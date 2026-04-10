@@ -18,9 +18,14 @@ The repo should be simple to reason about, publishable as independent packages, 
 - Architectural concept in docs: `App Graph`
 - Primary CLI binary: `dawn`
 - Scaffolder package and command: `create-dawn-app`
-- NPM scope: `@dawn/*`
+- Framework package scope: `@dawn/*`
 
 The attached RFC used `DawnGraph` as the public brand. This design simplifies the public surface to `dawn` and reserves `App Graph` as the explanatory concept used in documentation.
+
+Package naming rule:
+
+- framework libraries and internal shared packages use `@dawn/*`
+- the scaffolder remains intentionally unscoped as `create-dawn-app`
 
 ## Product Thesis
 
@@ -156,6 +161,38 @@ Shared Biome config published or consumed internally by workspace packages.
 
 Shared TypeScript base configs for library, app, and Node package use cases.
 
+## Canonical Dawn App Contract
+
+This section locks the minimal filesystem contract that Dawn tooling targets in v1.
+
+### App root
+
+A Dawn application lives at a package or project root containing `package.json` and `dawn.config.ts`.
+
+### Config entrypoint
+
+The canonical config filename is `dawn.config.ts` at the app root.
+
+V1 should keep the config intentionally small. It only needs to cover the fields required to support discovery, route metadata, and future expansion. It should not become a dumping ground for advanced runtime configuration in the first scaffold.
+
+### Discovery root
+
+Route discovery starts at `src/app` relative to the Dawn app root.
+
+Example:
+
+```txt
+my-dawn-app/
+  package.json
+  dawn.config.ts
+  src/
+    app/
+      (public)/
+      (internal)/
+```
+
+This convention is what `@dawn/core`, `@dawn/cli`, `create-dawn-app`, and `dawn typegen` should share. The Dawn framework repo itself is a monorepo and does not need to be treated as a Dawn application.
+
 ## Framework Authoring Model
 
 Dawn should be opinionated at the filesystem boundary and conservative at the runtime boundary.
@@ -198,6 +235,17 @@ This leaves room to add a `defineRoute()` helper later if it provides real value
 
 `graph.ts` should prefer native LangGraph authoring. Dawn may later add optional helpers, but the native-first path should remain first-class.
 
+### Workflow boundary
+
+`workflow.ts` is also valid in v1. It is an alternative executable entry for a route when structured control flow is clearer than explicit graph construction.
+
+For a single route directory, v1 should allow exactly one primary executable entry:
+
+- `graph.ts`, or
+- `workflow.ts`
+
+Future support for `agent.ts` can be added later, but it is not required for the first implementation plan.
+
 ## Dynamic Route Semantics
 
 The repo should adopt Next-like route discovery semantics for ownership and entrypoint discovery only:
@@ -234,6 +282,20 @@ These should be designed for later, but not required in the first scaffold:
 - `dawn studio`
 
 The reason to defer them is sequencing. Discovery, manifests, route validation, and generated types must stabilize first.
+
+## Template Scope
+
+The repository may contain multiple template folders over time, but v1 should ship exactly one supported scaffolding template: a minimal `basic` template.
+
+That initial template should establish the canonical app contract:
+
+- `package.json`
+- `dawn.config.ts`
+- `src/app`
+- one example route using either `graph.ts` or `workflow.ts`
+- minimal scripts for install, typecheck, and validation
+
+Additional templates such as `agent` and `graph` are future expansions and should not enlarge the first implementation plan.
 
 ## Website Scope
 
@@ -339,7 +401,7 @@ If the package namespace or docs remain half-committed between `DawnGraph` and `
 - The website lives in `apps/web`
 - Dawn owns filesystem conventions and tooling, not a replacement runtime
 - V1 focuses on scaffolding, discovery, validation, and type generation
-- Publishable packages use `@dawn/*`
+- Framework packages use `@dawn/*`, while the scaffolder remains `create-dawn-app`
 
 ## Open Questions Deferred Intentionally
 
