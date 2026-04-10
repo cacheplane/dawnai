@@ -38,6 +38,18 @@ async function createFixtureApp() {
   return appRoot;
 }
 
+async function createAppWithoutRoutesDir() {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-core-invalid-app-"));
+  tempDirs.push(appRoot);
+
+  await Promise.all([
+    writeFile(join(appRoot, "package.json"), "{}"),
+    writeFile(join(appRoot, "dawn.config.ts"), "export default {};\n"),
+  ]);
+
+  return appRoot;
+}
+
 describe("discoverRoutes", () => {
   test("detects the app root from dawn.config.ts and starts discovery at src/app", async () => {
     const appRoot = await createFixtureApp();
@@ -95,5 +107,13 @@ describe("discoverRoutes", () => {
         entryKind: "workflow",
       }),
     ]);
+  });
+
+  test("fails validation when the canonical src/app discovery root is missing", async () => {
+    const appRoot = await createAppWithoutRoutesDir();
+
+    await expect(discoverRoutes({ appRoot })).rejects.toThrow(
+      `Invalid Dawn app at ${appRoot}. Missing: ${join(appRoot, "src/app")}`,
+    );
   });
 });

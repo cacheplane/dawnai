@@ -44,6 +44,7 @@ export async function assertCanonicalDawnApp(appRoot: string): Promise<void> {
   const missingPaths = await Promise.all([
     join(appRoot, PACKAGE_JSON_FILE),
     join(appRoot, DAWN_CONFIG_FILE),
+    join(appRoot, DEFAULT_APP_DIR),
   ].map(async (filePath) => ((await fileExists(filePath)) ? null : filePath)));
 
   const missing = missingPaths.filter((value): value is string => value !== null);
