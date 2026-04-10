@@ -1,0 +1,24 @@
+{
+  "name": "@dawn/core",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest --run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@dawn/config-typescript": "workspace:*",
+    "@types/node": "25.6.0"
+  }
+}
