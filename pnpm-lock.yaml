@@ -24,6 +24,10 @@ importers:
         specifier: 4.1.4
         version: 4.1.4(vite@8.0.8)
 
+  packages/config-biome: {}
+
+  packages/config-typescript: {}
+
 packages:
 
   '@babel/runtime@7.29.2':
