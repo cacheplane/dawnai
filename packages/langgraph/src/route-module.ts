@@ -8,11 +8,13 @@ export interface RouteConfig {
 
 export interface GraphRouteModule<TEntry = unknown> {
   readonly graph: TEntry;
+  readonly workflow?: never;
   readonly config?: RouteConfig;
 }
 
 export interface WorkflowRouteModule<TEntry = unknown> {
   readonly workflow: TEntry;
+  readonly graph?: never;
   readonly config?: RouteConfig;
 }
 
@@ -24,7 +26,11 @@ export interface NormalizedRouteModule<TEntry = unknown> {
   readonly config: RouteConfig;
 }
 
-export function normalizeRouteModule<TEntry>(module: RouteModule<TEntry>): NormalizedRouteModule<TEntry> {
+export function normalizeRouteModule<TEntry>(
+  module:
+    | RouteModule<TEntry>
+    | (GraphRouteModule<TEntry> & WorkflowRouteModule<TEntry>),
+): NormalizedRouteModule<TEntry> {
   assertExactlyOneEntry(module);
 
   if ("graph" in module) {

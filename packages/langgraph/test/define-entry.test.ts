@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { defineEntry, normalizeRouteModule } from "@dawn/langgraph";
+import type { RouteModule } from "@dawn/langgraph/route-module";
 
 describe("@dawn/langgraph defineEntry", () => {
   test("graph.ts modules can export a native-first entry and route config", () => {
@@ -50,6 +51,8 @@ describe("@dawn/langgraph defineEntry", () => {
   test("rejects modules that provide both graph and workflow", () => {
     const graph = () => "graph";
     const workflow = () => "workflow";
+    // @ts-expect-error - route modules must not expose both executable entries
+    const invalidModule: RouteModule<typeof graph> = { graph, workflow };
 
     expect(() =>
       defineEntry({
@@ -59,10 +62,7 @@ describe("@dawn/langgraph defineEntry", () => {
     ).toThrow("Route modules must define exactly one primary executable entry: graph or workflow");
 
     expect(() =>
-      normalizeRouteModule({
-        graph,
-        workflow,
-      } as never),
+      normalizeRouteModule(invalidModule as never),
     ).toThrow("Route modules must define exactly one primary executable entry: graph or workflow");
   });
 });
