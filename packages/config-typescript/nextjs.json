@@ -3,6 +3,11 @@
   "extends": "./base.json",
   "compilerOptions": {
     "allowJs": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "preserve",
     "moduleResolution": "Bundler",
     "plugins": [

@@ -6,6 +6,11 @@
   "files": [
     "*.json"
   ],
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3"
+  },
   "exports": {
     ".": "./base.json",
     "./base": "./base.json",
@@ -14,6 +19,6 @@
     "./nextjs": "./nextjs.json"
   },
   "scripts": {
-    "typecheck": "node -e \"const { existsSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs'); const { tmpdir } = require('node:os'); const { join, resolve } = require('node:path'); const { execFileSync } = require('node:child_process'); const root = process.cwd(); const temp = mkdtempSync(join(tmpdir(), 'dawn-config-typescript-')); try { writeFileSync(join(temp, 'index.ts'), 'export {}\\n'); const wrappers = { 'base.json': { files: ['index.ts'] }, 'library.json': { files: ['index.ts'], compilerOptions: { outDir: 'dist' } }, 'node.json': { files: ['index.ts'], compilerOptions: { types: [] } }, 'nextjs.json': { files: ['index.ts'], compilerOptions: { types: [] } } }; for (const [config, extra] of Object.entries(wrappers)) { const wrapper = join(temp, config); writeFileSync(wrapper, JSON.stringify({ extends: resolve(root, config), ...extra })); if (config === 'library.json') { execFileSync('tsc', ['-p', wrapper, '--pretty', 'false'], { stdio: 'inherit' }); if (!existsSync(join(temp, 'dist', 'index.d.ts'))) { throw new Error('library config did not emit declarations'); } } else { execFileSync('tsc', ['-p', wrapper, '--noEmit', '--pretty', 'false'], { stdio: 'inherit' }); } } } finally { rmSync(temp, { recursive: true, force: true }); }\""
+    "typecheck": "node ./scripts/validate.mjs"
   }
 }
