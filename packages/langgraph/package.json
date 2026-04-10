@@ -1,0 +1,33 @@
+{
+  "name": "@dawn/langgraph",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./define-entry": {
+      "types": "./dist/define-entry.d.ts",
+      "default": "./dist/define-entry.js"
+    },
+    "./route-module": {
+      "types": "./dist/route-module.d.ts",
+      "default": "./dist/route-module.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest --run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@dawn/config-typescript": "workspace:*",
+    "@types/node": "25.6.0"
+  }
+}
