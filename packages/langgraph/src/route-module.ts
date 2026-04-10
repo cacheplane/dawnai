@@ -25,6 +25,8 @@ export interface NormalizedRouteModule<TEntry = unknown> {
 }
 
 export function normalizeRouteModule<TEntry>(module: RouteModule<TEntry>): NormalizedRouteModule<TEntry> {
+  assertExactlyOneEntry(module);
+
   if ("graph" in module) {
     return {
       kind: "graph",
@@ -38,4 +40,15 @@ export function normalizeRouteModule<TEntry>(module: RouteModule<TEntry>): Norma
     entry: module.workflow,
     config: module.config ?? {},
   };
+}
+
+export function assertExactlyOneEntry<TEntry>(
+  module: RouteModule<TEntry> | (GraphRouteModule<TEntry> & WorkflowRouteModule<TEntry>),
+): asserts module is RouteModule<TEntry> {
+  const hasGraph = "graph" in module;
+  const hasWorkflow = "workflow" in module;
+
+  if (hasGraph === hasWorkflow) {
+    throw new Error("Route modules must define exactly one primary executable entry: graph or workflow");
+  }
 }
