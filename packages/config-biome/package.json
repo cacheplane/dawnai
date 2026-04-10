@@ -1,0 +1,16 @@
+{
+  "name": "@dawn/config-biome",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "files": [
+    "biome.json"
+  ],
+  "exports": {
+    ".": "./biome.json",
+    "./biome": "./biome.json"
+  },
+  "scripts": {
+    "check": "biome check --config-path ./biome.json ./biome.json"
+  }
+}
