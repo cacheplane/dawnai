@@ -10,10 +10,11 @@ const DEFAULT_APP_DIR = "src/app";
 
 export async function findDawnApp(options: FindDawnAppOptions = {}): Promise<DiscoveredDawnApp> {
   const appRoot = options.appRoot ? resolve(options.appRoot) : await findAppRootFromCwd(options.cwd);
-  await assertCanonicalDawnApp(appRoot);
+  await assertDawnAppFiles(appRoot);
 
   const loadedConfig = await loadDawnConfig({ appRoot });
   const routesDir = resolve(appRoot, loadedConfig.config.appDir ?? DEFAULT_APP_DIR);
+  await assertCanonicalDawnApp(appRoot, routesDir);
 
   return {
     appRoot,
@@ -40,13 +41,22 @@ async function findAppRootFromCwd(cwd = process.cwd()): Promise<string> {
   }
 }
 
-export async function assertCanonicalDawnApp(appRoot: string): Promise<void> {
+async function assertDawnAppFiles(appRoot: string): Promise<void> {
   const missingPaths = await Promise.all([
     join(appRoot, PACKAGE_JSON_FILE),
     join(appRoot, DAWN_CONFIG_FILE),
-    join(appRoot, DEFAULT_APP_DIR),
   ].map(async (filePath) => ((await fileExists(filePath)) ? null : filePath)));
 
+  throwIfMissing(appRoot, missingPaths);
+}
+
+export async function assertCanonicalDawnApp(appRoot: string, routesDir = join(appRoot, DEFAULT_APP_DIR)): Promise<void> {
+  const missingPaths = await Promise.all([routesDir].map(async (filePath) => ((await fileExists(filePath)) ? null : filePath)));
+
+  throwIfMissing(appRoot, missingPaths);
+}
+
+function throwIfMissing(appRoot: string, missingPaths: ReadonlyArray<string | null>): void {
   const missing = missingPaths.filter((value): value is string => value !== null);
 
   if (missing.length > 0) {
