@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "extends": "./base.json",
+  "extends": "./library.json",
   "compilerOptions": {
     "lib": [
       "ES2022"

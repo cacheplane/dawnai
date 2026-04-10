@@ -70,14 +70,25 @@ try {
 
   const nodeWrapper = writeWrapper(tempDir, 'node.json', {
     extends: resolve(root, 'node.json'),
+    compilerOptions: {
+      outDir: 'node-dist',
+    },
     files: ['node.ts'],
   });
   writeFileSync(join(tempDir, 'node.ts'), [
-    'const cwd: string = process.cwd();',
-    'export { cwd };',
+    "import { readFileSync } from 'node:fs';",
+    '',
+    'export const cwd = process.cwd();',
+    'export const read = readFileSync;',
     '',
   ].join('\n'));
-  runTsc(['-p', nodeWrapper, '--noEmit', '--pretty', 'false']);
+  runTsc(['-b', nodeWrapper, '--pretty', 'false']);
+  if (!existsSync(join(tempDir, 'node-dist', 'node.js'))) {
+    throw new Error('node config did not emit JavaScript');
+  }
+  if (!existsSync(join(tempDir, 'node-dist', 'node.d.ts'))) {
+    throw new Error('node config did not emit declarations');
+  }
 
   const nextWrapper = writeWrapper(tempDir, 'nextjs.json', {
     extends: resolve(root, 'nextjs.json'),
