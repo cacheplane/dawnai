@@ -21,7 +21,7 @@ const PRIMARY_ROUTE_FILES = {
 
 export async function discoverRoutes(options: DiscoverRoutesOptions = {}): Promise<RouteManifest> {
   const app = await findDawnApp(options);
-  const routes = await collectRouteDefinitions(app.routesDir);
+  const routes = validateRouteCollisions(await collectRouteDefinitions(app.routesDir));
 
   return {
     appRoot: app.appRoot,
@@ -94,6 +94,24 @@ export function validateRouteEntries(routeDir: string, entryFiles: readonly stri
   }
 
   throw new Error(`Route directory ${routeDir} has multiple primary entries: ${entryFiles.join(", ")}`);
+}
+
+function validateRouteCollisions(routes: readonly RouteDefinition[]): RouteDefinition[] {
+  const byPathname = new Map<string, RouteDefinition>();
+
+  for (const route of routes) {
+    const existingRoute = byPathname.get(route.pathname);
+
+    if (existingRoute) {
+      throw new Error(
+        `Duplicate Dawn route pathname "${route.pathname}" detected at ${existingRoute.routeDir} and ${route.routeDir}`,
+      );
+    }
+
+    byPathname.set(route.pathname, route);
+  }
+
+  return [...routes];
 }
 
 function hasPrimaryRouteFile(fileName: string): fileName is PrimaryRouteFile {
