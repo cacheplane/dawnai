@@ -6,6 +6,14 @@ import type { DawnConfig, LoadedDawnConfig, LoadDawnConfigOptions } from "./type
 
 export const DAWN_CONFIG_FILE = "dawn.config.ts";
 
+type Token =
+  | { readonly type: "const" | "default" | "export" | "eof" | "equals" | "lbrace" | "rbrace" | "colon" | "comma" | "semicolon" }
+  | { readonly type: "identifier"; readonly value: string }
+  | { readonly type: "string"; readonly value: string };
+
+type TokenType = Token["type"];
+type TokenOfType<TType extends TokenType> = Extract<Token, { readonly type: TType }>;
+
 export async function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig> {
   const configPath = join(options.appRoot, DAWN_CONFIG_FILE);
 
@@ -21,43 +29,280 @@ export async function loadDawnConfig(options: LoadDawnConfigOptions): Promise<Lo
 }
 
 function parseDawnConfig(source: string): DawnConfig {
-  const evaluatedConfig = evaluateDawnConfigSource(source);
+  const parser = new DawnConfigParser(source);
 
-  if (!isRecord(evaluatedConfig)) {
-    return {};
+  return parser.parse();
+}
+
+class DawnConfigParser {
+  private readonly tokens: Token[];
+  private currentIndex = 0;
+  private readonly stringBindings = new Map<string, string>();
+
+  constructor(source: string) {
+    this.tokens = tokenize(source);
   }
 
-  const appDir = evaluatedConfig.appDir;
+  parse(): DawnConfig {
+    while (this.match("const")) {
+      this.parseConstDeclaration();
+      this.consumeOptional("semicolon");
+    }
 
-  return typeof appDir === "string" ? { appDir } : {};
-}
+    this.consume("export");
+    this.consume("default");
 
-function evaluateDawnConfigSource(source: string): unknown {
-  const sanitizedSource = sanitizeDawnConfigSource(source);
+    const config = this.parseConfigObject();
 
-  try {
-    return Function(`"use strict";\n${sanitizedSource}`)();
-  } catch (cause) {
-    throw new Error("Failed to evaluate dawn.config.ts", { cause });
+    this.consumeOptional("semicolon");
+    this.consume("eof");
+
+    return config;
+  }
+
+  private parseConstDeclaration(): void {
+    const identifier = this.consume("identifier");
+    this.consume("equals");
+    const value = this.consume("string");
+    this.stringBindings.set(identifier.value, value.value);
+  }
+
+  private parseConfigObject(): DawnConfig {
+    this.consume("lbrace");
+
+    let appDir: string | undefined;
+
+    while (!this.check("rbrace")) {
+      const property = this.consume("identifier");
+
+      if (property.value !== "appDir") {
+        throw unsupportedConfig(`unsupported property "${property.value}"`);
+      }
+
+      const resolvedValue = this.match("colon")
+        ? this.parsePropertyValue()
+        : this.resolveIdentifier(property.value);
+
+      appDir = resolvedValue;
+
+      if (!this.match("comma")) {
+        break;
+      }
+    }
+
+    this.consume("rbrace");
+
+    return appDir ? { appDir } : {};
+  }
+
+  private parsePropertyValue(): string {
+    if (this.check("string")) {
+      return this.consume("string").value;
+    }
+
+    if (this.check("identifier")) {
+      return this.resolveIdentifier(this.consume("identifier").value);
+    }
+
+    throw unsupportedConfig("property values must be string literals or const identifiers");
+  }
+
+  private resolveIdentifier(identifier: string): string {
+    const resolved = this.stringBindings.get(identifier);
+
+    if (!resolved) {
+      throw unsupportedConfig(`unknown identifier "${identifier}"`);
+    }
+
+    return resolved;
+  }
+
+  private match(type: TokenType): boolean {
+    if (!this.check(type)) {
+      return false;
+    }
+
+    this.currentIndex += 1;
+    return true;
+  }
+
+  private consume<TType extends TokenType>(type: TType): TokenOfType<TType> {
+    const token = this.peek();
+
+    if (token.type !== type) {
+      throw unsupportedConfig(`expected ${type} but found ${describeToken(token)}`);
+    }
+
+    this.currentIndex += 1;
+    return token as TokenOfType<TType>;
+  }
+
+  private consumeOptional(type: TokenType): void {
+    this.match(type);
+  }
+
+  private check(type: TokenType): boolean {
+    return this.peek().type === type;
+  }
+
+  private peek(): Token {
+    return this.tokens[this.currentIndex] ?? { type: "eof" };
   }
 }
 
-function sanitizeDawnConfigSource(source: string): string {
-  return source
-    .replace(/^\uFEFF/, "")
-    .replace(/^\s*import\s+type[\s\S]*?;\s*$/gm, "")
-    .replace(/^\s*export\s+type[\s\S]*?;\s*$/gm, "")
-    .replace(/^\s*type\s+[A-Za-z_$][\w$]*\s*=\s*[\s\S]*?;\s*$/gm, "")
-    .replace(/^\s*interface\s+[A-Za-z_$][\w$]*\s*\{[\s\S]*?^\}\s*$/gm, "")
-    .replace(
-      /\b(const|let|var)\s+([A-Za-z_$][\w$]*)\s*:\s*([^=;]+?)\s*=/g,
-      (_match, declarationKeyword: string, identifier: string) => `${declarationKeyword} ${identifier} =`,
-    )
-    .replace(/\s+as\s+const\b/g, "")
-    .replace(/\s+satisfies\s+[^;\n]+/g, "")
-    .replace(/export\s+default\s+/g, "return ");
+function tokenize(source: string): Token[] {
+  const tokens: Token[] = [];
+  let index = source.startsWith("\uFEFF") ? 1 : 0;
+
+  while (index < source.length) {
+    const character = source[index];
+
+    if (!character) {
+      break;
+    }
+
+    if (isWhitespace(character)) {
+      index += 1;
+      continue;
+    }
+
+    if (character === "/" && source[index + 1] === "/") {
+      index += 2;
+      while (index < source.length && source[index] !== "\n") {
+        index += 1;
+      }
+      continue;
+    }
+
+    if (character === "/" && source[index + 1] === "*") {
+      const commentEnd = source.indexOf("*/", index + 2);
+
+      if (commentEnd === -1) {
+        throw unsupportedConfig("unterminated block comment");
+      }
+
+      index = commentEnd + 2;
+      continue;
+    }
+
+    if (character === "{") {
+      tokens.push({ type: "lbrace" });
+      index += 1;
+      continue;
+    }
+
+    if (character === "}") {
+      tokens.push({ type: "rbrace" });
+      index += 1;
+      continue;
+    }
+
+    if (character === ":") {
+      tokens.push({ type: "colon" });
+      index += 1;
+      continue;
+    }
+
+    if (character === ",") {
+      tokens.push({ type: "comma" });
+      index += 1;
+      continue;
+    }
+
+    if (character === "=") {
+      tokens.push({ type: "equals" });
+      index += 1;
+      continue;
+    }
+
+    if (character === ";") {
+      tokens.push({ type: "semicolon" });
+      index += 1;
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      const [value, nextIndex] = readStringLiteral(source, index, character);
+      tokens.push({ type: "string", value });
+      index = nextIndex;
+      continue;
+    }
+
+    if (isIdentifierStart(character)) {
+      const [identifier, nextIndex] = readIdentifier(source, index);
+      index = nextIndex;
+
+      if (identifier === "const" || identifier === "export" || identifier === "default") {
+        tokens.push({ type: identifier });
+      } else {
+        tokens.push({ type: "identifier", value: identifier });
+      }
+
+      continue;
+    }
+
+    throw unsupportedConfig(`unexpected token "${character}"`);
+  }
+
+  tokens.push({ type: "eof" });
+
+  return tokens;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+function readStringLiteral(source: string, startIndex: number, quote: '"' | "'"): [string, number] {
+  let index = startIndex + 1;
+  let value = "";
+
+  while (index < source.length) {
+    const character = source[index];
+
+    if (!character) {
+      break;
+    }
+
+    if (character === "\\") {
+      throw unsupportedConfig("escaped string literals are not supported");
+    }
+
+    if (character === quote) {
+      return [value, index + 1];
+    }
+
+    value += character;
+    index += 1;
+  }
+
+  throw unsupportedConfig("unterminated string literal");
+}
+
+function readIdentifier(source: string, startIndex: number): [string, number] {
+  let index = startIndex + 1;
+
+  while (index < source.length && isIdentifierPart(source[index] ?? "")) {
+    index += 1;
+  }
+
+  return [source.slice(startIndex, index), index];
+}
+
+function isIdentifierStart(character: string): boolean {
+  return /[A-Za-z_$]/.test(character);
+}
+
+function isIdentifierPart(character: string): boolean {
+  return /[A-Za-z0-9_$]/.test(character);
+}
+
+function isWhitespace(character: string): boolean {
+  return /\s/.test(character);
+}
+
+function describeToken(token: Token): string {
+  return token.type === "identifier" || token.type === "string" ? `${token.type} "${token.value}"` : token.type;
+}
+
+function unsupportedConfig(reason: string): Error {
+  return new Error(
+    `Unsupported dawn.config.ts syntax: ${reason}. Supported subset: optional const string declarations followed by export default { appDir } or export default { appDir: "..." }.`,
+  );
 }

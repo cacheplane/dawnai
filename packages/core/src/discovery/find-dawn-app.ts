@@ -14,7 +14,7 @@ export async function findDawnApp(options: FindDawnAppOptions = {}): Promise<Dis
 
   const loadedConfig = await loadDawnConfig({ appRoot });
   const routesDir = resolve(appRoot, loadedConfig.config.appDir ?? DEFAULT_APP_DIR);
-  await assertCanonicalDawnApp(appRoot, routesDir);
+  await assertDawnRoutesDir(appRoot, routesDir);
 
   return {
     appRoot,
@@ -50,7 +50,7 @@ async function assertDawnAppFiles(appRoot: string): Promise<void> {
   throwIfMissing(appRoot, missingPaths);
 }
 
-export async function assertCanonicalDawnApp(appRoot: string, routesDir = join(appRoot, DEFAULT_APP_DIR)): Promise<void> {
+export async function assertDawnRoutesDir(appRoot: string, routesDir = join(appRoot, DEFAULT_APP_DIR)): Promise<void> {
   const missingPaths = await Promise.all([routesDir].map(async (filePath) => ((await fileExists(filePath)) ? null : filePath)));
 
   throwIfMissing(appRoot, missingPaths);
