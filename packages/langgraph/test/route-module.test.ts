@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, test } from "vitest";
@@ -17,8 +17,8 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
 });
 
-async function runCommand(command: string, args: readonly string[], cwd: string) {
-  await new Promise<void>((resolvePromise, rejectPromise) => {
+async function runCommand(command: string, args: readonly string[], cwd: string): Promise<{ readonly stdout: string; readonly stderr: string }> {
+  return await new Promise<{ readonly stdout: string; readonly stderr: string }>((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
       cwd,
       stdio: "pipe",
@@ -38,13 +38,26 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
     child.once("error", rejectPromise);
     child.once("close", (code) => {
       if (code === 0) {
-        resolvePromise();
+        resolvePromise({ stderr, stdout });
         return;
       }
 
       rejectPromise(new Error([`${command} ${args.join(" ")} failed`, stdout, stderr].filter(Boolean).join("\n")));
     });
   });
+}
+
+function resolveTarballPath(packStdout: string, outputDir: string) {
+  const tarballName = packStdout
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.endsWith(".tgz"));
+
+  if (!tarballName) {
+    throw new Error("Could not determine @dawn/langgraph tarball name");
+  }
+
+  return join(outputDir, basename(tarballName));
 }
 
 describe("@dawn/langgraph route-module", () => {
@@ -88,12 +101,12 @@ describe("@dawn/langgraph route-module", () => {
   test("packed consumers can resolve the route-module subpath export", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "dawn-langgraph-route-module-"));
     const consumerDir = join(tempRoot, "consumer");
-    const tarballPath = join(tempRoot, "dawn-langgraph-0.0.0.tgz");
     tempDirs.push(tempRoot);
 
     await writeFile(join(tempRoot, "package.json"), JSON.stringify({ name: "pack-root", private: true }));
     await runCommand("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--force"], packageRoot);
-    await runCommand("pnpm", ["pack", "--pack-destination", tempRoot], packageRoot);
+    const packOutput = await runCommand("pnpm", ["pack", "--pack-destination", tempRoot], packageRoot);
+    const tarballPath = resolveTarballPath(packOutput.stdout, tempRoot);
     await mkdir(consumerDir, { recursive: true });
     await writeFile(join(consumerDir, "package.json"), JSON.stringify({ name: "consumer", private: true }, null, 2));
     await runCommand("pnpm", ["add", tarballPath], consumerDir);
@@ -111,6 +124,9 @@ describe("@dawn/langgraph route-module", () => {
       ].join("\n"),
     );
 
-    await expect(runCommand("node", [scriptPath], consumerDir)).resolves.toBeUndefined();
+    await expect(runCommand("node", [scriptPath], consumerDir)).resolves.toEqual({
+      stderr: "",
+      stdout: "",
+    });
   });
 });
