@@ -33,6 +33,7 @@ async function scaffoldApp(options: CliOptions): Promise<void> {
   const templateDir = await resolveTemplateDir(options.template);
 
   await assertTargetDirIsWritable(appRoot);
+  await assertInternalModeWorkspace(options.mode);
 
   await writeTemplate({
     replacements: createTemplateReplacements(appRoot, options),
@@ -42,6 +43,28 @@ async function scaffoldApp(options: CliOptions): Promise<void> {
 
   if (options.mode === "external") {
     await rm(resolve(appRoot, ".npmrc"), { force: true });
+  }
+}
+
+async function assertInternalModeWorkspace(mode: CliOptions["mode"]): Promise<void> {
+  if (mode !== "internal") {
+    return;
+  }
+
+  const requiredPaths = [
+    resolve(repoRoot, "pnpm-workspace.yaml"),
+    resolve(repoRoot, "packages/core/package.json"),
+    resolve(repoRoot, "packages/cli/package.json"),
+    resolve(repoRoot, "packages/langgraph/package.json"),
+    resolve(repoRoot, "packages/config-typescript/package.json"),
+  ];
+
+  const isValidCheckout = await Promise.all(requiredPaths.map((path) => pathExists(path))).then((results) =>
+    results.every(Boolean),
+  );
+
+  if (!isValidCheckout) {
+    throw new Error("Internal mode requires a Dawn monorepo checkout with local packages available.");
   }
 }
 
@@ -160,6 +183,15 @@ function createTemplateReplacements(appRoot: string, options: CliOptions) {
     dawnCoreSpecifier: options.distTag,
     dawnLanggraphSpecifier: options.distTag,
   };
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 if (fileURLToPath(import.meta.url) === resolve(process.argv[1] ?? "")) {
