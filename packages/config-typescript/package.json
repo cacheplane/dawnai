@@ -35,7 +35,7 @@
     "access": "public"
   },
   "scripts": {
-    "lint": "biome check --config-path ../config-biome/biome.json package.json README.md",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json *.json scripts/validate.mjs",
     "typecheck": "node ./scripts/validate.mjs"
   }
 }

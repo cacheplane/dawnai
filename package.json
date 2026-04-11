@@ -10,8 +10,8 @@
     "check": "turbo run check",
     "ci:validate": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm pack:check && node scripts/publish-smoke.mjs",
     "dev": "turbo run dev --parallel",
-    "lint": "turbo run lint",
-    "lint:fix": "turbo run lint -- --write",
+    "lint": "pnpm exec biome check --config-path packages/config-biome/biome.json package.json && turbo run lint",
+    "lint:fix": "pnpm exec biome check --write --config-path packages/config-biome/biome.json package.json && turbo run lint -- --write",
     "pack:check": "node scripts/pack-check.mjs",
     "test": "node scripts/test.mjs",
     "typecheck": "turbo run typecheck"
