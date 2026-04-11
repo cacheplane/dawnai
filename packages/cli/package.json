@@ -1,0 +1,25 @@
+{
+  "name": "@dawn/cli",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "dawn": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest --run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dawn/core": "workspace:*",
+    "commander": "14.0.3"
+  },
+  "devDependencies": {
+    "@dawn/config-typescript": "workspace:*",
+    "@types/node": "25.6.0"
+  }
+}

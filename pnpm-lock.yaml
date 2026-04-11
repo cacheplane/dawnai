@@ -24,6 +24,22 @@ importers:
         specifier: 4.1.4
         version: 4.1.4(@types/node@25.6.0)(vite@8.0.8(@types/node@25.6.0))
 
+  packages/cli:
+    dependencies:
+      '@dawn/core':
+        specifier: workspace:*
+        version: link:../core
+      commander:
+        specifier: 14.0.3
+        version: 14.0.3
+    devDependencies:
+      '@dawn/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
   packages/config-biome: {}
 
   packages/config-typescript:
@@ -444,6 +460,10 @@ packages:
 
   chardet@2.1.1:
     resolution: {integrity: sha512-PsezH1rqdV9VvyNhxxOW32/d75r01NY7TQCmOqomRo15ZSOKbpTFVsfjghxo6JloQUCGnH4k1LGu0R4yCLlWQQ==}
+
+  commander@14.0.3:
+    resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
+    engines: {node: '>=20'}
 
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
@@ -1374,6 +1394,8 @@ snapshots:
   chai@6.2.2: {}
 
   chardet@2.1.1: {}
+
+  commander@14.0.3: {}
 
   convert-source-map@2.0.0: {}
 
