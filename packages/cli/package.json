@@ -27,6 +27,7 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.build.json",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json README.md src test tsconfig.json tsconfig.build.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts",
     "typecheck": "tsc -p tsconfig.json"
   },

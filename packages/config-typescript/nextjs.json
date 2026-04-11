@@ -3,11 +3,7 @@
   "extends": "./base.json",
   "compilerOptions": {
     "allowJs": true,
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "preserve",
     "moduleResolution": "Bundler",
     "plugins": [
@@ -15,10 +11,6 @@
         "name": "next"
       }
     ],
-    "types": [
-      "node",
-      "react",
-      "react-dom"
-    ]
+    "types": ["node", "react", "react-dom"]
   }
 }
