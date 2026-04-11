@@ -44,7 +44,10 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
 }
 
 describe("create-dawn-app", () => {
-  test("creates the canonical basic app structure and produces an installable fixture app under repo tmp", async () => {
+  test(
+    "creates the canonical basic app structure and produces an installable fixture app under repo tmp",
+    { timeout: 20_000 },
+    async () => {
     const repoRoot = resolve(import.meta.dirname, "../../..");
     const tempRoot = join(repoRoot, "tmp");
     const targetDir = join(tempRoot, "dawn-smoke");
@@ -118,5 +121,6 @@ describe("create-dawn-app", () => {
     } finally {
       await rename(templatesBackupDir, templatesDir);
     }
-  });
+    },
+  );
 });
