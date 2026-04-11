@@ -1,0 +1,24 @@
+{
+  "name": "@dawn/devkit",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@dawn/config-typescript": "workspace:*",
+    "@types/node": "25.6.0"
+  }
+}

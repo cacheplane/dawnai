@@ -63,6 +63,28 @@ importers:
         specifier: 25.6.0
         version: 25.6.0
 
+  packages/create-dawn-app:
+    dependencies:
+      '@dawn/devkit':
+        specifier: workspace:*
+        version: link:../devkit
+    devDependencies:
+      '@dawn/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
+  packages/devkit:
+    devDependencies:
+      '@dawn/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
   packages/langgraph:
     devDependencies:
       '@dawn/config-typescript':

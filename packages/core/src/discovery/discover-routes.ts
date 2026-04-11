@@ -3,20 +3,20 @@ import { join, relative, resolve, sep } from "node:path";
 
 import { findDawnApp } from "./find-dawn-app.js";
 import { isPrivateSegment, isRouteGroupSegment, toRouteSegments } from "./route-segments.js";
-import type {
-  DiscoverRoutesOptions,
-  RouteDefinition,
-  RouteEntryKind,
-  RouteManifest,
-} from "../types.js";
+import type { DiscoverRoutesOptions, RouteDefinition, RouteEntryKind, RouteManifest } from "../types.js";
 
 type PrimaryRouteFile = keyof typeof PRIMARY_ROUTE_FILES;
+type ExecutableRouteFile = keyof typeof EXECUTABLE_ROUTE_FILES;
 
-const PRIMARY_ROUTE_FILES = {
+const EXECUTABLE_ROUTE_FILES = {
   "graph.ts": "graph",
   "page.tsx": "page",
-  "route.ts": "route",
   "workflow.ts": "workflow",
+} as const satisfies Record<string, Exclude<RouteEntryKind, "route">>;
+
+const PRIMARY_ROUTE_FILES = {
+  ...EXECUTABLE_ROUTE_FILES,
+  "route.ts": "route",
 } as const satisfies Record<string, RouteEntryKind>;
 
 export async function discoverRoutes(options: DiscoverRoutesOptions = {}): Promise<RouteManifest> {
@@ -67,7 +67,7 @@ async function readRouteEntry(routesDir: string, routeDir: string): Promise<Rout
 
   validateRouteEntries(routeDir, primaryEntries.map((entry) => entry.name));
 
-  const entry = primaryEntries[0];
+  const entry = resolvePrimaryRouteEntry(primaryEntries.map((primaryEntry) => primaryEntry.name));
 
   if (!entry) {
     return null;
@@ -81,19 +81,33 @@ async function readRouteEntry(routesDir: string, routeDir: string): Promise<Rout
   return {
     id: toPathname(routeSegments),
     pathname: toPathname(routeSegments),
-    entryKind: PRIMARY_ROUTE_FILES[entry.name],
-    entryFile: resolve(routeDir, entry.name),
+    entryKind: PRIMARY_ROUTE_FILES[entry],
+    entryFile: resolve(routeDir, entry),
     routeDir,
     segments: toRouteSegments(routeSegments),
   };
 }
 
 export function validateRouteEntries(routeDir: string, entryFiles: readonly string[]): void {
-  if (entryFiles.length <= 1) {
+  const executableEntries = entryFiles.filter((entryFile): entryFile is ExecutableRouteFile =>
+    isExecutableRouteFile(entryFile),
+  );
+
+  if (executableEntries.length <= 1) {
     return;
   }
 
   throw new Error(`Route directory ${routeDir} has multiple primary entries: ${entryFiles.join(", ")}`);
+}
+
+function resolvePrimaryRouteEntry(entryFiles: readonly PrimaryRouteFile[]): PrimaryRouteFile | null {
+  const executableEntry = entryFiles.find(isExecutableRouteFile);
+
+  if (executableEntry) {
+    return executableEntry;
+  }
+
+  return entryFiles[0] ?? null;
 }
 
 function validateRouteCollisions(routes: readonly RouteDefinition[]): RouteDefinition[] {
@@ -116,6 +130,10 @@ function validateRouteCollisions(routes: readonly RouteDefinition[]): RouteDefin
 
 function hasPrimaryRouteFile(fileName: string): fileName is PrimaryRouteFile {
   return Object.hasOwn(PRIMARY_ROUTE_FILES, fileName);
+}
+
+function isExecutableRouteFile(fileName: string): fileName is ExecutableRouteFile {
+  return Object.hasOwn(EXECUTABLE_ROUTE_FILES, fileName);
 }
 
 function toPathname(routeSegments: readonly string[]): string {
