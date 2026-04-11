@@ -19,6 +19,14 @@ const packages = [
     name: "@dawn/devkit",
     body: "Shared file-writing and template utilities used by the CLI and scaffolder.",
   },
+  {
+    name: "@dawn/config-biome",
+    body: "Shared Biome config published or consumed internally by workspace packages.",
+  },
+  {
+    name: "@dawn/config-typescript",
+    body: "Shared TypeScript base configs for library, app, and Node package use cases.",
+  },
 ];
 
 export default function PackagesPage() {
