@@ -7,12 +7,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn/core": "file:{{dawnCorePackagePath}}",
-    "@dawn/cli": "file:{{dawnCliPackagePath}}",
-    "@dawn/langgraph": "file:{{dawnLanggraphPackagePath}}"
+    "@dawn/core": "{{dawnCoreSpecifier}}",
+    "@dawn/cli": "{{dawnCliSpecifier}}",
+    "@dawn/langgraph": "{{dawnLanggraphSpecifier}}"
   },
   "devDependencies": {
-    "@dawn/config-typescript": "file:{{dawnConfigTypescriptPackagePath}}",
+    "@dawn/config-typescript": "{{dawnConfigTypescriptSpecifier}}",
     "@types/node": "25.6.0",
     "typescript": "6.0.2"
   }

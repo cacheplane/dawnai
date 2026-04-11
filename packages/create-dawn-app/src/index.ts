@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { access, mkdir, readdir } from "node:fs/promises";
+import { access, mkdir, readdir, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { resolveTemplateDir, writeTemplate } from "@dawn/devkit";
 
 interface CliOptions {
+  readonly distTag: string;
+  readonly mode: "external" | "internal";
   readonly targetDir: string;
   readonly template: string;
 }
@@ -33,30 +35,38 @@ async function scaffoldApp(options: CliOptions): Promise<void> {
   await assertTargetDirIsWritable(appRoot);
 
   await writeTemplate({
-    replacements: {
-      appName: basename(appRoot),
-      dawnCorePackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/core"))),
-      dawnCliPackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/cli"))),
-      dawnConfigTypescriptPackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/config-typescript"))),
-      dawnLanggraphPackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/langgraph"))),
-    },
+    replacements: createTemplateReplacements(appRoot, options),
     targetDir: appRoot,
     templateDir,
   });
+
+  if (options.mode === "external") {
+    await rm(resolve(appRoot, ".npmrc"), { force: true });
+  }
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
   const args = [...argv];
-  const targetDir = args.shift();
-
-  if (!targetDir || targetDir.startsWith("-")) {
-    throw new Error("Usage: create-dawn-app <target-directory> [--template basic]");
-  }
-
+  let targetDir: string | undefined;
   let template = "basic";
+  let mode: CliOptions["mode"] = "external";
+  let distTag = "latest";
 
   while (args.length > 0) {
     const current = args.shift();
+
+    if (!current) {
+      continue;
+    }
+
+    if (!current.startsWith("-")) {
+      if (targetDir) {
+        throw new Error(`Unknown argument "${current}"`);
+      }
+
+      targetDir = current;
+      continue;
+    }
 
     if (current === "--template") {
       const value = args.shift();
@@ -69,10 +79,38 @@ function parseArgs(argv: readonly string[]): CliOptions {
       continue;
     }
 
+    if (current === "--mode") {
+      const value = args.shift();
+
+      if (value !== "external" && value !== "internal") {
+        throw new Error('Expected "--mode" to be one of: external, internal');
+      }
+
+      mode = value;
+      continue;
+    }
+
+    if (current === "--dist-tag") {
+      const value = args.shift();
+
+      if (!value) {
+        throw new Error('Missing value for "--dist-tag"');
+      }
+
+      distTag = value;
+      continue;
+    }
+
     throw new Error(`Unknown argument "${current}"`);
   }
 
+  if (!targetDir) {
+    throw new Error("Usage: create-dawn-app <target-directory> [--template basic] [--mode external|internal] [--dist-tag latest]");
+  }
+
   return {
+    distTag,
+    mode,
     targetDir,
     template,
   };
@@ -102,6 +140,26 @@ function toPortablePath(relativePath: string): string {
   }
 
   return `./${relativePath}`;
+}
+
+function createTemplateReplacements(appRoot: string, options: CliOptions) {
+  if (options.mode === "internal") {
+    return {
+      appName: basename(appRoot),
+      dawnCliSpecifier: `file:${toPortablePath(relative(appRoot, resolve(repoRoot, "packages/cli")))}`,
+      dawnConfigTypescriptSpecifier: `file:${toPortablePath(relative(appRoot, resolve(repoRoot, "packages/config-typescript")))}`,
+      dawnCoreSpecifier: `file:${toPortablePath(relative(appRoot, resolve(repoRoot, "packages/core")))}`,
+      dawnLanggraphSpecifier: `file:${toPortablePath(relative(appRoot, resolve(repoRoot, "packages/langgraph")))}`,
+    };
+  }
+
+  return {
+    appName: basename(appRoot),
+    dawnCliSpecifier: options.distTag,
+    dawnConfigTypescriptSpecifier: options.distTag,
+    dawnCoreSpecifier: options.distTag,
+    dawnLanggraphSpecifier: options.distTag,
+  };
 }
 
 if (fileURLToPath(import.meta.url) === resolve(process.argv[1] ?? "")) {

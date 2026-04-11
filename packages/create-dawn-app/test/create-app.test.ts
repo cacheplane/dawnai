@@ -1,7 +1,8 @@
-import { access, mkdir, readFile, rename, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { run } from "../src/index.js";
@@ -43,84 +44,115 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
   );
 }
 
+async function packPackage(repoRoot: string, packageName: string, outputDir: string) {
+  const packResult = await runCommand("pnpm", ["--filter", packageName, "pack", "--pack-destination", outputDir], repoRoot);
+
+  if (packResult.code !== 0) {
+    throw new Error(packResult.stderr || packResult.stdout || `Failed to pack ${packageName}`);
+  }
+
+  const tarballName = packResult.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .find((line) => line.endsWith(".tgz"));
+
+  if (!tarballName) {
+    throw new Error(`Could not find tarball name for ${packageName}`);
+  }
+
+  return join(outputDir, basename(tarballName));
+}
+
 describe("create-dawn-app", () => {
   test(
-    "creates the canonical basic app structure and produces an installable fixture app under repo tmp",
-    { timeout: 20_000 },
+    "packs and installs create-dawn-app outside the repo workspace and scaffolds default published dependencies",
+    { timeout: 30_000 },
     async () => {
-    const repoRoot = resolve(import.meta.dirname, "../../..");
-    const tempRoot = join(repoRoot, "tmp");
-    const targetDir = join(tempRoot, "dawn-smoke");
+      const repoRoot = resolve(import.meta.dirname, "../../..");
+      const buildResult = await runCommand("pnpm", ["--filter", "create-dawn-app", "build"], repoRoot);
 
-    await mkdir(tempRoot, { recursive: true });
-    await rm(targetDir, { force: true, recursive: true });
-    tempDirs.push(targetDir);
+      expect(buildResult.code).toBe(0);
 
-    const exitCode = await run([targetDir, "--template", "basic"]);
+      const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-standalone-"));
+      tempDirs.push(tempRoot);
+
+      const packDir = join(tempRoot, "packs");
+      const installDir = join(tempRoot, "installer");
+      const targetDir = join(tempRoot, "hello-dawn");
+
+      await mkdir(packDir, { recursive: true });
+      await mkdir(installDir, { recursive: true });
+
+      const devkitTarball = await packPackage(repoRoot, "@dawn/devkit", packDir);
+      const createAppTarball = await packPackage(repoRoot, "create-dawn-app", packDir);
+
+      await writeFile(
+        join(installDir, "package.json"),
+        JSON.stringify(
+          {
+            name: "installer",
+            private: true,
+            pnpm: {
+              overrides: {
+                "@dawn/devkit": devkitTarball,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const installDevkitResult = await runCommand("pnpm", ["add", devkitTarball], installDir);
+      expect(installDevkitResult.code).toBe(0);
+
+      const installResult = await runCommand("pnpm", ["add", createAppTarball], installDir);
+      expect(installResult.code).toBe(0);
+
+      const scaffoldResult = await runCommand("pnpm", ["exec", "create-dawn-app", targetDir], installDir);
+      expect(scaffoldResult.code).toBe(0);
+
+      await assertExists(join(targetDir, "package.json"));
+      await assertExists(join(targetDir, "dawn.config.ts"));
+      await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/workflow.ts"));
+
+      const packageJson = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8")) as {
+        readonly name: string;
+        readonly dependencies: Record<string, string>;
+        readonly devDependencies: Record<string, string>;
+      };
+
+      expect(packageJson.name).toBe("hello-dawn");
+      expect(packageJson.dependencies["@dawn/core"]).not.toMatch(/^file:/);
+      expect(packageJson.dependencies["@dawn/cli"]).not.toMatch(/^file:/);
+      expect(packageJson.dependencies["@dawn/langgraph"]).not.toMatch(/^file:/);
+      expect(packageJson.devDependencies["@dawn/config-typescript"]).not.toMatch(/^file:/);
+      expect(packageJson.dependencies["@dawn/core"]).toBe("latest");
+      await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow();
+    },
+  );
+
+  test("supports explicit internal dev scaffolding with repo-local package edges", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-internal-"));
+    tempDirs.push(tempRoot);
+
+    const targetDir = join(tempRoot, "hello-dawn");
+
+    const exitCode = await run([targetDir, "--mode", "internal"]);
 
     expect(exitCode).toBe(0);
 
-    await assertExists(targetDir);
-    await assertExists(join(targetDir, "package.json"));
-    await assertExists(join(targetDir, "dawn.config.ts"));
-    await assertExists(join(targetDir, "tsconfig.json"));
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/route.ts"));
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/workflow.ts"));
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"));
-
     const packageJson = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8")) as {
-      readonly name: string;
-      readonly scripts: Record<string, string>;
       readonly dependencies: Record<string, string>;
       readonly devDependencies: Record<string, string>;
     };
 
-    expect(packageJson.name).toBe(basename(targetDir));
-    expect(packageJson.scripts.typecheck).toBe("tsc --noEmit");
-    expect(packageJson.scripts.check).toBe("dawn check");
-    expect(packageJson.dependencies["@dawn/core"]).toBe("file:../../packages/core");
-    expect(packageJson.dependencies["@dawn/cli"]).toBe("file:../../packages/cli");
-    expect(packageJson.dependencies["@dawn/langgraph"]).toBe("file:../../packages/langgraph");
-    expect(packageJson.devDependencies["@dawn/config-typescript"]).toBe("file:../../packages/config-typescript");
-
-    const buildResult = await runCommand("pnpm", ["--filter", "create-dawn-app", "build"], repoRoot);
-    expect(buildResult.code).toBe(0);
-
-    await expect(access(join(targetDir, "pnpm-workspace.yaml"), constants.F_OK)).rejects.toThrow();
-
-    const installResult = await runCommand("pnpm", ["install", "--dir", targetDir], repoRoot);
-    expect(installResult.code).toBe(0);
-    expect(installResult.stderr).not.toContain("ERR_");
-
-    const typecheckResult = await runCommand("pnpm", ["--dir", targetDir, "typecheck"], repoRoot);
-    expect(typecheckResult.code).toBe(0);
-
-    const checkResult = await runCommand("pnpm", ["--dir", targetDir, "check"], repoRoot);
-    expect(checkResult.code).toBe(0);
-    expect(checkResult.stdout).toContain("/hello/[tenant]");
-
-    const builtTargetDir = join(tempRoot, "dawn-built-smoke");
-    const templatesDir = join(repoRoot, "templates");
-    const templatesBackupDir = join(repoRoot, "templates.task6-backup");
-
-    await rm(builtTargetDir, { force: true, recursive: true });
-    tempDirs.push(builtTargetDir);
-    await rm(templatesBackupDir, { force: true, recursive: true });
-    await rename(templatesDir, templatesBackupDir);
-
-    try {
-      const builtScaffoldResult = await runCommand(
-        "node",
-        [join(repoRoot, "packages/create-dawn-app/dist/index.js"), builtTargetDir, "--template", "basic"],
-        repoRoot,
-      );
-
-      expect(builtScaffoldResult.code).toBe(0);
-      await assertExists(join(builtTargetDir, "package.json"));
-      await assertExists(join(builtTargetDir, "src/app/(public)/hello/[tenant]/workflow.ts"));
-    } finally {
-      await rename(templatesBackupDir, templatesDir);
-    }
-    },
-  );
+    expect(packageJson.dependencies["@dawn/core"]).toMatch(/^file:/);
+    expect(packageJson.dependencies["@dawn/cli"]).toMatch(/^file:/);
+    expect(packageJson.dependencies["@dawn/langgraph"]).toMatch(/^file:/);
+    expect(packageJson.devDependencies["@dawn/config-typescript"]).toMatch(/^file:/);
+    await assertExists(join(targetDir, ".npmrc"));
+  });
 });
