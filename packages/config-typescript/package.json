@@ -3,6 +3,19 @@
   "version": "0.0.0",
   "private": false,
   "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/blove/dawn/tree/main/packages/config-typescript#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blove/dawn.git",
+    "directory": "packages/config-typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/blove/dawn/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "files": [
     "*.json"
   ],
@@ -18,7 +31,11 @@
     "./node": "./node.json",
     "./nextjs": "./nextjs.json"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "lint": "biome check --config-path ../config-biome/biome.json package.json *.json scripts/validate.mjs",
     "typecheck": "node ./scripts/validate.mjs"
   }
 }
