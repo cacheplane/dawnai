@@ -1,0 +1,24 @@
+{
+  "name": "create-dawn-app",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "create-dawn-app": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b ../devkit/tsconfig.json ../core/tsconfig.json ../langgraph/tsconfig.json ../cli/tsconfig.build.json tsconfig.json",
+    "test": "vitest --run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p ../devkit/tsconfig.json && tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@dawn/devkit": "workspace:*"
+  },
+  "devDependencies": {
+    "@dawn/config-typescript": "workspace:*",
+    "@types/node": "25.6.0"
+  }
+}

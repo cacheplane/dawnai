@@ -113,6 +113,28 @@ async function createAppWithNormalizedCollision() {
   return appRoot;
 }
 
+async function createAppWithRouteModuleCompanion() {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-core-route-module-"));
+  tempDirs.push(appRoot);
+
+  const files = [
+    "package.json",
+    "dawn.config.ts",
+    "src/app/(public)/hello/[tenant]/route.ts",
+    "src/app/(public)/hello/[tenant]/workflow.ts",
+  ];
+
+  await Promise.all(
+    files.map(async (relativePath) => {
+      const filePath = join(appRoot, relativePath);
+      await mkdir(dirname(filePath), { recursive: true });
+      await writeFile(filePath, relativePath.endsWith(".json") ? "{}" : "export default {};\n");
+    }),
+  );
+
+  return appRoot;
+}
+
 describe("discoverRoutes", () => {
   test("detects the app root from dawn.config.ts and starts discovery at src/app", async () => {
     const appRoot = await createFixtureApp();
@@ -203,5 +225,19 @@ describe("discoverRoutes", () => {
     await expect(discoverRoutes({ appRoot })).rejects.toThrow(
       `Duplicate Dawn route pathname "/about" detected`,
     );
+  });
+
+  test("allows route.ts to coexist with a workflow executable in the same route directory", async () => {
+    const appRoot = await createAppWithRouteModuleCompanion();
+
+    await expect(discoverRoutes({ appRoot })).resolves.toMatchObject({
+      routes: [
+        expect.objectContaining({
+          pathname: "/hello/[tenant]",
+          entryFile: join(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts"),
+          entryKind: "workflow",
+        }),
+      ],
+    });
   });
 });

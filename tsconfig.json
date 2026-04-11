@@ -1,4 +1,20 @@
 {
   "files": [],
-  "references": []
+  "references": [
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/langgraph"
+    },
+    {
+      "path": "./packages/cli/tsconfig.build.json"
+    },
+    {
+      "path": "./packages/devkit"
+    },
+    {
+      "path": "./packages/create-dawn-app"
+    }
+  ]
 }
