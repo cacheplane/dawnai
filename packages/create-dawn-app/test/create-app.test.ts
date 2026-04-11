@@ -111,7 +111,7 @@ describe("create-dawn-app", () => {
       const installResult = await runCommand("pnpm", ["add", createAppTarball], installDir);
       expect(installResult.code).toBe(0);
 
-      const scaffoldResult = await runCommand("pnpm", ["exec", "create-dawn-app", targetDir], installDir);
+      const scaffoldResult = await runCommand("pnpm", ["exec", "create-dawn-app", targetDir, "--dist-tag", "next"], installDir);
       expect(scaffoldResult.code).toBe(0);
 
       await assertExists(join(targetDir, "package.json"));
@@ -129,8 +129,21 @@ describe("create-dawn-app", () => {
       expect(packageJson.dependencies["@dawn/cli"]).not.toMatch(/^file:/);
       expect(packageJson.dependencies["@dawn/langgraph"]).not.toMatch(/^file:/);
       expect(packageJson.devDependencies["@dawn/config-typescript"]).not.toMatch(/^file:/);
-      expect(packageJson.dependencies["@dawn/core"]).toBe("latest");
+      expect(packageJson.dependencies["@dawn/core"]).toBe("next");
+      expect(packageJson.dependencies["@dawn/cli"]).toBe("next");
+      expect(packageJson.dependencies["@dawn/langgraph"]).toBe("next");
+      expect(packageJson.devDependencies["@dawn/config-typescript"]).toBe("next");
       await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow();
+
+      const invalidInternalTargetDir = join(tempRoot, "hello-dawn-internal");
+      const internalModeResult = await runCommand(
+        "pnpm",
+        ["exec", "create-dawn-app", invalidInternalTargetDir, "--mode", "internal"],
+        installDir,
+      );
+
+      expect(internalModeResult.code).toBe(1);
+      expect(internalModeResult.stderr).toContain("Internal mode requires a Dawn monorepo checkout");
     },
   );
 
