@@ -10,9 +10,9 @@
     "dawn": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json",
+    "build": "tsc -b tsconfig.build.json",
     "test": "vitest --run --config vitest.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@dawn/core": "workspace:*",

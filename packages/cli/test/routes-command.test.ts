@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { run } from "../src/index";
+import { run } from "../src/index.js";
 
 const tempDirs: string[] = [];
 
@@ -40,10 +40,10 @@ describe("dawn routes", () => {
     const stderr: string[] = [];
 
     const exitCode = await run(["routes", "--cwd", appRoot, "--json"], {
-      stderr: (message) => {
+      stderr: (message: string) => {
         stderr.push(message);
       },
-      stdout: (message) => {
+      stdout: (message: string) => {
         stdout.push(message);
       },
     });
