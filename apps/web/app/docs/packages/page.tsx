@@ -49,8 +49,8 @@ export default function PackagesPage() {
         </p>
         <p>
           In practice that means `@dawn/core`, `@dawn/langgraph`, `@dawn/cli`, `@dawn/devkit`,
-          `create-dawn-app`, `@dawn/config-biome`, and `@dawn/config-typescript` are all part of
-          the public package story, but the site should describe them as early-stage public package
+          `create-dawn-app`, `@dawn/config-biome`, and `@dawn/config-typescript` are all part of the
+          public package story, but the site should describe them as early-stage public package
           surfaces rather than a fully stabilized ecosystem.
         </p>
       </div>
