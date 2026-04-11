@@ -3,6 +3,19 @@
   "version": "0.0.0",
   "private": false,
   "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/blove/dawn/tree/main/packages/devkit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blove/dawn.git",
+    "directory": "packages/devkit"
+  },
+  "bugs": {
+    "url": "https://github.com/blove/dawn/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "files": [
     "dist",
     "templates"
@@ -14,8 +27,12 @@
       "default": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -b tsconfig.json",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

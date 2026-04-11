@@ -14,8 +14,29 @@ export default function GettingStartedPage() {
         <ul className="compact-list">
           <li>App root contains `package.json` and `dawn.config.ts`.</li>
           <li>Route discovery starts at `src/app`.</li>
-          <li>Each route directory exposes exactly one primary executable entry: `graph.ts` or `workflow.ts`.</li>
+          <li>
+            Each route directory exposes exactly one primary executable entry: `graph.ts` or
+            `workflow.ts`.
+          </li>
         </ul>
+      </div>
+
+      <div className="callout">
+        <p className="panel-label">supported dawn.config.ts subset</p>
+        <p>
+          The current parser only supports a narrow `dawn.config.ts` shape. For v0, treat it as a
+          small config file that either exports an empty object or sets `appDir` with a string
+          binding.
+        </p>
+        <pre className="code-block">
+          <code>{`const appDir = "src/custom-app"
+export default { appDir }`}</code>
+        </pre>
+        <p>
+          That means `appDir` is the only supported option today. Helper wrappers, computed config,
+          and arbitrary TypeScript expressions are outside the supported dawn.config.ts subset until
+          the config loader grows beyond this bootstrap syntax.
+        </p>
       </div>
 
       <pre className="code-block">
@@ -28,6 +49,12 @@ node packages/create-dawn-app/dist/index.js my-dawn-app --template basic`}</code
         The first scaffold path is intentionally small. It gives you a basic app shape while the
         repo continues to define discovery, validation, and type generation around that contract.
       </p>
+
+      <p>
+        There are two scaffold paths to keep straight. The repo build above is a bootstrap-local
+        workflow for Dawn contributors. External users should prefer the published `create-dawn-app`
+        package, which defaults to published package specifiers rather than monorepo-local paths.
+      </p>
     </article>
-  );
+  )
 }
