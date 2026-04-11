@@ -14,7 +14,10 @@ export default function GettingStartedPage() {
         <ul className="compact-list">
           <li>App root contains `package.json` and `dawn.config.ts`.</li>
           <li>Route discovery starts at `src/app`.</li>
-          <li>Each route directory exposes exactly one primary executable entry: `graph.ts` or `workflow.ts`.</li>
+          <li>
+            Each route directory exposes exactly one primary executable entry: `graph.ts` or
+            `workflow.ts`.
+          </li>
         </ul>
       </div>
 
@@ -29,5 +32,5 @@ node packages/create-dawn-app/dist/index.js my-dawn-app --template basic`}</code
         repo continues to define discovery, validation, and type generation around that contract.
       </p>
     </article>
-  );
+  )
 }

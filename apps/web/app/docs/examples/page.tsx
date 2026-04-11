@@ -24,5 +24,5 @@ export default function ExamplesPage() {
         For now, the goal is clarity over breadth.
       </p>
     </article>
-  );
+  )
 }
