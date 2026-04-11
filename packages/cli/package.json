@@ -15,7 +15,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@dawn/core": "file:../core",
+    "@dawn/core": "workspace:*",
     "commander": "14.0.3"
   },
   "devDependencies": {

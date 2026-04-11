@@ -35,6 +35,7 @@ async function scaffoldApp(options: CliOptions): Promise<void> {
   await writeTemplate({
     replacements: {
       appName: basename(appRoot),
+      dawnCorePackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/core"))),
       dawnCliPackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/cli"))),
       dawnConfigTypescriptPackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/config-typescript"))),
       dawnLanggraphPackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/langgraph"))),

@@ -8,7 +8,7 @@ export const TEMPLATE_NAMES = ["basic"] as const;
 export type TemplateName = (typeof TEMPLATE_NAMES)[number];
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const templatesRoot = resolve(packageRoot, "../../templates");
+const templatesRoot = resolve(packageRoot, "templates");
 
 export async function resolveTemplateDir(templateName: string): Promise<string> {
   if (!isTemplateName(templateName)) {
