@@ -3,11 +3,27 @@
   "version": "0.0.0",
   "private": false,
   "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/blove/dawn/tree/main/packages/create-dawn-app#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blove/dawn.git",
+    "directory": "packages/create-dawn-app"
+  },
+  "bugs": {
+    "url": "https://github.com/blove/dawn/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "files": [
     "dist"
   ],
   "bin": {
     "create-dawn-app": "./dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -b ../devkit/tsconfig.json ../core/tsconfig.json ../langgraph/tsconfig.json ../cli/tsconfig.build.json tsconfig.json",

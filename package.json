@@ -10,12 +10,14 @@
     "check": "turbo run check",
     "dev": "turbo run dev --parallel",
     "lint": "turbo run lint",
+    "pack:check": "node scripts/pack-check.mjs",
     "test": "node scripts/test.mjs",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.11",
     "@changesets/cli": "2.30.0",
+    "publint": "0.3.15",
     "turbo": "2.9.6",
     "typescript": "6.0.2",
     "vitest": "4.1.4"

@@ -3,12 +3,28 @@
   "version": "0.0.0",
   "private": false,
   "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/blove/dawn/tree/main/packages/config-biome#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blove/dawn.git",
+    "directory": "packages/config-biome"
+  },
+  "bugs": {
+    "url": "https://github.com/blove/dawn/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "files": [
     "biome.json"
   ],
   "exports": {
     ".": "./biome.json",
     "./biome": "./biome.json"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "check": "biome check --config-path ./biome.json ./biome.json"
