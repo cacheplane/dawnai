@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, test } from "vitest";
@@ -22,19 +22,20 @@ async function createPackedConsumer(): Promise<{ readonly consumerDir: string; r
 
   await writeFile(join(tempRoot, "package.json"), JSON.stringify({ name: "pack-root", private: true }));
   await runCommand("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--force"], packageRoot);
-  await runCommand("pnpm", ["pack", "--pack-destination", tempRoot], packageRoot);
+  const packOutput = await runCommand("pnpm", ["pack", "--pack-destination", tempRoot], packageRoot);
+  const tarballPath = resolveTarballPath(packOutput.stdout, tempRoot);
   await mkdir(consumerDir, { recursive: true });
   await writeFile(join(consumerDir, "package.json"), JSON.stringify({ name: "consumer", private: true }, null, 2));
-  await runCommand("pnpm", ["add", join(tempRoot, "dawn-langgraph-0.0.0.tgz")], consumerDir);
+  await runCommand("pnpm", ["add", tarballPath], consumerDir);
 
   return {
     consumerDir,
-    tarballPath: join(tempRoot, "dawn-langgraph-0.0.0.tgz"),
+    tarballPath,
   };
 }
 
-async function runCommand(command: string, args: readonly string[], cwd: string) {
-  await new Promise<void>((resolvePromise, rejectPromise) => {
+async function runCommand(command: string, args: readonly string[], cwd: string): Promise<{ readonly stdout: string; readonly stderr: string }> {
+  return await new Promise<{ readonly stdout: string; readonly stderr: string }>((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
       cwd,
       stdio: "pipe",
@@ -54,13 +55,26 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
     child.once("error", rejectPromise);
     child.once("close", (code) => {
       if (code === 0) {
-        resolvePromise();
+        resolvePromise({ stderr, stdout });
         return;
       }
 
       rejectPromise(new Error([`${command} ${args.join(" ")} failed`, stdout, stderr].filter(Boolean).join("\n")));
     });
   });
+}
+
+function resolveTarballPath(packStdout: string, outputDir: string) {
+  const tarballName = packStdout
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.endsWith(".tgz"));
+
+  if (!tarballName) {
+    throw new Error("Could not determine @dawn/langgraph tarball name");
+  }
+
+  return join(outputDir, basename(tarballName));
 }
 
 describe("@dawn/langgraph defineEntry", () => {
@@ -143,6 +157,9 @@ describe("@dawn/langgraph defineEntry", () => {
       ].join("\n"),
     );
 
-    await expect(runCommand("node", [scriptPath], consumerDir)).resolves.toBeUndefined();
+    await expect(runCommand("node", [scriptPath], consumerDir)).resolves.toEqual({
+      stderr: "",
+      stdout: "",
+    });
   });
 });
