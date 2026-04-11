@@ -41,6 +41,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Docs Check
+        run: node scripts/check-docs.mjs
+
       - name: Pack Check
         run: pnpm pack:check
 
