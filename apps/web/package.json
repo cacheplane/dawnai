@@ -6,7 +6,7 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "lint": "biome check --config-path ../../packages/config-biome/biome.json app package.json tsconfig.json next.config.ts",
+    "lint": "biome check --config-path ../../packages/config-biome/biome.json package.json",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

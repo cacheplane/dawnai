@@ -1,14 +1,14 @@
-import { describe, expect, test } from "vitest"
+import { describe, expect, test } from "vitest";
 
-import { renderRouteTypes } from "../src/typegen/render-route-types"
-import type { RouteManifest } from "../src/types"
+import { renderRouteTypes } from "../src/typegen/render-route-types";
+import type { RouteManifest } from "../src/types";
 
 describe("renderRouteTypes", () => {
   test("renders valid TypeScript for an empty manifest", () => {
     const manifest: RouteManifest = {
       appRoot: "/tmp/example-app",
       routes: [],
-    }
+    };
 
     expect(renderRouteTypes(manifest)).toMatchInlineSnapshot(`
       "declare module "dawn:routes" {
@@ -17,8 +17,8 @@ describe("renderRouteTypes", () => {
         export interface DawnRouteParams {}
       }
       "
-    `)
-  })
+    `);
+  });
 
   test("renders a dawn.generated.d.ts style declaration with path unions and route params", () => {
     const manifest: RouteManifest = {
@@ -63,7 +63,7 @@ describe("renderRouteTypes", () => {
           ],
         },
       ],
-    }
+    };
 
     expect(renderRouteTypes(manifest)).toMatchInlineSnapshot(`
       "declare module "dawn:routes" {
@@ -77,6 +77,6 @@ describe("renderRouteTypes", () => {
         }
       }
       "
-    `)
-  })
-})
+    `);
+  });
+});

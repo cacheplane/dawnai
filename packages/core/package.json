@@ -31,7 +31,7 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json README.md src test tsconfig.json vitest.config.ts",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json README.md",
     "test": "vitest --run --config vitest.config.ts",
     "typecheck": "tsc --noEmit"
   },

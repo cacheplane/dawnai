@@ -2,9 +2,13 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "./library.json",
   "compilerOptions": {
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   }
 }

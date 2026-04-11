@@ -1,15 +1,15 @@
-import type { RouteSegment } from "../types.js"
+import type { RouteSegment } from "../types.js";
 
 export function isRouteGroupSegment(segment: string): boolean {
-  return segment.startsWith("(") && segment.endsWith(")")
+  return segment.startsWith("(") && segment.endsWith(")");
 }
 
 export function isPrivateSegment(segment: string): boolean {
-  return segment.startsWith("_")
+  return segment.startsWith("_");
 }
 
 export function toRouteSegments(routeSegments: readonly string[]): RouteSegment[] {
-  return routeSegments.map((segment) => parseRouteSegment(segment))
+  return routeSegments.map((segment) => parseRouteSegment(segment));
 }
 
 function parseRouteSegment(segment: string): RouteSegment {
@@ -18,7 +18,7 @@ function parseRouteSegment(segment: string): RouteSegment {
       kind: "optional-catchall",
       name: segment.slice(5, -2),
       raw: segment,
-    }
+    };
   }
 
   if (segment.startsWith("[...") && segment.endsWith("]")) {
@@ -26,7 +26,7 @@ function parseRouteSegment(segment: string): RouteSegment {
       kind: "catchall",
       name: segment.slice(4, -1),
       raw: segment,
-    }
+    };
   }
 
   if (segment.startsWith("[") && segment.endsWith("]")) {
@@ -34,11 +34,11 @@ function parseRouteSegment(segment: string): RouteSegment {
       kind: "dynamic",
       name: segment.slice(1, -1),
       raw: segment,
-    }
+    };
   }
 
   return {
     kind: "static",
     raw: segment,
-  }
+  };
 }
