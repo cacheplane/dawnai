@@ -39,6 +39,22 @@ export default function PackagesPage() {
         a clear responsibility so release boundaries do not blur as the product grows.
       </p>
 
+      <div className="callout">
+        <p className="panel-label">Release channel</p>
+        <p>
+          The framework packages listed here are publishable and are being prepared as public
+          package surfaces for v0. The release channel is still intentionally conservative: the
+          monorepo is the development source of truth, while published packages are the external
+          consumption path.
+        </p>
+        <p>
+          In practice that means `@dawn/core`, `@dawn/langgraph`, `@dawn/cli`, `@dawn/devkit`,
+          `create-dawn-app`, `@dawn/config-biome`, and `@dawn/config-typescript` are all part of
+          the public package story, but the site should describe them as early-stage public package
+          surfaces rather than a fully stabilized ecosystem.
+        </p>
+      </div>
+
       <div className="section-grid docs-grid">
         {packages.map((pkg) => (
           <article className="card" key={pkg.name}>
@@ -47,6 +63,13 @@ export default function PackagesPage() {
           </article>
         ))}
       </div>
+
+      <p>
+        `create-dawn-app` is the clearest example of the split between development and release
+        flows. Dawn contributors can still scaffold against local packages when they explicitly opt
+        into monorepo development mode, but the default release channel is published scaffolding for
+        external users.
+      </p>
     </article>
   )
 }
