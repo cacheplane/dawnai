@@ -1,7 +1,67 @@
-import { describe, expect, test } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+
+import { afterEach, describe, expect, test } from "vitest";
 
 import { defineEntry, normalizeRouteModule } from "@dawn/langgraph";
 import type { RouteModule } from "@dawn/langgraph/route-module";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+});
+
+async function createPackedConsumer(): Promise<{ readonly consumerDir: string; readonly tarballPath: string }> {
+  const packageRoot = resolve(import.meta.dirname, "..");
+  const tempRoot = await mkdtemp(join(tmpdir(), "dawn-langgraph-pack-"));
+  const consumerDir = join(tempRoot, "consumer");
+  tempDirs.push(tempRoot);
+
+  await writeFile(join(tempRoot, "package.json"), JSON.stringify({ name: "pack-root", private: true }));
+  await runCommand("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--force"], packageRoot);
+  await runCommand("pnpm", ["pack", "--pack-destination", tempRoot], packageRoot);
+  await mkdir(consumerDir, { recursive: true });
+  await writeFile(join(consumerDir, "package.json"), JSON.stringify({ name: "consumer", private: true }, null, 2));
+  await runCommand("pnpm", ["add", join(tempRoot, "dawn-langgraph-0.0.0.tgz")], consumerDir);
+
+  return {
+    consumerDir,
+    tarballPath: join(tempRoot, "dawn-langgraph-0.0.0.tgz"),
+  };
+}
+
+async function runCommand(command: string, args: readonly string[], cwd: string) {
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: "pipe",
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+
+    child.once("error", rejectPromise);
+    child.once("close", (code) => {
+      if (code === 0) {
+        resolvePromise();
+        return;
+      }
+
+      rejectPromise(new Error([`${command} ${args.join(" ")} failed`, stdout, stderr].filter(Boolean).join("\n")));
+    });
+  });
+}
 
 describe("@dawn/langgraph defineEntry", () => {
   test("graph.ts modules can export a native-first entry and route config", () => {
@@ -64,5 +124,25 @@ describe("@dawn/langgraph defineEntry", () => {
     expect(() =>
       normalizeRouteModule(invalidModule as never),
     ).toThrow("Route modules must define exactly one primary executable entry: graph or workflow");
+  });
+
+  test("packed consumers can import defineEntry from the published root export", async () => {
+    const { consumerDir } = await createPackedConsumer();
+    const scriptPath = join(consumerDir, "entry-check.mjs");
+
+    await writeFile(
+      scriptPath,
+      [
+        'import { defineEntry, normalizeRouteModule } from "@dawn/langgraph";',
+        "const graph = () => 'graph';",
+        "const entry = defineEntry({ graph, config: { streaming: true } });",
+        "const normalized = normalizeRouteModule(entry);",
+        "if (normalized.kind !== 'graph' || normalized.config.streaming !== true) {",
+        "  throw new Error('packed root export failed');",
+        "}",
+      ].join("\n"),
+    );
+
+    await expect(runCommand("node", [scriptPath], consumerDir)).resolves.toBeUndefined();
   });
 });

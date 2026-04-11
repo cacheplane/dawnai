@@ -76,7 +76,7 @@ async function buildCliExecutable() {
 async function executeCli(entryPath: string, args: readonly string[]) {
   return await new Promise<{ readonly code: number | null; readonly stdout: string; readonly stderr: string }>(
     (resolvePromise, rejectPromise) => {
-      const child = spawn("node", [entryPath, ...args], {
+      const child = spawn(entryPath, [...args], {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -130,7 +130,7 @@ describe("dawn check", () => {
     expect(result.stderr).toContain("Missing:");
   });
 
-  test("runs from the built executable entrypoint for direct and symlinked invocation paths", async () => {
+  test("runs from the built dawn executable for direct and symlinked invocation paths", async () => {
     const appRoot = await createFixtureApp([
       "package.json",
       "dawn.config.ts",

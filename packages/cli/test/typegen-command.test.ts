@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { spawn } from "node:child_process";
+import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -49,6 +50,59 @@ async function createCustomAppDirFixture() {
   return appRoot;
 }
 
+async function runCommand(command: string, args: readonly string[], cwd: string) {
+  return await new Promise<{ readonly code: number | null; readonly stdout: string; readonly stderr: string }>(
+    (resolvePromise, rejectPromise) => {
+      const child = spawn(command, args, {
+        cwd,
+        stdio: "pipe",
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (chunk) => {
+        stdout += String(chunk);
+      });
+
+      child.stderr.on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+
+      child.once("error", rejectPromise);
+      child.once("close", (code) => {
+        resolvePromise({ code, stderr, stdout });
+      });
+    },
+  );
+}
+
+async function packPackage(packageName: string, outputDir: string) {
+  const repoRoot = resolve(import.meta.dirname, "../../..");
+  const buildResult = await runCommand("pnpm", ["--filter", packageName, "build"], repoRoot);
+
+  if (buildResult.code !== 0) {
+    throw new Error(buildResult.stderr || buildResult.stdout || `Failed to build ${packageName}`);
+  }
+
+  const packResult = await runCommand("pnpm", ["--filter", packageName, "pack", "--pack-destination", outputDir], repoRoot);
+
+  if (packResult.code !== 0) {
+    throw new Error(packResult.stderr || packResult.stdout || `Failed to pack ${packageName}`);
+  }
+
+  const tarballName = packResult.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.endsWith(".tgz"));
+
+  if (!tarballName) {
+    throw new Error(`Could not determine tarball name for ${packageName}`);
+  }
+
+  return join(outputDir, basename(tarballName));
+}
+
 describe("dawn typegen", () => {
   test("writes generated route types into the target app", async () => {
     const appRoot = await createFixtureApp();
@@ -87,5 +141,58 @@ describe("dawn typegen", () => {
     expect(exitCode).toBe(0);
     expect(output).toContain('export type DawnRoutePath = "/" | "/[tenant]";');
     await expect(readFile(join(appRoot, "src/app/dawn.generated.d.ts"), "utf8")).rejects.toThrow();
+  });
+
+  test("runs from an externally installed dawn bin against a custom appDir", async () => {
+    const installerRoot = await mkdtemp(join(tmpdir(), "dawn-cli-packed-installer-"));
+    const packsRoot = join(installerRoot, "packs");
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-typegen-external-"));
+    tempDirs.push(installerRoot, appRoot);
+
+    await mkdir(packsRoot, { recursive: true });
+    await mkdir(join(appRoot, "src", "custom-app", "[tenant]"), { recursive: true });
+
+    const coreTarball = await packPackage("@dawn/core", packsRoot);
+    const cliTarball = await packPackage("@dawn/cli", packsRoot);
+
+    await writeFile(
+      join(installerRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "installer",
+          private: true,
+          packageManager: "pnpm@10.33.0",
+          dependencies: {
+            "@dawn/cli": `file:${cliTarball}`,
+            "@dawn/core": `file:${coreTarball}`,
+          },
+          pnpm: {
+            overrides: {
+              "@dawn/core": `file:${coreTarball}`,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const installResult = await runCommand("pnpm", ["install"], installerRoot);
+    expect(installResult.code).toBe(0);
+
+    await Promise.all([
+      writeFile(join(appRoot, "package.json"), "{}"),
+      writeFile(join(appRoot, "dawn.config.ts"), 'const appDir = "src/custom-app";\nexport default { appDir };\n'),
+      writeFile(join(appRoot, "src", "custom-app", "page.tsx"), "export default {};\n"),
+      writeFile(join(appRoot, "src", "custom-app", "[tenant]", "graph.ts"), "export default {};\n"),
+    ]);
+
+    const typegenResult = await runCommand(join(installerRoot, "node_modules", ".bin", "dawn"), ["typegen", "--cwd", appRoot], installerRoot);
+
+    expect(typegenResult.code).toBe(0);
+    expect(typegenResult.stderr).toBe("");
+    await expect(readFile(join(appRoot, "src", "custom-app", "dawn.generated.d.ts"), "utf8")).resolves.toContain(
+      'export type DawnRoutePath = "/" | "/[tenant]";',
+    );
   });
 });
