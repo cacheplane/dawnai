@@ -27,7 +27,7 @@ importers:
   packages/cli:
     dependencies:
       '@dawn/core':
-        specifier: workspace:*
+        specifier: file:../core
         version: link:../core
       commander:
         specifier: 14.0.3
@@ -93,6 +93,25 @@ importers:
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
+
+  tmp/dawn-smoke:
+    dependencies:
+      '@dawn/cli':
+        specifier: file:../../packages/cli
+        version: link:../../packages/cli
+      '@dawn/langgraph':
+        specifier: file:../../packages/langgraph
+        version: link:../../packages/langgraph
+    devDependencies:
+      '@dawn/config-typescript':
+        specifier: file:../../packages/config-typescript
+        version: link:../../packages/config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+      typescript:
+        specifier: 6.0.2
+        version: 6.0.2
 
 packages:
 
