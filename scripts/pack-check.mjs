@@ -26,7 +26,13 @@ const packages = [
   },
   {
     dir: "packages/devkit",
-    expectedFiles: ["dist/index.js", "dist/index.d.ts", "templates/app-basic/package.json.template", "README.md"],
+    expectedFiles: [
+      "dist/index.js",
+      "dist/index.d.ts",
+      "templates/app-basic/npmrc.template",
+      "templates/app-basic/package.json.template",
+      "README.md",
+    ],
     requiredFields: ["publishConfig.access", "repository", "homepage", "bugs", "license", "engines.node", "exports", "types"],
   },
   {

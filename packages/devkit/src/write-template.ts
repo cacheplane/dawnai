@@ -42,6 +42,10 @@ async function copyTemplateTree(
 }
 
 function toOutputName(entryName: string): string {
+  if (entryName === "npmrc.template") {
+    return ".npmrc";
+  }
+
   return entryName.endsWith(".template") ? basename(entryName, ".template") : entryName;
 }
 
