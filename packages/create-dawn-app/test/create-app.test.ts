@@ -1,8 +1,7 @@
-import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { run } from "../src/index.js";
@@ -45,11 +44,14 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
 }
 
 describe("create-dawn-app", () => {
-  test("creates the canonical basic app structure and produces an installable fixture app", async () => {
-    const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-"));
-    tempDirs.push(tempRoot);
+  test("creates the canonical basic app structure and produces an installable fixture app under repo tmp", async () => {
+    const repoRoot = resolve(import.meta.dirname, "../../..");
+    const tempRoot = join(repoRoot, "tmp");
+    const targetDir = join(tempRoot, "dawn-smoke");
 
-    const targetDir = join(tempRoot, "hello-dawn");
+    await mkdir(tempRoot, { recursive: true });
+    await rm(targetDir, { force: true, recursive: true });
+    tempDirs.push(targetDir);
 
     const exitCode = await run([targetDir, "--template", "basic"]);
 
@@ -66,24 +68,30 @@ describe("create-dawn-app", () => {
     const packageJson = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8")) as {
       readonly name: string;
       readonly scripts: Record<string, string>;
+      readonly dependencies: Record<string, string>;
+      readonly devDependencies: Record<string, string>;
     };
 
     expect(packageJson.name).toBe(basename(targetDir));
     expect(packageJson.scripts.typecheck).toBe("tsc --noEmit");
-    expect(packageJson.scripts.check).toContain("packages/cli/dist/index.js check");
+    expect(packageJson.scripts.check).toBe("dawn check");
+    expect(packageJson.dependencies["@dawn/cli"]).toBe("file:../../packages/cli");
+    expect(packageJson.dependencies["@dawn/langgraph"]).toBe("file:../../packages/langgraph");
+    expect(packageJson.devDependencies["@dawn/config-typescript"]).toBe("file:../../packages/config-typescript");
 
-    const repoRoot = resolve(import.meta.dirname, "../../..");
     const buildResult = await runCommand("pnpm", ["--filter", "create-dawn-app", "build"], repoRoot);
     expect(buildResult.code).toBe(0);
 
-    const installResult = await runCommand("pnpm", ["install", "--dir", targetDir], tempRoot);
+    await expect(access(join(targetDir, "pnpm-workspace.yaml"), constants.F_OK)).rejects.toThrow();
+
+    const installResult = await runCommand("pnpm", ["install", "--dir", targetDir], repoRoot);
     expect(installResult.code).toBe(0);
     expect(installResult.stderr).not.toContain("ERR_");
 
-    const typecheckResult = await runCommand("pnpm", ["--dir", targetDir, "typecheck"], tempRoot);
+    const typecheckResult = await runCommand("pnpm", ["--dir", targetDir, "typecheck"], repoRoot);
     expect(typecheckResult.code).toBe(0);
 
-    const checkResult = await runCommand("pnpm", ["--dir", targetDir, "check"], tempRoot);
+    const checkResult = await runCommand("pnpm", ["--dir", targetDir, "check"], repoRoot);
     expect(checkResult.code).toBe(0);
     expect(checkResult.stdout).toContain("/hello/[tenant]");
   });

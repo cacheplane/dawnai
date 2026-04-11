@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { access, mkdir, readdir, realpath } from "node:fs/promises";
+import { access, mkdir, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { resolveTemplateDir, writeTemplate } from "@dawn/devkit";
@@ -35,9 +35,9 @@ async function scaffoldApp(options: CliOptions): Promise<void> {
   await writeTemplate({
     replacements: {
       appName: basename(appRoot),
-      dawnCliEntrypointPath: await resolvePackageDependencyPath("packages/cli/dist/index.js"),
-      dawnConfigTypescriptPackagePath: await resolvePackageDependencyPath("packages/config-typescript"),
-      dawnLanggraphPackagePath: await resolvePackageDependencyPath("packages/langgraph"),
+      dawnCliPackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/cli"))),
+      dawnConfigTypescriptPackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/config-typescript"))),
+      dawnLanggraphPackagePath: toPortablePath(relative(appRoot, resolve(repoRoot, "packages/langgraph"))),
     },
     targetDir: appRoot,
     templateDir,
@@ -95,8 +95,12 @@ async function assertTargetDirIsWritable(targetDir: string): Promise<void> {
   }
 }
 
-async function resolvePackageDependencyPath(packagePath: string): Promise<string> {
-  return await realpath(resolve(repoRoot, packagePath));
+function toPortablePath(relativePath: string): string {
+  if (relativePath.startsWith(".")) {
+    return relativePath;
+  }
+
+  return `./${relativePath}`;
 }
 
 if (fileURLToPath(import.meta.url) === resolve(process.argv[1] ?? "")) {

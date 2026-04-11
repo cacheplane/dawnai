@@ -3,10 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node {{dawnCliEntrypointPath}} check",
+    "check": "dawn check",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dawn/cli": "file:{{dawnCliPackagePath}}",
     "@dawn/langgraph": "file:{{dawnLanggraphPackagePath}}"
   },
   "devDependencies": {
