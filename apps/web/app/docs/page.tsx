@@ -1,4 +1,4 @@
-import Link from "next/link"
+import Link from "next/link";
 
 const sections = [
   {
@@ -26,7 +26,7 @@ const sections = [
     title: "Examples",
     body: "What the initial scaffold shows today, plus the route shapes the docs focus on.",
   },
-]
+];
 
 export default function DocsOverviewPage() {
   return (
@@ -49,5 +49,5 @@ export default function DocsOverviewPage() {
         ))}
       </div>
     </article>
-  )
+  );
 }

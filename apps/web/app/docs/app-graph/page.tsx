@@ -42,5 +42,5 @@ export default function AppGraphPage() {
         route metadata.
       </p>
     </article>
-  )
+  );
 }

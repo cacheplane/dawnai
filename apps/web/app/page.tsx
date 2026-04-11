@@ -1,4 +1,4 @@
-import Link from "next/link"
+import Link from "next/link";
 
 const pillars = [
   {
@@ -13,7 +13,7 @@ const pillars = [
     title: "One repo, clear surfaces",
     body: "The website, CLI, and framework packages live together but keep separate responsibilities and release boundaries.",
   },
-]
+];
 
 const quickLinks = [
   {
@@ -31,7 +31,7 @@ const quickLinks = [
     title: "Packages",
     body: "See how `@dawn/*` packages and `create-dawn-app` divide responsibilities.",
   },
-]
+];
 
 export default function HomePage() {
   return (
@@ -41,8 +41,8 @@ export default function HomePage() {
           <p className="eyebrow">TypeScript-first framework</p>
           <h1>Build graph-shaped agent systems without inventing a second runtime.</h1>
           <p className="hero-body">
-            Dawn gives agent apps a clear filesystem contract, predictable local tooling, and room
-            to stay native at the route boundary.
+            Dawn gives agent apps a clear filesystem contract, predictable local tooling, and
+            room to stay native at the route boundary.
           </p>
           <div className="hero-actions">
             <Link className="button button-primary" href="/docs/getting-started">
@@ -106,5 +106,5 @@ export default function HomePage() {
         ))}
       </section>
     </div>
-  )
+  );
 }

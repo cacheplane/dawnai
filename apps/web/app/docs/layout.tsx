@@ -1,5 +1,5 @@
-import Link from "next/link"
-import type { ReactNode } from "react"
+import Link from "next/link";
+import type { ReactNode } from "react";
 
 const docsNav = [
   { href: "/docs", label: "Overview" },
@@ -8,7 +8,7 @@ const docsNav = [
   { href: "/docs/packages", label: "Packages" },
   { href: "/docs/cli", label: "CLI" },
   { href: "/docs/examples", label: "Examples" },
-]
+];
 
 export default function DocsLayout({ children }: { children: ReactNode }) {
   return (
@@ -32,5 +32,5 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
 
       <section className="docs-content">{children}</section>
     </div>
-  )
+  );
 }

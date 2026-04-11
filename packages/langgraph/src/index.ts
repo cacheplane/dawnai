@@ -1,10 +1,10 @@
-export { defineEntry } from "./define-entry.js"
+export { defineEntry } from "./define-entry.js";
 export {
+  normalizeRouteModule,
   type GraphRouteModule,
   type NormalizedRouteModule,
-  normalizeRouteModule,
   type RouteConfig,
   type RouteEntryKind,
   type RouteModule,
   type WorkflowRouteModule,
-} from "./route-module.js"
+} from "./route-module.js";

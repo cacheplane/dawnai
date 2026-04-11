@@ -15,7 +15,7 @@ const commands = [
     name: "create-dawn-app",
     body: "Scaffold a new Dawn app. The first supported template is `basic`.",
   },
-]
+];
 
 export default function CliPage() {
   return (
@@ -42,5 +42,5 @@ dawn routes --json --cwd ./my-dawn-app
 dawn typegen --cwd ./my-dawn-app`}</code>
       </pre>
     </article>
-  )
+  );
 }

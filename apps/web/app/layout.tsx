@@ -1,16 +1,17 @@
-import type { Metadata } from "next"
-import Link from "next/link"
-import type { ReactNode } from "react"
+import type { Metadata } from "next";
+import Link from "next/link";
+import type { ReactNode } from "react";
 
-import "./globals.css"
+import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
     default: "Dawn",
     template: "%s | Dawn",
   },
-  description: "Dawn is a TypeScript-first application framework for graph-shaped agent systems.",
-}
+  description:
+    "Dawn is a TypeScript-first application framework for graph-shaped agent systems.",
+};
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
@@ -40,5 +41,5 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         </div>
       </body>
     </html>
-  )
+  );
 }
