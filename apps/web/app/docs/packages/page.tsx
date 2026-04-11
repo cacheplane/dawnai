@@ -27,7 +27,7 @@ const packages = [
     name: "@dawn/config-typescript",
     body: "Shared TypeScript base configs for library, app, and Node package use cases.",
   },
-];
+]
 
 export default function PackagesPage() {
   return (
@@ -48,5 +48,5 @@ export default function PackagesPage() {
         ))}
       </div>
     </article>
-  );
+  )
 }

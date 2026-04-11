@@ -28,6 +28,6 @@
   },
   "scripts": {
     "check": "biome check --config-path ./biome.json ./biome.json",
-    "lint": "biome check --config-path ./biome.json ./biome.json package.json README.md"
+    "lint": "biome check --config-path ./biome.json ./biome.json package.json"
   }
 }
