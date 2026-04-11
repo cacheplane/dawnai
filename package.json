@@ -8,7 +8,7 @@
   "scripts": {
     "build": "turbo run build",
     "check": "turbo run check",
-    "ci:validate": "pnpm typecheck && pnpm test && pnpm build && pnpm pack:check && node scripts/publish-smoke.mjs",
+    "ci:validate": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm pack:check && node scripts/publish-smoke.mjs",
     "dev": "turbo run dev --parallel",
     "lint": "turbo run lint",
     "pack:check": "node scripts/pack-check.mjs",
