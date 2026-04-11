@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename, join, resolve } from "node:path";
@@ -75,6 +75,7 @@ describe("create-dawn-app", () => {
     expect(packageJson.name).toBe(basename(targetDir));
     expect(packageJson.scripts.typecheck).toBe("tsc --noEmit");
     expect(packageJson.scripts.check).toBe("dawn check");
+    expect(packageJson.dependencies["@dawn/core"]).toBe("file:../../packages/core");
     expect(packageJson.dependencies["@dawn/cli"]).toBe("file:../../packages/cli");
     expect(packageJson.dependencies["@dawn/langgraph"]).toBe("file:../../packages/langgraph");
     expect(packageJson.devDependencies["@dawn/config-typescript"]).toBe("file:../../packages/config-typescript");
@@ -94,5 +95,28 @@ describe("create-dawn-app", () => {
     const checkResult = await runCommand("pnpm", ["--dir", targetDir, "check"], repoRoot);
     expect(checkResult.code).toBe(0);
     expect(checkResult.stdout).toContain("/hello/[tenant]");
+
+    const builtTargetDir = join(tempRoot, "dawn-built-smoke");
+    const templatesDir = join(repoRoot, "templates");
+    const templatesBackupDir = join(repoRoot, "templates.task6-backup");
+
+    await rm(builtTargetDir, { force: true, recursive: true });
+    tempDirs.push(builtTargetDir);
+    await rm(templatesBackupDir, { force: true, recursive: true });
+    await rename(templatesDir, templatesBackupDir);
+
+    try {
+      const builtScaffoldResult = await runCommand(
+        "node",
+        [join(repoRoot, "packages/create-dawn-app/dist/index.js"), builtTargetDir, "--template", "basic"],
+        repoRoot,
+      );
+
+      expect(builtScaffoldResult.code).toBe(0);
+      await assertExists(join(builtTargetDir, "package.json"));
+      await assertExists(join(builtTargetDir, "src/app/(public)/hello/[tenant]/workflow.ts"));
+    } finally {
+      await rename(templatesBackupDir, templatesDir);
+    }
   });
 });
