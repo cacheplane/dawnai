@@ -1,4 +1,8 @@
-import { pathToFileURL } from "node:url";
+#!/usr/bin/env node
+
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Command, CommanderError } from "commander";
 
@@ -51,7 +55,19 @@ export async function run(argv: readonly string[], io: CommandIo = createNodeIo(
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function isExecutedAsMain(importMetaUrl: string, argv1 = process.argv[1]): boolean {
+  if (!argv1) {
+    return false;
+  }
+
+  try {
+    return realpathSync(resolve(argv1)) === realpathSync(fileURLToPath(importMetaUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isExecutedAsMain(import.meta.url)) {
   const exitCode = await run(process.argv.slice(2));
   process.exit(exitCode);
 }

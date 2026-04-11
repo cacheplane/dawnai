@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { discoverRoutes, renderRouteTypes } from "@dawn/core";
+import { discoverRoutes, findDawnApp, renderRouteTypes } from "@dawn/core";
 import type { Command } from "commander";
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js";
@@ -10,7 +10,7 @@ interface TypegenOptions {
   readonly cwd?: string;
 }
 
-const OUTPUT_FILE = join("src", "app", "dawn.generated.d.ts");
+const OUTPUT_FILE = "dawn.generated.d.ts";
 
 export function registerTypegenCommand(program: Command, io: CommandIo): void {
   program
@@ -24,8 +24,9 @@ export function registerTypegenCommand(program: Command, io: CommandIo): void {
 
 export async function runTypegenCommand(options: TypegenOptions, io: CommandIo): Promise<void> {
   try {
-    const manifest = await discoverRoutes(options.cwd ? { cwd: options.cwd } : {});
-    const outputPath = join(manifest.appRoot, OUTPUT_FILE);
+    const app = await findDawnApp(options.cwd ? { cwd: options.cwd } : {});
+    const manifest = await discoverRoutes({ appRoot: app.appRoot });
+    const outputPath = join(app.routesDir, OUTPUT_FILE);
 
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, renderRouteTypes(manifest), "utf8");
