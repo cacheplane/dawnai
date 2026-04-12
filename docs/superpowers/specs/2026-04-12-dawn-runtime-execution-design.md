@@ -124,11 +124,15 @@ V1 behavior:
 
 V1 CLI contract:
 
-- `dawn test` with no positional arguments discovers all `run.test.ts` files under the app routes directory
+- `dawn test` with no positional arguments discovers all `run.test.ts` files under the configured Dawn routes root
 - `dawn test <path>` narrows scope to one scenario file or one route directory
+- if the narrowing path starts with `.` or `..`, resolve it from the caller's current working directory
+- otherwise resolve it relative to the discovered app root
+- a narrowed directory includes descendant route directories under that directory
+- route file paths are not valid narrowing inputs in v1
 - human-readable output is the default surface in v1
 - exit `0` when all discovered scenarios pass
-- exit `1` when one or more scenarios fail or a modeled route execution failure occurs
+- exit `1` when one or more scenarios fail, a modeled route execution failure occurs, or no scenarios are found
 - exit `2` on CLI or infrastructure failures before normal scenario results can be produced
 - JSON mode is deferred; the framework harness should continue to use its internal lanes and `dawn run` for machine-oriented assertions
 
@@ -170,10 +174,11 @@ The exact runtime helper API can still evolve during implementation, but the mod
 
 Scenario discovery rules:
 
-- Dawn discovers `run.test.ts` files by walking the app routes tree
+- Dawn discovers `run.test.ts` files by walking the configured Dawn routes root after resolving `dawn.config.ts`
 - a scenario file applies to the route directory it is colocated with
 - `target` is required on every scenario object, even when only one executable route boundary exists in the directory
-- `target` must be a relative path from the scenario file directory to either `graph.ts` or `workflow.ts`
+- `target` must be exactly `./graph.ts` or `./workflow.ts`
+- cross-directory scenario targets are out of scope in v1
 
 This keeps the semantic split clear:
 
@@ -191,6 +196,8 @@ App root discovery should match the existing Dawn CLI pattern:
 - allow `--cwd` override when needed
 
 This keeps `dawn run`, `dawn test`, and `dawn verify` aligned.
+
+`dawn test` discovery must walk the resolved Dawn routes root from config. If `dawn.config.ts` sets `appDir`, that configured route root is the tree Dawn searches for `run.test.ts`.
 
 ### Route Targeting
 
@@ -415,7 +422,7 @@ These should map to:
 
 These should map to:
 
-- exit `1` when one or more discovered scenarios fail
+- exit `1` when one or more discovered scenarios fail or when discovery yields zero scenarios
 - exit `2` when Dawn cannot discover, load, or execute the test run infrastructure correctly
 - concise human-readable stdout for scenario results
 - stderr reserved for CLI or infrastructure failures that bypass the normal test result flow
