@@ -1,7 +1,17 @@
+import { readFile } from "node:fs/promises"
+import { fileURLToPath } from "node:url"
 import { describe, expect, test } from "vitest"
 
 import { renderRouteTypes } from "../src/typegen/render-route-types"
 import type { RouteManifest } from "../src/types"
+
+const MANIFEST_SNAPSHOT_PATH = fileURLToPath(
+  new URL("../../../test/fixtures/contracts/manifest.snap.json", import.meta.url),
+)
+
+async function loadManifestSnapshot(): Promise<RouteManifest> {
+  return JSON.parse(await readFile(MANIFEST_SNAPSHOT_PATH, "utf8")) as RouteManifest
+}
 
 describe("renderRouteTypes", () => {
   test("renders valid TypeScript for an empty manifest", () => {
@@ -20,50 +30,8 @@ describe("renderRouteTypes", () => {
     `)
   })
 
-  test("renders a dawn.generated.d.ts style declaration with path unions and route params", () => {
-    const manifest: RouteManifest = {
-      appRoot: "/tmp/example-app",
-      routes: [
-        {
-          id: "/",
-          pathname: "/",
-          entryKind: "page",
-          entryFile: "/tmp/example-app/src/app/page.tsx",
-          routeDir: "/tmp/example-app/src/app",
-          segments: [],
-        },
-        {
-          id: "/[tenant]",
-          pathname: "/[tenant]",
-          entryKind: "graph",
-          entryFile: "/tmp/example-app/src/app/[tenant]/graph.ts",
-          routeDir: "/tmp/example-app/src/app/[tenant]",
-          segments: [{ raw: "[tenant]", name: "tenant", kind: "dynamic" }],
-        },
-        {
-          id: "/docs/[...path]",
-          pathname: "/docs/[...path]",
-          entryKind: "workflow",
-          entryFile: "/tmp/example-app/src/app/docs/[...path]/workflow.ts",
-          routeDir: "/tmp/example-app/src/app/docs/[...path]",
-          segments: [
-            { raw: "docs", kind: "static" },
-            { raw: "[...path]", name: "path", kind: "catchall" },
-          ],
-        },
-        {
-          id: "/docs/[[...path]]",
-          pathname: "/docs/[[...path]]",
-          entryKind: "graph",
-          entryFile: "/tmp/example-app/src/app/docs/[[...path]]/graph.ts",
-          routeDir: "/tmp/example-app/src/app/docs/[[...path]]",
-          segments: [
-            { raw: "docs", kind: "static" },
-            { raw: "[[...path]]", name: "path", kind: "optional-catchall" },
-          ],
-        },
-      ],
-    }
+  test("renders route types from the checked-in manifest snapshot", async () => {
+    const manifest = await loadManifestSnapshot()
 
     expect(renderRouteTypes(manifest)).toMatchInlineSnapshot(`
       "declare module "dawn:routes" {
