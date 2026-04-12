@@ -134,6 +134,17 @@ describe("dawn typegen", () => {
 
   test("writes generated route types into a custom configured appDir", async () => {
     const appRoot = await createCustomAppDirFixture()
+    const verifyStdout: string[] = []
+    const verifyStderr: string[] = []
+
+    const verifyExitCode = await run(["verify", "--cwd", appRoot], {
+      stderr: (message: string) => {
+        verifyStderr.push(message)
+      },
+      stdout: (message: string) => {
+        verifyStdout.push(message)
+      },
+    })
 
     const exitCode = await run(["typegen", "--cwd", appRoot], {
       stderr: () => {},
@@ -142,6 +153,9 @@ describe("dawn typegen", () => {
 
     const output = await readFile(join(appRoot, "src/custom-app/dawn.generated.d.ts"), "utf8")
 
+    expect(verifyExitCode).toBe(0)
+    expect(verifyStderr.join("")).toBe("")
+    expect(verifyStdout.join("")).toContain("Dawn app integrity OK")
     expect(exitCode).toBe(0)
     expect(output).toContain('export type DawnRoutePath = "/" | "/[tenant]";')
     await expect(readFile(join(appRoot, "src/app/dawn.generated.d.ts"), "utf8")).rejects.toThrow()
@@ -194,12 +208,17 @@ describe("dawn typegen", () => {
       writeFile(join(appRoot, "src", "custom-app", "[tenant]", "graph.ts"), "export default {};\n"),
     ])
 
+    const externalBin = join(installerRoot, "node_modules", ".bin", "dawn")
+    const verifyResult = await runCommand(externalBin, ["verify", "--cwd", appRoot], installerRoot)
     const typegenResult = await runCommand(
-      join(installerRoot, "node_modules", ".bin", "dawn"),
+      externalBin,
       ["typegen", "--cwd", appRoot],
       installerRoot,
     )
 
+    expect(verifyResult.code).toBe(0)
+    expect(verifyResult.stderr).toBe("")
+    expect(verifyResult.stdout).toContain("Dawn app integrity OK")
     expect(typegenResult.code).toBe(0)
     expect(typegenResult.stderr).toBe("")
     await expect(
