@@ -8,7 +8,7 @@
   "scripts": {
     "build": "turbo run build",
     "check": "turbo run check",
-    "ci:validate": "pnpm lint && pnpm typecheck && pnpm test && node scripts/check-docs.mjs && pnpm build && pnpm pack:check && pnpm verify:harness",
+    "ci:validate": "pnpm lint && pnpm typecheck && pnpm test && node scripts/check-docs.mjs && pnpm build && pnpm pack:check && pnpm verify:harness:self-test && pnpm verify:harness",
     "dev": "turbo run dev --parallel",
     "lint": "pnpm exec biome check --config-path packages/config-biome/biome.json package.json scripts && turbo run lint",
     "lint:fix": "pnpm exec biome check --write --unsafe --config-path packages/config-biome/biome.json package.json scripts && turbo run lint -- --write",
@@ -16,6 +16,7 @@
     "test": "node scripts/test.mjs",
     "verify:harness": "node scripts/harness-report.mjs framework smoke",
     "verify:harness:framework": "node scripts/harness-report.mjs framework",
+    "verify:harness:self-test": "node scripts/harness-report.mjs --self-test",
     "verify:harness:smoke": "node scripts/harness-report.mjs smoke",
     "typecheck": "turbo run typecheck"
   },

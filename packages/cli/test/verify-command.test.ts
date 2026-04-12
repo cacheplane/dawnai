@@ -1,11 +1,14 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { run } from "../src/index.js"
 
 const tempDirs: string[] = []
+const testDir = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(testDir, "../../..")
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
@@ -44,6 +47,10 @@ async function invoke(argv: readonly string[]) {
     stderr: stderr.join(""),
     stdout: stdout.join(""),
   }
+}
+
+function contractFixtureRoot(name: string) {
+  return join(repoRoot, "test", "fixtures", "contracts", name)
 }
 
 describe("dawn verify", () => {
@@ -113,6 +120,70 @@ describe("dawn verify", () => {
         failed: 1,
         passed: 0,
         total: 1,
+      },
+      status: "failed",
+    })
+  })
+
+  test("preserves the discovered app root for invalid config failures in json mode", async () => {
+    const appRoot = contractFixtureRoot("invalid-config")
+    const childDir = join(appRoot, "src", "app", "hello")
+
+    const result = await invoke(["verify", "--cwd", childDir, "--json"])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    expect(JSON.parse(result.stdout)).toEqual({
+      appRoot,
+      checks: [
+        {
+          error: {
+            message:
+              'Unsupported dawn.config.ts syntax: unexpected token "(". Supported subset: optional const string declarations followed by export default { appDir } or export default { appDir: "..." }.',
+          },
+          name: "app",
+          status: "failed",
+        },
+      ],
+      counts: {
+        failed: 1,
+        passed: 0,
+        total: 1,
+      },
+      status: "failed",
+    })
+  })
+
+  test("preserves staged checks and the discovered app root for invalid companion failures in json mode", async () => {
+    const appRoot = contractFixtureRoot("invalid-companion")
+    const childDir = join(appRoot, "src", "app", "broken")
+
+    const result = await invoke(["verify", "--cwd", childDir, "--json"])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    expect(JSON.parse(result.stdout)).toEqual({
+      appRoot,
+      checks: [
+        {
+          appRoot,
+          configPath: join(appRoot, "dawn.config.ts"),
+          name: "app",
+          routesDir: join(appRoot, "src", "app"),
+          status: "passed",
+        },
+        {
+          error: {
+            message: `Route directory ${join(appRoot, "src", "app", "broken", "[tenant]")} has multiple primary entries: graph.ts, workflow.ts`,
+          },
+          name: "routes",
+          status: "failed",
+        },
+      ],
+      counts: {
+        failed: 1,
+        passed: 1,
+        total: 2,
       },
       status: "failed",
     })
