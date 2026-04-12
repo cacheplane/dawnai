@@ -9,4 +9,5 @@ coverage/
 .env.*
 !.env.example
 tmp/
+artifacts/
 .worktrees/
