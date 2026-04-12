@@ -1,16 +1,21 @@
 import { spawn } from "node:child_process"
 import { constants } from "node:fs"
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { basename, join, resolve } from "node:path"
+import { access, readFile } from "node:fs/promises"
+import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vitest"
 
+import {
+  cleanupTrackedTempDirs,
+  createPackagedInstaller,
+  createTrackedTempDir,
+  type TrackedTempDir,
+} from "../../../test/harness/packaged-app.ts"
 import { run } from "../src/index.js"
 
-const tempDirs: string[] = []
+const tempDirs: TrackedTempDir[] = []
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
+  await cleanupTrackedTempDirs(tempDirs)
 })
 
 async function assertExists(path: string) {
@@ -46,75 +51,16 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
   })
 }
 
-async function packPackage(repoRoot: string, packageName: string, outputDir: string) {
-  const packResult = await runCommand(
-    "pnpm",
-    ["--filter", packageName, "pack", "--pack-destination", outputDir],
-    repoRoot,
-  )
-
-  if (packResult.code !== 0) {
-    throw new Error(packResult.stderr || packResult.stdout || `Failed to pack ${packageName}`)
-  }
-
-  const tarballName = packResult.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .find((line) => line.endsWith(".tgz"))
-
-  if (!tarballName) {
-    throw new Error(`Could not find tarball name for ${packageName}`)
-  }
-
-  return join(outputDir, basename(tarballName))
-}
-
 describe("create-dawn-app", () => {
-  test("packs and installs create-dawn-app outside the repo workspace and scaffolds default published dependencies", {
+  test("scaffolds external mode from the packaged bin with published dist-tag specifiers", {
     timeout: 30_000,
   }, async () => {
-    const repoRoot = resolve(import.meta.dirname, "../../..")
-    const buildResult = await runCommand("pnpm", ["--filter", "create-dawn-app", "build"], repoRoot)
+    const tempRoot = await createTrackedTempDir("create-dawn-app-standalone-", tempDirs)
 
-    expect(buildResult.code).toBe(0)
-
-    const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-standalone-"))
-    tempDirs.push(tempRoot)
-
-    const packDir = join(tempRoot, "packs")
-    const installDir = join(tempRoot, "installer")
+    const { installerDir: installDir } = await createPackagedInstaller({
+      tempRoot,
+    })
     const targetDir = join(tempRoot, "hello-dawn")
-
-    await mkdir(packDir, { recursive: true })
-    await mkdir(installDir, { recursive: true })
-
-    const devkitTarball = await packPackage(repoRoot, "@dawn/devkit", packDir)
-    const createAppTarball = await packPackage(repoRoot, "create-dawn-app", packDir)
-
-    await writeFile(
-      join(installDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "installer",
-          private: true,
-          pnpm: {
-            overrides: {
-              "@dawn/devkit": devkitTarball,
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    )
-
-    const installDevkitResult = await runCommand("pnpm", ["add", devkitTarball], installDir)
-    expect(installDevkitResult.code).toBe(0)
-
-    const installResult = await runCommand("pnpm", ["add", createAppTarball], installDir)
-    expect(installResult.code).toBe(0)
 
     const scaffoldResult = await runCommand(
       "pnpm",
@@ -131,9 +77,12 @@ describe("create-dawn-app", () => {
       readonly name: string
       readonly dependencies: Record<string, string>
       readonly devDependencies: Record<string, string>
+      readonly scripts: Record<string, string>
     }
 
     expect(packageJson.name).toBe("hello-dawn")
+    expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
+    expect(packageJson.scripts.typecheck).toBe("tsc --noEmit")
     expect(packageJson.dependencies["@dawn/core"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn/cli"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn/langgraph"]).not.toMatch(/^file:/)
@@ -143,6 +92,16 @@ describe("create-dawn-app", () => {
     expect(packageJson.dependencies["@dawn/langgraph"]).toBe("next")
     expect(packageJson.devDependencies["@dawn/config-typescript"]).toBe("next")
     await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow()
+  })
+
+  test("rejects packaged internal mode outside a Dawn monorepo checkout", {
+    timeout: 30_000,
+  }, async () => {
+    const tempRoot = await createTrackedTempDir("create-dawn-app-standalone-", tempDirs)
+
+    const { installerDir: installDir } = await createPackagedInstaller({
+      tempRoot,
+    })
 
     const invalidInternalTargetDir = join(tempRoot, "hello-dawn-internal")
     const internalModeResult = await runCommand(
@@ -156,8 +115,7 @@ describe("create-dawn-app", () => {
   })
 
   test("supports explicit internal dev scaffolding with repo-local package edges", async () => {
-    const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-internal-"))
-    tempDirs.push(tempRoot)
+    const tempRoot = await createTrackedTempDir("create-dawn-app-internal-", tempDirs)
 
     const targetDir = join(tempRoot, "hello-dawn")
 
@@ -168,8 +126,10 @@ describe("create-dawn-app", () => {
     const packageJson = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8")) as {
       readonly dependencies: Record<string, string>
       readonly devDependencies: Record<string, string>
+      readonly scripts: Record<string, string>
     }
 
+    expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
     expect(packageJson.dependencies["@dawn/core"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn/cli"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn/langgraph"]).toMatch(/^file:/)

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "check": "dawn check",
+    "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

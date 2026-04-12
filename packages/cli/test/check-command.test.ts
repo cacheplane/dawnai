@@ -129,7 +129,7 @@ describe("dawn check", () => {
     expect(result.stderr).toContain("Missing:")
   })
 
-  test("runs from the built dawn executable for direct and symlinked invocation paths", async () => {
+  test("runs check and verify from the built dawn executable for direct and symlinked invocation paths", async () => {
     const appRoot = await createFixtureApp(["package.json", "dawn.config.ts", "src/app/page.tsx"])
     const builtCli = await buildCliExecutable()
     const builtSource = await readFile(builtCli, "utf8")
@@ -137,15 +137,23 @@ describe("dawn check", () => {
 
     await symlink(builtCli, symlinkPath)
 
-    const directResult = await executeCli(builtCli, ["check", "--cwd", appRoot])
-    const symlinkResult = await executeCli(symlinkPath, ["check", "--cwd", appRoot])
+    const directCheckResult = await executeCli(builtCli, ["check", "--cwd", appRoot])
+    const directVerifyResult = await executeCli(builtCli, ["verify", "--cwd", appRoot])
+    const symlinkCheckResult = await executeCli(symlinkPath, ["check", "--cwd", appRoot])
+    const symlinkVerifyResult = await executeCli(symlinkPath, ["verify", "--cwd", appRoot])
 
     expect(builtSource.startsWith("#!/usr/bin/env node")).toBe(true)
-    expect(directResult.code).toBe(0)
-    expect(directResult.stderr).toBe("")
-    expect(directResult.stdout).toContain("Dawn app is valid")
-    expect(symlinkResult.code).toBe(0)
-    expect(symlinkResult.stderr).toBe("")
-    expect(symlinkResult.stdout).toContain("Dawn app is valid")
+    expect(directCheckResult.code).toBe(0)
+    expect(directCheckResult.stderr).toBe("")
+    expect(directCheckResult.stdout).toContain("Dawn app is valid")
+    expect(directVerifyResult.code).toBe(0)
+    expect(directVerifyResult.stderr).toBe("")
+    expect(directVerifyResult.stdout).toContain("Dawn app integrity OK")
+    expect(symlinkCheckResult.code).toBe(0)
+    expect(symlinkCheckResult.stderr).toBe("")
+    expect(symlinkCheckResult.stdout).toContain("Dawn app is valid")
+    expect(symlinkVerifyResult.code).toBe(0)
+    expect(symlinkVerifyResult.stderr).toBe("")
+    expect(symlinkVerifyResult.stdout).toContain("Dawn app integrity OK")
   })
 })
