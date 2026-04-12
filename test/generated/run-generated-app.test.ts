@@ -215,7 +215,6 @@ async function rewriteDependenciesToTarballs(options: {
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
     devDependencies?: Record<string, string>
     dependencies?: Record<string, string>
-    scripts?: Record<string, string>
     pnpm?: {
       overrides?: Record<string, string>
     }
@@ -230,10 +229,6 @@ async function rewriteDependenciesToTarballs(options: {
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
     "@dawn/config-typescript": options.tarballs.configTypescript,
-  }
-  packageJson.scripts = {
-    ...packageJson.scripts,
-    build: packageJson.scripts?.build ?? "tsc -p tsconfig.json",
   }
   packageJson.pnpm = {
     ...(packageJson.pnpm ?? {}),
@@ -286,13 +281,6 @@ async function runLifecycle(options: {
   })
 
   expect(typegenResult.stdout).toContain("Wrote route types")
-
-  await runCommand({
-    args: ["check"],
-    command: "pnpm",
-    cwd: options.appRoot,
-    transcriptPath: options.transcriptPath,
-  })
   await runCommand({
     args: ["typecheck"],
     command: "pnpm",

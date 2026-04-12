@@ -136,9 +136,12 @@ describe("create-dawn-app", () => {
       readonly name: string
       readonly dependencies: Record<string, string>
       readonly devDependencies: Record<string, string>
+      readonly scripts: Record<string, string>
     }
 
     expect(packageJson.name).toBe("hello-dawn")
+    expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
+    expect(packageJson.scripts.typecheck).toBe("tsc --noEmit")
     expect(packageJson.dependencies["@dawn/core"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn/cli"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn/langgraph"]).not.toMatch(/^file:/)
@@ -183,8 +186,10 @@ describe("create-dawn-app", () => {
     const packageJson = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8")) as {
       readonly dependencies: Record<string, string>
       readonly devDependencies: Record<string, string>
+      readonly scripts: Record<string, string>
     }
 
+    expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
     expect(packageJson.dependencies["@dawn/core"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn/cli"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn/langgraph"]).toMatch(/^file:/)
