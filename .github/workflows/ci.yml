@@ -47,6 +47,9 @@ jobs:
       - name: Pack Check
         run: pnpm pack:check
 
+      - name: Harness Coordinator Self-Test
+        run: pnpm verify:harness:self-test
+
       - name: Framework Verification
         run: pnpm verify:harness:framework
 
