@@ -20,11 +20,15 @@ export interface SpawnProcessResult {
 
 export async function spawnProcess(options: SpawnProcessOptions): Promise<SpawnProcessResult> {
   const args = options.args ?? []
+  const env = {
+    ...process.env,
+    ...options.env,
+  }
 
   return await new Promise<SpawnProcessResult>((resolve, reject) => {
     const child = spawn(options.command, [...args], {
       cwd: options.cwd,
-      env: options.env,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     })
 
