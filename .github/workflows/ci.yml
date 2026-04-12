@@ -35,7 +35,7 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
+      - name: Source Tests
         run: pnpm test
 
       - name: Docs Check
@@ -47,8 +47,8 @@ jobs:
       - name: Pack Check
         run: pnpm pack:check
 
-      - name: Generated Harness Verification
-        run: pnpm verify:harness:generated
+      - name: Framework Verification
+        run: pnpm verify:harness:framework
 
       - name: Smoke Harness Verification
         run: pnpm verify:harness:smoke
