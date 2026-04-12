@@ -1,21 +1,17 @@
 import { constants } from "node:fs"
-import {
-  access,
-  appendFile,
-  cp,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { basename, dirname, join, resolve } from "node:path"
+import { access, appendFile, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { dirname, join, resolve } from "node:path"
 
 import { afterEach, describe, expect, test } from "vitest"
 
 import { createArtifactRoot, spawnProcess } from "../../packages/devkit/src/testing/index.ts"
+import {
+  cleanupTrackedTempDirs,
+  createPackagedInstaller,
+  createTrackedTempDir,
+  markTrackedTempDirForPreserve,
+  type TrackedTempDir,
+} from "./harness.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
 const FIXTURE_ROOT = resolve(import.meta.dirname, "fixtures")
@@ -23,7 +19,7 @@ const CUSTOM_APP_DIR_FIXTURE_ROOT = resolve(
   REPO_ROOT,
   "test/fixtures/contracts/valid-custom-app-dir",
 )
-const tempDirs: string[] = []
+const tempDirs: TrackedTempDir[] = []
 
 interface PackedTarballs {
   readonly cli: string
@@ -48,10 +44,33 @@ interface GeneratedAppScenarioOptions {
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
+  await cleanupTrackedTempDirs(tempDirs)
 })
 
 describe("generated app publish harness", () => {
+  test("cleans successful tracked temp roots", async () => {
+    const tracked: TrackedTempDir[] = []
+    const tempRoot = await createTrackedTempDir("dgh-", tracked)
+    await writeFile(join(tempRoot, "marker.txt"), "ok", "utf8")
+
+    await cleanupTrackedTempDirs(tracked)
+
+    await expect(access(tempRoot, constants.F_OK)).rejects.toThrow()
+  })
+
+  test("preserves tracked temp roots when marked for debugging", async () => {
+    const tracked: TrackedTempDir[] = []
+    const tempRoot = await createTrackedTempDir("dgh-", tracked)
+    const markerPath = join(tempRoot, "marker.txt")
+    await writeFile(markerPath, "debug", "utf8")
+
+    markTrackedTempDirForPreserve(tracked, tempRoot)
+    await cleanupTrackedTempDirs(tracked)
+
+    await expect(readFile(markerPath, "utf8")).resolves.toBe("debug")
+    await rm(tempRoot, { force: true, recursive: true })
+  })
+
   test("scaffolds a packaged basic app and runs the published lifecycle", {
     timeout: 180_000,
   }, async () => {
@@ -72,8 +91,7 @@ describe("generated app publish harness", () => {
 async function runGeneratedAppScenario(
   options: GeneratedAppScenarioOptions,
 ): Promise<GeneratedAppScenarioResult> {
-  const tempRoot = await mkdtemp(join(tmpdir(), "dg-"))
-  tempDirs.push(tempRoot)
+  const tempRoot = await createTrackedTempDir("dg-", tempDirs)
 
   const artifactRoot = await createArtifactRoot({
     baseDir: tempRoot,
@@ -81,113 +99,41 @@ async function runGeneratedAppScenario(
     runId: "ga",
   })
   const transcriptPath = join(artifactRoot, "transcripts", "generated-app.log")
-  const packsDir = join(tempRoot, "p")
-  const installerDir = join(tempRoot, "i")
   const appRoot = join(tempRoot, options.targetDirName)
 
   await mkdir(dirname(transcriptPath), { recursive: true })
-  await mkdir(packsDir, { recursive: true })
-  await mkdir(installerDir, { recursive: true })
+  try {
+    const { installerDir, tarballs: packagedTarballs } = await createPackagedInstaller({
+      packageNames: ["@dawn/cli", "@dawn/config-typescript", "@dawn/core", "@dawn/langgraph"],
+      tempRoot,
+      transcriptPath,
+    })
+    const tarballs = toPackedTarballs(packagedTarballs)
+    await scaffoldApp({ appRoot, installerDir, transcriptPath })
 
-  const tarballs = await packPublishedPackages({ packsDir, transcriptPath })
-  await installPackagedInitializer({ installerDir, tarballs, transcriptPath })
-  await scaffoldApp({ appRoot, installerDir, transcriptPath })
+    if (options.mutateApp) {
+      await options.mutateApp(appRoot)
+    }
 
-  if (options.mutateApp) {
-    await options.mutateApp(appRoot)
+    await rewriteDependenciesToTarballs({ appRoot, tarballs })
+
+    const result = await runLifecycle({ appRoot, transcriptPath })
+    const expected = await readExpectedFixture(options.expectedFixtureName)
+
+    expect(normalizeForFixture(result, { appRoot, tarballs })).toEqual(expected)
+
+    return result
+  } catch (error) {
+    markTrackedTempDirForPreserve(tempDirs, tempRoot)
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      [
+        message,
+        `Preserved generated app artifacts at ${artifactRoot}`,
+        `Transcript: ${transcriptPath}`,
+      ].join("\n"),
+    )
   }
-
-  await rewriteDependenciesToTarballs({ appRoot, tarballs })
-
-  const result = await runLifecycle({ appRoot, transcriptPath })
-  const expected = await readExpectedFixture(options.expectedFixtureName)
-
-  expect(normalizeForFixture(result, { appRoot, tarballs })).toEqual(expected)
-
-  return result
-}
-
-async function packPublishedPackages(options: {
-  readonly packsDir: string
-  readonly transcriptPath: string
-}): Promise<PackedTarballs> {
-  await runCommand({
-    args: ["--filter", "create-dawn-app", "build"],
-    command: "pnpm",
-    cwd: REPO_ROOT,
-    transcriptPath: options.transcriptPath,
-  })
-
-  return {
-    cli: await packPackage("@dawn/cli", options),
-    configTypescript: await packPackage("@dawn/config-typescript", options),
-    core: await packPackage("@dawn/core", options),
-    createApp: await packPackage("create-dawn-app", options),
-    devkit: await packPackage("@dawn/devkit", options),
-    langgraph: await packPackage("@dawn/langgraph", options),
-  }
-}
-
-async function packPackage(
-  packageName: string,
-  options: { readonly packsDir: string; readonly transcriptPath: string },
-): Promise<string> {
-  const packResult = await runCommand({
-    args: ["--filter", packageName, "pack", "--pack-destination", options.packsDir],
-    command: "pnpm",
-    cwd: REPO_ROOT,
-    transcriptPath: options.transcriptPath,
-  })
-
-  const tarballName = packResult.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .find((line) => line.endsWith(".tgz"))
-
-  if (!tarballName) {
-    throw new Error(`Could not determine tarball name for ${packageName}`)
-  }
-
-  return join(options.packsDir, basename(tarballName))
-}
-
-async function installPackagedInitializer(options: {
-  readonly installerDir: string
-  readonly tarballs: PackedTarballs
-  readonly transcriptPath: string
-}): Promise<void> {
-  await writeFile(
-    join(options.installerDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: "installer",
-        private: true,
-        packageManager: "pnpm@10.33.0",
-        pnpm: {
-          overrides: {
-            "@dawn/devkit": options.tarballs.devkit,
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  )
-
-  await runCommand({
-    args: ["add", options.tarballs.devkit],
-    command: "pnpm",
-    cwd: options.installerDir,
-    transcriptPath: options.transcriptPath,
-  })
-  await runCommand({
-    args: ["add", options.tarballs.createApp],
-    command: "pnpm",
-    cwd: options.installerDir,
-    transcriptPath: options.transcriptPath,
-  })
 }
 
 async function scaffoldApp(options: {
@@ -371,6 +317,17 @@ async function readExpectedFixture(fixtureName: string): Promise<unknown> {
   return JSON.parse(await readFile(join(FIXTURE_ROOT, `${fixtureName}.expected.json`), "utf8"))
 }
 
+function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTarballs {
+  return {
+    cli: tarballs["@dawn/cli"],
+    configTypescript: tarballs["@dawn/config-typescript"],
+    core: tarballs["@dawn/core"],
+    createApp: tarballs["create-dawn-app"],
+    devkit: tarballs["@dawn/devkit"],
+    langgraph: tarballs["@dawn/langgraph"],
+  }
+}
+
 function normalizeForFixture(
   value: GeneratedAppScenarioResult,
   context: { readonly appRoot: string; readonly tarballs: PackedTarballs },
@@ -378,17 +335,16 @@ function normalizeForFixture(
   return normalizeValue(value, [
     [`/private${context.appRoot}`, "<app-root>"],
     [context.appRoot, "<app-root>"],
+    [context.tarballs.cli, "<tarball:@dawn/cli>"],
+    [context.tarballs.configTypescript, "<tarball:@dawn/config-typescript>"],
+    [context.tarballs.core, "<tarball:@dawn/core>"],
+    [context.tarballs.createApp, "<tarball:create-dawn-app>"],
+    [context.tarballs.devkit, "<tarball:@dawn/devkit>"],
+    [context.tarballs.langgraph, "<tarball:@dawn/langgraph>"],
     [`/private${dirname(context.tarballs.cli)}`, "<packs-dir>"],
     [dirname(context.tarballs.cli), "<packs-dir>"],
-    [context.tarballs.cli, `<packs-dir>/${basename(context.tarballs.cli)}`],
-    [
-      context.tarballs.configTypescript,
-      `<packs-dir>/${basename(context.tarballs.configTypescript)}`,
-    ],
-    [context.tarballs.core, `<packs-dir>/${basename(context.tarballs.core)}`],
-    [context.tarballs.createApp, `<packs-dir>/${basename(context.tarballs.createApp)}`],
-    [context.tarballs.devkit, `<packs-dir>/${basename(context.tarballs.devkit)}`],
-    [context.tarballs.langgraph, `<packs-dir>/${basename(context.tarballs.langgraph)}`],
+    ["25.6.0", "<version:@types/node>"],
+    ["6.0.2", "<version:typescript>"],
   ]) as GeneratedAppScenarioResult
 }
 

@@ -9,21 +9,21 @@
       "build": "tsc -p tsconfig.json"
     },
     "dependencies": {
-      "@dawn/core": "<packs-dir>/dawn-core-0.0.0.tgz",
-      "@dawn/cli": "<packs-dir>/dawn-cli-0.0.0.tgz",
-      "@dawn/langgraph": "<packs-dir>/dawn-langgraph-0.0.0.tgz"
+      "@dawn/core": "<tarball:@dawn/core>",
+      "@dawn/cli": "<tarball:@dawn/cli>",
+      "@dawn/langgraph": "<tarball:@dawn/langgraph>"
     },
     "devDependencies": {
-      "@dawn/config-typescript": "<packs-dir>/dawn-config-typescript-0.0.0.tgz",
-      "@types/node": "25.6.0",
-      "typescript": "6.0.2"
+      "@dawn/config-typescript": "<tarball:@dawn/config-typescript>",
+      "@types/node": "<version:@types/node>",
+      "typescript": "<version:typescript>"
     },
     "pnpm": {
       "overrides": {
-        "@dawn/cli": "<packs-dir>/dawn-cli-0.0.0.tgz",
-        "@dawn/config-typescript": "<packs-dir>/dawn-config-typescript-0.0.0.tgz",
-        "@dawn/core": "<packs-dir>/dawn-core-0.0.0.tgz",
-        "@dawn/langgraph": "<packs-dir>/dawn-langgraph-0.0.0.tgz"
+        "@dawn/cli": "<tarball:@dawn/cli>",
+        "@dawn/config-typescript": "<tarball:@dawn/config-typescript>",
+        "@dawn/core": "<tarball:@dawn/core>",
+        "@dawn/langgraph": "<tarball:@dawn/langgraph>"
       }
     }
   },
