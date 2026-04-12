@@ -38,14 +38,17 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Build
-        run: pnpm build
-
       - name: Docs Check
         run: node scripts/check-docs.mjs
+
+      - name: Build
+        run: pnpm build
 
       - name: Pack Check
         run: pnpm pack:check
 
-      - name: Publish Smoke
-        run: node scripts/publish-smoke.mjs
+      - name: Generated Harness Verification
+        run: pnpm verify:harness:generated
+
+      - name: Smoke Harness Verification
+        run: pnpm verify:harness:smoke
