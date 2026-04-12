@@ -132,7 +132,7 @@ V1 CLI contract:
 - route file paths are not valid narrowing inputs in v1
 - human-readable output is the default surface in v1
 - exit `0` when all discovered scenarios pass
-- exit `1` when one or more scenarios fail, a modeled route execution failure occurs, or no scenarios are found
+- exit `1` when one or more scenarios fail or when no scenarios are found
 - exit `2` on CLI or infrastructure failures before normal scenario results can be produced
 - JSON mode is deferred; the framework harness should continue to use its internal lanes and `dawn run` for machine-oriented assertions
 
