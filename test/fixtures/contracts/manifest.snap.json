@@ -1,0 +1,63 @@
+{
+  "appRoot": "/fixture/example-app",
+  "routes": [
+    {
+      "id": "/",
+      "pathname": "/",
+      "entryKind": "page",
+      "entryFile": "/fixture/example-app/src/app/page.tsx",
+      "routeDir": "/fixture/example-app/src/app",
+      "segments": []
+    },
+    {
+      "id": "/[tenant]",
+      "pathname": "/[tenant]",
+      "entryKind": "graph",
+      "entryFile": "/fixture/example-app/src/app/[tenant]/graph.ts",
+      "routeDir": "/fixture/example-app/src/app/[tenant]",
+      "segments": [
+        {
+          "raw": "[tenant]",
+          "name": "tenant",
+          "kind": "dynamic"
+        }
+      ]
+    },
+    {
+      "id": "/docs/[...path]",
+      "pathname": "/docs/[...path]",
+      "entryKind": "workflow",
+      "entryFile": "/fixture/example-app/src/app/docs/[...path]/workflow.ts",
+      "routeDir": "/fixture/example-app/src/app/docs/[...path]",
+      "segments": [
+        {
+          "raw": "docs",
+          "kind": "static"
+        },
+        {
+          "raw": "[...path]",
+          "name": "path",
+          "kind": "catchall"
+        }
+      ]
+    },
+    {
+      "id": "/docs/[[...path]]",
+      "pathname": "/docs/[[...path]]",
+      "entryKind": "graph",
+      "entryFile": "/fixture/example-app/src/app/docs/[[...path]]/graph.ts",
+      "routeDir": "/fixture/example-app/src/app/docs/[[...path]]",
+      "segments": [
+        {
+          "raw": "docs",
+          "kind": "static"
+        },
+        {
+          "raw": "[[...path]]",
+          "name": "path",
+          "kind": "optional-catchall"
+        }
+      ]
+    }
+  ]
+}
