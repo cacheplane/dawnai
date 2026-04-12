@@ -91,6 +91,33 @@ describe("dawn verify", () => {
     expect(result.stderr).toMatch(/^Verify failed:/)
   })
 
+  test("prints a normalized failure payload in json mode", async () => {
+    const appRoot = await createFixtureApp(["package.json", "dawn.config.ts"])
+
+    const result = await invoke(["verify", "--cwd", appRoot, "--json"])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    expect(JSON.parse(result.stdout)).toEqual({
+      appRoot,
+      checks: [
+        {
+          error: {
+            message: `Invalid Dawn app at ${appRoot}. Missing: ${join(appRoot, "src/app")}`,
+          },
+          name: "app",
+          status: "failed",
+        },
+      ],
+      counts: {
+        failed: 1,
+        passed: 0,
+        total: 1,
+      },
+      status: "failed",
+    })
+  })
+
   test("prints the normalized single-app verify result in json mode", async () => {
     const appRoot = await createFixtureApp([
       "package.json",

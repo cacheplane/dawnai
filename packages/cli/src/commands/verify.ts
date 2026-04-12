@@ -1,5 +1,7 @@
+import { resolve } from "node:path"
+
 import { discoverRoutes, findDawnApp, renderRouteTypes } from "@dawn/core"
-import type { Command } from "commander"
+import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
 
@@ -34,18 +36,35 @@ interface VerifyTypegenCheckResult {
   readonly status: "passed"
 }
 
+interface VerifyFailedCheckResult {
+  readonly error: {
+    readonly message: string
+  }
+  readonly name: "app"
+  readonly status: "failed"
+}
+
 type VerifyCheckResult =
   | VerifyAppCheckResult
+  | VerifyFailedCheckResult
   | VerifyRoutesCheckResult
   | VerifyTypegenCheckResult
 
-interface VerifyResult {
+interface VerifySuccessResult {
   readonly appRoot: string
   readonly checks: readonly VerifyCheckResult[]
   readonly counts: VerifyCheckCounts
   readonly status: "passed"
 }
 
+interface VerifyFailureResult {
+  readonly appRoot: string
+  readonly checks: readonly [VerifyFailedCheckResult]
+  readonly counts: VerifyCheckCounts
+  readonly status: "failed"
+}
+
+const FAILED_STATUS = "failed" as const
 const PASSED_STATUS = "passed" as const
 
 export function registerVerifyCommand(program: Command, io: CommandIo): void {
@@ -60,14 +79,19 @@ export function registerVerifyCommand(program: Command, io: CommandIo): void {
 }
 
 export async function runVerifyCommand(options: VerifyOptions, io: CommandIo): Promise<void> {
-  try {
-    const result = await verifyApp(options)
-
-    if (options.json) {
+  if (options.json) {
+    try {
+      const result = await verifyApp(options)
       writeLine(io.stdout, JSON.stringify(result, null, 2))
       return
+    } catch (error) {
+      writeLine(io.stdout, JSON.stringify(createVerifyFailureResult(options, error), null, 2))
+      throw new CommanderError(1, "dawn.verify.failed", "")
     }
+  }
 
+  try {
+    const result = await verifyApp(options)
     const routesCheck = result.checks.find(
       (check): check is VerifyRoutesCheckResult => check.name === "routes",
     )
@@ -81,7 +105,7 @@ export async function runVerifyCommand(options: VerifyOptions, io: CommandIo): P
   }
 }
 
-async function verifyApp(options: VerifyOptions): Promise<VerifyResult> {
+async function verifyApp(options: VerifyOptions): Promise<VerifySuccessResult> {
   const app = await findDawnApp(options.cwd ? { cwd: options.cwd } : {})
   const manifest = await discoverRoutes({ appRoot: app.appRoot })
   const renderedTypes = renderRouteTypes(manifest)
@@ -116,4 +140,33 @@ async function verifyApp(options: VerifyOptions): Promise<VerifyResult> {
     },
     status: PASSED_STATUS,
   }
+}
+
+function createVerifyFailureResult(options: VerifyOptions, error: unknown): VerifyFailureResult {
+  const message = formatErrorMessage(error)
+
+  return {
+    appRoot: inferFailureAppRoot(options, message),
+    checks: [
+      {
+        error: {
+          message,
+        },
+        name: "app",
+        status: FAILED_STATUS,
+      },
+    ],
+    counts: {
+      failed: 1,
+      passed: 0,
+      total: 1,
+    },
+    status: FAILED_STATUS,
+  }
+}
+
+function inferFailureAppRoot(options: VerifyOptions, message: string): string {
+  const fromMessage = /^Invalid Dawn app at (.+?)\. Missing: /u.exec(message)?.[1]
+
+  return fromMessage ?? resolve(options.cwd ?? process.cwd())
 }
