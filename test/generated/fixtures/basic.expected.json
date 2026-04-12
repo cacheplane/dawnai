@@ -1,0 +1,82 @@
+{
+  "packageJson": {
+    "name": "app",
+    "private": true,
+    "type": "module",
+    "scripts": {
+      "check": "dawn check",
+      "typecheck": "tsc --noEmit",
+      "build": "tsc -p tsconfig.json"
+    },
+    "dependencies": {
+      "@dawn/core": "<packs-dir>/dawn-core-0.0.0.tgz",
+      "@dawn/cli": "<packs-dir>/dawn-cli-0.0.0.tgz",
+      "@dawn/langgraph": "<packs-dir>/dawn-langgraph-0.0.0.tgz"
+    },
+    "devDependencies": {
+      "@dawn/config-typescript": "<packs-dir>/dawn-config-typescript-0.0.0.tgz",
+      "@types/node": "25.6.0",
+      "typescript": "6.0.2"
+    },
+    "pnpm": {
+      "overrides": {
+        "@dawn/cli": "<packs-dir>/dawn-cli-0.0.0.tgz",
+        "@dawn/config-typescript": "<packs-dir>/dawn-config-typescript-0.0.0.tgz",
+        "@dawn/core": "<packs-dir>/dawn-core-0.0.0.tgz",
+        "@dawn/langgraph": "<packs-dir>/dawn-langgraph-0.0.0.tgz"
+      }
+    }
+  },
+  "verifyJson": {
+    "appRoot": "<app-root>",
+    "checks": [
+      {
+        "appRoot": "<app-root>",
+        "configPath": "<app-root>/dawn.config.ts",
+        "name": "app",
+        "routesDir": "<app-root>/src/app",
+        "status": "passed"
+      },
+      {
+        "name": "routes",
+        "routeCount": 1,
+        "status": "passed"
+      },
+      {
+        "name": "typegen",
+        "renderedBytes": 165,
+        "status": "passed"
+      }
+    ],
+    "counts": {
+      "failed": 0,
+      "passed": 3,
+      "total": 3
+    },
+    "status": "passed"
+  },
+  "routesJson": {
+    "appRoot": "<app-root>",
+    "routes": [
+      {
+        "id": "/hello/[tenant]",
+        "pathname": "/hello/[tenant]",
+        "entryKind": "workflow",
+        "entryFile": "<app-root>/src/app/(public)/hello/[tenant]/workflow.ts",
+        "routeDir": "<app-root>/src/app/(public)/hello/[tenant]",
+        "segments": [
+          {
+            "kind": "static",
+            "raw": "hello"
+          },
+          {
+            "kind": "dynamic",
+            "name": "tenant",
+            "raw": "[tenant]"
+          }
+        ]
+      }
+    ]
+  },
+  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/hello/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/hello/[tenant]\": { tenant: string };\n  }\n}\n"
+}

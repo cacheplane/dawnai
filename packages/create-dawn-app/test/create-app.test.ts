@@ -70,51 +70,56 @@ async function packPackage(repoRoot: string, packageName: string, outputDir: str
   return join(outputDir, basename(tarballName))
 }
 
+async function createPackagedInstaller(repoRoot: string, tempRoot: string) {
+  const buildResult = await runCommand("pnpm", ["--filter", "create-dawn-app", "build"], repoRoot)
+  expect(buildResult.code).toBe(0)
+
+  const packDir = join(tempRoot, "packs")
+  const installDir = join(tempRoot, "installer")
+
+  await mkdir(packDir, { recursive: true })
+  await mkdir(installDir, { recursive: true })
+
+  const devkitTarball = await packPackage(repoRoot, "@dawn/devkit", packDir)
+  const createAppTarball = await packPackage(repoRoot, "create-dawn-app", packDir)
+
+  await writeFile(
+    join(installDir, "package.json"),
+    JSON.stringify(
+      {
+        name: "installer",
+        private: true,
+        pnpm: {
+          overrides: {
+            "@dawn/devkit": devkitTarball,
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  )
+
+  const installDevkitResult = await runCommand("pnpm", ["add", devkitTarball], installDir)
+  expect(installDevkitResult.code).toBe(0)
+
+  const installResult = await runCommand("pnpm", ["add", createAppTarball], installDir)
+  expect(installResult.code).toBe(0)
+
+  return installDir
+}
+
 describe("create-dawn-app", () => {
-  test("packs and installs create-dawn-app outside the repo workspace and scaffolds default published dependencies", {
+  test("scaffolds external mode from the packaged bin with published dist-tag specifiers", {
     timeout: 30_000,
   }, async () => {
     const repoRoot = resolve(import.meta.dirname, "../../..")
-    const buildResult = await runCommand("pnpm", ["--filter", "create-dawn-app", "build"], repoRoot)
-
-    expect(buildResult.code).toBe(0)
-
     const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-standalone-"))
     tempDirs.push(tempRoot)
 
-    const packDir = join(tempRoot, "packs")
-    const installDir = join(tempRoot, "installer")
+    const installDir = await createPackagedInstaller(repoRoot, tempRoot)
     const targetDir = join(tempRoot, "hello-dawn")
-
-    await mkdir(packDir, { recursive: true })
-    await mkdir(installDir, { recursive: true })
-
-    const devkitTarball = await packPackage(repoRoot, "@dawn/devkit", packDir)
-    const createAppTarball = await packPackage(repoRoot, "create-dawn-app", packDir)
-
-    await writeFile(
-      join(installDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "installer",
-          private: true,
-          pnpm: {
-            overrides: {
-              "@dawn/devkit": devkitTarball,
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    )
-
-    const installDevkitResult = await runCommand("pnpm", ["add", devkitTarball], installDir)
-    expect(installDevkitResult.code).toBe(0)
-
-    const installResult = await runCommand("pnpm", ["add", createAppTarball], installDir)
-    expect(installResult.code).toBe(0)
 
     const scaffoldResult = await runCommand(
       "pnpm",
@@ -143,6 +148,16 @@ describe("create-dawn-app", () => {
     expect(packageJson.dependencies["@dawn/langgraph"]).toBe("next")
     expect(packageJson.devDependencies["@dawn/config-typescript"]).toBe("next")
     await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow()
+  })
+
+  test("rejects packaged internal mode outside a Dawn monorepo checkout", {
+    timeout: 30_000,
+  }, async () => {
+    const repoRoot = resolve(import.meta.dirname, "../../..")
+    const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-standalone-"))
+    tempDirs.push(tempRoot)
+
+    const installDir = await createPackagedInstaller(repoRoot, tempRoot)
 
     const invalidInternalTargetDir = join(tempRoot, "hello-dawn-internal")
     const internalModeResult = await runCommand(
