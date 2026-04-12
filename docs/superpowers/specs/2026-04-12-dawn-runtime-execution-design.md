@@ -89,8 +89,10 @@ V1 command contract:
 - optional `--cwd` override for explicit app targeting
 - route selected by filesystem path first
 - JSON input read from stdin by default
-- JSON result written to stdout by default
-- nonzero exit on failure
+- JSON result written to stdout in both success and modeled failure cases
+- exit `0` on success
+- exit `1` on modeled run failures with a serialized JSON failure result
+- exit `2` on CLI or infrastructure failures where Dawn cannot produce the normal JSON result
 - in-process execution by default
 
 Example:
@@ -102,7 +104,7 @@ echo '{"tenant":"acme","message":"hello"}' | dawn run src/app/support/[tenant]/g
 This should mean:
 
 1. find the Dawn app by walking upward from `cwd`
-2. resolve the requested route path relative to that app root
+2. resolve the requested route path using the path rules defined below
 3. execute the route boundary in-process
 4. print a normalized JSON result
 
@@ -117,6 +119,42 @@ V1 behavior:
 - discover colocated TypeScript scenario files such as `run.test.ts`
 - execute those scenarios through the same execution primitive as `dawn run`
 - print concise pass/fail output for developer use
+
+V1 authoring contract:
+
+- `run.test.ts` exports a default array of scenario objects
+- one file may contain one or many scenarios
+- each scenario explicitly declares its target route file relative to the scenario file directory
+- when both `graph.ts` and `workflow.ts` exist in the same route directory, the scenario must name which one it targets
+
+Recommended conceptual shape:
+
+```ts
+export default [
+  {
+    name: "graph passes for valid input",
+    target: "./graph.ts",
+    input: { tenant: "acme", message: "hello" },
+    expect: {
+      status: "passed",
+      output: { reply: "hello" },
+    },
+  },
+  {
+    name: "workflow rejects missing tenant",
+    target: "./workflow.ts",
+    input: { message: "hello" },
+    expect: {
+      status: "failed",
+      error: {
+        kind: "execution_error",
+      },
+    },
+  },
+]
+```
+
+The exact runtime helper API can still evolve during implementation, but the module shape above should be treated as the v1 planning contract.
 
 This keeps the semantic split clear:
 
@@ -149,7 +187,16 @@ Examples:
 
 - `dawn run src/app/support/[tenant]/graph.ts`
 - `dawn run src/app/support/[tenant]/workflow.ts`
-- potentially `dawn run ./graph.ts` from inside a route directory
+
+Path resolution rule:
+
+- if the positional route path starts with `.` or `..`, resolve it from the caller's current working directory
+- otherwise resolve it relative to the discovered app root
+
+That keeps both of these valid without ambiguity:
+
+- `dawn run src/app/support/[tenant]/graph.ts`
+- `dawn run ./graph.ts`
 
 Normalized route ids can come later once Dawn has a stable execution layer.
 
@@ -333,9 +380,11 @@ Scenario files for app-level authoring should live with the route directories th
 
 These should map to:
 
-- stable nonzero exits
+- exit `1` for all modeled run failures that can still produce the normalized JSON result
+- exit `2` for CLI or infrastructure failures before the normal run contract can be produced
 - stable error kind/message fields in JSON output
-- concise human-readable stderr or stdout behavior, depending on mode
+- JSON written to stdout for both success and modeled failure results
+- stderr reserved for CLI or infrastructure failures that bypass the normal run contract
 
 ### `dawn test`
 
