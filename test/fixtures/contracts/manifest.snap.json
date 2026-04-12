@@ -1,0 +1,46 @@
+{
+  "routes": [
+    {
+      "pathname": "/",
+      "segments": []
+    },
+    {
+      "pathname": "/[tenant]",
+      "segments": [
+        {
+          "raw": "[tenant]",
+          "name": "tenant",
+          "kind": "dynamic"
+        }
+      ]
+    },
+    {
+      "pathname": "/docs/[...path]",
+      "segments": [
+        {
+          "raw": "docs",
+          "kind": "static"
+        },
+        {
+          "raw": "[...path]",
+          "name": "path",
+          "kind": "catchall"
+        }
+      ]
+    },
+    {
+      "pathname": "/docs/[[...path]]",
+      "segments": [
+        {
+          "raw": "docs",
+          "kind": "static"
+        },
+        {
+          "raw": "[[...path]]",
+          "name": "path",
+          "kind": "optional-catchall"
+        }
+      ]
+    }
+  ]
+}

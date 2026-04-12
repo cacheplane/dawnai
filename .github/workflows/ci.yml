@@ -35,17 +35,23 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
+      - name: Source Tests
         run: pnpm test
-
-      - name: Build
-        run: pnpm build
 
       - name: Docs Check
         run: node scripts/check-docs.mjs
 
+      - name: Build
+        run: pnpm build
+
       - name: Pack Check
         run: pnpm pack:check
 
-      - name: Publish Smoke
-        run: node scripts/publish-smoke.mjs
+      - name: Harness Coordinator Self-Test
+        run: pnpm verify:harness:self-test
+
+      - name: Framework Verification
+        run: pnpm verify:harness:framework
+
+      - name: Smoke Harness Verification
+        run: pnpm verify:harness:smoke

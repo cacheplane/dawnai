@@ -1,133 +1,43 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { discoverRoutes } from "../src/discovery/discover-routes"
 
+const CONTRACT_FIXTURES_DIR = fileURLToPath(
+  new URL("../../../test/fixtures/contracts/", import.meta.url),
+)
 const tempDirs: string[] = []
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
 
-async function createFixtureApp() {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-core-discovery-"))
+function fixtureRoot(name: string) {
+  return join(CONTRACT_FIXTURES_DIR, name)
+}
+
+async function createAdHocApp(
+  prefix: string,
+  files: Record<string, string>,
+  configSource = "export default {}\n",
+) {
+  const appRoot = await mkdtemp(join(tmpdir(), prefix))
   tempDirs.push(appRoot)
 
-  const files = [
-    "package.json",
-    "dawn.config.ts",
-    "src/app/(public)/page.tsx",
-    "src/app/(public)/[tenant]/graph.ts",
-    "src/app/docs/[...path]/workflow.ts",
-    "src/app/docs/[[...path]]/graph.ts",
-    "src/app/_private/graph.ts",
-    "src/app/internal/workflow.ts",
-    "src/ignored/page.tsx",
-  ]
+  const appFiles = {
+    "package.json": "{}\n",
+    "dawn.config.ts": configSource,
+    ...files,
+  }
 
   await Promise.all(
-    files.map(async (relativePath) => {
+    Object.entries(appFiles).map(async ([relativePath, source]) => {
       const filePath = join(appRoot, relativePath)
       await mkdir(dirname(filePath), { recursive: true })
-      await writeFile(filePath, relativePath.endsWith(".json") ? "{}" : "export default {};\n")
-    }),
-  )
-
-  return appRoot
-}
-
-async function createAppWithoutRoutesDir() {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-core-invalid-app-"))
-  tempDirs.push(appRoot)
-
-  await Promise.all([
-    writeFile(join(appRoot, "package.json"), "{}"),
-    writeFile(join(appRoot, "dawn.config.ts"), "export default {};\n"),
-  ])
-
-  return appRoot
-}
-
-async function createCustomAppDirFixture() {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-core-custom-appdir-"))
-  tempDirs.push(appRoot)
-
-  const files = ["package.json", "dawn.config.ts", "src/custom-app/page.tsx"]
-
-  await Promise.all(
-    files.map(async (relativePath) => {
-      const filePath = join(appRoot, relativePath)
-      await mkdir(dirname(filePath), { recursive: true })
-      await writeFile(
-        filePath,
-        relativePath === "dawn.config.ts"
-          ? 'const appDir = "src/custom-app";\nexport default { appDir };\n'
-          : relativePath.endsWith(".json")
-            ? "{}"
-            : "export default {};\n",
-      )
-    }),
-  )
-
-  return appRoot
-}
-
-async function createAppWithMissingConfiguredAppDir() {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-core-missing-configured-appdir-"))
-  tempDirs.push(appRoot)
-
-  await Promise.all([
-    writeFile(join(appRoot, "package.json"), "{}"),
-    writeFile(
-      join(appRoot, "dawn.config.ts"),
-      'const appDir = "src/custom-app";\nexport default { appDir };\n',
-    ),
-    mkdir(join(appRoot, "src", "app"), { recursive: true }),
-  ])
-
-  return appRoot
-}
-
-async function createAppWithNormalizedCollision() {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-core-route-collision-"))
-  tempDirs.push(appRoot)
-
-  const files = [
-    "package.json",
-    "dawn.config.ts",
-    "src/app/(marketing)/about/page.tsx",
-    "src/app/about/page.tsx",
-  ]
-
-  await Promise.all(
-    files.map(async (relativePath) => {
-      const filePath = join(appRoot, relativePath)
-      await mkdir(dirname(filePath), { recursive: true })
-      await writeFile(filePath, relativePath.endsWith(".json") ? "{}" : "export default {};\n")
-    }),
-  )
-
-  return appRoot
-}
-
-async function createAppWithRouteModuleCompanion() {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-core-route-module-"))
-  tempDirs.push(appRoot)
-
-  const files = [
-    "package.json",
-    "dawn.config.ts",
-    "src/app/(public)/hello/[tenant]/route.ts",
-    "src/app/(public)/hello/[tenant]/workflow.ts",
-  ]
-
-  await Promise.all(
-    files.map(async (relativePath) => {
-      const filePath = join(appRoot, relativePath)
-      await mkdir(dirname(filePath), { recursive: true })
-      await writeFile(filePath, relativePath.endsWith(".json") ? "{}" : "export default {};\n")
+      await writeFile(filePath, source)
     }),
   )
 
@@ -135,23 +45,62 @@ async function createAppWithRouteModuleCompanion() {
 }
 
 describe("discoverRoutes", () => {
-  test("detects the app root from dawn.config.ts and starts discovery at src/app", async () => {
-    const appRoot = await createFixtureApp()
+  test("discovers the valid default-app fixture from cwd and resolves its executable entry", async () => {
+    const appRoot = fixtureRoot("valid-basic")
 
     const manifest = await discoverRoutes({ cwd: join(appRoot, "src", "app", "(public)") })
 
     expect(manifest.appRoot).toBe(appRoot)
-    expect(manifest.routes.map((route) => route.pathname)).toEqual([
-      "/",
-      "/[tenant]",
-      "/docs/[...path]",
-      "/docs/[[...path]]",
-      "/internal",
+    expect(manifest.routes.map((route) => [route.pathname, route.entryKind])).toEqual([
+      ["/hello/[tenant]", "workflow"],
     ])
+    expect(manifest.routes[0]).toMatchObject({
+      entryFile: join(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts"),
+      routeDir: join(appRoot, "src/app/(public)/hello/[tenant]"),
+      segments: [
+        { raw: "hello", kind: "static" },
+        { raw: "[tenant]", name: "tenant", kind: "dynamic" },
+      ],
+    })
   })
 
-  test("ignores route groups in public paths, preserves dynamic metadata, excludes _private, and accepts graph/workflow entries", async () => {
-    const appRoot = await createFixtureApp()
+  test("discovers the valid custom appDir fixture and preserves its configured route path", async () => {
+    const appRoot = fixtureRoot("valid-custom-app-dir")
+
+    const manifest = await discoverRoutes({ appRoot })
+
+    expect(manifest.appRoot).toBe(appRoot)
+    expect(manifest.routes.map((route) => [route.pathname, route.entryKind])).toEqual([
+      ["/support/[tenant]", "graph"],
+    ])
+    expect(manifest.routes[0]).toMatchObject({
+      entryFile: join(appRoot, "src/dawn-app/support/[tenant]/graph.ts"),
+      routeDir: join(appRoot, "src/dawn-app/support/[tenant]"),
+      segments: [
+        { raw: "support", kind: "static" },
+        { raw: "[tenant]", name: "tenant", kind: "dynamic" },
+      ],
+    })
+  })
+
+  test("fails with a stable Dawn error when a route directory contains both graph.ts and workflow.ts", async () => {
+    const appRoot = fixtureRoot("invalid-companion")
+
+    await expect(discoverRoutes({ appRoot })).rejects.toThrow(
+      `Route directory ${join(appRoot, "src/app/broken/[tenant]")} has multiple primary entries: graph.ts, workflow.ts`,
+    )
+  })
+
+  test("discovers root pages, strips route groups, excludes _private routes, and parses catchall segments", async () => {
+    const appRoot = await createAdHocApp("dawn-core-discovery-", {
+      "src/app/(public)/page.tsx": "export default {}\n",
+      "src/app/(public)/[tenant]/graph.ts": "export default {}\n",
+      "src/app/docs/[...path]/workflow.ts": "export default {}\n",
+      "src/app/docs/[[...path]]/graph.ts": "export default {}\n",
+      "src/app/_private/graph.ts": "export default {}\n",
+      "src/app/internal/workflow.ts": "export default {}\n",
+      "src/ignored/page.tsx": "export default {}\n",
+    })
 
     const manifest = await discoverRoutes({ appRoot })
 
@@ -159,6 +108,7 @@ describe("discoverRoutes", () => {
       expect.objectContaining({
         pathname: "/",
         entryFile: join(appRoot, "src/app/(public)/page.tsx"),
+        entryKind: "page",
         segments: [],
       }),
       expect.objectContaining({
@@ -194,24 +144,21 @@ describe("discoverRoutes", () => {
   })
 
   test("fails validation when the canonical src/app discovery root is missing", async () => {
-    const appRoot = await createAppWithoutRoutesDir()
+    const appRoot = await createAdHocApp("dawn-core-missing-src-app-", {})
 
     await expect(discoverRoutes({ appRoot })).rejects.toThrow(
       `Invalid Dawn app at ${appRoot}. Missing: ${join(appRoot, "src/app")}`,
     )
   })
 
-  test("loads a configured appDir from a const-backed dawn.config.ts export", async () => {
-    const appRoot = await createCustomAppDirFixture()
-
-    const manifest = await discoverRoutes({ appRoot })
-
-    expect(manifest.routes.map((route) => route.pathname)).toEqual(["/"])
-    expect(manifest.routes[0]?.entryFile).toBe(join(appRoot, "src/custom-app/page.tsx"))
-  })
-
   test("fails validation when a configured appDir is missing", async () => {
-    const appRoot = await createAppWithMissingConfiguredAppDir()
+    const appRoot = await createAdHocApp(
+      "dawn-core-missing-configured-appdir-",
+      {
+        "src/app/page.tsx": "export default {}\n",
+      },
+      'const appDir = "src/custom-app"\nexport default { appDir }\n',
+    )
 
     await expect(discoverRoutes({ appRoot })).rejects.toThrow(
       `Invalid Dawn app at ${appRoot}. Missing: ${join(appRoot, "src/custom-app")}`,
@@ -219,24 +166,13 @@ describe("discoverRoutes", () => {
   })
 
   test("fails with a Dawn-specific error when normalized route paths collide", async () => {
-    const appRoot = await createAppWithNormalizedCollision()
+    const appRoot = await createAdHocApp("dawn-core-route-collision-", {
+      "src/app/(marketing)/about/page.tsx": "export default {}\n",
+      "src/app/about/page.tsx": "export default {}\n",
+    })
 
     await expect(discoverRoutes({ appRoot })).rejects.toThrow(
-      `Duplicate Dawn route pathname "/about" detected`,
+      'Duplicate Dawn route pathname "/about" detected',
     )
-  })
-
-  test("allows route.ts to coexist with a workflow executable in the same route directory", async () => {
-    const appRoot = await createAppWithRouteModuleCompanion()
-
-    await expect(discoverRoutes({ appRoot })).resolves.toMatchObject({
-      routes: [
-        expect.objectContaining({
-          pathname: "/hello/[tenant]",
-          entryFile: join(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts"),
-          entryKind: "workflow",
-        }),
-      ],
-    })
   })
 })
