@@ -14,8 +14,8 @@
     "lint:fix": "pnpm exec biome check --write --unsafe --config-path packages/config-biome/biome.json package.json scripts && turbo run lint -- --write",
     "pack:check": "node scripts/pack-check.mjs",
     "test": "node scripts/test.mjs",
-    "verify:harness": "node scripts/harness-report.mjs generated smoke publish-smoke",
-    "verify:harness:generated": "node scripts/harness-report.mjs generated publish-smoke",
+    "verify:harness": "node scripts/harness-report.mjs framework smoke",
+    "verify:harness:framework": "node scripts/harness-report.mjs framework",
     "verify:harness:smoke": "node scripts/harness-report.mjs smoke",
     "typecheck": "turbo run typecheck"
   },

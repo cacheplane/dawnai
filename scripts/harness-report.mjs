@@ -10,10 +10,10 @@ const maxBuffer = 20 * 1024 * 1024
 
 const defaultLaneDefinitions = new Map([
   [
-    "generated",
+    "framework",
     {
-      id: "generated",
-      name: "Generated verification",
+      id: "framework",
+      name: "Framework verification",
       phaseName: "vitest",
       execute: (context) =>
         executeVitestLane(context, {
@@ -32,19 +32,6 @@ const defaultLaneDefinitions = new Map([
         executeVitestLane(context, {
           configPath: "test/smoke/vitest.config.ts",
           reportFileName: "vitest-report.json",
-        }),
-    },
-  ],
-  [
-    "publish-smoke",
-    {
-      id: "publish-smoke",
-      name: "Publish smoke",
-      phaseName: "publish-smoke",
-      execute: (context) =>
-        executeCommandLane(context, {
-          args: ["scripts/publish-smoke.mjs"],
-          command: "node",
         }),
     },
   ],
@@ -290,48 +277,6 @@ function executeVitestLane(context, options) {
   }
 }
 
-function executeCommandLane(context, options) {
-  const result = runProcess(options)
-
-  if (result.kind === "errored") {
-    return {
-      artifacts: [],
-      failureReason: result.failureReason,
-      phaseName: context.laneId,
-      status: "errored",
-      transcript: result.transcript,
-    }
-  }
-
-  if (result.exitCode === 0) {
-    return {
-      artifacts: [],
-      failureReason: null,
-      phaseName: context.laneId,
-      status: "passed",
-      transcript: result.transcript,
-    }
-  }
-
-  if (result.exitCode === 1) {
-    return {
-      artifacts: [],
-      failureReason: `${context.laneName} exited with code 1.`,
-      phaseName: context.laneId,
-      status: "failed",
-      transcript: result.transcript,
-    }
-  }
-
-  return {
-    artifacts: [],
-    failureReason: `${context.laneName} exited with code ${result.exitCode}.`,
-    phaseName: context.laneId,
-    status: "errored",
-    transcript: result.transcript,
-  }
-}
-
 function runProcess(options) {
   const result = spawnSync(options.command, options.args, {
     cwd: repoRoot,
@@ -502,15 +447,16 @@ function runSelfTest() {
   const tempRoot = mkdtempSync(join(tmpdir(), "dawn-harness-report-"))
 
   try {
+    const passArtifactRoot = join(tempRoot, "pass")
     const passRun = runHarness({
-      artifactRoot: join(tempRoot, "pass"),
+      artifactRoot: passArtifactRoot,
       laneDefinitions: new Map([
         [
           "pass",
           {
             id: "pass",
             name: "Passing lane",
-            phaseName: "mock",
+            phaseName: "mock-pass",
             execute: ({ laneRoot }) => {
               const artifactPath = join(laneRoot, "artifact.txt")
               writeFileSync(artifactPath, "ok\n", "utf8")
@@ -518,45 +464,104 @@ function runSelfTest() {
               return {
                 artifacts: [artifactPath],
                 failureReason: null,
-                phaseName: "mock",
+                phaseName: "mock-pass",
                 status: "passed",
                 transcript: "pass transcript\n",
               }
             },
           },
         ],
+        [
+          "skip",
+          {
+            id: "skip",
+            name: "Skipped lane",
+            phaseName: "mock-skip",
+            execute: () => ({
+              artifacts: [],
+              failureReason: null,
+              phaseName: "mock-skip",
+              status: "skipped",
+              transcript: "skip transcript\n",
+            }),
+          },
+        ],
       ]),
-      requestedLanes: ["pass"],
+      requestedLanes: ["pass", "skip"],
       runId: "self-test-pass",
     })
 
     assert.equal(passRun.exitCode, 0)
-    assert.equal(passRun.result.status, "passed")
-    assert.deepEqual(passRun.result.requestedLanes, ["pass"])
-    assert.equal(passRun.result.results[0].name, "Passing lane")
-    assert.equal(passRun.result.results[0].phases[0].name, "mock")
-    assert.deepEqual(JSON.parse(renderJsonSummary(passRun.result)), passRun.result)
-    const textSummary = renderTextSummary(passRun.result)
-    assert.match(textSummary, /requested lanes: pass/u)
-    assert.match(textSummary, /lane names: pass=Passing lane/u)
-    assert.match(textSummary, /phase mock: passed/u)
+    assertRunContract(passRun.result, {
+      artifactRoot: passArtifactRoot,
+      counts: {
+        errored: 0,
+        failed: 0,
+        passed: 1,
+        skipped: 1,
+      },
+      executedLanes: ["pass", "skip"],
+      requestedLanes: ["pass", "skip"],
+      results: [
+        {
+          artifacts: [
+            join(passArtifactRoot, "pass", "artifact.txt"),
+            join(passArtifactRoot, "pass", "lane-result.json"),
+          ],
+          failureReason: null,
+          lane: "pass",
+          name: "Passing lane",
+          phaseName: "mock-pass",
+          status: "passed",
+          transcriptSnippet: "pass transcript",
+        },
+        {
+          artifacts: [join(passArtifactRoot, "skip", "lane-result.json")],
+          failureReason: null,
+          lane: "skip",
+          name: "Skipped lane",
+          phaseName: "mock-skip",
+          status: "skipped",
+          transcriptSnippet: "skip transcript",
+        },
+      ],
+      runId: "self-test-pass",
+      status: "passed",
+    })
+    assertJsonParity(passRun.result)
+    const passTextSummary = renderTextSummary(passRun.result)
+    assert.match(passTextSummary, /^run: self-test-pass/mu)
+    assert.match(passTextSummary, /^requested lanes: pass, skip$/mu)
+    assert.match(passTextSummary, /^executed lanes: pass, skip$/mu)
+    assert.match(passTextSummary, /^lane names: pass=Passing lane, skip=Skipped lane$/mu)
+    assert.match(passTextSummary, /^passed=1 failed=0 skipped=1 errored=0$/mu)
+    assert.match(passTextSummary, /^\[pass\] Passing lane: passed \(\d+ms\)$/mu)
+    assert.match(passTextSummary, /^phase mock-pass: passed \(\d+ms\)$/mu)
+    assert.match(passTextSummary, /^\[skip\] Skipped lane: skipped \(\d+ms\)$/mu)
+    assert.match(passTextSummary, /^phase mock-skip: skipped \(\d+ms\)$/mu)
 
+    const failedArtifactRoot = join(tempRoot, "failed")
     const failedRun = runHarness({
-      artifactRoot: join(tempRoot, "failed"),
+      artifactRoot: failedArtifactRoot,
       laneDefinitions: new Map([
         [
           "fail",
           {
             id: "fail",
             name: "Failing lane",
-            phaseName: "mock",
-            execute: () => ({
-              artifacts: [],
-              failureReason: "assertion failed",
-              phaseName: "mock",
-              status: "failed",
-              transcript: "fail transcript\n",
-            }),
+            phaseName: "mock-fail",
+            execute: ({ laneRoot }) => {
+              const artifactPath = join(laneRoot, "failure.txt")
+              writeFileSync(artifactPath, "assertion failed\n", "utf8")
+
+              return {
+                artifacts: [artifactPath],
+                failureReason: "assertion failed",
+                phaseName: "mock-fail",
+                status: "failed",
+                transcript: "fail transcript\n",
+              }
+            },
           },
         ],
       ]),
@@ -565,21 +570,51 @@ function runSelfTest() {
     })
 
     assert.equal(failedRun.exitCode, 1)
-    assert.equal(failedRun.result.status, "failed")
+    assertRunContract(failedRun.result, {
+      artifactRoot: failedArtifactRoot,
+      counts: {
+        errored: 0,
+        failed: 1,
+        passed: 0,
+        skipped: 0,
+      },
+      executedLanes: ["fail"],
+      requestedLanes: ["fail"],
+      results: [
+        {
+          artifacts: [
+            join(failedArtifactRoot, "fail", "failure.txt"),
+            join(failedArtifactRoot, "fail", "lane-result.json"),
+          ],
+          failureReason: "assertion failed",
+          lane: "fail",
+          name: "Failing lane",
+          phaseName: "mock-fail",
+          status: "failed",
+          transcriptSnippet: "fail transcript",
+        },
+      ],
+      runId: "self-test-failed",
+      status: "failed",
+    })
+    assertJsonParity(failedRun.result)
+    const failedTextSummary = renderTextSummary(failedRun.result)
+    assert.match(failedTextSummary, /^failure: assertion failed$/mu)
 
+    const erroredArtifactRoot = join(tempRoot, "errored")
     const erroredRun = runHarness({
-      artifactRoot: join(tempRoot, "errored"),
+      artifactRoot: erroredArtifactRoot,
       laneDefinitions: new Map([
         [
           "error",
           {
             id: "error",
             name: "Errored lane",
-            phaseName: "mock",
+            phaseName: "mock-error",
             execute: () => ({
               artifacts: [],
               failureReason: "spawn failed",
-              phaseName: "mock",
+              phaseName: "mock-error",
               status: "errored",
               transcript: "error transcript\n",
             }),
@@ -591,7 +626,33 @@ function runSelfTest() {
     })
 
     assert.equal(erroredRun.exitCode, 2)
-    assert.equal(erroredRun.result.status, "errored")
+    assertRunContract(erroredRun.result, {
+      artifactRoot: erroredArtifactRoot,
+      counts: {
+        errored: 1,
+        failed: 0,
+        passed: 0,
+        skipped: 0,
+      },
+      executedLanes: ["error"],
+      requestedLanes: ["error"],
+      results: [
+        {
+          artifacts: [join(erroredArtifactRoot, "error", "lane-result.json")],
+          failureReason: "spawn failed",
+          lane: "error",
+          name: "Errored lane",
+          phaseName: "mock-error",
+          status: "errored",
+          transcriptSnippet: "error transcript",
+        },
+      ],
+      runId: "self-test-errored",
+      status: "errored",
+    })
+    assertJsonParity(erroredRun.result)
+    const erroredTextSummary = renderTextSummary(erroredRun.result)
+    assert.match(erroredTextSummary, /^failure: spawn failed$/mu)
 
     process.stdout.write("harness-report self-test passed\n")
     return 0
@@ -602,4 +663,52 @@ function runSelfTest() {
   } finally {
     rmSync(tempRoot, { force: true, recursive: true })
   }
+}
+
+function assertJsonParity(result) {
+  assert.deepEqual(JSON.parse(renderJsonSummary(result)), result)
+  assert.deepEqual(readJsonFileIfPresent(join(result.artifactRoot, "run-result.json")), result)
+}
+
+function assertRunContract(result, expected) {
+  assert.equal(result.runId, expected.runId)
+  assert.equal(result.artifactRoot, expected.artifactRoot)
+  assert.equal(result.status, expected.status)
+  assert.deepEqual(result.requestedLanes, expected.requestedLanes)
+  assert.deepEqual(result.executedLanes, expected.executedLanes)
+  assert.deepEqual(result.counts, expected.counts)
+  assert.equal(result.results.length, expected.results.length)
+  assertTimestamp(result.startedAt)
+  assertTimestamp(result.finishedAt)
+  assert.ok(Date.parse(result.finishedAt) >= Date.parse(result.startedAt))
+
+  expected.results.forEach((expectedLane, index) => {
+    const laneResult = result.results[index]
+    const laneResultPath = join(result.artifactRoot, expectedLane.lane, "lane-result.json")
+
+    assert.equal(laneResult.lane, expectedLane.lane)
+    assert.equal(laneResult.name, expectedLane.name)
+    assert.equal(laneResult.status, expectedLane.status)
+    assert.equal(laneResult.failureReason, expectedLane.failureReason)
+    assert.deepEqual(laneResult.artifacts, expectedLane.artifacts)
+    assert.equal(
+      laneResult.transcriptPath,
+      join(result.artifactRoot, expectedLane.lane, "transcript.log"),
+    )
+    assert.ok(laneResult.durationMs >= 0)
+    assert.equal(laneResult.phases.length, 1)
+    assert.equal(laneResult.phases[0].name, expectedLane.phaseName)
+    assert.equal(laneResult.phases[0].status, expectedLane.status)
+    assert.ok(laneResult.phases[0].durationMs >= 0)
+    assert.equal(
+      readFileSync(laneResult.transcriptPath, "utf8"),
+      `${expectedLane.transcriptSnippet}\n`,
+    )
+    assert.deepEqual(readJsonFileIfPresent(laneResultPath), laneResult)
+  })
+}
+
+function assertTimestamp(value) {
+  assert.equal(typeof value, "string")
+  assert.notEqual(Number.isNaN(Date.parse(value)), true)
 }
