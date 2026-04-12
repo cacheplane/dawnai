@@ -1,35 +1,19 @@
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { afterEach, describe, expect, test } from "vitest"
+import { describe, expect, test } from "vitest"
 
 import { discoverRoutes } from "../src/discovery/discover-routes"
 
 const CONTRACT_FIXTURES_DIR = fileURLToPath(
   new URL("../../../test/fixtures/contracts/", import.meta.url),
 )
-const tempDirs: string[] = []
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
-})
-
-async function stageFixtureApp(name: string) {
-  const tempRoot = await mkdtemp(join(tmpdir(), `dawn-core-${name}-`))
-  const appRoot = join(tempRoot, name)
-
-  await cp(join(CONTRACT_FIXTURES_DIR, name), appRoot, { recursive: true })
-  await writeFile(join(appRoot, "package.json"), "{}\n")
-
-  tempDirs.push(tempRoot)
-
-  return appRoot
+function fixtureRoot(name: string) {
+  return join(CONTRACT_FIXTURES_DIR, name)
 }
 
 describe("discoverRoutes", () => {
   test("discovers the valid default-app fixture from cwd and resolves its executable entry", async () => {
-    const appRoot = await stageFixtureApp("valid-basic")
+    const appRoot = fixtureRoot("valid-basic")
 
     const manifest = await discoverRoutes({ cwd: join(appRoot, "src", "app", "(public)") })
 
@@ -48,7 +32,7 @@ describe("discoverRoutes", () => {
   })
 
   test("discovers the valid custom appDir fixture and preserves its configured route path", async () => {
-    const appRoot = await stageFixtureApp("valid-custom-app-dir")
+    const appRoot = fixtureRoot("valid-custom-app-dir")
 
     const manifest = await discoverRoutes({ appRoot })
 
@@ -67,10 +51,10 @@ describe("discoverRoutes", () => {
   })
 
   test("fails with a stable Dawn error when a route directory contains both graph.ts and workflow.ts", async () => {
-    const appRoot = await stageFixtureApp("invalid-companion")
+    const appRoot = fixtureRoot("invalid-companion")
 
     await expect(discoverRoutes({ appRoot })).rejects.toThrow(
-      `Route directory ${join(appRoot, "src/app/broken/[tenant]")} has multiple primary entries: graph.ts, route.ts, workflow.ts`,
+      `Route directory ${join(appRoot, "src/app/broken/[tenant]")} has multiple primary entries: graph.ts, workflow.ts`,
     )
   })
 })
