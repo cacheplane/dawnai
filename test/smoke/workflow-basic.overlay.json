@@ -1,0 +1,7 @@
+{
+  "entryKind": "workflow",
+  "entryModule": "src/app/(public)/hello/[tenant]/route.ts",
+  "input": {
+    "tenant": "workflow-tenant"
+  }
+}

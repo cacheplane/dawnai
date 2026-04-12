@@ -7,6 +7,7 @@ export default defineConfig({
       "./packages/cli/vitest.config.ts",
       "./packages/create-dawn-app/vitest.config.ts",
       "./test/generated/vitest.config.ts",
+      "./test/smoke/vitest.config.ts",
     ],
   },
 })
