@@ -11,7 +11,7 @@ import {
   createTrackedTempDir,
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
-} from "./harness.ts"
+} from "../harness/packaged-app.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
 const FIXTURE_ROOT = resolve(import.meta.dirname, "fixtures")

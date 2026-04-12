@@ -1,17 +1,21 @@
 import { spawn } from "node:child_process"
 import { constants } from "node:fs"
-import { access, mkdtemp, readFile, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { access, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vitest"
 
-import { createPackagedInstaller } from "../../../test/generated/harness.ts"
+import {
+  cleanupTrackedTempDirs,
+  createPackagedInstaller,
+  createTrackedTempDir,
+  type TrackedTempDir,
+} from "../../../test/harness/packaged-app.ts"
 import { run } from "../src/index.js"
 
-const tempDirs: string[] = []
+const tempDirs: TrackedTempDir[] = []
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
+  await cleanupTrackedTempDirs(tempDirs)
 })
 
 async function assertExists(path: string) {
@@ -51,8 +55,7 @@ describe("create-dawn-app", () => {
   test("scaffolds external mode from the packaged bin with published dist-tag specifiers", {
     timeout: 30_000,
   }, async () => {
-    const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-standalone-"))
-    tempDirs.push(tempRoot)
+    const tempRoot = await createTrackedTempDir("create-dawn-app-standalone-", tempDirs)
 
     const { installerDir: installDir } = await createPackagedInstaller({
       tempRoot,
@@ -94,8 +97,7 @@ describe("create-dawn-app", () => {
   test("rejects packaged internal mode outside a Dawn monorepo checkout", {
     timeout: 30_000,
   }, async () => {
-    const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-standalone-"))
-    tempDirs.push(tempRoot)
+    const tempRoot = await createTrackedTempDir("create-dawn-app-standalone-", tempDirs)
 
     const { installerDir: installDir } = await createPackagedInstaller({
       tempRoot,
@@ -113,8 +115,7 @@ describe("create-dawn-app", () => {
   })
 
   test("supports explicit internal dev scaffolding with repo-local package edges", async () => {
-    const tempRoot = await mkdtemp(join(tmpdir(), "create-dawn-app-internal-"))
-    tempDirs.push(tempRoot)
+    const tempRoot = await createTrackedTempDir("create-dawn-app-internal-", tempDirs)
 
     const targetDir = join(tempRoot, "hello-dawn")
 
