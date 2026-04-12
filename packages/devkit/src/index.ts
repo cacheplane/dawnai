@@ -4,3 +4,4 @@ export {
   type WriteTemplateOptions,
   writeTemplate,
 } from "./write-template.js"
+export * from "./testing/index.js"
