@@ -29,7 +29,9 @@ export interface GeneratedApp {
   readonly transcriptPath: string
 }
 
-export async function createGeneratedApp(options: CreateGeneratedAppOptions): Promise<GeneratedApp> {
+export async function createGeneratedApp(
+  options: CreateGeneratedAppOptions,
+): Promise<GeneratedApp> {
   const templateDir = await resolveTemplateDir(options.template)
   const appRoot = resolve(options.targetDir ?? resolve(options.artifactRoot, "app"))
   const transcriptPath = resolve(options.artifactRoot, "transcripts", "generated-app.log")

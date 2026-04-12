@@ -17,7 +17,9 @@ export function renderTextSummary(result: HarnessRunResult): string {
   ]
 
   for (const laneResult of result.results) {
-    lines.push(`[${laneResult.lane}] ${laneResult.name}: ${laneResult.status} (${laneResult.durationMs}ms)`)
+    lines.push(
+      `[${laneResult.lane}] ${laneResult.name}: ${laneResult.status} (${laneResult.durationMs}ms)`,
+    )
 
     if (laneResult.failureReason) {
       lines.push(`failure: ${laneResult.failureReason}`)

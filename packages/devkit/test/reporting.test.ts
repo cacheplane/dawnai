@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  renderJsonSummary,
-  renderTextSummary,
   type HarnessLaneResult,
   type HarnessRunResult,
+  renderJsonSummary,
+  renderTextSummary,
 } from "../src/index.ts"
 
 describe("harness reporting", () => {

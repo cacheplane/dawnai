@@ -1,23 +1,23 @@
 export {
-  createArtifactRoot,
   type CreateArtifactRootOptions,
+  createArtifactRoot,
 } from "./artifacts.js"
 export {
-  createGeneratedApp,
   type CreateGeneratedAppOptions,
+  createGeneratedApp,
   type GeneratedApp,
   type GeneratedAppSpecifiers,
 } from "./generated-app.js"
 export {
-  spawnProcess,
   type SpawnProcessOptions,
   type SpawnProcessResult,
+  spawnProcess,
 } from "./process.js"
 export { renderJsonSummary, renderTextSummary } from "./reporting.js"
-export {
-  type HarnessCounts,
-  type HarnessLaneResult,
-  type HarnessPhaseResult,
-  type HarnessRunResult,
-  type HarnessStatus,
+export type {
+  HarnessCounts,
+  HarnessLaneResult,
+  HarnessPhaseResult,
+  HarnessRunResult,
+  HarnessStatus,
 } from "./result-types.js"
