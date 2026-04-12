@@ -14,6 +14,8 @@ This design introduces three related pieces:
 - `dawn test` as the scenario/assertion layer built on top of `dawn run`
 - a new runtime-contract harness lane separate from the existing smoke lane
 
+This spec intentionally changes one earlier boundary from the testing-harness design: `dawn test` was previously reserved and non-shipping, but is now promoted into the next public command surface because the user explicitly wants the runtime design to start from `dawn run` plus a real public testing layer built on top of it.
+
 The first version should stay intentionally narrow:
 
 - app discovery from current working directory by default
@@ -120,6 +122,16 @@ V1 behavior:
 - execute those scenarios through the same execution primitive as `dawn run`
 - print concise pass/fail output for developer use
 
+V1 CLI contract:
+
+- `dawn test` with no positional arguments discovers all `run.test.ts` files under the app routes directory
+- `dawn test <path>` narrows scope to one scenario file or one route directory
+- human-readable output is the default surface in v1
+- exit `0` when all discovered scenarios pass
+- exit `1` when one or more scenarios fail or a modeled route execution failure occurs
+- exit `2` on CLI or infrastructure failures before normal scenario results can be produced
+- JSON mode is deferred; the framework harness should continue to use its internal lanes and `dawn run` for machine-oriented assertions
+
 V1 authoring contract:
 
 - `run.test.ts` exports a default array of scenario objects
@@ -155,6 +167,13 @@ export default [
 ```
 
 The exact runtime helper API can still evolve during implementation, but the module shape above should be treated as the v1 planning contract.
+
+Scenario discovery rules:
+
+- Dawn discovers `run.test.ts` files by walking the app routes tree
+- a scenario file applies to the route directory it is colocated with
+- `target` is required on every scenario object, even when only one executable route boundary exists in the directory
+- `target` must be a relative path from the scenario file directory to either `graph.ts` or `workflow.ts`
 
 This keeps the semantic split clear:
 
@@ -393,6 +412,13 @@ These should map to:
 - scenario load failure
 - route execution failure
 - assertion failure
+
+These should map to:
+
+- exit `1` when one or more discovered scenarios fail
+- exit `2` when Dawn cannot discover, load, or execute the test run infrastructure correctly
+- concise human-readable stdout for scenario results
+- stderr reserved for CLI or infrastructure failures that bypass the normal test result flow
 
 This matters because “the route crashed” and “the route returned the wrong shape” are different classes of failure and should not be flattened together.
 
