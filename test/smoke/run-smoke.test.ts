@@ -1,11 +1,13 @@
 import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
-import { dirname, join, resolve } from "node:path"
+import { dirname, join, relative, resolve } from "node:path"
 
 import { afterEach, describe, expect, test } from "vitest"
 
 import {
   createArtifactRoot,
   createGeneratedApp,
+  type HarnessLaneResult,
+  type HarnessPhaseResult,
   spawnProcess,
 } from "../../packages/devkit/src/testing/index.ts"
 import {
@@ -14,7 +16,7 @@ import {
   createTrackedTempDir,
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
-} from "../generated/harness.ts"
+} from "../harness/packaged-app.ts"
 
 const SMOKE_ROOT = resolve(import.meta.dirname)
 const tempDirs: TrackedTempDir[] = []
@@ -25,17 +27,22 @@ type SmokeFixtureName = "graph-basic" | "workflow-basic"
 interface SmokeOverlay {
   readonly deleteFiles?: readonly string[]
   readonly entryKind: SmokeEntryKind
-  readonly entryModule: string
   readonly files?: Readonly<Record<string, string>>
   readonly input: Record<string, unknown>
 }
 
-interface SmokeScenarioResult {
-  readonly artifactRoot: string
-  readonly fixtureName: SmokeFixtureName
-  readonly output: unknown
-  readonly status: "passed"
-  readonly transcriptPath: string
+interface SmokeRouteDefinition {
+  readonly entryFile: string
+  readonly entryKind: string
+  readonly id: string
+  readonly pathname: string
+  readonly routeDir: string
+  readonly segments: readonly unknown[]
+}
+
+interface SmokeRouteManifest {
+  readonly appRoot: string
+  readonly routes: readonly SmokeRouteDefinition[]
 }
 
 afterEach(async () => {
@@ -45,12 +52,23 @@ afterEach(async () => {
 describe("runtime smoke harness", () => {
   test("boots the graph fixture and executes one canonical flow", { timeout: 180_000 }, async () => {
     const result = await runSmokeScenario("graph-basic")
+    const output = await readSmokeOutput(result)
 
     expect(result).toMatchObject({
-      fixtureName: "graph-basic",
+      failureReason: null,
+      lane: "smoke",
+      name: "graph-basic",
       status: "passed",
     })
-    expect(result.output).toEqual({
+    expect(result.phases.map((phase) => phase.name)).toEqual([
+      "packaged-installer",
+      "install",
+      "discover-routes",
+      "typecheck",
+      "compile",
+      "execute",
+    ])
+    expect(output).toEqual({
       greeting: "Hello, graph-tenant!",
       tenant: "graph-tenant",
     })
@@ -61,12 +79,23 @@ describe("runtime smoke harness", () => {
     timeout: 180_000,
   }, async () => {
     const result = await runSmokeScenario("workflow-basic")
+    const output = await readSmokeOutput(result)
 
     expect(result).toMatchObject({
-      fixtureName: "workflow-basic",
+      failureReason: null,
+      lane: "smoke",
+      name: "workflow-basic",
       status: "passed",
     })
-    expect(result.output).toEqual({
+    expect(result.phases.map((phase) => phase.name)).toEqual([
+      "packaged-installer",
+      "install",
+      "discover-routes",
+      "typecheck",
+      "compile",
+      "execute",
+    ])
+    expect(output).toEqual({
       greeting: "Hello, workflow-tenant!",
       tenant: "workflow-tenant",
     })
@@ -74,7 +103,7 @@ describe("runtime smoke harness", () => {
   })
 })
 
-async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<SmokeScenarioResult> {
+async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessLaneResult> {
   const tempRoot = await createTrackedTempDir("dsm-", tempDirs)
   const artifactRoot = await createArtifactRoot({
     baseDir: tempRoot,
@@ -82,15 +111,20 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<SmokeSce
     runId: "smoke",
   })
   const transcriptPath = join(artifactRoot, "transcripts", `${fixtureName}.log`)
+  const phases: HarnessPhaseResult[] = []
+  const artifacts: string[] = []
+  const startedAt = Date.now()
 
   await mkdir(dirname(transcriptPath), { recursive: true })
 
   try {
     const overlay = await readOverlay(fixtureName)
-    const { tarballs } = await createPackagedInstaller({
-      packageNames: ["@dawn/cli", "@dawn/config-typescript", "@dawn/core", "@dawn/langgraph"],
-      tempRoot,
-      transcriptPath,
+    const { tarballs } = await recordPhase(phases, "packaged-installer", async () => {
+      return await createPackagedInstaller({
+        packageNames: ["@dawn/cli", "@dawn/config-typescript", "@dawn/core", "@dawn/langgraph"],
+        tempRoot,
+        transcriptPath,
+      })
     })
     const generatedApp = await createGeneratedApp({
       appName: fixtureName,
@@ -109,21 +143,66 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<SmokeSce
       tarballs,
     })
     await applyOverlay({ appRoot: generatedApp.appRoot, overlay })
-    await installAndPrepareApp({
-      appRoot: generatedApp.appRoot,
-      transcriptPath,
+
+    await recordPhase(phases, "install", async () => {
+      await runCommand({
+        args: ["install"],
+        command: "pnpm",
+        cwd: generatedApp.appRoot,
+        transcriptPath,
+      })
     })
 
-    const output = await executeCanonicalFlow({
-      appRoot: generatedApp.appRoot,
-      overlay,
-      transcriptPath,
+    const manifestArtifactPath = join(artifactRoot, "route-manifest.json")
+    const discoveredRoute = await recordPhase(phases, "discover-routes", async () => {
+      const manifest = await discoverRoutes({
+        appRoot: generatedApp.appRoot,
+        expectedEntryKind: overlay.entryKind,
+        transcriptPath,
+      })
+      await writeJsonArtifact(manifestArtifactPath, manifest)
+      artifacts.push(manifestArtifactPath)
+      return selectExecutableRoute(manifest, overlay.entryKind)
+    })
+
+    await recordPhase(phases, "typecheck", async () => {
+      await runCommand({
+        args: ["typecheck"],
+        command: "pnpm",
+        cwd: generatedApp.appRoot,
+        transcriptPath,
+      })
+    })
+
+    const compiledEntryPath = await recordPhase(phases, "compile", async () => {
+      return await compileDiscoveredRoute({
+        appRoot: generatedApp.appRoot,
+        entryFile: discoveredRoute.entryFile,
+        transcriptPath,
+      })
+    })
+
+    const outputArtifactPath = join(artifactRoot, "canonical-output.json")
+    await recordPhase(phases, "execute", async () => {
+      const output = await executeCanonicalFlow({
+        appRoot: generatedApp.appRoot,
+        compiledEntryPath,
+        input: overlay.input,
+        transcriptPath,
+        expectedKind: overlay.entryKind,
+      })
+
+      await writeJsonArtifact(outputArtifactPath, output)
+      artifacts.push(outputArtifactPath)
     })
 
     return {
-      artifactRoot,
-      fixtureName,
-      output,
+      artifacts,
+      durationMs: Date.now() - startedAt,
+      failureReason: null,
+      lane: "smoke",
+      name: fixtureName,
+      phases,
       status: "passed",
       transcriptPath,
     }
@@ -203,37 +282,48 @@ async function rewriteDependenciesToTarballs(options: {
   await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
 }
 
-async function installAndPrepareApp(options: {
+async function discoverRoutes(options: {
   readonly appRoot: string
+  readonly expectedEntryKind: SmokeEntryKind
   readonly transcriptPath: string
-}): Promise<void> {
-  await runCommand({
-    args: ["install"],
+}): Promise<SmokeRouteManifest> {
+  const result = await runCommand({
+    args: ["exec", "dawn", "routes", "--json"],
     command: "pnpm",
     cwd: options.appRoot,
     transcriptPath: options.transcriptPath,
   })
-  await runCommand({
-    args: ["exec", "dawn", "verify", "--json"],
-    command: "pnpm",
-    cwd: options.appRoot,
-    transcriptPath: options.transcriptPath,
-  })
-  await runCommand({
-    args: ["typecheck"],
-    command: "pnpm",
-    cwd: options.appRoot,
-    transcriptPath: options.transcriptPath,
-  })
+  const manifest = JSON.parse(result.stdout) as SmokeRouteManifest
+  const matchingRoutes = manifest.routes.filter((route) => route.entryKind === options.expectedEntryKind)
+
+  if (matchingRoutes.length !== 1) {
+    throw new Error(
+      `Expected exactly one ${options.expectedEntryKind} route, found ${matchingRoutes.length}`,
+    )
+  }
+
+  return manifest
 }
 
-async function executeCanonicalFlow(options: {
+function selectExecutableRoute(
+  manifest: SmokeRouteManifest,
+  expectedEntryKind: SmokeEntryKind,
+): SmokeRouteDefinition {
+  const route = manifest.routes.find((candidate) => candidate.entryKind === expectedEntryKind)
+
+  if (!route) {
+    throw new Error(`Could not find discovered ${expectedEntryKind} route`)
+  }
+
+  return route
+}
+
+async function compileDiscoveredRoute(options: {
   readonly appRoot: string
-  readonly overlay: SmokeOverlay
+  readonly entryFile: string
   readonly transcriptPath: string
-}): Promise<unknown> {
+}): Promise<string> {
   const buildDir = join(options.appRoot, ".dawn-smoke-dist")
-  const runnerPath = join(options.appRoot, ".dawn-smoke-runner.mjs")
 
   await rm(buildDir, { force: true, recursive: true })
   await runCommand({
@@ -243,11 +333,23 @@ async function executeCanonicalFlow(options: {
     transcriptPath: options.transcriptPath,
   })
 
-  const compiledEntryPath = join(
-    buildDir,
-    options.overlay.entryModule.replace(/\.ts$/u, ".js"),
-  )
-  await expect(stat(compiledEntryPath)).resolves.toBeDefined()
+  const normalizedAppRoot = normalizePrivatePath(options.appRoot)
+  const normalizedEntryFile = normalizePrivatePath(options.entryFile)
+  const relativeEntryPath = relative(normalizedAppRoot, normalizedEntryFile)
+  const compiledEntryPath = join(buildDir, relativeEntryPath).replace(/\.ts$/u, ".js")
+  await stat(compiledEntryPath)
+
+  return compiledEntryPath
+}
+
+async function executeCanonicalFlow(options: {
+  readonly appRoot: string
+  readonly compiledEntryPath: string
+  readonly expectedKind: SmokeEntryKind
+  readonly input: Record<string, unknown>
+  readonly transcriptPath: string
+}): Promise<unknown> {
+  const runnerPath = join(options.appRoot, ".dawn-smoke-runner.mjs")
 
   await writeFile(
     runnerPath,
@@ -282,26 +384,63 @@ async function executeCanonicalFlow(options: {
       '  throw new Error("Graph entry must be a function or expose invoke(input)");',
       "}",
       "",
-      "process.stdout.write(JSON.stringify({ kind: normalized.kind, output }));",
+      "process.stdout.write(JSON.stringify(output));",
       "",
     ].join("\n"),
     "utf8",
   )
 
   const runnerResult = await runCommand({
-    args: [runnerPath, compiledEntryPath, options.overlay.entryKind, JSON.stringify(options.overlay.input)],
+    args: [runnerPath, options.compiledEntryPath, options.expectedKind, JSON.stringify(options.input)],
     command: "node",
     cwd: options.appRoot,
     transcriptPath: options.transcriptPath,
   })
-  const parsed = JSON.parse(runnerResult.stdout) as {
-    readonly kind: SmokeEntryKind
-    readonly output: unknown
+
+  return JSON.parse(runnerResult.stdout)
+}
+
+async function recordPhase<T>(
+  phases: HarnessPhaseResult[],
+  name: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now()
+
+  try {
+    const result = await action()
+    phases.push({
+      durationMs: Date.now() - startedAt,
+      name,
+      status: "passed",
+    })
+    return result
+  } catch (error) {
+    phases.push({
+      durationMs: Date.now() - startedAt,
+      name,
+      status: "failed",
+    })
+    throw error
   }
+}
 
-  expect(parsed.kind).toBe(options.overlay.entryKind)
+async function readSmokeOutput(result: HarnessLaneResult): Promise<unknown> {
+  const outputArtifactPath = result.artifacts.find((artifactPath) =>
+    artifactPath.endsWith("/canonical-output.json"),
+  )
 
-  return parsed.output
+  expect(outputArtifactPath).toBeDefined()
+
+  return JSON.parse(await readFile(outputArtifactPath!, "utf8"))
+}
+
+async function writeJsonArtifact(path: string, value: unknown): Promise<void> {
+  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8")
+}
+
+function normalizePrivatePath(path: string): string {
+  return path.startsWith("/private/") ? path.slice("/private".length) : path
 }
 
 async function runCommand(options: {

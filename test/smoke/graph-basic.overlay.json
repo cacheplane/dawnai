@@ -3,7 +3,6 @@
     "src/app/(public)/hello/[tenant]/workflow.ts"
   ],
   "entryKind": "graph",
-  "entryModule": "src/app/(public)/hello/[tenant]/route.ts",
   "input": {
     "tenant": "graph-tenant"
   },
