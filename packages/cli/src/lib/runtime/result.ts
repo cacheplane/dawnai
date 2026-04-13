@@ -28,8 +28,7 @@ export interface RuntimeExecutionBaseResult extends RuntimeExecutionTiming {
   readonly routePath: string | null
 }
 
-export interface RuntimeExecutionSuccessResult
-  extends RuntimeExecutionBaseResult {
+export interface RuntimeExecutionSuccessResult extends RuntimeExecutionBaseResult {
   readonly appRoot: string
   readonly executionSource: "in-process" | "server"
   readonly mode: RuntimeExecutionMode
@@ -39,8 +38,7 @@ export interface RuntimeExecutionSuccessResult
   readonly status: "passed"
 }
 
-export interface RuntimeExecutionFailureResult
-  extends RuntimeExecutionBaseResult {
+export interface RuntimeExecutionFailureResult extends RuntimeExecutionBaseResult {
   readonly error: RuntimeExecutionError
   readonly status: "failed"
 }

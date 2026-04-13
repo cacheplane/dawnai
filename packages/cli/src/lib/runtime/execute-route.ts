@@ -5,7 +5,6 @@ import { pathToFileURL } from "node:url"
 
 import { findDawnApp } from "@dawn/core"
 import { normalizeRouteModule } from "@dawn/langgraph"
-import { deriveRouteIdentity } from "./route-identity.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import {
   createRuntimeFailureResult,
@@ -14,6 +13,7 @@ import {
   type RuntimeExecutionMode,
   type RuntimeExecutionResult,
 } from "./result.js"
+import { deriveRouteIdentity } from "./route-identity.js"
 
 export interface ExecuteRouteOptions {
   readonly appRoot?: string

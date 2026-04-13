@@ -95,9 +95,7 @@ async function readJsonFromStdin(io: CommandIo): Promise<unknown> {
 
 function writeResult(routePath: string, result: RuntimeExecutionResult, io: CommandIo): void {
   const payload =
-    result.routePath === null && routePath.length > 0
-      ? { ...result, routePath }
-      : result
+    result.routePath === null && routePath.length > 0 ? { ...result, routePath } : result
 
   writeLine(io.stdout, JSON.stringify(payload, null, 2))
 }

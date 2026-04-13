@@ -80,7 +80,9 @@ export function normalizeServerResult(
   })
 }
 
-function parseJson(input: string): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
+function parseJson(
+  input: string,
+): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
   try {
     return {
       ok: true,
