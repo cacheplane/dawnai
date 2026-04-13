@@ -78,7 +78,7 @@ Without a Dawn-owned local runtime command, the project risks:
 
 Responsibilities:
 
-- discover the app from `cwd`
+- discover the app from the current working directory using the same upward-search semantics as `dawn run`, `dawn test`, and `dawn verify`
 - resolve and serve all discovered routes in the app
 - expose a local HTTP endpoint for execution
 - watch relevant files
@@ -111,6 +111,7 @@ The command split becomes:
 `dawn dev` should serve a narrow local HTTP API whose primary execution surface is:
 
 - `POST /runs/wait`
+- `GET /healthz`
 
 This is intentionally the same transport contract Dawn already assumes for server-backed execution.
 
@@ -140,7 +141,11 @@ The local server should:
 3. execute the route in-process
 4. return the same server-facing result shape Dawn already expects to normalize
 
-V1 should stay narrow. It may add a health/readiness endpoint for startup coordination, but `/runs/wait` is the primary contract.
+`assistant_id` is the authoritative route identifier for request execution.
+
+`metadata.dawn.route_id`, `metadata.dawn.route_path`, and `metadata.dawn.mode` are verification fields, not alternative routing inputs. When they are present, `dawn dev` should validate that they match the resolved registry entry for the supplied `assistant_id`. Mismatches should be rejected rather than silently tolerated.
+
+V1 should stay narrow. `/healthz` is required for deterministic readiness and restart coordination, and `/runs/wait` remains the primary execution contract.
 
 ## Route Registry
 
@@ -176,7 +181,7 @@ Parent process responsibilities:
 - file watching
 - restart coordination
 - user-facing logs
-- stable port ownership
+- startup and readiness orchestration
 
 Child process responsibilities:
 
@@ -185,6 +190,18 @@ Child process responsibilities:
 - local HTTP server
 - `/runs/wait` handling
 - route execution
+
+The child process is the component that binds the configured localhost port and serves both `/runs/wait` and `/healthz`.
+
+Restart model:
+
+- parent detects a relevant file change
+- parent stops the current child
+- child exits and releases the port
+- parent starts a fresh child on the same configured port
+- parent treats the server as ready only after `/healthz` reports ready
+
+During restart, requests may temporarily fail because the old child is shutting down and the new child is not yet ready. Dawn-owned tests and orchestration should treat `/healthz` as the readiness gate instead of assuming the server is immediately available after process spawn.
 
 Why this split:
 
@@ -201,15 +218,23 @@ V1 should optimize for correctness:
 - restart the child server process on change
 - keep the transport contract stable across restarts
 
-Watched inputs should include:
+Watched inputs should include the served app tree and local execution configuration, not only route entry files.
+
+V1 should watch:
 
 - `dawn.config.ts`
+- the configured `appDir` subtree
+
+This is intentionally broad. If a file can affect local route behavior, `dawn dev` should restart when it changes. Typical examples include:
+
 - `graph.ts`
 - `workflow.ts`
 - `route.ts`
 - `state.ts`
+- imported local helpers or support modules under the served app
+- colocated prompt/config/state support files that execution imports
 
-Additional files can be added where they directly affect served execution semantics, but the first version should avoid trying to infer every possible support file relationship.
+V1 should prefer broad correctness over narrow dependency inference. It is acceptable to over-restart in local development; it is not acceptable to continue serving stale behavior after a common code edit.
 
 V1 should not attempt:
 
@@ -221,7 +246,7 @@ Restart-on-change is slower, but easier to make correct against the transport co
 
 ## Port And URL Model
 
-`dawn dev` should bind to localhost on a deterministic port.
+`dawn dev` should bind to localhost on a deterministic port through the child server process.
 
 V1 should support:
 
@@ -239,6 +264,16 @@ That URL should be immediately usable with:
 ```bash
 echo '{"tenant":"acme"}' | dawn run src/app/support/[tenant]/graph.ts --url http://127.0.0.1:3020
 ```
+
+## App Discovery Semantics
+
+`dawn dev` should use the same Dawn app discovery contract as the rest of the CLI:
+
+- if invoked from the app root, serve that app
+- if invoked from a nested directory inside a Dawn app, search upward to find `dawn.config.ts` and serve that app
+- if no Dawn app is discoverable from the current directory, fail with a clear CLI error
+
+This keeps local lifecycle behavior aligned with `dawn run`, `dawn test`, and `dawn verify` instead of inventing a special discovery rule for serving.
 
 ## Error Handling
 
