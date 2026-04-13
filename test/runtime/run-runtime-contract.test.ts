@@ -35,11 +35,11 @@ interface RuntimeOverlay {
   readonly deleteFiles?: readonly string[]
   readonly files?: Readonly<Record<string, string>>
   readonly input: Record<string, unknown>
-  readonly routePath: string
+  readonly routeFile: string
   readonly expected: {
     readonly error?: {
       readonly kind: RouteExecutionErrorKind
-      readonly messageIncludes?: string
+      readonly message?: string
     }
     readonly mode?: RouteExecutionMode
     readonly output?: unknown
@@ -158,7 +158,7 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
       const execution = await executeRoute({
         cwd: generatedApp.appRoot,
         input: overlay.input,
-        routePath: overlay.routePath,
+        routeFile: overlay.routeFile,
       })
 
       assertExecutionMatchesOverlay(execution, overlay)
@@ -210,8 +210,8 @@ function assertExecutionMatchesOverlay(execution: ExecuteRouteResult, overlay: R
     status: "failed",
   } satisfies Partial<ExecuteRouteFailureResult>)
 
-  if (overlay.expected.error?.messageIncludes) {
-    expect(execution.error.message).toContain(overlay.expected.error.messageIncludes)
+  if (overlay.expected.error?.message) {
+    expect(execution.error.message).toBe(overlay.expected.error.message)
   }
 }
 
