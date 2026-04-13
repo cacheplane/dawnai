@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises"
-import { dirname, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 
 import { afterEach, describe, expect, test } from "vitest"
 
@@ -24,8 +24,10 @@ import {
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
+import { startFakeAgentServer } from "./support/fake-agent-server.ts"
 
 const RUNTIME_ROOT = resolve(import.meta.dirname)
+const HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV = "DAWN_RUNTIME_ARTIFACT_BASE_DIR"
 const tempDirs: TrackedTempDir[] = []
 
 type RuntimeFixtureName = "graph-basic" | "graph-failure" | "workflow-basic" | "workflow-failure"
@@ -37,10 +39,10 @@ interface RuntimeOverlay {
   readonly routeFile: string
   readonly expected: {
     readonly error?: {
-      readonly kind: RouteExecutionErrorKind
+      readonly kind: RuntimeExecutionErrorKind
       readonly message?: string
     }
-    readonly mode?: RouteExecutionMode
+    readonly mode?: RuntimeExecutionMode
     readonly output?: unknown
     readonly status: "failed" | "passed"
   }
@@ -65,7 +67,9 @@ describe("runtime contract harness", () => {
       "install",
       "execute-direct",
       "execute-cli",
+      "execute-cli-server",
     ])
+    await expectRuntimeParityArtifacts(result, "graph-basic")
   })
 
   test("executes failing graph fixture through direct runtime primitive", {
@@ -84,7 +88,9 @@ describe("runtime contract harness", () => {
       "install",
       "execute-direct",
       "execute-cli",
+      "execute-cli-server",
     ])
+    await expectRuntimeParityArtifacts(result, "graph-failure")
   })
 
   test("executes passing workflow fixture through direct runtime primitive", {
@@ -103,7 +109,9 @@ describe("runtime contract harness", () => {
       "install",
       "execute-direct",
       "execute-cli",
+      "execute-cli-server",
     ])
+    await expectRuntimeParityArtifacts(result, "workflow-basic")
   })
 
   test("executes failing workflow fixture through direct runtime primitive", {
@@ -122,14 +130,17 @@ describe("runtime contract harness", () => {
       "install",
       "execute-direct",
       "execute-cli",
+      "execute-cli-server",
     ])
+    await expectRuntimeParityArtifacts(result, "workflow-failure")
   })
 })
 
 async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<HarnessLaneResult> {
   const tempRoot = await createTrackedTempDir("drt-", tempDirs)
+  const artifactBaseDir = process.env[HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV] ?? tempRoot
   const artifactRoot = await createArtifactRoot({
-    baseDir: tempRoot,
+    baseDir: artifactBaseDir,
     lane: fixtureName,
     runId: "runtime",
   })
@@ -198,9 +209,55 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
         transcriptPath,
       })
 
-      assertCliExecutionMatchesOverlay(execution, overlay, generatedApp.appRoot)
+      assertCliExecutionMatchesOverlay(execution, overlay, generatedApp.appRoot, "in-process")
       await writeJsonArtifact(cliOutputArtifactPath, execution)
       artifacts.push(cliOutputArtifactPath)
+    })
+
+    const serverOutputArtifactPath = join(artifactRoot, "server-execution-result.json")
+    const serverRequestArtifactPath = join(artifactRoot, "server-request.json")
+    await recordPhase(phases, "execute-cli-server", async () => {
+      const server = await startFakeAgentServer(async () =>
+        overlay.expected.status === "passed"
+          ? {
+              body: overlay.expected.output,
+              statusCode: 200,
+            }
+          : {
+              body: {
+                error: {
+                  kind: overlay.expected.error?.kind ?? "execution_error",
+                  message: overlay.expected.error?.message ?? "expected server execution failure",
+                },
+              },
+              statusCode: 500,
+            },
+      )
+
+      try {
+        const execution = await runCliExecution({
+          appRoot: generatedApp.appRoot,
+          input: overlay.input,
+          routePath: overlay.routeFile,
+          transcriptPath,
+          url: server.url,
+        })
+
+        assertCliExecutionMatchesOverlay(execution, overlay, generatedApp.appRoot, "server")
+        await writeJsonArtifact(serverOutputArtifactPath, execution)
+        artifacts.push(serverOutputArtifactPath)
+
+        const request = server.requests.at(-1)
+
+        if (!request) {
+          throw new Error("Fake Agent Server did not receive a /runs/wait request")
+        }
+
+        await writeJsonArtifact(serverRequestArtifactPath, request.jsonBody)
+        artifacts.push(serverRequestArtifactPath)
+      } finally {
+        await server.close()
+      }
     })
 
     return {
@@ -225,6 +282,40 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
       ].join("\n"),
     )
   }
+}
+
+async function expectRuntimeParityArtifacts(
+  result: HarnessLaneResult,
+  fixtureName: RuntimeFixtureName,
+): Promise<void> {
+  const overlay = await readOverlay(fixtureName)
+  const directExecution = await readExecutionArtifact(result.artifacts, "direct-execution-result.json")
+  const cliExecution = await readExecutionArtifact(result.artifacts, "cli-execution-result.json")
+  const serverExecution = await readExecutionArtifact(result.artifacts, "server-execution-result.json")
+  const serverRequest = await readJsonArtifact<Record<string, unknown>>(
+    result.artifacts,
+    "server-request.json",
+  )
+
+  assertExecutionMatchesOverlay(directExecution, overlay)
+  assertCliExecutionMatchesOverlay(cliExecution, overlay, directExecution.appRoot, "in-process")
+  assertCliExecutionMatchesOverlay(serverExecution, overlay, directExecution.appRoot, "server")
+
+  expect(toComparableExecution(cliExecution)).toEqual(toComparableExecution(directExecution))
+  expect(toComparableExecution(serverExecution)).toEqual({
+    ...toComparableExecution(directExecution),
+    executionSource: "server",
+  })
+  expect(serverRequest).toMatchObject({
+    assistant_id: `${expectedRouteId(overlay.routeFile)}#${overlay.expected.mode}`,
+    metadata: {
+      dawn: {
+        mode: overlay.expected.mode,
+        route_id: expectedRouteId(overlay.routeFile),
+        route_path: overlay.routeFile,
+      },
+    },
+  })
 }
 
 function assertExecutionMatchesOverlay(execution: RuntimeExecutionResult, overlay: RuntimeOverlay): void {
@@ -271,16 +362,19 @@ function assertCliExecutionMatchesOverlay(
     }
     readonly mode: RuntimeExecutionMode | null
     readonly output?: unknown
+    readonly routeId?: string | null
     readonly routePath: string
+    readonly executionSource?: "in-process" | "server"
     readonly status: "failed" | "passed"
   },
   overlay: RuntimeOverlay,
   appRoot: string,
+  executionSource: "in-process" | "server",
 ): void {
   expect(normalizePrivatePath(execution.appRoot ?? "")).toBe(normalizePrivatePath(appRoot))
   expect(execution.routePath).toBe(overlay.routeFile)
   expect(execution.routeId).toBe(expectedRouteId(overlay.routeFile))
-  expect(execution.executionSource).toBe("in-process")
+  expect(execution.executionSource).toBe(executionSource)
   expect(execution.startedAt).toEqual(expect.any(String))
   expect(execution.finishedAt).toEqual(expect.any(String))
   expect(execution.durationMs).toEqual(expect.any(Number))
@@ -429,9 +523,16 @@ async function runCliExecution(options: {
   readonly input: Record<string, unknown>
   readonly routePath: string
   readonly transcriptPath: string
+  readonly url?: string
 }) {
   const result = await runCommandWithInput({
-    args: ["exec", "dawn", "run", options.routePath],
+    args: [
+      "exec",
+      "dawn",
+      "run",
+      options.routePath,
+      ...(options.url ? ["--url", options.url] : []),
+    ],
     command: "pnpm",
     cwd: options.appRoot,
     stdin: JSON.stringify(options.input),
@@ -452,11 +553,63 @@ async function runCliExecution(options: {
       readonly kind: RuntimeExecutionErrorKind
       readonly message: string
     }
+    readonly executionSource?: "in-process" | "server"
     readonly mode: RuntimeExecutionMode | null
     readonly output?: unknown
+    readonly routeId?: string | null
     readonly routePath: string
     readonly status: "failed" | "passed"
   }
+}
+
+async function readExecutionArtifact(
+  artifacts: readonly string[],
+  artifactName: string,
+): Promise<RuntimeExecutionResult> {
+  return await readJsonArtifact<RuntimeExecutionResult>(artifacts, artifactName)
+}
+
+async function readJsonArtifact<T>(
+  artifacts: readonly string[],
+  artifactName: string,
+): Promise<T> {
+  const artifactPath = artifacts.find((candidate) => basename(candidate) === artifactName)
+
+  if (!artifactPath) {
+    throw new Error(`Missing runtime artifact: ${artifactName}`)
+  }
+
+  return JSON.parse(await readFile(artifactPath, "utf8")) as T
+}
+
+function toComparableExecution(
+  execution: Pick<
+    RuntimeExecutionResult,
+    "executionSource" | "mode" | "output" | "routeId" | "routePath" | "status"
+  > & {
+    readonly error?: {
+      readonly kind: RuntimeExecutionErrorKind
+      readonly message: string
+    }
+  },
+) {
+  return execution.status === "passed"
+    ? {
+        executionSource: execution.executionSource,
+        mode: execution.mode,
+        output: execution.output,
+        routeId: execution.routeId,
+        routePath: execution.routePath,
+        status: execution.status,
+      }
+    : {
+        error: execution.error,
+        executionSource: execution.executionSource,
+        mode: execution.mode,
+        routeId: execution.routeId,
+        routePath: execution.routePath,
+        status: execution.status,
+      }
 }
 
 async function appendTranscript(
