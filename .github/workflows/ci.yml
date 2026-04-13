@@ -53,5 +53,8 @@ jobs:
       - name: Framework Verification
         run: pnpm verify:harness:framework
 
+      - name: Runtime Contract Verification
+        run: pnpm verify:harness:runtime
+
       - name: Smoke Harness Verification
         run: pnpm verify:harness:smoke

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process"
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 
@@ -5,11 +6,9 @@ import { afterEach, describe, expect, test } from "vitest"
 
 import { executeRoute } from "../../packages/cli/src/lib/runtime/execute-route.ts"
 import type {
-  ExecuteRouteFailureResult,
-  ExecuteRouteResult,
-  ExecuteRouteSuccessResult,
-  RouteExecutionErrorKind,
-  RouteExecutionMode,
+  RuntimeExecutionErrorKind,
+  RuntimeExecutionMode,
+  RuntimeExecutionResult,
 } from "../../packages/cli/src/lib/runtime/result.ts"
 import {
   createArtifactRoot,
@@ -61,6 +60,12 @@ describe("runtime contract harness", () => {
       name: "graph-basic",
       status: "passed",
     })
+    expect(result.phases.map((phase) => phase.name)).toEqual([
+      "packaged-installer",
+      "install",
+      "execute-direct",
+      "execute-cli",
+    ])
   })
 
   test("executes failing graph fixture through direct runtime primitive", {
@@ -74,6 +79,12 @@ describe("runtime contract harness", () => {
       name: "graph-failure",
       status: "passed",
     })
+    expect(result.phases.map((phase) => phase.name)).toEqual([
+      "packaged-installer",
+      "install",
+      "execute-direct",
+      "execute-cli",
+    ])
   })
 
   test("executes passing workflow fixture through direct runtime primitive", {
@@ -87,6 +98,12 @@ describe("runtime contract harness", () => {
       name: "workflow-basic",
       status: "passed",
     })
+    expect(result.phases.map((phase) => phase.name)).toEqual([
+      "packaged-installer",
+      "install",
+      "execute-direct",
+      "execute-cli",
+    ])
   })
 
   test("executes failing workflow fixture through direct runtime primitive", {
@@ -100,6 +117,12 @@ describe("runtime contract harness", () => {
       name: "workflow-failure",
       status: "passed",
     })
+    expect(result.phases.map((phase) => phase.name)).toEqual([
+      "packaged-installer",
+      "install",
+      "execute-direct",
+      "execute-cli",
+    ])
   })
 })
 
@@ -153,8 +176,8 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
       })
     })
 
-    const outputArtifactPath = join(artifactRoot, "execution-result.json")
-    await recordPhase(phases, "execute", async () => {
+    const directOutputArtifactPath = join(artifactRoot, "direct-execution-result.json")
+    await recordPhase(phases, "execute-direct", async () => {
       const execution = await executeRoute({
         cwd: generatedApp.appRoot,
         input: overlay.input,
@@ -162,8 +185,22 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
       })
 
       assertExecutionMatchesOverlay(execution, overlay)
-      await writeJsonArtifact(outputArtifactPath, execution)
-      artifacts.push(outputArtifactPath)
+      await writeJsonArtifact(directOutputArtifactPath, execution)
+      artifacts.push(directOutputArtifactPath)
+    })
+
+    const cliOutputArtifactPath = join(artifactRoot, "cli-execution-result.json")
+    await recordPhase(phases, "execute-cli", async () => {
+      const execution = await runCliExecution({
+        appRoot: generatedApp.appRoot,
+        input: overlay.input,
+        routePath: overlay.routeFile,
+        transcriptPath,
+      })
+
+      assertCliExecutionMatchesOverlay(execution, overlay, generatedApp.appRoot)
+      await writeJsonArtifact(cliOutputArtifactPath, execution)
+      artifacts.push(cliOutputArtifactPath)
     })
 
     return {
@@ -190,7 +227,7 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
   }
 }
 
-function assertExecutionMatchesOverlay(execution: ExecuteRouteResult, overlay: RuntimeOverlay): void {
+function assertExecutionMatchesOverlay(execution: RuntimeExecutionResult, overlay: RuntimeOverlay): void {
   expect(execution.status).toBe(overlay.expected.status)
 
   if (overlay.expected.status === "passed") {
@@ -198,7 +235,7 @@ function assertExecutionMatchesOverlay(execution: ExecuteRouteResult, overlay: R
       mode: overlay.expected.mode,
       output: overlay.expected.output,
       status: "passed",
-    } satisfies Partial<ExecuteRouteSuccessResult>)
+    } satisfies Partial<RuntimeExecutionResult>)
     return
   }
 
@@ -208,10 +245,51 @@ function assertExecutionMatchesOverlay(execution: ExecuteRouteResult, overlay: R
     },
     mode: overlay.expected.mode,
     status: "failed",
-  } satisfies Partial<ExecuteRouteFailureResult>)
+  } satisfies Partial<RuntimeExecutionResult>)
 
   if (overlay.expected.error?.message) {
     expect(execution.error.message).toBe(overlay.expected.error.message)
+  }
+}
+
+function assertCliExecutionMatchesOverlay(
+  execution: {
+    readonly appRoot: string | null
+    readonly error?: {
+      readonly kind: RuntimeExecutionErrorKind
+      readonly message: string
+    }
+    readonly mode: RuntimeExecutionMode | null
+    readonly output?: unknown
+    readonly routePath: string
+    readonly status: "failed" | "passed"
+  },
+  overlay: RuntimeOverlay,
+  appRoot: string,
+): void {
+  expect(normalizePrivatePath(execution.appRoot ?? "")).toBe(normalizePrivatePath(appRoot))
+  expect(execution.routePath).toBe(overlay.routeFile)
+  expect(execution.status).toBe(overlay.expected.status)
+
+  if (overlay.expected.status === "passed") {
+    expect(execution).toMatchObject({
+      mode: overlay.expected.mode,
+      output: overlay.expected.output,
+      status: "passed",
+    })
+    return
+  }
+
+  expect(execution).toMatchObject({
+    error: {
+      kind: overlay.expected.error?.kind,
+    },
+    mode: overlay.expected.mode,
+    status: "failed",
+  })
+
+  if (overlay.expected.error?.message) {
+    expect(execution.error?.message).toBe(overlay.expected.error.message)
   }
 }
 
@@ -331,6 +409,41 @@ async function runCommand(options: {
   return result
 }
 
+async function runCliExecution(options: {
+  readonly appRoot: string
+  readonly input: Record<string, unknown>
+  readonly routePath: string
+  readonly transcriptPath: string
+}) {
+  const result = await runCommandWithInput({
+    args: ["exec", "dawn", "run", options.routePath],
+    command: "pnpm",
+    cwd: options.appRoot,
+    stdin: JSON.stringify(options.input),
+    transcriptPath: options.transcriptPath,
+  })
+
+  if (result.exitCode !== 0 && result.exitCode !== 1) {
+    throw new Error(`dawn run exited with unexpected code ${result.exitCode}`)
+  }
+
+  if (result.stderr.trim().length > 0) {
+    throw new Error(`dawn run wrote to stderr: ${result.stderr.trim()}`)
+  }
+
+  return JSON.parse(result.stdout) as {
+    readonly appRoot: string | null
+    readonly error?: {
+      readonly kind: RuntimeExecutionErrorKind
+      readonly message: string
+    }
+    readonly mode: RuntimeExecutionMode | null
+    readonly output?: unknown
+    readonly routePath: string
+    readonly status: "failed" | "passed"
+  }
+}
+
 async function appendTranscript(
   transcriptPath: string,
   result: {
@@ -355,4 +468,61 @@ async function appendTranscript(
       .join("\n"),
     "utf8",
   )
+}
+
+async function runCommandWithInput(options: {
+  readonly args: readonly string[]
+  readonly command: string
+  readonly cwd: string
+  readonly stdin: string
+  readonly transcriptPath: string
+}) {
+  const result = await new Promise<{
+    readonly args: readonly string[]
+    readonly command: string
+    readonly cwd: string
+    readonly exitCode: number | null
+    readonly ok: boolean
+    readonly stderr: string
+    readonly stdout: string
+  }>((resolvePromise, rejectPromise) => {
+    const child = spawn(options.command, [...options.args], {
+      cwd: options.cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+
+    let stdout = ""
+    let stderr = ""
+
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk)
+    })
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk)
+    })
+
+    child.once("error", rejectPromise)
+    child.once("close", (exitCode) => {
+      resolvePromise({
+        args: options.args,
+        command: options.command,
+        cwd: options.cwd,
+        exitCode,
+        ok: exitCode === 0,
+        stderr,
+        stdout,
+      })
+    })
+
+    child.stdin.write(options.stdin)
+    child.stdin.end()
+  })
+
+  await appendTranscript(options.transcriptPath, result)
+
+  return result
+}
+
+function normalizePrivatePath(path: string): string {
+  return path.replaceAll("/private/var/", "/var/")
 }
