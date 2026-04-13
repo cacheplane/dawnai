@@ -44,19 +44,38 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     ...(options.cwd ? { cwd: options.cwd } : {}),
   })
   const routeMode = toRouteMode(routeFile)
+
+  if (!routeMode) {
+    const routeIdentity = deriveRouteIdentity({
+      appRoot,
+      routeFile,
+      routesDir: discoveredApp.routesDir,
+    })
+
+    return createRuntimeFailureResult({
+      appRoot,
+      executionSource: "in-process",
+      kind: "route_resolution_error",
+      message: `Route file must end with graph.ts or workflow.ts: ${routeFile}`,
+      routeId: routeIdentity.ok ? routeIdentity.routeId : null,
+      routePath: routeIdentity.routePath,
+      startedAt,
+    })
+  }
+
   const routeIdentity = deriveRouteIdentity({
     appRoot,
     routeFile,
     routesDir: discoveredApp.routesDir,
   })
 
-  if (!routeMode) {
+  if (!routeIdentity.ok) {
     return createRuntimeFailureResult({
       appRoot,
       executionSource: "in-process",
       kind: "route_resolution_error",
-      message: `Route file must end with graph.ts or workflow.ts: ${routeFile}`,
-      routeId: routeIdentity.routeId,
+      message: `Route file is outside the configured appDir: ${routeFile}`,
+      mode: routeMode,
       routePath: routeIdentity.routePath,
       startedAt,
     })

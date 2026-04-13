@@ -543,5 +543,19 @@ function normalizePrivatePath(path: string): string {
 }
 
 function expectedRouteId(routeFile: string): string {
-  return `/${routeFile.split("/").slice(2, -1).join("/")}`
+  const routeSegments = routeFile
+    .split("/")
+    .slice(2, -1)
+    .filter(Boolean)
+    .filter((segment) => !isRouteGroupSegment(segment))
+
+  if (routeSegments.length === 0) {
+    return "/"
+  }
+
+  return `/${routeSegments.join("/")}`
+}
+
+function isRouteGroupSegment(segment: string): boolean {
+  return segment.startsWith("(") && segment.endsWith(")")
 }
