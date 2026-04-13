@@ -1,4 +1,6 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
@@ -7,9 +9,11 @@ import { afterEach, describe, expect, test } from "vitest"
 import { run } from "../src/index.js"
 
 const tempDirs: string[] = []
+const servers: Array<{ close: () => Promise<void> }> = []
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
+  await Promise.all(servers.splice(0).map((server) => server.close()))
 })
 
 describe("dawn run", () => {
@@ -338,6 +342,188 @@ describe("dawn run", () => {
     })
   })
 
+  test("executes a route over --url and returns the same normalized shape as in-process", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+    })
+    const server = await startFakeAgentServer(async () => ({
+      body: {
+        greeting: "Hello, server-tenant!",
+        tenant: "server-tenant",
+      },
+      statusCode: 200,
+    }))
+
+    const inProcessResult = await invoke(["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "server-tenant" }),
+    })
+    const serverResult = await invoke(
+      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", server.url],
+      {
+        stdin: JSON.stringify({ tenant: "server-tenant" }),
+      },
+    )
+
+    expect(inProcessResult.exitCode).toBe(0)
+    expect(serverResult.exitCode).toBe(0)
+    const inProcessPayload = JSON.parse(inProcessResult.stdout) as Record<string, unknown>
+    const serverPayload = JSON.parse(serverResult.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(serverPayload)
+    expect(omitExecutionMetadata(serverPayload)).toEqual({
+      ...omitExecutionMetadata(inProcessPayload),
+      executionSource: "server",
+    })
+  })
+
+  test("marks --url executions with executionSource server", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+    })
+    const server = await startFakeAgentServer(async () => ({
+      body: {
+        greeting: "Hello, workflow-server!",
+        tenant: "workflow-server",
+      },
+      statusCode: 200,
+    }))
+
+    const result = await invoke(
+      ["run", "src/app/support/[tenant]/workflow.ts", "--cwd", appRoot, "--url", server.url],
+      {
+        stdin: JSON.stringify({ tenant: "workflow-server" }),
+      },
+    )
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload.executionSource).toBe("server")
+  })
+
+  test("sends a mode-qualified assistant_id to /runs/wait", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant });\n`,
+    })
+    let receivedRequest: Record<string, unknown> | null = null
+    const server = await startFakeAgentServer(async ({ jsonBody }) => {
+      receivedRequest = jsonBody
+      return {
+        body: { tenant: "assistant-id" },
+        statusCode: 200,
+      }
+    })
+
+    const result = await invoke(
+      ["run", "src/app/support/[tenant]/workflow.ts", "--cwd", appRoot, "--url", server.url],
+      {
+        stdin: JSON.stringify({ tenant: "assistant-id" }),
+      },
+    )
+
+    expect(result.exitCode).toBe(0)
+    expect(receivedRequest).toMatchObject({
+      assistant_id: "/support/[tenant]#workflow",
+      input: {
+        tenant: "assistant-id",
+      },
+      metadata: {
+        dawn: {
+          mode: "workflow",
+          route_id: "/support/[tenant]",
+          route_path: "src/app/support/[tenant]/workflow.ts",
+        },
+      },
+      on_completion: "delete",
+    })
+  })
+
+  test("normalizes non-200 server responses to server_transport_error", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant });\n`,
+    })
+    const server = await startFakeAgentServer(async () => ({
+      body: {
+        error: "Missing /runs/wait assistant",
+      },
+      statusCode: 503,
+    }))
+
+    const result = await invoke(
+      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", server.url],
+      {
+        stdin: JSON.stringify({ tenant: "transport-error" }),
+      },
+    )
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "server",
+      error: {
+        kind: "server_transport_error",
+      },
+      mode: "graph",
+      routeId: "/support/[tenant]",
+      routePath: "src/app/support/[tenant]/graph.ts",
+      status: "failed",
+    })
+    expect((payload.error as Record<string, unknown>).message).toContain("503")
+    expect(payload.diagnostics).toBeUndefined()
+  })
+
+  test("normalizes malformed server payloads to transport errors", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant });\n`,
+    })
+    const server = await startFakeAgentServer(async () => ({
+      body: undefined,
+      rawBody: "{not-json",
+      statusCode: 200,
+    }))
+
+    const result = await invoke(
+      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", server.url],
+      {
+        stdin: JSON.stringify({ tenant: "bad-payload" }),
+      },
+    )
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "server",
+      error: {
+        kind: "server_transport_error",
+      },
+      mode: "graph",
+      routeId: "/support/[tenant]",
+      routePath: "src/app/support/[tenant]/graph.ts",
+      status: "failed",
+    })
+    expect(payload.diagnostics).toBeUndefined()
+  })
+
   test("uses stderr-only exit 2 failures for malformed JSON input", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
@@ -421,4 +607,82 @@ function expectFailureTiming(payload: Record<string, unknown>): void {
   expect(payload.startedAt).toEqual(expect.any(String))
   expect(payload.finishedAt).toEqual(expect.any(String))
   expect(payload.durationMs).toEqual(expect.any(Number))
+}
+
+function omitExecutionMetadata(payload: Record<string, unknown>): Record<string, unknown> {
+  const { durationMs: _durationMs, finishedAt: _finishedAt, startedAt: _startedAt, ...rest } = payload
+
+  return rest
+}
+
+async function startFakeAgentServer(
+  handler: (request: {
+    readonly jsonBody: Record<string, unknown>
+    readonly request: IncomingMessage
+  }) => Promise<{
+    readonly body?: unknown
+    readonly rawBody?: string
+    readonly statusCode: number
+  }>,
+): Promise<{ readonly close: () => Promise<void>; readonly url: string }> {
+  const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
+    if (request.method !== "POST" || request.url !== "/runs/wait") {
+      response.statusCode = 404
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify({ error: "not found" }))
+      return
+    }
+
+    const rawBody = await readRequestBody(request)
+    const jsonBody = JSON.parse(rawBody) as Record<string, unknown>
+    const result = await handler({ jsonBody, request })
+
+    response.statusCode = result.statusCode
+    response.setHeader("content-type", "application/json")
+    response.end(result.rawBody ?? JSON.stringify(result.body))
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject)
+      resolve()
+    })
+  })
+
+  const address = server.address()
+
+  if (!address || typeof address === "string") {
+    throw new Error("Fake server did not bind to a TCP address")
+  }
+
+  const close = async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+
+        resolve()
+      })
+    })
+  }
+
+  const fixture = {
+    close,
+    url: `http://127.0.0.1:${(address as AddressInfo).port}`,
+  }
+  servers.push(fixture)
+  return fixture
+}
+
+async function readRequestBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = []
+
+  for await (const chunk of request) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk)
+  }
+
+  return Buffer.concat(chunks).toString("utf8")
 }
