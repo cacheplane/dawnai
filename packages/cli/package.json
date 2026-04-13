@@ -33,7 +33,9 @@
   },
   "dependencies": {
     "@dawn/core": "workspace:*",
-    "commander": "14.0.3"
+    "@dawn/langgraph": "workspace:*",
+    "commander": "14.0.3",
+    "tsx": "^4.8.1"
   },
   "devDependencies": {
     "@dawn/config-typescript": "workspace:*",
