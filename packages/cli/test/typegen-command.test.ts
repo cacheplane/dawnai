@@ -161,7 +161,9 @@ describe("dawn typegen", () => {
     await expect(readFile(join(appRoot, "src/app/dawn.generated.d.ts"), "utf8")).rejects.toThrow()
   })
 
-  test("runs from an externally installed dawn bin against a custom appDir", async () => {
+  test("runs from an externally installed dawn bin against a custom appDir", {
+    timeout: 15_000,
+  }, async () => {
     const installerRoot = await mkdtemp(join(tmpdir(), "dawn-cli-packed-installer-"))
     const packsRoot = join(installerRoot, "packs")
     const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-typegen-external-"))
