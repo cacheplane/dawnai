@@ -723,6 +723,34 @@ describe("dawn test", () => {
     )
   })
 
+  test("rejects malformed expect values even when assert(result) is present", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/graph.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/run.test.ts": scenarioModuleSource(`
+        export default [
+          {
+            name: "malformed expect with assert",
+            target: "./graph.ts",
+            input: {},
+            expect: "passed",
+            assert() {
+              return undefined
+            },
+          },
+        ]
+      `),
+    })
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain(
+      'Scenario "malformed expect with assert" expect must be an object when provided',
+    )
+  })
+
   test("rejects scenarios that omit input", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
