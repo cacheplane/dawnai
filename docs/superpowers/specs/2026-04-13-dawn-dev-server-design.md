@@ -254,6 +254,8 @@ Child process responsibilities:
 
 The parent should resolve the Dawn app root before starting the child and rebuild its watcher set after every successful restart. The child should report successful startup only after it has built the route registry and started serving on the configured port.
 
+For v1, recoverable watch behavior depends on one constraint: the configured `appDir` must remain under the discovered Dawn app root. Dawn does not need to support a restart sequence where a config edit moves the served tree outside that app root while the process is already running.
+
 The child process is the component that binds the configured localhost port and serves both `/runs/wait` and `/healthz`.
 
 Restart model:
@@ -265,6 +267,13 @@ Restart model:
 - parent treats the server as ready only after `/healthz` reports ready
 
 Only one restart may be in flight at a time. If additional file events arrive while Dawn is stopping or starting the child, the parent should coalesce them into one follow-up restart from latest on-disk state rather than attempting overlapping restarts.
+
+Child shutdown must be bounded:
+
+- attempt graceful stop first
+- wait for a fixed shutdown timeout
+- if the child does not exit, force-kill it
+- only then proceed with the replacement child
 
 During restart, requests may temporarily fail because the old child is shutting down and the new child is not yet ready. Dawn-owned tests and orchestration should treat `/healthz` as the readiness gate instead of assuming the server is immediately available after process spawn.
 
@@ -316,6 +325,8 @@ This is intentionally broad. If a file can affect local route behavior, `dawn de
 V1 should prefer broad correctness over narrow dependency inference. It is acceptable to over-restart in local development; it is not acceptable to continue serving stale behavior after a common code edit.
 
 Imports or runtime dependencies outside the discovered Dawn app root are not guaranteed to participate in watch correctness in v1. Those cases are explicitly unsupported and may require manual restart.
+
+Likewise, changing `appDir` to a path outside the discovered app root during a running `dawn dev` session is unsupported in v1 and should be treated as a fatal lifecycle/config error rather than a recoverable watched edit.
 
 “Serve the whole app” therefore means:
 
@@ -414,6 +425,7 @@ Verify that `dawn dev`:
 - fails initial startup cleanly when the first child cannot boot
 - stays alive in a broken-but-watching state after a bad watched edit and recovers after a fixing edit
 - treats failed `/healthz` checks as not-ready during restart gaps
+- force-kills a stuck child after the configured shutdown timeout and successfully starts the replacement child
 
 ### Framework served parity coverage
 
