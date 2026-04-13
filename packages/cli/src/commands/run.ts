@@ -8,6 +8,7 @@ import {
   writeLine,
 } from "../lib/output.js"
 import { executeRoute } from "../lib/runtime/execute-route.js"
+import { executeRouteServer } from "../lib/runtime/execute-route-server.js"
 import {
   type ResolvedRouteTarget,
   resolveRouteTarget,
@@ -16,6 +17,7 @@ import type { RuntimeExecutionResult } from "../lib/runtime/result.js"
 
 interface RunOptions {
   readonly cwd?: string
+  readonly url?: string
 }
 
 export function registerRunCommand(program: Command, io: CommandIo): void {
@@ -23,6 +25,7 @@ export function registerRunCommand(program: Command, io: CommandIo): void {
     .command("run <routePath>")
     .description("Execute one Dawn route invocation")
     .option("--cwd <path>", "Path to the Dawn app root or a child directory within it")
+    .option("--url <baseUrl>", "Invoke a Dawn route against a running Agent Server")
     .action(async (routePath: string, options: RunOptions) => {
       await runRunCommand(routePath, options, io)
     })
@@ -47,15 +50,24 @@ export async function runRunCommand(
     }
 
     const target = resolvedTarget as ResolvedRouteTarget
-    const result = await executeRoute({
-      appRoot: target.appRoot,
-      input,
-      routeFile: target.routeFile,
-    })
+    const normalizedResult = options.url
+      ? await executeRouteServer({
+          appRoot: target.appRoot,
+          baseUrl: options.url,
+          input,
+          mode: target.mode,
+          routeId: target.routeId,
+          routePath: target.routePath,
+        })
+      : await executeRoute({
+          appRoot: target.appRoot,
+          input,
+          routeFile: target.routeFile,
+        })
 
-    writeResult(routePath, result, io)
+    writeResult(routePath, normalizedResult, io)
 
-    if (result.status === "failed") {
+    if (normalizedResult.status === "failed") {
       throw new CommanderError(1, "dawn.run.failed", "")
     }
   } catch (error) {

@@ -5,6 +5,10 @@ export interface RouteIdentity {
   readonly routePath: string
 }
 
+export function createRouteAssistantId(routeId: string, mode: "graph" | "workflow"): string {
+  return `${routeId}#${mode}`
+}
+
 export type RouteIdentityResult =
   | (RouteIdentity & {
       readonly ok: true
