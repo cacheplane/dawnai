@@ -138,6 +138,67 @@ describe("dawn run", () => {
     })
   })
 
+  test("normalizes grouped route directories to canonical route ids", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/(public)/hello/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+    })
+
+    const result = await invoke(["run", "src/app/(public)/hello/[tenant]/graph.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "grouped-route" }),
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      mode: "graph",
+      output: {
+        greeting: "Hello, grouped-route!",
+        tenant: "grouped-route",
+      },
+      routeId: "/hello/[tenant]",
+      routePath: "src/app/(public)/hello/[tenant]/graph.ts",
+      status: "passed",
+    })
+  })
+
+  test("rejects route files outside the discovered appDir with a normalized route-resolution failure", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "scripts/graph.ts": `export const graph = async () => ({ ok: true });\n`,
+      "src/app/page.tsx": "export default function Page() { return null; }\n",
+    })
+
+    const result = await invoke(["run", "scripts/graph.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "out-of-tree" }),
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      error: {
+        kind: "route_resolution_error",
+        message: `Route file is outside the configured appDir: ${join(appRoot, "scripts/graph.ts")}`,
+      },
+      mode: "graph",
+      routeId: null,
+      routePath: "scripts/graph.ts",
+      status: "failed",
+    })
+  })
+
   test("returns a modeled app discovery failure as JSON with exit 1", async () => {
     const outsideAppRoot = await mkdtemp(join(tmpdir(), "dawn-cli-run-outside-"))
     tempDirs.push(outsideAppRoot)
