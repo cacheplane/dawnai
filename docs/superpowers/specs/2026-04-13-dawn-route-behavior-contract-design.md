@@ -103,14 +103,62 @@ The next version of the Dawn execution result should include:
 - `durationMs`
 - `diagnostics`
 
+Conceptually:
+
+```ts
+type DawnExecutionResult =
+  | {
+      appRoot: string | null;
+      diagnostics?: Record<string, unknown>;
+      durationMs: number;
+      executionSource: "in-process" | "server";
+      finishedAt: string;
+      mode: "graph" | "workflow";
+      output: unknown;
+      routeId: string;
+      routePath: string;
+      startedAt: string;
+      status: "passed";
+    }
+  | {
+      appRoot: string | null;
+      diagnostics?: Record<string, unknown>;
+      durationMs: number;
+      error: {
+        details?: Record<string, unknown>;
+        kind:
+          | "app_discovery_error"
+          | "route_resolution_error"
+          | "unsupported_route_boundary"
+          | "execution_error"
+          | "server_transport_error";
+        message: string;
+      };
+      executionSource: "in-process" | "server";
+      finishedAt: string;
+      mode: "graph" | "workflow";
+      routeId: string;
+      routePath: string;
+      startedAt: string;
+      status: "failed";
+    };
+```
+
 ### Field Definitions
 
 #### Route identity
 
-- `routePath`: the filesystem-relative route path Dawn executed
+- `routePath`: the app-root-relative route path Dawn executed
 - `routeId`: Dawn’s normalized route identity derived from the resolved route path
 
-`routePath` preserves author ergonomics. `routeId` gives Dawn a stable identity for reporting and future runtime surfaces.
+`routePath` preserves author ergonomics. It is always app-root-relative, for example `src/app/support/[tenant]/graph.ts`.
+
+`routeId` gives Dawn a stable identity for reporting and future runtime surfaces. In v1.1 it is derived from the route directory relative to the configured `appDir`, normalized to a leading-slash route form with no executable filename:
+
+- `src/app/support/[tenant]/graph.ts` -> `/support/[tenant]`
+- `src/custom-app/docs/workflow.ts` -> `/docs`
+
+`graph.ts` and `workflow.ts` in the same route directory therefore share the same `routeId`.
 
 #### Mode
 
@@ -126,6 +174,16 @@ The next version of the Dawn execution result should include:
 - `error` is present on `failed`
 
 The error shape should keep Dawn’s normalized classification rather than exposing raw transport or exception internals as the primary contract.
+
+`error.kind` should stay in Dawn’s normalized namespace:
+
+- `app_discovery_error`
+- `route_resolution_error`
+- `unsupported_route_boundary`
+- `execution_error`
+- `server_transport_error`
+
+`error.message` is always a human-readable string. `error.details` is optional diagnostic context and should not be required for assertions.
 
 #### App context
 
@@ -204,6 +262,66 @@ echo '{"tenant":"acme","message":"hello"}' | dawn run src/app/support/[tenant]/g
 4. invoke the server using the baseline LangChain/LangGraph transport contract
 5. normalize the response into the same Dawn result shape used by in-process execution
 
+### Transport Mapping
+
+V1.1 should use the documented stateless wait flow:
+
+- HTTP method: `POST`
+- endpoint: `/runs/wait`
+- request body:
+  - `assistant_id`: the Dawn server execution identifier
+  - `input`: the stdin JSON payload
+  - `metadata.dawn.route_path`: the resolved `routePath`
+  - `metadata.dawn.route_id`: the normalized `routeId`
+  - `metadata.dawn.mode`: the resolved execution `mode`
+  - `on_completion`: `"delete"`
+
+The server execution identifier must be mode-qualified so server mode can disambiguate `graph.ts` vs `workflow.ts` in the same route directory. V1.1 should use:
+
+- `${routeId}#graph`
+- `${routeId}#workflow`
+
+Conceptually:
+
+```json
+{
+  "assistant_id": "/support/[tenant]#graph",
+  "input": {
+    "tenant": "acme",
+    "message": "hello"
+  },
+  "metadata": {
+    "dawn": {
+      "mode": "graph",
+      "route_id": "/support/[tenant]",
+      "route_path": "src/app/support/[tenant]/graph.ts"
+    }
+  },
+  "on_completion": "delete"
+}
+```
+
+Response normalization rules:
+
+- `200` with JSON response body:
+  - treat the response body as the raw route output
+  - normalize into a Dawn success result with `executionSource: "server"`
+- non-`200` response with server error payload:
+  - normalize to `status: "failed"`
+  - use `error.kind: "server_transport_error"` unless Dawn can confidently classify it as a normalized execution error
+  - preserve raw HTTP status and payload under `diagnostics` in debug paths
+
+This keeps Dawn transport-compatible with Agent Server while still preserving Dawn’s own result contract.
+
+### Compatibility Guardrails
+
+V1.1 server mode is intentionally narrow:
+
+- it is supported only against Dawn-served runtimes built on the current Agent Server stateless run contract
+- Dawn should not silently fall back to another endpoint or protocol
+- if `/runs/wait` is missing, the response shape is unrecognized, or the server cannot execute the requested mode-qualified assistant id, Dawn should surface a normalized `server_transport_error`
+- capability negotiation and broader adapter discovery are deferred to a later design
+
 ### What `dawn run` Must Not Do
 
 `dawn run` should not:
@@ -232,6 +350,88 @@ The next version should support both:
 - helper assertions for more complex cases
 
 This should not become a broad DSL. It should stay a small TypeScript contract over Dawn’s normalized execution result.
+
+### Scenario Interface
+
+Each `run.test.ts` file exports a default array of scenario objects.
+
+Each scenario must include:
+
+- `name: string`
+- `target: "./graph.ts" | "./workflow.ts"`
+- `input: unknown`
+
+Each scenario must include at least one of:
+
+- `expect`
+- `assert(result)`
+
+Optional execution controls:
+
+- `run.url?: string`
+
+`target` remains strictly colocated-only in v1.1:
+
+- it must be exactly `./graph.ts` or `./workflow.ts`
+- cross-directory targets remain invalid
+- scenario files continue to apply to the route directory they are colocated with
+
+### Helper API
+
+The first helper surface should stay intentionally small:
+
+- `expectOutput(result, expected)`
+- `expectError(result, expected)`
+- `expectMeta(result, expected)`
+
+These helpers should use the same matching semantics as declarative `expect` and should fail with Dawn-owned diff messages rather than exposing raw assertion-library output as the primary UX.
+
+### Declarative `expect`
+
+The declarative shape should support:
+
+```ts
+type ScenarioExpectation = {
+  status: "passed" | "failed";
+  output?: unknown;
+  error?: {
+    kind?:
+      | "app_discovery_error"
+      | "route_resolution_error"
+      | "unsupported_route_boundary"
+      | "execution_error"
+      | "server_transport_error";
+    message?: string | { includes: string };
+  };
+  meta?: {
+    executionSource?: "in-process" | "server";
+    mode?: "graph" | "workflow";
+    routeId?: string;
+    routePath?: string;
+  };
+};
+```
+
+Matching rules:
+
+- `status` matches exactly
+- object `output` matching is deep-partial subset matching
+- primitive `output` matching is exact
+- array `output` matching is exact in v1.1
+- `error.kind` matches exactly when provided
+- `error.message` matches exactly for string values and substring containment for `{ includes: string }`
+- `meta` fields match exactly when provided
+
+### Imperative `assert(result)`
+
+`assert(result)` receives the full normalized Dawn result after declarative `expect` evaluation, if `expect` is present. It is an escape hatch for harder cases and should not replace the common declarative path.
+
+When both are present:
+
+1. Dawn evaluates declarative `expect` first
+2. if declarative matching fails, the scenario fails and `assert(result)` does not run
+3. if declarative matching passes, Dawn runs `assert(result)`
+4. any thrown assertion error or failed helper assertion fails the scenario
 
 ### Recommended Shape
 
