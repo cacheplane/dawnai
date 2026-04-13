@@ -220,7 +220,11 @@ For `POST /runs/wait`:
     ```
   - `message` and `details` should carry normalized execution-failure context from the underlying route
 
-For request-contract failures such as malformed JSON bodies, metadata mismatch, or unknown `assistant_id`, Dawn should return a non-`200` response and a JSON error body. The exact `4xx` status codes and error envelope for those request failures are implementation details unless and until the shared server-backed contract is expanded in a future design.
+For request-contract failures such as malformed JSON bodies, metadata mismatch, or unknown `assistant_id`, Dawn should return a non-`200` response and a JSON error body. The exact `4xx` status codes are implementation details unless and until the shared server-backed contract is expanded in a future design, but one constraint is required now:
+
+- request-validation failures must not use `error.kind: "execution_error"`
+
+Reserve the normalized `execution_error` envelope for actual route execution failures only. Request-contract failures should use distinct non-execution error kinds such as `invalid_request` or `not_found` so `dawn run --url` cannot misclassify them as true route failures.
 
 This keeps the local server aligned with Dawn’s current normalization expectations:
 
@@ -427,6 +431,7 @@ Assert parity between:
 Also cover the server contract branches directly:
 
 - malformed request / unknown-route failures as generic non-`200` request-contract failures
+- metadata mismatch rejection between `assistant_id` and `metadata.dawn.*`
 - `500` route execution failure
 
 ### Downstream packaged-app coverage
