@@ -79,7 +79,7 @@ Without a Dawn-owned local runtime command, the project risks:
 Responsibilities:
 
 - discover the app from the current working directory using the same upward-search semantics as `dawn run`, `dawn test`, and `dawn verify`
-- resolve and serve all discovered routes in the app
+- resolve the full app and serve all executable runtime routes in the app
 - expose a local HTTP endpoint for execution
 - watch relevant files
 - restart cleanly on change
@@ -147,6 +147,13 @@ The local server should:
 
 V1 should stay narrow. `/healthz` is required for deterministic readiness and restart coordination, and `/runs/wait` remains the primary execution contract.
 
+`dawn dev` does not expose every discovered Dawn file as an HTTP endpoint. The executable `/runs/wait` registry includes only runtime entries backed by:
+
+- `graph.ts`
+- `workflow.ts`
+
+Other discovered files such as `route.ts`, `state.ts`, and non-runtime app files participate in route discovery, validation, or watch invalidation, but are not directly invokable HTTP entries in v1.
+
 ## Route Registry
 
 At startup, `dawn dev` should discover the full app and build an in-memory route registry.
@@ -170,6 +177,69 @@ This keeps Dawn’s local server aligned with:
 - `dawn test` server scenarios
 - runtime harness parity checks
 - future deployed compatibility against Agent Server-backed runtimes
+
+## `/runs/wait` Response Contract
+
+V1 should pin the local response behavior tightly enough for parity tests to assert it.
+
+For `POST /runs/wait`:
+
+- success
+  - HTTP `200`
+  - response body is the raw JSON route output
+- malformed JSON body
+  - HTTP `400`
+  - response body:
+    ```json
+    {
+      "error": {
+        "kind": "invalid_request",
+        "message": "Malformed JSON request body"
+      }
+    }
+    ```
+- malformed request shape or metadata mismatch
+  - HTTP `400`
+  - response body:
+    ```json
+    {
+      "error": {
+        "kind": "invalid_request",
+        "message": "Request metadata does not match the resolved assistant_id"
+      }
+    }
+    ```
+  - the exact message may vary by validation branch, but the status and error envelope should not
+- unknown `assistant_id`
+  - HTTP `404`
+  - response body:
+    ```json
+    {
+      "error": {
+        "kind": "not_found",
+        "message": "Unknown assistant_id: /example#graph"
+      }
+    }
+    ```
+- route execution failure
+  - HTTP `500`
+  - response body:
+    ```json
+    {
+      "error": {
+        "kind": "execution_error",
+        "message": "Route execution failed",
+        "details": {}
+      }
+    }
+    ```
+  - `message` and `details` should carry normalized execution-failure context from the underlying route
+
+This keeps the local server aligned with Dawn’s current normalization expectations:
+
+- `200` remains success
+- `500` with `error.kind: "execution_error"` remains a normalized execution failure
+- `400` and `404` remain request/transport-level failures from the perspective of `dawn run --url`
 
 ## Process Model
 
@@ -203,6 +273,18 @@ Restart model:
 
 During restart, requests may temporarily fail because the old child is shutting down and the new child is not yet ready. Dawn-owned tests and orchestration should treat `/healthz` as the readiness gate instead of assuming the server is immediately available after process spawn.
 
+If a watched edit breaks config, app discovery, or route-registry construction after the server was previously healthy, `dawn dev` should not exit immediately. Instead:
+
+- the parent stays alive and keeps watching
+- the child restart attempt fails
+- the port is not considered ready
+- `/healthz` remains unavailable until a later successful restart
+- the CLI logs the restart failure clearly and waits for the next file change
+
+Initial startup is different:
+
+- if the first child cannot start at all, `dawn dev` should fail the command directly
+
 Why this split:
 
 - watcher concerns stay separate from execution concerns
@@ -235,6 +317,14 @@ This is intentionally broad. If a file can affect local route behavior, `dawn de
 - colocated prompt/config/state support files that execution imports
 
 V1 should prefer broad correctness over narrow dependency inference. It is acceptable to over-restart in local development; it is not acceptable to continue serving stale behavior after a common code edit.
+
+“Serve the whole app” therefore means:
+
+- discover the whole Dawn app from `cwd`
+- watch the whole served app subtree for correctness
+- build a runtime registry for every executable `graph.ts` and `workflow.ts` route in that app
+
+It does not mean that non-runtime application files become direct HTTP endpoints in v1.
 
 V1 should not attempt:
 
@@ -300,6 +390,8 @@ This separation keeps:
 
 - lifecycle failures in `dawn dev`
 - execution failures in the run contract
+
+The exception is restart-time failure after a previously healthy server: that should become a recoverable lifecycle error in the parent watcher process rather than an immediate process exit.
 
 ## Testing And Verification
 
