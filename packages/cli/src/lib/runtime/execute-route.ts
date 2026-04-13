@@ -68,7 +68,7 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     if (normalized.kind !== routeMode) {
       return createRuntimeFailureResult({
         appRoot,
-        kind: "unsupported_route_boundary_error",
+        kind: "unsupported_route_boundary",
         message: `Expected ${routeMode} route at ${routeFile}, received ${normalized.kind}`,
         mode: routeMode,
         routeFile,
@@ -84,7 +84,9 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
       routeFile,
     })
   } catch (error) {
-    const kind = isUnsupportedBoundaryError(error) ? "unsupported_route_boundary_error" : "execution_error"
+    const kind = isUnsupportedBoundaryError(error)
+      ? "unsupported_route_boundary"
+      : "execution_error"
 
     return createRuntimeFailureResult({
       appRoot,

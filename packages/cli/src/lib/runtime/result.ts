@@ -4,7 +4,7 @@ export type RuntimeExecutionErrorKind =
   | "app_discovery_error"
   | "execution_error"
   | "route_resolution_error"
-  | "unsupported_route_boundary_error"
+  | "unsupported_route_boundary"
 
 export interface RuntimeExecutionError {
   readonly kind: RuntimeExecutionErrorKind
@@ -66,9 +66,3 @@ export function createRuntimeFailureResult(options: {
 export function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
-
-export type RouteExecutionMode = RuntimeExecutionMode
-export type RouteExecutionErrorKind = RuntimeExecutionErrorKind
-export type ExecuteRouteSuccessResult = RuntimeExecutionSuccessResult
-export type ExecuteRouteFailureResult = RuntimeExecutionFailureResult
-export type ExecuteRouteResult = RuntimeExecutionResult
