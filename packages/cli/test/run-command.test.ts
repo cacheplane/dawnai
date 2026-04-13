@@ -7,6 +7,7 @@ import { dirname, join } from "node:path"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { run } from "../src/index.js"
+import { executeRouteServer } from "../src/lib/runtime/execute-route-server.js"
 
 const tempDirs: string[] = []
 const servers: Array<{ close: () => Promise<void> }> = []
@@ -446,6 +447,87 @@ describe("dawn run", () => {
     })
   })
 
+  test("preserves base path prefixes when targeting a running server", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+    })
+    let receivedRequestPath: string | null = null
+    const server = await startFakeAgentServer(
+      async ({ request }) => {
+        receivedRequestPath = request.url ?? null
+        return {
+          body: {
+            greeting: "Hello, prefixed-server!",
+            tenant: "prefixed-server",
+          },
+          statusCode: 200,
+        }
+      },
+      "/api/runs/wait",
+    )
+
+    const result = await invoke(
+      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", new URL("/api", server.url).toString()],
+      {
+        stdin: JSON.stringify({ tenant: "prefixed-server" }),
+      },
+    )
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(receivedRequestPath).toBe("/api/runs/wait")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "server",
+      mode: "graph",
+      output: {
+        greeting: "Hello, prefixed-server!",
+        tenant: "prefixed-server",
+      },
+      routeId: "/support/[tenant]",
+      routePath: "src/app/support/[tenant]/graph.ts",
+      status: "passed",
+    })
+  })
+
+  test("times out stalled server transport with a bounded failure", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+    })
+    const server = await startHangingAgentServer("/runs/wait")
+
+    const result = await executeRouteServer({
+      appRoot,
+      baseUrl: server.url,
+      input: { tenant: "slow-server" },
+      mode: "graph",
+      routeId: "/support/[tenant]",
+      routePath: "src/app/support/[tenant]/graph.ts",
+      timeoutMs: 25,
+    })
+
+    expect(result.status).toBe("failed")
+    if (result.status !== "failed") {
+      throw new Error("Expected the stalled server transport to fail")
+    }
+
+    expect(result.executionSource).toBe("server")
+    expect(result.error).toMatchObject({
+      kind: "server_transport_error",
+      message: "Server transport timed out after 25ms waiting for /runs/wait",
+    })
+    expect(result.diagnostics).toMatchObject({
+      timeoutMs: 25,
+    })
+    expect(result.durationMs).toBeGreaterThanOrEqual(0)
+  })
+
   test("normalizes non-200 server responses to server_transport_error", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
@@ -624,9 +706,10 @@ async function startFakeAgentServer(
     readonly rawBody?: string
     readonly statusCode: number
   }>,
+  requestPath = "/runs/wait",
 ): Promise<{ readonly close: () => Promise<void>; readonly url: string }> {
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
-    if (request.method !== "POST" || request.url !== "/runs/wait") {
+    if (request.method !== "POST" || request.url !== requestPath) {
       response.statusCode = 404
       response.setHeader("content-type", "application/json")
       response.end(JSON.stringify({ error: "not found" }))
@@ -640,6 +723,55 @@ async function startFakeAgentServer(
     response.statusCode = result.statusCode
     response.setHeader("content-type", "application/json")
     response.end(result.rawBody ?? JSON.stringify(result.body))
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject)
+      resolve()
+    })
+  })
+
+  const address = server.address()
+
+  if (!address || typeof address === "string") {
+    throw new Error("Fake server did not bind to a TCP address")
+  }
+
+  const close = async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+
+        resolve()
+      })
+    })
+  }
+
+  const fixture = {
+    close,
+    url: `http://127.0.0.1:${(address as AddressInfo).port}`,
+  }
+  servers.push(fixture)
+  return fixture
+}
+
+async function startHangingAgentServer(
+  requestPath = "/runs/wait",
+): Promise<{ readonly close: () => Promise<void>; readonly url: string }> {
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    if (request.method !== "POST" || request.url !== requestPath) {
+      response.statusCode = 404
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify({ error: "not found" }))
+      return
+    }
+
+    request.resume()
   })
 
   await new Promise<void>((resolve, reject) => {
