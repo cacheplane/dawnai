@@ -147,6 +147,25 @@ The local server should:
 
 V1 should stay narrow. `/healthz` is required for deterministic readiness and restart coordination, and `/runs/wait` remains the primary execution contract.
 
+`GET /healthz` should use this contract:
+
+- ready child
+  - HTTP `200`
+  - response body:
+    ```json
+    {
+      "status": "ready"
+    }
+    ```
+- no healthy child currently serving
+  - the port may refuse the connection because no child is bound
+  - Dawn-owned orchestration and tests must treat transport failure to `/healthz` as `not ready`
+
+V1 does not require a richer not-ready body. The determinism comes from the positive ready contract:
+
+- `200 { "status": "ready" }` means ready
+- anything else means not ready
+
 `dawn dev` does not expose every discovered Dawn file as an HTTP endpoint. The executable `/runs/wait` registry includes only runtime entries backed by:
 
 - `graph.ts`
@@ -278,7 +297,7 @@ If a watched edit breaks config, app discovery, or route-registry construction a
 - the parent stays alive and keeps watching
 - the child restart attempt fails
 - the port is not considered ready
-- `/healthz` remains unavailable until a later successful restart
+- `/healthz` should fail at the transport level until a later successful restart
 - the CLI logs the restart failure clearly and waits for the next file change
 
 Initial startup is different:
@@ -300,12 +319,12 @@ V1 should optimize for correctness:
 - restart the child server process on change
 - keep the transport contract stable across restarts
 
-Watched inputs should include the served app tree and local execution configuration, not only route entry files.
+Watched inputs should include the served app and local execution configuration, not only route entry files.
 
 V1 should watch:
 
 - `dawn.config.ts`
-- the configured `appDir` subtree
+- the discovered Dawn app root recursively, excluding heavy/generated directories such as `node_modules`, `.git`, and Dawn artifact output
 
 This is intentionally broad. If a file can affect local route behavior, `dawn dev` should restart when it changes. Typical examples include:
 
@@ -318,10 +337,12 @@ This is intentionally broad. If a file can affect local route behavior, `dawn de
 
 V1 should prefer broad correctness over narrow dependency inference. It is acceptable to over-restart in local development; it is not acceptable to continue serving stale behavior after a common code edit.
 
+Imports or runtime dependencies outside the discovered Dawn app root are not guaranteed to participate in watch correctness in v1. Those cases are explicitly unsupported and may require manual restart.
+
 “Serve the whole app” therefore means:
 
 - discover the whole Dawn app from `cwd`
-- watch the whole served app subtree for correctness
+- watch the whole app root for correctness
 - build a runtime registry for every executable `graph.ts` and `workflow.ts` route in that app
 
 It does not mean that non-runtime application files become direct HTTP endpoints in v1.
@@ -404,8 +425,12 @@ Verify that `dawn dev`:
 - discovers the app from `cwd`
 - starts successfully on a stable port
 - exposes `/runs/wait`
+- exposes `/healthz` with `200 { "status": "ready" }` when healthy
 - maps mode-qualified assistant ids correctly
 - restarts on source change
+- fails initial startup cleanly when the first child cannot boot
+- stays alive in a broken-but-watching state after a bad watched edit and recovers after a fixing edit
+- treats failed `/healthz` checks as not-ready during restart gaps
 
 ### Framework served parity coverage
 
@@ -422,11 +447,19 @@ Assert parity between:
 - `dawn run`
 - `dawn run --url` against `dawn dev`
 
+Also cover the server contract branches directly:
+
+- `400` malformed JSON body
+- `400` metadata mismatch
+- `404` unknown `assistant_id`
+- `500` route execution failure
+
 ### Downstream packaged-app coverage
 
 For packaged generated apps and the handwritten external fixture:
 
 - start `dawn dev`
+- wait for `/healthz` readiness
 - run `dawn run --url`
 - run `dawn test` server scenarios
 - confirm the same contract outside the framework repo boundary
