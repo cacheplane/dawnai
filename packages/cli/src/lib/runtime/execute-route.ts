@@ -1,6 +1,6 @@
 import { constants } from "node:fs"
 import { access } from "node:fs/promises"
-import { basename, resolve } from "node:path"
+import { basename, isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { findDawnApp } from "@dawn/core"
@@ -29,12 +29,16 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
       appRoot: null,
       kind: "app_discovery_error",
       message: discoveredApp.message,
-      routeFile: resolve(options.routeFile),
+      routeFile: options.routeFile,
     })
   }
 
   const appRoot = discoveredApp.appRoot
-  const routeFile = resolve(options.routeFile)
+  const routeFile = resolveRouteFile({
+    appRoot,
+    routeFile: options.routeFile,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+  })
   const routeMode = toRouteMode(routeFile)
 
   if (!routeMode) {
@@ -56,16 +60,15 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     })
   }
 
-  await registerTsxLoader()
-
   try {
+    await registerTsxLoader()
     const routeModule = await import(pathToFileURL(routeFile).href)
     const normalized = normalizeRouteModule(routeModule)
 
     if (normalized.kind !== routeMode) {
       return createRuntimeFailureResult({
         appRoot,
-        kind: "unsupported_route_boundary",
+        kind: "unsupported_route_boundary_error",
         message: `Expected ${routeMode} route at ${routeFile}, received ${normalized.kind}`,
         mode: routeMode,
         routeFile,
@@ -81,9 +84,7 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
       routeFile,
     })
   } catch (error) {
-    const kind = isUnsupportedBoundaryError(error)
-      ? "unsupported_route_boundary"
-      : "execution_error"
+    const kind = isUnsupportedBoundaryError(error) ? "unsupported_route_boundary_error" : "execution_error"
 
     return createRuntimeFailureResult({
       appRoot,
@@ -93,6 +94,22 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
       routeFile,
     })
   }
+}
+
+function resolveRouteFile(options: {
+  readonly appRoot: string
+  readonly cwd?: string
+  readonly routeFile: string
+}): string {
+  if (isAbsolute(options.routeFile)) {
+    return resolve(options.routeFile)
+  }
+
+  if (options.routeFile.startsWith(".") || options.routeFile.startsWith("..")) {
+    return resolve(options.cwd ?? process.cwd(), options.routeFile)
+  }
+
+  return resolve(options.appRoot, options.routeFile)
 }
 
 async function discoverApp(options: ExecuteRouteOptions): Promise<
