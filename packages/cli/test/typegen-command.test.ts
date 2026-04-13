@@ -170,8 +170,9 @@ describe("dawn typegen", () => {
     await mkdir(packsRoot, { recursive: true })
     await mkdir(join(appRoot, "src", "custom-app", "[tenant]"), { recursive: true })
 
-    const coreTarball = await packPackage("@dawn/core", packsRoot)
     const cliTarball = await packPackage("@dawn/cli", packsRoot)
+    const coreTarball = await packPackage("@dawn/core", packsRoot)
+    const langgraphTarball = await packPackage("@dawn/langgraph", packsRoot)
 
     await writeFile(
       join(installerRoot, "package.json"),
@@ -183,10 +184,12 @@ describe("dawn typegen", () => {
           dependencies: {
             "@dawn/cli": `file:${cliTarball}`,
             "@dawn/core": `file:${coreTarball}`,
+            "@dawn/langgraph": `file:${langgraphTarball}`,
           },
           pnpm: {
             overrides: {
               "@dawn/core": `file:${coreTarball}`,
+              "@dawn/langgraph": `file:${langgraphTarball}`,
             },
           },
         },
