@@ -1,0 +1,41 @@
+{
+  "runJson": {
+    "appRoot": "<app-root>",
+    "executionSource": "in-process",
+    "mode": "workflow",
+    "output": {
+      "greeting": "Hello, basic-tenant!",
+      "tenant": "basic-tenant"
+    },
+    "routeId": "/hello/[tenant]",
+    "routePath": "src/app/(public)/hello/[tenant]/workflow.ts",
+    "status": "passed"
+  },
+  "runServerJson": {
+    "appRoot": "<app-root>",
+    "executionSource": "server",
+    "mode": "workflow",
+    "output": {
+      "greeting": "Hello, basic-tenant!",
+      "tenant": "basic-tenant"
+    },
+    "routeId": "/hello/[tenant]",
+    "routePath": "src/app/(public)/hello/[tenant]/workflow.ts",
+    "status": "passed"
+  },
+  "serverRequest": {
+    "assistant_id": "/hello/[tenant]#workflow",
+    "input": {
+      "tenant": "basic-tenant"
+    },
+    "metadata": {
+      "dawn": {
+        "mode": "workflow",
+        "route_id": "/hello/[tenant]",
+        "route_path": "src/app/(public)/hello/[tenant]/workflow.ts"
+      }
+    },
+    "on_completion": "delete"
+  },
+  "testStdout": "PASS basic in-process scenario\nPASS basic server scenario\nSummary: 2 passed, 0 failed"
+}

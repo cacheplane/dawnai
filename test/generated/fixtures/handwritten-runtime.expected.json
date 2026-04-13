@@ -1,0 +1,41 @@
+{
+  "runJson": {
+    "appRoot": "<app-root>",
+    "executionSource": "in-process",
+    "mode": "graph",
+    "output": {
+      "greeting": "Hello, handwritten-tenant!",
+      "tenant": "handwritten-tenant"
+    },
+    "routeId": "/hello/[tenant]",
+    "routePath": "src/app/(public)/hello/[tenant]/graph.ts",
+    "status": "passed"
+  },
+  "runServerJson": {
+    "appRoot": "<app-root>",
+    "executionSource": "server",
+    "mode": "graph",
+    "output": {
+      "greeting": "Hello, handwritten-tenant!",
+      "tenant": "handwritten-tenant"
+    },
+    "routeId": "/hello/[tenant]",
+    "routePath": "src/app/(public)/hello/[tenant]/graph.ts",
+    "status": "passed"
+  },
+  "serverRequest": {
+    "assistant_id": "/hello/[tenant]#graph",
+    "input": {
+      "tenant": "handwritten-tenant"
+    },
+    "metadata": {
+      "dawn": {
+        "mode": "graph",
+        "route_id": "/hello/[tenant]",
+        "route_path": "src/app/(public)/hello/[tenant]/graph.ts"
+      }
+    },
+    "on_completion": "delete"
+  },
+  "testStdout": "PASS handwritten in-process scenario\nPASS handwritten server scenario\nSummary: 2 passed, 0 failed"
+}

@@ -1,0 +1,41 @@
+{
+  "runJson": {
+    "appRoot": "<app-root>",
+    "executionSource": "in-process",
+    "mode": "graph",
+    "output": {
+      "greeting": "Hello, custom-tenant!",
+      "tenant": "custom-tenant"
+    },
+    "routeId": "/support/[tenant]",
+    "routePath": "src/dawn-app/support/[tenant]/graph.ts",
+    "status": "passed"
+  },
+  "runServerJson": {
+    "appRoot": "<app-root>",
+    "executionSource": "server",
+    "mode": "graph",
+    "output": {
+      "greeting": "Hello, custom-tenant!",
+      "tenant": "custom-tenant"
+    },
+    "routeId": "/support/[tenant]",
+    "routePath": "src/dawn-app/support/[tenant]/graph.ts",
+    "status": "passed"
+  },
+  "serverRequest": {
+    "assistant_id": "/support/[tenant]#graph",
+    "input": {
+      "tenant": "custom-tenant"
+    },
+    "metadata": {
+      "dawn": {
+        "mode": "graph",
+        "route_id": "/support/[tenant]",
+        "route_path": "src/dawn-app/support/[tenant]/graph.ts"
+      }
+    },
+    "on_completion": "delete"
+  },
+  "testStdout": "PASS custom appDir in-process scenario\nPASS custom appDir server scenario\nSummary: 2 passed, 0 failed"
+}
