@@ -212,6 +212,10 @@ async function validateScenario(options: {
     throw new RunScenarioLoadError(`Scenario "${name}" must define input`)
   }
 
+  if (typeof expectation !== "undefined" && !expectationRecord) {
+    throw new RunScenarioLoadError(`Scenario "${name}" expect must be an object when provided`)
+  }
+
   if (!expectationRecord && typeof assert !== "function") {
     throw new RunScenarioLoadError(
       `Scenario "${name}" must define at least one of expect or assert`,
