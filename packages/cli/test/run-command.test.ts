@@ -1,5 +1,5 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -150,9 +150,12 @@ describe("dawn run", () => {
       "src/app/(public)/hello/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
     })
 
-    const result = await invoke(["run", "src/app/(public)/hello/[tenant]/graph.ts", "--cwd", appRoot], {
-      stdin: JSON.stringify({ tenant: "grouped-route" }),
-    })
+    const result = await invoke(
+      ["run", "src/app/(public)/hello/[tenant]/graph.ts", "--cwd", appRoot],
+      {
+        stdin: JSON.stringify({ tenant: "grouped-route" }),
+      },
+    )
 
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
@@ -357,9 +360,12 @@ describe("dawn run", () => {
       statusCode: 200,
     }))
 
-    const inProcessResult = await invoke(["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot], {
-      stdin: JSON.stringify({ tenant: "server-tenant" }),
-    })
+    const inProcessResult = await invoke(
+      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot],
+      {
+        stdin: JSON.stringify({ tenant: "server-tenant" }),
+      },
+    )
     const serverResult = await invoke(
       ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", server.url],
       {
@@ -454,22 +460,26 @@ describe("dawn run", () => {
       "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
     })
     let receivedRequestPath: string | null = null
-    const server = await startFakeAgentServer(
-      async ({ request }) => {
-        receivedRequestPath = request.url ?? null
-        return {
-          body: {
-            greeting: "Hello, prefixed-server!",
-            tenant: "prefixed-server",
-          },
-          statusCode: 200,
-        }
-      },
-      "/api/runs/wait",
-    )
+    const server = await startFakeAgentServer(async ({ request }) => {
+      receivedRequestPath = request.url ?? null
+      return {
+        body: {
+          greeting: "Hello, prefixed-server!",
+          tenant: "prefixed-server",
+        },
+        statusCode: 200,
+      }
+    }, "/api/runs/wait")
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", new URL("/api", server.url).toString()],
+      [
+        "run",
+        "src/app/support/[tenant]/graph.ts",
+        "--cwd",
+        appRoot,
+        "--url",
+        new URL("/api", server.url).toString(),
+      ],
       {
         stdin: JSON.stringify({ tenant: "prefixed-server" }),
       },
@@ -692,7 +702,12 @@ function expectFailureTiming(payload: Record<string, unknown>): void {
 }
 
 function omitExecutionMetadata(payload: Record<string, unknown>): Record<string, unknown> {
-  const { durationMs: _durationMs, finishedAt: _finishedAt, startedAt: _startedAt, ...rest } = payload
+  const {
+    durationMs: _durationMs,
+    finishedAt: _finishedAt,
+    startedAt: _startedAt,
+    ...rest
+  } = payload
 
   return rest
 }

@@ -1,9 +1,9 @@
-import { isDeepStrictEqual } from "node:util"
-
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { expectError, expectMeta, expectOutput } from "../lib/runtime/assertions.js"
 import { executeRoute } from "../lib/runtime/execute-route.js"
+import { executeRouteServer } from "../lib/runtime/execute-route-server.js"
 import {
   type LoadedRunScenario,
   loadRunScenarios,
@@ -95,11 +95,20 @@ async function runScenario(scenario: LoadedRunScenario): Promise<ScenarioOutcome
   let result: RuntimeExecutionResult
 
   try {
-    result = await executeRoute({
-      appRoot: scenario.appRoot,
-      input: scenario.input,
-      routeFile: scenario.routeFile,
-    })
+    result = scenario.run?.url
+      ? await executeRouteServer({
+          appRoot: scenario.appRoot,
+          baseUrl: scenario.run.url,
+          input: scenario.input,
+          mode: scenario.mode,
+          routeId: scenario.routeId,
+          routePath: scenario.routePath,
+        })
+      : await executeRoute({
+          appRoot: scenario.appRoot,
+          input: scenario.input,
+          routeFile: scenario.routeFile,
+        })
   } catch (error) {
     return {
       kind: "execution",
@@ -107,83 +116,75 @@ async function runScenario(scenario: LoadedRunScenario): Promise<ScenarioOutcome
     }
   }
 
-  return evaluateScenario(scenario, result)
+  return await evaluateScenario(scenario, result)
 }
 
-function evaluateScenario(
+async function evaluateScenario(
   scenario: LoadedRunScenario,
   result: RuntimeExecutionResult,
-): ScenarioOutcome {
-  if (result.status === "failed" && scenario.expect.status === "passed") {
+): Promise<ScenarioOutcome> {
+  const declarativeMismatch = scenario.expect
+    ? evaluateDeclarativeExpectation(scenario.expect, result)
+    : null
+
+  if (declarativeMismatch) {
+    return {
+      kind: declarativeMismatch.kind,
+      message: declarativeMismatch.message,
+    }
+  }
+
+  if (!scenario.assert) {
+    return { kind: "passed" }
+  }
+
+  try {
+    await scenario.assert(result)
+    return { kind: "passed" }
+  } catch (error) {
+    return {
+      kind: "assertion",
+      message: formatErrorMessage(error),
+    }
+  }
+}
+
+function evaluateDeclarativeExpectation(
+  expectation: NonNullable<LoadedRunScenario["expect"]>,
+  result: RuntimeExecutionResult,
+): Exclude<ScenarioOutcome, ScenarioPass> | null {
+  if (result.status === "failed" && expectation.status === "passed") {
     return {
       kind: "execution",
       message: result.error.message,
     }
   }
 
-  if (result.status === "passed" && scenario.expect.status === "failed") {
+  if (result.status === "passed" && expectation.status === "failed") {
     return {
       kind: "assertion",
       message: "Expected status failed but received passed",
     }
   }
 
-  if (result.status === "passed") {
-    const mismatch = Object.hasOwn(scenario.expect, "output")
-      ? findOutputMismatch(scenario.expect.output, result.output, "output")
-      : null
-
-    if (mismatch) {
-      return {
-        kind: "assertion",
-        message: mismatch,
-      }
+  try {
+    if (expectation.meta) {
+      expectMeta(result, expectation.meta)
     }
 
-    return { kind: "passed" }
-  }
+    if (result.status === "passed" && Object.hasOwn(expectation, "output")) {
+      expectOutput(result, expectation.output)
+    }
 
-  if (scenario.expect.error?.kind && scenario.expect.error.kind !== result.error.kind) {
+    if (result.status === "failed" && expectation.error) {
+      expectError(result, expectation.error)
+    }
+
+    return null
+  } catch (error) {
     return {
       kind: "assertion",
-      message: `Expected error.kind ${scenario.expect.error.kind} but received ${result.error.kind}`,
+      message: formatErrorMessage(error),
     }
   }
-
-  if (scenario.expect.error?.message && scenario.expect.error.message !== result.error.message) {
-    return {
-      kind: "assertion",
-      message: `Expected error.message "${scenario.expect.error.message}" but received "${result.error.message}"`,
-    }
-  }
-
-  return { kind: "passed" }
-}
-
-function findOutputMismatch(expected: unknown, actual: unknown, path: string): string | null {
-  if (!isPlainObject(expected) || !isPlainObject(actual)) {
-    return isDeepStrictEqual(actual, expected)
-      ? null
-      : `Expected ${path} to equal ${JSON.stringify(expected)} but received ${JSON.stringify(actual)}`
-  }
-
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    const nextPath = `${path}.${key}`
-
-    if (!Object.hasOwn(actual, key)) {
-      return `Expected ${nextPath} to equal ${JSON.stringify(expectedValue)} but received undefined`
-    }
-
-    const mismatch = findOutputMismatch(expectedValue, actual[key], nextPath)
-
-    if (mismatch) {
-      return mismatch
-    }
-  }
-
-  return null
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
