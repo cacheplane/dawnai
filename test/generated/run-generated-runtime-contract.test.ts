@@ -1,0 +1,64 @@
+import { afterEach, describe, expect, test } from "vitest"
+
+import {
+  cleanupTrackedTempDirs,
+  createTrackedTempDir,
+  prepareGeneratedRuntimeApp,
+  readGeneratedExpectedFixture,
+  runGeneratedRuntimeScenario,
+  type TrackedTempDir,
+} from "./harness.ts"
+
+const tempDirs: TrackedTempDir[] = []
+
+afterEach(async () => {
+  await cleanupTrackedTempDirs(tempDirs)
+})
+
+describe("generated app runtime contract", () => {
+  test("validates the packaged basic app runtime contract", { timeout: 180_000 }, async () => {
+    const tempRoot = await createTrackedTempDir("dgr-", tempDirs)
+    const prepared = await prepareGeneratedRuntimeApp({
+      fixtureName: "basic",
+      registry: tempDirs,
+      tempRoot,
+    })
+
+    const result = await runGeneratedRuntimeScenario(prepared)
+    const expected = await readGeneratedExpectedFixture("basic")
+
+    expect(result).toEqual(expected)
+  })
+
+  test("validates the packaged custom-app-dir runtime contract", {
+    timeout: 180_000,
+  }, async () => {
+    const tempRoot = await createTrackedTempDir("dgr-", tempDirs)
+    const prepared = await prepareGeneratedRuntimeApp({
+      fixtureName: "custom-app-dir",
+      registry: tempDirs,
+      tempRoot,
+    })
+
+    const result = await runGeneratedRuntimeScenario(prepared)
+    const expected = await readGeneratedExpectedFixture("custom-app-dir")
+
+    expect(result).toEqual(expected)
+  })
+
+  test("validates the handwritten external app runtime contract", {
+    timeout: 180_000,
+  }, async () => {
+    const tempRoot = await createTrackedTempDir("dgr-", tempDirs)
+    const prepared = await prepareGeneratedRuntimeApp({
+      fixtureName: "handwritten",
+      registry: tempDirs,
+      tempRoot,
+    })
+
+    const result = await runGeneratedRuntimeScenario(prepared)
+    const expected = await readGeneratedExpectedFixture("handwritten")
+
+    expect(result).toEqual(expected)
+  })
+})

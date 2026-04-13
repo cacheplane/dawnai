@@ -1,0 +1,19 @@
+{
+  "name": "handwritten-runtime-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "dawn check",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dawn/core": "next",
+    "@dawn/cli": "next",
+    "@dawn/langgraph": "next"
+  },
+  "devDependencies": {
+    "@dawn/config-typescript": "next",
+    "@types/node": "25.6.0",
+    "typescript": "6.0.2"
+  }
+}
