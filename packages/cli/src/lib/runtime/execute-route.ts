@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url"
 
 import { findDawnApp } from "@dawn/core"
 import { normalizeRouteModule } from "@dawn/langgraph"
+import { deriveRouteIdentity } from "./route-identity.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import {
   createRuntimeFailureResult,
@@ -22,14 +23,17 @@ export interface ExecuteRouteOptions {
 }
 
 export async function executeRoute(options: ExecuteRouteOptions): Promise<RuntimeExecutionResult> {
+  const startedAt = Date.now()
   const discoveredApp = await discoverApp(options)
 
   if (!discoveredApp.ok) {
     return createRuntimeFailureResult({
       appRoot: null,
+      executionSource: "in-process",
       kind: "app_discovery_error",
       message: discoveredApp.message,
-      routeFile: options.routeFile,
+      routePath: options.routeFile,
+      startedAt,
     })
   }
 
@@ -40,23 +44,34 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     ...(options.cwd ? { cwd: options.cwd } : {}),
   })
   const routeMode = toRouteMode(routeFile)
+  const routeIdentity = deriveRouteIdentity({
+    appRoot,
+    routeFile,
+    routesDir: discoveredApp.routesDir,
+  })
 
   if (!routeMode) {
     return createRuntimeFailureResult({
       appRoot,
+      executionSource: "in-process",
       kind: "route_resolution_error",
       message: `Route file must end with graph.ts or workflow.ts: ${routeFile}`,
-      routeFile,
+      routeId: routeIdentity.routeId,
+      routePath: routeIdentity.routePath,
+      startedAt,
     })
   }
 
   if (!(await fileExists(routeFile))) {
     return createRuntimeFailureResult({
       appRoot,
+      executionSource: "in-process",
       kind: "route_resolution_error",
       message: `Route file does not exist: ${routeFile}`,
       mode: routeMode,
-      routeFile,
+      routeId: routeIdentity.routeId,
+      routePath: routeIdentity.routePath,
+      startedAt,
     })
   }
 
@@ -68,10 +83,13 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     if (normalized.kind !== routeMode) {
       return createRuntimeFailureResult({
         appRoot,
+        executionSource: "in-process",
         kind: "unsupported_route_boundary",
         message: `Expected ${routeMode} route at ${routeFile}, received ${normalized.kind}`,
         mode: routeMode,
-        routeFile,
+        routeId: routeIdentity.routeId,
+        routePath: routeIdentity.routePath,
+        startedAt,
       })
     }
 
@@ -79,9 +97,12 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
 
     return createRuntimeSuccessResult({
       appRoot,
+      executionSource: "in-process",
       mode: normalized.kind,
       output,
-      routeFile,
+      routeId: routeIdentity.routeId,
+      routePath: routeIdentity.routePath,
+      startedAt,
     })
   } catch (error) {
     const kind = isUnsupportedBoundaryError(error)
@@ -90,10 +111,13 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
 
     return createRuntimeFailureResult({
       appRoot,
+      executionSource: "in-process",
       kind,
       message: formatErrorMessage(error),
       mode: routeMode,
-      routeFile,
+      routeId: routeIdentity.routeId,
+      routePath: routeIdentity.routePath,
+      startedAt,
     })
   }
 }
@@ -118,6 +142,7 @@ async function discoverApp(options: ExecuteRouteOptions): Promise<
   | {
       readonly appRoot: string
       readonly ok: true
+      readonly routesDir: string
     }
   | {
       readonly message: string
@@ -133,6 +158,7 @@ async function discoverApp(options: ExecuteRouteOptions): Promise<
     return {
       appRoot: app.appRoot,
       ok: true,
+      routesDir: app.routesDir,
     }
   } catch (error) {
     return {

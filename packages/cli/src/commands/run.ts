@@ -18,25 +18,6 @@ interface RunOptions {
   readonly cwd?: string
 }
 
-interface RunCommandSuccessResult {
-  readonly appRoot: string
-  readonly mode: "graph" | "workflow"
-  readonly output: unknown
-  readonly routePath: string
-  readonly status: "passed"
-}
-
-interface RunCommandFailureResult {
-  readonly appRoot: string | null
-  readonly error: {
-    readonly kind: string
-    readonly message: string
-  }
-  readonly mode: "graph" | "workflow" | null
-  readonly routePath: string
-  readonly status: "failed"
-}
-
 export function registerRunCommand(program: Command, io: CommandIo): void {
   program
     .command("run <routePath>")
@@ -101,26 +82,10 @@ async function readJsonFromStdin(io: CommandIo): Promise<unknown> {
 }
 
 function writeResult(routePath: string, result: RuntimeExecutionResult, io: CommandIo): void {
-  if (result.status === "passed") {
-    const payload: RunCommandSuccessResult = {
-      appRoot: result.appRoot,
-      mode: result.mode,
-      output: result.output,
-      routePath,
-      status: "passed",
-    }
-
-    writeLine(io.stdout, JSON.stringify(payload, null, 2))
-    return
-  }
-
-  const payload: RunCommandFailureResult = {
-    appRoot: result.appRoot,
-    error: result.error,
-    mode: result.mode,
-    routePath,
-    status: "failed",
-  }
+  const payload =
+    result.routePath === null && routePath.length > 0
+      ? { ...result, routePath }
+      : result
 
   writeLine(io.stdout, JSON.stringify(payload, null, 2))
 }

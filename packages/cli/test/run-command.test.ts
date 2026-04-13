@@ -26,13 +26,18 @@ describe("dawn run", () => {
 
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
-    expect(JSON.parse(result.stdout)).toEqual({
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload).toMatchObject({
       appRoot,
+      executionSource: "in-process",
       mode: "graph",
       output: {
         greeting: "Hello, graph-tenant!",
         tenant: "graph-tenant",
       },
+      routeId: "/support/[tenant]",
       routePath: "src/app/support/[tenant]/graph.ts",
       status: "passed",
     })
@@ -51,13 +56,18 @@ describe("dawn run", () => {
 
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
-    expect(JSON.parse(result.stdout)).toEqual({
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload).toMatchObject({
       appRoot,
+      executionSource: "in-process",
       mode: "workflow",
       output: {
         greeting: "Hello, workflow-tenant!",
         tenant: "workflow-tenant",
       },
+      routeId: "/support/[tenant]",
       routePath: "src/app/support/[tenant]/workflow.ts",
       status: "passed",
     })
@@ -80,17 +90,50 @@ describe("dawn run", () => {
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
+    expectSuccessTiming(payload)
     expect({
       ...payload,
       appRoot: normalizePrivatePath(String(payload.appRoot)),
-    }).toEqual({
+    }).toMatchObject({
       appRoot: normalizePrivatePath(appRoot),
+      executionSource: "in-process",
       mode: "graph",
       output: {
         greeting: "Hello, relative-tenant!",
         tenant: "relative-tenant",
       },
-      routePath: "./graph.ts",
+      routeId: "/support/[tenant]",
+      routePath: "src/app/support/[tenant]/graph.ts",
+      status: "passed",
+    })
+  })
+
+  test("normalizes route identity from a configured custom appDir", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": 'const appDir = "src/custom-app";\nexport default { appDir };\n',
+      "src/custom-app/docs/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+    })
+
+    const result = await invoke(["run", "src/custom-app/docs/workflow.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "custom-app-dir" }),
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      mode: "workflow",
+      output: {
+        greeting: "Hello, custom-app-dir!",
+        tenant: "custom-app-dir",
+      },
+      routeId: "/docs",
+      routePath: "src/custom-app/docs/workflow.ts",
       status: "passed",
     })
   })
@@ -108,28 +151,36 @@ describe("dawn run", () => {
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as {
       readonly appRoot: string | null
+      readonly durationMs?: unknown
       readonly error: {
         readonly kind: string
         readonly message: string
       }
+      readonly executionSource?: unknown
+      readonly finishedAt?: unknown
       readonly mode: string | null
+      readonly routeId?: unknown
       readonly routePath: string
+      readonly startedAt?: unknown
       readonly status: string
     }
 
+    expectFailureTiming(payload)
     expect({
       ...payload,
       error: {
         ...payload.error,
         message: normalizePrivatePath(payload.error.message),
       },
-    }).toEqual({
+    }).toMatchObject({
       appRoot: null,
+      executionSource: "in-process",
       error: {
         kind: "app_discovery_error",
         message: `Could not find dawn.config.ts from ${normalizePrivatePath(outsideAppRoot)}`,
       },
       mode: null,
+      routeId: null,
       routePath: "src/app/support/[tenant]/graph.ts",
       status: "failed",
     })
@@ -148,13 +199,18 @@ describe("dawn run", () => {
 
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toBe("")
-    expect(JSON.parse(result.stdout)).toEqual({
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
       appRoot,
+      executionSource: "in-process",
       error: {
         kind: "route_resolution_error",
         message: `Route file does not exist: ${join(appRoot, "src/app/support/[tenant]/graph.ts")}`,
       },
       mode: "graph",
+      routeId: "/support/[tenant]",
       routePath: "src/app/support/[tenant]/graph.ts",
       status: "failed",
     })
@@ -174,13 +230,18 @@ describe("dawn run", () => {
 
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toBe("")
-    expect(JSON.parse(result.stdout)).toEqual({
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
       appRoot,
+      executionSource: "in-process",
       error: {
         kind: "unsupported_route_boundary",
         message: `Expected graph route at ${join(appRoot, "src/app/support/[tenant]/graph.ts")}, received workflow`,
       },
       mode: "graph",
+      routeId: "/support/[tenant]",
       routePath: "src/app/support/[tenant]/graph.ts",
       status: "failed",
     })
@@ -199,13 +260,18 @@ describe("dawn run", () => {
 
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toBe("")
-    expect(JSON.parse(result.stdout)).toEqual({
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
       appRoot,
+      executionSource: "in-process",
       error: {
         kind: "execution_error",
         message: "Graph exploded for boom",
       },
       mode: "graph",
+      routeId: "/support/[tenant]",
       routePath: "src/app/support/[tenant]/graph.ts",
       status: "failed",
     })
@@ -282,4 +348,16 @@ async function invoke(
 
 function normalizePrivatePath(path: string): string {
   return path.replaceAll("/private/var/", "/var/")
+}
+
+function expectSuccessTiming(payload: Record<string, unknown>): void {
+  expect(payload.startedAt).toEqual(expect.any(String))
+  expect(payload.finishedAt).toEqual(expect.any(String))
+  expect(payload.durationMs).toEqual(expect.any(Number))
+}
+
+function expectFailureTiming(payload: Record<string, unknown>): void {
+  expect(payload.startedAt).toEqual(expect.any(String))
+  expect(payload.finishedAt).toEqual(expect.any(String))
+  expect(payload.durationMs).toEqual(expect.any(Number))
 }

@@ -229,21 +229,31 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
 
 function assertExecutionMatchesOverlay(execution: RuntimeExecutionResult, overlay: RuntimeOverlay): void {
   expect(execution.status).toBe(overlay.expected.status)
+  expect(execution.executionSource).toBe("in-process")
+  expect(execution.startedAt).toEqual(expect.any(String))
+  expect(execution.finishedAt).toEqual(expect.any(String))
+  expect(execution.durationMs).toEqual(expect.any(Number))
 
   if (overlay.expected.status === "passed") {
     expect(execution).toMatchObject({
+      appRoot: expect.any(String),
       mode: overlay.expected.mode,
       output: overlay.expected.output,
+      routeId: expectedRouteId(overlay.routeFile),
+      routePath: overlay.routeFile,
       status: "passed",
     } satisfies Partial<RuntimeExecutionResult>)
     return
   }
 
   expect(execution).toMatchObject({
+    appRoot: expect.any(String),
     error: {
       kind: overlay.expected.error?.kind,
     },
     mode: overlay.expected.mode,
+    routeId: expectedRouteId(overlay.routeFile),
+    routePath: overlay.routeFile,
     status: "failed",
   } satisfies Partial<RuntimeExecutionResult>)
 
@@ -269,6 +279,11 @@ function assertCliExecutionMatchesOverlay(
 ): void {
   expect(normalizePrivatePath(execution.appRoot ?? "")).toBe(normalizePrivatePath(appRoot))
   expect(execution.routePath).toBe(overlay.routeFile)
+  expect(execution.routeId).toBe(expectedRouteId(overlay.routeFile))
+  expect(execution.executionSource).toBe("in-process")
+  expect(execution.startedAt).toEqual(expect.any(String))
+  expect(execution.finishedAt).toEqual(expect.any(String))
+  expect(execution.durationMs).toEqual(expect.any(Number))
   expect(execution.status).toBe(overlay.expected.status)
 
   if (overlay.expected.status === "passed") {
@@ -525,4 +540,8 @@ async function runCommandWithInput(options: {
 
 function normalizePrivatePath(path: string): string {
   return path.replaceAll("/private/var/", "/var/")
+}
+
+function expectedRouteId(routeFile: string): string {
+  return `/${routeFile.split("/").slice(2, -1).join("/")}`
 }

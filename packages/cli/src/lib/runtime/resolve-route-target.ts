@@ -4,6 +4,7 @@ import { basename, resolve } from "node:path"
 
 import { findDawnApp } from "@dawn/core"
 
+import { deriveRouteIdentity } from "./route-identity.js"
 import {
   createRuntimeFailureResult,
   formatErrorMessage,
@@ -20,19 +21,25 @@ export interface ResolveRouteTargetOptions {
 export interface ResolvedRouteTarget {
   readonly appRoot: string
   readonly mode: RuntimeExecutionMode
+  readonly routeId: string
   readonly routeFile: string
+  readonly routePath: string
 }
 
 export async function resolveRouteTarget(
   options: ResolveRouteTargetOptions,
 ): Promise<ResolvedRouteTarget | RuntimeExecutionFailureResult> {
+  const startedAt = Date.now()
   const discoveredApp = await discoverApp(options)
 
   if (!discoveredApp.ok) {
     return createRuntimeFailureResult({
       appRoot: null,
+      executionSource: "in-process",
       kind: "app_discovery_error",
       message: discoveredApp.message,
+      routePath: options.routePath,
+      startedAt,
     })
   }
 
@@ -41,28 +48,43 @@ export async function resolveRouteTarget(
     ...(options.invocationCwd ? { invocationCwd: options.invocationCwd } : {}),
   })
   const mode = toRouteMode(routeFile)
+  const routeIdentity = deriveRouteIdentity({
+    appRoot: discoveredApp.appRoot,
+    routeFile,
+    routesDir: discoveredApp.routesDir,
+  })
 
   if (!mode) {
     return createRuntimeFailureResult({
       appRoot: discoveredApp.appRoot,
+      executionSource: "in-process",
       kind: "route_resolution_error",
       message: `Route file must end with graph.ts or workflow.ts: ${routeFile}`,
+      routeId: routeIdentity.routeId,
+      routePath: routeIdentity.routePath,
+      startedAt,
     })
   }
 
   if (!(await fileExists(routeFile))) {
     return createRuntimeFailureResult({
       appRoot: discoveredApp.appRoot,
+      executionSource: "in-process",
       kind: "route_resolution_error",
       message: `Route file does not exist: ${routeFile}`,
       mode,
+      routeId: routeIdentity.routeId,
+      routePath: routeIdentity.routePath,
+      startedAt,
     })
   }
 
   return {
     appRoot: discoveredApp.appRoot,
     mode,
+    routeId: routeIdentity.routeId,
     routeFile,
+    routePath: routeIdentity.routePath,
   }
 }
 
@@ -70,6 +92,7 @@ async function discoverApp(options: ResolveRouteTargetOptions): Promise<
   | {
       readonly appRoot: string
       readonly ok: true
+      readonly routesDir: string
     }
   | {
       readonly message: string
@@ -82,6 +105,7 @@ async function discoverApp(options: ResolveRouteTargetOptions): Promise<
     return {
       appRoot: app.appRoot,
       ok: true,
+      routesDir: app.routesDir,
     }
   } catch (error) {
     return {
