@@ -1,0 +1,21 @@
+{
+  "deleteFiles": [
+    "src/app/(public)/hello/[tenant]/workflow.ts"
+  ],
+  "files": {
+    "src/app/(public)/hello/[tenant]/graph.ts": "import { defineEntry } from \"@dawn/langgraph\";\n\nimport type { HelloState } from \"./state.js\";\n\nconst entry = defineEntry({\n  graph: async (state: HelloState): Promise<HelloState> => {\n    throw new Error(`Graph execution failed for ${state.tenant}`);\n  },\n});\n\nexport const graph = entry.graph;\n",
+    "src/app/(public)/hello/[tenant]/route.ts": "export { graph } from \"./graph.js\";\n\nexport const config = {\n  runtime: \"node\",\n  tags: [\"hello\"],\n} as const;\n"
+  },
+  "input": {
+    "tenant": "graph-tenant"
+  },
+  "routeFile": "src/app/(public)/hello/[tenant]/graph.ts",
+  "expected": {
+    "error": {
+      "kind": "execution_error",
+      "message": "Graph execution failed for graph-tenant"
+    },
+    "mode": "graph",
+    "status": "failed"
+  }
+}

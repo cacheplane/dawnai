@@ -1,0 +1,14 @@
+{
+  "input": {
+    "tenant": "workflow-tenant"
+  },
+  "routeFile": "src/app/(public)/hello/[tenant]/workflow.ts",
+  "expected": {
+    "mode": "workflow",
+    "output": {
+      "greeting": "Hello, workflow-tenant!",
+      "tenant": "workflow-tenant"
+    },
+    "status": "passed"
+  }
+}
