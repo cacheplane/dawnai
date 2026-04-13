@@ -199,47 +199,13 @@ This keeps Dawn’s local server aligned with:
 
 ## `/runs/wait` Response Contract
 
-V1 should pin the local response behavior tightly enough for parity tests to assert it.
+V1 should stay aligned with Dawn’s existing shared server-backed execution contract rather than inventing a broader local-only HTTP contract.
 
 For `POST /runs/wait`:
 
 - success
   - HTTP `200`
   - response body is the raw JSON route output
-- malformed JSON body
-  - HTTP `400`
-  - response body:
-    ```json
-    {
-      "error": {
-        "kind": "invalid_request",
-        "message": "Malformed JSON request body"
-      }
-    }
-    ```
-- malformed request shape or metadata mismatch
-  - HTTP `400`
-  - response body:
-    ```json
-    {
-      "error": {
-        "kind": "invalid_request",
-        "message": "Request metadata does not match the resolved assistant_id"
-      }
-    }
-    ```
-  - the exact message may vary by validation branch, but the status and error envelope should not
-- unknown `assistant_id`
-  - HTTP `404`
-  - response body:
-    ```json
-    {
-      "error": {
-        "kind": "not_found",
-        "message": "Unknown assistant_id: /example#graph"
-      }
-    }
-    ```
 - route execution failure
   - HTTP `500`
   - response body:
@@ -254,11 +220,13 @@ For `POST /runs/wait`:
     ```
   - `message` and `details` should carry normalized execution-failure context from the underlying route
 
+For request-contract failures such as malformed JSON bodies, metadata mismatch, or unknown `assistant_id`, Dawn should return a non-`200` response and a JSON error body. The exact `4xx` status codes and error envelope for those request failures are implementation details unless and until the shared server-backed contract is expanded in a future design.
+
 This keeps the local server aligned with Dawn’s current normalization expectations:
 
 - `200` remains success
 - `500` with `error.kind: "execution_error"` remains a normalized execution failure
-- `400` and `404` remain request/transport-level failures from the perspective of `dawn run --url`
+- other non-`200` request-contract failures remain request/transport-level failures from the perspective of `dawn run --url`
 
 ## Process Model
 
@@ -267,6 +235,7 @@ V1 `dawn dev` should use a parent/child process design.
 Parent process responsibilities:
 
 - CLI entrypoint
+- Dawn app discovery before child spawn
 - file watching
 - restart coordination
 - user-facing logs
@@ -274,11 +243,12 @@ Parent process responsibilities:
 
 Child process responsibilities:
 
-- app discovery
 - route registry construction
 - local HTTP server
 - `/runs/wait` handling
 - route execution
+
+The parent should resolve the Dawn app root before starting the child and rebuild its watcher set after every successful restart. The child should report successful startup only after it has built the route registry and started serving on the configured port.
 
 The child process is the component that binds the configured localhost port and serves both `/runs/wait` and `/healthz`.
 
@@ -292,7 +262,7 @@ Restart model:
 
 During restart, requests may temporarily fail because the old child is shutting down and the new child is not yet ready. Dawn-owned tests and orchestration should treat `/healthz` as the readiness gate instead of assuming the server is immediately available after process spawn.
 
-If a watched edit breaks config, app discovery, or route-registry construction after the server was previously healthy, `dawn dev` should not exit immediately. Instead:
+If a watched edit breaks config or route-registry construction after the server was previously healthy, `dawn dev` should not exit immediately. Instead:
 
 - the parent stays alive and keeps watching
 - the child restart attempt fails
@@ -303,6 +273,8 @@ If a watched edit breaks config, app discovery, or route-registry construction a
 Initial startup is different:
 
 - if the first child cannot start at all, `dawn dev` should fail the command directly
+
+External/environment failures that are not likely to be fixed by another source edit, such as port binding failure on restart, should remain fatal lifecycle failures and cause `dawn dev` to exit rather than waiting forever in a broken state.
 
 Why this split:
 
@@ -399,6 +371,11 @@ Startup / lifecycle errors:
 
 These should fail the command directly and print clear CLI diagnostics.
 
+After the server has already been healthy once:
+
+- config and route-registry failures caused by watched edits are recoverable and should leave the parent alive in a broken-but-watching state
+- external/environment failures such as port binding failure remain fatal and should terminate `dawn dev`
+
 Request-time execution errors:
 
 - unsupported assistant ids
@@ -449,9 +426,7 @@ Assert parity between:
 
 Also cover the server contract branches directly:
 
-- `400` malformed JSON body
-- `400` metadata mismatch
-- `404` unknown `assistant_id`
+- malformed request / unknown-route failures as generic non-`200` request-contract failures
 - `500` route execution failure
 
 ### Downstream packaged-app coverage
