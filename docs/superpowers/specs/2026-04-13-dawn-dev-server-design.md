@@ -264,6 +264,8 @@ Restart model:
 - parent starts a fresh child on the same configured port
 - parent treats the server as ready only after `/healthz` reports ready
 
+Only one restart may be in flight at a time. If additional file events arrive while Dawn is stopping or starting the child, the parent should coalesce them into one follow-up restart from latest on-disk state rather than attempting overlapping restarts.
+
 During restart, requests may temporarily fail because the old child is shutting down and the new child is not yet ready. Dawn-owned tests and orchestration should treat `/healthz` as the readiness gate instead of assuming the server is immediately available after process spawn.
 
 If a watched edit breaks config or route-registry construction after the server was previously healthy, `dawn dev` should not exit immediately. Instead:
@@ -433,6 +435,8 @@ Also cover the server contract branches directly:
 - malformed request / unknown-route failures as generic non-`200` request-contract failures
 - metadata mismatch rejection between `assistant_id` and `metadata.dawn.*`
 - `500` route execution failure
+
+For malformed request, unknown-assistant, and metadata-mismatch branches, direct server-contract tests should also assert that the returned error kind is not `execution_error`.
 
 ### Downstream packaged-app coverage
 
