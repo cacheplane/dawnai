@@ -14,6 +14,7 @@ import {
 } from "../harness/packaged-app.ts"
 import { startFakeAgentServer } from "../runtime/support/fake-agent-server.ts"
 
+const REPO_ROOT = resolve(import.meta.dirname, "../..")
 const FIXTURE_ROOT = resolve(import.meta.dirname, "fixtures")
 const HANDWRITTEN_RUNTIME_FIXTURE_ROOT = join(FIXTURE_ROOT, "handwritten-runtime-app")
 const SERVER_URL_PLACEHOLDER = "__SERVER_URL__"
@@ -26,6 +27,7 @@ export {
 } from "../harness/packaged-app.ts"
 
 export type GeneratedRuntimeFixtureName = "basic" | "custom-app-dir" | "handwritten"
+export type GeneratedScaffoldMode = "external" | "internal"
 
 interface PackedTarballs {
   readonly cli: string
@@ -142,6 +144,7 @@ const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> =
 export async function prepareGeneratedRuntimeApp(options: {
   readonly fixtureName: GeneratedRuntimeFixtureName
   readonly registry?: TrackedTempDir[]
+  readonly scaffoldMode?: GeneratedScaffoldMode
   readonly tempRoot: string
 }): Promise<GeneratedRuntimeApp> {
   const fixture = runtimeFixtures[options.fixtureName]
@@ -164,7 +167,12 @@ export async function prepareGeneratedRuntimeApp(options: {
     const tarballs = toPackedTarballs(packagedTarballs)
 
     if (fixture.source === "generated") {
-      await scaffoldApp({ appRoot, installerDir, transcriptPath })
+      await scaffoldApp({
+        appRoot,
+        installerDir,
+        mode: options.scaffoldMode ?? "external",
+        transcriptPath,
+      })
     } else {
       await stageFixtureApp({
         appRoot,
@@ -183,7 +191,9 @@ export async function prepareGeneratedRuntimeApp(options: {
       })
     }
 
-    await rewriteDependenciesToTarballs({ appRoot, tarballs })
+    if ((options.scaffoldMode ?? "external") === "external") {
+      await rewriteDependenciesToTarballs({ appRoot, tarballs })
+    }
     await runPackagedCommand({
       args: ["install"],
       command: "pnpm",
@@ -327,14 +337,24 @@ async function captureServerRequest(options: {
 async function scaffoldApp(options: {
   readonly appRoot: string
   readonly installerDir: string
+  readonly mode: GeneratedScaffoldMode
   readonly transcriptPath: string
 }): Promise<void> {
-  await runPackagedCommand({
-    args: ["exec", "create-dawn-app", options.appRoot, "--dist-tag", "next"],
-    command: "pnpm",
-    cwd: options.installerDir,
-    transcriptPath: options.transcriptPath,
-  })
+  if (options.mode === "internal") {
+    await runPackagedCommand({
+      args: ["packages/create-dawn-app/dist/index.js", options.appRoot, "--mode", "internal"],
+      command: "node",
+      cwd: REPO_ROOT,
+      transcriptPath: options.transcriptPath,
+    })
+  } else {
+    await runPackagedCommand({
+      args: ["exec", "create-dawn-app", options.appRoot, "--dist-tag", "next"],
+      command: "pnpm",
+      cwd: options.installerDir,
+      transcriptPath: options.transcriptPath,
+    })
+  }
 
   await access(join(options.appRoot, "package.json"), constants.F_OK)
 }
