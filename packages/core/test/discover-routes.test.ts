@@ -83,11 +83,45 @@ describe("discoverRoutes", () => {
     })
   })
 
+  test("resolves the nearest valid Dawn app root instead of stopping at a nested config-only directory", async () => {
+    const appRoot = await createAdHocApp("dawn-core-nested-config-", {
+      "src/app/(public)/hello/[tenant]/workflow.ts": "export default {}\n",
+      "tools/scratch/dawn.config.ts": "export default {}\n",
+    })
+
+    const manifest = await discoverRoutes({ cwd: join(appRoot, "tools", "scratch") })
+
+    expect(manifest).toEqual({
+      appRoot,
+      routes: [
+        {
+          entryFile: join(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts"),
+          entryKind: "workflow",
+          id: "/hello/[tenant]",
+          pathname: "/hello/[tenant]",
+          routeDir: join(appRoot, "src/app/(public)/hello/[tenant]"),
+          segments: [
+            { kind: "static", raw: "hello" },
+            { kind: "dynamic", name: "tenant", raw: "[tenant]" },
+          ],
+        },
+      ],
+    })
+  })
+
   test("fails with a stable Dawn error when a route directory contains both graph.ts and workflow.ts", async () => {
     const appRoot = fixtureRoot("invalid-companion")
 
     await expect(discoverRoutes({ appRoot })).rejects.toThrow(
       `Route directory ${join(appRoot, "src/app/broken/[tenant]")} has multiple primary entries: graph.ts, workflow.ts`,
+    )
+  })
+
+  test("fails with a stable Dawn error when a route directory has route.ts without a primary executable entry", async () => {
+    const appRoot = fixtureRoot("invalid-route-only")
+
+    await expect(discoverRoutes({ appRoot })).rejects.toThrow(
+      `Route directory ${join(appRoot, "src/app/support/[tenant]")} must define exactly one primary executable entry: graph.ts, workflow.ts, or page.tsx`,
     )
   })
 
