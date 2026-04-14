@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "node:fs"
+import { type FSWatcher, watch } from "node:fs"
 import { join } from "node:path"
 
 export interface AppWatcher {
@@ -18,7 +18,9 @@ export function watchApp(options: {
           ? fileName.toString("utf8")
           : ""
 
-    options.onChange(relativePath.length > 0 ? join(options.appRoot, relativePath) : options.appRoot)
+    options.onChange(
+      relativePath.length > 0 ? join(options.appRoot, relativePath) : options.appRoot,
+    )
   }
 
   watchers.push(

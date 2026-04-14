@@ -3,10 +3,10 @@ import { isAbsolute, relative, resolve } from "node:path"
 
 import { findDawnApp, loadDawnConfig } from "@dawn/core"
 
-import { formatErrorMessage, type CommandIo, writeLine } from "../output.js"
-import { spawnDevChild, type SpawnedDevChild, DevChildStartupError } from "./dev-child.js"
+import { type CommandIo, formatErrorMessage, writeLine } from "../output.js"
+import { DevChildStartupError, type SpawnedDevChild, spawnDevChild } from "./dev-child.js"
 import { waitForDevServerReady } from "./health.js"
-import { watchApp, type AppWatcher } from "./watch-app.js"
+import { type AppWatcher, watchApp } from "./watch-app.js"
 
 export interface DevSession {
   readonly close: () => Promise<void>
@@ -144,9 +144,7 @@ class InternalDevSession {
         return
       }
 
-      await this.failFatal(
-        new Error(`Fatal dev session error: ${formatErrorMessage(error)}`),
-      )
+      await this.failFatal(new Error(`Fatal dev session error: ${formatErrorMessage(error)}`))
       return
     } finally {
       this.restartInFlight = false
@@ -193,7 +191,9 @@ class InternalDevSession {
       }
 
       void this.failFatal(
-        new Error(`Fatal dev session error: Dev child exited unexpectedly with code ${code ?? "unknown"}`),
+        new Error(
+          `Fatal dev session error: Dev child exited unexpectedly with code ${code ?? "unknown"}`,
+        ),
       )
     })
   }
@@ -263,9 +263,7 @@ function assertRoutesDirWithinAppRoot(appRoot: string, routesDir: string): void 
     relativeRoutesDir === ".." ||
     isAbsolute(relativeRoutesDir)
   ) {
-    throw new FatalDevSessionError(
-      "configured appDir must stay within the discovered app root",
-    )
+    throw new FatalDevSessionError("configured appDir must stay within the discovered app root")
   }
 }
 

@@ -1,8 +1,8 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import { type ChildProcess, spawn } from "node:child_process"
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer } from "node:net"
-import { join } from "node:path"
 import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import { afterEach, describe, expect, test } from "vitest"
 
@@ -245,36 +245,34 @@ describe("dawn dev runtime server", () => {
 })
 
 describe("dawn dev lifecycle", () => {
-  test(
-    "disposes a newly spawned child when startup readiness fails",
-    { timeout: 12_000 },
-    async () => {
-      const pidPath = join(tmpdir(), `dawn-dev-child-pid-${Date.now()}.txt`)
-      const appRoot = await createFixtureApp({
-        "dawn.config.ts": "export default {};\n",
-        "package.json": "{}\n",
-        "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ ok: true });\n`,
-      })
+  test("disposes a newly spawned child when startup readiness fails", {
+    timeout: 12_000,
+  }, async () => {
+    const pidPath = join(tmpdir(), `dawn-dev-child-pid-${Date.now()}.txt`)
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ ok: true });\n`,
+    })
 
-      const dev = await startDevProcess({
-        cwd: appRoot,
-        env: {
-          DAWN_DEV_CHILD_PID_PATH: pidPath,
-          DAWN_DEV_CHILD_TEST_MODE: "report-ready-without-server",
-        },
-      })
-      devProcesses.push(dev)
+    const dev = await startDevProcess({
+      cwd: appRoot,
+      env: {
+        DAWN_DEV_CHILD_PID_PATH: pidPath,
+        DAWN_DEV_CHILD_TEST_MODE: "report-ready-without-server",
+      },
+    })
+    devProcesses.push(dev)
 
-      const exitCode = await dev.waitForExit()
-      await waitForPath(pidPath)
+    const exitCode = await dev.waitForExit()
+    await waitForPath(pidPath)
 
-      const pid = Number((await readFile(pidPath, "utf8")).trim())
+    const pid = Number((await readFile(pidPath, "utf8")).trim())
 
-      expect(exitCode).toBe(1)
-      expect(dev.stderr).toContain("Timed out waiting for")
-      expect(isProcessAlive(pid)).toBe(false)
-    },
-  )
+    expect(exitCode).toBe(1)
+    expect(dev.stderr).toContain("Timed out waiting for")
+    expect(isProcessAlive(pid)).toBe(false)
+  })
 
   test("discovers the app from cwd and prints the listening URL", async () => {
     const appRoot = await createFixtureApp({
@@ -433,7 +431,11 @@ describe("dawn dev lifecycle", () => {
     })
 
     await waitForPath(markerPath)
-    await writeFile(routePath, `export const graph = async () => ({ version: "after-restart" });\n`, "utf8")
+    await writeFile(
+      routePath,
+      `export const graph = async () => ({ version: "after-restart" });\n`,
+      "utf8",
+    )
 
     const response = await responsePromise
     expect(response.status).toBe(503)
@@ -458,7 +460,11 @@ describe("dawn dev lifecycle", () => {
     const url = await dev.waitForReady()
     const readyCount = dev.readyCount()
 
-    await writeFile(configPath, 'const appDir = "src/missing";\nexport default { appDir };\n', "utf8")
+    await writeFile(
+      configPath,
+      'const appDir = "src/missing";\nexport default { appDir };\n',
+      "utf8",
+    )
 
     await dev.waitForLog(/Restart failed; watching for changes/)
     await dev.waitForNotReady()
@@ -492,7 +498,11 @@ describe("dawn dev lifecycle", () => {
     devProcesses.push(dev)
 
     await dev.waitForReady()
-    await writeFile(configPath, 'const appDir = "../outside";\nexport default { appDir };\n', "utf8")
+    await writeFile(
+      configPath,
+      'const appDir = "../outside";\nexport default { appDir };\n',
+      "utf8",
+    )
 
     const exitCode = await dev.waitForExit()
 
@@ -520,7 +530,11 @@ describe("dawn dev lifecycle", () => {
     devProcesses.push(dev)
 
     await dev.waitForReady()
-    await writeFile(routePath, `export const graph = async () => ({ version: "restart" });\n`, "utf8")
+    await writeFile(
+      routePath,
+      `export const graph = async () => ({ version: "restart" });\n`,
+      "utf8",
+    )
     await dev.waitForLog(/Restarting Dawn dev server/)
     await dev.waitForNotReady()
 
@@ -570,7 +584,11 @@ describe("dawn dev lifecycle", () => {
     }).catch((error) => error)
 
     await waitForPath(markerPath)
-    await writeFile(routePath, `export const graph = async () => ({ version: "replaced" });\n`, "utf8")
+    await writeFile(
+      routePath,
+      `export const graph = async () => ({ version: "replaced" });\n`,
+      "utf8",
+    )
 
     await dev.waitForLog(/Force-killed stuck dev child/)
     await dev.waitForNextReady(readyCount)
@@ -814,7 +832,9 @@ class DevProcessHandle {
       await delay(25)
     }
 
-    throw new Error(`Timed out waiting for log ${pattern}\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`)
+    throw new Error(
+      `Timed out waiting for log ${pattern}\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+    )
   }
 
   async waitForReady(timeoutMs = 8_000): Promise<string> {
@@ -858,7 +878,9 @@ class DevProcessHandle {
       await delay(25)
     }
 
-    throw new Error(`Timed out waiting for dawn dev readiness\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`)
+    throw new Error(
+      `Timed out waiting for dawn dev readiness\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+    )
   }
 
   async waitForNotReady(timeoutMs = 5_000): Promise<void> {
@@ -883,7 +905,9 @@ class DevProcessHandle {
       await delay(25)
     }
 
-    throw new Error(`Timed out waiting for dawn dev to become not-ready\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`)
+    throw new Error(
+      `Timed out waiting for dawn dev to become not-ready\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+    )
   }
 
   private async waitForPrintedUrl(timeoutMs: number): Promise<string> {
@@ -903,6 +927,8 @@ class DevProcessHandle {
       await delay(25)
     }
 
-    throw new Error(`Timed out waiting for dawn dev URL\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`)
+    throw new Error(
+      `Timed out waiting for dawn dev URL\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+    )
   }
 }
