@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises"
+import { resolve } from "node:path"
+
 import { afterEach, describe, expect, test } from "vitest"
 
 import {
@@ -10,6 +13,7 @@ import {
 } from "./harness.ts"
 
 const tempDirs: TrackedTempDir[] = []
+const REPO_ROOT = resolve(import.meta.dirname, "../..")
 
 afterEach(async () => {
   await cleanupTrackedTempDirs(tempDirs)
@@ -73,8 +77,26 @@ describe("generated app runtime contract", () => {
 
     const result = await runGeneratedRuntimeScenario(prepared)
     const expected = await readGeneratedExpectedFixture("basic")
+    const transcript = await readFile(prepared.transcriptPath, "utf8")
 
     expectGeneratedRuntimeScenario(result, expected)
+    expect(transcript).toContain(
+      `$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-app build)`,
+    )
+    expect(transcript).toContain(
+      `node packages/create-dawn-app/dist/index.js ${prepared.appRoot} --mode internal`,
+    )
+    expect(transcript).toContain(`$ (cd ${prepared.appRoot} && pnpm install)`)
+    expect(transcript).toContain(
+      `$ (cd ${prepared.appRoot} && pnpm exec dawn run src/app/(public)/hello/[tenant]/workflow.ts)`,
+    )
+    expect(transcript).toContain(
+      `$ (cd ${prepared.appRoot} && pnpm exec dawn run src/app/(public)/hello/[tenant]/workflow.ts --url`,
+    )
+    expect(transcript).toContain(`$ (cd ${prepared.appRoot} && pnpm exec dawn test)`)
+    expect(transcript).toContain("$ dawn dev")
+    expect(transcript).not.toContain("--pack-destination")
+    expect(transcript).not.toContain("pnpm add ")
   })
 })
 
