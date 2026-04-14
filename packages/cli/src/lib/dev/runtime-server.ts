@@ -24,6 +24,7 @@ export async function startRuntimeServer(options: StartRuntimeServerOptions): Pr
     activeRequests: 0,
     closed: false,
   }
+  const shutdownController = new AbortController()
   const sockets = new Set<import("node:net").Socket>()
 
   const server = createServer(async (request, response) => {
@@ -34,7 +35,7 @@ export async function startRuntimeServer(options: StartRuntimeServerOptions): Pr
 
     state.activeRequests++
     try {
-      await handleRequest({ registry, request, response })
+      await handleRequest({ registry, request, response, signal: shutdownController.signal })
     } catch (error) {
       sendJson(
         response,
@@ -71,6 +72,7 @@ export async function startRuntimeServer(options: StartRuntimeServerOptions): Pr
 
       state.acceptingRequests = false
       state.closed = true
+      shutdownController.abort(new Error("Runtime server shutting down"))
       sockets.forEach((socket) => socket.destroy())
 
       await new Promise<void>((resolve, reject) => {
@@ -104,8 +106,9 @@ async function handleRequest(options: {
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
+  readonly signal: AbortSignal
 }): Promise<void> {
-  const { request, response, registry } = options
+  const { request, response, registry, signal } = options
 
   if (request.method === "GET" && request.url === "/healthz") {
     sendJson(response, 200, { status: "ready" })
@@ -170,6 +173,7 @@ async function handleRequest(options: {
     appRoot: registry.appRoot,
     input: validatedBody.value.input,
     mode: route.mode,
+    signal,
     routeFile: route.routeFile,
     routeId: route.routeId,
     routePath: route.routePath,

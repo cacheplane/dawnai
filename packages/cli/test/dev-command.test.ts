@@ -203,6 +203,58 @@ describe("dawn dev runtime server", () => {
       },
     })
   })
+
+  test("cancels an in-flight route when the server shuts down", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/support/[tenant]/graph.ts": `
+        export const graph = async (_input: unknown, context?: { signal?: AbortSignal }) => {
+          await new Promise((resolve, reject) => {
+            const signal = context?.signal
+            if (!signal) {
+              reject(new Error("Missing shutdown signal"))
+              return
+            }
+
+            const onAbort = () => {
+              signal.removeEventListener("abort", onAbort)
+              reject(new Error("Route canceled"))
+            }
+
+            signal.addEventListener("abort", onAbort, { once: true })
+          })
+        };
+      `,
+    })
+
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+
+    const responsePromise = fetch(new URL("/runs/wait", server.url), {
+      body: JSON.stringify({
+        assistant_id: "/support/[tenant]#graph",
+        input: {},
+        metadata: {
+          dawn: {
+            mode: "graph",
+            route_id: "/support/[tenant]",
+            route_path: "src/app/support/[tenant]/graph.ts",
+          },
+        },
+        on_completion: "delete",
+      }),
+      headers: {
+        "content-type": "application/json",
+      },
+      method: "POST",
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    await server.close()
+
+    await expect(responsePromise).rejects.toThrow(/fetch failed|socket/i)
+  })
 })
 
 async function createFixtureApp(files: Readonly<Record<string, string>>) {
