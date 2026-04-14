@@ -1,6 +1,7 @@
 import { resolve } from "node:path"
 import type { ChildProcess } from "node:child_process"
 import { spawn } from "node:child_process"
+import { writeFile } from "node:fs/promises"
 
 import type { Command } from "commander"
 
@@ -68,6 +69,31 @@ export async function runDevChildCommand(options: DevChildCommandOptions): Promi
 
   if (startupDelayMs > 0) {
     await delay(startupDelayMs)
+  }
+
+  const childTestMode = process.env.DAWN_DEV_CHILD_TEST_MODE
+  const pidPath = process.env.DAWN_DEV_CHILD_PID_PATH
+
+  if (pidPath) {
+    await writeFile(pidPath, String(process.pid), "utf8")
+  }
+
+  if (childTestMode === "report-ready-without-server") {
+    process.send?.({
+      type: "ready",
+      url: `http://127.0.0.1:${port}`,
+    } satisfies DevChildReadyMessage)
+
+    await new Promise<void>((resolvePromise) => {
+      const resolveOnce = () => {
+        resolvePromise()
+      }
+
+      process.once("SIGINT", resolveOnce)
+      process.once("SIGTERM", resolveOnce)
+    })
+
+    return
   }
 
   let runtimeServer: Awaited<ReturnType<typeof startRuntimeServer>> | null = null
