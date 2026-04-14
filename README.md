@@ -22,7 +22,7 @@ pnpm install
 echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]/workflow.ts"
 ```
 
-3. Optionally start the local runtime and send the same route through `--url`.
+3. Optionally start the local runtime in one terminal and send the same route through `--url` from another terminal.
 
 ```bash
 pnpm exec dawn dev --port 3001
@@ -65,6 +65,10 @@ Discover and print the routes Dawn sees in the current app.
 ### `dawn typegen`
 
 Generate route types for the current app.
+
+### `dawn verify`
+
+Run the current repository's verification checks for the workspace.
 
 ### `dawn run`
 
