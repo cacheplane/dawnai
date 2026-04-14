@@ -3,10 +3,7 @@ import type { AddressInfo } from "node:net"
 
 import { executeResolvedRoute } from "../runtime/execute-route.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
-import {
-  createExecutionErrorBody,
-  createRequestErrorBody,
-} from "./server-errors.js"
+import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
 
 export interface RuntimeServer {
   readonly close: () => Promise<void>
@@ -18,7 +15,9 @@ export interface StartRuntimeServerOptions {
   readonly port?: number
 }
 
-export async function startRuntimeServer(options: StartRuntimeServerOptions): Promise<RuntimeServer> {
+export async function startRuntimeServer(
+  options: StartRuntimeServerOptions,
+): Promise<RuntimeServer> {
   const registry = await createRuntimeRegistry(options.appRoot)
   const state = {
     acceptingRequests: true,
@@ -208,7 +207,9 @@ async function handleRequest(options: {
 
 function validateRunsWaitRequest(
   value: unknown,
-): { readonly ok: true; readonly value: RunsWaitRequest } | { readonly details?: Record<string, unknown>; readonly message: string; readonly ok: false } {
+):
+  | { readonly ok: true; readonly value: RunsWaitRequest }
+  | { readonly details?: Record<string, unknown>; readonly message: string; readonly ok: false } {
   if (!isRecord(value)) {
     return { message: "Request body must be an object", ok: false }
   }
@@ -260,7 +261,9 @@ interface RunsWaitRequest {
   readonly on_completion: "delete"
 }
 
-function parseJson(input: string): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
+function parseJson(
+  input: string,
+): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
   try {
     return {
       ok: true,

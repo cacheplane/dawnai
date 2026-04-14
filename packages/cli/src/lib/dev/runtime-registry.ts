@@ -30,7 +30,10 @@ export async function createRuntimeRegistry(appRoot: string): Promise<RuntimeReg
       mode: route.entryKind,
       routeFile: route.entryFile,
       routeId: route.id,
-      routePath: route.entryFile.slice(manifest.appRoot.length + 1).split("\\").join("/"),
+      routePath: route.entryFile
+        .slice(manifest.appRoot.length + 1)
+        .split("\\")
+        .join("/"),
     } satisfies RuntimeRegistryEntry
 
     entries.push(entry)
@@ -39,7 +42,8 @@ export async function createRuntimeRegistry(appRoot: string): Promise<RuntimeReg
   return {
     appRoot: manifest.appRoot,
     entries,
-    lookup: (assistantId: string) => entries.find((entry) => entry.assistantId === assistantId) ?? null,
+    lookup: (assistantId: string) =>
+      entries.find((entry) => entry.assistantId === assistantId) ?? null,
   }
 }
 

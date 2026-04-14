@@ -1,7 +1,6 @@
 import type { Command } from "commander"
-
-import { CliError, type CommandIo } from "../lib/output.js"
 import { startDevSession } from "../lib/dev/dev-session.js"
+import { CliError, type CommandIo } from "../lib/output.js"
 
 interface DevOptions {
   readonly port?: string

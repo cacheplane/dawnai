@@ -1,7 +1,7 @@
-import { resolve } from "node:path"
 import type { ChildProcess } from "node:child_process"
 import { spawn } from "node:child_process"
 import { writeFile } from "node:fs/promises"
+import { resolve } from "node:path"
 
 import type { Command } from "commander"
 
@@ -184,7 +184,9 @@ export function spawnDevChild(options: SpawnDevChildOptions): SpawnedDevChild {
   const unexpectedExit = new Promise<number | null>((resolve) => {
     child.once("close", (code) => {
       if (!resolvedReady) {
-        rejectReady(new DevChildStartupError(stderr || `Dev child exited with code ${code ?? "unknown"}`))
+        rejectReady(
+          new DevChildStartupError(stderr || `Dev child exited with code ${code ?? "unknown"}`),
+        )
         return
       }
 
