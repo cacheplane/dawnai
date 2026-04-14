@@ -10,7 +10,14 @@ const generatedSmokeTests = [
 ]
 const result = spawnSync(
   "pnpm",
-  ["exec", "vitest", "--run", "--config", "test/generated/vitest.config.ts", ...generatedSmokeTests],
+  [
+    "exec",
+    "vitest",
+    "--run",
+    "--config",
+    "test/generated/vitest.config.ts",
+    ...generatedSmokeTests,
+  ],
   {
     cwd: repoRoot,
     encoding: "utf8",
