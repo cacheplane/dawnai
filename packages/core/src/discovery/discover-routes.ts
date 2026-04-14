@@ -52,7 +52,9 @@ async function walkRouteTree(
     discovered.push(routeEntry)
   }
 
-  const entries = await readdir(currentDir, { withFileTypes: true })
+  const entries = (await readdir(currentDir, { withFileTypes: true })).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )
 
   await Promise.all(
     entries
@@ -66,7 +68,9 @@ async function readRouteEntry(
   routesDir: string,
   routeDir: string,
 ): Promise<RouteDefinition | null> {
-  const entries = await readdir(routeDir, { withFileTypes: true })
+  const entries = (await readdir(routeDir, { withFileTypes: true })).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  )
   const primaryEntries = entries.filter(
     (entry): entry is (typeof entries)[number] & { name: PrimaryRouteFile } =>
       entry.isFile() && hasPrimaryRouteFile(entry.name),
@@ -103,12 +107,18 @@ export function validateRouteEntries(routeDir: string, entryFiles: readonly stri
     isExecutableRouteFile(entryFile),
   )
 
+  if (executableEntries.length === 0 && entryFiles.includes("route.ts")) {
+    throw new Error(
+      `Route directory ${routeDir} must define exactly one primary executable entry: graph.ts, workflow.ts, or page.tsx`,
+    )
+  }
+
   if (executableEntries.length <= 1) {
     return
   }
 
   throw new Error(
-    `Route directory ${routeDir} has multiple primary entries: ${entryFiles.join(", ")}`,
+    `Route directory ${routeDir} has multiple primary entries: ${[...entryFiles].sort().join(", ")}`,
   )
 }
 

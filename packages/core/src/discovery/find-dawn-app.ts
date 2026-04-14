@@ -27,7 +27,10 @@ async function findAppRootFromCwd(cwd = process.cwd()): Promise<string> {
   let currentDir = resolve(cwd)
 
   while (true) {
-    if (await fileExists(join(currentDir, DAWN_CONFIG_FILE))) {
+    if (
+      (await fileExists(join(currentDir, DAWN_CONFIG_FILE))) &&
+      (await fileExists(join(currentDir, PACKAGE_JSON_FILE)))
+    ) {
       return currentDir
     }
 
