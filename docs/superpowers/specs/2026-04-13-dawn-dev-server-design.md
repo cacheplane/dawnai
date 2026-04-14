@@ -220,11 +220,13 @@ For `POST /runs/wait`:
     ```
   - `message` and `details` should carry normalized execution-failure context from the underlying route
 
-For request-contract failures such as malformed JSON bodies, metadata mismatch, or unknown `assistant_id`, Dawn should return a non-`200` response and a JSON error body. The exact `4xx` status codes are implementation details unless and until the shared server-backed contract is expanded in a future design, but one constraint is required now:
+For request-contract failures such as malformed JSON bodies, metadata mismatch, or unknown `assistant_id`, Dawn should return a non-`200` response. The exact `4xx` status codes and response bodies remain out of shared contract scope unless the broader server-backed contract is expanded in a future design.
+
+One guardrail is required now:
 
 - request-validation failures must not use `error.kind: "execution_error"`
 
-Reserve the normalized `execution_error` envelope for actual route execution failures only. Request-contract failures should use distinct non-execution error kinds such as `invalid_request` or `not_found` so `dawn run --url` cannot misclassify them as true route failures.
+Reserve the normalized `execution_error` envelope for actual route execution failures only so `dawn run --url` cannot misclassify request-contract failures as true route failures.
 
 This keeps the local server aligned with Dawn’s current normalization expectations:
 
@@ -271,6 +273,8 @@ Only one restart may be in flight at a time. If additional file events arrive wh
 Child shutdown must be bounded:
 
 - attempt graceful stop first
+- stop accepting new requests
+- cancel in-flight `/runs/wait` requests as part of shutdown
 - wait for a fixed shutdown timeout
 - if the child does not exit, force-kill it
 - only then proceed with the replacement child
@@ -448,7 +452,11 @@ Also cover the server contract branches directly:
 - metadata mismatch rejection between `assistant_id` and `metadata.dawn.*`
 - `500` route execution failure
 
-For malformed request, unknown-assistant, and metadata-mismatch branches, direct server-contract tests should also assert that the returned error kind is not `execution_error`.
+For malformed request, unknown-assistant, and metadata-mismatch branches, direct server-contract tests should also assert that any returned error kind is not `execution_error`.
+
+Watcher coverage should also include one concurrency-sensitive case:
+
+- bursty file changes during a restart coalesce into at most one follow-up restart from latest on-disk state
 
 ### Downstream packaged-app coverage
 
