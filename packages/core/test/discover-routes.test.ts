@@ -206,7 +206,7 @@ describe("discoverRoutes", () => {
     })
 
     await expect(discoverRoutes({ appRoot })).rejects.toThrow(
-      'Duplicate Dawn route pathname "/about" detected',
+      `Duplicate Dawn route pathname "/about" detected at ${join(appRoot, "src/app/(marketing)/about")} and ${join(appRoot, "src/app/about")}`,
     )
   })
 })
