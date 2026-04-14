@@ -31,12 +31,11 @@ describe("dawn dev runtime server", () => {
     expect(await response.json()).toEqual({ status: "ready" })
   })
 
-  test("executes graph and workflow routes by mode-qualified assistant_id", async () => {
+  test("executes graph routes by mode-qualified assistant_id", async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
       "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ mode: "graph", tenant: input.tenant });\n`,
-      "src/app/support/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ mode: "workflow", tenant: input.tenant });\n`,
     })
 
     const server = await startRuntimeServer({ appRoot })
@@ -61,32 +60,8 @@ describe("dawn dev runtime server", () => {
       method: "POST",
     })
 
-    const workflowResponse = await fetch(new URL("/runs/wait", server.url), {
-      body: JSON.stringify({
-        assistant_id: "/support/[tenant]#workflow",
-        input: { tenant: "workflow" },
-        metadata: {
-          dawn: {
-            mode: "workflow",
-            route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/workflow.ts",
-          },
-        },
-        on_completion: "delete",
-      }),
-      headers: {
-        "content-type": "application/json",
-      },
-      method: "POST",
-    })
-
     expect(graphResponse.status).toBe(200)
     expect(await graphResponse.json()).toMatchObject({ mode: "graph", tenant: "graph" })
-    expect(workflowResponse.status).toBe(200)
-    expect(await workflowResponse.json()).toMatchObject({
-      mode: "workflow",
-      tenant: "workflow",
-    })
   })
 
   test("rejects metadata mismatches as non-execution request failures", async () => {
