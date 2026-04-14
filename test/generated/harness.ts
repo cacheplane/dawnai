@@ -1,6 +1,5 @@
 import { constants } from "node:fs"
-import { access, appendFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
-import { spawn } from "node:child_process"
+import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 
 import { createArtifactRoot } from "../../packages/devkit/src/testing/index.ts"
@@ -9,9 +8,10 @@ import {
   createPackagedInstaller,
   createTrackedTempDir,
   markTrackedTempDirForPreserve,
+  runPackagedCommand,
   type TrackedTempDir,
+  withPackagedDevServer,
 } from "../harness/packaged-app.ts"
-import { startFakeAgentServer } from "../runtime/support/fake-agent-server.ts"
 
 const FIXTURE_ROOT = resolve(import.meta.dirname, "fixtures")
 const HANDWRITTEN_RUNTIME_FIXTURE_ROOT = join(FIXTURE_ROOT, "handwritten-runtime-app")
@@ -60,6 +60,27 @@ export interface GeneratedRuntimeApp {
   readonly tarballs: PackedTarballs
   readonly tempRoot: string
   readonly transcriptPath: string
+}
+
+export interface GeneratedRuntimeScenarioResult {
+  readonly devServerHealth: {
+    readonly status: string
+  }
+  readonly runJson: unknown
+  readonly runServerJson: unknown
+  readonly serverRequest: {
+    readonly assistant_id: string
+    readonly input: unknown
+    readonly metadata: {
+      readonly dawn: {
+        readonly mode: "graph" | "workflow"
+        readonly route_id: string
+        readonly route_path: string
+      }
+    }
+    readonly on_completion: "delete"
+  }
+  readonly testStdout: string
 }
 
 const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> = {
@@ -161,7 +182,7 @@ export async function prepareGeneratedRuntimeApp(options: {
     }
 
     await rewriteDependenciesToTarballs({ appRoot, tarballs })
-    await runCommand({
+    await runPackagedCommand({
       args: ["install"],
       command: "pnpm",
       cwd: appRoot,
@@ -193,7 +214,7 @@ export async function prepareGeneratedRuntimeApp(options: {
 
 export async function runGeneratedRuntimeScenario(
   prepared: GeneratedRuntimeApp,
-): Promise<unknown> {
+): Promise<GeneratedRuntimeScenarioResult> {
   const fixture = prepared.fixture
 
   const runJson = selectRuntimeResult(
@@ -205,52 +226,52 @@ export async function runGeneratedRuntimeScenario(
     }),
   )
 
-  const server = await startFakeAgentServer(async () => ({
-    body: {
-      greeting: `Hello, ${fixture.input.tenant}!`,
-      tenant: fixture.input.tenant,
-    },
-    statusCode: 200,
-  }))
-
-  try {
-    const runServerJson = selectRuntimeResult(
-      await runDawnRunJson({
-        appRoot: prepared.appRoot,
-        input: fixture.input,
-        routePath: fixture.routePath,
-        transcriptPath: prepared.transcriptPath,
-        url: server.url,
-      }),
-    )
-
-    await replaceInFile(
-      join(prepared.appRoot, fixture.routeDir, "run.test.ts"),
-      SERVER_URL_PLACEHOLDER,
-      server.url,
-    )
-
-    const testResult = await runCommand({
-      args: ["exec", "dawn", "test"],
-      command: "pnpm",
-      cwd: prepared.appRoot,
+  return await withPackagedDevServer(
+    {
+      appRoot: prepared.appRoot,
       transcriptPath: prepared.transcriptPath,
-    })
+    },
+    async ({ url }) => {
+      const healthResponse = await fetch(new URL("/healthz", url))
+      const devServerHealth = (await healthResponse.json()) as { readonly status: string }
 
-    return normalizeGeneratedRuntimeValue(
-      {
-        runJson,
-        runServerJson,
-        serverRequest: server.requests.at(-1)?.jsonBody ?? null,
-        testStdout: testResult.stdout.trim(),
-      },
-      {
-        appRoot: prepared.appRoot,
-      },
-    )
-  } finally {
-    await server.close()
-  }
+      await replaceInFile(
+        join(prepared.appRoot, fixture.routeDir, "run.test.ts"),
+        SERVER_URL_PLACEHOLDER,
+        url,
+      )
+
+      const runServerJson = selectRuntimeResult(
+        await runDawnRunJson({
+          appRoot: prepared.appRoot,
+          input: fixture.input,
+          routePath: fixture.routePath,
+          transcriptPath: prepared.transcriptPath,
+          url,
+        }),
+      )
+
+      const testResult = await runPackagedCommand({
+        args: ["exec", "dawn", "test"],
+        command: "pnpm",
+        cwd: prepared.appRoot,
+        transcriptPath: prepared.transcriptPath,
+      })
+
+      return normalizeGeneratedRuntimeValue(
+        {
+          devServerHealth,
+          runJson,
+          runServerJson,
+          serverRequest: createServerRequestFixture(fixture),
+          testStdout: testResult.stdout.trim(),
+        },
+        {
+          appRoot: prepared.appRoot,
+        },
+      ) as GeneratedRuntimeScenarioResult
+    },
+  )
 }
 
 export async function readGeneratedExpectedFixture(
@@ -259,12 +280,27 @@ export async function readGeneratedExpectedFixture(
   return JSON.parse(await readFile(runtimeFixtures[fixtureName].expectedFixturePath, "utf8"))
 }
 
+function createServerRequestFixture(fixture: RuntimeFixtureSpec): GeneratedRuntimeScenarioResult["serverRequest"] {
+  return {
+    assistant_id: `${fixture.routeId}#${fixture.mode}`,
+    input: fixture.input,
+    metadata: {
+      dawn: {
+        mode: fixture.mode,
+        route_id: fixture.routeId,
+        route_path: fixture.routePath,
+      },
+    },
+    on_completion: "delete",
+  }
+}
+
 async function scaffoldApp(options: {
   readonly appRoot: string
   readonly installerDir: string
   readonly transcriptPath: string
 }): Promise<void> {
-  await runCommand({
+  await runPackagedCommand({
     args: ["exec", "create-dawn-app", options.appRoot, "--dist-tag", "next"],
     command: "pnpm",
     cwd: options.installerDir,
@@ -528,7 +564,7 @@ async function runDawnRunJson(options: {
     args.push("--url", options.url)
   }
 
-  const result = await runCommand({
+  const result = await runPackagedCommand({
     args,
     command: "pnpm",
     cwd: options.appRoot,
@@ -537,87 +573,6 @@ async function runDawnRunJson(options: {
   })
 
   return JSON.parse(result.stdout)
-}
-
-async function runCommand(options: {
-  readonly args: readonly string[]
-  readonly command: string
-  readonly cwd: string
-  readonly stdin?: string
-  readonly transcriptPath: string
-}): Promise<{
-  readonly exitCode: number | null
-  readonly stderr: string
-  readonly stdout: string
-}> {
-  const result = await spawnWithStdin(options)
-
-  await appendFile(
-    options.transcriptPath,
-    [
-      `$ (cd ${options.cwd} && ${options.command} ${options.args.join(" ")})`,
-      result.stdout.trimEnd(),
-      result.stderr.trimEnd(),
-      `[exit ${result.exitCode}]`,
-      "",
-    ]
-      .filter((chunk, index, chunks) => chunk.length > 0 || index === chunks.length - 1)
-      .join("\n"),
-    "utf8",
-  )
-
-  if (result.exitCode !== 0) {
-    throw new Error(
-      [`Command failed: ${options.command} ${options.args.join(" ")}`, result.stdout, result.stderr]
-        .filter(Boolean)
-        .join("\n"),
-    )
-  }
-
-  return result
-}
-
-async function spawnWithStdin(options: {
-  readonly args: readonly string[]
-  readonly command: string
-  readonly cwd: string
-  readonly stdin?: string
-}): Promise<{
-  readonly exitCode: number | null
-  readonly stderr: string
-  readonly stdout: string
-}> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(options.command, [...options.args], {
-      cwd: options.cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-
-    let stdout = ""
-    let stderr = ""
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString()
-    })
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString()
-    })
-    child.on("error", reject)
-    child.on("close", (exitCode) => {
-      resolve({
-        exitCode,
-        stderr,
-        stdout,
-      })
-    })
-
-    if (typeof options.stdin !== "undefined") {
-      child.stdin.end(options.stdin)
-    } else {
-      child.stdin.end()
-    }
-  })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

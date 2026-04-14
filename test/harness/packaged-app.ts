@@ -1,8 +1,14 @@
+import { spawn } from "node:child_process"
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
 
 import { spawnProcess } from "../../packages/devkit/src/testing/index.ts"
+import {
+  appendDevServerTranscript,
+  startDevServer,
+  type DevServerHandle,
+} from "../runtime/support/dev-server.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
 
@@ -21,6 +27,11 @@ export interface CreatePackagedInstallerResult {
   readonly installerDir: string
   readonly packsDir: string
   readonly tarballs: Readonly<Record<string, string>>
+}
+
+export interface PackagedDevServerSession {
+  readonly devServer: DevServerHandle
+  readonly url: string
 }
 
 export async function createTrackedTempDir(
@@ -62,7 +73,7 @@ export async function createPackagedInstaller(
   await mkdir(packsDir, { recursive: true })
   await mkdir(installerDir, { recursive: true })
 
-  await runCommand({
+  await runPackagedCommand({
     args: ["--filter", "create-dawn-app", "build"],
     command: "pnpm",
     cwd: REPO_ROOT,
@@ -97,13 +108,13 @@ export async function createPackagedInstaller(
     "utf8",
   )
 
-  await runCommand({
+  await runPackagedCommand({
     args: ["add", tarballs["@dawn/devkit"]],
     command: "pnpm",
     cwd: installerDir,
     transcriptPath: options.transcriptPath,
   })
-  await runCommand({
+  await runPackagedCommand({
     args: ["add", tarballs["create-dawn-app"]],
     command: "pnpm",
     cwd: installerDir,
@@ -121,7 +132,7 @@ async function packPackage(
   packageName: string,
   options: { readonly packsDir: string; readonly transcriptPath?: string },
 ): Promise<string> {
-  const packResult = await runCommand({
+  const packResult = await runPackagedCommand({
     args: ["--filter", packageName, "pack", "--pack-destination", options.packsDir],
     command: "pnpm",
     cwd: REPO_ROOT,
@@ -141,17 +152,21 @@ async function packPackage(
   return join(options.packsDir, basename(tarballName))
 }
 
-async function runCommand(options: {
+export async function runPackagedCommand(options: {
   readonly args: readonly string[]
   readonly command: string
   readonly cwd: string
+  readonly stdin?: string
   readonly transcriptPath?: string
 }) {
-  const result = await spawnProcess({
-    args: options.args,
-    command: options.command,
-    cwd: options.cwd,
-  })
+  const result =
+    typeof options.stdin === "undefined"
+      ? await spawnProcess({
+          args: options.args,
+          command: options.command,
+          cwd: options.cwd,
+        })
+      : await spawnWithStdin(options)
 
   if (options.transcriptPath) {
     await appendFile(
@@ -178,4 +193,76 @@ async function runCommand(options: {
   }
 
   return result
+}
+
+export async function withPackagedDevServer<T>(options: {
+  readonly appRoot: string
+  readonly env?: Readonly<Record<string, string>>
+  readonly port?: number
+  readonly transcriptPath: string
+}, action: (session: PackagedDevServerSession) => Promise<T>): Promise<T> {
+  const devServer = await startDevServer({
+    cwd: options.appRoot,
+    env: options.env,
+    port: options.port,
+  })
+
+  try {
+    const url = await devServer.waitForReady()
+
+    return await action({
+      devServer,
+      url,
+    })
+  } finally {
+    await devServer.stop()
+    await appendDevServerTranscript(options.transcriptPath, devServer)
+  }
+}
+
+async function spawnWithStdin(options: {
+  readonly args: readonly string[]
+  readonly command: string
+  readonly cwd: string
+  readonly stdin: string
+}): Promise<{
+  readonly args: readonly string[]
+  readonly command: string
+  readonly cwd: string
+  readonly exitCode: number | null
+  readonly ok: boolean
+  readonly stderr: string
+  readonly stdout: string
+}> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(options.command, [...options.args], {
+      cwd: options.cwd,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+
+    let stdout = ""
+    let stderr = ""
+
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk)
+    })
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk)
+    })
+    child.on("error", reject)
+    child.on("close", (exitCode) => {
+      resolve({
+        args: options.args,
+        command: options.command,
+        cwd: options.cwd,
+        exitCode,
+        ok: exitCode === 0,
+        stderr,
+        stdout,
+      })
+    })
+
+    child.stdin.end(options.stdin)
+  })
 }
