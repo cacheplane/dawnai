@@ -56,12 +56,13 @@ async function walkRouteTree(
     left.name.localeCompare(right.name),
   )
 
-  await Promise.all(
-    entries
-      .filter((entry) => entry.isDirectory())
-      .filter((entry) => !isPrivateSegment(entry.name))
-      .map((entry) => walkRouteTree(routesDir, join(currentDir, entry.name), discovered)),
-  )
+  for (const entry of entries) {
+    if (!entry.isDirectory() || isPrivateSegment(entry.name)) {
+      continue
+    }
+
+    await walkRouteTree(routesDir, join(currentDir, entry.name), discovered)
+  }
 }
 
 async function readRouteEntry(
