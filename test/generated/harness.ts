@@ -60,7 +60,7 @@ export interface GeneratedRuntimeApp {
   readonly appRoot: string
   readonly artifactRoot: string
   readonly fixture: RuntimeFixtureSpec
-  readonly tarballs: PackedTarballs
+  readonly tarballs?: PackedTarballs
   readonly tempRoot: string
   readonly transcriptPath: string
 }
@@ -148,6 +148,7 @@ export async function prepareGeneratedRuntimeApp(options: {
   readonly tempRoot: string
 }): Promise<GeneratedRuntimeApp> {
   const fixture = runtimeFixtures[options.fixtureName]
+  const scaffoldMode = options.scaffoldMode ?? "external"
   const artifactRoot = await createArtifactRoot({
     baseDir: options.tempRoot,
     lane: fixture.fixtureName,
@@ -159,18 +160,27 @@ export async function prepareGeneratedRuntimeApp(options: {
   await mkdir(dirname(transcriptPath), { recursive: true })
 
   try {
-    const { installerDir, tarballs: packagedTarballs } = await createPackagedInstaller({
-      packageNames: ["@dawn/cli", "@dawn/config-typescript", "@dawn/core", "@dawn/langgraph"],
-      tempRoot: options.tempRoot,
-      transcriptPath,
-    })
-    const tarballs = toPackedTarballs(packagedTarballs)
+    let installerDir: string | undefined
+    let tarballs: PackedTarballs | undefined
+
+    if (scaffoldMode === "internal") {
+      await buildLocalContributorPackages(transcriptPath)
+    } else {
+      const packagedInstaller = await createPackagedInstaller({
+        packageNames: ["@dawn/cli", "@dawn/config-typescript", "@dawn/core", "@dawn/langgraph"],
+        tempRoot: options.tempRoot,
+        transcriptPath,
+      })
+
+      installerDir = packagedInstaller.installerDir
+      tarballs = toPackedTarballs(packagedInstaller.tarballs)
+    }
 
     if (fixture.source === "generated") {
       await scaffoldApp({
         appRoot,
         installerDir,
-        mode: options.scaffoldMode ?? "external",
+        mode: scaffoldMode,
         transcriptPath,
       })
     } else {
@@ -191,7 +201,7 @@ export async function prepareGeneratedRuntimeApp(options: {
       })
     }
 
-    if ((options.scaffoldMode ?? "external") === "external") {
+    if (scaffoldMode === "external" && tarballs) {
       await rewriteDependenciesToTarballs({ appRoot, tarballs })
     }
     await runPackagedCommand({
@@ -336,7 +346,7 @@ async function captureServerRequest(options: {
 
 async function scaffoldApp(options: {
   readonly appRoot: string
-  readonly installerDir: string
+  readonly installerDir?: string
   readonly mode: GeneratedScaffoldMode
   readonly transcriptPath: string
 }): Promise<void> {
@@ -348,6 +358,10 @@ async function scaffoldApp(options: {
       transcriptPath: options.transcriptPath,
     })
   } else {
+    if (!options.installerDir) {
+      throw new Error("Expected packaged installer directory for external generated runtime scaffolding")
+    }
+
     await runPackagedCommand({
       args: ["exec", "create-dawn-app", options.appRoot, "--dist-tag", "next"],
       command: "pnpm",
@@ -365,6 +379,15 @@ async function stageFixtureApp(options: {
 }): Promise<void> {
   await rm(options.appRoot, { force: true, recursive: true })
   await cp(options.fixtureRoot, options.appRoot, { recursive: true })
+}
+
+async function buildLocalContributorPackages(transcriptPath: string): Promise<void> {
+  await runPackagedCommand({
+    args: ["--filter", "create-dawn-app", "build"],
+    command: "pnpm",
+    cwd: REPO_ROOT,
+    transcriptPath,
+  })
 }
 
 async function rewriteDependenciesToTarballs(options: {
