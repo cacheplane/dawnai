@@ -12,6 +12,7 @@ import {
   type TrackedTempDir,
   withPackagedDevServer,
 } from "../harness/packaged-app.ts"
+import { startFakeAgentServer } from "../runtime/support/fake-agent-server.ts"
 
 const FIXTURE_ROOT = resolve(import.meta.dirname, "fixtures")
 const HANDWRITTEN_RUNTIME_FIXTURE_ROOT = join(FIXTURE_ROOT, "handwritten-runtime-app")
@@ -80,6 +81,7 @@ export interface GeneratedRuntimeScenarioResult {
     }
     readonly on_completion: "delete"
   }
+  readonly serverRequestUrl: string | null
   readonly testStdout: string
 }
 
@@ -226,6 +228,11 @@ export async function runGeneratedRuntimeScenario(
     }),
   )
 
+  const requestCapture = await captureServerRequest({
+    fixture,
+    prepared,
+  })
+
   return await withPackagedDevServer(
     {
       appRoot: prepared.appRoot,
@@ -263,7 +270,8 @@ export async function runGeneratedRuntimeScenario(
           devServerHealth,
           runJson,
           runServerJson,
-          serverRequest: createServerRequestFixture(fixture),
+          serverRequest: requestCapture.serverRequest,
+          serverRequestUrl: requestCapture.serverRequestUrl,
           testStdout: testResult.stdout.trim(),
         },
         {
@@ -280,18 +288,39 @@ export async function readGeneratedExpectedFixture(
   return JSON.parse(await readFile(runtimeFixtures[fixtureName].expectedFixturePath, "utf8"))
 }
 
-function createServerRequestFixture(fixture: RuntimeFixtureSpec): GeneratedRuntimeScenarioResult["serverRequest"] {
-  return {
-    assistant_id: `${fixture.routeId}#${fixture.mode}`,
-    input: fixture.input,
-    metadata: {
-      dawn: {
-        mode: fixture.mode,
-        route_id: fixture.routeId,
-        route_path: fixture.routePath,
-      },
-    },
-    on_completion: "delete",
+async function captureServerRequest(options: {
+  readonly fixture: RuntimeFixtureSpec
+  readonly prepared: GeneratedRuntimeApp
+}): Promise<{
+  readonly serverRequest: GeneratedRuntimeScenarioResult["serverRequest"]
+  readonly serverRequestUrl: string | null
+}> {
+  const server = await startFakeAgentServer(async () => ({
+    body: createExpectedOutput(options.fixture),
+    statusCode: 200,
+  }))
+
+  try {
+    await runDawnRunJson({
+      appRoot: options.prepared.appRoot,
+      input: options.fixture.input,
+      routePath: options.fixture.routePath,
+      transcriptPath: options.prepared.transcriptPath,
+      url: server.url,
+    })
+
+    const request = server.requests.at(-1)
+
+    if (!request) {
+      throw new Error("Expected fake server to capture a dawn run --url request")
+    }
+
+    return {
+      serverRequest: request.jsonBody as GeneratedRuntimeScenarioResult["serverRequest"],
+      serverRequestUrl: request.url,
+    }
+  } finally {
+    await server.close()
   }
 }
 

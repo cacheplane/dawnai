@@ -68,6 +68,7 @@ function expectGeneratedRuntimeScenario(result: unknown, expected: unknown): voi
     devServerHealth: {
       status: "ready",
     },
+    serverRequestUrl: "/runs/wait",
   })
   expect(stripGeneratedRuntimeProof(result)).toEqual(expected)
 }
@@ -77,7 +78,11 @@ function stripGeneratedRuntimeProof(result: unknown): unknown {
     return result
   }
 
-  const { devServerHealth: _devServerHealth, ...rest } = result
+  const {
+    devServerHealth: _devServerHealth,
+    serverRequestUrl: _serverRequestUrl,
+    ...rest
+  } = result
 
   return rest
 }
