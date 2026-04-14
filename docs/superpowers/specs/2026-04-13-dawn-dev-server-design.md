@@ -279,6 +279,8 @@ Child shutdown must be bounded:
 - if the child does not exit, force-kill it
 - only then proceed with the replacement child
 
+Restart-induced cancellation is a lifecycle interruption, not a route execution failure. If an accepted `/runs/wait` request is canceled because `dawn dev` is restarting, the server should surface that to the client as a non-`200` non-execution failure. It must not use `error.kind: "execution_error"`.
+
 During restart, requests may temporarily fail because the old child is shutting down and the new child is not yet ready. Dawn-owned tests and orchestration should treat `/healthz` as the readiness gate instead of assuming the server is immediately available after process spawn.
 
 If a watched edit breaks config or route-registry construction after the server was previously healthy, `dawn dev` should not exit immediately. Instead:
@@ -457,6 +459,7 @@ For malformed request, unknown-assistant, and metadata-mismatch branches, direct
 Watcher coverage should also include one concurrency-sensitive case:
 
 - bursty file changes during a restart coalesce into at most one follow-up restart from latest on-disk state
+- restart-induced cancellation of an in-flight `/runs/wait` request is surfaced as a non-execution failure
 
 ### Downstream packaged-app coverage
 
