@@ -46,6 +46,8 @@ The current `basic` scaffold ships `src/app/(public)/hello/[tenant]/workflow.ts`
 
 ## Commands
 
+This is the user-first command set the README focuses on today, not an exhaustive internal CLI reference.
+
 ### `create-dawn-app`
 
 Scaffold a new Dawn app from the available template set.
@@ -65,10 +67,6 @@ Discover and print the routes Dawn sees in the current app.
 ### `dawn typegen`
 
 Generate route types for the current app.
-
-### `dawn verify`
-
-Run the current repository's verification checks for the workspace.
 
 ### `dawn run`
 
