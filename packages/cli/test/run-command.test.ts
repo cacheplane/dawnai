@@ -616,6 +616,47 @@ describe("dawn run", () => {
     expect(payload.diagnostics).toBeUndefined()
   })
 
+  test("treats non-200 request failures as transport failures", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ tenant: "ok" });\n`,
+    })
+    const server = await startFakeAgentServer(async () => ({
+      body: {
+        error: {
+          kind: "request_error",
+          message: "Request metadata does not match the registered route",
+        },
+      },
+      statusCode: 400,
+    }))
+
+    const result = await invoke(
+      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", server.url],
+      {
+        stdin: JSON.stringify({ tenant: "request-failure" }),
+      },
+    )
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "server",
+      error: {
+        kind: "server_transport_error",
+      },
+      mode: "graph",
+      routeId: "/support/[tenant]",
+      routePath: "src/app/support/[tenant]/graph.ts",
+      status: "failed",
+    })
+  })
+
   test("uses stderr-only exit 2 failures for malformed JSON input", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",

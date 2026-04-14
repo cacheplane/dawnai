@@ -141,6 +141,63 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
   }
 }
 
+export async function executeResolvedRoute(options: {
+  readonly appRoot: string
+  readonly input: unknown
+  readonly mode: RuntimeExecutionMode
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+}): Promise<RuntimeExecutionResult> {
+  const startedAt = Date.now()
+
+  try {
+    await registerTsxLoader()
+    const routeModule = await import(pathToFileURL(options.routeFile).href)
+    const normalized = normalizeRouteModule(routeModule)
+
+    if (normalized.kind !== options.mode) {
+      return createRuntimeFailureResult({
+        appRoot: options.appRoot,
+        executionSource: "in-process",
+        kind: "unsupported_route_boundary",
+        message: `Expected ${options.mode} route at ${options.routeFile}, received ${normalized.kind}`,
+        mode: options.mode,
+        routeId: options.routeId,
+        routePath: options.routePath,
+        startedAt,
+      })
+    }
+
+    const output = await executeNormalizedEntry(normalized.kind, normalized.entry, options.input)
+
+    return createRuntimeSuccessResult({
+      appRoot: options.appRoot,
+      executionSource: "in-process",
+      mode: normalized.kind,
+      output,
+      routeId: options.routeId,
+      routePath: options.routePath,
+      startedAt,
+    })
+  } catch (error) {
+    const kind = isUnsupportedBoundaryError(error)
+      ? "unsupported_route_boundary"
+      : "execution_error"
+
+    return createRuntimeFailureResult({
+      appRoot: options.appRoot,
+      executionSource: "in-process",
+      kind,
+      message: formatErrorMessage(error),
+      mode: options.mode,
+      routeId: options.routeId,
+      routePath: options.routePath,
+      startedAt,
+    })
+  }
+}
+
 function resolveRouteFile(options: {
   readonly appRoot: string
   readonly cwd?: string
