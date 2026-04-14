@@ -25,7 +25,6 @@ export async function startRuntimeServer(options: StartRuntimeServerOptions): Pr
     closed: false,
   }
   const shutdownController = new AbortController()
-  const sockets = new Set<import("node:net").Socket>()
 
   const server = createServer(async (request, response) => {
     if (!state.acceptingRequests) {
@@ -37,23 +36,21 @@ export async function startRuntimeServer(options: StartRuntimeServerOptions): Pr
     try {
       await handleRequest({ registry, request, response, signal: shutdownController.signal })
     } catch (error) {
-      sendJson(
-        response,
-        500,
-        createRequestErrorBody("Unexpected runtime server failure", {
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      )
+      if (shutdownController.signal.aborted) {
+        sendJson(
+          response,
+          503,
+          createRequestErrorBody("Request canceled during server shutdown", {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        )
+        return
+      }
+
+      sendJson(response, 500, createExecutionErrorBody("Unexpected runtime server failure"))
     } finally {
       state.activeRequests--
     }
-  })
-
-  server.on("connection", (socket) => {
-    sockets.add(socket)
-    socket.on("close", () => {
-      sockets.delete(socket)
-    })
   })
 
   await listen(server)
@@ -73,7 +70,6 @@ export async function startRuntimeServer(options: StartRuntimeServerOptions): Pr
       state.acceptingRequests = false
       state.closed = true
       shutdownController.abort(new Error("Runtime server shutting down"))
-      sockets.forEach((socket) => socket.destroy())
 
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -180,6 +176,17 @@ async function handleRequest(options: {
   })
 
   if (result.status === "failed") {
+    if (signal.aborted) {
+      sendJson(
+        response,
+        503,
+        createRequestErrorBody("Request canceled during server shutdown", {
+          error: result.error.message,
+        }),
+      )
+      return
+    }
+
     if (result.error.kind === "execution_error") {
       sendJson(response, 500, createExecutionErrorBody(result.error.message, result.error.details))
       return
