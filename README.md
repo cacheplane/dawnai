@@ -11,7 +11,7 @@ This repository documents the current behavior only. It is intentionally narrow.
 1. Create a new app.
 
 ```bash
-pnpm exec create-dawn-app my-dawn-app
+pnpm create dawn-app my-dawn-app
 cd my-dawn-app
 pnpm install
 ```
@@ -51,7 +51,7 @@ The current `basic` scaffold ships `src/app/(public)/hello/[tenant]/workflow.ts`
 Scaffold a new Dawn app from the available template set.
 
 ```bash
-pnpm exec create-dawn-app my-dawn-app
+pnpm create dawn-app my-dawn-app
 ```
 
 ### `dawn check`
