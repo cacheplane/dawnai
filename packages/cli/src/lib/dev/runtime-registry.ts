@@ -23,7 +23,9 @@ export async function createRuntimeRegistry(appRoot: string): Promise<RuntimeReg
   const app = await findDawnApp({ appRoot })
   const routeFiles = await collectExecutableRouteFiles(app.routesDir)
 
-  const entries = routeFiles.flatMap((routeFile) => {
+  const entries: RuntimeRegistryEntry[] = []
+
+  for (const routeFile of routeFiles) {
     const identity = deriveRouteIdentity({
       appRoot: app.appRoot,
       routeFile,
@@ -31,32 +33,34 @@ export async function createRuntimeRegistry(appRoot: string): Promise<RuntimeReg
     })
 
     if (!identity.ok) {
-      return []
+      continue
     }
 
     const mode = toRouteMode(routeFile)
 
     if (!mode) {
-      return []
+      continue
     }
 
-    return [
-      {
-        assistantId: createRouteAssistantId(identity.routeId, mode),
-        mode,
-        routeFile,
-        routeId: identity.routeId,
-        routePath: identity.routePath,
-      },
-    ]
-  })
+    const entry: RuntimeRegistryEntry = {
+      assistantId: createRouteAssistantId(identity.routeId, mode),
+      mode,
+      routeFile,
+      routeId: identity.routeId,
+      routePath: identity.routePath,
+    }
 
-  const byAssistantId = new Map(entries.map((entry) => [entry.assistantId, entry] as const))
+    if (entries.some((existing) => existing.assistantId === entry.assistantId)) {
+      throw new Error(`Duplicate runtime assistant_id detected: ${entry.assistantId}`)
+    }
+
+    entries.push(entry)
+  }
 
   return {
     appRoot: app.appRoot,
     entries,
-    lookup: (assistantId: string) => byAssistantId.get(assistantId) ?? null,
+    lookup: (assistantId: string) => entries.find((entry) => entry.assistantId === assistantId) ?? null,
   }
 }
 

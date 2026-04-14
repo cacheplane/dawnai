@@ -15,7 +15,7 @@ afterEach(async () => {
 })
 
 describe("dawn dev runtime server", () => {
-  test("returns healthz ready only after the server is fully ready", async () => {
+  test("returns healthz ready", async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
@@ -204,7 +204,7 @@ describe("dawn dev runtime server", () => {
     })
   })
 
-  test("cancels an in-flight route when the server shuts down", async () => {
+  test("returns a classified shutdown failure for an in-flight route", async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
@@ -251,9 +251,17 @@ describe("dawn dev runtime server", () => {
     })
 
     await new Promise((resolve) => setTimeout(resolve, 25))
-    await server.close()
+    const closePromise = server.close()
 
-    await expect(responsePromise).rejects.toThrow(/fetch failed|socket/i)
+    const response = await responsePromise
+    await closePromise
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({
+      error: {
+        kind: "request_error",
+      },
+    })
   })
 })
 
