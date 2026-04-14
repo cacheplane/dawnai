@@ -7,11 +7,13 @@ import { fileURLToPath } from "node:url"
 import { Command, CommanderError } from "commander"
 
 import { registerCheckCommand } from "./commands/check.js"
+import { registerDevCommand } from "./commands/dev.js"
 import { registerRoutesCommand } from "./commands/routes.js"
 import { registerRunCommand } from "./commands/run.js"
 import { registerTestCommand } from "./commands/test.js"
 import { registerTypegenCommand } from "./commands/typegen.js"
 import { registerVerifyCommand } from "./commands/verify.js"
+import { registerDevChildCommand } from "./lib/dev/dev-child.js"
 import { CliError, type CommandIo, createNodeIo, writeLine } from "./lib/output.js"
 
 export function createProgram(io: CommandIo): Command {
@@ -31,11 +33,13 @@ export function createProgram(io: CommandIo): Command {
     })
 
   registerCheckCommand(program, io)
+  registerDevCommand(program, io)
   registerRunCommand(program, io)
   registerRoutesCommand(program, io)
   registerTestCommand(program, io)
   registerTypegenCommand(program, io)
   registerVerifyCommand(program, io)
+  registerDevChildCommand(program)
 
   return program
 }
