@@ -20,6 +20,7 @@ export interface ExecuteRouteOptions {
   readonly cwd?: string
   readonly input: unknown
   readonly routeFile: string
+  readonly signal?: AbortSignal
 }
 
 export async function executeRoute(options: ExecuteRouteOptions): Promise<RuntimeExecutionResult> {
@@ -112,7 +113,12 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
       })
     }
 
-    const output = await executeNormalizedEntry(normalized.kind, normalized.entry, options.input)
+    const output = await executeNormalizedEntry(
+      normalized.kind,
+      normalized.entry,
+      options.input,
+      options.signal,
+    )
 
     return createRuntimeSuccessResult({
       appRoot,
@@ -148,6 +154,7 @@ export async function executeResolvedRoute(options: {
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
+  readonly signal?: AbortSignal
 }): Promise<RuntimeExecutionResult> {
   const startedAt = Date.now()
 
@@ -169,7 +176,12 @@ export async function executeResolvedRoute(options: {
       })
     }
 
-    const output = await executeNormalizedEntry(normalized.kind, normalized.entry, options.input)
+    const output = await executeNormalizedEntry(
+      normalized.kind,
+      normalized.entry,
+      options.input,
+      options.signal,
+    )
 
     return createRuntimeSuccessResult({
       appRoot: options.appRoot,
@@ -248,17 +260,18 @@ async function executeNormalizedEntry(
   mode: RuntimeExecutionMode,
   entry: unknown,
   input: unknown,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   if (mode === "workflow") {
     if (typeof entry !== "function") {
       throw new Error("Workflow entry must be a function")
     }
 
-    return await entry(input)
+    return await entry(input, signal ? { signal } : undefined)
   }
 
   if (typeof entry === "function") {
-    return await entry(input)
+    return await entry(input, signal ? { signal } : undefined)
   }
 
   if (
@@ -267,7 +280,7 @@ async function executeNormalizedEntry(
     "invoke" in entry &&
     typeof entry.invoke === "function"
   ) {
-    return await entry.invoke(input)
+    return await entry.invoke(input, signal ? { signal } : undefined)
   }
 
   throw new Error("Graph entry must be a function or expose invoke(input)")
