@@ -15,6 +15,7 @@ export interface RuntimeServer {
 
 export interface StartRuntimeServerOptions {
   readonly appRoot: string
+  readonly port?: number
 }
 
 export async function startRuntimeServer(options: StartRuntimeServerOptions): Promise<RuntimeServer> {
@@ -53,7 +54,7 @@ export async function startRuntimeServer(options: StartRuntimeServerOptions): Pr
     }
   })
 
-  await listen(server)
+  await listen(server, options.port)
 
   const address = server.address()
 
@@ -286,10 +287,10 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8")
 }
 
-async function listen(server: ReturnType<typeof createServer>): Promise<void> {
+async function listen(server: ReturnType<typeof createServer>, port?: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject)
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(port ?? 0, "127.0.0.1", () => {
       server.off("error", reject)
       resolve()
     })
