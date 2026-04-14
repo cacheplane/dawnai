@@ -322,6 +322,7 @@ describe("dawn dev lifecycle", () => {
     devProcesses.push(dev)
 
     const url = await dev.waitForReady()
+    const readyCount = dev.readyCount()
     const initialResponse = await invokeRunsWait(url, {
       assistantId: "/support/[tenant]#graph",
       input: {},
@@ -335,7 +336,7 @@ describe("dawn dev lifecycle", () => {
     await writeFile(routePath, `export const graph = async () => ({ version: "v2" });\n`, "utf8")
 
     await dev.waitForLog(/Restarting Dawn dev server/)
-    const restartedUrl = await dev.waitForReady()
+    const restartedUrl = await dev.waitForNextReady(readyCount)
     const updatedResponse = await invokeRunsWait(restartedUrl, {
       assistantId: "/support/[tenant]#graph",
       input: {},
@@ -366,13 +367,14 @@ describe("dawn dev lifecycle", () => {
     devProcesses.push(dev)
 
     const url = await dev.waitForReady()
+    const readyCount = dev.readyCount()
 
     await writeFile(routePath, `export const graph = async () => ({ version: "v2" });\n`, "utf8")
     await dev.waitForLog(/Restarting Dawn dev server/)
     await writeFile(routePath, `export const graph = async () => ({ version: "v3" });\n`, "utf8")
     await writeFile(routePath, `export const graph = async () => ({ version: "v4" });\n`, "utf8")
 
-    await dev.waitForReady()
+    await dev.waitForNextReady(readyCount)
     await delay(350)
     await dev.waitForReady()
 
@@ -389,11 +391,15 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("surfaces restart-induced in-flight cancellation as a non-execution failure", async () => {
+    const markerPath = join(tmpdir(), `dawn-dev-cancel-${Date.now()}.txt`)
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
       "src/app/support/[tenant]/graph.ts": `
+        import { writeFile } from "node:fs/promises";
+
         export const graph = async (_input: unknown, context?: { signal?: AbortSignal }) => {
+          await writeFile(${JSON.stringify(markerPath)}, "started", "utf8")
           await new Promise((resolve, reject) => {
             const signal = context?.signal
 
@@ -426,7 +432,7 @@ describe("dawn dev lifecycle", () => {
       routePath: "src/app/support/[tenant]/graph.ts",
     })
 
-    await delay(40)
+    await waitForPath(markerPath)
     await writeFile(routePath, `export const graph = async () => ({ version: "after-restart" });\n`, "utf8")
 
     const response = await responsePromise
@@ -450,6 +456,7 @@ describe("dawn dev lifecycle", () => {
     devProcesses.push(dev)
 
     const url = await dev.waitForReady()
+    const readyCount = dev.readyCount()
 
     await writeFile(configPath, 'const appDir = "src/missing";\nexport default { appDir };\n', "utf8")
 
@@ -460,7 +467,7 @@ describe("dawn dev lifecycle", () => {
 
     await writeFile(configPath, "export default {};\n", "utf8")
 
-    await dev.waitForReady()
+    await dev.waitForNextReady(readyCount)
     const response = await invokeRunsWait(url, {
       assistantId: "/support/[tenant]#graph",
       input: {},
@@ -553,6 +560,7 @@ describe("dawn dev lifecycle", () => {
     devProcesses.push(dev)
 
     const url = await dev.waitForReady()
+    const readyCount = dev.readyCount()
     void invokeRunsWait(url, {
       assistantId: "/support/[tenant]#graph",
       input: {},
@@ -565,7 +573,7 @@ describe("dawn dev lifecycle", () => {
     await writeFile(routePath, `export const graph = async () => ({ version: "replaced" });\n`, "utf8")
 
     await dev.waitForLog(/Force-killed stuck dev child/)
-    await dev.waitForReady()
+    await dev.waitForNextReady(readyCount)
 
     const replacementResponse = await invokeRunsWait(url, {
       assistantId: "/support/[tenant]#graph",
@@ -810,10 +818,27 @@ class DevProcessHandle {
   }
 
   async waitForReady(timeoutMs = 8_000): Promise<string> {
+    return await this.waitForNextReady(0, timeoutMs)
+  }
+
+  readyCount(): number {
+    return countOccurrences(this.stdout, "Dawn dev ready at")
+  }
+
+  async waitForNextReady(previousCount: number, timeoutMs = 8_000): Promise<string> {
     const url = await this.waitForPrintedUrl(timeoutMs)
     const startedAt = Date.now()
 
     while (Date.now() - startedAt < timeoutMs) {
+      if (this.readyCount() <= previousCount) {
+        if (this.exited) {
+          break
+        }
+
+        await delay(25)
+        continue
+      }
+
       try {
         const response = await fetch(new URL("/healthz", url))
 
