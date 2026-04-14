@@ -256,7 +256,7 @@ Child process responsibilities:
 
 The parent should resolve the Dawn app root before starting the child and rebuild its watcher set after every successful restart. The child should report successful startup only after it has built the route registry and started serving on the configured port.
 
-For v1, recoverable watch behavior depends on one constraint: the configured `appDir` must remain under the discovered Dawn app root. Dawn does not need to support a restart sequence where a config edit moves the served tree outside that app root while the process is already running.
+For v1, recoverable watch behavior depends on one constraint: the configured `appDir` must remain under the discovered Dawn app root. Dawn does not need to support a restart sequence where a config edit moves the served tree outside that app root while the process is already running. That case is an explicit fatal exception to the normal "watched config failures are recoverable after prior health" rule described later in this spec.
 
 The child process is the component that binds the configured localhost port and serves both `/runs/wait` and `/healthz`.
 
@@ -397,19 +397,26 @@ These should fail the command directly and print clear CLI diagnostics.
 After the server has already been healthy once:
 
 - config and route-registry failures caused by watched edits are recoverable and should leave the parent alive in a broken-but-watching state
+- changing `appDir` to a path outside the discovered app root is an explicit fatal config/lifecycle exception and should terminate `dawn dev`
 - external/environment failures such as port binding failure remain fatal and should terminate `dawn dev`
 
-Request-time execution errors:
+Request-time server failures split into two classes:
 
-- unsupported assistant ids
-- malformed `/runs/wait` payloads
-- execution failures inside a route
+- request-contract failures
+  - unsupported assistant ids
+  - malformed `/runs/wait` payloads
+  - metadata mismatches between `assistant_id` and `metadata.dawn.*`
+- route execution failures
+  - execution failures inside a route
 
-These should be surfaced through the local server contract and normalized by the client-side Dawn execution path the same way remote server responses already are.
+Request-contract failures should be surfaced as generic non-`200` server/request failures. They are not route execution failures, and Dawn's client-side normalization must not treat them as normalized `execution_error` results.
+
+Route execution failures should use the shared `500` `execution_error` response contract and be normalized by the client-side Dawn execution path the same way remote server responses already are.
 
 This separation keeps:
 
 - lifecycle failures in `dawn dev`
+- request-contract failures at the server/request boundary
 - execution failures in the run contract
 
 The exception is restart-time failure after a previously healthy server: that should become a recoverable lifecycle error in the parent watcher process rather than an immediate process exit.
