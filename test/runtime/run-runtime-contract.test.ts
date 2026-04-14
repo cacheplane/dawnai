@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { executeRoute } from "../../packages/cli/src/lib/runtime/execute-route.ts"
+import { createRouteAssistantId } from "../../packages/cli/src/lib/runtime/route-identity.ts"
 import type {
   RuntimeExecutionErrorKind,
   RuntimeExecutionMode,
@@ -24,7 +25,13 @@ import {
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
-import { startFakeAgentServer } from "./support/fake-agent-server.ts"
+import {
+  appendDevServerTranscript,
+  invokeRunsWait,
+  postRunsWait,
+  startDevServer,
+  waitForPath,
+} from "./support/dev-server.ts"
 
 const RUNTIME_ROOT = resolve(import.meta.dirname)
 const HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV = "DAWN_RUNTIME_ARTIFACT_BASE_DIR"
@@ -67,7 +74,7 @@ describe("runtime contract harness", () => {
       "install",
       "execute-direct",
       "execute-cli",
-      "execute-cli-server",
+      "execute-cli-dev-server",
     ])
     await expectRuntimeParityArtifacts(result, "graph-basic")
   })
@@ -88,7 +95,7 @@ describe("runtime contract harness", () => {
       "install",
       "execute-direct",
       "execute-cli",
-      "execute-cli-server",
+      "execute-cli-dev-server",
     ])
     await expectRuntimeParityArtifacts(result, "graph-failure")
   })
@@ -109,7 +116,7 @@ describe("runtime contract harness", () => {
       "install",
       "execute-direct",
       "execute-cli",
-      "execute-cli-server",
+      "execute-cli-dev-server",
     ])
     await expectRuntimeParityArtifacts(result, "workflow-basic")
   })
@@ -130,19 +137,282 @@ describe("runtime contract harness", () => {
       "install",
       "execute-direct",
       "execute-cli",
-      "execute-cli-server",
+      "execute-cli-dev-server",
     ])
     await expectRuntimeParityArtifacts(result, "workflow-failure")
+  })
+
+  test("records real dev-server request-contract failures as non-execution failures", {
+    timeout: 180_000,
+  }, async () => {
+    const result = await runRequestContractScenario("graph-basic")
+    const malformedRequest = await readJsonArtifact<Record<string, unknown>>(
+      result.artifacts,
+      "dev-server-malformed-request-response.json",
+    )
+    const metadataMismatch = await readJsonArtifact<Record<string, unknown>>(
+      result.artifacts,
+      "dev-server-metadata-mismatch-response.json",
+    )
+    const unknownAssistant = await readJsonArtifact<Record<string, unknown>>(
+      result.artifacts,
+      "dev-server-unknown-assistant-response.json",
+    )
+
+    expect((malformedRequest.error as { kind?: string } | undefined)?.kind).not.toBe("execution_error")
+    expect((metadataMismatch.error as { kind?: string } | undefined)?.kind).not.toBe(
+      "execution_error",
+    )
+    expect((unknownAssistant.error as { kind?: string } | undefined)?.kind).not.toBe(
+      "execution_error",
+    )
+  })
+
+  test("records restart-induced cancellation from real dawn dev as a non-execution failure", {
+    timeout: 180_000,
+  }, async () => {
+    const result = await runRestartCancellationScenario("graph-basic")
+    const cancellationResponse = await readJsonArtifact<Record<string, unknown>>(
+      result.artifacts,
+      "dev-server-restart-cancellation-response.json",
+    )
+    const cancellationExecution = await readJsonArtifact<RuntimeExecutionResult>(
+      result.artifacts,
+      "dev-server-restart-cancellation-execution.json",
+    )
+
+    expect((cancellationResponse.error as { kind?: string } | undefined)?.kind).not.toBe(
+      "execution_error",
+    )
+    expect(cancellationExecution).toMatchObject({
+      error: {
+        kind: "server_transport_error",
+      },
+      executionSource: "server",
+      status: "failed",
+    })
   })
 })
 
 async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<HarnessLaneResult> {
+  return await withRuntimeScenario(fixtureName, "runtime", async (context) => {
+    const directOutputArtifactPath = join(context.artifactRoot, "direct-execution-result.json")
+    await recordPhase(context.phases, "execute-direct", async () => {
+      const execution = await executeRoute({
+        cwd: context.generatedApp.appRoot,
+        input: context.overlay.input,
+        routeFile: context.overlay.routeFile,
+      })
+
+      assertExecutionMatchesOverlay(execution, context.overlay)
+      await writeJsonArtifact(directOutputArtifactPath, execution)
+      context.artifacts.push(directOutputArtifactPath)
+    })
+
+    const cliOutputArtifactPath = join(context.artifactRoot, "cli-execution-result.json")
+    await recordPhase(context.phases, "execute-cli", async () => {
+      const execution = await runCliExecution({
+        appRoot: context.generatedApp.appRoot,
+        input: context.overlay.input,
+        routePath: context.overlay.routeFile,
+        transcriptPath: context.transcriptPath,
+      })
+
+      assertCliExecutionMatchesOverlay(
+        execution,
+        context.overlay,
+        context.generatedApp.appRoot,
+        "in-process",
+      )
+      await writeJsonArtifact(cliOutputArtifactPath, execution)
+      context.artifacts.push(cliOutputArtifactPath)
+    })
+
+    const devServerOutputArtifactPath = join(context.artifactRoot, "dev-server-execution-result.json")
+    await recordPhase(context.phases, "execute-cli-dev-server", async () => {
+      const devServer = await startDevServer({
+        cwd: context.generatedApp.appRoot,
+      })
+
+      try {
+        const url = await devServer.waitForReady()
+        const execution = await runCliExecution({
+          appRoot: context.generatedApp.appRoot,
+          input: context.overlay.input,
+          routePath: context.overlay.routeFile,
+          transcriptPath: context.transcriptPath,
+          url,
+        })
+
+        assertCliExecutionMatchesOverlay(
+          execution,
+          context.overlay,
+          context.generatedApp.appRoot,
+          "server",
+        )
+        await writeJsonArtifact(devServerOutputArtifactPath, execution)
+        context.artifacts.push(devServerOutputArtifactPath)
+      } finally {
+        await devServer.stop()
+        await appendDevServerTranscript(context.transcriptPath, devServer)
+      }
+    })
+  })
+}
+
+async function runRequestContractScenario(fixtureName: RuntimeFixtureName): Promise<HarnessLaneResult> {
+  return await withRuntimeScenario(fixtureName, "request-contract", async (context) => {
+    await recordPhase(context.phases, "dev-server-request-contract", async () => {
+      const devServer = await startDevServer({
+        cwd: context.generatedApp.appRoot,
+      })
+
+      try {
+        const url = await devServer.waitForReady()
+        const routeId = expectedRouteId(context.overlay.routeFile)
+        const mode = context.overlay.expected.mode ?? "graph"
+        const malformedResponse = await postRunsWait(url, {
+          body: "{not-json",
+        })
+        const metadataMismatchResponse = await invokeRunsWait(url, {
+          assistantId: createRouteAssistantId(routeId, mode),
+          input: context.overlay.input,
+          mode: mode === "graph" ? "workflow" : "graph",
+          routeId,
+          routePath: context.overlay.routeFile,
+        })
+        const unknownAssistantResponse = await invokeRunsWait(url, {
+          assistantId: createRouteAssistantId(routeId, mode === "graph" ? "workflow" : "graph"),
+          input: context.overlay.input,
+          mode,
+          routeId,
+          routePath: context.overlay.routeFile,
+        })
+
+        await writeResponseArtifact(
+          join(context.artifactRoot, "dev-server-malformed-request-response.json"),
+          malformedResponse,
+          context.artifacts,
+        )
+        await writeResponseArtifact(
+          join(context.artifactRoot, "dev-server-metadata-mismatch-response.json"),
+          metadataMismatchResponse,
+          context.artifacts,
+        )
+        await writeResponseArtifact(
+          join(context.artifactRoot, "dev-server-unknown-assistant-response.json"),
+          unknownAssistantResponse,
+          context.artifacts,
+        )
+      } finally {
+        await devServer.stop()
+        await appendDevServerTranscript(context.transcriptPath, devServer)
+      }
+    })
+  })
+}
+
+async function runRestartCancellationScenario(
+  fixtureName: RuntimeFixtureName,
+): Promise<HarnessLaneResult> {
+  return await withRuntimeScenario(fixtureName, "restart-cancellation", async (context) => {
+    await recordPhase(context.phases, "dev-server-restart-cancellation", async () => {
+      const firstMarkerPath = join(context.tempRoot, "restart-cancellation-1.txt")
+      const secondMarkerPath = join(context.tempRoot, "restart-cancellation-2.txt")
+      const initialCancellationSource = createCancellationGraphSource(firstMarkerPath)
+      const resumedSource = `export const graph = async () => ({ version: "after-restart" });\n`
+      const secondCancellationSource = createCancellationGraphSource(secondMarkerPath)
+      const finalSource = `export const graph = async () => ({ version: "after-cli-restart" });\n`
+
+      await context.writeAppFile(context.overlay.routeFile, initialCancellationSource)
+
+      const devServer = await startDevServer({
+        cwd: context.generatedApp.appRoot,
+      })
+
+      try {
+        const url = await devServer.waitForReady()
+        const routeId = expectedRouteId(context.overlay.routeFile)
+        const assistantId = createRouteAssistantId(routeId, "graph")
+        const rawResponsePromise = invokeRunsWait(url, {
+          assistantId,
+          input: {},
+          mode: "graph",
+          routeId,
+          routePath: context.overlay.routeFile,
+        })
+
+        await waitForPath(firstMarkerPath, 8_000)
+        const readyCount = devServer.readyCount()
+
+        await devServer.writeFile(context.overlay.routeFile, resumedSource)
+
+        const rawResponse = await rawResponsePromise
+        await writeResponseArtifact(
+          join(context.artifactRoot, "dev-server-restart-cancellation-response.json"),
+          rawResponse,
+          context.artifacts,
+        )
+        await devServer.waitForNextReady(readyCount)
+
+        const secondReadyCount = devServer.readyCount()
+        await devServer.writeFile(context.overlay.routeFile, secondCancellationSource)
+        await devServer.waitForNextReady(secondReadyCount)
+
+        const cliExecutionPromise = runCliExecution({
+          appRoot: context.generatedApp.appRoot,
+          input: {},
+          routePath: context.overlay.routeFile,
+          transcriptPath: context.transcriptPath,
+          url,
+        })
+
+        await waitForPath(secondMarkerPath, 8_000)
+        const thirdReadyCount = devServer.readyCount()
+
+        await devServer.writeFile(context.overlay.routeFile, finalSource)
+
+        const cliExecution = await cliExecutionPromise
+        await writeJsonArtifact(
+          join(context.artifactRoot, "dev-server-restart-cancellation-execution.json"),
+          cliExecution,
+        )
+        context.artifacts.push(
+          join(context.artifactRoot, "dev-server-restart-cancellation-execution.json"),
+        )
+        await devServer.waitForNextReady(thirdReadyCount)
+      } finally {
+        await devServer.stop()
+        await appendDevServerTranscript(context.transcriptPath, devServer)
+      }
+    })
+  })
+}
+
+interface RuntimeScenarioContext {
+  readonly artifactRoot: string
+  readonly artifacts: string[]
+  readonly generatedApp: {
+    readonly appRoot: string
+  }
+  readonly overlay: RuntimeOverlay
+  readonly phases: HarnessPhaseResult[]
+  readonly tempRoot: string
+  readonly transcriptPath: string
+  readonly writeAppFile: (relativePath: string, source: string) => Promise<void>
+}
+
+async function withRuntimeScenario(
+  fixtureName: RuntimeFixtureName,
+  runId: string,
+  action: (context: RuntimeScenarioContext) => Promise<void>,
+): Promise<HarnessLaneResult> {
   const tempRoot = await createTrackedTempDir("drt-", tempDirs)
   const artifactBaseDir = process.env[HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV] ?? tempRoot
   const artifactRoot = await createArtifactRoot({
     baseDir: artifactBaseDir,
     lane: fixtureName,
-    runId: "runtime",
+    runId,
   })
   const transcriptPath = join(artifactRoot, "transcripts", `${fixtureName}.log`)
   const phases: HarnessPhaseResult[] = []
@@ -187,77 +457,19 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
       })
     })
 
-    const directOutputArtifactPath = join(artifactRoot, "direct-execution-result.json")
-    await recordPhase(phases, "execute-direct", async () => {
-      const execution = await executeRoute({
-        cwd: generatedApp.appRoot,
-        input: overlay.input,
-        routeFile: overlay.routeFile,
-      })
-
-      assertExecutionMatchesOverlay(execution, overlay)
-      await writeJsonArtifact(directOutputArtifactPath, execution)
-      artifacts.push(directOutputArtifactPath)
-    })
-
-    const cliOutputArtifactPath = join(artifactRoot, "cli-execution-result.json")
-    await recordPhase(phases, "execute-cli", async () => {
-      const execution = await runCliExecution({
-        appRoot: generatedApp.appRoot,
-        input: overlay.input,
-        routePath: overlay.routeFile,
-        transcriptPath,
-      })
-
-      assertCliExecutionMatchesOverlay(execution, overlay, generatedApp.appRoot, "in-process")
-      await writeJsonArtifact(cliOutputArtifactPath, execution)
-      artifacts.push(cliOutputArtifactPath)
-    })
-
-    const serverOutputArtifactPath = join(artifactRoot, "server-execution-result.json")
-    const serverRequestArtifactPath = join(artifactRoot, "server-request.json")
-    await recordPhase(phases, "execute-cli-server", async () => {
-      const server = await startFakeAgentServer(async () =>
-        overlay.expected.status === "passed"
-          ? {
-              body: overlay.expected.output,
-              statusCode: 200,
-            }
-          : {
-              body: {
-                error: {
-                  kind: overlay.expected.error?.kind ?? "execution_error",
-                  message: overlay.expected.error?.message ?? "expected server execution failure",
-                },
-              },
-              statusCode: 500,
-            },
-      )
-
-      try {
-        const execution = await runCliExecution({
-          appRoot: generatedApp.appRoot,
-          input: overlay.input,
-          routePath: overlay.routeFile,
-          transcriptPath,
-          url: server.url,
-        })
-
-        assertCliExecutionMatchesOverlay(execution, overlay, generatedApp.appRoot, "server")
-        await writeJsonArtifact(serverOutputArtifactPath, execution)
-        artifacts.push(serverOutputArtifactPath)
-
-        const request = server.requests.at(-1)
-
-        if (!request) {
-          throw new Error("Fake Agent Server did not receive a /runs/wait request")
-        }
-
-        await writeJsonArtifact(serverRequestArtifactPath, request.jsonBody)
-        artifacts.push(serverRequestArtifactPath)
-      } finally {
-        await server.close()
-      }
+    await action({
+      artifactRoot,
+      artifacts,
+      generatedApp,
+      overlay,
+      phases,
+      tempRoot,
+      transcriptPath,
+      writeAppFile: async (relativePath: string, source: string) => {
+        const outputPath = join(generatedApp.appRoot, relativePath)
+        await mkdir(dirname(outputPath), { recursive: true })
+        await writeFile(outputPath, source, "utf8")
+      },
     })
 
     return {
@@ -291,10 +503,9 @@ async function expectRuntimeParityArtifacts(
   const overlay = await readOverlay(fixtureName)
   const directExecution = await readExecutionArtifact(result.artifacts, "direct-execution-result.json")
   const cliExecution = await readExecutionArtifact(result.artifacts, "cli-execution-result.json")
-  const serverExecution = await readExecutionArtifact(result.artifacts, "server-execution-result.json")
-  const serverRequest = await readJsonArtifact<Record<string, unknown>>(
+  const serverExecution = await readExecutionArtifact(
     result.artifacts,
-    "server-request.json",
+    "dev-server-execution-result.json",
   )
 
   assertExecutionMatchesOverlay(directExecution, overlay)
@@ -305,16 +516,6 @@ async function expectRuntimeParityArtifacts(
   expect(toComparableExecution(serverExecution)).toEqual({
     ...toComparableExecution(directExecution),
     executionSource: "server",
-  })
-  expect(serverRequest).toMatchObject({
-    assistant_id: `${expectedRouteId(overlay.routeFile)}#${overlay.expected.mode}`,
-    metadata: {
-      dawn: {
-        mode: overlay.expected.mode,
-        route_id: expectedRouteId(overlay.routeFile),
-        route_path: overlay.routeFile,
-      },
-    },
   })
 }
 
@@ -491,6 +692,37 @@ async function recordPhase<T>(
 
 async function writeJsonArtifact(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8")
+}
+
+async function writeResponseArtifact(
+  path: string,
+  response: Response,
+  artifacts: string[],
+): Promise<void> {
+  const bodyText = await response.text()
+  let parsedBody: unknown = null
+
+  try {
+    parsedBody = JSON.parse(bodyText)
+  } catch {
+    parsedBody = {
+      rawBody: bodyText,
+    }
+  }
+
+  const value =
+    typeof parsedBody === "object" && parsedBody !== null
+      ? {
+          statusCode: response.status,
+          ...parsedBody,
+        }
+      : {
+          body: parsedBody,
+          statusCode: response.status,
+        }
+
+  await writeJsonArtifact(path, value)
+  artifacts.push(path)
 }
 
 async function runCommand(options: {
@@ -693,6 +925,31 @@ async function runCommandWithInput(options: {
 
 function normalizePrivatePath(path: string): string {
   return path.replaceAll("/private/var/", "/var/")
+}
+
+function createCancellationGraphSource(markerPath: string): string {
+  return `
+    import { writeFile } from "node:fs/promises";
+
+    export const graph = async (_input: unknown, context?: { signal?: AbortSignal }) => {
+      await writeFile(${JSON.stringify(markerPath)}, "started", "utf8")
+      await new Promise((resolve, reject) => {
+        const signal = context?.signal
+
+        if (!signal) {
+          reject(new Error("Missing signal"))
+          return
+        }
+
+        const onAbort = () => {
+          signal.removeEventListener("abort", onAbort)
+          reject(new Error("Canceled during restart"))
+        }
+
+        signal.addEventListener("abort", onAbort, { once: true })
+      })
+    };
+  `
 }
 
 function expectedRouteId(routeFile: string): string {

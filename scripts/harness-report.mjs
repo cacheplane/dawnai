@@ -39,12 +39,12 @@ const defaultLaneDefinitions = new Map([
     "runtime",
     {
       id: "runtime",
-      name: "Runtime contract",
+      name: "Runtime contract (real dev parity)",
       phaseName: "vitest",
       execute: (context) =>
         executeVitestLane(context, {
           configPath: "test/runtime/vitest.config.ts",
-          reportFileName: "vitest-report.json",
+          reportFileName: "runtime-vitest-report.json",
         }),
     },
   ],
