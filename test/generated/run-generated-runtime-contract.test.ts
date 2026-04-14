@@ -61,6 +61,21 @@ describe("generated app runtime contract", () => {
 
     expectGeneratedRuntimeScenario(result, expected)
   })
+
+  test("supports contributor-local runtime lifecycle", { timeout: 180_000 }, async () => {
+    const tempRoot = await createTrackedTempDir("dgr-", tempDirs)
+    const prepared = await prepareGeneratedRuntimeApp({
+      fixtureName: "basic",
+      registry: tempDirs,
+      scaffoldMode: "internal",
+      tempRoot,
+    })
+
+    const result = await runGeneratedRuntimeScenario(prepared)
+    const expected = await readGeneratedExpectedFixture("basic")
+
+    expectGeneratedRuntimeScenario(result, expected)
+  })
 })
 
 function expectGeneratedRuntimeScenario(result: unknown, expected: unknown): void {

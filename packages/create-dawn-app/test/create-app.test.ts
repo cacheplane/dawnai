@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process"
 import { constants } from "node:fs"
 import { access, readFile } from "node:fs/promises"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, test } from "vitest"
 
 import {
@@ -49,6 +50,12 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
       resolvePromise({ code, stderr, stdout })
     })
   })
+}
+
+function resolveFileSpecifier(specifier: string): string {
+  return specifier.startsWith("file://")
+    ? fileURLToPath(specifier)
+    : specifier.slice("file:".length)
 }
 
 describe("create-dawn-app", () => {
@@ -140,5 +147,48 @@ describe("create-dawn-app", () => {
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/workflow.ts"))
     await assertExists(join(targetDir, ".npmrc"))
+  })
+
+  test("writes contributor-local package specifiers and overrides as stable repo-local paths", async () => {
+    const tempRoot = await createTrackedTempDir("create-dawn-app-internal-", tempDirs)
+    const targetDir = join(tempRoot, "hello-dawn")
+    const repoRoot = resolve(import.meta.dirname, "../../..")
+
+    const exitCode = await run([targetDir, "--mode", "internal"])
+
+    expect(exitCode).toBe(0)
+
+    const packageJson = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8")) as {
+      readonly dependencies: Record<string, string>
+      readonly devDependencies: Record<string, string>
+      readonly pnpm?: {
+        readonly overrides?: Record<string, string>
+      }
+    }
+
+    expect(resolveFileSpecifier(packageJson.dependencies["@dawn/core"])).toBe(
+      resolve(repoRoot, "packages/core"),
+    )
+    expect(resolveFileSpecifier(packageJson.dependencies["@dawn/cli"])).toBe(
+      resolve(repoRoot, "packages/cli"),
+    )
+    expect(resolveFileSpecifier(packageJson.dependencies["@dawn/langgraph"])).toBe(
+      resolve(repoRoot, "packages/langgraph"),
+    )
+    expect(resolveFileSpecifier(packageJson.devDependencies["@dawn/config-typescript"])).toBe(
+      resolve(repoRoot, "packages/config-typescript"),
+    )
+    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn/core"] ?? "")).toBe(
+      resolve(repoRoot, "packages/core"),
+    )
+    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn/cli"] ?? "")).toBe(
+      resolve(repoRoot, "packages/cli"),
+    )
+    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn/langgraph"] ?? "")).toBe(
+      resolve(repoRoot, "packages/langgraph"),
+    )
+    expect(
+      resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn/config-typescript"] ?? ""),
+    ).toBe(resolve(repoRoot, "packages/config-typescript"))
   })
 })

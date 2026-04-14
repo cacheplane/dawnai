@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { constants } from "node:fs"
-import { access, mkdir, readdir, rm } from "node:fs/promises"
-import { basename, dirname, relative, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { basename, dirname, resolve } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { resolveTemplateDir, writeTemplate } from "@dawn/devkit"
 
@@ -31,17 +31,20 @@ export async function run(argv: readonly string[] = process.argv.slice(2)): Prom
 async function scaffoldApp(options: CliOptions): Promise<void> {
   const appRoot = resolve(options.targetDir)
   const templateDir = await resolveTemplateDir(options.template)
+  const replacements = createTemplateReplacements(appRoot, options)
 
   await assertTargetDirIsWritable(appRoot)
   await assertInternalModeWorkspace(options.mode)
 
   await writeTemplate({
-    replacements: createTemplateReplacements(appRoot, options),
+    replacements,
     targetDir: appRoot,
     templateDir,
   })
 
-  if (options.mode === "external") {
+  if (options.mode === "internal") {
+    await applyInternalModePackageOverrides(appRoot, replacements)
+  } else {
     await rm(resolve(appRoot, ".npmrc"), { force: true })
   }
 }
@@ -161,22 +164,26 @@ async function assertTargetDirIsWritable(targetDir: string): Promise<void> {
   }
 }
 
-function toPortablePath(relativePath: string): string {
-  if (relativePath.startsWith(".")) {
-    return relativePath
-  }
-
-  return `./${relativePath}`
+function createAbsoluteFileSpecifier(path: string): string {
+  return pathToFileURL(path).toString()
 }
 
-function createTemplateReplacements(appRoot: string, options: CliOptions) {
+function createTemplateReplacements(appRoot: string, options: CliOptions): {
+  readonly appName: string
+  readonly dawnCliSpecifier: string
+  readonly dawnConfigTypescriptSpecifier: string
+  readonly dawnCoreSpecifier: string
+  readonly dawnLanggraphSpecifier: string
+} {
   if (options.mode === "internal") {
     return {
       appName: basename(appRoot),
-      dawnCliSpecifier: `file:${toPortablePath(relative(appRoot, resolve(repoRoot, "packages/cli")))}`,
-      dawnConfigTypescriptSpecifier: `file:${toPortablePath(relative(appRoot, resolve(repoRoot, "packages/config-typescript")))}`,
-      dawnCoreSpecifier: `file:${toPortablePath(relative(appRoot, resolve(repoRoot, "packages/core")))}`,
-      dawnLanggraphSpecifier: `file:${toPortablePath(relative(appRoot, resolve(repoRoot, "packages/langgraph")))}`,
+      dawnCliSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/cli")),
+      dawnConfigTypescriptSpecifier: createAbsoluteFileSpecifier(
+        resolve(repoRoot, "packages/config-typescript"),
+      ),
+      dawnCoreSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/core")),
+      dawnLanggraphSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langgraph")),
     }
   }
 
@@ -187,6 +194,33 @@ function createTemplateReplacements(appRoot: string, options: CliOptions) {
     dawnCoreSpecifier: options.distTag,
     dawnLanggraphSpecifier: options.distTag,
   }
+}
+
+async function applyInternalModePackageOverrides(
+  appRoot: string,
+  replacements: ReturnType<typeof createTemplateReplacements>,
+): Promise<void> {
+  const packageJsonPath = resolve(appRoot, "package.json")
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+    dependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
+    pnpm?: {
+      overrides?: Record<string, string>
+    }
+  }
+
+  packageJson.pnpm = {
+    ...(packageJson.pnpm ?? {}),
+    overrides: {
+      ...(packageJson.pnpm?.overrides ?? {}),
+      "@dawn/cli": replacements.dawnCliSpecifier,
+      "@dawn/config-typescript": replacements.dawnConfigTypescriptSpecifier,
+      "@dawn/core": replacements.dawnCoreSpecifier,
+      "@dawn/langgraph": replacements.dawnLanggraphSpecifier,
+    },
+  }
+
+  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
 }
 
 async function pathExists(path: string): Promise<boolean> {

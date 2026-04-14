@@ -1,6 +1,7 @@
 import { constants } from "node:fs"
 import { access, appendFile, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 
 import { afterEach, describe, expect, test } from "vitest"
 
@@ -40,6 +41,7 @@ interface GeneratedAppScenarioResult {
 interface GeneratedAppScenarioOptions {
   readonly expectedFixtureName: string
   readonly mutateApp?: (appRoot: string) => Promise<void>
+  readonly scaffoldMode?: "external" | "internal"
   readonly targetDirName: string
 }
 
@@ -86,6 +88,61 @@ describe("generated app publish harness", () => {
       targetDirName: "app",
     })
   })
+
+  test("supports contributor-local verify lifecycle", { timeout: 180_000 }, async () => {
+    await runGeneratedAppScenario({ expectedFixtureName: "basic", targetDirName: "app" })
+
+    const contributorLocal = await runGeneratedAppScenario({
+      expectedFixtureName: "basic",
+      scaffoldMode: "internal",
+      targetDirName: "contributor-app",
+    })
+
+    expect(resolveInternalSpecifier(contributorLocal.packageJson, "@dawn/core")).toBe(
+      resolve(REPO_ROOT, "packages/core"),
+    )
+    expect(resolveInternalSpecifier(contributorLocal.packageJson, "@dawn/cli")).toBe(
+      resolve(REPO_ROOT, "packages/cli"),
+    )
+    expect(resolveInternalSpecifier(contributorLocal.packageJson, "@dawn/langgraph")).toBe(
+      resolve(REPO_ROOT, "packages/langgraph"),
+    )
+    expect(
+      resolveInternalSpecifier(contributorLocal.packageJson, "@dawn/config-typescript", {
+        section: "devDependencies",
+      }),
+    ).toBe(resolve(REPO_ROOT, "packages/config-typescript"))
+    expect(
+      resolveInternalOverride(contributorLocal.packageJson, "@dawn/config-typescript"),
+    ).toBe(resolve(REPO_ROOT, "packages/config-typescript"))
+    expect(resolveInternalOverride(contributorLocal.packageJson, "@dawn/core")).toBe(
+      resolve(REPO_ROOT, "packages/core"),
+    )
+    expect(resolveInternalOverride(contributorLocal.packageJson, "@dawn/cli")).toBe(
+      resolve(REPO_ROOT, "packages/cli"),
+    )
+    expect(resolveInternalOverride(contributorLocal.packageJson, "@dawn/langgraph")).toBe(
+      resolve(REPO_ROOT, "packages/langgraph"),
+    )
+    expect(contributorLocal.verifyJson).toMatchObject({
+      counts: {
+        failed: 0,
+        passed: 3,
+        total: 3,
+      },
+      status: "passed",
+    })
+    expect(contributorLocal.routesJson).toMatchObject({
+      routes: [
+        {
+          entryKind: "workflow",
+          id: "/hello/[tenant]",
+          pathname: "/hello/[tenant]",
+        },
+      ],
+    })
+    expect(contributorLocal.typegenOutput).toContain('export type DawnRoutePath = "/hello/[tenant]";')
+  })
 })
 
 async function runGeneratedAppScenario(
@@ -109,18 +166,27 @@ async function runGeneratedAppScenario(
       transcriptPath,
     })
     const tarballs = toPackedTarballs(packagedTarballs)
-    await scaffoldApp({ appRoot, installerDir, transcriptPath })
+    await scaffoldApp({
+      appRoot,
+      installerDir,
+      mode: options.scaffoldMode ?? "external",
+      transcriptPath,
+    })
 
     if (options.mutateApp) {
       await options.mutateApp(appRoot)
     }
 
-    await rewriteDependenciesToTarballs({ appRoot, tarballs })
+    if ((options.scaffoldMode ?? "external") === "external") {
+      await rewriteDependenciesToTarballs({ appRoot, tarballs })
+    }
 
     const result = await runLifecycle({ appRoot, transcriptPath })
-    const expected = await readExpectedFixture(options.expectedFixtureName)
+    if ((options.scaffoldMode ?? "external") === "external") {
+      const expected = await readExpectedFixture(options.expectedFixtureName)
 
-    expect(normalizeForFixture(result, { appRoot, tarballs })).toEqual(expected)
+      expect(normalizeForFixture(result, { appRoot, tarballs })).toEqual(expected)
+    }
 
     return result
   } catch (error) {
@@ -139,14 +205,24 @@ async function runGeneratedAppScenario(
 async function scaffoldApp(options: {
   readonly appRoot: string
   readonly installerDir: string
+  readonly mode: "external" | "internal"
   readonly transcriptPath: string
 }): Promise<void> {
-  await runCommand({
-    args: ["exec", "create-dawn-app", options.appRoot, "--dist-tag", "next"],
-    command: "pnpm",
-    cwd: options.installerDir,
-    transcriptPath: options.transcriptPath,
-  })
+  if (options.mode === "internal") {
+    await runCommand({
+      args: ["packages/create-dawn-app/dist/index.js", options.appRoot, "--mode", "internal"],
+      command: "node",
+      cwd: REPO_ROOT,
+      transcriptPath: options.transcriptPath,
+    })
+  } else {
+    await runCommand({
+      args: ["exec", "create-dawn-app", options.appRoot, "--dist-tag", "next"],
+      command: "pnpm",
+      cwd: options.installerDir,
+      transcriptPath: options.transcriptPath,
+    })
+  }
 
   await expect(
     access(join(options.appRoot, "package.json"), constants.F_OK),
@@ -317,6 +393,47 @@ async function readExpectedFixture(fixtureName: string): Promise<unknown> {
   return JSON.parse(await readFile(join(FIXTURE_ROOT, `${fixtureName}.expected.json`), "utf8"))
 }
 
+function resolveInternalSpecifier(
+  packageJson: unknown,
+  packageName: string,
+  options?: { readonly section?: "dependencies" | "devDependencies" },
+): string {
+  const section = options?.section ?? "dependencies"
+  const specifier = readPackageJsonRecord(packageJson, section)[packageName]
+
+  return resolveFileSpecifier(specifier)
+}
+
+function resolveInternalOverride(packageJson: unknown, packageName: string): string {
+  const pnpm = readPackageJsonRecord(packageJson, "pnpm")
+  const overrides = isRecord(pnpm.overrides) ? pnpm.overrides : {}
+
+  return resolveFileSpecifier(String(overrides[packageName] ?? ""))
+}
+
+function readPackageJsonRecord(
+  packageJson: unknown,
+  key: "dependencies" | "devDependencies" | "pnpm",
+): Record<string, unknown> {
+  if (!isRecord(packageJson)) {
+    throw new Error("Expected generated app package.json to be an object")
+  }
+
+  const value = packageJson[key]
+
+  if (!isRecord(value)) {
+    throw new Error(`Expected package.json.${key} to be an object`)
+  }
+
+  return value
+}
+
+function resolveFileSpecifier(specifier: string): string {
+  return specifier.startsWith("file://")
+    ? fileURLToPath(specifier)
+    : specifier.slice("file:".length)
+}
+
 function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTarballs {
   return {
     cli: tarballs["@dawn/cli"],
@@ -367,4 +484,8 @@ function normalizeValue(
   }
 
   return value
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
 }
