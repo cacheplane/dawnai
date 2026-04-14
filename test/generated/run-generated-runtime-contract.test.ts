@@ -27,7 +27,7 @@ describe("generated app runtime contract", () => {
     const result = await runGeneratedRuntimeScenario(prepared)
     const expected = await readGeneratedExpectedFixture("basic")
 
-    expect(result).toEqual(expected)
+    expectGeneratedRuntimeScenario(result, expected)
   })
 
   test("validates the packaged custom-app-dir runtime contract", {
@@ -43,7 +43,7 @@ describe("generated app runtime contract", () => {
     const result = await runGeneratedRuntimeScenario(prepared)
     const expected = await readGeneratedExpectedFixture("custom-app-dir")
 
-    expect(result).toEqual(expected)
+    expectGeneratedRuntimeScenario(result, expected)
   })
 
   test("validates the handwritten external app runtime contract", {
@@ -59,6 +59,25 @@ describe("generated app runtime contract", () => {
     const result = await runGeneratedRuntimeScenario(prepared)
     const expected = await readGeneratedExpectedFixture("handwritten")
 
-    expect(result).toEqual(expected)
+    expectGeneratedRuntimeScenario(result, expected)
   })
 })
+
+function expectGeneratedRuntimeScenario(result: unknown, expected: unknown): void {
+  expect(result).toMatchObject({
+    devServerHealth: {
+      status: "ready",
+    },
+  })
+  expect(stripGeneratedRuntimeProof(result)).toEqual(expected)
+}
+
+function stripGeneratedRuntimeProof(result: unknown): unknown {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return result
+  }
+
+  const { devServerHealth: _devServerHealth, ...rest } = result
+
+  return rest
+}
