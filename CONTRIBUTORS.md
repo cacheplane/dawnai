@@ -27,6 +27,28 @@ This guide is for engineers working inside the Dawn monorepo. It covers the curr
 - Run `pnpm install` from the repo root.
 - Run root workspace commands from the repo root so Turbo, harness scripts, and docs checks resolve the workspace correctly.
 
+## Contributor-Local Scaffold Path
+
+For local authoring work, the canonical contributor-local path is:
+
+```bash
+pnpm --filter create-dawn-app build
+node packages/create-dawn-app/dist/index.js ../my-dawn-app --mode internal
+cd ../my-dawn-app
+pnpm install
+```
+
+From that generated app root, the supported contributor-local commands are:
+
+```bash
+pnpm exec dawn verify
+pnpm exec dawn run "src/app/(public)/hello/[tenant]/workflow.ts"
+pnpm exec dawn test
+pnpm exec dawn dev
+```
+
+Use this path only when you intentionally want the generated app wired to the local Dawn checkout. The public user path remains `pnpm create dawn-app`.
+
 ## Common Commands
 
 - `pnpm lint` runs Biome and package lint tasks.
