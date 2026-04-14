@@ -175,6 +175,8 @@ class InternalDevSession {
       await child.waitForReady()
       await waitForDevServerReady(this.url)
     } catch (error) {
+      await child.stop(readShutdownTimeoutMs())
+
       if (error instanceof DevChildStartupError && error.code === "EADDRINUSE") {
         throw new FatalDevSessionError(`Port ${this.port} is unavailable`)
       }

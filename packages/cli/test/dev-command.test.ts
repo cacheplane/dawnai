@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process"
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer } from "node:net"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -245,6 +245,37 @@ describe("dawn dev runtime server", () => {
 })
 
 describe("dawn dev lifecycle", () => {
+  test(
+    "disposes a newly spawned child when startup readiness fails",
+    { timeout: 12_000 },
+    async () => {
+      const pidPath = join(tmpdir(), `dawn-dev-child-pid-${Date.now()}.txt`)
+      const appRoot = await createFixtureApp({
+        "dawn.config.ts": "export default {};\n",
+        "package.json": "{}\n",
+        "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ ok: true });\n`,
+      })
+
+      const dev = await startDevProcess({
+        cwd: appRoot,
+        env: {
+          DAWN_DEV_CHILD_PID_PATH: pidPath,
+          DAWN_DEV_CHILD_TEST_MODE: "report-ready-without-server",
+        },
+      })
+      devProcesses.push(dev)
+
+      const exitCode = await dev.waitForExit()
+      await waitForPath(pidPath)
+
+      const pid = Number((await readFile(pidPath, "utf8")).trim())
+
+      expect(exitCode).toBe(1)
+      expect(dev.stderr).toContain("Timed out waiting for")
+      expect(isProcessAlive(pid)).toBe(false)
+    },
+  )
+
   test("discovers the app from cwd and prints the listening URL", async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
@@ -672,6 +703,15 @@ async function waitForPath(path: string, timeoutMs = 2_000): Promise<void> {
   }
 
   throw new Error(`Timed out waiting for path ${path}`)
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function startDevProcess(options: {
