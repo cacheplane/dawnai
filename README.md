@@ -1,8 +1,8 @@
 # Dawn
 
-## Status
-
 Dawn is a TypeScript meta-framework for filesystem-based route discovery, route validation, type generation, local route execution, and a local development runtime.
+
+## Status
 
 This repository documents the current behavior only. It is intentionally narrow. Dawn is not a deployment runtime, not a LangSmith trace replacement, and not a hosted platform.
 
@@ -11,7 +11,7 @@ This repository documents the current behavior only. It is intentionally narrow.
 1. Create a new app.
 
 ```bash
-pnpm create dawn-app my-dawn-app
+pnpm exec create-dawn-app my-dawn-app
 cd my-dawn-app
 pnpm install
 ```
@@ -19,14 +19,14 @@ pnpm install
 2. Run the scaffolded route. The route path must be quoted because it contains `(`, `)`, and `[]`.
 
 ```bash
-echo '{"tenant":"acme"}' | dawn run "src/app/(public)/hello/[tenant]/workflow.ts"
+echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]/workflow.ts"
 ```
 
 3. Optionally start the local runtime and send the same route through `--url`.
 
 ```bash
-dawn dev
-echo '{"tenant":"acme"}' | dawn run "src/app/(public)/hello/[tenant]/workflow.ts" --url http://127.0.0.1:2024
+pnpm exec dawn dev --port 3001
+echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]/workflow.ts" --url http://127.0.0.1:3001
 ```
 
 ## App Contract
@@ -51,7 +51,7 @@ The current `basic` scaffold ships `src/app/(public)/hello/[tenant]/workflow.ts`
 Scaffold a new Dawn app from the available template set.
 
 ```bash
-pnpm create dawn-app my-dawn-app
+pnpm exec create-dawn-app my-dawn-app
 ```
 
 ### `dawn check`
@@ -71,7 +71,7 @@ Generate route types for the current app.
 Execute one route invocation with JSON stdin/stdout.
 
 ```bash
-echo '{"tenant":"acme"}' | dawn run "src/app/(public)/hello/[tenant]/workflow.ts"
+echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]/workflow.ts"
 ```
 
 ### `dawn test`
@@ -83,7 +83,7 @@ Run colocated `run.test.ts` scenarios against route targets.
 Start the local development runtime for interactive route execution.
 
 ```bash
-dawn dev
+pnpm exec dawn dev
 ```
 
 ## Packages
