@@ -18,21 +18,62 @@ describe("@dawn/langgraph defineTool", () => {
         name: "",
         run: async () => "never",
       }),
-    ).toThrow("Tools must define a non-empty name")
+    ).toThrow("Tool name must be a non-empty string")
+  })
+
+  test("rejects tools with a non-callable run implementation", () => {
+    expect(() =>
+      defineTool({
+        name: "lookupCustomer",
+        run: "not-a-function" as never,
+      }),
+    ).toThrow("Tool run must be a function")
   })
 
   test("runtime-context types are exported from the package root", () => {
     type Tools = {
-      readonly lookupCustomer: RuntimeTool<
-        { readonly id: string },
-        { readonly id: string },
-        RuntimeContext
-      >
+      readonly lookupCustomer: RuntimeTool<{ readonly id: string }, { readonly id: string }>
     }
 
     expectTypeOf<RuntimeContext<Tools>>().toEqualTypeOf<{
       readonly signal: AbortSignal
       readonly tools: Tools
     }>()
+  })
+
+  test("runtime-context tools are callable by name", async () => {
+    const tool = defineTool({
+      name: "lookupCustomer",
+      run: async (
+        input: { readonly id: string },
+        context: RuntimeContext<{
+          readonly lookupCustomer: RuntimeTool<{ readonly id: string }, { readonly id: string }>
+        }>,
+      ) => context.tools.lookupCustomer(input),
+    })
+
+    const result = await tool.run(
+      { id: "cus_123" },
+      {
+        signal: new AbortController().signal,
+        tools: {
+          lookupCustomer: async ({ id }) => ({ id }),
+        },
+      },
+    )
+
+    expect(result).toEqual({ id: "cus_123" })
+  })
+
+  test("defineTool defaults context to the exported runtime context shape", () => {
+    const tool = defineTool({
+      name: "lookupCustomer",
+      run: async (_input: { readonly id: string }, context) => ({
+        aborted: context.signal.aborted,
+        hasLookupCustomer: "lookupCustomer" in context.tools,
+      }),
+    })
+
+    expectTypeOf<Parameters<typeof tool.run>[1]>().toEqualTypeOf<RuntimeContext>()
   })
 })

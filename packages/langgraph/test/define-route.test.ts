@@ -5,7 +5,7 @@ describe("@dawn/langgraph defineRoute", () => {
   test("accepts an explicit workflow route definition", () => {
     const route = {
       kind: "workflow",
-      entry: "./routes/support/workflow.ts",
+      entry: "./workflow.ts",
       config: {
         runtime: "node",
       },
@@ -18,8 +18,17 @@ describe("@dawn/langgraph defineRoute", () => {
     expect(() =>
       defineRoute({
         kind: "workflow",
-        entry: "routes/support/workflow.ts",
+        entry: "workflow.ts",
       }),
-    ).toThrow("Route entry must be a relative module path")
+    ).toThrow('Route entry must be exactly "./graph.ts" or "./workflow.ts"')
+  })
+
+  test("rejects relative paths other than the canonical route module names", () => {
+    expect(() =>
+      defineRoute({
+        kind: "workflow",
+        entry: "./routes/support/workflow.ts",
+      }),
+    ).toThrow('Route entry must be exactly "./graph.ts" or "./workflow.ts"')
   })
 })
