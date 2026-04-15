@@ -83,6 +83,20 @@ This is the key shift:
 - before: runtime files are the authoring surface and `route.ts` is incidental
 - after: `route.ts` is the authoring surface and runtime files are implementation details
 
+### CLI and execution compatibility in v1
+
+This milestone must preserve Dawn’s current filesystem-path-first CLI contract.
+
+That means:
+
+- `dawn run` continues to accept `graph.ts` and `workflow.ts` file paths
+- `dawn test` scenario targets continue to point at `graph.ts` and `workflow.ts`
+- execution resolves the bound `route.ts` definition from the same route directory when present
+
+For this milestone, `route.ts` becomes authoritative for route definition, but the public CLI targeting contract does not switch to `route.ts`.
+
+Later ergonomic work may allow route-directory or `route.ts` targets directly. That is out of scope here.
+
 ### V1 route definition shape
 
 The first Dawn-owned route definition should stay narrow:
@@ -133,6 +147,48 @@ This is the right fit for Dawn because it extends the framework’s strongest ex
 - filesystem discovery
 - explicit app structure
 - static inventory for verification and tooling
+
+### Tool module contract
+
+The tool discovery model must be specific enough to implement.
+
+For v1:
+
+- each discovered tool file defines exactly one tool
+- each tool file must default-export a Dawn tool definition
+- Dawn tool definitions are created with a Dawn-owned helper such as `defineTool(...)`
+- every tool definition must declare an explicit `name`
+- tool names, not filenames, are the identity used for registry lookups and collision checks
+
+Conceptually:
+
+```ts
+import { defineTool } from "@dawn/langgraph";
+
+export default defineTool({
+  name: "weather.get",
+  description: "Look up the forecast for a city",
+  run: async (input, ctx) => {
+    return { forecast: `sunny in ${String(input.city)}` };
+  },
+});
+```
+
+Required static metadata in v1:
+
+- `name`
+
+Optional metadata in v1:
+
+- `description`
+
+Deferred metadata:
+
+- schema-first validation
+- permissions/policy declarations
+- richer classification metadata
+
+This keeps the first tool surface concrete without overcommitting the shape.
 
 ### Tool scope resolution
 
@@ -198,6 +254,7 @@ V1 context responsibilities:
 
 - resolved route metadata as needed for execution
 - resolved tool registry for the route
+- abort signal for the current execution
 
 Deferred context responsibilities:
 
@@ -205,6 +262,17 @@ Deferred context responsibilities:
 - approvals
 - request/session abstractions beyond what is needed immediately
 - trace abstractions
+
+The v1 context should be explicit and small:
+
+```ts
+interface DawnRouteContext {
+  readonly signal?: AbortSignal
+  readonly tools: Record<string, (input: unknown) => Promise<unknown>>
+}
+```
+
+Tool handlers themselves may receive an internal tool context later, but the route-handler contract in this milestone only depends on `ctx.tools` and `ctx.signal`.
 
 ### Why explicit context is correct
 
@@ -217,6 +285,27 @@ That gives Dawn one stable surface for:
 - route-level runtime services
 
 while still allowing the implementation beneath that surface to stay compatible with the existing underlying execution model.
+
+### Runtime compatibility rule
+
+The runtime needs an explicit compatibility rule so the new authoring lane does not conflict with Dawn’s existing native-first behavior.
+
+For this milestone:
+
+- legacy/native route execution continues to support the current behavior
+  - workflow functions called as `(input, { signal })`
+  - graph functions called as `(input, { signal })`
+  - graph objects exposing `.invoke(input, { signal })`
+- the new `route.ts` authoring lane narrows the bound entry contract to function-style exports
+  - `graph.ts` and `workflow.ts` bound through `route.ts` must export callable handlers
+  - those handlers receive `(input, DawnRouteContext)`
+
+This means:
+
+- Dawn does not break existing routes in this milestone
+- Dawn does define a stricter, Dawn-owned contract for the new authoring path
+
+That is an acceptable tradeoff for the first authoring layer because it keeps migration and runtime compatibility contained.
 
 ## Runtime Integration
 
