@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises"
+import { readdir } from "node:fs/promises"
 import { join, relative, resolve, sep } from "node:path"
 import type {
   DiscoverRoutesOptions,
@@ -89,8 +89,8 @@ async function readRouteEntry(
     return null
   }
 
-  const authoringRoute = entryFiles.includes("route.ts")
-    ? await readAuthoringRouteDefinition(routeDir)
+  const authoringCompanionEntry = entryFiles.includes("route.ts")
+    ? resolveAuthoringCompanionEntry(entryFiles)
     : null
 
   const routeSegments = relative(routesDir, routeDir)
@@ -98,10 +98,10 @@ async function readRouteEntry(
     .filter(Boolean)
     .filter((segment) => !isRouteGroupSegment(segment))
 
-  if (authoringRoute) {
+  if (authoringCompanionEntry) {
     return {
-      boundEntryFile: resolve(routeDir, authoringRoute.entry.slice(2)),
-      boundEntryKind: authoringRoute.kind,
+      boundEntryFile: resolve(routeDir, authoringCompanionEntry),
+      boundEntryKind: PRIMARY_ROUTE_FILES[authoringCompanionEntry],
       id: toPathname(routeSegments),
       pathname: toPathname(routeSegments),
       entryKind: "route",
@@ -153,6 +153,17 @@ function resolvePrimaryRouteEntry(
   return entryFiles[0] ?? null
 }
 
+function resolveAuthoringCompanionEntry(
+  entryFiles: readonly PrimaryRouteFile[],
+): Extract<ExecutableRouteFile, "graph.ts" | "workflow.ts"> | null {
+  const executableEntry = entryFiles.find(
+    (entryFile): entryFile is Extract<ExecutableRouteFile, "graph.ts" | "workflow.ts"> =>
+      entryFile === "graph.ts" || entryFile === "workflow.ts",
+  )
+
+  return executableEntry ?? null
+}
+
 function validateRouteCollisions(routes: readonly RouteDefinition[]): RouteDefinition[] {
   const byPathname = new Map<string, RouteDefinition>()
 
@@ -185,28 +196,4 @@ function toPathname(routeSegments: readonly string[]): string {
   }
 
   return `/${routeSegments.join("/")}`
-}
-
-async function readAuthoringRouteDefinition(routeDir: string): Promise<{
-  readonly entry: "./graph.ts" | "./workflow.ts"
-  readonly kind: "graph" | "workflow"
-} | null> {
-  const routeDefinitionPath = join(routeDir, "route.ts")
-  const source = await readFile(routeDefinitionPath, "utf8").catch(() => null)
-
-  if (source === null) {
-    return null
-  }
-
-  const kindMatch = /kind:\s*["'](graph|workflow)["']/u.exec(source)
-  const entryMatch = /entry:\s*["'](\.\/(?:graph|workflow)\.ts)["']/u.exec(source)
-
-  if (!kindMatch || !entryMatch) {
-    return null
-  }
-
-  return {
-    entry: entryMatch[1] as "./graph.ts" | "./workflow.ts",
-    kind: kindMatch[1] as "graph" | "workflow",
-  }
 }

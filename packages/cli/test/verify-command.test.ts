@@ -29,6 +29,27 @@ async function createFixtureApp(files: readonly string[]) {
   return appRoot
 }
 
+async function createAuthoringFixtureApp(files: Readonly<Record<string, string>>) {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-verify-authoring-"))
+  tempDirs.push(appRoot)
+
+  const appFiles = {
+    "package.json": "{}\n",
+    "dawn.config.ts": "export default {};\n",
+    ...files,
+  }
+
+  await Promise.all(
+    Object.entries(appFiles).map(async ([relativePath, source]) => {
+      const filePath = join(appRoot, relativePath)
+      await mkdir(dirname(filePath), { recursive: true })
+      await writeFile(filePath, source)
+    }),
+  )
+
+  return appRoot
+}
+
 async function invoke(argv: readonly string[]) {
   const stdout: string[] = []
   const stderr: string[] = []
@@ -228,6 +249,45 @@ describe("dawn verify", () => {
         total: 3,
       },
       status: "passed",
+    })
+  })
+
+  test("reports non-callable route.ts-bound handlers during verify", async () => {
+    const appRoot = await createAuthoringFixtureApp({
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/workflow.ts":
+        "export const workflow = { invoke: async () => ({ ok: true }) };\n",
+    })
+
+    const result = await invoke(["verify", "--cwd", appRoot, "--json"])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    expect(JSON.parse(result.stdout)).toEqual({
+      appRoot,
+      checks: [
+        {
+          appRoot,
+          configPath: join(appRoot, "dawn.config.ts"),
+          name: "app",
+          routesDir: join(appRoot, "src/app"),
+          status: "passed",
+        },
+        {
+          error: {
+            message: `Authoring workflow route at ${join(appRoot, "src/app/hello/[tenant]/workflow.ts")} must export a callable "workflow" handler`,
+          },
+          name: "routes",
+          status: "failed",
+        },
+      ],
+      counts: {
+        failed: 1,
+        passed: 1,
+        total: 2,
+      },
+      status: "failed",
     })
   })
 })
