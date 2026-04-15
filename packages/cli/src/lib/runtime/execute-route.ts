@@ -6,7 +6,10 @@ import { pathToFileURL } from "node:url"
 import { findDawnApp } from "@dawn/core"
 import { normalizeRouteModule } from "@dawn/langgraph"
 import { createDawnContext } from "./dawn-context.js"
-import { resolveAuthoringRouteDefinitionForTarget } from "./route-definition.js"
+import {
+  loadAuthoringRouteHandler,
+  resolveAuthoringRouteDefinitionForTarget,
+} from "./route-definition.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import {
   createRuntimeFailureResult,
@@ -329,25 +332,7 @@ async function executeAuthoringRoute(options: {
   }
 
   try {
-    await registerTsxLoader()
-    const routeModule = (await import(pathToFileURL(options.route.executableFile).href)) as Record<
-      string,
-      unknown
-    >
-    const handler = routeModule[options.route.kind]
-
-    if (typeof handler !== "function") {
-      return createRuntimeFailureResult({
-        appRoot: options.appRoot,
-        executionSource: "in-process",
-        kind: "unsupported_route_boundary",
-        message: `Authoring ${options.route.kind} route at ${options.route.executableFile} must export a callable "${options.route.kind}" handler`,
-        mode: options.route.kind,
-        routeId: options.routeId,
-        routePath: options.routePath,
-        startedAt: options.startedAt,
-      })
-    }
+    const handler = await loadAuthoringRouteHandler(options.route)
 
     const context = createDawnContext({
       tools,
@@ -365,10 +350,17 @@ async function executeAuthoringRoute(options: {
       startedAt: options.startedAt,
     })
   } catch (error) {
+    const kind =
+      error instanceof Error &&
+      error.message ===
+        `Authoring ${options.route.kind} route at ${options.route.executableFile} must export a callable "${options.route.kind}" handler`
+        ? "unsupported_route_boundary"
+        : "execution_error"
+
     return createRuntimeFailureResult({
       appRoot: options.appRoot,
       executionSource: "in-process",
-      kind: "execution_error",
+      kind,
       message: formatErrorMessage(error),
       mode: options.route.kind,
       routeId: options.routeId,

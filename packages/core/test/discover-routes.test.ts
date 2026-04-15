@@ -52,10 +52,12 @@ describe("discoverRoutes", () => {
 
     expect(manifest.appRoot).toBe(appRoot)
     expect(manifest.routes.map((route) => [route.pathname, route.entryKind])).toEqual([
-      ["/hello/[tenant]", "workflow"],
+      ["/hello/[tenant]", "route"],
     ])
     expect(manifest.routes[0]).toMatchObject({
-      entryFile: join(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts"),
+      boundEntryFile: join(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts"),
+      boundEntryKind: "workflow",
+      entryFile: join(appRoot, "src/app/(public)/hello/[tenant]/route.ts"),
       routeDir: join(appRoot, "src/app/(public)/hello/[tenant]"),
       segments: [
         { raw: "hello", kind: "static" },
@@ -71,10 +73,12 @@ describe("discoverRoutes", () => {
 
     expect(manifest.appRoot).toBe(appRoot)
     expect(manifest.routes.map((route) => [route.pathname, route.entryKind])).toEqual([
-      ["/support/[tenant]", "graph"],
+      ["/support/[tenant]", "route"],
     ])
     expect(manifest.routes[0]).toMatchObject({
-      entryFile: join(appRoot, "src/dawn-app/support/[tenant]/graph.ts"),
+      boundEntryFile: join(appRoot, "src/dawn-app/support/[tenant]/graph.ts"),
+      boundEntryKind: "graph",
+      entryFile: join(appRoot, "src/dawn-app/support/[tenant]/route.ts"),
       routeDir: join(appRoot, "src/dawn-app/support/[tenant]"),
       segments: [
         { raw: "support", kind: "static" },
@@ -152,6 +156,34 @@ describe("discoverRoutes", () => {
           { kind: "static", raw: "hello" },
           { kind: "dynamic", name: "tenant", raw: "[tenant]" },
         ],
+      }),
+    )
+  })
+
+  test("treats route.ts as authoritative when it uses helper constants instead of inline literals", async () => {
+    const appRoot = await createAdHocApp("dawn-core-authoring-constants-", {
+      "src/app/hello/[tenant]/route.ts": [
+        'const kind = "workflow";',
+        'const entry = "./workflow.ts";',
+        "export const route = {",
+        "  kind,",
+        "  entry,",
+        "} as const;",
+        "",
+      ].join("\n"),
+      "src/app/hello/[tenant]/workflow.ts": "export const workflow = async () => ({ ok: true });\n",
+    })
+
+    const manifest = await discoverRoutes({ appRoot })
+
+    expect(manifest.routes).toContainEqual(
+      expect.objectContaining({
+        boundEntryFile: join(appRoot, "src/app/hello/[tenant]/workflow.ts"),
+        boundEntryKind: "workflow",
+        entryFile: join(appRoot, "src/app/hello/[tenant]/route.ts"),
+        entryKind: "route",
+        id: "/hello/[tenant]",
+        pathname: "/hello/[tenant]",
       }),
     )
   })

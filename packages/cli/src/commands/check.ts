@@ -2,7 +2,10 @@ import { discoverRoutes, type RouteManifest } from "@dawn/core"
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
-import { loadAuthoringRouteDefinition } from "../lib/runtime/route-definition.js"
+import {
+  loadAuthoringRouteDefinition,
+  loadAuthoringRouteHandler,
+} from "../lib/runtime/route-definition.js"
 import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
 
 interface CheckOptions {
@@ -45,6 +48,7 @@ async function validateAuthoringRoutes(manifest: RouteManifest): Promise<void> {
       throw new Error(`Route definition ${route.entryFile} must export a Dawn route definition`)
     }
 
+    await loadAuthoringRouteHandler(definition)
     await discoverToolDefinitions({
       appRoot: manifest.appRoot,
       routeDir: route.routeDir,

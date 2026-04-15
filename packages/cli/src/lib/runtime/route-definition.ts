@@ -93,6 +93,25 @@ export async function resolveAuthoringRouteDefinitionForTarget(
   return definition
 }
 
+export async function loadAuthoringRouteHandler(
+  definition: ResolvedAuthoringRouteDefinition,
+): Promise<(input: unknown, context: unknown) => Promise<unknown> | unknown> {
+  await registerTsxLoader()
+  const routeModule = (await import(pathToFileURL(definition.executableFile).href)) as Record<
+    string,
+    unknown
+  >
+  const handler = routeModule[definition.kind]
+
+  if (typeof handler !== "function") {
+    throw new Error(
+      `Authoring ${definition.kind} route at ${definition.executableFile} must export a callable "${definition.kind}" handler`,
+    )
+  }
+
+  return handler as (input: unknown, context: unknown) => Promise<unknown> | unknown
+}
+
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     await access(filePath, constants.F_OK)

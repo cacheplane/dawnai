@@ -255,4 +255,22 @@ describe("dawn check", () => {
       `Route definition ${join(appRoot, "src/app/hello/[tenant]/route.ts")} kind "workflow" must bind entry "./workflow.ts", received "./graph.ts"`,
     )
   })
+
+  test("fails when a route.ts-bound workflow export is not callable", async () => {
+    const appRoot = await createAuthoringFixtureApp({
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/workflow.ts":
+        "export const workflow = { invoke: async () => ({ ok: true }) };\n",
+    })
+
+    const result = await invoke(["check", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("Validation failed")
+    expect(result.stderr).toContain(
+      `Authoring workflow route at ${join(appRoot, "src/app/hello/[tenant]/workflow.ts")} must export a callable "workflow" handler`,
+    )
+  })
 })
