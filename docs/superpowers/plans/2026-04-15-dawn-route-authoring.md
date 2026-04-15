@@ -31,6 +31,12 @@
 
 ### Runtime And CLI Integration Files
 
+- Modify: `/Users/blove/repos/dawn/packages/core/src/discovery/discover-routes.ts`
+  - Make route discovery/tooling read `route.ts` first for the new authoring lane while preserving stable route ids/pathnames.
+- Modify: `/Users/blove/repos/dawn/packages/core/src/types.ts`
+  - Carry any route-manifest metadata needed to expose the resolved bound entry and authoring-lane contract to tooling.
+- Modify: `/Users/blove/repos/dawn/packages/core/test/discover-routes.test.ts`
+  - Fixture-backed discovery coverage for `route.ts`-first tooling behavior.
 - Create: `/Users/blove/repos/dawn/packages/cli/src/lib/runtime/route-definition.ts`
   - Load and validate `route.ts`, preserve legacy fallback behavior, and expose normalized authoring definitions to runtime code.
 - Create: `/Users/blove/repos/dawn/packages/cli/src/lib/runtime/tool-discovery.ts`
@@ -49,6 +55,8 @@
   - Ensure verify covers the new route-definition contract without changing the outer result model.
 - Modify: `/Users/blove/repos/dawn/packages/cli/test/check-command.test.ts`
   - Validation coverage for authoring-lane errors.
+- Modify if needed: `/Users/blove/repos/dawn/packages/cli/test/routes-command.test.ts`
+  - Ensure `dawn routes` reflects the `route.ts`-first authoring lane consistently with discovery.
 - Modify: `/Users/blove/repos/dawn/packages/cli/test/run-command.test.ts`
   - Execution coverage for route.ts resolution and Dawn context.
 - Modify: `/Users/blove/repos/dawn/packages/cli/test/test-command.test.ts`
@@ -169,6 +177,9 @@ Only stage files actually changed.
 ### Task 2: Resolve Route Definitions And Tool Discovery In The Runtime
 
 **Files:**
+- Modify: `/Users/blove/repos/dawn/packages/core/src/discovery/discover-routes.ts`
+- Modify if needed: `/Users/blove/repos/dawn/packages/core/src/types.ts`
+- Modify: `/Users/blove/repos/dawn/packages/core/test/discover-routes.test.ts`
 - Create: `/Users/blove/repos/dawn/packages/cli/src/lib/runtime/route-definition.ts`
 - Create: `/Users/blove/repos/dawn/packages/cli/src/lib/runtime/tool-discovery.ts`
 - Create: `/Users/blove/repos/dawn/packages/cli/src/lib/runtime/dawn-context.ts`
@@ -178,6 +189,7 @@ Only stage files actually changed.
 - Modify if needed: `/Users/blove/repos/dawn/packages/cli/src/commands/check.ts`
 - Modify if needed: `/Users/blove/repos/dawn/packages/cli/src/commands/verify.ts`
 - Modify: `/Users/blove/repos/dawn/packages/cli/test/check-command.test.ts`
+- Modify if needed: `/Users/blove/repos/dawn/packages/cli/test/routes-command.test.ts`
 - Modify: `/Users/blove/repos/dawn/packages/cli/test/run-command.test.ts`
 - Modify: `/Users/blove/repos/dawn/packages/cli/test/test-command.test.ts`
 - Modify if needed: `/Users/blove/repos/dawn/packages/cli/test/dev-command.test.ts`
@@ -186,6 +198,7 @@ Only stage files actually changed.
 - [ ] **Step 1: Write failing tests for the authoring-lane runtime contract**
 
 Add failing CLI/runtime tests that prove:
+- `dawn routes` / route discovery reflect `route.ts` as the authoritative route definition when present
 - `dawn run src/app/.../workflow.ts` resolves sibling `route.ts` when present
 - bound route handlers receive a Dawn context with callable discovered tools
 - shared `src/tools/*.ts` and route-local `tools/*.ts` are both discovered
@@ -194,17 +207,53 @@ Add failing CLI/runtime tests that prove:
 - legacy graph/workflow routes without the new authoring lane still work
 
 At minimum, add named cases for:
+- `discovers a route.ts-bound workflow route through Dawn tooling`
 - `executes a route definition through workflow.ts and Dawn context`
 - `prefers route-local tools over shared tools with the same name`
 - `fails when shared tools collide within the same scope`
 - `keeps legacy workflow execution unchanged`
+
+Use concrete temp-app layouts instead of implicit fixtures. The red tests should include:
+
+- one app with:
+  - `src/tools/greet.ts`
+  - `src/app/hello/[tenant]/route.ts`
+  - `src/app/hello/[tenant]/workflow.ts`
+  - `src/app/hello/[tenant]/tools/tenant-greet.ts`
+- one app with same-scope shared collision:
+  - `src/tools/a.ts`
+  - `src/tools/b.ts`
+  - both exporting a tool named `greet`
+- one app with route-local shadowing:
+  - shared `src/tools/greet.ts`
+  - route-local `src/app/hello/[tenant]/tools/greet.ts`
+
+Pin stable error text for at least:
+
+- duplicate shared-tool name collisions
+- duplicate route-local tool name collisions
+- invalid `route.ts` entry binding when the referenced executable file is missing or mismatched
+
+Split the failing tests intentionally:
+
+- `packages/core/test/discover-routes.test.ts`
+  - route.ts-first discovery and manifest assertions
+- `packages/cli/test/check-command.test.ts`
+  - validation error surface
+- `packages/cli/test/routes-command.test.ts`
+  - printed/JSON route metadata shape
+- `packages/cli/test/run-command.test.ts`
+  - runtime context + tool execution
+- `packages/cli/test/test-command.test.ts`
+  - scenario execution through the new lane
 
 - [ ] **Step 2: Run the targeted CLI tests to verify they fail**
 
 Run:
 
 ```bash
-pnpm --filter @dawn/cli exec vitest --run --config vitest.config.ts test/run-command.test.ts test/test-command.test.ts test/check-command.test.ts
+pnpm --filter @dawn/core exec vitest --run --config vitest.config.ts test/discover-routes.test.ts
+pnpm --filter @dawn/cli exec vitest --run --config vitest.config.ts test/routes-command.test.ts test/run-command.test.ts test/test-command.test.ts test/check-command.test.ts
 ```
 
 Expected:
@@ -213,6 +262,7 @@ Expected:
 - [ ] **Step 3: Implement route-definition loading, tool discovery, and Dawn context injection**
 
 Implement the runtime bridge so:
+- route discovery/tooling uses `route.ts` as authoritative metadata when present
 - CLI targets stay filesystem-path-first
 - execution resolves `route.ts` from the same route directory when present
 - the new authoring lane narrows bound entries to callable handlers
@@ -228,6 +278,7 @@ If `dawn check` / `dawn verify` need explicit validation for the new lane, add t
 Run:
 
 ```bash
+pnpm --filter @dawn/core test
 pnpm --filter @dawn/cli test
 pnpm --filter @dawn/cli typecheck
 pnpm exec vitest --run --config test/runtime/vitest.config.ts
@@ -242,7 +293,7 @@ Expected:
 Run:
 
 ```bash
-git add packages/cli
+git add packages/core packages/cli
 git commit -m "feat: resolve Dawn route authoring at runtime"
 ```
 
@@ -380,24 +431,6 @@ git commit -m "test: finalize route authoring acceptance"
 ```
 
 If no cleanup is needed, do not create an extra commit.
-
-- [ ] **Step 4: Merge to local `main` after fresh merged-state verification**
-
-After the branch is green, fast-forward merge into local `main`, rerun the acceptance evidence on merged `main`, then clean up the feature worktree and branch.
-
-Required merged-state verification:
-
-```bash
-pnpm --filter @dawn/langgraph test
-pnpm --filter @dawn/cli test
-pnpm exec vitest --run --config test/generated/vitest.config.ts
-pnpm exec vitest --run --config test/runtime/vitest.config.ts
-pnpm test
-node scripts/check-docs.mjs
-```
-
-Expected:
-- PASS on merged `main`
 
 ---
 
