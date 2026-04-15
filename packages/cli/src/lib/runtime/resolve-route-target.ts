@@ -9,6 +9,7 @@ import {
   type RuntimeExecutionFailureResult,
   type RuntimeExecutionMode,
 } from "./result.js"
+import { resolveAuthoringRouteDefinitionForTarget } from "./route-definition.js"
 import { deriveRouteIdentity } from "./route-identity.js"
 
 export interface ResolveRouteTargetOptions {
@@ -90,6 +91,34 @@ export async function resolveRouteTarget(
       executionSource: "in-process",
       kind: "route_resolution_error",
       message: `Route file does not exist: ${routeFile}`,
+      mode,
+      routeId: routeIdentity.routeId,
+      routePath: routeIdentity.routePath,
+      startedAt,
+    })
+  }
+
+  try {
+    const authoringDefinition = await resolveAuthoringRouteDefinitionForTarget(routeFile)
+
+    if (authoringDefinition && authoringDefinition.kind !== mode) {
+      return createRuntimeFailureResult({
+        appRoot: discoveredApp.appRoot,
+        executionSource: "in-process",
+        kind: "route_resolution_error",
+        message: `Route definition ${authoringDefinition.routeDefinitionFile} resolved mode ${authoringDefinition.kind} for ${routeFile}`,
+        mode,
+        routeId: routeIdentity.routeId,
+        routePath: routeIdentity.routePath,
+        startedAt,
+      })
+    }
+  } catch (error) {
+    return createRuntimeFailureResult({
+      appRoot: discoveredApp.appRoot,
+      executionSource: "in-process",
+      kind: "route_resolution_error",
+      message: formatErrorMessage(error),
       mode,
       routeId: routeIdentity.routeId,
       routePath: routeIdentity.routePath,

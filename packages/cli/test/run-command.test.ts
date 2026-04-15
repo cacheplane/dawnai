@@ -18,6 +18,112 @@ afterEach(async () => {
 })
 
 describe("dawn run", () => {
+  test("executes a route definition through workflow.ts and Dawn context", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/tools/greet.ts": `export default {
+  name: "greet",
+  run: async (input: { tenant: string }) => ({ scope: "shared", message: \`Hello, \${input.tenant}!\` }),
+};
+`,
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/workflow.ts": `export const workflow = async (
+  input: { tenant: string },
+  context: { signal: AbortSignal; tools: Record<string, (input: unknown) => Promise<unknown>> },
+) => ({
+  hasSignal: context.signal instanceof AbortSignal,
+  shared: await context.tools.greet({ tenant: input.tenant }),
+  tenant: input.tenant,
+  tenantGreeting: await context.tools["tenant-greet"]({ tenant: input.tenant }),
+});
+`,
+      "src/app/hello/[tenant]/tools/tenant-greet.ts": `export default {
+  name: "tenant-greet",
+  run: async (input: { tenant: string }) => ({ scope: "route-local", message: \`Tenant hello, \${input.tenant}!\` }),
+};
+`,
+    })
+
+    const result = await invoke(["run", "src/app/hello/[tenant]/workflow.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "authoring-tenant" }),
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      mode: "workflow",
+      output: {
+        hasSignal: true,
+        shared: {
+          message: "Hello, authoring-tenant!",
+          scope: "shared",
+        },
+        tenant: "authoring-tenant",
+        tenantGreeting: {
+          message: "Tenant hello, authoring-tenant!",
+          scope: "route-local",
+        },
+      },
+      routeId: "/hello/[tenant]",
+      routePath: "src/app/hello/[tenant]/workflow.ts",
+      status: "passed",
+    })
+  })
+
+  test("prefers route-local tools over shared tools with the same name", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/tools/greet.ts": `export default {
+  name: "greet",
+  run: async () => ({ scope: "shared" }),
+};
+`,
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/workflow.ts": `export const workflow = async (
+  _input: unknown,
+  context: { tools: Record<string, (input: unknown) => Promise<unknown>> },
+) => {
+  return await context.tools.greet({})
+};
+`,
+      "src/app/hello/[tenant]/tools/greet.ts": `export default {
+  name: "greet",
+  run: async () => ({ scope: "route-local" }),
+};
+`,
+    })
+
+    const result = await invoke(["run", "src/app/hello/[tenant]/workflow.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "shadowed" }),
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      mode: "workflow",
+      output: {
+        scope: "route-local",
+      },
+      routeId: "/hello/[tenant]",
+      routePath: "src/app/hello/[tenant]/workflow.ts",
+      status: "passed",
+    })
+  })
+
   test("executes a graph route from an app-root-relative path and prints the normalized JSON result", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
@@ -71,6 +177,36 @@ describe("dawn run", () => {
       output: {
         greeting: "Hello, workflow-tenant!",
         tenant: "workflow-tenant",
+      },
+      routeId: "/support/[tenant]",
+      routePath: "src/app/support/[tenant]/workflow.ts",
+      status: "passed",
+    })
+  })
+
+  test("keeps legacy workflow execution unchanged when no route.ts is present", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant, source: "legacy" });\n`,
+    })
+
+    const result = await invoke(["run", "src/app/support/[tenant]/workflow.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "legacy-tenant" }),
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      mode: "workflow",
+      output: {
+        source: "legacy",
+        tenant: "legacy-tenant",
       },
       routeId: "/support/[tenant]",
       routePath: "src/app/support/[tenant]/workflow.ts",

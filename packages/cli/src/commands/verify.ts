@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 
-import { discoverRoutes, findDawnApp, renderRouteTypes } from "@dawn/core"
+import { discoverRoutes, findDawnApp, renderRouteTypes, type RouteManifest } from "@dawn/core"
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { loadAuthoringRouteDefinition } from "../lib/runtime/route-definition.js"
+import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
 
 interface VerifyOptions {
   readonly cwd?: string
@@ -140,6 +142,7 @@ async function verifyApp(
 
   try {
     manifest = await discoverRoutes({ appRoot: app.appRoot })
+    await validateAuthoringRoutes(manifest)
   } catch (error) {
     return createVerifyFailureResult(app.appRoot, checks, "routes", error)
   }
@@ -238,5 +241,24 @@ function findAppRootFromCwd(cwd = process.cwd()): string | null {
     }
 
     currentDir = parentDir
+  }
+}
+
+async function validateAuthoringRoutes(manifest: RouteManifest): Promise<void> {
+  for (const route of manifest.routes) {
+    if (route.entryKind !== "route") {
+      continue
+    }
+
+    const definition = await loadAuthoringRouteDefinition(route.entryFile)
+
+    if (!definition) {
+      throw new Error(`Route definition ${route.entryFile} must export a Dawn route definition`)
+    }
+
+    await discoverToolDefinitions({
+      appRoot: manifest.appRoot,
+      routeDir: route.routeDir,
+    })
   }
 }

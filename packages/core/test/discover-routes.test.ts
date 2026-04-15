@@ -125,6 +125,37 @@ describe("discoverRoutes", () => {
     )
   })
 
+  test("discovers a route.ts-bound workflow route through Dawn tooling", async () => {
+    const appRoot = await createAdHocApp("dawn-core-authoring-route-", {
+      "src/tools/greet.ts":
+        'export default { name: "greet", run: async () => "hello from shared" };\n',
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/workflow.ts":
+        "export const workflow = async () => ({ ok: true });\n",
+      "src/app/hello/[tenant]/tools/tenant-greet.ts":
+        'export default { name: "tenant-greet", run: async () => "hello from route" };\n',
+    })
+
+    const manifest = await discoverRoutes({ appRoot })
+
+    expect(manifest.routes).toContainEqual(
+      expect.objectContaining({
+        boundEntryFile: join(appRoot, "src/app/hello/[tenant]/workflow.ts"),
+        boundEntryKind: "workflow",
+        entryFile: join(appRoot, "src/app/hello/[tenant]/route.ts"),
+        entryKind: "route",
+        id: "/hello/[tenant]",
+        pathname: "/hello/[tenant]",
+        routeDir: join(appRoot, "src/app/hello/[tenant]"),
+        segments: [
+          { kind: "static", raw: "hello" },
+          { kind: "dynamic", name: "tenant", raw: "[tenant]" },
+        ],
+      }),
+    )
+  })
+
   test("discovers root pages, strips route groups, excludes _private routes, and parses catchall segments", async () => {
     const appRoot = await createAdHocApp("dawn-core-discovery-", {
       "src/app/(public)/page.tsx": "export default {}\n",

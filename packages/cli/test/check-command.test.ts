@@ -27,6 +27,27 @@ async function createFixtureApp(files: readonly string[]) {
   return appRoot
 }
 
+async function createAuthoringFixtureApp(files: Readonly<Record<string, string>>) {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-check-authoring-"))
+  tempDirs.push(appRoot)
+
+  const appFiles = {
+    "package.json": "{}\n",
+    "dawn.config.ts": "export default {};\n",
+    ...files,
+  }
+
+  await Promise.all(
+    Object.entries(appFiles).map(async ([relativePath, source]) => {
+      const filePath = join(appRoot, relativePath)
+      await mkdir(dirname(filePath), { recursive: true })
+      await writeFile(filePath, source)
+    }),
+  )
+
+  return appRoot
+}
+
 async function invoke(argv: readonly string[]) {
   const stdout: string[] = []
   const stderr: string[] = []
@@ -155,5 +176,83 @@ describe("dawn check", () => {
     expect(symlinkVerifyResult.code).toBe(0)
     expect(symlinkVerifyResult.stderr).toBe("")
     expect(symlinkVerifyResult.stdout).toContain("Dawn app integrity OK")
+  })
+
+  test("fails when shared tools collide within the same scope", async () => {
+    const appRoot = await createAuthoringFixtureApp({
+      "src/tools/a.ts":
+        'export default { name: "greet", run: async () => "hello from a" };\n',
+      "src/tools/b.ts":
+        'export default { name: "greet", run: async () => "hello from b" };\n',
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/workflow.ts":
+        "export const workflow = async () => ({ ok: true });\n",
+    })
+
+    const result = await invoke(["check", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("Validation failed")
+    expect(result.stderr).toContain(
+      `Duplicate shared Dawn tool name "greet" detected at ${join(appRoot, "src/tools/a.ts")} and ${join(appRoot, "src/tools/b.ts")}`,
+    )
+  })
+
+  test("fails when route-local tools collide within the same scope", async () => {
+    const appRoot = await createAuthoringFixtureApp({
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/workflow.ts":
+        "export const workflow = async () => ({ ok: true });\n",
+      "src/app/hello/[tenant]/tools/a.ts":
+        'export default { name: "greet", run: async () => "hello from a" };\n',
+      "src/app/hello/[tenant]/tools/b.ts":
+        'export default { name: "greet", run: async () => "hello from b" };\n',
+    })
+
+    const result = await invoke(["check", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("Validation failed")
+    expect(result.stderr).toContain(
+      `Duplicate route-local Dawn tool name "greet" detected at ${join(appRoot, "src/app/hello/[tenant]/tools/a.ts")} and ${join(appRoot, "src/app/hello/[tenant]/tools/b.ts")}`,
+    )
+  })
+
+  test("fails when route.ts binds to a missing executable file", async () => {
+    const appRoot = await createAuthoringFixtureApp({
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/graph.ts": "export const graph = async () => ({ ok: true });\n",
+    })
+
+    const result = await invoke(["check", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("Validation failed")
+    expect(result.stderr).toContain(
+      `Route definition ${join(appRoot, "src/app/hello/[tenant]/route.ts")} binds to missing executable file: ${join(appRoot, "src/app/hello/[tenant]/workflow.ts")}`,
+    )
+  })
+
+  test("fails when route.ts kind and entry do not match", async () => {
+    const appRoot = await createAuthoringFixtureApp({
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./graph.ts" };\n',
+      "src/app/hello/[tenant]/graph.ts": "export const graph = async () => ({ ok: true });\n",
+    })
+
+    const result = await invoke(["check", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("Validation failed")
+    expect(result.stderr).toContain(
+      `Route definition ${join(appRoot, "src/app/hello/[tenant]/route.ts")} kind "workflow" must bind entry "./workflow.ts", received "./graph.ts"`,
+    )
   })
 })
