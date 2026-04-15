@@ -16,6 +16,8 @@ export type RouteSegment =
     }
 
 export interface RouteDefinition {
+  readonly boundEntryFile?: string
+  readonly boundEntryKind?: Exclude<RouteEntryKind, "page" | "route">
   readonly id: string
   readonly pathname: string
   readonly entryKind: RouteEntryKind

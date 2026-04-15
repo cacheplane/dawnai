@@ -18,6 +18,68 @@ afterEach(async () => {
 })
 
 describe("dawn test", () => {
+  test("executes route.ts-bound workflow scenarios through the new lane", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/tools/greet.ts": `export default {
+  name: "greet",
+  run: async (input: { tenant: string }) => ({ scope: "shared", tenant: input.tenant }),
+};
+`,
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/workflow.ts": `export const workflow = async (
+  input: { tenant: string },
+  context: { tools: Record<string, (input: unknown) => Promise<unknown>> },
+) => ({
+  shared: await context.tools.greet({ tenant: input.tenant }),
+  tenantGreeting: await context.tools["tenant-greet"]({ tenant: input.tenant }),
+});
+`,
+      "src/app/hello/[tenant]/tools/tenant-greet.ts": `export default {
+  name: "tenant-greet",
+  run: async (input: { tenant: string }) => ({ scope: "route-local", tenant: input.tenant }),
+};
+`,
+      "src/app/hello/[tenant]/run.test.ts": scenarioModule([
+        {
+          expect: {
+            meta: {
+              executionSource: "in-process",
+              mode: "workflow",
+              routeId: "/hello/[tenant]",
+              routePath: "src/app/hello/[tenant]/workflow.ts",
+            },
+            output: {
+              shared: {
+                scope: "shared",
+                tenant: "scenario-tenant",
+              },
+              tenantGreeting: {
+                scope: "route-local",
+                tenant: "scenario-tenant",
+              },
+            },
+            status: "passed",
+          },
+          input: {
+            tenant: "scenario-tenant",
+          },
+          name: "authoring workflow scenario passes",
+          target: "./workflow.ts",
+        },
+      ]),
+    })
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("PASS authoring workflow scenario passes")
+    expect(result.stdout).toContain("Summary: 1 passed, 0 failed")
+  })
+
   test("discovers all run.test.ts files under the configured routes root", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",

@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises"
+import { readdir, readFile } from "node:fs/promises"
 import { join, relative, resolve, sep } from "node:path"
 import type {
   DiscoverRoutesOptions,
@@ -82,16 +82,34 @@ async function readRouteEntry(
     primaryEntries.map((entry) => entry.name),
   )
 
-  const entry = resolvePrimaryRouteEntry(primaryEntries.map((primaryEntry) => primaryEntry.name))
+  const entryFiles = primaryEntries.map((primaryEntry) => primaryEntry.name)
+  const entry = resolvePrimaryRouteEntry(entryFiles)
 
   if (!entry) {
     return null
   }
 
+  const authoringRoute = entryFiles.includes("route.ts")
+    ? await readAuthoringRouteDefinition(routeDir)
+    : null
+
   const routeSegments = relative(routesDir, routeDir)
     .split(sep)
     .filter(Boolean)
     .filter((segment) => !isRouteGroupSegment(segment))
+
+  if (authoringRoute) {
+    return {
+      boundEntryFile: resolve(routeDir, authoringRoute.entry.slice(2)),
+      boundEntryKind: authoringRoute.kind,
+      id: toPathname(routeSegments),
+      pathname: toPathname(routeSegments),
+      entryKind: "route",
+      entryFile: resolve(routeDir, "route.ts"),
+      routeDir,
+      segments: toRouteSegments(routeSegments),
+    }
+  }
 
   return {
     id: toPathname(routeSegments),
@@ -167,4 +185,28 @@ function toPathname(routeSegments: readonly string[]): string {
   }
 
   return `/${routeSegments.join("/")}`
+}
+
+async function readAuthoringRouteDefinition(routeDir: string): Promise<{
+  readonly entry: "./graph.ts" | "./workflow.ts"
+  readonly kind: "graph" | "workflow"
+} | null> {
+  const routeDefinitionPath = join(routeDir, "route.ts")
+  const source = await readFile(routeDefinitionPath, "utf8").catch(() => null)
+
+  if (source === null) {
+    return null
+  }
+
+  const kindMatch = /kind:\s*["'](graph|workflow)["']/u.exec(source)
+  const entryMatch = /entry:\s*["'](\.\/(?:graph|workflow)\.ts)["']/u.exec(source)
+
+  if (!kindMatch || !entryMatch) {
+    return null
+  }
+
+  return {
+    entry: entryMatch[1] as "./graph.ts" | "./workflow.ts",
+    kind: kindMatch[1] as "graph" | "workflow",
+  }
 }

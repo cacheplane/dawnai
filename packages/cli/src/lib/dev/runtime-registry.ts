@@ -21,16 +21,18 @@ export async function createRuntimeRegistry(appRoot: string): Promise<RuntimeReg
   const entries: RuntimeRegistryEntry[] = []
 
   for (const route of manifest.routes) {
-    if (!isExecutableRoute(route.entryKind)) {
+    const executable = resolveExecutableRoute(route)
+
+    if (!executable) {
       continue
     }
 
     const entry = {
-      assistantId: createRouteAssistantId(route.id, route.entryKind),
-      mode: route.entryKind,
-      routeFile: route.entryFile,
+      assistantId: createRouteAssistantId(route.id, executable.mode),
+      mode: executable.mode,
+      routeFile: executable.routeFile,
       routeId: route.id,
-      routePath: route.entryFile
+      routePath: executable.routeFile
         .slice(manifest.appRoot.length + 1)
         .split("\\")
         .join("/"),
@@ -49,4 +51,31 @@ export async function createRuntimeRegistry(appRoot: string): Promise<RuntimeReg
 
 function isExecutableRoute(kind: string): kind is "graph" | "workflow" {
   return kind === "graph" || kind === "workflow"
+}
+
+function resolveExecutableRoute(route: {
+  readonly boundEntryFile?: string
+  readonly boundEntryKind?: string
+  readonly entryFile: string
+  readonly entryKind: string
+}): { readonly mode: "graph" | "workflow"; readonly routeFile: string } | null {
+  if (isExecutableRoute(route.entryKind)) {
+    return {
+      mode: route.entryKind,
+      routeFile: route.entryFile,
+    }
+  }
+
+  if (
+    typeof route.boundEntryKind === "string" &&
+    isExecutableRoute(route.boundEntryKind) &&
+    typeof route.boundEntryFile === "string"
+  ) {
+    return {
+      mode: route.boundEntryKind,
+      routeFile: route.boundEntryFile,
+    }
+  }
+
+  return null
 }
