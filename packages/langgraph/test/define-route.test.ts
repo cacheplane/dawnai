@@ -31,4 +31,13 @@ describe("@dawn/langgraph defineRoute", () => {
       }),
     ).toThrow('Route entry must be exactly "./graph.ts" or "./workflow.ts"')
   })
+
+  test("rejects mismatched kind and entry pairs", () => {
+    expect(() =>
+      defineRoute({
+        kind: "graph",
+        entry: "./workflow.ts",
+      }),
+    ).toThrow('Route kind and entry must match exactly: "graph" -> "./graph.ts", "workflow" -> "./workflow.ts"')
+  })
 })
