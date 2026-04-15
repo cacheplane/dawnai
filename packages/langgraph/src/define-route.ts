@@ -7,12 +7,12 @@ export interface RouteDefinition {
 }
 
 export function defineRoute<TRoute extends RouteDefinition>(route: TRoute): TRoute {
-  assertRelativeRouteEntry(route.entry)
+  assertCanonicalRouteEntry(route.entry)
   return route
 }
 
-function assertRelativeRouteEntry(entry: string): asserts entry is string {
-  if (!entry.startsWith("./") && !entry.startsWith("../")) {
-    throw new Error("Route entry must be a relative module path")
+function assertCanonicalRouteEntry(entry: string): asserts entry is "./graph.ts" | "./workflow.ts" {
+  if (entry !== "./graph.ts" && entry !== "./workflow.ts") {
+    throw new Error('Route entry must be exactly "./graph.ts" or "./workflow.ts"')
   }
 }
