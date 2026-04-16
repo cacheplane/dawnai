@@ -96,6 +96,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@dawn/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       tsx:
         specifier: ^4.8.1
         version: 4.21.0

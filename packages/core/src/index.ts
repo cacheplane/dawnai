@@ -2,10 +2,6 @@ export { loadDawnConfig } from "./config.js"
 export { discoverRoutes, validateRouteEntries } from "./discovery/discover-routes.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"
 export {
-  loadAuthoringRouteDefinition,
-  type ResolvedAuthoringRouteDefinition,
-} from "./discovery/load-authoring-route-definition.js"
-export {
   isPrivateSegment,
   isRouteGroupSegment,
   toRouteSegments,
@@ -19,7 +15,7 @@ export type {
   LoadDawnConfigOptions,
   LoadedDawnConfig,
   RouteDefinition,
-  RouteEntryKind,
+  RouteKind,
   RouteManifest,
   RouteSegment,
 } from "./types.js"

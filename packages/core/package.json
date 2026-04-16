@@ -36,6 +36,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dawn/sdk": "workspace:*",
     "tsx": "^4.8.1"
   },
   "devDependencies": {
