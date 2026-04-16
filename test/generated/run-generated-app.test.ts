@@ -84,7 +84,12 @@ describe("generated app publish harness", () => {
   test("scaffolds a packaged basic app and runs the published lifecycle", {
     timeout: 180_000,
   }, async () => {
-    await runGeneratedAppScenario({ expectedFixtureName: "basic", targetDirName: "app" })
+    const scenario = await runGeneratedAppScenario({
+      expectedFixtureName: "basic",
+      targetDirName: "app",
+    })
+
+    await expectBasicAuthoringLane(scenario.artifacts.appRoot)
   })
 
   test("supports the same packaged lifecycle for a custom configured appDir", {
@@ -113,6 +118,7 @@ describe("generated app publish harness", () => {
         appRoot: contributorLocal.artifacts.appRoot,
       }),
     ).toEqual(expected)
+    await expectBasicAuthoringLane(contributorLocal.artifacts.appRoot)
     expect(transcript).toContain(
       `$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-app build)`,
     )
@@ -131,6 +137,22 @@ describe("generated app publish harness", () => {
     expect(transcript).not.toContain("pnpm add ")
   })
 })
+
+async function expectBasicAuthoringLane(appRoot: string): Promise<void> {
+  const routePath = join(appRoot, "src/app/(public)/hello/[tenant]/route.ts")
+  const workflowPath = join(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts")
+  const toolPath = join(appRoot, "src/app/(public)/hello/[tenant]/tools/greet.ts")
+  const routeSource = await readFile(routePath, "utf8")
+  const workflowSource = await readFile(workflowPath, "utf8")
+  const toolSource = await readFile(toolPath, "utf8")
+
+  expect(routeSource).toContain("defineRoute({")
+  expect(routeSource).toContain('entry: "./workflow.ts"')
+  expect(workflowSource).toContain("RuntimeContext")
+  expect(workflowSource).toContain("context.tools.greet(")
+  expect(toolSource).toContain("defineTool({")
+  expect(toolSource).toContain('name: "greet"')
+}
 
 async function runGeneratedAppScenario(
   options: GeneratedAppScenarioOptions,
@@ -276,8 +298,55 @@ async function rewriteDependenciesToTarballs(options: {
 
 async function rewriteToCustomAppDirLayout(appRoot: string): Promise<void> {
   await rm(join(appRoot, "src"), { force: true, recursive: true })
-  await cp(join(CUSTOM_APP_DIR_FIXTURE_ROOT, "src"), join(appRoot, "src"), { recursive: true })
   await cp(join(CUSTOM_APP_DIR_FIXTURE_ROOT, "dawn.config.ts"), join(appRoot, "dawn.config.ts"))
+  await mkdir(join(appRoot, "src/dawn-app/support/[tenant]"), { recursive: true })
+  await writeFile(
+    join(appRoot, "src/dawn-app/support/[tenant]/graph.ts"),
+    [
+      'import { defineEntry } from "@dawn/langgraph"',
+      "",
+      'import type { SupportTenantState } from "./state.js"',
+      "",
+      "const entry = defineEntry({",
+      "  graph: async (state: SupportTenantState): Promise<SupportTenantState> => ({",
+      "    ...state,",
+      "    greeting: `Hello, ${state.tenant}!`,",
+      "  }),",
+      "})",
+      "",
+      "export const graph = entry.graph",
+      "",
+    ].join("\n"),
+    "utf8",
+  )
+  await writeFile(
+    join(appRoot, "src/dawn-app/support/[tenant]/route.ts"),
+    [
+      'import { defineRoute } from "@dawn/langgraph"',
+      "",
+      "export const route = defineRoute({",
+      '  kind: "graph",',
+      '  entry: "./graph.ts",',
+      "  config: {",
+      '    runtime: "node",',
+      '    tags: ["support"],',
+      "  },",
+      "})",
+      "",
+    ].join("\n"),
+    "utf8",
+  )
+  await writeFile(
+    join(appRoot, "src/dawn-app/support/[tenant]/state.ts"),
+    [
+      "export interface SupportTenantState {",
+      "  greeting?: string",
+      "  tenant: string",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  )
 }
 
 async function runLifecycle(options: {

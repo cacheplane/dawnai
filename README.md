@@ -42,7 +42,13 @@ Each route directory exposes exactly one primary executable entry:
 - `graph.ts`
 - `workflow.ts`
 
-The current `basic` scaffold ships `src/app/(public)/hello/[tenant]/workflow.ts`.
+Route directories may also include `route.ts` as an authoring companion that binds the executable entry.
+
+The current `basic` scaffold ships:
+
+- `src/app/(public)/hello/[tenant]/route.ts`
+- `src/app/(public)/hello/[tenant]/workflow.ts`
+- `src/app/(public)/hello/[tenant]/tools/greet.ts`
 
 ## Commands
 

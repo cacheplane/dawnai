@@ -47,6 +47,12 @@ pnpm exec dawn test
 pnpm exec dawn dev
 ```
 
+The generated `basic` app now demonstrates the route authoring lane with:
+
+- `src/app/(public)/hello/[tenant]/route.ts`
+- `src/app/(public)/hello/[tenant]/workflow.ts`
+- `src/app/(public)/hello/[tenant]/tools/greet.ts`
+
 Use this path only when you intentionally want the generated app wired to the local Dawn checkout. The public user path remains `pnpm create dawn-app`.
 
 ## Common Commands
