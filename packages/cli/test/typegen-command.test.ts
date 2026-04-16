@@ -175,6 +175,7 @@ describe("dawn typegen", () => {
     const cliTarball = await packPackage("@dawn/cli", packsRoot)
     const coreTarball = await packPackage("@dawn/core", packsRoot)
     const langgraphTarball = await packPackage("@dawn/langgraph", packsRoot)
+    const sdkTarball = await packPackage("@dawn/sdk", packsRoot)
 
     await writeFile(
       join(installerRoot, "package.json"),
@@ -192,6 +193,7 @@ describe("dawn typegen", () => {
             overrides: {
               "@dawn/core": `file:${coreTarball}`,
               "@dawn/langgraph": `file:${langgraphTarball}`,
+              "@dawn/sdk": `file:${sdkTarball}`,
             },
           },
         },

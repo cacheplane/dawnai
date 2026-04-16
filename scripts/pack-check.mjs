@@ -42,6 +42,26 @@ const packages = [
     ],
   },
   {
+    dir: "packages/sdk",
+    expectedFiles: [
+      "dist/index.js",
+      "dist/index.d.ts",
+      "dist/tool.js",
+      "dist/tool.d.ts",
+      "package.json",
+    ],
+    requiredFields: [
+      "publishConfig.access",
+      "repository",
+      "homepage",
+      "bugs",
+      "license",
+      "engines.node",
+      "exports",
+      "types",
+    ],
+  },
+  {
     dir: "packages/cli",
     expectedFiles: ["dist/index.js", "README.md"],
     requiredFields: [

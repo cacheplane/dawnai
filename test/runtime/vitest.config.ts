@@ -11,6 +11,7 @@ export default defineConfig({
     alias: {
       "@dawn/core": resolve(rootDir, "../../packages/core/src/index.ts"),
       "@dawn/langgraph": resolve(rootDir, "../../packages/langgraph/src/index.ts"),
+      "@dawn/sdk": resolve(rootDir, "../../packages/sdk/src/index.ts"),
     },
   },
   test: {

@@ -11,6 +11,7 @@ export default defineConfig({
       "@dawn/langgraph": resolve(rootDir, "src/index.ts"),
       "@dawn/langgraph/define-entry": resolve(rootDir, "src/define-entry.ts"),
       "@dawn/langgraph/route-module": resolve(rootDir, "src/route-module.ts"),
+      "@dawn/sdk": resolve(rootDir, "../sdk/src/index.ts"),
     },
   },
   test: {

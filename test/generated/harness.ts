@@ -38,6 +38,7 @@ interface PackedTarballs {
   readonly createApp: string
   readonly devkit: string
   readonly langgraph: string
+  readonly sdk: string
 }
 
 interface RuntimeFixtureSpec {
@@ -169,7 +170,13 @@ export async function prepareGeneratedRuntimeApp(options: {
       await buildLocalContributorPackages(transcriptPath)
     } else {
       const packagedInstaller = await createPackagedInstaller({
-        packageNames: ["@dawn/cli", "@dawn/config-typescript", "@dawn/core", "@dawn/langgraph"],
+        packageNames: [
+          "@dawn/cli",
+          "@dawn/config-typescript",
+          "@dawn/core",
+          "@dawn/langgraph",
+          "@dawn/sdk",
+        ],
         tempRoot: options.tempRoot,
         transcriptPath,
       })
@@ -438,6 +445,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn/config-typescript": options.tarballs.configTypescript,
       "@dawn/core": options.tarballs.core,
       "@dawn/langgraph": options.tarballs.langgraph,
+      "@dawn/sdk": options.tarballs.sdk,
     },
   }
 
@@ -641,6 +649,7 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     createApp: tarballs["create-dawn-app"],
     devkit: tarballs["@dawn/devkit"],
     langgraph: tarballs["@dawn/langgraph"],
+    sdk: tarballs["@dawn/sdk"],
   }
 }
 

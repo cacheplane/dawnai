@@ -1,8 +1,6 @@
-import { spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { basename, join, resolve } from "node:path"
+import { rm, writeFile } from "node:fs/promises"
+import { join, resolve } from "node:path"
 import { normalizeRouteModule } from "@dawn/langgraph"
 import type {
   GraphRouteModule,
@@ -11,6 +9,8 @@ import type {
 } from "@dawn/langgraph/route-module"
 import { afterEach, describe, expect, test } from "vitest"
 
+import { createPackedConsumer, runCommand } from "./_helpers/packed-consumer.js"
+
 const packageRoot = resolve(import.meta.dirname, "..")
 const packageJsonPath = join(packageRoot, "package.json")
 const tempDirs: string[] = []
@@ -18,59 +18,6 @@ const tempDirs: string[] = []
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
-
-async function runCommand(
-  command: string,
-  args: readonly string[],
-  cwd: string,
-): Promise<{ readonly stdout: string; readonly stderr: string }> {
-  return await new Promise<{ readonly stdout: string; readonly stderr: string }>(
-    (resolvePromise, rejectPromise) => {
-      const child = spawn(command, args, {
-        cwd,
-        stdio: "pipe",
-      })
-
-      let stdout = ""
-      let stderr = ""
-
-      child.stdout.on("data", (chunk) => {
-        stdout += String(chunk)
-      })
-
-      child.stderr.on("data", (chunk) => {
-        stderr += String(chunk)
-      })
-
-      child.once("error", rejectPromise)
-      child.once("close", (code) => {
-        if (code === 0) {
-          resolvePromise({ stderr, stdout })
-          return
-        }
-
-        rejectPromise(
-          new Error(
-            [`${command} ${args.join(" ")} failed`, stdout, stderr].filter(Boolean).join("\n"),
-          ),
-        )
-      })
-    },
-  )
-}
-
-function resolveTarballPath(packStdout: string, outputDir: string, packageName: string) {
-  const tarballName = packStdout
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line.endsWith(".tgz"))
-
-  if (!tarballName) {
-    throw new Error(`Could not determine ${packageName} tarball name`)
-  }
-
-  return join(outputDir, basename(tarballName))
-}
 
 describe("@dawn/langgraph route-module", () => {
   test("exposes publishable exports and types on the package surface", () => {
@@ -113,45 +60,10 @@ describe("@dawn/langgraph route-module", () => {
   })
 
   test("packed consumers can resolve the route-module subpath export", async () => {
-    const sdkRoot = resolve(import.meta.dirname, "../../sdk")
-    const tempRoot = await mkdtemp(join(tmpdir(), "dawn-langgraph-route-module-"))
-    const consumerDir = join(tempRoot, "consumer")
+    const { consumerDir, tempRoot } = await createPackedConsumer()
     tempDirs.push(tempRoot)
-
-    await writeFile(
-      join(tempRoot, "package.json"),
-      JSON.stringify({ name: "pack-root", private: true }),
-    )
-    await runCommand("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--force"], sdkRoot)
-    const sdkPackOutput = await runCommand(
-      "pnpm",
-      ["pack", "--pack-destination", tempRoot],
-      sdkRoot,
-    )
-    const sdkTarballPath = resolveTarballPath(sdkPackOutput.stdout, tempRoot, "@dawn/sdk")
-    await runCommand("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--force"], packageRoot)
-    const packOutput = await runCommand(
-      "pnpm",
-      ["pack", "--pack-destination", tempRoot],
-      packageRoot,
-    )
-    const tarballPath = resolveTarballPath(packOutput.stdout, tempRoot, "@dawn/langgraph")
-    await mkdir(consumerDir, { recursive: true })
-    await writeFile(
-      join(consumerDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "consumer",
-          private: true,
-          pnpm: { overrides: { "@dawn/sdk": `file:${sdkTarballPath}` } },
-        },
-        null,
-        2,
-      ),
-    )
-    await runCommand("pnpm", ["add", sdkTarballPath, tarballPath], consumerDir)
-
     const scriptPath = join(consumerDir, "route-module-check.mjs")
+
     await writeFile(
       scriptPath,
       [
