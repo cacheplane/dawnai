@@ -269,6 +269,7 @@ async function rewriteDependenciesToTarballs(options: {
     "@dawn/cli": options.tarballs.cli,
     "@dawn/core": options.tarballs.core,
     "@dawn/langgraph": options.tarballs.langgraph,
+    "@dawn/sdk": options.tarballs.sdk,
   }
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
@@ -294,36 +295,13 @@ async function rewriteToCustomAppDirLayout(appRoot: string): Promise<void> {
   await cp(join(CUSTOM_APP_DIR_FIXTURE_ROOT, "dawn.config.ts"), join(appRoot, "dawn.config.ts"))
   await mkdir(join(appRoot, "src/dawn-app/support/[tenant]"), { recursive: true })
   await writeFile(
-    join(appRoot, "src/dawn-app/support/[tenant]/graph.ts"),
+    join(appRoot, "src/dawn-app/support/[tenant]/index.ts"),
     [
-      'import { defineEntry } from "@dawn/langgraph"',
-      "",
       'import type { SupportTenantState } from "./state.js"',
       "",
-      "const entry = defineEntry({",
-      "  graph: async (state: SupportTenantState): Promise<SupportTenantState> => ({",
-      "    ...state,",
-      "    greeting: `Hello, ${state.tenant}!`,",
-      "  }),",
-      "})",
-      "",
-      "export const graph = entry.graph",
-      "",
-    ].join("\n"),
-    "utf8",
-  )
-  await writeFile(
-    join(appRoot, "src/dawn-app/support/[tenant]/route.ts"),
-    [
-      'import { defineRoute } from "@dawn/langgraph"',
-      "",
-      "export const route = defineRoute({",
-      '  kind: "graph",',
-      '  entry: "./graph.ts",',
-      "  config: {",
-      '    runtime: "node",',
-      '    tags: ["support"],',
-      "  },",
+      "export const graph = async (state: SupportTenantState): Promise<SupportTenantState> => ({",
+      "  ...state,",
+      "  greeting: `Hello, ${state.tenant}!`,",
       "})",
       "",
     ].join("\n"),
@@ -497,6 +475,7 @@ async function createExpectedInternalFixture(
         "@dawn/cli": "<repo:@dawn/cli>",
         "@dawn/core": "<repo:@dawn/core>",
         "@dawn/langgraph": "<repo:@dawn/langgraph>",
+        "@dawn/sdk": "<repo:@dawn/sdk>",
       },
       devDependencies: {
         ...expected.packageJson.devDependencies,
@@ -508,6 +487,7 @@ async function createExpectedInternalFixture(
           "@dawn/config-typescript": "<repo:@dawn/config-typescript>",
           "@dawn/core": "<repo:@dawn/core>",
           "@dawn/langgraph": "<repo:@dawn/langgraph>",
+          "@dawn/sdk": "<repo:@dawn/sdk>",
         },
       },
     },
@@ -558,19 +538,26 @@ function normalizeForInternalFixture(
     [pathToRepoPackageFileSpecifier("@dawn/config-typescript"), "<repo:@dawn/config-typescript>"],
     [pathToRepoPackageFileSpecifier("@dawn/core"), "<repo:@dawn/core>"],
     [pathToRepoPackageFileSpecifier("@dawn/langgraph"), "<repo:@dawn/langgraph>"],
+    [pathToRepoPackageFileSpecifier("@dawn/sdk"), "<repo:@dawn/sdk>"],
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
   ]) as GeneratedAppScenarioResult
 }
 
 function pathToRepoPackageFileSpecifier(
-  packageName: "@dawn/cli" | "@dawn/config-typescript" | "@dawn/core" | "@dawn/langgraph",
+  packageName:
+    | "@dawn/cli"
+    | "@dawn/config-typescript"
+    | "@dawn/core"
+    | "@dawn/langgraph"
+    | "@dawn/sdk",
 ): string {
   const packageDirByName = {
     "@dawn/cli": "packages/cli",
     "@dawn/config-typescript": "packages/config-typescript",
     "@dawn/core": "packages/core",
     "@dawn/langgraph": "packages/langgraph",
+    "@dawn/sdk": "packages/sdk",
   } as const
 
   return pathToFileURL(resolve(REPO_ROOT, packageDirByName[packageName])).toString()

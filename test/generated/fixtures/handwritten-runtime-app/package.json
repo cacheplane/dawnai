@@ -9,7 +9,8 @@
   "dependencies": {
     "@dawn/core": "next",
     "@dawn/cli": "next",
-    "@dawn/langgraph": "next"
+    "@dawn/langgraph": "next",
+    "@dawn/sdk": "next"
   },
   "devDependencies": {
     "@dawn/config-typescript": "next",

@@ -91,10 +91,10 @@ describe("generated app runtime contract", () => {
     )
     expect(transcript).toContain(`$ (cd ${prepared.appRoot} && pnpm install)`)
     expect(transcript).toContain(
-      `$ (cd ${prepared.appRoot} && pnpm exec dawn run src/app/(public)/hello/[tenant]/workflow.ts)`,
+      `$ (cd ${prepared.appRoot} && pnpm exec dawn run src/app/(public)/hello/[tenant]/index.ts)`,
     )
     expect(transcript).toContain(
-      `$ (cd ${prepared.appRoot} && pnpm exec dawn run src/app/(public)/hello/[tenant]/workflow.ts --url`,
+      `$ (cd ${prepared.appRoot} && pnpm exec dawn run src/app/(public)/hello/[tenant]/index.ts --url`,
     )
     expect(transcript).toContain(`$ (cd ${prepared.appRoot} && pnpm exec dawn test)`)
     expect(transcript).toContain("$ dawn dev")
