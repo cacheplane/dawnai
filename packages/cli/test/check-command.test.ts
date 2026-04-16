@@ -12,23 +12,8 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
 
-async function createFixtureApp(files: readonly string[]) {
+async function createFixtureApp(files: Readonly<Record<string, string>>) {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-check-"))
-  tempDirs.push(appRoot)
-
-  await Promise.all(
-    files.map(async (relativePath) => {
-      const filePath = join(appRoot, relativePath)
-      await mkdir(dirname(filePath), { recursive: true })
-      await writeFile(filePath, relativePath.endsWith(".json") ? "{}" : "export default {};\n")
-    }),
-  )
-
-  return appRoot
-}
-
-async function createAuthoringFixtureApp(files: Readonly<Record<string, string>>) {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-check-authoring-"))
   tempDirs.push(appRoot)
 
   const appFiles = {
@@ -123,24 +108,79 @@ async function executeCli(entryPath: string, args: readonly string[]) {
 }
 
 describe("dawn check", () => {
-  test("exits cleanly for a valid fixture app and reports validation success", async () => {
-    const appRoot = await createFixtureApp([
-      "package.json",
-      "dawn.config.ts",
-      "src/app/page.tsx",
-      "src/app/[tenant]/graph.ts",
-    ])
+  test("passes for an app with a workflow index.ts and reports the route list", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
+export async function workflow(_input: unknown, _ctx: RuntimeContext) {
+  return {}
+}
+`,
+    })
 
     const result = await invoke(["check", "--cwd", appRoot])
 
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain("Dawn app is valid")
-    expect(result.stdout).toContain("/[tenant]")
     expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Dawn app is valid")
+    expect(result.stdout).toContain("1 routes discovered")
+    expect(result.stdout).toContain("- /hello (workflow)")
   })
 
-  test("exits non-zero for an invalid fixture app and reports the failing validation", async () => {
-    const appRoot = await createFixtureApp(["package.json", "dawn.config.ts"])
+  test("passes for an app with a graph index.ts", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/support/[tenant]/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
+export const graph = {
+  invoke: async (_input: unknown, _ctx: RuntimeContext) => ({}),
+}
+`,
+    })
+
+    const result = await invoke(["check", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Dawn app is valid")
+    expect(result.stdout).toContain("- /support/[tenant] (graph)")
+  })
+
+  test("fails when an index.ts exports both workflow and graph", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": `export async function workflow() { return {} }
+export const graph = { invoke: async () => ({}) }
+`,
+    })
+
+    const result = await invoke(["check", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("Validation failed")
+    expect(result.stderr).toContain(
+      `Route index.ts must export exactly one of "workflow" or "graph"`,
+    )
+  })
+
+  test("ignores route directories that have no index.ts", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": `export async function workflow() { return {} }
+`,
+      "src/app/empty/notes.md": "# just notes\n",
+    })
+
+    const result = await invoke(["check", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("1 routes discovered")
+    expect(result.stdout).toContain("- /hello (workflow)")
+    expect(result.stdout).not.toContain("/empty")
+  })
+
+  test("returns a nonzero exit code and a stable error prefix for invalid apps", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-check-invalid-"))
+    tempDirs.push(appRoot)
+    await writeFile(join(appRoot, "package.json"), "{}\n")
+    await writeFile(join(appRoot, "dawn.config.ts"), "export default {};\n")
 
     const result = await invoke(["check", "--cwd", appRoot])
 
@@ -151,7 +191,10 @@ describe("dawn check", () => {
   })
 
   test("runs check and verify from the built dawn executable for direct and symlinked invocation paths", async () => {
-    const appRoot = await createFixtureApp(["package.json", "dawn.config.ts", "src/app/page.tsx"])
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": `export async function workflow() { return {} }
+`,
+    })
     const builtCli = await buildCliExecutable()
     const builtSource = await readFile(builtCli, "utf8")
     const symlinkPath = join(appRoot, "dawn-link.js")
@@ -179,12 +222,10 @@ describe("dawn check", () => {
   })
 
   test("fails when shared tools collide within the same scope", async () => {
-    const appRoot = await createAuthoringFixtureApp({
+    const appRoot = await createFixtureApp({
       "src/tools/a.ts": 'export default { name: "greet", run: async () => "hello from a" };\n',
       "src/tools/b.ts": 'export default { name: "greet", run: async () => "hello from b" };\n',
-      "src/app/hello/[tenant]/route.ts":
-        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts": "export const workflow = async () => ({ ok: true });\n",
+      "src/app/hello/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
     })
 
     const result = await invoke(["check", "--cwd", appRoot])
@@ -198,10 +239,8 @@ describe("dawn check", () => {
   })
 
   test("fails when route-local tools collide within the same scope", async () => {
-    const appRoot = await createAuthoringFixtureApp({
-      "src/app/hello/[tenant]/route.ts":
-        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts": "export const workflow = async () => ({ ok: true });\n",
+    const appRoot = await createFixtureApp({
+      "src/app/hello/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
       "src/app/hello/[tenant]/tools/a.ts":
         'export default { name: "greet", run: async () => "hello from a" };\n',
       "src/app/hello/[tenant]/tools/b.ts":
@@ -218,11 +257,10 @@ describe("dawn check", () => {
     )
   })
 
-  test("fails when route.ts binds to a missing executable file", async () => {
-    const appRoot = await createAuthoringFixtureApp({
-      "src/app/hello/[tenant]/route.ts":
-        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/graph.ts": "export const graph = async () => ({ ok: true });\n",
+  test("fails when a shared tool module is malformed", async () => {
+    const appRoot = await createFixtureApp({
+      "src/tools/broken.ts": "export default { run: async () => 'missing name' };\n",
+      "src/app/hello/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
     })
 
     const result = await invoke(["check", "--cwd", appRoot])
@@ -231,42 +269,7 @@ describe("dawn check", () => {
     expect(result.stdout).toBe("")
     expect(result.stderr).toContain("Validation failed")
     expect(result.stderr).toContain(
-      `Route definition ${join(appRoot, "src/app/hello/[tenant]/route.ts")} binds to missing executable file: ${join(appRoot, "src/app/hello/[tenant]/workflow.ts")}`,
-    )
-  })
-
-  test("fails when route.ts kind and entry do not match", async () => {
-    const appRoot = await createAuthoringFixtureApp({
-      "src/app/hello/[tenant]/route.ts":
-        'export const route = { kind: "workflow", entry: "./graph.ts" };\n',
-      "src/app/hello/[tenant]/graph.ts": "export const graph = async () => ({ ok: true });\n",
-    })
-
-    const result = await invoke(["check", "--cwd", appRoot])
-
-    expect(result.exitCode).toBe(1)
-    expect(result.stdout).toBe("")
-    expect(result.stderr).toContain("Validation failed")
-    expect(result.stderr).toContain(
-      `Route definition ${join(appRoot, "src/app/hello/[tenant]/route.ts")} kind "workflow" must bind entry "./workflow.ts", received "./graph.ts"`,
-    )
-  })
-
-  test("fails when a route.ts-bound workflow export is not callable", async () => {
-    const appRoot = await createAuthoringFixtureApp({
-      "src/app/hello/[tenant]/route.ts":
-        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts":
-        "export const workflow = { invoke: async () => ({ ok: true }) };\n",
-    })
-
-    const result = await invoke(["check", "--cwd", appRoot])
-
-    expect(result.exitCode).toBe(1)
-    expect(result.stdout).toBe("")
-    expect(result.stderr).toContain("Validation failed")
-    expect(result.stderr).toContain(
-      `Authoring workflow route at ${join(appRoot, "src/app/hello/[tenant]/workflow.ts")} must export a callable "workflow" handler`,
+      `Tool module ${join(appRoot, "src/tools/broken.ts")} must define a non-empty tool name`,
     )
   })
 })

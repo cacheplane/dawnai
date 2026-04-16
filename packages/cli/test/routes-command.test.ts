@@ -11,45 +11,18 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
 
-async function createFixtureApp() {
+async function createFixtureApp(files: Readonly<Record<string, string>>) {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-routes-"))
   tempDirs.push(appRoot)
 
-  const files = [
-    "package.json",
-    "dawn.config.ts",
-    "src/app/page.tsx",
-    "src/app/docs/[...path]/workflow.ts",
-  ]
-
-  await Promise.all(
-    files.map(async (relativePath) => {
-      const filePath = join(appRoot, relativePath)
-      await mkdir(dirname(filePath), { recursive: true })
-      await writeFile(filePath, relativePath.endsWith(".json") ? "{}" : "export default {};\n")
-    }),
-  )
-
-  return appRoot
-}
-
-async function createAuthoringFixtureApp() {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-routes-authoring-"))
-  tempDirs.push(appRoot)
-
-  const files = {
+  const appFiles = {
     "package.json": "{}\n",
     "dawn.config.ts": "export default {};\n",
-    "src/tools/greet.ts": 'export default { name: "greet", run: async () => "hello" };\n',
-    "src/app/hello/[tenant]/route.ts":
-      'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-    "src/app/hello/[tenant]/workflow.ts": "export const workflow = async () => ({ ok: true });\n",
-    "src/app/hello/[tenant]/tools/tenant-greet.ts":
-      'export default { name: "tenant-greet", run: async () => "tenant hello" };\n',
+    ...files,
   }
 
   await Promise.all(
-    Object.entries(files).map(async ([relativePath, source]) => {
+    Object.entries(appFiles).map(async ([relativePath, source]) => {
       const filePath = join(appRoot, relativePath)
       await mkdir(dirname(filePath), { recursive: true })
       await writeFile(filePath, source)
@@ -59,37 +32,51 @@ async function createAuthoringFixtureApp() {
   return appRoot
 }
 
-describe("dawn routes", () => {
-  test("prints discovered route metadata as JSON", async () => {
-    const appRoot = await createFixtureApp()
-    const stdout: string[] = []
-    const stderr: string[] = []
+async function invoke(argv: readonly string[]) {
+  const stdout: string[] = []
+  const stderr: string[] = []
 
-    const exitCode = await run(["routes", "--cwd", appRoot, "--json"], {
-      stderr: (message: string) => {
-        stderr.push(message)
-      },
-      stdout: (message: string) => {
-        stdout.push(message)
-      },
+  const exitCode = await run([...argv], {
+    stderr: (message: string) => {
+      stderr.push(message)
+    },
+    stdout: (message: string) => {
+      stdout.push(message)
+    },
+  })
+
+  return {
+    exitCode,
+    stderr: stderr.join(""),
+    stdout: stdout.join(""),
+  }
+}
+
+describe("dawn routes", () => {
+  test("prints discovered route metadata as JSON with kind per route", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/index.ts": "export async function workflow() { return {} }\n",
+      "src/app/docs/[...path]/index.ts": "export const graph = { invoke: async () => ({}) }\n",
     })
 
-    expect(exitCode).toBe(0)
-    expect(stderr.join("")).toBe("")
-    expect(JSON.parse(stdout.join(""))).toEqual({
+    const result = await invoke(["routes", "--cwd", appRoot, "--json"])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(JSON.parse(result.stdout)).toEqual({
       appRoot,
       routes: [
         {
-          entryFile: join(appRoot, "src/app/page.tsx"),
-          entryKind: "page",
+          entryFile: join(appRoot, "src/app/index.ts"),
+          kind: "workflow",
           id: "/",
           pathname: "/",
           routeDir: join(appRoot, "src/app"),
           segments: [],
         },
         {
-          entryFile: join(appRoot, "src/app/docs/[...path]/workflow.ts"),
-          entryKind: "workflow",
+          entryFile: join(appRoot, "src/app/docs/[...path]/index.ts"),
+          kind: "graph",
           id: "/docs/[...path]",
           pathname: "/docs/[...path]",
           routeDir: join(appRoot, "src/app/docs/[...path]"),
@@ -102,61 +89,39 @@ describe("dawn routes", () => {
     })
   })
 
-  test("prints route.ts-first metadata for authoring-lane routes", async () => {
-    const appRoot = await createAuthoringFixtureApp()
-    const stdout: string[] = []
-    const stderr: string[] = []
-
-    const exitCode = await run(["routes", "--cwd", appRoot, "--json"], {
-      stderr: (message: string) => {
-        stderr.push(message)
-      },
-      stdout: (message: string) => {
-        stdout.push(message)
-      },
+  test("omits the removed boundEntryFile and boundEntryKind fields from JSON output", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
     })
 
-    expect(exitCode).toBe(0)
-    expect(stderr.join("")).toBe("")
-    expect(JSON.parse(stdout.join(""))).toEqual({
-      appRoot,
-      routes: [
-        {
-          boundEntryFile: join(appRoot, "src/app/hello/[tenant]/workflow.ts"),
-          boundEntryKind: "workflow",
-          entryFile: join(appRoot, "src/app/hello/[tenant]/route.ts"),
-          entryKind: "route",
-          id: "/hello/[tenant]",
-          pathname: "/hello/[tenant]",
-          routeDir: join(appRoot, "src/app/hello/[tenant]"),
-          segments: [
-            { kind: "static", raw: "hello" },
-            { kind: "dynamic", name: "tenant", raw: "[tenant]" },
-          ],
-        },
-      ],
-    })
+    const result = await invoke(["routes", "--cwd", appRoot, "--json"])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as {
+      readonly routes: readonly Record<string, unknown>[]
+    }
+
+    for (const route of payload.routes) {
+      expect(route).not.toHaveProperty("boundEntryFile")
+      expect(route).not.toHaveProperty("boundEntryKind")
+      expect(route).not.toHaveProperty("entryKind")
+    }
   })
 
-  test("prints route.ts as the authoritative file in text output", async () => {
-    const appRoot = await createAuthoringFixtureApp()
-    const stdout: string[] = []
-    const stderr: string[] = []
-
-    const exitCode = await run(["routes", "--cwd", appRoot], {
-      stderr: (message: string) => {
-        stderr.push(message)
-      },
-      stdout: (message: string) => {
-        stdout.push(message)
-      },
+  test("prints index.ts as the authoritative file in text output", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
     })
 
-    expect(exitCode).toBe(0)
-    expect(stderr.join("")).toBe("")
-    expect(stdout.join("")).toContain(
-      `/hello/[tenant] -> ${join(appRoot, "src/app/hello/[tenant]/route.ts")}`,
+    const result = await invoke(["routes", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain(
+      `/hello/[tenant] -> ${join(appRoot, "src/app/hello/[tenant]/index.ts")}`,
     )
-    expect(stdout.join("")).not.toContain(join(appRoot, "src/app/hello/[tenant]/workflow.ts"))
+    expect(result.stdout).not.toContain("route.ts")
+    expect(result.stdout).not.toContain("workflow.ts")
   })
 })

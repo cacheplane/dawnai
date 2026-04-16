@@ -16,13 +16,18 @@ async function createFixtureApp() {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-typegen-"))
   tempDirs.push(appRoot)
 
-  const files = ["package.json", "dawn.config.ts", "src/app/page.tsx", "src/app/[tenant]/graph.ts"]
+  const fileEntries: ReadonlyArray<readonly [string, string]> = [
+    ["package.json", "{}"],
+    ["dawn.config.ts", "export default {};\n"],
+    ["src/app/index.ts", "export const graph = async () => ({});\n"],
+    ["src/app/[tenant]/index.ts", "export const graph = async () => ({});\n"],
+  ]
 
   await Promise.all(
-    files.map(async (relativePath) => {
+    fileEntries.map(async ([relativePath, contents]) => {
       const filePath = join(appRoot, relativePath)
       await mkdir(dirname(filePath), { recursive: true })
-      await writeFile(filePath, relativePath.endsWith(".json") ? "{}" : "export default {};\n")
+      await writeFile(filePath, contents)
     }),
   )
 
@@ -41,8 +46,14 @@ async function createCustomAppDirFixture() {
       join(appRoot, "dawn.config.ts"),
       'const appDir = "src/custom-app";\nexport default { appDir };\n',
     ),
-    writeFile(join(appRoot, "src", "custom-app", "page.tsx"), "export default {};\n"),
-    writeFile(join(appRoot, "src", "custom-app", "[tenant]", "graph.ts"), "export default {};\n"),
+    writeFile(
+      join(appRoot, "src", "custom-app", "index.ts"),
+      "export const graph = async () => ({});\n",
+    ),
+    writeFile(
+      join(appRoot, "src", "custom-app", "[tenant]", "index.ts"),
+      "export const graph = async () => ({});\n",
+    ),
   ])
 
   return appRoot
@@ -211,8 +222,14 @@ describe("dawn typegen", () => {
         join(appRoot, "dawn.config.ts"),
         'const appDir = "src/custom-app";\nexport default { appDir };\n',
       ),
-      writeFile(join(appRoot, "src", "custom-app", "page.tsx"), "export default {};\n"),
-      writeFile(join(appRoot, "src", "custom-app", "[tenant]", "graph.ts"), "export default {};\n"),
+      writeFile(
+        join(appRoot, "src", "custom-app", "index.ts"),
+        "export const graph = async () => ({});\n",
+      ),
+      writeFile(
+        join(appRoot, "src", "custom-app", "[tenant]", "index.ts"),
+        "export const graph = async () => ({});\n",
+      ),
     ])
 
     const externalBin = join(installerRoot, "node_modules", ".bin", "dawn")
