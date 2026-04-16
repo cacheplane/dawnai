@@ -1,4 +1,4 @@
-import { defineTool, type ToolDefinition } from "@dawn/langgraph";
+import { defineTool, type ToolDefinition } from "@dawn/sdk";
 
 export default defineTool({
   name: "greet",
