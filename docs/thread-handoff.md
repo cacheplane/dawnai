@@ -71,36 +71,32 @@ The route-execution stack is now established:
 
 The normalized execution result contract now includes route identity, execution source, timing, normalized status, output, and normalized error shape.
 
-### Dawn Route Authoring
+### Dawn Route Authoring and SDK
 
-The newest completed milestone is the first Dawn-owned route authoring layer.
+The newest completed milestone introduced a backend-neutral `@dawn/sdk` package and migrated the route authoring convention to `index.ts` per route.
 
 What changed:
 
-- `route.ts` is now the authoritative Dawn route definition when present
-- `route.ts` explicitly binds to exactly one sibling `graph.ts` or `workflow.ts`
-- Dawn tooling now loads route definitions rather than guessing from sibling files
+- A route is a directory containing `index.ts`; the `index.ts` exports a `workflow` or `graph` function/object
+- `@dawn/sdk` is the canonical author-facing package: types, helpers, runtime context, and tool authoring
+- `@dawn/langgraph` is now an adapter that implements the `@dawn/sdk` contract and wires it to LangGraph
 - route-local tools under `tools/*.ts` are part of the authoring model
-- route handlers receive Dawn-specific runtime context
+- route handlers receive Dawn-specific runtime context via `@dawn/sdk` types
+- `dawn run` targets a route directory or its `index.ts`; targeting legacy `workflow.ts`/`graph.ts` directly produces an error
 
 Current authoring package surface:
 
-- [`packages/langgraph/src/define-route.ts`](../packages/langgraph/src/define-route.ts)
-- [`packages/langgraph/src/define-tool.ts`](../packages/langgraph/src/define-tool.ts)
-- [`packages/langgraph/src/runtime-context.ts`](../packages/langgraph/src/runtime-context.ts)
+- [`packages/sdk/src/index.ts`](../packages/sdk/src/index.ts)
 
 Current runtime/discovery support for that authoring lane:
 
 - [`packages/core/src/discovery/discover-routes.ts`](../packages/core/src/discovery/discover-routes.ts)
-- [`packages/core/src/discovery/load-authoring-route-definition.ts`](../packages/core/src/discovery/load-authoring-route-definition.ts)
 - [`packages/cli/src/lib/runtime/execute-route.ts`](../packages/cli/src/lib/runtime/execute-route.ts)
-- [`packages/cli/src/lib/runtime/route-definition.ts`](../packages/cli/src/lib/runtime/route-definition.ts)
 - [`packages/cli/src/lib/runtime/tool-discovery.ts`](../packages/cli/src/lib/runtime/tool-discovery.ts)
 
 Starter template proof:
 
-- [`packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/route.ts`](../packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/route.ts)
-- [`packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/workflow.ts`](../packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/workflow.ts)
+- [`packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/index.ts`](../packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/index.ts)
 - [`packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/tools/greet.ts`](../packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/tools/greet.ts)
 
 ## Testing and Harness Model
@@ -159,11 +155,9 @@ Dawn should not become a deployment runtime.
 - `dawn test` builds on `dawn run`
 - `dawn dev` does not absorb one-shot execution semantics
 
-### `route.ts` Is Authoritative
+### `index.ts` Is The Route Entry
 
-When present, `route.ts` is the Dawn-owned route definition surface.
-
-The runtime and discovery layers should not fall back to guessing the binding from sibling files if `route.ts` exists and is malformed or inconsistent.
+A route directory's `index.ts` is the Dawn-owned route entry. The runtime and discovery layers look for `index.ts` in each route directory and do not fall back to legacy sibling files.
 
 ### Tool Composition Is Filesystem-Driven
 
@@ -195,7 +189,7 @@ These parts are now stable enough to support the next authoring phases:
 - route identity and route binding
 - local dev runtime lifecycle
 - in-process and server-backed execution contract
-- route authoring with explicit `route.ts` binding
+- route authoring with `index.ts` per route and `@dawn/sdk` author contract
 - filesystem-driven tool registration and discovery
 
 ## What Is Still Not The Product Thesis
@@ -220,9 +214,9 @@ It is not yet:
 
 The repo now has a Dawn-owned route layer, but not yet a Dawn-owned authoring contract broad enough to prove the LangChain / LangGraph / Deep Agents thesis.
 
-### `@dawn/langgraph` Is Still The Only Real Backend-Facing Authoring Package
+### `@dawn/langgraph` Is Still The Only Real Backend Adapter
 
-That is fine for the completed milestone, but it means Dawn still leans LangGraph-first in implementation reality.
+`@dawn/sdk` now owns the backend-neutral author contract, but `@dawn/langgraph` remains the only backend adapter implementation. Dawn still leans LangGraph-first in execution reality.
 
 ### Tool Composition Is Still Early
 
