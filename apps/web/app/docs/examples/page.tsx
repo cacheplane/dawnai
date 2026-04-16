@@ -14,7 +14,9 @@ export default function ExamplesPage() {
         <ul className="compact-list">
           <li>Where `dawn.config.ts` lives.</li>
           <li>How routes are discovered from `src/app`.</li>
-          <li>How `route.ts` stays thin while `graph.ts` or `workflow.ts` owns execution.</li>
+          <li>
+            How each route&apos;s `index.ts` exports a single `workflow` or `graph` for execution.
+          </li>
           <li>How support folders like `ui/`, `approvals/`, and `evals/` stay colocated.</li>
         </ul>
       </div>

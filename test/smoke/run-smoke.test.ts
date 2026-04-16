@@ -21,22 +21,20 @@ import {
 const SMOKE_ROOT = resolve(import.meta.dirname)
 const tempDirs: TrackedTempDir[] = []
 
-type SmokeEntryKind = "graph" | "workflow"
+type SmokeRouteKind = "graph" | "workflow"
 type SmokeFixtureName = "graph-basic" | "workflow-basic"
 
 interface SmokeOverlay {
   readonly deleteFiles?: readonly string[]
-  readonly entryKind: SmokeEntryKind
   readonly files?: Readonly<Record<string, string>>
   readonly input: Record<string, unknown>
+  readonly kind: SmokeRouteKind
 }
 
 interface SmokeRouteDefinition {
-  readonly boundEntryFile?: string
-  readonly boundEntryKind?: string
   readonly entryFile: string
-  readonly entryKind: string
   readonly id: string
+  readonly kind: SmokeRouteKind
   readonly pathname: string
   readonly routeDir: string
   readonly segments: readonly unknown[]
@@ -52,7 +50,9 @@ afterEach(async () => {
 })
 
 describe("runtime smoke harness", () => {
-  test("boots the graph fixture and executes one canonical flow", { timeout: 180_000 }, async () => {
+  test("boots the graph fixture and executes one canonical flow", {
+    timeout: 180_000,
+  }, async () => {
     const result = await runSmokeScenario("graph-basic")
     const output = await readSmokeOutput(result)
 
@@ -165,12 +165,12 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
     const discoveredRoute = await recordPhase(phases, "discover-routes", async () => {
       const manifest = await discoverRoutes({
         appRoot: generatedApp.appRoot,
-        expectedEntryKind: overlay.entryKind,
+        expectedKind: overlay.kind,
         transcriptPath,
       })
       await writeJsonArtifact(manifestArtifactPath, manifest)
       artifacts.push(manifestArtifactPath)
-      return selectExecutableRoute(manifest, overlay.entryKind)
+      return selectExecutableRoute(manifest, overlay.kind)
     })
 
     await recordPhase(phases, "typecheck", async () => {
@@ -292,7 +292,7 @@ async function rewriteDependenciesToTarballs(options: {
 
 async function discoverRoutes(options: {
   readonly appRoot: string
-  readonly expectedEntryKind: SmokeEntryKind
+  readonly expectedKind: SmokeRouteKind
   readonly transcriptPath: string
 }): Promise<SmokeRouteManifest> {
   const result = await runCommand({
@@ -302,13 +302,11 @@ async function discoverRoutes(options: {
     transcriptPath: options.transcriptPath,
   })
   const manifest = JSON.parse(result.stdout) as SmokeRouteManifest
-  const matchingRoutes = manifest.routes.filter((route) =>
-    resolveExecutableRoute(route)?.entryKind === options.expectedEntryKind
-  )
+  const matchingRoutes = manifest.routes.filter((route) => route.kind === options.expectedKind)
 
   if (matchingRoutes.length !== 1) {
     throw new Error(
-      `Expected exactly one ${options.expectedEntryKind} route, found ${matchingRoutes.length}`,
+      `Expected exactly one ${options.expectedKind} route, found ${matchingRoutes.length}`,
     )
   }
 
@@ -317,38 +315,15 @@ async function discoverRoutes(options: {
 
 function selectExecutableRoute(
   manifest: SmokeRouteManifest,
-  expectedEntryKind: SmokeEntryKind,
+  expectedKind: SmokeRouteKind,
 ): SmokeRouteDefinition {
-  const route = manifest.routes.find(
-    (candidate) => resolveExecutableRoute(candidate)?.entryKind === expectedEntryKind,
-  )
+  const route = manifest.routes.find((candidate) => candidate.kind === expectedKind)
 
   if (!route) {
-    throw new Error(`Could not find discovered ${expectedEntryKind} route`)
+    throw new Error(`Could not find discovered ${expectedKind} route`)
   }
 
-  return resolveExecutableRoute(route) ?? route
-}
-
-function resolveExecutableRoute(route: SmokeRouteDefinition): SmokeRouteDefinition | null {
-  if (route.entryKind === "graph" || route.entryKind === "workflow") {
-    return route
-  }
-
-  if (
-    route.entryKind === "route" &&
-    typeof route.boundEntryKind === "string" &&
-    (route.boundEntryKind === "graph" || route.boundEntryKind === "workflow") &&
-    typeof route.boundEntryFile === "string"
-  ) {
-    return {
-      ...route,
-      entryFile: route.boundEntryFile,
-      entryKind: route.boundEntryKind,
-    }
-  }
-
-  return null
+  return route
 }
 
 async function compileDiscoveredRoute(options: {
@@ -360,7 +335,16 @@ async function compileDiscoveredRoute(options: {
 
   await rm(buildDir, { force: true, recursive: true })
   await runCommand({
-    args: ["exec", "tsc", "-p", "tsconfig.json", "--outDir", ".dawn-smoke-dist", "--noEmit", "false"],
+    args: [
+      "exec",
+      "tsc",
+      "-p",
+      "tsconfig.json",
+      "--outDir",
+      ".dawn-smoke-dist",
+      "--noEmit",
+      "false",
+    ],
     command: "pnpm",
     cwd: options.appRoot,
     transcriptPath: options.transcriptPath,
@@ -384,7 +368,9 @@ async function executeCanonicalFlow(options: {
   const routePath = relative(
     normalizePrivatePath(options.appRoot),
     normalizePrivatePath(options.entryFile),
-  ).split("\\").join("/")
+  )
+    .split("\\")
+    .join("/")
   const runnerResult = await runCommand({
     args: ["exec", "dawn", "run", routePath],
     command: "pnpm",
