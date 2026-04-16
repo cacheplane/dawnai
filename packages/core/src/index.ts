@@ -1,5 +1,5 @@
 export { loadDawnConfig } from "./config.js"
-export { discoverRoutes, validateRouteEntries } from "./discovery/discover-routes.js"
+export { discoverRoutes } from "./discovery/discover-routes.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"
 export {
   isPrivateSegment,
