@@ -2,7 +2,7 @@
   "input": {
     "tenant": "workflow-tenant"
   },
-  "routeFile": "src/app/(public)/hello/[tenant]/workflow.ts",
+  "routeFile": "src/app/(public)/hello/[tenant]/index.ts",
   "expected": {
     "mode": "workflow",
     "output": {
