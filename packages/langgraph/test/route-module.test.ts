@@ -59,14 +59,14 @@ async function runCommand(
   )
 }
 
-function resolveTarballPath(packStdout: string, outputDir: string) {
+function resolveTarballPath(packStdout: string, outputDir: string, packageName: string) {
   const tarballName = packStdout
     .split("\n")
     .map((line) => line.trim())
     .find((line) => line.endsWith(".tgz"))
 
   if (!tarballName) {
-    throw new Error("Could not determine @dawn/langgraph tarball name")
+    throw new Error(`Could not determine ${packageName} tarball name`)
   }
 
   return join(outputDir, basename(tarballName))
@@ -113,6 +113,7 @@ describe("@dawn/langgraph route-module", () => {
   })
 
   test("packed consumers can resolve the route-module subpath export", async () => {
+    const sdkRoot = resolve(import.meta.dirname, "../../sdk")
     const tempRoot = await mkdtemp(join(tmpdir(), "dawn-langgraph-route-module-"))
     const consumerDir = join(tempRoot, "consumer")
     tempDirs.push(tempRoot)
@@ -121,19 +122,34 @@ describe("@dawn/langgraph route-module", () => {
       join(tempRoot, "package.json"),
       JSON.stringify({ name: "pack-root", private: true }),
     )
+    await runCommand("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--force"], sdkRoot)
+    const sdkPackOutput = await runCommand(
+      "pnpm",
+      ["pack", "--pack-destination", tempRoot],
+      sdkRoot,
+    )
+    const sdkTarballPath = resolveTarballPath(sdkPackOutput.stdout, tempRoot, "@dawn/sdk")
     await runCommand("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--force"], packageRoot)
     const packOutput = await runCommand(
       "pnpm",
       ["pack", "--pack-destination", tempRoot],
       packageRoot,
     )
-    const tarballPath = resolveTarballPath(packOutput.stdout, tempRoot)
+    const tarballPath = resolveTarballPath(packOutput.stdout, tempRoot, "@dawn/langgraph")
     await mkdir(consumerDir, { recursive: true })
     await writeFile(
       join(consumerDir, "package.json"),
-      JSON.stringify({ name: "consumer", private: true }, null, 2),
+      JSON.stringify(
+        {
+          name: "consumer",
+          private: true,
+          pnpm: { overrides: { "@dawn/sdk": `file:${sdkTarballPath}` } },
+        },
+        null,
+        2,
+      ),
     )
-    await runCommand("pnpm", ["add", tarballPath], consumerDir)
+    await runCommand("pnpm", ["add", sdkTarballPath, tarballPath], consumerDir)
 
     const scriptPath = join(consumerDir, "route-module-check.mjs")
     await writeFile(

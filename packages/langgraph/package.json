@@ -43,6 +43,9 @@
     "test": "vitest --run --config vitest.config.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.contracts.json"
   },
+  "dependencies": {
+    "@dawn/sdk": "workspace:*"
+  },
   "devDependencies": {
     "@dawn/config-typescript": "workspace:*",
     "@types/node": "25.6.0"
