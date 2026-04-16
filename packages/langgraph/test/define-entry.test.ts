@@ -85,6 +85,27 @@ describe("@dawn/langgraph defineEntry", () => {
     )
   })
 
+  test("treats explicit-undefined keys as absent when classifying entries", () => {
+    const workflow = () => "workflow"
+    const graph = () => "graph"
+
+    expect(normalizeRouteModule({ graph: undefined, workflow } as never)).toEqual({
+      kind: "workflow",
+      entry: workflow,
+      config: {},
+    })
+
+    expect(normalizeRouteModule({ graph, workflow: undefined } as never)).toEqual({
+      kind: "graph",
+      entry: graph,
+      config: {},
+    })
+
+    expect(() => normalizeRouteModule({ graph: undefined, workflow: undefined } as never)).toThrow(
+      `Route index.ts exports neither "workflow" nor "graph"`,
+    )
+  })
+
   test("packed consumers can import defineEntry from the published root export", async () => {
     const { consumerDir, tempRoot } = await createPackedConsumer()
     tempDirs.push(tempRoot)

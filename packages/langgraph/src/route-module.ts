@@ -27,17 +27,17 @@ export function normalizeRouteModule<TEntry>(
 ): NormalizedRouteModule<TEntry> {
   assertExactlyOneEntry(module)
 
-  if ("graph" in module) {
+  if (hasDefinedKey(module, "graph")) {
     return {
       kind: "graph",
-      entry: module.graph,
+      entry: module.graph as TEntry,
       config: module.config ?? {},
     }
   }
 
   return {
     kind: "workflow",
-    entry: module.workflow,
+    entry: module.workflow as TEntry,
     config: module.config ?? {},
   }
 }
@@ -45,9 +45,8 @@ export function normalizeRouteModule<TEntry>(
 export function assertExactlyOneEntry<TEntry>(
   module: RouteModule<TEntry> | (GraphRouteModule<TEntry> & WorkflowRouteModule<TEntry>),
 ): asserts module is RouteModule<TEntry> {
-  const hasGraph = "graph" in module && (module as { graph?: unknown }).graph !== undefined
-  const hasWorkflow =
-    "workflow" in module && (module as { workflow?: unknown }).workflow !== undefined
+  const hasGraph = hasDefinedKey(module, "graph")
+  const hasWorkflow = hasDefinedKey(module, "workflow")
 
   if (hasGraph && hasWorkflow) {
     throw new Error(`Route index.ts must export exactly one of "workflow" or "graph"`)
@@ -56,4 +55,8 @@ export function assertExactlyOneEntry<TEntry>(
   if (!hasGraph && !hasWorkflow) {
     throw new Error(`Route index.ts exports neither "workflow" nor "graph"`)
   }
+}
+
+function hasDefinedKey(module: object, key: "graph" | "workflow"): boolean {
+  return key in module && (module as Record<string, unknown>)[key] !== undefined
 }
