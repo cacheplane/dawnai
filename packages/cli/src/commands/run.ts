@@ -9,6 +9,7 @@ import {
 } from "../lib/output.js"
 import { executeRoute } from "../lib/runtime/execute-route.js"
 import { executeRouteServer } from "../lib/runtime/execute-route-server.js"
+import { loadRouteKind } from "../lib/runtime/load-route-kind.js"
 import {
   type ResolvedRouteTarget,
   resolveRouteTarget,
@@ -55,6 +56,7 @@ export async function runRunCommand(
           appRoot: target.appRoot,
           baseUrl: options.url,
           input,
+          mode: await loadRouteKind(target.routeFile),
           routeId: target.routeId,
           routePath: target.routePath,
         })
