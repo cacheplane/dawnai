@@ -1,6 +1,10 @@
-export { workflow } from "./workflow.js";
+import { defineRoute } from "@dawn/langgraph";
 
-export const config = {
-  runtime: "node",
-  tags: ["hello"],
-} as const;
+export const route = defineRoute({
+  kind: "workflow",
+  entry: "./workflow.ts",
+  config: {
+    runtime: "node",
+    tags: ["hello"],
+  },
+});

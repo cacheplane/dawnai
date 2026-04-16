@@ -61,8 +61,10 @@
       {
         "id": "/hello/[tenant]",
         "pathname": "/hello/[tenant]",
-        "entryKind": "workflow",
-        "entryFile": "<app-root>/src/app/(public)/hello/[tenant]/workflow.ts",
+        "boundEntryFile": "<app-root>/src/app/(public)/hello/[tenant]/workflow.ts",
+        "boundEntryKind": "workflow",
+        "entryKind": "route",
+        "entryFile": "<app-root>/src/app/(public)/hello/[tenant]/route.ts",
         "routeDir": "<app-root>/src/app/(public)/hello/[tenant]",
         "segments": [
           {

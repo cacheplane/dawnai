@@ -1,12 +1,22 @@
-import { defineEntry } from "@dawn/langgraph";
+import type { RuntimeContext, RuntimeTool } from "@dawn/langgraph";
 
 import type { HelloState } from "./state.js";
 
-const entry = defineEntry({
-  workflow: async (state: HelloState): Promise<HelloState> => ({
-    ...state,
-    greeting: `Hello, ${state.tenant}!`,
-  }),
-});
+type HelloTools = {
+  readonly greet: RuntimeTool<
+    { readonly tenant: string },
+    { readonly greeting: string }
+  >
+}
 
-export const workflow = entry.workflow;
+export async function workflow(
+  state: HelloState,
+  context: RuntimeContext<HelloTools>,
+): Promise<HelloState> {
+  const result = await context.tools.greet({ tenant: state.tenant })
+
+  return {
+    ...state,
+    greeting: result.greeting,
+  }
+}
