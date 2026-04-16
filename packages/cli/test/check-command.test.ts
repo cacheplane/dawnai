@@ -17,7 +17,7 @@ async function createFixtureApp(files: Readonly<Record<string, string>>) {
   tempDirs.push(appRoot)
 
   const appFiles = {
-    "package.json": "{}\n",
+    "package.json": '{"type":"module"}\n',
     "dawn.config.ts": "export default {};\n",
     ...files,
   }
@@ -179,7 +179,7 @@ export const graph = { invoke: async () => ({}) }
   test("returns a nonzero exit code and a stable error prefix for invalid apps", async () => {
     const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-check-invalid-"))
     tempDirs.push(appRoot)
-    await writeFile(join(appRoot, "package.json"), "{}\n")
+    await writeFile(join(appRoot, "package.json"), '{"type":"module"}\n')
     await writeFile(join(appRoot, "dawn.config.ts"), "export default {};\n")
 
     const result = await invoke(["check", "--cwd", appRoot])

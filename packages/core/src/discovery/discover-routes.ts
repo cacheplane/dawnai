@@ -127,7 +127,12 @@ async function loadRouteExports(indexFile: string): Promise<{
 }
 
 async function registerTsxLoader(): Promise<void> {
-  loaderPromise ??= import("tsx").then(() => undefined)
+  loaderPromise ??= (async () => {
+    const { register } = (await import("tsx/esm/api")) as {
+      readonly register: () => unknown
+    }
+    register()
+  })()
   await loaderPromise
 }
 
