@@ -73,6 +73,9 @@ importers:
       '@dawn/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
+      '@dawn/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0

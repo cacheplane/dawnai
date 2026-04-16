@@ -21,7 +21,7 @@ describe("@dawn/cli/testing", () => {
   test("packed consumers can import the published testing helpers", { timeout: 30_000 }, async () => {
     const tempRoot = await createTrackedTempDir("dawn-cli-testing-pack-", tempDirs)
     const { installerDir, tarballs } = await createPackagedInstaller({
-      packageNames: ["@dawn/core", "@dawn/langgraph", "@dawn/cli"],
+      packageNames: ["@dawn/core", "@dawn/langgraph", "@dawn/sdk", "@dawn/cli"],
       tempRoot,
     })
 
@@ -124,6 +124,7 @@ async function writeInstallerOverrides(
     "@dawn/cli": requiredTarball(tarballs, "@dawn/cli"),
     "@dawn/core": requiredTarball(tarballs, "@dawn/core"),
     "@dawn/langgraph": requiredTarball(tarballs, "@dawn/langgraph"),
+    "@dawn/sdk": requiredTarball(tarballs, "@dawn/sdk"),
   }
 
   await writeFile(

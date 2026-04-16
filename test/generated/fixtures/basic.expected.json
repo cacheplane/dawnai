@@ -23,7 +23,8 @@
         "@dawn/cli": "<tarball:@dawn/cli>",
         "@dawn/config-typescript": "<tarball:@dawn/config-typescript>",
         "@dawn/core": "<tarball:@dawn/core>",
-        "@dawn/langgraph": "<tarball:@dawn/langgraph>"
+        "@dawn/langgraph": "<tarball:@dawn/langgraph>",
+        "@dawn/sdk": "<tarball:@dawn/sdk>"
       }
     }
   },

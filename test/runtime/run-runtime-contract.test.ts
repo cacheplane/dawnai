@@ -425,7 +425,13 @@ async function withRuntimeScenario(
     const overlay = await readOverlay(fixtureName)
     const { tarballs } = await recordPhase(phases, "packaged-installer", async () => {
       return await createPackagedInstaller({
-        packageNames: ["@dawn/cli", "@dawn/config-typescript", "@dawn/core", "@dawn/langgraph"],
+        packageNames: [
+          "@dawn/cli",
+          "@dawn/config-typescript",
+          "@dawn/core",
+          "@dawn/langgraph",
+          "@dawn/sdk",
+        ],
         tempRoot,
         transcriptPath,
       })
@@ -659,6 +665,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn/config-typescript": options.tarballs["@dawn/config-typescript"],
       "@dawn/core": options.tarballs["@dawn/core"],
       "@dawn/langgraph": options.tarballs["@dawn/langgraph"],
+      "@dawn/sdk": options.tarballs["@dawn/sdk"],
     },
   }
 

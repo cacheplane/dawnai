@@ -1,110 +1,16 @@
-import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { basename, join, resolve } from "node:path"
+import { rm, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { defineEntry, normalizeRouteModule } from "@dawn/langgraph"
 import type { RouteModule } from "@dawn/langgraph/route-module"
 import { afterEach, describe, expect, test } from "vitest"
+
+import { createPackedConsumer, runCommand } from "./_helpers/packed-consumer.js"
 
 const tempDirs: string[] = []
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
-
-async function createPackedConsumer(): Promise<{
-  readonly consumerDir: string
-  readonly tarballPath: string
-}> {
-  const packageRoot = resolve(import.meta.dirname, "..")
-  const sdkRoot = resolve(import.meta.dirname, "../../sdk")
-  const tempRoot = await mkdtemp(join(tmpdir(), "dawn-langgraph-pack-"))
-  const consumerDir = join(tempRoot, "consumer")
-  tempDirs.push(tempRoot)
-
-  await writeFile(
-    join(tempRoot, "package.json"),
-    JSON.stringify({ name: "pack-root", private: true }),
-  )
-  await runCommand("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--force"], sdkRoot)
-  const sdkPackOutput = await runCommand("pnpm", ["pack", "--pack-destination", tempRoot], sdkRoot)
-  const sdkTarballPath = resolveTarballPath(sdkPackOutput.stdout, tempRoot, "@dawn/sdk")
-  await runCommand("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--force"], packageRoot)
-  const packOutput = await runCommand("pnpm", ["pack", "--pack-destination", tempRoot], packageRoot)
-  const tarballPath = resolveTarballPath(packOutput.stdout, tempRoot, "@dawn/langgraph")
-  await mkdir(consumerDir, { recursive: true })
-  await writeFile(
-    join(consumerDir, "package.json"),
-    JSON.stringify(
-      {
-        name: "consumer",
-        private: true,
-        pnpm: { overrides: { "@dawn/sdk": `file:${sdkTarballPath}` } },
-      },
-      null,
-      2,
-    ),
-  )
-  await runCommand("pnpm", ["add", sdkTarballPath, tarballPath], consumerDir)
-
-  return {
-    consumerDir,
-    tarballPath,
-  }
-}
-
-async function runCommand(
-  command: string,
-  args: readonly string[],
-  cwd: string,
-): Promise<{ readonly stdout: string; readonly stderr: string }> {
-  return await new Promise<{ readonly stdout: string; readonly stderr: string }>(
-    (resolvePromise, rejectPromise) => {
-      const child = spawn(command, args, {
-        cwd,
-        stdio: "pipe",
-      })
-
-      let stdout = ""
-      let stderr = ""
-
-      child.stdout.on("data", (chunk) => {
-        stdout += String(chunk)
-      })
-
-      child.stderr.on("data", (chunk) => {
-        stderr += String(chunk)
-      })
-
-      child.once("error", rejectPromise)
-      child.once("close", (code) => {
-        if (code === 0) {
-          resolvePromise({ stderr, stdout })
-          return
-        }
-
-        rejectPromise(
-          new Error(
-            [`${command} ${args.join(" ")} failed`, stdout, stderr].filter(Boolean).join("\n"),
-          ),
-        )
-      })
-    },
-  )
-}
-
-function resolveTarballPath(packStdout: string, outputDir: string, packageName: string) {
-  const tarballName = packStdout
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line.endsWith(".tgz"))
-
-  if (!tarballName) {
-    throw new Error(`Could not determine ${packageName} tarball name`)
-  }
-
-  return join(outputDir, basename(tarballName))
-}
 
 describe("@dawn/langgraph defineEntry", () => {
   test("graph.ts modules can export a native-first entry and route config", () => {
@@ -170,7 +76,8 @@ describe("@dawn/langgraph defineEntry", () => {
   })
 
   test("packed consumers can import defineEntry from the published root export", async () => {
-    const { consumerDir } = await createPackedConsumer()
+    const { consumerDir, tempRoot } = await createPackedConsumer()
+    tempDirs.push(tempRoot)
     const scriptPath = join(consumerDir, "entry-check.mjs")
 
     await writeFile(

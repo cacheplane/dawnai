@@ -8,6 +8,7 @@ export default defineConfig({
       "./packages/create-dawn-app/vitest.config.ts",
       "./packages/devkit/vitest.config.ts",
       "./packages/langgraph/vitest.config.ts",
+      "./packages/sdk/vitest.config.ts",
     ],
   },
 })

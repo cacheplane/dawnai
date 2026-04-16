@@ -30,6 +30,7 @@ interface PackedTarballs {
   readonly createApp: string
   readonly devkit: string
   readonly langgraph: string
+  readonly sdk: string
 }
 
 interface GeneratedAppScenarioResult {
@@ -162,7 +163,13 @@ async function runGeneratedAppScenario(
       await buildLocalContributorPackages(transcriptPath)
     } else {
       const packagedInstaller = await createPackagedInstaller({
-        packageNames: ["@dawn/cli", "@dawn/config-typescript", "@dawn/core", "@dawn/langgraph"],
+        packageNames: [
+          "@dawn/cli",
+          "@dawn/config-typescript",
+          "@dawn/core",
+          "@dawn/langgraph",
+          "@dawn/sdk",
+        ],
         tempRoot,
         transcriptPath,
       })
@@ -275,6 +282,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn/config-typescript": options.tarballs.configTypescript,
       "@dawn/core": options.tarballs.core,
       "@dawn/langgraph": options.tarballs.langgraph,
+      "@dawn/sdk": options.tarballs.sdk,
     },
   }
 
@@ -514,6 +522,7 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     createApp: tarballs["create-dawn-app"],
     devkit: tarballs["@dawn/devkit"],
     langgraph: tarballs["@dawn/langgraph"],
+    sdk: tarballs["@dawn/sdk"],
   }
 }
 
@@ -530,6 +539,7 @@ function normalizeForFixture(
     [context.tarballs.createApp, "<tarball:create-dawn-app>"],
     [context.tarballs.devkit, "<tarball:@dawn/devkit>"],
     [context.tarballs.langgraph, "<tarball:@dawn/langgraph>"],
+    [context.tarballs.sdk, "<tarball:@dawn/sdk>"],
     [`/private${dirname(context.tarballs.cli)}`, "<packs-dir>"],
     [dirname(context.tarballs.cli), "<packs-dir>"],
     ["25.6.0", "<version:@types/node>"],
