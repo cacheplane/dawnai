@@ -17,7 +17,7 @@ async function createFixtureApp() {
   tempDirs.push(appRoot)
 
   const fileEntries: ReadonlyArray<readonly [string, string]> = [
-    ["package.json", "{}"],
+    ["package.json", '{"type":"module"}'],
     ["dawn.config.ts", "export default {};\n"],
     ["src/app/index.ts", "export const graph = async () => ({});\n"],
     ["src/app/[tenant]/index.ts", "export const graph = async () => ({});\n"],
@@ -41,7 +41,7 @@ async function createCustomAppDirFixture() {
   await mkdir(join(appRoot, "src", "custom-app", "[tenant]"), { recursive: true })
 
   await Promise.all([
-    writeFile(join(appRoot, "package.json"), "{}"),
+    writeFile(join(appRoot, "package.json"), '{"type":"module"}'),
     writeFile(
       join(appRoot, "dawn.config.ts"),
       'const appDir = "src/custom-app";\nexport default { appDir };\n',
@@ -217,7 +217,7 @@ describe("dawn typegen", () => {
     expect(installResult.code).toBe(0)
 
     await Promise.all([
-      writeFile(join(appRoot, "package.json"), "{}"),
+      writeFile(join(appRoot, "package.json"), '{"type":"module"}'),
       writeFile(
         join(appRoot, "dawn.config.ts"),
         'const appDir = "src/custom-app";\nexport default { appDir };\n',

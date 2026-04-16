@@ -1,8 +1,13 @@
 let loaderPromise: Promise<void> | undefined
-const TSX_MODULE = "tsx"
+const TSX_API_MODULE = "tsx/esm/api"
 
 export async function registerTsxLoader(): Promise<void> {
-  loaderPromise ??= import(TSX_MODULE).then(() => undefined)
+  loaderPromise ??= (async () => {
+    const { register } = (await import(TSX_API_MODULE)) as {
+      readonly register: () => unknown
+    }
+    register()
+  })()
 
   await loaderPromise
 }
