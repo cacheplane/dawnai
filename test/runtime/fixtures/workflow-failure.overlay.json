@@ -1,11 +1,11 @@
 {
   "files": {
-    "src/app/(public)/hello/[tenant]/workflow.ts": "import { defineEntry } from \"@dawn/langgraph\";\n\nimport type { HelloState } from \"./state.js\";\n\nconst entry = defineEntry({\n  workflow: async (state: HelloState): Promise<HelloState> => {\n    throw new Error(`Workflow execution failed for ${state.tenant}`);\n  },\n});\n\nexport const workflow = entry.workflow;\n"
+    "src/app/(public)/hello/[tenant]/index.ts": "import type { HelloState } from \"./state.js\";\n\nexport const workflow = async (state: HelloState): Promise<HelloState> => {\n  throw new Error(`Workflow execution failed for ${state.tenant}`);\n};\n"
   },
   "input": {
     "tenant": "workflow-tenant"
   },
-  "routeFile": "src/app/(public)/hello/[tenant]/workflow.ts",
+  "routeFile": "src/app/(public)/hello/[tenant]/index.ts",
   "expected": {
     "error": {
       "kind": "execution_error",

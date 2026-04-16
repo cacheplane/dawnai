@@ -1,15 +1,11 @@
 {
-  "deleteFiles": [
-    "src/app/(public)/hello/[tenant]/workflow.ts"
-  ],
   "files": {
-    "src/app/(public)/hello/[tenant]/graph.ts": "import { defineEntry } from \"@dawn/langgraph\";\n\nimport type { HelloState } from \"./state.js\";\n\nconst entry = defineEntry({\n  graph: async (state: HelloState): Promise<HelloState> => {\n    throw new Error(`Graph execution failed for ${state.tenant}`);\n  },\n});\n\nexport const graph = entry.graph;\n",
-    "src/app/(public)/hello/[tenant]/route.ts": "import { defineRoute } from \"@dawn/langgraph\";\n\nexport const route = defineRoute({\n  kind: \"graph\",\n  entry: \"./graph.ts\",\n  config: {\n    runtime: \"node\",\n    tags: [\"hello\"],\n  },\n});\n"
+    "src/app/(public)/hello/[tenant]/index.ts": "import type { HelloState } from \"./state.js\";\n\nexport const graph = async (state: HelloState): Promise<HelloState> => {\n  throw new Error(`Graph execution failed for ${state.tenant}`);\n};\n"
   },
   "input": {
     "tenant": "graph-tenant"
   },
-  "routeFile": "src/app/(public)/hello/[tenant]/graph.ts",
+  "routeFile": "src/app/(public)/hello/[tenant]/index.ts",
   "expected": {
     "error": {
       "kind": "execution_error",
