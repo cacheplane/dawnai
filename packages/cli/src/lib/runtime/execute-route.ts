@@ -9,6 +9,7 @@ import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,
   formatErrorMessage,
+  type RuntimeExecutionMode,
   type RuntimeExecutionResult,
 } from "./result.js"
 import { deriveRouteIdentity } from "./route-identity.js"
@@ -109,11 +110,13 @@ async function executeRouteAtResolvedPath(options: {
   readonly startedAt: number
 }): Promise<RuntimeExecutionResult> {
   const routeDir = resolve(options.routeFile, "..")
+  let mode: RuntimeExecutionMode | null = null
 
   try {
     await registerTsxLoader()
     const routeModule = await import(pathToFileURL(options.routeFile).href)
     const normalized = normalizeRouteModule(routeModule)
+    mode = normalized.kind
 
     const tools = await discoverToolDefinitions({
       appRoot: options.appRoot,
@@ -145,6 +148,7 @@ async function executeRouteAtResolvedPath(options: {
       executionSource: "in-process",
       kind,
       message,
+      mode,
       routeId: options.routeId,
       routePath: options.routePath,
       startedAt: options.startedAt,

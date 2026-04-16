@@ -522,7 +522,6 @@ async function expectRuntimeParityArtifacts(
   expect(toComparableExecution(serverExecution)).toEqual({
     ...toComparableExecution(directExecution),
     executionSource: "server",
-    ...(directExecution.status === "failed" ? { mode: overlay.expected.mode ?? null } : {}),
   })
 }
 
@@ -550,7 +549,7 @@ function assertExecutionMatchesOverlay(execution: RuntimeExecutionResult, overla
     error: {
       kind: overlay.expected.error?.kind,
     },
-    mode: null,
+    mode: overlay.expected.mode,
     routeId: expectedRouteId(overlay.routeFile),
     routePath: overlay.routeFile,
     status: "failed",
@@ -601,7 +600,7 @@ function assertCliExecutionMatchesOverlay(
     error: {
       kind: overlay.expected.error?.kind,
     },
-    mode: executionSource === "server" ? overlay.expected.mode : null,
+    mode: overlay.expected.mode,
     status: "failed",
   })
 
