@@ -18,7 +18,7 @@ afterEach(async () => {
 })
 
 describe("dawn test", () => {
-  test("executes route.ts-bound workflow scenarios through the new lane", async () => {
+  test("executes scenario targets that resolve to companion workflow.ts files with shared and route-local tools", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
@@ -27,11 +27,10 @@ describe("dawn test", () => {
   run: async (input: { tenant: string }) => ({ scope: "shared", tenant: input.tenant }),
 };
 `,
-      "src/app/hello/[tenant]/route.ts":
-        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts": `export const workflow = async (
+      "src/app/hello/[tenant]/workflow.ts": `import type { RuntimeContext } from "@dawn/sdk"
+export const workflow = async (
   input: { tenant: string },
-  context: { tools: Record<string, (input: unknown) => Promise<unknown>> },
+  context: RuntimeContext,
 ) => ({
   shared: await context.tools.greet({ tenant: input.tenant }),
   tenantGreeting: await context.tools["tenant-greet"]({ tenant: input.tenant }),

@@ -14,23 +14,8 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
 
-async function createFixtureApp(files: readonly string[]) {
+async function createFixtureApp(files: Readonly<Record<string, string>>) {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-verify-"))
-  tempDirs.push(appRoot)
-
-  await Promise.all(
-    files.map(async (relativePath) => {
-      const filePath = join(appRoot, relativePath)
-      await mkdir(dirname(filePath), { recursive: true })
-      await writeFile(filePath, relativePath.endsWith(".json") ? "{}" : "export default {};\n")
-    }),
-  )
-
-  return appRoot
-}
-
-async function createAuthoringFixtureApp(files: Readonly<Record<string, string>>) {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-verify-authoring-"))
   tempDirs.push(appRoot)
 
   const appFiles = {
@@ -75,13 +60,11 @@ function contractFixtureRoot(name: string) {
 }
 
 describe("dawn verify", () => {
-  test("succeeds for a valid fixture app and reports a concise integrity summary", async () => {
-    const appRoot = await createFixtureApp([
-      "package.json",
-      "dawn.config.ts",
-      "src/app/page.tsx",
-      "src/app/[tenant]/graph.ts",
-    ])
+  test("succeeds for a valid index.ts app and reports a concise integrity summary", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": "export async function workflow() { return {} }\n",
+      "src/app/support/[tenant]/index.ts": "export const graph = { invoke: async () => ({}) }\n",
+    })
 
     const result = await invoke(["verify", "--cwd", appRoot])
 
@@ -93,12 +76,10 @@ describe("dawn verify", () => {
   })
 
   test("resolves the Dawn app root from a child directory via --cwd", async () => {
-    const appRoot = await createFixtureApp([
-      "package.json",
-      "dawn.config.ts",
-      "src/app/page.tsx",
-      "src/app/settings/page.tsx",
-    ])
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": "export async function workflow() { return {} }\n",
+      "src/app/settings/index.ts": "export async function workflow() { return {} }\n",
+    })
     const childDir = join(appRoot, "src", "app", "settings")
 
     const result = await invoke(["verify", "--cwd", childDir])
@@ -110,7 +91,10 @@ describe("dawn verify", () => {
   })
 
   test("returns a nonzero exit code with a stable error prefix for invalid apps", async () => {
-    const appRoot = await createFixtureApp(["package.json", "dawn.config.ts"])
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-verify-invalid-"))
+    tempDirs.push(appRoot)
+    await writeFile(join(appRoot, "package.json"), "{}\n")
+    await writeFile(join(appRoot, "dawn.config.ts"), "export default {};\n")
 
     const result = await invoke(["verify", "--cwd", appRoot])
 
@@ -120,7 +104,10 @@ describe("dawn verify", () => {
   })
 
   test("prints a normalized failure payload in json mode", async () => {
-    const appRoot = await createFixtureApp(["package.json", "dawn.config.ts"])
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-verify-invalid-json-"))
+    tempDirs.push(appRoot)
+    await writeFile(join(appRoot, "package.json"), "{}\n")
+    await writeFile(join(appRoot, "dawn.config.ts"), "export default {};\n")
 
     const result = await invoke(["verify", "--cwd", appRoot, "--json"])
 
@@ -175,7 +162,7 @@ describe("dawn verify", () => {
     })
   })
 
-  test("preserves staged checks and the discovered app root for invalid companion failures in json mode", async () => {
+  test("preserves staged checks and the discovered app root for invalid index.ts failures in json mode", async () => {
     const appRoot = contractFixtureRoot("invalid-companion")
     const childDir = join(appRoot, "src", "app", "broken")
 
@@ -195,7 +182,7 @@ describe("dawn verify", () => {
         },
         {
           error: {
-            message: `Route directory ${join(appRoot, "src", "app", "broken", "[tenant]")} has multiple primary entries: graph.ts, workflow.ts`,
+            message: `Route index.ts must export exactly one of "workflow" or "graph"`,
           },
           name: "routes",
           status: "failed",
@@ -210,13 +197,11 @@ describe("dawn verify", () => {
     })
   })
 
-  test("prints the normalized single-app verify result in json mode", async () => {
-    const appRoot = await createFixtureApp([
-      "package.json",
-      "dawn.config.ts",
-      "src/app/page.tsx",
-      "src/app/[tenant]/graph.ts",
-    ])
+  test("prints the normalized single-app verify result in json mode with kind on each route", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": "export async function workflow() { return {} }\n",
+      "src/app/support/[tenant]/index.ts": "export const graph = { invoke: async () => ({}) }\n",
+    })
 
     const result = await invoke(["verify", "--cwd", appRoot, "--json"])
 
@@ -249,45 +234,6 @@ describe("dawn verify", () => {
         total: 3,
       },
       status: "passed",
-    })
-  })
-
-  test("reports non-callable route.ts-bound handlers during verify", async () => {
-    const appRoot = await createAuthoringFixtureApp({
-      "src/app/hello/[tenant]/route.ts":
-        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts":
-        "export const workflow = { invoke: async () => ({ ok: true }) };\n",
-    })
-
-    const result = await invoke(["verify", "--cwd", appRoot, "--json"])
-
-    expect(result.exitCode).toBe(1)
-    expect(result.stderr).toBe("")
-    expect(JSON.parse(result.stdout)).toEqual({
-      appRoot,
-      checks: [
-        {
-          appRoot,
-          configPath: join(appRoot, "dawn.config.ts"),
-          name: "app",
-          routesDir: join(appRoot, "src/app"),
-          status: "passed",
-        },
-        {
-          error: {
-            message: `Authoring workflow route at ${join(appRoot, "src/app/hello/[tenant]/workflow.ts")} must export a callable "workflow" handler`,
-          },
-          name: "routes",
-          status: "failed",
-        },
-      ],
-      counts: {
-        failed: 1,
-        passed: 1,
-        total: 2,
-      },
-      status: "failed",
     })
   })
 })

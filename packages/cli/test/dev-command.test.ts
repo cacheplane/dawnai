@@ -23,7 +23,7 @@ describe("dawn dev runtime server", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ ok: true });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ ok: true });\n`,
     })
 
     const server = await startRuntimeServer({ appRoot })
@@ -39,7 +39,7 @@ describe("dawn dev runtime server", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ mode: "graph", tenant: input.tenant });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async (input: { tenant: string }) => ({ mode: "graph", tenant: input.tenant });\n`,
     })
 
     const server = await startRuntimeServer({ appRoot })
@@ -53,7 +53,7 @@ describe("dawn dev runtime server", () => {
           dawn: {
             mode: "graph",
             route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/graph.ts",
+            route_path: "src/app/support/[tenant]/index.ts",
           },
         },
         on_completion: "delete",
@@ -72,7 +72,7 @@ describe("dawn dev runtime server", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ ok: true });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ ok: true });\n`,
     })
 
     const server = await startRuntimeServer({ appRoot })
@@ -86,7 +86,7 @@ describe("dawn dev runtime server", () => {
           dawn: {
             mode: "workflow",
             route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/graph.ts",
+            route_path: "src/app/support/[tenant]/index.ts",
           },
         },
         on_completion: "delete",
@@ -109,7 +109,7 @@ describe("dawn dev runtime server", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ ok: true });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ ok: true });\n`,
     })
 
     const server = await startRuntimeServer({ appRoot })
@@ -131,7 +131,7 @@ describe("dawn dev runtime server", () => {
           dawn: {
             mode: "workflow",
             route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/graph.ts",
+            route_path: "src/app/support/[tenant]/index.ts",
           },
         },
         on_completion: "delete",
@@ -150,7 +150,7 @@ describe("dawn dev runtime server", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => { throw new Error("boom"); };\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => { throw new Error("boom"); };\n`,
     })
 
     const server = await startRuntimeServer({ appRoot })
@@ -164,7 +164,7 @@ describe("dawn dev runtime server", () => {
           dawn: {
             mode: "graph",
             route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/graph.ts",
+            route_path: "src/app/support/[tenant]/index.ts",
           },
         },
         on_completion: "delete",
@@ -187,7 +187,7 @@ describe("dawn dev runtime server", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `
+      "src/app/support/[tenant]/index.ts": `
         export const graph = async (_input: unknown, context?: { signal?: AbortSignal }) => {
           await new Promise((resolve, reject) => {
             const signal = context?.signal
@@ -218,7 +218,7 @@ describe("dawn dev runtime server", () => {
           dawn: {
             mode: "graph",
             route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/graph.ts",
+            route_path: "src/app/support/[tenant]/index.ts",
           },
         },
         on_completion: "delete",
@@ -252,7 +252,7 @@ describe("dawn dev lifecycle", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ ok: true });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ ok: true });\n`,
     })
 
     const dev = await startDevProcess({
@@ -278,7 +278,7 @@ describe("dawn dev lifecycle", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
     })
     const routeDir = join(appRoot, "src/app/support/[tenant]")
 
@@ -293,7 +293,7 @@ describe("dawn dev lifecycle", () => {
       input: { tenant: "cwd" },
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
     })
 
     expect(dev.stdout).toContain(`http://127.0.0.1:${new URL(url).port}`)
@@ -308,9 +308,9 @@ describe("dawn dev lifecycle", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ version: "v1" });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ version: "v1" });\n`,
     })
-    const routePath = join(appRoot, "src/app/support/[tenant]/graph.ts")
+    const routePath = join(appRoot, "src/app/support/[tenant]/index.ts")
     const port = await allocatePort()
 
     const dev = await startDevProcess({
@@ -326,7 +326,7 @@ describe("dawn dev lifecycle", () => {
       input: {},
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
     })
 
     expect(await initialResponse.json()).toMatchObject({ version: "v1" })
@@ -340,7 +340,7 @@ describe("dawn dev lifecycle", () => {
       input: {},
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
     })
 
     expect(new URL(restartedUrl).port).toBe(String(port))
@@ -352,9 +352,9 @@ describe("dawn dev lifecycle", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ version: "v1" });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ version: "v1" });\n`,
     })
-    const routePath = join(appRoot, "src/app/support/[tenant]/graph.ts")
+    const routePath = join(appRoot, "src/app/support/[tenant]/index.ts")
 
     const dev = await startDevProcess({
       cwd: appRoot,
@@ -381,7 +381,7 @@ describe("dawn dev lifecycle", () => {
       input: {},
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
     })
 
     expect(await response.json()).toMatchObject({ version: "v4" })
@@ -393,7 +393,7 @@ describe("dawn dev lifecycle", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `
+      "src/app/support/[tenant]/index.ts": `
         import { writeFile } from "node:fs/promises";
 
         export const graph = async (_input: unknown, context?: { signal?: AbortSignal }) => {
@@ -416,7 +416,7 @@ describe("dawn dev lifecycle", () => {
         };
       `,
     })
-    const routePath = join(appRoot, "src/app/support/[tenant]/graph.ts")
+    const routePath = join(appRoot, "src/app/support/[tenant]/index.ts")
 
     const dev = await startDevProcess({ cwd: appRoot })
     devProcesses.push(dev)
@@ -427,7 +427,7 @@ describe("dawn dev lifecycle", () => {
       input: {},
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
     })
 
     await waitForPath(markerPath)
@@ -450,7 +450,7 @@ describe("dawn dev lifecycle", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ version: "healthy" });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ version: "healthy" });\n`,
     })
     const configPath = join(appRoot, "dawn.config.ts")
 
@@ -479,7 +479,7 @@ describe("dawn dev lifecycle", () => {
       input: {},
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
     })
 
     expect(response.status).toBe(200)
@@ -490,7 +490,7 @@ describe("dawn dev lifecycle", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ version: "healthy" });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ version: "healthy" });\n`,
     })
     const configPath = join(appRoot, "dawn.config.ts")
 
@@ -515,9 +515,9 @@ describe("dawn dev lifecycle", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ version: "healthy" });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ version: "healthy" });\n`,
     })
-    const routePath = join(appRoot, "src/app/support/[tenant]/graph.ts")
+    const routePath = join(appRoot, "src/app/support/[tenant]/index.ts")
     const port = await allocatePort()
 
     const dev = await startDevProcess({
@@ -554,7 +554,7 @@ describe("dawn dev lifecycle", () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
-      "src/app/support/[tenant]/graph.ts": `
+      "src/app/support/[tenant]/index.ts": `
         import { writeFile } from "node:fs/promises";
 
         export const graph = async () => {
@@ -563,7 +563,7 @@ describe("dawn dev lifecycle", () => {
         };
       `,
     })
-    const routePath = join(appRoot, "src/app/support/[tenant]/graph.ts")
+    const routePath = join(appRoot, "src/app/support/[tenant]/index.ts")
 
     const dev = await startDevProcess({
       cwd: appRoot,
@@ -580,7 +580,7 @@ describe("dawn dev lifecycle", () => {
       input: {},
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
     }).catch((error) => error)
 
     await waitForPath(markerPath)
@@ -598,7 +598,7 @@ describe("dawn dev lifecycle", () => {
       input: {},
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
     })
 
     expect(await replacementResponse.json()).toMatchObject({ version: "replaced" })

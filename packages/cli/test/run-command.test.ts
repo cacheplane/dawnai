@@ -18,7 +18,7 @@ afterEach(async () => {
 })
 
 describe("dawn run", () => {
-  test("executes a route definition through workflow.ts and Dawn context", async () => {
+  test("executes the route directory's index.ts and exposes shared and route-local tools through ctx.tools", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
@@ -27,16 +27,15 @@ describe("dawn run", () => {
   run: async (input: { tenant: string }) => ({ scope: "shared", message: \`Hello, \${input.tenant}!\` }),
 };
 `,
-      "src/app/hello/[tenant]/route.ts":
-        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts": `export const workflow = async (
-  input: { tenant: string },
-  context: { signal: AbortSignal; tools: Record<string, (input: unknown) => Promise<unknown>> },
+      "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
+export const workflow = async (
+  state: { tenant: string },
+  ctx: RuntimeContext,
 ) => ({
-  hasSignal: context.signal instanceof AbortSignal,
-  shared: await context.tools.greet({ tenant: input.tenant }),
-  tenant: input.tenant,
-  tenantGreeting: await context.tools["tenant-greet"]({ tenant: input.tenant }),
+  hasSignal: ctx.signal instanceof AbortSignal,
+  shared: await ctx.tools.greet({ tenant: state.tenant }),
+  tenant: state.tenant,
+  tenantGreeting: await ctx.tools["tenant-greet"]({ tenant: state.tenant }),
 });
 `,
       "src/app/hello/[tenant]/tools/tenant-greet.ts": `export default {
@@ -46,7 +45,7 @@ describe("dawn run", () => {
 `,
     })
 
-    const result = await invoke(["run", "src/app/hello/[tenant]/workflow.ts", "--cwd", appRoot], {
+    const result = await invoke(["run", "src/app/hello/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "authoring-tenant" }),
     })
 
@@ -72,7 +71,37 @@ describe("dawn run", () => {
         },
       },
       routeId: "/hello/[tenant]",
-      routePath: "src/app/hello/[tenant]/workflow.ts",
+      routePath: "src/app/hello/[tenant]/index.ts",
+      status: "passed",
+    })
+  })
+
+  test("executes the route's index.ts when targeted directly", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/index.ts": `export const workflow = async (state: { tenant: string }) => ({ tenant: state.tenant, source: "direct-index" });\n`,
+    })
+
+    const result = await invoke(["run", "src/app/support/[tenant]/index.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "direct-tenant" }),
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectSuccessTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      mode: "workflow",
+      output: {
+        source: "direct-index",
+        tenant: "direct-tenant",
+      },
+      routeId: "/support/[tenant]",
+      routePath: "src/app/support/[tenant]/index.ts",
       status: "passed",
     })
   })
@@ -86,13 +115,12 @@ describe("dawn run", () => {
   run: async () => ({ scope: "shared" }),
 };
 `,
-      "src/app/hello/[tenant]/route.ts":
-        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts": `export const workflow = async (
-  _input: unknown,
-  context: { tools: Record<string, (input: unknown) => Promise<unknown>> },
+      "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
+export const workflow = async (
+  _state: unknown,
+  ctx: RuntimeContext,
 ) => {
-  return await context.tools.greet({})
+  return await ctx.tools.greet({})
 };
 `,
       "src/app/hello/[tenant]/tools/greet.ts": `export default {
@@ -102,7 +130,7 @@ describe("dawn run", () => {
 `,
     })
 
-    const result = await invoke(["run", "src/app/hello/[tenant]/workflow.ts", "--cwd", appRoot], {
+    const result = await invoke(["run", "src/app/hello/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "shadowed" }),
     })
 
@@ -119,54 +147,20 @@ describe("dawn run", () => {
         scope: "route-local",
       },
       routeId: "/hello/[tenant]",
-      routePath: "src/app/hello/[tenant]/workflow.ts",
+      routePath: "src/app/hello/[tenant]/index.ts",
       status: "passed",
     })
   })
 
-  test("treats invalid route.ts exports as authoritative route-resolution failures", async () => {
+  test("executes a graph route when graph is exported as a function", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/hello/[tenant]/route.ts": "export const notRoute = true;\n",
-      "src/app/hello/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({
-  tenant: input.tenant,
-  source: "should-not-run",
-});\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
 
-    const result = await invoke(["run", "src/app/hello/[tenant]/workflow.ts", "--cwd", appRoot], {
-      stdin: JSON.stringify({ tenant: "authoring-tenant" }),
-    })
-
-    expect(result.exitCode).toBe(1)
-    expect(result.stderr).toBe("")
-    const payload = JSON.parse(result.stdout) as Record<string, unknown>
-
-    expectFailureTiming(payload)
-    expect(payload).toMatchObject({
-      appRoot,
-      executionSource: "in-process",
-      error: {
-        kind: "route_resolution_error",
-        message: `Route definition ${join(appRoot, "src/app/hello/[tenant]/route.ts")} must export a Dawn route definition`,
-      },
-      mode: "workflow",
-      routeId: "/hello/[tenant]",
-      routePath: "src/app/hello/[tenant]/workflow.ts",
-      status: "failed",
-    })
-  })
-
-  test("executes a graph route from an app-root-relative path and prints the normalized JSON result", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
-    })
-
-    const result = await invoke(["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot], {
-      stdin: JSON.stringify({ tenant: "graph-tenant" }),
+    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "graph-fn-tenant" }),
     })
 
     expect(result.exitCode).toBe(0)
@@ -179,24 +173,27 @@ describe("dawn run", () => {
       executionSource: "in-process",
       mode: "graph",
       output: {
-        greeting: "Hello, graph-tenant!",
-        tenant: "graph-tenant",
+        greeting: "Hello, graph-fn-tenant!",
+        tenant: "graph-fn-tenant",
       },
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
       status: "passed",
     })
   })
 
-  test("executes a workflow route and prints the normalized JSON result", async () => {
+  test("executes a graph route exposed as an object with .invoke", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = {
+  invoke: async (state: { tenant: string }) => ({ tenant: state.tenant, source: "graph-object" }),
+}
+`,
     })
 
-    const result = await invoke(["run", "src/app/support/[tenant]/workflow.ts", "--cwd", appRoot], {
-      stdin: JSON.stringify({ tenant: "workflow-tenant" }),
+    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "graph-object-tenant" }),
     })
 
     expect(result.exitCode).toBe(0)
@@ -207,44 +204,104 @@ describe("dawn run", () => {
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
-      mode: "workflow",
+      mode: "graph",
       output: {
-        greeting: "Hello, workflow-tenant!",
-        tenant: "workflow-tenant",
+        source: "graph-object",
+        tenant: "graph-object-tenant",
       },
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/workflow.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
       status: "passed",
     })
   })
 
-  test("keeps legacy workflow execution unchanged when no route.ts is present", async () => {
+  test("fails when an index.ts exports both workflow and graph", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant, source: "legacy" });\n`,
+      "src/app/support/[tenant]/index.ts": `export const workflow = async () => ({ ok: true })
+export const graph = async () => ({ ok: true })
+`,
     })
 
-    const result = await invoke(["run", "src/app/support/[tenant]/workflow.ts", "--cwd", appRoot], {
-      stdin: JSON.stringify({ tenant: "legacy-tenant" }),
+    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "ambiguous" }),
     })
 
-    expect(result.exitCode).toBe(0)
+    expect(result.exitCode).toBe(1)
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectFailureTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
-      mode: "workflow",
-      output: {
-        source: "legacy",
-        tenant: "legacy-tenant",
+      error: {
+        kind: "unsupported_route_boundary",
+        message: `Route index.ts must export exactly one of "workflow" or "graph"`,
       },
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/workflow.ts",
-      status: "passed",
+      routePath: "src/app/support/[tenant]/index.ts",
+      status: "failed",
+    })
+  })
+
+  test("rejects targeting a non-index.ts file inside a route directory", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
+      "src/app/support/[tenant]/workflow.ts":
+        "export const workflow = async () => ({ stale: true });\n",
+    })
+    const legacyTarget = join(appRoot, "src/app/support/[tenant]/workflow.ts")
+
+    const result = await invoke(["run", "src/app/support/[tenant]/workflow.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "stale" }),
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      error: {
+        kind: "route_resolution_error",
+        message: `Route target must be a route directory or its index.ts: ${legacyTarget}`,
+      },
+      status: "failed",
+    })
+  })
+
+  test("rejects targeting a route directory that has no index.ts", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/page.tsx": "export default function Page() { return null; }\n",
+      "src/app/empty/notes.md": "# placeholder\n",
+    })
+    const emptyDir = join(appRoot, "src/app/empty")
+
+    const result = await invoke(["run", "src/app/empty", "--cwd", appRoot], {
+      stdin: JSON.stringify({}),
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      error: {
+        kind: "route_resolution_error",
+        message: `Route directory has no index.ts: ${emptyDir}`,
+      },
+      status: "failed",
     })
   })
 
@@ -252,11 +309,11 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
     const routeDir = join(appRoot, "src/app/support/[tenant]")
 
-    const result = await invoke(["run", "./graph.ts"], {
+    const result = await invoke(["run", "./"], {
       cwd: routeDir,
       stdin: JSON.stringify({ tenant: "relative-tenant" }),
     })
@@ -278,7 +335,7 @@ describe("dawn run", () => {
         tenant: "relative-tenant",
       },
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
       status: "passed",
     })
   })
@@ -287,10 +344,10 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": 'const appDir = "src/custom-app";\nexport default { appDir };\n',
-      "src/custom-app/docs/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+      "src/custom-app/docs/index.ts": `export const workflow = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
 
-    const result = await invoke(["run", "src/custom-app/docs/workflow.ts", "--cwd", appRoot], {
+    const result = await invoke(["run", "src/custom-app/docs", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "custom-app-dir" }),
     })
 
@@ -308,7 +365,7 @@ describe("dawn run", () => {
         tenant: "custom-app-dir",
       },
       routeId: "/docs",
-      routePath: "src/custom-app/docs/workflow.ts",
+      routePath: "src/custom-app/docs/index.ts",
       status: "passed",
     })
   })
@@ -317,15 +374,12 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/(public)/hello/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+      "src/app/(public)/hello/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
 
-    const result = await invoke(
-      ["run", "src/app/(public)/hello/[tenant]/graph.ts", "--cwd", appRoot],
-      {
-        stdin: JSON.stringify({ tenant: "grouped-route" }),
-      },
-    )
+    const result = await invoke(["run", "src/app/(public)/hello/[tenant]", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "grouped-route" }),
+    })
 
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
@@ -341,39 +395,8 @@ describe("dawn run", () => {
         tenant: "grouped-route",
       },
       routeId: "/hello/[tenant]",
-      routePath: "src/app/(public)/hello/[tenant]/graph.ts",
+      routePath: "src/app/(public)/hello/[tenant]/index.ts",
       status: "passed",
-    })
-  })
-
-  test("rejects route files outside the discovered appDir with a normalized route-resolution failure", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "scripts/graph.ts": `export const graph = async () => ({ ok: true });\n`,
-      "src/app/page.tsx": "export default function Page() { return null; }\n",
-    })
-
-    const result = await invoke(["run", "scripts/graph.ts", "--cwd", appRoot], {
-      stdin: JSON.stringify({ tenant: "out-of-tree" }),
-    })
-
-    expect(result.exitCode).toBe(1)
-    expect(result.stderr).toBe("")
-    const payload = JSON.parse(result.stdout) as Record<string, unknown>
-
-    expectFailureTiming(payload)
-    expect(payload).toMatchObject({
-      appRoot,
-      executionSource: "in-process",
-      error: {
-        kind: "route_resolution_error",
-        message: `Route file is outside the configured appDir: ${join(appRoot, "scripts/graph.ts")}`,
-      },
-      mode: "graph",
-      routeId: null,
-      routePath: "scripts/graph.ts",
-      status: "failed",
     })
   })
 
@@ -381,7 +404,7 @@ describe("dawn run", () => {
     const outsideAppRoot = await mkdtemp(join(tmpdir(), "dawn-cli-run-outside-"))
     tempDirs.push(outsideAppRoot)
 
-    const result = await invoke(["run", "src/app/support/[tenant]/graph.ts"], {
+    const result = await invoke(["run", "src/app/support/[tenant]"], {
       cwd: outsideAppRoot,
       stdin: JSON.stringify({ tenant: "missing-app" }),
     })
@@ -390,21 +413,17 @@ describe("dawn run", () => {
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as {
       readonly appRoot: string | null
-      readonly durationMs?: unknown
       readonly error: {
         readonly kind: string
         readonly message: string
       }
       readonly executionSource?: unknown
-      readonly finishedAt?: unknown
       readonly mode: string | null
-      readonly routeId?: unknown
       readonly routePath: string
-      readonly startedAt?: unknown
       readonly status: string
     }
 
-    expectFailureTiming(payload)
+    expectFailureTiming(payload as unknown as Record<string, unknown>)
     expect({
       ...payload,
       error: {
@@ -419,20 +438,20 @@ describe("dawn run", () => {
         message: `Could not find dawn.config.ts from ${normalizePrivatePath(outsideAppRoot)}`,
       },
       mode: null,
-      routeId: null,
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]",
       status: "failed",
     })
   })
 
-  test("returns a modeled route resolution failure as JSON with exit 1", async () => {
+  test("returns a route resolution failure as JSON when the target does not exist", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/page.tsx": "export default {};\n",
     })
+    const missingTarget = join(appRoot, "src/app/support/[tenant]")
 
-    const result = await invoke(["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot], {
+    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "missing-route" }),
     })
 
@@ -446,42 +465,8 @@ describe("dawn run", () => {
       executionSource: "in-process",
       error: {
         kind: "route_resolution_error",
-        message: `Route file does not exist: ${join(appRoot, "src/app/support/[tenant]/graph.ts")}`,
+        message: `Route target does not exist: ${missingTarget}`,
       },
-      mode: "graph",
-      routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
-      status: "failed",
-    })
-  })
-
-  test("returns an unsupported boundary failure as JSON with exit 1", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts":
-        "export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant });\n",
-    })
-
-    const result = await invoke(["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot], {
-      stdin: JSON.stringify({ tenant: "unsupported-tenant" }),
-    })
-
-    expect(result.exitCode).toBe(1)
-    expect(result.stderr).toBe("")
-    const payload = JSON.parse(result.stdout) as Record<string, unknown>
-
-    expectFailureTiming(payload)
-    expect(payload).toMatchObject({
-      appRoot,
-      executionSource: "in-process",
-      error: {
-        kind: "unsupported_route_boundary",
-        message: `Expected graph route at ${join(appRoot, "src/app/support/[tenant]/graph.ts")}, received workflow`,
-      },
-      mode: "graph",
-      routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
       status: "failed",
     })
   })
@@ -490,10 +475,10 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => { throw new Error(\`Graph exploded for \${input.tenant}\`); };\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => { throw new Error(\`Graph exploded for \${state.tenant}\`); };\n`,
     })
 
-    const result = await invoke(["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot], {
+    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "boom" }),
     })
 
@@ -509,18 +494,34 @@ describe("dawn run", () => {
         kind: "execution_error",
         message: "Graph exploded for boom",
       },
-      mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
       status: "failed",
     })
+  })
+
+  test("uses stderr-only exit 2 failures for malformed JSON input", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/[tenant]/index.ts":
+        "export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant });\n",
+    })
+
+    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+      stdin: "{not-json",
+    })
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("Failed to read JSON from stdin")
   })
 
   test("executes a route over --url and returns the same normalized shape as in-process", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
     const server = await startFakeAgentServer(async () => ({
       body: {
@@ -530,14 +531,11 @@ describe("dawn run", () => {
       statusCode: 200,
     }))
 
-    const inProcessResult = await invoke(
-      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot],
-      {
-        stdin: JSON.stringify({ tenant: "server-tenant" }),
-      },
-    )
+    const inProcessResult = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "server-tenant" }),
+    })
     const serverResult = await invoke(
-      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", server.url],
+      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "server-tenant" }),
       },
@@ -559,7 +557,7 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+      "src/app/support/[tenant]/index.ts": `export const workflow = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
     const server = await startFakeAgentServer(async () => ({
       body: {
@@ -570,7 +568,7 @@ describe("dawn run", () => {
     }))
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]/workflow.ts", "--cwd", appRoot, "--url", server.url],
+      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "workflow-server" }),
       },
@@ -588,7 +586,7 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant });\n`,
+      "src/app/support/[tenant]/index.ts": `export const workflow = async (state: { tenant: string }) => ({ tenant: state.tenant });\n`,
     })
     let receivedRequest: Record<string, unknown> | null = null
     const server = await startFakeAgentServer(async ({ jsonBody }) => {
@@ -600,7 +598,7 @@ describe("dawn run", () => {
     })
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]/workflow.ts", "--cwd", appRoot, "--url", server.url],
+      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "assistant-id" }),
       },
@@ -616,7 +614,7 @@ describe("dawn run", () => {
         dawn: {
           mode: "workflow",
           route_id: "/support/[tenant]",
-          route_path: "src/app/support/[tenant]/workflow.ts",
+          route_path: "src/app/support/[tenant]/index.ts",
         },
       },
       on_completion: "delete",
@@ -627,7 +625,7 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, greeting: \`Hello, \${input.tenant}!\` });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
     let receivedRequestPath: string | null = null
     const server = await startFakeAgentServer(async ({ request }) => {
@@ -644,7 +642,7 @@ describe("dawn run", () => {
     const result = await invoke(
       [
         "run",
-        "src/app/support/[tenant]/graph.ts",
+        "src/app/support/[tenant]",
         "--cwd",
         appRoot,
         "--url",
@@ -670,7 +668,7 @@ describe("dawn run", () => {
         tenant: "prefixed-server",
       },
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
       status: "passed",
     })
   })
@@ -688,7 +686,7 @@ describe("dawn run", () => {
       input: { tenant: "slow-server" },
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
       timeoutMs: 25,
     })
 
@@ -712,7 +710,7 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant });\n`,
     })
     const server = await startFakeAgentServer(async () => ({
       body: {
@@ -722,7 +720,7 @@ describe("dawn run", () => {
     }))
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", server.url],
+      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "transport-error" }),
       },
@@ -741,7 +739,7 @@ describe("dawn run", () => {
       },
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
       status: "failed",
     })
     expect((payload.error as Record<string, unknown>).message).toContain("503")
@@ -752,7 +750,7 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant });\n`,
     })
     const server = await startFakeAgentServer(async () => ({
       body: undefined,
@@ -761,7 +759,7 @@ describe("dawn run", () => {
     }))
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", server.url],
+      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "bad-payload" }),
       },
@@ -780,7 +778,7 @@ describe("dawn run", () => {
       },
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
       status: "failed",
     })
     expect(payload.diagnostics).toBeUndefined()
@@ -790,7 +788,7 @@ describe("dawn run", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts": `export const graph = async () => ({ tenant: "ok" });\n`,
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ tenant: "ok" });\n`,
     })
     const server = await startFakeAgentServer(async () => ({
       body: {
@@ -803,7 +801,7 @@ describe("dawn run", () => {
     }))
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot, "--url", server.url],
+      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "request-failure" }),
       },
@@ -822,26 +820,9 @@ describe("dawn run", () => {
       },
       mode: "graph",
       routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/graph.ts",
+      routePath: "src/app/support/[tenant]/index.ts",
       status: "failed",
     })
-  })
-
-  test("uses stderr-only exit 2 failures for malformed JSON input", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts":
-        "export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant });\n",
-    })
-
-    const result = await invoke(["run", "src/app/support/[tenant]/graph.ts", "--cwd", appRoot], {
-      stdin: "{not-json",
-    })
-
-    expect(result.exitCode).toBe(2)
-    expect(result.stdout).toBe("")
-    expect(result.stderr).toContain("Failed to read JSON from stdin")
   })
 })
 
