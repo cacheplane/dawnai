@@ -53,7 +53,7 @@ export const workflow = async (
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -91,7 +91,7 @@ export const workflow = async (
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -138,7 +138,7 @@ export const workflow = async (
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -167,7 +167,7 @@ export const workflow = async (
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -200,7 +200,7 @@ export const workflow = async (
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -232,7 +232,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectFailureTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -264,7 +264,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectFailureTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -293,7 +293,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectFailureTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -322,7 +322,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect({
       ...payload,
       appRoot: normalizePrivatePath(String(payload.appRoot)),
@@ -355,7 +355,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -385,7 +385,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -423,7 +423,7 @@ export const graph = async () => ({ ok: true })
       readonly status: string
     }
 
-    expectFailureTiming(payload as unknown as Record<string, unknown>)
+    expectTiming(payload as unknown as Record<string, unknown>)
     expect({
       ...payload,
       error: {
@@ -459,7 +459,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectFailureTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -486,7 +486,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectFailureTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "in-process",
@@ -546,7 +546,7 @@ export const graph = async () => ({ ok: true })
     const inProcessPayload = JSON.parse(inProcessResult.stdout) as Record<string, unknown>
     const serverPayload = JSON.parse(serverResult.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(serverPayload)
+    expectTiming(serverPayload)
     expect(omitExecutionMetadata(serverPayload)).toEqual({
       ...omitExecutionMetadata(inProcessPayload),
       executionSource: "server",
@@ -578,7 +578,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect(payload.executionSource).toBe("server")
   })
 
@@ -658,7 +658,7 @@ export const graph = async () => ({ ok: true })
     expect(receivedRequestPath).toBe("/api/runs/wait")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectSuccessTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "server",
@@ -730,7 +730,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectFailureTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "server",
@@ -769,7 +769,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectFailureTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "server",
@@ -811,7 +811,7 @@ export const graph = async () => ({ ok: true })
     expect(result.stderr).toBe("")
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
-    expectFailureTiming(payload)
+    expectTiming(payload)
     expect(payload).toMatchObject({
       appRoot,
       executionSource: "server",
@@ -881,13 +881,7 @@ function normalizePrivatePath(path: string): string {
   return path.replaceAll("/private/var/", "/var/")
 }
 
-function expectSuccessTiming(payload: Record<string, unknown>): void {
-  expect(payload.startedAt).toEqual(expect.any(String))
-  expect(payload.finishedAt).toEqual(expect.any(String))
-  expect(payload.durationMs).toEqual(expect.any(Number))
-}
-
-function expectFailureTiming(payload: Record<string, unknown>): void {
+function expectTiming(payload: Record<string, unknown>): void {
   expect(payload.startedAt).toEqual(expect.any(String))
   expect(payload.finishedAt).toEqual(expect.any(String))
   expect(payload.durationMs).toEqual(expect.any(Number))
