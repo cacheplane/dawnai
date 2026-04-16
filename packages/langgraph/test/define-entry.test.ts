@@ -68,10 +68,20 @@ describe("@dawn/langgraph defineEntry", () => {
         graph,
         workflow,
       } as never),
-    ).toThrow("Route modules must define exactly one primary executable entry: graph or workflow")
+    ).toThrow(`Route index.ts must export exactly one of "workflow" or "graph"`)
 
     expect(() => normalizeRouteModule(invalidModule as never)).toThrow(
-      "Route modules must define exactly one primary executable entry: graph or workflow",
+      `Route index.ts must export exactly one of "workflow" or "graph"`,
+    )
+  })
+
+  test("rejects modules that provide neither graph nor workflow", () => {
+    expect(() => defineEntry({} as never)).toThrow(
+      `Route index.ts exports neither "workflow" nor "graph"`,
+    )
+
+    expect(() => normalizeRouteModule({} as never)).toThrow(
+      `Route index.ts exports neither "workflow" nor "graph"`,
     )
   })
 

@@ -1,10 +1,6 @@
-export type RouteEntryKind = "graph" | "workflow"
+import type { RouteConfig, RouteKind } from "@dawn/sdk"
 
-export interface RouteConfig {
-  readonly runtime?: "node" | "edge"
-  readonly streaming?: boolean
-  readonly tags?: readonly string[]
-}
+export type { RouteConfig, RouteKind }
 
 export interface GraphRouteModule<TEntry = unknown> {
   readonly graph: TEntry
@@ -21,7 +17,7 @@ export interface WorkflowRouteModule<TEntry = unknown> {
 export type RouteModule<TEntry = unknown> = GraphRouteModule<TEntry> | WorkflowRouteModule<TEntry>
 
 export interface NormalizedRouteModule<TEntry = unknown> {
-  readonly kind: RouteEntryKind
+  readonly kind: RouteKind
   readonly entry: TEntry
   readonly config: RouteConfig
 }
@@ -49,12 +45,15 @@ export function normalizeRouteModule<TEntry>(
 export function assertExactlyOneEntry<TEntry>(
   module: RouteModule<TEntry> | (GraphRouteModule<TEntry> & WorkflowRouteModule<TEntry>),
 ): asserts module is RouteModule<TEntry> {
-  const hasGraph = "graph" in module
-  const hasWorkflow = "workflow" in module
+  const hasGraph = "graph" in module && (module as { graph?: unknown }).graph !== undefined
+  const hasWorkflow =
+    "workflow" in module && (module as { workflow?: unknown }).workflow !== undefined
 
-  if (hasGraph === hasWorkflow) {
-    throw new Error(
-      "Route modules must define exactly one primary executable entry: graph or workflow",
-    )
+  if (hasGraph && hasWorkflow) {
+    throw new Error(`Route index.ts must export exactly one of "workflow" or "graph"`)
+  }
+
+  if (!hasGraph && !hasWorkflow) {
+    throw new Error(`Route index.ts exports neither "workflow" nor "graph"`)
   }
 }

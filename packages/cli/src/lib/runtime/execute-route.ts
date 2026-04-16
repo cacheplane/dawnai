@@ -389,8 +389,8 @@ function toRouteMode(routeFile: string): RuntimeExecutionMode | null {
 function isUnsupportedBoundaryError(error: unknown): boolean {
   return (
     error instanceof Error &&
-    (error.message ===
-      "Route modules must define exactly one primary executable entry: graph or workflow" ||
+    (error.message === `Route index.ts must export exactly one of "workflow" or "graph"` ||
+      error.message === `Route index.ts exports neither "workflow" nor "graph"` ||
       error.message === "Workflow entry must be a function" ||
       error.message === "Graph entry must be a function or expose invoke(input)")
   )
