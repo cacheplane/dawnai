@@ -19,14 +19,14 @@ pnpm install
 2. Run the scaffolded route. The route path must be quoted because it contains `(`, `)`, and `[]`.
 
 ```bash
-echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]/workflow.ts"
+echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]"
 ```
 
 3. Optionally start the local runtime in one terminal and send the same route through `--url` from another terminal.
 
 ```bash
 pnpm exec dawn dev --port 3001
-echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]/workflow.ts" --url http://127.0.0.1:3001
+echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]" --url http://127.0.0.1:3001
 ```
 
 ## App Contract
@@ -37,19 +37,27 @@ Route discovery starts at `src/app` by default.
 
 `appDir` is the only supported config option today.
 
-Route directories currently support these route files:
+A route is a directory containing `index.ts`. The `index.ts` exports either a `workflow` function or a `graph` function/object:
 
-- `page.tsx` for UI routes
-- `graph.ts` or `workflow.ts` for executable routes
-- `route.ts` as the Dawn-owned route definition that binds exactly one sibling `graph.ts` or `workflow.ts`
+```ts
+// workflow-style route
+export async function workflow(state, ctx) { return state }
+
+// graph-style route
+export async function graph(state, ctx) { return state }
+// or
+export const graph = { invoke: async (state, ctx) => state }
+```
 
 Route directories may also include companion files such as `state.ts` and route-local tools under `tools/*.ts`.
 
+Route directories currently support these additional files:
+
+- `page.tsx` for UI routes
+
 The current `basic` scaffold ships:
 
-- `src/app/(public)/hello/[tenant]/route.ts`
-- `src/app/(public)/hello/[tenant]/workflow.ts`
-- `src/app/(public)/hello/[tenant]/state.ts`
+- `src/app/(public)/hello/[tenant]/index.ts`
 - `src/app/(public)/hello/[tenant]/tools/greet.ts`
 
 ## Commands
@@ -81,7 +89,7 @@ Generate route types for the current app.
 Execute one route invocation with JSON stdin/stdout.
 
 ```bash
-echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]/workflow.ts"
+echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]"
 ```
 
 ### `dawn test`
@@ -99,7 +107,8 @@ pnpm exec dawn dev
 ## Packages
 
 - `@dawn/core` owns discovery, config loading, validation, and route types.
-- `@dawn/langgraph` owns thin route authoring contracts.
+- `@dawn/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
+- `@dawn/langgraph` is the LangGraph adapter that implements the `@dawn/sdk` contract.
 - `@dawn/cli` owns the user-facing commands and local runtime behavior.
 - `create-dawn-app` owns scaffolding for new apps.
 - `@dawn/devkit` owns shared template and file-generation helpers.

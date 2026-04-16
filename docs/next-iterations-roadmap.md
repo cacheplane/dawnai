@@ -13,15 +13,15 @@ The roadmap is intentionally phased. The current repo has enough CLI/runtime/aut
 Dawn currently has:
 
 - stable app/project plumbing
-- stable route discovery and route identity
+- stable route discovery and route identity (`index.ts` per route convention)
 - local route execution and local dev runtime
 - scenario testing and generated-app parity coverage
-- a first Dawn-owned route authoring layer
+- a Dawn-owned backend-neutral authoring contract (`@dawn/sdk`)
+- `@dawn/langgraph` as the first backend adapter implementing the `@dawn/sdk` contract
 - filesystem-driven tool registration and discovery
 
 Dawn does not yet have:
 
-- a Dawn-owned backend-neutral authoring contract
 - a LangChain-native authoring path
 - a Deep Agents composition layer
 - a mature higher-level model for tools, workflows, approvals, memory, evals, or traces
@@ -43,60 +43,19 @@ The following should be treated as still provisional and subject to new design w
 - higher-level tool composition
 - LangChain-native and Deep Agents authoring models
 
-## Phase 1: Dawn-Owned Authoring Contract
+## Phase 1: Dawn-Owned Authoring Contract (Complete)
 
 ### Goal
 
 Define a Dawn authoring contract that is semantically owned by Dawn rather than inherited from LangGraph implementation details.
 
-### Why This Comes First
+### Status
 
-If Dawn jumps straight to LangChain-native authoring or Deep Agents integration, it risks baking one backend’s semantics into the core framework surface.
+This phase is complete as of the authoring-sdk milestone.
 
-The first post-handoff phase should instead answer:
+`@dawn/sdk` is the Dawn-owned backend-neutral package containing the full author-facing contract: route types, tool authoring helpers (`defineTool`), runtime context types (`RuntimeContext`, `RuntimeTool`), and the `index.ts`-per-route convention. `@dawn/langgraph` is now an adapter that implements the `@dawn/sdk` contract and wires it to LangGraph execution.
 
-- what does a Dawn route author?
-- what does a Dawn tool author?
-- what runtime context, composition model, and execution expectations are Dawn-owned?
-
-### Scope
-
-This phase should expand the authoring surface from the current route-binding layer into a clearer Dawn contract for:
-
-- route definition shape
-- tool composition boundaries
-- runtime context shape
-- author-facing route metadata
-- boundaries between Dawn-owned semantics and backend-owned semantics
-
-It should stay disciplined and avoid absorbing unrelated subsystems too early.
-
-### Deliverables
-
-- a design spec for a Dawn-owned authoring contract
-- explicit type surfaces for that contract, likely centered in a Dawn-owned package rather than backend-specific packages
-- one or more authoring examples proving the contract is not just a LangGraph wrapper
-- CLI/runtime integration where needed to support the new contract
-- tests that freeze the contract before backend expansion
-
-Concrete likely outputs:
-
-- a new authoring-focused package such as `@dawn/authoring` or a similarly named Dawn-owned surface
-- a clearer separation between Dawn-owned route/tool/context types and backend adapter types
-- at least one template or fixture route rewritten to use the broader Dawn contract rather than only the current `route.ts` binding helper
-
-### Success Criteria
-
-- Dawn has a clear author-facing contract that can be described without reference to LangGraph internals
-- the contract is stable enough to become the surface future backend integrations implement
-- the contract remains compatible with the existing route/run/test/dev model
-
-### What To Defer
-
-- Deep Agents-specific composition
-- approvals and memory abstractions
-- eval authoring
-- any custom trace model
+Authors depend on `@dawn/sdk` for all Dawn-owned types and helpers. `@dawn/langgraph` remains available for backwards compatibility but is no longer the canonical author surface.
 
 ## Phase 2: LangChain-Native Authoring
 
@@ -237,24 +196,23 @@ Future authoring systems should extend that strength rather than replace it with
 
 ## Recommended Immediate Next Outcomes
 
-The next thread should aim to leave the repo with these outcomes:
+Phase 1 is now complete. The next thread should aim to leave the repo with these outcomes:
 
-1. A written design for the Dawn-owned authoring contract beyond the current route-binding layer
-2. A decision on the exact contract boundary between Dawn-owned authoring semantics and backend-owned execution semantics
-3. A concrete implementation plan for the first backend-neutral authoring phase
-4. An explicit package map for the next iteration, for example whether Dawn should add `@dawn/authoring`, `@dawn/langchain`, and later `@dawn/deepagents`
+1. A written design for LangChain-native authoring on top of the `@dawn/sdk` contract (Phase 2)
+2. A decision on the adapter package structure for `@dawn/langchain`
+3. A concrete implementation plan for the first real cross-backend authoring proof
+4. At least one proving example that demonstrates Dawn is not solely a LangGraph-oriented shell
 
-If those outcomes are not reached, the next thread risks drifting back into local plumbing work instead of closing the actual product gap.
+If those outcomes are not reached, the next thread risks circling back to plumbing work instead of closing the actual product gap.
 
 ## Suggested Questions For The Next Thread
 
 The next thread should probably resolve these questions in order:
 
-1. What are the Dawn-owned concepts that authors interact with directly?
-2. Which of those concepts must be backend-neutral from day one?
-3. Which concepts should remain thin wrappers for now?
-4. What is the smallest real example that proves Dawn is more than a LangGraph-oriented shell?
-5. What should Phase 1 explicitly refuse to own yet?
+1. What is the minimal LangChain-native route or workflow example that proves the `@dawn/sdk` contract is not LangGraph-specific?
+2. What does the `@dawn/langchain` adapter package look like at its interface boundary with `@dawn/sdk`?
+3. What runtime and discovery changes (if any) are needed to support a second backend adapter in `dawn run` and `dawn test`?
+4. What should Phase 2 explicitly refuse to own yet?
 
 ## Related Documents
 

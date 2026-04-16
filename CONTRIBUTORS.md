@@ -15,7 +15,8 @@ This guide is for engineers working inside the Dawn monorepo. It covers the curr
 ## Package Responsibilities
 
 - `@dawn/core` owns app discovery, config loading, validation, and route type generation.
-- `@dawn/langgraph` owns the thin route authoring contract used by route modules.
+- `@dawn/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
+- `@dawn/langgraph` is the LangGraph adapter that implements the `@dawn/sdk` contract and wires it to LangGraph.
 - `@dawn/cli` owns the user-facing commands and the local runtime behavior.
 - `create-dawn-app` owns app scaffolding.
 - `@dawn/devkit` owns shared template and file-generation helpers.
@@ -42,15 +43,14 @@ From that generated app root, the supported contributor-local commands are:
 
 ```bash
 pnpm exec dawn verify
-pnpm exec dawn run "src/app/(public)/hello/[tenant]/workflow.ts"
+pnpm exec dawn run "src/app/(public)/hello/[tenant]"
 pnpm exec dawn test
 pnpm exec dawn dev
 ```
 
 The generated `basic` app now demonstrates the route authoring lane with:
 
-- `src/app/(public)/hello/[tenant]/route.ts`
-- `src/app/(public)/hello/[tenant]/workflow.ts`
+- `src/app/(public)/hello/[tenant]/index.ts`
 - `src/app/(public)/hello/[tenant]/tools/greet.ts`
 
 Use this path only when you intentionally want the generated app wired to the local Dawn checkout. The public user path remains `pnpm create dawn-app`.
