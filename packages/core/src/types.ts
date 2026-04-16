@@ -1,8 +1,10 @@
+import type { RouteKind } from "@dawn/sdk"
+
+export type { RouteKind }
+
 export interface DawnConfig {
   readonly appDir?: string
 }
-
-export type RouteEntryKind = "graph" | "page" | "route" | "workflow"
 
 export type RouteSegment =
   | {
@@ -16,11 +18,9 @@ export type RouteSegment =
     }
 
 export interface RouteDefinition {
-  readonly boundEntryFile?: string
-  readonly boundEntryKind?: Exclude<RouteEntryKind, "page" | "route">
   readonly id: string
   readonly pathname: string
-  readonly entryKind: RouteEntryKind
+  readonly kind: RouteKind
   readonly entryFile: string
   readonly routeDir: string
   readonly segments: RouteSegment[]
