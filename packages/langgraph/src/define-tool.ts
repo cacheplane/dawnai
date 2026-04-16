@@ -1,1 +1,1 @@
-export { defineTool, type ToolDefinition } from "@dawn/sdk"
+export { defineTool, type ToolContext, type ToolDefinition } from "@dawn/sdk"
