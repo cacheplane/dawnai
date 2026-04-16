@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test } from "vitest"
 import {
   cleanupTrackedTempDirs,
   createTrackedTempDir,
+  expectBasicAuthoringLane,
   prepareGeneratedRuntimeApp,
   readGeneratedExpectedFixture,
   runGeneratedRuntimeScenario,
@@ -101,28 +102,6 @@ describe("generated app runtime contract", () => {
     expect(transcript).not.toContain("pnpm add ")
   })
 })
-
-async function expectBasicAuthoringLane(appRoot: string): Promise<void> {
-  const routeSource = await readFile(
-    resolve(appRoot, "src/app/(public)/hello/[tenant]/route.ts"),
-    "utf8",
-  )
-  const workflowSource = await readFile(
-    resolve(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts"),
-    "utf8",
-  )
-  const toolSource = await readFile(
-    resolve(appRoot, "src/app/(public)/hello/[tenant]/tools/greet.ts"),
-    "utf8",
-  )
-
-  expect(routeSource).toContain("defineRoute({")
-  expect(routeSource).toContain('entry: "./workflow.ts"')
-  expect(workflowSource).toContain("RuntimeContext")
-  expect(workflowSource).toContain("context.tools.greet(")
-  expect(toolSource).toContain("defineTool({")
-  expect(toolSource).toContain('name: "greet"')
-}
 
 function expectGeneratedRuntimeScenario(result: unknown, expected: unknown): void {
   expect(result).toMatchObject({

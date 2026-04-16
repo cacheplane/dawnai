@@ -13,6 +13,7 @@ import {
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
+import { expectBasicAuthoringLane } from "./harness.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
 const FIXTURE_ROOT = resolve(import.meta.dirname, "fixtures")
@@ -137,22 +138,6 @@ describe("generated app publish harness", () => {
     expect(transcript).not.toContain("pnpm add ")
   })
 })
-
-async function expectBasicAuthoringLane(appRoot: string): Promise<void> {
-  const routePath = join(appRoot, "src/app/(public)/hello/[tenant]/route.ts")
-  const workflowPath = join(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts")
-  const toolPath = join(appRoot, "src/app/(public)/hello/[tenant]/tools/greet.ts")
-  const routeSource = await readFile(routePath, "utf8")
-  const workflowSource = await readFile(workflowPath, "utf8")
-  const toolSource = await readFile(toolPath, "utf8")
-
-  expect(routeSource).toContain("defineRoute({")
-  expect(routeSource).toContain('entry: "./workflow.ts"')
-  expect(workflowSource).toContain("RuntimeContext")
-  expect(workflowSource).toContain("context.tools.greet(")
-  expect(toolSource).toContain("defineTool({")
-  expect(toolSource).toContain('name: "greet"')
-}
 
 async function runGeneratedAppScenario(
   options: GeneratedAppScenarioOptions,
