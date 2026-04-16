@@ -180,14 +180,11 @@ describe("dawn check", () => {
 
   test("fails when shared tools collide within the same scope", async () => {
     const appRoot = await createAuthoringFixtureApp({
-      "src/tools/a.ts":
-        'export default { name: "greet", run: async () => "hello from a" };\n',
-      "src/tools/b.ts":
-        'export default { name: "greet", run: async () => "hello from b" };\n',
+      "src/tools/a.ts": 'export default { name: "greet", run: async () => "hello from a" };\n',
+      "src/tools/b.ts": 'export default { name: "greet", run: async () => "hello from b" };\n',
       "src/app/hello/[tenant]/route.ts":
         'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts":
-        "export const workflow = async () => ({ ok: true });\n",
+      "src/app/hello/[tenant]/workflow.ts": "export const workflow = async () => ({ ok: true });\n",
     })
 
     const result = await invoke(["check", "--cwd", appRoot])
@@ -204,8 +201,7 @@ describe("dawn check", () => {
     const appRoot = await createAuthoringFixtureApp({
       "src/app/hello/[tenant]/route.ts":
         'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts":
-        "export const workflow = async () => ({ ok: true });\n",
+      "src/app/hello/[tenant]/workflow.ts": "export const workflow = async () => ({ ok: true });\n",
       "src/app/hello/[tenant]/tools/a.ts":
         'export default { name: "greet", run: async () => "hello from a" };\n',
       "src/app/hello/[tenant]/tools/b.ts":

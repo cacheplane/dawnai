@@ -38,6 +38,8 @@ describe("@dawn/langgraph defineRoute", () => {
         kind: "graph",
         entry: "./workflow.ts",
       }),
-    ).toThrow('Route kind and entry must match exactly: "graph" -> "./graph.ts", "workflow" -> "./workflow.ts"')
+    ).toThrow(
+      'Route kind and entry must match exactly: "graph" -> "./graph.ts", "workflow" -> "./workflow.ts"',
+    )
   })
 })

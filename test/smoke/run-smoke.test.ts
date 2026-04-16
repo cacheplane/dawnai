@@ -32,6 +32,8 @@ interface SmokeOverlay {
 }
 
 interface SmokeRouteDefinition {
+  readonly boundEntryFile?: string
+  readonly boundEntryKind?: string
   readonly entryFile: string
   readonly entryKind: string
   readonly id: string
@@ -174,8 +176,8 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
       })
     })
 
-    const compiledEntryPath = await recordPhase(phases, "compile", async () => {
-      return await compileDiscoveredRoute({
+    await recordPhase(phases, "compile", async () => {
+      await compileDiscoveredRoute({
         appRoot: generatedApp.appRoot,
         entryFile: discoveredRoute.entryFile,
         transcriptPath,
@@ -186,10 +188,9 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
     await recordPhase(phases, "execute", async () => {
       const output = await executeCanonicalFlow({
         appRoot: generatedApp.appRoot,
-        compiledEntryPath,
+        entryFile: discoveredRoute.entryFile,
         input: overlay.input,
         transcriptPath,
-        expectedKind: overlay.entryKind,
       })
 
       await writeJsonArtifact(outputArtifactPath, output)
@@ -294,7 +295,9 @@ async function discoverRoutes(options: {
     transcriptPath: options.transcriptPath,
   })
   const manifest = JSON.parse(result.stdout) as SmokeRouteManifest
-  const matchingRoutes = manifest.routes.filter((route) => route.entryKind === options.expectedEntryKind)
+  const matchingRoutes = manifest.routes.filter((route) =>
+    resolveExecutableRoute(route)?.entryKind === options.expectedEntryKind
+  )
 
   if (matchingRoutes.length !== 1) {
     throw new Error(
@@ -309,13 +312,36 @@ function selectExecutableRoute(
   manifest: SmokeRouteManifest,
   expectedEntryKind: SmokeEntryKind,
 ): SmokeRouteDefinition {
-  const route = manifest.routes.find((candidate) => candidate.entryKind === expectedEntryKind)
+  const route = manifest.routes.find(
+    (candidate) => resolveExecutableRoute(candidate)?.entryKind === expectedEntryKind,
+  )
 
   if (!route) {
     throw new Error(`Could not find discovered ${expectedEntryKind} route`)
   }
 
-  return route
+  return resolveExecutableRoute(route) ?? route
+}
+
+function resolveExecutableRoute(route: SmokeRouteDefinition): SmokeRouteDefinition | null {
+  if (route.entryKind === "graph" || route.entryKind === "workflow") {
+    return route
+  }
+
+  if (
+    route.entryKind === "route" &&
+    typeof route.boundEntryKind === "string" &&
+    (route.boundEntryKind === "graph" || route.boundEntryKind === "workflow") &&
+    typeof route.boundEntryFile === "string"
+  ) {
+    return {
+      ...route,
+      entryFile: route.boundEntryFile,
+      entryKind: route.boundEntryKind,
+    }
+  }
+
+  return null
 }
 
 async function compileDiscoveredRoute(options: {
@@ -344,60 +370,24 @@ async function compileDiscoveredRoute(options: {
 
 async function executeCanonicalFlow(options: {
   readonly appRoot: string
-  readonly compiledEntryPath: string
-  readonly expectedKind: SmokeEntryKind
+  readonly entryFile: string
   readonly input: Record<string, unknown>
   readonly transcriptPath: string
 }): Promise<unknown> {
-  const runnerPath = join(options.appRoot, ".dawn-smoke-runner.mjs")
-
-  await writeFile(
-    runnerPath,
-    [
-      'import { resolve } from "node:path";',
-      'import { pathToFileURL } from "node:url";',
-      'import { normalizeRouteModule } from "@dawn/langgraph";',
-      "",
-      "const [compiledEntryArg, expectedKindArg, inputArg] = process.argv.slice(2);",
-      "",
-      "if (!compiledEntryArg || !expectedKindArg || !inputArg) {",
-      '  throw new Error("Expected compiled entry path, expected kind, and JSON input");',
-      "}",
-      "",
-      "const routeModule = await import(pathToFileURL(resolve(compiledEntryArg)).href);",
-      "const normalized = normalizeRouteModule(routeModule);",
-      "const input = JSON.parse(inputArg);",
-      "",
-      "if (normalized.kind !== expectedKindArg) {",
-      '  throw new Error(`Expected ${expectedKindArg} entry but received ${normalized.kind}`);',
-      "}",
-      "",
-      "let output;",
-      "",
-      "if (normalized.kind === \"workflow\") {",
-      "  output = await normalized.entry(input);",
-      "} else if (typeof normalized.entry === \"function\") {",
-      "  output = await normalized.entry(input);",
-      "} else if (normalized.entry && typeof normalized.entry.invoke === \"function\") {",
-      "  output = await normalized.entry.invoke(input);",
-      "} else {",
-      '  throw new Error("Graph entry must be a function or expose invoke(input)");',
-      "}",
-      "",
-      "process.stdout.write(JSON.stringify(output));",
-      "",
-    ].join("\n"),
-    "utf8",
-  )
-
+  const routePath = relative(
+    normalizePrivatePath(options.appRoot),
+    normalizePrivatePath(options.entryFile),
+  ).split("\\").join("/")
   const runnerResult = await runCommand({
-    args: [runnerPath, options.compiledEntryPath, options.expectedKind, JSON.stringify(options.input)],
-    command: "node",
+    args: ["exec", "dawn", "run", routePath],
+    command: "pnpm",
     cwd: options.appRoot,
+    stdin: JSON.stringify(options.input),
     transcriptPath: options.transcriptPath,
   })
+  const payload = JSON.parse(runnerResult.stdout) as { readonly output: unknown }
 
-  return JSON.parse(runnerResult.stdout)
+  return payload.output
 }
 
 async function recordPhase<T>(
@@ -447,12 +437,14 @@ async function runCommand(options: {
   readonly args: readonly string[]
   readonly command: string
   readonly cwd: string
+  readonly stdin?: string
   readonly transcriptPath: string
 }) {
   const result = await spawnProcess({
     args: options.args,
     command: options.command,
     cwd: options.cwd,
+    ...(typeof options.stdin === "string" ? { stdin: options.stdin } : {}),
   })
 
   await appendTranscript(options.transcriptPath, result)

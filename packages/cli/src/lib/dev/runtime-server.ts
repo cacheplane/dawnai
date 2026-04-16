@@ -165,7 +165,7 @@ async function handleRequest(options: {
     return
   }
 
-  const result = await executeResolvedRoute({
+  const resultPromise = executeResolvedRoute({
     appRoot: registry.appRoot,
     input: validatedBody.value.input,
     mode: route.mode,
@@ -174,6 +174,12 @@ async function handleRequest(options: {
     routeId: route.routeId,
     routePath: route.routePath,
   })
+  const result = await raceRequestAgainstShutdown(resultPromise, signal)
+
+  if (result === SHUTDOWN_ABORTED) {
+    sendJson(response, 503, createRequestErrorBody("Request canceled during server shutdown"))
+    return
+  }
 
   if (result.status === "failed") {
     if (signal.aborted) {
@@ -203,6 +209,35 @@ async function handleRequest(options: {
   }
 
   sendJson(response, 200, result.output)
+}
+
+const SHUTDOWN_ABORTED = Symbol("shutdown-aborted")
+
+async function raceRequestAgainstShutdown<T>(
+  execution: Promise<T>,
+  signal: AbortSignal,
+): Promise<T | typeof SHUTDOWN_ABORTED> {
+  if (signal.aborted) {
+    void execution.catch(() => undefined)
+    return SHUTDOWN_ABORTED
+  }
+
+  const shutdown = new Promise<typeof SHUTDOWN_ABORTED>((resolve) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort)
+      resolve(SHUTDOWN_ABORTED)
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+
+  const result = await Promise.race([execution, shutdown])
+
+  if (result === SHUTDOWN_ABORTED) {
+    void execution.catch(() => undefined)
+  }
+
+  return result
 }
 
 function validateRunsWaitRequest(

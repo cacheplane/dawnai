@@ -92,6 +92,10 @@ importers:
         version: 19.2.3(@types/react@19.2.14)
 
   packages/core:
+    dependencies:
+      tsx:
+        specifier: ^4.8.1
+        version: 4.21.0
     devDependencies:
       '@dawn/config-typescript':
         specifier: workspace:*

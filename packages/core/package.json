@@ -35,6 +35,9 @@
     "test": "vitest --run --config vitest.config.ts",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "tsx": "^4.8.1"
+  },
   "devDependencies": {
     "@dawn/config-typescript": "workspace:*",
     "@types/node": "25.6.0"

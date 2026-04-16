@@ -5,6 +5,7 @@ export interface SpawnProcessOptions {
   readonly command: string
   readonly cwd?: string
   readonly env?: NodeJS.ProcessEnv
+  readonly stdin?: string
 }
 
 export interface SpawnProcessResult {
@@ -29,7 +30,7 @@ export async function spawnProcess(options: SpawnProcessOptions): Promise<SpawnP
     const child = spawn(options.command, [...args], {
       cwd: options.cwd,
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     })
 
     let stdout = ""
@@ -42,6 +43,11 @@ export async function spawnProcess(options: SpawnProcessOptions): Promise<SpawnP
     child.stderr.on("data", (chunk: string | Buffer) => {
       stderr += chunk.toString()
     })
+
+    if (typeof options.stdin === "string") {
+      child.stdin.write(options.stdin)
+    }
+    child.stdin.end()
 
     child.on("error", reject)
     child.on("close", (exitCode, signal) => {

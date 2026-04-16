@@ -9,7 +9,10 @@ type ToolScope = "route-local" | "shared"
 export interface DiscoveredToolDefinition {
   readonly filePath: string
   readonly name: string
-  readonly run: (input: unknown, context: { readonly signal: AbortSignal }) => Promise<unknown> | unknown
+  readonly run: (
+    input: unknown,
+    context: { readonly signal: AbortSignal },
+  ) => Promise<unknown> | unknown
   readonly scope: ToolScope
 }
 
