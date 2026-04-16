@@ -1,6 +1,6 @@
-import { basename, resolve } from "node:path"
 import type { Stats } from "node:fs"
 import { stat } from "node:fs/promises"
+import { basename, resolve } from "node:path"
 
 import { findDawnApp } from "@dawn/core"
 import {
