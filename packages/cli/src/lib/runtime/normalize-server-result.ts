@@ -8,7 +8,7 @@ import {
 export interface NormalizeServerResultOptions {
   readonly appRoot: string
   readonly finishedAt?: number
-  readonly mode: RuntimeExecutionMode
+  readonly mode?: RuntimeExecutionMode
   readonly responseBodyText: string
   readonly routeId: string
   readonly routePath: string
@@ -29,7 +29,22 @@ export function normalizeServerResult(
         ...(options.finishedAt === undefined ? {} : { finishedAt: options.finishedAt }),
         kind: "server_transport_error",
         message: "Server returned a malformed JSON payload for /runs/wait",
-        mode: options.mode,
+        ...(options.mode !== undefined ? { mode: options.mode } : {}),
+        routeId: options.routeId,
+        routePath: options.routePath,
+        startedAt: options.startedAt,
+      })
+    }
+
+    const resolvedMode = options.mode ?? extractModeFromBody(parsedBody.value)
+
+    if (!resolvedMode) {
+      return createRuntimeFailureResult({
+        appRoot: options.appRoot,
+        executionSource: "server",
+        ...(options.finishedAt === undefined ? {} : { finishedAt: options.finishedAt }),
+        kind: "server_transport_error",
+        message: "Server returned a result with an unknown route kind",
         routeId: options.routeId,
         routePath: options.routePath,
         startedAt: options.startedAt,
@@ -40,7 +55,7 @@ export function normalizeServerResult(
       appRoot: options.appRoot,
       executionSource: "server",
       ...(options.finishedAt === undefined ? {} : { finishedAt: options.finishedAt }),
-      mode: options.mode,
+      mode: resolvedMode,
       output: parsedBody.value,
       routeId: options.routeId,
       routePath: options.routePath,
@@ -59,7 +74,7 @@ export function normalizeServerResult(
         ...(options.finishedAt === undefined ? {} : { finishedAt: options.finishedAt }),
         kind: "execution_error",
         message: executionError.message,
-        mode: options.mode,
+        ...(options.mode !== undefined ? { mode: options.mode } : {}),
         routeId: options.routeId,
         routePath: options.routePath,
         startedAt: options.startedAt,
@@ -73,11 +88,25 @@ export function normalizeServerResult(
     ...(options.finishedAt === undefined ? {} : { finishedAt: options.finishedAt }),
     kind: "server_transport_error",
     message: `Server transport failed for /runs/wait with HTTP ${options.statusCode}`,
-    mode: options.mode,
+    ...(options.mode !== undefined ? { mode: options.mode } : {}),
     routeId: options.routeId,
     routePath: options.routePath,
     startedAt: options.startedAt,
   })
+}
+
+function extractModeFromBody(value: unknown): RuntimeExecutionMode | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const mode = value.mode
+
+  if (mode === "graph" || mode === "workflow") {
+    return mode
+  }
+
+  return null
 }
 
 function parseJson(

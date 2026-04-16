@@ -55,7 +55,6 @@ export async function runRunCommand(
           appRoot: target.appRoot,
           baseUrl: options.url,
           input,
-          mode: target.mode,
           routeId: target.routeId,
           routePath: target.routePath,
         })

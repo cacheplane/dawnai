@@ -168,7 +168,6 @@ async function handleRequest(options: {
   const resultPromise = executeResolvedRoute({
     appRoot: registry.appRoot,
     input: validatedBody.value.input,
-    mode: route.mode,
     signal,
     routeFile: route.routeFile,
     routeId: route.routeId,

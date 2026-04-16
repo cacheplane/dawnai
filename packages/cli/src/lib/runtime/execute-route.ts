@@ -1,4 +1,4 @@
-import { basename, isAbsolute, resolve } from "node:path"
+import { isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { findDawnApp } from "@dawn/core"
@@ -9,13 +9,8 @@ import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,
   formatErrorMessage,
-  type RuntimeExecutionMode,
   type RuntimeExecutionResult,
 } from "./result.js"
-import {
-  loadAuthoringRouteHandler,
-  resolveAuthoringRouteDefinitionForTarget,
-} from "./route-definition.js"
 import { deriveRouteIdentity } from "./route-identity.js"
 import { discoverToolDefinitions } from "./tool-discovery.js"
 import { fileExists } from "./utils.js"
@@ -49,40 +44,20 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     routeFile: options.routeFile,
     ...(options.cwd ? { cwd: options.cwd } : {}),
   })
-  const routeMode = toRouteMode(routeFile)
 
-  if (!routeMode) {
-    const routeIdentity = deriveRouteIdentity({
-      appRoot,
-      routeFile,
-      routesDir: discoveredApp.routesDir,
-    })
-
-    return createRuntimeFailureResult({
-      appRoot,
-      executionSource: "in-process",
-      kind: "route_resolution_error",
-      message: `Route file must end with graph.ts or workflow.ts: ${routeFile}`,
-      routeId: routeIdentity.ok ? routeIdentity.routeId : null,
-      routePath: routeIdentity.routePath,
-      startedAt,
-    })
-  }
-
-  const routeIdentity = deriveRouteIdentity({
+  const identity = deriveRouteIdentity({
     appRoot,
     routeFile,
     routesDir: discoveredApp.routesDir,
   })
 
-  if (!routeIdentity.ok) {
+  if (!identity.ok) {
     return createRuntimeFailureResult({
       appRoot,
       executionSource: "in-process",
       kind: "route_resolution_error",
       message: `Route file is outside the configured appDir: ${routeFile}`,
-      mode: routeMode,
-      routePath: routeIdentity.routePath,
+      routePath: identity.routePath,
       startedAt,
     })
   }
@@ -93,9 +68,8 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
       executionSource: "in-process",
       kind: "route_resolution_error",
       message: `Route file does not exist: ${routeFile}`,
-      mode: routeMode,
-      routeId: routeIdentity.routeId,
-      routePath: routeIdentity.routePath,
+      routeId: identity.routeId,
+      routePath: identity.routePath,
       startedAt,
     })
   }
@@ -103,10 +77,9 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
   return await executeRouteAtResolvedPath({
     appRoot,
     input: options.input,
-    mode: routeMode,
     routeFile,
-    routeId: routeIdentity.routeId,
-    routePath: routeIdentity.routePath,
+    routeId: identity.routeId,
+    routePath: identity.routePath,
     ...(options.signal ? { signal: options.signal } : {}),
     startedAt,
   })
@@ -115,24 +88,111 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
 export async function executeResolvedRoute(options: {
   readonly appRoot: string
   readonly input: unknown
-  readonly mode: RuntimeExecutionMode
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
   readonly signal?: AbortSignal
 }): Promise<RuntimeExecutionResult> {
-  const startedAt = Date.now()
-
   return await executeRouteAtResolvedPath({
-    appRoot: options.appRoot,
-    input: options.input,
-    mode: options.mode,
-    routeFile: options.routeFile,
-    routeId: options.routeId,
-    routePath: options.routePath,
-    ...(options.signal ? { signal: options.signal } : {}),
-    startedAt,
+    ...options,
+    startedAt: Date.now(),
   })
+}
+
+async function executeRouteAtResolvedPath(options: {
+  readonly appRoot: string
+  readonly input: unknown
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly signal?: AbortSignal
+  readonly startedAt: number
+}): Promise<RuntimeExecutionResult> {
+  const routeDir = resolve(options.routeFile, "..")
+
+  try {
+    await registerTsxLoader()
+    const routeModule = await import(pathToFileURL(options.routeFile).href)
+    const normalized = normalizeRouteModule(routeModule)
+
+    const tools = await discoverToolDefinitions({
+      appRoot: options.appRoot,
+      routeDir,
+    })
+
+    const context = createDawnContext({
+      tools,
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
+
+    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context)
+
+    return createRuntimeSuccessResult({
+      appRoot: options.appRoot,
+      executionSource: "in-process",
+      mode: normalized.kind,
+      output,
+      routeId: options.routeId,
+      routePath: options.routePath,
+      startedAt: options.startedAt,
+    })
+  } catch (error) {
+    const kind = isBoundaryError(error) ? "unsupported_route_boundary" : "execution_error"
+    const message = rewriteNeitherExportMessage(error, options.routeFile)
+
+    return createRuntimeFailureResult({
+      appRoot: options.appRoot,
+      executionSource: "in-process",
+      kind,
+      message,
+      routeId: options.routeId,
+      routePath: options.routePath,
+      startedAt: options.startedAt,
+    })
+  }
+}
+
+function rewriteNeitherExportMessage(error: unknown, routeFile: string): string {
+  if (
+    error instanceof Error &&
+    error.message === `Route index.ts exports neither "workflow" nor "graph"`
+  ) {
+    return `Route index.ts at ${routeFile} exports neither "workflow" nor "graph"`
+  }
+
+  return formatErrorMessage(error)
+}
+
+async function invokeEntry(
+  kind: "graph" | "workflow",
+  entry: unknown,
+  input: unknown,
+  context: unknown,
+): Promise<unknown> {
+  if (kind === "workflow") {
+    if (typeof entry !== "function") {
+      throw new Error("Workflow entry must be a function")
+    }
+    return await entry(input, context)
+  }
+
+  if (typeof entry === "function") {
+    return await entry(input, context)
+  }
+
+  if (
+    typeof entry === "object" &&
+    entry !== null &&
+    "invoke" in entry &&
+    typeof (entry as { invoke?: unknown }).invoke === "function"
+  ) {
+    return await (entry as { invoke: (input: unknown, context: unknown) => unknown }).invoke(
+      input,
+      context,
+    )
+  }
+
+  throw new Error("Graph entry must be a function or expose invoke(input)")
 }
 
 function resolveRouteFile(options: {
@@ -181,217 +241,15 @@ async function discoverApp(options: ExecuteRouteOptions): Promise<
   }
 }
 
-async function executeNormalizedEntry(
-  mode: RuntimeExecutionMode,
-  entry: unknown,
-  input: unknown,
-  signal?: AbortSignal,
-): Promise<unknown> {
-  if (mode === "workflow") {
-    if (typeof entry !== "function") {
-      throw new Error("Workflow entry must be a function")
-    }
-
-    return await entry(input, signal ? { signal } : undefined)
+function isBoundaryError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
   }
 
-  if (typeof entry === "function") {
-    return await entry(input, signal ? { signal } : undefined)
-  }
-
-  if (
-    typeof entry === "object" &&
-    entry !== null &&
-    "invoke" in entry &&
-    typeof entry.invoke === "function"
-  ) {
-    return await entry.invoke(input, signal ? { signal } : undefined)
-  }
-
-  throw new Error("Graph entry must be a function or expose invoke(input)")
-}
-
-async function executeRouteAtResolvedPath(options: {
-  readonly appRoot: string
-  readonly input: unknown
-  readonly mode: RuntimeExecutionMode
-  readonly routeFile: string
-  readonly routeId: string
-  readonly routePath: string
-  readonly signal?: AbortSignal
-  readonly startedAt: number
-}): Promise<RuntimeExecutionResult> {
-  let authoringDefinition: Awaited<ReturnType<typeof resolveAuthoringRouteDefinitionForTarget>>
-
-  try {
-    authoringDefinition = await resolveAuthoringRouteDefinitionForTarget(options.routeFile)
-  } catch (error) {
-    return createRuntimeFailureResult({
-      appRoot: options.appRoot,
-      executionSource: "in-process",
-      kind: "route_resolution_error",
-      message: formatErrorMessage(error),
-      mode: options.mode,
-      routeId: options.routeId,
-      routePath: options.routePath,
-      startedAt: options.startedAt,
-    })
-  }
-
-  if (authoringDefinition) {
-    return await executeAuthoringRoute({
-      ...options,
-      route: authoringDefinition,
-    })
-  }
-
-  try {
-    await registerTsxLoader()
-    const routeModule = await import(pathToFileURL(options.routeFile).href)
-    const normalized = normalizeRouteModule(routeModule)
-
-    if (normalized.kind !== options.mode) {
-      return createRuntimeFailureResult({
-        appRoot: options.appRoot,
-        executionSource: "in-process",
-        kind: "unsupported_route_boundary",
-        message: `Expected ${options.mode} route at ${options.routeFile}, received ${normalized.kind}`,
-        mode: options.mode,
-        routeId: options.routeId,
-        routePath: options.routePath,
-        startedAt: options.startedAt,
-      })
-    }
-
-    const output = await executeNormalizedEntry(
-      normalized.kind,
-      normalized.entry,
-      options.input,
-      options.signal,
-    )
-
-    return createRuntimeSuccessResult({
-      appRoot: options.appRoot,
-      executionSource: "in-process",
-      mode: normalized.kind,
-      output,
-      routeId: options.routeId,
-      routePath: options.routePath,
-      startedAt: options.startedAt,
-    })
-  } catch (error) {
-    const kind = isUnsupportedBoundaryError(error)
-      ? "unsupported_route_boundary"
-      : "execution_error"
-
-    return createRuntimeFailureResult({
-      appRoot: options.appRoot,
-      executionSource: "in-process",
-      kind,
-      message: formatErrorMessage(error),
-      mode: options.mode,
-      routeId: options.routeId,
-      routePath: options.routePath,
-      startedAt: options.startedAt,
-    })
-  }
-}
-
-async function executeAuthoringRoute(options: {
-  readonly appRoot: string
-  readonly input: unknown
-  readonly mode: RuntimeExecutionMode
-  readonly route: NonNullable<Awaited<ReturnType<typeof resolveAuthoringRouteDefinitionForTarget>>>
-  readonly routeFile: string
-  readonly routeId: string
-  readonly routePath: string
-  readonly signal?: AbortSignal
-  readonly startedAt: number
-}): Promise<RuntimeExecutionResult> {
-  let tools: Awaited<ReturnType<typeof discoverToolDefinitions>>
-
-  try {
-    tools = await discoverToolDefinitions({
-      appRoot: options.appRoot,
-      routeDir: options.route.routeDir,
-    })
-  } catch (error) {
-    return createRuntimeFailureResult({
-      appRoot: options.appRoot,
-      executionSource: "in-process",
-      kind: "route_resolution_error",
-      message: formatErrorMessage(error),
-      mode: options.mode,
-      routeId: options.routeId,
-      routePath: options.routePath,
-      startedAt: options.startedAt,
-    })
-  }
-
-  try {
-    const handler = await loadAuthoringRouteHandler(options.route)
-
-    const context = createDawnContext({
-      tools,
-      ...(options.signal ? { signal: options.signal } : {}),
-    })
-    const output =
-      typeof handler === "function"
-        ? await handler(options.input, context)
-        : await handler.invoke(options.input, context)
-
-    return createRuntimeSuccessResult({
-      appRoot: options.appRoot,
-      executionSource: "in-process",
-      mode: options.route.kind,
-      output,
-      routeId: options.routeId,
-      routePath: options.routePath,
-      startedAt: options.startedAt,
-    })
-  } catch (error) {
-    const kind =
-      error instanceof Error &&
-      (error.message ===
-        `Authoring ${options.route.kind} route at ${options.route.executableFile} must export a callable "${options.route.kind}" handler` ||
-        error.message ===
-          `Authoring graph route at ${options.route.executableFile} must export a callable "graph" handler or an object exposing invoke(input)`)
-        ? "unsupported_route_boundary"
-        : "execution_error"
-
-    return createRuntimeFailureResult({
-      appRoot: options.appRoot,
-      executionSource: "in-process",
-      kind,
-      message: formatErrorMessage(error),
-      mode: options.route.kind,
-      routeId: options.routeId,
-      routePath: options.routePath,
-      startedAt: options.startedAt,
-    })
-  }
-}
-
-function toRouteMode(routeFile: string): RuntimeExecutionMode | null {
-  const routeName = basename(routeFile)
-
-  if (routeName === "graph.ts") {
-    return "graph"
-  }
-
-  if (routeName === "workflow.ts") {
-    return "workflow"
-  }
-
-  return null
-}
-
-function isUnsupportedBoundaryError(error: unknown): boolean {
   return (
-    error instanceof Error &&
-    (error.message === `Route index.ts must export exactly one of "workflow" or "graph"` ||
-      error.message === `Route index.ts exports neither "workflow" nor "graph"` ||
-      error.message === "Workflow entry must be a function" ||
-      error.message === "Graph entry must be a function or expose invoke(input)")
+    error.message === `Route index.ts must export exactly one of "workflow" or "graph"` ||
+    error.message === `Route index.ts exports neither "workflow" nor "graph"` ||
+    error.message === "Workflow entry must be a function" ||
+    error.message === "Graph entry must be a function or expose invoke(input)"
   )
 }
