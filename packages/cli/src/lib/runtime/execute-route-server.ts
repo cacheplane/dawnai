@@ -12,7 +12,7 @@ export interface ExecuteRouteServerOptions {
   readonly appRoot: string
   readonly baseUrl: string
   readonly input: unknown
-  readonly mode?: "graph" | "workflow"
+  readonly mode: "graph" | "workflow"
   readonly routeId: string
   readonly routePath: string
   readonly timeoutMs?: number
@@ -33,9 +33,7 @@ export async function executeRouteServer(
   try {
     const response = await fetch(createRunsWaitUrl(options.baseUrl), {
       body: JSON.stringify({
-        assistant_id: options.mode
-          ? createRouteAssistantId(options.routeId, options.mode)
-          : options.routeId,
+        assistant_id: createRouteAssistantId(options.routeId, options.mode),
         input: options.input,
         metadata: {
           dawn: {
@@ -58,7 +56,7 @@ export async function executeRouteServer(
     return normalizeServerResult({
       appRoot: options.appRoot,
       finishedAt,
-      ...(options.mode !== undefined ? { mode: options.mode } : {}),
+      mode: options.mode,
       responseBodyText,
       routeId: options.routeId,
       routePath: options.routePath,
@@ -76,7 +74,7 @@ export async function executeRouteServer(
       message: timedOut
         ? `Server transport timed out after ${timeoutMs}ms waiting for /runs/wait`
         : `Server transport failed for /runs/wait: ${formatErrorMessage(error)}`,
-      ...(options.mode !== undefined ? { mode: options.mode } : {}),
+      mode: options.mode,
       finishedAt,
       routeId: options.routeId,
       routePath: options.routePath,
