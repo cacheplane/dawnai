@@ -100,7 +100,7 @@ const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> =
     mode: "workflow",
     routeDir: "src/app/(public)/hello/[tenant]",
     routeId: "/hello/[tenant]",
-    routePath: "src/app/(public)/hello/[tenant]/workflow.ts",
+    routePath: "src/app/(public)/hello/[tenant]/index.ts",
     scenarioNames: {
       inProcess: "basic in-process scenario",
       server: "basic server scenario",
@@ -117,7 +117,7 @@ const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> =
     mode: "graph",
     routeDir: "src/dawn-app/support/[tenant]",
     routeId: "/support/[tenant]",
-    routePath: "src/dawn-app/support/[tenant]/graph.ts",
+    routePath: "src/dawn-app/support/[tenant]/index.ts",
     scenarioNames: {
       inProcess: "custom appDir in-process scenario",
       server: "custom appDir server scenario",
@@ -134,7 +134,7 @@ const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> =
     mode: "graph",
     routeDir: "src/app/(public)/hello/[tenant]",
     routeId: "/hello/[tenant]",
-    routePath: "src/app/(public)/hello/[tenant]/graph.ts",
+    routePath: "src/app/(public)/hello/[tenant]/index.ts",
     scenarioNames: {
       inProcess: "handwritten in-process scenario",
       server: "handwritten server scenario",
@@ -245,10 +245,7 @@ export async function prepareGeneratedRuntimeApp(options: {
 
 export async function expectBasicAuthoringLane(appRoot: string): Promise<void> {
   await expect(
-    access(resolve(appRoot, "src/app/(public)/hello/[tenant]/route.ts"), constants.F_OK),
-  ).resolves.toBeUndefined()
-  await expect(
-    access(resolve(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts"), constants.F_OK),
+    access(resolve(appRoot, "src/app/(public)/hello/[tenant]/index.ts"), constants.F_OK),
   ).resolves.toBeUndefined()
   await expect(
     access(resolve(appRoot, "src/app/(public)/hello/[tenant]/state.ts"), constants.F_OK),
@@ -432,6 +429,7 @@ async function rewriteDependenciesToTarballs(options: {
     "@dawn/cli": options.tarballs.cli,
     "@dawn/core": options.tarballs.core,
     "@dawn/langgraph": options.tarballs.langgraph,
+    "@dawn/sdk": options.tarballs.sdk,
   }
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
@@ -461,36 +459,13 @@ async function rewriteToCustomAppDirRuntimeLayout(appRoot: string): Promise<void
     "utf8",
   )
   await writeFile(
-    join(appRoot, "src/dawn-app/support/[tenant]/graph.ts"),
+    join(appRoot, "src/dawn-app/support/[tenant]/index.ts"),
     [
-      'import { defineEntry } from "@dawn/langgraph"',
-      "",
       'import type { SupportTenantState } from "./state.js"',
       "",
-      "const entry = defineEntry({",
-      "  graph: async (state: SupportTenantState): Promise<SupportTenantState> => ({",
-      "    ...state,",
-      "    greeting: `Hello, ${state.tenant}!`,",
-      "  }),",
-      "})",
-      "",
-      "export const graph = entry.graph",
-      "",
-    ].join("\n"),
-    "utf8",
-  )
-  await writeFile(
-    join(appRoot, "src/dawn-app/support/[tenant]/route.ts"),
-    [
-      'import { defineRoute } from "@dawn/langgraph"',
-      "",
-      "export const route = defineRoute({",
-      '  kind: "graph",',
-      '  entry: "./graph.ts",',
-      "  config: {",
-      '    runtime: "node",',
-      '    tags: ["support"],',
-      "  },",
+      "export const graph = async (state: SupportTenantState): Promise<SupportTenantState> => ({",
+      "  ...state,",
+      "  greeting: `Hello, ${state.tenant}!`,",
       "})",
       "",
     ].join("\n"),
@@ -513,7 +488,14 @@ async function writeRunScenarioFile(options: {
   readonly appRoot: string
   readonly fixture: RuntimeFixtureSpec
 }): Promise<void> {
-  const runTestPath = join(options.appRoot, options.fixture.routeDir, "run.test.ts")
+  const routeDir = join(options.appRoot, options.fixture.routeDir)
+  const runTestPath = join(routeDir, "run.test.ts")
+  const scenarioRoutePath = options.fixture.routePath
+
+  await writeCompanionScenarioEntry({
+    fixture: options.fixture,
+    routeDir,
+  })
 
   await writeFile(
     runTestPath,
@@ -532,7 +514,7 @@ async function writeRunScenarioFile(options: {
       '        executionSource: "in-process",',
       `        mode: ${JSON.stringify(options.fixture.mode)},`,
       `        routeId: ${JSON.stringify(options.fixture.routeId)},`,
-      `        routePath: ${JSON.stringify(options.fixture.routePath)},`,
+      `        routePath: ${JSON.stringify(scenarioRoutePath)},`,
       "      },",
       "    },",
       "  },",
@@ -550,7 +532,7 @@ async function writeRunScenarioFile(options: {
       '        executionSource: "server",',
       `        mode: ${JSON.stringify(options.fixture.mode)},`,
       `        routeId: ${JSON.stringify(options.fixture.routeId)},`,
-      `        routePath: ${JSON.stringify(options.fixture.routePath)},`,
+      `        routePath: ${JSON.stringify(scenarioRoutePath)},`,
       "      },",
       "    },",
       "    assert(result) {",
@@ -561,6 +543,24 @@ async function writeRunScenarioFile(options: {
       "]",
       "",
     ].join("\n"),
+    "utf8",
+  )
+}
+
+function companionFileNameFor(target: RuntimeFixtureSpec["target"]): "graph.ts" | "workflow.ts" {
+  return target === "./graph.ts" ? "graph.ts" : "workflow.ts"
+}
+
+async function writeCompanionScenarioEntry(options: {
+  readonly fixture: RuntimeFixtureSpec
+  readonly routeDir: string
+}): Promise<void> {
+  const companionFile = join(options.routeDir, companionFileNameFor(options.fixture.target))
+  const exportName = options.fixture.mode
+
+  await writeFile(
+    companionFile,
+    [`export { ${exportName} } from "./index.js"`, ""].join("\n"),
     "utf8",
   )
 }

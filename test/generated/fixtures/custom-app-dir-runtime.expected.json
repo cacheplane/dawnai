@@ -8,7 +8,7 @@
       "tenant": "custom-tenant"
     },
     "routeId": "/support/[tenant]",
-    "routePath": "src/dawn-app/support/[tenant]/graph.ts",
+    "routePath": "src/dawn-app/support/[tenant]/index.ts",
     "status": "passed"
   },
   "runServerJson": {
@@ -20,7 +20,7 @@
       "tenant": "custom-tenant"
     },
     "routeId": "/support/[tenant]",
-    "routePath": "src/dawn-app/support/[tenant]/graph.ts",
+    "routePath": "src/dawn-app/support/[tenant]/index.ts",
     "status": "passed"
   },
   "serverRequest": {
@@ -32,7 +32,7 @@
       "dawn": {
         "mode": "graph",
         "route_id": "/support/[tenant]",
-        "route_path": "src/dawn-app/support/[tenant]/graph.ts"
+        "route_path": "src/dawn-app/support/[tenant]/index.ts"
       }
     },
     "on_completion": "delete"

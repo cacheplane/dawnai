@@ -11,7 +11,8 @@
     "dependencies": {
       "@dawn/core": "<tarball:@dawn/core>",
       "@dawn/cli": "<tarball:@dawn/cli>",
-      "@dawn/langgraph": "<tarball:@dawn/langgraph>"
+      "@dawn/langgraph": "<tarball:@dawn/langgraph>",
+      "@dawn/sdk": "<tarball:@dawn/sdk>"
     },
     "devDependencies": {
       "@dawn/config-typescript": "<tarball:@dawn/config-typescript>",
@@ -62,10 +63,8 @@
       {
         "id": "/hello/[tenant]",
         "pathname": "/hello/[tenant]",
-        "boundEntryFile": "<app-root>/src/app/(public)/hello/[tenant]/workflow.ts",
-        "boundEntryKind": "workflow",
-        "entryKind": "route",
-        "entryFile": "<app-root>/src/app/(public)/hello/[tenant]/route.ts",
+        "kind": "workflow",
+        "entryFile": "<app-root>/src/app/(public)/hello/[tenant]/index.ts",
         "routeDir": "<app-root>/src/app/(public)/hello/[tenant]",
         "segments": [
           {

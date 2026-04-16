@@ -8,7 +8,7 @@
       "tenant": "handwritten-tenant"
     },
     "routeId": "/hello/[tenant]",
-    "routePath": "src/app/(public)/hello/[tenant]/graph.ts",
+    "routePath": "src/app/(public)/hello/[tenant]/index.ts",
     "status": "passed"
   },
   "runServerJson": {
@@ -20,7 +20,7 @@
       "tenant": "handwritten-tenant"
     },
     "routeId": "/hello/[tenant]",
-    "routePath": "src/app/(public)/hello/[tenant]/graph.ts",
+    "routePath": "src/app/(public)/hello/[tenant]/index.ts",
     "status": "passed"
   },
   "serverRequest": {
@@ -32,7 +32,7 @@
       "dawn": {
         "mode": "graph",
         "route_id": "/hello/[tenant]",
-        "route_path": "src/app/(public)/hello/[tenant]/graph.ts"
+        "route_path": "src/app/(public)/hello/[tenant]/index.ts"
       }
     },
     "on_completion": "delete"

@@ -59,6 +59,7 @@ async function assertInternalModeWorkspace(mode: CliOptions["mode"]): Promise<vo
     resolve(repoRoot, "packages/core/package.json"),
     resolve(repoRoot, "packages/cli/package.json"),
     resolve(repoRoot, "packages/langgraph/package.json"),
+    resolve(repoRoot, "packages/sdk/package.json"),
     resolve(repoRoot, "packages/config-typescript/package.json"),
   ]
 
@@ -177,6 +178,7 @@ function createTemplateReplacements(
   readonly dawnConfigTypescriptSpecifier: string
   readonly dawnCoreSpecifier: string
   readonly dawnLanggraphSpecifier: string
+  readonly dawnSdkSpecifier: string
 } {
   if (options.mode === "internal") {
     return {
@@ -187,6 +189,7 @@ function createTemplateReplacements(
       ),
       dawnCoreSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/core")),
       dawnLanggraphSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langgraph")),
+      dawnSdkSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/sdk")),
     }
   }
 
@@ -196,6 +199,7 @@ function createTemplateReplacements(
     dawnConfigTypescriptSpecifier: options.distTag,
     dawnCoreSpecifier: options.distTag,
     dawnLanggraphSpecifier: options.distTag,
+    dawnSdkSpecifier: options.distTag,
   }
 }
 
@@ -220,6 +224,7 @@ async function applyInternalModePackageOverrides(
       "@dawn/config-typescript": replacements.dawnConfigTypescriptSpecifier,
       "@dawn/core": replacements.dawnCoreSpecifier,
       "@dawn/langgraph": replacements.dawnLanggraphSpecifier,
+      "@dawn/sdk": replacements.dawnSdkSpecifier,
     },
   }
 

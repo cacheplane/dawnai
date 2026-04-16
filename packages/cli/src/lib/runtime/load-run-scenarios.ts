@@ -259,11 +259,14 @@ async function validateScenario(options: {
     )
   }
 
-  const routeFile = resolve(dirname(options.scenarioFile), target)
+  const targetFile = resolve(dirname(options.scenarioFile), target)
 
-  if (!(await pathExists(routeFile))) {
-    throw new RunScenarioLoadError(`Scenario "${name}" target does not exist: ${routeFile}`)
+  if (!(await pathExists(targetFile))) {
+    throw new RunScenarioLoadError(`Scenario "${name}" target does not exist: ${targetFile}`)
   }
+
+  const indexFile = resolve(dirname(options.scenarioFile), "index.ts")
+  const routeFile = (await pathExists(indexFile)) ? indexFile : targetFile
 
   const routeIdentity = deriveRouteIdentity({
     appRoot: options.appRoot,

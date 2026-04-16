@@ -10,7 +10,8 @@
   "dependencies": {
     "@dawn/core": "{{dawnCoreSpecifier}}",
     "@dawn/cli": "{{dawnCliSpecifier}}",
-    "@dawn/langgraph": "{{dawnLanggraphSpecifier}}"
+    "@dawn/langgraph": "{{dawnLanggraphSpecifier}}",
+    "@dawn/sdk": "{{dawnSdkSpecifier}}"
   },
   "devDependencies": {
     "@dawn/config-typescript": "{{dawnConfigTypescriptSpecifier}}",

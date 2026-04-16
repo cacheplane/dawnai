@@ -17,7 +17,7 @@ export default [
         executionSource: "in-process",
         mode: "graph",
         routeId: "/hello/[tenant]",
-        routePath: "src/app/(public)/hello/[tenant]/graph.ts",
+        routePath: "src/app/(public)/hello/[tenant]/index.ts",
       },
     },
   },
@@ -40,7 +40,7 @@ export default [
         executionSource: "server",
         mode: "graph",
         routeId: "/hello/[tenant]",
-        routePath: "src/app/(public)/hello/[tenant]/graph.ts",
+        routePath: "src/app/(public)/hello/[tenant]/index.ts",
       },
     },
     assert(result) {
