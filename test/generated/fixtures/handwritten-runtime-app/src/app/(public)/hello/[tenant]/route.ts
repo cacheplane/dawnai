@@ -1,6 +1,10 @@
-export { graph } from "./graph.js"
+import { defineRoute } from "@dawn/langgraph"
 
-export const config = {
-  runtime: "node",
-  tags: ["handwritten"],
-} as const
+export const route = defineRoute({
+  kind: "graph",
+  entry: "./graph.ts",
+  config: {
+    runtime: "node",
+    tags: ["handwritten"],
+  },
+})

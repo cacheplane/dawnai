@@ -124,6 +124,40 @@ describe("dawn run", () => {
     })
   })
 
+  test("treats invalid route.ts exports as authoritative route-resolution failures", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/hello/[tenant]/route.ts": "export const notRoute = true;\n",
+      "src/app/hello/[tenant]/workflow.ts": `export const workflow = async (input: { tenant: string }) => ({
+  tenant: input.tenant,
+  source: "should-not-run",
+});\n`,
+    })
+
+    const result = await invoke(["run", "src/app/hello/[tenant]/workflow.ts", "--cwd", appRoot], {
+      stdin: JSON.stringify({ tenant: "authoring-tenant" }),
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+    expectFailureTiming(payload)
+    expect(payload).toMatchObject({
+      appRoot,
+      executionSource: "in-process",
+      error: {
+        kind: "route_resolution_error",
+        message: `Route definition ${join(appRoot, "src/app/hello/[tenant]/route.ts")} must export a Dawn route definition`,
+      },
+      mode: "workflow",
+      routeId: "/hello/[tenant]",
+      routePath: "src/app/hello/[tenant]/workflow.ts",
+      status: "failed",
+    })
+  })
+
   test("executes a graph route from an app-root-relative path and prints the normalized JSON result", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",

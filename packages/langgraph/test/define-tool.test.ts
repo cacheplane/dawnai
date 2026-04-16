@@ -1,4 +1,4 @@
-import { defineTool, type RuntimeContext, type RuntimeTool } from "@dawn/langgraph"
+import { defineTool, type RuntimeContext, type RuntimeTool, type ToolDefinition } from "@dawn/langgraph"
 import { describe, expect, expectTypeOf, test } from "vitest"
 
 describe("@dawn/langgraph defineTool", () => {
@@ -65,15 +65,9 @@ describe("@dawn/langgraph defineTool", () => {
     expect(result).toEqual({ id: "cus_123" })
   })
 
-  test("defineTool defaults context to the exported runtime context shape", () => {
-    const tool = defineTool({
-      name: "lookupCustomer",
-      run: async (_input: { readonly id: string }, context) => ({
-        aborted: context.signal.aborted,
-        hasLookupCustomer: "lookupCustomer" in context.tools,
-      }),
-    })
-
-    expectTypeOf<Parameters<typeof tool.run>[1]>().toEqualTypeOf<RuntimeContext>()
+  test("ToolDefinition defaults context to the signal-only tool context shape", () => {
+    expectTypeOf<Parameters<ToolDefinition["run"]>[1]>().toEqualTypeOf<{
+      readonly signal: AbortSignal
+    }>()
   })
 })

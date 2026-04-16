@@ -1,9 +1,9 @@
-import type { RuntimeContext } from "./runtime-context.js"
+import type { ToolContext } from "./runtime-context.js"
 
 export interface ToolDefinition<
   TInput = unknown,
   TOutput = unknown,
-  TContext = RuntimeContext,
+  TContext = ToolContext,
 > {
   readonly name: string
   readonly description?: string
