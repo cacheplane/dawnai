@@ -28,7 +28,7 @@ export async function loadAuthoringRouteDefinition(
   const definition = routeModule.route ?? routeModule.default
 
   if (!isRecord(definition)) {
-    return null
+    throw new Error(`Route definition ${routeDefinitionFile} must export a Dawn route definition`)
   }
 
   const routeDir = dirname(routeDefinitionFile)
