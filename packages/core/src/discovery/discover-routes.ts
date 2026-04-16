@@ -92,12 +92,9 @@ async function readRouteEntry(
 
 async function inferRouteKind(indexFile: string): Promise<RouteKind | null> {
   await registerTsxLoader()
-  const module = (await import(pathToFileURL(indexFile).href)) as {
-    readonly graph?: unknown
-    readonly workflow?: unknown
-  }
-  const hasGraph = "graph" in module && module.graph !== undefined
-  const hasWorkflow = "workflow" in module && module.workflow !== undefined
+  const routeExports = await loadRouteExports(indexFile)
+  const hasGraph = "graph" in routeExports && routeExports.graph !== undefined
+  const hasWorkflow = "workflow" in routeExports && routeExports.workflow !== undefined
 
   if (hasGraph && hasWorkflow) {
     throw new Error(`Route index.ts must export exactly one of "workflow" or "graph"`)
@@ -112,6 +109,21 @@ async function inferRouteKind(indexFile: string): Promise<RouteKind | null> {
   }
 
   return null
+}
+
+async function loadRouteExports(indexFile: string): Promise<{
+  readonly graph?: unknown
+  readonly workflow?: unknown
+}> {
+  try {
+    return (await import(pathToFileURL(indexFile).href)) as {
+      readonly graph?: unknown
+      readonly workflow?: unknown
+    }
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause)
+    throw new Error(`Failed to load route at ${indexFile}: ${reason}`, { cause })
+  }
 }
 
 async function registerTsxLoader(): Promise<void> {
