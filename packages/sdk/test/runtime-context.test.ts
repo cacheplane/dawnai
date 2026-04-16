@@ -1,7 +1,7 @@
-import { defineTool, type RuntimeContext, type RuntimeTool } from "@dawn/langgraph"
+import { defineTool, type RuntimeContext, type RuntimeTool } from "@dawn/sdk"
 import { describe, expect, expectTypeOf, test } from "vitest"
 
-describe("@dawn/langgraph runtime-context type surface", () => {
+describe("@dawn/sdk runtime-context type surface", () => {
   test("runtime-context types are exported from the package root", () => {
     type Tools = {
       readonly lookupCustomer: RuntimeTool<{ readonly id: string }, { readonly id: string }>
