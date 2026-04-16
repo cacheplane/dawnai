@@ -1,13 +1,10 @@
 {
-  "deleteFiles": [
-    "src/app/(public)/hello/[tenant]/workflow.ts"
-  ],
-  "entryKind": "graph",
+  "deleteFiles": ["src/app/(public)/hello/[tenant]/tools/greet.ts"],
+  "files": {
+    "src/app/(public)/hello/[tenant]/index.ts": "import type { HelloState } from \"./state.js\";\n\nexport async function graph(input: HelloState): Promise<HelloState> {\n  return {\n    ...input,\n    greeting: `Hello, ${input.tenant}!`,\n  };\n}\n"
+  },
   "input": {
     "tenant": "graph-tenant"
   },
-  "files": {
-    "src/app/(public)/hello/[tenant]/graph.ts": "import { defineEntry } from \"@dawn/langgraph\";\n\nimport type { HelloState } from \"./state.js\";\n\nconst entry = defineEntry({\n  graph: {\n    async invoke(state: HelloState): Promise<HelloState> {\n      return {\n        ...state,\n        greeting: `Hello, ${state.tenant}!`,\n      };\n    },\n  },\n});\n\nexport const graph = entry.graph;\n",
-    "src/app/(public)/hello/[tenant]/route.ts": "import { defineRoute } from \"@dawn/langgraph\";\n\nexport const route = defineRoute({\n  kind: \"graph\",\n  entry: \"./graph.ts\",\n  config: {\n    runtime: \"node\",\n    tags: [\"hello\", \"smoke\", \"graph\"],\n  },\n});\n"
-  }
+  "kind": "graph"
 }

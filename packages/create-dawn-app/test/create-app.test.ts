@@ -78,9 +78,9 @@ describe("create-dawn-app", () => {
 
     await assertExists(join(targetDir, "package.json"))
     await assertExists(join(targetDir, "dawn.config.ts"))
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/route.ts"))
+    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/workflow.ts"))
+    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/tools/greet.ts"))
 
     const packageJson = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8")) as {
       readonly name: string
@@ -143,9 +143,9 @@ describe("create-dawn-app", () => {
     expect(packageJson.dependencies["@dawn/cli"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn/langgraph"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn/config-typescript"]).toMatch(/^file:/)
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/route.ts"))
+    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/workflow.ts"))
+    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/tools/greet.ts"))
     await assertExists(join(targetDir, ".npmrc"))
   })
 

@@ -1,6 +1,6 @@
 {
-  "entryKind": "workflow",
   "input": {
     "tenant": "workflow-tenant"
-  }
+  },
+  "kind": "workflow"
 }

@@ -15,8 +15,8 @@ export default function GettingStartedPage() {
           <li>App root contains `package.json` and `dawn.config.ts`.</li>
           <li>Route discovery starts at `src/app`.</li>
           <li>
-            Each route directory exposes exactly one primary executable entry: `graph.ts` or
-            `workflow.ts`.
+            Each route directory exposes a single `index.ts` that exports exactly one of `workflow`
+            or `graph`.
           </li>
         </ul>
       </div>

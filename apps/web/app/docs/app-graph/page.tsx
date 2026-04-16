@@ -13,8 +13,9 @@ export default function AppGraphPage() {
         <div className="card">
           <h3>Filesystem-owned by Dawn</h3>
           <p>
-            Discovery and validation center on files like `route.ts`, `graph.ts`, `workflow.ts`,
-            `state.ts`, `middleware.ts`, `memory.ts`, `ui/`, `approvals/`, and `evals/`.
+            Discovery and validation center on each route&apos;s `index.ts` (exporting one of
+            `workflow` or `graph`) alongside support files like `state.ts`, `middleware.ts`,
+            `memory.ts`, `tools/`, `ui/`, `approvals/`, and `evals/`.
           </p>
         </div>
 
@@ -29,9 +30,9 @@ export default function AppGraphPage() {
 
       <pre className="code-block">
         <code>{`src/app/(public)/support/[tenant]/
-  route.ts
-  graph.ts
+  index.ts
   state.ts
+  tools/
   ui/
   approvals/`}</code>
       </pre>
