@@ -1,28 +1,14 @@
 import { readdir } from "node:fs/promises"
 import { join, relative, resolve, sep } from "node:path"
-import type {
-  DiscoverRoutesOptions,
-  RouteDefinition,
-  RouteEntryKind,
-  RouteManifest,
-} from "../types.js"
+import { pathToFileURL } from "node:url"
+import type { RouteKind } from "@dawn/sdk"
+import type { DiscoverRoutesOptions, RouteDefinition, RouteManifest } from "../types.js"
 import { findDawnApp } from "./find-dawn-app.js"
-import { loadAuthoringRouteDefinition } from "./load-authoring-route-definition.js"
 import { isPrivateSegment, isRouteGroupSegment, toRouteSegments } from "./route-segments.js"
 
-type PrimaryRouteFile = keyof typeof PRIMARY_ROUTE_FILES
-type ExecutableRouteFile = keyof typeof EXECUTABLE_ROUTE_FILES
+const INDEX_FILE = "index.ts"
 
-const EXECUTABLE_ROUTE_FILES = {
-  "graph.ts": "graph",
-  "page.tsx": "page",
-  "workflow.ts": "workflow",
-} as const satisfies Record<string, Exclude<RouteEntryKind, "route">>
-
-const PRIMARY_ROUTE_FILES = {
-  ...EXECUTABLE_ROUTE_FILES,
-  "route.ts": "route",
-} as const satisfies Record<string, RouteEntryKind>
+let loaderPromise: Promise<void> | undefined
 
 export async function discoverRoutes(options: DiscoverRoutesOptions = {}): Promise<RouteManifest> {
   const app = await findDawnApp(options)
@@ -70,23 +56,22 @@ async function readRouteEntry(
   routesDir: string,
   routeDir: string,
 ): Promise<RouteDefinition | null> {
-  const entries = (await readdir(routeDir, { withFileTypes: true })).sort((left, right) =>
-    left.name.localeCompare(right.name),
-  )
-  const primaryEntries = entries.filter(
-    (entry): entry is (typeof entries)[number] & { name: PrimaryRouteFile } =>
-      entry.isFile() && hasPrimaryRouteFile(entry.name),
-  )
+  const entries = await readdir(routeDir, { withFileTypes: true }).catch(() => null)
 
-  validateRouteEntries(
-    routeDir,
-    primaryEntries.map((entry) => entry.name),
-  )
+  if (!entries) {
+    return null
+  }
 
-  const entryFiles = primaryEntries.map((primaryEntry) => primaryEntry.name)
-  const entry = resolvePrimaryRouteEntry(entryFiles)
+  const hasIndex = entries.some((entry) => entry.isFile() && entry.name === INDEX_FILE)
 
-  if (!entry) {
+  if (!hasIndex) {
+    return null
+  }
+
+  const indexFile = resolve(routeDir, INDEX_FILE)
+  const kind = await inferRouteKind(indexFile)
+
+  if (!kind) {
     return null
   }
 
@@ -95,67 +80,43 @@ async function readRouteEntry(
     .filter(Boolean)
     .filter((segment) => !isRouteGroupSegment(segment))
 
-  if (entryFiles.includes("route.ts")) {
-    const authoringDefinition = await loadAuthoringRouteDefinition(resolve(routeDir, "route.ts"))
-
-    if (!authoringDefinition) {
-      throw new Error(
-        `Route definition ${resolve(routeDir, "route.ts")} must export a Dawn route definition`,
-      )
-    }
-
-    return {
-      boundEntryFile: authoringDefinition.executableFile,
-      boundEntryKind: authoringDefinition.kind,
-      id: toPathname(routeSegments),
-      pathname: toPathname(routeSegments),
-      entryKind: "route",
-      entryFile: authoringDefinition.routeDefinitionFile,
-      routeDir,
-      segments: toRouteSegments(routeSegments),
-    }
-  }
-
   return {
     id: toPathname(routeSegments),
     pathname: toPathname(routeSegments),
-    entryKind: PRIMARY_ROUTE_FILES[entry],
-    entryFile: resolve(routeDir, entry),
+    kind,
+    entryFile: indexFile,
     routeDir,
     segments: toRouteSegments(routeSegments),
   }
 }
 
-export function validateRouteEntries(routeDir: string, entryFiles: readonly string[]): void {
-  const executableEntries = entryFiles.filter((entryFile): entryFile is ExecutableRouteFile =>
-    isExecutableRouteFile(entryFile),
-  )
+async function inferRouteKind(indexFile: string): Promise<RouteKind | null> {
+  await registerTsxLoader()
+  const module = (await import(pathToFileURL(indexFile).href)) as {
+    readonly graph?: unknown
+    readonly workflow?: unknown
+  }
+  const hasGraph = "graph" in module && module.graph !== undefined
+  const hasWorkflow = "workflow" in module && module.workflow !== undefined
 
-  if (executableEntries.length === 0 && entryFiles.includes("route.ts")) {
-    throw new Error(
-      `Route directory ${routeDir} must define exactly one primary executable entry: graph.ts, workflow.ts, or page.tsx`,
-    )
+  if (hasGraph && hasWorkflow) {
+    throw new Error(`Route index.ts must export exactly one of "workflow" or "graph"`)
   }
 
-  if (executableEntries.length <= 1) {
-    return
+  if (hasGraph) {
+    return "graph"
   }
 
-  throw new Error(
-    `Route directory ${routeDir} has multiple primary entries: ${[...entryFiles].sort().join(", ")}`,
-  )
+  if (hasWorkflow) {
+    return "workflow"
+  }
+
+  return null
 }
 
-function resolvePrimaryRouteEntry(
-  entryFiles: readonly PrimaryRouteFile[],
-): PrimaryRouteFile | null {
-  const executableEntry = entryFiles.find(isExecutableRouteFile)
-
-  if (executableEntry) {
-    return executableEntry
-  }
-
-  return entryFiles[0] ?? null
+async function registerTsxLoader(): Promise<void> {
+  loaderPromise ??= import("tsx").then(() => undefined)
+  await loaderPromise
 }
 
 function validateRouteCollisions(routes: readonly RouteDefinition[]): RouteDefinition[] {
@@ -174,14 +135,6 @@ function validateRouteCollisions(routes: readonly RouteDefinition[]): RouteDefin
   }
 
   return [...routes]
-}
-
-function hasPrimaryRouteFile(fileName: string): fileName is PrimaryRouteFile {
-  return Object.hasOwn(PRIMARY_ROUTE_FILES, fileName)
-}
-
-function isExecutableRouteFile(fileName: string): fileName is ExecutableRouteFile {
-  return Object.hasOwn(EXECUTABLE_ROUTE_FILES, fileName)
 }
 
 function toPathname(routeSegments: readonly string[]): string {

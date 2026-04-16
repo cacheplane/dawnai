@@ -26,7 +26,7 @@ async function loadManifestSnapshot(): Promise<RouteManifest> {
     routes: snapshot.routes.map((route) => ({
       id: route.pathname,
       pathname: route.pathname,
-      entryKind: "page",
+      kind: "workflow",
       entryFile: `/fixture/type-rendering${route.pathname === "/" ? "/index" : route.pathname}.tsx`,
       routeDir: `/fixture/type-rendering${route.pathname}`,
       segments: route.segments,
