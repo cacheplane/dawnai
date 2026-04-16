@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "../src/define-tool.js"
+import type { ToolDefinition } from "../src/tool.js"
 
 type DefaultToolRun = ToolDefinition["run"]
 

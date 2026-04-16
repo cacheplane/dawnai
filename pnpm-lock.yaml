@@ -127,6 +127,10 @@ importers:
         version: 25.6.0
 
   packages/langgraph:
+    dependencies:
+      '@dawn/sdk':
+        specifier: workspace:*
+        version: link:../sdk
     devDependencies:
       '@dawn/config-typescript':
         specifier: workspace:*

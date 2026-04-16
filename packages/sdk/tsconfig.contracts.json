@@ -5,5 +5,5 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/placeholder.contract.ts"]
+  "include": ["src/**/*.ts", "test/tool-context.contract.ts"]
 }
