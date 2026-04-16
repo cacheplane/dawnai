@@ -1,5 +1,3 @@
-import { constants } from "node:fs"
-import { access } from "node:fs/promises"
 import { basename, isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
@@ -20,6 +18,7 @@ import {
 } from "./route-definition.js"
 import { deriveRouteIdentity } from "./route-identity.js"
 import { discoverToolDefinitions } from "./tool-discovery.js"
+import { fileExists } from "./utils.js"
 
 export interface ExecuteRouteOptions {
   readonly appRoot?: string
@@ -395,13 +394,4 @@ function isUnsupportedBoundaryError(error: unknown): boolean {
       error.message === "Workflow entry must be a function" ||
       error.message === "Graph entry must be a function or expose invoke(input)")
   )
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath, constants.F_OK)
-    return true
-  } catch {
-    return false
-  }
 }

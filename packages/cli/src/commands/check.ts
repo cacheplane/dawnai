@@ -1,12 +1,8 @@
-import { discoverRoutes, type RouteManifest } from "@dawn/core"
+import { discoverRoutes } from "@dawn/core"
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
-import {
-  loadAuthoringRouteDefinition,
-  loadAuthoringRouteHandler,
-} from "../lib/runtime/route-definition.js"
-import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
+import { validateAuthoringRoutes } from "../lib/runtime/validate-authoring-routes.js"
 
 interface CheckOptions {
   readonly cwd?: string
@@ -33,25 +29,5 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
     }
   } catch (error) {
     throw new CliError(`Validation failed: ${formatErrorMessage(error)}`)
-  }
-}
-
-async function validateAuthoringRoutes(manifest: RouteManifest): Promise<void> {
-  for (const route of manifest.routes) {
-    if (route.entryKind !== "route") {
-      continue
-    }
-
-    const definition = await loadAuthoringRouteDefinition(route.entryFile)
-
-    if (!definition) {
-      throw new Error(`Route definition ${route.entryFile} must export a Dawn route definition`)
-    }
-
-    await loadAuthoringRouteHandler(definition)
-    await discoverToolDefinitions({
-      appRoot: manifest.appRoot,
-      routeDir: route.routeDir,
-    })
   }
 }

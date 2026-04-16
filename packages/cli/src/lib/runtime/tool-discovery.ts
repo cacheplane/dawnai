@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { registerTsxLoader } from "./register-tsx-loader.js"
+import { isRecord } from "./utils.js"
 
 type ToolScope = "route-local" | "shared"
 
@@ -55,7 +56,9 @@ async function loadToolScope(options: {
   }
 
   const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+    .filter(
+      (entry) => entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts"),
+    )
     .map((entry) => join(options.directory, entry.name))
     .sort((left, right) => left.localeCompare(right))
 
@@ -106,8 +109,4 @@ async function loadToolDefinition(
     run: definition.run as DiscoveredToolDefinition["run"],
     scope,
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
 }
