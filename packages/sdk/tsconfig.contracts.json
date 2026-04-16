@@ -5,5 +5,5 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/runtime-context.contract.ts", "test/tool-context.contract.ts"]
+  "include": ["src/**/*.ts", "test/*.contract.ts"]
 }
