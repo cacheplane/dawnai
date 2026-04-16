@@ -1,15 +1,13 @@
-import { constants } from "node:fs"
-import { access } from "node:fs/promises"
 import { basename, resolve } from "node:path"
+import type { Stats } from "node:fs"
+import { stat } from "node:fs/promises"
 
 import { findDawnApp } from "@dawn/core"
 import {
   createRuntimeFailureResult,
   formatErrorMessage,
   type RuntimeExecutionFailureResult,
-  type RuntimeExecutionMode,
 } from "./result.js"
-import { resolveAuthoringRouteDefinitionForTarget } from "./route-definition.js"
 import { deriveRouteIdentity } from "./route-identity.js"
 
 export interface ResolveRouteTargetOptions {
@@ -20,11 +18,12 @@ export interface ResolveRouteTargetOptions {
 
 export interface ResolvedRouteTarget {
   readonly appRoot: string
-  readonly mode: RuntimeExecutionMode
   readonly routeId: string
   readonly routeFile: string
   readonly routePath: string
 }
+
+const LEGACY_BASENAMES = new Set(["workflow.ts", "graph.ts", "route.ts"])
 
 export async function resolveRouteTarget(
   options: ResolveRouteTargetOptions,
@@ -43,96 +42,135 @@ export async function resolveRouteTarget(
     })
   }
 
-  const routeFile = toRouteFilePath(options.routePath, {
+  const rawTarget = toAbsolutePath(options.routePath, {
     appRoot: discoveredApp.appRoot,
     ...(options.invocationCwd ? { invocationCwd: options.invocationCwd } : {}),
   })
-  const mode = toRouteMode(routeFile)
 
-  if (!mode) {
-    const routeIdentity = deriveRouteIdentity({
-      appRoot: discoveredApp.appRoot,
-      routeFile,
-      routesDir: discoveredApp.routesDir,
-    })
-
-    return createRuntimeFailureResult({
-      appRoot: discoveredApp.appRoot,
-      executionSource: "in-process",
-      kind: "route_resolution_error",
-      message: `Route file must end with graph.ts or workflow.ts: ${routeFile}`,
-      routeId: routeIdentity.ok ? routeIdentity.routeId : null,
-      routePath: routeIdentity.routePath,
-      startedAt,
-    })
-  }
-
-  const routeIdentity = deriveRouteIdentity({
-    appRoot: discoveredApp.appRoot,
-    routeFile,
-    routesDir: discoveredApp.routesDir,
-  })
-
-  if (!routeIdentity.ok) {
-    return createRuntimeFailureResult({
-      appRoot: discoveredApp.appRoot,
-      executionSource: "in-process",
-      kind: "route_resolution_error",
-      message: `Route file is outside the configured appDir: ${routeFile}`,
-      mode,
-      routePath: routeIdentity.routePath,
-      startedAt,
-    })
-  }
-
-  if (!(await fileExists(routeFile))) {
-    return createRuntimeFailureResult({
-      appRoot: discoveredApp.appRoot,
-      executionSource: "in-process",
-      kind: "route_resolution_error",
-      message: `Route file does not exist: ${routeFile}`,
-      mode,
-      routeId: routeIdentity.routeId,
-      routePath: routeIdentity.routePath,
-      startedAt,
-    })
-  }
+  let targetStat: Stats | null
 
   try {
-    const authoringDefinition = await resolveAuthoringRouteDefinitionForTarget(routeFile)
+    targetStat = await stat(rawTarget)
+  } catch {
+    targetStat = null
+  }
 
-    if (authoringDefinition && authoringDefinition.kind !== mode) {
-      return createRuntimeFailureResult({
+  if (!targetStat) {
+    return failure({
+      appRoot: discoveredApp.appRoot,
+      routesDir: discoveredApp.routesDir,
+      routeFile: rawTarget,
+      message: `Route target does not exist: ${rawTarget}`,
+      startedAt,
+    })
+  }
+
+  if (targetStat.isDirectory()) {
+    const indexFile = resolve(rawTarget, "index.ts")
+    let indexStat: Stats | null
+
+    try {
+      indexStat = await stat(indexFile)
+    } catch {
+      indexStat = null
+    }
+
+    if (!indexStat?.isFile()) {
+      return failure({
         appRoot: discoveredApp.appRoot,
-        executionSource: "in-process",
-        kind: "route_resolution_error",
-        message: `Route definition ${authoringDefinition.routeDefinitionFile} resolved mode ${authoringDefinition.kind} for ${routeFile}`,
-        mode,
-        routeId: routeIdentity.routeId,
-        routePath: routeIdentity.routePath,
+        routesDir: discoveredApp.routesDir,
+        routeFile: rawTarget,
+        message: `Route directory has no index.ts: ${rawTarget}`,
         startedAt,
       })
     }
-  } catch (error) {
-    return createRuntimeFailureResult({
+
+    return ok({
       appRoot: discoveredApp.appRoot,
+      routesDir: discoveredApp.routesDir,
+      routeFile: indexFile,
+    })
+  }
+
+  if (basename(rawTarget) !== "index.ts") {
+    if (LEGACY_BASENAMES.has(basename(rawTarget))) {
+      return failure({
+        appRoot: discoveredApp.appRoot,
+        routesDir: discoveredApp.routesDir,
+        routeFile: rawTarget,
+        message: `Route target must be a route directory or its index.ts: ${rawTarget}`,
+        startedAt,
+      })
+    }
+
+    return failure({
+      appRoot: discoveredApp.appRoot,
+      routesDir: discoveredApp.routesDir,
+      routeFile: rawTarget,
+      message: `Route target must be a route directory or its index.ts: ${rawTarget}`,
+      startedAt,
+    })
+  }
+
+  return ok({
+    appRoot: discoveredApp.appRoot,
+    routesDir: discoveredApp.routesDir,
+    routeFile: rawTarget,
+  })
+}
+
+function ok(options: {
+  readonly appRoot: string
+  readonly routesDir: string
+  readonly routeFile: string
+}): ResolvedRouteTarget | RuntimeExecutionFailureResult {
+  const identity = deriveRouteIdentity({
+    appRoot: options.appRoot,
+    routeFile: options.routeFile,
+    routesDir: options.routesDir,
+  })
+
+  if (!identity.ok) {
+    return createRuntimeFailureResult({
+      appRoot: options.appRoot,
       executionSource: "in-process",
       kind: "route_resolution_error",
-      message: formatErrorMessage(error),
-      mode,
-      routeId: routeIdentity.routeId,
-      routePath: routeIdentity.routePath,
-      startedAt,
+      message: `Route file is outside the configured appDir: ${options.routeFile}`,
+      routePath: identity.routePath,
+      startedAt: Date.now(),
     })
   }
 
   return {
-    appRoot: discoveredApp.appRoot,
-    mode,
-    routeId: routeIdentity.routeId,
-    routeFile,
-    routePath: routeIdentity.routePath,
+    appRoot: options.appRoot,
+    routeId: identity.routeId,
+    routeFile: options.routeFile,
+    routePath: identity.routePath,
   }
+}
+
+function failure(options: {
+  readonly appRoot: string
+  readonly routesDir: string
+  readonly routeFile: string
+  readonly message: string
+  readonly startedAt: number
+}): RuntimeExecutionFailureResult {
+  const identity = deriveRouteIdentity({
+    appRoot: options.appRoot,
+    routeFile: options.routeFile,
+    routesDir: options.routesDir,
+  })
+
+  return createRuntimeFailureResult({
+    appRoot: options.appRoot,
+    executionSource: "in-process",
+    kind: "route_resolution_error",
+    message: options.message,
+    ...(identity.ok ? { routeId: identity.routeId } : {}),
+    routePath: identity.routePath,
+    startedAt: options.startedAt,
+  })
 }
 
 async function discoverApp(options: ResolveRouteTargetOptions): Promise<
@@ -162,7 +200,7 @@ async function discoverApp(options: ResolveRouteTargetOptions): Promise<
   }
 }
 
-function toRouteFilePath(
+function toAbsolutePath(
   routePath: string,
   options: {
     readonly appRoot: string
@@ -174,27 +212,4 @@ function toRouteFilePath(
   }
 
   return resolve(options.appRoot, routePath)
-}
-
-function toRouteMode(routeFile: string): RuntimeExecutionMode | null {
-  const routeName = basename(routeFile)
-
-  if (routeName === "graph.ts") {
-    return "graph"
-  }
-
-  if (routeName === "workflow.ts") {
-    return "workflow"
-  }
-
-  return null
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath, constants.F_OK)
-    return true
-  } catch {
-    return false
-  }
 }

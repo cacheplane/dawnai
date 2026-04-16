@@ -5,7 +5,6 @@ import { discoverRoutes, findDawnApp, renderRouteTypes } from "@dawn/core"
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
-import { validateAuthoringRoutes } from "../lib/runtime/validate-authoring-routes.js"
 
 interface VerifyOptions {
   readonly cwd?: string
@@ -141,7 +140,6 @@ async function verifyApp(
 
   try {
     manifest = await discoverRoutes({ appRoot: app.appRoot })
-    await validateAuthoringRoutes(manifest)
   } catch (error) {
     return createVerifyFailureResult(app.appRoot, checks, "routes", error)
   }
