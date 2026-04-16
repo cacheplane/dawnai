@@ -37,17 +37,19 @@ Route discovery starts at `src/app` by default.
 
 `appDir` is the only supported config option today.
 
-Each route directory exposes exactly one primary executable entry:
+Route directories currently support these route files:
 
-- `graph.ts`
-- `workflow.ts`
+- `page.tsx` for UI routes
+- `graph.ts` or `workflow.ts` for executable routes
+- `route.ts` as the Dawn-owned route definition that binds exactly one sibling `graph.ts` or `workflow.ts`
 
-Route directories may also include `route.ts` as an authoring companion that binds the executable entry.
+Route directories may also include companion files such as `state.ts` and route-local tools under `tools/*.ts`.
 
 The current `basic` scaffold ships:
 
 - `src/app/(public)/hello/[tenant]/route.ts`
 - `src/app/(public)/hello/[tenant]/workflow.ts`
+- `src/app/(public)/hello/[tenant]/state.ts`
 - `src/app/(public)/hello/[tenant]/tools/greet.ts`
 
 ## Commands

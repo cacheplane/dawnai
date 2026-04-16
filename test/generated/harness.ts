@@ -2,6 +2,8 @@ import { constants } from "node:fs"
 import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 
+import { expect } from "vitest"
+
 import { createArtifactRoot } from "../../packages/devkit/src/testing/index.ts"
 import {
   cleanupTrackedTempDirs,
@@ -232,6 +234,21 @@ export async function prepareGeneratedRuntimeApp(options: {
       ].join("\n"),
     )
   }
+}
+
+export async function expectBasicAuthoringLane(appRoot: string): Promise<void> {
+  await expect(
+    access(resolve(appRoot, "src/app/(public)/hello/[tenant]/route.ts"), constants.F_OK),
+  ).resolves.toBeUndefined()
+  await expect(
+    access(resolve(appRoot, "src/app/(public)/hello/[tenant]/workflow.ts"), constants.F_OK),
+  ).resolves.toBeUndefined()
+  await expect(
+    access(resolve(appRoot, "src/app/(public)/hello/[tenant]/state.ts"), constants.F_OK),
+  ).resolves.toBeUndefined()
+  await expect(
+    access(resolve(appRoot, "src/app/(public)/hello/[tenant]/tools/greet.ts"), constants.F_OK),
+  ).resolves.toBeUndefined()
 }
 
 export async function runGeneratedRuntimeScenario(
