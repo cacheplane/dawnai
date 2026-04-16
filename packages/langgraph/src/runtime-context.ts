@@ -3,7 +3,10 @@ export interface ToolContext {
 }
 
 export interface RuntimeContext<
-  TTools extends Record<string, RuntimeTool<any, any>> = Record<string, RuntimeTool<any, any>>,
+  TTools extends Record<string, RuntimeTool<never, unknown>> = Record<
+    string,
+    RuntimeTool<never, unknown>
+  >,
 > {
   readonly signal: AbortSignal
   readonly tools: TTools

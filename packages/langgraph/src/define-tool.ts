@@ -1,10 +1,6 @@
 import type { ToolContext } from "./runtime-context.js"
 
-export interface ToolDefinition<
-  TInput = unknown,
-  TOutput = unknown,
-  TContext = ToolContext,
-> {
+export interface ToolDefinition<TInput = unknown, TOutput = unknown, TContext = ToolContext> {
   readonly name: string
   readonly description?: string
   readonly run: (input: TInput, context: TContext) => Promise<TOutput> | TOutput

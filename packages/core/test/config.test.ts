@@ -67,7 +67,7 @@ describe("loadDawnConfig", () => {
 
   test("rejects non-string const appDir bindings with a stable parser error", async () => {
     const appRoot = await createConfigFixture(
-      'const appDir = getAppDir()\nexport default { appDir }\n',
+      "const appDir = getAppDir()\nexport default { appDir }\n",
     )
 
     await expect(loadDawnConfig({ appRoot })).rejects.toThrow(

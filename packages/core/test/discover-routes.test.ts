@@ -135,8 +135,7 @@ describe("discoverRoutes", () => {
         'export default { name: "greet", run: async () => "hello from shared" };\n',
       "src/app/hello/[tenant]/route.ts":
         'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-      "src/app/hello/[tenant]/workflow.ts":
-        "export const workflow = async () => ({ ok: true });\n",
+      "src/app/hello/[tenant]/workflow.ts": "export const workflow = async () => ({ ok: true });\n",
       "src/app/hello/[tenant]/tools/tenant-greet.ts":
         'export default { name: "tenant-greet", run: async () => "hello from route" };\n',
     })
@@ -185,6 +184,18 @@ describe("discoverRoutes", () => {
         id: "/hello/[tenant]",
         pathname: "/hello/[tenant]",
       }),
+    )
+  })
+
+  test("fails when route.ts binds to a missing executable file instead of guessing from sibling files", async () => {
+    const appRoot = await createAdHocApp("dawn-core-authoring-mismatch-", {
+      "src/app/hello/[tenant]/route.ts":
+        'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
+      "src/app/hello/[tenant]/graph.ts": "export const graph = async () => ({ ok: true });\n",
+    })
+
+    await expect(discoverRoutes({ appRoot })).rejects.toThrow(
+      `Route definition ${join(appRoot, "src/app/hello/[tenant]/route.ts")} binds to missing executable file: ${join(appRoot, "src/app/hello/[tenant]/workflow.ts")}`,
     )
   })
 

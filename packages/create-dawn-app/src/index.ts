@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { constants } from "node:fs"
-import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
@@ -168,7 +168,10 @@ function createAbsoluteFileSpecifier(path: string): string {
   return pathToFileURL(path).toString()
 }
 
-function createTemplateReplacements(appRoot: string, options: CliOptions): {
+function createTemplateReplacements(
+  appRoot: string,
+  options: CliOptions,
+): {
   readonly appName: string
   readonly dawnCliSpecifier: string
   readonly dawnConfigTypescriptSpecifier: string

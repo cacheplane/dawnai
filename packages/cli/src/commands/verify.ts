@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 
-import { discoverRoutes, findDawnApp, renderRouteTypes, type RouteManifest } from "@dawn/core"
+import { discoverRoutes, findDawnApp, type RouteManifest, renderRouteTypes } from "@dawn/core"
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"

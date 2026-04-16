@@ -6,10 +6,6 @@ import { pathToFileURL } from "node:url"
 import { findDawnApp } from "@dawn/core"
 import { normalizeRouteModule } from "@dawn/langgraph"
 import { createDawnContext } from "./dawn-context.js"
-import {
-  loadAuthoringRouteHandler,
-  resolveAuthoringRouteDefinitionForTarget,
-} from "./route-definition.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import {
   createRuntimeFailureResult,
@@ -18,6 +14,10 @@ import {
   type RuntimeExecutionMode,
   type RuntimeExecutionResult,
 } from "./result.js"
+import {
+  loadAuthoringRouteHandler,
+  resolveAuthoringRouteDefinitionForTarget,
+} from "./route-definition.js"
 import { deriveRouteIdentity } from "./route-identity.js"
 import { discoverToolDefinitions } from "./tool-discovery.js"
 
@@ -222,9 +222,7 @@ async function executeRouteAtResolvedPath(options: {
   readonly signal?: AbortSignal
   readonly startedAt: number
 }): Promise<RuntimeExecutionResult> {
-  let authoringDefinition: Awaited<
-    ReturnType<typeof resolveAuthoringRouteDefinitionForTarget>
-  >
+  let authoringDefinition: Awaited<ReturnType<typeof resolveAuthoringRouteDefinitionForTarget>>
 
   try {
     authoringDefinition = await resolveAuthoringRouteDefinitionForTarget(options.routeFile)
@@ -338,7 +336,10 @@ async function executeAuthoringRoute(options: {
       tools,
       ...(options.signal ? { signal: options.signal } : {}),
     })
-    const output = await handler(options.input, context)
+    const output =
+      typeof handler === "function"
+        ? await handler(options.input, context)
+        : await handler.invoke(options.input, context)
 
     return createRuntimeSuccessResult({
       appRoot: options.appRoot,
@@ -352,8 +353,10 @@ async function executeAuthoringRoute(options: {
   } catch (error) {
     const kind =
       error instanceof Error &&
-      error.message ===
-        `Authoring ${options.route.kind} route at ${options.route.executableFile} must export a callable "${options.route.kind}" handler`
+      (error.message ===
+        `Authoring ${options.route.kind} route at ${options.route.executableFile} must export a callable "${options.route.kind}" handler` ||
+        error.message ===
+          `Authoring graph route at ${options.route.executableFile} must export a callable "graph" handler or an object exposing invoke(input)`)
         ? "unsupported_route_boundary"
         : "execution_error"
 

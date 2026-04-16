@@ -43,8 +43,7 @@ async function createAuthoringFixtureApp() {
     "src/tools/greet.ts": 'export default { name: "greet", run: async () => "hello" };\n',
     "src/app/hello/[tenant]/route.ts":
       'export const route = { kind: "workflow", entry: "./workflow.ts" };\n',
-    "src/app/hello/[tenant]/workflow.ts":
-      "export const workflow = async () => ({ ok: true });\n",
+    "src/app/hello/[tenant]/workflow.ts": "export const workflow = async () => ({ ok: true });\n",
     "src/app/hello/[tenant]/tools/tenant-greet.ts":
       'export default { name: "tenant-greet", run: async () => "tenant hello" };\n',
   }
@@ -158,8 +157,6 @@ describe("dawn routes", () => {
     expect(stdout.join("")).toContain(
       `/hello/[tenant] -> ${join(appRoot, "src/app/hello/[tenant]/route.ts")}`,
     )
-    expect(stdout.join("")).not.toContain(
-      join(appRoot, "src/app/hello/[tenant]/workflow.ts"),
-    )
+    expect(stdout.join("")).not.toContain(join(appRoot, "src/app/hello/[tenant]/workflow.ts"))
   })
 })

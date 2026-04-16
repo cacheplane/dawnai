@@ -7,6 +7,7 @@ import type {
   RouteManifest,
 } from "../types.js"
 import { findDawnApp } from "./find-dawn-app.js"
+import { loadAuthoringRouteDefinition } from "./load-authoring-route-definition.js"
 import { isPrivateSegment, isRouteGroupSegment, toRouteSegments } from "./route-segments.js"
 
 type PrimaryRouteFile = keyof typeof PRIMARY_ROUTE_FILES
@@ -89,23 +90,27 @@ async function readRouteEntry(
     return null
   }
 
-  const authoringCompanionEntry = entryFiles.includes("route.ts")
-    ? resolveAuthoringCompanionEntry(entryFiles)
-    : null
-
   const routeSegments = relative(routesDir, routeDir)
     .split(sep)
     .filter(Boolean)
     .filter((segment) => !isRouteGroupSegment(segment))
 
-  if (authoringCompanionEntry) {
+  if (entryFiles.includes("route.ts")) {
+    const authoringDefinition = await loadAuthoringRouteDefinition(resolve(routeDir, "route.ts"))
+
+    if (!authoringDefinition) {
+      throw new Error(
+        `Route definition ${resolve(routeDir, "route.ts")} must export a Dawn route definition`,
+      )
+    }
+
     return {
-      boundEntryFile: resolve(routeDir, authoringCompanionEntry),
-      boundEntryKind: PRIMARY_ROUTE_FILES[authoringCompanionEntry],
+      boundEntryFile: authoringDefinition.executableFile,
+      boundEntryKind: authoringDefinition.kind,
       id: toPathname(routeSegments),
       pathname: toPathname(routeSegments),
       entryKind: "route",
-      entryFile: resolve(routeDir, "route.ts"),
+      entryFile: authoringDefinition.routeDefinitionFile,
       routeDir,
       segments: toRouteSegments(routeSegments),
     }
@@ -151,17 +156,6 @@ function resolvePrimaryRouteEntry(
   }
 
   return entryFiles[0] ?? null
-}
-
-function resolveAuthoringCompanionEntry(
-  entryFiles: readonly PrimaryRouteFile[],
-): Extract<ExecutableRouteFile, "graph.ts" | "workflow.ts"> | null {
-  const executableEntry = entryFiles.find(
-    (entryFile): entryFile is Extract<ExecutableRouteFile, "graph.ts" | "workflow.ts"> =>
-      entryFile === "graph.ts" || entryFile === "workflow.ts",
-  )
-
-  return executableEntry ?? null
 }
 
 function validateRouteCollisions(routes: readonly RouteDefinition[]): RouteDefinition[] {
