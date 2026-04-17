@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { findDawnApp } from "@dawn/core"
+import { loadRouteKind } from "./load-route-kind.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import type { RuntimeExecutionResult } from "./result.js"
 import { deriveRouteIdentity } from "./route-identity.js"
@@ -103,10 +104,6 @@ async function discoverScenarioFiles(options: {
 
   const targetName = basename(narrowingTarget)
 
-  if (targetName === "graph.ts" || targetName === "workflow.ts") {
-    throw new RunScenarioLoadError("Route-file narrowing is not supported in v1")
-  }
-
   if (targetName === RUN_TEST_FILE) {
     return [narrowingTarget]
   }
@@ -160,13 +157,42 @@ async function loadScenarioFile(options: {
     )
   }
 
+  const indexFile = resolve(dirname(options.scenarioFile), "index.ts")
+
+  if (!(await pathExists(indexFile))) {
+    throw new RunScenarioLoadError(
+      `Scenario file ${options.scenarioFile} has no sibling index.ts — run.test.ts must be colocated with a route entry point`,
+    )
+  }
+
+  const mode = await loadRouteKindSafe(options.scenarioFile, indexFile)
+
+  const routeIdentity = deriveRouteIdentity({
+    appRoot: options.appRoot,
+    routeFile: indexFile,
+    routesDir: options.routesDir,
+  })
+
+  if (!routeIdentity.ok) {
+    throw new RunScenarioLoadError(
+      `Scenario file ${options.scenarioFile} sibling index.ts is outside the configured appDir`,
+    )
+  }
+
+  const routeContext = {
+    appRoot: options.appRoot,
+    mode,
+    routeFile: indexFile,
+    routeId: routeIdentity.routeId,
+    routePath: routeIdentity.routePath,
+  }
+
   return await Promise.all(
     scenarioModule.default.map(
       async (rawScenario, index) =>
         await validateScenario({
-          appRoot: options.appRoot,
           rawScenario,
-          routesDir: options.routesDir,
+          routeContext,
           scenarioFile: options.scenarioFile,
           scenarioIndex: index,
         }),
@@ -174,10 +200,28 @@ async function loadScenarioFile(options: {
   )
 }
 
+async function loadRouteKindSafe(
+  scenarioFile: string,
+  indexFile: string,
+): Promise<"graph" | "workflow"> {
+  try {
+    return await loadRouteKind(indexFile)
+  } catch {
+    throw new RunScenarioLoadError(
+      `Scenario file ${scenarioFile} sibling index.ts exports neither "workflow" nor "graph"`,
+    )
+  }
+}
+
 async function validateScenario(options: {
-  readonly appRoot: string
   readonly rawScenario: unknown
-  readonly routesDir: string
+  readonly routeContext: {
+    readonly appRoot: string
+    readonly mode: "graph" | "workflow"
+    readonly routeFile: string
+    readonly routeId: string
+    readonly routePath: string
+  }
   readonly scenarioFile: string
   readonly scenarioIndex: number
 }): Promise<LoadedRunScenario> {
@@ -188,7 +232,6 @@ async function validateScenario(options: {
   }
 
   const name = options.rawScenario.name
-  const target = options.rawScenario.target
   const hasInput = Object.hasOwn(options.rawScenario, "input")
   const input = options.rawScenario.input
   const expectation = options.rawScenario.expect
@@ -199,12 +242,6 @@ async function validateScenario(options: {
   if (typeof name !== "string" || name.length === 0) {
     throw new RunScenarioLoadError(
       `Scenario file ${options.scenarioFile} contains a scenario with a missing name at index ${options.scenarioIndex}`,
-    )
-  }
-
-  if (target !== "./graph.ts" && target !== "./workflow.ts") {
-    throw new RunScenarioLoadError(
-      `Scenario "${name}" target must be exactly "./graph.ts" or "./workflow.ts"`,
     )
   }
 
@@ -259,29 +296,8 @@ async function validateScenario(options: {
     )
   }
 
-  const targetFile = resolve(dirname(options.scenarioFile), target)
-
-  if (!(await pathExists(targetFile))) {
-    throw new RunScenarioLoadError(`Scenario "${name}" target does not exist: ${targetFile}`)
-  }
-
-  const indexFile = resolve(dirname(options.scenarioFile), "index.ts")
-  const routeFile = (await pathExists(indexFile)) ? indexFile : targetFile
-
-  const routeIdentity = deriveRouteIdentity({
-    appRoot: options.appRoot,
-    routeFile,
-    routesDir: options.routesDir,
-  })
-
-  if (!routeIdentity.ok) {
-    throw new RunScenarioLoadError(`Scenario "${name}" target is outside the configured appDir`)
-  }
-
-  const mode = target === "./graph.ts" ? "graph" : "workflow"
-
   return {
-    appRoot: options.appRoot,
+    appRoot: options.routeContext.appRoot,
     ...(isScenarioAssert(assert) ? { assert } : {}),
     ...(expectationRecord
       ? {
@@ -296,11 +312,11 @@ async function validateScenario(options: {
         }
       : {}),
     input,
-    mode,
+    mode: options.routeContext.mode,
     name,
-    routeId: routeIdentity.routeId,
-    routeFile,
-    routePath: routeIdentity.routePath,
+    routeId: options.routeContext.routeId,
+    routeFile: options.routeContext.routeFile,
+    routePath: options.routeContext.routePath,
     ...(isRecord(runOptions) && typeof runOptions.url === "string"
       ? { run: { url: runOptions.url } }
       : {}),
