@@ -56,7 +56,6 @@ interface RuntimeFixtureSpec {
     readonly server: string
   }
   readonly source: "generated" | "handwritten"
-  readonly target: "./graph.ts" | "./workflow.ts"
 }
 
 export interface GeneratedRuntimeApp {
@@ -106,7 +105,6 @@ const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> =
       server: "basic server scenario",
     },
     source: "generated",
-    target: "./workflow.ts",
   },
   "custom-app-dir": {
     expectedFixturePath: join(FIXTURE_ROOT, "custom-app-dir-runtime.expected.json"),
@@ -123,7 +121,6 @@ const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> =
       server: "custom appDir server scenario",
     },
     source: "generated",
-    target: "./graph.ts",
   },
   handwritten: {
     expectedFixturePath: join(FIXTURE_ROOT, "handwritten-runtime.expected.json"),
@@ -140,7 +137,6 @@ const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> =
       server: "handwritten server scenario",
     },
     source: "handwritten",
-    target: "./graph.ts",
   },
 }
 
@@ -492,11 +488,6 @@ async function writeRunScenarioFile(options: {
   const runTestPath = join(routeDir, "run.test.ts")
   const scenarioRoutePath = options.fixture.routePath
 
-  await writeCompanionScenarioEntry({
-    fixture: options.fixture,
-    routeDir,
-  })
-
   await writeFile(
     runTestPath,
     [
@@ -505,7 +496,6 @@ async function writeRunScenarioFile(options: {
       "export default [",
       "  {",
       `    name: ${JSON.stringify(options.fixture.scenarioNames.inProcess)},`,
-      `    target: ${JSON.stringify(options.fixture.target)},`,
       `    input: ${JSON.stringify(options.fixture.input)},`,
       "    expect: {",
       '      status: "passed",',
@@ -520,7 +510,6 @@ async function writeRunScenarioFile(options: {
       "  },",
       "  {",
       `    name: ${JSON.stringify(options.fixture.scenarioNames.server)},`,
-      `    target: ${JSON.stringify(options.fixture.target)},`,
       `    input: ${JSON.stringify(options.fixture.input)},`,
       "    run: {",
       `      url: ${JSON.stringify(SERVER_URL_PLACEHOLDER)},`,
@@ -543,24 +532,6 @@ async function writeRunScenarioFile(options: {
       "]",
       "",
     ].join("\n"),
-    "utf8",
-  )
-}
-
-function companionFileNameFor(target: RuntimeFixtureSpec["target"]): "graph.ts" | "workflow.ts" {
-  return target === "./graph.ts" ? "graph.ts" : "workflow.ts"
-}
-
-async function writeCompanionScenarioEntry(options: {
-  readonly fixture: RuntimeFixtureSpec
-  readonly routeDir: string
-}): Promise<void> {
-  const companionFile = join(options.routeDir, companionFileNameFor(options.fixture.target))
-  const exportName = options.fixture.mode
-
-  await writeFile(
-    companionFile,
-    [`export { ${exportName} } from "./index.js"`, ""].join("\n"),
     "utf8",
   )
 }

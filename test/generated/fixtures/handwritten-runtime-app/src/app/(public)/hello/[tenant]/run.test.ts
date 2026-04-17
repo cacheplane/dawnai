@@ -3,7 +3,7 @@ import { expectMeta, expectOutput } from "@dawn/cli/testing"
 export default [
   {
     name: "handwritten in-process scenario",
-    target: "./graph.ts",
+
     input: {
       tenant: "handwritten-tenant",
     },
@@ -23,7 +23,7 @@ export default [
   },
   {
     name: "handwritten server scenario",
-    target: "./graph.ts",
+
     input: {
       tenant: "handwritten-tenant",
     },
