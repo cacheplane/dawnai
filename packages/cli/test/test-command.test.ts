@@ -18,7 +18,7 @@ afterEach(async () => {
 })
 
 describe("dawn test", () => {
-  test("executes scenario targets that resolve to companion workflow.ts files with shared and route-local tools", async () => {
+  test("executes workflow scenarios inferred from index.ts with shared and route-local tools", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
@@ -27,7 +27,7 @@ describe("dawn test", () => {
   run: async (input: { tenant: string }) => ({ scope: "shared", tenant: input.tenant }),
 };
 `,
-      "src/app/hello/[tenant]/workflow.ts": `import type { RuntimeContext } from "@dawn/sdk"
+      "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
 export const workflow = async (
   input: { tenant: string },
   context: RuntimeContext,
@@ -48,7 +48,7 @@ export const workflow = async (
               executionSource: "in-process",
               mode: "workflow",
               routeId: "/hello/[tenant]",
-              routePath: "src/app/hello/[tenant]/workflow.ts",
+              routePath: "src/app/hello/[tenant]/index.ts",
             },
             output: {
               shared: {
@@ -66,7 +66,6 @@ export const workflow = async (
             tenant: "scenario-tenant",
           },
           name: "authoring workflow scenario passes",
-          target: "./workflow.ts",
         },
       ]),
     })
@@ -83,7 +82,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/alpha/graph.ts": "export const graph = async () => ({ route: 'alpha' });\n",
+      "src/app/alpha/index.ts": "export const graph = async () => ({ route: 'alpha' });\n",
       "src/app/alpha/run.test.ts": scenarioModule([
         {
           expect: {
@@ -94,10 +93,9 @@ export const workflow = async (
           },
           input: {},
           name: "alpha graph passes",
-          target: "./graph.ts",
         },
       ]),
-      "src/app/beta/workflow.ts": "export const workflow = async () => ({ route: 'beta' });\n",
+      "src/app/beta/index.ts": "export const workflow = async () => ({ route: 'beta' });\n",
       "src/app/beta/run.test.ts": scenarioModule([
         {
           expect: {
@@ -108,7 +106,6 @@ export const workflow = async (
           },
           input: {},
           name: "beta workflow passes",
-          target: "./workflow.ts",
         },
       ]),
     })
@@ -126,22 +123,20 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/alpha/graph.ts": "export const graph = async () => ({ route: 'alpha' });\n",
+      "src/app/alpha/index.ts": "export const graph = async () => ({ route: 'alpha' });\n",
       "src/app/alpha/run.test.ts": scenarioModule([
         {
           expect: { output: { route: "alpha" }, status: "passed" },
           input: {},
           name: "alpha graph passes",
-          target: "./graph.ts",
         },
       ]),
-      "src/app/beta/workflow.ts": "export const workflow = async () => ({ route: 'beta' });\n",
+      "src/app/beta/index.ts": "export const workflow = async () => ({ route: 'beta' });\n",
       "src/app/beta/run.test.ts": scenarioModule([
         {
           expect: { output: { route: "beta" }, status: "passed" },
           input: {},
           name: "beta workflow passes",
-          target: "./workflow.ts",
         },
       ]),
     })
@@ -160,33 +155,30 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/docs/graph.ts": "export const graph = async () => ({ section: 'docs' });\n",
+      "src/app/docs/index.ts": "export const graph = async () => ({ section: 'docs' });\n",
       "src/app/docs/run.test.ts": scenarioModule([
         {
           expect: { output: { section: "docs" }, status: "passed" },
           input: {},
           name: "docs graph passes",
-          target: "./graph.ts",
         },
       ]),
-      "src/app/docs/guides/workflow.ts":
+      "src/app/docs/guides/index.ts":
         "export const workflow = async () => ({ section: 'guides' });\n",
       "src/app/docs/guides/run.test.ts": scenarioModule([
         {
           expect: { output: { section: "guides" }, status: "passed" },
           input: {},
           name: "guides workflow passes",
-          target: "./workflow.ts",
         },
       ]),
-      "src/app/marketing/graph.ts":
+      "src/app/marketing/index.ts":
         "export const graph = async () => ({ section: 'marketing' });\n",
       "src/app/marketing/run.test.ts": scenarioModule([
         {
           expect: { output: { section: "marketing" }, status: "passed" },
           input: {},
           name: "marketing graph passes",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -203,13 +195,12 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/docs/graph.ts": "export const graph = async () => ({ section: 'docs' });\n",
+      "src/app/docs/index.ts": "export const graph = async () => ({ section: 'docs' });\n",
       "src/app/docs/run.test.ts": scenarioModule([
         {
           expect: { output: { section: "docs" }, status: "passed" },
           input: {},
           name: "docs graph passes",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -226,13 +217,12 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/docs/graph.ts": "export const graph = async () => ({ section: 'docs' });\n",
+      "src/app/docs/index.ts": "export const graph = async () => ({ section: 'docs' });\n",
       "src/app/docs/run.test.ts": scenarioModule([
         {
           expect: { output: { section: "docs" }, status: "passed" },
           input: {},
           name: "docs graph passes",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -243,72 +233,15 @@ export const workflow = async (
     expect(result.stdout).toContain("PASS docs graph passes")
   })
 
-  test("honors explicit local targets when both graph.ts and workflow.ts exist in the same route directory", async () => {
+  test("rejects scenarios when sibling index.ts is missing", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ mode: 'graph' });\n",
-      "src/app/support/workflow.ts":
-        "export const workflow = async () => ({ mode: 'workflow' });\n",
       "src/app/support/run.test.ts": scenarioModule([
         {
-          expect: { output: { mode: "graph" }, status: "passed" },
+          expect: { status: "passed" },
           input: {},
-          name: "graph companion target passes",
-          target: "./graph.ts",
-        },
-        {
-          expect: { output: { mode: "workflow" }, status: "passed" },
-          input: {},
-          name: "workflow companion target passes",
-          target: "./workflow.ts",
-        },
-      ]),
-    })
-
-    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
-
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain("PASS graph companion target passes")
-    expect(result.stdout).toContain("PASS workflow companion target passes")
-  })
-
-  test("rejects route-file narrowing input in v1", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ mode: 'graph' });\n",
-      "src/app/support/run.test.ts": scenarioModule([
-        {
-          expect: { output: { mode: "graph" }, status: "passed" },
-          input: {},
-          name: "graph companion target passes",
-          target: "./graph.ts",
-        },
-      ]),
-    })
-
-    const result = await invoke(["test", "src/app/support/graph.ts", "--cwd", appRoot], {
-      cwd: appRoot,
-    })
-
-    expect(result.exitCode).toBe(2)
-    expect(result.stdout).toBe("")
-    expect(result.stderr).toContain("Scenario-load failure")
-    expect(result.stderr).toContain("Route-file narrowing is not supported in v1")
-  })
-
-  test("rejects missing or invalid targets", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ mode: 'graph' });\n",
-      "src/app/support/run.test.ts": scenarioModule([
-        {
-          expect: { output: { mode: "graph" }, status: "passed" },
-          input: {},
-          name: "invalid target",
-          target: "graph.ts",
+          name: "orphan scenario",
         },
       ]),
     })
@@ -316,24 +249,22 @@ export const workflow = async (
     const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
 
     expect(result.exitCode).toBe(2)
-    expect(result.stdout).toBe("")
     expect(result.stderr).toContain("Scenario-load failure")
     expect(result.stderr).toContain(
-      'Scenario "invalid target" target must be exactly "./graph.ts" or "./workflow.ts"',
+      "has no sibling index.ts — run.test.ts must be colocated with a route entry point",
     )
   })
 
-  test("rejects cross-directory targets", async () => {
+  test("rejects scenarios when index.ts exports neither workflow nor graph", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ mode: 'graph' });\n",
+      "src/app/support/index.ts": "export const handler = async () => ({ ok: true });\n",
       "src/app/support/run.test.ts": scenarioModule([
         {
-          expect: { output: { mode: "graph" }, status: "passed" },
+          expect: { status: "passed" },
           input: {},
-          name: "cross-directory target",
-          target: "../graph.ts",
+          name: "bad export scenario",
         },
       ]),
     })
@@ -341,10 +272,9 @@ export const workflow = async (
     const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
 
     expect(result.exitCode).toBe(2)
-    expect(result.stdout).toBe("")
     expect(result.stderr).toContain("Scenario-load failure")
     expect(result.stderr).toContain(
-      'Scenario "cross-directory target" target must be exactly "./graph.ts" or "./workflow.ts"',
+      'sibling index.ts exports neither "workflow" nor "graph"',
     )
   })
 
@@ -352,7 +282,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": `export const graph = async () => { throw new Error("expected route failure"); };\n`,
+      "src/app/support/index.ts": `export const graph = async () => { throw new Error("expected route failure"); };\n`,
       "src/app/support/run.test.ts": scenarioModule([
         {
           expect: {
@@ -364,7 +294,6 @@ export const workflow = async (
           },
           input: {},
           name: "expected failure passes",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -380,13 +309,12 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
       "src/app/support/run.test.ts": scenarioModule([
         {
           expect: { status: "failed" },
           input: {},
           name: "status mismatch fails",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -403,7 +331,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ greeting: 'hello' });\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ greeting: 'hello' });\n",
       "src/app/support/run.test.ts": scenarioModule([
         {
           expect: {
@@ -414,7 +342,6 @@ export const workflow = async (
           },
           input: {},
           name: "output mismatch fails",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -430,7 +357,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts":
+      "src/app/support/index.ts":
         "export const graph = async () => ({ profile: { tenant: 'acme', region: 'us-west' }, tags: ['alpha', 'beta'] });\n",
       "src/app/support/run.test.ts": scenarioModule([
         {
@@ -444,7 +371,6 @@ export const workflow = async (
           },
           input: {},
           name: "nested output subset passes",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -459,7 +385,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts":
+      "src/app/support/index.ts":
         "export const graph = async () => ({ tags: ['alpha', 'beta'] });\n",
       "src/app/support/run.test.ts": scenarioModule([
         {
@@ -471,7 +397,6 @@ export const workflow = async (
           },
           input: {},
           name: "array output mismatch fails",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -489,7 +414,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/workflow.ts":
+      "src/app/support/[tenant]/index.ts":
         "export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant });\n",
       "src/app/support/[tenant]/run.test.ts": scenarioModule([
         {
@@ -498,7 +423,7 @@ export const workflow = async (
               executionSource: "in-process",
               mode: "workflow",
               routeId: "/support/[tenant]",
-              routePath: "src/app/support/[tenant]/workflow.ts",
+              routePath: "src/app/support/[tenant]/index.ts",
             },
             output: {
               tenant: "meta-tenant",
@@ -509,7 +434,6 @@ export const workflow = async (
             tenant: "meta-tenant",
           },
           name: "meta assertions pass",
-          target: "./workflow.ts",
         },
       ]),
     })
@@ -524,7 +448,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts":
+      "src/app/support/index.ts":
         "export const graph = async () => { throw new Error('tenant acme exploded while rendering'); };\n",
       "src/app/support/run.test.ts": scenarioModule([
         {
@@ -538,7 +462,6 @@ export const workflow = async (
           },
           input: {},
           name: "includes matcher passes",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -553,7 +476,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/graph.ts":
+      "src/app/support/[tenant]/index.ts":
         "export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, source: 'local' });\n",
       "src/app/support/[tenant]/run.test.ts": scenarioModule([
         {
@@ -562,7 +485,7 @@ export const workflow = async (
               executionSource: "server",
               mode: "graph",
               routeId: "/support/[tenant]",
-              routePath: "src/app/support/[tenant]/graph.ts",
+              routePath: "src/app/support/[tenant]/index.ts",
             },
             output: {
               source: "server",
@@ -577,7 +500,6 @@ export const workflow = async (
           run: {
             url: "__SERVER_URL__",
           },
-          target: "./graph.ts",
         },
       ]).replace("__SERVER_URL__", "__SERVER_URL__"),
     })
@@ -605,12 +527,11 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
       "src/app/support/run.test.ts": scenarioModuleSource(`
         export default [
           {
             name: "assert runs after declarative expect",
-            target: "./graph.ts",
             input: {},
             expect: {
               status: "passed",
@@ -638,12 +559,11 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ greeting: 'hello' });\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ greeting: 'hello' });\n",
       "src/app/support/run.test.ts": scenarioModuleSource(`
         export default [
           {
             name: "assert is skipped after declarative failure",
-            target: "./graph.ts",
             input: {},
             expect: {
               status: "passed",
@@ -672,7 +592,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": `export const graph = async () => { throw new Error("kind mismatch"); };\n`,
+      "src/app/support/index.ts": `export const graph = async () => { throw new Error("kind mismatch"); };\n`,
       "src/app/support/run.test.ts": scenarioModule([
         {
           expect: {
@@ -683,7 +603,6 @@ export const workflow = async (
           },
           input: {},
           name: "error kind mismatch fails",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -701,7 +620,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": `export const graph = async () => { throw new Error("actual message"); };\n`,
+      "src/app/support/index.ts": `export const graph = async () => { throw new Error("actual message"); };\n`,
       "src/app/support/run.test.ts": scenarioModule([
         {
           expect: {
@@ -712,7 +631,6 @@ export const workflow = async (
           },
           input: {},
           name: "error message mismatch fails",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -730,13 +648,12 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": `export const graph = async () => { throw new Error("unexpected execution failure"); };\n`,
+      "src/app/support/index.ts": `export const graph = async () => { throw new Error("unexpected execution failure"); };\n`,
       "src/app/support/run.test.ts": scenarioModule([
         {
           expect: { status: "passed" },
           input: {},
           name: "unexpected execution failure",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -752,7 +669,7 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
     })
 
     const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
@@ -766,12 +683,11 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
       "src/app/support/run.test.ts": scenarioModule([
         {
           input: {},
           name: "missing expect and assert",
-          target: "./graph.ts",
         },
       ]),
     })
@@ -788,12 +704,11 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
       "src/app/support/run.test.ts": scenarioModuleSource(`
         export default [
           {
             name: "malformed expect with assert",
-            target: "./graph.ts",
             input: {},
             expect: "passed",
             assert() {
@@ -816,14 +731,13 @@ export const workflow = async (
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/graph.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
       "src/app/support/run.test.ts": scenarioModule([
         {
           expect: {
             status: "passed",
           },
           name: "missing input",
-          target: "./graph.ts",
         },
       ]),
     })
