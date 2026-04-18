@@ -221,45 +221,39 @@ export const graph = { invoke: async () => ({}) }
     expect(symlinkVerifyResult.stdout).toContain("Dawn app integrity OK")
   })
 
-  test("fails when shared tools collide within the same scope", async () => {
+  test("passes when shared tools each have unique names derived from their filenames", async () => {
     const appRoot = await createFixtureApp({
-      "src/tools/a.ts": 'export default { name: "greet", run: async () => "hello from a" };\n',
-      "src/tools/b.ts": 'export default { name: "greet", run: async () => "hello from b" };\n',
+      "src/tools/greet.ts": "export default async (input: unknown) => ({ greeting: 'hi' });\n",
+      "src/tools/farewell.ts": "export default async (input: unknown) => ({ farewell: 'bye' });\n",
       "src/app/hello/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
     })
 
     const result = await invoke(["check", "--cwd", appRoot])
 
-    expect(result.exitCode).toBe(1)
-    expect(result.stdout).toBe("")
-    expect(result.stderr).toContain("Validation failed")
-    expect(result.stderr).toContain(
-      `Duplicate shared Dawn tool name "greet" detected at ${join(appRoot, "src/tools/a.ts")} and ${join(appRoot, "src/tools/b.ts")}`,
-    )
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Dawn app is valid")
   })
 
-  test("fails when route-local tools collide within the same scope", async () => {
+  test("passes when route-local tools each have unique names derived from their filenames", async () => {
     const appRoot = await createFixtureApp({
       "src/app/hello/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
-      "src/app/hello/[tenant]/tools/a.ts":
-        'export default { name: "greet", run: async () => "hello from a" };\n',
-      "src/app/hello/[tenant]/tools/b.ts":
-        'export default { name: "greet", run: async () => "hello from b" };\n',
+      "src/app/hello/[tenant]/tools/greet.ts":
+        "export default async (input: unknown) => ({ greeting: 'hi' });\n",
+      "src/app/hello/[tenant]/tools/farewell.ts":
+        "export default async (input: unknown) => ({ farewell: 'bye' });\n",
     })
 
     const result = await invoke(["check", "--cwd", appRoot])
 
-    expect(result.exitCode).toBe(1)
-    expect(result.stdout).toBe("")
-    expect(result.stderr).toContain("Validation failed")
-    expect(result.stderr).toContain(
-      `Duplicate route-local Dawn tool name "greet" detected at ${join(appRoot, "src/app/hello/[tenant]/tools/a.ts")} and ${join(appRoot, "src/app/hello/[tenant]/tools/b.ts")}`,
-    )
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("Dawn app is valid")
   })
 
-  test("fails when a shared tool module is malformed", async () => {
+  test("fails when a shared tool module does not default export a function", async () => {
     const appRoot = await createFixtureApp({
-      "src/tools/broken.ts": "export default { run: async () => 'missing name' };\n",
+      "src/tools/broken.ts": "export default 'not a function';\n",
       "src/app/hello/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
     })
 
@@ -269,7 +263,7 @@ export const graph = { invoke: async () => ({}) }
     expect(result.stdout).toBe("")
     expect(result.stderr).toContain("Validation failed")
     expect(result.stderr).toContain(
-      `Tool module ${join(appRoot, "src/tools/broken.ts")} must define a non-empty tool name`,
+      `Tool file ${join(appRoot, "src/tools/broken.ts")} must default export a function`,
     )
   })
 })
