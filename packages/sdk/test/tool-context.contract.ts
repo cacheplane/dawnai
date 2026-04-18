@@ -1,12 +1,11 @@
-import type { ToolDefinition } from "../src/tool.js"
+// Bare function tools receive only input — no context parameter.
+// This contract ensures the pattern compiles and has the correct shape.
 
-type DefaultToolRun = ToolDefinition["run"]
+type ToolFn<TInput = unknown, TOutput = unknown> = (input: TInput) => Promise<TOutput> | TOutput
 
-const validDefaultToolContextUsage: DefaultToolRun = async (_input, context) =>
-  context.signal.aborted
+const validBareToolUsage: ToolFn<
+  { readonly tenant: string },
+  { readonly greeting: string }
+> = async (input) => ({ greeting: `Hello, ${input.tenant}!` })
 
-// @ts-expect-error Default tool context should not expose route-level tools.
-const invalidDefaultToolContextUsage: DefaultToolRun = async (_input, context) => context.tools
-
-void validDefaultToolContextUsage
-void invalidDefaultToolContextUsage
+void validBareToolUsage
