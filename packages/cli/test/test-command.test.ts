@@ -22,10 +22,7 @@ describe("dawn test", () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/tools/greet.ts": `export default {
-  name: "greet",
-  run: async (input: { tenant: string }) => ({ scope: "shared", tenant: input.tenant }),
-};
+      "src/tools/greet.ts": `export default async (input: { tenant: string }) => ({ scope: "shared", tenant: input.tenant });
 `,
       "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
 export const workflow = async (
@@ -36,10 +33,7 @@ export const workflow = async (
   tenantGreeting: await context.tools["tenant-greet"]({ tenant: input.tenant }),
 });
 `,
-      "src/app/hello/[tenant]/tools/tenant-greet.ts": `export default {
-  name: "tenant-greet",
-  run: async (input: { tenant: string }) => ({ scope: "route-local", tenant: input.tenant }),
-};
+      "src/app/hello/[tenant]/tools/tenant-greet.ts": `export default async (input: { tenant: string }) => ({ scope: "route-local", tenant: input.tenant });
 `,
       "src/app/hello/[tenant]/run.test.ts": scenarioModule([
         {
