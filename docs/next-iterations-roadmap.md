@@ -53,9 +53,9 @@ Define a Dawn authoring contract that is semantically owned by Dawn rather than 
 
 This phase is complete as of the authoring-sdk milestone.
 
-`@dawn/sdk` is the Dawn-owned backend-neutral package containing the full author-facing contract: route types, tool authoring helpers (`defineTool`), runtime context types (`RuntimeContext`, `RuntimeTool`), and the `index.ts`-per-route convention. `@dawn/langgraph` is now an adapter that implements the `@dawn/sdk` contract and wires it to LangGraph execution.
+`@dawn/sdk` is the Dawn-owned backend-neutral package containing the full author-facing contract: route types, runtime context types (`RuntimeContext`, `RuntimeTool`), and the `index.ts`-per-route convention. Tools are plain default-exported functions with names inferred from filenames. `@dawn/langgraph` is now an adapter that implements the `@dawn/sdk` contract and wires it to LangGraph execution.
 
-Authors depend on `@dawn/sdk` for all Dawn-owned types and helpers. `@dawn/langgraph` remains available for backwards compatibility but is no longer the canonical author surface.
+Authors depend on `@dawn/sdk` for type annotations only. `@dawn/langgraph` remains available for backwards compatibility but is no longer the canonical author surface.
 
 ## Phase 2: LangChain-Native Authoring
 
