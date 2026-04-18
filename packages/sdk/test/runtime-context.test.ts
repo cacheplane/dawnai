@@ -1,4 +1,4 @@
-import { defineTool, type RuntimeContext, type RuntimeTool } from "@dawn/sdk"
+import type { RuntimeContext, RuntimeTool } from "@dawn/sdk"
 import { describe, expect, expectTypeOf, test } from "vitest"
 
 describe("@dawn/sdk runtime-context type surface", () => {
@@ -14,17 +14,14 @@ describe("@dawn/sdk runtime-context type surface", () => {
   })
 
   test("runtime-context tools are callable by name", async () => {
-    const tool = defineTool({
-      name: "lookupCustomer",
-      run: async (
-        input: { readonly id: string },
-        context: RuntimeContext<{
-          readonly lookupCustomer: RuntimeTool<{ readonly id: string }, { readonly id: string }>
-        }>,
-      ) => context.tools.lookupCustomer(input),
-    })
+    const lookupCustomer = async (
+      input: { readonly id: string },
+      _context: RuntimeContext<{
+        readonly lookupCustomer: RuntimeTool<{ readonly id: string }, { readonly id: string }>
+      }>,
+    ) => _context.tools.lookupCustomer(input)
 
-    const result = await tool.run(
+    const result = await lookupCustomer(
       { id: "cus_123" },
       {
         signal: new AbortController().signal,

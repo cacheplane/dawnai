@@ -1,5 +1,4 @@
 export { defineEntry } from "./define-entry.js"
-export { defineTool, type ToolContext, type ToolDefinition } from "./define-tool.js"
 export {
   type GraphRouteModule,
   type NormalizedRouteModule,
