@@ -1,5 +1,5 @@
 import { readdir } from "node:fs/promises"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { registerTsxLoader } from "./register-tsx-loader.js"
@@ -8,6 +8,7 @@ import { isRecord } from "./utils.js"
 type ToolScope = "route-local" | "shared"
 
 export interface DiscoveredToolDefinition {
+  readonly description?: string
   readonly filePath: string
   readonly name: string
   readonly run: (
@@ -88,25 +89,32 @@ async function loadToolDefinition(
 ): Promise<DiscoveredToolDefinition> {
   const toolModule = (await import(pathToFileURL(filePath).href)) as {
     readonly default?: unknown
+    readonly description?: unknown
   }
   const definition = toolModule.default
+  const name = basename(filePath, ".ts")
+  const description =
+    typeof toolModule.description === "string" ? toolModule.description : undefined
 
-  if (!isRecord(definition)) {
-    throw new Error(`Tool module ${filePath} must default export a Dawn tool definition`)
+  if (typeof definition === "function") {
+    return {
+      ...(description ? { description } : {}),
+      filePath,
+      name,
+      run: definition as DiscoveredToolDefinition["run"],
+      scope,
+    }
   }
 
-  if (typeof definition.name !== "string" || definition.name.trim().length === 0) {
-    throw new Error(`Tool module ${filePath} must define a non-empty tool name`)
+  if (isRecord(definition) && typeof definition.run === "function") {
+    return {
+      ...(description ? { description } : {}),
+      filePath,
+      name,
+      run: definition.run as DiscoveredToolDefinition["run"],
+      scope,
+    }
   }
 
-  if (typeof definition.run !== "function") {
-    throw new Error(`Tool module ${filePath} must define a callable tool.run`)
-  }
-
-  return {
-    filePath,
-    name: definition.name,
-    run: definition.run as DiscoveredToolDefinition["run"],
-    scope,
-  }
+  throw new Error(`Tool file ${filePath} must default export a function`)
 }
