@@ -41,7 +41,6 @@ export async function runRunCommand(
     const input = await readJsonFromStdin(io)
     const resolvedTarget = await resolveRouteTarget({
       ...(options.cwd ? { cwd: options.cwd } : {}),
-      invocationCwd: process.cwd(),
       routePath,
     })
 
