@@ -15,6 +15,7 @@ export interface DiscoveredToolDefinition {
     input: unknown,
     context: { readonly signal: AbortSignal },
   ) => Promise<unknown> | unknown
+  readonly schema?: unknown
   readonly scope: ToolScope
 }
 
@@ -90,15 +91,18 @@ async function loadToolDefinition(
   const toolModule = (await import(pathToFileURL(filePath).href)) as {
     readonly default?: unknown
     readonly description?: unknown
+    readonly schema?: unknown
   }
   const definition = toolModule.default
   const name = basename(filePath, ".ts")
   const description =
     typeof toolModule.description === "string" ? toolModule.description : undefined
+  const schema = toolModule.schema !== undefined ? toolModule.schema : undefined
 
   if (typeof definition === "function") {
     return {
       ...(description ? { description } : {}),
+      ...(schema ? { schema } : {}),
       filePath,
       name,
       run: definition as DiscoveredToolDefinition["run"],
@@ -109,6 +113,7 @@ async function loadToolDefinition(
   if (isRecord(definition) && typeof definition.run === "function") {
     return {
       ...(description ? { description } : {}),
+      ...(schema ? { schema } : {}),
       filePath,
       name,
       run: definition.run as DiscoveredToolDefinition["run"],

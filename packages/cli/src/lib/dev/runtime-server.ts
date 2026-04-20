@@ -287,7 +287,7 @@ interface RunsWaitRequest {
   readonly input: unknown
   readonly metadata: {
     readonly dawn: {
-      readonly mode: "graph" | "workflow"
+      readonly mode: "chain" | "graph" | "workflow"
       readonly route_id: string
       readonly route_path: string
     }
