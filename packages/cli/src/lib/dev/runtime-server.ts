@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net"
 
 import { executeResolvedRoute } from "../runtime/execute-route.js"
+import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
 
@@ -111,6 +112,11 @@ async function handleRequest(options: {
     return
   }
 
+  if (request.method === "POST" && request.url === "/runs/stream") {
+    await handleStreamRequest({ registry, request, response, signal })
+    return
+  }
+
   if (request.method !== "POST" || request.url !== "/runs/wait") {
     sendJson(response, 404, createRequestErrorBody("Not found"))
     return
@@ -208,6 +214,69 @@ async function handleRequest(options: {
   }
 
   sendJson(response, 200, result.output)
+}
+
+async function handleStreamRequest(options: {
+  readonly registry: RuntimeRegistry
+  readonly request: IncomingMessage
+  readonly response: ServerResponse
+  readonly signal: AbortSignal
+}): Promise<void> {
+  const { request, response, registry, signal } = options
+
+  const rawBody = await readRequestBody(request)
+  const parsedBody = parseJson(rawBody)
+
+  if (!parsedBody.ok) {
+    sendJson(response, 400, createRequestErrorBody("Malformed request body"))
+    return
+  }
+
+  const validatedBody = validateRunsWaitRequest(parsedBody.value)
+
+  if (!validatedBody.ok) {
+    sendJson(response, 400, createRequestErrorBody(validatedBody.message, validatedBody.details))
+    return
+  }
+
+  const route = registry.lookup(validatedBody.value.assistant_id)
+
+  if (!route) {
+    sendJson(
+      response,
+      404,
+      createRequestErrorBody(`Unknown assistant_id: ${validatedBody.value.assistant_id}`),
+    )
+    return
+  }
+
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  })
+
+  const result = await executeResolvedRoute({
+    appRoot: registry.appRoot,
+    input: validatedBody.value.input,
+    signal,
+    routeFile: route.routeFile,
+    routeId: route.routeId,
+    routePath: route.routePath,
+  })
+
+  if (result.status === "failed") {
+    const errorChunk: StreamChunk = {
+      type: "done",
+      output: { error: result.error.message },
+    }
+    response.write(toSseEvent(errorChunk))
+  } else {
+    const doneChunk: StreamChunk = { type: "done", output: result.output }
+    response.write(toSseEvent(doneChunk))
+  }
+
+  response.end()
 }
 
 const SHUTDOWN_ABORTED = Symbol("shutdown-aborted")
