@@ -60,7 +60,9 @@ afterEach(async () => {
 })
 
 describe("runtime contract harness", () => {
-  test("executes passing graph fixture through direct runtime primitive", { timeout: 180_000 }, async () => {
+  test("executes passing graph fixture through direct runtime primitive", {
+    timeout: 180_000,
+  }, async () => {
     const result = await runRuntimeScenario("graph-basic")
 
     expect(result).toMatchObject({
@@ -159,7 +161,9 @@ describe("runtime contract harness", () => {
       "dev-server-unknown-assistant-response.json",
     )
 
-    expect((malformedRequest.error as { kind?: string } | undefined)?.kind).not.toBe("execution_error")
+    expect((malformedRequest.error as { kind?: string } | undefined)?.kind).not.toBe(
+      "execution_error",
+    )
     expect((metadataMismatch.error as { kind?: string } | undefined)?.kind).not.toBe(
       "execution_error",
     )
@@ -228,7 +232,10 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
       context.artifacts.push(cliOutputArtifactPath)
     })
 
-    const devServerOutputArtifactPath = join(context.artifactRoot, "dev-server-execution-result.json")
+    const devServerOutputArtifactPath = join(
+      context.artifactRoot,
+      "dev-server-execution-result.json",
+    )
     await recordPhase(context.phases, "execute-cli-dev-server", async () => {
       const devServer = await startDevServer({
         cwd: context.generatedApp.appRoot,
@@ -260,7 +267,9 @@ async function runRuntimeScenario(fixtureName: RuntimeFixtureName): Promise<Harn
   })
 }
 
-async function runRequestContractScenario(fixtureName: RuntimeFixtureName): Promise<HarnessLaneResult> {
+async function runRequestContractScenario(
+  fixtureName: RuntimeFixtureName,
+): Promise<HarnessLaneResult> {
   return await withRuntimeScenario(fixtureName, "request-contract", async (context) => {
     await recordPhase(context.phases, "dev-server-request-contract", async () => {
       const devServer = await startDevServer({
@@ -429,6 +438,7 @@ async function withRuntimeScenario(
           "@dawn/cli",
           "@dawn/config-typescript",
           "@dawn/core",
+          "@dawn/langchain",
           "@dawn/langgraph",
           "@dawn/sdk",
         ],
@@ -507,7 +517,10 @@ async function expectRuntimeParityArtifacts(
   fixtureName: RuntimeFixtureName,
 ): Promise<void> {
   const overlay = await readOverlay(fixtureName)
-  const directExecution = await readExecutionArtifact(result.artifacts, "direct-execution-result.json")
+  const directExecution = await readExecutionArtifact(
+    result.artifacts,
+    "direct-execution-result.json",
+  )
   const cliExecution = await readExecutionArtifact(result.artifacts, "cli-execution-result.json")
   const serverExecution = await readExecutionArtifact(
     result.artifacts,
@@ -525,7 +538,10 @@ async function expectRuntimeParityArtifacts(
   })
 }
 
-function assertExecutionMatchesOverlay(execution: RuntimeExecutionResult, overlay: RuntimeOverlay): void {
+function assertExecutionMatchesOverlay(
+  execution: RuntimeExecutionResult,
+  overlay: RuntimeOverlay,
+): void {
   expect(execution.status).toBe(overlay.expected.status)
   expect(execution.executionSource).toBe("in-process")
   expect(execution.startedAt).toEqual(expect.any(String))
@@ -664,6 +680,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn/cli": options.tarballs["@dawn/cli"],
       "@dawn/config-typescript": options.tarballs["@dawn/config-typescript"],
       "@dawn/core": options.tarballs["@dawn/core"],
+      "@dawn/langchain": options.tarballs["@dawn/langchain"],
       "@dawn/langgraph": options.tarballs["@dawn/langgraph"],
       "@dawn/sdk": options.tarballs["@dawn/sdk"],
     },
@@ -808,10 +825,7 @@ async function readExecutionArtifact(
   return await readJsonArtifact<RuntimeExecutionResult>(artifacts, artifactName)
 }
 
-async function readJsonArtifact<T>(
-  artifacts: readonly string[],
-  artifactName: string,
-): Promise<T> {
+async function readJsonArtifact<T>(artifacts: readonly string[], artifactName: string): Promise<T> {
   const artifactPath = artifacts.find((candidate) => basename(candidate) === artifactName)
 
   if (!artifactPath) {

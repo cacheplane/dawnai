@@ -58,6 +58,7 @@ async function assertInternalModeWorkspace(mode: CliOptions["mode"]): Promise<vo
     resolve(repoRoot, "pnpm-workspace.yaml"),
     resolve(repoRoot, "packages/core/package.json"),
     resolve(repoRoot, "packages/cli/package.json"),
+    resolve(repoRoot, "packages/langchain/package.json"),
     resolve(repoRoot, "packages/langgraph/package.json"),
     resolve(repoRoot, "packages/sdk/package.json"),
     resolve(repoRoot, "packages/config-typescript/package.json"),
@@ -177,6 +178,7 @@ function createTemplateReplacements(
   readonly dawnCliSpecifier: string
   readonly dawnConfigTypescriptSpecifier: string
   readonly dawnCoreSpecifier: string
+  readonly dawnLangchainSpecifier: string
   readonly dawnLanggraphSpecifier: string
   readonly dawnSdkSpecifier: string
 } {
@@ -188,6 +190,7 @@ function createTemplateReplacements(
         resolve(repoRoot, "packages/config-typescript"),
       ),
       dawnCoreSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/core")),
+      dawnLangchainSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langchain")),
       dawnLanggraphSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langgraph")),
       dawnSdkSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/sdk")),
     }
@@ -198,6 +201,7 @@ function createTemplateReplacements(
     dawnCliSpecifier: options.distTag,
     dawnConfigTypescriptSpecifier: options.distTag,
     dawnCoreSpecifier: options.distTag,
+    dawnLangchainSpecifier: options.distTag,
     dawnLanggraphSpecifier: options.distTag,
     dawnSdkSpecifier: options.distTag,
   }
@@ -223,6 +227,7 @@ async function applyInternalModePackageOverrides(
       "@dawn/cli": replacements.dawnCliSpecifier,
       "@dawn/config-typescript": replacements.dawnConfigTypescriptSpecifier,
       "@dawn/core": replacements.dawnCoreSpecifier,
+      "@dawn/langchain": replacements.dawnLangchainSpecifier,
       "@dawn/langgraph": replacements.dawnLanggraphSpecifier,
       "@dawn/sdk": replacements.dawnSdkSpecifier,
     },

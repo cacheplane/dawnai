@@ -37,6 +37,7 @@ interface PackedTarballs {
   readonly core: string
   readonly createApp: string
   readonly devkit: string
+  readonly langchain: string
   readonly langgraph: string
   readonly sdk: string
 }
@@ -170,6 +171,7 @@ export async function prepareGeneratedRuntimeApp(options: {
           "@dawn/cli",
           "@dawn/config-typescript",
           "@dawn/core",
+          "@dawn/langchain",
           "@dawn/langgraph",
           "@dawn/sdk",
         ],
@@ -376,7 +378,9 @@ async function scaffoldApp(options: {
     })
   } else {
     if (!options.installerDir) {
-      throw new Error("Expected packaged installer directory for external generated runtime scaffolding")
+      throw new Error(
+        "Expected packaged installer directory for external generated runtime scaffolding",
+      )
     }
 
     await runPackagedCommand({
@@ -438,6 +442,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn/cli": options.tarballs.cli,
       "@dawn/config-typescript": options.tarballs.configTypescript,
       "@dawn/core": options.tarballs.core,
+      "@dawn/langchain": options.tarballs.langchain,
       "@dawn/langgraph": options.tarballs.langgraph,
       "@dawn/sdk": options.tarballs.sdk,
     },
@@ -619,6 +624,7 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     core: tarballs["@dawn/core"],
     createApp: tarballs["create-dawn-app"],
     devkit: tarballs["@dawn/devkit"],
+    langchain: tarballs["@dawn/langchain"],
     langgraph: tarballs["@dawn/langgraph"],
     sdk: tarballs["@dawn/sdk"],
   }
