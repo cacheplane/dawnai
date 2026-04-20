@@ -60,6 +60,9 @@ importers:
       '@dawn/core':
         specifier: workspace:*
         version: link:../core
+      '@dawn/langchain':
+        specifier: workspace:*
+        version: link:../langchain
       '@dawn/langgraph':
         specifier: workspace:*
         version: link:../langgraph
@@ -76,6 +79,9 @@ importers:
       '@dawn/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@langchain/core':
+        specifier: 0.3.62
+        version: 0.3.62
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
