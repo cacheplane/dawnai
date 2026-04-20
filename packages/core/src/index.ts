@@ -11,6 +11,7 @@ export type {
   DawnConfig,
   DiscoveredDawnApp,
   DiscoverRoutesOptions,
+  ExtractedToolType,
   FindDawnAppOptions,
   LoadDawnConfigOptions,
   LoadedDawnConfig,
@@ -18,4 +19,5 @@ export type {
   RouteKind,
   RouteManifest,
   RouteSegment,
+  RouteToolTypes,
 } from "./types.js"
