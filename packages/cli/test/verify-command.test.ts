@@ -182,7 +182,9 @@ describe("dawn verify", () => {
         },
         {
           error: {
-            message: expect.stringContaining(`must export exactly one of "workflow", "graph", or "chain"`),
+            message: expect.stringContaining(
+              `must export exactly one of "workflow", "graph", or "chain"`,
+            ),
           },
           name: "routes",
           status: "failed",

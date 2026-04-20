@@ -1,5 +1,5 @@
-import { describe, expect, test } from "vitest"
 import { chainAdapter } from "@dawn/langchain"
+import { describe, expect, test } from "vitest"
 
 describe("chainAdapter", () => {
   test("kind is chain", () => {
@@ -9,12 +9,18 @@ describe("chainAdapter", () => {
   test("execute calls invoke on the entry", async () => {
     const entry = {
       invoke: async (input: unknown) => ({ result: input }),
-      stream: async function* () { yield "chunk" },
+      stream: async function* () {
+        yield "chunk"
+      },
     }
 
-    const output = await chainAdapter.execute(entry, { message: "hello" }, {
-      signal: new AbortController().signal,
-    })
+    const output = await chainAdapter.execute(
+      entry,
+      { message: "hello" },
+      {
+        signal: new AbortController().signal,
+      },
+    )
 
     expect(output).toEqual({ result: { message: "hello" } })
   })
@@ -30,9 +36,13 @@ describe("chainAdapter", () => {
     }
 
     const chunks: unknown[] = []
-    for await (const chunk of chainAdapter.stream(entry, {}, {
-      signal: new AbortController().signal,
-    })) {
+    for await (const chunk of chainAdapter.stream(
+      entry,
+      {},
+      {
+        signal: new AbortController().signal,
+      },
+    )) {
       chunks.push(chunk)
     }
 
@@ -45,9 +55,13 @@ describe("chainAdapter", () => {
     }
 
     const chunks: unknown[] = []
-    for await (const chunk of chainAdapter.stream(entry, { msg: "hi" }, {
-      signal: new AbortController().signal,
-    })) {
+    for await (const chunk of chainAdapter.stream(
+      entry,
+      { msg: "hi" },
+      {
+        signal: new AbortController().signal,
+      },
+    )) {
       chunks.push(chunk)
     }
 
@@ -56,9 +70,13 @@ describe("chainAdapter", () => {
 
   test("execute throws when entry has no invoke method", async () => {
     await expect(
-      chainAdapter.execute("not-a-runnable", {}, {
-        signal: new AbortController().signal,
-      }),
+      chainAdapter.execute(
+        "not-a-runnable",
+        {},
+        {
+          signal: new AbortController().signal,
+        },
+      ),
     ).rejects.toThrow(/invoke/)
   })
 })

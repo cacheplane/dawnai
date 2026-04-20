@@ -4,7 +4,10 @@ const DEFAULT_MAX_ITERATIONS = 10
 
 interface ToolExecutor {
   readonly name: string
-  readonly run: (input: unknown, context: { readonly signal: AbortSignal }) => Promise<unknown> | unknown
+  readonly run: (
+    input: unknown,
+    context: { readonly signal: AbortSignal },
+  ) => Promise<unknown> | unknown
 }
 
 export interface ExecuteWithToolLoopOptions {
@@ -15,9 +18,7 @@ export interface ExecuteWithToolLoopOptions {
   readonly maxIterations?: number
 }
 
-export async function executeWithToolLoop(
-  options: ExecuteWithToolLoopOptions,
-): Promise<unknown> {
+export async function executeWithToolLoop(options: ExecuteWithToolLoopOptions): Promise<unknown> {
   const { chain, input, tools, signal, maxIterations = DEFAULT_MAX_ITERATIONS } = options
   const toolMap = new Map(tools.map((t) => [t.name, t]))
   let currentInput: unknown = input
@@ -46,7 +47,9 @@ export async function executeWithToolLoop(
           })
         } catch (error) {
           return new ToolMessage({
-            content: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+            content: JSON.stringify({
+              error: error instanceof Error ? error.message : String(error),
+            }),
             tool_call_id: call.id ?? "",
           })
         }
@@ -69,6 +72,6 @@ function isAIMessageWithToolCalls(
   return (
     value instanceof AIMessage &&
     Array.isArray((value as AIMessage & { tool_calls?: unknown }).tool_calls) &&
-    ((value as AIMessage & { tool_calls: unknown[] }).tool_calls).length > 0
+    (value as AIMessage & { tool_calls: unknown[] }).tool_calls.length > 0
   )
 }

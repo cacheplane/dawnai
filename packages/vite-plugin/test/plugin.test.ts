@@ -1,5 +1,5 @@
-import { describe, expect, test } from "vitest"
 import { transformToolSource } from "@dawn/vite-plugin"
+import { describe, expect, test } from "vitest"
 
 describe("transformToolSource", () => {
   test("injects schema and description for a typed tool", () => {
@@ -15,10 +15,10 @@ export default async (input: { id: string }) => {
     const result = transformToolSource(source, "lookup-customer.ts")
 
     expect(result).not.toBeNull()
-    expect(result!).toContain('export const description = "Look up a customer by ID"')
-    expect(result!).toContain("export const schema =")
-    expect(result!).toContain("z.object(")
-    expect(result!).toContain('.describe("Customer ID")')
+    expect(result).toContain('export const description = "Look up a customer by ID"')
+    expect(result).toContain("export const schema =")
+    expect(result).toContain("z.object(")
+    expect(result).toContain('.describe("Customer ID")')
   })
 
   test("does not override existing description export", () => {
@@ -80,7 +80,7 @@ export default async (input: unknown) => input
     const result = transformToolSource(source, "tool.ts")
 
     expect(result).not.toBeNull()
-    expect(result!).toContain('export const description = "A simple tool"')
-    expect(result!).not.toContain("export const schema")
+    expect(result).toContain('export const description = "A simple tool"')
+    expect(result).not.toContain("export const schema")
   })
 })

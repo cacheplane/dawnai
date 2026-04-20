@@ -238,7 +238,9 @@ export const graph = async () => ({ ok: true })
       executionSource: "in-process",
       error: {
         kind: "unsupported_route_boundary",
-        message: expect.stringContaining(`must export exactly one of "workflow", "graph", or "chain"`),
+        message: expect.stringContaining(
+          `must export exactly one of "workflow", "graph", or "chain"`,
+        ),
       },
       routeId: "/support/[tenant]",
       routePath: "src/app/support/[tenant]/index.ts",

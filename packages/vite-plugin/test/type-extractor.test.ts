@@ -17,9 +17,7 @@ describe("extractParameterType", () => {
     const result = extractParameterType(source, "test.ts")
     expect(result).toEqual({
       kind: "object",
-      properties: [
-        { name: "count", type: { kind: "number" }, optional: false },
-      ],
+      properties: [{ name: "count", type: { kind: "number" }, optional: false }],
     })
   })
 
@@ -28,9 +26,7 @@ describe("extractParameterType", () => {
     const result = extractParameterType(source, "test.ts")
     expect(result).toEqual({
       kind: "object",
-      properties: [
-        { name: "active", type: { kind: "boolean" }, optional: false },
-      ],
+      properties: [{ name: "active", type: { kind: "boolean" }, optional: false }],
     })
   })
 
@@ -39,9 +35,7 @@ describe("extractParameterType", () => {
     const result = extractParameterType(source, "test.ts")
     expect(result).toEqual({
       kind: "object",
-      properties: [
-        { name: "name", type: { kind: "string" }, optional: true },
-      ],
+      properties: [{ name: "name", type: { kind: "string" }, optional: true }],
     })
   })
 
