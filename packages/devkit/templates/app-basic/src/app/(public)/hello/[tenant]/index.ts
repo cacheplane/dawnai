@@ -1,22 +1,16 @@
-import type { RuntimeContext, RuntimeTool } from "@dawn/sdk";
+import type { RuntimeContext } from "@dawn/sdk"
+import type { RouteTools } from "dawn:routes"
 
-import type { HelloState } from "./state.js";
-
-type HelloTools = {
-  readonly greet: RuntimeTool<
-    { readonly tenant: string },
-    { readonly greeting: string }
-  >;
-};
+import type { HelloState } from "./state.js"
 
 export async function workflow(
   state: HelloState,
-  context: RuntimeContext<HelloTools>,
+  context: RuntimeContext<RouteTools<"/hello/[tenant]">>,
 ): Promise<HelloState> {
-  const result = await context.tools.greet({ tenant: state.tenant });
+  const result = await context.tools.greet({ tenant: state.tenant })
 
   return {
     ...state,
     greeting: result.greeting,
-  };
+  }
 }
