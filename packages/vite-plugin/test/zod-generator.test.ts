@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
-
-import { generateZodSchema } from "../src/zod-generator.js"
 import type { TypeInfo } from "../src/type-info.js"
+import { generateZodSchema } from "../src/zod-generator.js"
 
 describe("generateZodSchema", () => {
   it("generates z.string() for string", () => {
@@ -65,21 +64,15 @@ describe("generateZodSchema", () => {
         { name: "count", type: { kind: "number" }, optional: false },
       ],
     }
-    expect(generateZodSchema(type)).toBe(
-      'z.object({ "id": z.string(), "count": z.number() })',
-    )
+    expect(generateZodSchema(type)).toBe('z.object({ "id": z.string(), "count": z.number() })')
   })
 
   it("generates .optional() for optional properties", () => {
     const type: TypeInfo = {
       kind: "object",
-      properties: [
-        { name: "name", type: { kind: "string" }, optional: true },
-      ],
+      properties: [{ name: "name", type: { kind: "string" }, optional: true }],
     }
-    expect(generateZodSchema(type)).toBe(
-      'z.object({ "name": z.string().optional() })',
-    )
+    expect(generateZodSchema(type)).toBe('z.object({ "name": z.string().optional() })')
   })
 
   it("generates .describe() from PropertyInfo.description", () => {
@@ -102,9 +95,7 @@ describe("generateZodSchema", () => {
   it("generates .describe() from descriptions Map parameter", () => {
     const type: TypeInfo = {
       kind: "object",
-      properties: [
-        { name: "age", type: { kind: "number" }, optional: false },
-      ],
+      properties: [{ name: "age", type: { kind: "number" }, optional: false }],
     }
     const descriptions = new Map([["age", "The user age"]])
     expect(generateZodSchema(type, descriptions)).toBe(
@@ -184,15 +175,11 @@ describe("generateZodSchema", () => {
       members: [
         {
           kind: "object",
-          properties: [
-            { name: "id", type: { kind: "string" }, optional: false },
-          ],
+          properties: [{ name: "id", type: { kind: "string" }, optional: false }],
         },
         {
           kind: "object",
-          properties: [
-            { name: "name", type: { kind: "string" }, optional: false },
-          ],
+          properties: [{ name: "name", type: { kind: "string" }, optional: false }],
         },
       ],
     }
@@ -220,9 +207,7 @@ describe("generateZodSchema", () => {
       kind: "enum",
       values: ["active", "inactive", "pending"],
     }
-    expect(generateZodSchema(type)).toBe(
-      'z.enum(["active", "inactive", "pending"])',
-    )
+    expect(generateZodSchema(type)).toBe('z.enum(["active", "inactive", "pending"])')
   })
 
   it("generates .optional() for optional wrapper", () => {
@@ -257,13 +242,9 @@ describe("generateZodSchema", () => {
       kind: "array",
       element: {
         kind: "object",
-        properties: [
-          { name: "id", type: { kind: "string" }, optional: false },
-        ],
+        properties: [{ name: "id", type: { kind: "string" }, optional: false }],
       },
     }
-    expect(generateZodSchema(type)).toBe(
-      'z.array(z.object({ "id": z.string() }))',
-    )
+    expect(generateZodSchema(type)).toBe('z.array(z.object({ "id": z.string() }))')
   })
 })

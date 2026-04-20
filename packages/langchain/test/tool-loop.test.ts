@@ -1,6 +1,6 @@
+import { AIMessage } from "@langchain/core/messages"
 import { describe, expect, test } from "vitest"
 import { executeWithToolLoop } from "../src/tool-loop.js"
-import { AIMessage } from "@langchain/core/messages"
 
 describe("executeWithToolLoop", () => {
   test("returns output directly when no tool calls", async () => {
@@ -27,9 +27,7 @@ describe("executeWithToolLoop", () => {
         if (callCount === 1) {
           return new AIMessage({
             content: "",
-            tool_calls: [
-              { id: "call_1", name: "greet", args: { name: "World" } },
-            ],
+            tool_calls: [{ id: "call_1", name: "greet", args: { name: "World" } }],
           })
         }
         return new AIMessage({ content: "Done! Hello, World!" })
@@ -39,7 +37,9 @@ describe("executeWithToolLoop", () => {
     const tools = [
       {
         name: "greet",
-        run: async (input: unknown) => ({ greeting: `Hello, ${(input as { name: string }).name}!` }),
+        run: async (input: unknown) => ({
+          greeting: `Hello, ${(input as { name: string }).name}!`,
+        }),
       },
     ]
 
@@ -59,15 +59,11 @@ describe("executeWithToolLoop", () => {
       invoke: async () =>
         new AIMessage({
           content: "",
-          tool_calls: [
-            { id: "call_1", name: "noop", args: {} },
-          ],
+          tool_calls: [{ id: "call_1", name: "noop", args: {} }],
         }),
     }
 
-    const tools = [
-      { name: "noop", run: async () => ({}) },
-    ]
+    const tools = [{ name: "noop", run: async () => ({}) }]
 
     await expect(
       executeWithToolLoop({

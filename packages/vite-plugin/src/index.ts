@@ -44,8 +44,7 @@ export function transformToolSource(source: string, fileName: string): string | 
   const typeInfo = extractParameterType(source, fileName)
 
   const needsDescription = !hasExistingDescription && jsDoc.description !== undefined
-  const needsSchema =
-    !hasExistingSchema && typeInfo !== null && typeInfo.kind !== "unknown"
+  const needsSchema = !hasExistingSchema && typeInfo !== null && typeInfo.kind !== "unknown"
 
   if (!needsDescription && !needsSchema) {
     return null

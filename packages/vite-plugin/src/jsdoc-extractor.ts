@@ -26,12 +26,8 @@ export function extractJsDoc(source: string, fileName: string): JsDocInfo {
     // export default function / export default async function
     if (
       ts.isFunctionDeclaration(statement) &&
-      statement.modifiers?.some(
-        (m) => m.kind === ts.SyntaxKind.ExportKeyword,
-      ) &&
-      statement.modifiers?.some(
-        (m) => m.kind === ts.SyntaxKind.DefaultKeyword,
-      )
+      statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) &&
+      statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)
     ) {
       defaultExportNode = statement
       break
@@ -40,12 +36,8 @@ export function extractJsDoc(source: string, fileName: string): JsDocInfo {
     // export default class
     if (
       ts.isClassDeclaration(statement) &&
-      statement.modifiers?.some(
-        (m) => m.kind === ts.SyntaxKind.ExportKeyword,
-      ) &&
-      statement.modifiers?.some(
-        (m) => m.kind === ts.SyntaxKind.DefaultKeyword,
-      )
+      statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) &&
+      statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)
     ) {
       defaultExportNode = statement
       break
@@ -73,7 +65,10 @@ export function extractJsDoc(source: string, fileName: string): JsDocInfo {
   }
 
   // Use the last JSDoc comment
-  const lastRange = jsDocRanges[jsDocRanges.length - 1]!
+  const lastRange = jsDocRanges[jsDocRanges.length - 1]
+  if (!lastRange) {
+    return { params: {} }
+  }
   const commentText = fullText.slice(lastRange.pos, lastRange.end)
 
   return parseJsDocComment(commentText)
@@ -81,9 +76,7 @@ export function extractJsDoc(source: string, fileName: string): JsDocInfo {
 
 function parseJsDocComment(comment: string): JsDocInfo {
   // Strip /** and */
-  const inner = comment
-    .replace(/^\/\*\*/, "")
-    .replace(/\*\/$/, "")
+  const inner = comment.replace(/^\/\*\*/, "").replace(/\*\/$/, "")
 
   const lines = inner.split("\n").map((line) => {
     // Strip leading whitespace and optional leading *
@@ -97,9 +90,9 @@ function parseJsDocComment(comment: string): JsDocInfo {
     if (line.startsWith("@param")) {
       // @param name - description  OR  @param name description
       const match = line.match(/^@param\s+(\S+)\s*(?:-\s*)?(.*)$/)
-      if (match) {
-        const name = match[1]!
-        const desc = match[2]!.trim()
+      if (match?.[1] !== undefined) {
+        const name = match[1]
+        const desc = (match[2] ?? "").trim()
         params[name] = desc
       }
     } else if (line.startsWith("@")) {

@@ -17,16 +17,21 @@ Dawn currently has:
 - local route execution and local dev runtime
 - scenario testing and generated-app parity coverage
 - a Dawn-owned backend-neutral authoring contract (`@dawn/sdk`)
-- `@dawn/langgraph` as the first backend adapter implementing the `@dawn/sdk` contract
-- filesystem-driven tool registration and discovery
+- a formal `BackendAdapter` interface in `@dawn/sdk` with `execute()` and `stream()` methods
+- `@dawn/langgraph` as the first backend adapter (`graph` and `workflow` route kinds)
+- `@dawn/langchain` as the second backend adapter (`chain` route kind for LCEL runnables)
+- `@dawn/vite-plugin` for build-time tool schema inference from TypeScript types and JSDoc
+- CLI-owned route discovery and normalization (no backend-specific imports for discovery)
+- filesystem-driven tool registration and discovery with optional Zod schema exports
+- Dawn-owned ReAct tool execution loop for chain routes (no AgentExecutor dependency)
+- NDJSON streaming for `dawn run` and SSE streaming for `dawn dev`
 
 Dawn does not yet have:
 
-- a LangChain-native authoring path
 - a Deep Agents composition layer
 - a mature higher-level model for tools, workflows, approvals, memory, evals, or traces
 
-That means the next work should focus on authoring breadth, not more generic plumbing.
+That means the next work should focus on Deep Agents integration and richer authoring systems.
 
 The following should be treated as already stabilized enough for the roadmap phases below:
 
@@ -35,13 +40,15 @@ The following should be treated as already stabilized enough for the roadmap pha
 - `verify` / `run` / `test` / `dev` command boundaries
 - local dev runtime ownership
 - first-generation route authoring and filesystem tool discovery
+- `BackendAdapter` interface and adapter dispatch pattern
+- LangChain-native authoring path (`chain` routes)
+- tool schema inference pipeline (Vite plugin)
 
 The following should be treated as still provisional and subject to new design work:
 
-- backend-neutral authoring semantics
-- cross-backend package structure
+- Deep Agents authoring model
 - higher-level tool composition
-- LangChain-native and Deep Agents authoring models
+- streaming event type extensions
 
 ## Phase 1: Dawn-Owned Authoring Contract (Complete)
 
@@ -57,52 +64,44 @@ This phase is complete as of the authoring-sdk milestone.
 
 Authors depend on `@dawn/sdk` for type annotations only. `@dawn/langgraph` remains available for backwards compatibility but is no longer the canonical author surface.
 
-## Phase 2: LangChain-Native Authoring
+## Phase 2: LangChain-Native Authoring (Complete)
 
 ### Goal
 
 Prove that the Dawn-owned authoring contract can support a real LangChain-native path instead of only the current LangGraph-thin surface.
 
-### Why This Comes Second
+### Status
+
+This phase is complete as of the langchain-native milestone.
+
+**New packages:**
+
+- `@dawn/langchain` — `BackendAdapter` for `chain` route kind, tool converter (Dawn tools → LangChain `DynamicStructuredTool`), Dawn-owned ReAct tool execution loop
+- `@dawn/vite-plugin` — build-time Zod schema inference from TypeScript function signatures and JSDoc via the TypeScript Compiler API
+
+**Key changes:**
+
+- `@dawn/sdk` gained a formal `BackendAdapter` interface with `execute()` and `stream()` methods, and `RouteKind` expanded to `"chain" | "graph" | "workflow"`
+- CLI now owns all route discovery and normalization — no more `@dawn/langgraph` import for `normalizeRouteModule()`
+- `@dawn/langgraph` refactored to export `graphAdapter` and `workflowAdapter` as `BackendAdapter` implementations
+- Chain routes use LCEL `Runnable` exports; Dawn automatically binds tools, injects route params, and propagates abort signals
+- NDJSON streaming for `dawn run`, SSE streaming for `dawn dev`
+- Tool discovery supports optional `export const schema` (Zod) alongside the Vite plugin inference path
+
+**Design spec:** [`docs/superpowers/specs/2026-04-20-langchain-native-authoring-design.md`](./superpowers/specs/2026-04-20-langchain-native-authoring-design.md)
+
+### Why This Came Second
 
 This is the first real proof that Dawn is becoming a meta-framework instead of a LangGraph-first runtime shell.
 
-If the same Dawn contract can drive a LangChain-native authoring path without warping the contract, Dawn’s core thesis becomes materially stronger.
+The same Dawn contract drives a LangChain-native authoring path without warping the contract, which materially strengthens Dawn’s core thesis.
 
-### Scope
+### What Was Deferred
 
-This phase should introduce:
-
-- a LangChain-native authoring surface or adapter package
-- clear mapping from Dawn authoring concepts to LangChain execution semantics
-- examples that show the same Dawn authoring model applied in a LangChain-native lane
-
-The work should remain focused on authoring, not deployment/runtime reinvention.
-
-### Deliverables
-
-- a package or integration layer for LangChain-native authoring, likely under a package name such as `@dawn/langchain`
-- at least one meaningful example app or route proving the path
-- runtime and test coverage for the new backend lane
-- docs explaining the relationship between Dawn authoring and LangChain-native execution
-
-Concrete likely outputs:
-
-- a minimal but real LangChain-native route or workflow example
-- one generated or fixture app that proves the LangChain lane in `dawn run`, `dawn test`, and `dawn dev`
-- package-level tests that prove the LangChain lane implements the Dawn contract instead of bypassing it
-
-### Success Criteria
-
-- Dawn can demonstrate one real authoring flow that is not LangGraph-thin
-- the Dawn contract remains coherent across the existing and new lanes
-- users can understand where Dawn ends and LangChain begins
-
-### What To Defer
-
-- Deep Agents composition
-- generalized plugin ecosystems
-- deployment/runtime management work
+- Deep Agents composition (Phase 3)
+- Recursive type support in Vite plugin
+- Better missing-dependency DX (`dawn verify` checks for `@langchain/core`)
+- Custom SSE event types beyond the initial set
 
 ## Phase 3: Deep Agents Integration and Composition
 
@@ -196,12 +195,12 @@ Future authoring systems should extend that strength rather than replace it with
 
 ## Recommended Immediate Next Outcomes
 
-Phase 1 is now complete. The next thread should aim to leave the repo with these outcomes:
+Phases 1 and 2 are now complete. The next thread should aim to leave the repo with these outcomes:
 
-1. A written design for LangChain-native authoring on top of the `@dawn/sdk` contract (Phase 2)
-2. A decision on the adapter package structure for `@dawn/langchain`
-3. A concrete implementation plan for the first real cross-backend authoring proof
-4. At least one proving example that demonstrates Dawn is not solely a LangGraph-oriented shell
+1. A written design for Deep Agents integration on top of the `@dawn/sdk` contract (Phase 3)
+2. A decision on the `@dawn/deepagents` adapter package structure and route kind
+3. A concrete implementation plan for the first composition proof
+4. At least one proving example that demonstrates Dawn can support a third execution backend without contract changes
 
 If those outcomes are not reached, the next thread risks circling back to plumbing work instead of closing the actual product gap.
 
@@ -209,13 +208,15 @@ If those outcomes are not reached, the next thread risks circling back to plumbi
 
 The next thread should probably resolve these questions in order:
 
-1. What is the minimal LangChain-native route or workflow example that proves the `@dawn/sdk` contract is not LangGraph-specific?
-2. What does the `@dawn/langchain` adapter package look like at its interface boundary with `@dawn/sdk`?
-3. What runtime and discovery changes (if any) are needed to support a second backend adapter in `dawn run` and `dawn test`?
-4. What should Phase 2 explicitly refuse to own yet?
+1. What route kind and export name does Deep Agents use? Does `BackendAdapter` need changes to support it?
+2. How do Deep Agents concepts (multi-agent orchestration, delegation) map into Dawn's route and tool model?
+3. What does the `@dawn/deepagents` adapter look like at its interface boundary with `@dawn/sdk`?
+4. What composition primitives does Dawn own versus delegate to Deep Agents?
 
 ## Related Documents
 
 - [`docs/thread-handoff.md`](./thread-handoff.md)
 - [`docs/superpowers/specs/2026-04-15-dawn-route-authoring-design.md`](./superpowers/specs/2026-04-15-dawn-route-authoring-design.md)
+- [`docs/superpowers/specs/2026-04-20-langchain-native-authoring-design.md`](./superpowers/specs/2026-04-20-langchain-native-authoring-design.md)
 - [`docs/superpowers/plans/2026-04-15-dawn-route-authoring.md`](./superpowers/plans/2026-04-15-dawn-route-authoring.md)
+- [`docs/superpowers/plans/2026-04-20-langchain-native-authoring.md`](./superpowers/plans/2026-04-20-langchain-native-authoring.md)

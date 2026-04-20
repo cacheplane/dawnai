@@ -1,9 +1,6 @@
 import type { TypeInfo } from "./type-info.js"
 
-export function generateZodSchema(
-  type: TypeInfo,
-  descriptions?: Map<string, string>,
-): string {
+export function generateZodSchema(type: TypeInfo, descriptions?: Map<string, string>): string {
   switch (type.kind) {
     case "string":
       return "z.string()"
@@ -16,18 +13,13 @@ export function generateZodSchema(
     case "unknown":
       return "z.unknown()"
     case "literal": {
-      const val =
-        typeof type.value === "string"
-          ? JSON.stringify(type.value)
-          : String(type.value)
+      const val = typeof type.value === "string" ? JSON.stringify(type.value) : String(type.value)
       return `z.literal(${val})`
     }
     case "array":
       return `z.array(${generateZodSchema(type.element, descriptions)})`
     case "tuple": {
-      const elements = type.elements
-        .map((el) => generateZodSchema(el, descriptions))
-        .join(", ")
+      const elements = type.elements.map((el) => generateZodSchema(el, descriptions)).join(", ")
       return `z.tuple([${elements}])`
     }
     case "object": {
@@ -36,8 +28,7 @@ export function generateZodSchema(
         if (prop.optional) {
           schema = `${schema}.optional()`
         }
-        const desc =
-          prop.description ?? descriptions?.get(prop.name)
+        const desc = prop.description ?? descriptions?.get(prop.name)
         if (desc !== undefined) {
           schema = `${schema}.describe(${JSON.stringify(desc)})`
         }
@@ -52,24 +43,30 @@ export function generateZodSchema(
     case "set":
       return `z.set(${generateZodSchema(type.element, descriptions)})`
     case "union": {
-      const members = type.members
-        .map((m) => generateZodSchema(m, descriptions))
-        .join(", ")
+      const members = type.members.map((m) => generateZodSchema(m, descriptions)).join(", ")
       return `z.union([${members}])`
     }
     case "intersection": {
       if (type.members.length === 0) {
         return "z.unknown()"
       }
-      if (type.members.length === 1) {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        return generateZodSchema(type.members[0]!, descriptions)
+      const first = type.members[0]
+      if (!first) {
+        return "z.unknown()"
       }
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      let result = `z.intersection(${generateZodSchema(type.members[0]!, descriptions)}, ${generateZodSchema(type.members[1]!, descriptions)})`
+      if (type.members.length === 1) {
+        return generateZodSchema(first, descriptions)
+      }
+      const second = type.members[1]
+      if (!second) {
+        return generateZodSchema(first, descriptions)
+      }
+      let result = `z.intersection(${generateZodSchema(first, descriptions)}, ${generateZodSchema(second, descriptions)})`
       for (let i = 2; i < type.members.length; i++) {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        result = `z.intersection(${result}, ${generateZodSchema(type.members[i]!, descriptions)})`
+        const member = type.members[i]
+        if (member) {
+          result = `z.intersection(${result}, ${generateZodSchema(member, descriptions)})`
+        }
       }
       return result
     }

@@ -44,8 +44,7 @@ export const chainAdapter: BackendAdapter = {
     }
 
     const streamResult = entry.stream(input, { signal: context.signal })
-    const iterable =
-      streamResult instanceof Promise ? await streamResult : streamResult
+    const iterable = streamResult instanceof Promise ? await streamResult : streamResult
 
     for await (const chunk of iterable) {
       yield chunk

@@ -6,10 +6,7 @@ import type { PropertyInfo, TypeInfo } from "./type-info.js"
  * Extracts the TypeInfo for the first parameter of the default-exported function.
  * Returns null if no default export is found.
  */
-export function extractParameterType(
-  source: string,
-  fileName: string,
-): TypeInfo | null {
+export function extractParameterType(source: string, fileName: string): TypeInfo | null {
   const options: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2022,
     module: ts.ModuleKind.ESNext,
@@ -49,29 +46,23 @@ export function extractParameterType(
   if (!moduleSymbol) return null
 
   const exports = checker.getExportsOfModule(moduleSymbol)
-  const defaultExport = exports.find(
-    (e) => e.escapedName === "default",
-  )
+  const defaultExport = exports.find((e) => e.escapedName === "default")
 
   if (!defaultExport) return null
 
-  const exportType = checker.getTypeOfSymbolAtLocation(
-    defaultExport,
-    sourceFile,
-  )
-  const signatures = checker.getSignaturesOfType(
-    exportType,
-    ts.SignatureKind.Call,
-  )
+  const exportType = checker.getTypeOfSymbolAtLocation(defaultExport, sourceFile)
+  const signatures = checker.getSignaturesOfType(exportType, ts.SignatureKind.Call)
 
   if (signatures.length === 0) return null
 
-  const firstSignature = signatures[0]!
+  const firstSignature = signatures[0]
+  if (!firstSignature) return null
   const params = firstSignature.getParameters()
 
   if (params.length === 0) return null
 
-  const firstParam = params[0]!
+  const firstParam = params[0]
+  if (!firstParam) return null
   const paramType = checker.getTypeOfSymbolAtLocation(firstParam, sourceFile)
 
   return resolveType(paramType, checker)
@@ -86,8 +77,7 @@ function resolveType(type: ts.Type, checker: ts.TypeChecker): TypeInfo {
     return { kind: "literal", value: type.value }
   }
   if (type.flags & ts.TypeFlags.BooleanLiteral) {
-    const intrinsicName = (type as unknown as { intrinsicName: string })
-      .intrinsicName
+    const intrinsicName = (type as unknown as { intrinsicName: string }).intrinsicName
     return { kind: "literal", value: intrinsicName === "true" }
   }
 
@@ -111,24 +101,17 @@ function resolveType(type: ts.Type, checker: ts.TypeChecker): TypeInfo {
 
     // Filter out "true" and "false" boolean literal types that form a boolean
     const isBooleanUnion =
-      members.length === 2 &&
-      members.every((m) => m.flags & ts.TypeFlags.BooleanLiteral)
+      members.length === 2 && members.every((m) => m.flags & ts.TypeFlags.BooleanLiteral)
     if (isBooleanUnion) {
       return { kind: "boolean" }
     }
 
     // Check if all non-undefined members are string literals → enum
-    const nonUndefinedMembers = members.filter(
-      (m) => !(m.flags & ts.TypeFlags.Undefined),
-    )
-    const allStringLiterals = nonUndefinedMembers.every((m) =>
-      m.isStringLiteral(),
-    )
+    const nonUndefinedMembers = members.filter((m) => !(m.flags & ts.TypeFlags.Undefined))
+    const allStringLiterals = nonUndefinedMembers.every((m) => m.isStringLiteral())
 
     if (allStringLiterals && nonUndefinedMembers.length > 0) {
-      const values = nonUndefinedMembers.map(
-        (m) => (m as ts.StringLiteralType).value,
-      )
+      const values = nonUndefinedMembers.map((m) => (m as ts.StringLiteralType).value)
       const enumType: TypeInfo = { kind: "enum", values }
       // If there were undefined members, wrap in optional
       if (nonUndefinedMembers.length < members.length) {
@@ -164,9 +147,7 @@ function resolveType(type: ts.Type, checker: ts.TypeChecker): TypeInfo {
 
     // Check for tuple
     if (checker.isTupleType(type)) {
-      const typeArgs = checker.getTypeArguments(
-        objectType as ts.TypeReference,
-      )
+      const typeArgs = checker.getTypeArguments(objectType as ts.TypeReference)
       const elements = typeArgs.map((t) => resolveType(t, checker))
       return { kind: "tuple", elements }
     }
@@ -176,44 +157,27 @@ function resolveType(type: ts.Type, checker: ts.TypeChecker): TypeInfo {
     const symbolName = symbol?.getName()
 
     if (symbolName === "Array" || symbolName === "ReadonlyArray") {
-      const typeArgs = checker.getTypeArguments(
-        objectType as ts.TypeReference,
-      )
-      const element = typeArgs[0]
-        ? resolveType(typeArgs[0], checker)
-        : { kind: "unknown" as const }
+      const typeArgs = checker.getTypeArguments(objectType as ts.TypeReference)
+      const element = typeArgs[0] ? resolveType(typeArgs[0], checker) : { kind: "unknown" as const }
       return { kind: "array", element }
     }
 
     if (symbolName === "Map" || symbolName === "ReadonlyMap") {
-      const typeArgs = checker.getTypeArguments(
-        objectType as ts.TypeReference,
-      )
-      const key = typeArgs[0]
-        ? resolveType(typeArgs[0], checker)
-        : { kind: "unknown" as const }
-      const value = typeArgs[1]
-        ? resolveType(typeArgs[1], checker)
-        : { kind: "unknown" as const }
+      const typeArgs = checker.getTypeArguments(objectType as ts.TypeReference)
+      const key = typeArgs[0] ? resolveType(typeArgs[0], checker) : { kind: "unknown" as const }
+      const value = typeArgs[1] ? resolveType(typeArgs[1], checker) : { kind: "unknown" as const }
       return { kind: "map", key, value }
     }
 
     if (symbolName === "Set" || symbolName === "ReadonlySet") {
-      const typeArgs = checker.getTypeArguments(
-        objectType as ts.TypeReference,
-      )
-      const element = typeArgs[0]
-        ? resolveType(typeArgs[0], checker)
-        : { kind: "unknown" as const }
+      const typeArgs = checker.getTypeArguments(objectType as ts.TypeReference)
+      const element = typeArgs[0] ? resolveType(typeArgs[0], checker) : { kind: "unknown" as const }
       return { kind: "set", element }
     }
 
     // Check for Record type (string index signature with no declared properties)
     const properties = type.getProperties()
-    const stringIndexType = checker.getIndexTypeOfType(
-      type,
-      ts.IndexKind.String,
-    )
+    const stringIndexType = checker.getIndexTypeOfType(type, ts.IndexKind.String)
 
     if (stringIndexType && properties.length === 0) {
       const valueType = resolveType(stringIndexType, checker)
@@ -233,20 +197,22 @@ function resolveType(type: ts.Type, checker: ts.TypeChecker): TypeInfo {
         // Strip it out since we already track optionality separately.
         let effectiveType = propType
         if (optional && propType.isUnion()) {
-          const nonUndefined = propType.types.filter(
-            (t) => !(t.flags & ts.TypeFlags.Undefined),
-          )
-          if (nonUndefined.length === 1) {
-            effectiveType = nonUndefined[0]!
+          const nonUndefined = propType.types.filter((t) => !(t.flags & ts.TypeFlags.Undefined))
+          if (nonUndefined.length === 1 && nonUndefined[0]) {
+            effectiveType = nonUndefined[0]
           } else if (nonUndefined.length > 1) {
             // Reconstruct union without undefined - resolve each member
             const members = nonUndefined.map((t) => resolveType(t, checker))
             return {
               name: prop.getName(),
-              type:
-                members.every((m) => m.kind === "object")
-                  ? { kind: "object" as const, properties: members.flatMap((m) => (m as Extract<TypeInfo, { kind: "object" }>).properties) }
-                  : { kind: "union" as const, members },
+              type: members.every((m) => m.kind === "object")
+                ? {
+                    kind: "object" as const,
+                    properties: members.flatMap(
+                      (m) => (m as Extract<TypeInfo, { kind: "object" }>).properties,
+                    ),
+                  }
+                : { kind: "union" as const, members },
               optional,
             }
           }

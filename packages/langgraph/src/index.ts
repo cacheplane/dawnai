@@ -1,4 +1,5 @@
 export { defineEntry } from "./define-entry.js"
+export { graphAdapter, workflowAdapter } from "./langgraph-adapter.js"
 export {
   type GraphRouteModule,
   type NormalizedRouteModule,
@@ -9,4 +10,3 @@ export {
   type WorkflowRouteModule,
 } from "./route-module.js"
 export type { RuntimeContext, RuntimeTool } from "./runtime-context.js"
-export { graphAdapter, workflowAdapter } from "./langgraph-adapter.js"
