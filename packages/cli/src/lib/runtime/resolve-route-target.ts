@@ -1,6 +1,6 @@
 import { relative, sep } from "node:path"
 
-import { discoverRoutes } from "@dawn/core"
+import { discoverRoutes, type RouteManifest } from "@dawn/core"
 import {
   createRuntimeFailureResult,
   formatErrorMessage,
@@ -24,7 +24,7 @@ export async function resolveRouteTarget(
 ): Promise<ResolvedRouteTarget | RuntimeExecutionFailureResult> {
   const startedAt = Date.now()
 
-  let manifest: Awaited<ReturnType<typeof discoverRoutes>>
+  let manifest: RouteManifest
 
   try {
     manifest = await discoverRoutes(options.cwd ? { cwd: options.cwd } : {})
