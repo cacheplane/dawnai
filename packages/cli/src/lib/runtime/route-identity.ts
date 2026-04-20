@@ -5,7 +5,7 @@ export interface RouteIdentity {
   readonly routePath: string
 }
 
-export function createRouteAssistantId(routeId: string, mode: "graph" | "workflow"): string {
+export function createRouteAssistantId(routeId: string, mode: "chain" | "graph" | "workflow"): string {
   return `${routeId}#${mode}`
 }
 

@@ -1,4 +1,4 @@
-export type RuntimeExecutionMode = "graph" | "workflow"
+export type RuntimeExecutionMode = "chain" | "graph" | "workflow"
 
 export type RuntimeExecutionErrorKind =
   | "app_discovery_error"

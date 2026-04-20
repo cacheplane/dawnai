@@ -1,10 +1,8 @@
 import { isAbsolute, resolve } from "node:path"
-import { pathToFileURL } from "node:url"
 
 import { findDawnApp } from "@dawn/core"
-import { normalizeRouteModule } from "@dawn/langgraph"
 import { createDawnContext } from "./dawn-context.js"
-import { registerTsxLoader } from "./register-tsx-loader.js"
+import { normalizeRouteModule } from "./load-route-kind.js"
 import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,
@@ -113,9 +111,7 @@ async function executeRouteAtResolvedPath(options: {
   let mode: RuntimeExecutionMode | null = null
 
   try {
-    await registerTsxLoader()
-    const routeModule = await import(pathToFileURL(options.routeFile).href)
-    const normalized = normalizeRouteModule(routeModule)
+    const normalized = await normalizeRouteModule(options.routeFile)
     mode = normalized.kind
 
     const tools = await discoverToolDefinitions({
@@ -141,7 +137,7 @@ async function executeRouteAtResolvedPath(options: {
     })
   } catch (error) {
     const kind = isBoundaryError(error) ? "unsupported_route_boundary" : "execution_error"
-    const message = rewriteNeitherExportMessage(error, options.routeFile)
+    const message = formatErrorMessage(error)
 
     return createRuntimeFailureResult({
       appRoot: options.appRoot,
@@ -156,19 +152,8 @@ async function executeRouteAtResolvedPath(options: {
   }
 }
 
-function rewriteNeitherExportMessage(error: unknown, routeFile: string): string {
-  if (
-    error instanceof Error &&
-    error.message === `Route index.ts exports neither "workflow" nor "graph"`
-  ) {
-    return `Route index.ts at ${routeFile} exports neither "workflow" nor "graph"`
-  }
-
-  return formatErrorMessage(error)
-}
-
 async function invokeEntry(
-  kind: "graph" | "workflow",
+  kind: "chain" | "graph" | "workflow",
   entry: unknown,
   input: unknown,
   context: unknown,
@@ -178,6 +163,18 @@ async function invokeEntry(
       throw new Error("Workflow entry must be a function")
     }
     return await entry(input, context)
+  }
+
+  if (kind === "chain") {
+    if (
+      typeof entry === "object" &&
+      entry !== null &&
+      "invoke" in entry &&
+      typeof (entry as { invoke?: unknown }).invoke === "function"
+    ) {
+      return await (entry as { invoke: (input: unknown) => unknown }).invoke(input)
+    }
+    throw new Error("Chain entry must expose invoke(input)")
   }
 
   if (typeof entry === "function") {
@@ -251,9 +248,10 @@ function isBoundaryError(error: unknown): boolean {
   }
 
   return (
-    error.message === `Route index.ts must export exactly one of "workflow" or "graph"` ||
-    error.message === `Route index.ts exports neither "workflow" nor "graph"` ||
+    /must export exactly one of/.test(error.message) ||
+    /exports neither/.test(error.message) ||
     error.message === "Workflow entry must be a function" ||
-    error.message === "Graph entry must be a function or expose invoke(input)"
+    error.message === "Graph entry must be a function or expose invoke(input)" ||
+    error.message === "Chain entry must expose invoke(input)"
   )
 }

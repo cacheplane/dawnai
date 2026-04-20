@@ -267,7 +267,7 @@ export const workflow = async (
 
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain("Scenario-load failure")
-    expect(result.stderr).toContain('sibling index.ts exports neither "workflow" nor "graph"')
+    expect(result.stderr).toContain('sibling index.ts exports neither "workflow", "graph", nor "chain"')
   })
 
   test("passes a scenario that expects a modeled route failure", async () => {
