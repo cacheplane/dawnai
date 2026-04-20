@@ -61,7 +61,7 @@ describe("discoverRoutes", () => {
     })
 
     await expect(discoverRoutes({ appRoot })).rejects.toThrow(
-      /Route index\.ts must export exactly one of "workflow" or "graph"/,
+      /Route index\.ts must export exactly one of "workflow", "graph", or "chain"/,
     )
   })
 
