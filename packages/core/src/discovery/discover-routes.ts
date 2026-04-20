@@ -93,11 +93,18 @@ async function readRouteEntry(
 async function inferRouteKind(indexFile: string): Promise<RouteKind | null> {
   await registerTsxLoader()
   const routeExports = await loadRouteExports(indexFile)
+  const hasChain = "chain" in routeExports && routeExports.chain !== undefined
   const hasGraph = "graph" in routeExports && routeExports.graph !== undefined
   const hasWorkflow = "workflow" in routeExports && routeExports.workflow !== undefined
 
-  if (hasGraph && hasWorkflow) {
-    throw new Error(`Route index.ts must export exactly one of "workflow" or "graph"`)
+  const count = [hasChain, hasGraph, hasWorkflow].filter(Boolean).length
+
+  if (count > 1) {
+    throw new Error(`Route index.ts must export exactly one of "workflow", "graph", or "chain"`)
+  }
+
+  if (hasChain) {
+    return "chain"
   }
 
   if (hasGraph) {
@@ -112,11 +119,13 @@ async function inferRouteKind(indexFile: string): Promise<RouteKind | null> {
 }
 
 async function loadRouteExports(indexFile: string): Promise<{
+  readonly chain?: unknown
   readonly graph?: unknown
   readonly workflow?: unknown
 }> {
   try {
     return (await import(pathToFileURL(indexFile).href)) as {
+      readonly chain?: unknown
       readonly graph?: unknown
       readonly workflow?: unknown
     }
