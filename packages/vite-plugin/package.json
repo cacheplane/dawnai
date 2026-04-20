@@ -36,6 +36,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dawn/core": "workspace:*",
     "typescript": "5.8.3"
   },
   "devDependencies": {

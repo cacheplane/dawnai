@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
-
-import { discoverRoutes, findDawnApp, renderRouteTypes } from "@dawn/core"
+import type { RouteToolTypes } from "@dawn/core"
+import { discoverRoutes, extractToolTypesForRoute, findDawnApp, renderDawnTypes } from "@dawn/core"
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
@@ -153,7 +153,16 @@ async function verifyApp(
   let renderedTypes: string
 
   try {
-    renderedTypes = renderRouteTypes(manifest)
+    const sharedToolsDir = join(app.appRoot, "src")
+    const routeToolTypes: RouteToolTypes[] = []
+    for (const route of manifest.routes) {
+      const tools = await extractToolTypesForRoute({
+        routeDir: route.routeDir,
+        sharedToolsDir,
+      })
+      routeToolTypes.push({ pathname: route.pathname, tools })
+    }
+    renderedTypes = renderDawnTypes(manifest, routeToolTypes)
   } catch (error) {
     return createVerifyFailureResult(app.appRoot, checks, "typegen", error)
   }

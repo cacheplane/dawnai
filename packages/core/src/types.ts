@@ -56,3 +56,14 @@ export interface DiscoverRoutesOptions {
   readonly appRoot?: string
   readonly cwd?: string
 }
+
+export interface ExtractedToolType {
+  readonly name: string
+  readonly inputType: string
+  readonly outputType: string
+}
+
+export interface RouteToolTypes {
+  readonly pathname: string
+  readonly tools: readonly ExtractedToolType[]
+}
