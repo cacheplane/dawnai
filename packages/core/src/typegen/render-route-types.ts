@@ -1,4 +1,38 @@
-import type { RouteManifest, RouteSegment } from "../types.js"
+import type { RouteManifest, RouteSegment, RouteToolTypes } from "../types.js"
+import { renderToolTypes } from "./render-tool-types.js"
+
+export function renderDawnTypes(
+  manifest: RouteManifest,
+  toolTypes: readonly RouteToolTypes[],
+): string {
+  const pathUnion =
+    manifest.routes.length > 0
+      ? manifest.routes.map((route) => JSON.stringify(route.pathname)).join(" | ")
+      : "never"
+
+  const paramLines = manifest.routes.map((route) => {
+    const params = renderParamsForSegments(route.segments)
+    return `  ${JSON.stringify(route.pathname)}: ${params};`
+  })
+
+  const paramBlock =
+    paramLines.length === 0
+      ? "  export interface DawnRouteParams {}"
+      : ["  export interface DawnRouteParams {", ...paramLines, "  }"].join("\n")
+
+  const toolBlock = renderToolTypes(toolTypes).trimEnd()
+
+  return [
+    'declare module "dawn:routes" {',
+    `  export type DawnRoutePath = ${pathUnion};`,
+    "",
+    paramBlock,
+    "",
+    toolBlock,
+    "}",
+    "",
+  ].join("\n")
+}
 
 export function renderRouteTypes(manifest: RouteManifest): string {
   const pathUnion =
