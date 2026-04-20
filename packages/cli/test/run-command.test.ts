@@ -45,7 +45,7 @@ export const workflow = async (
 `,
     })
 
-    const result = await invoke(["run", "src/app/hello/[tenant]", "--cwd", appRoot], {
+    const result = await invoke(["run", "/hello/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "authoring-tenant" }),
     })
 
@@ -76,14 +76,14 @@ export const workflow = async (
     })
   })
 
-  test("executes the route's index.ts when targeted directly", async () => {
+  test("resolves route pathname to its entry file", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/[tenant]/index.ts": `export const workflow = async (state: { tenant: string }) => ({ tenant: state.tenant, source: "direct-index" });\n`,
     })
 
-    const result = await invoke(["run", "src/app/support/[tenant]/index.ts", "--cwd", appRoot], {
+    const result = await invoke(["run", "/support/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "direct-tenant" }),
     })
 
@@ -130,7 +130,7 @@ export const workflow = async (
 `,
     })
 
-    const result = await invoke(["run", "src/app/hello/[tenant]", "--cwd", appRoot], {
+    const result = await invoke(["run", "/hello/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "shadowed" }),
     })
 
@@ -159,7 +159,7 @@ export const workflow = async (
       "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
 
-    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+    const result = await invoke(["run", "/support/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "graph-fn-tenant" }),
     })
 
@@ -192,7 +192,7 @@ export const workflow = async (
 `,
     })
 
-    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+    const result = await invoke(["run", "/support/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "graph-object-tenant" }),
     })
 
@@ -224,7 +224,7 @@ export const graph = async () => ({ ok: true })
 `,
     })
 
-    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+    const result = await invoke(["run", "/support/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "ambiguous" }),
     })
 
@@ -234,60 +234,26 @@ export const graph = async () => ({ ok: true })
 
     expectTiming(payload)
     expect(payload).toMatchObject({
-      appRoot,
       executionSource: "in-process",
       error: {
-        kind: "unsupported_route_boundary",
+        kind: "app_discovery_error",
         message: expect.stringContaining(
           `must export exactly one of "workflow", "graph", or "chain"`,
         ),
       },
-      routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/index.ts",
+      routePath: "/support/[tenant]",
       status: "failed",
     })
   })
 
-  test("rejects targeting a non-index.ts file inside a route directory", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/index.ts": "export const workflow = async () => ({ ok: true });\n",
-      "src/app/support/[tenant]/workflow.ts":
-        "export const workflow = async () => ({ stale: true });\n",
-    })
-    const legacyTarget = join(appRoot, "src/app/support/[tenant]/workflow.ts")
-
-    const result = await invoke(["run", "src/app/support/[tenant]/workflow.ts", "--cwd", appRoot], {
-      stdin: JSON.stringify({ tenant: "stale" }),
-    })
-
-    expect(result.exitCode).toBe(1)
-    expect(result.stderr).toBe("")
-    const payload = JSON.parse(result.stdout) as Record<string, unknown>
-
-    expectTiming(payload)
-    expect(payload).toMatchObject({
-      appRoot,
-      executionSource: "in-process",
-      error: {
-        kind: "route_resolution_error",
-        message: `Route target must be a route directory or its index.ts: ${legacyTarget}`,
-      },
-      status: "failed",
-    })
-  })
-
-  test("rejects targeting a route directory that has no index.ts", async () => {
+  test("returns route not found when pathname does not match any route", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/page.tsx": "export default function Page() { return null; }\n",
-      "src/app/empty/notes.md": "# placeholder\n",
     })
-    const emptyDir = join(appRoot, "src/app/empty")
 
-    const result = await invoke(["run", "src/app/empty", "--cwd", appRoot], {
+    const result = await invoke(["run", "/nonexistent", "--cwd", appRoot], {
       stdin: JSON.stringify({}),
     })
 
@@ -301,44 +267,9 @@ export const graph = async () => ({ ok: true })
       executionSource: "in-process",
       error: {
         kind: "route_resolution_error",
-        message: `Route directory has no index.ts: ${emptyDir}`,
+        message: expect.stringContaining("Route not found: /nonexistent"),
       },
       status: "failed",
-    })
-  })
-
-  test("resolves dot-relative route paths from the caller working directory", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
-    })
-    const routeDir = join(appRoot, "src/app/support/[tenant]")
-
-    const result = await invoke(["run", "./"], {
-      cwd: routeDir,
-      stdin: JSON.stringify({ tenant: "relative-tenant" }),
-    })
-
-    expect(result.exitCode).toBe(0)
-    expect(result.stderr).toBe("")
-    const payload = JSON.parse(result.stdout) as Record<string, unknown>
-
-    expectTiming(payload)
-    expect({
-      ...payload,
-      appRoot: normalizePrivatePath(String(payload.appRoot)),
-    }).toMatchObject({
-      appRoot: normalizePrivatePath(appRoot),
-      executionSource: "in-process",
-      mode: "graph",
-      output: {
-        greeting: "Hello, relative-tenant!",
-        tenant: "relative-tenant",
-      },
-      routeId: "/support/[tenant]",
-      routePath: "src/app/support/[tenant]/index.ts",
-      status: "passed",
     })
   })
 
@@ -349,7 +280,7 @@ export const graph = async () => ({ ok: true })
       "src/custom-app/docs/index.ts": `export const workflow = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
 
-    const result = await invoke(["run", "src/custom-app/docs", "--cwd", appRoot], {
+    const result = await invoke(["run", "/docs", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "custom-app-dir" }),
     })
 
@@ -379,7 +310,7 @@ export const graph = async () => ({ ok: true })
       "src/app/(public)/hello/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant, greeting: \`Hello, \${state.tenant}!\` });\n`,
     })
 
-    const result = await invoke(["run", "src/app/(public)/hello/[tenant]", "--cwd", appRoot], {
+    const result = await invoke(["run", "/hello/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "grouped-route" }),
     })
 
@@ -406,7 +337,7 @@ export const graph = async () => ({ ok: true })
     const outsideAppRoot = await mkdtemp(join(tmpdir(), "dawn-cli-run-outside-"))
     tempDirs.push(outsideAppRoot)
 
-    const result = await invoke(["run", "src/app/support/[tenant]"], {
+    const result = await invoke(["run", "/support/[tenant]"], {
       cwd: outsideAppRoot,
       stdin: JSON.stringify({ tenant: "missing-app" }),
     })
@@ -440,7 +371,7 @@ export const graph = async () => ({ ok: true })
         message: `Could not find dawn.config.ts from ${normalizePrivatePath(outsideAppRoot)}`,
       },
       mode: null,
-      routePath: "src/app/support/[tenant]",
+      routePath: "/support/[tenant]",
       status: "failed",
     })
   })
@@ -451,9 +382,8 @@ export const graph = async () => ({ ok: true })
       "dawn.config.ts": "export default {};\n",
       "src/app/page.tsx": "export default {};\n",
     })
-    const missingTarget = join(appRoot, "src/app/support/[tenant]")
 
-    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+    const result = await invoke(["run", "/support/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "missing-route" }),
     })
 
@@ -467,7 +397,7 @@ export const graph = async () => ({ ok: true })
       executionSource: "in-process",
       error: {
         kind: "route_resolution_error",
-        message: `Route target does not exist: ${missingTarget}`,
+        message: expect.stringContaining("Route not found: /support/[tenant]"),
       },
       status: "failed",
     })
@@ -480,7 +410,7 @@ export const graph = async () => ({ ok: true })
       "src/app/support/[tenant]/index.ts": `export const graph = async (state: { tenant: string }) => { throw new Error(\`Graph exploded for \${state.tenant}\`); };\n`,
     })
 
-    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+    const result = await invoke(["run", "/support/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "boom" }),
     })
 
@@ -510,7 +440,7 @@ export const graph = async () => ({ ok: true })
         "export const graph = async (state: { tenant: string }) => ({ tenant: state.tenant });\n",
     })
 
-    const result = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+    const result = await invoke(["run", "/support/[tenant]", "--cwd", appRoot], {
       stdin: "{not-json",
     })
 
@@ -533,11 +463,11 @@ export const graph = async () => ({ ok: true })
       statusCode: 200,
     }))
 
-    const inProcessResult = await invoke(["run", "src/app/support/[tenant]", "--cwd", appRoot], {
+    const inProcessResult = await invoke(["run", "/support/[tenant]", "--cwd", appRoot], {
       stdin: JSON.stringify({ tenant: "server-tenant" }),
     })
     const serverResult = await invoke(
-      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
+      ["run", "/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "server-tenant" }),
       },
@@ -570,7 +500,7 @@ export const graph = async () => ({ ok: true })
     }))
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
+      ["run", "/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "workflow-server" }),
       },
@@ -600,7 +530,7 @@ export const graph = async () => ({ ok: true })
     })
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
+      ["run", "/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "assistant-id" }),
       },
@@ -644,7 +574,7 @@ export const graph = async () => ({ ok: true })
     const result = await invoke(
       [
         "run",
-        "src/app/support/[tenant]",
+        "/support/[tenant]",
         "--cwd",
         appRoot,
         "--url",
@@ -722,7 +652,7 @@ export const graph = async () => ({ ok: true })
     }))
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
+      ["run", "/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "transport-error" }),
       },
@@ -761,7 +691,7 @@ export const graph = async () => ({ ok: true })
     }))
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
+      ["run", "/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "bad-payload" }),
       },
@@ -803,7 +733,7 @@ export const graph = async () => ({ ok: true })
     }))
 
     const result = await invoke(
-      ["run", "src/app/support/[tenant]", "--cwd", appRoot, "--url", server.url],
+      ["run", "/support/[tenant]", "--cwd", appRoot, "--url", server.url],
       {
         stdin: JSON.stringify({ tenant: "request-failure" }),
       },
