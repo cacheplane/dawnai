@@ -32,6 +32,9 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Build
+        run: pnpm build
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -40,9 +43,6 @@ jobs:
 
       - name: Docs Check
         run: node scripts/check-docs.mjs
-
-      - name: Build
-        run: pnpm build
 
       - name: Pack Check
         run: pnpm pack:check
