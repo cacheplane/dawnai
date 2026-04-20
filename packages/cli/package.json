@@ -44,6 +44,7 @@
   },
   "dependencies": {
     "@dawn/core": "workspace:*",
+    "@dawn/langchain": "workspace:*",
     "@dawn/langgraph": "workspace:*",
     "commander": "14.0.3",
     "tsx": "^4.8.1"
@@ -51,6 +52,7 @@
   "devDependencies": {
     "@dawn/config-typescript": "workspace:*",
     "@dawn/sdk": "workspace:*",
+    "@langchain/core": "0.3.62",
     "@types/node": "25.6.0"
   }
 }
