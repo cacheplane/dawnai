@@ -9,6 +9,7 @@ export {
 export { extractToolTypesForRoute } from "./typegen/extract-tool-types.js"
 export type { ExtractToolTypesOptions } from "./typegen/extract-tool-types.js"
 export { renderRouteTypes } from "./typegen/render-route-types.js"
+export { renderToolTypes } from "./typegen/render-tool-types.js"
 export type {
   DawnConfig,
   DiscoveredDawnApp,
