@@ -156,7 +156,7 @@ export const graph = { invoke: async () => ({}) }
     expect(result.stdout).toBe("")
     expect(result.stderr).toContain("Validation failed")
     expect(result.stderr).toContain(
-      `Route index.ts must export exactly one of "workflow" or "graph"`,
+      `must export exactly one of "workflow", "graph", or "chain"`,
     )
   })
 

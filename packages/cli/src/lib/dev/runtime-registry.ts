@@ -4,7 +4,7 @@ import { createRouteAssistantId } from "../runtime/route-identity.js"
 
 export interface RuntimeRegistryEntry {
   readonly assistantId: string
-  readonly mode: "graph" | "workflow"
+  readonly mode: "chain" | "graph" | "workflow"
   readonly routeId: string
   readonly routePath: string
   readonly routeFile: string
