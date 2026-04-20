@@ -173,6 +173,22 @@ importers:
         specifier: 25.6.0
         version: 25.6.0
 
+  packages/vite-plugin:
+    dependencies:
+      typescript:
+        specifier: 5.8.3
+        version: 5.8.3
+    devDependencies:
+      '@dawn/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+      zod:
+        specifier: 3.24.4
+        version: 3.24.4
+
 packages:
 
   '@babel/runtime@7.29.2':
@@ -1548,6 +1564,11 @@ packages:
     resolution: {integrity: sha512-+v2QJey7ZUeUiuigkU+uFfklvNUyPI2VO2vBpMYJA+a1hKFLFiKtUYlRHdb3P9CrAvMzi0upbjI4WT+zKtqkBg==}
     hasBin: true
 
+  typescript@5.8.3:
+    resolution: {integrity: sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
   typescript@6.0.2:
     resolution: {integrity: sha512-bGdAIrZ0wiGDo5l8c++HWtbaNCWTS4UTv7RaTH/ThVIgjkveJt83m74bBHMJkuCbslY8ixgLBVZJIOiQlQTjfQ==}
     engines: {node: '>=14.17'}
@@ -2868,6 +2889,8 @@ snapshots:
       '@turbo/linux-arm64': 2.9.6
       '@turbo/windows-64': 2.9.6
       '@turbo/windows-arm64': 2.9.6
+
+  typescript@5.8.3: {}
 
   typescript@6.0.2: {}
 
