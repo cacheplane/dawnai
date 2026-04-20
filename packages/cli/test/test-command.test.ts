@@ -135,7 +135,7 @@ export const workflow = async (
       ]),
     })
 
-    const result = await invoke(["test", "src/app/beta/run.test.ts", "--cwd", appRoot], {
+    const result = await invoke(["test", "/beta", "--cwd", appRoot], {
       cwd: appRoot,
     })
 
@@ -177,7 +177,7 @@ export const workflow = async (
       ]),
     })
 
-    const result = await invoke(["test", "src/app/docs", "--cwd", appRoot], { cwd: appRoot })
+    const result = await invoke(["test", "/docs", "--cwd", appRoot], { cwd: appRoot })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain("PASS docs graph passes")
@@ -185,7 +185,7 @@ export const workflow = async (
     expect(result.stdout).not.toContain("marketing graph passes")
   })
 
-  test("supports caller-cwd-relative narrowing", async () => {
+  test("narrows by route pathname", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
@@ -199,29 +199,7 @@ export const workflow = async (
       ]),
     })
 
-    const result = await invoke(["test", "./docs"], {
-      cwd: join(appRoot, "src/app"),
-    })
-
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain("PASS docs graph passes")
-  })
-
-  test("supports app-root-relative narrowing", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "src/app/docs/index.ts": "export const graph = async () => ({ section: 'docs' });\n",
-      "src/app/docs/run.test.ts": scenarioModule([
-        {
-          expect: { output: { section: "docs" }, status: "passed" },
-          input: {},
-          name: "docs graph passes",
-        },
-      ]),
-    })
-
-    const result = await invoke(["test", "src/app/docs", "--cwd", appRoot], { cwd: appRoot })
+    const result = await invoke(["test", "/docs", "--cwd", appRoot], { cwd: appRoot })
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain("PASS docs graph passes")
