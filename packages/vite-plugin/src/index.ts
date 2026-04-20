@@ -1,13 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-
-import {
-  discoverRoutes,
-  extractToolTypesForRoute,
-  findDawnApp,
-  renderDawnTypes,
-} from "@dawn/core"
 import type { RouteToolTypes } from "@dawn/core"
+import { discoverRoutes, extractToolTypesForRoute, findDawnApp, renderDawnTypes } from "@dawn/core"
 
 import { extractJsDoc } from "./jsdoc-extractor.js"
 import { extractParameterType } from "./type-extractor.js"
