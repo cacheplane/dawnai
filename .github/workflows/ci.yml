@@ -58,3 +58,11 @@ jobs:
 
       - name: Smoke Harness Verification
         run: pnpm verify:harness:smoke
+
+      - name: Upload Harness Artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-artifacts
+          path: artifacts/testing/
+          retention-days: 7
