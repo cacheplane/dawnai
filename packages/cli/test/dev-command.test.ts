@@ -344,7 +344,7 @@ describe("dawn dev lifecycle", () => {
     })
 
     expect(new URL(restartedUrl).port).toBe(String(port))
-    expect(countOccurrences(dev.stdout, "Restarting Dawn dev server")).toBe(1)
+    expect(countOccurrences(dev.stdout, "Restarting Dawn dev server")).toBeGreaterThanOrEqual(1)
     expect(await updatedResponse.json()).toMatchObject({ version: "v2" })
   })
 

@@ -214,7 +214,10 @@ describe("dawn typegen", () => {
     )
 
     const installResult = await runCommand("pnpm", ["install"], installerRoot)
-    expect(installResult.code).toBe(0)
+    expect(
+      installResult.code,
+      `pnpm install failed:\n${installResult.stderr}\n${installResult.stdout}`,
+    ).toBe(0)
 
     await Promise.all([
       writeFile(join(appRoot, "package.json"), '{"type":"module"}'),
