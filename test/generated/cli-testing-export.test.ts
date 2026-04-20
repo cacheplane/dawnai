@@ -18,17 +18,25 @@ afterEach(async () => {
 })
 
 describe("@dawn/cli/testing", () => {
-  test("packed consumers can import the published testing helpers", { timeout: 30_000 }, async () => {
+  test("packed consumers can import the published testing helpers", {
+    timeout: 30_000,
+  }, async () => {
     const tempRoot = await createTrackedTempDir("dawn-cli-testing-pack-", tempDirs)
     const { installerDir, tarballs } = await createPackagedInstaller({
-      packageNames: ["@dawn/core", "@dawn/langgraph", "@dawn/sdk", "@dawn/cli"],
+      packageNames: ["@dawn/core", "@dawn/langchain", "@dawn/langgraph", "@dawn/sdk", "@dawn/cli"],
       tempRoot,
     })
 
     await writeInstallerOverrides(installerDir, tarballs)
     await runCommand(
       "pnpm",
-      ["add", requiredTarball(tarballs, "@dawn/core"), requiredTarball(tarballs, "@dawn/langgraph"), requiredTarball(tarballs, "@dawn/cli")],
+      [
+        "add",
+        requiredTarball(tarballs, "@dawn/core"),
+        requiredTarball(tarballs, "@dawn/langchain"),
+        requiredTarball(tarballs, "@dawn/langgraph"),
+        requiredTarball(tarballs, "@dawn/cli"),
+      ],
       installerDir,
     )
 
@@ -76,10 +84,7 @@ describe("@dawn/cli/testing", () => {
   })
 })
 
-function requiredTarball(
-  tarballs: Readonly<Record<string, string>>,
-  packageName: string,
-): string {
+function requiredTarball(tarballs: Readonly<Record<string, string>>, packageName: string): string {
   const tarball = tarballs[packageName]
 
   if (!tarball) {
@@ -98,7 +103,9 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
 
   if (!result.ok) {
     throw new Error(
-      [`${command} ${args.join(" ")} failed`, result.stdout, result.stderr].filter(Boolean).join("\n"),
+      [`${command} ${args.join(" ")} failed`, result.stdout, result.stderr]
+        .filter(Boolean)
+        .join("\n"),
     )
   }
 
@@ -123,6 +130,7 @@ async function writeInstallerOverrides(
     ...(packageJson.pnpm?.overrides ?? {}),
     "@dawn/cli": requiredTarball(tarballs, "@dawn/cli"),
     "@dawn/core": requiredTarball(tarballs, "@dawn/core"),
+    "@dawn/langchain": requiredTarball(tarballs, "@dawn/langchain"),
     "@dawn/langgraph": requiredTarball(tarballs, "@dawn/langgraph"),
     "@dawn/sdk": requiredTarball(tarballs, "@dawn/sdk"),
   }

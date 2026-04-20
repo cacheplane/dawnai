@@ -29,6 +29,7 @@ interface PackedTarballs {
   readonly core: string
   readonly createApp: string
   readonly devkit: string
+  readonly langchain: string
   readonly langgraph: string
   readonly sdk: string
 }
@@ -121,9 +122,7 @@ describe("generated app publish harness", () => {
       }),
     ).toEqual(expected)
     await expectBasicAuthoringLane(contributorLocal.artifacts.appRoot)
-    expect(transcript).toContain(
-      `$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-app build)`,
-    )
+    expect(transcript).toContain(`$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-app build)`)
     expect(transcript).toContain(
       `node packages/create-dawn-app/dist/index.js ${contributorLocal.artifacts.appRoot} --mode internal`,
     )
@@ -134,7 +133,9 @@ describe("generated app publish harness", () => {
     expect(transcript).toContain(
       `$ (cd ${contributorLocal.artifacts.appRoot} && pnpm exec dawn routes --json)`,
     )
-    expect(transcript).toContain(`$ (cd ${contributorLocal.artifacts.appRoot} && pnpm exec dawn typegen)`)
+    expect(transcript).toContain(
+      `$ (cd ${contributorLocal.artifacts.appRoot} && pnpm exec dawn typegen)`,
+    )
     expect(transcript).not.toContain("--pack-destination")
     expect(transcript).not.toContain("pnpm add ")
   })
@@ -167,6 +168,7 @@ async function runGeneratedAppScenario(
           "@dawn/cli",
           "@dawn/config-typescript",
           "@dawn/core",
+          "@dawn/langchain",
           "@dawn/langgraph",
           "@dawn/sdk",
         ],
@@ -235,7 +237,9 @@ async function scaffoldApp(options: {
     })
   } else {
     if (!options.installerDir) {
-      throw new Error("Expected packaged installer directory for external generated-app scaffolding")
+      throw new Error(
+        "Expected packaged installer directory for external generated-app scaffolding",
+      )
     }
 
     await runCommand({
@@ -282,6 +286,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn/cli": options.tarballs.cli,
       "@dawn/config-typescript": options.tarballs.configTypescript,
       "@dawn/core": options.tarballs.core,
+      "@dawn/langchain": options.tarballs.langchain,
       "@dawn/langgraph": options.tarballs.langgraph,
       "@dawn/sdk": options.tarballs.sdk,
     },
@@ -486,6 +491,7 @@ async function createExpectedInternalFixture(
           "@dawn/cli": "<repo:@dawn/cli>",
           "@dawn/config-typescript": "<repo:@dawn/config-typescript>",
           "@dawn/core": "<repo:@dawn/core>",
+          "@dawn/langchain": "<repo:@dawn/langchain>",
           "@dawn/langgraph": "<repo:@dawn/langgraph>",
           "@dawn/sdk": "<repo:@dawn/sdk>",
         },
@@ -501,6 +507,7 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     core: tarballs["@dawn/core"],
     createApp: tarballs["create-dawn-app"],
     devkit: tarballs["@dawn/devkit"],
+    langchain: tarballs["@dawn/langchain"],
     langgraph: tarballs["@dawn/langgraph"],
     sdk: tarballs["@dawn/sdk"],
   }
@@ -518,6 +525,7 @@ function normalizeForFixture(
     [context.tarballs.core, "<tarball:@dawn/core>"],
     [context.tarballs.createApp, "<tarball:create-dawn-app>"],
     [context.tarballs.devkit, "<tarball:@dawn/devkit>"],
+    [context.tarballs.langchain, "<tarball:@dawn/langchain>"],
     [context.tarballs.langgraph, "<tarball:@dawn/langgraph>"],
     [context.tarballs.sdk, "<tarball:@dawn/sdk>"],
     [`/private${dirname(context.tarballs.cli)}`, "<packs-dir>"],
@@ -537,6 +545,7 @@ function normalizeForInternalFixture(
     [pathToRepoPackageFileSpecifier("@dawn/cli"), "<repo:@dawn/cli>"],
     [pathToRepoPackageFileSpecifier("@dawn/config-typescript"), "<repo:@dawn/config-typescript>"],
     [pathToRepoPackageFileSpecifier("@dawn/core"), "<repo:@dawn/core>"],
+    [pathToRepoPackageFileSpecifier("@dawn/langchain"), "<repo:@dawn/langchain>"],
     [pathToRepoPackageFileSpecifier("@dawn/langgraph"), "<repo:@dawn/langgraph>"],
     [pathToRepoPackageFileSpecifier("@dawn/sdk"), "<repo:@dawn/sdk>"],
     ["25.6.0", "<version:@types/node>"],
@@ -549,6 +558,7 @@ function pathToRepoPackageFileSpecifier(
     | "@dawn/cli"
     | "@dawn/config-typescript"
     | "@dawn/core"
+    | "@dawn/langchain"
     | "@dawn/langgraph"
     | "@dawn/sdk",
 ): string {
@@ -556,6 +566,7 @@ function pathToRepoPackageFileSpecifier(
     "@dawn/cli": "packages/cli",
     "@dawn/config-typescript": "packages/config-typescript",
     "@dawn/core": "packages/core",
+    "@dawn/langchain": "packages/langchain",
     "@dawn/langgraph": "packages/langgraph",
     "@dawn/sdk": "packages/sdk",
   } as const

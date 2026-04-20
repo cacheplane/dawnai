@@ -99,6 +99,7 @@ export async function createPackagedInstaller(
         pnpm: {
           overrides: {
             "@dawn/devkit": tarballs["@dawn/devkit"],
+            "@dawn/langchain": tarballs["@dawn/langchain"],
           },
         },
       },
@@ -195,12 +196,15 @@ export async function runPackagedCommand(options: {
   return result
 }
 
-export async function withPackagedDevServer<T>(options: {
-  readonly appRoot: string
-  readonly env?: Readonly<Record<string, string>>
-  readonly port?: number
-  readonly transcriptPath: string
-}, action: (session: PackagedDevServerSession) => Promise<T>): Promise<T> {
+export async function withPackagedDevServer<T>(
+  options: {
+    readonly appRoot: string
+    readonly env?: Readonly<Record<string, string>>
+    readonly port?: number
+    readonly transcriptPath: string
+  },
+  action: (session: PackagedDevServerSession) => Promise<T>,
+): Promise<T> {
   const devServer = await startDevServer({
     cwd: options.appRoot,
     env: options.env,

@@ -24,6 +24,7 @@
         "@dawn/cli": "<tarball:@dawn/cli>",
         "@dawn/config-typescript": "<tarball:@dawn/config-typescript>",
         "@dawn/core": "<tarball:@dawn/core>",
+        "@dawn/langchain": "<tarball:@dawn/langchain>",
         "@dawn/langgraph": "<tarball:@dawn/langgraph>",
         "@dawn/sdk": "<tarball:@dawn/sdk>"
       }
