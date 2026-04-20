@@ -47,7 +47,7 @@
       },
       {
         "name": "typegen",
-        "renderedBytes": 169,
+        "renderedBytes": 279,
         "status": "passed"
       }
     ],
@@ -81,5 +81,5 @@
       }
     ]
   },
-  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/support/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/support/[tenant]\": { tenant: string };\n  }\n}\n"
+  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/support/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/support/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {}\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n}\n"
 }
