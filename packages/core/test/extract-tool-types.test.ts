@@ -75,8 +75,8 @@ export default async function alpha(input: { a: string }): Promise<{ result: str
     })
 
     expect(result).toHaveLength(2)
-    expect(result[0]!.name).toBe("alpha")
-    expect(result[1]!.name).toBe("zeta")
+    expect(result[0]?.name).toBe("alpha")
+    expect(result[1]?.name).toBe("zeta")
   })
 
   test("returns empty array when no tools directory exists", async () => {
@@ -209,8 +209,8 @@ export default async function sharedTool(input: { a: number }): Promise<{ b: num
     })
 
     expect(result).toHaveLength(2)
-    expect(result[0]!.name).toBe("local-tool")
-    expect(result[1]!.name).toBe("shared-tool")
+    expect(result[0]?.name).toBe("local-tool")
+    expect(result[1]?.name).toBe("shared-tool")
   })
 
   test("skips .d.ts files", async () => {
@@ -239,6 +239,6 @@ export default function types(input: { bad: string }): Promise<{ bad: string }>
     })
 
     expect(result).toHaveLength(1)
-    expect(result[0]!.name).toBe("real")
+    expect(result[0]?.name).toBe("real")
   })
 })

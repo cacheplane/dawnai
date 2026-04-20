@@ -55,19 +55,22 @@ export async function extractToolTypesForRoute(
     const signatures = checker.getSignaturesOfType(exportType, ts.SignatureKind.Call)
     if (signatures.length === 0) continue
 
-    const signature = signatures[0]!
+    const signature = signatures[0]
+    if (!signature) continue
     const params = signature.getParameters()
 
     let inputType: string
     if (params.length === 0) {
       inputType = "void"
     } else {
-      const paramType = checker.getTypeOfSymbolAtLocation(params[0]!, sourceFile)
+      const firstParam = params[0]
+      if (!firstParam) continue
+      const paramType = checker.getTypeOfSymbolAtLocation(firstParam, sourceFile)
       inputType = checker.typeToString(paramType)
     }
 
     const returnType = checker.getReturnTypeOfSignature(signature)
-    const outputType = unwrapPromise(returnType, checker)
+    const outputType = unwrapPromise(returnType)
 
     results.push({
       name,
@@ -80,12 +83,12 @@ export async function extractToolTypesForRoute(
   return results
 }
 
-function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
+function unwrapPromise(type: ts.Type): ts.Type {
   const symbol = type.getSymbol()
   if (symbol && symbol.getName() === "Promise") {
     const typeArgs = (type as ts.TypeReference).typeArguments
-    if (typeArgs && typeArgs.length > 0) {
-      return typeArgs[0]!
+    if (typeArgs && typeArgs.length > 0 && typeArgs[0]) {
+      return typeArgs[0]
     }
   }
   return type

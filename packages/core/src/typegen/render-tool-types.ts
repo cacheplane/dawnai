@@ -22,12 +22,7 @@ export function renderToolTypes(routeTools: readonly RouteToolTypes[]): string {
     routeLines.push("    };")
   }
 
-  return [
-    "  export interface DawnRouteTools {",
-    ...routeLines,
-    "  }",
-    "",
-    routeToolsType,
-    "",
-  ].join("\n")
+  return ["  export interface DawnRouteTools {", ...routeLines, "  }", "", routeToolsType, ""].join(
+    "\n",
+  )
 }
