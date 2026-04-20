@@ -277,15 +277,17 @@ export async function runGeneratedRuntimeScenario(
       appRoot: prepared.appRoot,
       transcriptPath: prepared.transcriptPath,
     },
-    async ({ url }) => {
+    async ({ devServer, url }) => {
       const healthResponse = await fetch(new URL("/healthz", url))
       const devServerHealth = (await healthResponse.json()) as { readonly status: string }
 
+      const readyCountBeforeReplace = devServer.readyCount()
       await replaceInFile(
         join(prepared.appRoot, fixture.routeDir, "run.test.ts"),
         SERVER_URL_PLACEHOLDER,
         url,
       )
+      await devServer.waitForNextReady(readyCountBeforeReplace)
 
       const runServerJson = selectRuntimeResult(
         await runDawnRunJson({
