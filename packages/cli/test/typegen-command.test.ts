@@ -185,6 +185,7 @@ describe("dawn typegen", () => {
 
     const cliTarball = await packPackage("@dawn/cli", packsRoot)
     const coreTarball = await packPackage("@dawn/core", packsRoot)
+    const langchainTarball = await packPackage("@dawn/langchain", packsRoot)
     const langgraphTarball = await packPackage("@dawn/langgraph", packsRoot)
     const sdkTarball = await packPackage("@dawn/sdk", packsRoot)
 
@@ -198,11 +199,13 @@ describe("dawn typegen", () => {
           dependencies: {
             "@dawn/cli": `file:${cliTarball}`,
             "@dawn/core": `file:${coreTarball}`,
+            "@dawn/langchain": `file:${langchainTarball}`,
             "@dawn/langgraph": `file:${langgraphTarball}`,
           },
           pnpm: {
             overrides: {
               "@dawn/core": `file:${coreTarball}`,
+              "@dawn/langchain": `file:${langchainTarball}`,
               "@dawn/langgraph": `file:${langgraphTarball}`,
               "@dawn/sdk": `file:${sdkTarball}`,
             },
