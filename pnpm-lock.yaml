@@ -108,6 +108,9 @@ importers:
       tsx:
         specifier: ^4.8.1
         version: 4.21.0
+      typescript:
+        specifier: 5.8.3
+        version: 5.8.3
     devDependencies:
       '@dawn/config-typescript':
         specifier: workspace:*
