@@ -9,3 +9,4 @@ export {
   type WorkflowRouteModule,
 } from "./route-module.js"
 export type { RuntimeContext, RuntimeTool } from "./runtime-context.js"
+export { graphAdapter, workflowAdapter } from "./langgraph-adapter.js"
