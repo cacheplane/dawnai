@@ -6,7 +6,10 @@ export function Header() {
       <Link
         href="/"
         className="font-display font-semibold text-lg text-text-primary"
-        style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50", letterSpacing: "-0.02em" }}
+        style={{
+          fontVariationSettings: "'opsz' 144, 'SOFT' 50",
+          letterSpacing: "-0.02em",
+        }}
       >
         dawn
       </Link>

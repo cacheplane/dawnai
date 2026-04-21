@@ -31,7 +31,8 @@ export function CodeExample() {
           </div>
           <div>&nbsp;&nbsp;&nbsp;&nbsp;hello/</div>
           <div>
-            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-purple-400">[tenant]/</span>{" "}
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+            <span className="text-purple-400">[tenant]/</span>{" "}
             <span className="text-text-dim text-xs">&larr; dynamic segment</span>
           </div>
           <div>
@@ -57,7 +58,8 @@ export function CodeExample() {
             </span>
           </div>
           <div>
-            &nbsp;&nbsp;<span className="text-text-secondary">dawn.generated.d.ts</span>{" "}
+            &nbsp;&nbsp;
+            <span className="text-text-secondary">dawn.generated.d.ts</span>{" "}
             <span className="text-text-dim text-xs">&larr; auto-generated ambient types</span>
           </div>
           <div>
@@ -107,7 +109,8 @@ export function CodeExample() {
           <div>
             &nbsp;&nbsp;ctx: <span className="text-yellow-400">RuntimeContext</span>&lt;
             <span className="text-yellow-400">RouteTools</span>&lt;
-            <span className="text-green-400">&quot;/hello/[tenant]&quot;</span>&gt;&gt;
+            <span className="text-green-400">&quot;/hello/[tenant]&quot;</span>
+            &gt;&gt;
           </div>
           <div>
             {")"} {"{"}
@@ -162,13 +165,16 @@ export function CodeExample() {
               <span className="text-yellow-400">RouteTools</span>&lt;P&gt; =
             </div>
             <div>
-              &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-yellow-400">DawnRouteTools</span>[P]
+              &nbsp;&nbsp;&nbsp;&nbsp;
+              <span className="text-yellow-400">DawnRouteTools</span>[P]
             </div>
             <div>
-              &nbsp;&nbsp;<span className="text-gray-500">{"// greet signature inferred"}</span>
+              &nbsp;&nbsp;
+              <span className="text-gray-500">{"// greet signature inferred"}</span>
             </div>
             <div>
-              &nbsp;&nbsp;<span className="text-gray-500">{"// from tools/greet.ts export"}</span>
+              &nbsp;&nbsp;
+              <span className="text-gray-500">{"// from tools/greet.ts export"}</span>
             </div>
             <div>{"}"}</div>
           </div>

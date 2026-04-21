@@ -1,4 +1,7 @@
+import { getPrompt } from "../../../content/prompts"
 import { CopyPromptButton } from "../CopyPromptButton"
+
+const scaffoldPrompt = getPrompt("scaffold")
 
 export function HeroSection() {
   return (
@@ -58,7 +61,7 @@ export function HeroSection() {
       </div>
 
       <div className="relative mt-8 flex gap-3 justify-center">
-        <CopyPromptButton />
+        <CopyPromptButton prompt={scaffoldPrompt.body} label="Copy prompt" variant="hero" />
         <a
           href="https://github.com/cacheplane/dawnai"
           target="_blank"
