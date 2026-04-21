@@ -1,0 +1,104 @@
+# Getting Started
+
+Dawn is a TypeScript-first framework for building graph-based AI agent systems. This guide gets you from zero to a running agent route in under a minute.
+
+## Prerequisites
+
+- **Node.js** 22.12.0 or later
+- **pnpm** (recommended) or npm
+
+## Scaffold a new app
+
+```bash
+npx create-dawn-app my-agent
+cd my-agent
+pnpm install
+```
+
+This creates a project with the standard Dawn structure:
+
+```
+my-agent/
+├── dawn.config.ts
+├── package.json
+├── tsconfig.json
+└── src/app/
+    ├── (public)/
+    │   └── hello/
+    │       └── [tenant]/
+    │           ├── index.ts        # Route entry
+    │           ├── state.ts        # Route state type
+    │           └── tools/
+    │               └── greet.ts    # Co-located tool
+    └── dawn.generated.d.ts         # Auto-generated types
+```
+
+## Understand the route
+
+Each route is a directory under `src/app/` with an `index.ts` that exports exactly one of:
+
+- **`workflow`** — an async function that receives state and a typed context
+- **`graph`** — a LangGraph graph instance
+- **`chain`** — a LangChain LCEL Runnable
+
+The scaffolded app uses a `workflow` export:
+
+```typescript
+import type { RuntimeContext } from "@dawn/sdk"
+import type { RouteTools } from "dawn:routes"
+import type { HelloState } from "./state.js"
+
+export async function workflow(
+  state: HelloState,
+  ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>
+) {
+  const result = await ctx.tools.greet({ tenant: state.tenant })
+  return { ...state, greeting: result.greeting }
+}
+```
+
+The `RouteTools<"/hello/[tenant]">` type is auto-generated from the tool files in the `tools/` directory. You get full autocomplete for `ctx.tools.greet()` with zero manual wiring.
+
+## Add a tool
+
+Tools live in a `tools/` directory inside a route. Each tool is a TypeScript file with a default export:
+
+```typescript
+// src/app/(public)/hello/[tenant]/tools/greet.ts
+export default async (input: { readonly tenant: string }) => {
+  return { greeting: `Hello, ${input.tenant}!` }
+}
+```
+
+Dawn extracts the input and output types at build time using the TypeScript compiler API, then writes them to `dawn.generated.d.ts`. No Zod schemas, no manual type declarations.
+
+## Run your agent
+
+```bash
+dawn run '/hello/acme'
+```
+
+Dawn discovers the route matching `/hello/acme`, resolves `[tenant]` to `"acme"`, and executes the workflow. You should see:
+
+```
+Route    /hello/[tenant]
+Mode     workflow
+Tenant   acme
+✓ { greeting: "Hello, acme!" }
+```
+
+## Start the dev server
+
+For iterative development with hot reload:
+
+```bash
+dawn dev
+```
+
+The dev server watches for file changes and restarts automatically. It exposes the same endpoints used by the LangGraph Platform — `/runs/wait` and `/runs/stream` — so what works locally works in production.
+
+## What's next
+
+- Explore the [Dawn GitHub repository](https://github.com/anthropics/dawn) for the full source
+- Read the template code in `src/app/` to understand route conventions
+- Try adding a new route directory with its own tools
