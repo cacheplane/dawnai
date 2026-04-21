@@ -49,13 +49,24 @@ export function HowItWorks() {
   return (
     <section className="py-20 px-8 border-t border-border-subtle">
       <div className="text-center mb-10">
-        <h2 className="text-3xl font-bold text-text-primary">Up and running in 30 seconds.</h2>
+        <h2
+          className="font-display text-4xl md:text-5xl font-semibold text-text-primary tracking-tight"
+          style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
+        >
+          Up and running in 30 seconds.
+        </h2>
       </div>
 
       <div className="max-w-md mx-auto space-y-8">
         {steps.map((step) => (
           <div key={step.number} className="flex gap-5 items-start">
-            <div className="w-8 h-8 rounded-full bg-[#181818] text-text-primary flex items-center justify-center text-sm font-bold shrink-0">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
+                step.number === 1
+                  ? "bg-accent-amber text-bg-primary"
+                  : "bg-bg-card border border-border text-text-primary"
+              }`}
+            >
               {step.number}
             </div>
             <div>

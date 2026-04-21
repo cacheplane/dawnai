@@ -21,11 +21,15 @@ export function ProblemSection() {
   return (
     <section className="py-20 px-8 border-t border-border-subtle">
       <div className="text-center max-w-2xl mx-auto">
-        <p className="text-text-muted text-xs uppercase tracking-widest mb-3">The Problem</p>
-        <h2 className="text-3xl font-bold text-text-primary leading-snug">
-          Building agents with raw LangGraph
-          <br />
-          is like building React apps before Next.js.
+        <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+          <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
+          The Problem
+        </p>
+        <h2
+          className="font-display text-4xl md:text-5xl font-semibold text-text-primary leading-[1.1] text-balance tracking-tight"
+          style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
+        >
+          Building agents with raw LangGraph is like building React apps before Next.js.
         </h2>
         <p className="text-text-secondary mt-4 leading-7">
           You get the runtime. But you&apos;re left to figure out project structure, tooling, type
