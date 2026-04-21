@@ -2,8 +2,16 @@ export function CodeExample() {
   return (
     <section className="py-20 px-8 border-t border-border-subtle bg-bg-secondary">
       <div className="text-center mb-10">
-        <p className="text-text-muted text-xs uppercase tracking-widest mb-3">See It</p>
-        <h2 className="text-3xl font-bold text-text-primary">A Dawn app, typed end to end.</h2>
+        <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+          <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
+          See It
+        </p>
+        <h2
+          className="font-display text-4xl md:text-5xl font-semibold text-text-primary leading-[1.1] tracking-tight"
+          style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
+        >
+          A Dawn app, typed end to end.
+        </h2>
       </div>
 
       {/* Project tree */}
@@ -172,12 +180,13 @@ export function CodeExample() {
         <div className="bg-bg-card border border-border rounded-lg p-4 font-mono text-sm leading-7">
           <p className="text-text-muted text-[0.65rem] mb-2 font-sans">Terminal</p>
           <div className="text-text-secondary">
-            $ <span className="text-text-primary">dawn run &apos;/hello/acme&apos;</span>
+            <span className="text-accent-amber">$</span>{" "}
+            <span className="text-text-primary">dawn run &apos;/hello/acme&apos;</span>
           </div>
           <div className="text-text-muted mt-1">Route&nbsp;&nbsp;&nbsp; /hello/[tenant]</div>
           <div className="text-text-muted">Mode&nbsp;&nbsp;&nbsp;&nbsp; workflow</div>
           <div className="text-text-muted">Tenant&nbsp;&nbsp; acme</div>
-          <div className="text-accent-green mt-1">
+          <div className="text-accent-amber mt-1">
             &#10003; {"{"} greeting: &quot;Hello, acme!&quot; {"}"}
           </div>
         </div>

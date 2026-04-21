@@ -2,9 +2,21 @@ import type { MDXComponents } from "mdx/types"
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
-    h1: ({ children }) => <h1 className="text-3xl font-bold text-text-primary mb-4">{children}</h1>,
+    h1: ({ children }) => (
+      <h1
+        className="font-display text-4xl md:text-5xl font-semibold text-text-primary mb-6 tracking-tight"
+        style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
+      >
+        {children}
+      </h1>
+    ),
     h2: ({ children }) => (
-      <h2 className="text-2xl font-bold text-text-primary mt-10 mb-4">{children}</h2>
+      <h2
+        className="font-display text-2xl md:text-3xl font-semibold text-text-primary mt-10 mb-4 tracking-tight"
+        style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
+      >
+        {children}
+      </h2>
     ),
     h3: ({ children }) => (
       <h3 className="text-lg font-semibold text-text-primary mt-8 mb-3">{children}</h3>

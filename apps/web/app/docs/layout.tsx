@@ -7,7 +7,10 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
   return (
     <div className="max-w-5xl mx-auto px-8 py-12 flex gap-12">
       <aside className="w-56 shrink-0">
-        <p className="text-xs text-text-muted uppercase tracking-widest mb-4">Documentation</p>
+        <p className="text-xs text-text-muted uppercase tracking-widest mb-4 inline-flex items-center gap-2">
+          <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
+          Documentation
+        </p>
         <nav className="space-y-2">
           {docsNav.map((item) => (
             <Link
