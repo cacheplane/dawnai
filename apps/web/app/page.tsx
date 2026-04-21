@@ -3,6 +3,9 @@ import { ProblemSection } from "./components/landing/ProblemSection"
 import { ComparisonTable } from "./components/landing/ComparisonTable"
 import { SolutionSection } from "./components/landing/SolutionSection"
 import { CodeExample } from "./components/landing/CodeExample"
+import { DeploySection } from "./components/landing/DeploySection"
+import { FeatureGrid } from "./components/landing/FeatureGrid"
+import { HowItWorks } from "./components/landing/HowItWorks"
 
 export default function HomePage() {
   return (
@@ -12,6 +15,9 @@ export default function HomePage() {
       <ComparisonTable />
       <SolutionSection />
       <CodeExample />
+      <DeploySection />
+      <FeatureGrid />
+      <HowItWorks />
     </>
   )
 }
