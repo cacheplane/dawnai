@@ -49,7 +49,6 @@ export async function runTestCommand(
   try {
     const scenarios = await loadRunScenarios({
       ...(options.cwd ? { cwd: options.cwd } : {}),
-      invocationCwd: process.cwd(),
       ...(narrowingPath ? { narrowingPath } : {}),
     })
 
