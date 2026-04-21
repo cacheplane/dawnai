@@ -6,6 +6,8 @@ import { CodeExample } from "./components/landing/CodeExample"
 import { DeploySection } from "./components/landing/DeploySection"
 import { FeatureGrid } from "./components/landing/FeatureGrid"
 import { HowItWorks } from "./components/landing/HowItWorks"
+import { EcosystemSection } from "./components/landing/EcosystemSection"
+import { CtaSection } from "./components/landing/CtaSection"
 
 export default function HomePage() {
   return (
@@ -18,6 +20,8 @@ export default function HomePage() {
       <DeploySection />
       <FeatureGrid />
       <HowItWorks />
+      <EcosystemSection />
+      <CtaSection />
     </>
   )
 }
