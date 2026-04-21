@@ -1,12 +1,35 @@
-const rows: Array<{ label: string; nextjs: string; dawn: string; dawnOnly?: boolean }> = [
-  { label: "File-system routing", nextjs: "app/page.tsx", dawn: "src/app/index.ts" },
+const rows: Array<{
+  label: string
+  nextjs: string
+  dawn: string
+  dawnOnly?: boolean
+}> = [
+  {
+    label: "File-system routing",
+    nextjs: "app/page.tsx",
+    dawn: "src/app/index.ts",
+  },
   { label: "Dynamic segments", nextjs: "[slug]", dawn: "[tenant]" },
   { label: "Route groups", nextjs: "(marketing)", dawn: "(public)" },
-  { label: "Generated types", nextjs: ".next/types/", dawn: "dawn.generated.d.ts" },
+  {
+    label: "Generated types",
+    nextjs: ".next/types/",
+    dawn: "dawn.generated.d.ts",
+  },
   { label: "Dev server", nextjs: "next dev", dawn: "dawn dev" },
   { label: "Scaffold CLI", nextjs: "create-next-app", dawn: "create-dawn-app" },
-  { label: "Co-located tools w/ type inference", nextjs: "\u2014", dawn: "\u2713", dawnOnly: true },
-  { label: "Built-in scenario testing", nextjs: "\u2014", dawn: "\u2713", dawnOnly: true },
+  {
+    label: "Co-located tools w/ type inference",
+    nextjs: "\u2014",
+    dawn: "\u2713",
+    dawnOnly: true,
+  },
+  {
+    label: "Built-in scenario testing",
+    nextjs: "\u2014",
+    dawn: "\u2713",
+    dawnOnly: true,
+  },
 ]
 
 export function ComparisonTable() {
