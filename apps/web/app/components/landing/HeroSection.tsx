@@ -1,4 +1,4 @@
-import Link from "next/link"
+import { CopyPromptButton } from "../CopyPromptButton"
 
 export function HeroSection() {
   return (
@@ -15,11 +15,11 @@ export function HeroSection() {
       {/* Earth — curvature pinned to the very bottom, thin atmospheric dawn along the limb */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 bg-no-repeat bg-bottom"
+        className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 bg-no-repeat bg-bottom w-full"
         style={{
           backgroundImage: "url('/backgrounds/dawn-earth.svg')",
-          backgroundSize: "100% auto",
-          height: "180px",
+          backgroundSize: "100% 100%",
+          aspectRatio: "1920 / 340",
         }}
       />
       {/* Ecosystem badge */}
@@ -58,14 +58,9 @@ export function HeroSection() {
       </div>
 
       <div className="relative mt-8 flex gap-3 justify-center">
-        <Link
-          href="/docs/getting-started"
-          className="px-6 py-2.5 bg-accent-amber text-bg-primary rounded-md text-sm font-semibold hover:bg-accent-amber-deep transition-colors"
-        >
-          Get Started
-        </Link>
+        <CopyPromptButton />
         <a
-          href="https://github.com/anthropics/dawn"
+          href="https://github.com/cacheplane/dawnai"
           target="_blank"
           rel="noopener noreferrer"
           className="px-6 py-2.5 border border-border text-text-secondary rounded-md text-sm hover:border-text-muted hover:text-text-primary transition-colors"
