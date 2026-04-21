@@ -1,9 +1,9 @@
 import { constants } from "node:fs"
 import { access, readdir } from "node:fs/promises"
-import { basename, dirname, join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
-import { findDawnApp } from "@dawn/core"
+import { discoverRoutes, findDawnApp } from "@dawn/core"
 import { loadRouteKind } from "./load-route-kind.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import type { RuntimeExecutionResult } from "./result.js"
@@ -46,7 +46,6 @@ export interface LoadedRunScenario {
 
 export interface LoadRunScenariosOptions {
   readonly cwd?: string
-  readonly invocationCwd?: string
   readonly narrowingPath?: string
 }
 
@@ -62,8 +61,7 @@ export async function loadRunScenarios(
 ): Promise<readonly LoadedRunScenario[]> {
   const app = await findDawnApp(options.cwd ? { cwd: options.cwd } : {})
   const scenarioFiles = await discoverScenarioFiles({
-    appRoot: app.appRoot,
-    ...(options.invocationCwd ? { invocationCwd: options.invocationCwd } : {}),
+    ...(options.cwd ? { cwd: options.cwd } : {}),
     ...(options.narrowingPath ? { narrowingPath: options.narrowingPath } : {}),
     routesDir: app.routesDir,
   })
@@ -84,8 +82,7 @@ export async function loadRunScenarios(
 }
 
 async function discoverScenarioFiles(options: {
-  readonly appRoot: string
-  readonly invocationCwd?: string
+  readonly cwd?: string
   readonly narrowingPath?: string
   readonly routesDir: string
 }): Promise<readonly string[]> {
@@ -93,28 +90,28 @@ async function discoverScenarioFiles(options: {
     return await collectScenarioFiles(options.routesDir)
   }
 
-  const narrowingTarget = resolveNarrowingTarget(options.narrowingPath, {
-    appRoot: options.appRoot,
-    ...(options.invocationCwd ? { invocationCwd: options.invocationCwd } : {}),
-  })
+  const normalizedPathname = options.narrowingPath.startsWith("/")
+    ? options.narrowingPath
+    : `/${options.narrowingPath}`
 
-  if (!(await pathExists(narrowingTarget))) {
-    throw new RunScenarioLoadError(`Narrowing path does not exist: ${narrowingTarget}`)
+  const manifest = await discoverRoutes(options.cwd ? { cwd: options.cwd } : {})
+  const matchingRoutes = manifest.routes.filter(
+    (route) =>
+      route.pathname === normalizedPathname || route.pathname.startsWith(`${normalizedPathname}/`),
+  )
+
+  if (matchingRoutes.length === 0) {
+    throw new RunScenarioLoadError(`No routes match narrowing path: ${normalizedPathname}`)
   }
 
-  const targetName = basename(narrowingTarget)
+  const scenarioFiles: string[] = []
 
-  if (targetName === RUN_TEST_FILE) {
-    return [narrowingTarget]
+  for (const route of matchingRoutes) {
+    const routeScenarios = await collectScenarioFiles(route.routeDir)
+    scenarioFiles.push(...routeScenarios)
   }
 
-  const directoryEntries = await readdir(narrowingTarget, { withFileTypes: true }).catch(() => null)
-
-  if (!directoryEntries) {
-    throw new RunScenarioLoadError(`Unsupported narrowing target: ${narrowingTarget}`)
-  }
-
-  return await collectScenarioFiles(narrowingTarget)
+  return scenarioFiles.sort((left, right) => left.localeCompare(right))
 }
 
 async function collectScenarioFiles(rootDir: string): Promise<readonly string[]> {
@@ -322,20 +319,6 @@ async function validateScenario(options: {
       : {}),
     scenarioFile: options.scenarioFile,
   }
-}
-
-function resolveNarrowingTarget(
-  narrowingPath: string,
-  options: {
-    readonly appRoot: string
-    readonly invocationCwd?: string
-  },
-): string {
-  if (narrowingPath.startsWith("./") || narrowingPath.startsWith("../")) {
-    return resolve(options.invocationCwd ?? process.cwd(), narrowingPath)
-  }
-
-  return resolve(options.appRoot, narrowingPath)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

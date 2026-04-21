@@ -195,8 +195,8 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
     await recordPhase(phases, "execute", async () => {
       const output = await executeCanonicalFlow({
         appRoot: generatedApp.appRoot,
-        entryFile: discoveredRoute.entryFile,
         input: overlay.input,
+        pathname: discoveredRoute.pathname,
         transcriptPath,
       })
 
@@ -363,18 +363,12 @@ async function compileDiscoveredRoute(options: {
 
 async function executeCanonicalFlow(options: {
   readonly appRoot: string
-  readonly entryFile: string
   readonly input: Record<string, unknown>
+  readonly pathname: string
   readonly transcriptPath: string
 }): Promise<unknown> {
-  const routePath = relative(
-    normalizePrivatePath(options.appRoot),
-    normalizePrivatePath(options.entryFile),
-  )
-    .split("\\")
-    .join("/")
   const runnerResult = await runCommand({
-    args: ["exec", "dawn", "run", routePath],
+    args: ["exec", "dawn", "run", options.pathname],
     command: "pnpm",
     cwd: options.appRoot,
     stdin: JSON.stringify(options.input),
