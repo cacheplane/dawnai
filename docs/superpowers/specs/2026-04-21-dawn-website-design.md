@@ -29,7 +29,7 @@ This framing targets: frontend engineers, full-stack TypeScript developers, and 
 | **MDX via @next/mdx** | Docs content as Markdown with embedded components |
 | **TypeScript** | Matches the monorepo |
 
-The website lives at `apps/website/` in the Dawn monorepo. It is a standalone Next.js app with no dependency on Dawn packages — it's a marketing site, not a Dawn app.
+The website lives at `apps/web/` in the Dawn monorepo (an existing Next.js app that will be rewritten in-place). It is a standalone Next.js app with no dependency on Dawn packages — it's a marketing site, not a Dawn app.
 
 ### Visual Style
 
@@ -135,7 +135,7 @@ Located at `content/docs/getting-started.mdx`, covers:
 ### File Structure
 
 ```
-apps/website/
+apps/web/
 ├── next.config.ts
 ├── tailwind.config.ts
 ├── tsconfig.json
