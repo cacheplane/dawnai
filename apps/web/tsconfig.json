@@ -5,7 +5,7 @@
     "incremental": true,
     "ignoreDeprecations": "6.0",
     "noEmit": true,
-    "types": ["node", "react", "react-dom"]
+    "types": ["node", "react", "react-dom", "mdx"]
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
   "exclude": ["node_modules"]
