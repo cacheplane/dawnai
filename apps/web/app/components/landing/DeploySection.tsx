@@ -46,25 +46,51 @@ export function DeploySection() {
                 }`}
               >
                 {i === 0 && (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={step.accent ? "#00a67e" : "#fff"} strokeWidth="2">
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke={step.accent ? "#00a67e" : "#fff"}
+                    strokeWidth="2"
+                    aria-hidden="true"
+                  >
                     <polyline points="16 18 22 12 16 6" />
                     <polyline points="8 6 2 12 8 18" />
                   </svg>
                 )}
                 {i === 1 && (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={step.accent ? "#00a67e" : "#fff"} strokeWidth="2">
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke={step.accent ? "#00a67e" : "#fff"}
+                    strokeWidth="2"
+                    aria-hidden="true"
+                  >
                     <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
                     <polyline points="22 4 12 14.01 9 11.01" />
                   </svg>
                 )}
                 {i === 2 && (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#00a67e" strokeWidth="2">
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#00a67e"
+                    strokeWidth="2"
+                    aria-hidden="true"
+                  >
                     <path d="M22 2L11 13" />
                     <polygon points="22 2 15 22 11 13 2 9 22 2" />
                   </svg>
                 )}
               </div>
-              <p className={`text-sm font-semibold ${step.accent ? "text-accent-green" : "text-text-primary"}`}>
+              <p
+                className={`text-sm font-semibold ${step.accent ? "text-accent-green" : "text-text-primary"}`}
+              >
                 {step.label}
               </p>
               <div className="text-xs text-text-muted mt-1.5 leading-5">
@@ -73,9 +99,7 @@ export function DeploySection() {
                 ))}
               </div>
             </div>
-            {i < steps.length - 1 && (
-              <span className="text-[#333] text-2xl mb-8 mx-2">&rarr;</span>
-            )}
+            {i < steps.length - 1 && <span className="text-[#333] text-2xl mb-8 mx-2">&rarr;</span>}
           </div>
         ))}
       </div>

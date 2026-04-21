@@ -17,7 +17,9 @@ export function CodeExample() {
           </div>
           <div>
             &nbsp;&nbsp;<span className="text-text-muted">(public)/</span>{" "}
-            <span className="text-text-dim text-xs">&larr; route group, excluded from pathname</span>
+            <span className="text-text-dim text-xs">
+              &larr; route group, excluded from pathname
+            </span>
           </div>
           <div>&nbsp;&nbsp;&nbsp;&nbsp;hello/</div>
           <div>
@@ -99,7 +101,9 @@ export function CodeExample() {
             <span className="text-yellow-400">RouteTools</span>&lt;
             <span className="text-green-400">&quot;/hello/[tenant]&quot;</span>&gt;&gt;
           </div>
-          <div>{")"} {"{"}</div>
+          <div>
+            {")"} {"{"}
+          </div>
           <div>
             &nbsp;&nbsp;<span className="text-purple-400">const</span> result ={" "}
             <span className="text-purple-400">await</span> ctx.tools.
@@ -124,21 +128,22 @@ export function CodeExample() {
             &nbsp;&nbsp;<span className="text-purple-400">readonly</span> tenant:{" "}
             <span className="text-yellow-400">string</span>
           </div>
-          <div>{"}"}) =&gt; {"{"}</div>
+          <div>
+            {"}"}) =&gt; {"{"}
+          </div>
           <div>
             &nbsp;&nbsp;<span className="text-purple-400">return</span> {"{"}
           </div>
           <div>
-            &nbsp;&nbsp;&nbsp;&nbsp;greeting:{" "}
-            <span className="text-green-400">{"`Hello, ${"}</span>input.tenant
+            &nbsp;&nbsp;&nbsp;&nbsp;greeting: <span className="text-green-400">{"`Hello, ${"}</span>
+            input.tenant
             <span className="text-green-400">{"}!`"}</span>
           </div>
           <div>&nbsp;&nbsp;{"}"}</div>
           <div>{"}"}</div>
           <div className="mt-6 border-t border-border pt-3">
             <p className="text-text-muted text-[0.65rem] mb-3">
-              dawn.generated.d.ts{" "}
-              <span className="text-text-dim">(auto-generated)</span>
+              dawn.generated.d.ts <span className="text-text-dim">(auto-generated)</span>
             </p>
             <div>
               <span className="text-purple-400">declare module</span>{" "}
@@ -152,10 +157,10 @@ export function CodeExample() {
               &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-yellow-400">DawnRouteTools</span>[P]
             </div>
             <div>
-              &nbsp;&nbsp;<span className="text-gray-500">// greet signature inferred</span>
+              &nbsp;&nbsp;<span className="text-gray-500">{"// greet signature inferred"}</span>
             </div>
             <div>
-              &nbsp;&nbsp;<span className="text-gray-500">// from tools/greet.ts export</span>
+              &nbsp;&nbsp;<span className="text-gray-500">{"// from tools/greet.ts export"}</span>
             </div>
             <div>{"}"}</div>
           </div>
@@ -169,9 +174,7 @@ export function CodeExample() {
           <div className="text-text-secondary">
             $ <span className="text-text-primary">dawn run &apos;/hello/acme&apos;</span>
           </div>
-          <div className="text-text-muted mt-1">
-            Route&nbsp;&nbsp;&nbsp; /hello/[tenant]
-          </div>
+          <div className="text-text-muted mt-1">Route&nbsp;&nbsp;&nbsp; /hello/[tenant]</div>
           <div className="text-text-muted">Mode&nbsp;&nbsp;&nbsp;&nbsp; workflow</div>
           <div className="text-text-muted">Tenant&nbsp;&nbsp; acme</div>
           <div className="text-accent-green mt-1">

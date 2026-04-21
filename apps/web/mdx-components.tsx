@@ -2,18 +2,14 @@ import type { MDXComponents } from "mdx/types"
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
-    h1: ({ children }) => (
-      <h1 className="text-3xl font-bold text-text-primary mb-4">{children}</h1>
-    ),
+    h1: ({ children }) => <h1 className="text-3xl font-bold text-text-primary mb-4">{children}</h1>,
     h2: ({ children }) => (
       <h2 className="text-2xl font-bold text-text-primary mt-10 mb-4">{children}</h2>
     ),
     h3: ({ children }) => (
       <h3 className="text-lg font-semibold text-text-primary mt-8 mb-3">{children}</h3>
     ),
-    p: ({ children }) => (
-      <p className="text-text-secondary leading-7 mb-4">{children}</p>
-    ),
+    p: ({ children }) => <p className="text-text-secondary leading-7 mb-4">{children}</p>,
     code: ({ children }) => (
       <code className="bg-bg-card border border-border rounded px-1.5 py-0.5 text-sm font-mono text-text-secondary">
         {children}
