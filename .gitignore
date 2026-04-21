@@ -11,3 +11,5 @@ coverage/
 tmp/
 artifacts/
 .worktrees/
+.superpowers/
+.vercel
