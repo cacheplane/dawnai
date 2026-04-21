@@ -1,8 +1,28 @@
 import type { Metadata } from "next"
+import { Fraunces, Inter, JetBrains_Mono } from "next/font/google"
 import type { ReactNode } from "react"
 import { Footer } from "./components/Footer"
 import { Header } from "./components/Header"
 import "./globals.css"
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+})
+
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-fraunces",
+  display: "swap",
+  axes: ["opsz", "SOFT", "WONK"],
+})
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+})
 
 export const metadata: Metadata = {
   title: {
@@ -15,7 +35,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className="dark">
+    <html
+      lang="en"
+      className={`dark ${inter.variable} ${fraunces.variable} ${jetbrainsMono.variable}`}
+    >
       <body>
         <div className="min-h-screen flex flex-col">
           <Header />

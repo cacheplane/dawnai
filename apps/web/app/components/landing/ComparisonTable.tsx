@@ -13,8 +13,14 @@ export function ComparisonTable() {
   return (
     <section className="py-20 px-8 border-t border-border-subtle bg-bg-secondary">
       <div className="text-center max-w-2xl mx-auto">
-        <p className="text-text-muted text-xs uppercase tracking-widest mb-3">The Pattern</p>
-        <h2 className="text-3xl font-bold text-text-primary leading-snug">
+        <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+          <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
+          The Pattern
+        </p>
+        <h2
+          className="font-display text-4xl md:text-5xl font-semibold text-text-primary leading-[1.1] tracking-tight"
+          style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
+        >
           You already know this story.
         </h2>
         <p className="text-text-secondary mt-4 leading-7">
@@ -23,12 +29,18 @@ export function ComparisonTable() {
         </p>
       </div>
 
-      <div className="max-w-[650px] mx-auto mt-10 border border-border rounded-lg overflow-hidden">
+      <div className="max-w-[650px] mx-auto mt-10 border border-border rounded-lg overflow-hidden relative">
+        {/* The illuminated column — a hairline amber seam dividing Next.js from Dawn */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-accent-amber/60 to-transparent"
+          style={{ right: "calc((100% - 40px) / 4)" }}
+        />
         {/* Header */}
-        <div className="grid grid-cols-[2fr_1fr_1fr] bg-[#111] px-5 py-3 text-xs text-text-secondary uppercase tracking-wide font-semibold">
+        <div className="grid grid-cols-[2fr_1fr_1fr] bg-bg-card px-5 py-3 text-xs text-text-secondary uppercase tracking-wide font-semibold">
           <span>Convention</span>
           <span className="text-center">Next.js</span>
-          <span className="text-center text-text-primary">Dawn</span>
+          <span className="text-center text-accent-amber">Dawn</span>
         </div>
 
         {/* Rows */}
@@ -36,7 +48,7 @@ export function ComparisonTable() {
           <div
             key={row.label}
             className={`grid grid-cols-[2fr_1fr_1fr] px-5 py-2.5 text-sm border-t border-border-subtle ${
-              i % 2 === 1 ? "bg-bg-card" : ""
+              i % 2 === 1 ? "bg-bg-card/60" : ""
             }`}
           >
             <span className={`text-text-secondary ${row.dawnOnly ? "font-semibold" : ""}`}>
@@ -45,7 +57,7 @@ export function ComparisonTable() {
             <span className="text-center text-text-muted font-mono text-xs">{row.nextjs}</span>
             <span
               className={`text-center font-mono text-xs ${
-                row.dawnOnly ? "text-accent-green font-semibold text-sm" : "text-text-primary"
+                row.dawnOnly ? "text-accent-amber font-semibold text-sm" : "text-text-primary"
               }`}
             >
               {row.dawn}

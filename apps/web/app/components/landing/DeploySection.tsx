@@ -20,11 +20,15 @@ export function DeploySection() {
   return (
     <section className="py-20 px-8 border-t border-border-subtle">
       <div className="text-center max-w-2xl mx-auto">
-        <p className="text-text-muted text-xs uppercase tracking-widest mb-3">The Deploy Story</p>
-        <h2 className="text-3xl font-bold text-text-primary leading-snug">
-          Build locally.
-          <br />
-          Deploy to LangSmith.
+        <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+          <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
+          The Deploy Story
+        </p>
+        <h2
+          className="font-display text-4xl md:text-5xl font-semibold text-text-primary leading-[1.1] tracking-tight text-balance"
+          style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
+        >
+          Build locally. Deploy to LangSmith.
         </h2>
         <p className="text-text-secondary mt-4 leading-7">
           Dawn owns your local development lifecycle. When you&apos;re ready to ship, your routes
@@ -41,8 +45,8 @@ export function DeploySection() {
               <div
                 className={`w-14 h-14 rounded-[10px] flex items-center justify-center mx-auto mb-3 ${
                   step.accent
-                    ? "bg-gradient-to-br from-[#0a1a10] to-[#0a200a] border border-[#1a3a1a]"
-                    : "bg-[#111] border border-[#222]"
+                    ? "bg-gradient-to-br from-[#1a1005] to-[#2a1a08] border border-accent-amber/40"
+                    : "bg-bg-card border border-border"
                 }`}
               >
                 {i === 0 && (
@@ -51,7 +55,7 @@ export function DeploySection() {
                     height="20"
                     viewBox="0 0 24 24"
                     fill="none"
-                    stroke={step.accent ? "#00a67e" : "#fff"}
+                    stroke={step.accent ? "#f59e0b" : "#f8f5ef"}
                     strokeWidth="2"
                     aria-hidden="true"
                   >
@@ -65,7 +69,7 @@ export function DeploySection() {
                     height="20"
                     viewBox="0 0 24 24"
                     fill="none"
-                    stroke={step.accent ? "#00a67e" : "#fff"}
+                    stroke={step.accent ? "#f59e0b" : "#f8f5ef"}
                     strokeWidth="2"
                     aria-hidden="true"
                   >
@@ -79,7 +83,7 @@ export function DeploySection() {
                     height="20"
                     viewBox="0 0 24 24"
                     fill="none"
-                    stroke="#00a67e"
+                    stroke="#f59e0b"
                     strokeWidth="2"
                     aria-hidden="true"
                   >
@@ -89,7 +93,7 @@ export function DeploySection() {
                 )}
               </div>
               <p
-                className={`text-sm font-semibold ${step.accent ? "text-accent-green" : "text-text-primary"}`}
+                className={`text-sm font-semibold ${step.accent ? "text-accent-amber" : "text-text-primary"}`}
               >
                 {step.label}
               </p>
@@ -99,14 +103,16 @@ export function DeploySection() {
                 ))}
               </div>
             </div>
-            {i < steps.length - 1 && <span className="text-[#333] text-2xl mb-8 mx-2">&rarr;</span>}
+            {i < steps.length - 1 && (
+              <span className="text-accent-amber/50 text-2xl mb-8 mx-2">&rarr;</span>
+            )}
           </div>
         ))}
       </div>
 
       {/* Protocol note */}
       <div className="max-w-[550px] mx-auto mt-8 bg-bg-card border border-border rounded-lg px-5 py-4 flex gap-4 items-start">
-        <span className="text-accent-green text-base mt-0.5">&#9432;</span>
+        <span className="text-accent-amber text-base mt-0.5">&#9432;</span>
         <p className="text-sm text-text-secondary leading-relaxed">
           Dawn&apos;s dev server speaks the{" "}
           <span className="text-text-primary">LangGraph Platform protocol</span> natively &mdash;{" "}
