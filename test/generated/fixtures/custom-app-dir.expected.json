@@ -36,6 +36,7 @@
       {
         "appRoot": "<app-root>",
         "configPath": "<app-root>/dawn.config.ts",
+        "dawnDir": "<app-root>/.dawn",
         "name": "app",
         "routesDir": "<app-root>/src/dawn-app",
         "status": "passed"

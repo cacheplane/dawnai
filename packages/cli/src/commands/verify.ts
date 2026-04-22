@@ -20,6 +20,7 @@ interface VerifyCheckCounts {
 interface VerifyAppCheckResult {
   readonly appRoot: string
   readonly configPath: string
+  readonly dawnDir: string
   readonly name: "app"
   readonly routesDir: string
   readonly status: "passed"
@@ -130,6 +131,7 @@ async function verifyApp(
     {
       appRoot: app.appRoot,
       configPath: app.configPath,
+      dawnDir: app.dawnDir,
       name: "app",
       routesDir: app.routesDir,
       status: PASSED_STATUS,
