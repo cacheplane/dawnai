@@ -40,7 +40,12 @@ export async function resolveRouteTarget(
   }
 
   const normalizedPathname = normalizePathname(options.routePath)
-  const route = manifest.routes.find((candidate) => candidate.pathname === normalizedPathname)
+  const route =
+    manifest.routes.find((candidate) => candidate.pathname === normalizedPathname) ??
+    manifest.routes.find((candidate) => {
+      const relativeEntry = relative(manifest.appRoot, candidate.entryFile).split(sep).join("/")
+      return relativeEntry === options.routePath
+    })
 
   if (!route) {
     const available = manifest.routes.map((r) => r.pathname)
