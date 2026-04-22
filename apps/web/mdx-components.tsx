@@ -1,7 +1,15 @@
 import type { MDXComponents } from "mdx/types"
+import { Callout } from "./app/components/mdx/Callout"
+import { Step, Steps } from "./app/components/mdx/Steps"
+import { Tab, Tabs } from "./app/components/mdx/Tabs"
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
+    Callout,
+    Steps,
+    Step,
+    Tabs,
+    Tab,
     h1: ({ children }) => (
       <h1
         className="font-display text-4xl md:text-5xl font-semibold text-text-primary mb-6 tracking-tight"
