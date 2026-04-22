@@ -2,17 +2,24 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { DocsSearch } from "./DocsSearch"
 import { DOCS_NAV } from "./nav"
+import type { DocsSearchEntry } from "./search-index"
 
-export function DocsSidebar() {
+interface Props {
+  readonly searchIndex: readonly DocsSearchEntry[]
+}
+
+export function DocsSidebar({ searchIndex }: Props) {
   const pathname = usePathname()
 
   return (
     <aside className="w-56 shrink-0">
-      <p className="text-xs text-text-muted uppercase tracking-widest mb-6 inline-flex items-center gap-2">
+      <p className="text-xs text-text-muted uppercase tracking-widest mb-4 inline-flex items-center gap-2">
         <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
         Documentation
       </p>
+      <DocsSearch index={searchIndex} />
       <nav className="space-y-6">
         {DOCS_NAV.map((section) => (
           <div key={section.label}>
