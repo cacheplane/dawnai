@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { CopyCommand } from "../CopyCommand"
 
 export function CtaSection() {
   return (
@@ -39,8 +40,8 @@ export function CtaSection() {
         </a>
       </div>
 
-      <div className="mt-6 font-mono text-sm text-text-muted bg-bg-card inline-block px-5 py-2.5 rounded-md border border-border">
-        <span className="text-accent-amber">$</span> npx create-dawn-app my-agent
+      <div className="mt-6">
+        <CopyCommand command="npx create-dawn-app my-agent" />
       </div>
     </section>
   )
