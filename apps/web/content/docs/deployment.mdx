@@ -1,0 +1,65 @@
+# Deployment
+
+Dawn itself is **not a deployment runtime**. It owns local development: `dawn dev`, `dawn run`, `dawn test`. Production runs on the **LangGraph Platform**, which Dawn's dev server already speaks natively. What runs locally runs in production without translation.
+
+## The deployment path
+
+<Steps>
+  <Step title="Verify locally">
+    ```
+    dawn check
+    dawn routes
+    dawn typegen
+    dawn test
+    ```
+
+    All four must pass. `dawn check` validates the app contract, `dawn routes` confirms discovery, `dawn typegen` regenerates ambient types, `dawn test` runs every scenario against the in-process runtime.
+  </Step>
+  <Step title="Confirm protocol parity">
+    Run your tests against a live dev server:
+
+    ```
+    dawn dev --port 3001 &
+    dawn test --url http://127.0.0.1:3001
+    ```
+
+    If in-process and live-server tests both pass, the same inputs will pass on LangGraph Platform.
+  </Step>
+  <Step title="Declare assistants">
+    Create a `langgraph.json` at the app root mapping Dawn's discovered routes to LangGraph assistants:
+
+    ```json
+    {
+      "graphs": {
+        "hello": "./src/app/(public)/hello/[tenant]/index.ts:workflow"
+      },
+      "env": ".env"
+    }
+    ```
+
+    Each entry binds an `assistant_id` (left side) to a route entry export (right side).
+  </Step>
+  <Step title="Push to your Platform-connected remote">
+    The LangGraph Platform builds the image and provisions assistants keyed by `assistant_id`. From there, your agents and harnesses can hit the deployed endpoints using the same protocol they already speak locally.
+  </Step>
+</Steps>
+
+## What Dawn does not do
+
+<Callout type="warn" title="Not a hosted platform">
+  Dawn does not provision infrastructure, manage secrets, or replace LangSmith. If you want a hosted runtime, use the LangGraph Platform. If you want observability, use LangSmith.
+</Callout>
+
+## Self-hosting
+
+If you can't or won't use the LangGraph Platform, you can self-host by wrapping Dawn's runtime in a Docker container that exposes the same protocol endpoints (`/runs/wait`, `/runs/stream`, `/assistants`). Dawn's dev server implementation (in `@dawn/cli`) is the reference — it's the same process you'd run in production, just without the file watcher.
+
+<Callout type="tip" title="Dev server as reference">
+  `dawn dev` running on port 3001 is functionally identical to a deployed Dawn runtime. Point your staging tests at a `dawn dev` instance and you'll catch 95% of deployment issues before you ship.
+</Callout>
+
+## Troubleshooting
+
+- **Tests pass in-process but fail live-server** — a tool or route isn't serializing cleanly. Check that inputs, outputs, and state are JSON-serializable (no Dates, Maps, classes).
+- **Assistant id not found** — the `langgraph.json` entry doesn't match what Dawn discovered. Run `dawn routes` to see the exact pathnames, then update the `graphs` mapping.
+- **Type inference drifted** — run `dawn typegen` locally and commit `dawn.generated.d.ts`. The Platform build uses the committed file.

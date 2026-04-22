@@ -1,0 +1,92 @@
+# Routes
+
+Routes are the unit of work in Dawn. A route is a directory under `src/app/` containing an `index.ts` that exports exactly one of three entry types: a `workflow` function, a LangGraph `graph`, or a LangChain `chain`.
+
+Routes are discovered by filesystem walk — **no registration, no config**.
+
+## Route entry
+
+Every route's `index.ts` exports one entry. The three choices are interchangeable: a given route picks whichever best matches the work.
+
+<Tabs>
+  <Tab label="workflow">
+    The most common entry. A plain async function that takes state + runtime context, returns new state.
+
+    ```ts
+    import type { RuntimeContext } from "@dawn/sdk"
+    import type { RouteTools } from "dawn:routes"
+    import type { HelloState } from "./state.js"
+
+    export async function workflow(
+      state: HelloState,
+      ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>
+    ) {
+      const result = await ctx.tools.greet({ tenant: state.tenant })
+      return { ...state, greeting: result.greeting }
+    }
+    ```
+  </Tab>
+  <Tab label="graph">
+    A LangGraph graph instance. Use when the route is a genuine multi-node stateful graph.
+
+    ```ts
+    export const graph = /* LangGraph graph instance */
+    ```
+  </Tab>
+  <Tab label="chain">
+    A LangChain LCEL Runnable. Use for single-shot prompt chains.
+
+    ```ts
+    export const chain = /* LCEL runnable */
+    ```
+  </Tab>
+</Tabs>
+
+<Callout type="warn" title="Exactly one entry per route">
+  A single `index.ts` may export **only one** of `workflow`, `graph`, or `chain`. `dawn check` enforces this.
+</Callout>
+
+## Pathname rules
+
+The route's URL-style pathname is computed from its directory path, with two transformations:
+
+- **Route groups** — segments in parentheses like `(public)` are excluded from the pathname.
+- **Dynamic segments** — segments in brackets like `[tenant]` match any value and map to a state field of the same name.
+
+| Directory | Pathname |
+|---|---|
+| `src/app/(public)/hello/[tenant]/` | `/hello/[tenant]` |
+| `src/app/(internal)/admin/users/` | `/admin/users` |
+| `src/app/docs/[...slug]/` | `/docs/[...slug]` |
+
+Run `dawn routes` to list every route Dawn discovered and its computed pathname.
+
+## State
+
+Each route has a `state.ts` file that defines its state type:
+
+```ts
+// src/app/(public)/hello/[tenant]/state.ts
+export interface HelloState {
+  readonly tenant: string
+  readonly greeting?: string
+}
+```
+
+Dynamic segment names become state fields automatically. `[tenant]` → `state.tenant`.
+
+## Tools
+
+A route's `tools/` directory contains co-located tools. Tool types are inferred from source and made available on `ctx.tools` with full autocomplete. See [Tools](/docs/tools) for the full reference.
+
+## Running a route
+
+```
+dawn run '/hello/acme'
+```
+
+`dawn run` reads state from stdin (JSON), resolves the pathname to a route, invokes the entry, and writes the result to stdout.
+
+<Callout type="tip" title="Tip">
+  Quote the route path in your shell — route groups and dynamic segments contain `(`, `)`, and `[]` which shells expand.
+</Callout>
