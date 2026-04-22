@@ -5,7 +5,16 @@ import { PROMPTS } from "../../content/prompts"
 
 const CONTENT_ROOT = path.join(process.cwd(), "content")
 
-const DOCS_PAGES = [{ title: "Getting Started", path: "docs/getting-started.mdx" }]
+const DOCS_PAGES = [
+  { title: "Getting Started", path: "docs/getting-started.mdx" },
+  { title: "Routes", path: "docs/routes.mdx" },
+  { title: "Tools", path: "docs/tools.mdx" },
+  { title: "State", path: "docs/state.mdx" },
+  { title: "Testing", path: "docs/testing.mdx" },
+  { title: "Dev Server", path: "docs/dev-server.mdx" },
+  { title: "Deployment", path: "docs/deployment.mdx" },
+  { title: "CLI Reference", path: "docs/cli.mdx" },
+]
 
 const TEMPLATES = [
   { title: "AGENTS.md template", path: "templates/AGENTS.md" },

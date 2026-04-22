@@ -1,0 +1,81 @@
+# Testing
+
+Scenario tests are colocated with routes as `run.test.ts` files. Each scenario declares an input state and the expected output, and Dawn runs them against the real route runtime.
+
+## A minimal test
+
+```ts
+// src/app/(public)/hello/[tenant]/run.test.ts
+import { describe, test } from "@dawn/sdk/testing"
+
+describe("/hello/[tenant]", () => {
+  test("greets a tenant", {
+    input: { tenant: "acme" },
+    expected: { tenant: "acme", greeting: "Hello, acme!" },
+  })
+})
+```
+
+Run all scenarios:
+
+```
+dawn test
+```
+
+Dawn discovers every `run.test.ts` under `src/app/`, invokes the route for each scenario, and compares output deep-equal against `expected`.
+
+## Against a live dev server
+
+By default, tests run against the in-process route runtime. You can also point tests at a running `dawn dev` server to verify protocol parity:
+
+```
+dawn dev --port 3001 &
+dawn test --url http://127.0.0.1:3001
+```
+
+<Callout type="tip" title="Run both to confirm parity">
+  If the in-process run passes but the live-server run fails, something in your route doesn't survive the LangGraph Platform protocol. The live-server mode is how you catch this before deploy.
+</Callout>
+
+## Mocking tools
+
+For routes that call external APIs, databases, or LLMs, stub the tools per-scenario:
+
+```ts
+test("with mocked greet", {
+  input: { tenant: "acme" },
+  expected: { tenant: "acme", greeting: "Hi from mock!" },
+  tools: {
+    greet: async () => ({ greeting: "Hi from mock!" }),
+  },
+})
+```
+
+The mock signature must match the tool's inferred input/output shape. TypeScript checks this at compile time.
+
+## Rules
+
+<Steps>
+  <Step title="File location">
+    `run.test.ts` must live in the route's directory, not a sibling or nested folder. Dawn matches tests to routes by directory, not by name.
+  </Step>
+  <Step title="describe() matches the route">
+    The top-level `describe` block should pass the route's pathname. Dawn uses it to look up the correct route for the scenarios inside.
+  </Step>
+  <Step title="expected is deep-equal by default">
+    Dawn compares the returned state deep-equal against `expected`. Use `expected.eq`, `expected.contains`, or custom matchers for partial or fuzzy matching (see `@dawn/sdk/testing` for the full surface).
+  </Step>
+  <Step title="Keep scenarios focused">
+    One scenario = one claim about the route's behavior. If you're adding branches, add more scenarios — don't inflate a single one.
+  </Step>
+</Steps>
+
+## CI
+
+`dawn test` exits non-zero on any failure and outputs a diff per mismatched scenario. Wire it into your CI step after `dawn check` and `dawn typegen`:
+
+```yaml
+- run: pnpm exec dawn check
+- run: pnpm exec dawn typegen
+- run: pnpm exec dawn test
+```

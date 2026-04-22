@@ -13,6 +13,26 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     label: "Start",
     items: [{ label: "Getting Started", href: "/docs/getting-started" }],
   },
+  {
+    label: "Core Concepts",
+    items: [
+      { label: "Routes", href: "/docs/routes" },
+      { label: "Tools", href: "/docs/tools" },
+      { label: "State", href: "/docs/state" },
+    ],
+  },
+  {
+    label: "Workflow",
+    items: [
+      { label: "Testing", href: "/docs/testing" },
+      { label: "Dev Server", href: "/docs/dev-server" },
+      { label: "Deployment", href: "/docs/deployment" },
+    ],
+  },
+  {
+    label: "Reference",
+    items: [{ label: "CLI", href: "/docs/cli" }],
+  },
 ]
 
 // Flat ordered list of pages — used for prev/next navigation.
