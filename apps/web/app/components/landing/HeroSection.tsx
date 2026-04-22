@@ -6,7 +6,13 @@ const scaffoldPrompt = getPrompt("scaffold")
 
 export function HeroSection() {
   return (
-    <section className="relative pt-24 pb-56 text-center overflow-hidden isolate">
+    <section
+      className="relative pt-24 pb-56 text-center overflow-hidden isolate"
+      style={{
+        background:
+          "linear-gradient(to bottom, var(--color-bg-primary) 0%, var(--color-bg-primary) 55%, #020617 100%)",
+      }}
+    >
       {/* Starfield — the distant cosmos, scattered throughout the upper hero */}
       <div
         aria-hidden

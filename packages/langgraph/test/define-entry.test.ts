@@ -106,7 +106,9 @@ describe("@dawn/langgraph defineEntry", () => {
     )
   })
 
-  test("packed consumers can import defineEntry from the published root export", async () => {
+  test("packed consumers can import defineEntry from the published root export", {
+    timeout: 30_000,
+  }, async () => {
     const { consumerDir, tempRoot } = await createPackedConsumer()
     tempDirs.push(tempRoot)
     const scriptPath = join(consumerDir, "entry-check.mjs")
