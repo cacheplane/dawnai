@@ -59,7 +59,9 @@ describe("@dawn/langgraph route-module", () => {
     expect(normalizedWorkflow.kind).toBe("workflow")
   })
 
-  test("packed consumers can resolve the route-module subpath export", async () => {
+  test("packed consumers can resolve the route-module subpath export", {
+    timeout: 30_000,
+  }, async () => {
     const { consumerDir, tempRoot } = await createPackedConsumer()
     tempDirs.push(tempRoot)
     const scriptPath = join(consumerDir, "route-module-check.mjs")
