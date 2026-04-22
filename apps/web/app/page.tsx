@@ -6,12 +6,14 @@ import { EcosystemSection } from "./components/landing/EcosystemSection"
 import { FeatureGrid } from "./components/landing/FeatureGrid"
 import { HeroSection } from "./components/landing/HeroSection"
 import { HowItWorks } from "./components/landing/HowItWorks"
+import { LandingAmbient } from "./components/landing/LandingAmbient"
 import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
 
 export default function HomePage() {
   return (
-    <>
+    <div className="relative isolate">
+      <LandingAmbient />
       <HeroSection />
       <ProblemSection />
       <ComparisonTable />
@@ -22,6 +24,6 @@ export default function HomePage() {
       <HowItWorks />
       <EcosystemSection />
       <CtaSection />
-    </>
+    </div>
   )
 }

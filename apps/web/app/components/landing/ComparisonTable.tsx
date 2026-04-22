@@ -34,7 +34,7 @@ const rows: Array<{
 
 export function ComparisonTable() {
   return (
-    <section className="py-20 px-8 border-t border-border-subtle bg-bg-secondary">
+    <section className="py-20 px-8 border-t border-border-subtle bg-bg-secondary/50">
       <div className="text-center max-w-2xl mx-auto">
         <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
@@ -53,12 +53,6 @@ export function ComparisonTable() {
       </div>
 
       <div className="max-w-[650px] mx-auto mt-10 border border-border rounded-lg overflow-hidden relative">
-        {/* The illuminated column — a hairline amber seam dividing Next.js from Dawn */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-accent-amber/60 to-transparent"
-          style={{ right: "calc((100% - 40px) / 4)" }}
-        />
         {/* Header */}
         <div className="grid grid-cols-[2fr_1fr_1fr] bg-bg-card px-5 py-3 text-xs text-text-secondary uppercase tracking-wide font-semibold">
           <span>Convention</span>
