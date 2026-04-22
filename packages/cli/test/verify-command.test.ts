@@ -176,6 +176,7 @@ describe("dawn verify", () => {
         {
           appRoot,
           configPath: join(appRoot, "dawn.config.ts"),
+          dawnDir: join(appRoot, ".dawn"),
           name: "app",
           routesDir: join(appRoot, "src", "app"),
           status: "passed",
@@ -215,6 +216,7 @@ describe("dawn verify", () => {
         {
           appRoot,
           configPath: join(appRoot, "dawn.config.ts"),
+          dawnDir: join(appRoot, ".dawn"),
           name: "app",
           routesDir: join(appRoot, "src/app"),
           status: "passed",

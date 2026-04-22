@@ -26,7 +26,7 @@ export async function runTypegenCommand(options: TypegenOptions, io: CommandIo):
   try {
     const app = await findDawnApp(options.cwd ? { cwd: options.cwd } : {})
     const manifest = await discoverRoutes({ appRoot: app.appRoot })
-    const outputPath = join(app.routesDir, OUTPUT_FILE)
+    const outputPath = join(app.dawnDir, OUTPUT_FILE)
 
     const sharedToolsDir = join(app.appRoot, "src")
     const routeToolTypes: RouteToolTypes[] = []

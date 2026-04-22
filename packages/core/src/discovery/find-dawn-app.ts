@@ -7,6 +7,7 @@ import type { DiscoveredDawnApp, FindDawnAppOptions } from "../types.js"
 
 const PACKAGE_JSON_FILE = "package.json"
 const DEFAULT_APP_DIR = "src/app"
+const DAWN_DIR = ".dawn"
 
 export async function findDawnApp(options: FindDawnAppOptions = {}): Promise<DiscoveredDawnApp> {
   const appRoot = options.appRoot ? resolve(options.appRoot) : await findAppRootFromCwd(options.cwd)
@@ -16,9 +17,12 @@ export async function findDawnApp(options: FindDawnAppOptions = {}): Promise<Dis
   const routesDir = resolve(appRoot, loadedConfig.config.appDir ?? DEFAULT_APP_DIR)
   await assertDawnRoutesDir(appRoot, routesDir)
 
+  const dawnDir = join(appRoot, DAWN_DIR)
+
   return {
     appRoot,
     configPath: loadedConfig.configPath,
+    dawnDir,
     routesDir,
   }
 }
