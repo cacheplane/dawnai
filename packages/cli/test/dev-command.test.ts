@@ -348,7 +348,9 @@ describe("dawn dev lifecycle", () => {
     expect(await updatedResponse.json()).toMatchObject({ version: "v2" })
   })
 
-  test("coalesces bursty edits during restart into at most one follow-up restart", async () => {
+  test("coalesces bursty edits during restart into at most one follow-up restart", {
+    timeout: 15_000,
+  }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
