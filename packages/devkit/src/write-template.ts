@@ -46,6 +46,10 @@ function toOutputName(entryName: string): string {
     return ".npmrc"
   }
 
+  if (entryName === "gitignore.template") {
+    return ".gitignore"
+  }
+
   return entryName.endsWith(".template") ? basename(entryName, ".template") : entryName
 }
 

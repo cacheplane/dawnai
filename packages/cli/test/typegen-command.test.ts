@@ -133,7 +133,7 @@ describe("dawn typegen", () => {
       },
     })
 
-    const outputPath = join(appRoot, "src/app/dawn.generated.d.ts")
+    const outputPath = join(appRoot, ".dawn/dawn.generated.d.ts")
     const output = await readFile(outputPath, "utf8")
 
     expect(exitCode).toBe(0)
@@ -162,14 +162,13 @@ describe("dawn typegen", () => {
       stdout: () => {},
     })
 
-    const output = await readFile(join(appRoot, "src/custom-app/dawn.generated.d.ts"), "utf8")
+    const output = await readFile(join(appRoot, ".dawn/dawn.generated.d.ts"), "utf8")
 
     expect(verifyExitCode).toBe(0)
     expect(verifyStderr.join("")).toBe("")
     expect(verifyStdout.join("")).toContain("Dawn app integrity OK")
     expect(exitCode).toBe(0)
     expect(output).toContain('export type DawnRoutePath = "/" | "/[tenant]";')
-    await expect(readFile(join(appRoot, "src/app/dawn.generated.d.ts"), "utf8")).rejects.toThrow()
   })
 
   test("runs from an externally installed dawn bin against a custom appDir", {
@@ -252,7 +251,7 @@ describe("dawn typegen", () => {
     expect(typegenResult.code).toBe(0)
     expect(typegenResult.stderr).toBe("")
     await expect(
-      readFile(join(appRoot, "src", "custom-app", "dawn.generated.d.ts"), "utf8"),
+      readFile(join(appRoot, ".dawn", "dawn.generated.d.ts"), "utf8"),
     ).resolves.toContain('export type DawnRoutePath = "/" | "/[tenant]";')
   })
 })

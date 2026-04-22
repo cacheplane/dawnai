@@ -100,7 +100,7 @@ async function runTypegen(appRoot?: string): Promise<void> {
     }
 
     const content = renderDawnTypes(manifest, toolTypesPerRoute)
-    const outputPath = join(app.routesDir, OUTPUT_FILE)
+    const outputPath = join(app.dawnDir, OUTPUT_FILE)
 
     await mkdir(dirname(outputPath), { recursive: true })
     await writeFile(outputPath, content, "utf-8")

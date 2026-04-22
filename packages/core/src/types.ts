@@ -49,6 +49,7 @@ export interface FindDawnAppOptions {
 export interface DiscoveredDawnApp {
   readonly appRoot: string
   readonly configPath: string
+  readonly dawnDir: string
   readonly routesDir: string
 }
 
