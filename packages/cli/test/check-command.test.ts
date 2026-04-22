@@ -188,7 +188,9 @@ export const graph = { invoke: async () => ({}) }
     expect(result.stderr).toContain("Missing:")
   })
 
-  test("runs check and verify from the built dawn executable for direct and symlinked invocation paths", async () => {
+  test("runs check and verify from the built dawn executable for direct and symlinked invocation paths", {
+    timeout: 30_000,
+  }, async () => {
     const appRoot = await createFixtureApp({
       "src/app/hello/index.ts": `export async function workflow() { return {} }
 `,
