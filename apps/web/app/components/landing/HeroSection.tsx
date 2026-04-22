@@ -1,11 +1,12 @@
 import { getPrompt } from "../../../content/prompts"
+import { CopyCommand } from "../CopyCommand"
 import { CopyPromptButton } from "../CopyPromptButton"
 
 const scaffoldPrompt = getPrompt("scaffold")
 
 export function HeroSection() {
   return (
-    <section className="relative pt-24 pb-32 text-center overflow-hidden isolate">
+    <section className="relative pt-24 pb-56 text-center overflow-hidden isolate">
       {/* Starfield — the distant cosmos, scattered throughout the upper hero */}
       <div
         aria-hidden
@@ -72,8 +73,8 @@ export function HeroSection() {
         </a>
       </div>
 
-      <div className="relative mt-6 font-mono text-sm text-text-muted bg-bg-card inline-block px-4 py-2 rounded-md border border-border">
-        <span className="text-accent-amber">$</span> npx create-dawn-app my-agent
+      <div className="relative mt-6">
+        <CopyCommand command="npx create-dawn-app my-agent" />
       </div>
     </section>
   )

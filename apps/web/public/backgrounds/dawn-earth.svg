@@ -14,27 +14,31 @@
   <!-- Earth disc — the dark curvature, sitting low -->
   <circle cx="960" cy="5300" r="5100" fill="url(#earth-body)"/>
   <!-- City lights — a scatter of warm pinpricks on the dark nightside of earth -->
-  <g fill="#fbbf24" opacity="0.9">
-    <circle cx="540" cy="222" r="0.8"/>
-    <circle cx="610" cy="240" r="0.6"/>
-    <circle cx="690" cy="218" r="1.0"/>
-    <circle cx="760" cy="232" r="0.7"/>
-    <circle cx="830" cy="215" r="0.9"/>
-    <circle cx="910" cy="225" r="0.6"/>
-    <circle cx="990" cy="218" r="1.1"/>
-    <circle cx="1070" cy="230" r="0.7"/>
-    <circle cx="1150" cy="222" r="0.8"/>
-    <circle cx="1230" cy="228" r="0.6"/>
-    <circle cx="1310" cy="218" r="0.9"/>
-    <circle cx="1390" cy="234" r="0.7"/>
-  </g>
-  <g fill="#fde68a" opacity="0.6">
-    <circle cx="580" cy="248" r="0.5"/>
-    <circle cx="720" cy="252" r="0.5"/>
-    <circle cx="870" cy="246" r="0.5"/>
-    <circle cx="1020" cy="250" r="0.5"/>
-    <circle cx="1170" cy="248" r="0.5"/>
-    <circle cx="1330" cy="252" r="0.5"/>
+  <!-- Symmetric around cx=960. Mirrored pairs ensure no left/right optical bias. -->
+  <g filter="url(#city-glow)">
+    <g fill="#fcd34d" opacity="0.7">
+      <circle cx="540" cy="222" r="0.9"/>
+      <circle cx="1380" cy="222" r="0.9"/>
+      <circle cx="615" cy="240" r="0.7"/>
+      <circle cx="1305" cy="240" r="0.7"/>
+      <circle cx="690" cy="218" r="1.1"/>
+      <circle cx="1230" cy="218" r="1.1"/>
+      <circle cx="765" cy="232" r="0.8"/>
+      <circle cx="1155" cy="232" r="0.8"/>
+      <circle cx="840" cy="215" r="1.0"/>
+      <circle cx="1080" cy="215" r="1.0"/>
+      <circle cx="915" cy="225" r="0.7"/>
+      <circle cx="1005" cy="225" r="0.7"/>
+      <circle cx="960" cy="221" r="1.2"/>
+    </g>
+    <g fill="#fef3c7" opacity="0.45">
+      <circle cx="600" cy="248" r="0.55"/>
+      <circle cx="1320" cy="248" r="0.55"/>
+      <circle cx="740" cy="252" r="0.55"/>
+      <circle cx="1180" cy="252" r="0.55"/>
+      <circle cx="870" cy="246" r="0.55"/>
+      <circle cx="1050" cy="246" r="0.55"/>
+    </g>
   </g>
   <!-- Hair-thin bright edge at the terminator -->
   <g filter="url(#limb-blur-edge)">
@@ -42,7 +46,11 @@
   </g>
   <!-- Localized terminator bloom — where the sun is actually cresting, brightest at center -->
   <g filter="url(#terminator-bloom-blur)">
-    <ellipse cx="960" cy="210" rx="520" ry="40" fill="url(#terminator-bloom-fill)" opacity="0.95"/>
+    <ellipse cx="960" cy="210" rx="560" ry="44" fill="url(#terminator-bloom-fill)" opacity="1"/>
+  </g>
+  <!-- Sharp central anchor — the unmistakable peak the eye locks onto -->
+  <g filter="url(#terminator-peak-blur)">
+    <ellipse cx="960" cy="208" rx="120" ry="16" fill="url(#terminator-peak-fill)" opacity="1"/>
   </g>
   <defs>
     <filter id="limb-blur-outer" x="-4500" y="-100" width="10920" height="11000" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
@@ -60,11 +68,27 @@
     <filter id="terminator-bloom-blur" x="0" y="120" width="1920" height="200" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feGaussianBlur stdDeviation="24"/>
     </filter>
-    <radialGradient id="terminator-bloom-fill" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(960 210) scale(520 40)">
-      <stop offset="0" stop-color="#fef3c7" stop-opacity="0.85"/>
-      <stop offset="0.3" stop-color="#fcd34d" stop-opacity="0.7"/>
-      <stop offset="0.6" stop-color="#f59e0b" stop-opacity="0.4"/>
+    <!-- City lights glow — pinpoints with a faint warm halo so they read as light sources without dominating -->
+    <filter id="city-glow" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="0.5" result="blur1"/>
+      <feMerge>
+        <feMergeNode in="blur1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <radialGradient id="terminator-bloom-fill" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(960 210) scale(560 44)">
+      <stop offset="0" stop-color="#fef3c7" stop-opacity="0.95"/>
+      <stop offset="0.3" stop-color="#fcd34d" stop-opacity="0.78"/>
+      <stop offset="0.6" stop-color="#f59e0b" stop-opacity="0.45"/>
       <stop offset="1" stop-color="#d97706" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="terminator-peak-blur" x="780" y="180" width="360" height="80" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <radialGradient id="terminator-peak-fill" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(960 208) scale(120 16)">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="0.4" stop-color="#fef3c7" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#fcd34d" stop-opacity="0"/>
     </radialGradient>
     <!-- Outer atmosphere: pale periwinkle scattering upward -->
     <radialGradient id="atmosphere-outer" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(960 5420) scale(5340)">
