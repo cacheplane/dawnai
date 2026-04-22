@@ -1,0 +1,102 @@
+# CLI Reference
+
+Dawn ships a single `dawn` binary with six commands. Every command reads `dawn.config.ts` from the current working directory and operates on the app rooted there.
+
+## `dawn check`
+
+Validates the app structure and configuration.
+
+```
+dawn check
+```
+
+Checks:
+- `dawn.config.ts` exists and has only supported fields.
+- `package.json` exists.
+- Every route has exactly one of `workflow`, `graph`, or `chain` exported from `index.ts`.
+- Every route's `state.ts` exports a named state type.
+- No tool files have invalid shapes.
+
+Exits non-zero on any violation with a detailed message.
+
+## `dawn routes`
+
+Lists every route Dawn discovered and its computed pathname.
+
+```
+dawn routes
+```
+
+Output:
+
+```
+/hello/[tenant]   workflow   src/app/(public)/hello/[tenant]/index.ts
+/admin/users      graph      src/app/(internal)/admin/users/index.ts
+```
+
+Use this to confirm that route groups and dynamic segments are being parsed the way you expect.
+
+## `dawn typegen`
+
+Regenerates `dawn.generated.d.ts` from the current state of every tool file.
+
+```
+dawn typegen
+```
+
+<Callout type="info" title="Run automatically by dawn dev">
+  `dawn dev` runs `typegen` on every save. You only need to invoke it manually after a fresh clone, before CI, or after a tool signature change while the dev server isn't running.
+</Callout>
+
+## `dawn run`
+
+Executes a single route invocation with JSON stdin/stdout.
+
+```
+echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
+```
+
+Flags:
+- `--url <url>` — run against a live dev server instead of the in-process runtime.
+- `--stream` — use the `/runs/stream` endpoint (requires `--url`) and pipe SSE events to stdout.
+
+<Callout type="tip" title="Quote the path">
+  Route paths contain `(`, `)`, `[`, and `]`. Always quote them in shell so they aren't expanded.
+</Callout>
+
+## `dawn test`
+
+Runs every colocated `run.test.ts` scenario in the app.
+
+```
+dawn test
+```
+
+Flags:
+- `--url <url>` — run against a live dev server.
+- `--filter <pattern>` — only run scenarios whose describe/test name matches.
+
+Exits non-zero on any failure with a diff per mismatched scenario. See [Testing](/docs/testing) for scenario authoring.
+
+## `dawn dev`
+
+Starts the local runtime — hot reload + LangGraph Platform protocol.
+
+```
+dawn dev --port 3001
+```
+
+Flags:
+- `--port <n>` — HTTP port (default 3000).
+- `--host <addr>` — bind address (default 127.0.0.1).
+
+See [Dev Server](/docs/dev-server) for the full protocol reference and architecture notes.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Validation failure (e.g. `dawn check`) or scenario failure (e.g. `dawn test`) |
+| 2 | Configuration error (missing `dawn.config.ts`, bad `appDir`) |
+| 3 | Internal error (bug — please file an issue) |

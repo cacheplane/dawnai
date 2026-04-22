@@ -1,0 +1,60 @@
+# State
+
+Every route has a state type declared in a colocated `state.ts` file. State is the contract between the caller, the route's entry, and any tools the entry invokes.
+
+## The shape
+
+```ts
+// src/app/(public)/hello/[tenant]/state.ts
+export interface HelloState {
+  readonly tenant: string
+  readonly greeting?: string
+}
+```
+
+`HelloState` is imported into `index.ts` and used as the first parameter of the `workflow` function (or the equivalent graph state type).
+
+```ts
+import type { HelloState } from "./state.js"
+
+export async function workflow(state: HelloState, ctx) {
+  // state.tenant is string
+  // state.greeting is string | undefined
+}
+```
+
+## Dynamic segments become state fields
+
+If your route's directory contains a dynamic segment like `[tenant]`, that segment's value is populated on the state field of the same name at runtime.
+
+```
+src/app/(public)/hello/[tenant]/  →  state.tenant populated from the pathname
+```
+
+<Callout type="info" title="Naming matters">
+  The dynamic segment name and the state field name must match exactly. Dawn wires them up by name, not by position.
+</Callout>
+
+## Rules
+
+<Steps>
+  <Step title="State must be JSON-serializable">
+    Dawn serializes state across runtime boundaries (dev server, scenario tests, LangGraph Platform). Use primitives, plain objects, arrays. No classes, no Dates, no Maps.
+  </Step>
+  <Step title="Prefer readonly">
+    Mark fields `readonly`. The entry function returns a new state object rather than mutating the input. This keeps scenario tests deterministic and LangGraph checkpoint-safe.
+  </Step>
+  <Step title="Outputs accumulate">
+    A workflow returns `{ ...state, newField }` — merging new outputs into the existing state. Fields added during the run are typed as optional (`greeting?: string`) so the caller isn't forced to provide them.
+  </Step>
+</Steps>
+
+## State flow
+
+```
+caller stdin  →  state  →  workflow/graph/chain  →  new state  →  stdout
+                              ↓
+                           ctx.tools
+```
+
+The state is the only thing that crosses the runtime boundary. Everything else — tool results, intermediate values — lives inside the entry for the duration of a single run.
