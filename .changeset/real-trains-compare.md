@@ -4,7 +4,10 @@
 "@dawn/config-typescript": patch
 "@dawn/core": patch
 "@dawn/devkit": patch
+"@dawn/langchain": patch
 "@dawn/langgraph": patch
+"@dawn/sdk": patch
+"@dawn/vite-plugin": patch
 "create-dawn-app": patch
 ---
 
