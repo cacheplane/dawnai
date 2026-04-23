@@ -1,3 +1,4 @@
+import { ArchitectureSection } from "./components/landing/ArchitectureSection"
 import { CodeExample } from "./components/landing/CodeExample"
 import { ComparisonTable } from "./components/landing/ComparisonTable"
 import { CtaSection } from "./components/landing/CtaSection"
@@ -9,15 +10,18 @@ import { HowItWorks } from "./components/landing/HowItWorks"
 import { LandingAmbient } from "./components/landing/LandingAmbient"
 import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
+import { StatsStrip } from "./components/landing/StatsStrip"
 
 export default function HomePage() {
   return (
     <div className="relative isolate">
       <LandingAmbient />
       <HeroSection />
+      <StatsStrip />
       <ProblemSection />
       <ComparisonTable />
       <SolutionSection />
+      <ArchitectureSection />
       <CodeExample />
       <DeploySection />
       <FeatureGrid />
