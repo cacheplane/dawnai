@@ -5,7 +5,7 @@ import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promise
 import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { resolveTemplateDir, writeTemplate } from "@dawn/devkit"
+import { resolveTemplateDir, writeTemplate } from "@dawnai.org/devkit"
 
 interface CliOptions {
   readonly distTag: string
@@ -224,12 +224,12 @@ async function applyInternalModePackageOverrides(
     ...(packageJson.pnpm ?? {}),
     overrides: {
       ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawn/cli": replacements.dawnCliSpecifier,
-      "@dawn/config-typescript": replacements.dawnConfigTypescriptSpecifier,
-      "@dawn/core": replacements.dawnCoreSpecifier,
-      "@dawn/langchain": replacements.dawnLangchainSpecifier,
-      "@dawn/langgraph": replacements.dawnLanggraphSpecifier,
-      "@dawn/sdk": replacements.dawnSdkSpecifier,
+      "@dawnai.org/cli": replacements.dawnCliSpecifier,
+      "@dawnai.org/config-typescript": replacements.dawnConfigTypescriptSpecifier,
+      "@dawnai.org/core": replacements.dawnCoreSpecifier,
+      "@dawnai.org/langchain": replacements.dawnLangchainSpecifier,
+      "@dawnai.org/langgraph": replacements.dawnLanggraphSpecifier,
+      "@dawnai.org/sdk": replacements.dawnSdkSpecifier,
     },
   }
 

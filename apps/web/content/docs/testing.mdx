@@ -6,7 +6,7 @@ Scenario tests are colocated with routes as `run.test.ts` files. Each scenario d
 
 ```ts
 // src/app/(public)/hello/[tenant]/run.test.ts
-import { describe, test } from "@dawn/sdk/testing"
+import { describe, test } from "@dawnai.org/sdk/testing"
 
 describe("/hello/[tenant]", () => {
   test("greets a tenant", {
@@ -63,7 +63,7 @@ The mock signature must match the tool's inferred input/output shape. TypeScript
     The top-level `describe` block should pass the route's pathname. Dawn uses it to look up the correct route for the scenarios inside.
   </Step>
   <Step title="expected is deep-equal by default">
-    Dawn compares the returned state deep-equal against `expected`. Use `expected.eq`, `expected.contains`, or custom matchers for partial or fuzzy matching (see `@dawn/sdk/testing` for the full surface).
+    Dawn compares the returned state deep-equal against `expected`. Use `expected.eq`, `expected.contains`, or custom matchers for partial or fuzzy matching (see `@dawnai.org/sdk/testing` for the full surface).
   </Step>
   <Step title="Keep scenarios focused">
     One scenario = one claim about the route's behavior. If you're adding branches, add more scenarios — don't inflate a single one.

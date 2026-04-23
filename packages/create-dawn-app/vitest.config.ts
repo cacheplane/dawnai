@@ -8,7 +8,7 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   resolve: {
     alias: {
-      "@dawn/devkit": resolve(rootDir, "../devkit/src/index.ts"),
+      "@dawnai.org/devkit": resolve(rootDir, "../devkit/src/index.ts"),
     },
   },
   test: {

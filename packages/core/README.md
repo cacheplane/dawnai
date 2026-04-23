@@ -1,4 +1,4 @@
-# @dawn/core
+# @dawnai.org/core
 
 Shared Dawn app discovery, config loading, route validation, and route type generation primitives.
 

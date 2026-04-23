@@ -1,7 +1,7 @@
-import type { RuntimeContext, RuntimeTool } from "@dawn/sdk"
+import type { RuntimeContext, RuntimeTool } from "@dawnai.org/sdk"
 import { describe, expect, expectTypeOf, test } from "vitest"
 
-describe("@dawn/sdk runtime-context type surface", () => {
+describe("@dawnai.org/sdk runtime-context type surface", () => {
   test("runtime-context types are exported from the package root", () => {
     type Tools = {
       readonly lookupCustomer: RuntimeTool<{ readonly id: string }, { readonly id: string }>

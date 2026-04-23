@@ -92,14 +92,14 @@ describe("create-dawn-app", () => {
     expect(packageJson.name).toBe("hello-dawn")
     expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
     expect(packageJson.scripts.typecheck).toBe("tsc --noEmit")
-    expect(packageJson.dependencies["@dawn/core"]).not.toMatch(/^file:/)
-    expect(packageJson.dependencies["@dawn/cli"]).not.toMatch(/^file:/)
-    expect(packageJson.dependencies["@dawn/langgraph"]).not.toMatch(/^file:/)
-    expect(packageJson.devDependencies["@dawn/config-typescript"]).not.toMatch(/^file:/)
-    expect(packageJson.dependencies["@dawn/core"]).toBe("next")
-    expect(packageJson.dependencies["@dawn/cli"]).toBe("next")
-    expect(packageJson.dependencies["@dawn/langgraph"]).toBe("next")
-    expect(packageJson.devDependencies["@dawn/config-typescript"]).toBe("next")
+    expect(packageJson.dependencies["@dawnai.org/core"]).not.toMatch(/^file:/)
+    expect(packageJson.dependencies["@dawnai.org/cli"]).not.toMatch(/^file:/)
+    expect(packageJson.dependencies["@dawnai.org/langgraph"]).not.toMatch(/^file:/)
+    expect(packageJson.devDependencies["@dawnai.org/config-typescript"]).not.toMatch(/^file:/)
+    expect(packageJson.dependencies["@dawnai.org/core"]).toBe("next")
+    expect(packageJson.dependencies["@dawnai.org/cli"]).toBe("next")
+    expect(packageJson.dependencies["@dawnai.org/langgraph"]).toBe("next")
+    expect(packageJson.devDependencies["@dawnai.org/config-typescript"]).toBe("next")
     await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow()
   })
 
@@ -139,10 +139,10 @@ describe("create-dawn-app", () => {
     }
 
     expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
-    expect(packageJson.dependencies["@dawn/core"]).toMatch(/^file:/)
-    expect(packageJson.dependencies["@dawn/cli"]).toMatch(/^file:/)
-    expect(packageJson.dependencies["@dawn/langgraph"]).toMatch(/^file:/)
-    expect(packageJson.devDependencies["@dawn/config-typescript"]).toMatch(/^file:/)
+    expect(packageJson.dependencies["@dawnai.org/core"]).toMatch(/^file:/)
+    expect(packageJson.dependencies["@dawnai.org/cli"]).toMatch(/^file:/)
+    expect(packageJson.dependencies["@dawnai.org/langgraph"]).toMatch(/^file:/)
+    expect(packageJson.devDependencies["@dawnai.org/config-typescript"]).toMatch(/^file:/)
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/tools/greet.ts"))
@@ -166,29 +166,29 @@ describe("create-dawn-app", () => {
       }
     }
 
-    expect(resolveFileSpecifier(packageJson.dependencies["@dawn/core"])).toBe(
+    expect(resolveFileSpecifier(packageJson.dependencies["@dawnai.org/core"])).toBe(
       resolve(repoRoot, "packages/core"),
     )
-    expect(resolveFileSpecifier(packageJson.dependencies["@dawn/cli"])).toBe(
+    expect(resolveFileSpecifier(packageJson.dependencies["@dawnai.org/cli"])).toBe(
       resolve(repoRoot, "packages/cli"),
     )
-    expect(resolveFileSpecifier(packageJson.dependencies["@dawn/langgraph"])).toBe(
+    expect(resolveFileSpecifier(packageJson.dependencies["@dawnai.org/langgraph"])).toBe(
       resolve(repoRoot, "packages/langgraph"),
     )
-    expect(resolveFileSpecifier(packageJson.devDependencies["@dawn/config-typescript"])).toBe(
+    expect(resolveFileSpecifier(packageJson.devDependencies["@dawnai.org/config-typescript"])).toBe(
       resolve(repoRoot, "packages/config-typescript"),
     )
-    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn/core"] ?? "")).toBe(
+    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawnai.org/core"] ?? "")).toBe(
       resolve(repoRoot, "packages/core"),
     )
-    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn/cli"] ?? "")).toBe(
+    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawnai.org/cli"] ?? "")).toBe(
       resolve(repoRoot, "packages/cli"),
     )
-    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn/langgraph"] ?? "")).toBe(
+    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawnai.org/langgraph"] ?? "")).toBe(
       resolve(repoRoot, "packages/langgraph"),
     )
     expect(
-      resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn/config-typescript"] ?? ""),
+      resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawnai.org/config-typescript"] ?? ""),
     ).toBe(resolve(repoRoot, "packages/config-typescript"))
   })
 })

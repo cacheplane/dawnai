@@ -1,4 +1,4 @@
-import { expectMeta, expectOutput } from "@dawn/cli/testing"
+import { expectMeta, expectOutput } from "@dawnai.org/cli/testing"
 
 export default [
   {

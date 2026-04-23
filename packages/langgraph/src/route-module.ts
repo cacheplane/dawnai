@@ -1,4 +1,4 @@
-import type { RouteConfig, RouteKind } from "@dawn/sdk"
+import type { RouteConfig, RouteKind } from "@dawnai.org/sdk"
 
 export type { RouteConfig, RouteKind }
 

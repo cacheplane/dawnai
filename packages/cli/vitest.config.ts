@@ -8,10 +8,10 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   resolve: {
     alias: {
-      "@dawn/core": resolve(rootDir, "../core/src/index.ts"),
-      "@dawn/langchain": resolve(rootDir, "../langchain/src/index.ts"),
-      "@dawn/langgraph": resolve(rootDir, "../langgraph/src/index.ts"),
-      "@dawn/sdk": resolve(rootDir, "../sdk/src/index.ts"),
+      "@dawnai.org/core": resolve(rootDir, "../core/src/index.ts"),
+      "@dawnai.org/langchain": resolve(rootDir, "../langchain/src/index.ts"),
+      "@dawnai.org/langgraph": resolve(rootDir, "../langgraph/src/index.ts"),
+      "@dawnai.org/sdk": resolve(rootDir, "../sdk/src/index.ts"),
     },
   },
   test: {

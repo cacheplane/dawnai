@@ -1,6 +1,6 @@
 import { relative, sep } from "node:path"
 
-import { discoverRoutes, type RouteManifest } from "@dawn/core"
+import { discoverRoutes, type RouteManifest } from "@dawnai.org/core"
 import {
   createRuntimeFailureResult,
   formatErrorMessage,

@@ -66,7 +66,7 @@ export async function createPackagedInstaller(
 ): Promise<CreatePackagedInstallerResult> {
   const packsDir = join(options.tempRoot, "packs")
   const installerDir = join(options.tempRoot, "installer")
-  const packageNames = ["@dawn/devkit", "create-dawn-app", ...(options.packageNames ?? [])].filter(
+  const packageNames = ["@dawnai.org/devkit", "create-dawn-app", ...(options.packageNames ?? [])].filter(
     (value, index, allValues) => allValues.indexOf(value) === index,
   )
 
@@ -98,8 +98,8 @@ export async function createPackagedInstaller(
         packageManager: "pnpm@10.33.0",
         pnpm: {
           overrides: {
-            "@dawn/devkit": tarballs["@dawn/devkit"],
-            "@dawn/langchain": tarballs["@dawn/langchain"],
+            "@dawnai.org/devkit": tarballs["@dawnai.org/devkit"],
+            "@dawnai.org/langchain": tarballs["@dawnai.org/langchain"],
           },
         },
       },
@@ -110,7 +110,7 @@ export async function createPackagedInstaller(
   )
 
   await runPackagedCommand({
-    args: ["add", tarballs["@dawn/devkit"]],
+    args: ["add", tarballs["@dawnai.org/devkit"]],
     command: "pnpm",
     cwd: installerDir,
     transcriptPath: options.transcriptPath,

@@ -1,4 +1,4 @@
-import { discoverRoutes } from "@dawn/core"
+import { discoverRoutes } from "@dawnai.org/core"
 
 import { createRouteAssistantId } from "../runtime/route-identity.js"
 

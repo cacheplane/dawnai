@@ -24,7 +24,7 @@ describe("dawn test", () => {
       "dawn.config.ts": "export default {};\n",
       "src/tools/greet.ts": `export default async (input: { tenant: string }) => ({ scope: "shared", tenant: input.tenant });
 `,
-      "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
+      "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawnai.org/sdk"
 export const workflow = async (
   input: { tenant: string },
   context: RuntimeContext,

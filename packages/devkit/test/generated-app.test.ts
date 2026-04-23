@@ -32,10 +32,10 @@ describe("generated app helper", () => {
         resolve(artifactRoot, "transcripts", "generated-app.log"),
       )
       expect(packageJson).toContain('"name": "sample-generated-app"')
-      expect(packageJson).toContain('"@dawn/cli": "workspace:*"')
-      expect(packageJson).toContain('"@dawn/core": "workspace:*"')
-      expect(packageJson).toContain('"@dawn/langgraph": "workspace:*"')
-      expect(packageJson).toContain('"@dawn/config-typescript": "workspace:*"')
+      expect(packageJson).toContain('"@dawnai.org/cli": "workspace:*"')
+      expect(packageJson).toContain('"@dawnai.org/core": "workspace:*"')
+      expect(packageJson).toContain('"@dawnai.org/langgraph": "workspace:*"')
+      expect(packageJson).toContain('"@dawnai.org/config-typescript": "workspace:*"')
     } finally {
       await rm(baseDir, { force: true, recursive: true })
     }
