@@ -1,6 +1,7 @@
 import { getPrompt } from "../../../content/prompts"
 import { CopyCommand } from "../CopyCommand"
 import { CopyPromptButton } from "../CopyPromptButton"
+import { HeroEarthParallax } from "./HeroEarthParallax"
 
 const scaffoldPrompt = getPrompt("scaffold")
 
@@ -22,16 +23,8 @@ export function HeroSection() {
           backgroundSize: "100% auto",
         }}
       />
-      {/* Earth — curvature pinned to the very bottom, thin atmospheric dawn along the limb */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 bg-no-repeat bg-bottom w-full"
-        style={{
-          backgroundImage: "url('/backgrounds/dawn-earth.svg')",
-          backgroundSize: "100% 100%",
-          aspectRatio: "1920 / 340",
-        }}
-      />
+      {/* Earth — curvature pinned to the very bottom, with scroll-linked parallax lift. */}
+      <HeroEarthParallax />
       {/* Ecosystem badge */}
       <div className="relative inline-flex items-center gap-2 px-3.5 py-1.5 border border-border rounded-full text-xs text-text-secondary mb-6">
         <span className="text-text-muted">Built for the</span>
