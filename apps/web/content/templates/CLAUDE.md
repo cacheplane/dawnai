@@ -12,7 +12,7 @@ This project uses **Dawn**, a TypeScript-first meta-framework for building graph
   - `chain` (LangChain LCEL Runnable)
 - **`src/app/**/state.ts`** — the route's state type. Imported by `index.ts`.
 - **`src/app/**/tools/*.ts`** — co-located tools. Each file has a default export that is an async function. Types are inferred and written to `dawn.generated.d.ts`.
-- **`src/app/**/run.test.ts`** — colocated scenario tests. Use `@dawn/sdk/testing`.
+- **`src/app/**/run.test.ts`** — colocated scenario tests. Use `@dawnai.org/sdk/testing`.
 - **`dawn.generated.d.ts`** — auto-generated. Do NOT edit by hand.
 
 ## Pathname Rules
@@ -42,7 +42,7 @@ export default async (input: { readonly tenant: string }) => {
 
 ```ts
 // src/app/(public)/hello/[tenant]/index.ts
-import type { RuntimeContext } from "@dawn/sdk"
+import type { RuntimeContext } from "@dawnai.org/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { HelloState } from "./state.js"
 
@@ -66,10 +66,10 @@ export async function workflow(
 
 ## Packages
 
-- `@dawn/sdk` — backend-neutral contract (types, `RuntimeContext`, test helpers).
-- `@dawn/langgraph` — adapter for LangGraph graphs and workflows.
-- `@dawn/langchain` — adapter for LangChain LCEL chains.
-- `@dawn/cli` — the `dawn` CLI.
+- `@dawnai.org/sdk` — backend-neutral contract (types, `RuntimeContext`, test helpers).
+- `@dawnai.org/langgraph` — adapter for LangGraph graphs and workflows.
+- `@dawnai.org/langchain` — adapter for LangChain LCEL chains.
+- `@dawnai.org/cli` — the `dawn` CLI.
 
 ## Do Not
 

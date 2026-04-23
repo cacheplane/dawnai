@@ -7,13 +7,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn/core": "next",
-    "@dawn/cli": "next",
-    "@dawn/langgraph": "next",
-    "@dawn/sdk": "next"
+    "@dawnai.org/core": "next",
+    "@dawnai.org/cli": "next",
+    "@dawnai.org/langgraph": "next",
+    "@dawnai.org/sdk": "next"
   },
   "devDependencies": {
-    "@dawn/config-typescript": "next",
+    "@dawnai.org/config-typescript": "next",
     "@types/node": "25.6.0",
     "typescript": "6.0.2"
   }

@@ -92,7 +92,7 @@ Every section H2 in Fraunces. Every eyebrow label gets a `1×1` amber dot chapte
 - **DeploySection** — Fraunces H2. Deploy step (the 3rd and terminal step) fully ambered: icon stroke, gradient background (`from-[#1a1005] to-[#2a1a08]`), border, label. Arrows between steps in `accent-amber/50`. Protocol note's ⓘ amber.
 - **FeatureGrid** — Fraunces H2. The `Dawn CLI` card — the defining differentiating feature — gets an amber border and a small amber corner dot. Other cards neutral.
 - **HowItWorks** — Fraunces H2. Step 1's number circle is amber-filled with dark text (the first beat); steps 2–4 are neutral warm cards.
-- **EcosystemSection** — Fraunces H2. **Green's only home.** Eyebrow dot green. `@dawn/langgraph` and `@dawn/langchain` cards have green borders with a subtle green radial glow at the bottom. `@dawn/sdk` stays neutral dashed. No amber in this section.
+- **EcosystemSection** — Fraunces H2. **Green's only home.** Eyebrow dot green. `@dawnai.org/langgraph` and `@dawnai.org/langchain` cards have green borders with a subtle green radial glow at the bottom. `@dawnai.org/sdk` stays neutral dashed. No amber in this section.
 - **CtaSection** — Fraunces H2, amber CTA pill, amber `$` in install command. A subtle starfield echo at the top of the section closes the cosmic loop from hero to CTA.
 
 ### Documentation (`/docs/getting-started`)

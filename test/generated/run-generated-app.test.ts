@@ -165,12 +165,12 @@ async function runGeneratedAppScenario(
     } else {
       const packagedInstaller = await createPackagedInstaller({
         packageNames: [
-          "@dawn/cli",
-          "@dawn/config-typescript",
-          "@dawn/core",
-          "@dawn/langchain",
-          "@dawn/langgraph",
-          "@dawn/sdk",
+          "@dawnai.org/cli",
+          "@dawnai.org/config-typescript",
+          "@dawnai.org/core",
+          "@dawnai.org/langchain",
+          "@dawnai.org/langgraph",
+          "@dawnai.org/sdk",
         ],
         tempRoot,
         transcriptPath,
@@ -270,25 +270,25 @@ async function rewriteDependenciesToTarballs(options: {
 
   packageJson.dependencies = {
     ...packageJson.dependencies,
-    "@dawn/cli": options.tarballs.cli,
-    "@dawn/core": options.tarballs.core,
-    "@dawn/langgraph": options.tarballs.langgraph,
-    "@dawn/sdk": options.tarballs.sdk,
+    "@dawnai.org/cli": options.tarballs.cli,
+    "@dawnai.org/core": options.tarballs.core,
+    "@dawnai.org/langgraph": options.tarballs.langgraph,
+    "@dawnai.org/sdk": options.tarballs.sdk,
   }
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
-    "@dawn/config-typescript": options.tarballs.configTypescript,
+    "@dawnai.org/config-typescript": options.tarballs.configTypescript,
   }
   packageJson.pnpm = {
     ...(packageJson.pnpm ?? {}),
     overrides: {
       ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawn/cli": options.tarballs.cli,
-      "@dawn/config-typescript": options.tarballs.configTypescript,
-      "@dawn/core": options.tarballs.core,
-      "@dawn/langchain": options.tarballs.langchain,
-      "@dawn/langgraph": options.tarballs.langgraph,
-      "@dawn/sdk": options.tarballs.sdk,
+      "@dawnai.org/cli": options.tarballs.cli,
+      "@dawnai.org/config-typescript": options.tarballs.configTypescript,
+      "@dawnai.org/core": options.tarballs.core,
+      "@dawnai.org/langchain": options.tarballs.langchain,
+      "@dawnai.org/langgraph": options.tarballs.langgraph,
+      "@dawnai.org/sdk": options.tarballs.sdk,
     },
   }
 
@@ -477,23 +477,23 @@ async function createExpectedInternalFixture(
       name: appName,
       dependencies: {
         ...expected.packageJson.dependencies,
-        "@dawn/cli": "<repo:@dawn/cli>",
-        "@dawn/core": "<repo:@dawn/core>",
-        "@dawn/langgraph": "<repo:@dawn/langgraph>",
-        "@dawn/sdk": "<repo:@dawn/sdk>",
+        "@dawnai.org/cli": "<repo:@dawnai.org/cli>",
+        "@dawnai.org/core": "<repo:@dawnai.org/core>",
+        "@dawnai.org/langgraph": "<repo:@dawnai.org/langgraph>",
+        "@dawnai.org/sdk": "<repo:@dawnai.org/sdk>",
       },
       devDependencies: {
         ...expected.packageJson.devDependencies,
-        "@dawn/config-typescript": "<repo:@dawn/config-typescript>",
+        "@dawnai.org/config-typescript": "<repo:@dawnai.org/config-typescript>",
       },
       pnpm: {
         overrides: {
-          "@dawn/cli": "<repo:@dawn/cli>",
-          "@dawn/config-typescript": "<repo:@dawn/config-typescript>",
-          "@dawn/core": "<repo:@dawn/core>",
-          "@dawn/langchain": "<repo:@dawn/langchain>",
-          "@dawn/langgraph": "<repo:@dawn/langgraph>",
-          "@dawn/sdk": "<repo:@dawn/sdk>",
+          "@dawnai.org/cli": "<repo:@dawnai.org/cli>",
+          "@dawnai.org/config-typescript": "<repo:@dawnai.org/config-typescript>",
+          "@dawnai.org/core": "<repo:@dawnai.org/core>",
+          "@dawnai.org/langchain": "<repo:@dawnai.org/langchain>",
+          "@dawnai.org/langgraph": "<repo:@dawnai.org/langgraph>",
+          "@dawnai.org/sdk": "<repo:@dawnai.org/sdk>",
         },
       },
     },
@@ -502,14 +502,14 @@ async function createExpectedInternalFixture(
 
 function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTarballs {
   return {
-    cli: tarballs["@dawn/cli"],
-    configTypescript: tarballs["@dawn/config-typescript"],
-    core: tarballs["@dawn/core"],
+    cli: tarballs["@dawnai.org/cli"],
+    configTypescript: tarballs["@dawnai.org/config-typescript"],
+    core: tarballs["@dawnai.org/core"],
     createApp: tarballs["create-dawn-app"],
-    devkit: tarballs["@dawn/devkit"],
-    langchain: tarballs["@dawn/langchain"],
-    langgraph: tarballs["@dawn/langgraph"],
-    sdk: tarballs["@dawn/sdk"],
+    devkit: tarballs["@dawnai.org/devkit"],
+    langchain: tarballs["@dawnai.org/langchain"],
+    langgraph: tarballs["@dawnai.org/langgraph"],
+    sdk: tarballs["@dawnai.org/sdk"],
   }
 }
 
@@ -520,14 +520,14 @@ function normalizeForFixture(
   return normalizeValue(value, [
     [`/private${context.appRoot}`, "<app-root>"],
     [context.appRoot, "<app-root>"],
-    [context.tarballs.cli, "<tarball:@dawn/cli>"],
-    [context.tarballs.configTypescript, "<tarball:@dawn/config-typescript>"],
-    [context.tarballs.core, "<tarball:@dawn/core>"],
+    [context.tarballs.cli, "<tarball:@dawnai.org/cli>"],
+    [context.tarballs.configTypescript, "<tarball:@dawnai.org/config-typescript>"],
+    [context.tarballs.core, "<tarball:@dawnai.org/core>"],
     [context.tarballs.createApp, "<tarball:create-dawn-app>"],
-    [context.tarballs.devkit, "<tarball:@dawn/devkit>"],
-    [context.tarballs.langchain, "<tarball:@dawn/langchain>"],
-    [context.tarballs.langgraph, "<tarball:@dawn/langgraph>"],
-    [context.tarballs.sdk, "<tarball:@dawn/sdk>"],
+    [context.tarballs.devkit, "<tarball:@dawnai.org/devkit>"],
+    [context.tarballs.langchain, "<tarball:@dawnai.org/langchain>"],
+    [context.tarballs.langgraph, "<tarball:@dawnai.org/langgraph>"],
+    [context.tarballs.sdk, "<tarball:@dawnai.org/sdk>"],
     [`/private${dirname(context.tarballs.cli)}`, "<packs-dir>"],
     [dirname(context.tarballs.cli), "<packs-dir>"],
     ["25.6.0", "<version:@types/node>"],
@@ -542,12 +542,12 @@ function normalizeForInternalFixture(
   return normalizeValue(value, [
     [`/private${context.appRoot}`, "<app-root>"],
     [context.appRoot, "<app-root>"],
-    [pathToRepoPackageFileSpecifier("@dawn/cli"), "<repo:@dawn/cli>"],
-    [pathToRepoPackageFileSpecifier("@dawn/config-typescript"), "<repo:@dawn/config-typescript>"],
-    [pathToRepoPackageFileSpecifier("@dawn/core"), "<repo:@dawn/core>"],
-    [pathToRepoPackageFileSpecifier("@dawn/langchain"), "<repo:@dawn/langchain>"],
-    [pathToRepoPackageFileSpecifier("@dawn/langgraph"), "<repo:@dawn/langgraph>"],
-    [pathToRepoPackageFileSpecifier("@dawn/sdk"), "<repo:@dawn/sdk>"],
+    [pathToRepoPackageFileSpecifier("@dawnai.org/cli"), "<repo:@dawnai.org/cli>"],
+    [pathToRepoPackageFileSpecifier("@dawnai.org/config-typescript"), "<repo:@dawnai.org/config-typescript>"],
+    [pathToRepoPackageFileSpecifier("@dawnai.org/core"), "<repo:@dawnai.org/core>"],
+    [pathToRepoPackageFileSpecifier("@dawnai.org/langchain"), "<repo:@dawnai.org/langchain>"],
+    [pathToRepoPackageFileSpecifier("@dawnai.org/langgraph"), "<repo:@dawnai.org/langgraph>"],
+    [pathToRepoPackageFileSpecifier("@dawnai.org/sdk"), "<repo:@dawnai.org/sdk>"],
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
   ]) as GeneratedAppScenarioResult
@@ -555,20 +555,20 @@ function normalizeForInternalFixture(
 
 function pathToRepoPackageFileSpecifier(
   packageName:
-    | "@dawn/cli"
-    | "@dawn/config-typescript"
-    | "@dawn/core"
-    | "@dawn/langchain"
-    | "@dawn/langgraph"
-    | "@dawn/sdk",
+    | "@dawnai.org/cli"
+    | "@dawnai.org/config-typescript"
+    | "@dawnai.org/core"
+    | "@dawnai.org/langchain"
+    | "@dawnai.org/langgraph"
+    | "@dawnai.org/sdk",
 ): string {
   const packageDirByName = {
-    "@dawn/cli": "packages/cli",
-    "@dawn/config-typescript": "packages/config-typescript",
-    "@dawn/core": "packages/core",
-    "@dawn/langchain": "packages/langchain",
-    "@dawn/langgraph": "packages/langgraph",
-    "@dawn/sdk": "packages/sdk",
+    "@dawnai.org/cli": "packages/cli",
+    "@dawnai.org/config-typescript": "packages/config-typescript",
+    "@dawnai.org/core": "packages/core",
+    "@dawnai.org/langchain": "packages/langchain",
+    "@dawnai.org/langgraph": "packages/langgraph",
+    "@dawnai.org/sdk": "packages/sdk",
   } as const
 
   return pathToFileURL(resolve(REPO_ROOT, packageDirByName[packageName])).toString()

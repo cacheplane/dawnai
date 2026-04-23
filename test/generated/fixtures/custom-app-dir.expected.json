@@ -9,24 +9,24 @@
       "build": "tsc -p tsconfig.json"
     },
     "dependencies": {
-      "@dawn/core": "<tarball:@dawn/core>",
-      "@dawn/cli": "<tarball:@dawn/cli>",
-      "@dawn/langgraph": "<tarball:@dawn/langgraph>",
-      "@dawn/sdk": "<tarball:@dawn/sdk>"
+      "@dawnai.org/core": "<tarball:@dawnai.org/core>",
+      "@dawnai.org/cli": "<tarball:@dawnai.org/cli>",
+      "@dawnai.org/langgraph": "<tarball:@dawnai.org/langgraph>",
+      "@dawnai.org/sdk": "<tarball:@dawnai.org/sdk>"
     },
     "devDependencies": {
-      "@dawn/config-typescript": "<tarball:@dawn/config-typescript>",
+      "@dawnai.org/config-typescript": "<tarball:@dawnai.org/config-typescript>",
       "@types/node": "<version:@types/node>",
       "typescript": "<version:typescript>"
     },
     "pnpm": {
       "overrides": {
-        "@dawn/cli": "<tarball:@dawn/cli>",
-        "@dawn/config-typescript": "<tarball:@dawn/config-typescript>",
-        "@dawn/core": "<tarball:@dawn/core>",
-        "@dawn/langchain": "<tarball:@dawn/langchain>",
-        "@dawn/langgraph": "<tarball:@dawn/langgraph>",
-        "@dawn/sdk": "<tarball:@dawn/sdk>"
+        "@dawnai.org/cli": "<tarball:@dawnai.org/cli>",
+        "@dawnai.org/config-typescript": "<tarball:@dawnai.org/config-typescript>",
+        "@dawnai.org/core": "<tarball:@dawnai.org/core>",
+        "@dawnai.org/langchain": "<tarball:@dawnai.org/langchain>",
+        "@dawnai.org/langgraph": "<tarball:@dawnai.org/langgraph>",
+        "@dawnai.org/sdk": "<tarball:@dawnai.org/sdk>"
       }
     }
   },

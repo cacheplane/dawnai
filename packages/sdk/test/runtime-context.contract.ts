@@ -1,4 +1,4 @@
-import type { RuntimeContext, RuntimeTool, ToolRegistry } from "@dawn/sdk"
+import type { RuntimeContext, RuntimeTool, ToolRegistry } from "@dawnai.org/sdk"
 
 const _registry: ToolRegistry = {}
 void _registry

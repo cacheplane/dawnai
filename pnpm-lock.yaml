@@ -60,7 +60,7 @@ importers:
         specifier: ^4.2.4
         version: 4.2.4
     devDependencies:
-      '@dawn/config-typescript':
+      '@dawnai.org/config-typescript':
         specifier: workspace:*
         version: link:../../packages/config-typescript
       '@types/mdx':
@@ -81,13 +81,13 @@ importers:
 
   packages/cli:
     dependencies:
-      '@dawn/core':
+      '@dawnai.org/core':
         specifier: workspace:*
         version: link:../core
-      '@dawn/langchain':
+      '@dawnai.org/langchain':
         specifier: workspace:*
         version: link:../langchain
-      '@dawn/langgraph':
+      '@dawnai.org/langgraph':
         specifier: workspace:*
         version: link:../langgraph
       commander:
@@ -97,10 +97,10 @@ importers:
         specifier: ^4.8.1
         version: 4.21.0
     devDependencies:
-      '@dawn/config-typescript':
+      '@dawnai.org/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
-      '@dawn/sdk':
+      '@dawnai.org/sdk':
         specifier: workspace:*
         version: link:../sdk
       '@langchain/core':
@@ -126,7 +126,7 @@ importers:
 
   packages/core:
     dependencies:
-      '@dawn/sdk':
+      '@dawnai.org/sdk':
         specifier: workspace:*
         version: link:../sdk
       tsx:
@@ -136,7 +136,7 @@ importers:
         specifier: 5.8.3
         version: 5.8.3
     devDependencies:
-      '@dawn/config-typescript':
+      '@dawnai.org/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
       '@types/node':
@@ -145,11 +145,11 @@ importers:
 
   packages/create-dawn-app:
     dependencies:
-      '@dawn/devkit':
+      '@dawnai.org/devkit':
         specifier: workspace:*
         version: link:../devkit
     devDependencies:
-      '@dawn/config-typescript':
+      '@dawnai.org/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
       '@types/node':
@@ -158,7 +158,7 @@ importers:
 
   packages/devkit:
     devDependencies:
-      '@dawn/config-typescript':
+      '@dawnai.org/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
       '@types/node':
@@ -167,11 +167,11 @@ importers:
 
   packages/langchain:
     dependencies:
-      '@dawn/sdk':
+      '@dawnai.org/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
-      '@dawn/config-typescript':
+      '@dawnai.org/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
       '@langchain/core':
@@ -186,11 +186,11 @@ importers:
 
   packages/langgraph:
     dependencies:
-      '@dawn/sdk':
+      '@dawnai.org/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
-      '@dawn/config-typescript':
+      '@dawnai.org/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
       '@types/node':
@@ -199,7 +199,7 @@ importers:
 
   packages/sdk:
     devDependencies:
-      '@dawn/config-typescript':
+      '@dawnai.org/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
       '@types/node':
@@ -208,14 +208,14 @@ importers:
 
   packages/vite-plugin:
     dependencies:
-      '@dawn/core':
+      '@dawnai.org/core':
         specifier: workspace:*
         version: link:../core
       typescript:
         specifier: 5.8.3
         version: 5.8.3
     devDependencies:
-      '@dawn/config-typescript':
+      '@dawnai.org/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
       '@types/node':

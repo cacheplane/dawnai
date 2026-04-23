@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from "node:path"
 
-import { findDawnApp } from "@dawn/core"
+import { findDawnApp } from "@dawnai.org/core"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
 import {

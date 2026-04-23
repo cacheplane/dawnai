@@ -81,7 +81,7 @@ export function CodeExample() {
             <span className="text-yellow-400">RuntimeContext</span>
             {" } "}
             <span className="text-purple-400">from</span>{" "}
-            <span className="text-green-400">&quot;@dawn/sdk&quot;</span>
+            <span className="text-green-400">&quot;@dawnai.org/sdk&quot;</span>
           </div>
           <div>
             <span className="text-purple-400">import</span>{" "}

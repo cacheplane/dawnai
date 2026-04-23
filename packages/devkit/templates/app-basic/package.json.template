@@ -8,13 +8,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn/core": "{{dawnCoreSpecifier}}",
-    "@dawn/cli": "{{dawnCliSpecifier}}",
-    "@dawn/langgraph": "{{dawnLanggraphSpecifier}}",
-    "@dawn/sdk": "{{dawnSdkSpecifier}}"
+    "@dawnai.org/core": "{{dawnCoreSpecifier}}",
+    "@dawnai.org/cli": "{{dawnCliSpecifier}}",
+    "@dawnai.org/langgraph": "{{dawnLanggraphSpecifier}}",
+    "@dawnai.org/sdk": "{{dawnSdkSpecifier}}"
   },
   "devDependencies": {
-    "@dawn/config-typescript": "{{dawnConfigTypescriptSpecifier}}",
+    "@dawnai.org/config-typescript": "{{dawnConfigTypescriptSpecifier}}",
     "@types/node": "25.6.0",
     "typescript": "6.0.2"
   }

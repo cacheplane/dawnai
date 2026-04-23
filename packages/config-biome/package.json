@@ -1,5 +1,5 @@
 {
-  "name": "@dawn/config-biome",
+  "name": "@dawnai.org/config-biome",
   "version": "0.0.1",
   "private": false,
   "type": "module",

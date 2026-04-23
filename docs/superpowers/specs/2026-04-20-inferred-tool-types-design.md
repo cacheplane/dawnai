@@ -48,7 +48,7 @@ TypeScript resolves both the input parameter type and the return type from this 
 
 ### Type extraction
 
-A new module in `@dawn/core` (`src/typegen/extract-tool-types.ts`) uses the TypeScript compiler API to extract input and return types from each tool file's default export function.
+A new module in `@dawnai.org/core` (`src/typegen/extract-tool-types.ts`) uses the TypeScript compiler API to extract input and return types from each tool file's default export function.
 
 For each route in the manifest, the extractor scans:
 - `{routeDir}/tools/*.ts` — route-local tools
@@ -99,12 +99,12 @@ declare module "dawn:routes" {
 }
 ```
 
-The `RouteTools<P>` type alias provides the ergonomic lookup. Tool function signatures use the `(input: T) => Promise<O>` form rather than `RuntimeTool<T, O>` to avoid a dependency on `@dawn/sdk` inside the generated declaration file.
+The `RouteTools<P>` type alias provides the ergonomic lookup. Tool function signatures use the `(input: T) => Promise<O>` form rather than `RuntimeTool<T, O>` to avoid a dependency on `@dawnai.org/sdk` inside the generated declaration file.
 
 ### Developer consumption
 
 ```typescript
-import type { RuntimeContext } from "@dawn/sdk"
+import type { RuntimeContext } from "@dawnai.org/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { HelloState } from "./state.js"
 
@@ -122,7 +122,7 @@ export async function workflow(
 
 ### Triggers
 
-Three entry points call the same `@dawn/core` generation logic:
+Three entry points call the same `@dawnai.org/core` generation logic:
 
 **`dawn typegen` (CLI)**
 The existing command at `packages/cli/src/commands/typegen.ts` calls the generation logic. No behavioral change other than the output now includes tool types alongside route types.
@@ -166,7 +166,7 @@ export function dawnToolSchemaPlugin(options?: {
 }
 ```
 
-The `runTypegen` helper calls `discoverRoutes` + `extractToolTypes` + `renderDawnTypes` from `@dawn/core` and writes `dawn.generated.d.ts`.
+The `runTypegen` helper calls `discoverRoutes` + `extractToolTypes` + `renderDawnTypes` from `@dawnai.org/core` and writes `dawn.generated.d.ts`.
 
 ### Template updates
 
@@ -191,7 +191,7 @@ export default async (input: { readonly tenant: string }) => {
 
 Before:
 ```typescript
-import type { RuntimeContext, RuntimeTool } from "@dawn/sdk"
+import type { RuntimeContext, RuntimeTool } from "@dawnai.org/sdk"
 import type { HelloState } from "./state.js"
 
 type HelloTools = {
@@ -212,7 +212,7 @@ export async function workflow(
 
 After:
 ```typescript
-import type { RuntimeContext } from "@dawn/sdk"
+import type { RuntimeContext } from "@dawnai.org/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { HelloState } from "./state.js"
 
@@ -273,7 +273,7 @@ declare module "dawn:routes" {
 
 ### What does not change
 
-- `RuntimeContext`, `RuntimeTool`, `ToolRegistry` types in `@dawn/sdk` — unchanged
+- `RuntimeContext`, `RuntimeTool`, `ToolRegistry` types in `@dawnai.org/sdk` — unchanged
 - Runtime tool discovery (`tool-discovery.ts`) — unchanged, still loads tools dynamically
 - Vite plugin's existing `transform` hook for Zod schema injection — unchanged
 - Route discovery (`discover-routes.ts`) — unchanged, tool extraction is a separate pass

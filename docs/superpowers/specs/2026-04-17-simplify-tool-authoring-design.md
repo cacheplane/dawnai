@@ -6,10 +6,10 @@ Remove `defineTool`, `ToolDefinition`, and `ToolContext` from the public API. To
 
 ## Background
 
-The current tool authoring contract requires importing `defineTool` from `@dawn/sdk` and wrapping the tool in an object with a `name` field:
+The current tool authoring contract requires importing `defineTool` from `@dawnai.org/sdk` and wrapping the tool in an object with a `name` field:
 
 ```typescript
-import { defineTool, type ToolDefinition } from "@dawn/sdk"
+import { defineTool, type ToolDefinition } from "@dawnai.org/sdk"
 
 export default defineTool({
   name: "greet",
@@ -56,13 +56,13 @@ In `tool-discovery.ts`, `loadToolDefinition` changes from requiring a record wit
 
 ### SDK removal
 
-Remove from `@dawn/sdk` (`packages/sdk`):
+Remove from `@dawnai.org/sdk` (`packages/sdk`):
 - `defineTool` function, `ToolDefinition` type, `ToolContext` type from `src/tool.ts`
 - Re-exports from `src/index.ts`
 - `test/define-tool.test.ts`
 
-Remove from `@dawn/langgraph` (`packages/langgraph`):
-- `src/define-tool.ts` (re-exports `defineTool` from `@dawn/sdk`) — delete file
+Remove from `@dawnai.org/langgraph` (`packages/langgraph`):
+- `src/define-tool.ts` (re-exports `defineTool` from `@dawnai.org/sdk`) — delete file
 - Re-export from `src/index.ts`
 
 ### Template and fixture updates
@@ -103,4 +103,4 @@ Remove from `@dawn/langgraph` (`packages/langgraph`):
 - `dawn-context.ts` — consumes `DiscoveredToolDefinition` unchanged (name is still a string, run is still a function)
 - Tool resolution order (route-local shadows shared)
 - Tool function signature `(input, context)` with `{ signal: AbortSignal }` context
-- `RuntimeContext`, `RuntimeTool`, `ToolRegistry` types in `@dawn/sdk` — these describe the consumer side, not the authoring side
+- `RuntimeContext`, `RuntimeTool`, `ToolRegistry` types in `@dawnai.org/sdk` — these describe the consumer side, not the authoring side

@@ -32,10 +32,10 @@
     "typecheck": "tsc --noEmit -p ../devkit/tsconfig.json && tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@dawn/devkit": "workspace:*"
+    "@dawnai.org/devkit": "workspace:*"
   },
   "devDependencies": {
-    "@dawn/config-typescript": "workspace:*",
+    "@dawnai.org/config-typescript": "workspace:*",
     "@types/node": "25.6.0"
   }
 }

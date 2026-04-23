@@ -5,9 +5,9 @@
     "noEmit": false,
     "outDir": "dist",
     "paths": {
-      "@dawn/core": ["../core/src/index.ts"],
-      "@dawn/langgraph": ["../langgraph/src/index.ts"],
-      "@dawn/langgraph/*": ["../langgraph/src/*.ts"]
+      "@dawnai.org/core": ["../core/src/index.ts"],
+      "@dawnai.org/langgraph": ["../langgraph/src/index.ts"],
+      "@dawnai.org/langgraph/*": ["../langgraph/src/*.ts"]
     },
     "rootDir": "src"
   },

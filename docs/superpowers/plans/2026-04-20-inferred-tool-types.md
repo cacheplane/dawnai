@@ -4,9 +4,9 @@
 
 **Goal:** Generate tool types automatically from properly typed tool functions so route files get full `context.tools` type safety without manual type aliases.
 
-**Architecture:** A new `@dawn/core` module uses the TypeScript compiler API to extract input and return types from tool file default exports, then renders them into the existing `dawn.generated.d.ts` alongside route path/param types. The vite plugin triggers typegen on dev startup and file watch. The `dawn typegen` CLI command remains for standalone use.
+**Architecture:** A new `@dawnai.org/core` module uses the TypeScript compiler API to extract input and return types from tool file default exports, then renders them into the existing `dawn.generated.d.ts` alongside route path/param types. The vite plugin triggers typegen on dev startup and file watch. The `dawn typegen` CLI command remains for standalone use.
 
-**Tech Stack:** TypeScript compiler API (`typescript` package), Vitest, existing `@dawn/core` typegen pipeline
+**Tech Stack:** TypeScript compiler API (`typescript` package), Vitest, existing `@dawnai.org/core` typegen pipeline
 
 ---
 
@@ -23,7 +23,7 @@
 | `packages/cli/src/commands/typegen.ts` | **Modified.** Call `extractToolTypes` + `renderDawnTypes` instead of `renderRouteTypes`. |
 | `packages/cli/src/commands/verify.ts` | **Modified.** Call updated rendering pipeline. |
 | `packages/vite-plugin/src/index.ts` | **Modified.** Add `configureServer` and `buildStart` hooks to trigger typegen. |
-| `packages/vite-plugin/package.json` | **Modified.** Add `@dawn/core` dependency. |
+| `packages/vite-plugin/package.json` | **Modified.** Add `@dawnai.org/core` dependency. |
 | `packages/devkit/templates/app-basic/.../tools/greet.ts` | **Modified.** Properly typed input parameter. |
 | `packages/devkit/templates/app-basic/.../index.ts` | **Modified.** Use `RouteTools` instead of manual `HelloTools`. |
 | `packages/devkit/templates/app-basic/src/app/dawn.generated.d.ts` | **New.** Pre-generated types for template. |
@@ -34,7 +34,7 @@
 
 ---
 
-### Task 1: Add TypeScript dependency to `@dawn/core`
+### Task 1: Add TypeScript dependency to `@dawnai.org/core`
 
 **Files:**
 - Modify: `packages/core/package.json`
@@ -45,7 +45,7 @@ In `packages/core/package.json`, add `typescript` to the `dependencies` object:
 
 ```json
 "dependencies": {
-  "@dawn/sdk": "workspace:*",
+  "@dawnai.org/sdk": "workspace:*",
   "tsx": "^4.8.1",
   "typescript": "5.8.3"
 }
@@ -62,7 +62,7 @@ Expected: lockfile updates, no errors.
 
 ```bash
 git add packages/core/package.json pnpm-lock.yaml
-git commit -m "chore: add typescript dependency to @dawn/core for tool type extraction"
+git commit -m "chore: add typescript dependency to @dawnai.org/core for tool type extraction"
 ```
 
 ---
@@ -876,8 +876,8 @@ import {
   extractToolTypesForRoute,
   findDawnApp,
   renderDawnTypes,
-} from "@dawn/core"
-import type { RouteToolTypes } from "@dawn/core"
+} from "@dawnai.org/core"
+import type { RouteToolTypes } from "@dawnai.org/core"
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
@@ -956,8 +956,8 @@ import {
   extractToolTypesForRoute,
   findDawnApp,
   renderDawnTypes,
-} from "@dawn/core"
-import type { RouteToolTypes } from "@dawn/core"
+} from "@dawnai.org/core"
+import type { RouteToolTypes } from "@dawnai.org/core"
 ```
 
 Replace the typegen section:
@@ -1018,7 +1018,7 @@ export default async (input: { readonly tenant: string }) => {
 Replace the content of `packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/index.ts`:
 
 ```typescript
-import type { RuntimeContext } from "@dawn/sdk"
+import type { RuntimeContext } from "@dawnai.org/sdk"
 import type { RouteTools } from "dawn:routes"
 
 import type { HelloState } from "./state.js"
@@ -1081,13 +1081,13 @@ git commit -m "feat: update template to use inferred tool types via RouteTools"
 - Modify: `packages/vite-plugin/src/index.ts`
 - Modify: `packages/vite-plugin/package.json`
 
-- [ ] **Step 1: Add `@dawn/core` dependency to vite-plugin**
+- [ ] **Step 1: Add `@dawnai.org/core` dependency to vite-plugin**
 
-In `packages/vite-plugin/package.json`, add `@dawn/core` to dependencies:
+In `packages/vite-plugin/package.json`, add `@dawnai.org/core` to dependencies:
 
 ```json
 "dependencies": {
-  "@dawn/core": "workspace:*",
+  "@dawnai.org/core": "workspace:*",
   "typescript": "5.8.3"
 }
 ```
@@ -1107,8 +1107,8 @@ import {
   extractToolTypesForRoute,
   findDawnApp,
   renderDawnTypes,
-} from "@dawn/core"
-import type { RouteToolTypes } from "@dawn/core"
+} from "@dawnai.org/core"
+import type { RouteToolTypes } from "@dawnai.org/core"
 
 import { extractJsDoc } from "./jsdoc-extractor.js"
 import { extractParameterType } from "./type-extractor.js"
@@ -1336,7 +1336,7 @@ If tests fail, check:
 - `renderedBytes` values in fixtures match actual output
 - `typegenOutput` strings match exactly (watch for trailing newlines, indentation)
 - TypeScript `typeToString` formatting differences between the plan's examples and actual output
-- Verify that `@dawn/core`'s `typescript` dependency doesn't cause version conflicts
+- Verify that `@dawnai.org/core`'s `typescript` dependency doesn't cause version conflicts
 
 - [ ] **Step 3: Commit any fixes**
 

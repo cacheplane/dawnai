@@ -202,7 +202,7 @@ If `mdx/types` is not found, add `@mdx-js/react` types. The `@next/mdx` package 
 - [ ] **Step 7: Verify the build works**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web build
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web build
 ```
 
 Expected: Build succeeds (the page content will be wrong since we haven't updated components yet, but the toolchain works).
@@ -330,7 +330,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 - [ ] **Step 4: Verify build**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web build
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web build
 ```
 
 Expected: Build succeeds.
@@ -489,7 +489,7 @@ export default function HomePage() {
 - [ ] **Step 4: Verify build**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web build
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web build
 ```
 
 Expected: Build succeeds.
@@ -668,7 +668,7 @@ export default function HomePage() {
 - [ ] **Step 4: Verify build**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web build
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web build
 ```
 
 Expected: Build succeeds.
@@ -763,7 +763,7 @@ export function CodeExample() {
             <span className="text-yellow-400">RuntimeContext</span>
             {" } "}
             <span className="text-purple-400">from</span>{" "}
-            <span className="text-green-400">&quot;@dawn/sdk&quot;</span>
+            <span className="text-green-400">&quot;@dawnai.org/sdk&quot;</span>
           </div>
           <div>
             <span className="text-purple-400">import</span>{" "}
@@ -908,7 +908,7 @@ export default function HomePage() {
 - [ ] **Step 3: Verify build**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web build
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web build
 ```
 
 Expected: Build succeeds.
@@ -1193,7 +1193,7 @@ export default function HomePage() {
 - [ ] **Step 5: Verify build**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web build
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web build
 ```
 
 Expected: Build succeeds.
@@ -1220,17 +1220,17 @@ Create `apps/web/app/components/landing/EcosystemSection.tsx`:
 ```tsx
 const packages = [
   {
-    name: "@dawn/langgraph",
+    name: "@dawnai.org/langgraph",
     accent: true,
     body: "Backend adapter for LangGraph graphs and workflows. Native execution.",
   },
   {
-    name: "@dawn/langchain",
+    name: "@dawnai.org/langchain",
     accent: true,
     body: "Adapter for LCEL chains. Convert Dawn tools to LangChain tools automatically.",
   },
   {
-    name: "@dawn/sdk",
+    name: "@dawnai.org/sdk",
     accent: false,
     body: "Backend-neutral contract. RuntimeContext, tools, route config. Bring any adapter.",
   },
@@ -1349,7 +1349,7 @@ export default function HomePage() {
 - [ ] **Step 4: Verify build**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web build
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web build
 ```
 
 Expected: Build succeeds.
@@ -1480,7 +1480,7 @@ Each route is a directory under `src/app/` with an `index.ts` that exports exact
 The scaffolded app uses a `workflow` export:
 
 ```typescript
-import type { RuntimeContext } from "@dawn/sdk"
+import type { RuntimeContext } from "@dawnai.org/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { HelloState } from "./state.js"
 
@@ -1563,7 +1563,7 @@ export default function GettingStartedPage() {
 - [ ] **Step 5: Verify build**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web build
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web build
 ```
 
 Expected: Build succeeds. If the MDX import fails, check that `pageExtensions` in `next.config.ts` includes `"mdx"` and that `mdx-components.tsx` is at the app root.
@@ -1619,7 +1619,7 @@ Fix any rendering issues.
 - [ ] **Step 4: Verify full build succeeds**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web build
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web build
 ```
 
 Expected: Build succeeds with no errors.
@@ -1627,7 +1627,7 @@ Expected: Build succeeds with no errors.
 - [ ] **Step 5: Verify typecheck passes**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web typecheck
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web typecheck
 ```
 
 Expected: No type errors.
@@ -1635,7 +1635,7 @@ Expected: No type errors.
 - [ ] **Step 6: Verify lint passes**
 
 ```bash
-cd /Users/blove/repos/dawn && pnpm --filter @dawn/web lint
+cd /Users/blove/repos/dawn && pnpm --filter @dawnai.org/web lint
 ```
 
 Expected: No lint errors. Fix any that appear.

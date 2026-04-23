@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url"
 
-import type { RouteKind } from "@dawn/sdk"
+import type { RouteKind } from "@dawnai.org/sdk"
 
 import { registerTsxLoader } from "./register-tsx-loader.js"
 

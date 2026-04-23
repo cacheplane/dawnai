@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Extract Dawn's author-facing contract from `@dawn/langgraph` into a new backend-neutral `@dawn/sdk` package, and replace the `route.ts` + `workflow.ts`/`graph.ts` convention with a single `index.ts` per route whose kind is inferred from named exports.
+**Goal:** Extract Dawn's author-facing contract from `@dawnai.org/langgraph` into a new backend-neutral `@dawnai.org/sdk` package, and replace the `route.ts` + `workflow.ts`/`graph.ts` convention with a single `index.ts` per route whose kind is inferred from named exports.
 
-**Architecture:** New `@dawn/sdk` owns backend-neutral types (`defineTool`, `ToolDefinition`, `ToolContext`, `RuntimeContext`, `RuntimeTool`, `ToolRegistry`, `RouteConfig`, `RouteKind`). `@dawn/langgraph` slims to the LangGraph execution adapter (`normalizeRouteModule`, `RouteModule`, `defineEntry`) and re-exports SDK types. `@dawn/core` discovery scans for `index.ts` files, inferring route kind from whether `workflow` or `graph` is exported. `@dawn/cli` collapses its execution path to a single lane.
+**Architecture:** New `@dawnai.org/sdk` owns backend-neutral types (`defineTool`, `ToolDefinition`, `ToolContext`, `RuntimeContext`, `RuntimeTool`, `ToolRegistry`, `RouteConfig`, `RouteKind`). `@dawnai.org/langgraph` slims to the LangGraph execution adapter (`normalizeRouteModule`, `RouteModule`, `defineEntry`) and re-exports SDK types. `@dawnai.org/core` discovery scans for `index.ts` files, inferring route kind from whether `workflow` or `graph` is exported. `@dawnai.org/cli` collapses its execution path to a single lane.
 
 **Tech Stack:** TypeScript, pnpm workspaces + Turbo, Vitest, Biome, tsx, LangGraph.
 
@@ -29,12 +29,12 @@
 - `packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/index.ts` — replaces route.ts+workflow.ts
 
 **Modified files:**
-- `packages/langgraph/package.json` — add `@dawn/sdk` dep, drop subpath exports
-- `packages/langgraph/src/index.ts` — re-export from `@dawn/sdk`
+- `packages/langgraph/package.json` — add `@dawnai.org/sdk` dep, drop subpath exports
+- `packages/langgraph/src/index.ts` — re-export from `@dawnai.org/sdk`
 - `packages/langgraph/src/route-module.ts` — import `RouteKind` from sdk
 - `packages/langgraph/src/runtime-context.ts` — re-export from sdk
 - `packages/langgraph/src/define-tool.ts` — re-export from sdk
-- `packages/core/package.json` — add `@dawn/sdk` dep
+- `packages/core/package.json` — add `@dawnai.org/sdk` dep
 - `packages/core/src/types.ts` — `RouteDefinition` uses `RouteKind`, no `boundEntry*`
 - `packages/core/src/discovery/discover-routes.ts` — rewrite for `index.ts` scan
 - `packages/core/src/index.ts` — update exports
@@ -63,7 +63,7 @@
 
 ---
 
-## Task 1: Create `@dawn/sdk` package scaffold
+## Task 1: Create `@dawnai.org/sdk` package scaffold
 
 **Files:**
 - Create: `packages/sdk/package.json`
@@ -77,7 +77,7 @@
 
 ```json
 {
-  "name": "@dawn/sdk",
+  "name": "@dawnai.org/sdk",
   "version": "0.0.0",
   "private": false,
   "type": "module",
@@ -114,7 +114,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.contracts.json"
   },
   "devDependencies": {
-    "@dawn/config-typescript": "workspace:*",
+    "@dawnai.org/config-typescript": "workspace:*",
     "@types/node": "25.6.0"
   }
 }
@@ -144,7 +144,7 @@ Create `packages/sdk/tsconfig.contracts.json` adapted to match the sdk package l
 cat /Users/blove/repos/dawn/packages/langgraph/vitest.config.ts
 ```
 
-Create `packages/sdk/vitest.config.ts` with the same shape. Aliases must self-resolve `@dawn/sdk` to `./src/index.ts` and exclude `*.contract.ts` from test runs.
+Create `packages/sdk/vitest.config.ts` with the same shape. Aliases must self-resolve `@dawnai.org/sdk` to `./src/index.ts` and exclude `*.contract.ts` from test runs.
 
 - [ ] **Step 5: Create `packages/sdk/src/index.ts`** (empty barrel for now)
 
@@ -159,7 +159,7 @@ export {}
 ```ts
 import { describe, expect, it } from "vitest"
 
-describe("@dawn/sdk package", () => {
+describe("@dawnai.org/sdk package", () => {
   it("loads", () => {
     expect(true).toBe(true)
   })
@@ -169,33 +169,33 @@ describe("@dawn/sdk package", () => {
 - [ ] **Step 7: Install workspace so pnpm picks up the new package**
 
 Run: `pnpm install`
-Expected: pnpm resolves `@dawn/sdk` in the workspace graph. No errors.
+Expected: pnpm resolves `@dawnai.org/sdk` in the workspace graph. No errors.
 
 - [ ] **Step 8: Run sdk tests to verify scaffold wires up**
 
-Run: `pnpm --filter @dawn/sdk test`
+Run: `pnpm --filter @dawnai.org/sdk test`
 Expected: PASS — 1 placeholder test.
 
 - [ ] **Step 9: Run sdk typecheck**
 
-Run: `pnpm --filter @dawn/sdk typecheck`
+Run: `pnpm --filter @dawnai.org/sdk typecheck`
 Expected: PASS.
 
 - [ ] **Step 10: Run sdk lint**
 
-Run: `pnpm --filter @dawn/sdk lint`
+Run: `pnpm --filter @dawnai.org/sdk lint`
 Expected: PASS.
 
 - [ ] **Step 11: Commit**
 
 ```bash
 git add packages/sdk pnpm-lock.yaml
-git commit -m "feat(sdk): scaffold @dawn/sdk package"
+git commit -m "feat(sdk): scaffold @dawnai.org/sdk package"
 ```
 
 ---
 
-## Task 2: Move tool authoring to `@dawn/sdk`
+## Task 2: Move tool authoring to `@dawnai.org/sdk`
 
 **Files:**
 - Create: `packages/sdk/src/tool.ts`
@@ -245,17 +245,17 @@ export { defineTool, type ToolContext, type ToolDefinition } from "./tool.js"
 
 - [ ] **Step 3: Move `packages/langgraph/test/define-tool.test.ts` → `packages/sdk/test/define-tool.test.ts`**
 
-Copy the file. Change the import from `@dawn/langgraph` to `@dawn/sdk`:
+Copy the file. Change the import from `@dawnai.org/langgraph` to `@dawnai.org/sdk`:
 
 ```ts
-import { defineTool } from "@dawn/sdk"
+import { defineTool } from "@dawnai.org/sdk"
 ```
 
 Delete the original at `packages/langgraph/test/define-tool.test.ts`.
 
 - [ ] **Step 4: Move `packages/langgraph/test/tool-context.contract.ts` → `packages/sdk/test/tool-context.contract.ts`**
 
-Copy the file. Change import from `@dawn/langgraph` to `@dawn/sdk`.
+Copy the file. Change import from `@dawnai.org/langgraph` to `@dawnai.org/sdk`.
 
 Delete the original at `packages/langgraph/test/tool-context.contract.ts`.
 
@@ -267,21 +267,21 @@ rm /Users/blove/repos/dawn/packages/sdk/test/placeholder.test.ts
 
 - [ ] **Step 6: Run sdk tests to verify move**
 
-Run: `pnpm --filter @dawn/sdk test`
+Run: `pnpm --filter @dawnai.org/sdk test`
 Expected: PASS — `define-tool.test.ts` runs and passes.
 
 - [ ] **Step 7: Run sdk contract typecheck**
 
-Run: `pnpm --filter @dawn/sdk typecheck`
-Expected: PASS — `tool-context.contract.ts` type-checks against `@dawn/sdk` exports.
+Run: `pnpm --filter @dawnai.org/sdk typecheck`
+Expected: PASS — `tool-context.contract.ts` type-checks against `@dawnai.org/sdk` exports.
 
-- [ ] **Step 8: Add `@dawn/sdk` as a dependency of `@dawn/langgraph`**
+- [ ] **Step 8: Add `@dawnai.org/sdk` as a dependency of `@dawnai.org/langgraph`**
 
 Edit `packages/langgraph/package.json`. Add at top-level (alphabetically with existing `devDependencies`):
 
 ```json
   "dependencies": {
-    "@dawn/sdk": "workspace:*"
+    "@dawnai.org/sdk": "workspace:*"
   },
 ```
 
@@ -293,34 +293,34 @@ Expected: pnpm-lock.yaml updates, no errors.
 - [ ] **Step 10: Replace `packages/langgraph/src/define-tool.ts` with a re-export**
 
 ```ts
-export { defineTool, type ToolContext, type ToolDefinition } from "@dawn/sdk"
+export { defineTool, type ToolContext, type ToolDefinition } from "@dawnai.org/sdk"
 ```
 
 - [ ] **Step 11: Run langgraph tests**
 
-Run: `pnpm --filter @dawn/langgraph test`
+Run: `pnpm --filter @dawnai.org/langgraph test`
 Expected: PASS — `define-tool.test.ts` is gone, other tests continue to pass.
 
 - [ ] **Step 12: Run langgraph typecheck**
 
-Run: `pnpm --filter @dawn/langgraph typecheck`
+Run: `pnpm --filter @dawnai.org/langgraph typecheck`
 Expected: PASS.
 
 - [ ] **Step 13: Run langgraph lint**
 
-Run: `pnpm --filter @dawn/langgraph lint`
+Run: `pnpm --filter @dawnai.org/langgraph lint`
 Expected: PASS.
 
 - [ ] **Step 14: Commit**
 
 ```bash
 git add packages/sdk packages/langgraph pnpm-lock.yaml
-git commit -m "refactor(sdk): move defineTool and ToolContext to @dawn/sdk"
+git commit -m "refactor(sdk): move defineTool and ToolContext to @dawnai.org/sdk"
 ```
 
 ---
 
-## Task 3: Move runtime context to `@dawn/sdk`
+## Task 3: Move runtime context to `@dawnai.org/sdk`
 
 **Files:**
 - Create: `packages/sdk/src/runtime-context.ts`
@@ -360,7 +360,7 @@ export type { RuntimeContext, RuntimeTool, ToolRegistry } from "./runtime-contex
 `packages/sdk/test/runtime-context.contract.ts`:
 
 ```ts
-import type { RuntimeContext, RuntimeTool, ToolRegistry } from "@dawn/sdk"
+import type { RuntimeContext, RuntimeTool, ToolRegistry } from "@dawnai.org/sdk"
 
 const _registry: ToolRegistry = {}
 void _registry
@@ -387,30 +387,30 @@ Inspect the existing contracts config. If it uses a glob that already includes `
 
 - [ ] **Step 5: Run sdk tests + typecheck**
 
-Run: `pnpm --filter @dawn/sdk test && pnpm --filter @dawn/sdk typecheck`
+Run: `pnpm --filter @dawnai.org/sdk test && pnpm --filter @dawnai.org/sdk typecheck`
 Expected: PASS.
 
 - [ ] **Step 6: Replace `packages/langgraph/src/runtime-context.ts` with re-export**
 
 ```ts
-export type { RuntimeContext, RuntimeTool, ToolRegistry } from "@dawn/sdk"
+export type { RuntimeContext, RuntimeTool, ToolRegistry } from "@dawnai.org/sdk"
 ```
 
 - [ ] **Step 7: Run langgraph full validation**
 
-Run: `pnpm --filter @dawn/langgraph test && pnpm --filter @dawn/langgraph typecheck && pnpm --filter @dawn/langgraph lint`
+Run: `pnpm --filter @dawnai.org/langgraph test && pnpm --filter @dawnai.org/langgraph typecheck && pnpm --filter @dawnai.org/langgraph lint`
 Expected: PASS.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 git add packages/sdk packages/langgraph
-git commit -m "refactor(sdk): move RuntimeContext and RuntimeTool to @dawn/sdk, add ToolRegistry"
+git commit -m "refactor(sdk): move RuntimeContext and RuntimeTool to @dawnai.org/sdk, add ToolRegistry"
 ```
 
 ---
 
-## Task 4: Move `RouteConfig` and `RouteKind` to `@dawn/sdk`, delete `defineRoute`
+## Task 4: Move `RouteConfig` and `RouteKind` to `@dawnai.org/sdk`, delete `defineRoute`
 
 **Files:**
 - Create: `packages/sdk/src/route-config.ts`
@@ -443,7 +443,7 @@ export type { RuntimeContext, RuntimeTool, ToolRegistry } from "./runtime-contex
 
 - [ ] **Step 3: Run sdk test + typecheck + lint**
 
-Run: `pnpm --filter @dawn/sdk test && pnpm --filter @dawn/sdk typecheck && pnpm --filter @dawn/sdk lint`
+Run: `pnpm --filter @dawnai.org/sdk test && pnpm --filter @dawnai.org/sdk typecheck && pnpm --filter @dawnai.org/sdk lint`
 Expected: PASS.
 
 - [ ] **Step 4: Update `packages/langgraph/src/route-module.ts` to import `RouteKind` from sdk and emit spec-pinned error messages**
@@ -451,7 +451,7 @@ Expected: PASS.
 Replace the file-top local `RouteEntryKind` alias and `RouteConfig` interface with imports. The error messages in `assertExactlyOneEntry` now distinguish the "both" vs "neither" cases per the spec:
 
 ```ts
-import type { RouteConfig, RouteKind } from "@dawn/sdk"
+import type { RouteConfig, RouteKind } from "@dawnai.org/sdk"
 
 export type { RouteConfig, RouteKind }
 
@@ -577,34 +577,34 @@ Edit the test file to assert these two distinct cases.
 
 - [ ] **Step 10: Run langgraph full validation**
 
-Run: `pnpm --filter @dawn/langgraph test && pnpm --filter @dawn/langgraph typecheck && pnpm --filter @dawn/langgraph lint && pnpm --filter @dawn/langgraph build`
-Expected: PASS. `define-route.test.ts` gone; `route-module.test.ts` updated for new error strings; imports from `@dawn/sdk` resolve.
+Run: `pnpm --filter @dawnai.org/langgraph test && pnpm --filter @dawnai.org/langgraph typecheck && pnpm --filter @dawnai.org/langgraph lint && pnpm --filter @dawnai.org/langgraph build`
+Expected: PASS. `define-route.test.ts` gone; `route-module.test.ts` updated for new error strings; imports from `@dawnai.org/sdk` resolve.
 
 - [ ] **Step 11: Commit**
 
 ```bash
 git add packages/sdk packages/langgraph
-git commit -m "refactor(sdk): move RouteConfig and RouteKind to @dawn/sdk, drop defineRoute"
+git commit -m "refactor(sdk): move RouteConfig and RouteKind to @dawnai.org/sdk, drop defineRoute"
 ```
 
 ---
 
-## Task 5: Update `@dawn/core` types to use `RouteKind` from sdk
+## Task 5: Update `@dawnai.org/core` types to use `RouteKind` from sdk
 
 **Files:**
-- Modify: `packages/core/package.json` — add `@dawn/sdk` dep
+- Modify: `packages/core/package.json` — add `@dawnai.org/sdk` dep
 - Modify: `packages/core/src/types.ts`
 - Modify: `packages/core/src/index.ts`
 
 **Warning:** At end of this task, core tests are still green (tests use the exported types). The downstream CLI will go red at the next task boundary; we repair it in Task 8.
 
-- [ ] **Step 1: Add `@dawn/sdk` to `packages/core/package.json` dependencies**
+- [ ] **Step 1: Add `@dawnai.org/sdk` to `packages/core/package.json` dependencies**
 
 Edit `packages/core/package.json`. In `dependencies`:
 
 ```json
   "dependencies": {
-    "@dawn/sdk": "workspace:*",
+    "@dawnai.org/sdk": "workspace:*",
     "tsx": "^4.8.1"
   },
 ```
@@ -617,7 +617,7 @@ Expected: lockfile updates.
 - [ ] **Step 3: Rewrite `packages/core/src/types.ts`**
 
 ```ts
-import type { RouteKind } from "@dawn/sdk"
+import type { RouteKind } from "@dawnai.org/sdk"
 
 export type { RouteKind }
 
@@ -718,12 +718,12 @@ Note: the `export { loadAuthoringRouteDefinition, ... }` block is removed. `disc
 
 ```bash
 git add packages/core pnpm-lock.yaml
-git commit -m "refactor(core): adopt RouteKind from @dawn/sdk, drop bound entry fields"
+git commit -m "refactor(core): adopt RouteKind from @dawnai.org/sdk, drop bound entry fields"
 ```
 
 ---
 
-## Task 6: Rewrite `@dawn/core` discovery for `index.ts`-based model
+## Task 6: Rewrite `@dawnai.org/core` discovery for `index.ts`-based model
 
 **Files:**
 - Rewrite: `packages/core/src/discovery/discover-routes.ts`
@@ -889,7 +889,7 @@ describe("discoverRoutes", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pnpm --filter @dawn/core test`
+Run: `pnpm --filter @dawnai.org/core test`
 Expected: FAIL. Errors will reference removed types in `discover-routes.ts` (compile errors) or the unchanged discovery logic not scanning `index.ts`.
 
 - [ ] **Step 3: Rewrite `packages/core/src/discovery/discover-routes.ts`**
@@ -900,7 +900,7 @@ Replace the entire file:
 import { readdir } from "node:fs/promises"
 import { join, relative, resolve, sep } from "node:path"
 import { pathToFileURL } from "node:url"
-import type { RouteKind } from "@dawn/sdk"
+import type { RouteKind } from "@dawnai.org/sdk"
 import type {
   DiscoverRoutesOptions,
   RouteDefinition,
@@ -1065,7 +1065,7 @@ Use the Grep tool:
 - pattern: `validateRouteEntries`
 - output_mode: `files_with_matches`
 
-If the only hit is inside `@dawn/core` itself (and its own test that we rewrote), remove the export and the function. If there are external callers, the shim stays.
+If the only hit is inside `@dawnai.org/core` itself (and its own test that we rewrote), remove the export and the function. If there are external callers, the shim stays.
 
 - [ ] **Step 5: Delete `packages/core/src/discovery/load-authoring-route-definition.ts`**
 
@@ -1083,12 +1083,12 @@ If it references `entryKind`, rename to `kind`. If it references `boundEntryFile
 
 - [ ] **Step 7: Run core test to verify green**
 
-Run: `pnpm --filter @dawn/core test`
+Run: `pnpm --filter @dawnai.org/core test`
 Expected: PASS — the rewritten `discover-routes.test.ts` passes; `render-route-types.test.ts` is unaffected unless it referenced removed fields (fix those if so).
 
 - [ ] **Step 8: Run core typecheck + lint**
 
-Run: `pnpm --filter @dawn/core typecheck && pnpm --filter @dawn/core lint`
+Run: `pnpm --filter @dawnai.org/core typecheck && pnpm --filter @dawnai.org/core lint`
 Expected: PASS.
 
 - [ ] **Step 9: Commit**
@@ -1131,7 +1131,7 @@ rm /Users/blove/repos/dawn/test/fixtures/contracts/valid-basic/src/app/\(public\
 Create `test/fixtures/contracts/valid-basic/src/app/(public)/hello/[tenant]/index.ts`:
 
 ```ts
-import type { RuntimeContext } from "@dawn/sdk"
+import type { RuntimeContext } from "@dawnai.org/sdk"
 import type { HelloState } from "./state.js"
 
 export async function workflow(state: HelloState, _ctx: RuntimeContext): Promise<HelloState> {
@@ -1203,10 +1203,10 @@ The snapshot shown earlier only carries `pathname` and `segments` (no `entryKind
 
 - [ ] **Step 8: Rebuild fixture-consuming tests**
 
-Run: `pnpm --filter @dawn/core test`
+Run: `pnpm --filter @dawnai.org/core test`
 Expected: PASS (since core tests rewrote themselves inline in Task 6, unchanged here).
 
-Run: `pnpm --filter @dawn/cli test`
+Run: `pnpm --filter @dawnai.org/cli test`
 Expected: may still FAIL — CLI tests still reference old contract. Acceptable; we rewrite CLI tests in Task 9.
 
 - [ ] **Step 9: Commit**
@@ -1218,7 +1218,7 @@ git commit -m "test: migrate contract fixtures to index.ts route convention"
 
 ---
 
-## Task 8: Simplify `@dawn/cli` runtime — single execution path
+## Task 8: Simplify `@dawnai.org/cli` runtime — single execution path
 
 **Files:**
 - Delete: `packages/cli/src/lib/runtime/validate-authoring-routes.ts`
@@ -1257,7 +1257,7 @@ import { basename, resolve } from "node:path"
 import type { Stats } from "node:fs"
 import { stat } from "node:fs/promises"
 
-import { findDawnApp } from "@dawn/core"
+import { findDawnApp } from "@dawnai.org/core"
 import {
   createRuntimeFailureResult,
   formatErrorMessage,
@@ -1494,8 +1494,8 @@ Single execution lane:
 import { isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
-import { findDawnApp } from "@dawn/core"
-import { normalizeRouteModule } from "@dawn/langgraph"
+import { findDawnApp } from "@dawnai.org/core"
+import { normalizeRouteModule } from "@dawnai.org/langgraph"
 import { createDawnContext } from "./dawn-context.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import {
@@ -1753,7 +1753,7 @@ function isBoundaryError(error: unknown): boolean {
 Drop the `validateAuthoringRoutes` call. Discovery already fails fast on malformed `index.ts` exports, so validation is inherent. For per-route deeper validation (e.g., tool discovery succeeds), add an inline walk:
 
 ```ts
-import { discoverRoutes } from "@dawn/core"
+import { discoverRoutes } from "@dawnai.org/core"
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
@@ -1822,7 +1822,7 @@ For each remaining hit, update or delete the caller.
 
 - [ ] **Step 9: Build cli to check type errors**
 
-Run: `pnpm --filter @dawn/cli typecheck`
+Run: `pnpm --filter @dawnai.org/cli typecheck`
 Expected: may have errors (tests still reference old imports). Fix non-test errors first. Test errors land in Task 9.
 
 - [ ] **Step 10: Commit**
@@ -1866,7 +1866,7 @@ Use temp-dir builder pattern (mkdtemp + writeFile). Reference the sdk contract f
 ```ts
 // Inside the fixture app:
 // src/app/hello/index.ts:
-//   import type { RuntimeContext } from "@dawn/sdk"
+//   import type { RuntimeContext } from "@dawnai.org/sdk"
 //   export async function workflow(_input: unknown, _ctx: RuntimeContext) { return {} }
 ```
 
@@ -1896,12 +1896,12 @@ Mirror run-command scenarios plus scenario-file loading if that's in scope for t
 
 - [ ] **Step 7: Run all CLI tests**
 
-Run: `pnpm --filter @dawn/cli test`
+Run: `pnpm --filter @dawnai.org/cli test`
 Expected: PASS.
 
 - [ ] **Step 8: Run CLI typecheck + lint**
 
-Run: `pnpm --filter @dawn/cli typecheck && pnpm --filter @dawn/cli lint`
+Run: `pnpm --filter @dawnai.org/cli typecheck && pnpm --filter @dawnai.org/cli lint`
 Expected: PASS.
 
 - [ ] **Step 9: Commit**
@@ -1933,7 +1933,7 @@ rm "/Users/blove/repos/dawn/packages/devkit/templates/app-basic/src/app/(public)
 `packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/index.ts`:
 
 ```ts
-import type { RuntimeContext, RuntimeTool } from "@dawn/langgraph";
+import type { RuntimeContext, RuntimeTool } from "@dawnai.org/langgraph";
 
 import type { HelloState } from "./state.js";
 
@@ -1961,7 +1961,7 @@ No `config` export — defaults are fine for the starter.
 
 - [ ] **Step 3: Verify template package builds**
 
-Run: `pnpm --filter @dawn/devkit lint`
+Run: `pnpm --filter @dawnai.org/devkit lint`
 Expected: PASS.
 
 (The devkit package holds the template as source files, not compiled output. Build may not apply; lint is the main check.)
@@ -2031,7 +2031,7 @@ rm "/Users/blove/repos/dawn/test/generated/fixtures/handwritten-runtime-app/src/
 Create `test/generated/fixtures/handwritten-runtime-app/src/app/(public)/hello/[tenant]/index.ts`:
 
 ```ts
-import type { RuntimeContext } from "@dawn/sdk"
+import type { RuntimeContext } from "@dawnai.org/sdk"
 import type { HelloState } from "./state.js"
 
 export const graph = {
@@ -2128,7 +2128,7 @@ Use Grep:
 
 For each hit in a doc file, update to reflect the new convention. Keep fixture paths (e.g. inside test descriptions) accurate if they still reference the new names.
 
-- [ ] **Step 3: Update `@dawn/sdk` package README if exists**
+- [ ] **Step 3: Update `@dawnai.org/sdk` package README if exists**
 
 If `packages/sdk/README.md` was not created, skip. If created in Task 1, ensure it accurately describes the current exports.
 

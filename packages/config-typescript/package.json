@@ -1,5 +1,5 @@
 {
-  "name": "@dawn/config-typescript",
+  "name": "@dawnai.org/config-typescript",
   "version": "0.0.1",
   "private": false,
   "type": "module",

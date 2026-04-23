@@ -17,13 +17,13 @@ afterEach(async () => {
   await cleanupTrackedTempDirs(tempDirs)
 })
 
-describe("@dawn/cli/testing", () => {
+describe("@dawnai.org/cli/testing", () => {
   test("packed consumers can import the published testing helpers", {
     timeout: 30_000,
   }, async () => {
     const tempRoot = await createTrackedTempDir("dawn-cli-testing-pack-", tempDirs)
     const { installerDir, tarballs } = await createPackagedInstaller({
-      packageNames: ["@dawn/core", "@dawn/langchain", "@dawn/langgraph", "@dawn/sdk", "@dawn/cli"],
+      packageNames: ["@dawnai.org/core", "@dawnai.org/langchain", "@dawnai.org/langgraph", "@dawnai.org/sdk", "@dawnai.org/cli"],
       tempRoot,
     })
 
@@ -32,10 +32,10 @@ describe("@dawn/cli/testing", () => {
       "pnpm",
       [
         "add",
-        requiredTarball(tarballs, "@dawn/core"),
-        requiredTarball(tarballs, "@dawn/langchain"),
-        requiredTarball(tarballs, "@dawn/langgraph"),
-        requiredTarball(tarballs, "@dawn/cli"),
+        requiredTarball(tarballs, "@dawnai.org/core"),
+        requiredTarball(tarballs, "@dawnai.org/langchain"),
+        requiredTarball(tarballs, "@dawnai.org/langgraph"),
+        requiredTarball(tarballs, "@dawnai.org/cli"),
       ],
       installerDir,
     )
@@ -45,7 +45,7 @@ describe("@dawn/cli/testing", () => {
     await writeFile(
       scriptPath,
       [
-        'import { expectError, expectMeta, expectOutput } from "@dawn/cli/testing";',
+        'import { expectError, expectMeta, expectOutput } from "@dawnai.org/cli/testing";',
         "const passed = {",
         '  appRoot: "/tmp/dawn-app",',
         "  durationMs: 1,",
@@ -128,11 +128,11 @@ async function writeInstallerOverrides(
 
   const overrides = {
     ...(packageJson.pnpm?.overrides ?? {}),
-    "@dawn/cli": requiredTarball(tarballs, "@dawn/cli"),
-    "@dawn/core": requiredTarball(tarballs, "@dawn/core"),
-    "@dawn/langchain": requiredTarball(tarballs, "@dawn/langchain"),
-    "@dawn/langgraph": requiredTarball(tarballs, "@dawn/langgraph"),
-    "@dawn/sdk": requiredTarball(tarballs, "@dawn/sdk"),
+    "@dawnai.org/cli": requiredTarball(tarballs, "@dawnai.org/cli"),
+    "@dawnai.org/core": requiredTarball(tarballs, "@dawnai.org/core"),
+    "@dawnai.org/langchain": requiredTarball(tarballs, "@dawnai.org/langchain"),
+    "@dawnai.org/langgraph": requiredTarball(tarballs, "@dawnai.org/langgraph"),
+    "@dawnai.org/sdk": requiredTarball(tarballs, "@dawnai.org/sdk"),
   }
 
   await writeFile(

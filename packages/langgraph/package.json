@@ -1,5 +1,5 @@
 {
-  "name": "@dawn/langgraph",
+  "name": "@dawnai.org/langgraph",
   "version": "0.0.1",
   "private": false,
   "type": "module",
@@ -44,10 +44,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn/sdk": "workspace:*"
+    "@dawnai.org/sdk": "workspace:*"
   },
   "devDependencies": {
-    "@dawn/config-typescript": "workspace:*",
+    "@dawnai.org/config-typescript": "workspace:*",
     "@types/node": "25.6.0"
   }
 }

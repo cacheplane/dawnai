@@ -1,5 +1,5 @@
 {
-  "name": "@dawn/vite-plugin",
+  "name": "@dawnai.org/vite-plugin",
   "version": "0.0.1",
   "private": false,
   "type": "module",
@@ -36,11 +36,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn/core": "workspace:*",
+    "@dawnai.org/core": "workspace:*",
     "typescript": "5.8.3"
   },
   "devDependencies": {
-    "@dawn/config-typescript": "workspace:*",
+    "@dawnai.org/config-typescript": "workspace:*",
     "@types/node": "25.6.0",
     "zod": "3.24.4"
   }

@@ -105,7 +105,7 @@ For each publishable package:
 - ensure `files`, `bin`, `types`, and `exports` are correct for packed artifacts
 - add package README files that describe the actual public surface
 
-This task explicitly includes `@dawn/config-biome` and `@dawn/config-typescript` as public packages. Do not leave them outside publish normalization if `.changeset/config.json` continues to allow publishing them.
+This task explicitly includes `@dawnai.org/config-biome` and `@dawnai.org/config-typescript` as public packages. Do not leave them outside publish normalization if `.changeset/config.json` continues to allow publishing them.
 
 - [ ] **Step 4: Add package metadata validation**
 
@@ -234,22 +234,22 @@ Add tests that consume the built or packed artifacts instead of source aliases, 
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawn/langgraph test`
+Run: `pnpm --filter @dawnai.org/langgraph test`
 Expected: FAIL if the packaged-consumer path is not yet covered or breaks.
 
 - [ ] **Step 3: Implement packaged-consumer smoke coverage**
 
 Add:
-- one smoke test for `@dawn/langgraph` through packed or built output
+- one smoke test for `@dawnai.org/langgraph` through packed or built output
 - one direct executable smoke test for the `dawn` bin path without `node <path>`
 - one external-style `typegen` smoke test using a custom `appDir`
 
 - [ ] **Step 4: Run verification**
 
-Run: `pnpm --filter @dawn/langgraph test`
+Run: `pnpm --filter @dawnai.org/langgraph test`
 Expected: PASS.
 
-Run: `pnpm --filter @dawn/cli test`
+Run: `pnpm --filter @dawnai.org/cli test`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -333,10 +333,10 @@ Add `robots.ts` and `sitemap.ts` so the site is ready for public indexing once d
 Run: `node scripts/check-docs.mjs`
 Expected: PASS.
 
-Run: `pnpm --filter @dawn/web typecheck`
+Run: `pnpm --filter @dawnai.org/web typecheck`
 Expected: PASS.
 
-Run: `pnpm --filter @dawn/web build`
+Run: `pnpm --filter @dawnai.org/web build`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**

@@ -181,7 +181,7 @@ Prefer fixture-backed tests over ad hoc assertions when the behavior is truly pa
 Run:
 
 ```bash
-pnpm --filter @dawn/core test
+pnpm --filter @dawnai.org/core test
 ```
 
 Expected:
@@ -214,8 +214,8 @@ Examples:
 Run:
 
 ```bash
-pnpm --filter @dawn/core test
-pnpm --filter @dawn/cli test
+pnpm --filter @dawnai.org/core test
+pnpm --filter @dawnai.org/cli test
 ```
 
 Expected:
@@ -251,7 +251,7 @@ Run the acceptance commands that prove the milestone’s declared stable surface
 
 ```bash
 pnpm --filter create-dawn-app test
-pnpm --filter @dawn/core test
+pnpm --filter @dawnai.org/core test
 pnpm exec vitest --run --config test/generated/vitest.config.ts test/generated/run-generated-app.test.ts -t "supports contributor-local verify lifecycle"
 pnpm exec vitest --run --config test/generated/vitest.config.ts test/generated/run-generated-runtime-contract.test.ts -t "supports contributor-local runtime lifecycle"
 pnpm exec vitest --run --config test/generated/vitest.config.ts test/generated/run-generated-app.test.ts
@@ -322,7 +322,7 @@ At completion, report this milestone as:
 
 Back that claim with fresh evidence from:
 - `pnpm --filter create-dawn-app test`
-- `pnpm --filter @dawn/core test`
+- `pnpm --filter @dawnai.org/core test`
 - `pnpm exec vitest --run --config test/generated/vitest.config.ts`
 - `pnpm exec vitest --run --config test/runtime/vitest.config.ts`
 - `pnpm test`

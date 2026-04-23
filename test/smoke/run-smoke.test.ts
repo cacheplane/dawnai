@@ -124,12 +124,12 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
     const { tarballs } = await recordPhase(phases, "packaged-installer", async () => {
       return await createPackagedInstaller({
         packageNames: [
-          "@dawn/cli",
-          "@dawn/config-typescript",
-          "@dawn/core",
-          "@dawn/langchain",
-          "@dawn/langgraph",
-          "@dawn/sdk",
+          "@dawnai.org/cli",
+          "@dawnai.org/config-typescript",
+          "@dawnai.org/core",
+          "@dawnai.org/langchain",
+          "@dawnai.org/langgraph",
+          "@dawnai.org/sdk",
         ],
         tempRoot,
         transcriptPath,
@@ -139,10 +139,10 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
       appName: fixtureName,
       artifactRoot,
       specifiers: {
-        dawnCli: tarballs["@dawn/cli"],
-        dawnConfigTypescript: tarballs["@dawn/config-typescript"],
-        dawnCore: tarballs["@dawn/core"],
-        dawnLanggraph: tarballs["@dawn/langgraph"],
+        dawnCli: tarballs["@dawnai.org/cli"],
+        dawnConfigTypescript: tarballs["@dawnai.org/config-typescript"],
+        dawnCore: tarballs["@dawnai.org/core"],
+        dawnLanggraph: tarballs["@dawnai.org/langgraph"],
       },
       template: "basic",
     })
@@ -268,24 +268,24 @@ async function rewriteDependenciesToTarballs(options: {
 
   packageJson.dependencies = {
     ...packageJson.dependencies,
-    "@dawn/cli": options.tarballs["@dawn/cli"],
-    "@dawn/core": options.tarballs["@dawn/core"],
-    "@dawn/langgraph": options.tarballs["@dawn/langgraph"],
+    "@dawnai.org/cli": options.tarballs["@dawnai.org/cli"],
+    "@dawnai.org/core": options.tarballs["@dawnai.org/core"],
+    "@dawnai.org/langgraph": options.tarballs["@dawnai.org/langgraph"],
   }
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
-    "@dawn/config-typescript": options.tarballs["@dawn/config-typescript"],
+    "@dawnai.org/config-typescript": options.tarballs["@dawnai.org/config-typescript"],
   }
   packageJson.pnpm = {
     ...(packageJson.pnpm ?? {}),
     overrides: {
       ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawn/cli": options.tarballs["@dawn/cli"],
-      "@dawn/config-typescript": options.tarballs["@dawn/config-typescript"],
-      "@dawn/core": options.tarballs["@dawn/core"],
-      "@dawn/langchain": options.tarballs["@dawn/langchain"],
-      "@dawn/langgraph": options.tarballs["@dawn/langgraph"],
-      "@dawn/sdk": options.tarballs["@dawn/sdk"],
+      "@dawnai.org/cli": options.tarballs["@dawnai.org/cli"],
+      "@dawnai.org/config-typescript": options.tarballs["@dawnai.org/config-typescript"],
+      "@dawnai.org/core": options.tarballs["@dawnai.org/core"],
+      "@dawnai.org/langchain": options.tarballs["@dawnai.org/langchain"],
+      "@dawnai.org/langgraph": options.tarballs["@dawnai.org/langgraph"],
+      "@dawnai.org/sdk": options.tarballs["@dawnai.org/sdk"],
     },
   }
 

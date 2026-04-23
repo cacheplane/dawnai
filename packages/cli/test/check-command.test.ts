@@ -110,7 +110,7 @@ async function executeCli(entryPath: string, args: readonly string[]) {
 describe("dawn check", () => {
   test("passes for an app with a workflow index.ts and reports the route list", async () => {
     const appRoot = await createFixtureApp({
-      "src/app/hello/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
+      "src/app/hello/index.ts": `import type { RuntimeContext } from "@dawnai.org/sdk"
 export async function workflow(_input: unknown, _ctx: RuntimeContext) {
   return {}
 }
@@ -128,7 +128,7 @@ export async function workflow(_input: unknown, _ctx: RuntimeContext) {
 
   test("passes for an app with a graph index.ts", async () => {
     const appRoot = await createFixtureApp({
-      "src/app/support/[tenant]/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
+      "src/app/support/[tenant]/index.ts": `import type { RuntimeContext } from "@dawnai.org/sdk"
 export const graph = {
   invoke: async (_input: unknown, _ctx: RuntimeContext) => ({}),
 }

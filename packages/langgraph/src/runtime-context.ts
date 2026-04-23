@@ -1,1 +1,1 @@
-export type { RuntimeContext, RuntimeTool, ToolRegistry } from "@dawn/sdk"
+export type { RuntimeContext, RuntimeTool, ToolRegistry } from "@dawnai.org/sdk"

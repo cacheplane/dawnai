@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add LangChain LCEL runnables as a second execution backend, proving Dawn is a meta-framework. Introduce `BackendAdapter` interface, `@dawn/langchain` package, `@dawn/vite-plugin` for build-time schema inference, and SSE streaming in `dawn dev`.
+**Goal:** Add LangChain LCEL runnables as a second execution backend, proving Dawn is a meta-framework. Introduce `BackendAdapter` interface, `@dawnai.org/langchain` package, `@dawnai.org/vite-plugin` for build-time schema inference, and SSE streaming in `dawn dev`.
 
-**Architecture:** `@dawn/sdk` gains a `BackendAdapter` type. The CLI owns route discovery for all kinds (`graph`, `workflow`, `chain`). `@dawn/langchain` provides a thin adapter that handles `.invoke()` / `.stream()` on LCEL runnables, auto-binds Dawn-discovered tools, and runs a Dawn-owned tool execution loop. `@dawn/vite-plugin` infers Zod schemas from TypeScript function signatures at build time. Streaming uses NDJSON for `dawn run` and SSE for `dawn dev`.
+**Architecture:** `@dawnai.org/sdk` gains a `BackendAdapter` type. The CLI owns route discovery for all kinds (`graph`, `workflow`, `chain`). `@dawnai.org/langchain` provides a thin adapter that handles `.invoke()` / `.stream()` on LCEL runnables, auto-binds Dawn-discovered tools, and runs a Dawn-owned tool execution loop. `@dawnai.org/vite-plugin` infers Zod schemas from TypeScript function signatures at build time. Streaming uses NDJSON for `dawn run` and SSE for `dawn dev`.
 
 **Tech Stack:** TypeScript, Vitest, pnpm workspaces, `@langchain/core`, Vite plugin API, TypeScript Compiler API, Zod
 
@@ -16,8 +16,8 @@
 
 | Package | Path | Responsibility |
 |---------|------|----------------|
-| `@dawn/langchain` | `packages/langchain/` | BackendAdapter for `chain` routes, tool converter |
-| `@dawn/vite-plugin` | `packages/vite-plugin/` | Build-time TS→Zod schema inference for tools |
+| `@dawnai.org/langchain` | `packages/langchain/` | BackendAdapter for `chain` routes, tool converter |
+| `@dawnai.org/vite-plugin` | `packages/vite-plugin/` | Build-time TS→Zod schema inference for tools |
 
 ### New files
 
@@ -56,20 +56,20 @@
 | `packages/sdk/src/index.ts` | Add `BackendAdapter` re-export |
 | `packages/core/src/discovery/discover-routes.ts` | Add `chain` to `inferRouteKind()` and `loadRouteExports()` |
 | `packages/cli/src/lib/runtime/execute-route.ts` | Replace `normalizeRouteModule` + `invokeEntry` with adapter dispatch |
-| `packages/cli/src/lib/runtime/load-route-kind.ts` | CLI-owned normalization replacing `@dawn/langgraph` import |
+| `packages/cli/src/lib/runtime/load-route-kind.ts` | CLI-owned normalization replacing `@dawnai.org/langgraph` import |
 | `packages/cli/src/lib/runtime/result.ts` | Expand `RuntimeExecutionMode` to include `"chain"` |
 | `packages/cli/src/lib/runtime/tool-discovery.ts` | Add optional `schema` field to `DiscoveredToolDefinition` |
 | `packages/cli/src/lib/dev/runtime-server.ts` | Add SSE streaming endpoint |
 | `packages/cli/src/lib/dev/runtime-registry.ts` | Expand mode type to include `"chain"` |
 | `packages/cli/src/commands/run.ts` | Wire streaming NDJSON for `dawn run` |
-| `packages/cli/package.json` | Add `@dawn/langchain` dependency |
-| `packages/cli/vitest.config.ts` | Add `@dawn/langchain` alias |
+| `packages/cli/package.json` | Add `@dawnai.org/langchain` dependency |
+| `packages/cli/vitest.config.ts` | Add `@dawnai.org/langchain` alias |
 | `packages/langgraph/src/index.ts` | Export `BackendAdapter` implementation |
 | `packages/langgraph/src/langgraph-adapter.ts` | New file: BackendAdapter wrapping existing logic |
 
 ---
 
-### Task 1: Expand `RouteKind` and `BackendAdapter` in `@dawn/sdk`
+### Task 1: Expand `RouteKind` and `BackendAdapter` in `@dawnai.org/sdk`
 
 **Files:**
 - Modify: `packages/sdk/src/route-config.ts`
@@ -118,19 +118,19 @@ export type { RuntimeContext, RuntimeTool, ToolRegistry } from "./runtime-contex
 
 - [ ] **Step 4: Run typecheck**
 
-Run: `pnpm --filter @dawn/sdk exec tsc --noEmit`
+Run: `pnpm --filter @dawnai.org/sdk exec tsc --noEmit`
 Expected: PASS
 
 - [ ] **Step 5: Run SDK tests**
 
-Run: `pnpm --filter @dawn/sdk test`
+Run: `pnpm --filter @dawnai.org/sdk test`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add packages/sdk/src/backend-adapter.ts packages/sdk/src/route-config.ts packages/sdk/src/index.ts
-git commit -m "feat: add BackendAdapter interface and chain route kind to @dawn/sdk"
+git commit -m "feat: add BackendAdapter interface and chain route kind to @dawnai.org/sdk"
 ```
 
 ---
@@ -146,7 +146,7 @@ Create `packages/core/test/discover-routes-chain.test.ts`:
 
 ```typescript
 import { describe, expect, test } from "vitest"
-import { discoverRoutes } from "@dawn/core"
+import { discoverRoutes } from "@dawnai.org/core"
 import { join } from "node:path"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -200,7 +200,7 @@ describe("chain route discovery", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @dawn/core exec vitest run test/discover-routes-chain.test.ts`
+Run: `pnpm --filter @dawnai.org/core exec vitest run test/discover-routes-chain.test.ts`
 Expected: FAIL — `chain` not recognized, route has 0 entries
 
 - [ ] **Step 3: Update `inferRouteKind` to recognize `chain`**
@@ -262,12 +262,12 @@ async function loadRouteExports(indexFile: string): Promise<{
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `pnpm --filter @dawn/core exec vitest run test/discover-routes-chain.test.ts`
+Run: `pnpm --filter @dawnai.org/core exec vitest run test/discover-routes-chain.test.ts`
 Expected: PASS
 
 - [ ] **Step 6: Run all core tests**
 
-Run: `pnpm --filter @dawn/core test`
+Run: `pnpm --filter @dawnai.org/core test`
 Expected: PASS
 
 - [ ] **Step 7: Commit**
@@ -301,7 +301,7 @@ Replace the entire contents of `packages/cli/src/lib/runtime/load-route-kind.ts`
 ```typescript
 import { pathToFileURL } from "node:url"
 
-import type { RouteKind } from "@dawn/sdk"
+import type { RouteKind } from "@dawnai.org/sdk"
 
 import { registerTsxLoader } from "./register-tsx-loader.js"
 
@@ -364,7 +364,7 @@ Replace the imports (lines 1-17) with:
 ```typescript
 import { isAbsolute, resolve } from "node:path"
 
-import { findDawnApp } from "@dawn/core"
+import { findDawnApp } from "@dawnai.org/core"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
@@ -526,12 +526,12 @@ function isBoundaryError(error: unknown): boolean {
 
 - [ ] **Step 4: Run CLI typecheck**
 
-Run: `pnpm --filter @dawn/cli exec tsc -p tsconfig.json`
+Run: `pnpm --filter @dawnai.org/cli exec tsc -p tsconfig.json`
 Expected: PASS
 
 - [ ] **Step 5: Run CLI tests**
 
-Run: `pnpm --filter @dawn/cli test`
+Run: `pnpm --filter @dawnai.org/cli test`
 Expected: PASS (existing tests still work — they use graph/workflow exports)
 
 - [ ] **Step 6: Commit**
@@ -576,12 +576,12 @@ In `packages/cli/src/lib/runtime/execute-route-server.ts`, change line 15:
 
 - [ ] **Step 4: Run typecheck**
 
-Run: `pnpm --filter @dawn/cli exec tsc -p tsconfig.json`
+Run: `pnpm --filter @dawnai.org/cli exec tsc -p tsconfig.json`
 Expected: PASS
 
 - [ ] **Step 5: Run all CLI tests**
 
-Run: `pnpm --filter @dawn/cli test`
+Run: `pnpm --filter @dawnai.org/cli test`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
@@ -664,12 +664,12 @@ async function loadToolDefinition(
 
 - [ ] **Step 3: Run CLI typecheck**
 
-Run: `pnpm --filter @dawn/cli exec tsc -p tsconfig.json`
+Run: `pnpm --filter @dawnai.org/cli exec tsc -p tsconfig.json`
 Expected: PASS
 
 - [ ] **Step 4: Run CLI tests**
 
-Run: `pnpm --filter @dawn/cli test`
+Run: `pnpm --filter @dawnai.org/cli test`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -681,7 +681,7 @@ git commit -m "feat: add optional schema field to discovered tool definitions"
 
 ---
 
-### Task 6: Scaffold `@dawn/langchain` package
+### Task 6: Scaffold `@dawnai.org/langchain` package
 
 **Files:**
 - Create: `packages/langchain/package.json`
@@ -695,7 +695,7 @@ Create `packages/langchain/package.json`:
 
 ```json
 {
-  "name": "@dawn/langchain",
+  "name": "@dawnai.org/langchain",
   "version": "0.0.0",
   "private": false,
   "type": "module",
@@ -732,13 +732,13 @@ Create `packages/langchain/package.json`:
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn/sdk": "workspace:*"
+    "@dawnai.org/sdk": "workspace:*"
   },
   "peerDependencies": {
     "@langchain/core": ">=0.3.0"
   },
   "devDependencies": {
-    "@dawn/config-typescript": "workspace:*",
+    "@dawnai.org/config-typescript": "workspace:*",
     "@langchain/core": "0.3.62",
     "@types/node": "25.6.0",
     "zod": "3.24.4"
@@ -777,8 +777,8 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   resolve: {
     alias: {
-      "@dawn/langchain": resolve(rootDir, "src/index.ts"),
-      "@dawn/sdk": resolve(rootDir, "../sdk/src/index.ts"),
+      "@dawnai.org/langchain": resolve(rootDir, "src/index.ts"),
+      "@dawnai.org/sdk": resolve(rootDir, "../sdk/src/index.ts"),
     },
   },
   test: {
@@ -806,7 +806,7 @@ Expected: PASS — lockfile updated, `@langchain/core` installed as dev dep
 
 ```bash
 git add packages/langchain/package.json packages/langchain/tsconfig.json packages/langchain/vitest.config.ts packages/langchain/src/index.ts pnpm-lock.yaml
-git commit -m "feat: scaffold @dawn/langchain package with peerDep on @langchain/core"
+git commit -m "feat: scaffold @dawnai.org/langchain package with peerDep on @langchain/core"
 ```
 
 ---
@@ -823,7 +823,7 @@ Create `packages/langchain/test/tool-converter.test.ts`:
 
 ```typescript
 import { describe, expect, test } from "vitest"
-import { convertToolToLangChain } from "@dawn/langchain"
+import { convertToolToLangChain } from "@dawnai.org/langchain"
 
 describe("convertToolToLangChain", () => {
   test("converts a basic Dawn tool to a DynamicStructuredTool", async () => {
@@ -900,7 +900,7 @@ describe("convertToolToLangChain", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawn/langchain exec vitest run test/tool-converter.test.ts`
+Run: `pnpm --filter @dawnai.org/langchain exec vitest run test/tool-converter.test.ts`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: Implement `tool-converter.ts`**
@@ -949,7 +949,7 @@ function isZodObject(value: unknown): value is z.ZodObject<z.ZodRawShape> {
 
 - [ ] **Step 4: Run tests**
 
-Run: `pnpm --filter @dawn/langchain exec vitest run test/tool-converter.test.ts`
+Run: `pnpm --filter @dawnai.org/langchain exec vitest run test/tool-converter.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1058,7 +1058,7 @@ describe("executeWithToolLoop", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawn/langchain exec vitest run test/tool-loop.test.ts`
+Run: `pnpm --filter @dawnai.org/langchain exec vitest run test/tool-loop.test.ts`
 Expected: FAIL
 
 - [ ] **Step 3: Implement `tool-loop.ts`**
@@ -1142,7 +1142,7 @@ function isAIMessageWithToolCalls(
 
 - [ ] **Step 4: Run tests**
 
-Run: `pnpm --filter @dawn/langchain exec vitest run test/tool-loop.test.ts`
+Run: `pnpm --filter @dawnai.org/langchain exec vitest run test/tool-loop.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1167,7 +1167,7 @@ Create `packages/langchain/test/chain-adapter.test.ts`:
 
 ```typescript
 import { describe, expect, test } from "vitest"
-import { chainAdapter } from "@dawn/langchain"
+import { chainAdapter } from "@dawnai.org/langchain"
 
 describe("chainAdapter", () => {
   test("kind is chain", () => {
@@ -1219,7 +1219,7 @@ describe("chainAdapter", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawn/langchain exec vitest run test/chain-adapter.test.ts`
+Run: `pnpm --filter @dawnai.org/langchain exec vitest run test/chain-adapter.test.ts`
 Expected: FAIL
 
 - [ ] **Step 3: Implement `chain-adapter.ts`**
@@ -1227,7 +1227,7 @@ Expected: FAIL
 Create `packages/langchain/src/chain-adapter.ts`:
 
 ```typescript
-import type { BackendAdapter } from "@dawn/sdk"
+import type { BackendAdapter } from "@dawnai.org/sdk"
 
 interface RunnableLike {
   readonly invoke: (input: unknown, options?: { signal?: AbortSignal }) => Promise<unknown>
@@ -1295,24 +1295,24 @@ export { executeWithToolLoop } from "./tool-loop.js"
 
 - [ ] **Step 5: Run tests**
 
-Run: `pnpm --filter @dawn/langchain exec vitest run test/chain-adapter.test.ts`
+Run: `pnpm --filter @dawnai.org/langchain exec vitest run test/chain-adapter.test.ts`
 Expected: PASS
 
 - [ ] **Step 6: Run all langchain tests**
 
-Run: `pnpm --filter @dawn/langchain test`
+Run: `pnpm --filter @dawnai.org/langchain test`
 Expected: PASS
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add packages/langchain/src/chain-adapter.ts packages/langchain/src/index.ts packages/langchain/test/chain-adapter.test.ts
-git commit -m "feat: implement BackendAdapter for chain routes in @dawn/langchain"
+git commit -m "feat: implement BackendAdapter for chain routes in @dawnai.org/langchain"
 ```
 
 ---
 
-### Task 10: Scaffold `@dawn/vite-plugin` package
+### Task 10: Scaffold `@dawnai.org/vite-plugin` package
 
 **Files:**
 - Create: `packages/vite-plugin/package.json`
@@ -1326,7 +1326,7 @@ Create `packages/vite-plugin/package.json`:
 
 ```json
 {
-  "name": "@dawn/vite-plugin",
+  "name": "@dawnai.org/vite-plugin",
   "version": "0.0.0",
   "private": false,
   "type": "module",
@@ -1366,7 +1366,7 @@ Create `packages/vite-plugin/package.json`:
     "typescript": "5.8.3"
   },
   "devDependencies": {
-    "@dawn/config-typescript": "workspace:*",
+    "@dawnai.org/config-typescript": "workspace:*",
     "@types/node": "25.6.0",
     "zod": "3.24.4"
   }
@@ -1404,7 +1404,7 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   resolve: {
     alias: {
-      "@dawn/vite-plugin": resolve(rootDir, "src/index.ts"),
+      "@dawnai.org/vite-plugin": resolve(rootDir, "src/index.ts"),
     },
   },
   test: {
@@ -1433,7 +1433,7 @@ Expected: PASS
 
 ```bash
 git add packages/vite-plugin/package.json packages/vite-plugin/tsconfig.json packages/vite-plugin/vitest.config.ts packages/vite-plugin/src/index.ts pnpm-lock.yaml
-git commit -m "feat: scaffold @dawn/vite-plugin package for build-time schema inference"
+git commit -m "feat: scaffold @dawnai.org/vite-plugin package for build-time schema inference"
 ```
 
 ---
@@ -1719,7 +1719,7 @@ describe("extractParameterType", () => {
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawn/vite-plugin exec vitest run test/type-extractor.test.ts`
+Run: `pnpm --filter @dawnai.org/vite-plugin exec vitest run test/type-extractor.test.ts`
 Expected: FAIL
 
 - [ ] **Step 4: Implement `type-extractor.ts`**
@@ -1958,7 +1958,7 @@ function createInMemoryHost(fileName: string, source: string): ts.CompilerHost {
 
 - [ ] **Step 5: Run tests**
 
-Run: `pnpm --filter @dawn/vite-plugin exec vitest run test/type-extractor.test.ts`
+Run: `pnpm --filter @dawnai.org/vite-plugin exec vitest run test/type-extractor.test.ts`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
@@ -2113,7 +2113,7 @@ describe("generateZodSchema", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawn/vite-plugin exec vitest run test/zod-generator.test.ts`
+Run: `pnpm --filter @dawnai.org/vite-plugin exec vitest run test/zod-generator.test.ts`
 Expected: FAIL
 
 - [ ] **Step 3: Implement `zod-generator.ts`**
@@ -2187,7 +2187,7 @@ function formatLiteralValue(value: string | number | boolean): string {
 
 - [ ] **Step 4: Run tests**
 
-Run: `pnpm --filter @dawn/vite-plugin exec vitest run test/zod-generator.test.ts`
+Run: `pnpm --filter @dawnai.org/vite-plugin exec vitest run test/zod-generator.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -2283,7 +2283,7 @@ export default async (input: { name: string }) => input
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawn/vite-plugin exec vitest run test/jsdoc-extractor.test.ts`
+Run: `pnpm --filter @dawnai.org/vite-plugin exec vitest run test/jsdoc-extractor.test.ts`
 Expected: FAIL
 
 - [ ] **Step 3: Implement `jsdoc-extractor.ts`**
@@ -2392,7 +2392,7 @@ function parseJsDocComment(comment: string): JsDocInfo {
 
 - [ ] **Step 4: Run tests**
 
-Run: `pnpm --filter @dawn/vite-plugin exec vitest run test/jsdoc-extractor.test.ts`
+Run: `pnpm --filter @dawnai.org/vite-plugin exec vitest run test/jsdoc-extractor.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -2487,7 +2487,7 @@ export default async (input: unknown) => input
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawn/vite-plugin exec vitest run test/plugin.test.ts`
+Run: `pnpm --filter @dawnai.org/vite-plugin exec vitest run test/plugin.test.ts`
 Expected: FAIL
 
 - [ ] **Step 3: Implement the full plugin in `index.ts`**
@@ -2573,12 +2573,12 @@ export function transformToolSource(source: string, fileName: string): string | 
 
 - [ ] **Step 4: Run tests**
 
-Run: `pnpm --filter @dawn/vite-plugin exec vitest run test/plugin.test.ts`
+Run: `pnpm --filter @dawnai.org/vite-plugin exec vitest run test/plugin.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: Run all vite-plugin tests**
 
-Run: `pnpm --filter @dawn/vite-plugin test`
+Run: `pnpm --filter @dawnai.org/vite-plugin test`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
@@ -2590,7 +2590,7 @@ git commit -m "feat: implement Vite plugin for build-time tool schema inference"
 
 ---
 
-### Task 15: Wire `@dawn/langgraph` as a BackendAdapter
+### Task 15: Wire `@dawnai.org/langgraph` as a BackendAdapter
 
 **Files:**
 - Create: `packages/langgraph/src/langgraph-adapter.ts`
@@ -2601,7 +2601,7 @@ git commit -m "feat: implement Vite plugin for build-time tool schema inference"
 Create `packages/langgraph/src/langgraph-adapter.ts`:
 
 ```typescript
-import type { BackendAdapter } from "@dawn/sdk"
+import type { BackendAdapter } from "@dawnai.org/sdk"
 
 export function createLangGraphAdapter(kind: "graph" | "workflow"): BackendAdapter {
   return {
@@ -2674,12 +2674,12 @@ export type { RuntimeContext, RuntimeTool } from "./runtime-context.js"
 
 - [ ] **Step 3: Run langgraph typecheck**
 
-Run: `pnpm --filter @dawn/langgraph exec tsc --noEmit`
+Run: `pnpm --filter @dawnai.org/langgraph exec tsc --noEmit`
 Expected: PASS
 
 - [ ] **Step 4: Run langgraph tests**
 
-Run: `pnpm --filter @dawn/langgraph test`
+Run: `pnpm --filter @dawnai.org/langgraph test`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -2723,7 +2723,7 @@ function omitType(chunk: StreamChunk): Record<string, unknown> {
 
 - [ ] **Step 2: Run CLI typecheck**
 
-Run: `pnpm --filter @dawn/cli exec tsc -p tsconfig.json`
+Run: `pnpm --filter @dawnai.org/cli exec tsc -p tsconfig.json`
 Expected: PASS
 
 - [ ] **Step 3: Commit**
@@ -2828,12 +2828,12 @@ async function handleStreamRequest(options: {
 
 - [ ] **Step 2: Run CLI typecheck**
 
-Run: `pnpm --filter @dawn/cli exec tsc -p tsconfig.json`
+Run: `pnpm --filter @dawnai.org/cli exec tsc -p tsconfig.json`
 Expected: PASS
 
 - [ ] **Step 3: Run CLI tests**
 
-Run: `pnpm --filter @dawn/cli test`
+Run: `pnpm --filter @dawnai.org/cli test`
 Expected: PASS
 
 - [ ] **Step 4: Commit**
@@ -2845,18 +2845,18 @@ git commit -m "feat: add SSE streaming endpoint to dev server"
 
 ---
 
-### Task 18: Add `@dawn/langchain` to CLI dependencies and wire adapter
+### Task 18: Add `@dawnai.org/langchain` to CLI dependencies and wire adapter
 
 **Files:**
 - Modify: `packages/cli/package.json`
 - Modify: `packages/cli/vitest.config.ts`
 
-- [ ] **Step 1: Add `@dawn/langchain` to CLI `package.json`**
+- [ ] **Step 1: Add `@dawnai.org/langchain` to CLI `package.json`**
 
 In `packages/cli/package.json`, add to the `dependencies` object:
 
 ```json
-"@dawn/langchain": "workspace:*",
+"@dawnai.org/langchain": "workspace:*",
 ```
 
 Also add `@langchain/core` to devDependencies for type resolution:
@@ -2867,16 +2867,16 @@ Also add `@langchain/core` to devDependencies for type resolution:
 
 - [ ] **Step 2: Update CLI `vitest.config.ts`**
 
-Add the `@dawn/langchain` alias:
+Add the `@dawnai.org/langchain` alias:
 
 ```typescript
 export default defineConfig({
   resolve: {
     alias: {
-      "@dawn/core": resolve(rootDir, "../core/src/index.ts"),
-      "@dawn/langchain": resolve(rootDir, "../langchain/src/index.ts"),
-      "@dawn/langgraph": resolve(rootDir, "../langgraph/src/index.ts"),
-      "@dawn/sdk": resolve(rootDir, "../sdk/src/index.ts"),
+      "@dawnai.org/core": resolve(rootDir, "../core/src/index.ts"),
+      "@dawnai.org/langchain": resolve(rootDir, "../langchain/src/index.ts"),
+      "@dawnai.org/langgraph": resolve(rootDir, "../langgraph/src/index.ts"),
+      "@dawnai.org/sdk": resolve(rootDir, "../sdk/src/index.ts"),
     },
   },
   test: {
@@ -2893,14 +2893,14 @@ Expected: PASS
 
 - [ ] **Step 4: Run CLI typecheck**
 
-Run: `pnpm --filter @dawn/cli exec tsc -p tsconfig.json`
+Run: `pnpm --filter @dawnai.org/cli exec tsc -p tsconfig.json`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/cli/package.json packages/cli/vitest.config.ts pnpm-lock.yaml
-git commit -m "feat: add @dawn/langchain dependency to CLI package"
+git commit -m "feat: add @dawnai.org/langchain dependency to CLI package"
 ```
 
 ---
@@ -2985,12 +2985,12 @@ export const chain = {
 
 - [ ] **Step 2: Run test**
 
-Run: `pnpm --filter @dawn/cli exec vitest run test/chain-route.test.ts`
+Run: `pnpm --filter @dawnai.org/cli exec vitest run test/chain-route.test.ts`
 Expected: PASS
 
 - [ ] **Step 3: Run all CLI tests**
 
-Run: `pnpm --filter @dawn/cli test`
+Run: `pnpm --filter @dawnai.org/cli test`
 Expected: PASS
 
 - [ ] **Step 4: Commit**
@@ -3014,7 +3014,7 @@ Expected: PASS — all lint, typecheck, tests, build, pack-check, and harness la
 
 - [ ] **Step 2: Update roadmap**
 
-In `docs/next-iterations-roadmap.md`, update Phase 2 section to reflect implementation status. Add a note that Phase 2 core is implemented with `@dawn/langchain`, `@dawn/vite-plugin`, BackendAdapter interface, SSE streaming, and chain route support.
+In `docs/next-iterations-roadmap.md`, update Phase 2 section to reflect implementation status. Add a note that Phase 2 core is implemented with `@dawnai.org/langchain`, `@dawnai.org/vite-plugin`, BackendAdapter interface, SSE streaming, and chain route support.
 
 - [ ] **Step 3: Commit**
 

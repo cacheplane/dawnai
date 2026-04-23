@@ -103,7 +103,7 @@ Cover:
 - [ ] **Step 2: Run the focused tests to verify they fail**
 
 Run:
-- `pnpm --filter @dawn/cli exec vitest --run test/run-command.test.ts`
+- `pnpm --filter @dawnai.org/cli exec vitest --run test/run-command.test.ts`
 - `pnpm exec vitest --run --config test/runtime/vitest.config.ts`
 
 Expected: FAIL because the richer result contract does not exist yet.
@@ -148,7 +148,7 @@ So the in-process path emits the richer normalized result without changing the d
 - [ ] **Step 6: Run the focused tests to verify they pass**
 
 Run:
-- `pnpm --filter @dawn/cli exec vitest --run test/run-command.test.ts`
+- `pnpm --filter @dawnai.org/cli exec vitest --run test/run-command.test.ts`
 - `pnpm exec vitest --run --config test/runtime/vitest.config.ts`
 
 Expected: PASS.
@@ -184,7 +184,7 @@ Use a local fake HTTP server in the test to keep the path deterministic.
 - [ ] **Step 2: Run the focused CLI tests to verify they fail**
 
 Run:
-- `pnpm --filter @dawn/cli exec vitest --run test/run-command.test.ts`
+- `pnpm --filter @dawnai.org/cli exec vitest --run test/run-command.test.ts`
 
 Expected: FAIL because `--url` support does not exist yet.
 
@@ -221,9 +221,9 @@ Do not add lifecycle flags or implicit server startup.
 - [ ] **Step 5: Run the CLI verification**
 
 Run:
-- `pnpm --filter @dawn/cli exec vitest --run test/run-command.test.ts`
-- `pnpm --filter @dawn/cli test`
-- `pnpm --filter @dawn/cli typecheck`
+- `pnpm --filter @dawnai.org/cli exec vitest --run test/run-command.test.ts`
+- `pnpm --filter @dawnai.org/cli test`
+- `pnpm --filter @dawnai.org/cli typecheck`
 
 Expected: PASS.
 
@@ -258,7 +258,7 @@ Extend `/Users/blove/repos/dawn/packages/cli/test/test-command.test.ts` with cas
 - [ ] **Step 2: Run the focused `dawn test` suite to verify it fails**
 
 Run:
-- `pnpm --filter @dawn/cli exec vitest --run test/test-command.test.ts`
+- `pnpm --filter @dawnai.org/cli exec vitest --run test/test-command.test.ts`
 
 Expected: FAIL because the richer scenario contract does not exist yet.
 
@@ -292,7 +292,7 @@ Matching rules:
 - arrays use exact matching
 - helper failures produce Dawn-owned diff messages
 
-Create `/Users/blove/repos/dawn/packages/cli/src/testing/index.ts` that re-exports the public helper surface for `@dawn/cli/testing`.
+Create `/Users/blove/repos/dawn/packages/cli/src/testing/index.ts` that re-exports the public helper surface for `@dawnai.org/cli/testing`.
 
 - [ ] **Step 5: Update the test command runner**
 
@@ -305,12 +305,12 @@ Modify `/Users/blove/repos/dawn/packages/cli/src/commands/test.ts` so it:
 
 - [ ] **Step 6: Wire package exports**
 
-Update `/Users/blove/repos/dawn/packages/cli/package.json` so published consumers can import `@dawn/cli/testing`.
+Update `/Users/blove/repos/dawn/packages/cli/package.json` so published consumers can import `@dawnai.org/cli/testing`.
 
 - [ ] **Step 7: Verify the published testing export path**
 
 Add one focused packed-consumer assertion to the existing CLI or generated test surface that proves:
-- the packed `@dawn/cli` tarball exposes `@dawn/cli/testing`
+- the packed `@dawnai.org/cli` tarball exposes `@dawnai.org/cli/testing`
 - a consumer can import `expectOutput`, `expectError`, and `expectMeta`
 
 Keep this verification small and explicit rather than relying on repo-local resolution.
@@ -318,9 +318,9 @@ Keep this verification small and explicit rather than relying on repo-local reso
 - [ ] **Step 8: Run CLI verification**
 
 Run:
-- `pnpm --filter @dawn/cli exec vitest --run test/test-command.test.ts`
-- `pnpm --filter @dawn/cli test`
-- `pnpm --filter @dawn/cli typecheck`
+- `pnpm --filter @dawnai.org/cli exec vitest --run test/test-command.test.ts`
+- `pnpm --filter @dawnai.org/cli test`
+- `pnpm --filter @dawnai.org/cli typecheck`
 
 Expected: PASS.
 
@@ -510,8 +510,8 @@ git commit -m "test: add generated app runtime verification"
 - [ ] **Step 1: Run targeted command suites**
 
 Run:
-- `pnpm --filter @dawn/cli test`
-- `pnpm --filter @dawn/cli typecheck`
+- `pnpm --filter @dawnai.org/cli test`
+- `pnpm --filter @dawnai.org/cli typecheck`
 - `pnpm exec vitest --run --config test/runtime/vitest.config.ts`
 - `pnpm exec vitest --run --config test/generated/vitest.config.ts`
 

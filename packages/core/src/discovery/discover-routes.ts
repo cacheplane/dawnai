@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises"
 import { join, relative, resolve, sep } from "node:path"
 import { pathToFileURL } from "node:url"
-import type { RouteKind } from "@dawn/sdk"
+import type { RouteKind } from "@dawnai.org/sdk"
 import type { DiscoverRoutesOptions, RouteDefinition, RouteManifest } from "../types.js"
 import { findDawnApp } from "./find-dawn-app.js"
 import { isPrivateSegment, isRouteGroupSegment, toRouteSegments } from "./route-segments.js"

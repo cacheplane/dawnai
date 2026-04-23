@@ -27,7 +27,7 @@ describe("dawn run", () => {
   run: async (input: { tenant: string }) => ({ scope: "shared", message: \`Hello, \${input.tenant}!\` }),
 };
 `,
-      "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
+      "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawnai.org/sdk"
 export const workflow = async (
   state: { tenant: string },
   ctx: RuntimeContext,
@@ -115,7 +115,7 @@ export const workflow = async (
   run: async () => ({ scope: "shared" }),
 };
 `,
-      "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawn/sdk"
+      "src/app/hello/[tenant]/index.ts": `import type { RuntimeContext } from "@dawnai.org/sdk"
 export const workflow = async (
   _state: unknown,
   ctx: RuntimeContext,

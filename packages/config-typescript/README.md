@@ -1,11 +1,11 @@
-# @dawn/config-typescript
+# @dawnai.org/config-typescript
 
 Reusable TypeScript base configs for Dawn libraries, Node packages, and Next.js apps.
 
 Exports:
-- `@dawn/config-typescript/base`
-- `@dawn/config-typescript/library`
-- `@dawn/config-typescript/node`
-- `@dawn/config-typescript/nextjs`
+- `@dawnai.org/config-typescript/base`
+- `@dawnai.org/config-typescript/library`
+- `@dawnai.org/config-typescript/node`
+- `@dawnai.org/config-typescript/nextjs`
 
 These configs are published so Dawn-generated apps can extend them directly.

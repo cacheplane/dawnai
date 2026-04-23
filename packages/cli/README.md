@@ -1,4 +1,4 @@
-# @dawn/cli
+# @dawnai.org/cli
 
 The `dawn` command-line interface for validating Dawn apps, inspecting routes, and generating route types.
 

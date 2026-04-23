@@ -1,4 +1,4 @@
-import { convertToolToLangChain } from "@dawn/langchain"
+import { convertToolToLangChain } from "@dawnai.org/langchain"
 import { describe, expect, test } from "vitest"
 
 describe("convertToolToLangChain", () => {

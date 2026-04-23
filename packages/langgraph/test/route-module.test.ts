@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs"
 import { rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { normalizeRouteModule } from "@dawn/langgraph"
+import { normalizeRouteModule } from "@dawnai.org/langgraph"
 import type {
   GraphRouteModule,
   RouteModule,
   WorkflowRouteModule,
-} from "@dawn/langgraph/route-module"
+} from "@dawnai.org/langgraph/route-module"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { createPackedConsumer, runCommand } from "./_helpers/packed-consumer.js"
@@ -19,7 +19,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
 
-describe("@dawn/langgraph route-module", () => {
+describe("@dawnai.org/langgraph route-module", () => {
   test("exposes publishable exports and types on the package surface", () => {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
       readonly exports: Record<string, { readonly types: string; readonly default: string }>
@@ -69,7 +69,7 @@ describe("@dawn/langgraph route-module", () => {
     await writeFile(
       scriptPath,
       [
-        'import { normalizeRouteModule } from "@dawn/langgraph/route-module";',
+        'import { normalizeRouteModule } from "@dawnai.org/langgraph/route-module";',
         "const workflow = () => 'workflow';",
         "const normalized = normalizeRouteModule({ workflow, config: { runtime: 'node' } });",
         "if (normalized.kind !== 'workflow' || normalized.config.runtime !== 'node') {",
