@@ -1,0 +1,12 @@
+# @dawn/config-typescript
+
+## 0.0.1
+
+### Patch Changes
+
+- 0f32260: Normalize the public Dawn packages for publishing, including release metadata,
+  packed artifact validation, and packaged template assets for `@dawn/devkit`.
+
+  Make `create-dawn-app` standalone by default so external scaffolds use release
+  channel package specifiers, while keeping explicit internal monorepo scaffolding
+  behind a guarded `--mode internal` path.
