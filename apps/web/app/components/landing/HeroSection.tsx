@@ -1,30 +1,22 @@
 import { getPrompt } from "../../../content/prompts"
 import { CopyCommand } from "../CopyCommand"
 import { CopyPromptButton } from "../CopyPromptButton"
-import { HeroEarthParallax } from "./HeroEarthParallax"
+import { HeroParallaxLayers } from "./HeroEarthParallax"
 
 const scaffoldPrompt = getPrompt("scaffold")
 
 export function HeroSection() {
   return (
     <section
-      className="relative pt-24 pb-56 text-center overflow-hidden isolate"
+      className="relative pt-24 pb-56 text-center isolate"
       style={{
         background:
           "linear-gradient(to bottom, var(--color-bg-primary) 0%, var(--color-bg-primary) 55%, #020617 100%)",
       }}
     >
-      {/* Starfield — the distant cosmos, scattered throughout the upper hero */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -z-20 bg-no-repeat bg-top opacity-[0.85]"
-        style={{
-          backgroundImage: "url('/backgrounds/dawn-stars.svg')",
-          backgroundSize: "100% auto",
-        }}
-      />
-      {/* Earth — curvature pinned to the very bottom, with scroll-linked parallax lift. */}
-      <HeroEarthParallax />
+      {/* Starfield (slow drift) + earth (medium lift) + sun bloom (accelerated).
+          Sun bloom extends below the hero and bleeds into StatsStrip's transparent top. */}
+      <HeroParallaxLayers />
       {/* Ecosystem badge */}
       <div className="relative inline-flex items-center gap-2 px-3.5 py-1.5 border border-border rounded-full text-xs text-text-secondary mb-6">
         <span className="text-text-muted">Built for the</span>
