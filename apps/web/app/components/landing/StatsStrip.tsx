@@ -23,7 +23,12 @@ const stats = [
 
 export function StatsStrip() {
   return (
-    <section className="relative px-8 py-12" style={{ background: "#020617" }}>
+    <section
+      className="relative px-8 py-12"
+      style={{
+        background: "linear-gradient(to bottom, transparent 0%, rgba(2,6,23,0.6) 30%, #020617 70%)",
+      }}
+    >
       <div className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-4">
         {stats.map((stat) => (
           <div
