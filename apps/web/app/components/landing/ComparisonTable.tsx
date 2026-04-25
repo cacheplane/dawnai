@@ -54,7 +54,7 @@ export function ComparisonTable() {
 
       <div className="max-w-[650px] mx-auto mt-10 border border-border rounded-lg overflow-hidden relative">
         {/* Header */}
-        <div className="grid grid-cols-[2fr_1fr_1fr] bg-bg-card px-5 py-3 text-xs text-text-secondary uppercase tracking-wide font-semibold">
+        <div className="grid grid-cols-[2fr_1fr_1fr] bg-bg-card px-3 sm:px-5 py-3 text-[10px] sm:text-xs text-text-secondary uppercase tracking-wide font-semibold">
           <span>Convention</span>
           <span className="text-center">Next.js</span>
           <span className="text-center text-accent-amber">Dawn</span>
@@ -64,17 +64,21 @@ export function ComparisonTable() {
         {rows.map((row, i) => (
           <div
             key={row.label}
-            className={`grid grid-cols-[2fr_1fr_1fr] px-5 py-2.5 text-sm border-t border-border-subtle ${
+            className={`grid grid-cols-[2fr_1fr_1fr] px-3 sm:px-5 py-2.5 text-xs sm:text-sm border-t border-border-subtle ${
               i % 2 === 1 ? "bg-bg-card/60" : ""
             }`}
           >
             <span className={`text-text-secondary ${row.dawnOnly ? "font-semibold" : ""}`}>
               {row.label}
             </span>
-            <span className="text-center text-text-muted font-mono text-xs">{row.nextjs}</span>
+            <span className="text-center text-text-muted font-mono text-[10px] sm:text-xs break-all sm:break-normal">
+              {row.nextjs}
+            </span>
             <span
-              className={`text-center font-mono text-xs ${
-                row.dawnOnly ? "text-accent-amber font-semibold text-sm" : "text-text-primary"
+              className={`text-center font-mono text-[10px] sm:text-xs break-all sm:break-normal ${
+                row.dawnOnly
+                  ? "text-accent-amber font-semibold text-xs sm:text-sm"
+                  : "text-text-primary"
               }`}
             >
               {row.dawn}

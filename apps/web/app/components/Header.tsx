@@ -18,7 +18,7 @@ export function Header() {
           Docs
         </Link>
         <a
-          href="https://github.com/anthropics/dawn"
+          href="https://github.com/cacheplane/dawnai"
           target="_blank"
           rel="noopener noreferrer"
           className="hover:text-text-primary transition-colors"
@@ -29,7 +29,7 @@ export function Header() {
           href="/docs/getting-started"
           className="bg-accent-amber text-bg-primary px-3 py-1.5 rounded-md font-semibold hover:bg-accent-amber-deep transition-colors"
         >
-          Get Started
+          Read the Docs
         </Link>
       </nav>
     </header>

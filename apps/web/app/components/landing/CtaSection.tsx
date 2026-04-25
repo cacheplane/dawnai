@@ -31,7 +31,7 @@ export function CtaSection() {
           Get Started
         </Link>
         <a
-          href="https://github.com/anthropics/dawn"
+          href="https://github.com/cacheplane/dawnai"
           target="_blank"
           rel="noopener noreferrer"
           className="px-8 py-3 border border-border text-text-secondary rounded-md text-sm hover:border-text-muted hover:text-text-primary transition-colors"
