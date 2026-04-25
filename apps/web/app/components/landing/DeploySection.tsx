@@ -37,10 +37,10 @@ export function DeploySection() {
         </p>
       </div>
 
-      {/* Pipeline */}
-      <div className="max-w-[650px] mx-auto mt-10 flex items-center justify-center gap-0">
+      {/* Pipeline — stacked vertically on mobile, horizontal on md+ */}
+      <div className="max-w-[650px] mx-auto mt-10 flex flex-col md:flex-row items-center justify-center gap-0">
         {steps.map((step, i) => (
-          <div key={step.label} className="flex items-center">
+          <div key={step.label} className="flex flex-col md:flex-row items-center">
             <div className="text-center flex-1 min-w-[140px]">
               <div
                 className={`w-14 h-14 rounded-[10px] flex items-center justify-center mx-auto mb-3 ${
@@ -104,7 +104,14 @@ export function DeploySection() {
               </div>
             </div>
             {i < steps.length - 1 && (
-              <span className="text-accent-amber/50 text-2xl mb-8 mx-2">&rarr;</span>
+              <span className="text-accent-amber/50 text-2xl mx-2 my-2 md:my-0 md:mb-8 inline-flex">
+                <span className="md:hidden" aria-hidden>
+                  &darr;
+                </span>
+                <span className="hidden md:inline" aria-hidden>
+                  &rarr;
+                </span>
+              </span>
             )}
           </div>
         ))}
