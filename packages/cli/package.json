@@ -1,5 +1,5 @@
 {
-  "name": "@dawnai.org/cli",
+  "name": "@dawn-ai/cli",
   "version": "0.0.1",
   "private": false,
   "type": "module",
@@ -43,15 +43,15 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@dawnai.org/core": "workspace:*",
-    "@dawnai.org/langchain": "workspace:*",
-    "@dawnai.org/langgraph": "workspace:*",
+    "@dawn-ai/core": "workspace:*",
+    "@dawn-ai/langchain": "workspace:*",
+    "@dawn-ai/langgraph": "workspace:*",
     "commander": "14.0.3",
     "tsx": "^4.8.1"
   },
   "devDependencies": {
-    "@dawnai.org/config-typescript": "workspace:*",
-    "@dawnai.org/sdk": "workspace:*",
+    "@dawn-ai/config-typescript": "workspace:*",
+    "@dawn-ai/sdk": "workspace:*",
     "@langchain/core": "0.3.62",
     "@types/node": "25.6.0"
   }

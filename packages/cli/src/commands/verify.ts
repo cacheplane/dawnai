@@ -1,12 +1,12 @@
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
-import type { RouteToolTypes } from "@dawnai.org/core"
+import type { RouteToolTypes } from "@dawn-ai/core"
 import {
   discoverRoutes,
   extractToolTypesForRoute,
   findDawnApp,
   renderDawnTypes,
-} from "@dawnai.org/core"
+} from "@dawn-ai/core"
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"

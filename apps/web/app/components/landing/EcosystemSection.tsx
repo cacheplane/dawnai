@@ -1,16 +1,16 @@
 const packages = [
   {
-    name: "@dawnai.org/langgraph",
+    name: "@dawn-ai/langgraph",
     accent: true,
     body: "Backend adapter for LangGraph graphs and workflows. Native execution.",
   },
   {
-    name: "@dawnai.org/langchain",
+    name: "@dawn-ai/langchain",
     accent: true,
     body: "Adapter for LCEL chains. Convert Dawn tools to LangChain tools automatically.",
   },
   {
-    name: "@dawnai.org/sdk",
+    name: "@dawn-ai/sdk",
     accent: false,
     body: "Backend-neutral contract. RuntimeContext, tools, route config. Bring any adapter.",
   },

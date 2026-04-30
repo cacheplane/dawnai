@@ -1,12 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import type { RouteToolTypes } from "@dawnai.org/core"
+import type { RouteToolTypes } from "@dawn-ai/core"
 import {
   discoverRoutes,
   extractToolTypesForRoute,
   findDawnApp,
   renderDawnTypes,
-} from "@dawnai.org/core"
+} from "@dawn-ai/core"
 
 import { extractJsDoc } from "./jsdoc-extractor.js"
 import { extractParameterType } from "./type-extractor.js"

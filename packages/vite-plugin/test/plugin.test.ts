@@ -1,4 +1,4 @@
-import { transformToolSource } from "@dawnai.org/vite-plugin"
+import { transformToolSource } from "@dawn-ai/vite-plugin"
 import { describe, expect, test } from "vitest"
 
 describe("transformToolSource", () => {

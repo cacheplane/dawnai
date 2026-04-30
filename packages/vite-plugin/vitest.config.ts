@@ -8,7 +8,7 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   resolve: {
     alias: {
-      "@dawnai.org/vite-plugin": resolve(rootDir, "src/index.ts"),
+      "@dawn-ai/vite-plugin": resolve(rootDir, "src/index.ts"),
     },
   },
   test: {

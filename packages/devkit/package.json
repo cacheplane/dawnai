@@ -1,5 +1,5 @@
 {
-  "name": "@dawnai.org/devkit",
+  "name": "@dawn-ai/devkit",
   "version": "0.0.1",
   "private": false,
   "type": "module",
@@ -37,7 +37,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@dawnai.org/config-typescript": "workspace:*",
+    "@dawn-ai/config-typescript": "workspace:*",
     "@types/node": "25.6.0"
   }
 }

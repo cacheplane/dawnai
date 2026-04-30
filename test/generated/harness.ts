@@ -168,12 +168,12 @@ export async function prepareGeneratedRuntimeApp(options: {
     } else {
       const packagedInstaller = await createPackagedInstaller({
         packageNames: [
-          "@dawnai.org/cli",
-          "@dawnai.org/config-typescript",
-          "@dawnai.org/core",
-          "@dawnai.org/langchain",
-          "@dawnai.org/langgraph",
-          "@dawnai.org/sdk",
+          "@dawn-ai/cli",
+          "@dawn-ai/config-typescript",
+          "@dawn-ai/core",
+          "@dawn-ai/langchain",
+          "@dawn-ai/langgraph",
+          "@dawn-ai/sdk",
         ],
         tempRoot: options.tempRoot,
         transcriptPath,
@@ -428,25 +428,25 @@ async function rewriteDependenciesToTarballs(options: {
 
   packageJson.dependencies = {
     ...packageJson.dependencies,
-    "@dawnai.org/cli": options.tarballs.cli,
-    "@dawnai.org/core": options.tarballs.core,
-    "@dawnai.org/langgraph": options.tarballs.langgraph,
-    "@dawnai.org/sdk": options.tarballs.sdk,
+    "@dawn-ai/cli": options.tarballs.cli,
+    "@dawn-ai/core": options.tarballs.core,
+    "@dawn-ai/langgraph": options.tarballs.langgraph,
+    "@dawn-ai/sdk": options.tarballs.sdk,
   }
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
-    "@dawnai.org/config-typescript": options.tarballs.configTypescript,
+    "@dawn-ai/config-typescript": options.tarballs.configTypescript,
   }
   packageJson.pnpm = {
     ...(packageJson.pnpm ?? {}),
     overrides: {
       ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawnai.org/cli": options.tarballs.cli,
-      "@dawnai.org/config-typescript": options.tarballs.configTypescript,
-      "@dawnai.org/core": options.tarballs.core,
-      "@dawnai.org/langchain": options.tarballs.langchain,
-      "@dawnai.org/langgraph": options.tarballs.langgraph,
-      "@dawnai.org/sdk": options.tarballs.sdk,
+      "@dawn-ai/cli": options.tarballs.cli,
+      "@dawn-ai/config-typescript": options.tarballs.configTypescript,
+      "@dawn-ai/core": options.tarballs.core,
+      "@dawn-ai/langchain": options.tarballs.langchain,
+      "@dawn-ai/langgraph": options.tarballs.langgraph,
+      "@dawn-ai/sdk": options.tarballs.sdk,
     },
   }
 
@@ -498,7 +498,7 @@ async function writeRunScenarioFile(options: {
   await writeFile(
     runTestPath,
     [
-      'import { expectMeta, expectOutput } from "@dawnai.org/cli/testing"',
+      'import { expectMeta, expectOutput } from "@dawn-ai/cli/testing"',
       "",
       "export default [",
       "  {",
@@ -621,14 +621,14 @@ function normalizeValue(
 
 function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTarballs {
   return {
-    cli: tarballs["@dawnai.org/cli"],
-    configTypescript: tarballs["@dawnai.org/config-typescript"],
-    core: tarballs["@dawnai.org/core"],
+    cli: tarballs["@dawn-ai/cli"],
+    configTypescript: tarballs["@dawn-ai/config-typescript"],
+    core: tarballs["@dawn-ai/core"],
     createApp: tarballs["create-dawn-app"],
-    devkit: tarballs["@dawnai.org/devkit"],
-    langchain: tarballs["@dawnai.org/langchain"],
-    langgraph: tarballs["@dawnai.org/langgraph"],
-    sdk: tarballs["@dawnai.org/sdk"],
+    devkit: tarballs["@dawn-ai/devkit"],
+    langchain: tarballs["@dawn-ai/langchain"],
+    langgraph: tarballs["@dawn-ai/langgraph"],
+    sdk: tarballs["@dawn-ai/sdk"],
   }
 }
 

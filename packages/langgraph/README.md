@@ -1,4 +1,4 @@
-# @dawnai.org/langgraph
+# @dawn-ai/langgraph
 
 Thin Dawn contracts for LangGraph-style route modules.
 

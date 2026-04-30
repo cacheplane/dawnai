@@ -9,24 +9,24 @@
       "build": "tsc -p tsconfig.json"
     },
     "dependencies": {
-      "@dawnai.org/core": "<tarball:@dawnai.org/core>",
-      "@dawnai.org/cli": "<tarball:@dawnai.org/cli>",
-      "@dawnai.org/langgraph": "<tarball:@dawnai.org/langgraph>",
-      "@dawnai.org/sdk": "<tarball:@dawnai.org/sdk>"
+      "@dawn-ai/core": "<tarball:@dawn-ai/core>",
+      "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
+      "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
+      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>"
     },
     "devDependencies": {
-      "@dawnai.org/config-typescript": "<tarball:@dawnai.org/config-typescript>",
+      "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
       "@types/node": "<version:@types/node>",
       "typescript": "<version:typescript>"
     },
     "pnpm": {
       "overrides": {
-        "@dawnai.org/cli": "<tarball:@dawnai.org/cli>",
-        "@dawnai.org/config-typescript": "<tarball:@dawnai.org/config-typescript>",
-        "@dawnai.org/core": "<tarball:@dawnai.org/core>",
-        "@dawnai.org/langchain": "<tarball:@dawnai.org/langchain>",
-        "@dawnai.org/langgraph": "<tarball:@dawnai.org/langgraph>",
-        "@dawnai.org/sdk": "<tarball:@dawnai.org/sdk>"
+        "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
+        "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
+        "@dawn-ai/core": "<tarball:@dawn-ai/core>",
+        "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
+        "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
+        "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>"
       }
     }
   },

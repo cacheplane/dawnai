@@ -1,4 +1,4 @@
-# @dawnai.org/sdk
+# @dawn-ai/sdk
 
 TypeScript types for authoring Dawn routes and tools.
 

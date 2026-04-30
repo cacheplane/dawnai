@@ -1,4 +1,4 @@
-import { discoverRoutes } from "@dawnai.org/core"
+import { discoverRoutes } from "@dawn-ai/core"
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"

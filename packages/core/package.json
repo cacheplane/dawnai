@@ -1,5 +1,5 @@
 {
-  "name": "@dawnai.org/core",
+  "name": "@dawn-ai/core",
   "version": "0.0.1",
   "private": false,
   "type": "module",
@@ -36,12 +36,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawnai.org/sdk": "workspace:*",
+    "@dawn-ai/sdk": "workspace:*",
     "tsx": "^4.8.1",
     "typescript": "5.8.3"
   },
   "devDependencies": {
-    "@dawnai.org/config-typescript": "workspace:*",
+    "@dawn-ai/config-typescript": "workspace:*",
     "@types/node": "25.6.0"
   }
 }

@@ -182,11 +182,11 @@ describe("dawn typegen", () => {
     await mkdir(packsRoot, { recursive: true })
     await mkdir(join(appRoot, "src", "custom-app", "[tenant]"), { recursive: true })
 
-    const cliTarball = await packPackage("@dawnai.org/cli", packsRoot)
-    const coreTarball = await packPackage("@dawnai.org/core", packsRoot)
-    const langchainTarball = await packPackage("@dawnai.org/langchain", packsRoot)
-    const langgraphTarball = await packPackage("@dawnai.org/langgraph", packsRoot)
-    const sdkTarball = await packPackage("@dawnai.org/sdk", packsRoot)
+    const cliTarball = await packPackage("@dawn-ai/cli", packsRoot)
+    const coreTarball = await packPackage("@dawn-ai/core", packsRoot)
+    const langchainTarball = await packPackage("@dawn-ai/langchain", packsRoot)
+    const langgraphTarball = await packPackage("@dawn-ai/langgraph", packsRoot)
+    const sdkTarball = await packPackage("@dawn-ai/sdk", packsRoot)
 
     await writeFile(
       join(installerRoot, "package.json"),
@@ -196,17 +196,17 @@ describe("dawn typegen", () => {
           private: true,
           packageManager: "pnpm@10.33.0",
           dependencies: {
-            "@dawnai.org/cli": `file:${cliTarball}`,
-            "@dawnai.org/core": `file:${coreTarball}`,
-            "@dawnai.org/langchain": `file:${langchainTarball}`,
-            "@dawnai.org/langgraph": `file:${langgraphTarball}`,
+            "@dawn-ai/cli": `file:${cliTarball}`,
+            "@dawn-ai/core": `file:${coreTarball}`,
+            "@dawn-ai/langchain": `file:${langchainTarball}`,
+            "@dawn-ai/langgraph": `file:${langgraphTarball}`,
           },
           pnpm: {
             overrides: {
-              "@dawnai.org/core": `file:${coreTarball}`,
-              "@dawnai.org/langchain": `file:${langchainTarball}`,
-              "@dawnai.org/langgraph": `file:${langgraphTarball}`,
-              "@dawnai.org/sdk": `file:${sdkTarball}`,
+              "@dawn-ai/core": `file:${coreTarball}`,
+              "@dawn-ai/langchain": `file:${langchainTarball}`,
+              "@dawn-ai/langgraph": `file:${langgraphTarball}`,
+              "@dawn-ai/sdk": `file:${sdkTarball}`,
             },
           },
         },

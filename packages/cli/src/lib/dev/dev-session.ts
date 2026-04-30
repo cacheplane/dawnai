@@ -1,7 +1,7 @@
 import { createServer } from "node:net"
 import { isAbsolute, relative, resolve } from "node:path"
 
-import { findDawnApp, loadDawnConfig } from "@dawnai.org/core"
+import { findDawnApp, loadDawnConfig } from "@dawn-ai/core"
 
 import { type CommandIo, formatErrorMessage, writeLine } from "../output.js"
 import { DevChildStartupError, type SpawnedDevChild, spawnDevChild } from "./dev-child.js"

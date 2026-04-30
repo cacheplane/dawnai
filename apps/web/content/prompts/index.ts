@@ -36,7 +36,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app. Dawn is a TypeScript-first me
 
 5. Summarize what I can build next: add a tool, add a new route, write a scenario test.
 
-Key packages: \`@dawnai.org/sdk\` (backend-neutral contract), \`@dawnai.org/langgraph\` (graphs/workflows), \`@dawnai.org/langchain\` (LCEL), \`@dawnai.org/cli\` (CLI).
+Key packages: \`@dawn-ai/sdk\` (backend-neutral contract), \`@dawn-ai/langgraph\` (graphs/workflows), \`@dawn-ai/langchain\` (LCEL), \`@dawn-ai/cli\` (CLI).
 
 Reference: https://dawnai.org/llms.txt
 `
@@ -88,7 +88,7 @@ const WRITE_A_ROUTE = `Help me add a new route to an existing Dawn app. Routes a
 
    **Workflow** (async function, most common):
    \`\`\`ts
-   import type { RuntimeContext } from "@dawnai.org/sdk"
+   import type { RuntimeContext } from "@dawn-ai/sdk"
    import type { RouteTools } from "dawn:routes"
    import type { <RouteName>State } from "./state.js"
 
@@ -129,7 +129,7 @@ const WRITE_A_TEST = `Help me write a scenario test for a Dawn route. Dawn tests
 1. In the route directory, create \`run.test.ts\`:
 
    \`\`\`ts
-   import { describe, test } from "@dawnai.org/sdk/testing"
+   import { describe, test } from "@dawn-ai/sdk/testing"
 
    describe("/<route-path>", () => {
      test("greets a single tenant", {
