@@ -73,15 +73,15 @@ The normalized execution result contract now includes route identity, execution 
 
 ### Dawn Route Authoring and SDK
 
-The newest completed milestone introduced a backend-neutral `@dawnai.org/sdk` package and migrated the route authoring convention to `index.ts` per route.
+The newest completed milestone introduced a backend-neutral `@dawn-ai/sdk` package and migrated the route authoring convention to `index.ts` per route.
 
 What changed:
 
 - A route is a directory containing `index.ts`; the `index.ts` exports a `workflow` or `graph` function/object
-- `@dawnai.org/sdk` is the canonical author-facing package: types, helpers, runtime context, and tool authoring
-- `@dawnai.org/langgraph` is now an adapter that implements the `@dawnai.org/sdk` contract and wires it to LangGraph
+- `@dawn-ai/sdk` is the canonical author-facing package: types, helpers, runtime context, and tool authoring
+- `@dawn-ai/langgraph` is now an adapter that implements the `@dawn-ai/sdk` contract and wires it to LangGraph
 - route-local tools under `tools/*.ts` are part of the authoring model
-- route handlers receive Dawn-specific runtime context via `@dawnai.org/sdk` types
+- route handlers receive Dawn-specific runtime context via `@dawn-ai/sdk` types
 - `dawn run` targets a route directory or its `index.ts`; targeting legacy `workflow.ts`/`graph.ts` directly produces an error
 
 Current authoring package surface:
@@ -109,9 +109,9 @@ Package and CLI behavior is covered with Vitest inside the relevant workspaces.
 
 Primary packages:
 
-- `@dawnai.org/core`
-- `@dawnai.org/langgraph`
-- `@dawnai.org/cli`
+- `@dawn-ai/core`
+- `@dawn-ai/langgraph`
+- `@dawn-ai/cli`
 - `create-dawn-app`
 
 ### Harness Lanes
@@ -189,7 +189,7 @@ These parts are now stable enough to support the next authoring phases:
 - route identity and route binding
 - local dev runtime lifecycle
 - in-process and server-backed execution contract
-- route authoring with `index.ts` per route and `@dawnai.org/sdk` author contract
+- route authoring with `index.ts` per route and `@dawn-ai/sdk` author contract
 - filesystem-driven tool registration and discovery
 
 ## What Is Still Not The Product Thesis
@@ -214,9 +214,9 @@ It is not yet:
 
 The repo now has a Dawn-owned route layer, but not yet a Dawn-owned authoring contract broad enough to prove the LangChain / LangGraph / Deep Agents thesis.
 
-### `@dawnai.org/langgraph` Is Still The Only Real Backend Adapter
+### `@dawn-ai/langgraph` Is Still The Only Real Backend Adapter
 
-`@dawnai.org/sdk` now owns the backend-neutral author contract, but `@dawnai.org/langgraph` remains the only backend adapter implementation. Dawn still leans LangGraph-first in execution reality.
+`@dawn-ai/sdk` now owns the backend-neutral author contract, but `@dawn-ai/langgraph` remains the only backend adapter implementation. Dawn still leans LangGraph-first in execution reality.
 
 ### Tool Composition Is Still Early
 

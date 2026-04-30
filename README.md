@@ -106,14 +106,14 @@ pnpm exec dawn dev
 
 ## Packages
 
-- `@dawnai.org/core` owns discovery, config loading, validation, and route types.
-- `@dawnai.org/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
-- `@dawnai.org/langgraph` is the LangGraph adapter that implements the `@dawnai.org/sdk` contract.
-- `@dawnai.org/cli` owns the user-facing commands and local runtime behavior.
+- `@dawn-ai/core` owns discovery, config loading, validation, and route types.
+- `@dawn-ai/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
+- `@dawn-ai/langgraph` is the LangGraph adapter that implements the `@dawn-ai/sdk` contract.
+- `@dawn-ai/cli` owns the user-facing commands and local runtime behavior.
 - `create-dawn-app` owns scaffolding for new apps.
-- `@dawnai.org/devkit` owns shared template and file-generation helpers.
-- `@dawnai.org/config-typescript` provides the shared TypeScript workspace configuration.
-- `@dawnai.org/config-biome` provides the shared Biome workspace configuration.
+- `@dawn-ai/devkit` owns shared template and file-generation helpers.
+- `@dawn-ai/config-typescript` provides the shared TypeScript workspace configuration.
+- `@dawn-ai/config-biome` provides the shared Biome workspace configuration.
 
 ## Current Boundaries
 

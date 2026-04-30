@@ -1,5 +1,5 @@
 {
-  "name": "@dawnai.org/web",
+  "name": "@dawn-ai/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -22,7 +22,7 @@
     "tailwindcss": "^4.2.4"
   },
   "devDependencies": {
-    "@dawnai.org/config-typescript": "workspace:*",
+    "@dawn-ai/config-typescript": "workspace:*",
     "@types/mdx": "^2.0.13",
     "@types/node": "25.6.0",
     "@types/react": "19.2.14",

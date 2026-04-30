@@ -93,8 +93,8 @@ Cover:
 - [ ] **Step 2: Run the focused tests to verify they fail**
 
 Run:
-- `pnpm --filter @dawnai.org/cli exec vitest --run test/dev-command.test.ts`
-- `pnpm --filter @dawnai.org/cli exec vitest --run test/run-command.test.ts`
+- `pnpm --filter @dawn-ai/cli exec vitest --run test/dev-command.test.ts`
+- `pnpm --filter @dawn-ai/cli exec vitest --run test/run-command.test.ts`
 
 Expected: FAIL because no local runtime server exists yet.
 
@@ -138,8 +138,8 @@ So the client path and local server agree on:
 - [ ] **Step 6: Run the focused tests to verify they pass**
 
 Run:
-- `pnpm --filter @dawnai.org/cli exec vitest --run test/dev-command.test.ts`
-- `pnpm --filter @dawnai.org/cli exec vitest --run test/run-command.test.ts`
+- `pnpm --filter @dawn-ai/cli exec vitest --run test/dev-command.test.ts`
+- `pnpm --filter @dawn-ai/cli exec vitest --run test/run-command.test.ts`
 
 Expected: PASS.
 
@@ -180,7 +180,7 @@ Extend `/Users/blove/repos/dawn/packages/cli/test/dev-command.test.ts` with case
 - [ ] **Step 2: Run the focused lifecycle suite to verify it fails**
 
 Run:
-- `pnpm --filter @dawnai.org/cli exec vitest --run test/dev-command.test.ts`
+- `pnpm --filter @dawn-ai/cli exec vitest --run test/dev-command.test.ts`
 
 Expected: FAIL because `dawn dev` and the parent/child session manager do not exist yet.
 
@@ -222,9 +222,9 @@ The child must:
 - [ ] **Step 5: Run the focused lifecycle verification**
 
 Run:
-- `pnpm --filter @dawnai.org/cli exec vitest --run test/dev-command.test.ts`
-- `pnpm --filter @dawnai.org/cli test`
-- `pnpm --filter @dawnai.org/cli typecheck`
+- `pnpm --filter @dawn-ai/cli exec vitest --run test/dev-command.test.ts`
+- `pnpm --filter @dawn-ai/cli test`
+- `pnpm --filter @dawn-ai/cli typecheck`
 
 Expected: PASS.
 
@@ -370,8 +370,8 @@ Expected: PASS.
 Run:
 - `pnpm exec vitest --run --config test/runtime/vitest.config.ts`
 - `pnpm exec vitest --run --config test/generated/vitest.config.ts`
-- `pnpm --filter @dawnai.org/cli test`
-- `pnpm --filter @dawnai.org/cli typecheck`
+- `pnpm --filter @dawn-ai/cli test`
+- `pnpm --filter @dawn-ai/cli typecheck`
 - `node scripts/publish-smoke.mjs`
 
 Expected: PASS.

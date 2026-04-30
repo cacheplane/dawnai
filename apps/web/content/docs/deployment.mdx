@@ -52,7 +52,7 @@ Dawn itself is **not a deployment runtime**. It owns local development: `dawn de
 
 ## Self-hosting
 
-If you can't or won't use the LangGraph Platform, you can self-host by wrapping Dawn's runtime in a Docker container that exposes the same protocol endpoints (`/runs/wait`, `/runs/stream`, `/assistants`). Dawn's dev server implementation (in `@dawnai.org/cli`) is the reference — it's the same process you'd run in production, just without the file watcher.
+If you can't or won't use the LangGraph Platform, you can self-host by wrapping Dawn's runtime in a Docker container that exposes the same protocol endpoints (`/runs/wait`, `/runs/stream`, `/assistants`). Dawn's dev server implementation (in `@dawn-ai/cli`) is the reference — it's the same process you'd run in production, just without the file watcher.
 
 <Callout type="tip" title="Dev server as reference">
   `dawn dev` running on port 3001 is functionally identical to a deployed Dawn runtime. Point your staging tests at a `dawn dev` instance and you'll catch 95% of deployment issues before you ship.

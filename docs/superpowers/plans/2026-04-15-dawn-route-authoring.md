@@ -4,7 +4,7 @@
 
 **Goal:** Add the first real Dawn authoring layer by making `route.ts` the Dawn-owned route contract, auto-discovering tools from folder structure, and injecting a Dawn-specific runtime context into route handlers.
 
-**Architecture:** The implementation should keep Dawn’s public execution boundary stable while adding a new authoring lane on top. `@dawnai.org/langgraph` will own the new authoring primitives, `@dawnai.org/cli` will resolve and execute the new route definition and tool registry, and the starter template plus harness suites will prove the full flow end-to-end. Legacy native-first graph/workflow execution stays supported while the new authoring lane narrows to function-style handlers bound through `route.ts`.
+**Architecture:** The implementation should keep Dawn’s public execution boundary stable while adding a new authoring lane on top. `@dawn-ai/langgraph` will own the new authoring primitives, `@dawn-ai/cli` will resolve and execute the new route definition and tool registry, and the starter template plus harness suites will prove the full flow end-to-end. Legacy native-first graph/workflow execution stays supported while the new authoring lane narrows to function-style handlers bound through `route.ts`.
 
 **Tech Stack:** TypeScript, Vitest, pnpm workspaces, Commander CLI, existing Dawn runtime/dev server harnesses
 
@@ -98,7 +98,7 @@
 
 ---
 
-### Task 1: Add Authoring Primitives To `@dawnai.org/langgraph`
+### Task 1: Add Authoring Primitives To `@dawn-ai/langgraph`
 
 **Files:**
 - Create: `/Users/blove/repos/dawn/packages/langgraph/src/define-route.ts`
@@ -124,12 +124,12 @@ At minimum, add named test cases for:
 - `accepts a named tool definition`
 - `rejects unnamed tools`
 
-- [ ] **Step 2: Run the new `@dawnai.org/langgraph` tests to verify they fail**
+- [ ] **Step 2: Run the new `@dawn-ai/langgraph` tests to verify they fail**
 
 Run:
 
 ```bash
-pnpm --filter @dawnai.org/langgraph test
+pnpm --filter @dawn-ai/langgraph test
 ```
 
 Expected:
@@ -149,13 +149,13 @@ Keep the contracts narrow:
 
 Do not add schema/policy/memory abstractions.
 
-- [ ] **Step 4: Run `@dawnai.org/langgraph` verification**
+- [ ] **Step 4: Run `@dawn-ai/langgraph` verification**
 
 Run:
 
 ```bash
-pnpm --filter @dawnai.org/langgraph test
-pnpm --filter @dawnai.org/langgraph typecheck
+pnpm --filter @dawn-ai/langgraph test
+pnpm --filter @dawn-ai/langgraph typecheck
 ```
 
 Expected:
@@ -252,8 +252,8 @@ Split the failing tests intentionally:
 Run:
 
 ```bash
-pnpm --filter @dawnai.org/core exec vitest --run --config vitest.config.ts test/discover-routes.test.ts
-pnpm --filter @dawnai.org/cli exec vitest --run --config vitest.config.ts test/routes-command.test.ts test/run-command.test.ts test/test-command.test.ts test/check-command.test.ts
+pnpm --filter @dawn-ai/core exec vitest --run --config vitest.config.ts test/discover-routes.test.ts
+pnpm --filter @dawn-ai/cli exec vitest --run --config vitest.config.ts test/routes-command.test.ts test/run-command.test.ts test/test-command.test.ts test/check-command.test.ts
 ```
 
 Expected:
@@ -271,16 +271,16 @@ Implement the runtime bridge so:
 - same-scope collisions produce stable errors
 - legacy native-first execution still works for existing routes
 
-If `dawn check` / `dawn verify` need explicit validation for the new lane, add the smallest possible authoring validation there instead of widening `@dawnai.org/core`.
+If `dawn check` / `dawn verify` need explicit validation for the new lane, add the smallest possible authoring validation there instead of widening `@dawn-ai/core`.
 
 - [ ] **Step 4: Run CLI/runtime verification**
 
 Run:
 
 ```bash
-pnpm --filter @dawnai.org/core test
-pnpm --filter @dawnai.org/cli test
-pnpm --filter @dawnai.org/cli typecheck
+pnpm --filter @dawn-ai/core test
+pnpm --filter @dawn-ai/cli test
+pnpm --filter @dawn-ai/cli typecheck
 pnpm exec vitest --run --config test/runtime/vitest.config.ts
 ```
 
@@ -393,10 +393,10 @@ Only stage files actually changed.
 Run:
 
 ```bash
-pnpm --filter @dawnai.org/langgraph test
-pnpm --filter @dawnai.org/langgraph typecheck
-pnpm --filter @dawnai.org/cli test
-pnpm --filter @dawnai.org/cli typecheck
+pnpm --filter @dawn-ai/langgraph test
+pnpm --filter @dawn-ai/langgraph typecheck
+pnpm --filter @dawn-ai/cli test
+pnpm --filter @dawn-ai/cli typecheck
 pnpm --filter create-dawn-app test
 pnpm exec vitest --run --config test/generated/vitest.config.ts
 pnpm exec vitest --run --config test/runtime/vitest.config.ts
@@ -440,4 +440,4 @@ If no cleanup is needed, do not create an extra commit.
 - The new authoring lane is allowed to be stricter than the legacy/native lane. That is intentional.
 - Do not widen the tool abstraction into schemas, permissions, or memory yet.
 - Prefer explicit validation failures over magical fallback when route definitions or discovered tools are invalid.
-- If a validation concern can be solved in `@dawnai.org/cli` without widening `@dawnai.org/core`, keep it there for this milestone.
+- If a validation concern can be solved in `@dawn-ai/cli` without widening `@dawn-ai/core`, keep it there for this milestone.

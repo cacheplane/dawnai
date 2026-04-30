@@ -6,11 +6,11 @@ Move `dawn.generated.d.ts` out of the user's source tree into a `.dawn/` directo
 
 ## Approach
 
-**Output path owned by `findDawnApp`.** The `DiscoveredDawnApp` type gains a `dawnDir` property, computed as `join(appRoot, ".dawn")`. All consumers (`dawn typegen`, Vite plugin) read `app.dawnDir` to determine where to write generated files. This centralizes the path logic in `@dawnai.org/core`.
+**Output path owned by `findDawnApp`.** The `DiscoveredDawnApp` type gains a `dawnDir` property, computed as `join(appRoot, ".dawn")`. All consumers (`dawn typegen`, Vite plugin) read `app.dawnDir` to determine where to write generated files. This centralizes the path logic in `@dawn-ai/core`.
 
 ## Changes
 
-### 1. `@dawnai.org/core` — `DiscoveredDawnApp` gains `dawnDir`
+### 1. `@dawn-ai/core` — `DiscoveredDawnApp` gains `dawnDir`
 
 **`packages/core/src/types.ts`**
 
@@ -29,13 +29,13 @@ export interface DiscoveredDawnApp {
 
 Compute `dawnDir` as `join(appRoot, ".dawn")` and return it. Do **not** create the directory here — `findDawnApp` is also called by read-only commands like `dawn routes`. Directory creation is the responsibility of consumers that write (typegen, vite plugin).
 
-### 2. `@dawnai.org/cli` — `typegen` writes to `dawnDir`
+### 2. `@dawn-ai/cli` — `typegen` writes to `dawnDir`
 
 **`packages/cli/src/commands/typegen.ts`**
 
 Change the output path from `join(app.routesDir, OUTPUT_FILE)` to `join(app.dawnDir, OUTPUT_FILE)`.
 
-### 3. `@dawnai.org/vite-plugin` — writes to `dawnDir`
+### 3. `@dawn-ai/vite-plugin` — writes to `dawnDir`
 
 **`packages/vite-plugin/src/index.ts`**
 

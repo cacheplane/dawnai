@@ -194,7 +194,7 @@ artifacts/
 
 Notes:
 
-- `@dawnai.org/devkit` should own the harness primitives in v1 because they are framework-internal and shared by CLI and tests.
+- `@dawn-ai/devkit` should own the harness primitives in v1 because they are framework-internal and shared by CLI and tests.
 - `artifacts/testing/` should be gitignored if persisted locally. It exists to make failures inspectable without digging through temporary shell output.
 - `dawn test` does not require a shipped command file in v1. The repo layout above reflects the v1 deliverable only.
 

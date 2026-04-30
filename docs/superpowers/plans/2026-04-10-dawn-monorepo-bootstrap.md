@@ -4,7 +4,7 @@
 
 **Goal:** Build the initial `dawn` monorepo with a working workspace foundation, publishable TypeScript packages, a `dawn` CLI, a `create-dawn-app` scaffolder, and a minimal marketing/docs website.
 
-**Architecture:** Use a `pnpm` workspace monorepo coordinated by `turbo`, with TypeScript project references and `tsc -b` for package builds. Keep Dawn-specific behavior in `@dawnai.org/core` and compose it into `@dawnai.org/cli` and `create-dawn-app`, while leaving runtime-facing route authoring thin and native-first.
+**Architecture:** Use a `pnpm` workspace monorepo coordinated by `turbo`, with TypeScript project references and `tsc -b` for package builds. Keep Dawn-specific behavior in `@dawn-ai/core` and compose it into `@dawn-ai/cli` and `create-dawn-app`, while leaving runtime-facing route authoring thin and native-first.
 
 **Tech Stack:** Node 22.x, pnpm 10.33.0, turbo 2.9.6, TypeScript 6.0.2, Next.js 16.2.3, React 19.2.0, Vitest 4.1.4, Biome 2.4.11, Changesets 2.30.0, Commander 14.0.3, Zod 4.3.6
 
@@ -136,32 +136,32 @@ git commit -m "chore: bootstrap workspace foundation"
 
 - [ ] **Step 1: Write the failing config package checks**
 
-Create root script references so `pnpm --filter @dawnai.org/config-typescript typecheck` and `pnpm --filter @dawnai.org/config-biome check` fail before the packages exist.
+Create root script references so `pnpm --filter @dawn-ai/config-typescript typecheck` and `pnpm --filter @dawn-ai/config-biome check` fail before the packages exist.
 
 - [ ] **Step 2: Run checks to verify they fail**
 
-Run: `pnpm --filter @dawnai.org/config-typescript typecheck`
+Run: `pnpm --filter @dawn-ai/config-typescript typecheck`
 Expected: FAIL because package is missing.
 
-Run: `pnpm --filter @dawnai.org/config-biome check`
+Run: `pnpm --filter @dawn-ai/config-biome check`
 Expected: FAIL because package is missing.
 
 - [ ] **Step 3: Write the minimal shared config packages**
 
-Create `@dawnai.org/config-typescript` with JSON config exports covering:
+Create `@dawn-ai/config-typescript` with JSON config exports covering:
 - base TypeScript settings
 - library build settings with declarations
 - Node package settings
 - Next.js app settings
 
-Create `@dawnai.org/config-biome` with a reusable `biome.json` that enables formatting and linting defaults suitable for the monorepo.
+Create `@dawn-ai/config-biome` with a reusable `biome.json` that enables formatting and linting defaults suitable for the monorepo.
 
 - [ ] **Step 4: Run checks to verify they pass**
 
-Run: `pnpm --filter @dawnai.org/config-typescript typecheck`
+Run: `pnpm --filter @dawn-ai/config-typescript typecheck`
 Expected: PASS or no-op with exit code 0.
 
-Run: `pnpm --filter @dawnai.org/config-biome check`
+Run: `pnpm --filter @dawn-ai/config-biome check`
 Expected: PASS with valid configuration.
 
 - [ ] **Step 5: Commit**
@@ -171,7 +171,7 @@ git add packages/config-typescript packages/config-biome
 git commit -m "chore: add shared workspace configs"
 ```
 
-### Task 3: `@dawnai.org/core` Discovery and Typegen
+### Task 3: `@dawn-ai/core` Discovery and Typegen
 
 **Files:**
 - Create: `/Users/blove/repos/dawn/packages/core/package.json`
@@ -201,8 +201,8 @@ Create `discover-routes.test.ts` with a fixture app tree asserting that:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @dawnai.org/core test -- --run packages/core/test/discover-routes.test.ts`
-Expected: FAIL because `@dawnai.org/core` does not exist yet.
+Run: `pnpm --filter @dawn-ai/core test -- --run packages/core/test/discover-routes.test.ts`
+Expected: FAIL because `@dawn-ai/core` does not exist yet.
 
 - [ ] **Step 3: Write the failing typegen test**
 
@@ -210,12 +210,12 @@ Create `render-route-types.test.ts` asserting that a discovered route manifest r
 
 - [ ] **Step 4: Run test to verify it fails**
 
-Run: `pnpm --filter @dawnai.org/core test -- --run packages/core/test/render-route-types.test.ts`
+Run: `pnpm --filter @dawn-ai/core test -- --run packages/core/test/render-route-types.test.ts`
 Expected: FAIL because the typegen module does not exist yet.
 
 - [ ] **Step 5: Write the minimal implementation**
 
-Implement `@dawnai.org/core` with:
+Implement `@dawn-ai/core` with:
 - a config loader for `dawn.config.ts`
 - app-root discovery from current working directory or explicit path
 - route discovery under `src/app`
@@ -227,13 +227,13 @@ Use focused modules; keep filesystem parsing separate from rendering.
 
 - [ ] **Step 6: Run package verification**
 
-Run: `pnpm --filter @dawnai.org/core test`
+Run: `pnpm --filter @dawn-ai/core test`
 Expected: PASS.
 
-Run: `pnpm --filter @dawnai.org/core typecheck`
+Run: `pnpm --filter @dawn-ai/core typecheck`
 Expected: PASS.
 
-Run: `pnpm --filter @dawnai.org/core build`
+Run: `pnpm --filter @dawn-ai/core build`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -243,7 +243,7 @@ git add packages/core tsconfig.json vitest.workspace.ts
 git commit -m "feat: add dawn core discovery and typegen"
 ```
 
-### Task 4: `@dawnai.org/langgraph` Integration Contracts
+### Task 4: `@dawn-ai/langgraph` Integration Contracts
 
 **Files:**
 - Create: `/Users/blove/repos/dawn/packages/langgraph/package.json`
@@ -260,11 +260,11 @@ git commit -m "feat: add dawn core discovery and typegen"
 Create tests asserting:
 - `graph.ts` modules can export a native-first entry and route config
 - `workflow.ts` modules are accepted as alternative executable route entries
-- the package exposes types and helpers that `@dawnai.org/core` and the template app can consume without inventing a second runtime
+- the package exposes types and helpers that `@dawn-ai/core` and the template app can consume without inventing a second runtime
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawnai.org/langgraph test -- --run packages/langgraph/test/define-entry.test.ts`
+Run: `pnpm --filter @dawn-ai/langgraph test -- --run packages/langgraph/test/define-entry.test.ts`
 Expected: FAIL because the package does not exist yet.
 
 - [ ] **Step 3: Write the minimal implementation**
@@ -276,13 +276,13 @@ Implement a minimal publishable package with:
 
 - [ ] **Step 4: Run package verification**
 
-Run: `pnpm --filter @dawnai.org/langgraph test`
+Run: `pnpm --filter @dawn-ai/langgraph test`
 Expected: PASS.
 
-Run: `pnpm --filter @dawnai.org/langgraph typecheck`
+Run: `pnpm --filter @dawn-ai/langgraph typecheck`
 Expected: PASS.
 
-Run: `pnpm --filter @dawnai.org/langgraph build`
+Run: `pnpm --filter @dawn-ai/langgraph build`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -292,7 +292,7 @@ git add packages/langgraph tsconfig.json vitest.workspace.ts
 git commit -m "feat: add langgraph integration contracts"
 ```
 
-### Task 5: `@dawnai.org/cli` Commands
+### Task 5: `@dawn-ai/cli` Commands
 
 **Files:**
 - Create: `/Users/blove/repos/dawn/packages/cli/package.json`
@@ -317,12 +317,12 @@ Create tests asserting:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @dawnai.org/cli test -- --run packages/cli/test/routes-command.test.ts`
+Run: `pnpm --filter @dawn-ai/cli test -- --run packages/cli/test/routes-command.test.ts`
 Expected: FAIL because the CLI package does not exist yet.
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Implement the CLI with Commander and compose `@dawnai.org/core` helpers. Support:
+Implement the CLI with Commander and compose `@dawn-ai/core` helpers. Support:
 - optional `--cwd` path argument for app root targeting
 - human-readable output by default
 - JSON output for `routes`
@@ -331,13 +331,13 @@ Implement the CLI with Commander and compose `@dawnai.org/core` helpers. Support
 
 - [ ] **Step 4: Run package verification**
 
-Run: `pnpm --filter @dawnai.org/cli test`
+Run: `pnpm --filter @dawn-ai/cli test`
 Expected: PASS.
 
-Run: `pnpm --filter @dawnai.org/cli typecheck`
+Run: `pnpm --filter @dawn-ai/cli typecheck`
 Expected: PASS.
 
-Run: `pnpm --filter @dawnai.org/cli build`
+Run: `pnpm --filter @dawn-ai/cli build`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -347,7 +347,7 @@ git add packages/cli tsconfig.json vitest.workspace.ts
 git commit -m "feat: add dawn cli commands"
 ```
 
-### Task 6: `@dawnai.org/devkit` and `create-dawn-app`
+### Task 6: `@dawn-ai/devkit` and `create-dawn-app`
 
 **Files:**
 - Create: `/Users/blove/repos/dawn/packages/devkit/package.json`
@@ -381,7 +381,7 @@ Expected: FAIL because the scaffolder package does not exist yet.
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Implement `@dawnai.org/devkit` template copying helpers and `create-dawn-app` CLI entrypoint. Support one template only: `basic`.
+Implement `@dawn-ai/devkit` template copying helpers and `create-dawn-app` CLI entrypoint. Support one template only: `basic`.
 
 - [ ] **Step 4: Run package verification**
 
@@ -433,11 +433,11 @@ git commit -m "feat: add create-dawn-app scaffolder"
 
 - [ ] **Step 1: Write the failing app build test**
 
-Create the package entry and root workspace references so `pnpm --filter @dawnai.org/web build` fails before the app exists.
+Create the package entry and root workspace references so `pnpm --filter @dawn-ai/web build` fails before the app exists.
 
 - [ ] **Step 2: Run build to verify it fails**
 
-Run: `pnpm --filter @dawnai.org/web build`
+Run: `pnpm --filter @dawn-ai/web build`
 Expected: FAIL because the app package does not exist yet.
 
 - [ ] **Step 3: Write the minimal website implementation**
@@ -457,10 +457,10 @@ Keep the site static-friendly and independent from unfinished runtime internals.
 
 - [ ] **Step 4: Run app verification**
 
-Run: `pnpm --filter @dawnai.org/web typecheck`
+Run: `pnpm --filter @dawn-ai/web typecheck`
 Expected: PASS.
 
-Run: `pnpm --filter @dawnai.org/web build`
+Run: `pnpm --filter @dawn-ai/web build`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**

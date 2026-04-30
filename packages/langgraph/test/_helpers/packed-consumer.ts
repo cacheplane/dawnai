@@ -28,7 +28,7 @@ export async function createPackedConsumer(): Promise<PackedConsumer> {
     ["pack", "--pack-destination", tempRoot],
     SDK_PACKAGE_ROOT,
   )
-  const sdkTarballPath = resolveTarballPath(sdkPackOutput.stdout, tempRoot, "@dawnai.org/sdk")
+  const sdkTarballPath = resolveTarballPath(sdkPackOutput.stdout, tempRoot, "@dawn-ai/sdk")
 
   await runCommand(
     "pnpm",
@@ -40,7 +40,7 @@ export async function createPackedConsumer(): Promise<PackedConsumer> {
     ["pack", "--pack-destination", tempRoot],
     LANGGRAPH_PACKAGE_ROOT,
   )
-  const tarballPath = resolveTarballPath(packOutput.stdout, tempRoot, "@dawnai.org/langgraph")
+  const tarballPath = resolveTarballPath(packOutput.stdout, tempRoot, "@dawn-ai/langgraph")
 
   await mkdir(consumerDir, { recursive: true })
   await writeFile(
@@ -49,7 +49,7 @@ export async function createPackedConsumer(): Promise<PackedConsumer> {
       {
         name: "consumer",
         private: true,
-        pnpm: { overrides: { "@dawnai.org/sdk": `file:${sdkTarballPath}` } },
+        pnpm: { overrides: { "@dawn-ai/sdk": `file:${sdkTarballPath}` } },
       },
       null,
       2,

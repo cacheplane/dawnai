@@ -111,13 +111,13 @@ Document only implemented commands:
 - `dawn dev`
 
 Document the current package map at a high level:
-- `@dawnai.org/core`
-- `@dawnai.org/langgraph`
-- `@dawnai.org/cli`
+- `@dawn-ai/core`
+- `@dawn-ai/langgraph`
+- `@dawn-ai/cli`
 - `create-dawn-app`
-- `@dawnai.org/devkit`
-- `@dawnai.org/config-typescript`
-- `@dawnai.org/config-biome`
+- `@dawn-ai/devkit`
+- `@dawn-ai/config-typescript`
+- `@dawn-ai/config-biome`
 
 Keep package summaries concise and route deeper repo detail to `CONTRIBUTORS.md`.
 
@@ -189,11 +189,11 @@ Then explain the actual top-level areas and ownership:
 - `docs/*`
 
 Map package responsibilities clearly:
-- discovery/config/types in `@dawnai.org/core`
-- route authoring contracts in `@dawnai.org/langgraph`
-- CLI/runtime in `@dawnai.org/cli`
+- discovery/config/types in `@dawn-ai/core`
+- route authoring contracts in `@dawn-ai/langgraph`
+- CLI/runtime in `@dawn-ai/cli`
 - scaffolding in `create-dawn-app`
-- shared templating in `@dawnai.org/devkit`
+- shared templating in `@dawn-ai/devkit`
 - shared config in the config packages
 
 - [ ] **Step 3: Document the real contributor commands and verification lanes**

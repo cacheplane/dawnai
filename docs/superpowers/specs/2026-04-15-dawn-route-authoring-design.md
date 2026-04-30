@@ -108,7 +108,7 @@ The first Dawn-owned route definition should stay narrow:
 Conceptually:
 
 ```ts
-import { defineRoute } from "@dawnai.org/langgraph";
+import { defineRoute } from "@dawn-ai/langgraph";
 
 export const route = defineRoute({
   kind: "workflow",
@@ -163,7 +163,7 @@ For v1:
 Conceptually:
 
 ```ts
-import { defineTool } from "@dawnai.org/langgraph";
+import { defineTool } from "@dawn-ai/langgraph";
 
 export default defineTool({
   name: "weather.get",

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Extract Dawn's author-facing contract from `@dawnai.org/langgraph` into a new backend-neutral package `@dawnai.org/sdk`, and replace the `route.ts` + `workflow.ts`/`graph.ts` convention with a single `index.ts` per route whose kind is inferred from its named exports.
+Extract Dawn's author-facing contract from `@dawn-ai/langgraph` into a new backend-neutral package `@dawn-ai/sdk`, and replace the `route.ts` + `workflow.ts`/`graph.ts` convention with a single `index.ts` per route whose kind is inferred from its named exports.
 
 This milestone moves Dawn from:
 
@@ -16,11 +16,11 @@ without yet introducing a pluggable backend adapter runtime.
 
 ## Why This Exists
 
-The current authoring surface lives entirely in `@dawnai.org/langgraph`:
+The current authoring surface lives entirely in `@dawn-ai/langgraph`:
 
 - `defineRoute`, `defineTool`, `RouteDefinition`, `RuntimeContext`, `ToolDefinition` are all exported from a backend-specific package
-- The template imports from `@dawnai.org/langgraph` even though nothing it uses is LangGraph-specific
-- Future backends (`@dawnai.org/langchain`, `@dawnai.org/deepagents`) have no shared contract surface to implement
+- The template imports from `@dawn-ai/langgraph` even though nothing it uses is LangGraph-specific
+- Future backends (`@dawn-ai/langchain`, `@dawn-ai/deepagents`) have no shared contract surface to implement
 
 The route authoring model also carries a layer of indirection:
 
@@ -34,9 +34,9 @@ This milestone resolves both problems at once.
 
 This milestone covers:
 
-- create `@dawnai.org/sdk` package with the backend-neutral author-facing contract
-- strip the author-facing types out of `@dawnai.org/langgraph`, keep only the LangGraph execution adapter
-- have `@dawnai.org/langgraph` re-export `@dawnai.org/sdk` types for author convenience
+- create `@dawn-ai/sdk` package with the backend-neutral author-facing contract
+- strip the author-facing types out of `@dawn-ai/langgraph`, keep only the LangGraph execution adapter
+- have `@dawn-ai/langgraph` re-export `@dawn-ai/sdk` types for author convenience
 - replace `route.ts` + `workflow.ts`/`graph.ts` convention with a single `index.ts` per route
 - infer route kind from the named exports of `index.ts` (`workflow` or `graph`)
 - replace route `config` companion with an optional `config` export in `index.ts`
@@ -60,9 +60,9 @@ This milestone does not cover:
 
 This milestone is complete when:
 
-- `@dawnai.org/sdk` is a published workspace package with the backend-neutral contract
-- `@dawnai.org/langgraph` no longer exports `defineRoute` or route-definition types
-- `@dawnai.org/langgraph` re-exports `@dawnai.org/sdk` types so single-backend authors have one import source
+- `@dawn-ai/sdk` is a published workspace package with the backend-neutral contract
+- `@dawn-ai/langgraph` no longer exports `defineRoute` or route-definition types
+- `@dawn-ai/langgraph` re-exports `@dawn-ai/sdk` types so single-backend authors have one import source
 - route discovery identifies routes by scanning for `index.ts` files and inspecting their named exports
 - route kind is inferred from whether `index.ts` exports `workflow` or `graph`
 - the starter template uses a single `index.ts` per route with no `route.ts`
@@ -72,7 +72,7 @@ This milestone is complete when:
 
 ## Package Structure
 
-### `@dawnai.org/sdk` (new)
+### `@dawn-ai/sdk` (new)
 
 Author-facing, backend-neutral contract.
 
@@ -89,7 +89,7 @@ Exports:
 
 The SDK does not export a route-definition helper. There is no `defineRoute` in the new model. Routes are defined by the presence of a `workflow` or `graph` export in `index.ts`, not by wrapping a definition object.
 
-### `@dawnai.org/langgraph` (slimmed)
+### `@dawn-ai/langgraph` (slimmed)
 
 LangGraph-specific execution adapter.
 
@@ -99,16 +99,16 @@ Stays:
 - `RouteModule`, `GraphRouteModule`, `WorkflowRouteModule`, `NormalizedRouteModule` — LangGraph-execution-lane module types
 - `defineEntry` — stays, unchanged
 
-`RouteEntryKind` (previously defined in `@dawnai.org/langgraph`) is removed. Both `@dawnai.org/langgraph` and `@dawnai.org/core` import `RouteKind` from `@dawnai.org/sdk` as the single canonical name.
+`RouteEntryKind` (previously defined in `@dawn-ai/langgraph`) is removed. Both `@dawn-ai/langgraph` and `@dawn-ai/core` import `RouteKind` from `@dawn-ai/sdk` as the single canonical name.
 
 Removed:
 
 - `defineRoute`, `RouteDefinition`
-- `defineTool`, `ToolDefinition` (moved to `@dawnai.org/sdk`)
-- `RuntimeContext`, `RuntimeTool`, `ToolContext` (moved to `@dawnai.org/sdk`)
-- `RouteConfig` (moved to `@dawnai.org/sdk`)
+- `defineTool`, `ToolDefinition` (moved to `@dawn-ai/sdk`)
+- `RuntimeContext`, `RuntimeTool`, `ToolContext` (moved to `@dawn-ai/sdk`)
+- `RouteConfig` (moved to `@dawn-ai/sdk`)
 
-Re-exports from `@dawnai.org/sdk` (for author convenience):
+Re-exports from `@dawn-ai/sdk` (for author convenience):
 
 - `defineTool`
 - `ToolDefinition`
@@ -117,9 +117,9 @@ Re-exports from `@dawnai.org/sdk` (for author convenience):
 - `RuntimeTool`
 - `RouteConfig`
 
-This lets authors keep a single import source per backend (`@dawnai.org/langgraph`) without the SDK becoming a hidden implementation detail.
+This lets authors keep a single import source per backend (`@dawn-ai/langgraph`) without the SDK becoming a hidden implementation detail.
 
-### `@dawnai.org/core` (updated)
+### `@dawn-ai/core` (updated)
 
 Route discovery and app contract.
 
@@ -127,11 +127,11 @@ Changes:
 
 - discovery scans for `index.ts` files inside `appDir`
 - `loadAuthoringRouteDefinition` is removed
-- the manifest `RouteDefinition` type (different from the removed `@dawnai.org/langgraph` `RouteDefinition`) no longer carries `boundEntryFile` / `boundEntryKind` — those fields are gone
-- `RouteEntryKind` in `@dawnai.org/core` is replaced by `RouteKind` imported from `@dawnai.org/sdk`
+- the manifest `RouteDefinition` type (different from the removed `@dawn-ai/langgraph` `RouteDefinition`) no longer carries `boundEntryFile` / `boundEntryKind` — those fields are gone
+- `RouteEntryKind` in `@dawn-ai/core` is replaced by `RouteKind` imported from `@dawn-ai/sdk`
 - manifest `entryFile` now points to the route's `index.ts` rather than a `workflow.ts` / `graph.ts` sibling
 
-### `@dawnai.org/cli` (simplified)
+### `@dawn-ai/cli` (simplified)
 
 One execution path, no authoring-lane vs legacy-lane branching.
 
@@ -167,7 +167,7 @@ Each route directory contains exactly one `index.ts`. That file is the route.
 
 ```ts
 // Workflow route
-import type { RuntimeContext, RuntimeTool } from "@dawnai.org/langgraph"
+import type { RuntimeContext, RuntimeTool } from "@dawn-ai/langgraph"
 import type { HelloState } from "./state.js"
 
 type HelloTools = {
@@ -219,16 +219,16 @@ Unknown keys in `config` are ignored (no warning, no error) — future backends 
 
 ### Tool authoring
 
-Tool authoring is unchanged in shape. Authors keep using the same import path — `@dawnai.org/langgraph` now re-exports the tool types from `@dawnai.org/sdk`:
+Tool authoring is unchanged in shape. Authors keep using the same import path — `@dawn-ai/langgraph` now re-exports the tool types from `@dawn-ai/sdk`:
 
 ```ts
-import { defineTool, type ToolDefinition } from "@dawnai.org/langgraph"
+import { defineTool, type ToolDefinition } from "@dawn-ai/langgraph"
 ```
 
-Multi-backend or backend-neutral code may import directly from `@dawnai.org/sdk`:
+Multi-backend or backend-neutral code may import directly from `@dawn-ai/sdk`:
 
 ```ts
-import { defineTool, type ToolDefinition } from "@dawnai.org/sdk"
+import { defineTool, type ToolDefinition } from "@dawn-ai/sdk"
 ```
 
 Tool discovery rules are unchanged:
@@ -282,20 +282,20 @@ No backwards compatibility for the old filename convention. Dawn is pre-1.0 with
 
 ## Backend Extension Pattern
 
-Backend packages extend `@dawnai.org/sdk` rather than replacing it.
+Backend packages extend `@dawn-ai/sdk` rather than replacing it.
 
 Current:
 
-- `@dawnai.org/langgraph` imports `RuntimeContext`, `ToolDefinition`, etc. from `@dawnai.org/sdk`
-- `@dawnai.org/langgraph` re-exports those types for single-backend authors
-- `@dawnai.org/langgraph` adds LangGraph-specific execution types (`RouteModule`, `normalizeRouteModule`)
+- `@dawn-ai/langgraph` imports `RuntimeContext`, `ToolDefinition`, etc. from `@dawn-ai/sdk`
+- `@dawn-ai/langgraph` re-exports those types for single-backend authors
+- `@dawn-ai/langgraph` adds LangGraph-specific execution types (`RouteModule`, `normalizeRouteModule`)
 
 Future (not in this milestone):
 
-- `@dawnai.org/langchain` imports from `@dawnai.org/sdk`, re-exports for LangChain-native authors, adds LangChain-specific composition helpers
-- `@dawnai.org/deepagents` imports from `@dawnai.org/sdk`, re-exports for Deep Agents authors, adds multi-agent orchestration primitives
+- `@dawn-ai/langchain` imports from `@dawn-ai/sdk`, re-exports for LangChain-native authors, adds LangChain-specific composition helpers
+- `@dawn-ai/deepagents` imports from `@dawn-ai/sdk`, re-exports for Deep Agents authors, adds multi-agent orchestration primitives
 
-The invariant: `@dawnai.org/sdk` is the source of truth for the backend-neutral contract. Backend packages may extend, never replace.
+The invariant: `@dawn-ai/sdk` is the source of truth for the backend-neutral contract. Backend packages may extend, never replace.
 
 ## Template Updates
 
@@ -320,7 +320,7 @@ packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/
     └── greet.ts
 ```
 
-Template `index.ts` imports `RuntimeContext` and `RuntimeTool` from `@dawnai.org/langgraph` (which re-exports from `@dawnai.org/sdk`). No `config` export in the template — defaults are fine for the starter.
+Template `index.ts` imports `RuntimeContext` and `RuntimeTool` from `@dawn-ai/langgraph` (which re-exports from `@dawn-ai/sdk`). No `config` export in the template — defaults are fine for the starter.
 
 Contributor-local scaffold in `CONTRIBUTORS.md` updated to match.
 
@@ -328,7 +328,7 @@ Contributor-local scaffold in `CONTRIBUTORS.md` updated to match.
 
 ### SDK contract tests
 
-New in `@dawnai.org/sdk`:
+New in `@dawn-ai/sdk`:
 
 - `test/define-tool.test.ts` — tool authoring
 - `test/tool-context.contract.ts` — tool context type freeze
@@ -340,7 +340,7 @@ Deleted:
 
 - `test/define-route.test.ts`
 
-Moved to `@dawnai.org/sdk`:
+Moved to `@dawn-ai/sdk`:
 
 - `test/define-tool.test.ts`
 - `test/tool-context.contract.ts`
@@ -420,10 +420,10 @@ This milestone establishes the neutral contract surface. Later phases extend it.
 
 Implement the extraction as a single atomic milestone:
 
-1. create `@dawnai.org/sdk` with the backend-neutral contract
-2. slim `@dawnai.org/langgraph` to the execution adapter, re-export SDK types
-3. update discovery in `@dawnai.org/core` for `index.ts`-based route model
-4. simplify execution in `@dawnai.org/cli` to a single lane
+1. create `@dawn-ai/sdk` with the backend-neutral contract
+2. slim `@dawn-ai/langgraph` to the execution adapter, re-export SDK types
+3. update discovery in `@dawn-ai/core` for `index.ts`-based route model
+4. simplify execution in `@dawn-ai/cli` to a single lane
 5. update the starter template and contributor-local scaffold
 6. rewrite tests to pin the new contract
 

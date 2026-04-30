@@ -14,13 +14,13 @@ This guide is for engineers working inside the Dawn monorepo. It covers the curr
 
 ## Package Responsibilities
 
-- `@dawnai.org/core` owns app discovery, config loading, validation, and route type generation.
-- `@dawnai.org/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
-- `@dawnai.org/langgraph` is the LangGraph adapter that implements the `@dawnai.org/sdk` contract and wires it to LangGraph.
-- `@dawnai.org/cli` owns the user-facing commands and the local runtime behavior.
+- `@dawn-ai/core` owns app discovery, config loading, validation, and route type generation.
+- `@dawn-ai/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
+- `@dawn-ai/langgraph` is the LangGraph adapter that implements the `@dawn-ai/sdk` contract and wires it to LangGraph.
+- `@dawn-ai/cli` owns the user-facing commands and the local runtime behavior.
 - `create-dawn-app` owns app scaffolding.
-- `@dawnai.org/devkit` owns shared template and file-generation helpers.
-- `@dawnai.org/config-typescript` and `@dawnai.org/config-biome` own the shared workspace configuration packages.
+- `@dawn-ai/devkit` owns shared template and file-generation helpers.
+- `@dawn-ai/config-typescript` and `@dawn-ai/config-biome` own the shared workspace configuration packages.
 
 ## Local Setup
 

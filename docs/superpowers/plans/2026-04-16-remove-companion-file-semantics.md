@@ -6,7 +6,7 @@
 
 **Architecture:** The `loadScenarioFile` function gains a pre-resolution step that locates the sibling `index.ts` and calls `loadRouteKind` to derive mode. The `validateScenario` function drops all `target`-related validation. Companion files (`graph.ts` / `workflow.ts`) are deleted from all test fixtures. The generated runtime harness drops its `writeCompanionScenarioEntry` helper and the `target` field from `RuntimeFixtureSpec`.
 
-**Tech Stack:** TypeScript, Vitest, pnpm monorepo, `@dawnai.org/core` discovery, `@dawnai.org/cli` runtime
+**Tech Stack:** TypeScript, Vitest, pnpm monorepo, `@dawn-ai/core` discovery, `@dawn-ai/cli` runtime
 
 ---
 
@@ -245,7 +245,7 @@ The existing logic after this (checking for `RUN_TEST_FILE`, then falling throug
 
 - [ ] **Step 6: Run typecheck**
 
-Run: `pnpm --filter @dawnai.org/cli exec tsc -p tsconfig.json --noEmit`
+Run: `pnpm --filter @dawn-ai/cli exec tsc -p tsconfig.json --noEmit`
 Expected: Clean (0 errors)
 
 - [ ] **Step 7: Commit**
@@ -490,7 +490,7 @@ In `writeRunScenarioFile`, remove lines 495–498:
 Replace the content of `test/generated/fixtures/handwritten-runtime-app/src/app/(public)/hello/[tenant]/run.test.ts` with:
 
 ```typescript
-import { expectMeta, expectOutput } from "@dawnai.org/cli/testing"
+import { expectMeta, expectOutput } from "@dawn-ai/cli/testing"
 
 export default [
   {

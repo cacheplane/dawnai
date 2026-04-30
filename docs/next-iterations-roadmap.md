@@ -16,11 +16,11 @@ Dawn currently has:
 - stable route discovery and route identity (`index.ts` per route convention)
 - local route execution and local dev runtime
 - scenario testing and generated-app parity coverage
-- a Dawn-owned backend-neutral authoring contract (`@dawnai.org/sdk`)
-- a formal `BackendAdapter` interface in `@dawnai.org/sdk` with `execute()` and `stream()` methods
-- `@dawnai.org/langgraph` as the first backend adapter (`graph` and `workflow` route kinds)
-- `@dawnai.org/langchain` as the second backend adapter (`chain` route kind for LCEL runnables)
-- `@dawnai.org/vite-plugin` for build-time tool schema inference from TypeScript types and JSDoc
+- a Dawn-owned backend-neutral authoring contract (`@dawn-ai/sdk`)
+- a formal `BackendAdapter` interface in `@dawn-ai/sdk` with `execute()` and `stream()` methods
+- `@dawn-ai/langgraph` as the first backend adapter (`graph` and `workflow` route kinds)
+- `@dawn-ai/langchain` as the second backend adapter (`chain` route kind for LCEL runnables)
+- `@dawn-ai/vite-plugin` for build-time tool schema inference from TypeScript types and JSDoc
 - CLI-owned route discovery and normalization (no backend-specific imports for discovery)
 - filesystem-driven tool registration and discovery with optional Zod schema exports
 - Dawn-owned ReAct tool execution loop for chain routes (no AgentExecutor dependency)
@@ -60,9 +60,9 @@ Define a Dawn authoring contract that is semantically owned by Dawn rather than 
 
 This phase is complete as of the authoring-sdk milestone.
 
-`@dawnai.org/sdk` is the Dawn-owned backend-neutral package containing the full author-facing contract: route types, runtime context types (`RuntimeContext`, `RuntimeTool`), and the `index.ts`-per-route convention. Tools are plain default-exported functions with names inferred from filenames. `@dawnai.org/langgraph` is now an adapter that implements the `@dawnai.org/sdk` contract and wires it to LangGraph execution.
+`@dawn-ai/sdk` is the Dawn-owned backend-neutral package containing the full author-facing contract: route types, runtime context types (`RuntimeContext`, `RuntimeTool`), and the `index.ts`-per-route convention. Tools are plain default-exported functions with names inferred from filenames. `@dawn-ai/langgraph` is now an adapter that implements the `@dawn-ai/sdk` contract and wires it to LangGraph execution.
 
-Authors depend on `@dawnai.org/sdk` for type annotations only. `@dawnai.org/langgraph` remains available for backwards compatibility but is no longer the canonical author surface.
+Authors depend on `@dawn-ai/sdk` for type annotations only. `@dawn-ai/langgraph` remains available for backwards compatibility but is no longer the canonical author surface.
 
 ## Phase 2: LangChain-Native Authoring (Complete)
 
@@ -76,14 +76,14 @@ This phase is complete as of the langchain-native milestone.
 
 **New packages:**
 
-- `@dawnai.org/langchain` — `BackendAdapter` for `chain` route kind, tool converter (Dawn tools → LangChain `DynamicStructuredTool`), Dawn-owned ReAct tool execution loop
-- `@dawnai.org/vite-plugin` — build-time Zod schema inference from TypeScript function signatures and JSDoc via the TypeScript Compiler API
+- `@dawn-ai/langchain` — `BackendAdapter` for `chain` route kind, tool converter (Dawn tools → LangChain `DynamicStructuredTool`), Dawn-owned ReAct tool execution loop
+- `@dawn-ai/vite-plugin` — build-time Zod schema inference from TypeScript function signatures and JSDoc via the TypeScript Compiler API
 
 **Key changes:**
 
-- `@dawnai.org/sdk` gained a formal `BackendAdapter` interface with `execute()` and `stream()` methods, and `RouteKind` expanded to `"chain" | "graph" | "workflow"`
-- CLI now owns all route discovery and normalization — no more `@dawnai.org/langgraph` import for `normalizeRouteModule()`
-- `@dawnai.org/langgraph` refactored to export `graphAdapter` and `workflowAdapter` as `BackendAdapter` implementations
+- `@dawn-ai/sdk` gained a formal `BackendAdapter` interface with `execute()` and `stream()` methods, and `RouteKind` expanded to `"chain" | "graph" | "workflow"`
+- CLI now owns all route discovery and normalization — no more `@dawn-ai/langgraph` import for `normalizeRouteModule()`
+- `@dawn-ai/langgraph` refactored to export `graphAdapter` and `workflowAdapter` as `BackendAdapter` implementations
 - Chain routes use LCEL `Runnable` exports; Dawn automatically binds tools, injects route params, and propagates abort signals
 - NDJSON streaming for `dawn run`, SSE streaming for `dawn dev`
 - Tool discovery supports optional `export const schema` (Zod) alongside the Vite plugin inference path
@@ -127,7 +127,7 @@ This is where tool composition can start to move beyond simple discovery into ri
 
 ### Deliverables
 
-- a design for Deep Agents integration on top of the Dawn contract, likely expressed through a package such as `@dawnai.org/deepagents`
+- a design for Deep Agents integration on top of the Dawn contract, likely expressed through a package such as `@dawn-ai/deepagents`
 - one or more proving examples
 - execution and test coverage proving the integration path works
 - explicit documentation of what Dawn owns versus what Deep Agents owns
@@ -197,8 +197,8 @@ Future authoring systems should extend that strength rather than replace it with
 
 Phases 1 and 2 are now complete. The next thread should aim to leave the repo with these outcomes:
 
-1. A written design for Deep Agents integration on top of the `@dawnai.org/sdk` contract (Phase 3)
-2. A decision on the `@dawnai.org/deepagents` adapter package structure and route kind
+1. A written design for Deep Agents integration on top of the `@dawn-ai/sdk` contract (Phase 3)
+2. A decision on the `@dawn-ai/deepagents` adapter package structure and route kind
 3. A concrete implementation plan for the first composition proof
 4. At least one proving example that demonstrates Dawn can support a third execution backend without contract changes
 
@@ -210,7 +210,7 @@ The next thread should probably resolve these questions in order:
 
 1. What route kind and export name does Deep Agents use? Does `BackendAdapter` need changes to support it?
 2. How do Deep Agents concepts (multi-agent orchestration, delegation) map into Dawn's route and tool model?
-3. What does the `@dawnai.org/deepagents` adapter look like at its interface boundary with `@dawnai.org/sdk`?
+3. What does the `@dawn-ai/deepagents` adapter look like at its interface boundary with `@dawn-ai/sdk`?
 4. What composition primitives does Dawn own versus delegate to Deep Agents?
 
 ## Related Documents

@@ -4,7 +4,7 @@
 
 **Goal:** Build a framework-first testing harness that hardens Dawn’s filesystem contract, generated-app correctness, and minimal runtime startup through one layered internal system and the new app-local `dawn verify` command.
 
-**Architecture:** Keep the public surface narrow and make the framework harness strong. The implementation should centralize shared testing primitives in `@dawnai.org/devkit`, add contract fixtures and generated-app lanes as explicit test layers, introduce `dawn verify` as an app-local integrity command, and wire root scripts and CI to compose these lanes with normalized reporting.
+**Architecture:** Keep the public surface narrow and make the framework harness strong. The implementation should centralize shared testing primitives in `@dawn-ai/devkit`, add contract fixtures and generated-app lanes as explicit test layers, introduce `dawn verify` as an app-local integrity command, and wire root scripts and CI to compose these lanes with normalized reporting.
 
 **Tech Stack:** pnpm workspaces, Turborepo, TypeScript, Vitest projects, Node child processes, packed tarball smoke tests, GitHub Actions
 
@@ -105,7 +105,7 @@ Create `packages/devkit/test/reporting.test.ts` that asserts a run result object
 
 - [ ] **Step 2: Run the devkit test to verify it fails**
 
-Run: `pnpm --filter @dawnai.org/devkit exec vitest --run test/reporting.test.ts`
+Run: `pnpm --filter @dawn-ai/devkit exec vitest --run test/reporting.test.ts`
 Expected: FAIL because the testing primitives do not exist.
 
 - [ ] **Step 3: Write the failing generated-app helper test**
@@ -117,7 +117,7 @@ Create `packages/devkit/test/generated-app.test.ts` that asserts a helper can:
 
 - [ ] **Step 4: Run the generated-app helper test to verify it fails**
 
-Run: `pnpm --filter @dawnai.org/devkit exec vitest --run test/generated-app.test.ts`
+Run: `pnpm --filter @dawn-ai/devkit exec vitest --run test/generated-app.test.ts`
 Expected: FAIL because no shared harness helpers exist.
 
 - [ ] **Step 5: Add the missing devkit test runner prerequisites**
@@ -138,7 +138,7 @@ Keep these primitives framework-internal and small. Do not add registry or brows
 
 - [ ] **Step 7: Run the devkit tests to verify they pass**
 
-Run: `pnpm --filter @dawnai.org/devkit test`
+Run: `pnpm --filter @dawn-ai/devkit test`
 Expected: PASS.
 
 - [ ] **Step 8: Commit**
@@ -178,7 +178,7 @@ Update `packages/core/test/discover-routes.test.ts` to load the checked-in fixtu
 
 - [ ] **Step 2: Run the route discovery test to verify it fails**
 
-Run: `pnpm --filter @dawnai.org/core exec vitest --run test/discover-routes.test.ts`
+Run: `pnpm --filter @dawn-ai/core exec vitest --run test/discover-routes.test.ts`
 Expected: FAIL because the checked-in fixture catalog does not exist yet.
 
 - [ ] **Step 3: Write the failing config and typegen fixture tests**
@@ -189,7 +189,7 @@ Update:
 
 - [ ] **Step 4: Run the config and typegen tests to verify they fail**
 
-Run: `pnpm --filter @dawnai.org/core exec vitest --run test/config.test.ts test/render-route-types.test.ts`
+Run: `pnpm --filter @dawn-ai/core exec vitest --run test/config.test.ts test/render-route-types.test.ts`
 Expected: FAIL because the new fixtures and expectations are not present.
 
 - [ ] **Step 5: Create the checked-in fixture catalog**
@@ -208,7 +208,7 @@ Replace ad hoc inline setup with reads from the checked-in fixture directories. 
 
 - [ ] **Step 7: Run core tests to verify they pass**
 
-Run: `pnpm --filter @dawnai.org/core test`
+Run: `pnpm --filter @dawn-ai/core test`
 Expected: PASS.
 
 - [ ] **Step 8: Commit**
@@ -238,7 +238,7 @@ Create `packages/cli/test/verify-command.test.ts` that asserts:
 
 - [ ] **Step 2: Run the CLI verify test to verify it fails**
 
-Run: `pnpm --filter @dawnai.org/cli exec vitest --run test/verify-command.test.ts`
+Run: `pnpm --filter @dawn-ai/cli exec vitest --run test/verify-command.test.ts`
 Expected: FAIL because the command does not exist.
 
 - [ ] **Step 3: Implement the `verify` command minimally**
@@ -259,7 +259,7 @@ Update:
 
 - [ ] **Step 5: Run CLI verification**
 
-Run: `pnpm --filter @dawnai.org/cli test`
+Run: `pnpm --filter @dawn-ai/cli test`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**

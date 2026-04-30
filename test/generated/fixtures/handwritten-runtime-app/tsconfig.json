@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "extends": "@dawnai.org/config-typescript/node",
+  "extends": "@dawn-ai/config-typescript/node",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": "."

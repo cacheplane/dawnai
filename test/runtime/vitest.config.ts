@@ -9,9 +9,9 @@ export default defineConfig({
   root: resolve(rootDir, "../.."),
   resolve: {
     alias: {
-      "@dawnai.org/core": resolve(rootDir, "../../packages/core/src/index.ts"),
-      "@dawnai.org/langgraph": resolve(rootDir, "../../packages/langgraph/src/index.ts"),
-      "@dawnai.org/sdk": resolve(rootDir, "../../packages/sdk/src/index.ts"),
+      "@dawn-ai/core": resolve(rootDir, "../../packages/core/src/index.ts"),
+      "@dawn-ai/langgraph": resolve(rootDir, "../../packages/langgraph/src/index.ts"),
+      "@dawn-ai/sdk": resolve(rootDir, "../../packages/sdk/src/index.ts"),
     },
   },
   test: {

@@ -2,21 +2,21 @@
 
 ## Goal
 
-Prove that the Dawn-owned authoring contract can support a real LangChain-native path. Introduce `@dawnai.org/langchain` as the second backend adapter, a unified `BackendAdapter` interface in `@dawnai.org/sdk`, a Vite plugin for build-time tool schema inference, and SSE streaming in `dawn dev`.
+Prove that the Dawn-owned authoring contract can support a real LangChain-native path. Introduce `@dawn-ai/langchain` as the second backend adapter, a unified `BackendAdapter` interface in `@dawn-ai/sdk`, a Vite plugin for build-time tool schema inference, and SSE streaming in `dawn dev`.
 
 ## Background
 
-Dawn currently supports two route kinds (`graph` and `workflow`) through a single backend adapter (`@dawnai.org/langgraph`). The authoring contract (`@dawnai.org/sdk`) is backend-neutral by design, but there is no second backend to prove it.
+Dawn currently supports two route kinds (`graph` and `workflow`) through a single backend adapter (`@dawn-ai/langgraph`). The authoring contract (`@dawn-ai/sdk`) is backend-neutral by design, but there is no second backend to prove it.
 
 Phase 2 adds LangChain LCEL runnables as the second execution backend, with `chain` as the new route export name. This is the first real proof that Dawn is a meta-framework rather than a LangGraph-first runtime shell.
 
-A third backend (`@dawnai.org/deepagents`) is planned for Phase 3, which validates investing in a formal adapter interface now.
+A third backend (`@dawn-ai/deepagents`) is planned for Phase 3, which validates investing in a formal adapter interface now.
 
 ## Design
 
 ### BackendAdapter interface
 
-`@dawnai.org/sdk` gains a new type-only `BackendAdapter` interface:
+`@dawn-ai/sdk` gains a new type-only `BackendAdapter` interface:
 
 ```typescript
 export interface BackendAdapter {
@@ -37,27 +37,27 @@ export interface BackendAdapter {
 - `kind` identifies which route kind(s) this adapter handles
 - `execute()` runs to completion, returns final output
 - `stream()` returns an async iterable of chunks
-- Both `@dawnai.org/langgraph` and `@dawnai.org/langchain` export a constant or factory that satisfies `BackendAdapter`
-- `@dawnai.org/sdk` remains a pure type layer — `BackendAdapter` is a type export only
+- Both `@dawn-ai/langgraph` and `@dawn-ai/langchain` export a constant or factory that satisfies `BackendAdapter`
+- `@dawn-ai/sdk` remains a pure type layer — `BackendAdapter` is a type export only
 
 `RouteKind` expands from `"graph" | "workflow"` to `"graph" | "workflow" | "chain"`.
 
 Three known adapters will implement this interface:
-- `@dawnai.org/langgraph` — handles `graph` and `workflow` (existing, refactored)
-- `@dawnai.org/langchain` — handles `chain` (new)
-- `@dawnai.org/deepagents` — Phase 3, future route kind TBD
+- `@dawn-ai/langgraph` — handles `graph` and `workflow` (existing, refactored)
+- `@dawn-ai/langchain` — handles `chain` (new)
+- `@dawn-ai/deepagents` — Phase 3, future route kind TBD
 
 ### Route discovery and kind inference
 
 The CLI owns all discovery. Changes:
 
 - `inferRouteKind()` in `discover-routes.ts` adds `chain` to the list of recognized named exports
-- `loadRouteKind()` in `load-route-kind.ts` replaces its current call to `normalizeRouteModule()` from `@dawnai.org/langgraph` with CLI-owned logic:
+- `loadRouteKind()` in `load-route-kind.ts` replaces its current call to `normalizeRouteModule()` from `@dawn-ai/langgraph` with CLI-owned logic:
   1. Load the route module
   2. Check for `graph`, `workflow`, or `chain` named export
   3. Validate exactly one is present (same rule as today)
   4. Return the kind and entry reference
-- `normalizeRouteModule()` in `@dawnai.org/langgraph` becomes internal or is removed — the CLI no longer imports it for discovery
+- `normalizeRouteModule()` in `@dawn-ai/langgraph` becomes internal or is removed — the CLI no longer imports it for discovery
 - Existing validation rules carry over: exactly one recognized export, must be a function or object with `.invoke()`
 
 Adding Deep Agents later means adding a fourth export name to the CLI's recognition list — no new package imports needed for discovery.
@@ -155,7 +155,7 @@ The Vite plugin infers the schema and description at build time. No Zod import n
 
 **Dawn tool to LangChain DynamicStructuredTool conversion:**
 
-`tool-converter.ts` in `@dawnai.org/langchain` converts each `DiscoveredToolDefinition` to a `DynamicStructuredTool`:
+`tool-converter.ts` in `@dawn-ai/langchain` converts each `DiscoveredToolDefinition` to a `DynamicStructuredTool`:
 
 ```typescript
 new DynamicStructuredTool({
@@ -173,7 +173,7 @@ When no schema is provided (and no Vite plugin), falls back to `z.record(z.unkno
 
 ### Vite plugin for schema inference
 
-New package `@dawnai.org/vite-plugin` at `packages/vite-plugin/`.
+New package `@dawn-ai/vite-plugin` at `packages/vite-plugin/`.
 
 The plugin runs at build time (and during `dawn dev` via Vite's transform pipeline):
 
@@ -217,11 +217,11 @@ Since the TS compiler API resolves generics, mapped types, and conditional types
 | Function types | Not meaningful as tool input |
 | Recursive self-referencing types | Cycle detection needed — defer to v2 |
 
-### `@dawnai.org/langchain` package structure
+### `@dawn-ai/langchain` package structure
 
 ```
 packages/langchain/
-  package.json          # peerDeps: @langchain/core; deps: @dawnai.org/sdk
+  package.json          # peerDeps: @langchain/core; deps: @dawn-ai/sdk
   tsconfig.json
   src/
     index.ts            # public exports
@@ -232,9 +232,9 @@ packages/langchain/
     tool-converter.test.ts
 ```
 
-No runtime dependency on `@dawnai.org/langgraph`. `@langchain/core` is a peer dependency (user installs it).
+No runtime dependency on `@dawn-ai/langgraph`. `@langchain/core` is a peer dependency (user installs it).
 
-### `@dawnai.org/vite-plugin` package structure
+### `@dawn-ai/vite-plugin` package structure
 
 ```
 packages/vite-plugin/
@@ -261,9 +261,9 @@ packages/vite-plugin/
 4. For `dawn test`: calls `adapter.execute()`, asserts on final output
 5. For `dawn dev`: calls `adapter.stream()`, forwards as SSE
 
-**Adapter registration:** CLI maintains a `RouteKind -> BackendAdapter` map. On startup, imports adapters from `@dawnai.org/langgraph` and `@dawnai.org/langchain`. If an import fails (package not installed), the error surfaces at execution time when a route of that kind is invoked.
+**Adapter registration:** CLI maintains a `RouteKind -> BackendAdapter` map. On startup, imports adapters from `@dawn-ai/langgraph` and `@dawn-ai/langchain`. If an import fails (package not installed), the error surfaces at execution time when a route of that kind is invoked.
 
-**`@dawnai.org/langgraph` refactor:** Existing `normalizeRouteModule()` and `invokeEntry()` logic moves behind the `BackendAdapter` interface. `@dawnai.org/langgraph` exports a `BackendAdapter` handling `graph` and `workflow` kinds, plus `.stream()` support.
+**`@dawn-ai/langgraph` refactor:** Existing `normalizeRouteModule()` and `invokeEntry()` logic moves behind the `BackendAdapter` interface. `@dawn-ai/langgraph` exports a `BackendAdapter` handling `graph` and `workflow` kinds, plus `.stream()` support.
 
 ### Streaming
 
@@ -316,13 +316,13 @@ Note: Better missing-dependency DX (e.g., `dawn verify` checking for `@langchain
 
 ### Testing strategy
 
-**`@dawnai.org/langchain` unit tests:**
+**`@dawn-ai/langchain` unit tests:**
 - Adapter calls `.invoke()` and `.stream()` on mock Runnable
 - Tool binding: when tools present, adapter binds to model and runs tool loop
 - Signal propagation: abort cancels in-flight operations
 - Tool converter: Dawn `DiscoveredToolDefinition` converts to `DynamicStructuredTool` correctly
 
-**`@dawnai.org/vite-plugin` unit tests:**
+**`@dawn-ai/vite-plugin` unit tests:**
 - Type extractor: all supported TS types extracted correctly from function signatures
 - Zod generator: type info converts to correct Zod schema code strings
 - JSDoc extractor: descriptions and `@param` tags mapped correctly
@@ -342,13 +342,13 @@ Note: Better missing-dependency DX (e.g., `dawn verify` checking for `@langchain
 
 ### What does not change
 
-- `@dawnai.org/sdk` remains a pure type layer (plus new `BackendAdapter` type)
+- `@dawn-ai/sdk` remains a pure type layer (plus new `BackendAdapter` type)
 - Tool discovery in the CLI (`tool-discovery.ts`) — same filesystem conventions, same bare function exports
 - Tool resolution order (route-local shadows shared)
 - Route filesystem conventions (`index.ts` per route, `tools/` directories)
 - `dawn verify` / `dawn test` / `dawn dev` command boundaries
 - Scenario test authoring format (`run.test.ts` default export array)
-- `@dawnai.org/langgraph` existing behavior for `graph` and `workflow` routes
+- `@dawn-ai/langgraph` existing behavior for `graph` and `workflow` routes
 
 ### What to defer
 
@@ -370,8 +370,8 @@ Note: Better missing-dependency DX (e.g., `dawn verify` checking for `@langchain
 ## Files modified
 
 **New packages:**
-- `packages/langchain/` — `@dawnai.org/langchain` adapter package
-- `packages/vite-plugin/` — `@dawnai.org/vite-plugin` schema inference plugin
+- `packages/langchain/` — `@dawn-ai/langchain` adapter package
+- `packages/vite-plugin/` — `@dawn-ai/vite-plugin` schema inference plugin
 
 **Modified source:**
 - `packages/sdk/src/index.ts` — add `BackendAdapter` type export

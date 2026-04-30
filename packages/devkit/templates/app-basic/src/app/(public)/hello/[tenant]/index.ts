@@ -1,4 +1,4 @@
-import type { RuntimeContext } from "@dawnai.org/sdk"
+import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { RouteTools } from "dawn:routes"
 
 import type { HelloState } from "./state.js"

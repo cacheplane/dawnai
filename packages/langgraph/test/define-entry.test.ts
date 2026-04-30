@@ -1,7 +1,7 @@
 import { rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { defineEntry, normalizeRouteModule } from "@dawnai.org/langgraph"
-import type { RouteModule } from "@dawnai.org/langgraph/route-module"
+import { defineEntry, normalizeRouteModule } from "@dawn-ai/langgraph"
+import type { RouteModule } from "@dawn-ai/langgraph/route-module"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { createPackedConsumer, runCommand } from "./_helpers/packed-consumer.js"
@@ -12,7 +12,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
 
-describe("@dawnai.org/langgraph defineEntry", () => {
+describe("@dawn-ai/langgraph defineEntry", () => {
   test("graph.ts modules can export a native-first entry and route config", () => {
     const graph = () => "graph"
     const module = {
@@ -116,7 +116,7 @@ describe("@dawnai.org/langgraph defineEntry", () => {
     await writeFile(
       scriptPath,
       [
-        'import { defineEntry, normalizeRouteModule } from "@dawnai.org/langgraph";',
+        'import { defineEntry, normalizeRouteModule } from "@dawn-ai/langgraph";',
         "const graph = () => 'graph';",
         "const entry = defineEntry({ graph, config: { streaming: true } });",
         "const normalized = normalizeRouteModule(entry);",

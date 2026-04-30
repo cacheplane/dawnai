@@ -1,4 +1,4 @@
-import type { BackendAdapter } from "@dawnai.org/sdk"
+import type { BackendAdapter } from "@dawn-ai/sdk"
 
 interface RunnableLike {
   readonly invoke: (input: unknown, options?: { signal?: AbortSignal }) => Promise<unknown>

@@ -171,13 +171,13 @@ Do not document unimplemented commands or reserved ideas.
 
 Summarize the public package split:
 
-- `@dawnai.org/core`
-- `@dawnai.org/langgraph`
-- `@dawnai.org/cli`
+- `@dawn-ai/core`
+- `@dawn-ai/langgraph`
+- `@dawn-ai/cli`
 - `create-dawn-app`
-- `@dawnai.org/devkit`
-- `@dawnai.org/config-typescript`
-- `@dawnai.org/config-biome`
+- `@dawn-ai/devkit`
+- `@dawn-ai/config-typescript`
+- `@dawn-ai/config-biome`
 
 This section should stay high-level and route deeper implementation detail to `CONTRIBUTORS.md`.
 
@@ -223,11 +223,11 @@ This section should explain what each top-level area is for, not just list names
 
 The contributor guide should map package boundaries clearly:
 
-- `@dawnai.org/core` owns discovery, config loading, validation, and route types
-- `@dawnai.org/langgraph` owns thin route authoring contracts
-- `@dawnai.org/cli` owns user-facing commands and local runtime behavior
+- `@dawn-ai/core` owns discovery, config loading, validation, and route types
+- `@dawn-ai/langgraph` owns thin route authoring contracts
+- `@dawn-ai/cli` owns user-facing commands and local runtime behavior
 - `create-dawn-app` owns scaffolding
-- `@dawnai.org/devkit` owns shared template and file-generation helpers
+- `@dawn-ai/devkit` owns shared template and file-generation helpers
 - config packages own shared workspace configuration
 
 ### Local Setup

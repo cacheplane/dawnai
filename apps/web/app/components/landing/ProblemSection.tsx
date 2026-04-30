@@ -157,7 +157,7 @@ export default async (i: { readonly tenant: string }) =>
   ({ greeting: \`Hello, \${i.tenant}!\` })
 
 // src/app/(public)/hello/[tenant]/index.ts
-import type { RuntimeContext } from "@dawnai.org/sdk"
+import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { HelloState } from "./state.js"
 

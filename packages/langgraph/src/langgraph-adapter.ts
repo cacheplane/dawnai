@@ -1,4 +1,4 @@
-import type { BackendAdapter } from "@dawnai.org/sdk"
+import type { BackendAdapter } from "@dawn-ai/sdk"
 
 export function createLangGraphAdapter(kind: "graph" | "workflow"): BackendAdapter {
   return {

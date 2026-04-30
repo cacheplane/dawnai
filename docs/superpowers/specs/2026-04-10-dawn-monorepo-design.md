@@ -18,13 +18,13 @@ The repo should be simple to reason about, publishable as independent packages, 
 - Architectural concept in docs: `App Graph`
 - Primary CLI binary: `dawn`
 - Scaffolder package and command: `create-dawn-app`
-- Framework package scope: `@dawnai.org/*`
+- Framework package scope: `@dawn-ai/*`
 
 The attached RFC used `DawnGraph` as the public brand. This design simplifies the public surface to `dawn` and reserves `App Graph` as the explanatory concept used in documentation.
 
 Package naming rule:
 
-- framework libraries and internal shared packages use `@dawnai.org/*`
+- framework libraries and internal shared packages use `@dawn-ai/*`
 - the scaffolder remains intentionally unscoped as `create-dawn-app`
 
 ## Product Thesis
@@ -117,7 +117,7 @@ Marketing and documentation site for Dawn. This app should explain the product, 
 
 The website is part of the monorepo, but it is not the runtime control plane for the framework.
 
-### `@dawnai.org/core`
+### `@dawn-ai/core`
 
 Owns Dawn-specific conventions and shared contracts:
 
@@ -131,7 +131,7 @@ Owns Dawn-specific conventions and shared contracts:
 
 This package is the center of the repo's Dawn-specific logic.
 
-### `@dawnai.org/langgraph`
+### `@dawn-ai/langgraph`
 
 Owns integration points with LangGraph and adjacent libraries:
 
@@ -141,23 +141,23 @@ Owns integration points with LangGraph and adjacent libraries:
 
 This package must avoid becoming a second runtime layer.
 
-### `@dawnai.org/cli`
+### `@dawn-ai/cli`
 
-Owns the `dawn` binary and command implementations. Commands should compose `@dawnai.org/core` and `@dawnai.org/langgraph` rather than defining duplicate discovery or validation logic.
+Owns the `dawn` binary and command implementations. Commands should compose `@dawn-ai/core` and `@dawn-ai/langgraph` rather than defining duplicate discovery or validation logic.
 
 ### `create-dawn-app`
 
 Owns scaffolding for new Dawn applications. It should provide a fast path into Dawn conventions with a small, understandable output tree.
 
-### `@dawnai.org/devkit`
+### `@dawn-ai/devkit`
 
-Shared scaffolding and code-generation utilities used by both `create-dawn-app` and `@dawnai.org/cli`. This package prevents those tools from diverging in how they write files, discover templates, or validate project layouts.
+Shared scaffolding and code-generation utilities used by both `create-dawn-app` and `@dawn-ai/cli`. This package prevents those tools from diverging in how they write files, discover templates, or validate project layouts.
 
-### `@dawnai.org/config-biome`
+### `@dawn-ai/config-biome`
 
 Shared Biome config published or consumed internally by workspace packages.
 
-### `@dawnai.org/config-typescript`
+### `@dawn-ai/config-typescript`
 
 Shared TypeScript base configs for library, app, and Node package use cases.
 
@@ -191,7 +191,7 @@ my-dawn-app/
       (internal)/
 ```
 
-This convention is what `@dawnai.org/core`, `@dawnai.org/cli`, `create-dawn-app`, and `dawn typegen` should share. The Dawn framework repo itself is a monorepo and does not need to be treated as a Dawn application.
+This convention is what `@dawn-ai/core`, `@dawn-ai/cli`, `create-dawn-app`, and `dawn typegen` should share. The Dawn framework repo itself is a monorepo and does not need to be treated as a Dawn application.
 
 ## Framework Authoring Model
 
@@ -345,9 +345,9 @@ Reasons:
 
 ### Per-package expectations
 
-- `@dawnai.org/core`: filesystem discovery, parsing, and manifest tests
-- `@dawnai.org/langgraph`: adapter contract tests against native authoring shapes
-- `@dawnai.org/cli`: command and fixture tests
+- `@dawn-ai/core`: filesystem discovery, parsing, and manifest tests
+- `@dawn-ai/langgraph`: adapter contract tests against native authoring shapes
+- `@dawn-ai/cli`: command and fixture tests
 - `create-dawn-app`: smoke tests that scaffold a fixture and validate installable output
 - `apps/web`: content and app build verification
 
@@ -361,7 +361,7 @@ Reasons:
 
 ### Phase 2: Core framework contracts
 
-- implement discovery and config loading in `@dawnai.org/core`
+- implement discovery and config loading in `@dawn-ai/core`
 - define route manifests and type generation inputs
 - implement minimal LangGraph integration contracts
 
@@ -401,7 +401,7 @@ If the package namespace or docs remain half-committed between `DawnGraph` and `
 - The website lives in `apps/web`
 - Dawn owns filesystem conventions and tooling, not a replacement runtime
 - V1 focuses on scaffolding, discovery, validation, and type generation
-- Framework packages use `@dawnai.org/*`, while the scaffolder remains `create-dawn-app`
+- Framework packages use `@dawn-ai/*`, while the scaffolder remains `create-dawn-app`
 
 ## Open Questions Deferred Intentionally
 

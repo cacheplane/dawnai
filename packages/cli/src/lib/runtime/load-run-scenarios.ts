@@ -3,7 +3,7 @@ import { access, readdir } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
-import { discoverRoutes, findDawnApp } from "@dawnai.org/core"
+import { discoverRoutes, findDawnApp } from "@dawn-ai/core"
 import { loadRouteKind } from "./load-route-kind.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import type { RuntimeExecutionResult } from "./result.js"

@@ -6,7 +6,7 @@
 
 **Architecture:** `resolveRouteTarget` drops its `toAbsolutePath` + `stat()` approach and instead calls `discoverRoutes` to get the `RouteManifest`, then looks up the provided pathname. `load-run-scenarios.ts` narrowing similarly switches from filesystem resolution to route pathname prefix matching. All `invocationCwd` plumbing is removed.
 
-**Tech Stack:** TypeScript, vitest, `@dawnai.org/core` route discovery
+**Tech Stack:** TypeScript, vitest, `@dawn-ai/core` route discovery
 
 ---
 
@@ -40,7 +40,7 @@ Replace the entire implementation of `resolveRouteTarget`. The new version:
 ```typescript
 import { relative, sep } from "node:path"
 
-import { discoverRoutes } from "@dawnai.org/core"
+import { discoverRoutes } from "@dawn-ai/core"
 import {
   createRuntimeFailureResult,
   formatErrorMessage,
@@ -248,7 +248,7 @@ async function discoverScenarioFiles(options: {
     ? options.narrowingPath
     : `/${options.narrowingPath}`
 
-  const { discoverRoutes } = await import("@dawnai.org/core")
+  const { discoverRoutes } = await import("@dawn-ai/core")
   const manifest = await discoverRoutes()
   const matchingRoutes = manifest.routes.filter(
     (route) =>
@@ -281,10 +281,10 @@ Note: `pathExists` is still used in `loadScenarioFile` to check sibling `index.t
 
 Actually, `resolve` is used in `loadScenarioFile` line 160: `const indexFile = resolve(dirname(options.scenarioFile), "index.ts")`. So keep the `resolve` import.
 
-Also: `discoverRoutes` is already imported at the top via `findDawnApp` from `@dawnai.org/core`. Instead of dynamic import, add `discoverRoutes` to the existing static import:
+Also: `discoverRoutes` is already imported at the top via `findDawnApp` from `@dawn-ai/core`. Instead of dynamic import, add `discoverRoutes` to the existing static import:
 
 ```typescript
-import { discoverRoutes, findDawnApp } from "@dawnai.org/core"
+import { discoverRoutes, findDawnApp } from "@dawn-ai/core"
 ```
 
 - [ ] **Step 2: Verify compilation**

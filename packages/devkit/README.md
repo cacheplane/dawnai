@@ -1,4 +1,4 @@
-# @dawnai.org/devkit
+# @dawn-ai/devkit
 
 Shared template and file-writing helpers used by Dawn tooling.
 

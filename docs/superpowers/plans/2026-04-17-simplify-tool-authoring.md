@@ -4,7 +4,7 @@
 
 **Goal:** Remove `defineTool` ceremony and infer tool names from filenames so tools are just default-exported functions.
 
-**Architecture:** Change `tool-discovery.ts` to accept bare function exports and derive names from filenames. Remove `defineTool`, `ToolDefinition`, and `ToolContext` from `@dawnai.org/sdk` and `@dawnai.org/langgraph`. Update template and test fixtures.
+**Architecture:** Change `tool-discovery.ts` to accept bare function exports and derive names from filenames. Remove `defineTool`, `ToolDefinition`, and `ToolContext` from `@dawn-ai/sdk` and `@dawn-ai/langgraph`. Update template and test fixtures.
 
 **Tech Stack:** TypeScript, Vitest, pnpm workspaces
 
@@ -101,12 +101,12 @@ async function loadToolDefinition(
 
 - [ ] **Step 4: Run typecheck**
 
-Run: `pnpm --filter @dawnai.org/cli exec tsc -p tsconfig.json --noEmit`
+Run: `pnpm --filter @dawn-ai/cli exec tsc -p tsconfig.json --noEmit`
 Expected: PASS (no type errors)
 
 - [ ] **Step 5: Run existing CLI tests to verify backward compatibility**
 
-Run: `pnpm --filter @dawnai.org/cli exec vitest run test/test-command.test.ts`
+Run: `pnpm --filter @dawn-ai/cli exec vitest run test/test-command.test.ts`
 Expected: PASS — the existing object-with-name fixtures still work because the record+run path handles them.
 
 - [ ] **Step 6: Commit**
@@ -163,7 +163,7 @@ with:
 
 - [ ] **Step 3: Run the CLI tests**
 
-Run: `pnpm --filter @dawnai.org/cli exec vitest run test/test-command.test.ts`
+Run: `pnpm --filter @dawn-ai/cli exec vitest run test/test-command.test.ts`
 Expected: PASS — all 25 tests pass with bare function tool fixtures.
 
 - [ ] **Step 4: Commit**
@@ -175,7 +175,7 @@ git commit -m "test: update tool fixtures to bare function exports"
 
 ---
 
-### Task 3: Remove `defineTool` from `@dawnai.org/sdk` and `@dawnai.org/langgraph`
+### Task 3: Remove `defineTool` from `@dawn-ai/sdk` and `@dawn-ai/langgraph`
 
 **Files:**
 - Modify: `packages/sdk/src/tool.ts`
@@ -210,10 +210,10 @@ rm packages/sdk/test/define-tool.test.ts
 Replace the entire file with:
 
 ```typescript
-import type { RuntimeContext, RuntimeTool } from "@dawnai.org/sdk"
+import type { RuntimeContext, RuntimeTool } from "@dawn-ai/sdk"
 import { describe, expect, expectTypeOf, test } from "vitest"
 
-describe("@dawnai.org/sdk runtime-context type surface", () => {
+describe("@dawn-ai/sdk runtime-context type surface", () => {
   test("runtime-context types are exported from the package root", () => {
     type Tools = {
       readonly lookupCustomer: RuntimeTool<{ readonly id: string }, { readonly id: string }>
@@ -253,7 +253,7 @@ describe("@dawnai.org/sdk runtime-context type surface", () => {
 Replace with:
 
 ```markdown
-# @dawnai.org/sdk
+# @dawn-ai/sdk
 
 TypeScript types for authoring Dawn routes and tools.
 
@@ -291,12 +291,12 @@ export type { RuntimeContext, RuntimeTool } from "./runtime-context.js"
 
 - [ ] **Step 8: Run SDK tests**
 
-Run: `pnpm --filter @dawnai.org/sdk test`
+Run: `pnpm --filter @dawn-ai/sdk test`
 Expected: PASS (1 test file, 2 tests)
 
 - [ ] **Step 9: Run langgraph typecheck**
 
-Run: `pnpm --filter @dawnai.org/langgraph exec tsc -p tsconfig.json --noEmit`
+Run: `pnpm --filter @dawn-ai/langgraph exec tsc -p tsconfig.json --noEmit`
 Expected: PASS
 
 - [ ] **Step 10: Commit**

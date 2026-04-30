@@ -127,7 +127,7 @@ Create:
 - `packages/cli/src/lib/runtime/result.ts`
 
 Use one concrete v1 in-process loading strategy:
-- add `tsx` as a runtime dependency of `@dawnai.org/cli`
+- add `tsx` as a runtime dependency of `@dawn-ai/cli`
 - register the `tsx` loader inside the current process
 - use dynamic import after loader registration so source `graph.ts`, `workflow.ts`, and later `run.test.ts` modules execute in-process
 
@@ -192,7 +192,7 @@ Create `packages/cli/test/run-command.test.ts` covering:
 
 - [ ] **Step 2: Run the `dawn run` tests to verify they fail**
 
-Run: `pnpm --filter @dawnai.org/cli exec vitest --run test/run-command.test.ts`
+Run: `pnpm --filter @dawn-ai/cli exec vitest --run test/run-command.test.ts`
 Expected: FAIL because the command and runtime helpers do not exist.
 
 - [ ] **Step 3: Implement route target resolution**
@@ -227,14 +227,14 @@ Register it in `packages/cli/src/index.ts`.
 
 - [ ] **Step 6: Run `dawn run` tests to verify they pass**
 
-Run: `pnpm --filter @dawnai.org/cli exec vitest --run test/run-command.test.ts`
+Run: `pnpm --filter @dawn-ai/cli exec vitest --run test/run-command.test.ts`
 Expected: PASS.
 
 - [ ] **Step 7: Run CLI package verification**
 
 Run:
-- `pnpm --filter @dawnai.org/cli test`
-- `pnpm --filter @dawnai.org/cli typecheck`
+- `pnpm --filter @dawn-ai/cli test`
+- `pnpm --filter @dawn-ai/cli typecheck`
 
 Expected: PASS.
 
@@ -279,7 +279,7 @@ Create `packages/cli/test/test-command.test.ts` covering:
 
 - [ ] **Step 2: Run the `dawn test` tests to verify they fail**
 
-Run: `pnpm --filter @dawnai.org/cli exec vitest --run test/test-command.test.ts`
+Run: `pnpm --filter @dawn-ai/cli exec vitest --run test/test-command.test.ts`
 Expected: FAIL because the command and scenario loader do not exist.
 
 - [ ] **Step 3: Implement scenario discovery and loading**
@@ -313,14 +313,14 @@ Register it in `packages/cli/src/index.ts`.
 
 - [ ] **Step 5: Run `dawn test` tests to verify they pass**
 
-Run: `pnpm --filter @dawnai.org/cli exec vitest --run test/test-command.test.ts`
+Run: `pnpm --filter @dawn-ai/cli exec vitest --run test/test-command.test.ts`
 Expected: PASS.
 
 - [ ] **Step 6: Run CLI package verification**
 
 Run:
-- `pnpm --filter @dawnai.org/cli test`
-- `pnpm --filter @dawnai.org/cli typecheck`
+- `pnpm --filter @dawn-ai/cli test`
+- `pnpm --filter @dawn-ai/cli typecheck`
 
 Expected: PASS.
 
