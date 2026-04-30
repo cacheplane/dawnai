@@ -94,11 +94,13 @@ describe("create-dawn-app", () => {
     expect(packageJson.scripts.typecheck).toBe("tsc --noEmit")
     expect(packageJson.dependencies["@dawn-ai/core"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/cli"]).not.toMatch(/^file:/)
-    expect(packageJson.dependencies["@dawn-ai/langgraph"]).not.toMatch(/^file:/)
+    expect(packageJson.dependencies["@dawn-ai/langchain"]).not.toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/core"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/cli"]).toBe("next")
-    expect(packageJson.dependencies["@dawn-ai/langgraph"]).toBe("next")
+    expect(packageJson.dependencies["@dawn-ai/langchain"]).toBe("next")
+    expect(packageJson.dependencies["@langchain/openai"]).toBe("0.6.17")
+    expect(packageJson.dependencies["@langchain/core"]).toBe("0.3.80")
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toBe("next")
     await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow()
   })
@@ -141,7 +143,9 @@ describe("create-dawn-app", () => {
     expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
     expect(packageJson.dependencies["@dawn-ai/core"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/cli"]).toMatch(/^file:/)
-    expect(packageJson.dependencies["@dawn-ai/langgraph"]).toMatch(/^file:/)
+    expect(packageJson.dependencies["@dawn-ai/langchain"]).toMatch(/^file:/)
+    expect(packageJson.dependencies["@langchain/openai"]).toBe("0.6.17")
+    expect(packageJson.dependencies["@langchain/core"]).toBe("0.3.80")
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toMatch(/^file:/)
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
@@ -172,9 +176,11 @@ describe("create-dawn-app", () => {
     expect(resolveFileSpecifier(packageJson.dependencies["@dawn-ai/cli"])).toBe(
       resolve(repoRoot, "packages/cli"),
     )
-    expect(resolveFileSpecifier(packageJson.dependencies["@dawn-ai/langgraph"])).toBe(
-      resolve(repoRoot, "packages/langgraph"),
+    expect(resolveFileSpecifier(packageJson.dependencies["@dawn-ai/langchain"])).toBe(
+      resolve(repoRoot, "packages/langchain"),
     )
+    expect(packageJson.dependencies["@langchain/openai"]).toBe("0.6.17")
+    expect(packageJson.dependencies["@langchain/core"]).toBe("0.3.80")
     expect(resolveFileSpecifier(packageJson.devDependencies["@dawn-ai/config-typescript"])).toBe(
       resolve(repoRoot, "packages/config-typescript"),
     )
@@ -184,8 +190,8 @@ describe("create-dawn-app", () => {
     expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn-ai/cli"] ?? "")).toBe(
       resolve(repoRoot, "packages/cli"),
     )
-    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn-ai/langgraph"] ?? "")).toBe(
-      resolve(repoRoot, "packages/langgraph"),
+    expect(resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn-ai/langchain"] ?? "")).toBe(
+      resolve(repoRoot, "packages/langchain"),
     )
     expect(
       resolveFileSpecifier(packageJson.pnpm?.overrides?.["@dawn-ai/config-typescript"] ?? ""),

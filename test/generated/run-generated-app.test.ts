@@ -272,7 +272,7 @@ async function rewriteDependenciesToTarballs(options: {
     ...packageJson.dependencies,
     "@dawn-ai/cli": options.tarballs.cli,
     "@dawn-ai/core": options.tarballs.core,
-    "@dawn-ai/langgraph": options.tarballs.langgraph,
+    "@dawn-ai/langchain": options.tarballs.langchain,
     "@dawn-ai/sdk": options.tarballs.sdk,
   }
   packageJson.devDependencies = {
@@ -287,7 +287,6 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/config-typescript": options.tarballs.configTypescript,
       "@dawn-ai/core": options.tarballs.core,
       "@dawn-ai/langchain": options.tarballs.langchain,
-      "@dawn-ai/langgraph": options.tarballs.langgraph,
       "@dawn-ai/sdk": options.tarballs.sdk,
     },
   }
@@ -479,7 +478,7 @@ async function createExpectedInternalFixture(
         ...expected.packageJson.dependencies,
         "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
         "@dawn-ai/core": "<repo:@dawn-ai/core>",
-        "@dawn-ai/langgraph": "<repo:@dawn-ai/langgraph>",
+        "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
         "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
       },
       devDependencies: {
@@ -492,7 +491,6 @@ async function createExpectedInternalFixture(
           "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
           "@dawn-ai/core": "<repo:@dawn-ai/core>",
           "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
-          "@dawn-ai/langgraph": "<repo:@dawn-ai/langgraph>",
           "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
         },
       },
