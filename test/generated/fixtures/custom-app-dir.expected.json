@@ -11,8 +11,10 @@
     "dependencies": {
       "@dawn-ai/core": "<tarball:@dawn-ai/core>",
       "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
-      "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
-      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>"
+      "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
+      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
+      "@langchain/core": "0.3.80",
+      "@langchain/openai": "0.6.17"
     },
     "devDependencies": {
       "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
@@ -25,7 +27,6 @@
         "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
         "@dawn-ai/core": "<tarball:@dawn-ai/core>",
         "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
-        "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
         "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>"
       }
     }
