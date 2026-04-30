@@ -1,4 +1,8 @@
-export interface HelloState {
-  readonly tenant: string;
-  readonly greeting?: string;
+export interface HelloInput {
+  readonly tenant: string
+  readonly message: string
+}
+
+export interface HelloOutput {
+  readonly response: string
 }
