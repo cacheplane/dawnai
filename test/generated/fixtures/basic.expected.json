@@ -50,7 +50,7 @@
       },
       {
         "name": "typegen",
-        "renderedBytes": 433,
+        "renderedBytes": 421,
         "status": "passed"
       }
     ],
@@ -84,5 +84,5 @@
       }
     ]
   },
-  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/hello/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/hello/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {\n    \"/hello/[tenant]\": {\n      readonly greet: (input: { readonly tenant: string; }) => Promise<{ name: string; greeting: string; plan: string; }>;\n    };\n  }\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n}\n"
+  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/hello/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/hello/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {\n    \"/hello/[tenant]\": {\n      readonly greet: (input: { readonly tenant: string; }) => Promise<{ greeting: string; tenant: string; }>;\n    };\n  }\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n}\n"
 }
