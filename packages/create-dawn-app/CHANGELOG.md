@@ -1,5 +1,13 @@
 # create-dawn-app
 
+## 0.0.2
+
+### Patch Changes
+
+- 5c18b2d: Fix workspace:\* protocol leaking into published package dependencies.
+- Updated dependencies [5c18b2d]
+  - @dawn-ai/devkit@0.0.2
+
 ## 0.0.1
 
 ### Patch Changes
