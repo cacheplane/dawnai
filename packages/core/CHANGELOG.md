@@ -1,5 +1,17 @@
 # @dawn-ai/core
 
+## 0.1.0
+
+### Minor Changes
+
+- 1034806: Fix workspace:\* protocol leaking into published package dependencies.
+  Republish with resolved version specifiers.
+
+### Patch Changes
+
+- Updated dependencies [1034806]
+  - @dawn-ai/sdk@0.1.0
+
 ## 0.0.1
 
 ### Patch Changes
