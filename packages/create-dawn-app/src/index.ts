@@ -234,7 +234,6 @@ async function applyInternalModePackageOverrides(
       "@dawn-ai/config-typescript": replacements.dawnConfigTypescriptSpecifier,
       "@dawn-ai/core": replacements.dawnCoreSpecifier,
       "@dawn-ai/langchain": replacements.dawnLangchainSpecifier,
-      "@dawn-ai/langgraph": replacements.dawnLanggraphSpecifier,
       "@dawn-ai/sdk": replacements.dawnSdkSpecifier,
     },
   }
