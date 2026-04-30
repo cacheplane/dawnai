@@ -1,6 +1,11 @@
+import { z } from "zod"
+
+export const schema = z.object({
+  tenant: z.string().describe("The tenant identifier to look up"),
+})
+
 /**
  * Look up information about a tenant.
- * @param tenant - The tenant identifier to look up
  */
 export default async (input: { readonly tenant: string }) => {
   return {

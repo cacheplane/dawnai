@@ -2,7 +2,7 @@ import { ChatPromptTemplate } from "@langchain/core/prompts"
 import { ChatOpenAI } from "@langchain/openai"
 import { convertToolToLangChain } from "@dawn-ai/langchain"
 
-import greet from "./tools/greet.js"
+import greet, { schema as greetSchema } from "./tools/greet.js"
 
 const model = new ChatOpenAI({
   modelName: "gpt-4o-mini",
@@ -21,6 +21,7 @@ const greetTool = convertToolToLangChain({
   name: "greet",
   description: "Look up information about a tenant",
   run: greet,
+  schema: greetSchema,
 })
 
 export const chain = prompt.pipe(model.bindTools([greetTool]))
