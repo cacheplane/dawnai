@@ -1,16 +1,26 @@
-import type { RuntimeContext } from "@dawn-ai/sdk"
-import type { RouteTools } from "dawn:routes"
+import { ChatPromptTemplate } from "@langchain/core/prompts"
+import { ChatOpenAI } from "@langchain/openai"
+import { convertToolToLangChain } from "@dawn-ai/langchain"
 
-import type { HelloState } from "./state.js"
+import greet from "./tools/greet.js"
 
-export async function workflow(
-  state: HelloState,
-  context: RuntimeContext<RouteTools<"/hello/[tenant]">>,
-): Promise<HelloState> {
-  const result = await context.tools.greet({ tenant: state.tenant })
+const model = new ChatOpenAI({
+  modelName: "gpt-4o-mini",
+  temperature: 0,
+})
 
-  return {
-    ...state,
-    greeting: result.greeting,
-  }
-}
+const prompt = ChatPromptTemplate.fromMessages([
+  [
+    "system",
+    "You are a helpful assistant for the {tenant} organization. Use the available tools to look up tenant information before responding.",
+  ],
+  ["human", "{message}"],
+])
+
+const greetTool = convertToolToLangChain({
+  name: "greet",
+  description: "Look up information about a tenant",
+  run: greet,
+})
+
+export const chain = prompt.pipe(model.bindTools([greetTool]))

@@ -11,8 +11,10 @@
     "dependencies": {
       "@dawn-ai/core": "<tarball:@dawn-ai/core>",
       "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
-      "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
-      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>"
+      "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
+      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
+      "@langchain/core": "0.3.80",
+      "@langchain/openai": "0.6.17"
     },
     "devDependencies": {
       "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
@@ -25,7 +27,6 @@
         "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
         "@dawn-ai/core": "<tarball:@dawn-ai/core>",
         "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
-        "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
         "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>"
       }
     }
@@ -48,7 +49,7 @@
       },
       {
         "name": "typegen",
-        "renderedBytes": 405,
+        "renderedBytes": 433,
         "status": "passed"
       }
     ],
@@ -65,7 +66,7 @@
       {
         "id": "/hello/[tenant]",
         "pathname": "/hello/[tenant]",
-        "kind": "workflow",
+        "kind": "chain",
         "entryFile": "<app-root>/src/app/(public)/hello/[tenant]/index.ts",
         "routeDir": "<app-root>/src/app/(public)/hello/[tenant]",
         "segments": [
@@ -82,5 +83,5 @@
       }
     ]
   },
-  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/hello/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/hello/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {\n    \"/hello/[tenant]\": {\n      readonly greet: (input: { readonly tenant: string; }) => Promise<{ greeting: string; }>;\n    };\n  }\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n}\n"
+  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/hello/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/hello/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {\n    \"/hello/[tenant]\": {\n      readonly greet: (input: { readonly tenant: string; }) => Promise<{ name: string; greeting: string; plan: string; }>;\n    };\n  }\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n}\n"
 }

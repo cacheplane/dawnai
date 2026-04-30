@@ -10,8 +10,10 @@
   "dependencies": {
     "@dawn-ai/core": "{{dawnCoreSpecifier}}",
     "@dawn-ai/cli": "{{dawnCliSpecifier}}",
-    "@dawn-ai/langgraph": "{{dawnLanggraphSpecifier}}",
-    "@dawn-ai/sdk": "{{dawnSdkSpecifier}}"
+    "@dawn-ai/langchain": "{{dawnLangchainSpecifier}}",
+    "@dawn-ai/sdk": "{{dawnSdkSpecifier}}",
+    "@langchain/core": "{{langchainCoreSpecifier}}",
+    "@langchain/openai": "{{langchainOpenaiSpecifier}}"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "{{dawnConfigTypescriptSpecifier}}",

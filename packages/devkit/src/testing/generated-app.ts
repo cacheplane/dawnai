@@ -9,7 +9,10 @@ export interface GeneratedAppSpecifiers {
   readonly dawnCli: string
   readonly dawnConfigTypescript: string
   readonly dawnCore: string
-  readonly dawnLanggraph: string
+  readonly dawnLangchain: string
+  readonly dawnSdk: string
+  readonly langchainCore: string
+  readonly langchainOpenai: string
 }
 
 export interface CreateGeneratedAppOptions {
@@ -44,7 +47,10 @@ export async function createGeneratedApp(
       dawnCliSpecifier: specifiers.dawnCli,
       dawnConfigTypescriptSpecifier: specifiers.dawnConfigTypescript,
       dawnCoreSpecifier: specifiers.dawnCore,
-      dawnLanggraphSpecifier: specifiers.dawnLanggraph,
+      dawnLangchainSpecifier: specifiers.dawnLangchain,
+      dawnSdkSpecifier: specifiers.dawnSdk,
+      langchainCoreSpecifier: specifiers.langchainCore,
+      langchainOpenaiSpecifier: specifiers.langchainOpenai,
     },
     targetDir: appRoot,
     templateDir,
@@ -67,6 +73,9 @@ function normalizeSpecifiers(
     dawnCli: specifiers?.dawnCli ?? "workspace:*",
     dawnConfigTypescript: specifiers?.dawnConfigTypescript ?? "workspace:*",
     dawnCore: specifiers?.dawnCore ?? "workspace:*",
-    dawnLanggraph: specifiers?.dawnLanggraph ?? "workspace:*",
+    dawnLangchain: specifiers?.dawnLangchain ?? "workspace:*",
+    dawnSdk: specifiers?.dawnSdk ?? "workspace:*",
+    langchainCore: specifiers?.langchainCore ?? "0.3.80",
+    langchainOpenai: specifiers?.langchainOpenai ?? "0.6.17",
   }
 }
