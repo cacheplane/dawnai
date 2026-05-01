@@ -21,8 +21,8 @@ import {
 const SMOKE_ROOT = resolve(import.meta.dirname)
 const tempDirs: TrackedTempDir[] = []
 
-type SmokeRouteKind = "chain" | "graph" | "workflow"
-type SmokeFixtureName = "graph-basic" | "workflow-basic"
+type SmokeRouteKind = "agent" | "chain" | "graph" | "workflow"
+type SmokeFixtureName = "agent-basic" | "graph-basic" | "workflow-basic"
 
 interface SmokeOverlay {
   readonly deleteFiles?: readonly string[]
@@ -50,6 +50,33 @@ afterEach(async () => {
 })
 
 describe("runtime smoke harness", () => {
+  test("boots the agent fixture and executes one canonical flow", {
+    timeout: 180_000,
+  }, async () => {
+    const result = await runSmokeScenario("agent-basic")
+    const output = await readSmokeOutput(result)
+
+    expect(result).toMatchObject({
+      failureReason: null,
+      lane: "smoke",
+      name: "agent-basic",
+      status: "passed",
+    })
+    expect(result.phases.map((phase) => phase.name)).toEqual([
+      "packaged-installer",
+      "install",
+      "discover-routes",
+      "typecheck",
+      "compile",
+      "execute",
+    ])
+    expect(output).toEqual({
+      greeting: "Hello from agent, agent-tenant!",
+      tenant: "agent-tenant",
+    })
+    await expect(stat(result.transcriptPath)).resolves.toBeDefined()
+  })
+
   test("boots the graph fixture and executes one canonical flow", {
     timeout: 180_000,
   }, async () => {

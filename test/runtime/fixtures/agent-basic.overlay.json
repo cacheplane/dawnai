@@ -1,0 +1,17 @@
+{
+  "files": {
+    "src/app/(public)/hello/[tenant]/index.ts": "export const agent = {\n  async invoke(input) {\n    return {\n      greeting: `Hello from agent, ${input.tenant || \"unknown\"}!`,\n      tenant: input.tenant || \"unknown\",\n    };\n  },\n};\n"
+  },
+  "input": {
+    "tenant": "agent-tenant"
+  },
+  "routeFile": "src/app/(public)/hello/[tenant]/index.ts",
+  "expected": {
+    "mode": "agent",
+    "output": {
+      "greeting": "Hello from agent, agent-tenant!",
+      "tenant": "agent-tenant"
+    },
+    "status": "passed"
+  }
+}
