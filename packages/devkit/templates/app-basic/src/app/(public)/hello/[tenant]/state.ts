@@ -1,13 +1,6 @@
-export interface HelloInput {
-  readonly tenant: string
-}
+import { z } from "zod"
 
-export interface HelloOutput {
-  readonly greeting: string
-  readonly tenant: string
-}
-
-export interface HelloState {
-  greeting?: string
-  tenant: string
-}
+export default z.object({
+  /** Accumulated context from tool call results */
+  context: z.string().default(""),
+})
