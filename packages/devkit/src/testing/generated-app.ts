@@ -13,6 +13,7 @@ export interface GeneratedAppSpecifiers {
   readonly dawnSdk: string
   readonly langchainCore: string
   readonly langchainOpenai: string
+  readonly zod: string
 }
 
 export interface CreateGeneratedAppOptions {
@@ -51,6 +52,7 @@ export async function createGeneratedApp(
       dawnSdkSpecifier: specifiers.dawnSdk,
       langchainCoreSpecifier: specifiers.langchainCore,
       langchainOpenaiSpecifier: specifiers.langchainOpenai,
+      zodSpecifier: specifiers.zod,
     },
     targetDir: appRoot,
     templateDir,
@@ -77,5 +79,6 @@ function normalizeSpecifiers(
     dawnSdk: specifiers?.dawnSdk ?? "workspace:*",
     langchainCore: specifiers?.langchainCore ?? "0.3.80",
     langchainOpenai: specifiers?.langchainOpenai ?? "0.6.17",
+    zod: specifiers?.zod ?? "3.24.4",
   }
 }

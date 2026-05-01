@@ -13,7 +13,8 @@
     "@dawn-ai/langchain": "{{dawnLangchainSpecifier}}",
     "@dawn-ai/sdk": "{{dawnSdkSpecifier}}",
     "@langchain/core": "{{langchainCoreSpecifier}}",
-    "@langchain/openai": "{{langchainOpenaiSpecifier}}"
+    "@langchain/openai": "{{langchainOpenaiSpecifier}}",
+    "zod": "{{zodSpecifier}}"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "{{dawnConfigTypescriptSpecifier}}",
