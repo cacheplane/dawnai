@@ -35,8 +35,8 @@ describe("generated app helper", () => {
       expect(packageJson).toContain('"@dawn-ai/cli": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/core": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/langchain": "workspace:*"')
+      expect(packageJson).toContain('"@dawn-ai/sdk": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/config-typescript": "workspace:*"')
-      expect(packageJson).toContain('"langchain": "1.0.0-alpha.5"')
     } finally {
       await rm(baseDir, { force: true, recursive: true })
     }

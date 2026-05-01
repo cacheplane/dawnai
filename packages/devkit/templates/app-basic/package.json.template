@@ -11,10 +11,7 @@
     "@dawn-ai/core": "{{dawnCoreSpecifier}}",
     "@dawn-ai/cli": "{{dawnCliSpecifier}}",
     "@dawn-ai/langchain": "{{dawnLangchainSpecifier}}",
-    "@dawn-ai/sdk": "{{dawnSdkSpecifier}}",
-    "@langchain/core": "{{langchainCoreSpecifier}}",
-    "@langchain/openai": "{{langchainOpenaiSpecifier}}",
-    "langchain": "{{langchainSpecifier}}"
+    "@dawn-ai/sdk": "{{dawnSdkSpecifier}}"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "{{dawnConfigTypescriptSpecifier}}",

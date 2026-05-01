@@ -1,9 +1,12 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import { discoverRoutes } from "../src/index.js"
+
+const SDK_PATH = resolve(fileURLToPath(import.meta.url), "../../../sdk")
 
 let workspaceRoot: string
 
@@ -20,6 +23,10 @@ async function writeApp(files: Readonly<Record<string, string>>): Promise<string
 
   await writeFile(join(appRoot, "package.json"), `{}\n`, "utf8")
   await writeFile(join(appRoot, "dawn.config.ts"), `export default { appDir: "src/app" }\n`, "utf8")
+
+  // Symlink @dawn-ai/sdk so fixture files can import it
+  await mkdir(join(appRoot, "node_modules/@dawn-ai"), { recursive: true })
+  await symlink(SDK_PATH, join(appRoot, "node_modules/@dawn-ai/sdk"))
 
   for (const [relative, content] of Object.entries(files)) {
     const absolute = join(appRoot, relative)
@@ -117,5 +124,19 @@ describe("discoverRoutes", () => {
     })
 
     await expect(discoverRoutes({ appRoot })).rejects.toThrow(/Duplicate Dawn route pathname/)
+  })
+
+  it("discovers an agent route from export default agent()", async () => {
+    const appRoot = await writeApp({
+      "src/app/hello/index.ts": `import { agent } from "@dawn-ai/sdk"\nexport default agent({ model: "gpt-4o-mini", systemPrompt: "hi" })\n`,
+    })
+
+    const manifest = await discoverRoutes({ appRoot })
+
+    expect(manifest.routes).toHaveLength(1)
+    expect(manifest.routes[0]).toMatchObject({
+      pathname: "/hello",
+      kind: "agent",
+    })
   })
 })

@@ -44,10 +44,10 @@ const packages = [
   {
     dir: "packages/sdk",
     expectedFiles: [
+      "dist/agent.js",
+      "dist/agent.d.ts",
       "dist/index.js",
       "dist/index.d.ts",
-      "dist/tool.js",
-      "dist/tool.d.ts",
       "package.json",
     ],
     requiredFields: [

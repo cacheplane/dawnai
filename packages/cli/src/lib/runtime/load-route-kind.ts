@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url"
 
 import type { RouteKind } from "@dawn-ai/sdk"
+import { isDawnAgent } from "@dawn-ai/sdk"
 
 import { registerTsxLoader } from "./register-tsx-loader.js"
 
@@ -21,8 +22,14 @@ export async function normalizeRouteModule(routeFile: string): Promise<Normalize
     readonly agent?: unknown
     readonly chain?: unknown
     readonly config?: Record<string, unknown>
+    readonly default?: unknown
     readonly graph?: unknown
     readonly workflow?: unknown
+  }
+
+  // Check default export for DawnAgent descriptor (preferred path)
+  if ("default" in routeModule && isDawnAgent(routeModule.default)) {
+    return { kind: "agent", entry: routeModule.default, config: routeModule.config ?? {} }
   }
 
   const hasAgent = "agent" in routeModule && routeModule.agent !== undefined
