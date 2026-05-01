@@ -7,7 +7,7 @@ declare module "dawn:routes" {
 
   export interface DawnRouteTools {
     "/hello/[tenant]": {
-      readonly greet: (input: { readonly tenant: string; }) => Promise<{ greeting: string; tenant: string; }>;
+      readonly greet: (input: { readonly tenant: string; }) => Promise<{ name: string; plan: string; }>;
     };
   }
 
