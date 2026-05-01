@@ -2,5 +2,5 @@
   "input": {
     "tenant": "workflow-tenant"
   },
-  "kind": "workflow"
+  "kind": "chain"
 }

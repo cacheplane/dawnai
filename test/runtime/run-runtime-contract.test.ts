@@ -453,7 +453,7 @@ async function withRuntimeScenario(
         dawnCli: tarballs["@dawn-ai/cli"],
         dawnConfigTypescript: tarballs["@dawn-ai/config-typescript"],
         dawnCore: tarballs["@dawn-ai/core"],
-        dawnLanggraph: tarballs["@dawn-ai/langgraph"],
+        dawnLangchain: tarballs["@dawn-ai/langchain"],
       },
       template: "basic",
     })
@@ -667,7 +667,8 @@ async function rewriteDependenciesToTarballs(options: {
     ...packageJson.dependencies,
     "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],
     "@dawn-ai/core": options.tarballs["@dawn-ai/core"],
-    "@dawn-ai/langgraph": options.tarballs["@dawn-ai/langgraph"],
+    "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
+    "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
   }
   packageJson.devDependencies = {
     ...packageJson.devDependencies,

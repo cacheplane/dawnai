@@ -4,7 +4,7 @@
   },
   "routeFile": "src/app/(public)/hello/[tenant]/index.ts",
   "expected": {
-    "mode": "workflow",
+    "mode": "chain",
     "output": {
       "greeting": "Hello, workflow-tenant!",
       "tenant": "workflow-tenant"
