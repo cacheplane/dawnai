@@ -158,6 +158,18 @@ async function invokeEntry(
   input: unknown,
   context: unknown,
 ): Promise<unknown> {
+  if (kind === "agent") {
+    if (
+      typeof entry === "object" &&
+      entry !== null &&
+      "invoke" in entry &&
+      typeof (entry as { invoke?: unknown }).invoke === "function"
+    ) {
+      return await (entry as { invoke: (input: unknown) => unknown }).invoke(input)
+    }
+    throw new Error("Agent entry must expose invoke(input)")
+  }
+
   if (kind === "workflow") {
     if (typeof entry !== "function") {
       throw new Error("Workflow entry must be a function")
@@ -252,6 +264,7 @@ function isBoundaryError(error: unknown): boolean {
     /exports neither/.test(error.message) ||
     error.message === "Workflow entry must be a function" ||
     error.message === "Graph entry must be a function or expose invoke(input)" ||
-    error.message === "Chain entry must expose invoke(input)"
+    error.message === "Chain entry must expose invoke(input)" ||
+    error.message === "Agent entry must expose invoke(input)"
   )
 }
