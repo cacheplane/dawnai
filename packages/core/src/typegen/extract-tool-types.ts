@@ -72,7 +72,10 @@ export async function extractToolTypesForRoute(
     const returnType = checker.getReturnTypeOfSignature(signature)
     const outputType = unwrapPromise(returnType)
 
+    const description = extractJsDoc(defaultExport, checker)
+
     results.push({
+      description,
       name,
       inputType,
       outputType: checker.typeToString(outputType),
@@ -81,6 +84,11 @@ export async function extractToolTypesForRoute(
 
   results.sort((a, b) => a.name.localeCompare(b.name))
   return results
+}
+
+function extractJsDoc(symbol: ts.Symbol, checker: ts.TypeChecker): string {
+  const docs = symbol.getDocumentationComment(checker)
+  return docs.map((d) => d.text).join("").trim()
 }
 
 function unwrapPromise(type: ts.Type): ts.Type {

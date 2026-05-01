@@ -84,6 +84,21 @@ async function loadToolScope(options: {
   return discovered
 }
 
+export function injectGeneratedSchemas(
+  tools: readonly DiscoveredToolDefinition[],
+  generatedSchemas: Record<string, unknown>,
+): readonly DiscoveredToolDefinition[] {
+  return tools.map((tool) => {
+    // User-exported schema takes priority
+    if (tool.schema) return tool
+
+    const generated = generatedSchemas[tool.name]
+    if (!generated) return tool
+
+    return { ...tool, schema: generated }
+  })
+}
+
 async function loadToolDefinition(
   filePath: string,
   scope: ToolScope,
