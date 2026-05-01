@@ -8,4 +8,6 @@ export type {
   OpenAiModelId,
 } from "./known-model-ids.js"
 export type { RouteConfig, RouteKind } from "./route-config.js"
+export type { RouteStateMap, RouteToolMap } from "./route-types.js"
 export type { RuntimeContext, RuntimeTool, ToolRegistry } from "./runtime-context.js"
+export type { Prettify } from "./types.js"
