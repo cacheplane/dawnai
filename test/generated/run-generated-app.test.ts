@@ -491,6 +491,7 @@ async function createExpectedInternalFixture(
           "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
           "@dawn-ai/core": "<repo:@dawn-ai/core>",
           "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
+          "@dawn-ai/langgraph": "<repo:@dawn-ai/langgraph>",
           "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
         },
       },

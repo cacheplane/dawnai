@@ -183,6 +183,7 @@ function createTemplateReplacements(
   readonly dawnSdkSpecifier: string
   readonly langchainCoreSpecifier: string
   readonly langchainOpenaiSpecifier: string
+  readonly zodSpecifier: string
 } {
   if (options.mode === "internal") {
     return {
@@ -197,6 +198,7 @@ function createTemplateReplacements(
       dawnSdkSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/sdk")),
       langchainCoreSpecifier: "0.3.80",
       langchainOpenaiSpecifier: "0.6.17",
+      zodSpecifier: "3.24.4",
     }
   }
 
@@ -210,6 +212,7 @@ function createTemplateReplacements(
     dawnSdkSpecifier: options.distTag,
     langchainCoreSpecifier: "0.3.80",
     langchainOpenaiSpecifier: "0.6.17",
+    zodSpecifier: "3.24.4",
   }
 }
 
@@ -234,6 +237,7 @@ async function applyInternalModePackageOverrides(
       "@dawn-ai/config-typescript": replacements.dawnConfigTypescriptSpecifier,
       "@dawn-ai/core": replacements.dawnCoreSpecifier,
       "@dawn-ai/langchain": replacements.dawnLangchainSpecifier,
+      "@dawn-ai/langgraph": replacements.dawnLanggraphSpecifier,
       "@dawn-ai/sdk": replacements.dawnSdkSpecifier,
     },
   }
