@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from "node:path"
 
-import { findDawnApp } from "@dawn-ai/core"
+import { type ResolvedStateField, findDawnApp, resolveStateFields } from "@dawn-ai/core"
 import { executeAgent } from "@dawn-ai/langchain"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
@@ -12,6 +12,7 @@ import {
   type RuntimeExecutionResult,
 } from "./result.js"
 import { deriveRouteIdentity } from "./route-identity.js"
+import { discoverStateDefinition } from "./state-discovery.js"
 import { discoverToolDefinitions } from "./tool-discovery.js"
 import { fileExists } from "./utils.js"
 
@@ -120,6 +121,17 @@ async function executeRouteAtResolvedPath(options: {
       routeDir,
     })
 
+    let stateFields: readonly ResolvedStateField[] | undefined
+    if (normalized.kind === "agent") {
+      const stateDefinition = await discoverStateDefinition({ routeDir })
+      if (stateDefinition) {
+        stateFields = resolveStateFields({
+          defaults: stateDefinition.defaults,
+          reducerOverrides: stateDefinition.reducerOverrides,
+        })
+      }
+    }
+
     const context = createDawnContext({
       tools,
       ...(options.signal ? { signal: options.signal } : {}),
@@ -127,6 +139,7 @@ async function executeRouteAtResolvedPath(options: {
 
     const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
       routeId: options.routeId,
+      ...(stateFields ? { stateFields } : {}),
       tools,
       ...(options.signal ? { signal: options.signal } : {}),
     })
@@ -165,6 +178,7 @@ async function invokeEntry(
   agentContext?: {
     readonly routeId: string
     readonly signal?: AbortSignal
+    readonly stateFields?: readonly ResolvedStateField[]
     readonly tools: ReadonlyArray<{
       readonly description?: string
       readonly name: string
@@ -183,6 +197,7 @@ async function invokeEntry(
       input,
       routeParamNames,
       signal: agentContext?.signal ?? new AbortController().signal,
+      ...(agentContext?.stateFields ? { stateFields: agentContext.stateFields } : {}),
       tools: agentContext?.tools ?? [],
     })
   }

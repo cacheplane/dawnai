@@ -35,5 +35,5 @@ export function materializeStateSchema(
     }
   }
 
-  return Annotation.Root(spec)
+  return Annotation.Root(spec as any)
 }
