@@ -12,7 +12,7 @@ export interface ExecuteRouteServerOptions {
   readonly appRoot: string
   readonly baseUrl: string
   readonly input: unknown
-  readonly mode: "chain" | "graph" | "workflow"
+  readonly mode: "agent" | "chain" | "graph" | "workflow"
   readonly routeId: string
   readonly routePath: string
   readonly timeoutMs?: number

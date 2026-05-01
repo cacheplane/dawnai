@@ -35,7 +35,7 @@ export interface LoadedRunScenario {
   readonly assert?: (result: RuntimeExecutionResult) => unknown | Promise<unknown>
   readonly expect?: RunScenarioExpectation
   readonly input: unknown
-  readonly mode: "chain" | "graph" | "workflow"
+  readonly mode: "agent" | "chain" | "graph" | "workflow"
   readonly name: string
   readonly routeId: string
   readonly routeFile: string
@@ -200,7 +200,7 @@ async function loadScenarioFile(options: {
 async function loadRouteKindSafe(
   scenarioFile: string,
   indexFile: string,
-): Promise<"chain" | "graph" | "workflow"> {
+): Promise<"agent" | "chain" | "graph" | "workflow"> {
   try {
     return await loadRouteKind(indexFile)
   } catch {
@@ -214,7 +214,7 @@ async function validateScenario(options: {
   readonly rawScenario: unknown
   readonly routeContext: {
     readonly appRoot: string
-    readonly mode: "chain" | "graph" | "workflow"
+    readonly mode: "agent" | "chain" | "graph" | "workflow"
     readonly routeFile: string
     readonly routeId: string
     readonly routePath: string

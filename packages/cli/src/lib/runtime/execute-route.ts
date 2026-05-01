@@ -153,7 +153,7 @@ async function executeRouteAtResolvedPath(options: {
 }
 
 async function invokeEntry(
-  kind: "chain" | "graph" | "workflow",
+  kind: "agent" | "chain" | "graph" | "workflow",
   entry: unknown,
   input: unknown,
   context: unknown,
