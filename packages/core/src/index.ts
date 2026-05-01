@@ -6,6 +6,8 @@ export {
   isRouteGroupSegment,
   toRouteSegments,
 } from "./discovery/route-segments.js"
+export type { ExtractToolSchemasOptions } from "./typegen/extract-tool-schema.js"
+export { extractToolSchemasForRoute } from "./typegen/extract-tool-schema.js"
 export type { ExtractToolTypesOptions } from "./typegen/extract-tool-types.js"
 export { extractToolTypesForRoute } from "./typegen/extract-tool-types.js"
 export { renderDawnTypes, renderRouteTypes } from "./typegen/render-route-types.js"
@@ -14,13 +16,16 @@ export type {
   DawnConfig,
   DiscoveredDawnApp,
   DiscoverRoutesOptions,
+  ExtractedToolSchema,
   ExtractedToolType,
   FindDawnAppOptions,
+  JsonSchemaProperty,
   LoadDawnConfigOptions,
   LoadedDawnConfig,
   RouteDefinition,
   RouteKind,
   RouteManifest,
   RouteSegment,
+  RouteToolSchemas,
   RouteToolTypes,
 } from "./types.js"
