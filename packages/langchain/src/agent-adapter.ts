@@ -1,3 +1,4 @@
+import { HumanMessage } from "@langchain/core/messages"
 import { convertToolToLangChain } from "./tool-converter.js"
 
 interface DawnToolDefinition {
@@ -60,5 +61,21 @@ export async function executeAgent(options: {
     config.tools = langchainTools
   }
 
-  return await options.entry.invoke(agentInput, config)
+  const messages = [new HumanMessage(formatAgentMessage(agentInput))]
+
+  return await options.entry.invoke({ messages }, config)
+}
+
+function formatAgentMessage(input: Record<string, unknown>): string {
+  const entries = Object.entries(input)
+
+  if (entries.length === 0) {
+    return ""
+  }
+
+  if (entries.length === 1) {
+    return String(entries[0]![1])
+  }
+
+  return entries.map(([key, value]) => `${key}: ${String(value)}`).join("\n")
 }
