@@ -168,7 +168,10 @@ async function invokeEntry(
     readonly tools: ReadonlyArray<{
       readonly description?: string
       readonly name: string
-      readonly run: (input: unknown, context: { readonly signal: AbortSignal }) => Promise<unknown> | unknown
+      readonly run: (
+        input: unknown,
+        context: { readonly signal: AbortSignal },
+      ) => Promise<unknown> | unknown
       readonly schema?: unknown
     }>
   },

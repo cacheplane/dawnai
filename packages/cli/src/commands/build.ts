@@ -1,9 +1,8 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join, relative, resolve } from "node:path"
 
-import type { Command } from "commander"
-
 import { discoverRoutes } from "@dawn-ai/core"
+import type { Command } from "commander"
 import { type CommandIo, writeLine } from "../lib/output.js"
 import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
 
@@ -59,12 +58,14 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
     if (route.kind === "agent" && tools.length > 0) {
       const toolImports = tools.map((tool) => {
         const relToolPath = relative(dirname(entryFilePath), dirname(tool.filePath))
-        const toolFileName = tool.filePath.split("/").pop()?.replace(/\.ts$/, ".js") ?? `${tool.name}.js`
+        const toolFileName =
+          tool.filePath.split("/").pop()?.replace(/\.ts$/, ".js") ?? `${tool.name}.js`
         return `import ${tool.name} from "${relToolPath}/${toolFileName}"`
       })
 
-      const toolBindings = tools.map((tool) =>
-        `const ${tool.name}Tool = tool(${tool.name}, {\n  name: "${tool.name}",\n  description: "${tool.description ?? ""}",\n  schema: z.record(z.string(), z.unknown()),\n})`
+      const toolBindings = tools.map(
+        (tool) =>
+          `const ${tool.name}Tool = tool(${tool.name}, {\n  name: "${tool.name}",\n  description: "${tool.description ?? ""}",\n  schema: z.record(z.string(), z.unknown()),\n})`,
       )
 
       const toolNames = tools.map((tool) => `${tool.name}Tool`)
@@ -113,9 +114,12 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
   }
 
   const outputLanggraphPath = join(buildDir, "langgraph.json")
-  await writeFile(outputLanggraphPath, JSON.stringify(mergedConfig, null, 2) + "\n", "utf8")
+  await writeFile(outputLanggraphPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, "utf8")
 
   writeLine(io.stdout, `Build complete: ${relative(process.cwd(), buildDir)}`)
   writeLine(io.stdout, `  ${Object.keys(graphs).length} route(s) compiled`)
-  writeLine(io.stdout, `  langgraph.json written to ${relative(process.cwd(), outputLanggraphPath)}`)
+  writeLine(
+    io.stdout,
+    `  langgraph.json written to ${relative(process.cwd(), outputLanggraphPath)}`,
+  )
 }

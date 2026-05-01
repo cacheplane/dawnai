@@ -101,7 +101,9 @@ async function inferRouteKind(indexFile: string): Promise<RouteKind | null> {
   const count = [hasAgent, hasChain, hasGraph, hasWorkflow].filter(Boolean).length
 
   if (count > 1) {
-    throw new Error(`Route index.ts must export exactly one of "agent", "workflow", "graph", or "chain"`)
+    throw new Error(
+      `Route index.ts must export exactly one of "agent", "workflow", "graph", or "chain"`,
+    )
   }
 
   if (hasAgent) {

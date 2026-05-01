@@ -54,5 +54,7 @@ export async function normalizeRouteModule(routeFile: string): Promise<Normalize
     return { kind: "workflow", entry: routeModule.workflow, config: routeModule.config ?? {} }
   }
 
-  throw new Error(`Route index.ts at ${routeFile} exports neither "agent", "workflow", "graph", nor "chain"`)
+  throw new Error(
+    `Route index.ts at ${routeFile} exports neither "agent", "workflow", "graph", nor "chain"`,
+  )
 }
