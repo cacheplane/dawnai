@@ -3,13 +3,11 @@ import { pathToFileURL } from "node:url"
 import type { RouteKind } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 
+import type { NormalizedRouteModule } from "@dawn-ai/core"
+
 import { registerTsxLoader } from "./register-tsx-loader.js"
 
-export interface NormalizedRouteModule {
-  readonly kind: RouteKind
-  readonly entry: unknown
-  readonly config: Record<string, unknown>
-}
+export type { NormalizedRouteModule } from "@dawn-ai/core"
 
 export async function loadRouteKind(routeFile: string): Promise<RouteKind> {
   const normalized = await normalizeRouteModule(routeFile)

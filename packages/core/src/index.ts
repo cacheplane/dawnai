@@ -26,6 +26,7 @@ export type {
   JsonSchemaProperty,
   LoadDawnConfigOptions,
   LoadedDawnConfig,
+  NormalizedRouteModule,
   ResolvedStateField,
   RouteDefinition,
   RouteKind,

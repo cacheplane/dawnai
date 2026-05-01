@@ -31,6 +31,12 @@ export interface RouteManifest {
   readonly routes: RouteDefinition[]
 }
 
+export interface NormalizedRouteModule {
+  readonly kind: RouteKind
+  readonly entry: unknown
+  readonly config: Record<string, unknown>
+}
+
 export interface LoadDawnConfigOptions {
   readonly appRoot: string
 }
