@@ -12,4 +12,12 @@ declare module "dawn:routes" {
   }
 
   export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];
+
+  export interface DawnRouteState {
+    "/hello/[tenant]": {
+      readonly context: string;
+    };
+  }
+
+  export type RouteState<P extends DawnRoutePath> = DawnRouteState[P];
 }

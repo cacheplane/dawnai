@@ -41,6 +41,7 @@ export default async function greet(input: { name: string }): Promise<{ message:
 
     expect(result).toEqual([
       {
+        description: "",
         name: "greet",
         inputType: "{ name: string; }",
         outputType: "{ message: string; }",
@@ -110,6 +111,7 @@ export default async function flexible(input: unknown): Promise<{ done: boolean 
 
     expect(result).toEqual([
       {
+        description: "",
         name: "flexible",
         inputType: "unknown",
         outputType: "{ done: boolean; }",
@@ -136,6 +138,7 @@ export default async function ping(): Promise<{ pong: boolean }> {
 
     expect(result).toEqual([
       {
+        description: "",
         name: "ping",
         inputType: "void",
         outputType: "{ pong: boolean; }",
@@ -173,6 +176,7 @@ export default async function lookup(input: { query: string }): Promise<{ shared
 
     expect(result).toEqual([
       {
+        description: "",
         name: "lookup",
         inputType: "{ id: number; }",
         outputType: "{ local: true; }",
@@ -211,6 +215,49 @@ export default async function sharedTool(input: { a: number }): Promise<{ b: num
     expect(result).toHaveLength(2)
     expect(result[0]?.name).toBe("local-tool")
     expect(result[1]?.name).toBe("shared-tool")
+  })
+
+  test("extracts JSDoc description from tool function", async () => {
+    const routeDir = join(tempDir, "route")
+    writeToolFile(
+      routeDir,
+      "greet",
+      `
+/**
+ * Greets the user by name.
+ */
+export default async function greet(input: { name: string }): Promise<{ message: string }> {
+  return { message: "hello " + input.name }
+}
+`,
+    )
+
+    const result = await extractToolTypesForRoute({
+      routeDir,
+      sharedToolsDir: undefined,
+    })
+
+    expect(result[0]?.description).toBe("Greets the user by name.")
+  })
+
+  test("returns empty description when no JSDoc", async () => {
+    const routeDir = join(tempDir, "route")
+    writeToolFile(
+      routeDir,
+      "ping",
+      `
+export default async function ping(): Promise<{ pong: boolean }> {
+  return { pong: true }
+}
+`,
+    )
+
+    const result = await extractToolTypesForRoute({
+      routeDir,
+      sharedToolsDir: undefined,
+    })
+
+    expect(result[0]?.description).toBe("")
   })
 
   test("skips .d.ts files", async () => {

@@ -1,6 +1,7 @@
 import type { DawnAgent } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { HumanMessage } from "@langchain/core/messages"
+import { type ResolvedStateField, materializeStateSchema } from "./state-adapter.js"
 import { convertToolToLangChain } from "./tool-converter.js"
 
 interface DawnToolDefinition {
@@ -33,6 +34,7 @@ const materializedAgents = new WeakMap<DawnAgent, AgentLike>()
 async function materializeAgent(
   descriptor: DawnAgent,
   tools: readonly DawnToolDefinition[],
+  stateFields?: readonly ResolvedStateField[],
 ): Promise<AgentLike> {
   const cached = materializedAgents.get(descriptor)
   if (cached) {
@@ -48,11 +50,17 @@ async function materializeAgent(
     model: descriptor.model,
   })
 
-  const compiled = createReactAgent({
+  const agentOptions: Record<string, unknown> = {
     llm,
     tools: langchainTools,
     prompt: descriptor.systemPrompt,
-  })
+  }
+
+  if (stateFields && stateFields.length > 0) {
+    agentOptions.stateSchema = materializeStateSchema(stateFields)
+  }
+
+  const compiled = createReactAgent(agentOptions as any)
 
   materializedAgents.set(descriptor, compiled as unknown as AgentLike)
   return compiled as unknown as AgentLike
@@ -63,6 +71,7 @@ export async function executeAgent(options: {
   readonly input: unknown
   readonly routeParamNames: readonly string[]
   readonly signal: AbortSignal
+  readonly stateFields?: readonly ResolvedStateField[]
   readonly tools: readonly DawnToolDefinition[]
 }): Promise<unknown> {
   const inputRecord = (options.input ?? {}) as Record<string, unknown>
@@ -87,7 +96,7 @@ export async function executeAgent(options: {
 
   // DawnAgent descriptor path — materialize on first use
   if (isDawnAgent(options.entry)) {
-    const materializedAgent = await materializeAgent(options.entry, options.tools)
+    const materializedAgent = await materializeAgent(options.entry, options.tools, options.stateFields)
     const messages = [new HumanMessage(formatAgentMessage(agentInput))]
     return await materializedAgent.invoke({ messages }, config)
   }

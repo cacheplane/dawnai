@@ -8,15 +8,7 @@ export interface DawnAgent {
   readonly systemPrompt: string
 }
 
-export type KnownModelId =
-  | "gpt-4o"
-  | "gpt-4o-mini"
-  | "gpt-4.1"
-  | "gpt-4.1-mini"
-  | "gpt-4.1-nano"
-  | "claude-sonnet-4-20250514"
-  | "claude-haiku-4-20250414"
-  | (string & {})
+import type { KnownModelId } from "./known-model-ids.js"
 
 export interface AgentConfig {
   readonly model: KnownModelId

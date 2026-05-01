@@ -31,6 +31,12 @@ export interface RouteManifest {
   readonly routes: RouteDefinition[]
 }
 
+export interface NormalizedRouteModule {
+  readonly kind: RouteKind
+  readonly entry: unknown
+  readonly config: Record<string, unknown>
+}
+
 export interface LoadDawnConfigOptions {
   readonly appRoot: string
 }
@@ -59,6 +65,7 @@ export interface DiscoverRoutesOptions {
 }
 
 export interface ExtractedToolType {
+  readonly description: string
   readonly name: string
   readonly inputType: string
   readonly outputType: string
@@ -67,4 +74,38 @@ export interface ExtractedToolType {
 export interface RouteToolTypes {
   readonly pathname: string
   readonly tools: readonly ExtractedToolType[]
+}
+
+export interface JsonSchemaProperty {
+  readonly type: string
+  readonly description?: string
+  readonly items?: JsonSchemaProperty
+  readonly properties?: Record<string, JsonSchemaProperty>
+  readonly required?: readonly string[]
+  readonly additionalProperties?: boolean
+  readonly enum?: readonly string[]
+}
+
+export interface ExtractedToolSchema {
+  readonly name: string
+  readonly description: string
+  readonly parameters: {
+    readonly type: "object"
+    readonly properties: Record<string, JsonSchemaProperty>
+    readonly required: readonly string[]
+    readonly additionalProperties: false
+  }
+}
+
+export interface RouteToolSchemas {
+  readonly pathname: string
+  readonly tools: readonly ExtractedToolSchema[]
+}
+
+export type StateFieldReducer = "append" | "replace"
+
+export interface ResolvedStateField {
+  readonly name: string
+  readonly reducer: StateFieldReducer | ((current: unknown, incoming: unknown) => unknown)
+  readonly default: unknown
 }
