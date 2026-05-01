@@ -1,16 +1,6 @@
-import { RunnableLambda } from "@langchain/core/runnables"
+import { createAgent } from "langchain"
 
-import greet from "./tools/greet.js"
-
-const lookupTenant = new RunnableLambda({
-  func: async (input: { tenant: string }) => await greet(input),
+export const agent = createAgent({
+  model: "gpt-4o-mini",
+  systemPrompt: "You are a helpful assistant for the {tenant} organization ({plan} plan). Answer questions about the tenant.",
 })
-
-const formatResponse = new RunnableLambda({
-  func: (info: { name: string; plan: string }) => ({
-    greeting: `Hello, ${info.name}!`,
-    tenant: info.name,
-  }),
-})
-
-export const chain = lookupTenant.pipe(formatResponse)
