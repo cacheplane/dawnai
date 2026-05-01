@@ -14,6 +14,8 @@ export type { ExtractToolTypesOptions } from "./typegen/extract-tool-types.js"
 export { extractToolTypesForRoute } from "./typegen/extract-tool-types.js"
 export { renderDawnTypes, renderRouteTypes } from "./typegen/render-route-types.js"
 export { renderToolTypes } from "./typegen/render-tool-types.js"
+export type { RouteStateFields } from "./typegen/render-state-types.js"
+export { renderStateTypes } from "./typegen/render-state-types.js"
 export type {
   DawnConfig,
   DiscoveredDawnApp,
