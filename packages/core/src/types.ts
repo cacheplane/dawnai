@@ -95,3 +95,11 @@ export interface RouteToolSchemas {
   readonly pathname: string
   readonly tools: readonly ExtractedToolSchema[]
 }
+
+export type StateFieldReducer = "append" | "replace"
+
+export interface ResolvedStateField {
+  readonly name: string
+  readonly reducer: StateFieldReducer | ((current: unknown, incoming: unknown) => unknown)
+  readonly default: unknown
+}

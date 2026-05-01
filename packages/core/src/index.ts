@@ -1,5 +1,7 @@
 export { loadDawnConfig } from "./config.js"
 export { discoverRoutes } from "./discovery/discover-routes.js"
+export type { ResolveStateFieldsOptions } from "./state/resolve-state-fields.js"
+export { resolveStateFields } from "./state/resolve-state-fields.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"
 export {
   isPrivateSegment,
@@ -22,10 +24,12 @@ export type {
   JsonSchemaProperty,
   LoadDawnConfigOptions,
   LoadedDawnConfig,
+  ResolvedStateField,
   RouteDefinition,
   RouteKind,
   RouteManifest,
   RouteSegment,
   RouteToolSchemas,
   RouteToolTypes,
+  StateFieldReducer,
 } from "./types.js"
