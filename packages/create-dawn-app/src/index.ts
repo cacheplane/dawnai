@@ -181,9 +181,6 @@ function createTemplateReplacements(
   readonly dawnLangchainSpecifier: string
   readonly dawnLanggraphSpecifier: string
   readonly dawnSdkSpecifier: string
-  readonly langchainCoreSpecifier: string
-  readonly langchainOpenaiSpecifier: string
-  readonly langchainSpecifier: string
 } {
   if (options.mode === "internal") {
     return {
@@ -196,9 +193,6 @@ function createTemplateReplacements(
       dawnLangchainSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langchain")),
       dawnLanggraphSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langgraph")),
       dawnSdkSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/sdk")),
-      langchainCoreSpecifier: "0.3.80",
-      langchainOpenaiSpecifier: "0.6.17",
-      langchainSpecifier: "1.0.0-alpha.5",
     }
   }
 
@@ -210,9 +204,6 @@ function createTemplateReplacements(
     dawnLangchainSpecifier: options.distTag,
     dawnLanggraphSpecifier: options.distTag,
     dawnSdkSpecifier: options.distTag,
-    langchainCoreSpecifier: "0.3.80",
-    langchainOpenaiSpecifier: "0.6.17",
-    langchainSpecifier: "1.0.0-alpha.5",
   }
 }
 
