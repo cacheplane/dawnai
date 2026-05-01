@@ -48,7 +48,7 @@ interface RuntimeFixtureSpec {
   readonly input: {
     readonly tenant: string
   }
-  readonly mode: "chain" | "graph" | "workflow"
+  readonly mode: "agent" | "chain" | "graph" | "workflow"
   readonly routeDir: string
   readonly routeId: string
   readonly routePath: string
@@ -79,7 +79,7 @@ export interface GeneratedRuntimeScenarioResult {
     readonly input: unknown
     readonly metadata: {
       readonly dawn: {
-        readonly mode: "chain" | "graph" | "workflow"
+        readonly mode: "agent" | "chain" | "graph" | "workflow"
         readonly route_id: string
         readonly route_path: string
       }
@@ -97,7 +97,7 @@ const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> =
     input: {
       tenant: "basic-tenant",
     },
-    mode: "chain",
+    mode: "agent",
     routeDir: "src/app/(public)/hello/[tenant]",
     routeId: "/hello/[tenant]",
     routePath: "src/app/(public)/hello/[tenant]/index.ts",

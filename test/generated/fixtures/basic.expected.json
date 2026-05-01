@@ -15,7 +15,7 @@
       "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
       "@langchain/core": "0.3.80",
       "@langchain/openai": "0.6.17",
-      "zod": "3.24.4"
+      "langchain": "0.3.14"
     },
     "devDependencies": {
       "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
@@ -67,7 +67,7 @@
       {
         "id": "/hello/[tenant]",
         "pathname": "/hello/[tenant]",
-        "kind": "chain",
+        "kind": "agent",
         "entryFile": "<app-root>/src/app/(public)/hello/[tenant]/index.ts",
         "routeDir": "<app-root>/src/app/(public)/hello/[tenant]",
         "segments": [
