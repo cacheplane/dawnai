@@ -1,4 +1,4 @@
-export type RouteKind = "chain" | "graph" | "workflow"
+export type RouteKind = "agent" | "chain" | "graph" | "workflow"
 
 export interface RouteConfig {
   readonly runtime?: "node" | "edge"

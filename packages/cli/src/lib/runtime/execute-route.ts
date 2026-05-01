@@ -1,6 +1,7 @@
 import { isAbsolute, resolve } from "node:path"
 
 import { findDawnApp } from "@dawn-ai/core"
+import { executeAgent } from "@dawn-ai/langchain"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
 import {
@@ -124,7 +125,11 @@ async function executeRouteAtResolvedPath(options: {
       ...(options.signal ? { signal: options.signal } : {}),
     })
 
-    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context)
+    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
+      routeId: options.routeId,
+      tools,
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
 
     return createRuntimeSuccessResult({
       appRoot: options.appRoot,
@@ -153,11 +158,35 @@ async function executeRouteAtResolvedPath(options: {
 }
 
 async function invokeEntry(
-  kind: "chain" | "graph" | "workflow",
+  kind: "agent" | "chain" | "graph" | "workflow",
   entry: unknown,
   input: unknown,
   context: unknown,
+  agentContext?: {
+    readonly routeId: string
+    readonly signal?: AbortSignal
+    readonly tools: ReadonlyArray<{
+      readonly description?: string
+      readonly name: string
+      readonly run: (
+        input: unknown,
+        context: { readonly signal: AbortSignal },
+      ) => Promise<unknown> | unknown
+      readonly schema?: unknown
+    }>
+  },
 ): Promise<unknown> {
+  if (kind === "agent") {
+    const routeParamNames = extractRouteParamNames(agentContext?.routeId ?? "")
+    return await executeAgent({
+      entry,
+      input,
+      routeParamNames,
+      signal: agentContext?.signal ?? new AbortController().signal,
+      tools: agentContext?.tools ?? [],
+    })
+  }
+
   if (kind === "workflow") {
     if (typeof entry !== "function") {
       throw new Error("Workflow entry must be a function")
@@ -240,6 +269,11 @@ async function discoverApp(options: ExecuteRouteOptions): Promise<
       ok: false,
     }
   }
+}
+
+function extractRouteParamNames(routeId: string): string[] {
+  const matches = routeId.matchAll(/\[(\w+)\]/g)
+  return [...matches].map((match) => match[1]).filter((s): s is string => s !== undefined)
 }
 
 function isBoundaryError(error: unknown): boolean {

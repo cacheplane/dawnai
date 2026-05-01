@@ -14,7 +14,7 @@
     "@dawn-ai/sdk": "{{dawnSdkSpecifier}}",
     "@langchain/core": "{{langchainCoreSpecifier}}",
     "@langchain/openai": "{{langchainOpenaiSpecifier}}",
-    "zod": "{{zodSpecifier}}"
+    "langchain": "{{langchainSpecifier}}"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "{{dawnConfigTypescriptSpecifier}}",

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 
 import { Command, CommanderError } from "commander"
 
+import { registerBuildCommand } from "./commands/build.js"
 import { registerCheckCommand } from "./commands/check.js"
 import { registerDevCommand } from "./commands/dev.js"
 import { registerRoutesCommand } from "./commands/routes.js"
@@ -32,6 +33,7 @@ export function createProgram(io: CommandIo): Command {
       },
     })
 
+  registerBuildCommand(program, io)
   registerCheckCommand(program, io)
   registerDevCommand(program, io)
   registerRunCommand(program, io)

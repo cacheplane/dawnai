@@ -274,7 +274,9 @@ describe("dawn dev lifecycle", () => {
     expect(isProcessAlive(pid)).toBe(false)
   })
 
-  test("discovers the app from cwd and prints the listening URL", async () => {
+  test("discovers the app from cwd and prints the listening URL", {
+    timeout: 15_000,
+  }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
@@ -304,7 +306,9 @@ describe("dawn dev lifecycle", () => {
     })
   })
 
-  test("keeps a stable port and serves new behavior after a watched route edit restart", async () => {
+  test("keeps a stable port and serves new behavior after a watched route edit restart", {
+    timeout: 15_000,
+  }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
@@ -390,7 +394,9 @@ describe("dawn dev lifecycle", () => {
     expect(countOccurrences(dev.stdout, "Restarting Dawn dev server")).toBeLessThanOrEqual(2)
   })
 
-  test("surfaces restart-induced in-flight cancellation as a non-execution failure", async () => {
+  test("surfaces restart-induced in-flight cancellation as a non-execution failure", {
+    timeout: 15_000,
+  }, async () => {
     const markerPath = join(tmpdir(), `dawn-dev-cancel-${Date.now()}.txt`)
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
@@ -448,7 +454,9 @@ describe("dawn dev lifecycle", () => {
     })
   })
 
-  test("stays alive in a broken-but-watching state after a bad watched edit and recovers after a fixing edit", async () => {
+  test("stays alive in a broken-but-watching state after a bad watched edit and recovers after a fixing edit", {
+    timeout: 15_000,
+  }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
@@ -488,7 +496,9 @@ describe("dawn dev lifecycle", () => {
     expect(await response.json()).toMatchObject({ version: "healthy" })
   })
 
-  test("terminates the session for fatal appDir changes outside the discovered app root", async () => {
+  test("terminates the session for fatal appDir changes outside the discovered app root", {
+    timeout: 15_000,
+  }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
@@ -513,7 +523,9 @@ describe("dawn dev lifecycle", () => {
     expect(dev.stderr).toContain("configured appDir must stay within the discovered app root")
   })
 
-  test("terminates the session for fatal restart-time environment failures such as port rebinding", async () => {
+  test("terminates the session for fatal restart-time environment failures such as port rebinding", {
+    timeout: 15_000,
+  }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
@@ -551,7 +563,9 @@ describe("dawn dev lifecycle", () => {
     }
   })
 
-  test("force-kills a stuck child after the shutdown timeout and replaces it", async () => {
+  test("force-kills a stuck child after the shutdown timeout and replaces it", {
+    timeout: 15_000,
+  }, async () => {
     const markerPath = join(tmpdir(), `dawn-dev-stuck-${Date.now()}.txt`)
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",

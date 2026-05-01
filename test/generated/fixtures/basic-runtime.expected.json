@@ -2,7 +2,7 @@
   "runJson": {
     "appRoot": "<app-root>",
     "executionSource": "in-process",
-    "mode": "chain",
+    "mode": "agent",
     "output": {
       "greeting": "Hello, basic-tenant!",
       "tenant": "basic-tenant"
@@ -14,7 +14,7 @@
   "runServerJson": {
     "appRoot": "<app-root>",
     "executionSource": "server",
-    "mode": "chain",
+    "mode": "agent",
     "output": {
       "greeting": "Hello, basic-tenant!",
       "tenant": "basic-tenant"
@@ -24,13 +24,13 @@
     "status": "passed"
   },
   "serverRequest": {
-    "assistant_id": "/hello/[tenant]#chain",
+    "assistant_id": "/hello/[tenant]#agent",
     "input": {
       "tenant": "basic-tenant"
     },
     "metadata": {
       "dawn": {
-        "mode": "chain",
+        "mode": "agent",
         "route_id": "/hello/[tenant]",
         "route_path": "src/app/(public)/hello/[tenant]/index.ts"
       }

@@ -1,0 +1,17 @@
+{
+  "files": {
+    "src/app/(public)/hello/[tenant]/index.ts": "export const agent = {\n  async invoke(input, config) {\n    const tenant = config?.configurable?.tenant || \"unknown\";\n    return {\n      greeting: `Hello from agent, ${tenant}!`,\n      tenant,\n    };\n  },\n};\n"
+  },
+  "input": {
+    "tenant": "agent-tenant"
+  },
+  "routeFile": "src/app/(public)/hello/[tenant]/index.ts",
+  "expected": {
+    "mode": "agent",
+    "output": {
+      "greeting": "Hello from agent, agent-tenant!",
+      "tenant": "agent-tenant"
+    },
+    "status": "passed"
+  }
+}

@@ -6,6 +6,7 @@
     "outDir": "dist",
     "paths": {
       "@dawn-ai/core": ["../core/src/index.ts"],
+      "@dawn-ai/langchain": ["../langchain/src/index.ts"],
       "@dawn-ai/langgraph": ["../langgraph/src/index.ts"],
       "@dawn-ai/langgraph/*": ["../langgraph/src/*.ts"]
     },
@@ -15,6 +16,9 @@
   "references": [
     {
       "path": "../core"
+    },
+    {
+      "path": "../langchain"
     },
     {
       "path": "../langgraph"
