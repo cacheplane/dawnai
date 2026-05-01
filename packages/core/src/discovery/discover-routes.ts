@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises"
 import { join, relative, resolve, sep } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { RouteKind } from "@dawn-ai/sdk"
+import { isDawnAgent } from "@dawn-ai/sdk"
 import type { DiscoverRoutesOptions, RouteDefinition, RouteManifest } from "../types.js"
 import { findDawnApp } from "./find-dawn-app.js"
 import { isPrivateSegment, isRouteGroupSegment, toRouteSegments } from "./route-segments.js"
@@ -93,6 +94,12 @@ async function readRouteEntry(
 async function inferRouteKind(indexFile: string): Promise<RouteKind | null> {
   await registerTsxLoader()
   const routeExports = await loadRouteExports(indexFile)
+
+  // Check default export for DawnAgent descriptor (preferred path)
+  if ("default" in routeExports && isDawnAgent(routeExports.default)) {
+    return "agent"
+  }
+
   const hasAgent = "agent" in routeExports && routeExports.agent !== undefined
   const hasChain = "chain" in routeExports && routeExports.chain !== undefined
   const hasGraph = "graph" in routeExports && routeExports.graph !== undefined
@@ -126,6 +133,7 @@ async function inferRouteKind(indexFile: string): Promise<RouteKind | null> {
 }
 
 async function loadRouteExports(indexFile: string): Promise<{
+  readonly default?: unknown
   readonly agent?: unknown
   readonly chain?: unknown
   readonly graph?: unknown
@@ -133,6 +141,7 @@ async function loadRouteExports(indexFile: string): Promise<{
 }> {
   try {
     return (await import(pathToFileURL(indexFile).href)) as {
+      readonly default?: unknown
       readonly agent?: unknown
       readonly chain?: unknown
       readonly graph?: unknown
