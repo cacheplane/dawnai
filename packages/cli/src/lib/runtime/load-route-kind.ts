@@ -18,22 +18,28 @@ export async function loadRouteKind(routeFile: string): Promise<RouteKind> {
 export async function normalizeRouteModule(routeFile: string): Promise<NormalizedRouteModule> {
   await registerTsxLoader()
   const routeModule = (await import(pathToFileURL(routeFile).href)) as {
+    readonly agent?: unknown
     readonly chain?: unknown
     readonly config?: Record<string, unknown>
     readonly graph?: unknown
     readonly workflow?: unknown
   }
 
+  const hasAgent = "agent" in routeModule && routeModule.agent !== undefined
   const hasChain = "chain" in routeModule && routeModule.chain !== undefined
   const hasGraph = "graph" in routeModule && routeModule.graph !== undefined
   const hasWorkflow = "workflow" in routeModule && routeModule.workflow !== undefined
 
-  const count = [hasChain, hasGraph, hasWorkflow].filter(Boolean).length
+  const count = [hasAgent, hasChain, hasGraph, hasWorkflow].filter(Boolean).length
 
   if (count > 1) {
     throw new Error(
-      `Route index.ts at ${routeFile} must export exactly one of "workflow", "graph", or "chain"`,
+      `Route index.ts at ${routeFile} must export exactly one of "agent", "workflow", "graph", or "chain"`,
     )
+  }
+
+  if (hasAgent) {
+    return { kind: "agent", entry: routeModule.agent, config: routeModule.config ?? {} }
   }
 
   if (hasChain) {
@@ -48,5 +54,5 @@ export async function normalizeRouteModule(routeFile: string): Promise<Normalize
     return { kind: "workflow", entry: routeModule.workflow, config: routeModule.config ?? {} }
   }
 
-  throw new Error(`Route index.ts at ${routeFile} exports neither "workflow", "graph", nor "chain"`)
+  throw new Error(`Route index.ts at ${routeFile} exports neither "agent", "workflow", "graph", nor "chain"`)
 }
