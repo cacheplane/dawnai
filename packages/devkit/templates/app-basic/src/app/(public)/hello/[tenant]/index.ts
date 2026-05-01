@@ -1,9 +1,7 @@
-import type { Runnable } from "@langchain/core/runnables"
-import { createAgent } from "langchain"
+import { agent } from "@dawn-ai/sdk"
 
-export const agent: Runnable = createAgent({
+export default agent({
   model: "gpt-4o-mini",
   systemPrompt:
     "You are a helpful assistant for the {tenant} organization. Answer questions about the tenant.",
-  tools: [],
 })
