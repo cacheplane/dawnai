@@ -10,7 +10,17 @@ const tempRoot = mkdtempSync(join(tmpdir(), "dawn-pack-check-"))
 const packages = [
   {
     dir: "packages/core",
-    expectedFiles: ["dist/index.js", "dist/index.d.ts", "README.md"],
+    expectedFiles: [
+      "dist/index.js",
+      "dist/index.d.ts",
+      "dist/typegen/extract-tool-schema.js",
+      "dist/typegen/extract-tool-schema.d.ts",
+      "dist/typegen/render-state-types.js",
+      "dist/typegen/render-state-types.d.ts",
+      "dist/state/resolve-state-fields.js",
+      "dist/state/resolve-state-fields.d.ts",
+      "README.md",
+    ],
     requiredFields: [
       "publishConfig.access",
       "repository",
@@ -48,6 +58,12 @@ const packages = [
       "dist/agent.d.ts",
       "dist/index.js",
       "dist/index.d.ts",
+      "dist/known-model-ids.js",
+      "dist/known-model-ids.d.ts",
+      "dist/types.js",
+      "dist/types.d.ts",
+      "dist/route-types.js",
+      "dist/route-types.d.ts",
       "package.json",
     ],
     requiredFields: [

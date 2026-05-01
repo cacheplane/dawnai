@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
-import { discoverStateDefinition } from "../src/lib/runtime/state-discovery"
+import { discoverStateDefinition } from "../src/lib/runtime/state-discovery.js"
 
 let tempDir: string
 
