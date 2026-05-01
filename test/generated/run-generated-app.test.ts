@@ -187,6 +187,28 @@ async function runGeneratedAppScenario(
       transcriptPath,
     })
 
+    if (options.expectedFixtureName === "basic") {
+      await writeFile(
+        join(appRoot, "src/app/(public)/hello/[tenant]/index.ts"),
+        [
+          'import greet from "./tools/greet.js"',
+          "",
+          "export const agent = {",
+          "  async invoke(input: { tenant: string }) {",
+          "    const info = await greet(input)",
+          "    return {",
+          "      greeting: `Hello, ${info.name}!`,",
+          "      tenant: info.name,",
+          "    }",
+          "  },",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      )
+      await removeLangchainFromPackageJson(appRoot)
+    }
+
     if (options.mutateApp) {
       await options.mutateApp(appRoot)
     }
@@ -439,6 +461,18 @@ async function appendTranscript(
       .join("\n"),
     "utf8",
   )
+}
+
+async function removeLangchainFromPackageJson(appRoot: string): Promise<void> {
+  const packageJsonPath = join(appRoot, "package.json")
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+    dependencies?: Record<string, string>
+  }
+  if (packageJson.dependencies) {
+    delete packageJson.dependencies.langchain
+    delete packageJson.dependencies["@langchain/openai"]
+  }
+  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
 }
 
 async function readExpectedFixture(fixtureName: string): Promise<unknown> {

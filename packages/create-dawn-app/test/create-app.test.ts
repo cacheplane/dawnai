@@ -101,7 +101,7 @@ describe("create-dawn-app", () => {
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toBe("next")
     expect(packageJson.dependencies["@langchain/openai"]).toBe("0.6.17")
     expect(packageJson.dependencies["@langchain/core"]).toBe("0.3.80")
-    expect(packageJson.dependencies.zod).toBe("3.24.4")
+    expect(packageJson.dependencies.langchain).toBe("1.0.0-alpha.5")
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toBe("next")
     await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow()
   })
@@ -147,7 +147,7 @@ describe("create-dawn-app", () => {
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@langchain/openai"]).toBe("0.6.17")
     expect(packageJson.dependencies["@langchain/core"]).toBe("0.3.80")
-    expect(packageJson.dependencies.zod).toBe("3.24.4")
+    expect(packageJson.dependencies.langchain).toBe("1.0.0-alpha.5")
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toMatch(/^file:/)
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
@@ -183,7 +183,7 @@ describe("create-dawn-app", () => {
     )
     expect(packageJson.dependencies["@langchain/openai"]).toBe("0.6.17")
     expect(packageJson.dependencies["@langchain/core"]).toBe("0.3.80")
-    expect(packageJson.dependencies.zod).toBe("3.24.4")
+    expect(packageJson.dependencies.langchain).toBe("1.0.0-alpha.5")
     expect(resolveFileSpecifier(packageJson.devDependencies["@dawn-ai/config-typescript"])).toBe(
       resolve(repoRoot, "packages/config-typescript"),
     )

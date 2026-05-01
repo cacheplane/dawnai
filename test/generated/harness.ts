@@ -201,6 +201,29 @@ export async function prepareGeneratedRuntimeApp(options: {
       await rewriteToCustomAppDirRuntimeLayout(appRoot)
     }
 
+    if (fixture.fixtureName === "basic") {
+      await writeFile(
+        join(appRoot, fixture.routeDir, "index.ts"),
+        [
+          'import greet from "./tools/greet.js"',
+          "",
+          "export const agent = {",
+          "  async invoke(input: Record<string, unknown>, config?: Record<string, unknown>) {",
+          "    const tenant = (config?.configurable as Record<string, unknown>)?.tenant as string",
+          "    const info = await greet({ tenant })",
+          "    return {",
+          "      greeting: `Hello, ${info.name}!`,",
+          "      tenant: info.name,",
+          "    }",
+          "  },",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      )
+      await removeLangchainFromPackageJson(appRoot)
+    }
+
     if (fixture.fixtureName !== "handwritten") {
       await writeRunScenarioFile({
         appRoot,
@@ -450,6 +473,18 @@ async function rewriteDependenciesToTarballs(options: {
     },
   }
 
+  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
+}
+
+async function removeLangchainFromPackageJson(appRoot: string): Promise<void> {
+  const packageJsonPath = join(appRoot, "package.json")
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+    dependencies?: Record<string, string>
+  }
+  if (packageJson.dependencies) {
+    delete packageJson.dependencies.langchain
+    delete packageJson.dependencies["@langchain/openai"]
+  }
   await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
 }
 

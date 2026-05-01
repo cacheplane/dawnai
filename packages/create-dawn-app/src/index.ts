@@ -198,7 +198,7 @@ function createTemplateReplacements(
       dawnSdkSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/sdk")),
       langchainCoreSpecifier: "0.3.80",
       langchainOpenaiSpecifier: "0.6.17",
-      langchainSpecifier: "0.3.14",
+      langchainSpecifier: "1.0.0-alpha.5",
     }
   }
 
@@ -212,7 +212,7 @@ function createTemplateReplacements(
     dawnSdkSpecifier: options.distTag,
     langchainCoreSpecifier: "0.3.80",
     langchainOpenaiSpecifier: "0.6.17",
-    langchainSpecifier: "0.3.14",
+    langchainSpecifier: "1.0.0-alpha.5",
   }
 }
 

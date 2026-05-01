@@ -1,6 +1,6 @@
 {
   "files": {
-    "src/app/(public)/hello/[tenant]/index.ts": "export const agent = {\n  async invoke(input) {\n    throw new Error(`Agent execution failed for ${input.tenant || \"unknown\"}`);\n  },\n};\n"
+    "src/app/(public)/hello/[tenant]/index.ts": "export const agent = {\n  async invoke(input, config) {\n    const tenant = config?.configurable?.tenant || \"unknown\";\n    throw new Error(`Agent execution failed for ${tenant}`);\n  },\n};\n"
   },
   "input": {
     "tenant": "agent-tenant"

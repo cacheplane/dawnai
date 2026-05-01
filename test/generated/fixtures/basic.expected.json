@@ -13,9 +13,7 @@
       "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
       "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
       "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
-      "@langchain/core": "0.3.80",
-      "@langchain/openai": "0.6.17",
-      "langchain": "0.3.14"
+      "@langchain/core": "0.3.80"
     },
     "devDependencies": {
       "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",

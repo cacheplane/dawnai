@@ -1,6 +1,6 @@
 {
   "files": {
-    "src/app/(public)/hello/[tenant]/index.ts": "export const agent = {\n  async invoke(input) {\n    return {\n      greeting: `Hello from agent, ${input.tenant || \"unknown\"}!`,\n      tenant: input.tenant || \"unknown\",\n    };\n  },\n};\n"
+    "src/app/(public)/hello/[tenant]/index.ts": "export const agent = {\n  async invoke(input, config) {\n    const tenant = config?.configurable?.tenant || \"unknown\";\n    return {\n      greeting: `Hello from agent, ${tenant}!`,\n      tenant,\n    };\n  },\n};\n"
   },
   "input": {
     "tenant": "agent-tenant"

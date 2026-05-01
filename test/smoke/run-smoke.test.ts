@@ -293,6 +293,8 @@ async function rewriteDependenciesToTarballs(options: {
     }
   }
 
+  delete packageJson.dependencies?.langchain
+  delete packageJson.dependencies?.["@langchain/openai"]
   packageJson.dependencies = {
     ...packageJson.dependencies,
     "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],
