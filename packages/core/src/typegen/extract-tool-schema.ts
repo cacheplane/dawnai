@@ -136,11 +136,19 @@ function tsTypeToJsonSchema(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): { type: string; description?: string; items?: JsonSchemaProperty; enum?: string[] } {
-  // String literal union → enum
+  // Strip undefined from unions (optional properties resolve as T | undefined)
   if (type.isUnion()) {
-    const allStringLiterals = type.types.every((t) => t.isStringLiteral())
-    if (allStringLiterals) {
-      const enumValues = type.types.map((t) => (t as ts.StringLiteralType).value)
+    const nonUndefined = type.types.filter(
+      (t) => !(t.flags & ts.TypeFlags.Undefined),
+    )
+    if (nonUndefined.length === 1 && nonUndefined[0]) {
+      return tsTypeToJsonSchema(nonUndefined[0], checker)
+    }
+
+    // String literal union → enum
+    const allStringLiterals = nonUndefined.every((t) => t.isStringLiteral())
+    if (allStringLiterals && nonUndefined.length > 0) {
+      const enumValues = nonUndefined.map((t) => (t as ts.StringLiteralType).value)
       return { type: "string", enum: enumValues }
     }
   }

@@ -28,14 +28,14 @@ describe("DX improvements integration", () => {
 /**
  * Searches the knowledge base for relevant documents.
  */
-export default async function search(input: {
+export default async (input: {
   /** The search query string */
   query: string
   /** Maximum number of results */
-  limit?: string
+  limit?: number
   /** Filter by category */
   category: "docs" | "code" | "issues"
-}): Promise<{ results: unknown[]; total: number }> {
+}) => {
   return { results: [], total: 0 }
 }
 `,
@@ -58,7 +58,7 @@ export default async function search(input: {
       description: "The search query string",
     })
     expect(schema.parameters.properties.limit).toEqual({
-      type: "string",
+      type: "number",
       description: "Maximum number of results",
     })
     expect(schema.parameters.properties.category).toEqual({
@@ -78,7 +78,7 @@ export default async function search(input: {
       join(toolsDir, "greet.ts"),
       `
 /** Greets someone. */
-export default async function greet(input: { name: string }): Promise<{ message: string }> {
+export default async (input: { name: string }) => {
   return { message: "hello" }
 }
 `,
