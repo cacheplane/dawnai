@@ -155,7 +155,7 @@ export const graph = { invoke: async () => ({}) }
     expect(result.exitCode).toBe(1)
     expect(result.stdout).toBe("")
     expect(result.stderr).toContain("Validation failed")
-    expect(result.stderr).toContain(`must export exactly one of "workflow", "graph", or "chain"`)
+    expect(result.stderr).toContain(`must export exactly one of "agent", "workflow", "graph", or "chain"`)
   })
 
   test("ignores route directories that have no index.ts", async () => {
