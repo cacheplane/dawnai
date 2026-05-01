@@ -184,7 +184,7 @@ describe("dawn verify", () => {
         {
           error: {
             message: expect.stringContaining(
-              `must export exactly one of "workflow", "graph", or "chain"`,
+              `must export exactly one of "agent", "workflow", "graph", or "chain"`,
             ),
           },
           name: "routes",

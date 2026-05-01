@@ -37,7 +37,7 @@ const RUNTIME_ROOT = resolve(import.meta.dirname)
 const HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV = "DAWN_RUNTIME_ARTIFACT_BASE_DIR"
 const tempDirs: TrackedTempDir[] = []
 
-type RuntimeFixtureName = "graph-basic" | "graph-failure" | "workflow-basic" | "workflow-failure"
+type RuntimeFixtureName = "agent-basic" | "agent-failure" | "graph-basic" | "graph-failure" | "workflow-basic" | "workflow-failure"
 
 interface RuntimeOverlay {
   readonly deleteFiles?: readonly string[]
@@ -60,6 +60,48 @@ afterEach(async () => {
 })
 
 describe("runtime contract harness", () => {
+  test("executes passing agent fixture through direct runtime primitive", {
+    timeout: 180_000,
+  }, async () => {
+    const result = await runRuntimeScenario("agent-basic")
+
+    expect(result).toMatchObject({
+      failureReason: null,
+      lane: "runtime",
+      name: "agent-basic",
+      status: "passed",
+    })
+    expect(result.phases.map((phase) => phase.name)).toEqual([
+      "packaged-installer",
+      "install",
+      "execute-direct",
+      "execute-cli",
+      "execute-cli-dev-server",
+    ])
+    await expectRuntimeParityArtifacts(result, "agent-basic")
+  })
+
+  test("executes failing agent fixture through direct runtime primitive", {
+    timeout: 180_000,
+  }, async () => {
+    const result = await runRuntimeScenario("agent-failure")
+
+    expect(result).toMatchObject({
+      failureReason: null,
+      lane: "runtime",
+      name: "agent-failure",
+      status: "passed",
+    })
+    expect(result.phases.map((phase) => phase.name)).toEqual([
+      "packaged-installer",
+      "install",
+      "execute-direct",
+      "execute-cli",
+      "execute-cli-dev-server",
+    ])
+    await expectRuntimeParityArtifacts(result, "agent-failure")
+  })
+
   test("executes passing graph fixture through direct runtime primitive", {
     timeout: 180_000,
   }, async () => {
@@ -663,6 +705,8 @@ async function rewriteDependenciesToTarballs(options: {
     }
   }
 
+  delete packageJson.dependencies?.langchain
+  delete packageJson.dependencies?.["@langchain/openai"]
   packageJson.dependencies = {
     ...packageJson.dependencies,
     "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],

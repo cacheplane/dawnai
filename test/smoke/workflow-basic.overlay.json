@@ -1,6 +1,10 @@
 {
+  "deleteFiles": ["src/app/(public)/hello/[tenant]/tools/greet.ts"],
+  "files": {
+    "src/app/(public)/hello/[tenant]/index.ts": "import type { HelloState } from \"./state.js\";\n\nexport async function workflow(input: HelloState): Promise<HelloState> {\n  return {\n    ...input,\n    greeting: `Hello, ${input.tenant}!`,\n  };\n}\n"
+  },
   "input": {
     "tenant": "workflow-tenant"
   },
-  "kind": "chain"
+  "kind": "workflow"
 }

@@ -238,7 +238,7 @@ export const graph = async () => ({ ok: true })
       error: {
         kind: "app_discovery_error",
         message: expect.stringContaining(
-          `must export exactly one of "workflow", "graph", or "chain"`,
+          `must export exactly one of "agent", "workflow", "graph", or "chain"`,
         ),
       },
       routePath: "/support/[tenant]",

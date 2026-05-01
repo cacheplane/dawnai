@@ -1,10 +1,13 @@
 {
+  "files": {
+    "src/app/(public)/hello/[tenant]/index.ts": "import type { HelloState } from \"./state.js\";\n\nexport const workflow = async (state: HelloState): Promise<HelloState> => ({\n  ...state,\n  greeting: `Hello, ${state.tenant}!`,\n});\n"
+  },
   "input": {
     "tenant": "workflow-tenant"
   },
   "routeFile": "src/app/(public)/hello/[tenant]/index.ts",
   "expected": {
-    "mode": "chain",
+    "mode": "workflow",
     "output": {
       "greeting": "Hello, workflow-tenant!",
       "tenant": "workflow-tenant"

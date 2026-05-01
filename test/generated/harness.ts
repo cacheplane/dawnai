@@ -48,7 +48,7 @@ interface RuntimeFixtureSpec {
   readonly input: {
     readonly tenant: string
   }
-  readonly mode: "chain" | "graph" | "workflow"
+  readonly mode: "agent" | "chain" | "graph" | "workflow"
   readonly routeDir: string
   readonly routeId: string
   readonly routePath: string
@@ -79,7 +79,7 @@ export interface GeneratedRuntimeScenarioResult {
     readonly input: unknown
     readonly metadata: {
       readonly dawn: {
-        readonly mode: "chain" | "graph" | "workflow"
+        readonly mode: "agent" | "chain" | "graph" | "workflow"
         readonly route_id: string
         readonly route_path: string
       }
@@ -97,7 +97,7 @@ const runtimeFixtures: Record<GeneratedRuntimeFixtureName, RuntimeFixtureSpec> =
     input: {
       tenant: "basic-tenant",
     },
-    mode: "chain",
+    mode: "agent",
     routeDir: "src/app/(public)/hello/[tenant]",
     routeId: "/hello/[tenant]",
     routePath: "src/app/(public)/hello/[tenant]/index.ts",
@@ -199,6 +199,29 @@ export async function prepareGeneratedRuntimeApp(options: {
 
     if (fixture.fixtureName === "custom-app-dir") {
       await rewriteToCustomAppDirRuntimeLayout(appRoot)
+    }
+
+    if (fixture.fixtureName === "basic") {
+      await writeFile(
+        join(appRoot, fixture.routeDir, "index.ts"),
+        [
+          'import greet from "./tools/greet.js"',
+          "",
+          "export const agent = {",
+          "  async invoke(input: Record<string, unknown>, config?: Record<string, unknown>) {",
+          "    const tenant = (config?.configurable as Record<string, unknown>)?.tenant as string",
+          "    const info = await greet({ tenant })",
+          "    return {",
+          "      greeting: `Hello, ${info.name}!`,",
+          "      tenant: info.name,",
+          "    }",
+          "  },",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      )
+      await removeLangchainFromPackageJson(appRoot)
     }
 
     if (fixture.fixtureName !== "handwritten") {
@@ -450,6 +473,18 @@ async function rewriteDependenciesToTarballs(options: {
     },
   }
 
+  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
+}
+
+async function removeLangchainFromPackageJson(appRoot: string): Promise<void> {
+  const packageJsonPath = join(appRoot, "package.json")
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+    dependencies?: Record<string, string>
+  }
+  if (packageJson.dependencies) {
+    delete packageJson.dependencies.langchain
+    delete packageJson.dependencies["@langchain/openai"]
+  }
   await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
 }
 

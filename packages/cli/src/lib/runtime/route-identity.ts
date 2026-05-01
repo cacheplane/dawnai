@@ -7,7 +7,7 @@ export interface RouteIdentity {
 
 export function createRouteAssistantId(
   routeId: string,
-  mode: "chain" | "graph" | "workflow",
+  mode: "agent" | "chain" | "graph" | "workflow",
 ): string {
   return `${routeId}#${mode}`
 }
