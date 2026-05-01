@@ -1,4 +1,5 @@
-import { isAbsolute, resolve } from "node:path"
+import { existsSync, readFileSync } from "node:fs"
+import { isAbsolute, join, resolve } from "node:path"
 
 import { type ResolvedStateField, findDawnApp, resolveStateFields } from "@dawn-ai/core"
 import { executeAgent } from "@dawn-ai/langchain"
@@ -13,7 +14,7 @@ import {
 } from "./result.js"
 import { deriveRouteIdentity } from "./route-identity.js"
 import { discoverStateDefinition } from "./state-discovery.js"
-import { discoverToolDefinitions } from "./tool-discovery.js"
+import { discoverToolDefinitions, injectGeneratedSchemas } from "./tool-discovery.js"
 import { fileExists } from "./utils.js"
 
 export interface ExecuteRouteOptions {
@@ -116,10 +117,26 @@ async function executeRouteAtResolvedPath(options: {
     const normalized = await normalizeRouteModule(options.routeFile)
     mode = normalized.kind
 
-    const tools = await discoverToolDefinitions({
+    const discoveredTools = await discoverToolDefinitions({
       appRoot: options.appRoot,
       routeDir,
     })
+
+    // Inject codegen-generated schemas for tools without explicit schema exports
+    const routeId = options.routeId.replace(/^\//, "").replace(/\//g, "-") || "index"
+    const schemaManifestPath = join(options.appRoot, ".dawn", "routes", routeId, "tools.json")
+    let tools = discoveredTools
+    if (existsSync(schemaManifestPath)) {
+      try {
+        const manifest = JSON.parse(readFileSync(schemaManifestPath, "utf-8")) as Record<
+          string,
+          unknown
+        >
+        tools = injectGeneratedSchemas(discoveredTools, manifest)
+      } catch {
+        // Generated schema is best-effort — fall through on parse errors
+      }
+    }
 
     let stateFields: readonly ResolvedStateField[] | undefined
     if (normalized.kind === "agent") {
