@@ -1,3 +1,5 @@
+import type { DawnAgent } from "@dawn-ai/sdk"
+import { isDawnAgent } from "@dawn-ai/sdk"
 import { HumanMessage } from "@langchain/core/messages"
 import { convertToolToLangChain } from "./tool-converter.js"
 
@@ -26,6 +28,36 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
   }
 }
 
+const materializedAgents = new WeakMap<DawnAgent, AgentLike>()
+
+async function materializeAgent(
+  descriptor: DawnAgent,
+  tools: readonly DawnToolDefinition[],
+): Promise<AgentLike> {
+  const cached = materializedAgents.get(descriptor)
+  if (cached) {
+    return cached
+  }
+
+  const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
+  const { ChatOpenAI } = await import("@langchain/openai")
+
+  const langchainTools = tools.map((tool) => convertToolToLangChain(tool))
+
+  const llm = new ChatOpenAI({
+    model: descriptor.model,
+  })
+
+  const compiled = createReactAgent({
+    llm,
+    tools: langchainTools,
+    prompt: descriptor.systemPrompt,
+  })
+
+  materializedAgents.set(descriptor, compiled as unknown as AgentLike)
+  return compiled as unknown as AgentLike
+}
+
 export async function executeAgent(options: {
   readonly entry: unknown
   readonly input: unknown
@@ -33,8 +65,6 @@ export async function executeAgent(options: {
   readonly signal: AbortSignal
   readonly tools: readonly DawnToolDefinition[]
 }): Promise<unknown> {
-  assertAgentLike(options.entry)
-
   const inputRecord = (options.input ?? {}) as Record<string, unknown>
   const params: Record<string, unknown> = {}
   const agentInput: Record<string, unknown> = {}
@@ -47,8 +77,6 @@ export async function executeAgent(options: {
     }
   }
 
-  const langchainTools = options.tools.map((tool) => convertToolToLangChain(tool))
-
   const config: Record<string, unknown> = {
     signal: options.signal,
   }
@@ -57,12 +85,22 @@ export async function executeAgent(options: {
     config.configurable = params
   }
 
+  // DawnAgent descriptor path — materialize on first use
+  if (isDawnAgent(options.entry)) {
+    const materializedAgent = await materializeAgent(options.entry, options.tools)
+    const messages = [new HumanMessage(formatAgentMessage(agentInput))]
+    return await materializedAgent.invoke({ messages }, config)
+  }
+
+  // Legacy path — raw Runnable with .invoke()
+  assertAgentLike(options.entry)
+
+  const langchainTools = options.tools.map((tool) => convertToolToLangChain(tool))
   if (langchainTools.length > 0) {
     config.tools = langchainTools
   }
 
   const messages = [new HumanMessage(formatAgentMessage(agentInput))]
-
   return await options.entry.invoke({ messages }, config)
 }
 
@@ -74,7 +112,7 @@ function formatAgentMessage(input: Record<string, unknown>): string {
   }
 
   if (entries.length === 1) {
-    return String(entries[0]![1])
+    return String(entries[0]?.[1])
   }
 
   return entries.map(([key, value]) => `${key}: ${String(value)}`).join("\n")
