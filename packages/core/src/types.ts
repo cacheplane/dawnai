@@ -59,6 +59,7 @@ export interface DiscoverRoutesOptions {
 }
 
 export interface ExtractedToolType {
+  readonly description: string
   readonly name: string
   readonly inputType: string
   readonly outputType: string
