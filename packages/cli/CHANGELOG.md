@@ -1,5 +1,14 @@
 # @dawn-ai/cli
 
+## 0.1.2
+
+### Patch Changes
+
+- Fix watch-mode typegen not picking up file changes due to ESM import cache
+  - @dawn-ai/core@0.1.2
+  - @dawn-ai/langchain@0.1.2
+  - @dawn-ai/langgraph@0.1.2
+
 ## 0.1.0
 
 ### Minor Changes
