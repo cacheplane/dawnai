@@ -20,7 +20,7 @@
     "dist"
   ],
   "bin": {
-    "create-dawn-ai-app": "./dist/index.js"
+    "create-dawn-ai-app": "./dist/bin.js"
   },
   "publishConfig": {
     "access": "public"

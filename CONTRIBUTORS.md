@@ -34,7 +34,7 @@ For local authoring work, the canonical contributor-local path is:
 
 ```bash
 pnpm --filter create-dawn-app build
-node packages/create-dawn-app/dist/index.js ../my-dawn-app --mode internal
+node packages/create-dawn-app/dist/bin.js ../my-dawn-app --mode internal
 cd ../my-dawn-app
 pnpm install
 ```

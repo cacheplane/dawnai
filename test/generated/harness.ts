@@ -396,7 +396,7 @@ async function scaffoldApp(options: {
 }): Promise<void> {
   if (options.mode === "internal") {
     await runPackagedCommand({
-      args: ["packages/create-dawn-app/dist/index.js", options.appRoot, "--mode", "internal"],
+      args: ["packages/create-dawn-app/dist/bin.js", options.appRoot, "--mode", "internal"],
       command: "node",
       cwd: REPO_ROOT,
       transcriptPath: options.transcriptPath,

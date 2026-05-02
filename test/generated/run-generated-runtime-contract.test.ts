@@ -87,7 +87,7 @@ describe("generated app runtime contract", () => {
       `$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-ai-app build)`,
     )
     expect(transcript).toContain(
-      `node packages/create-dawn-app/dist/index.js ${prepared.appRoot} --mode internal`,
+      `node packages/create-dawn-app/dist/bin.js ${prepared.appRoot} --mode internal`,
     )
     expect(transcript).toContain(`$ (cd ${prepared.appRoot} && pnpm install)`)
     expect(transcript).toContain(
