@@ -5,14 +5,15 @@
     "type": "module",
     "scripts": {
       "check": "dawn check",
-      "typecheck": "tsc --noEmit",
-      "build": "tsc -p tsconfig.json"
+      "build": "tsc -p tsconfig.json",
+      "typecheck": "tsc --noEmit"
     },
     "dependencies": {
       "@dawn-ai/core": "<tarball:@dawn-ai/core>",
       "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
       "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
-      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>"
+      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
+      "zod": "^3.24.0"
     },
     "devDependencies": {
       "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",

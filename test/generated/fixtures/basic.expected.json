@@ -5,14 +5,15 @@
     "type": "module",
     "scripts": {
       "check": "dawn check",
-      "typecheck": "tsc --noEmit",
-      "build": "tsc -p tsconfig.json"
+      "build": "tsc -p tsconfig.json",
+      "typecheck": "tsc --noEmit"
     },
     "dependencies": {
       "@dawn-ai/core": "<tarball:@dawn-ai/core>",
       "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
       "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
-      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>"
+      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
+      "zod": "^3.24.0"
     },
     "devDependencies": {
       "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
@@ -81,5 +82,5 @@
       }
     ]
   },
-  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/hello/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/hello/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {\n    \"/hello/[tenant]\": {\n      readonly greet: (input: { readonly tenant: string; }) => Promise<{ name: string; plan: string; }>;\n    };\n  }\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n}\n"
+  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/hello/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/hello/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {\n    \"/hello/[tenant]\": {\n      readonly greet: (input: { readonly tenant: string; }) => Promise<{ name: string; plan: string; }>;\n    };\n  }\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n\n  export interface DawnRouteState {\n    \"/hello/[tenant]\": {\n      readonly context: string;\n    };\n  }\n\n  export type RouteState<P extends DawnRoutePath> = DawnRouteState[P];\n}\n"
 }
