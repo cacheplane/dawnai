@@ -40,7 +40,7 @@ function extractHeadings(mdx: string): readonly DocsSearchHeading[] {
     }
     if (inFence) continue
     const match = /^(#{1,3})\s+(.+)$/.exec(trimmed)
-    if (!match || !match[1] || !match[2]) continue
+    if (!match?.[1] || !match[2]) continue
     const level = match[1].length as 1 | 2 | 3
     const text = match[2].trim().replace(/`([^`]+)`/g, "$1")
     out.push({ text, level, anchor: slugify(text) })
