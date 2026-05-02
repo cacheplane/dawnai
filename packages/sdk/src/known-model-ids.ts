@@ -17,10 +17,7 @@ export type OpenAiModelId =
   | "o3-mini"
   | "o4-mini"
 
-export type AnthropicModelId =
-  | "claude-opus-4-7"
-  | "claude-sonnet-4-6"
-  | "claude-haiku-4-5-20251001"
+export type AnthropicModelId = "claude-opus-4-7" | "claude-sonnet-4-6" | "claude-haiku-4-5-20251001"
 
 export type GoogleModelId =
   | "gemini-3-pro-preview"
@@ -29,8 +26,4 @@ export type GoogleModelId =
   | "gemini-2.5-flash"
   | "gemini-2.5-flash-lite"
 
-export type KnownModelId =
-  | OpenAiModelId
-  | AnthropicModelId
-  | GoogleModelId
-  | (string & {})
+export type KnownModelId = OpenAiModelId | AnthropicModelId | GoogleModelId | (string & {})

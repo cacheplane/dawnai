@@ -17,12 +17,14 @@ describe("Prettify<T>", () => {
 
 describe("RouteToolMap", () => {
   test("is an empty interface by default", () => {
+    // biome-ignore lint/complexity/noBannedTypes: testing empty interface shape
     expectTypeOf<RouteToolMap>().toEqualTypeOf<{}>()
   })
 })
 
 describe("RouteStateMap", () => {
   test("is an empty interface by default", () => {
+    // biome-ignore lint/complexity/noBannedTypes: testing empty interface shape
     expectTypeOf<RouteStateMap>().toEqualTypeOf<{}>()
   })
 })
