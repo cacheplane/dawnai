@@ -14,7 +14,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      packages: write
       id-token: write
 
     steps:
@@ -48,7 +47,7 @@ jobs:
           publish: pnpm exec changeset publish
           title: Version Packages
           commit: Version Packages
+          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
