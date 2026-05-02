@@ -90,7 +90,9 @@ async function discoverReducerOverrides(
 
     const fieldName = basename(entry, ".ts")
     const filePath = join(reducersDir, entry)
-    const mod = (await import(`${pathToFileURL(filePath).href}?t=${Date.now()}`)) as { readonly default?: unknown }
+    const mod = (await import(`${pathToFileURL(filePath).href}?t=${Date.now()}`)) as {
+      readonly default?: unknown
+    }
 
     if (typeof mod.default === "function") {
       overrides.set(fieldName, mod.default as (current: unknown, incoming: unknown) => unknown)
