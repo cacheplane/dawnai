@@ -309,6 +309,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/config-typescript": options.tarballs.configTypescript,
       "@dawn-ai/core": options.tarballs.core,
       "@dawn-ai/langchain": options.tarballs.langchain,
+      "@dawn-ai/langgraph": options.tarballs.langgraph,
       "@dawn-ai/sdk": options.tarballs.sdk,
     },
   }
