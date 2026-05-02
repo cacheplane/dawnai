@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
-import { readdir, readFile } from "node:fs/promises"
-import { dirname, resolve } from "node:path"
+import { readdir, readFile, rm } from "node:fs/promises"
+import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -40,10 +40,28 @@ export async function publishRelease({ packages, tag, npmView, run, log }) {
     log(`Staging ${state.name}@${state.version} under ${tag}`)
 
     try {
-      await run("pnpm", ["publish", "--tag", tag, "--access", state.access, "--no-git-checks"], {
-        cwd: state.dir,
-        cwdPackage: state.package,
-      })
+      // pnpm pack resolves workspace:* protocol into the tarball
+      const packOutput = await run(
+        "pnpm",
+        ["pack", "--pack-destination", state.dir],
+        { cwd: state.dir, cwdPackage: state.package, stdio: "pipe" },
+      )
+      const tarball = packOutput.split("\n").map((l) => l.trim()).filter(Boolean).find((l) => l.endsWith(".tgz"))
+
+      if (!tarball) {
+        throw new Error(`Could not determine tarball name from pnpm pack output`)
+      }
+
+      const tarballPath = resolve(state.dir, basename(tarball))
+
+      // npm publish with --provenance uses OIDC for auth (no token needed)
+      await run(
+        "npm",
+        ["publish", tarballPath, "--tag", tag, "--access", state.access, "--provenance"],
+        { cwd: state.dir, cwdPackage: state.package },
+      )
+
+      await rm(tarballPath, { force: true })
     } catch (error) {
       throw new Error(`Failed to stage ${state.name}@${state.version}: ${formatError(error)}`)
     }

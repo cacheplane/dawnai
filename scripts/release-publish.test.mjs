@@ -160,7 +160,13 @@ function registryState(initialPackages) {
     },
     runner(calls, options = {}) {
       return async (command, args, { cwdPackage }) => {
-        if (command === "pnpm" && args[0] === "publish") {
+        if (command === "pnpm" && args[0] === "pack") {
+          // pnpm pack returns the tarball filename
+          const name = cwdPackage.packageJson.name.replace("@", "").replace("/", "-")
+          return `${name}-${cwdPackage.packageJson.version}.tgz\n`
+        }
+
+        if (command === "npm" && args[0] === "publish" && args[1]?.endsWith(".tgz")) {
           const tag = args[args.indexOf("--tag") + 1]
           const info = registry.get(cwdPackage.packageJson.name)
 

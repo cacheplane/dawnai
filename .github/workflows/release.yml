@@ -32,6 +32,7 @@ jobs:
         with:
           node-version: 22.14.0
           cache: pnpm
+          registry-url: https://registry.npmjs.org
 
       - name: Setup npm trusted publishing CLI
         run: npm install --global npm@11.5.1
@@ -52,4 +53,4 @@ jobs:
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_CONFIG_PROVENANCE: true
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
