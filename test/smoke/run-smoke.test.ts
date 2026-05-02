@@ -201,6 +201,15 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
       return selectExecutableRoute(manifest, overlay.kind)
     })
 
+    await recordPhase(phases, "typegen", async () => {
+      await runCommand({
+        args: ["exec", "dawn", "typegen"],
+        command: "pnpm",
+        cwd: generatedApp.appRoot,
+        transcriptPath,
+      })
+    })
+
     await recordPhase(phases, "typecheck", async () => {
       await runCommand({
         args: ["typecheck"],

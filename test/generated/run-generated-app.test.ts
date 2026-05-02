@@ -376,7 +376,7 @@ async function runLifecycle(options: {
     transcriptPath: options.transcriptPath,
   })
 
-  expect(typegenResult.stdout).toContain("Wrote route types")
+  expect(typegenResult.stdout).toContain("Wrote types for")
   await runCommand({
     args: ["typecheck"],
     command: "pnpm",
@@ -396,12 +396,7 @@ async function runLifecycle(options: {
   delete packageJson.packageManager
   const verifyJson = JSON.parse(verifyResult.stdout)
   const routesJson = JSON.parse(routesResult.stdout)
-  const typegenOutputPath = typegenResult.stdout.match(/Wrote route types to (.+)\n?$/u)?.[1]
-
-  if (!typegenOutputPath) {
-    throw new Error(`Could not determine typegen output path from: ${typegenResult.stdout}`)
-  }
-
+  const typegenOutputPath = join(options.appRoot, ".dawn", "dawn.generated.d.ts")
   await expect(stat(typegenOutputPath)).resolves.toBeDefined()
 
   return {
