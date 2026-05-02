@@ -242,4 +242,3 @@ async function pathExists(path: string): Promise<boolean> {
     return false
   }
 }
-
