@@ -103,7 +103,7 @@ async function loadToolDefinition(
   filePath: string,
   scope: ToolScope,
 ): Promise<DiscoveredToolDefinition> {
-  const toolModule = (await import(pathToFileURL(filePath).href)) as {
+  const toolModule = (await import(`${pathToFileURL(filePath).href}?t=${Date.now()}`)) as {
     readonly default?: unknown
     readonly description?: unknown
     readonly schema?: unknown
