@@ -1,9 +1,11 @@
 import { createServer } from "node:net"
 import { isAbsolute, relative, resolve } from "node:path"
 
-import { findDawnApp, loadDawnConfig } from "@dawn-ai/core"
+import { discoverRoutes, findDawnApp, loadDawnConfig } from "@dawn-ai/core"
 
 import { type CommandIo, formatErrorMessage, writeLine } from "../output.js"
+import { runTypegen } from "../typegen/run-typegen.js"
+import { classifyChange } from "./classify-change.js"
 import { DevChildStartupError, type SpawnedDevChild, spawnDevChild } from "./dev-child.js"
 import { waitForDevServerReady } from "./health.js"
 import { type AppWatcher, watchApp } from "./watch-app.js"
@@ -48,6 +50,7 @@ class InternalDevSession {
   private readonly appRoot: string
   private readonly port: number
   private readonly url: string
+  private typegenTimeout: ReturnType<typeof setTimeout> | null = null
   private watcher: AppWatcher | null = null
   private closed = false
   private hasBeenReady = false
@@ -74,10 +77,13 @@ class InternalDevSession {
   }
 
   async start(): Promise<void> {
+    // Run typegen before starting dev server
+    await this.runTypegenSafe()
+
     this.watcher = watchApp({
       appRoot: this.appRoot,
-      onChange: (_path) => {
-        void this.requestRestart()
+      onChange: (path) => {
+        this.handleChange(path)
       },
     })
 
@@ -91,6 +97,12 @@ class InternalDevSession {
     }
 
     this.closed = true
+
+    if (this.typegenTimeout) {
+      clearTimeout(this.typegenTimeout)
+      this.typegenTimeout = null
+    }
+
     this.watcher?.close()
     this.watcher = null
 
@@ -148,6 +160,47 @@ class InternalDevSession {
       return
     } finally {
       this.restartInFlight = false
+    }
+  }
+
+  private handleChange(absolutePath: string): void {
+    if (this.closed) return
+
+    const relative = absolutePath.startsWith(this.appRoot)
+      ? absolutePath.slice(this.appRoot.length + 1)
+      : absolutePath
+
+    // Ignore generated output inside .dawn/
+    if (relative.startsWith(".dawn/") || relative === ".dawn") {
+      return
+    }
+
+    const classification = classifyChange(relative)
+
+    if (classification === "typegen") {
+      this.scheduleTypegen()
+    } else {
+      void this.requestRestart()
+    }
+  }
+
+  private scheduleTypegen(): void {
+    if (this.typegenTimeout) {
+      clearTimeout(this.typegenTimeout)
+    }
+
+    this.typegenTimeout = setTimeout(() => {
+      this.typegenTimeout = null
+      void this.runTypegenSafe()
+    }, 100)
+  }
+
+  private async runTypegenSafe(): Promise<void> {
+    try {
+      const manifest = await discoverRoutes({ appRoot: this.appRoot })
+      await runTypegen({ appRoot: this.appRoot, manifest })
+    } catch (error) {
+      writeLine(this.io.stderr, `Typegen failed: ${formatErrorMessage(error)}`)
     }
   }
 

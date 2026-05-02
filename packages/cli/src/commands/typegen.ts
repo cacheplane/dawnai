@@ -1,21 +1,12 @@
-import { mkdir, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
-import type { RouteToolTypes } from "@dawn-ai/core"
-import {
-  discoverRoutes,
-  extractToolTypesForRoute,
-  findDawnApp,
-  renderDawnTypes,
-} from "@dawn-ai/core"
+import { discoverRoutes, findDawnApp } from "@dawn-ai/core"
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { runTypegen } from "../lib/typegen/run-typegen.js"
 
 interface TypegenOptions {
   readonly cwd?: string
 }
-
-const OUTPUT_FILE = "dawn.generated.d.ts"
 
 export function registerTypegenCommand(program: Command, io: CommandIo): void {
   program
@@ -31,22 +22,12 @@ export async function runTypegenCommand(options: TypegenOptions, io: CommandIo):
   try {
     const app = await findDawnApp(options.cwd ? { cwd: options.cwd } : {})
     const manifest = await discoverRoutes({ appRoot: app.appRoot })
-    const outputPath = join(app.dawnDir, OUTPUT_FILE)
+    const result = await runTypegen({ appRoot: app.appRoot, manifest })
 
-    const sharedToolsDir = join(app.appRoot, "src")
-    const routeToolTypes: RouteToolTypes[] = []
-    for (const route of manifest.routes) {
-      const tools = await extractToolTypesForRoute({
-        routeDir: route.routeDir,
-        sharedToolsDir,
-      })
-      routeToolTypes.push({ pathname: route.pathname, tools })
-    }
-
-    await mkdir(dirname(outputPath), { recursive: true })
-    await writeFile(outputPath, renderDawnTypes(manifest, routeToolTypes), "utf8")
-
-    writeLine(io.stdout, `Wrote route types to ${outputPath}`)
+    writeLine(
+      io.stdout,
+      `Wrote types for ${result.routeCount} route(s), ${result.toolSchemaCount} tool schema(s), ${result.stateRouteCount} stateful route(s)`,
+    )
   } catch (error) {
     throw new CliError(`Failed to generate route types: ${formatErrorMessage(error)}`)
   }

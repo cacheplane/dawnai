@@ -1,9 +1,11 @@
 import type { RouteManifest, RouteSegment, RouteToolTypes } from "../types.js"
+import { type RouteStateFields, renderStateTypes } from "./render-state-types.js"
 import { renderToolTypes } from "./render-tool-types.js"
 
 export function renderDawnTypes(
   manifest: RouteManifest,
   toolTypes: readonly RouteToolTypes[],
+  stateTypes?: readonly RouteStateFields[],
 ): string {
   const pathUnion =
     manifest.routes.length > 0
@@ -22,16 +24,24 @@ export function renderDawnTypes(
 
   const toolBlock = renderToolTypes(toolTypes).trimEnd()
 
-  return [
+  const parts: string[] = [
     'declare module "dawn:routes" {',
     `  export type DawnRoutePath = ${pathUnion};`,
     "",
     paramBlock,
     "",
     toolBlock,
-    "}",
-    "",
-  ].join("\n")
+  ]
+
+  if (stateTypes && stateTypes.length > 0) {
+    parts.push("")
+    parts.push(renderStateTypes(stateTypes).trimEnd())
+  }
+
+  parts.push("}")
+  parts.push("")
+
+  return parts.join("\n")
 }
 
 export function renderRouteTypes(manifest: RouteManifest): string {

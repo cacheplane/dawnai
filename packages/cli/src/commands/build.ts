@@ -5,6 +5,7 @@ import { discoverRoutes } from "@dawn-ai/core"
 import type { Command } from "commander"
 import { type CommandIo, writeLine } from "../lib/output.js"
 import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
+import { runTypegen } from "../lib/typegen/run-typegen.js"
 
 interface BuildOptions {
   readonly clean?: boolean
@@ -26,6 +27,9 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
   const manifest = await discoverRoutes({
     ...(options.cwd ? { appRoot: options.cwd } : {}),
   })
+
+  // Run typegen as pre-step to produce .dawn/routes/<id>/tools.json and .dawn/dawn.generated.d.ts
+  await runTypegen({ appRoot: manifest.appRoot, manifest })
 
   const buildDir = resolve(manifest.appRoot, ".dawn", "build")
 
