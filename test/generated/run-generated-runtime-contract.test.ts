@@ -84,7 +84,7 @@ describe("generated app runtime contract", () => {
 
     expectGeneratedRuntimeScenario(result, expected)
     expect(transcript).toContain(
-      `$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-app build)`,
+      `$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-ai-app build)`,
     )
     expect(transcript).toContain(
       `node packages/create-dawn-app/dist/index.js ${prepared.appRoot} --mode internal`,

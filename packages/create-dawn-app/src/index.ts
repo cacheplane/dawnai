@@ -136,7 +136,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
 
   if (!targetDir) {
     throw new Error(
-      "Usage: create-dawn-app <target-directory> [--template basic] [--mode external|internal] [--dist-tag latest]",
+      "Usage: create-dawn-ai-app <target-directory> [--template basic] [--mode external|internal] [--dist-tag latest]",
     )
   }
 
