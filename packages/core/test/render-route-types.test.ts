@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, test } from "vitest"
 
 import { renderDawnTypes, renderRouteTypes } from "../src/typegen/render-route-types"
+import type { RouteStateFields } from "../src/typegen/render-state-types"
 import type { RouteManifest, RouteSegment, RouteToolTypes } from "../src/types"
 
 const MANIFEST_SNAPSHOT_PATH = fileURLToPath(
@@ -106,6 +107,67 @@ describe("renderDawnTypes", () => {
       }
       "
     `)
+  })
+
+  test("includes DawnRouteState and RouteState when stateTypes is provided", () => {
+    const manifest: RouteManifest = {
+      appRoot: "/tmp/example-app",
+      routes: [
+        {
+          id: "/hello/[tenant]",
+          pathname: "/hello/[tenant]",
+          kind: "workflow",
+          entryFile: "/tmp/example-app/hello/[tenant].tsx",
+          routeDir: "/tmp/example-app/hello/[tenant]",
+          segments: [
+            { kind: "static", value: "hello" },
+            { kind: "dynamic", name: "tenant" },
+          ],
+        },
+      ],
+    }
+
+    const toolTypes: RouteToolTypes[] = []
+
+    const stateTypes: RouteStateFields[] = [
+      {
+        pathname: "/hello/[tenant]",
+        fields: [
+          { name: "status", type: "string" },
+          { name: "count", type: "number" },
+        ],
+      },
+    ]
+
+    const output = renderDawnTypes(manifest, toolTypes, stateTypes)
+    expect(output).toContain("DawnRouteState")
+    expect(output).toContain("RouteState")
+    expect(output).toContain("readonly status: string;")
+    expect(output).toContain("readonly count: number;")
+  })
+
+  test("does NOT include DawnRouteState when stateTypes is omitted", () => {
+    const manifest: RouteManifest = {
+      appRoot: "/tmp/example-app",
+      routes: [
+        {
+          id: "/hello/[tenant]",
+          pathname: "/hello/[tenant]",
+          kind: "workflow",
+          entryFile: "/tmp/example-app/hello/[tenant].tsx",
+          routeDir: "/tmp/example-app/hello/[tenant]",
+          segments: [
+            { kind: "static", value: "hello" },
+            { kind: "dynamic", name: "tenant" },
+          ],
+        },
+      ],
+    }
+
+    const toolTypes: RouteToolTypes[] = []
+
+    const output = renderDawnTypes(manifest, toolTypes)
+    expect(output).not.toContain("DawnRouteState")
   })
 })
 

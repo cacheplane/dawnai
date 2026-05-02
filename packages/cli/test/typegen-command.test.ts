@@ -138,7 +138,7 @@ describe("dawn typegen", () => {
 
     expect(exitCode).toBe(0)
     expect(stderr.join("")).toBe("")
-    expect(stdout.join("")).toContain("Wrote route types")
+    expect(stdout.join("")).toContain("Wrote types for 2 route(s)")
     expect(output).toContain('export type DawnRoutePath = "/" | "/[tenant]";')
     expect(output).toContain('"/[tenant]": { tenant: string };')
   })
