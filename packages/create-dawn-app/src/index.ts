@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { constants } from "node:fs"
 import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
@@ -245,5 +243,3 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-const exitCode = await run(process.argv.slice(2))
-process.exit(exitCode)

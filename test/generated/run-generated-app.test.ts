@@ -124,7 +124,7 @@ describe("generated app publish harness", () => {
     await expectBasicAuthoringLane(contributorLocal.artifacts.appRoot)
     expect(transcript).toContain(`$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-ai-app build)`)
     expect(transcript).toContain(
-      `node packages/create-dawn-app/dist/index.js ${contributorLocal.artifacts.appRoot} --mode internal`,
+      `node packages/create-dawn-app/dist/bin.js ${contributorLocal.artifacts.appRoot} --mode internal`,
     )
     expect(transcript).toContain(`$ (cd ${contributorLocal.artifacts.appRoot} && pnpm install)`)
     expect(transcript).toContain(
@@ -252,7 +252,7 @@ async function scaffoldApp(options: {
 }): Promise<void> {
   if (options.mode === "internal") {
     await runCommand({
-      args: ["packages/create-dawn-app/dist/index.js", options.appRoot, "--mode", "internal"],
+      args: ["packages/create-dawn-app/dist/bin.js", options.appRoot, "--mode", "internal"],
       command: "node",
       cwd: REPO_ROOT,
       transcriptPath: options.transcriptPath,
