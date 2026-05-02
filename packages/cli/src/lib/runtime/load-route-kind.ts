@@ -1,9 +1,7 @@
 import { pathToFileURL } from "node:url"
-
+import type { NormalizedRouteModule } from "@dawn-ai/core"
 import type { RouteKind } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
-
-import type { NormalizedRouteModule } from "@dawn-ai/core"
 
 import { registerTsxLoader } from "./register-tsx-loader.js"
 

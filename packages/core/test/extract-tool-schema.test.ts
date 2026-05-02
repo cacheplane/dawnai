@@ -174,9 +174,7 @@ export default async function plain(input: {
 
     expect(result[0]?.description).toBe("")
     expect(result[0]?.parameters.properties.value).toEqual({ type: "string" })
-    expect("description" in (result[0]?.parameters.properties.value ?? {})).toBe(
-      false,
-    )
+    expect("description" in (result[0]?.parameters.properties.value ?? {})).toBe(false)
   })
 
   test("no-parameter tools get empty properties and required", async () => {

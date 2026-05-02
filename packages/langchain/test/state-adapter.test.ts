@@ -26,10 +26,8 @@ describe("materializeStateSchema", () => {
   })
 
   test("handles custom function reducer", () => {
-    const customReducer = (current: unknown, incoming: unknown) => incoming
-    const fields = [
-      { name: "data", reducer: customReducer, default: null },
-    ]
+    const customReducer = (_current: unknown, incoming: unknown) => incoming
+    const fields = [{ name: "data", reducer: customReducer, default: null }]
 
     const annotation = materializeStateSchema(fields)
     expect(annotation.spec).toBeDefined()

@@ -2,9 +2,8 @@ import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { afterEach, describe, expect, test } from "vitest"
-
 import { discoverRoutes } from "@dawn-ai/core"
+import { afterEach, describe, expect, test } from "vitest"
 
 import { runTypegen } from "../src/lib/typegen/run-typegen.js"
 
@@ -29,20 +28,17 @@ async function setupApp(options?: { withState?: boolean }) {
   await Promise.all([
     createFile(join(appRoot, "package.json"), '{"type":"module"}'),
     createFile(join(appRoot, "dawn.config.ts"), "export default {};\n"),
-    createFile(
-      join(routeDir, "index.ts"),
-      "export const agent = async () => ({});\n",
-    ),
+    createFile(join(routeDir, "index.ts"), "export const agent = async () => ({});\n"),
     createFile(
       join(toolsDir, "greet.ts"),
-      "/** Greets the tenant. */\nexport default async (input: { name: string }) => ({ message: \"hi\" })\n",
+      '/** Greets the tenant. */\nexport default async (input: { name: string }) => ({ message: "hi" })\n',
     ),
   ])
 
   if (options?.withState) {
     await createFile(
       join(routeDir, "state.ts"),
-      "export default { \"~standard\": { validate: () => ({ value: { context: \"\" } }) } };\n",
+      'export default { "~standard": { validate: () => ({ value: { context: "" } }) } };\n',
     )
   }
 
@@ -106,8 +102,6 @@ describe("runTypegen", () => {
     expect(existsSync(stateJsonPath)).toBe(true)
 
     const stateJson = JSON.parse(await readFile(stateJsonPath, "utf8"))
-    expect(stateJson).toEqual([
-      { name: "context", reducer: "replace", default: "" },
-    ])
+    expect(stateJson).toEqual([{ name: "context", reducer: "replace", default: "" }])
   })
 })

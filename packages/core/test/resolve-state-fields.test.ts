@@ -34,7 +34,7 @@ describe("resolveStateFields", () => {
   })
 
   test("reducer overrides take precedence", () => {
-    const customReducer = (current: string[], incoming: string[]) => incoming
+    const customReducer = (_current: string[], incoming: string[]) => incoming
     const defaults = new Map<string, unknown>([["results", []]])
     const reducerOverrides = new Map<string, (current: unknown, incoming: unknown) => unknown>([
       ["results", customReducer as (current: unknown, incoming: unknown) => unknown],

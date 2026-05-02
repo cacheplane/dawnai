@@ -88,7 +88,10 @@ export async function extractToolTypesForRoute(
 
 function extractJsDoc(symbol: ts.Symbol, checker: ts.TypeChecker): string {
   const docs = symbol.getDocumentationComment(checker)
-  return docs.map((d) => d.text).join("").trim()
+  return docs
+    .map((d) => d.text)
+    .join("")
+    .trim()
 }
 
 function unwrapPromise(type: ts.Type): ts.Type {

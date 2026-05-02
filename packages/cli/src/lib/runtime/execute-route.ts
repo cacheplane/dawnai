@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 
-import { type ResolvedStateField, findDawnApp, resolveStateFields } from "@dawn-ai/core"
+import { findDawnApp, type ResolvedStateField, resolveStateFields } from "@dawn-ai/core"
 import { executeAgent } from "@dawn-ai/langchain"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"

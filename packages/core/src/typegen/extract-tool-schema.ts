@@ -59,9 +59,7 @@ export async function extractToolSchemasForRoute(
     if (!signature) continue
 
     // Extract tool description from JSDoc
-    const description = ts.displayPartsToString(
-      defaultExport.getDocumentationComment(checker),
-    )
+    const description = ts.displayPartsToString(defaultExport.getDocumentationComment(checker))
 
     const params = signature.getParameters()
     if (params.length === 0) {
@@ -91,9 +89,7 @@ export async function extractToolSchemasForRoute(
       const schema = tsTypeToJsonSchema(propType, checker)
 
       // Extract property JSDoc description
-      const propDoc = ts.displayPartsToString(
-        prop.getDocumentationComment(checker),
-      )
+      const propDoc = ts.displayPartsToString(prop.getDocumentationComment(checker))
       if (propDoc) {
         schema.description = propDoc
       }
@@ -105,11 +101,7 @@ export async function extractToolSchemasForRoute(
       const isOptional =
         declarations !== undefined &&
         declarations.length > 0 &&
-        declarations.some(
-          (d) =>
-            ts.isPropertySignature(d) &&
-            d.questionToken !== undefined,
-        )
+        declarations.some((d) => ts.isPropertySignature(d) && d.questionToken !== undefined)
 
       if (!isOptional) {
         required.push(propName)
@@ -138,9 +130,7 @@ function tsTypeToJsonSchema(
 ): { type: string; description?: string; items?: JsonSchemaProperty; enum?: string[] } {
   // Strip undefined from unions (optional properties resolve as T | undefined)
   if (type.isUnion()) {
-    const nonUndefined = type.types.filter(
-      (t) => !(t.flags & ts.TypeFlags.Undefined),
-    )
+    const nonUndefined = type.types.filter((t) => !(t.flags & ts.TypeFlags.Undefined))
     if (nonUndefined.length === 1 && nonUndefined[0]) {
       return tsTypeToJsonSchema(nonUndefined[0], checker)
     }
@@ -157,9 +147,7 @@ function tsTypeToJsonSchema(
   if (checker.isArrayType(type)) {
     const typeArgs = (type as ts.TypeReference).typeArguments
     const elementType = typeArgs && typeArgs.length > 0 && typeArgs[0]
-    const items = elementType
-      ? tsTypeToJsonSchema(elementType, checker)
-      : { type: "string" }
+    const items = elementType ? tsTypeToJsonSchema(elementType, checker) : { type: "string" }
     return { type: "array", items }
   }
 
