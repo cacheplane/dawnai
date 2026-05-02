@@ -265,7 +265,7 @@ async function scaffoldApp(options: {
     }
 
     await runCommand({
-      args: ["exec", "create-dawn-app", options.appRoot, "--dist-tag", "next"],
+      args: ["exec", "create-dawn-ai-app", options.appRoot, "--dist-tag", "next"],
       command: "pnpm",
       cwd: options.installerDir,
       transcriptPath: options.transcriptPath,
@@ -476,7 +476,7 @@ async function readExpectedFixture(fixtureName: string): Promise<unknown> {
 
 async function buildLocalContributorPackages(transcriptPath: string): Promise<void> {
   await runCommand({
-    args: ["--filter", "create-dawn-app", "build"],
+    args: ["--filter", "create-dawn-ai-app", "build"],
     command: "pnpm",
     cwd: REPO_ROOT,
     transcriptPath,
@@ -533,7 +533,7 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     cli: tarballs["@dawn-ai/cli"],
     configTypescript: tarballs["@dawn-ai/config-typescript"],
     core: tarballs["@dawn-ai/core"],
-    createApp: tarballs["create-dawn-app"],
+    createApp: tarballs["create-dawn-ai-app"],
     devkit: tarballs["@dawn-ai/devkit"],
     langchain: tarballs["@dawn-ai/langchain"],
     langgraph: tarballs["@dawn-ai/langgraph"],

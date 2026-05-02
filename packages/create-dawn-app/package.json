@@ -1,5 +1,5 @@
 {
-  "name": "create-dawn-app",
+  "name": "create-dawn-ai-app",
   "version": "0.0.4",
   "private": false,
   "type": "module",
@@ -20,7 +20,7 @@
     "dist"
   ],
   "bin": {
-    "create-dawn-app": "./dist/index.js"
+    "create-dawn-ai-app": "./dist/index.js"
   },
   "publishConfig": {
     "access": "public"

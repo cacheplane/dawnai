@@ -66,7 +66,7 @@ export async function createPackagedInstaller(
 ): Promise<CreatePackagedInstallerResult> {
   const packsDir = join(options.tempRoot, "packs")
   const installerDir = join(options.tempRoot, "installer")
-  const packageNames = ["@dawn-ai/devkit", "create-dawn-app", ...(options.packageNames ?? [])].filter(
+  const packageNames = ["@dawn-ai/devkit", "create-dawn-ai-app", ...(options.packageNames ?? [])].filter(
     (value, index, allValues) => allValues.indexOf(value) === index,
   )
 
@@ -74,7 +74,7 @@ export async function createPackagedInstaller(
   await mkdir(installerDir, { recursive: true })
 
   await runPackagedCommand({
-    args: ["--filter", "create-dawn-app", "build"],
+    args: ["--filter", "create-dawn-ai-app", "build"],
     command: "pnpm",
     cwd: REPO_ROOT,
     transcriptPath: options.transcriptPath,
@@ -116,7 +116,7 @@ export async function createPackagedInstaller(
     transcriptPath: options.transcriptPath,
   })
   await runPackagedCommand({
-    args: ["add", tarballs["create-dawn-app"]],
+    args: ["add", tarballs["create-dawn-ai-app"]],
     command: "pnpm",
     cwd: installerDir,
     transcriptPath: options.transcriptPath,

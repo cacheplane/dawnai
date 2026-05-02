@@ -58,7 +58,7 @@ function resolveFileSpecifier(specifier: string): string {
     : specifier.slice("file:".length)
 }
 
-describe("create-dawn-app", () => {
+describe("create-dawn-ai-app", () => {
   test("scaffolds external mode from the packaged bin with published dist-tag specifiers", {
     timeout: 30_000,
   }, async () => {
@@ -71,7 +71,7 @@ describe("create-dawn-app", () => {
 
     const scaffoldResult = await runCommand(
       "pnpm",
-      ["exec", "create-dawn-app", targetDir, "--dist-tag", "next"],
+      ["exec", "create-dawn-ai-app", targetDir, "--dist-tag", "next"],
       installDir,
     )
     expect(scaffoldResult.code).toBe(0)
@@ -115,7 +115,7 @@ describe("create-dawn-app", () => {
     const invalidInternalTargetDir = join(tempRoot, "hello-dawn-internal")
     const internalModeResult = await runCommand(
       "pnpm",
-      ["exec", "create-dawn-app", invalidInternalTargetDir, "--mode", "internal"],
+      ["exec", "create-dawn-ai-app", invalidInternalTargetDir, "--mode", "internal"],
       installDir,
     )
 
