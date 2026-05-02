@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { constants, realpathSync } from "node:fs"
+import { constants } from "node:fs"
 import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -245,7 +245,5 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-if (fileURLToPath(import.meta.url) === realpathSync(resolve(process.argv[1] ?? ""))) {
-  const exitCode = await run(process.argv.slice(2))
-  process.exit(exitCode)
-}
+const exitCode = await run(process.argv.slice(2))
+process.exit(exitCode)
