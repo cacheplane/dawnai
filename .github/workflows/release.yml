@@ -30,9 +30,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version: 22.14.0
           cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      - name: Setup npm trusted publishing CLI
+        run: npm install --global npm@11.5.1
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -44,10 +47,11 @@ jobs:
         uses: changesets/action@v1
         with:
           version: pnpm exec changeset version
-          publish: pnpm exec changeset publish
+          publish: pnpm release:publish
           title: Version Packages
           commit: Version Packages
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
