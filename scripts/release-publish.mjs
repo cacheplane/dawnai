@@ -41,12 +41,16 @@ export async function publishRelease({ packages, tag, npmView, run, log }) {
 
     try {
       // pnpm pack resolves workspace:* protocol into the tarball
-      const packOutput = await run(
-        "pnpm",
-        ["pack", "--pack-destination", state.dir],
-        { cwd: state.dir, cwdPackage: state.package, stdio: "pipe" },
-      )
-      const tarball = packOutput.split("\n").map((l) => l.trim()).filter(Boolean).find((l) => l.endsWith(".tgz"))
+      const packOutput = await run("pnpm", ["pack", "--pack-destination", state.dir], {
+        cwd: state.dir,
+        cwdPackage: state.package,
+        stdio: "pipe",
+      })
+      const tarball = packOutput
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .find((l) => l.endsWith(".tgz"))
 
       if (!tarball) {
         throw new Error(`Could not determine tarball name from pnpm pack output`)
