@@ -1,5 +1,11 @@
 # @dawn-ai/vite-plugin
 
+## 0.1.2
+
+### Patch Changes
+
+- @dawn-ai/core@0.1.2
+
 ## 0.0.3
 
 ### Patch Changes
