@@ -122,7 +122,7 @@ describe("generated app publish harness", () => {
       }),
     ).toEqual(expected)
     await expectBasicAuthoringLane(contributorLocal.artifacts.appRoot)
-    expect(transcript).toContain(`$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-app build)`)
+    expect(transcript).toContain(`$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-ai-app build)`)
     expect(transcript).toContain(
       `node packages/create-dawn-app/dist/index.js ${contributorLocal.artifacts.appRoot} --mode internal`,
     )
@@ -551,7 +551,7 @@ function normalizeForFixture(
     [context.tarballs.cli, "<tarball:@dawn-ai/cli>"],
     [context.tarballs.configTypescript, "<tarball:@dawn-ai/config-typescript>"],
     [context.tarballs.core, "<tarball:@dawn-ai/core>"],
-    [context.tarballs.createApp, "<tarball:create-dawn-app>"],
+    [context.tarballs.createApp, "<tarball:create-dawn-ai-app>"],
     [context.tarballs.devkit, "<tarball:@dawn-ai/devkit>"],
     [context.tarballs.langchain, "<tarball:@dawn-ai/langchain>"],
     [context.tarballs.langgraph, "<tarball:@dawn-ai/langgraph>"],
