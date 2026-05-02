@@ -6,9 +6,7 @@ export interface ResolvedStateField {
   readonly default: unknown
 }
 
-export function materializeStateSchema(
-  fields: readonly ResolvedStateField[],
-) {
+export function materializeStateSchema(fields: readonly ResolvedStateField[]) {
   const spec: Record<string, unknown> = {
     ...MessagesAnnotation.spec,
   }
@@ -35,5 +33,6 @@ export function materializeStateSchema(
     }
   }
 
+  // biome-ignore lint/suspicious/noExplicitAny: dynamically-built spec doesn't satisfy strict StateDefinition type
   return Annotation.Root(spec as any)
 }

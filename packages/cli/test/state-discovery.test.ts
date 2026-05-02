@@ -46,8 +46,8 @@ export default schema
     const result = await discoverStateDefinition({ routeDir })
 
     expect(result).not.toBeNull()
-    expect(result!.defaults.get("context")).toBe("")
-    expect(result!.defaults.get("results")).toEqual([])
+    expect(result?.defaults.get("context")).toBe("")
+    expect(result?.defaults.get("results")).toEqual([])
   })
 
   test("discovers state.ts with .parse() fallback", async () => {
@@ -69,8 +69,8 @@ export default schema
     const result = await discoverStateDefinition({ routeDir })
 
     expect(result).not.toBeNull()
-    expect(result!.defaults.get("count")).toBe(0)
-    expect(result!.defaults.get("items")).toEqual([])
+    expect(result?.defaults.get("count")).toBe(0)
+    expect(result?.defaults.get("items")).toEqual([])
   })
 
   test("discovers reducer overrides from reducers/ folder", async () => {
@@ -100,18 +100,17 @@ export default (current: string[], incoming: string[]) => incoming
     const result = await discoverStateDefinition({ routeDir })
 
     expect(result).not.toBeNull()
-    expect(result!.reducerOverrides.has("tags")).toBe(true)
-    const reducer = result!.reducerOverrides.get("tags")!
-    expect(reducer(["a"], ["b"])).toEqual(["b"])
+    expect(result?.reducerOverrides.has("tags")).toBe(true)
+    // biome-ignore lint/style/noNonNullAssertion: test assertion after null check
+    const reducer = result!.reducerOverrides.get("tags")
+    // biome-ignore lint/style/noNonNullAssertion: test assertion after existence check
+    expect(reducer!(["a"], ["b"])).toEqual(["b"])
   })
 
   test("returns null when default export is not an object", async () => {
     const routeDir = join(tempDir, "route")
     mkdirSync(routeDir, { recursive: true })
-    writeFileSync(
-      join(routeDir, "state.ts"),
-      `export default "not a schema"`,
-    )
+    writeFileSync(join(routeDir, "state.ts"), `export default "not a schema"`)
 
     const result = await discoverStateDefinition({ routeDir })
     expect(result).toBeNull()
@@ -137,6 +136,6 @@ export default schema
     const result = await discoverStateDefinition({ routeDir })
 
     expect(result).not.toBeNull()
-    expect(result!.reducerOverrides.size).toBe(0)
+    expect(result?.reducerOverrides.size).toBe(0)
   })
 })

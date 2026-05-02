@@ -2,13 +2,12 @@ import type { ResolvedStateField } from "../types.js"
 
 export interface ResolveStateFieldsOptions {
   readonly defaults: ReadonlyMap<string, unknown>
-  readonly reducerOverrides: ReadonlyMap<
-    string,
-    (current: unknown, incoming: unknown) => unknown
-  >
+  readonly reducerOverrides: ReadonlyMap<string, (current: unknown, incoming: unknown) => unknown>
 }
 
-export function resolveStateFields(options: ResolveStateFieldsOptions): readonly ResolvedStateField[] {
+export function resolveStateFields(
+  options: ResolveStateFieldsOptions,
+): readonly ResolvedStateField[] {
   const results: ResolvedStateField[] = []
 
   for (const [name, defaultValue] of options.defaults) {

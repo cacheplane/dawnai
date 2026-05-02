@@ -55,9 +55,9 @@ function extractDefaults(schema: unknown): Map<string, unknown> | null {
   return null
 }
 
-function isStandardSchema(
-  value: unknown,
-): value is { "~standard": { validate: (input: unknown) => { value?: unknown; issues?: unknown[] } } } {
+function isStandardSchema(value: unknown): value is {
+  "~standard": { validate: (input: unknown) => { value?: unknown; issues?: unknown[] } }
+} {
   return (
     typeof value === "object" &&
     value !== null &&

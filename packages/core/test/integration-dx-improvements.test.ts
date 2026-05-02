@@ -95,7 +95,7 @@ export default async (input: { name: string }) => {
 
     expect(types).toHaveLength(1)
     expect(schemas).toHaveLength(1)
-    expect(types[0]!.name).toBe(schemas[0]!.name)
-    expect(types[0]!.description).toBe(schemas[0]!.description)
+    expect(types[0]?.name).toBe(schemas[0]?.name)
+    expect(types[0]?.description).toBe(schemas[0]?.description)
   })
 })

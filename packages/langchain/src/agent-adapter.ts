@@ -1,7 +1,7 @@
 import type { DawnAgent } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { HumanMessage } from "@langchain/core/messages"
-import { type ResolvedStateField, materializeStateSchema } from "./state-adapter.js"
+import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
 import { convertToolToLangChain } from "./tool-converter.js"
 
 interface DawnToolDefinition {
@@ -60,6 +60,7 @@ async function materializeAgent(
     agentOptions.stateSchema = materializeStateSchema(stateFields)
   }
 
+  // biome-ignore lint/suspicious/noExplicitAny: dynamically-built options don't satisfy strict StateDefinition type
   const compiled = createReactAgent(agentOptions as any)
 
   materializedAgents.set(descriptor, compiled as unknown as AgentLike)
@@ -96,7 +97,11 @@ export async function executeAgent(options: {
 
   // DawnAgent descriptor path — materialize on first use
   if (isDawnAgent(options.entry)) {
-    const materializedAgent = await materializeAgent(options.entry, options.tools, options.stateFields)
+    const materializedAgent = await materializeAgent(
+      options.entry,
+      options.tools,
+      options.stateFields,
+    )
     const messages = [new HumanMessage(formatAgentMessage(agentInput))]
     return await materializedAgent.invoke({ messages }, config)
   }

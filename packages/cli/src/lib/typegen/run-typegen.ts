@@ -1,14 +1,18 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-
-import type { ExtractedToolSchema, ResolvedStateField, RouteManifest, RouteToolTypes } from "@dawn-ai/core"
+import type {
+  ExtractedToolSchema,
+  ResolvedStateField,
+  RouteManifest,
+  RouteStateFields,
+  RouteToolTypes,
+} from "@dawn-ai/core"
 import {
   extractToolSchemasForRoute,
   extractToolTypesForRoute,
   renderDawnTypes,
   resolveStateFields,
 } from "@dawn-ai/core"
-import type { RouteStateFields } from "@dawn-ai/core"
 
 import { discoverStateDefinition } from "../runtime/state-discovery.js"
 
@@ -99,7 +103,7 @@ async function writeToolSchemas(
     }
   }
 
-  await writeFile(join(dir, "tools.json"), JSON.stringify(output, null, 2) + "\n", "utf8")
+  await writeFile(join(dir, "tools.json"), `${JSON.stringify(output, null, 2)}\n`, "utf8")
 }
 
 async function writeStateManifest(
@@ -117,15 +121,11 @@ async function writeStateManifest(
     default: f.default,
   }))
 
-  await writeFile(join(dir, "state.json"), JSON.stringify(output, null, 2) + "\n", "utf8")
+  await writeFile(join(dir, "state.json"), `${JSON.stringify(output, null, 2)}\n`, "utf8")
 }
 
 function routeIdToSlug(routeId: string): string {
-  return routeId
-    .replace(/^\//, "")
-    .replace(/\//g, "-")
-    .replace(/\[/g, "")
-    .replace(/\]/g, "")
+  return routeId.replace(/^\//, "").replace(/\//g, "-").replace(/\[/g, "").replace(/\]/g, "")
 }
 
 function inferTypeFromDefault(value: unknown): string {

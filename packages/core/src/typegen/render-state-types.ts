@@ -19,12 +19,7 @@ export function renderStateTypes(routeStates: readonly RouteStateFields[]): stri
     routeLines.push("    };")
   }
 
-  return [
-    "  export interface DawnRouteState {",
-    ...routeLines,
-    "  }",
-    "",
-    routeStateType,
-    "",
-  ].join("\n")
+  return ["  export interface DawnRouteState {", ...routeLines, "  }", "", routeStateType, ""].join(
+    "\n",
+  )
 }
