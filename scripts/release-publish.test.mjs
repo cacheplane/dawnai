@@ -104,6 +104,44 @@ describe("publishRelease", () => {
     assert.equal((await state.view("@dawn-ai/core")).tags.latest, "0.1.0")
   })
 
+  it("retries verification when registry has propagation delay", async () => {
+    const calls = []
+    let viewCallCount = 0
+    const state = registryState({
+      "@dawn-ai/core": { versions: ["0.1.0"], latest: "0.1.0" },
+      "@dawn-ai/sdk": { versions: ["0.1.0"], latest: "0.1.0" },
+    })
+
+    // Wrap view to simulate propagation delay: sdk not visible until 3rd view call
+    const delayedView = async (packageName) => {
+      viewCallCount++
+      const result = await state.view(packageName)
+      if (packageName === "@dawn-ai/sdk" && viewCallCount <= 4) {
+        return { versions: ["0.1.0"], tags: result.tags }
+      }
+      return result
+    }
+
+    await publishRelease({
+      packages,
+      tag: "dawn-release-123-1",
+      npmView: delayedView,
+      run: state.runner(calls),
+      log: () => {},
+    })
+
+    assert.deepEqual(calls, [
+      ["publish", "@dawn-ai/core", "0.1.1", "dawn-release-123-1"],
+      ["publish", "@dawn-ai/sdk", "0.1.1", "dawn-release-123-1"],
+      ["dist-tag", "@dawn-ai/core", "0.1.1", "latest"],
+      ["dist-tag", "@dawn-ai/sdk", "0.1.1", "latest"],
+      ["git-tag", "@dawn-ai/core@0.1.1"],
+      ["git-tag", "@dawn-ai/sdk@0.1.1"],
+    ])
+    // Verify retry happened (initial read + at least 2 retry reads for sdk)
+    assert.ok(viewCallCount > 4, `Expected retries but only got ${viewCallCount} view calls`)
+  })
+
   it("skips packages that are already published on latest", async () => {
     const calls = []
     const state = registryState({
