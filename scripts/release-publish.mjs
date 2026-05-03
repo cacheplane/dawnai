@@ -34,6 +34,7 @@ export async function publishRelease({ packages, npmView, run, log }) {
   }
 
   const missingPackages = pendingPackages.filter((state) => !state.versions.includes(state.version))
+  const stagedPackages = pendingPackages.filter((state) => state.versions.includes(state.version))
 
   for (const state of missingPackages) {
     log(`Publishing ${state.name}@${state.version}`)
@@ -67,6 +68,20 @@ export async function publishRelease({ packages, npmView, run, log }) {
       await rm(tarballPath, { force: true })
     } catch (error) {
       throw new Error(`Failed to publish ${state.name}@${state.version}: ${formatError(error)}`)
+    }
+  }
+
+  // Promote packages that were published in a prior run but latest wasn't updated
+  for (const state of stagedPackages) {
+    log(`Promoting ${state.name}@${state.version} to ${latestTag}`)
+
+    try {
+      await run("npm", ["dist-tag", "add", `${state.name}@${state.version}`, latestTag], {
+        cwd: repoRoot,
+        cwdPackage: state.package,
+      })
+    } catch (error) {
+      throw new Error(`Failed to promote ${state.name}@${state.version}: ${formatError(error)}`)
     }
   }
 
