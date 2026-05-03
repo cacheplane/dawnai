@@ -51,22 +51,26 @@ describe("publishRelease", () => {
     ])
   })
 
-  it("creates git tags for already-published versions on retry", async () => {
+  it("promotes already-published versions that are not on latest", async () => {
     const calls = []
     const state = registryState({
-      "@dawn-ai/core": { versions: ["0.1.0", "0.1.1"], latest: "0.1.1" },
-      "@dawn-ai/sdk": { versions: ["0.1.0", "0.1.1"], latest: "0.1.1" },
+      "@dawn-ai/core": { versions: ["0.1.0", "0.1.1"], latest: "0.1.0" },
+      "@dawn-ai/sdk": { versions: ["0.1.0", "0.1.1"], latest: "0.1.0" },
     })
 
-    const result = await publishRelease({
+    await publishRelease({
       packages,
       npmView: state.view,
       run: state.runner(calls),
       log: () => {},
     })
 
-    assert.deepEqual(calls, [])
-    assert.equal(result.status, "already-published")
+    assert.deepEqual(calls, [
+      ["dist-tag", "@dawn-ai/core", "0.1.1", "latest"],
+      ["dist-tag", "@dawn-ai/sdk", "0.1.1", "latest"],
+      ["git-tag", "@dawn-ai/core@0.1.1"],
+      ["git-tag", "@dawn-ai/sdk@0.1.1"],
+    ])
   })
 
   it("retries verification when registry has propagation delay", async () => {
@@ -179,6 +183,16 @@ function registryState(initialPackages) {
           return
         }
 
+        if (command === "npm" && args[0] === "dist-tag" && args[1] === "add") {
+          const [name, version] = splitPackageSpec(args[2])
+          const tag = args[3]
+          const info = registry.get(name)
+
+          calls.push(["dist-tag", name, version, tag])
+          info.latest = version
+          return
+        }
+
         if (command === "git" && args[0] === "tag") {
           calls.push(["git-tag", args[1]])
           return
@@ -188,4 +202,9 @@ function registryState(initialPackages) {
       }
     },
   }
+}
+
+function splitPackageSpec(spec) {
+  const atIndex = spec.lastIndexOf("@")
+  return [spec.slice(0, atIndex), spec.slice(atIndex + 1)]
 }
