@@ -1,5 +1,14 @@
 # @dawn-ai/cli
 
+## 0.1.4
+
+### Patch Changes
+
+- 86e24c0: Switch to pure OIDC trusted publishing (no npm token required)
+  - @dawn-ai/core@0.1.4
+  - @dawn-ai/langchain@0.1.4
+  - @dawn-ai/langgraph@0.1.4
+
 ## 0.1.3
 
 ### Patch Changes
