@@ -95,6 +95,8 @@ export async function executeAgent(options: {
     config.configurable = params
   }
 
+  const messages = extractMessages(agentInput)
+
   // DawnAgent descriptor path — materialize on first use
   if (isDawnAgent(options.entry)) {
     const materializedAgent = await materializeAgent(
@@ -102,7 +104,6 @@ export async function executeAgent(options: {
       options.tools,
       options.stateFields,
     )
-    const messages = [new HumanMessage(formatAgentMessage(agentInput))]
     return await materializedAgent.invoke({ messages }, config)
   }
 
@@ -114,8 +115,38 @@ export async function executeAgent(options: {
     config.tools = langchainTools
   }
 
-  const messages = [new HumanMessage(formatAgentMessage(agentInput))]
   return await options.entry.invoke({ messages }, config)
+}
+
+interface InputMessage {
+  readonly role: string
+  readonly content: string
+}
+
+function isInputMessageArray(value: unknown): value is readonly InputMessage[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as { role?: unknown }).role === "string" &&
+        typeof (item as { content?: unknown }).content === "string",
+    )
+  )
+}
+
+function extractMessages(input: Record<string, unknown>): HumanMessage[] {
+  // LangGraph protocol format: {messages: [{role, content}, ...]}
+  if (isInputMessageArray(input.messages)) {
+    return input.messages
+      .filter((msg) => msg.role === "user")
+      .map((msg) => new HumanMessage(msg.content))
+  }
+
+  // Legacy flat-object format: {key: value, ...}
+  return [new HumanMessage(formatAgentMessage(input))]
 }
 
 function formatAgentMessage(input: Record<string, unknown>): string {
