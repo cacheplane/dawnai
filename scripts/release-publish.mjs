@@ -71,9 +71,9 @@ export async function publishRelease({ packages, tag, npmView, run, log }) {
     }
   }
 
-  const verifiedStates = await readPackageStates(packages, npmView)
+  const verifiedStates = await verifyPublishedWithRetry(packages, npmView, log)
   const unavailablePackages = verifiedStates.filter(
-    (state) => state.tags[latestTag] !== state.version && !state.versions.includes(state.version),
+    (state) => !state.versions.includes(state.version),
   )
 
   if (unavailablePackages.length > 0) {
@@ -198,6 +198,27 @@ async function readPackageStates(packages, npmViewPackage) {
   )
 }
 
+async function verifyPublishedWithRetry(packages, npmViewPackage, log, maxAttempts = 5) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const states = await readPackageStates(packages, npmViewPackage)
+    const unavailable = states.filter((state) => !state.versions.includes(state.version))
+
+    if (unavailable.length === 0) {
+      return states
+    }
+
+    if (attempt === maxAttempts) {
+      return states
+    }
+
+    const delayMs = attempt * 5000
+    log(
+      `Waiting ${delayMs / 1000}s for registry propagation (${unavailable.length} package(s) pending, attempt ${attempt}/${maxAttempts})`,
+    )
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
+}
+
 async function npmView(packageName) {
   const versions = await npmJson(["view", packageName, "versions", "--json"])
   const tags = await npmJson(["view", packageName, "dist-tags", "--json"])
@@ -209,7 +230,10 @@ async function npmView(packageName) {
 }
 
 async function npmJson(args) {
-  const output = await runCommand("npm", args, { cwd: repoRoot, stdio: "pipe" })
+  const output = await runCommand("npm", args, {
+    cwd: repoRoot,
+    stdio: "pipe",
+  })
   return JSON.parse(output || "null")
 }
 
