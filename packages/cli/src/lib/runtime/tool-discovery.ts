@@ -93,9 +93,19 @@ export function injectGeneratedSchemas(
     if (tool.schema) return tool
 
     const generated = generatedSchemas[tool.name]
-    if (!generated) return tool
+    if (!generated || typeof generated !== "object") return tool
 
-    return { ...tool, schema: generated }
+    const entry = generated as { description?: string; parameters?: unknown }
+    const description =
+      !tool.description && typeof entry.description === "string"
+        ? entry.description
+        : tool.description
+    const schema =
+      entry.parameters && typeof entry.parameters === "object" ? entry.parameters : undefined
+
+    if (!description && !schema) return tool
+
+    return { ...tool, ...(description ? { description } : {}), ...(schema ? { schema } : {}) }
   })
 }
 
