@@ -123,7 +123,12 @@ async function executeRouteAtResolvedPath(options: {
     })
 
     // Inject codegen-generated schemas for tools without explicit schema exports
-    const routeId = options.routeId.replace(/^\//, "").replace(/\//g, "-") || "index"
+    const routeId =
+      options.routeId
+        .replace(/^\//, "")
+        .replace(/\//g, "-")
+        .replace(/\[/g, "")
+        .replace(/\]/g, "") || "index"
     const schemaManifestPath = join(options.appRoot, ".dawn", "routes", routeId, "tools.json")
     let tools = discoveredTools
     if (existsSync(schemaManifestPath)) {

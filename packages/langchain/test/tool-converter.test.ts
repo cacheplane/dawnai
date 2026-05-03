@@ -33,6 +33,30 @@ describe("convertToolToLangChain", () => {
     expect(langchainTool.description).toBe("")
   })
 
+  test("converts JSON Schema from tools.json to Zod schema", async () => {
+    const dawnTool = {
+      name: "greet",
+      description: "Greet a tenant",
+      filePath: "/app/tools/greet.ts",
+      run: async (input: unknown) => input,
+      schema: {
+        type: "object",
+        properties: {
+          tenant: { type: "string" },
+        },
+        required: ["tenant"],
+        additionalProperties: false,
+      },
+      scope: "shared" as const,
+    }
+
+    const langchainTool = convertToolToLangChain(dawnTool)
+
+    expect(langchainTool.name).toBe("greet")
+    const result = await langchainTool.invoke({ tenant: "acme" })
+    expect(JSON.parse(result)).toEqual({ tenant: "acme" })
+  })
+
   test("uses provided Zod schema when available", async () => {
     const { z } = await import("zod")
     const schema = z.object({ id: z.string().describe("Customer ID") })
