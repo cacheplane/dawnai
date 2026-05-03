@@ -4,7 +4,6 @@ import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const latestTag = "latest"
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
@@ -25,18 +24,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 }
 
+/**
+ * Publishes packages that are not yet on the registry at their current version.
+ * Uses OIDC trusted publishing (--provenance) for authentication — no token needed.
+ * Publishes directly with --tag latest so no separate dist-tag promotion is required.
+ */
 export async function publishRelease({ packages, npmView, run, log }) {
   const packageStates = await readPackageStates(packages, npmView)
-  const pendingPackages = packageStates.filter((state) => state.tags[latestTag] !== state.version)
+  const unpublished = packageStates.filter((state) => !state.versions.includes(state.version))
 
-  if (pendingPackages.length === 0) {
+  if (unpublished.length === 0) {
     return { status: "already-published", packages: [] }
   }
 
-  const missingPackages = pendingPackages.filter((state) => !state.versions.includes(state.version))
-  const stagedPackages = pendingPackages.filter((state) => state.versions.includes(state.version))
-
-  for (const state of missingPackages) {
+  for (const state of unpublished) {
     log(`Publishing ${state.name}@${state.version}`)
 
     try {
@@ -58,10 +59,10 @@ export async function publishRelease({ packages, npmView, run, log }) {
 
       const tarballPath = resolve(state.dir, basename(tarball))
 
-      // npm publish with --provenance uses OIDC for auth (no token needed)
+      // OIDC trusted publishing: no token needed, provenance handles auth + signing
       await run(
         "npm",
-        ["publish", tarballPath, "--tag", latestTag, "--access", state.access, "--provenance"],
+        ["publish", tarballPath, "--tag", "latest", "--access", state.access, "--provenance"],
         { cwd: state.dir, cwdPackage: state.package },
       )
 
@@ -71,34 +72,7 @@ export async function publishRelease({ packages, npmView, run, log }) {
     }
   }
 
-  // Promote packages that were published in a prior run but latest wasn't updated
-  for (const state of stagedPackages) {
-    log(`Promoting ${state.name}@${state.version} to ${latestTag}`)
-
-    try {
-      await run("npm", ["dist-tag", "add", `${state.name}@${state.version}`, latestTag], {
-        cwd: repoRoot,
-        cwdPackage: state.package,
-      })
-    } catch (error) {
-      throw new Error(`Failed to promote ${state.name}@${state.version}: ${formatError(error)}`)
-    }
-  }
-
-  const verifiedStates = await verifyPublishedWithRetry(packages, npmView, log)
-  const unverifiedPackages = verifiedStates.filter(
-    (state) => state.tags[latestTag] !== state.version,
-  )
-
-  if (unverifiedPackages.length > 0) {
-    throw new Error(
-      `Latest tag verification failed for: ${unverifiedPackages
-        .map((state) => `${state.name}@${state.version}`)
-        .join(", ")}`,
-    )
-  }
-
-  for (const state of verifiedStates.filter((state) => state.tags[latestTag] === state.version)) {
+  for (const state of unpublished) {
     const tagName = `${state.name}@${state.version}`
 
     await run("git", ["tag", tagName], {
@@ -110,7 +84,7 @@ export async function publishRelease({ packages, npmView, run, log }) {
 
   return {
     status: "published",
-    packages: pendingPackages.map((state) => `${state.name}@${state.version}`),
+    packages: unpublished.map((state) => `${state.name}@${state.version}`),
   }
 }
 
@@ -151,27 +125,6 @@ async function readPackageStates(packages, npmViewPackage) {
       }
     }),
   )
-}
-
-async function verifyPublishedWithRetry(packages, npmViewPackage, log, maxAttempts = 5) {
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const states = await readPackageStates(packages, npmViewPackage)
-    const unavailable = states.filter((state) => state.tags[latestTag] !== state.version)
-
-    if (unavailable.length === 0) {
-      return states
-    }
-
-    if (attempt === maxAttempts) {
-      return states
-    }
-
-    const delayMs = attempt * 5000
-    log(
-      `Waiting ${delayMs / 1000}s for registry propagation (${unavailable.length} package(s) pending, attempt ${attempt}/${maxAttempts})`,
-    )
-    await new Promise((resolve) => setTimeout(resolve, delayMs))
-  }
 }
 
 async function npmView(packageName) {
