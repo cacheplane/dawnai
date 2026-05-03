@@ -6,7 +6,7 @@ import { publishRelease } from "./release-publish.mjs"
 const packages = [packageInfo("@dawn-ai/core", "0.1.1"), packageInfo("@dawn-ai/sdk", "0.1.1")]
 
 describe("publishRelease", () => {
-  it("publishes missing versions under a temporary tag before promoting latest", async () => {
+  it("publishes missing versions directly to latest", async () => {
     const calls = []
     const state = registryState({
       "@dawn-ai/core": { versions: ["0.1.0"], latest: "0.1.0" },
@@ -15,23 +15,20 @@ describe("publishRelease", () => {
 
     await publishRelease({
       packages,
-      tag: "dawn-release-123-1",
       npmView: state.view,
       run: state.runner(calls),
       log: () => {},
     })
 
     assert.deepEqual(calls, [
-      ["publish", "@dawn-ai/core", "0.1.1", "dawn-release-123-1"],
-      ["publish", "@dawn-ai/sdk", "0.1.1", "dawn-release-123-1"],
-      ["dist-tag", "@dawn-ai/core", "0.1.1", "latest"],
-      ["dist-tag", "@dawn-ai/sdk", "0.1.1", "latest"],
+      ["publish", "@dawn-ai/core", "0.1.1", "latest"],
+      ["publish", "@dawn-ai/sdk", "0.1.1", "latest"],
       ["git-tag", "@dawn-ai/core@0.1.1"],
       ["git-tag", "@dawn-ai/sdk@0.1.1"],
     ])
   })
 
-  it("does not promote latest when any package fails to publish", async () => {
+  it("does not create git tags when any package fails to publish", async () => {
     const calls = []
     const state = registryState({
       "@dawn-ai/core": { versions: ["0.1.0"], latest: "0.1.0" },
@@ -41,67 +38,35 @@ describe("publishRelease", () => {
     await assert.rejects(
       publishRelease({
         packages,
-        tag: "dawn-release-123-1",
         npmView: state.view,
         run: state.runner(calls, { failPublishFor: "@dawn-ai/sdk" }),
         log: () => {},
       }),
-      /Failed to stage @dawn-ai\/sdk@0\.1\.1/,
+      /Failed to publish @dawn-ai\/sdk@0\.1\.1/,
     )
 
     assert.deepEqual(calls, [
-      ["publish", "@dawn-ai/core", "0.1.1", "dawn-release-123-1"],
-      ["publish", "@dawn-ai/sdk", "0.1.1", "dawn-release-123-1"],
+      ["publish", "@dawn-ai/core", "0.1.1", "latest"],
+      ["publish", "@dawn-ai/sdk", "0.1.1", "latest"],
     ])
   })
 
-  it("promotes already staged versions on retry once every package version exists", async () => {
+  it("creates git tags for already-published versions on retry", async () => {
     const calls = []
     const state = registryState({
-      "@dawn-ai/core": { versions: ["0.1.0", "0.1.1"], latest: "0.1.0" },
-      "@dawn-ai/sdk": { versions: ["0.1.0", "0.1.1"], latest: "0.1.0" },
+      "@dawn-ai/core": { versions: ["0.1.0", "0.1.1"], latest: "0.1.1" },
+      "@dawn-ai/sdk": { versions: ["0.1.0", "0.1.1"], latest: "0.1.1" },
     })
 
-    await publishRelease({
+    const result = await publishRelease({
       packages,
-      tag: "dawn-release-123-2",
       npmView: state.view,
       run: state.runner(calls),
       log: () => {},
     })
 
-    assert.deepEqual(calls, [
-      ["dist-tag", "@dawn-ai/core", "0.1.1", "latest"],
-      ["dist-tag", "@dawn-ai/sdk", "0.1.1", "latest"],
-      ["git-tag", "@dawn-ai/core@0.1.1"],
-      ["git-tag", "@dawn-ai/sdk@0.1.1"],
-    ])
-  })
-
-  it("rolls back promoted latest tags when a later promotion fails", async () => {
-    const calls = []
-    const state = registryState({
-      "@dawn-ai/core": { versions: ["0.1.0", "0.1.1"], latest: "0.1.0" },
-      "@dawn-ai/sdk": { versions: ["0.1.0", "0.1.1"], latest: "0.1.0" },
-    })
-
-    await assert.rejects(
-      publishRelease({
-        packages,
-        tag: "dawn-release-123-2",
-        npmView: state.view,
-        run: state.runner(calls, { failPromoteFor: "@dawn-ai/sdk" }),
-        log: () => {},
-      }),
-      /Failed to promote @dawn-ai\/sdk@0\.1\.1/,
-    )
-
-    assert.deepEqual(calls, [
-      ["dist-tag", "@dawn-ai/core", "0.1.1", "latest"],
-      ["dist-tag", "@dawn-ai/sdk", "0.1.1", "latest"],
-      ["dist-tag", "@dawn-ai/core", "0.1.0", "latest"],
-    ])
-    assert.equal((await state.view("@dawn-ai/core")).tags.latest, "0.1.0")
+    assert.deepEqual(calls, [])
+    assert.equal(result.status, "already-published")
   })
 
   it("retries verification when registry has propagation delay", async () => {
@@ -112,33 +77,30 @@ describe("publishRelease", () => {
       "@dawn-ai/sdk": { versions: ["0.1.0"], latest: "0.1.0" },
     })
 
-    // Wrap view to simulate propagation delay: sdk not visible until 3rd view call
+    // Wrap view to simulate propagation delay: sdk latest tag not visible until later
     const delayedView = async (packageName) => {
       viewCallCount++
       const result = await state.view(packageName)
       if (packageName === "@dawn-ai/sdk" && viewCallCount <= 4) {
-        return { versions: ["0.1.0"], tags: result.tags }
+        return { versions: result.versions, tags: { latest: "0.1.0" } }
       }
       return result
     }
 
     await publishRelease({
       packages,
-      tag: "dawn-release-123-1",
       npmView: delayedView,
       run: state.runner(calls),
       log: () => {},
     })
 
     assert.deepEqual(calls, [
-      ["publish", "@dawn-ai/core", "0.1.1", "dawn-release-123-1"],
-      ["publish", "@dawn-ai/sdk", "0.1.1", "dawn-release-123-1"],
-      ["dist-tag", "@dawn-ai/core", "0.1.1", "latest"],
-      ["dist-tag", "@dawn-ai/sdk", "0.1.1", "latest"],
+      ["publish", "@dawn-ai/core", "0.1.1", "latest"],
+      ["publish", "@dawn-ai/sdk", "0.1.1", "latest"],
       ["git-tag", "@dawn-ai/core@0.1.1"],
       ["git-tag", "@dawn-ai/sdk@0.1.1"],
     ])
-    // Verify retry happened (initial read + at least 2 retry reads for sdk)
+    // Verify retry happened
     assert.ok(viewCallCount > 4, `Expected retries but only got ${viewCallCount} view calls`)
   })
 
@@ -151,7 +113,6 @@ describe("publishRelease", () => {
 
     const result = await publishRelease({
       packages,
-      tag: "dawn-release-123-2",
       npmView: state.view,
       run: state.runner(calls),
       log: () => {},
@@ -199,7 +160,6 @@ function registryState(initialPackages) {
     runner(calls, options = {}) {
       return async (command, args, { cwdPackage }) => {
         if (command === "pnpm" && args[0] === "pack") {
-          // pnpm pack returns the tarball filename
           const name = cwdPackage.packageJson.name.replace("@", "").replace("/", "-")
           return `${name}-${cwdPackage.packageJson.version}.tgz\n`
         }
@@ -215,21 +175,7 @@ function registryState(initialPackages) {
           }
 
           info.versions.add(cwdPackage.packageJson.version)
-          return
-        }
-
-        if (command === "npm" && args[0] === "dist-tag" && args[1] === "add") {
-          const [name, version] = splitPackageSpec(args[2])
-          const tag = args[3]
-          const info = registry.get(name)
-
-          calls.push(["dist-tag", name, version, tag])
-
-          if (options.failPromoteFor === name && version === "0.1.1") {
-            throw new Error("npm dist-tag failed")
-          }
-
-          info.latest = version
+          info.latest = cwdPackage.packageJson.version
           return
         }
 
@@ -242,9 +188,4 @@ function registryState(initialPackages) {
       }
     },
   }
-}
-
-function splitPackageSpec(spec) {
-  const atIndex = spec.lastIndexOf("@")
-  return [spec.slice(0, atIndex), spec.slice(atIndex + 1)]
 }
