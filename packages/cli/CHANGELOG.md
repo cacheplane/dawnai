@@ -1,5 +1,15 @@
 # @dawn-ai/cli
 
+## 0.1.5
+
+### Patch Changes
+
+- 0127c57: Fix tool schema wiring so OpenAI receives valid function parameters from codegen-generated tools.json
+- Updated dependencies [0127c57]
+  - @dawn-ai/langchain@0.1.5
+  - @dawn-ai/core@0.1.5
+  - @dawn-ai/langgraph@0.1.5
+
 ## 0.1.4
 
 ### Patch Changes

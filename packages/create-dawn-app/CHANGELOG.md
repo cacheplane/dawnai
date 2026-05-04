@@ -1,5 +1,11 @@
 # create-dawn-app
 
+## 0.1.5
+
+### Patch Changes
+
+- @dawn-ai/devkit@0.1.5
+
 ## 0.1.4
 
 ### Patch Changes
