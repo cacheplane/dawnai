@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 
 import { findDawnApp, type ResolvedStateField, resolveStateFields } from "@dawn-ai/core"
-import { executeAgent } from "@dawn-ai/langchain"
+import { executeAgent, streamAgent } from "@dawn-ai/langchain"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
 import {
@@ -14,7 +14,12 @@ import {
 } from "./result.js"
 import { deriveRouteIdentity } from "./route-identity.js"
 import { discoverStateDefinition } from "./state-discovery.js"
-import { discoverToolDefinitions, injectGeneratedSchemas } from "./tool-discovery.js"
+import type { StreamChunk } from "./stream-types.js"
+import {
+  type DiscoveredToolDefinition,
+  discoverToolDefinitions,
+  injectGeneratedSchemas,
+} from "./tool-discovery.js"
 import { fileExists } from "./utils.js"
 
 export interface ExecuteRouteOptions {
@@ -101,6 +106,126 @@ export async function executeResolvedRoute(options: {
   })
 }
 
+export async function* streamResolvedRoute(options: {
+  readonly appRoot: string
+  readonly input: unknown
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly signal?: AbortSignal
+}): AsyncGenerator<StreamChunk> {
+  const prepared = await prepareRouteExecution(options)
+
+  if (!prepared.ok) {
+    yield { type: "done", output: { error: prepared.message } }
+    return
+  }
+
+  const { normalized, tools, stateFields } = prepared
+
+  if (normalized.kind !== "agent") {
+    // Non-agent routes don't support incremental streaming — execute and emit done
+    const context = createDawnContext({
+      tools,
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
+    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context)
+    yield { type: "done", output }
+    return
+  }
+
+  const routeParamNames = extractRouteParamNames(options.routeId)
+
+  for await (const chunk of streamAgent({
+    entry: normalized.entry,
+    input: options.input,
+    routeParamNames,
+    signal: options.signal ?? new AbortController().signal,
+    ...(stateFields ? { stateFields } : {}),
+    tools,
+  })) {
+    switch (chunk.type) {
+      case "token":
+        yield { type: "chunk", data: chunk.data }
+        break
+      case "tool_call": {
+        const tc = chunk.data as { name: string; input: unknown }
+        yield { type: "tool_call", name: tc.name, input: tc.input }
+        break
+      }
+      case "tool_result": {
+        const tr = chunk.data as { name: string; output: unknown }
+        yield { type: "tool_result", name: tr.name, output: tr.output }
+        break
+      }
+      case "done":
+        yield { type: "done", output: chunk.data }
+        break
+    }
+  }
+}
+
+interface PreparedRoute {
+  readonly normalized: {
+    readonly kind: "agent" | "chain" | "graph" | "workflow"
+    readonly entry: unknown
+  }
+  readonly ok: true
+  readonly stateFields: readonly ResolvedStateField[] | undefined
+  readonly tools: readonly DiscoveredToolDefinition[]
+}
+
+interface PreparedRouteError {
+  readonly message: string
+  readonly ok: false
+}
+
+async function prepareRouteExecution(options: {
+  readonly appRoot: string
+  readonly routeFile: string
+  readonly routeId: string
+}): Promise<PreparedRoute | PreparedRouteError> {
+  const routeDir = resolve(options.routeFile, "..")
+
+  const normalized = await normalizeRouteModule(options.routeFile)
+
+  const discoveredTools = await discoverToolDefinitions({
+    appRoot: options.appRoot,
+    routeDir,
+  })
+
+  // Inject codegen-generated schemas for tools without explicit schema exports
+  const routeId =
+    options.routeId.replace(/^\//, "").replace(/\//g, "-").replace(/\[/g, "").replace(/\]/g, "") ||
+    "index"
+  const schemaManifestPath = join(options.appRoot, ".dawn", "routes", routeId, "tools.json")
+  let tools = discoveredTools
+  if (existsSync(schemaManifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(schemaManifestPath, "utf-8")) as Record<
+        string,
+        unknown
+      >
+      tools = injectGeneratedSchemas(discoveredTools, manifest)
+    } catch {
+      // Generated schema is best-effort — fall through on parse errors
+    }
+  }
+
+  let stateFields: readonly ResolvedStateField[] | undefined
+  if (normalized.kind === "agent") {
+    const stateDefinition = await discoverStateDefinition({ routeDir })
+    if (stateDefinition) {
+      stateFields = resolveStateFields({
+        defaults: stateDefinition.defaults,
+        reducerOverrides: stateDefinition.reducerOverrides,
+      })
+    }
+  }
+
+  return { normalized, ok: true, stateFields, tools }
+}
+
 async function executeRouteAtResolvedPath(options: {
   readonly appRoot: string
   readonly input: unknown
@@ -110,49 +235,26 @@ async function executeRouteAtResolvedPath(options: {
   readonly signal?: AbortSignal
   readonly startedAt: number
 }): Promise<RuntimeExecutionResult> {
-  const routeDir = resolve(options.routeFile, "..")
   let mode: RuntimeExecutionMode | null = null
 
   try {
-    const normalized = await normalizeRouteModule(options.routeFile)
+    const prepared = await prepareRouteExecution(options)
+
+    if (!prepared.ok) {
+      return createRuntimeFailureResult({
+        appRoot: options.appRoot,
+        executionSource: "in-process",
+        kind: "execution_error",
+        message: prepared.message,
+        mode,
+        routeId: options.routeId,
+        routePath: options.routePath,
+        startedAt: options.startedAt,
+      })
+    }
+
+    const { normalized, tools, stateFields } = prepared
     mode = normalized.kind
-
-    const discoveredTools = await discoverToolDefinitions({
-      appRoot: options.appRoot,
-      routeDir,
-    })
-
-    // Inject codegen-generated schemas for tools without explicit schema exports
-    const routeId =
-      options.routeId
-        .replace(/^\//, "")
-        .replace(/\//g, "-")
-        .replace(/\[/g, "")
-        .replace(/\]/g, "") || "index"
-    const schemaManifestPath = join(options.appRoot, ".dawn", "routes", routeId, "tools.json")
-    let tools = discoveredTools
-    if (existsSync(schemaManifestPath)) {
-      try {
-        const manifest = JSON.parse(readFileSync(schemaManifestPath, "utf-8")) as Record<
-          string,
-          unknown
-        >
-        tools = injectGeneratedSchemas(discoveredTools, manifest)
-      } catch {
-        // Generated schema is best-effort — fall through on parse errors
-      }
-    }
-
-    let stateFields: readonly ResolvedStateField[] | undefined
-    if (normalized.kind === "agent") {
-      const stateDefinition = await discoverStateDefinition({ routeDir })
-      if (stateDefinition) {
-        stateFields = resolveStateFields({
-          defaults: stateDefinition.defaults,
-          reducerOverrides: stateDefinition.reducerOverrides,
-        })
-      }
-    }
 
     const context = createDawnContext({
       tools,

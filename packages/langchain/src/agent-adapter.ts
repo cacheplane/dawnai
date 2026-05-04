@@ -67,14 +67,60 @@ async function materializeAgent(
   return compiled as unknown as AgentLike
 }
 
-export async function executeAgent(options: {
+export interface AgentStreamChunk {
+  readonly type: "token" | "tool_call" | "tool_result" | "done"
+  readonly data: unknown
+}
+
+export interface AgentOptions {
   readonly entry: unknown
   readonly input: unknown
   readonly routeParamNames: readonly string[]
   readonly signal: AbortSignal
   readonly stateFields?: readonly ResolvedStateField[]
   readonly tools: readonly DawnToolDefinition[]
-}): Promise<unknown> {
+}
+
+export async function executeAgent(options: AgentOptions): Promise<unknown> {
+  let result: unknown
+  for await (const chunk of streamAgent(options)) {
+    if (chunk.type === "done") {
+      result = chunk.data
+    }
+  }
+  return result
+}
+
+export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentStreamChunk> {
+  const { agentInput, config } = prepareAgentCall(options)
+  const messages = extractMessages(agentInput)
+
+  // DawnAgent descriptor path — materialize on first use
+  if (isDawnAgent(options.entry)) {
+    const materializedAgent = await materializeAgent(
+      options.entry,
+      options.tools,
+      options.stateFields,
+    )
+    yield* streamFromRunnable(materializedAgent, { messages }, config)
+    return
+  }
+
+  // Legacy path — raw Runnable with .invoke()
+  assertAgentLike(options.entry)
+
+  const langchainTools = options.tools.map((tool) => convertToolToLangChain(tool))
+  if (langchainTools.length > 0) {
+    config.tools = langchainTools
+  }
+
+  yield* streamFromRunnable(options.entry, { messages }, config)
+}
+
+function prepareAgentCall(options: AgentOptions): {
+  agentInput: Record<string, unknown>
+  config: Record<string, unknown>
+} {
   const inputRecord = (options.input ?? {}) as Record<string, unknown>
   const params: Record<string, unknown> = {}
   const agentInput: Record<string, unknown> = {}
@@ -95,27 +141,63 @@ export async function executeAgent(options: {
     config.configurable = params
   }
 
-  const messages = extractMessages(agentInput)
+  return { agentInput, config }
+}
 
-  // DawnAgent descriptor path — materialize on first use
-  if (isDawnAgent(options.entry)) {
-    const materializedAgent = await materializeAgent(
-      options.entry,
-      options.tools,
-      options.stateFields,
-    )
-    return await materializedAgent.invoke({ messages }, config)
+async function* streamFromRunnable(
+  runnable: AgentLike,
+  input: unknown,
+  config: Record<string, unknown>,
+): AsyncGenerator<AgentStreamChunk> {
+  const streamable = runnable as AgentLike & {
+    streamEvents?: (
+      input: unknown,
+      options: Record<string, unknown>,
+    ) => AsyncIterable<{ event: string; data: { chunk?: unknown; output?: unknown }; name: string }>
   }
 
-  // Legacy path — raw Runnable with .invoke()
-  assertAgentLike(options.entry)
-
-  const langchainTools = options.tools.map((tool) => convertToolToLangChain(tool))
-  if (langchainTools.length > 0) {
-    config.tools = langchainTools
+  if (typeof streamable.streamEvents !== "function") {
+    // Fallback: invoke and emit a single done event
+    const result = await runnable.invoke(input, config)
+    yield { type: "done", data: result }
+    return
   }
 
-  return await options.entry.invoke({ messages }, config)
+  let finalOutput: unknown
+
+  for await (const event of streamable.streamEvents(input, { ...config, version: "v2" })) {
+    switch (event.event) {
+      case "on_chat_model_stream": {
+        const content = (event.data.chunk as { content?: unknown })?.content
+        if (content && typeof content === "string" && content.length > 0) {
+          yield { type: "token", data: content }
+        }
+        break
+      }
+      case "on_tool_start": {
+        yield {
+          type: "tool_call",
+          data: { name: event.name, input: event.data.chunk ?? event.data.output },
+        }
+        break
+      }
+      case "on_tool_end": {
+        yield {
+          type: "tool_result",
+          data: { name: event.name, output: event.data.output },
+        }
+        break
+      }
+      case "on_chain_end": {
+        if (event.name === "LangGraph") {
+          finalOutput = event.data.output
+        }
+        break
+      }
+    }
+  }
+
+  yield { type: "done", data: finalOutput }
 }
 
 interface InputMessage {
