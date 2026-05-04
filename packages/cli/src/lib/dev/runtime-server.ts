@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 
-import { executeResolvedRoute } from "../runtime/execute-route.js"
+import { executeResolvedRoute, streamResolvedRoute } from "../runtime/execute-route.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
@@ -256,24 +256,23 @@ async function handleStreamRequest(options: {
     connection: "keep-alive",
   })
 
-  const result = await executeResolvedRoute({
-    appRoot: registry.appRoot,
-    input: validatedBody.value.input,
-    signal,
-    routeFile: route.routeFile,
-    routeId: route.routeId,
-    routePath: route.routePath,
-  })
-
-  if (result.status === "failed") {
+  try {
+    for await (const chunk of streamResolvedRoute({
+      appRoot: registry.appRoot,
+      input: validatedBody.value.input,
+      signal,
+      routeFile: route.routeFile,
+      routeId: route.routeId,
+      routePath: route.routePath,
+    })) {
+      response.write(toSseEvent(chunk))
+    }
+  } catch (error) {
     const errorChunk: StreamChunk = {
       type: "done",
-      output: { error: result.error.message },
+      output: { error: error instanceof Error ? error.message : String(error) },
     }
     response.write(toSseEvent(errorChunk))
-  } else {
-    const doneChunk: StreamChunk = { type: "done", output: result.output }
-    response.write(toSseEvent(doneChunk))
   }
 
   response.end()

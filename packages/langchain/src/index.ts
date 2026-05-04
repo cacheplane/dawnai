@@ -1,4 +1,5 @@
-export { executeAgent } from "./agent-adapter.js"
+export type { AgentStreamChunk } from "./agent-adapter.js"
+export { executeAgent, streamAgent } from "./agent-adapter.js"
 export { chainAdapter } from "./chain-adapter.js"
 export { materializeStateSchema } from "./state-adapter.js"
 export { convertToolToLangChain } from "./tool-converter.js"
