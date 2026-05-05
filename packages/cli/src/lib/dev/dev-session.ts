@@ -8,6 +8,7 @@ import { runTypegen } from "../typegen/run-typegen.js"
 import { classifyChange } from "./classify-change.js"
 import { DevChildStartupError, type SpawnedDevChild, spawnDevChild } from "./dev-child.js"
 import { waitForDevServerReady } from "./health.js"
+import { loadEnvFile } from "./load-env.js"
 import { type AppWatcher, watchApp } from "./watch-app.js"
 
 export interface DevSession {
@@ -21,6 +22,12 @@ export async function startDevSession(options: {
   readonly io: CommandIo
   readonly port?: number
 }): Promise<DevSession> {
+  // Load .env from the working directory before discovering the app
+  const envLoaded = loadEnvFile(options.cwd)
+  if (envLoaded > 0) {
+    writeLine(options.io.stdout, `Loaded ${envLoaded} variable(s) from .env`)
+  }
+
   const discoveredApp = await discoverInitialApp(options.cwd)
   const port = options.port ?? (await allocatePort())
   const url = `http://127.0.0.1:${port}`

@@ -71,7 +71,7 @@ describe("dawn verify", () => {
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("Dawn app integrity OK")
-    expect(result.stdout).toContain("3 checks passed")
+    expect(result.stdout).toContain("4 checks passed")
     expect(result.stdout).toContain("2 routes discovered")
   })
 
@@ -231,11 +231,17 @@ describe("dawn verify", () => {
           renderedBytes: expect.any(Number),
           status: "passed",
         },
+        {
+          missingEnvVars: expect.any(Array),
+          missingPackages: expect.any(Array),
+          name: "deps",
+          status: expect.stringMatching(/^(passed|warning)$/),
+        },
       ],
       counts: {
         failed: 0,
-        passed: 3,
-        total: 3,
+        passed: 4,
+        total: 4,
       },
       status: "passed",
     })
