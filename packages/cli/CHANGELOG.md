@@ -1,5 +1,14 @@
 # @dawn-ai/cli
 
+## 0.1.6
+
+### Patch Changes
+
+- Use codegen schemas in dawn build output — tool descriptions and JSON Schema from .dawn/routes/<id>/tools.json are now injected into generated entry files for LangGraph Platform deployment.
+  - @dawn-ai/core@0.1.6
+  - @dawn-ai/langchain@0.1.6
+  - @dawn-ai/langgraph@0.1.6
+
 ## 0.1.5
 
 ### Patch Changes
