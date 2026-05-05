@@ -1,10 +1,15 @@
+import { existsSync, readFileSync } from "node:fs"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join, relative, resolve } from "node:path"
 
 import { discoverRoutes } from "@dawn-ai/core"
 import type { Command } from "commander"
 import { type CommandIo, writeLine } from "../lib/output.js"
-import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
+import {
+  type DiscoveredToolDefinition,
+  discoverToolDefinitions,
+  injectGeneratedSchemas,
+} from "../lib/runtime/tool-discovery.js"
 import { runTypegen } from "../lib/typegen/run-typegen.js"
 
 interface BuildOptions {
@@ -42,18 +47,30 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
   const graphs: Record<string, string> = {}
 
   for (const route of manifest.routes) {
-    const tools = await discoverToolDefinitions({
+    const discoveredTools = await discoverToolDefinitions({
       appRoot: manifest.appRoot,
       routeDir: route.routeDir,
     })
 
-    const entryFileName = route.id
-      .replace(/^\//, "")
-      .replace(/\//g, "-")
-      .replace(/\[/g, "")
-      .replace(/\]/g, "")
+    // Inject codegen-generated schemas (same as runtime path)
+    const routeSlug =
+      route.id.replace(/^\//, "").replace(/\//g, "-").replace(/\[/g, "").replace(/\]/g, "") ||
+      "index"
+    const schemaManifestPath = join(manifest.appRoot, ".dawn", "routes", routeSlug, "tools.json")
+    let tools = discoveredTools
+    if (existsSync(schemaManifestPath)) {
+      try {
+        const schemaManifest = JSON.parse(readFileSync(schemaManifestPath, "utf-8")) as Record<
+          string,
+          unknown
+        >
+        tools = injectGeneratedSchemas(discoveredTools, schemaManifest)
+      } catch {
+        // Best-effort — fall through on parse errors
+      }
+    }
 
-    const entryFilePath = join(buildDir, `${entryFileName}.ts`)
+    const entryFilePath = join(buildDir, `${routeSlug}.ts`)
     const relativeRoutePath = relative(dirname(entryFilePath), route.routeDir)
     const routeImportPath = `${relativeRoutePath}/index.js`
 
@@ -67,10 +84,11 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
         return `import ${tool.name} from "${relToolPath}/${toolFileName}"`
       })
 
-      const toolBindings = tools.map(
-        (tool) =>
-          `const ${tool.name}Tool = tool(${tool.name}, {\n  name: "${tool.name}",\n  description: "${tool.description ?? ""}",\n  schema: z.record(z.string(), z.unknown()),\n})`,
-      )
+      const toolBindings = tools.map((tool) => {
+        const description = tool.description ?? ""
+        const schema = toolSchemaToZodSource(tool)
+        return `const ${tool.name}Tool = tool(${tool.name}, {\n  name: "${tool.name}",\n  description: "${description}",\n  schema: ${schema},\n})`
+      })
 
       const toolNames = tools.map((tool) => `${tool.name}Tool`)
 
@@ -126,4 +144,61 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
     io.stdout,
     `  langgraph.json written to ${relative(process.cwd(), outputLanggraphPath)}`,
   )
+}
+
+interface JsonSchemaProperty {
+  readonly type?: string
+  readonly items?: { readonly type?: string }
+}
+
+function toolSchemaToZodSource(tool: DiscoveredToolDefinition): string {
+  const schema = tool.schema as
+    | {
+        readonly type?: string
+        readonly properties?: Record<string, JsonSchemaProperty>
+        readonly required?: readonly string[]
+      }
+    | undefined
+
+  if (
+    !schema ||
+    typeof schema !== "object" ||
+    schema.type !== "object" ||
+    !schema.properties ||
+    Object.keys(schema.properties).length === 0
+  ) {
+    return "z.record(z.string(), z.unknown())"
+  }
+
+  const required = new Set(schema.required ?? [])
+  const fields = Object.entries(schema.properties).map(([key, prop]) => {
+    let zodType = jsonSchemaTypeToZod(prop)
+    if (!required.has(key)) {
+      zodType += ".optional()"
+    }
+    return `  ${key}: ${zodType}`
+  })
+
+  return `z.object({\n${fields.join(",\n")},\n})`
+}
+
+function jsonSchemaTypeToZod(prop: JsonSchemaProperty): string {
+  switch (prop.type) {
+    case "string":
+      return "z.string()"
+    case "number":
+    case "integer":
+      return "z.number()"
+    case "boolean":
+      return "z.boolean()"
+    case "array": {
+      const itemType = prop.items?.type
+      if (itemType === "string") return "z.array(z.string())"
+      if (itemType === "number" || itemType === "integer") return "z.array(z.number())"
+      if (itemType === "boolean") return "z.array(z.boolean())"
+      return "z.array(z.unknown())"
+    }
+    default:
+      return "z.unknown()"
+  }
 }
