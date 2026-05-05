@@ -10,6 +10,7 @@ import {
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { checkDependencies } from "../lib/verify/check-dependencies.js"
 
 interface VerifyOptions {
   readonly cwd?: string
@@ -43,16 +44,24 @@ interface VerifyTypegenCheckResult {
   readonly status: "passed"
 }
 
+interface VerifyDepsCheckResult {
+  readonly missingEnvVars: readonly string[]
+  readonly missingPackages: readonly string[]
+  readonly name: "deps"
+  readonly status: "passed" | "warning"
+}
+
 interface VerifyFailedCheckResult {
   readonly error: {
     readonly message: string
   }
-  readonly name: "app" | "routes" | "typegen"
+  readonly name: "app" | "deps" | "routes" | "typegen"
   readonly status: "failed"
 }
 
 type VerifyCheckResult =
   | VerifyAppCheckResult
+  | VerifyDepsCheckResult
   | VerifyFailedCheckResult
   | VerifyRoutesCheckResult
   | VerifyTypegenCheckResult
@@ -105,11 +114,29 @@ export async function runVerifyCommand(options: VerifyOptions, io: CommandIo): P
     const routesCheck = result.checks.find(
       (check): check is VerifyRoutesCheckResult => check.name === "routes",
     )
+    const depsCheck = result.checks.find(
+      (check): check is VerifyDepsCheckResult => check.name === "deps",
+    ) as VerifyDepsCheckResult | undefined
 
     writeLine(
       io.stdout,
       `Dawn app integrity OK: ${result.counts.passed} checks passed, ${routesCheck?.routeCount ?? 0} routes discovered.`,
     )
+
+    if (depsCheck && depsCheck.missingPackages.length > 0) {
+      writeLine(
+        io.stdout,
+        `Warning: Missing packages: ${depsCheck.missingPackages.join(", ")}. Install with: npm install ${depsCheck.missingPackages.join(" ")}`,
+      )
+    }
+
+    if (depsCheck && depsCheck.missingEnvVars.length > 0) {
+      writeLine(
+        io.stdout,
+        `Warning: Missing environment variables: ${depsCheck.missingEnvVars.join(", ")}. Create a .env file or set these in your shell.`,
+      )
+    }
+
     return
   }
 
@@ -179,6 +206,17 @@ async function verifyApp(
     renderedBytes: Buffer.byteLength(renderedTypes, "utf8"),
     status: PASSED_STATUS,
   })
+
+  // Check dependencies and environment variables (advisory, not blocking)
+  const depsResult = checkDependencies(app.appRoot)
+  const hasWarnings =
+    depsResult.missingPackages.length > 0 || depsResult.missingEnvVars.length > 0
+  checks.push({
+    missingEnvVars: depsResult.missingEnvVars,
+    missingPackages: depsResult.missingPackages,
+    name: "deps",
+    status: hasWarnings ? "warning" : PASSED_STATUS,
+  } as VerifyDepsCheckResult)
 
   return {
     appRoot: app.appRoot,
