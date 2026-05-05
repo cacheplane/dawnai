@@ -4,6 +4,10 @@ import { dirname, join, relative, resolve } from "node:path"
 
 import { discoverRoutes } from "@dawn-ai/core"
 import type { Command } from "commander"
+import {
+  extractDeploymentConfig,
+  generateDockerfile,
+} from "../lib/build/deployment-config.js"
 import { type CommandIo, writeLine } from "../lib/output.js"
 import {
   type DiscoveredToolDefinition,
@@ -130,13 +134,22 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
     // No user langgraph.json — start with empty config
   }
 
+  const deployment = extractDeploymentConfig(manifest.appRoot)
+
   const mergedConfig = {
     ...userConfig,
     graphs,
+    dependencies: deployment.dependencies,
+    env: deployment.env,
+    node_version: deployment.node_version,
   }
 
   const outputLanggraphPath = join(buildDir, "langgraph.json")
   await writeFile(outputLanggraphPath, `${JSON.stringify(mergedConfig, null, 2)}\n`, "utf8")
+
+  // Generate Dockerfile for LangGraph Platform
+  const dockerfilePath = join(buildDir, "Dockerfile")
+  await writeFile(dockerfilePath, generateDockerfile(deployment.node_version), "utf8")
 
   writeLine(io.stdout, `Build complete: ${relative(process.cwd(), buildDir)}`)
   writeLine(io.stdout, `  ${Object.keys(graphs).length} route(s) compiled`)
@@ -144,6 +157,7 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
     io.stdout,
     `  langgraph.json written to ${relative(process.cwd(), outputLanggraphPath)}`,
   )
+  writeLine(io.stdout, `  Dockerfile written to ${relative(process.cwd(), dockerfilePath)}`)
 }
 
 interface JsonSchemaProperty {
