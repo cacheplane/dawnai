@@ -1,6 +1,8 @@
 export type { AgentStreamChunk } from "./agent-adapter.js"
+export type { RetryOptions } from "./retry.js"
 export { executeAgent, streamAgent } from "./agent-adapter.js"
 export { chainAdapter } from "./chain-adapter.js"
+export { isRetryableError, withRetry } from "./retry.js"
 export { materializeStateSchema } from "./state-adapter.js"
 export { convertToolToLangChain } from "./tool-converter.js"
 export { executeWithToolLoop } from "./tool-loop.js"

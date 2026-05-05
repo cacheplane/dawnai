@@ -1,6 +1,7 @@
 import type { DawnAgent } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { HumanMessage } from "@langchain/core/messages"
+import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
 import { convertToolToLangChain } from "./tool-converter.js"
 
@@ -157,43 +158,77 @@ async function* streamFromRunnable(
   }
 
   if (typeof streamable.streamEvents !== "function") {
-    // Fallback: invoke and emit a single done event
-    const result = await runnable.invoke(input, config)
+    // Fallback: invoke with retry and emit a single done event
+    const signal = config.signal as AbortSignal | undefined
+    const result = await withRetry(
+      () => runnable.invoke(input, config),
+      signal ? { signal } : undefined,
+    )
     yield { type: "done", data: result }
     return
   }
 
   let finalOutput: unknown
+  let hasYielded = false
+  let lastStreamError: Error | undefined
 
-  for await (const event of streamable.streamEvents(input, { ...config, version: "v2" })) {
-    switch (event.event) {
-      case "on_chat_model_stream": {
-        const content = (event.data.chunk as { content?: unknown })?.content
-        if (content && typeof content === "string" && content.length > 0) {
-          yield { type: "token", data: content }
+  // Retry the entire stream if it fails before producing any output
+  const maxStreamAttempts = 3
+  for (let attempt = 0; attempt < maxStreamAttempts; attempt++) {
+    hasYielded = false
+    lastStreamError = undefined
+    finalOutput = undefined
+
+    try {
+      for await (const event of streamable.streamEvents(input, { ...config, version: "v2" })) {
+        switch (event.event) {
+          case "on_chat_model_stream": {
+            const content = (event.data.chunk as { content?: unknown })?.content
+            if (content && typeof content === "string" && content.length > 0) {
+              hasYielded = true
+              yield { type: "token" as const, data: content }
+            }
+            break
+          }
+          case "on_tool_start": {
+            hasYielded = true
+            yield {
+              type: "tool_call" as const,
+              data: { name: event.name, input: event.data.chunk ?? event.data.output },
+            }
+            break
+          }
+          case "on_tool_end": {
+            hasYielded = true
+            yield {
+              type: "tool_result" as const,
+              data: { name: event.name, output: event.data.output },
+            }
+            break
+          }
+          case "on_chain_end": {
+            if (event.name === "LangGraph") {
+              finalOutput = event.data.output
+            }
+            break
+          }
         }
-        break
       }
-      case "on_tool_start": {
-        yield {
-          type: "tool_call",
-          data: { name: event.name, input: event.data.chunk ?? event.data.output },
-        }
-        break
+
+      // Stream completed successfully
+      break
+    } catch (error) {
+      lastStreamError = error instanceof Error ? error : new Error(String(error))
+
+      // If we already yielded chunks, we can't retry (client has partial data)
+      // Or if the error isn't retryable, rethrow immediately
+      if (hasYielded || !isRetryableError(error) || attempt === maxStreamAttempts - 1) {
+        throw lastStreamError
       }
-      case "on_tool_end": {
-        yield {
-          type: "tool_result",
-          data: { name: event.name, output: event.data.output },
-        }
-        break
-      }
-      case "on_chain_end": {
-        if (event.name === "LangGraph") {
-          finalOutput = event.data.output
-        }
-        break
-      }
+
+      // Backoff before retry
+      const delay = Math.min(1000 * 2 ** attempt + Math.random() * 500, 10_000)
+      await new Promise((resolve) => setTimeout(resolve, delay))
     }
   }
 

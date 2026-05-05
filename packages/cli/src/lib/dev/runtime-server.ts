@@ -3,6 +3,12 @@ import type { AddressInfo } from "node:net"
 
 import { executeResolvedRoute, streamResolvedRoute } from "../runtime/execute-route.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
+import {
+  type DawnMiddleware,
+  type MiddlewareContext,
+  loadMiddleware,
+  runMiddleware,
+} from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
 
@@ -20,6 +26,7 @@ export async function startRuntimeServer(
   options: StartRuntimeServerOptions,
 ): Promise<RuntimeServer> {
   const registry = await createRuntimeRegistry(options.appRoot)
+  const middlewares = await loadMiddleware(options.appRoot)
   const state = {
     acceptingRequests: true,
     activeRequests: 0,
@@ -35,7 +42,13 @@ export async function startRuntimeServer(
 
     state.activeRequests++
     try {
-      await handleRequest({ registry, request, response, signal: shutdownController.signal })
+      await handleRequest({
+        middlewares,
+        registry,
+        request,
+        response,
+        signal: shutdownController.signal,
+      })
     } catch (error) {
       if (shutdownController.signal.aborted) {
         sendJson(
@@ -100,12 +113,13 @@ export async function startRuntimeServer(
 }
 
 async function handleRequest(options: {
+  readonly middlewares: readonly DawnMiddleware[]
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
   readonly signal: AbortSignal
 }): Promise<void> {
-  const { request, response, registry, signal } = options
+  const { middlewares, request, response, registry, signal } = options
 
   if (request.method === "GET" && request.url === "/healthz") {
     sendJson(response, 200, { status: "ready" })
@@ -113,7 +127,7 @@ async function handleRequest(options: {
   }
 
   if (request.method === "POST" && request.url === "/runs/stream") {
-    await handleStreamRequest({ registry, request, response, signal })
+    await handleStreamRequest({ middlewares, registry, request, response, signal })
     return
   }
 
@@ -146,6 +160,20 @@ async function handleRequest(options: {
       createRequestErrorBody(`Unknown assistant_id: ${validatedBody.value.assistant_id}`),
     )
     return
+  }
+
+  // Run middleware before execution
+  if (middlewares.length > 0) {
+    const mwContext: MiddlewareContext = {
+      request,
+      routeId: route.routeId,
+      assistantId: route.assistantId,
+    }
+    const mwResult = await runMiddleware(middlewares, mwContext)
+    if (mwResult.action === "reject") {
+      sendJson(response, mwResult.status, mwResult.body)
+      return
+    }
   }
 
   if (
@@ -217,12 +245,13 @@ async function handleRequest(options: {
 }
 
 async function handleStreamRequest(options: {
+  readonly middlewares: readonly DawnMiddleware[]
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
   readonly signal: AbortSignal
 }): Promise<void> {
-  const { request, response, registry, signal } = options
+  const { middlewares, request, response, registry, signal } = options
 
   const rawBody = await readRequestBody(request)
   const parsedBody = parseJson(rawBody)
@@ -248,6 +277,20 @@ async function handleStreamRequest(options: {
       createRequestErrorBody(`Unknown assistant_id: ${validatedBody.value.assistant_id}`),
     )
     return
+  }
+
+  // Run middleware before streaming
+  if (middlewares.length > 0) {
+    const mwContext: MiddlewareContext = {
+      request,
+      routeId: route.routeId,
+      assistantId: route.assistantId,
+    }
+    const mwResult = await runMiddleware(middlewares, mwContext)
+    if (mwResult.action === "reject") {
+      sendJson(response, mwResult.status, mwResult.body)
+      return
+    }
   }
 
   response.writeHead(200, {
