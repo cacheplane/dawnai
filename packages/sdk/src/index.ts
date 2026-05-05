@@ -1,4 +1,4 @@
-export type { AgentConfig, DawnAgent } from "./agent.js"
+export type { AgentConfig, DawnAgent, RetryConfig } from "./agent.js"
 export { agent, isDawnAgent } from "./agent.js"
 export type { BackendAdapter } from "./backend-adapter.js"
 export type {
