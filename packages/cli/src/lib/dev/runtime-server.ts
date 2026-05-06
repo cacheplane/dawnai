@@ -122,7 +122,13 @@ async function handleRequest(options: {
   }
 
   if (request.method === "POST" && request.url === "/runs/stream") {
-    await handleStreamRequest({ middleware, registry, request, response, signal })
+    await handleStreamRequest({
+      middleware,
+      registry,
+      request,
+      response,
+      signal,
+    })
     return
   }
 
@@ -198,6 +204,7 @@ async function handleRequest(options: {
   const resultPromise = executeResolvedRoute({
     appRoot: registry.appRoot,
     input: validatedBody.value.input,
+    ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
     signal,
     routeFile: route.routeFile,
     routeId: route.routeId,
@@ -300,6 +307,7 @@ async function handleStreamRequest(options: {
     for await (const chunk of streamResolvedRoute({
       appRoot: registry.appRoot,
       input: validatedBody.value.input,
+      ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
       signal,
       routeFile: route.routeFile,
       routeId: route.routeId,
@@ -347,17 +355,22 @@ async function raceRequestAgainstShutdown<T>(
   return result
 }
 
-function validateRunsWaitRequest(
-  value: unknown,
-):
+function validateRunsWaitRequest(value: unknown):
   | { readonly ok: true; readonly value: RunsWaitRequest }
-  | { readonly details?: Record<string, unknown>; readonly message: string; readonly ok: false } {
+  | {
+      readonly details?: Record<string, unknown>
+      readonly message: string
+      readonly ok: false
+    } {
   if (!isRecord(value)) {
     return { message: "Request body must be an object", ok: false }
   }
 
   if (typeof value.assistant_id !== "string") {
-    return { message: "Request body must include assistant_id as a string", ok: false }
+    return {
+      message: "Request body must include assistant_id as a string",
+      ok: false,
+    }
   }
 
   if (!isRecord(value.metadata) || !isRecord(value.metadata.dawn)) {
@@ -365,15 +378,24 @@ function validateRunsWaitRequest(
   }
 
   if (typeof value.metadata.dawn.mode !== "string") {
-    return { message: "Request body must include metadata.dawn.mode as a string", ok: false }
+    return {
+      message: "Request body must include metadata.dawn.mode as a string",
+      ok: false,
+    }
   }
 
   if (typeof value.metadata.dawn.route_id !== "string") {
-    return { message: "Request body must include metadata.dawn.route_id as a string", ok: false }
+    return {
+      message: "Request body must include metadata.dawn.route_id as a string",
+      ok: false,
+    }
   }
 
   if (typeof value.metadata.dawn.route_path !== "string") {
-    return { message: "Request body must include metadata.dawn.route_path as a string", ok: false }
+    return {
+      message: "Request body must include metadata.dawn.route_path as a string",
+      ok: false,
+    }
   }
 
   if (!Object.hasOwn(value, "input")) {
@@ -381,7 +403,10 @@ function validateRunsWaitRequest(
   }
 
   if (value.on_completion !== "delete") {
-    return { message: "Request body must set on_completion to delete", ok: false }
+    return {
+      message: "Request body must set on_completion to delete",
+      ok: false,
+    }
   }
 
   return {

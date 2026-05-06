@@ -6,20 +6,31 @@ interface ToolExecutor {
   readonly name: string
   readonly run: (
     input: unknown,
-    context: { readonly signal: AbortSignal },
+    context: {
+      readonly middleware?: Readonly<Record<string, unknown>>
+      readonly signal: AbortSignal
+    },
   ) => Promise<unknown> | unknown
 }
 
 export interface ExecuteWithToolLoopOptions {
   readonly chain: { readonly invoke: (input: unknown) => Promise<unknown> }
   readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
   readonly tools: readonly ToolExecutor[]
   readonly signal: AbortSignal
   readonly maxIterations?: number
 }
 
 export async function executeWithToolLoop(options: ExecuteWithToolLoopOptions): Promise<unknown> {
-  const { chain, input, tools, signal, maxIterations = DEFAULT_MAX_ITERATIONS } = options
+  const {
+    chain,
+    input,
+    middlewareContext,
+    tools,
+    signal,
+    maxIterations = DEFAULT_MAX_ITERATIONS,
+  } = options
   const toolMap = new Map(tools.map((t) => [t.name, t]))
   let currentInput: unknown = input
 
@@ -40,7 +51,10 @@ export async function executeWithToolLoop(options: ExecuteWithToolLoopOptions): 
           })
         }
         try {
-          const output = await tool.run(call.args, { signal })
+          const output = await tool.run(call.args, {
+            ...(middlewareContext ? { middleware: middlewareContext } : {}),
+            signal,
+          })
           return new ToolMessage({
             content: JSON.stringify(output),
             tool_call_id: call.id ?? "",
@@ -66,9 +80,9 @@ export async function executeWithToolLoop(options: ExecuteWithToolLoopOptions): 
   throw new Error(`Tool execution loop exceeded maximum ${maxIterations} iterations`)
 }
 
-function isAIMessageWithToolCalls(
-  value: unknown,
-): value is AIMessage & { tool_calls: readonly { id?: string; name: string; args: unknown }[] } {
+function isAIMessageWithToolCalls(value: unknown): value is AIMessage & {
+  tool_calls: readonly { id?: string; name: string; args: unknown }[]
+} {
   return (
     value instanceof AIMessage &&
     Array.isArray((value as AIMessage & { tool_calls?: unknown }).tool_calls) &&

@@ -6,12 +6,18 @@ interface DawnToolDefinition {
   readonly name: string
   readonly run: (
     input: unknown,
-    context: { readonly signal: AbortSignal },
+    context: {
+      readonly middleware?: Readonly<Record<string, unknown>>
+      readonly signal: AbortSignal
+    },
   ) => Promise<unknown> | unknown
   readonly schema?: unknown
 }
 
-export function convertToolToLangChain(tool: DawnToolDefinition): DynamicStructuredTool {
+export function convertToolToLangChain(
+  tool: DawnToolDefinition,
+  middlewareContext?: Readonly<Record<string, unknown>>,
+): DynamicStructuredTool {
   const schema = toZodSchema(tool.schema)
 
   // Cast through unknown to bridge the dual-Zod version type incompatibility
@@ -22,7 +28,10 @@ export function convertToolToLangChain(tool: DawnToolDefinition): DynamicStructu
     schema: schema as unknown as z.ZodObject<z.ZodRawShape>,
     func: async (input, _runManager, config) => {
       const signal = config?.signal ?? new AbortController().signal
-      const result = await tool.run(input, { signal })
+      const result = await tool.run(input, {
+        ...(middlewareContext ? { middleware: middlewareContext } : {}),
+        signal,
+      })
       return JSON.stringify(result)
     },
   }) as unknown as DynamicStructuredTool

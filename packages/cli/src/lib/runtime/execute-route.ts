@@ -95,6 +95,7 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
 export async function executeResolvedRoute(options: {
   readonly appRoot: string
   readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
@@ -109,6 +110,7 @@ export async function executeResolvedRoute(options: {
 export async function* streamResolvedRoute(options: {
   readonly appRoot: string
   readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
@@ -126,6 +128,7 @@ export async function* streamResolvedRoute(options: {
   if (normalized.kind !== "agent") {
     // Non-agent routes don't support incremental streaming — execute and emit done
     const context = createDawnContext({
+      ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
       tools,
       ...(options.signal ? { signal: options.signal } : {}),
     })
@@ -139,6 +142,7 @@ export async function* streamResolvedRoute(options: {
   for await (const chunk of streamAgent({
     entry: normalized.entry,
     input: options.input,
+    ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
     routeParamNames,
     signal: options.signal ?? new AbortController().signal,
     ...(stateFields ? { stateFields } : {}),
@@ -229,6 +233,7 @@ async function prepareRouteExecution(options: {
 async function executeRouteAtResolvedPath(options: {
   readonly appRoot: string
   readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
@@ -257,11 +262,13 @@ async function executeRouteAtResolvedPath(options: {
     mode = normalized.kind
 
     const context = createDawnContext({
+      ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
       tools,
       ...(options.signal ? { signal: options.signal } : {}),
     })
 
     const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
+      ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
       routeId: options.routeId,
       ...(stateFields ? { stateFields } : {}),
       tools,
@@ -300,6 +307,7 @@ async function invokeEntry(
   input: unknown,
   context: unknown,
   agentContext?: {
+    readonly middlewareContext?: Readonly<Record<string, unknown>>
     readonly routeId: string
     readonly signal?: AbortSignal
     readonly stateFields?: readonly ResolvedStateField[]
@@ -308,7 +316,10 @@ async function invokeEntry(
       readonly name: string
       readonly run: (
         input: unknown,
-        context: { readonly signal: AbortSignal },
+        context: {
+          readonly middleware?: Readonly<Record<string, unknown>>
+          readonly signal: AbortSignal
+        },
       ) => Promise<unknown> | unknown
       readonly schema?: unknown
     }>
@@ -319,6 +330,9 @@ async function invokeEntry(
     return await executeAgent({
       entry,
       input,
+      ...(agentContext?.middlewareContext
+        ? { middlewareContext: agentContext.middlewareContext }
+        : {}),
       routeParamNames,
       signal: agentContext?.signal ?? new AbortController().signal,
       ...(agentContext?.stateFields ? { stateFields: agentContext.stateFields } : {}),
