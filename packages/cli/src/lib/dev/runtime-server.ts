@@ -3,12 +3,8 @@ import type { AddressInfo } from "node:net"
 
 import { executeResolvedRoute, streamResolvedRoute } from "../runtime/execute-route.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
-import {
-  type DawnMiddleware,
-  type MiddlewareContext,
-  loadMiddleware,
-  runMiddleware,
-} from "./middleware.js"
+import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
+import { loadMiddleware, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
 
@@ -26,7 +22,7 @@ export async function startRuntimeServer(
   options: StartRuntimeServerOptions,
 ): Promise<RuntimeServer> {
   const registry = await createRuntimeRegistry(options.appRoot)
-  const middlewares = await loadMiddleware(options.appRoot)
+  const middleware = await loadMiddleware(options.appRoot)
   const state = {
     acceptingRequests: true,
     activeRequests: 0,
@@ -43,7 +39,7 @@ export async function startRuntimeServer(
     state.activeRequests++
     try {
       await handleRequest({
-        middlewares,
+        middleware,
         registry,
         request,
         response,
@@ -113,13 +109,13 @@ export async function startRuntimeServer(
 }
 
 async function handleRequest(options: {
-  readonly middlewares: readonly DawnMiddleware[]
+  readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
   readonly signal: AbortSignal
 }): Promise<void> {
-  const { middlewares, request, response, registry, signal } = options
+  const { middleware, request, response, registry, signal } = options
 
   if (request.method === "GET" && request.url === "/healthz") {
     sendJson(response, 200, { status: "ready" })
@@ -127,7 +123,7 @@ async function handleRequest(options: {
   }
 
   if (request.method === "POST" && request.url === "/runs/stream") {
-    await handleStreamRequest({ middlewares, registry, request, response, signal })
+    await handleStreamRequest({ middleware, registry, request, response, signal })
     return
   }
 
@@ -163,17 +159,18 @@ async function handleRequest(options: {
   }
 
   // Run middleware before execution
-  if (middlewares.length > 0) {
-    const mwContext: MiddlewareContext = {
-      request,
-      routeId: route.routeId,
-      assistantId: route.assistantId,
-    }
-    const mwResult = await runMiddleware(middlewares, mwContext)
-    if (mwResult.action === "reject") {
-      sendJson(response, mwResult.status, mwResult.body)
-      return
-    }
+  const mwRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: parseHeaders(request),
+    method: request.method ?? "POST",
+    params: extractRouteParams(route.routeId, validatedBody.value.input),
+    routeId: route.routeId,
+    url: request.url ?? "/runs/wait",
+  }
+  const mwResult = await runMiddleware(middleware, mwRequest)
+  if (mwResult.action === "reject") {
+    sendJson(response, mwResult.status, mwResult.body)
+    return
   }
 
   if (
@@ -245,13 +242,13 @@ async function handleRequest(options: {
 }
 
 async function handleStreamRequest(options: {
-  readonly middlewares: readonly DawnMiddleware[]
+  readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
   readonly signal: AbortSignal
 }): Promise<void> {
-  const { middlewares, request, response, registry, signal } = options
+  const { middleware, request, response, registry, signal } = options
 
   const rawBody = await readRequestBody(request)
   const parsedBody = parseJson(rawBody)
@@ -280,17 +277,18 @@ async function handleStreamRequest(options: {
   }
 
   // Run middleware before streaming
-  if (middlewares.length > 0) {
-    const mwContext: MiddlewareContext = {
-      request,
-      routeId: route.routeId,
-      assistantId: route.assistantId,
-    }
-    const mwResult = await runMiddleware(middlewares, mwContext)
-    if (mwResult.action === "reject") {
-      sendJson(response, mwResult.status, mwResult.body)
-      return
-    }
+  const mwRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: parseHeaders(request),
+    method: request.method ?? "POST",
+    params: extractRouteParams(route.routeId, validatedBody.value.input),
+    routeId: route.routeId,
+    url: request.url ?? "/runs/stream",
+  }
+  const mwResult = await runMiddleware(middleware, mwRequest)
+  if (mwResult.action === "reject") {
+    sendJson(response, mwResult.status, mwResult.body)
+    return
   }
 
   response.writeHead(200, {
@@ -443,6 +441,39 @@ async function listen(server: ReturnType<typeof createServer>, port?: number): P
       resolve()
     })
   })
+}
+
+function parseHeaders(request: IncomingMessage): Record<string, string> {
+  const headers: Record<string, string> = {}
+  for (const [key, value] of Object.entries(request.headers)) {
+    if (typeof value === "string") {
+      headers[key] = value
+    } else if (Array.isArray(value)) {
+      headers[key] = value.join(", ")
+    }
+  }
+  return headers
+}
+
+function extractRouteParams(
+  routeId: string,
+  input: unknown,
+): Record<string, string> {
+  const params: Record<string, string> = {}
+  const matches = routeId.matchAll(/\[(\w+)\]/g)
+  const inputRecord = (typeof input === "object" && input !== null ? input : {}) as Record<
+    string,
+    unknown
+  >
+
+  for (const match of matches) {
+    const name = match[1]
+    if (name && name in inputRecord) {
+      params[name] = String(inputRecord[name])
+    }
+  }
+
+  return params
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
