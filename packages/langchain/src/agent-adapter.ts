@@ -1,4 +1,4 @@
-import type { DawnAgent } from "@dawn-ai/sdk"
+import type { DawnAgent, RetryConfig } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { HumanMessage } from "@langchain/core/messages"
 import { isRetryableError, withRetry } from "./retry.js"
@@ -76,6 +76,7 @@ export interface AgentStreamChunk {
 export interface AgentOptions {
   readonly entry: unknown
   readonly input: unknown
+  readonly retry?: RetryConfig
   readonly routeParamNames: readonly string[]
   readonly signal: AbortSignal
   readonly stateFields?: readonly ResolvedStateField[]
@@ -103,7 +104,8 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       options.tools,
       options.stateFields,
     )
-    yield* streamFromRunnable(materializedAgent, { messages }, config)
+    const retryConfig = options.entry.retry
+    yield* streamFromRunnable(materializedAgent, { messages }, config, retryConfig)
     return
   }
 
@@ -115,7 +117,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     config.tools = langchainTools
   }
 
-  yield* streamFromRunnable(options.entry, { messages }, config)
+  yield* streamFromRunnable(options.entry, { messages }, config, options.retry)
 }
 
 function prepareAgentCall(options: AgentOptions): {
@@ -149,6 +151,7 @@ async function* streamFromRunnable(
   runnable: AgentLike,
   input: unknown,
   config: Record<string, unknown>,
+  retryConfig?: RetryConfig,
 ): AsyncGenerator<AgentStreamChunk> {
   const streamable = runnable as AgentLike & {
     streamEvents?: (
@@ -160,9 +163,14 @@ async function* streamFromRunnable(
   if (typeof streamable.streamEvents !== "function") {
     // Fallback: invoke with retry and emit a single done event
     const signal = config.signal as AbortSignal | undefined
+    const retryOptions: import("./retry.js").RetryOptions = {
+      ...(retryConfig?.maxAttempts ? { maxAttempts: retryConfig.maxAttempts } : {}),
+      ...(retryConfig?.baseDelay ? { baseDelayMs: retryConfig.baseDelay } : {}),
+      ...(signal ? { signal } : {}),
+    }
     const result = await withRetry(
       () => runnable.invoke(input, config),
-      signal ? { signal } : undefined,
+      Object.keys(retryOptions).length > 0 ? retryOptions : undefined,
     )
     yield { type: "done", data: result }
     return
@@ -173,7 +181,7 @@ async function* streamFromRunnable(
   let lastStreamError: Error | undefined
 
   // Retry the entire stream if it fails before producing any output
-  const maxStreamAttempts = 3
+  const maxStreamAttempts = retryConfig?.maxAttempts ?? 3
   for (let attempt = 0; attempt < maxStreamAttempts; attempt++) {
     hasYielded = false
     lastStreamError = undefined
