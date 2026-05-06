@@ -51,12 +51,18 @@
         "name": "typegen",
         "renderedBytes": 415,
         "status": "passed"
+      },
+      {
+        "missingEnvVars": ["OPENAI_API_KEY"],
+        "missingPackages": ["@langchain/core", "@langchain/openai", "@langchain/langgraph"],
+        "name": "deps",
+        "status": "warning"
       }
     ],
     "counts": {
       "failed": 0,
-      "passed": 3,
-      "total": 3
+      "passed": 4,
+      "total": 4
     },
     "status": "passed"
   },

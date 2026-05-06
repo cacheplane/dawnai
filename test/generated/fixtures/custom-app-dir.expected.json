@@ -54,7 +54,7 @@
       },
       {
         "missingEnvVars": ["OPENAI_API_KEY"],
-        "missingPackages": [],
+        "missingPackages": ["@langchain/core", "@langchain/openai", "@langchain/langgraph"],
         "name": "deps",
         "status": "warning"
       }
