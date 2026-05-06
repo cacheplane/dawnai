@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
@@ -79,7 +79,7 @@ describe("loadEnvFile", () => {
 
     writeFileSync(
       join(tempDir, ".env"),
-      'TEST_DAWN_DOUBLE="quoted value"\nTEST_DAWN_SINGLE=\'single quoted\'\n',
+      "TEST_DAWN_DOUBLE=\"quoted value\"\nTEST_DAWN_SINGLE='single quoted'\n",
     )
 
     const count = loadEnvFile(tempDir)
@@ -118,7 +118,7 @@ describe("loadEnvFile", () => {
       "LANGSMITH_API_KEY=lsv2_test_key\nLANGCHAIN_TRACING_V2=false\n",
     )
 
-    const count = loadEnvFile(tempDir)
+    const _count = loadEnvFile(tempDir)
 
     expect(process.env.LANGCHAIN_TRACING_V2).toBe("false")
   })

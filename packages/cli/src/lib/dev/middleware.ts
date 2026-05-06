@@ -1,28 +1,10 @@
-import type { IncomingMessage, ServerResponse } from "node:http"
+import type { DawnMiddleware, MiddlewareRequest, MiddlewareResult } from "@dawn-ai/sdk"
 
 /**
- * Dawn middleware hook — runs before route execution.
- * Return a response to short-circuit, or undefined to continue.
+ * Load middleware from the app's middleware.ts file.
+ * Convention: src/middleware.ts exports a default function (using defineMiddleware).
  */
-export interface DawnMiddleware {
-  (context: MiddlewareContext): Promise<MiddlewareResult> | MiddlewareResult
-}
-
-export interface MiddlewareContext {
-  readonly request: IncomingMessage
-  readonly routeId: string
-  readonly assistantId: string
-}
-
-export type MiddlewareResult =
-  | { readonly action: "continue"; readonly context?: Record<string, unknown> }
-  | { readonly action: "reject"; readonly status: number; readonly body: unknown }
-
-/**
- * Load middleware hooks from the app's middleware.ts file.
- * Convention: src/middleware.ts exports a default function or array.
- */
-export async function loadMiddleware(appRoot: string): Promise<readonly DawnMiddleware[]> {
+export async function loadMiddleware(appRoot: string): Promise<DawnMiddleware | undefined> {
   const middlewarePaths = [
     `${appRoot}/src/middleware.ts`,
     `${appRoot}/src/middleware.js`,
@@ -36,40 +18,26 @@ export async function loadMiddleware(appRoot: string): Promise<readonly DawnMidd
       const exported = mod.default ?? mod.middleware
 
       if (typeof exported === "function") {
-        return [exported as DawnMiddleware]
-      }
-
-      if (Array.isArray(exported)) {
-        return exported.filter((fn): fn is DawnMiddleware => typeof fn === "function")
+        return exported as DawnMiddleware
       }
     } catch {
       // File doesn't exist or can't be loaded — try next
     }
   }
 
-  return []
+  return undefined
 }
 
 /**
- * Run middleware chain. Returns the first rejection, or continue with merged context.
+ * Run middleware. Returns continue (with optional context) or reject.
  */
 export async function runMiddleware(
-  middlewares: readonly DawnMiddleware[],
-  context: MiddlewareContext,
+  middleware: DawnMiddleware | undefined,
+  request: MiddlewareRequest,
 ): Promise<MiddlewareResult> {
-  let mergedContext: Record<string, unknown> = {}
-
-  for (const mw of middlewares) {
-    const result = await mw(context)
-
-    if (result.action === "reject") {
-      return result
-    }
-
-    if (result.context) {
-      mergedContext = { ...mergedContext, ...result.context }
-    }
+  if (!middleware) {
+    return { action: "continue" }
   }
 
-  return { action: "continue", context: mergedContext }
+  return await middleware(request)
 }

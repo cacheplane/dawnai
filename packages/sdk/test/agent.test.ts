@@ -46,4 +46,24 @@ describe("agent()", () => {
     const descriptor = agent({ model: "gpt-4o", systemPrompt: "test" })
     expectTypeOf(descriptor).toMatchTypeOf<DawnAgent>()
   })
+
+  test("accepts optional retry config", () => {
+    const descriptor = agent({
+      model: "gpt-4o-mini",
+      systemPrompt: "You are helpful.",
+      retry: { maxAttempts: 5, baseDelay: 2000 },
+    })
+
+    expect(descriptor.model).toBe("gpt-4o-mini")
+    expect(descriptor.retry).toEqual({ maxAttempts: 5, baseDelay: 2000 })
+  })
+
+  test("retry defaults to undefined when not provided", () => {
+    const descriptor = agent({
+      model: "gpt-4o-mini",
+      systemPrompt: "Hello",
+    })
+
+    expect(descriptor.retry).toBeUndefined()
+  })
 })

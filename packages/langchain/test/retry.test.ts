@@ -92,8 +92,8 @@ describe("withRetry", () => {
     const controller = new AbortController()
     controller.abort()
 
-    await expect(
-      withRetry(async () => "never", { signal: controller.signal }),
-    ).rejects.toThrow("Operation aborted")
+    await expect(withRetry(async () => "never", { signal: controller.signal })).rejects.toThrow(
+      "Operation aborted",
+    )
   })
 })

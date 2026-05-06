@@ -209,8 +209,7 @@ async function verifyApp(
 
   // Check dependencies and environment variables (advisory, not blocking)
   const depsResult = checkDependencies(app.appRoot)
-  const hasWarnings =
-    depsResult.missingPackages.length > 0 || depsResult.missingEnvVars.length > 0
+  const hasWarnings = depsResult.missingPackages.length > 0 || depsResult.missingEnvVars.length > 0
   checks.push({
     missingEnvVars: depsResult.missingEnvVars,
     missingPackages: depsResult.missingPackages,
