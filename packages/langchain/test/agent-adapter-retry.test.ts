@@ -1,12 +1,6 @@
-import { describe, expect, test, vi } from "vitest"
+import { describe, expect, test } from "vitest"
 
-/**
- * These tests verify that per-agent retry config is respected.
- * We test the internal wiring by checking that withRetry receives
- * the correct options from the agent descriptor.
- */
-
-import { isRetryableError, withRetry } from "../src/retry.js"
+import { withRetry } from "../src/retry.js"
 
 describe("per-agent retry config wiring", () => {
   test("withRetry respects custom maxAttempts", async () => {

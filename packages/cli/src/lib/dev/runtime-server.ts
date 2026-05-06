@@ -1,9 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
-
+import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import { executeResolvedRoute, streamResolvedRoute } from "../runtime/execute-route.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
-import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
@@ -455,10 +454,7 @@ function parseHeaders(request: IncomingMessage): Record<string, string> {
   return headers
 }
 
-function extractRouteParams(
-  routeId: string,
-  input: unknown,
-): Record<string, string> {
+function extractRouteParams(routeId: string, input: unknown): Record<string, string> {
   const params: Record<string, string> = {}
   const matches = routeId.matchAll(/\[(\w+)\]/g)
   const inputRecord = (typeof input === "object" && input !== null ? input : {}) as Record<

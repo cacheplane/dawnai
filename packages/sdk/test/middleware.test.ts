@@ -2,9 +2,9 @@ import { describe, expect, test } from "vitest"
 import {
   allow,
   defineMiddleware,
-  reject,
   type MiddlewareRequest,
   type MiddlewareResult,
+  reject,
 } from "../src/middleware.js"
 
 describe("reject()", () => {
@@ -47,7 +47,7 @@ describe("allow()", () => {
 
 describe("defineMiddleware()", () => {
   test("returns the function as-is (type-safe identity wrapper)", () => {
-    const fn = async (req: MiddlewareRequest): Promise<MiddlewareResult> => {
+    const fn = async (_req: MiddlewareRequest): Promise<MiddlewareResult> => {
       return allow()
     }
 
@@ -56,7 +56,7 @@ describe("defineMiddleware()", () => {
   })
 
   test("works with a sync function", () => {
-    const fn = (req: MiddlewareRequest): MiddlewareResult => {
+    const fn = (_req: MiddlewareRequest): MiddlewareResult => {
       return reject(401)
     }
 

@@ -1,7 +1,6 @@
-import { describe, expect, test } from "vitest"
-
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
-import { loadMiddleware, runMiddleware } from "../src/lib/dev/middleware.js"
+import { describe, expect, test } from "vitest"
+import { runMiddleware } from "../src/lib/dev/middleware.js"
 
 function createMockRequest(overrides?: Partial<MiddlewareRequest>): MiddlewareRequest {
   return {

@@ -1,12 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
-import {
-  extractDeploymentConfig,
-  type LangGraphConfig,
-} from "../src/lib/build/deployment-config.js"
+import { extractDeploymentConfig } from "../src/lib/build/deployment-config.js"
 
 let tempDir: string
 
