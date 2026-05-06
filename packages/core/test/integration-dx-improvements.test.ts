@@ -47,7 +47,7 @@ export default async (input: {
     })
 
     expect(schemas).toHaveLength(1)
-    const schema = schemas[0]!
+    const [schema] = schemas
 
     expect(schema.name).toBe("search")
     expect(schema.description).toBe("Searches the knowledge base for relevant documents.")
