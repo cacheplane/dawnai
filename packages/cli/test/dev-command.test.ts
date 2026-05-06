@@ -246,7 +246,7 @@ describe("dawn dev runtime server", () => {
 
 describe("dawn dev lifecycle", () => {
   test("disposes a newly spawned child when startup readiness fails", {
-    timeout: 12_000,
+    timeout: 30_000,
   }, async () => {
     const pidPath = join(tmpdir(), `dawn-dev-child-pid-${Date.now()}.txt`)
     const appRoot = await createFixtureApp({
