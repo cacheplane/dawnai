@@ -10,7 +10,10 @@ interface DawnToolDefinition {
   readonly name: string
   readonly run: (
     input: unknown,
-    context: { readonly signal: AbortSignal },
+    context: {
+      readonly middleware?: Readonly<Record<string, unknown>>
+      readonly signal: AbortSignal
+    },
   ) => Promise<unknown> | unknown
   readonly schema?: unknown
 }
@@ -36,6 +39,7 @@ async function materializeAgent(
   descriptor: DawnAgent,
   tools: readonly DawnToolDefinition[],
   stateFields?: readonly ResolvedStateField[],
+  middlewareContext?: Readonly<Record<string, unknown>>,
 ): Promise<AgentLike> {
   const cached = materializedAgents.get(descriptor)
   if (cached) {
@@ -45,7 +49,7 @@ async function materializeAgent(
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
   const { ChatOpenAI } = await import("@langchain/openai")
 
-  const langchainTools = tools.map((tool) => convertToolToLangChain(tool))
+  const langchainTools = tools.map((tool) => convertToolToLangChain(tool, middlewareContext))
 
   const llm = new ChatOpenAI({
     model: descriptor.model,
@@ -76,6 +80,7 @@ export interface AgentStreamChunk {
 export interface AgentOptions {
   readonly entry: unknown
   readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
   readonly retry?: RetryConfig
   readonly routeParamNames: readonly string[]
   readonly signal: AbortSignal
@@ -103,6 +108,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       options.entry,
       options.tools,
       options.stateFields,
+      options.middlewareContext,
     )
     const retryConfig = options.entry.retry
     yield* streamFromRunnable(materializedAgent, { messages }, config, retryConfig)
@@ -112,7 +118,9 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
   // Legacy path — raw Runnable with .invoke()
   assertAgentLike(options.entry)
 
-  const langchainTools = options.tools.map((tool) => convertToolToLangChain(tool))
+  const langchainTools = options.tools.map((tool) =>
+    convertToolToLangChain(tool, options.middlewareContext),
+  )
   if (langchainTools.length > 0) {
     config.tools = langchainTools
   }
@@ -157,7 +165,11 @@ async function* streamFromRunnable(
     streamEvents?: (
       input: unknown,
       options: Record<string, unknown>,
-    ) => AsyncIterable<{ event: string; data: { chunk?: unknown; output?: unknown }; name: string }>
+    ) => AsyncIterable<{
+      event: string
+      data: { chunk?: unknown; output?: unknown }
+      name: string
+    }>
   }
 
   if (typeof streamable.streamEvents !== "function") {
@@ -188,7 +200,10 @@ async function* streamFromRunnable(
     finalOutput = undefined
 
     try {
-      for await (const event of streamable.streamEvents(input, { ...config, version: "v2" })) {
+      for await (const event of streamable.streamEvents(input, {
+        ...config,
+        version: "v2",
+      })) {
         switch (event.event) {
           case "on_chat_model_stream": {
             const content = (event.data.chunk as { content?: unknown })?.content
@@ -202,7 +217,10 @@ async function* streamFromRunnable(
             hasYielded = true
             yield {
               type: "tool_call" as const,
-              data: { name: event.name, input: event.data.chunk ?? event.data.output },
+              data: {
+                name: event.name,
+                input: event.data.chunk ?? event.data.output,
+              },
             }
             break
           }

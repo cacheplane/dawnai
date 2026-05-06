@@ -13,7 +13,10 @@ export interface DiscoveredToolDefinition {
   readonly name: string
   readonly run: (
     input: unknown,
-    context: { readonly signal: AbortSignal },
+    context: {
+      readonly middleware?: Readonly<Record<string, unknown>>
+      readonly signal: AbortSignal
+    },
   ) => Promise<unknown> | unknown
   readonly schema?: unknown
   readonly scope: ToolScope
@@ -51,7 +54,9 @@ async function loadToolScope(options: {
   readonly directory: string
   readonly scope: ToolScope
 }): Promise<readonly DiscoveredToolDefinition[]> {
-  const entries = await readdir(options.directory, { withFileTypes: true }).catch(() => null)
+  const entries = await readdir(options.directory, {
+    withFileTypes: true,
+  }).catch(() => null)
 
   if (!entries) {
     return []
@@ -105,7 +110,11 @@ export function injectGeneratedSchemas(
 
     if (!description && !schema) return tool
 
-    return { ...tool, ...(description ? { description } : {}), ...(schema ? { schema } : {}) }
+    return {
+      ...tool,
+      ...(description ? { description } : {}),
+      ...(schema ? { schema } : {}),
+    }
   })
 }
 
