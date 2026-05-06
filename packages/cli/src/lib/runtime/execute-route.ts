@@ -1,485 +1,444 @@
-import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs"
+import { isAbsolute, join, resolve } from "node:path"
 
+import { findDawnApp, type ResolvedStateField, resolveStateFields } from "@dawn-ai/core"
+import { executeAgent, streamAgent } from "@dawn-ai/langchain"
+import { createDawnContext } from "./dawn-context.js"
+import { normalizeRouteModule } from "./load-route-kind.js"
 import {
-	findDawnApp,
-	type ResolvedStateField,
-	resolveStateFields,
-} from "@dawn-ai/core";
-import { executeAgent, streamAgent } from "@dawn-ai/langchain";
-import { createDawnContext } from "./dawn-context.js";
-import { normalizeRouteModule } from "./load-route-kind.js";
+  createRuntimeFailureResult,
+  createRuntimeSuccessResult,
+  formatErrorMessage,
+  type RuntimeExecutionMode,
+  type RuntimeExecutionResult,
+} from "./result.js"
+import { deriveRouteIdentity } from "./route-identity.js"
+import { discoverStateDefinition } from "./state-discovery.js"
+import type { StreamChunk } from "./stream-types.js"
 import {
-	createRuntimeFailureResult,
-	createRuntimeSuccessResult,
-	formatErrorMessage,
-	type RuntimeExecutionMode,
-	type RuntimeExecutionResult,
-} from "./result.js";
-import { deriveRouteIdentity } from "./route-identity.js";
-import { discoverStateDefinition } from "./state-discovery.js";
-import type { StreamChunk } from "./stream-types.js";
-import {
-	type DiscoveredToolDefinition,
-	discoverToolDefinitions,
-	injectGeneratedSchemas,
-} from "./tool-discovery.js";
-import { fileExists } from "./utils.js";
+  type DiscoveredToolDefinition,
+  discoverToolDefinitions,
+  injectGeneratedSchemas,
+} from "./tool-discovery.js"
+import { fileExists } from "./utils.js"
 
 export interface ExecuteRouteOptions {
-	readonly appRoot?: string;
-	readonly cwd?: string;
-	readonly input: unknown;
-	readonly routeFile: string;
-	readonly signal?: AbortSignal;
+  readonly appRoot?: string
+  readonly cwd?: string
+  readonly input: unknown
+  readonly routeFile: string
+  readonly signal?: AbortSignal
 }
 
-export async function executeRoute(
-	options: ExecuteRouteOptions,
-): Promise<RuntimeExecutionResult> {
-	const startedAt = Date.now();
-	const discoveredApp = await discoverApp(options);
+export async function executeRoute(options: ExecuteRouteOptions): Promise<RuntimeExecutionResult> {
+  const startedAt = Date.now()
+  const discoveredApp = await discoverApp(options)
 
-	if (!discoveredApp.ok) {
-		return createRuntimeFailureResult({
-			appRoot: null,
-			executionSource: "in-process",
-			kind: "app_discovery_error",
-			message: discoveredApp.message,
-			routePath: options.routeFile,
-			startedAt,
-		});
-	}
+  if (!discoveredApp.ok) {
+    return createRuntimeFailureResult({
+      appRoot: null,
+      executionSource: "in-process",
+      kind: "app_discovery_error",
+      message: discoveredApp.message,
+      routePath: options.routeFile,
+      startedAt,
+    })
+  }
 
-	const appRoot = discoveredApp.appRoot;
-	const routeFile = resolveRouteFile({
-		appRoot,
-		routeFile: options.routeFile,
-		...(options.cwd ? { cwd: options.cwd } : {}),
-	});
+  const appRoot = discoveredApp.appRoot
+  const routeFile = resolveRouteFile({
+    appRoot,
+    routeFile: options.routeFile,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+  })
 
-	const identity = deriveRouteIdentity({
-		appRoot,
-		routeFile,
-		routesDir: discoveredApp.routesDir,
-	});
+  const identity = deriveRouteIdentity({
+    appRoot,
+    routeFile,
+    routesDir: discoveredApp.routesDir,
+  })
 
-	if (!identity.ok) {
-		return createRuntimeFailureResult({
-			appRoot,
-			executionSource: "in-process",
-			kind: "route_resolution_error",
-			message: `Route file is outside the configured appDir: ${routeFile}`,
-			routePath: identity.routePath,
-			startedAt,
-		});
-	}
+  if (!identity.ok) {
+    return createRuntimeFailureResult({
+      appRoot,
+      executionSource: "in-process",
+      kind: "route_resolution_error",
+      message: `Route file is outside the configured appDir: ${routeFile}`,
+      routePath: identity.routePath,
+      startedAt,
+    })
+  }
 
-	if (!(await fileExists(routeFile))) {
-		return createRuntimeFailureResult({
-			appRoot,
-			executionSource: "in-process",
-			kind: "route_resolution_error",
-			message: `Route file does not exist: ${routeFile}`,
-			routeId: identity.routeId,
-			routePath: identity.routePath,
-			startedAt,
-		});
-	}
+  if (!(await fileExists(routeFile))) {
+    return createRuntimeFailureResult({
+      appRoot,
+      executionSource: "in-process",
+      kind: "route_resolution_error",
+      message: `Route file does not exist: ${routeFile}`,
+      routeId: identity.routeId,
+      routePath: identity.routePath,
+      startedAt,
+    })
+  }
 
-	return await executeRouteAtResolvedPath({
-		appRoot,
-		input: options.input,
-		routeFile,
-		routeId: identity.routeId,
-		routePath: identity.routePath,
-		...(options.signal ? { signal: options.signal } : {}),
-		startedAt,
-	});
+  return await executeRouteAtResolvedPath({
+    appRoot,
+    input: options.input,
+    routeFile,
+    routeId: identity.routeId,
+    routePath: identity.routePath,
+    ...(options.signal ? { signal: options.signal } : {}),
+    startedAt,
+  })
 }
 
 export async function executeResolvedRoute(options: {
-	readonly appRoot: string;
-	readonly input: unknown;
-	readonly middlewareContext?: Readonly<Record<string, unknown>>;
-	readonly routeFile: string;
-	readonly routeId: string;
-	readonly routePath: string;
-	readonly signal?: AbortSignal;
+  readonly appRoot: string
+  readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly signal?: AbortSignal
 }): Promise<RuntimeExecutionResult> {
-	return await executeRouteAtResolvedPath({
-		...options,
-		startedAt: Date.now(),
-	});
+  return await executeRouteAtResolvedPath({
+    ...options,
+    startedAt: Date.now(),
+  })
 }
 
 export async function* streamResolvedRoute(options: {
-	readonly appRoot: string;
-	readonly input: unknown;
-	readonly middlewareContext?: Readonly<Record<string, unknown>>;
-	readonly routeFile: string;
-	readonly routeId: string;
-	readonly routePath: string;
-	readonly signal?: AbortSignal;
+  readonly appRoot: string
+  readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly signal?: AbortSignal
 }): AsyncGenerator<StreamChunk> {
-	const prepared = await prepareRouteExecution(options);
+  const prepared = await prepareRouteExecution(options)
 
-	if (!prepared.ok) {
-		yield { type: "done", output: { error: prepared.message } };
-		return;
-	}
+  if (!prepared.ok) {
+    yield { type: "done", output: { error: prepared.message } }
+    return
+  }
 
-	const { normalized, tools, stateFields } = prepared;
+  const { normalized, tools, stateFields } = prepared
 
-	if (normalized.kind !== "agent") {
-		// Non-agent routes don't support incremental streaming — execute and emit done
-		const context = createDawnContext({
-			...(options.middlewareContext
-				? { middleware: options.middlewareContext }
-				: {}),
-			tools,
-			...(options.signal ? { signal: options.signal } : {}),
-		});
-		const output = await invokeEntry(
-			normalized.kind,
-			normalized.entry,
-			options.input,
-			context,
-		);
-		yield { type: "done", output };
-		return;
-	}
+  if (normalized.kind !== "agent") {
+    // Non-agent routes don't support incremental streaming — execute and emit done
+    const context = createDawnContext({
+      ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
+      tools,
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
+    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context)
+    yield { type: "done", output }
+    return
+  }
 
-	const routeParamNames = extractRouteParamNames(options.routeId);
+  const routeParamNames = extractRouteParamNames(options.routeId)
 
-	for await (const chunk of streamAgent({
-		entry: normalized.entry,
-		input: options.input,
-		...(options.middlewareContext
-			? { middlewareContext: options.middlewareContext }
-			: {}),
-		routeParamNames,
-		signal: options.signal ?? new AbortController().signal,
-		...(stateFields ? { stateFields } : {}),
-		tools,
-	})) {
-		switch (chunk.type) {
-			case "token":
-				yield { type: "chunk", data: chunk.data };
-				break;
-			case "tool_call": {
-				const tc = chunk.data as { name: string; input: unknown };
-				yield { type: "tool_call", name: tc.name, input: tc.input };
-				break;
-			}
-			case "tool_result": {
-				const tr = chunk.data as { name: string; output: unknown };
-				yield { type: "tool_result", name: tr.name, output: tr.output };
-				break;
-			}
-			case "done":
-				yield { type: "done", output: chunk.data };
-				break;
-		}
-	}
+  for await (const chunk of streamAgent({
+    entry: normalized.entry,
+    input: options.input,
+    ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
+    routeParamNames,
+    signal: options.signal ?? new AbortController().signal,
+    ...(stateFields ? { stateFields } : {}),
+    tools,
+  })) {
+    switch (chunk.type) {
+      case "token":
+        yield { type: "chunk", data: chunk.data }
+        break
+      case "tool_call": {
+        const tc = chunk.data as { name: string; input: unknown }
+        yield { type: "tool_call", name: tc.name, input: tc.input }
+        break
+      }
+      case "tool_result": {
+        const tr = chunk.data as { name: string; output: unknown }
+        yield { type: "tool_result", name: tr.name, output: tr.output }
+        break
+      }
+      case "done":
+        yield { type: "done", output: chunk.data }
+        break
+    }
+  }
 }
 
 interface PreparedRoute {
-	readonly normalized: {
-		readonly kind: "agent" | "chain" | "graph" | "workflow";
-		readonly entry: unknown;
-	};
-	readonly ok: true;
-	readonly stateFields: readonly ResolvedStateField[] | undefined;
-	readonly tools: readonly DiscoveredToolDefinition[];
+  readonly normalized: {
+    readonly kind: "agent" | "chain" | "graph" | "workflow"
+    readonly entry: unknown
+  }
+  readonly ok: true
+  readonly stateFields: readonly ResolvedStateField[] | undefined
+  readonly tools: readonly DiscoveredToolDefinition[]
 }
 
 interface PreparedRouteError {
-	readonly message: string;
-	readonly ok: false;
+  readonly message: string
+  readonly ok: false
 }
 
 async function prepareRouteExecution(options: {
-	readonly appRoot: string;
-	readonly routeFile: string;
-	readonly routeId: string;
+  readonly appRoot: string
+  readonly routeFile: string
+  readonly routeId: string
 }): Promise<PreparedRoute | PreparedRouteError> {
-	const routeDir = resolve(options.routeFile, "..");
+  const routeDir = resolve(options.routeFile, "..")
 
-	const normalized = await normalizeRouteModule(options.routeFile);
+  const normalized = await normalizeRouteModule(options.routeFile)
 
-	const discoveredTools = await discoverToolDefinitions({
-		appRoot: options.appRoot,
-		routeDir,
-	});
+  const discoveredTools = await discoverToolDefinitions({
+    appRoot: options.appRoot,
+    routeDir,
+  })
 
-	// Inject codegen-generated schemas for tools without explicit schema exports
-	const routeId =
-		options.routeId
-			.replace(/^\//, "")
-			.replace(/\//g, "-")
-			.replace(/\[/g, "")
-			.replace(/\]/g, "") || "index";
-	const schemaManifestPath = join(
-		options.appRoot,
-		".dawn",
-		"routes",
-		routeId,
-		"tools.json",
-	);
-	let tools = discoveredTools;
-	if (existsSync(schemaManifestPath)) {
-		try {
-			const manifest = JSON.parse(
-				readFileSync(schemaManifestPath, "utf-8"),
-			) as Record<string, unknown>;
-			tools = injectGeneratedSchemas(discoveredTools, manifest);
-		} catch {
-			// Generated schema is best-effort — fall through on parse errors
-		}
-	}
+  // Inject codegen-generated schemas for tools without explicit schema exports
+  const routeId =
+    options.routeId.replace(/^\//, "").replace(/\//g, "-").replace(/\[/g, "").replace(/\]/g, "") ||
+    "index"
+  const schemaManifestPath = join(options.appRoot, ".dawn", "routes", routeId, "tools.json")
+  let tools = discoveredTools
+  if (existsSync(schemaManifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(schemaManifestPath, "utf-8")) as Record<
+        string,
+        unknown
+      >
+      tools = injectGeneratedSchemas(discoveredTools, manifest)
+    } catch {
+      // Generated schema is best-effort — fall through on parse errors
+    }
+  }
 
-	let stateFields: readonly ResolvedStateField[] | undefined;
-	if (normalized.kind === "agent") {
-		const stateDefinition = await discoverStateDefinition({ routeDir });
-		if (stateDefinition) {
-			stateFields = resolveStateFields({
-				defaults: stateDefinition.defaults,
-				reducerOverrides: stateDefinition.reducerOverrides,
-			});
-		}
-	}
+  let stateFields: readonly ResolvedStateField[] | undefined
+  if (normalized.kind === "agent") {
+    const stateDefinition = await discoverStateDefinition({ routeDir })
+    if (stateDefinition) {
+      stateFields = resolveStateFields({
+        defaults: stateDefinition.defaults,
+        reducerOverrides: stateDefinition.reducerOverrides,
+      })
+    }
+  }
 
-	return { normalized, ok: true, stateFields, tools };
+  return { normalized, ok: true, stateFields, tools }
 }
 
 async function executeRouteAtResolvedPath(options: {
-	readonly appRoot: string;
-	readonly input: unknown;
-	readonly middlewareContext?: Readonly<Record<string, unknown>>;
-	readonly routeFile: string;
-	readonly routeId: string;
-	readonly routePath: string;
-	readonly signal?: AbortSignal;
-	readonly startedAt: number;
+  readonly appRoot: string
+  readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly signal?: AbortSignal
+  readonly startedAt: number
 }): Promise<RuntimeExecutionResult> {
-	let mode: RuntimeExecutionMode | null = null;
+  let mode: RuntimeExecutionMode | null = null
 
-	try {
-		const prepared = await prepareRouteExecution(options);
+  try {
+    const prepared = await prepareRouteExecution(options)
 
-		if (!prepared.ok) {
-			return createRuntimeFailureResult({
-				appRoot: options.appRoot,
-				executionSource: "in-process",
-				kind: "execution_error",
-				message: prepared.message,
-				mode,
-				routeId: options.routeId,
-				routePath: options.routePath,
-				startedAt: options.startedAt,
-			});
-		}
+    if (!prepared.ok) {
+      return createRuntimeFailureResult({
+        appRoot: options.appRoot,
+        executionSource: "in-process",
+        kind: "execution_error",
+        message: prepared.message,
+        mode,
+        routeId: options.routeId,
+        routePath: options.routePath,
+        startedAt: options.startedAt,
+      })
+    }
 
-		const { normalized, tools, stateFields } = prepared;
-		mode = normalized.kind;
+    const { normalized, tools, stateFields } = prepared
+    mode = normalized.kind
 
-		const context = createDawnContext({
-			...(options.middlewareContext
-				? { middleware: options.middlewareContext }
-				: {}),
-			tools,
-			...(options.signal ? { signal: options.signal } : {}),
-		});
+    const context = createDawnContext({
+      ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
+      tools,
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
 
-		const output = await invokeEntry(
-			normalized.kind,
-			normalized.entry,
-			options.input,
-			context,
-			{
-				...(options.middlewareContext
-					? { middlewareContext: options.middlewareContext }
-					: {}),
-				routeId: options.routeId,
-				...(stateFields ? { stateFields } : {}),
-				tools,
-				...(options.signal ? { signal: options.signal } : {}),
-			},
-		);
+    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
+      ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
+      routeId: options.routeId,
+      ...(stateFields ? { stateFields } : {}),
+      tools,
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
 
-		return createRuntimeSuccessResult({
-			appRoot: options.appRoot,
-			executionSource: "in-process",
-			mode: normalized.kind,
-			output,
-			routeId: options.routeId,
-			routePath: options.routePath,
-			startedAt: options.startedAt,
-		});
-	} catch (error) {
-		const kind = isBoundaryError(error)
-			? "unsupported_route_boundary"
-			: "execution_error";
-		const message = formatErrorMessage(error);
+    return createRuntimeSuccessResult({
+      appRoot: options.appRoot,
+      executionSource: "in-process",
+      mode: normalized.kind,
+      output,
+      routeId: options.routeId,
+      routePath: options.routePath,
+      startedAt: options.startedAt,
+    })
+  } catch (error) {
+    const kind = isBoundaryError(error) ? "unsupported_route_boundary" : "execution_error"
+    const message = formatErrorMessage(error)
 
-		return createRuntimeFailureResult({
-			appRoot: options.appRoot,
-			executionSource: "in-process",
-			kind,
-			message,
-			mode,
-			routeId: options.routeId,
-			routePath: options.routePath,
-			startedAt: options.startedAt,
-		});
-	}
+    return createRuntimeFailureResult({
+      appRoot: options.appRoot,
+      executionSource: "in-process",
+      kind,
+      message,
+      mode,
+      routeId: options.routeId,
+      routePath: options.routePath,
+      startedAt: options.startedAt,
+    })
+  }
 }
 
 async function invokeEntry(
-	kind: "agent" | "chain" | "graph" | "workflow",
-	entry: unknown,
-	input: unknown,
-	context: unknown,
-	agentContext?: {
-		readonly middlewareContext?: Readonly<Record<string, unknown>>;
-		readonly routeId: string;
-		readonly signal?: AbortSignal;
-		readonly stateFields?: readonly ResolvedStateField[];
-		readonly tools: ReadonlyArray<{
-			readonly description?: string;
-			readonly name: string;
-			readonly run: (
-				input: unknown,
-				context: {
-					readonly middleware?: Readonly<Record<string, unknown>>;
-					readonly signal: AbortSignal;
-				},
-			) => Promise<unknown> | unknown;
-			readonly schema?: unknown;
-		}>;
-	},
+  kind: "agent" | "chain" | "graph" | "workflow",
+  entry: unknown,
+  input: unknown,
+  context: unknown,
+  agentContext?: {
+    readonly middlewareContext?: Readonly<Record<string, unknown>>
+    readonly routeId: string
+    readonly signal?: AbortSignal
+    readonly stateFields?: readonly ResolvedStateField[]
+    readonly tools: ReadonlyArray<{
+      readonly description?: string
+      readonly name: string
+      readonly run: (
+        input: unknown,
+        context: {
+          readonly middleware?: Readonly<Record<string, unknown>>
+          readonly signal: AbortSignal
+        },
+      ) => Promise<unknown> | unknown
+      readonly schema?: unknown
+    }>
+  },
 ): Promise<unknown> {
-	if (kind === "agent") {
-		const routeParamNames = extractRouteParamNames(agentContext?.routeId ?? "");
-		return await executeAgent({
-			entry,
-			input,
-			...(agentContext?.middlewareContext
-				? { middlewareContext: agentContext.middlewareContext }
-				: {}),
-			routeParamNames,
-			signal: agentContext?.signal ?? new AbortController().signal,
-			...(agentContext?.stateFields
-				? { stateFields: agentContext.stateFields }
-				: {}),
-			tools: agentContext?.tools ?? [],
-		});
-	}
+  if (kind === "agent") {
+    const routeParamNames = extractRouteParamNames(agentContext?.routeId ?? "")
+    return await executeAgent({
+      entry,
+      input,
+      ...(agentContext?.middlewareContext
+        ? { middlewareContext: agentContext.middlewareContext }
+        : {}),
+      routeParamNames,
+      signal: agentContext?.signal ?? new AbortController().signal,
+      ...(agentContext?.stateFields ? { stateFields: agentContext.stateFields } : {}),
+      tools: agentContext?.tools ?? [],
+    })
+  }
 
-	if (kind === "workflow") {
-		if (typeof entry !== "function") {
-			throw new Error("Workflow entry must be a function");
-		}
-		return await entry(input, context);
-	}
+  if (kind === "workflow") {
+    if (typeof entry !== "function") {
+      throw new Error("Workflow entry must be a function")
+    }
+    return await entry(input, context)
+  }
 
-	if (kind === "chain") {
-		if (
-			typeof entry === "object" &&
-			entry !== null &&
-			"invoke" in entry &&
-			typeof (entry as { invoke?: unknown }).invoke === "function"
-		) {
-			return await (entry as { invoke: (input: unknown) => unknown }).invoke(
-				input,
-			);
-		}
-		throw new Error("Chain entry must expose invoke(input)");
-	}
+  if (kind === "chain") {
+    if (
+      typeof entry === "object" &&
+      entry !== null &&
+      "invoke" in entry &&
+      typeof (entry as { invoke?: unknown }).invoke === "function"
+    ) {
+      return await (entry as { invoke: (input: unknown) => unknown }).invoke(input)
+    }
+    throw new Error("Chain entry must expose invoke(input)")
+  }
 
-	if (typeof entry === "function") {
-		return await entry(input, context);
-	}
+  if (typeof entry === "function") {
+    return await entry(input, context)
+  }
 
-	if (
-		typeof entry === "object" &&
-		entry !== null &&
-		"invoke" in entry &&
-		typeof (entry as { invoke?: unknown }).invoke === "function"
-	) {
-		return await (
-			entry as { invoke: (input: unknown, context: unknown) => unknown }
-		).invoke(input, context);
-	}
+  if (
+    typeof entry === "object" &&
+    entry !== null &&
+    "invoke" in entry &&
+    typeof (entry as { invoke?: unknown }).invoke === "function"
+  ) {
+    return await (entry as { invoke: (input: unknown, context: unknown) => unknown }).invoke(
+      input,
+      context,
+    )
+  }
 
-	throw new Error("Graph entry must be a function or expose invoke(input)");
+  throw new Error("Graph entry must be a function or expose invoke(input)")
 }
 
 function resolveRouteFile(options: {
-	readonly appRoot: string;
-	readonly cwd?: string;
-	readonly routeFile: string;
+  readonly appRoot: string
+  readonly cwd?: string
+  readonly routeFile: string
 }): string {
-	if (isAbsolute(options.routeFile)) {
-		return resolve(options.routeFile);
-	}
+  if (isAbsolute(options.routeFile)) {
+    return resolve(options.routeFile)
+  }
 
-	if (options.routeFile.startsWith(".") || options.routeFile.startsWith("..")) {
-		return resolve(options.cwd ?? process.cwd(), options.routeFile);
-	}
+  if (options.routeFile.startsWith(".") || options.routeFile.startsWith("..")) {
+    return resolve(options.cwd ?? process.cwd(), options.routeFile)
+  }
 
-	return resolve(options.appRoot, options.routeFile);
+  return resolve(options.appRoot, options.routeFile)
 }
 
 async function discoverApp(options: ExecuteRouteOptions): Promise<
-	| {
-			readonly appRoot: string;
-			readonly ok: true;
-			readonly routesDir: string;
-	  }
-	| {
-			readonly message: string;
-			readonly ok: false;
-	  }
+  | {
+      readonly appRoot: string
+      readonly ok: true
+      readonly routesDir: string
+    }
+  | {
+      readonly message: string
+      readonly ok: false
+    }
 > {
-	try {
-		const app = await findDawnApp({
-			...(options.appRoot ? { appRoot: options.appRoot } : {}),
-			...(options.cwd ? { cwd: options.cwd } : {}),
-		});
+  try {
+    const app = await findDawnApp({
+      ...(options.appRoot ? { appRoot: options.appRoot } : {}),
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+    })
 
-		return {
-			appRoot: app.appRoot,
-			ok: true,
-			routesDir: app.routesDir,
-		};
-	} catch (error) {
-		return {
-			message: formatErrorMessage(error),
-			ok: false,
-		};
-	}
+    return {
+      appRoot: app.appRoot,
+      ok: true,
+      routesDir: app.routesDir,
+    }
+  } catch (error) {
+    return {
+      message: formatErrorMessage(error),
+      ok: false,
+    }
+  }
 }
 
 function extractRouteParamNames(routeId: string): string[] {
-	const matches = routeId.matchAll(/\[(\w+)\]/g);
-	return [...matches]
-		.map((match) => match[1])
-		.filter((s): s is string => s !== undefined);
+  const matches = routeId.matchAll(/\[(\w+)\]/g)
+  return [...matches].map((match) => match[1]).filter((s): s is string => s !== undefined)
 }
 
 function isBoundaryError(error: unknown): boolean {
-	if (!(error instanceof Error)) {
-		return false;
-	}
+  if (!(error instanceof Error)) {
+    return false
+  }
 
-	return (
-		/must export exactly one of/.test(error.message) ||
-		/exports neither/.test(error.message) ||
-		error.message === "Workflow entry must be a function" ||
-		error.message ===
-			"Graph entry must be a function or expose invoke(input)" ||
-		error.message === "Chain entry must expose invoke(input)"
-	);
+  return (
+    /must export exactly one of/.test(error.message) ||
+    /exports neither/.test(error.message) ||
+    error.message === "Workflow entry must be a function" ||
+    error.message === "Graph entry must be a function or expose invoke(input)" ||
+    error.message === "Chain entry must expose invoke(input)"
+  )
 }
