@@ -41,9 +41,16 @@ Route discovery starts at `src/app` by default.
 
 `appDir` is the only supported config option today.
 
-A route is a directory containing `index.ts`. The `index.ts` exports either a `workflow` function or a `graph` function/object:
+A route is a directory containing `index.ts`. The `index.ts` exports exactly one of four route kinds: an `agent` descriptor (the scaffold default), a `workflow` function, a `graph` function/object, or a `chain`:
 
 ```ts
+// agent-style route (the basic scaffold default)
+import { agent } from "@dawn-ai/sdk"
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "You are a helpful assistant for the {tenant} organization.",
+})
+
 // workflow-style route
 export async function workflow(state, ctx) { return state }
 
@@ -51,18 +58,53 @@ export async function workflow(state, ctx) { return state }
 export async function graph(state, ctx) { return state }
 // or
 export const graph = { invoke: async (state, ctx) => state }
+
+// chain-style route
+export async function chain(state, ctx) { return state }
 ```
 
-Route directories may also include companion files such as `state.ts` and route-local tools under `tools/*.ts`.
+Route directories support these additional files:
 
-Route directories currently support these additional files:
+- `state.ts` — default-exported Zod schema describing the route's state shape (the scaffold uses `z.object({...})`).
+- `tools/*.ts` — route-local tools, each exporting `(input, ctx) => ...` where `ctx` is `{ middleware?, signal }`.
+- `reducers/<field>.ts` — optional per-field reducers that override the default merge behavior for state.
+- `run.test.ts` — colocated scenarios picked up by `dawn test`.
+- `page.tsx` — UI route surface.
 
-- `page.tsx` for UI routes
+The current `basic` scaffold ships an agent-style route:
 
-The current `basic` scaffold ships:
+- `src/app/(public)/hello/[tenant]/index.ts` — `export default agent({ model, systemPrompt })`
+- `src/app/(public)/hello/[tenant]/state.ts` — default-exported Zod schema
+- `src/app/(public)/hello/[tenant]/tools/greet.ts` — a route-local tool
 
-- `src/app/(public)/hello/[tenant]/index.ts`
-- `src/app/(public)/hello/[tenant]/tools/greet.ts`
+### Authoring agents
+
+`agent({ model, systemPrompt, retry?: { maxAttempts, baseDelay } })` is the recommended export for new routes. The optional `retry` config controls how the agent retries failed model calls. `dawn build` binds route-local tools to the agent at build time so the LLM can invoke them on LangGraph Platform.
+
+```ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "...",
+  retry: { maxAttempts: 3, baseDelay: 250 },
+})
+```
+
+### Middleware
+
+Per-route middleware runs before each invocation. Use `defineMiddleware` together with `reject(status, body?)` to deny a request, or `allow(context?)` to continue and pass an immutable context bag through to tools via `ctx.middleware`:
+
+```ts
+import { defineMiddleware, allow, reject } from "@dawn-ai/sdk"
+
+export default defineMiddleware(async (req) => {
+  if (!req.headers.authorization) return reject(401, { error: "unauthorized" })
+  return allow({ tenantId: req.params.tenant })
+})
+```
+
+`req` (`MiddlewareRequest`) carries `assistantId`, `headers`, `method`, `params`, `routeId`, and `url`. Middleware runs identically under `dawn dev` and on the deployed runtime.
 
 ## Commands
 
