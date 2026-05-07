@@ -1,6 +1,6 @@
 # Tools
 
-Tools are the units of work a route's entry can invoke. They live in a `tools/` subdirectory inside a route, are discovered automatically, and have their types **inferred from source** — no Zod schemas, no manual type wiring.
+Tools are the units of work a route's entry can invoke. They live in a `tools/` subdirectory inside a route, are discovered automatically, and have their **input and output types inferred from TypeScript source** — no Zod schemas required for tools. (Route state in `state.ts` does use Zod; see [State](/docs/state).)
 
 ## A minimal tool
 
@@ -11,23 +11,58 @@ export default async (input: { readonly tenant: string }) => {
 }
 ```
 
-That's it. Dawn extracts the input and output types at build time using the TypeScript compiler API and writes them into `dawn.generated.d.ts`. The tool becomes available as `ctx.tools.greet` inside the route's entry, fully typed.
+That's it. Dawn extracts the input and output types at build time using the TypeScript compiler API and writes them into `dawn.generated.d.ts`. The tool becomes available as `ctx.tools.greet` inside `workflow`/`graph` route entries (fully typed), and is auto-bound to the LLM at `dawn build` time inside `agent` route entries.
 
 <Callout type="info" title="No registration needed">
   Every `.ts` file in a route's `tools/` directory is automatically discovered. Drop a file in, save, and the type appears in `ctx.tools` on the next `dawn typegen` or `dawn dev` reload.
 </Callout>
 
-## Invoking a tool
+## The runtime signature
+
+The full runtime signature accepted by tool discovery is `(input, ctx) => ...`, where `ctx` is `{ signal: AbortSignal, middleware?: Readonly<Record<string, unknown>> }`:
 
 ```ts
-// in the route's index.ts
-export async function workflow(state, ctx) {
+// src/app/(public)/hello/[tenant]/tools/greet.ts
+export default async (
+  input: { readonly tenant: string },
+  ctx: { signal: AbortSignal; middleware?: Readonly<Record<string, unknown>> },
+) => {
+  // Cooperate with cancellation — the AbortSignal is always present.
+  const res = await fetch(`https://example.com/hello?tenant=${input.tenant}`, {
+    signal: ctx.signal,
+  })
+  // ctx.middleware is the readonly bag populated by allow({ ... }) in src/middleware.ts.
+  return { greeting: await res.text() }
+}
+```
+
+The second parameter is optional but recommended for any tool that does network I/O, holds long-running work, or needs middleware-derived context. See [Routes](/docs/routes#middleware) for how `defineMiddleware` and `allow(context)` populate `ctx.middleware`.
+
+## Invoking a tool
+
+Inside a `workflow` or `graph` route, tools are invoked through `ctx.tools.<name>(...)`:
+
+```ts
+// in the route's index.ts (workflow form)
+import type { RuntimeContext } from "@dawn-ai/sdk"
+import type { RouteTools } from "dawn:routes"
+import type { z } from "zod"
+import type state from "./state.js"
+
+type HelloState = z.infer<typeof state>
+
+export async function workflow(
+  state: HelloState,
+  ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
+) {
   const result = await ctx.tools.greet({ tenant: state.tenant })
   return { ...state, greeting: result.greeting }
 }
 ```
 
 `ctx.tools.greet` has full IntelliSense — input shape, return shape, everything.
+
+Inside an `agent` route, you do not call tools yourself. `dawn build` binds the route's tools to the agent at build time and the LLM invokes them as needed. See [Routes](/docs/routes) for both forms side by side.
 
 ## Input and output rules
 
@@ -50,19 +85,17 @@ export async function workflow(state, ctx) {
   </Step>
 </Steps>
 
-## The generated declaration
+## The generated declarations
 
-Dawn writes a `dawn.generated.d.ts` file at your app root that looks roughly like:
+`dawn typegen` writes two artifacts:
 
-```ts
-declare module "dawn:routes" {
-  export type RouteTools<P> = DawnRouteTools[P]
-  // greet signature inferred from tools/greet.ts export
-}
-```
+- **`dawn.generated.d.ts`** at the app root — the ambient type module that backs `import type { RouteTools } from "dawn:routes"`. The emitted shape pivots over a `RouteTools<P>` lookup keyed by each discovered route pathname; `dawn typegen` populates the entries with concrete tool signatures inferred from source.
+- **`.dawn/routes/<routeSlug>/tools.json`** — per-route tool-schema manifests consumed by `dawn build` when emitting LangGraph entries.
 
-<Callout type="warn" title="Don't edit this file">
-  `dawn.generated.d.ts` is regenerated on every `dawn typegen` and by the dev server on save. Your edits will be wiped.
+To inspect the exact shape Dawn emits in your app, run `dawn typegen` and open `dawn.generated.d.ts`.
+
+<Callout type="warn" title="Don't edit these files">
+  `dawn.generated.d.ts` and the per-route `tools.json` files under `.dawn/routes/` are regenerated on every `dawn typegen` and by the dev server on save. Your edits will be wiped.
 </Callout>
 
 Regenerate manually if needed:

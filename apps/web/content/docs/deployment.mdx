@@ -1,46 +1,63 @@
 # Deployment
 
-Dawn itself is **not a deployment runtime**. It owns local development: `dawn dev`, `dawn run`, `dawn test`. Production runs on the **LangGraph Platform**, which Dawn's dev server already speaks natively. What runs locally runs in production without translation.
+Dawn does not host or run production traffic itself. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). Production runs on the **LangGraph Platform**, which Dawn's dev server already speaks natively. What runs locally runs in production after `dawn build` materializes the platform-ready entry files.
 
 ## The deployment path
 
 <Steps>
   <Step title="Verify locally">
     ```
-    dawn check
-    dawn routes
-    dawn typegen
-    dawn test
+    dawn verify
     ```
 
-    All four must pass. `dawn check` validates the app contract, `dawn routes` confirms discovery, `dawn typegen` regenerates ambient types, `dawn test` runs every scenario against the in-process runtime.
+    `dawn verify` runs four checks in one call: app contract, route discovery, typegen, and deps (missing packages and missing env vars). Pass `--json` for machine-readable output. The deps check is uniquely useful before a deploy — neither `dawn check` nor `dawn typegen` covers it.
+
+    Optionally follow with scenario coverage:
+
+    ```
+    dawn test
+    ```
   </Step>
   <Step title="Confirm protocol parity">
-    Run your tests against a live dev server:
+    Run scenarios against a live dev server by setting `run.url` per-scenario in your `run.test.ts` files (the command-level `--url` flag does not exist on `dawn test`). `dawn dev` exposes the same protocol endpoints as the deployed runtime — `/runs/wait` and `/runs/stream` — so request/response shape parity is guaranteed for those endpoints. Process boundaries, state persistence, and tool bindings are still re-materialized by `dawn build` for production, so this step is necessary but not sufficient.
 
     ```
     dawn dev --port 3001 &
-    dawn test --url http://127.0.0.1:3001
+    # In your run.test.ts: set run: { url: "http://127.0.0.1:3001" } per scenario
+    dawn test
+    ```
+  </Step>
+  <Step title="Build the deployment artifact">
+    `dawn build` writes `.dawn/build/langgraph.json` along with per-route entry files under `.dawn/build/<routeSlug>.ts`. For `agent` routes, the generated entry calls `agent.bindTools([...])` so every tool discovered for the route is wired to the LLM.
+
+    ```
+    dawn build --clean
     ```
 
-    If in-process and live-server tests both pass, the same inputs will pass on LangGraph Platform.
-  </Step>
-  <Step title="Declare assistants">
-    Create a `langgraph.json` at the app root mapping Dawn's discovered routes to LangGraph assistants:
+    A typical generated `.dawn/build/langgraph.json` looks like:
 
     ```json
     {
       "graphs": {
-        "hello": "./src/app/(public)/hello/[tenant]/index.ts:workflow"
+        "/hello/[tenant]#agent": "./.dawn/build/hello-tenant.ts:default"
       },
-      "env": ".env"
+      "dependencies": ["."],
+      "env": ".env.example",
+      "node_version": "22"
     }
     ```
 
-    Each entry binds an `assistant_id` (left side) to a route entry export (right side).
+    Notes:
+    - Each `assistant_id` is `<routeId>#<kind>` — e.g. `/hello/[tenant]#agent`. Use this exact string as `assistant_id` in any client request.
+    - `dependencies: ["."]` and `node_version: "22"` are required by LangGraph Platform.
+    - `env` resolves to `.env.example` when that file exists, else `.env`.
+    - If you keep a hand-authored `langgraph.json` at the app root, `dawn build` shallow-merges it on top of the generated values.
+  </Step>
+  <Step title="Per-route middleware (optional)">
+    `src/middleware.ts` (default-exporting a function from `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request — identically in `dawn dev` and on LangGraph Platform. Use it to gate access by header, populate request-scoped context, or `reject(status, body)` unauthorized callers. See [Routes](/docs/routes#middleware) for the API.
   </Step>
   <Step title="Push to your Platform-connected remote">
-    The LangGraph Platform builds the image and provisions assistants keyed by `assistant_id`. From there, your agents and harnesses can hit the deployed endpoints using the same protocol they already speak locally.
+    The LangGraph Platform builds the image from `.dawn/build/` and provisions assistants keyed by the `<routeId>#<kind>` ids in the generated `langgraph.json`. From there, your agents and harnesses can hit the deployed endpoints using the same protocol they already speak locally.
   </Step>
 </Steps>
 
@@ -52,14 +69,10 @@ Dawn itself is **not a deployment runtime**. It owns local development: `dawn de
 
 ## Self-hosting
 
-If you can't or won't use the LangGraph Platform, you can self-host by wrapping Dawn's runtime in a Docker container that exposes the same protocol endpoints (`/runs/wait`, `/runs/stream`, `/assistants`). Dawn's dev server implementation (in `@dawn-ai/cli`) is the reference — it's the same process you'd run in production, just without the file watcher.
-
-<Callout type="tip" title="Dev server as reference">
-  `dawn dev` running on port 3001 is functionally identical to a deployed Dawn runtime. Point your staging tests at a `dawn dev` instance and you'll catch 95% of deployment issues before you ship.
-</Callout>
+If you can't or won't use the LangGraph Platform, build with `dawn build` and feed `.dawn/build/` to your own container. The generated entry files and `langgraph.json` are the canonical interface — the in-process `dawn dev` runtime is a reference for the same protocol surface (`/runs/wait`, `/runs/stream`, `/healthz`), but is not intended as a production runtime itself.
 
 ## Troubleshooting
 
 - **Tests pass in-process but fail live-server** — a tool or route isn't serializing cleanly. Check that inputs, outputs, and state are JSON-serializable (no Dates, Maps, classes).
-- **Assistant id not found** — the `langgraph.json` entry doesn't match what Dawn discovered. Run `dawn routes` to see the exact pathnames, then update the `graphs` mapping.
+- **Assistant id not found** — the request `assistant_id` doesn't match the `<routeId>#<kind>` keys in `.dawn/build/langgraph.json`. Inspect that file directly (`cat .dawn/build/langgraph.json`) or run `dawn verify --json` to confirm what was discovered.
 - **Type inference drifted** — run `dawn typegen` locally and commit `dawn.generated.d.ts`. The Platform build uses the committed file.

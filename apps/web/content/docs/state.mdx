@@ -1,39 +1,63 @@
 # State
 
-Every route has a state type declared in a colocated `state.ts` file. State is the contract between the caller, the route's entry, and any tools the entry invokes.
+Every route has a state contract declared in a colocated `state.ts` file. State is the contract between the caller, the route's entry, and any tools the entry invokes.
 
 ## The shape
 
+`state.ts` default-exports a Zod schema. Dawn extracts defaults from the schema at runtime and you can derive the TS type via `z.infer<typeof state>`:
+
 ```ts
 // src/app/(public)/hello/[tenant]/state.ts
-export interface HelloState {
-  readonly tenant: string
-  readonly greeting?: string
-}
-```
+import { z } from "zod"
 
-`HelloState` is imported into `index.ts` and used as the first parameter of the `workflow` function (or the equivalent graph state type).
+export default z.object({
+  /** Accumulated context from tool call results */
+  context: z.string().default(""),
+})
+```
 
 ```ts
-import type { HelloState } from "./state.js"
+// src/app/(public)/hello/[tenant]/index.ts (workflow form)
+import type { RuntimeContext } from "@dawn-ai/sdk"
+import type { z } from "zod"
+import type state from "./state.js"
 
-export async function workflow(state: HelloState, ctx) {
-  // state.tenant is string
-  // state.greeting is string | undefined
+type HelloState = z.infer<typeof state>
+
+export async function workflow(state: HelloState, ctx: RuntimeContext) {
+  // state.context is string (Zod-parsed default `""` is applied when caller omits it)
 }
 ```
+
+<Callout type="info" title="Zod or any Standard Schema">
+  State discovery accepts either a Zod schema (matched by `.parse({})`) or any value that implements [Standard Schema](https://standardschema.dev/) (matched by the `~standard.validate({})` slot). The scaffold uses Zod; either works at runtime.
+</Callout>
 
 ## Dynamic segments become state fields
 
-If your route's directory contains a dynamic segment like `[tenant]`, that segment's value is populated on the state field of the same name at runtime.
+If your route's directory contains a dynamic segment like `[tenant]`, that segment's value is populated on the state field of the same name at runtime — **injected from the URL path, not declared in the Zod schema**.
 
 ```
 src/app/(public)/hello/[tenant]/  →  state.tenant populated from the pathname
 ```
 
+The schema only covers state your entry produces or the caller supplies. Dawn merges dynamic-segment values on top of the schema-derived defaults; double-declaring `tenant` in the Zod schema would conflict with the path injection.
+
 <Callout type="info" title="Naming matters">
   The dynamic segment name and the state field name must match exactly. Dawn wires them up by name, not by position.
 </Callout>
+
+## Custom reducers
+
+Each route may include a `reducers/` directory with one file per state field. The default export is a `(current, incoming) => merged` function that overrides Dawn's default merge for that field.
+
+```ts
+// src/app/(public)/hello/[tenant]/reducers/context.ts
+export default (current: string, incoming: string) =>
+  current ? `${current}\n${incoming}` : incoming
+```
+
+The file basename must equal the state-field name (`context.ts` → reduces `state.context`). Reducers are useful for accumulation patterns (concatenating logs, summing counters, deduplicating lists) where the default object spread is too coarse.
 
 ## Rules
 
@@ -42,19 +66,18 @@ src/app/(public)/hello/[tenant]/  →  state.tenant populated from the pathname
     Dawn serializes state across runtime boundaries (dev server, scenario tests, LangGraph Platform). Use primitives, plain objects, arrays. No classes, no Dates, no Maps.
   </Step>
   <Step title="Prefer readonly">
-    Mark fields `readonly`. The entry function returns a new state object rather than mutating the input. This keeps scenario tests deterministic and LangGraph checkpoint-safe.
+    Mark fields `readonly` (or use Zod's `.readonly()`) when they should not be mutated. The entry function returns a new state object rather than mutating the input. This keeps scenario tests deterministic and LangGraph checkpoint-safe.
   </Step>
   <Step title="Outputs accumulate">
-    A workflow returns `{ ...state, newField }` — merging new outputs into the existing state. Fields added during the run are typed as optional (`greeting?: string`) so the caller isn't forced to provide them.
+    A workflow returns `{ ...state, newField }` — merging new outputs into the existing state. Custom reducers (above) override the merge for a specific field.
   </Step>
 </Steps>
 
 ## State flow
 
-```
-caller stdin  →  state  →  workflow/graph/chain  →  new state  →  stdout
-                              ↓
-                           ctx.tools
-```
+State crosses the runtime boundary at every entry point:
 
-The state is the only thing that crosses the runtime boundary. Everything else — tool results, intermediate values — lives inside the entry for the duration of a single run.
+- `dawn run` — JSON via stdin, JSON via stdout.
+- `/runs/wait` and `/runs/stream` (locally under `dawn dev`, on LangGraph Platform in prod) — JSON over HTTP keyed by `assistant_id`.
+
+Tool results, intermediate values, and other in-route data live inside the entry for the duration of a single run; only the final state crosses the boundary.

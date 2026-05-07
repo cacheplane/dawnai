@@ -8,11 +8,13 @@
 dawn dev
 ```
 
-By default the server listens on port 3000. Override with `--port`:
+By default the server binds an ephemeral localhost port (announced on stdout as `Dawn dev ready at http://127.0.0.1:<port>`). Pass `--port <n>` for a stable port:
 
 ```
 dawn dev --port 3001
 ```
+
+The bind address is always `127.0.0.1`.
 
 ## Invoking a route
 
@@ -22,49 +24,75 @@ With the server running in one terminal, you can hit it from another:
 echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]' --url http://127.0.0.1:3001
 ```
 
-`dawn run` resolves the pathname to an `assistant_id`, POSTs to `/runs/wait`, and prints the result. This is the exact request path a production LangGraph Platform deployment would take.
+`dawn run` resolves the pathname to an `assistant_id` of the form `<routeId>#<kind>` (e.g. `/hello/[tenant]#agent`), POSTs to `/runs/wait`, and prints the result. This is the exact request path a production LangGraph Platform deployment would take.
 
 ## Protocol endpoints
 
+The dev server handles three endpoints. Anything else returns 404.
+
 <Tabs>
+  <Tab label="/healthz">
+    Readiness check.
+
+    ```
+    GET /healthz
+    -> 200 { "status": "ready" }
+    ```
+
+    Returns 200 once the child runtime is up; non-200 means not-ready. `dawn dev` itself uses this endpoint internally to detect readiness.
+  </Tab>
   <Tab label="/runs/wait">
-    Synchronous run — blocks until the route completes, returns the final state.
+    Synchronous run — blocks until the route completes, returns the final state as JSON.
 
     ```
     POST /runs/wait
-    Body: { assistant_id, input }
+    Body: {
+      "assistant_id": "/hello/[tenant]#agent",
+      "input": { "tenant": "acme" },
+      "metadata": {
+        "dawn": {
+          "mode": "agent",
+          "route_id": "/hello/[tenant]",
+          "route_path": "/hello/acme"
+        }
+      },
+      "on_completion": "delete"
+    }
     ```
+
+    The server validates the full envelope. `metadata.dawn.{mode, route_id, route_path}` must match the values registered for the `assistant_id`, or the server returns 400 with an `expected/received` diff. `on_completion: "delete"` is required.
   </Tab>
   <Tab label="/runs/stream">
-    Streaming run — returns an SSE stream of intermediate events as the route progresses.
+    Streaming run — same body shape as `/runs/wait`, returns an SSE stream (`content-type: text/event-stream`) of intermediate events as the route progresses.
 
     ```
     POST /runs/stream
-    Body: { assistant_id, input, stream_mode }
-    ```
-  </Tab>
-  <Tab label="/assistants">
-    Lists the assistants (routes) the server is serving.
-
-    ```
-    GET /assistants
+    Body: { /* same shape as /runs/wait */ }
     ```
   </Tab>
 </Tabs>
 
+The `assistant_id` format `<routeId>#<kind>` is the same format `dawn build` writes into the `graphs` map of `.dawn/build/langgraph.json`, so the same client request shape works against `dawn dev` and against a deployed runtime.
+
+## Middleware
+
+`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request. It can short-circuit a request with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
+
+`MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Routes](/docs/routes#middleware) for the full reference; a dedicated middleware page is tracked as a follow-up.
+
 ## Hot reload
 
-When you save a route file, a tool, or a state file, the dev server:
+When you save a file under `src/app/`, the dev server:
 
 <Steps>
-  <Step title="Re-runs typegen">
-    Any tool signature changes are picked up and `dawn.generated.d.ts` is updated. Your IDE's TypeScript server sees the new types within seconds.
+  <Step title="Reclassifies the change">
+    Typegen-only changes (tool signatures, state schemas) trigger a debounced typegen run (~100ms) — the child does not restart. Structural changes restart the child.
   </Step>
-  <Step title="Restarts the child runtime">
-    Dawn uses a parent-child process architecture. The parent owns the HTTP server and file watcher; the child owns the route graph. On save, only the child restarts — in-flight requests complete before the swap.
+  <Step title="Restarts the child runtime when needed">
+    Dawn uses a parent-child process architecture. The parent owns the HTTP server and file watcher; the child owns the route graph. On a structural change the child is `stop()`ed (with a forced kill timeout — in-flight requests are given a brief grace window, then force-killed) and a fresh child is started.
   </Step>
   <Step title="Preserves assistant ids">
-    Assistants keep their stable ids across restarts, so any agent or harness holding an `assistant_id` continues to work without reconnection.
+    Assistants keep their stable ids (`<routeId>#<kind>`) across restarts, so any agent or harness holding an `assistant_id` continues to work without reconnection.
   </Step>
 </Steps>
 
@@ -74,9 +102,9 @@ When you save a route file, a tool, or a state file, the dev server:
 
 ## Logging
 
-Every request is logged to stdout with the pathname, assistant id, duration, and result status. Set `DEBUG=dawn:*` for verbose tracing of the parent/child handshake.
+Every request is logged to stdout with the pathname, assistant id, duration, and result status. Set `DAWN_DEV_SHUTDOWN_TIMEOUT_MS` to override the child-restart grace window (default ~5s).
 
 ## Next steps
 
 - [Testing](/docs/testing) — run scenarios against a live dev server
-- [Deployment](/docs/deployment) — ship the same runtime to LangGraph Platform
+- [Deployment](/docs/deployment) — `dawn build` and the LangGraph Platform handoff
