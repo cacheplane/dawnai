@@ -20,13 +20,19 @@ cd my-dawn-app
 pnpm install
 ```
 
-2. Run the scaffolded route. The route path must be quoted because it contains `(`, `)`, and `[]`.
+2. Validate the app and generate types in one call.
+
+```bash
+pnpm exec dawn verify
+```
+
+3. Run the scaffolded route. The route path must be quoted because it contains `(`, `)`, and `[]`.
 
 ```bash
 echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]"
 ```
 
-3. Optionally start the local runtime in one terminal and send the same route through `--url` from another terminal.
+4. Optionally start the local runtime in one terminal and send the same route through `--url` from another terminal.
 
 ```bash
 pnpm exec dawn dev --port 3001
@@ -39,7 +45,7 @@ A Dawn app root contains `package.json` and `dawn.config.ts`.
 
 Route discovery starts at `src/app` by default.
 
-`appDir` is the only supported config option today.
+`appDir` is the only currently supported config option, and it defaults to `src/app`.
 
 A route is a directory containing `index.ts`. The `index.ts` exports exactly one of four route kinds: an `agent` descriptor (the scaffold default), a `workflow` function, a `graph` function/object, or a `chain`:
 
@@ -167,6 +173,8 @@ pnpm exec dawn build
 - `@dawn-ai/core` owns discovery, config loading, validation, and route types.
 - `@dawn-ai/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
 - `@dawn-ai/langgraph` is the LangGraph adapter that implements the `@dawn-ai/sdk` contract.
+- `@dawn-ai/langchain` is the LangChain adapter that materializes `chain` and `agent` routes.
+- `@dawn-ai/vite-plugin` is the Vite plugin that drives Dawn's typegen pipeline (extracts tool types, emits ambient route declarations).
 - `@dawn-ai/cli` owns the user-facing commands and local runtime behavior.
 - `create-dawn-ai-app` owns scaffolding for new apps.
 - `@dawn-ai/devkit` owns shared template and file-generation helpers.
