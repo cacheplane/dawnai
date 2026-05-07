@@ -4,12 +4,10 @@
 
 # @dawn-ai/core
 
-Shared Dawn app discovery, config loading, route validation, and route type generation primitives.
+Filesystem-based route discovery, app config loading, state-field resolution, and typegen primitives that the Dawn CLI builds on.
 
-Public surface:
-- `loadDawnConfig()`
-- `findDawnApp()`
-- `discoverRoutes()`
-- `renderRouteTypes()`
+This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
 
-This package owns Dawn's filesystem and metadata conventions. It does not provide a graph runtime.
+## License
+
+MIT

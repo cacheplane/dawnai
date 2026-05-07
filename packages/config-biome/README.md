@@ -4,10 +4,10 @@
 
 # @dawn-ai/config-biome
 
-Reusable Biome configuration for Dawn packages and apps.
+Shared Biome lint/format configuration used by Dawn workspace packages.
 
-Exports:
-- `@dawn-ai/config-biome`
-- `@dawn-ai/config-biome/biome`
+This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
 
-Use this package when a Dawn workspace wants the same formatter and linter defaults as the framework repo.
+## License
+
+MIT
