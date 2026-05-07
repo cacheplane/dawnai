@@ -15,7 +15,7 @@ This repository documents the current behavior only. It is intentionally narrow.
 1. Create a new app.
 
 ```bash
-pnpm create dawn-app my-dawn-app
+pnpm create dawn-ai-app my-dawn-app
 cd my-dawn-app
 pnpm install
 ```
@@ -68,12 +68,12 @@ The current `basic` scaffold ships:
 
 This is the user-first command set the README focuses on today, not an exhaustive internal CLI reference.
 
-### `create-dawn-app`
+### `create-dawn-ai-app`
 
 Scaffold a new Dawn app from the available template set.
 
 ```bash
-pnpm create dawn-app my-dawn-app
+pnpm create dawn-ai-app my-dawn-app
 ```
 
 ### `dawn check`
