@@ -748,7 +748,159 @@ Templates findings: F-075 through F-087 (6 critical, 3 important, 4 minor).
 
 ## 5. Public package READMEs (`@dawn-ai/sdk`, `@dawn-ai/cli`, `create-dawn-ai-app`)
 
-_(pending — Task 6)_
+### F-088: `@dawn-ai/sdk` README has no install instructions
+- **Surface:** Public package READMEs
+- **File:** packages/sdk/README.md
+- **Type:** gap
+- **Severity:** important
+- **Description:** The README never tells the reader how to install the package. The hybrid policy requires an install command (e.g., `npm install @dawn-ai/sdk` / `pnpm add @dawn-ai/sdk`) so the npmjs.com listing is actionable. Today the file jumps straight from a one-line description to a public-surface bullet list.
+- **Suggested fix:** Add an "Install" section with `npm install @dawn-ai/sdk` (and a pnpm/yarn equivalent), placed immediately after the overview paragraph.
+
+### F-089: `@dawn-ai/sdk` README claims "pure type layer with no runtime dependencies" but the package now ships runtime helpers
+- **Surface:** Public package READMEs
+- **File:** packages/sdk/README.md:10
+- **Type:** error
+- **Severity:** critical
+- **Description:** The README closes with "This package is a pure type layer with no runtime dependencies." That is wrong: `packages/sdk/src/index.ts` exports runtime values `agent`, `isDawnAgent` (from `./agent.js`) and `allow`, `defineMiddleware`, `reject` (from `./middleware.js`). These are real functions, not types. The README will mislead readers into thinking they cannot author agents or middleware via the SDK and that the import has zero runtime cost.
+- **Suggested fix:** Replace the "pure type layer" sentence with a description that the SDK ships both type primitives and small runtime helpers (`agent()`, `defineMiddleware()`, `allow()`, `reject()`, `isDawnAgent()`), and is the canonical entry point for authoring Dawn routes, agents, and middleware.
+
+### F-090: `@dawn-ai/sdk` README "Public surface" list is materially incomplete
+- **Surface:** Public package READMEs
+- **File:** packages/sdk/README.md:5-8
+- **Type:** gap
+- **Severity:** important
+- **Description:** The README lists three exports (`RuntimeContext`, `RuntimeTool`/`ToolRegistry`, `RouteConfig`/`RouteKind`). The actual `packages/sdk/src/index.ts` re-exports many more, including `agent`, `AgentConfig`, `DawnAgent`, `RetryConfig`, `isDawnAgent`, `BackendAdapter`, `AnthropicModelId`/`GoogleModelId`/`OpenAiModelId`/`KnownModelId`, `ContinueResult`/`DawnMiddleware`/`MiddlewareRequest`/`MiddlewareResult`/`RejectResult`, `allow`/`defineMiddleware`/`reject`, `RouteStateMap`/`RouteToolMap`, and `Prettify`. Readers cannot discover the actual SDK surface from the README.
+- **Suggested fix:** Restructure the README around the three public concept buckets — agents (`agent()`, `AgentConfig`, `DawnAgent`, `isDawnAgent`), middleware (`defineMiddleware`, `allow`, `reject`, `DawnMiddleware`), and route/runtime types (`RouteConfig`, `RouteKind`, `RuntimeContext`, `RuntimeTool`, `ToolRegistry`) — with a link out to the website for the full API.
+
+### F-091: `@dawn-ai/sdk` README contains no code example
+- **Surface:** Public package READMEs
+- **File:** packages/sdk/README.md
+- **Type:** gap
+- **Severity:** important
+- **Description:** The hybrid policy requires "most important APIs/commands shown briefly with a code example or two." The SDK README has zero code blocks. A reader landing on npmjs.com cannot tell what authoring a Dawn route looks like.
+- **Suggested fix:** Add one short example showing an `agent()` route export (matching the scaffold default) and one showing a `defineMiddleware()` usage, both as fenced TypeScript blocks.
+
+### F-092: `@dawn-ai/sdk` README has no link to the canonical docs site
+- **Surface:** Public package READMEs
+- **File:** packages/sdk/README.md
+- **Type:** gap
+- **Severity:** important
+- **Description:** The hybrid policy requires a link to `https://dawn-ai.org/docs/<page>` so the README on npmjs.com points readers to the full reference. The current SDK README has no outbound link at all.
+- **Suggested fix:** Add a "Learn more" / "Documentation" footer linking to `https://dawn-ai.org/docs/routes` (and `…/tools`, `…/state` as relevant) for the full reference.
+
+### F-093: `@dawn-ai/sdk` README does not state the Node engine requirement
+- **Surface:** Public package READMEs
+- **File:** packages/sdk/README.md
+- **Type:** gap
+- **Severity:** minor
+- **Description:** `packages/sdk/package.json` declares `"engines": { "node": ">=22.12.0" }`. The README does not mention this. Users who install on older Node versions will hit npm engine warnings without context.
+- **Suggested fix:** Add a one-line "Requires Node.js 22.12+" note alongside the install command.
+
+### F-094: `@dawn-ai/cli` README has no install instructions
+- **Surface:** Public package READMEs
+- **File:** packages/cli/README.md
+- **Type:** gap
+- **Severity:** important
+- **Description:** The README describes the CLI but never shows an install command. The closing line says "Install the package globally or use it as a project-local dependency" without telling the reader how. Hybrid policy requires an explicit install command (`npm install -D @dawn-ai/cli` or `npm install -g @dawn-ai/cli`) that matches the published package name.
+- **Suggested fix:** Add an "Install" section with both the project-local (`npm install -D @dawn-ai/cli`) and global (`npm install -g @dawn-ai/cli`) commands, plus pnpm equivalents.
+
+### F-095: `@dawn-ai/cli` README's command list omits five of eight commands
+- **Surface:** Public package READMEs
+- **File:** packages/cli/README.md:5-8
+- **Type:** error
+- **Severity:** critical
+- **Description:** The README lists only `dawn check`, `dawn routes`, `dawn typegen`. The actual program (`packages/cli/src/index.ts:36-44`) registers eight user-facing commands: `build`, `check`, `dev`, `run`, `routes`, `test`, `typegen`, `verify` (plus an internal `dev-child`). Notably, `dawn dev` (the local development runtime) and `dawn build` (which produces LangGraph Platform deployment artifacts) are the two highest-leverage commands and are entirely absent.
+- **Suggested fix:** Replace the three-bullet list with a complete table covering all eight commands (`build`, `check`, `dev`, `routes`, `run`, `test`, `typegen`, `verify`) with a one-line description of each. Cross-reference `packages/cli/src/commands/*.ts` for accurate descriptions.
+
+### F-096: `@dawn-ai/cli` README mischaracterizes the CLI as primarily a CI checker
+- **Surface:** Public package READMEs
+- **File:** packages/cli/README.md:3, 10
+- **Type:** misalignment
+- **Severity:** important
+- **Description:** The opening describes the CLI as "validating Dawn apps, inspecting routes, and generating route types" and the closing line frames usage as "run Dawn app checks in CI and local development." This frames the CLI as a static-analysis/typegen tool, but `dawn dev` is the local runtime, `dawn run` executes routes locally, `dawn test` runs route tests, and `dawn build` produces deployment artifacts. The README undersells the CLI to the point of being misleading.
+- **Suggested fix:** Reword the opening to: "The `dawn` command-line interface — local dev server, route execution, validation/typegen, and the build step that produces LangGraph Platform deployment artifacts." Update the closing to drop the "checks in CI" framing.
+
+### F-097: `@dawn-ai/cli` README contains no code example or usage snippet
+- **Surface:** Public package READMEs
+- **File:** packages/cli/README.md
+- **Type:** gap
+- **Severity:** important
+- **Description:** Hybrid policy requires "most important APIs/commands shown briefly with a code example or two." The CLI README has no shell snippets at all — not even `dawn --help` or a representative invocation like `dawn dev` / `dawn build`.
+- **Suggested fix:** Add a short "Usage" section with a couple of the most common invocations (`dawn dev`, `dawn check`, `dawn build`) shown as fenced shell blocks.
+
+### F-098: `@dawn-ai/cli` README has no link to the canonical docs site
+- **Surface:** Public package READMEs
+- **File:** packages/cli/README.md
+- **Type:** gap
+- **Severity:** important
+- **Description:** The README does not link to the website. Hybrid policy requires a pointer to `https://dawn-ai.org/docs/<page>` so npmjs.com readers can reach the full reference (e.g., `https://dawn-ai.org/docs/cli`).
+- **Suggested fix:** Add a "Learn more" footer linking to `https://dawn-ai.org/docs/cli` (and `…/getting-started`, `…/deployment` as relevant).
+
+### F-099: `@dawn-ai/cli` README does not state the Node engine requirement
+- **Surface:** Public package READMEs
+- **File:** packages/cli/README.md
+- **Type:** gap
+- **Severity:** minor
+- **Description:** `packages/cli/package.json` declares `"engines": { "node": ">=22.12.0" }`. The README does not mention this.
+- **Suggested fix:** Add a one-line "Requires Node.js 22.12+" note alongside the install command.
+
+### F-100: `@dawn-ai/cli` README does not mention the `dawn` binary name
+- **Surface:** Public package READMEs
+- **File:** packages/cli/README.md
+- **Type:** gap
+- **Severity:** minor
+- **Description:** The package is published as `@dawn-ai/cli` but the binary it installs is named `dawn` (per `packages/cli/package.json:23-25`). The README uses `dawn …` in command examples without ever stating that the package installs a `dawn` binary, which is mildly confusing for readers comparing the install name to the command name.
+- **Suggested fix:** Add a sentence near the install instructions: "Installs a `dawn` binary on your `PATH`."
+
+### F-101: `create-dawn-app` README title and self-name disagree with the published package name
+- **Surface:** Public package READMEs
+- **File:** packages/create-dawn-app/README.md:1
+- **Type:** error
+- **Severity:** critical
+- **Description:** The README's H1 is `# create-dawn-app`, but the package is published as `create-dawn-ai-app` (per `packages/create-dawn-app/package.json:2`, with bin name `create-dawn-ai-app` on line 23). The directory name `create-dawn-app` is internal-only — the public name on npm is `create-dawn-ai-app`. A reader on npmjs.com will see a title that does not match the package they're viewing, and any `npm init`/`pnpm create` example derived from the title will fail. This is the same class of bug as the root README's F-003.
+- **Suggested fix:** Change the H1 to `# create-dawn-ai-app` and use that name consistently throughout. Mention the directory/published-name divergence is intentional only if it helps; otherwise just use the published name.
+
+### F-102: `create-dawn-app` README has no install/usage command
+- **Surface:** Public package READMEs
+- **File:** packages/create-dawn-app/README.md
+- **Type:** gap
+- **Severity:** critical
+- **Description:** The README describes the scaffolder but never shows the canonical `npm create dawn-ai-app …` / `pnpm create dawn-ai-app …` invocation. This is the *only* thing a user needs from this README, and it is missing. (Compare with the root README, which uses `pnpm create dawn-app` — itself wrong per F-003 — but at least shows a command.)
+- **Suggested fix:** Add a "Usage" section showing `pnpm create dawn-ai-app my-app`, `npm create dawn-ai-app@latest my-app`, and `yarn create dawn-ai-app my-app` (or whichever subset the team supports), followed by the next-step `cd my-app && pnpm install && pnpm dawn dev` flow.
+
+### F-103: `create-dawn-app` README does not enumerate the scaffold's resulting structure or commands
+- **Surface:** Public package READMEs
+- **File:** packages/create-dawn-app/README.md
+- **Type:** gap
+- **Severity:** important
+- **Description:** The README mentions "Dawn's canonical `src/app` route layout" but doesn't show what the user gets — no example of the generated tree, no mention that the scaffold installs a working `agent()` route, no list of the npm scripts available in the generated `package.json` (e.g., `dawn dev`, `dawn check`, `dawn build`). Hybrid policy requires the most important surface shown briefly.
+- **Suggested fix:** Add a short "What you get" section listing the generated layout (e.g., `src/app/agent/index.ts`, scripts: `dawn dev`, `dawn check`, `dawn build`) with a tiny tree snippet.
+
+### F-104: `create-dawn-app` README has no link to the canonical docs site
+- **Surface:** Public package READMEs
+- **File:** packages/create-dawn-app/README.md
+- **Type:** gap
+- **Severity:** important
+- **Description:** No outbound link to `https://dawn-ai.org/docs/getting-started` (or equivalent), which is where a fresh user should land after running the scaffolder. Hybrid policy requires this pointer.
+- **Suggested fix:** Add a "Next steps" footer linking to `https://dawn-ai.org/docs/getting-started`.
+
+### F-105: `create-dawn-app` README does not state the Node engine requirement
+- **Surface:** Public package READMEs
+- **File:** packages/create-dawn-app/README.md
+- **Type:** gap
+- **Severity:** minor
+- **Description:** `packages/create-dawn-app/package.json` declares `"engines": { "node": ">=22.12.0" }` and the scaffolded apps inherit similar constraints. The README does not surface this, so users on older Node versions will hit obscure failures during scaffold.
+- **Suggested fix:** Add a one-line "Requires Node.js 22.12+" note alongside the usage commands.
+
+### F-106: `create-dawn-app` README understates available templates relative to roadmap, with no signal of what's coming
+- **Surface:** Public package READMEs
+- **File:** packages/create-dawn-app/README.md:5-6
+- **Type:** gap
+- **Severity:** minor
+- **Description:** "Current template support: `basic`" is technically accurate today, but the README gives no indication of how to request additional templates, how to pass `--template`, or whether more are planned. For a scaffolder whose entire value prop is templates, this is a thin presentation.
+- **Suggested fix:** If the CLI supports `--template <name>`, document the flag with the current accepted values. If not, drop the bullet and just say "Generates a working Dawn starter app with an `agent()` route."
+
+Public READMEs findings: F-088 through F-106 (4 critical, 11 important, 4 minor).
 
 ## 6. Internal package READMEs (config-biome, config-typescript, core, devkit, langchain, langgraph, vite-plugin)
 
