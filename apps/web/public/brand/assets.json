@@ -1,0 +1,124 @@
+{
+  "name": "Dawn AI Brand Assets",
+  "version": "2026-05-07",
+  "description": "Official Dawn AI logos, icons, favicons, and social assets for developers and coding agents.",
+  "homepage": "/brand",
+  "downloadUrl": "/brand/dawn-ai-brand-assets.zip",
+  "manifestUrl": "/brand/assets.json",
+  "usage": {
+    "summary": "Use the official files as provided. Use white assets on dark backgrounds and black assets on light backgrounds. Do not stretch, recolor, redraw, or imply endorsement.",
+    "preferredLogo": "logo-horizontal-white-svg",
+    "preferredIcon": "icon-white-svg"
+  },
+  "assets": [
+    {
+      "id": "logo-horizontal-white-svg",
+      "label": "Horizontal logo, white",
+      "type": "logo",
+      "format": "svg",
+      "url": "/brand/dawn-logo-horizontal-white.svg",
+      "background": "dark",
+      "recommendedFor": [
+        "website headers",
+        "dark backgrounds",
+        "README images on dark canvases"
+      ]
+    },
+    {
+      "id": "logo-horizontal-black-svg",
+      "label": "Horizontal logo, black",
+      "type": "logo",
+      "format": "svg",
+      "url": "/brand/dawn-logo-horizontal-black.svg",
+      "background": "light",
+      "recommendedFor": [
+        "light backgrounds",
+        "documents",
+        "press mentions"
+      ]
+    },
+    {
+      "id": "logo-horizontal-white-on-black-png",
+      "label": "Horizontal logo, white on black",
+      "type": "logo",
+      "format": "png",
+      "url": "/brand/dawn-logo-horizontal-white-on-black.png",
+      "background": "included",
+      "dimensions": {
+        "width": 1440,
+        "height": 440
+      },
+      "recommendedFor": [
+        "README previews",
+        "presentations",
+        "social cards"
+      ]
+    },
+    {
+      "id": "icon-white-svg",
+      "label": "Icon, white",
+      "type": "icon",
+      "format": "svg",
+      "url": "/brand/dawn-icon-white.svg",
+      "background": "dark",
+      "recommendedFor": [
+        "compact UI",
+        "dark backgrounds",
+        "logo grids"
+      ]
+    },
+    {
+      "id": "icon-black-svg",
+      "label": "Icon, black",
+      "type": "icon",
+      "format": "svg",
+      "url": "/brand/dawn-icon-black.svg",
+      "background": "light",
+      "recommendedFor": [
+        "compact UI",
+        "light backgrounds",
+        "logo grids"
+      ]
+    },
+    {
+      "id": "social-avatar-white-on-black-png",
+      "label": "Social avatar, white on black",
+      "type": "social",
+      "format": "png",
+      "url": "/social/dawn-social-avatar-white-on-black-1024.png",
+      "background": "included",
+      "dimensions": {
+        "width": 1024,
+        "height": 1024
+      },
+      "recommendedFor": [
+        "social profiles",
+        "square avatars",
+        "marketplace icons"
+      ]
+    },
+    {
+      "id": "favicon-ico",
+      "label": "Favicon ICO",
+      "type": "favicon",
+      "format": "ico",
+      "url": "/favicon.ico",
+      "background": "transparent",
+      "recommendedFor": [
+        "browser favicon"
+      ]
+    },
+    {
+      "id": "webmanifest",
+      "label": "Web app manifest",
+      "type": "manifest",
+      "format": "json",
+      "url": "/site.webmanifest",
+      "background": "not-applicable",
+      "recommendedFor": [
+        "web apps",
+        "installable app metadata"
+      ]
+    }
+  ]
+}
