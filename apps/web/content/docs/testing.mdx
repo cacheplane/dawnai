@@ -96,10 +96,8 @@ dawn test
 
 Two cross-cutting features shape what scenarios assert:
 
-- **Agent retries** — `agent({ retry: { maxAttempts, baseDelay } })` retries on transient errors. To assert the exhausted-retry path, set `expect.status: "failed"` and use `expect.error` (or an `assert` callback with `expectError`).
-- **Middleware** — `src/middleware.ts` runs before every `/runs/wait` and `/runs/stream` request. **Live-server scenarios (`run: { url }`) exercise middleware; in-process scenarios bypass it.** A scenario whose middleware calls `reject(...)` should set `expect.status: "failed"` with a matching `expect.error`.
-
-A dedicated middleware page is tracked as a follow-up.
+- **Agent retries** — `agent({ retry: { maxAttempts, baseDelay } })` retries on transient errors. To assert the exhausted-retry path, set `expect.status: "failed"` and use `expect.error` (or an `assert` callback with `expectError`). See [Retry](/docs/retry).
+- **Middleware** — `src/middleware.ts` runs before every `/runs/wait` and `/runs/stream` request. **Live-server scenarios (`run: { url }`) exercise middleware; in-process scenarios bypass it.** A scenario whose middleware calls `reject(...)` should set `expect.status: "failed"` with a matching `expect.error`. See [Middleware](/docs/middleware).
 
 ## Mocking tools
 
