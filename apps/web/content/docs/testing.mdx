@@ -1,19 +1,23 @@
 # Testing
 
-Scenario tests are colocated with routes as `run.test.ts` files. Each scenario declares an input state and the expected output, and Dawn runs them against the real route runtime.
+Scenario tests are colocated with routes as `run.test.ts` files. Each scenario declares an input state and the expected output, and `dawn test` runs them against the real route runtime.
 
 ## A minimal test
 
+A scenario file is a default-exported array of plain scenario records — there is no `describe()` or `test()` wrapper, and the route is inferred from the file's directory:
+
 ```ts
 // src/app/(public)/hello/[tenant]/run.test.ts
-import { describe, test } from "@dawn-ai/sdk/testing"
-
-describe("/hello/[tenant]", () => {
-  test("greets a tenant", {
+export default [
+  {
+    name: "greets a tenant",
     input: { tenant: "acme" },
-    expected: { tenant: "acme", greeting: "Hello, acme!" },
-  })
-})
+    expect: {
+      status: "passed",
+      output: { tenant: "acme", greeting: "Hello, acme!" },
+    },
+  },
+]
 ```
 
 Run all scenarios:
@@ -22,48 +26,98 @@ Run all scenarios:
 dawn test
 ```
 
-Dawn discovers every `run.test.ts` under `src/app/`, invokes the route for each scenario, and compares output deep-equal against `expected`.
+Dawn discovers every `run.test.ts` under `src/app/`, invokes the route for each scenario, and evaluates the declarative expectation.
+
+## Scenario shape
+
+Each entry in the default-exported array is `{ name, input, expect, run?, assert? }`:
+
+- `name` — human-readable scenario name.
+- `input` — the JSON state passed to the route.
+- `expect` — declarative expectation (see below).
+- `run?` — optional run config: `{ url?: string }` to target a live dev server.
+- `assert?` — optional `(result) => void` callback for custom assertions, evaluated alongside `expect`.
+
+The `expect` object accepts:
+
+- `status` (required) — `"passed" | "failed"`.
+- `output?` — deep-equal match against the route's returned state.
+- `meta?` — match against `{ mode, routeId, routePath, executionSource }`.
+- `error?` — for `status: "failed"`, match `{ kind, message: string | { includes: string } }`.
+
+For programmatic assertions in `assert(result)`, import the helpers from `@dawn-ai/cli/testing`:
+
+```ts
+import { expectError, expectMeta, expectOutput } from "@dawn-ai/cli/testing"
+
+export default [
+  {
+    name: "custom assert",
+    input: { tenant: "acme" },
+    expect: { status: "passed" },
+    assert: (result) => {
+      expectOutput(result, { greeting: "Hello, acme!" })
+      expectMeta(result, { mode: "agent", routeId: "/hello/[tenant]" })
+    },
+  },
+]
+```
 
 ## Against a live dev server
 
-By default, tests run against the in-process route runtime. You can also point tests at a running `dawn dev` server to verify protocol parity:
+To exercise protocol parity against a running `dawn dev`, set `run.url` per-scenario. There is no command-level `--url` flag on `dawn test`.
+
+```ts
+export default [
+  {
+    name: "greets a tenant via dev server",
+    input: { tenant: "acme" },
+    run: { url: "http://127.0.0.1:3001" },
+    expect: {
+      status: "passed",
+      output: { tenant: "acme", greeting: "Hello, acme!" },
+    },
+  },
+]
+```
+
+Start the dev server first, then run `dawn test`:
 
 ```
 dawn dev --port 3001 &
-dawn test --url http://127.0.0.1:3001
+dawn test
 ```
 
 <Callout type="tip" title="Run both to confirm parity">
-  If the in-process run passes but the live-server run fails, something in your route doesn't survive the LangGraph Platform protocol. The live-server mode is how you catch this before deploy.
+  If the in-process scenario passes but the live-server scenario fails, something in your route doesn't survive the LangGraph Platform protocol. The live-server mode is how you catch this before deploy.
 </Callout>
+
+## Agents, retries, and middleware
+
+Two cross-cutting features shape what scenarios assert:
+
+- **Agent retries** — `agent({ retry: { maxAttempts, baseDelay } })` retries on transient errors. To assert the exhausted-retry path, set `expect.status: "failed"` and use `expect.error` (or an `assert` callback with `expectError`).
+- **Middleware** — `src/middleware.ts` runs before every `/runs/wait` and `/runs/stream` request. **Live-server scenarios (`run: { url }`) exercise middleware; in-process scenarios bypass it.** A scenario whose middleware calls `reject(...)` should set `expect.status: "failed"` with a matching `expect.error`.
+
+A dedicated middleware page is tracked as a follow-up.
 
 ## Mocking tools
 
-For routes that call external APIs, databases, or LLMs, stub the tools per-scenario:
-
-```ts
-test("with mocked greet", {
-  input: { tenant: "acme" },
-  expected: { tenant: "acme", greeting: "Hi from mock!" },
-  tools: {
-    greet: async () => ({ greeting: "Hi from mock!" }),
-  },
-})
-```
-
-The mock signature must match the tool's inferred input/output shape. TypeScript checks this at compile time.
+<Callout type="warn" title="Not supported today">
+  Per-scenario tool mocking (a `tools` field in the scenario record) is **not** part of the scenario surface today — extra keys are silently ignored. Use the `assert` callback for custom matchers, or stub external dependencies inside the tool itself (e.g. behind an env flag) until tool mocking lands. Tracked as a follow-up.
+</Callout>
 
 ## Rules
 
 <Steps>
   <Step title="File location">
-    `run.test.ts` must live in the route's directory, not a sibling or nested folder. Dawn matches tests to routes by directory, not by name.
+    `run.test.ts` must live in the route's directory, not a sibling or nested folder. Dawn matches tests to routes by directory.
   </Step>
-  <Step title="describe() matches the route">
-    The top-level `describe` block should pass the route's pathname. Dawn uses it to look up the correct route for the scenarios inside.
+  <Step title="Default-exported array">
+    The file's default export is the array of scenario records. There is no `describe()` or `test()` wrapper.
   </Step>
-  <Step title="expected is deep-equal by default">
-    Dawn compares the returned state deep-equal against `expected`. Use `expected.eq`, `expected.contains`, or custom matchers for partial or fuzzy matching (see `@dawn-ai/sdk/testing` for the full surface).
+  <Step title="Use the helpers from @dawn-ai/cli/testing for custom assertions">
+    `expectOutput`, `expectMeta`, and `expectError` cover deep-equal match (with helpful diffs). For partial or fuzzy matching today, use the declarative `expect` shape (`output`/`meta`/`error`) or write a custom predicate in `assert(result)`.
   </Step>
   <Step title="Keep scenarios focused">
     One scenario = one claim about the route's behavior. If you're adding branches, add more scenarios — don't inflate a single one.
@@ -72,10 +126,11 @@ The mock signature must match the tool's inferred input/output shape. TypeScript
 
 ## CI
 
-`dawn test` exits non-zero on any failure and outputs a diff per mismatched scenario. Wire it into your CI step after `dawn check` and `dawn typegen`:
+Use `dawn verify` as the integrity gate (it covers app, routes, typegen, and deps in one call), then run `dawn test`:
 
 ```yaml
-- run: pnpm exec dawn check
-- run: pnpm exec dawn typegen
+- run: pnpm exec dawn verify
 - run: pnpm exec dawn test
 ```
+
+`dawn verify` runs typegen and check internally, plus the deps check (missing packages, missing env vars) that bare `dawn check && dawn typegen` does not. `dawn test` exits non-zero on any failure and outputs a diff per mismatched scenario.
