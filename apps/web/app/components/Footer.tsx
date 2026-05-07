@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { BrandLogo } from "./BrandLogo"
 
 interface LinkItem {
   readonly label: string
@@ -121,16 +122,7 @@ export function Footer() {
         <div className="grid grid-cols-2 md:grid-cols-6 gap-10 md:gap-8">
           {/* Brand block — spans 2 cols on desktop, full width on mobile */}
           <div className="col-span-2 md:col-span-2">
-            <Link
-              href="/"
-              className="font-display font-semibold text-2xl text-text-primary inline-block"
-              style={{
-                fontVariationSettings: "'opsz' 144, 'SOFT' 50",
-                letterSpacing: "-0.02em",
-              }}
-            >
-              dawn
-            </Link>
+            <BrandLogo imageClassName="h-8" />
             <p className="text-sm text-text-muted mt-3 leading-relaxed max-w-[36ch]">
               The App Router for AI agents. A TypeScript-first meta-framework for LangChain.
             </p>
