@@ -194,4 +194,4 @@ The canonical reference lives on the docs site:
 
 ## Contributing
 
-For repository layout, test lanes, and local verification commands, see [CONTRIBUTORS.md](./CONTRIBUTORS.md).
+For the public contribution workflow, see [CONTRIBUTING.md](./CONTRIBUTING.md). For repository layout, test lanes, and local verification commands, see [CONTRIBUTORS.md](./CONTRIBUTORS.md).

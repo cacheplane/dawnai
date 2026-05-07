@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://dawn-ai.org/docs/getting-started
+    about: Read Dawn's public documentation.
+  - name: Brand assets
+    url: https://dawn-ai.org/brand
+    about: Download Dawn logos and media assets.
