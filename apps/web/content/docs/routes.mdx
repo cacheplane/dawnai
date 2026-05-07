@@ -1,21 +1,37 @@
 # Routes
 
-Routes are the unit of work in Dawn. A route is a directory under `src/app/` containing an `index.ts` that exports exactly one of three entry types: a `workflow` function, a LangGraph `graph`, or a LangChain `chain`.
+Routes are the unit of work in Dawn. A route is a directory under `src/app/` containing an `index.ts` that exports exactly one of four entry types: an `agent` descriptor (the scaffold default), a `workflow` function, a LangGraph `graph`, or a LangChain `chain`.
 
 Routes are discovered by filesystem walk — **no registration, no config**.
 
 ## Route entry
 
-Every route's `index.ts` exports one entry. The three choices are interchangeable: a given route picks whichever best matches the work.
+Every route's `index.ts` exports one entry. The four choices are interchangeable: a given route picks whichever best matches the work.
 
 <Tabs>
+  <Tab label="agent">
+    The scaffold default and the preferred path for LLM-driven routes. `agent({ model, systemPrompt })` produces a `DawnAgent` descriptor that `dawn build` lowers into a tool-bound LangGraph node — the LLM picks when to invoke each route-local tool.
+
+    ```ts
+    import { agent } from "@dawn-ai/sdk"
+
+    export default agent({
+      model: "gpt-4o-mini",
+      systemPrompt:
+        "You are a helpful assistant for the {tenant} organization. Answer questions about the tenant.",
+    })
+    ```
+  </Tab>
   <Tab label="workflow">
-    The most common entry. A plain async function that takes state + runtime context, returns new state.
+    A plain async function that takes state + runtime context and returns new state. Use when you want explicit, code-driven orchestration.
 
     ```ts
     import type { RuntimeContext } from "@dawn-ai/sdk"
     import type { RouteTools } from "dawn:routes"
-    import type { HelloState } from "./state.js"
+    import type { z } from "zod"
+    import type state from "./state.js"
+
+    type HelloState = z.infer<typeof state>
 
     export async function workflow(
       state: HelloState,
@@ -43,8 +59,51 @@ Every route's `index.ts` exports one entry. The three choices are interchangeabl
 </Tabs>
 
 <Callout type="warn" title="Exactly one entry per route">
-  A single `index.ts` may export **only one** of `workflow`, `graph`, or `chain`. `dawn check` enforces this.
+  A single `index.ts` may export **only one** of `agent`, `workflow`, `graph`, or `chain`. Discovery enforces this — `dawn check`, `dawn routes`, `dawn build`, `dawn typegen`, and `dawn verify` all surface the violation.
 </Callout>
+
+## Agents
+
+Agent routes are descriptors authored with `agent()` from `@dawn-ai/sdk`:
+
+```ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "You are concise and accurate.",
+  retry: {
+    maxAttempts: 3,
+    baseDelay: 250,
+  },
+})
+```
+
+`AgentConfig` accepts:
+
+- `model` — a `KnownModelId` (typed string covering OpenAI, Anthropic, and Google model ids).
+- `systemPrompt` — the system message for the agent.
+- `retry?: RetryConfig` — optional `{ maxAttempts?: number, baseDelay?: number }` policy. See `packages/sdk/src/agent.ts` for the exact shape; a dedicated retry-policy reference is tracked as a follow-up.
+
+At build time, `dawn build` emits a LangGraph entry that calls `agent.bindTools(...)` with every tool discovered for the route, so any tool in the route's `tools/` directory (and any shared tool in `src/tools/`) is automatically available to the LLM.
+
+## Middleware
+
+`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request — locally under `dawn dev`, and on LangGraph Platform.
+
+```ts
+// src/middleware.ts
+import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"
+
+export default defineMiddleware(async (req) => {
+  if (!req.headers["x-tenant-id"]) {
+    return reject(401, { error: "missing x-tenant-id" })
+  }
+  return allow({ tenantId: req.headers["x-tenant-id"] })
+})
+```
+
+`MiddlewareRequest` exposes `assistantId`, `routeId`, `headers`, `params`, `method`, and `url`. The optional `context` passed to `allow(...)` is forwarded to every tool as `ctx.middleware` (see [Tools](/docs/tools)). A dedicated middleware page is tracked as a follow-up; until then, the source of truth is `packages/sdk/src/middleware.ts`.
 
 ## Pathname rules
 
@@ -63,30 +122,37 @@ Run `dawn routes` to list every route Dawn discovered and its computed pathname.
 
 ## State
 
-Each route has a `state.ts` file that defines its state type:
+Each route has a `state.ts` file whose default export is a Zod schema:
 
 ```ts
 // src/app/(public)/hello/[tenant]/state.ts
-export interface HelloState {
-  readonly tenant: string
-  readonly greeting?: string
-}
+import { z } from "zod"
+
+export default z.object({
+  context: z.string().default(""),
+})
 ```
 
-Dynamic segment names become state fields automatically. `[tenant]` → `state.tenant`.
+Dawn extracts defaults from the schema at runtime and infers the TS type via `z.infer<typeof state>`. **Dynamic-segment fields (`[tenant]`) are injected from the URL path and should not be declared in the schema.** See [State](/docs/state) for the full reference, including custom reducers.
 
 ## Tools
 
-A route's `tools/` directory contains co-located tools. Tool types are inferred from source and made available on `ctx.tools` with full autocomplete. See [Tools](/docs/tools) for the full reference.
+A route's `tools/` directory contains co-located tools. Tool types are inferred from source and made available on `ctx.tools` with full autocomplete inside `workflow` / `graph` routes, or auto-bound to the agent for `agent` routes. See [Tools](/docs/tools) for the full reference.
 
 ## Running a route
 
-```
-dawn run '/hello/acme'
+```bash
+echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
 ```
 
-`dawn run` reads state from stdin (JSON), resolves the pathname to a route, invokes the entry, and writes the result to stdout.
+`dawn run` reads state from stdin (JSON), resolves the pathname to a route, invokes the entry, and writes the JSON result to stdout. The route argument can be the parameterized id (`/hello/[tenant]`) or the concrete pathname (`/hello/acme`); the input JSON's matching field supplies the dynamic-segment value.
 
 <Callout type="tip" title="Tip">
   Quote the route path in your shell — route groups and dynamic segments contain `(`, `)`, and `[]` which shells expand.
 </Callout>
+
+## Related
+
+- [State](/docs/state) — schema, defaults, dynamic-segment merging, custom reducers
+- [CLI](/docs/cli) — `dawn run`, `dawn check`, `dawn verify`, `dawn build`
+- [Deployment](/docs/deployment) — `dawn build` output and LangGraph Platform handoff

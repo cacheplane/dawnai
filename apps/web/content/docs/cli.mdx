@@ -1,6 +1,6 @@
 # CLI Reference
 
-Dawn ships a single `dawn` binary with six commands. Every command reads `dawn.config.ts` from the current working directory and operates on the app rooted there.
+Dawn ships a single `dawn` binary with eight commands: `build`, `check`, `dev`, `routes`, `run`, `test`, `typegen`, and `verify`. Every command reads `dawn.config.ts` from the current working directory (or from `--cwd <path>`) and operates on the app rooted there.
 
 ## `dawn check`
 
@@ -10,14 +10,28 @@ Validates the app structure and configuration.
 dawn check
 ```
 
-Checks:
-- `dawn.config.ts` exists and has only supported fields.
-- `package.json` exists.
-- Every route has exactly one of `workflow`, `graph`, or `chain` exported from `index.ts`.
-- Every route's `state.ts` exports a named state type.
-- No tool files have invalid shapes.
+Internally, `dawn check` loads `dawn.config.ts`, resolves the app root, runs `discoverRoutes`, and parses each route's tool definitions with `discoverToolDefinitions`. It surfaces:
 
-Exits non-zero on any violation with a detailed message.
+- A `dawn.config.ts` that fails to load.
+- Any route whose `index.ts` exports more than one (or none) of `agent`, `workflow`, `graph`, `chain`.
+- Any tool file that fails to parse.
+
+Output is a `Dawn app is valid: N routes discovered.` line followed by a per-route `- <pathname> (<kind>)` summary. Exits non-zero on any violation with a detailed message.
+
+## `dawn verify`
+
+Runs four checks in one call (`app`, `routes`, `typegen`, `deps`) — the canonical pre-deploy integrity gate.
+
+```
+dawn verify
+dawn verify --json
+```
+
+Flags:
+- `--cwd <path>` — operate on a different app root.
+- `--json` — emit a structured report (`{ status, appRoot, checks, counts }`) instead of human-readable text.
+
+The `deps` check covers missing packages and missing env vars (advisory) — uniquely useful before a deploy. See [Deployment](/docs/deployment) for the recommended workflow.
 
 ## `dawn routes`
 
@@ -25,28 +39,49 @@ Lists every route Dawn discovered and its computed pathname.
 
 ```
 dawn routes
+dawn routes --json
 ```
 
 Output:
 
 ```
-/hello/[tenant]   workflow   src/app/(public)/hello/[tenant]/index.ts
-/admin/users      graph      src/app/(internal)/admin/users/index.ts
+Discovered 2 Dawn routes in /path/to/app
+/hello/[tenant] -> src/app/(public)/hello/[tenant]/index.ts
+/admin/users -> src/app/(internal)/admin/users/index.ts
 ```
 
 Use this to confirm that route groups and dynamic segments are being parsed the way you expect.
 
 ## `dawn typegen`
 
-Regenerates `dawn.generated.d.ts` from the current state of every tool file.
+Regenerates `dawn.generated.d.ts` and per-route `.dawn/routes/<routeSlug>/tools.json` schema manifests.
 
 ```
 dawn typegen
 ```
 
+The success log reports route, tool-schema, and stateful-route counts. The `tools.json` artifacts are consumed by `dawn build` to emit LangGraph entries.
+
 <Callout type="info" title="Run automatically by dawn dev">
-  `dawn dev` runs `typegen` on every save. You only need to invoke it manually after a fresh clone, before CI, or after a tool signature change while the dev server isn't running.
+  `dawn dev` runs `typegen` (debounced) on saves that touch tool signatures or state schemas. You only need to invoke it manually after a fresh clone, before CI, or after a tool signature change while the dev server isn't running.
 </Callout>
+
+## `dawn build`
+
+Writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts` — the artifacts you hand to LangGraph Platform.
+
+```
+dawn build
+dawn build --clean
+```
+
+Flags:
+- `--cwd <path>` — operate on a different app root.
+- `--clean` — wipe `.dawn/build/` before writing.
+
+The generated `langgraph.json` includes `graphs` (keyed by `<routeId>#<kind>`), `dependencies: ["."]`, `env` (`.env.example` if present, else `.env`), and `node_version: "22"`. For `agent` routes, the generated entry calls `agent.bindTools([...])` with every tool discovered for the route.
+
+See [Deployment](/docs/deployment) for the full bridge.
 
 ## `dawn run`
 
@@ -57,8 +92,10 @@ echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
 ```
 
 Flags:
+- `--cwd <path>` — operate on a different app root.
 - `--url <url>` — run against a live dev server instead of the in-process runtime.
-- `--stream` — use the `/runs/stream` endpoint (requires `--url`) and pipe SSE events to stdout.
+
+The route argument can be the parameterized id (`/hello/[tenant]`) or the concrete pathname (`/hello/acme`); the input JSON's matching field supplies the dynamic-segment value.
 
 <Callout type="tip" title="Quote the path">
   Route paths contain `(`, `)`, `[`, and `]`. Always quote them in shell so they aren't expanded.
@@ -70,25 +107,25 @@ Runs every colocated `run.test.ts` scenario in the app.
 
 ```
 dawn test
+dawn test src/app/(public)/hello
 ```
 
 Flags:
-- `--url <url>` — run against a live dev server.
-- `--filter <pattern>` — only run scenarios whose describe/test name matches.
+- `--cwd <path>` — operate on a different app root.
 
-Exits non-zero on any failure with a diff per mismatched scenario. See [Testing](/docs/testing) for scenario authoring.
+The optional positional `[path]` argument narrows the discovered scenario set to a subdirectory. To target a live dev server, set `run: { url }` per-scenario inside `run.test.ts` (there is no command-level `--url` flag on `dawn test`). Exits non-zero on any failure with a diff per mismatched scenario. See [Testing](/docs/testing) for scenario authoring.
 
 ## `dawn dev`
 
-Starts the local runtime — hot reload + LangGraph Platform protocol.
+Starts the local runtime — hot reload + LangGraph Platform protocol. Bind address is fixed at `127.0.0.1`.
 
 ```
+dawn dev
 dawn dev --port 3001
 ```
 
 Flags:
-- `--port <n>` — HTTP port (default 3000).
-- `--host <addr>` — bind address (default 127.0.0.1).
+- `--port <n>` — HTTP port. Default: dynamically allocated. Pass `--port` for a stable address.
 
 See [Dev Server](/docs/dev-server) for the full protocol reference and architecture notes.
 
@@ -98,5 +135,6 @@ See [Dev Server](/docs/dev-server) for the full protocol reference and architect
 |---|---|
 | 0 | Success |
 | 1 | Validation failure (e.g. `dawn check`) or scenario failure (e.g. `dawn test`) |
-| 2 | Configuration error (missing `dawn.config.ts`, bad `appDir`) |
-| 3 | Internal error (bug — please file an issue) |
+| 2 | Configuration / runtime error (missing `dawn.config.ts`, bad `appDir`, scenario load failure) |
+
+Non-zero exit codes from underlying tools (Commander, child processes) may be propagated unchanged.
