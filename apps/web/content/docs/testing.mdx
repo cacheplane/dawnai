@@ -45,10 +45,10 @@ The `expect` object accepts:
 - `meta?` — match against `{ mode, routeId, routePath, executionSource }`.
 - `error?` — for `status: "failed"`, match `{ kind, message: string | { includes: string } }`.
 
-For programmatic assertions in `assert(result)`, import the helpers from `@dawn-ai/cli/testing`:
+For programmatic assertions in `assert(result)`, import the helpers from `@dawn-ai/sdk/testing`:
 
 ```ts
-import { expectError, expectMeta, expectOutput } from "@dawn-ai/cli/testing"
+import { expectError, expectMeta, expectOutput } from "@dawn-ai/sdk/testing"
 
 export default [
   {
@@ -114,7 +114,7 @@ Two cross-cutting features shape what scenarios assert:
   <Step title="Default-exported array">
     The file's default export is the array of scenario records. There is no `describe()` or `test()` wrapper.
   </Step>
-  <Step title="Use the helpers from @dawn-ai/cli/testing for custom assertions">
+  <Step title="Use the helpers from @dawn-ai/sdk/testing for custom assertions">
     `expectOutput`, `expectMeta`, and `expectError` cover deep-equal match (with helpful diffs). For partial or fuzzy matching today, use the declarative `expect` shape (`output`/`meta`/`error`) or write a custom predicate in `assert(result)`.
   </Step>
   <Step title="Keep scenarios focused">
