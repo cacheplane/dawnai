@@ -4,11 +4,10 @@
 
 # @dawn-ai/langgraph
 
-Thin Dawn contracts for LangGraph-style route modules.
+LangGraph runtime adapters and route module contracts (`graphAdapter`, `workflowAdapter`, `defineEntry`) used by the Dawn CLI.
 
-Public surface:
-- `defineEntry()`
-- `normalizeRouteModule()`
-- route module and route config types
+This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
 
-This package keeps Dawn close to native graph and workflow authoring instead of wrapping execution in a second runtime.
+## License
+
+MIT

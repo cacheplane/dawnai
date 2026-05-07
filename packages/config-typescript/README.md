@@ -4,12 +4,10 @@
 
 # @dawn-ai/config-typescript
 
-Reusable TypeScript base configs for Dawn libraries, Node packages, and Next.js apps.
+Shared TypeScript compiler configurations (`base`, `library`, `node`, `nextjs`) for Dawn workspace packages.
 
-Exports:
-- `@dawn-ai/config-typescript/base`
-- `@dawn-ai/config-typescript/library`
-- `@dawn-ai/config-typescript/node`
-- `@dawn-ai/config-typescript/nextjs`
+This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
 
-These configs are published so Dawn-generated apps can extend them directly.
+## License
+
+MIT

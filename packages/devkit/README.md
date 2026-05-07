@@ -4,11 +4,10 @@
 
 # @dawn-ai/devkit
 
-Shared template and file-writing helpers used by Dawn tooling.
+Internal scaffold templates and dev-time tooling shared between `@dawn-ai/cli` and `create-dawn-ai-app`.
 
-Public surface:
-- template resolution helpers
-- template copy/write helpers
-- packaged starter templates consumed by `create-dawn-app`
+This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
 
-This package is intentionally small. It exists to keep Dawn scaffolding logic consistent across tools.
+## License
+
+MIT
