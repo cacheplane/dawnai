@@ -34,9 +34,7 @@ for (const check of checks) {
 const cliMdxPath = resolve(repoRoot, "apps/web/content/docs/cli.mdx")
 const cliMdx = readFileSync(cliMdxPath, "utf8")
 
-const cliEntryUrl = pathToFileURL(
-  resolve(repoRoot, "packages/cli/dist/index.js"),
-).href
+const cliEntryUrl = pathToFileURL(resolve(repoRoot, "packages/cli/dist/index.js")).href
 const cliEntry = await import(cliEntryUrl).catch((error) => {
   failures.push(
     `CLI surface check could not import packages/cli/dist/index.js — did you run pnpm build? (${error.message})`,
