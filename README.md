@@ -122,6 +122,10 @@ pnpm create dawn-ai-app my-dawn-app
 
 Validate the app structure and configuration for the current workspace.
 
+### `dawn verify`
+
+Run all four integrity checks (app, routes, typegen, deps) in one command. The canonical pre-deploy gate, with optional `--json` output for CI.
+
 ### `dawn routes`
 
 Discover and print the routes Dawn sees in the current app.
@@ -148,6 +152,14 @@ Start the local development runtime for interactive route execution.
 
 ```bash
 pnpm exec dawn dev
+```
+
+### `dawn build`
+
+Produce LangGraph Platform deployment artifacts under `.dawn/build/`. Emits a `langgraph.json` (with `dependencies: ["."]`, `node_version: "22"`, and an `env` path) plus per-route entry files. Agent routes have their tools bound at build time.
+
+```bash
+pnpm exec dawn build
 ```
 
 ## Packages
