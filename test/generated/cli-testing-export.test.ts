@@ -17,11 +17,14 @@ afterEach(async () => {
   await cleanupTrackedTempDirs(tempDirs)
 })
 
-describe("@dawn-ai/cli/testing", () => {
+describe.each([
+  { subpath: "@dawn-ai/sdk/testing", label: "sdk" },
+  { subpath: "@dawn-ai/cli/testing", label: "cli" },
+])("$subpath", ({ subpath, label }) => {
   test("packed consumers can import the published testing helpers", {
     timeout: 30_000,
   }, async () => {
-    const tempRoot = await createTrackedTempDir("dawn-cli-testing-pack-", tempDirs)
+    const tempRoot = await createTrackedTempDir(`dawn-${label}-testing-pack-`, tempDirs)
     const { installerDir, tarballs } = await createPackagedInstaller({
       packageNames: ["@dawn-ai/core", "@dawn-ai/langchain", "@dawn-ai/langgraph", "@dawn-ai/sdk", "@dawn-ai/cli"],
       tempRoot,
@@ -45,7 +48,7 @@ describe("@dawn-ai/cli/testing", () => {
     await writeFile(
       scriptPath,
       [
-        'import { expectError, expectMeta, expectOutput } from "@dawn-ai/cli/testing";',
+        `import { expectError, expectMeta, expectOutput } from "${subpath}";`,
         "const passed = {",
         '  appRoot: "/tmp/dawn-app",',
         "  durationMs: 1,",

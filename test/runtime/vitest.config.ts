@@ -11,6 +11,7 @@ export default defineConfig({
     alias: {
       "@dawn-ai/core": resolve(rootDir, "../../packages/core/src/index.ts"),
       "@dawn-ai/langgraph": resolve(rootDir, "../../packages/langgraph/src/index.ts"),
+      "@dawn-ai/sdk/testing": resolve(rootDir, "../../packages/sdk/src/testing/index.ts"),
       "@dawn-ai/sdk": resolve(rootDir, "../../packages/sdk/src/index.ts"),
     },
   },
