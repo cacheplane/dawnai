@@ -1,7 +1,7 @@
+import { expectError, expectMeta, expectOutput } from "@dawn-ai/sdk/testing"
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
-import { expectError, expectMeta, expectOutput } from "../lib/runtime/assertions.js"
 import { executeRoute } from "../lib/runtime/execute-route.js"
 import { executeRouteServer } from "../lib/runtime/execute-route-server.js"
 import {
