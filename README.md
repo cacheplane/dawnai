@@ -4,11 +4,11 @@
 
 # Dawn
 
-Dawn is a TypeScript meta-framework for filesystem-based route discovery, route validation, type generation, local route execution, and a local development runtime.
+Dawn is a TypeScript meta-framework for authoring agents and workflows: filesystem-based route discovery, the `agent()` descriptor, route-local tools, per-route middleware, type generation, a local development runtime, and `dawn build` for producing LangGraph Platform deployment artifacts.
 
 ## Status
 
-This repository documents the current behavior only. It is intentionally narrow. Dawn is not a deployment runtime, not a LangSmith trace replacement, and not a hosted platform.
+This repository documents the current behavior only. Dawn does not host or run production traffic — `dawn build` produces deployment artifacts (`.dawn/build/langgraph.json` plus per-route entry files) that LangGraph Platform runs. Dawn is not a LangSmith trace replacement and not a hosted platform.
 
 ## Quickstart
 
