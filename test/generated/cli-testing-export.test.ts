@@ -38,6 +38,7 @@ describe.each([
         requiredTarball(tarballs, "@dawn-ai/core"),
         requiredTarball(tarballs, "@dawn-ai/langchain"),
         requiredTarball(tarballs, "@dawn-ai/langgraph"),
+        requiredTarball(tarballs, "@dawn-ai/sdk"),
         requiredTarball(tarballs, "@dawn-ai/cli"),
       ],
       installerDir,
