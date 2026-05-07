@@ -10,7 +10,7 @@ Dawn is a TypeScript-first framework for building graph-based AI agent systems. 
 ## Scaffold a new app
 
 ```bash
-npx create-dawn-app my-agent
+pnpm create dawn-ai-app my-agent
 cd my-agent
 pnpm install
 ```
@@ -27,37 +27,44 @@ my-agent/
     │   └── hello/
     │       └── [tenant]/
     │           ├── index.ts        # Route entry
-    │           ├── state.ts        # Route state type
+    │           ├── state.ts        # Route state schema (Zod)
     │           └── tools/
     │               └── greet.ts    # Co-located tool
     └── dawn.generated.d.ts         # Auto-generated types
 ```
 
+## Validate the app
+
+Before you run anything, confirm the app is well-formed and the generated types are up to date:
+
+```bash
+dawn verify
+```
+
+`dawn verify` runs four checks (app contract, route discovery, typegen, deps) in a single call. For a quicker individual gate while iterating, use `dawn check` and `dawn typegen` separately.
+
 ## Understand the route
 
 Each route is a directory under `src/app/` with an `index.ts` that exports exactly one of:
 
-- **`workflow`** — an async function that receives state and a typed context
-- **`graph`** — a LangGraph graph instance
-- **`chain`** — a LangChain LCEL Runnable
+- **`agent`** — a `DawnAgent` descriptor (default-exported) created via `agent({ model, systemPrompt })`. The scaffold default and the recommended path for LLM-driven routes.
+- **`workflow`** — an async function that receives state and a typed context.
+- **`graph`** — a LangGraph graph instance.
+- **`chain`** — a LangChain LCEL Runnable.
 
-The scaffolded app uses a `workflow` export:
+The scaffolded app uses an `agent` default export:
 
 ```typescript
-import type { RuntimeContext } from "@dawn-ai/sdk"
-import type { RouteTools } from "dawn:routes"
-import type { HelloState } from "./state.js"
+import { agent } from "@dawn-ai/sdk"
 
-export async function workflow(
-  state: HelloState,
-  ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>
-) {
-  const result = await ctx.tools.greet({ tenant: state.tenant })
-  return { ...state, greeting: result.greeting }
-}
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt:
+    "You are a helpful assistant for the {tenant} organization. Answer questions about the tenant.",
+})
 ```
 
-The `RouteTools<"/hello/[tenant]">` type is auto-generated from the tool files in the `tools/` directory. You get full autocomplete for `ctx.tools.greet()` with zero manual wiring.
+Tools in the route's `tools/` directory are auto-bound to the agent at `dawn build` time — the LLM picks when to invoke them. See [Routes](/docs/routes) for the `workflow` / `graph` / `chain` alternatives, and the optional `retry: { maxAttempts, baseDelay }` config.
 
 ## Add a tool
 
@@ -70,22 +77,19 @@ export default async (input: { readonly tenant: string }) => {
 }
 ```
 
-Dawn extracts the input and output types at build time using the TypeScript compiler API, then writes them to `dawn.generated.d.ts`. No Zod schemas, no manual type declarations.
+Dawn extracts the input and output types at build time using the TypeScript compiler API, then writes them to `dawn.generated.d.ts`. Tool inputs and outputs require no Zod schemas — that inference is what makes `ctx.tools.greet()` show up fully typed without any manual wiring. (Route state in `state.ts` does use a Zod schema; see [State](/docs/state).)
+
+The tool's runtime signature is `(input, ctx) => ...`, where `ctx` is `{ signal: AbortSignal, middleware?: Readonly<Record<string, unknown>> }`. Use `ctx.signal` to cooperate with cancellation; `ctx.middleware` carries request-scoped context populated by `src/middleware.ts`. See [Tools](/docs/tools) for the full reference.
 
 ## Run your agent
 
+`dawn run` reads JSON state from stdin, invokes the route, and prints the JSON result to stdout:
+
 ```bash
-dawn run '/hello/acme'
+echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
 ```
 
-Dawn discovers the route matching `/hello/acme`, resolves `[tenant]` to `"acme"`, and executes the workflow. You should see:
-
-```
-Route    /hello/[tenant]
-Mode     workflow
-Tenant   acme
-✓ { greeting: "Hello, acme!" }
-```
+The output is JSON (`JSON.stringify(result, null, 2)`) — for the scaffold's agent route, that's the LLM's structured response after any tool calls. The `[tenant]` segment is resolved from the matching state field.
 
 ## Start the dev server
 
@@ -95,10 +99,19 @@ For iterative development with hot reload:
 dawn dev
 ```
 
-The dev server watches for file changes and restarts automatically. It exposes the same endpoints used by the LangGraph Platform — `/runs/wait` and `/runs/stream` — so what works locally works in production.
+The dev server watches for file changes and restarts automatically. It binds an ephemeral localhost port by default (announced on stdout); pass `--port <n>` for a stable port. It exposes the same endpoints used by the LangGraph Platform — `/runs/wait` and `/runs/stream` — so what works locally works in production.
+
+## Ship to production
+
+Run `dawn build` to write `.dawn/build/langgraph.json` plus per-route entry files. That directory is what you hand to LangGraph Platform. See [Deployment](/docs/deployment) for the full bridge.
 
 ## What's next
 
-- Explore the [Dawn GitHub repository](https://github.com/cacheplane/dawnai) for the full source
-- Read the template code in `src/app/` to understand route conventions
-- Try adding a new route directory with its own tools
+- [Routes](/docs/routes) — `agent`, `workflow`, `graph`, `chain`, middleware
+- [Tools](/docs/tools) — tool inputs, outputs, and runtime context
+- [State](/docs/state) — Zod state schemas and dynamic-segment merging
+- [CLI](/docs/cli) — every command flag and exit code
+- [Dev Server](/docs/dev-server) — protocol endpoints, hot reload, middleware
+- [Testing](/docs/testing) — scenario tests and live-server parity
+- [Deployment](/docs/deployment) — `dawn build` and LangGraph Platform handoff
+- [Dawn on GitHub](https://github.com/cacheplane/dawnai) — full source
