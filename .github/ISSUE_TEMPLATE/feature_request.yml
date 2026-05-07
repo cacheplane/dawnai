@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a Dawn feature or improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should Dawn do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or alternate designs did you consider?
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add links, examples, or prior art if useful.

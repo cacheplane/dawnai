@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a reproducible Dawn bug.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a bug. Please include a minimal reproduction when possible.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest app, route, command, or code sample that reproduces the issue.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: package
+    attributes:
+      label: Affected package or command
+      placeholder: "@dawn-ai/cli, @dawn-ai/sdk, dawn build, dawn dev"
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: "22.12.0"
+  - type: input
+    id: pnpm
+    attributes:
+      label: pnpm version
+      placeholder: "10.33.0"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste relevant logs or error output.
+      render: shell
