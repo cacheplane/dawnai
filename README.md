@@ -175,9 +175,7 @@ pnpm exec dawn build
 
 ## Current Boundaries
 
-Dawn is not a deployment runtime. Local runtime ownership stops at `dawn dev`.
-
-Dawn is not a LangSmith trace replacement.
+Local runtime ownership stops at `dawn dev`. Production traffic runs on LangGraph Platform from the artifacts `dawn build` emits.
 
 The starter template surface is intentionally small, and the supported config surface is intentionally narrow.
 
