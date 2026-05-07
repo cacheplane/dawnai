@@ -3,6 +3,7 @@
 **Status:** in progress
 **Spec:** `docs/superpowers/specs/2026-05-06-docs-review-design.md`
 **Plan:** `docs/superpowers/plans/2026-05-06-docs-review.md`
+**Last refresh:** 2026-05-07 — audit refreshed against main HEAD 7a96d3b (Add Dawn brand assets, PR #38). Affected sections: 1, 5, 6.
 
 ## Findings format
 
@@ -24,7 +25,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-001: README opening sentence omits agent execution and tools — Dawn's primary capability
 - **Surface:** Root README
-- **File:** README.md:3
+- **File:** README.md:7
 - **Type:** misalignment
 - **Severity:** important
 - **Description:** The opening line describes Dawn as a framework for "filesystem-based route discovery, route validation, type generation, local route execution, and a local development runtime." This omits agent execution, route-local tool authoring, middleware, and `dawn build` for LangGraph Platform deployment artifacts — all currently shipping capabilities. The scaffold even ships an `agent()` route by default (see F-005), so describing Dawn purely as a route/runtime framework is misleading.
@@ -32,7 +33,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-002: "Status" section says Dawn is not a deployment runtime, but `dawn build` produces LangGraph Platform deployment artifacts
 - **Surface:** Root README
-- **File:** README.md:5-7
+- **File:** README.md:9-11
 - **Type:** misalignment
 - **Severity:** important
 - **Description:** The Status section asserts Dawn "is not a deployment runtime, not a LangSmith trace replacement, and not a hosted platform." This is technically still true (Dawn does not host or run production traffic), but it ignores the fact that `dawn build` (packages/cli/src/commands/build.ts) now exists specifically to emit `langgraph.json` + entry files for LangGraph Platform deployment. Readers will be confused when `dawn build` is missing from Commands and the Status disclaimer suggests deployment is out of scope.
@@ -40,7 +41,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-003: Quickstart `pnpm create dawn-app` invokes a non-existent npm package
 - **Surface:** Root README
-- **File:** README.md:14, 72
+- **File:** README.md:18, 76
 - **Type:** error
 - **Severity:** critical
 - **Description:** The README instructs users to run `pnpm create dawn-app my-dawn-app`. `pnpm create dawn-app` resolves to the npm package `create-dawn-app`, but the published package is `create-dawn-ai-app` (see packages/create-dawn-app/package.json line 2: `"name": "create-dawn-ai-app"`, and bin name `create-dawn-ai-app` on line 23). The Quickstart command will fail with a "package not found" error for any first-time user.
@@ -48,7 +49,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-004: Scaffold route example documents `workflow`/`graph` exports but actual scaffold exports `agent`
 - **Surface:** Root README
-- **File:** README.md:40-50
+- **File:** README.md:44-54
 - **Type:** misalignment
 - **Severity:** critical
 - **Description:** The App Contract section says a route's `index.ts` "exports either a `workflow` function or a `graph` function/object" and shows two snippets using those exports. But the basic template ships `index.ts` that does `export default agent({...})` (packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/index.ts). The discovery layer (packages/core/src/discovery/discover-routes.ts) actually accepts four kinds: `agent`, `workflow`, `graph`, and `chain` (RouteKind in packages/sdk/src/route-config.ts:1). A user reading this section and then opening the scaffold would be very confused — the scaffolded route does not match either pattern shown.
@@ -56,7 +57,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-005: README under-claims scaffold contents — omits `state.ts` and the default `agent` export
 - **Surface:** Root README
-- **File:** README.md:58-61
+- **File:** README.md:62-65
 - **Type:** misalignment
 - **Severity:** important
 - **Description:** README says the basic scaffold ships `index.ts` and `tools/greet.ts`. The actual template (packages/devkit/templates/app-basic/) also ships `state.ts` (line 7 of the file listing). The README's own App Contract section even calls out that "Route directories may also include companion files such as `state.ts`," yet the scaffold listing omits it. Additionally the `index.ts` content is `export default agent({...})`, not the `workflow`/`graph` forms shown in the contract.
@@ -64,7 +65,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-006: Commands section omits `dawn build` and `dawn verify` — both shipping commands
 - **Surface:** Root README
-- **File:** README.md:63-105
+- **File:** README.md:67-109
 - **Type:** gap
 - **Severity:** important
 - **Description:** The Commands section documents `dawn check`, `dawn routes`, `dawn typegen`, `dawn run`, `dawn test`, and `dawn dev`. Two shipping commands are missing:
@@ -75,7 +76,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-007: Quickstart never mentions `dawn check`/`dawn typegen`/`dawn verify` despite Commands listing them
 - **Surface:** Root README
-- **File:** README.md:9-30
+- **File:** README.md:13-34
 - **Type:** gap
 - **Severity:** minor
 - **Description:** The Quickstart goes from `pnpm install` straight to `dawn run`. A first-time user will hit cryptic errors if `dawn typegen` has not been run (the scaffolded `.dawn/dawn.generated.d.ts` ships pre-generated, but any added route requires regeneration). At minimum a `pnpm exec dawn check` step would surface validation issues before invocation, and `pnpm exec dawn typegen` would set expectations.
@@ -95,7 +96,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-009: App Contract claims `appDir` is "the only supported config option today" — accurate but tonally fragile
 - **Surface:** Root README
-- **File:** README.md:38
+- **File:** README.md:42
 - **Type:** misalignment
 - **Severity:** minor
 - **Description:** The claim is currently true (packages/core/src/config.ts:90 only accepts `appDir`; the type at packages/core/src/types.ts:6 has `appDir?: string` as the only field). However the wording invites churn — every time a config option lands, this line needs editing. More importantly, it does not state the default value (`src/app`) inline, even though that default is documented one line earlier.
@@ -103,7 +104,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-010: Route directory "additional files" list says only `page.tsx` — omits `state.ts`, `run.test.ts`, and `tools/`
 - **Surface:** Root README
-- **File:** README.md:54-56
+- **File:** README.md:58-60
 - **Type:** misalignment
 - **Severity:** important
 - **Description:** The README lists `page.tsx for UI routes` as the only additional file, but two paragraphs earlier (line 52) it acknowledges `state.ts` and `tools/*.ts`. The `dawn test` command (line 95-97) further depends on `run.test.ts` colocated next to `index.ts`. The "additional files" list is contradicted by the rest of the same section.
@@ -111,7 +112,7 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-011: Packages section is missing `@dawn-ai/vite-plugin`
 - **Surface:** Root README
-- **File:** README.md:107-116
+- **File:** README.md:111-120
 - **Type:** gap
 - **Severity:** minor
 - **Description:** The Packages section enumerates eight packages. The workspace also ships `@dawn-ai/vite-plugin` (packages/vite-plugin/ exists in the tree). Whether this is "internal-only" or user-facing should be made explicit; right now it is silently absent.
@@ -127,13 +128,21 @@ Findings are numbered globally across all sections (F-001, F-002, ...). Each sub
 
 ### F-013: "Current Boundaries" repeats Status disclaimers without adding new information
 - **Surface:** Root README
-- **File:** README.md:118-124
+- **File:** README.md:122-128
 - **Type:** misalignment
 - **Severity:** minor
 - **Description:** Lines 118-124 restate "Dawn is not a deployment runtime" and "Dawn is not a LangSmith trace replacement" — both already stated in the Status section (lines 5-7). The third sentence ("starter template surface is intentionally small") is the only novel content. This duplication wastes readers' attention and amplifies the F-002 misalignment about deployment scope.
 - **Suggested fix:** Either fold Current Boundaries into a single revised Status block (with the deployment-artifact correction from F-002) or drop it.
 
-Root README findings: F-001 through F-013 (3 critical, 6 important, 4 minor).
+### F-114: Image header markup is inconsistent between the root README and the nine package READMEs
+- **Surface:** Root README (and all package READMEs)
+- **File:** README.md:1-3, packages/sdk/README.md:1-3, packages/cli/README.md:1-3, packages/core/README.md:1-3, packages/langchain/README.md:1-3, packages/langgraph/README.md:1-3, packages/vite-plugin/README.md:1-3, packages/devkit/README.md:1-3, packages/config-typescript/README.md:1-3, packages/config-biome/README.md:1-3, packages/create-dawn-app/README.md:1-3
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** PR #38 added a Dawn brand image header to the root README and to all nine package READMEs, but the markup diverges between root and packages. The root README uses `<p align="center">` with `width="360"` and a relative path `docs/brand/dawn-logo-horizontal-black-on-white.png`. The nine package READMEs use plain `<p>` (no `align`) with `width="180"` and an absolute `https://raw.githubusercontent.com/cacheplane/dawnai/main/...` URL. The visual result on GitHub differs (centered vs. left-aligned) and on npmjs.com only the absolute URL renders, so the chosen-style asymmetry is not just cosmetic — it affects how the brand surfaces on each channel.
+- **Suggested fix:** Decide on a single canonical header markup (e.g., always `<p align="center">` with the same width) and apply it uniformly. Keep the relative path for the root README (renders on GitHub) and the absolute path for package READMEs (renders on both GitHub and npmjs.com), but normalize the wrapping element and width across all ten files.
+
+Root README findings: F-001 through F-013, plus F-114 (3 critical, 6 important, 5 minor).
 
 ## 2. Website load-bearing pages (`getting-started.mdx`, `routes.mdx`, `tools.mdx`, `deployment.mdx`)
 
@@ -758,7 +767,7 @@ Templates findings: F-075 through F-087 (6 critical, 3 important, 4 minor).
 
 ### F-089: `@dawn-ai/sdk` README claims "pure type layer with no runtime dependencies" but the package now ships runtime helpers
 - **Surface:** Public package READMEs
-- **File:** packages/sdk/README.md:10
+- **File:** packages/sdk/README.md:14
 - **Type:** error
 - **Severity:** critical
 - **Description:** The README closes with "This package is a pure type layer with no runtime dependencies." That is wrong: `packages/sdk/src/index.ts` exports runtime values `agent`, `isDawnAgent` (from `./agent.js`) and `allow`, `defineMiddleware`, `reject` (from `./middleware.js`). These are real functions, not types. The README will mislead readers into thinking they cannot author agents or middleware via the SDK and that the import has zero runtime cost.
@@ -766,7 +775,7 @@ Templates findings: F-075 through F-087 (6 critical, 3 important, 4 minor).
 
 ### F-090: `@dawn-ai/sdk` README "Public surface" list is materially incomplete
 - **Surface:** Public package READMEs
-- **File:** packages/sdk/README.md:5-8
+- **File:** packages/sdk/README.md:9-12
 - **Type:** gap
 - **Severity:** important
 - **Description:** The README lists three exports (`RuntimeContext`, `RuntimeTool`/`ToolRegistry`, `RouteConfig`/`RouteKind`). The actual `packages/sdk/src/index.ts` re-exports many more, including `agent`, `AgentConfig`, `DawnAgent`, `RetryConfig`, `isDawnAgent`, `BackendAdapter`, `AnthropicModelId`/`GoogleModelId`/`OpenAiModelId`/`KnownModelId`, `ContinueResult`/`DawnMiddleware`/`MiddlewareRequest`/`MiddlewareResult`/`RejectResult`, `allow`/`defineMiddleware`/`reject`, `RouteStateMap`/`RouteToolMap`, and `Prettify`. Readers cannot discover the actual SDK surface from the README.
@@ -806,7 +815,7 @@ Templates findings: F-075 through F-087 (6 critical, 3 important, 4 minor).
 
 ### F-095: `@dawn-ai/cli` README's command list omits five of eight commands
 - **Surface:** Public package READMEs
-- **File:** packages/cli/README.md:5-8
+- **File:** packages/cli/README.md:9-12
 - **Type:** error
 - **Severity:** critical
 - **Description:** The README lists only `dawn check`, `dawn routes`, `dawn typegen`. The actual program (`packages/cli/src/index.ts:36-44`) registers eight user-facing commands: `build`, `check`, `dev`, `run`, `routes`, `test`, `typegen`, `verify` (plus an internal `dev-child`). Notably, `dawn dev` (the local development runtime) and `dawn build` (which produces LangGraph Platform deployment artifacts) are the two highest-leverage commands and are entirely absent.
@@ -814,7 +823,7 @@ Templates findings: F-075 through F-087 (6 critical, 3 important, 4 minor).
 
 ### F-096: `@dawn-ai/cli` README mischaracterizes the CLI as primarily a CI checker
 - **Surface:** Public package READMEs
-- **File:** packages/cli/README.md:3, 10
+- **File:** packages/cli/README.md:7, 14
 - **Type:** misalignment
 - **Severity:** important
 - **Description:** The opening describes the CLI as "validating Dawn apps, inspecting routes, and generating route types" and the closing line frames usage as "run Dawn app checks in CI and local development." This frames the CLI as a static-analysis/typegen tool, but `dawn dev` is the local runtime, `dawn run` executes routes locally, `dawn test` runs route tests, and `dawn build` produces deployment artifacts. The README undersells the CLI to the point of being misleading.
@@ -854,7 +863,7 @@ Templates findings: F-075 through F-087 (6 critical, 3 important, 4 minor).
 
 ### F-101: `create-dawn-app` README title and self-name disagree with the published package name
 - **Surface:** Public package READMEs
-- **File:** packages/create-dawn-app/README.md:1
+- **File:** packages/create-dawn-app/README.md:5
 - **Type:** error
 - **Severity:** critical
 - **Description:** The README's H1 is `# create-dawn-app`, but the package is published as `create-dawn-ai-app` (per `packages/create-dawn-app/package.json:2`, with bin name `create-dawn-ai-app` on line 23). The directory name `create-dawn-app` is internal-only — the public name on npm is `create-dawn-ai-app`. A reader on npmjs.com will see a title that does not match the package they're viewing, and any `npm init`/`pnpm create` example derived from the title will fail. This is the same class of bug as the root README's F-003.
@@ -894,7 +903,7 @@ Templates findings: F-075 through F-087 (6 critical, 3 important, 4 minor).
 
 ### F-106: `create-dawn-app` README understates available templates relative to roadmap, with no signal of what's coming
 - **Surface:** Public package READMEs
-- **File:** packages/create-dawn-app/README.md:5-6
+- **File:** packages/create-dawn-app/README.md:9-10
 - **Type:** gap
 - **Severity:** minor
 - **Description:** "Current template support: `basic`" is technically accurate today, but the README gives no indication of how to request additional templates, how to pass `--template`, or whether more are planned. For a scaffolder whose entire value prop is templates, this is a thin presentation.
@@ -960,7 +969,15 @@ Public READMEs findings: F-088 through F-106 (4 critical, 11 important, 4 minor)
 - **Description:** The README's "Public surface" elevates `extractJsDoc()`, `extractParameterType()`, and `generateZodSchema()` alongside `dawnToolSchemaPlugin()` and `transformToolSource()`. The first three are implementation details re-exported for testability — no consumer imports them in normal use, and listing them in a stub README implies they are part of the user-facing contract. This is the only README of the seven that exposes internal helpers this way, contributing to the F-108 inconsistency.
 - **Suggested fix:** Trim the public-surface list to `dawnToolSchemaPlugin()` (and optionally `transformToolSource()` if it is intentionally documented for advanced users). Move the JSDoc/type/Zod helpers to the website's internals page if they need documenting.
 
-Internal READMEs findings: F-107 through F-113 (0 critical, 2 important, 5 minor).
+### F-115: Package README image headers hardcode `cacheplane/dawnai@main` raw GitHub URL — durability and pre-publish risk
+- **Surface:** Public package READMEs and Internal package READMEs
+- **File:** packages/sdk/README.md:2, packages/cli/README.md:2, packages/create-dawn-app/README.md:2, packages/core/README.md:2, packages/langchain/README.md:2, packages/langgraph/README.md:2, packages/vite-plugin/README.md:2, packages/devkit/README.md:2, packages/config-typescript/README.md:2, packages/config-biome/README.md:2
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** All ten package READMEs reference the brand image via `https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/dawn-logo-horizontal-black-on-white.png`. Two consequences: (1) the URL only resolves once the brand asset has actually landed on `main` — for any package README that's published to npm before that commit propagates (or for a fork where the asset was never copied), the image renders broken; (2) the URL hardcodes both the GitHub org/repo (`cacheplane/dawnai`) and the branch (`main`), so any future repo rename, transfer, or default-branch change silently breaks the brand on every published package page. This is acceptable today (PR #38 lands the asset alongside the references) but it deserves a tracking note so future repo-rename work knows to search for `cacheplane/dawnai`.
+- **Suggested fix:** Either (a) leave as-is and document the coupling in CONTRIBUTORS.md so a repo rename triggers a sweep of `cacheplane/dawnai` references, or (b) bundle the image into each published package via `files`/`publishConfig` and reference `./logo.png` so the README is self-contained on npmjs.com. Option (b) is more durable but increases the published tarball size by ~30KB per package.
+
+Internal READMEs findings: F-107 through F-113, plus F-115 (0 critical, 2 important, 6 minor).
 
 ## Summary
 
