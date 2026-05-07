@@ -356,7 +356,287 @@ Load-bearing pages findings: F-014 through F-039 (12 critical, 10 important, 4 m
 
 ## 3. Website supporting pages (`state.mdx`, `cli.mdx`, `dev-server.mdx`, `testing.mdx`)
 
-_(pending — Task 4)_
+### F-040: state.mdx documents a TypeScript `interface` shape — actual scaffold uses a default-exported Zod schema
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/state.mdx:7-24
+- **Type:** error
+- **Severity:** critical
+- **Description:** The "shape" snippet shows `export interface HelloState { readonly tenant: string; readonly greeting?: string }` and then imports `HelloState` for use as the workflow's state-typed first parameter. The actual scaffold (packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/state.ts) is `import { z } from "zod"; export default z.object({ context: z.string().default("") })`. State discovery (packages/cli/src/lib/runtime/state-discovery.ts:11-56) requires a default-exported Standard-Schema-compatible or Zod schema with a `.parse({})` shape — a TypeScript `interface` produces no runtime export, so `discoverStateDefinition` returns `null` and state defaults silently disappear. This is the same drift flagged in F-023 on routes.mdx but state.mdx is the canonical state page, so the misalignment is more severe here.
+- **Suggested fix:** Replace the snippet with the Zod default-export form: `import { z } from "zod"; export default z.object({ context: z.string().default("") })`. Show how the schema doubles as a runtime defaults provider (state-discovery extracts via `.parse({})`) and as a TS type via `z.infer<typeof state>`.
+
+### F-041: state.mdx never mentions Zod, Standard Schema, or `.default()` — the entire runtime contract is invisible
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/state.mdx (overall)
+- **Type:** gap
+- **Severity:** critical
+- **Description:** The page says "State is the contract between the caller, the route's entry, and any tools" but never explains how the contract is declared. Reality: `discoverStateDefinition` (packages/cli/src/lib/runtime/state-discovery.ts:34-56) accepts either a Standard-Schema-conformant value (via the `~standard.validate({})` slot) or a Zod-compatible `.parse({})` object. The scaffold uses Zod. The audit plan flags state.ts semantics as the load-bearing detail to verify, and the doc treats state as a TS-only concept.
+- **Suggested fix:** Rewrite the "shape" section around the Zod default-export form. Add a note on Standard Schema fallback for non-Zod schema libraries. Show the `z.infer<typeof state>` idiom for getting a TS type out of the schema.
+
+### F-042: state.mdx omits the `reducers/<field>.ts` override mechanism
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/state.mdx:38-50
+- **Type:** gap
+- **Severity:** important
+- **Description:** state-discovery.ts:78-103 imports any `reducers/<field>.ts` files inside a route directory and registers each default export as a custom reducer for that state field. The "Rules" Steps explain JSON-serializability, readonly, and accumulation, but never mention that reducers exist or that they let authors override the default merge behavior per field. Authors hitting accumulation issues have no doc surface to find this.
+- **Suggested fix:** Add a "Custom reducers" section showing `routeDir/reducers/<fieldName>.ts` exporting `(current, incoming) => merged` as the default. Note that the file basename must equal the state-field name. Cross-reference to a future reducers-deep-dive page.
+
+### F-043: state.mdx workflow snippet uses untyped `ctx` and the `workflow` form, contradicting agent-first scaffold
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/state.mdx:17-24
+- **Type:** misalignment
+- **Severity:** important
+- **Description:** Snippet: `export async function workflow(state: HelloState, ctx) { ... }`. The scaffold default is `export default agent({ model, systemPrompt })` (packages/devkit/templates/app-basic/src/app/(public)/hello/[tenant]/index.ts), and per F-015/F-016 in load-bearing pages, agent is now a first-class kind. `ctx` is also untyped (`noImplicitAny` would error in strict mode). Same misalignment thread as F-029.
+- **Suggested fix:** Add types (`ctx: RuntimeContext` from `@dawn-ai/sdk`). Add a sibling note that agent routes don't use a workflow signature — state still flows through the same Zod default export and is consumed by the LLM/tool-binding layer.
+
+### F-044: state.mdx "State flow" diagram says state goes "stdin → workflow → stdout" — no mention of HTTP, dev-server, or LangGraph protocol
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/state.mdx:52-60
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** The flow diagram implies state always crosses `dawn run`'s stdin/stdout boundary. In production, state crosses HTTP via `/runs/wait` and `/runs/stream` (packages/cli/src/lib/dev/runtime-server.ts:124-135), keyed by `assistant_id`, with dev/prod parity. The diagram is correct for `dawn run` only.
+- **Suggested fix:** Either generalize the boundary description ("state crosses the runtime boundary — stdin/stdout for `dawn run`, JSON over HTTP for `/runs/wait` and `/runs/stream`"), or drop the diagram and link to the dev-server protocol page.
+
+### F-045: state.mdx makes no reference to dynamic-segment merging into Zod state defaults
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/state.mdx:26-36
+- **Type:** gap
+- **Severity:** important
+- **Description:** "Naming matters" callout is correct on the wiring rule, but the scaffolded state.ts only declares `context`. The `tenant` field actually arrives at runtime from the URL pathname and is layered on top of the schema-derived defaults (resolveStateFields, packages/core/src/state-resolution). The page says "the dynamic segment is populated on the state field of the same name" but never notes that authors do NOT need to (and should not) declare `tenant` in their Zod schema — it's injected from the path. Authors copying the snippet from F-040's fix could double-declare and conflict.
+- **Suggested fix:** Add a sentence: "Dynamic-segment fields are injected from the URL path at runtime — they are not declared in the Zod schema. Schema fields cover the state your entry produces or the caller supplies." Show the scaffold pattern (`z.object({ context })`) alongside the `[tenant]` segment to make the split explicit.
+
+### F-046: cli.mdx opening claims "Dawn ships a single `dawn` binary with six commands" — the binary registers eight
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx:3
+- **Type:** error
+- **Severity:** critical
+- **Description:** The first paragraph asserts six commands. packages/cli/src/index.ts:36-44 registers eight user-facing commands: `build`, `check`, `dev`, `run`, `routes`, `test`, `typegen`, `verify`. The page documents only six (`check`, `routes`, `typegen`, `run`, `test`, `dev`). `dawn build` and `dawn verify` are entirely absent — both shipping commands per the audit context.
+- **Suggested fix:** Update the count to eight (or drop the count). Add `## dawn build` and `## dawn verify` sections (see F-047 and F-048).
+
+### F-047: cli.mdx is missing the `dawn build` reference entirely
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx (overall)
+- **Type:** gap
+- **Severity:** critical
+- **Description:** `dawn build` (packages/cli/src/commands/build.ts:21-30) is the only path to LangGraph Platform deployment artifacts. It accepts `--clean` and `--cwd <path>`, runs typegen as a pre-step, writes `.dawn/build/<routeSlug>.ts` entry files (with `agent.bindTools(...)` for agent routes), and emits `.dawn/build/langgraph.json` with `graphs`, `dependencies: ["."]`, `env`, and `node_version: "22"` (extractDeploymentConfig at packages/cli/src/lib/build/deployment-config.ts:18-24). None of this is in cli.mdx.
+- **Suggested fix:** Add a `## dawn build` section that documents `--clean` and `--cwd`, describes the artifact layout under `.dawn/build/`, and cross-links to deployment.mdx.
+
+### F-048: cli.mdx is missing the `dawn verify` reference entirely
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx (overall)
+- **Type:** gap
+- **Severity:** critical
+- **Description:** `dawn verify` (packages/cli/src/commands/verify.ts:88-97) runs four checks (`app`, `routes`, `typegen`, `deps`) with optional `--json`. Per the audit context it is the canonical integrity gate, and per F-034 deployment.mdx should reroute users to it. The CLI reference omits it entirely.
+- **Suggested fix:** Add a `## dawn verify` section documenting `--cwd`, `--json`, the four checks (including the deps check that surfaces missing packages and missing env vars), and the JSON output shape (`{ status, appRoot, checks, counts }`).
+
+### F-049: cli.mdx `dawn check` description over-claims — `state.ts` named-export rule and "no invalid tool shapes" rule are documented but not real
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx:13-18
+- **Type:** error
+- **Severity:** important
+- **Description:** The check list says it validates: (1) dawn.config.ts has only supported fields, (2) package.json exists, (3) every route exports exactly one of `workflow`/`graph`/`chain`, (4) every route's `state.ts` exports a named state type, (5) no tool files have invalid shapes. Reality (packages/cli/src/commands/check.ts:21-40): check calls `discoverRoutes` (which enforces app structure and the single-entry rule across `agent | workflow | graph | chain` — note `agent` missing from doc list, mirroring F-021) and then `discoverToolDefinitions` per route. There is no `state.ts` named-export check (state.ts uses a default Zod export; F-040). The "package.json exists" check happens during `findDawnApp`, not as a separate check call.
+- **Suggested fix:** Rewrite the bullet list to match reality: (a) dawn.config.ts loads, (b) app structure resolves via findDawnApp, (c) discoverRoutes returns successfully — single entry per route across `agent | workflow | graph | chain`, (d) discoverToolDefinitions parses each route's `tools/*.ts` without errors. Drop the `state.ts` named-export claim. Update the entry-kind enumeration to four kinds.
+
+### F-050: cli.mdx `dawn check` and `dawn routes` outputs do not match the real CLI
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx:22-37
+- **Type:** error
+- **Severity:** important
+- **Description:** `dawn routes` is documented to print `pathname  kind  entryFile` columns. The actual implementation (packages/cli/src/commands/routes.ts:31-35) prints `Discovered N Dawn routes in <appRoot>` followed by `<pathname> -> <entryFile>` (no kind column). It also accepts `--json` (line 16-17), which is not documented. `dawn check` similarly prints `Dawn app is valid: N routes discovered.` plus per-route `- <pathname> (<kind>)` lines (check.ts:32-35), which the doc never describes.
+- **Suggested fix:** Replace the `dawn routes` sample with the real `<pathname> -> <entryFile>` form, and document `--json`. Add a one-line description of `dawn check`'s output (route count + per-route kind line).
+
+### F-051: cli.mdx `dawn run` example uses `--stream` flag — flag does not exist
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx:60-61
+- **Type:** error
+- **Severity:** critical
+- **Description:** Documented flags include `--stream` "use the `/runs/stream` endpoint (requires `--url`)". `runRunCommand` (packages/cli/src/commands/run.ts:24-33) registers exactly two options: `--cwd <path>` and `--url <baseUrl>`. There is no `--stream` flag — invoking `dawn run --stream` will produce commander's "unknown option" error. The runtime server has a `/runs/stream` endpoint (runtime-server.ts:124-135), but the CLI does not surface it as a `dawn run` flag today.
+- **Suggested fix:** Either remove the `--stream` bullet, or document the actual streaming entry point (e.g., direct fetch of `/runs/stream`) — but do not advertise a CLI flag that does not exist.
+
+### F-052: cli.mdx `dawn run` flags omit `--cwd` (real flag) and use route ID `'/hello/[tenant]'` literally
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx:55-57,60-61
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** `--cwd <path>` is a real flag (run.ts:28) and should appear in the flags list. The example pipes `{"tenant":"acme"}` and runs `dawn run '/hello/[tenant]'` with the bracketed ID. resolveRouteTarget supports both pathname (`/hello/[tenant]`) and concrete (`/hello/acme`) forms, so the example is correct; but the cli.mdx tip on quoting (lines 63-65) only mentions `(`, `)`, `[`, `]` — readers may be unsure whether the ID should be the bracketed form or the concrete tenant.
+- **Suggested fix:** Add `--cwd <path>` to the flags list. Add a note that the route argument can be the parameterized ID (`/hello/[tenant]`) or the concrete pathname (`/hello/acme`); the input JSON's matching field supplies the dynamic segment value.
+
+### F-053: cli.mdx `dawn test` flags wrong — only `--cwd` exists; `--url` and `--filter` are documented but absent
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx:75-77
+- **Type:** error
+- **Severity:** critical
+- **Description:** Documented flags: `--url <url>` and `--filter <pattern>`. `runTestCommand` (packages/cli/src/commands/test.ts:34-42) registers only `--cwd <path>`. There is also a positional `[path]` narrowing argument. To run scenarios against a live server, scenario files must declare `run: { url }` per-scenario (load-run-scenarios.ts:269-279); there is no command-level `--url`. There is no filter flag at all. Same `dawn test --url` defect manifests in deployment.mdx F-033 and testing.mdx (see F-058).
+- **Suggested fix:** Replace flags list with `--cwd <path>` and the optional positional `[path]` narrowing argument. Cross-reference scenario-level `run: { url }` for live-server tests. Drop `--filter`.
+
+### F-054: cli.mdx `dawn dev` documents non-existent `--host` flag and wrong default port
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx:81-91
+- **Type:** error
+- **Severity:** important
+- **Description:** Documented flags: `--port <n>` (default 3000) and `--host <addr>` (default 127.0.0.1). `runDevCommand` (packages/cli/src/commands/dev.ts:9-17) registers only `--port <number>`. There is no `--host` flag — bind address is always `127.0.0.1` (runtime-server.ts:463 and dev-session.ts:33). Default port is **dynamically allocated** when `--port` is omitted (dev-session.ts:32, allocatePort()), not 3000.
+- **Suggested fix:** Drop the `--host` bullet. Reword `--port` as "HTTP port (default: dynamically allocated; pass `--port` for a stable address)." Mention the bind address is fixed at 127.0.0.1.
+
+### F-055: cli.mdx exit-code table claims 4 codes — actual surface uses 0/1/2 and indirectly Commander codes; "code 3 internal error" is unverified
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx:95-103
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** The table claims codes 0, 1, 2, and 3. The runtime (packages/cli/src/index.ts:49-71) returns 0 on success, propagates `error.exitCode` for `CliError`/`CommanderError`, and falls back to 1 for unknown errors. CliError defaults to exit code 1 (lib/output.ts), and explicit code-2 throws are scattered through commands (`dawn run` config errors, scenario-load failures). There is no documented code-3 path. The current table over-promises a stable error taxonomy that the code does not enforce.
+- **Suggested fix:** Either wire up explicit error codes in code (as a separate engineering task), or soften the table: "0 success; 1 validation/scenario failure; 2 configuration/runtime error; non-zero exit codes may be propagated unchanged from underlying tools." Drop the unverified `3` row until backed by code.
+
+### F-056: cli.mdx `dawn typegen` output description is incomplete — no mention of per-route `tools.json` artifacts
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/cli.mdx:39-49
+- **Type:** gap
+- **Severity:** minor
+- **Description:** The page says typegen "regenerates `dawn.generated.d.ts` from the current state of every tool file." Reality (packages/cli/src/commands/typegen.ts:21-33 and packages/cli/src/lib/typegen/run-typegen.ts): typegen also writes per-route `.dawn/routes/<slug>/tools.json` schema manifests consumed by `dawn build`'s codegen (build.ts:60-72). The completion message even reports `routeCount`, `toolSchemaCount`, and `stateRouteCount`. Mirrors F-030 in tools.mdx.
+- **Suggested fix:** Expand the description to "Regenerates `dawn.generated.d.ts` and per-route `.dawn/routes/<slug>/tools.json` schema manifests." Add a one-line mention that the success log reports route, tool-schema, and stateful-route counts.
+
+### F-057: dev-server.mdx documents `/assistants` endpoint — does not exist
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/dev-server.mdx:46-52
+- **Type:** error
+- **Severity:** critical
+- **Description:** The Tabs include a `/assistants` tab claiming `GET /assistants` "lists the assistants (routes) the server is serving." packages/cli/src/lib/dev/runtime-server.ts:119-138 only handles `GET /healthz`, `POST /runs/stream`, and `POST /runs/wait`. Anything else returns 404 (line 136). There is no list endpoint. Users following the docs to enumerate routes via HTTP will hit a 404.
+- **Suggested fix:** Drop the `/assistants` tab. If a list endpoint is desirable, file a follow-up issue. Cross-reference `dawn routes` (or `dawn routes --json`) for the list-routes use case.
+
+### F-058: dev-server.mdx omits `GET /healthz` — the only readiness endpoint
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/dev-server.mdx:27-53
+- **Type:** gap
+- **Severity:** important
+- **Description:** runtime-server.ts:119-122 implements `GET /healthz` returning `{ status: "ready" }` with HTTP 200. The dev-session uses it to detect readiness (health.ts:1-14, dev-session.ts:234). The doc never mentions `/healthz`, which is the only contract surface external orchestrators (Docker, k8s, CI) can rely on.
+- **Suggested fix:** Add a `/healthz` tab in the protocol section: `GET /healthz` returns `200 { "status": "ready" }` once the child runtime is up; non-200 means not-ready. Note that `dawn dev` itself uses this endpoint internally.
+
+### F-059: dev-server.mdx assistant_id description is wrong — claims `dawn run` resolves pathname, but the format is `<routeId>#<mode>`
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/dev-server.mdx:23-25,33-44,66-68
+- **Type:** error
+- **Severity:** critical
+- **Description:** The page says "`dawn run` resolves the pathname to an `assistant_id`, POSTs to `/runs/wait`, and prints the result." It never reveals the format. Real format (createRouteAssistantId at packages/cli/src/lib/runtime/route-identity.ts:8-13 and dawn build at build.ts:119): `${routeId}#${kind}` — e.g. `/hello/[tenant]#agent`. The lookup at runtime-server.ts:155 keys on this exact string, and runs/wait body validation requires `metadata.dawn.{mode, route_id, route_path}` to all match the registered route (lines 181-202). External clients building requests by hand have no way to derive the assistant_id from the docs. Mirrors F-036 in deployment.mdx.
+- **Suggested fix:** Document the format `<routeId>#<kind>` with a concrete example (`/hello/[tenant]#agent`). In the `/runs/wait` body, also document the required `metadata.dawn.{mode, route_id, route_path}` and `on_completion: "delete"` shape (validateRunsWaitRequest at runtime-server.ts:358-416).
+
+### F-060: dev-server.mdx `/runs/wait` body shape is incomplete — missing `metadata.dawn.{mode,route_id,route_path}` and `on_completion`
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/dev-server.mdx:33-37
+- **Type:** error
+- **Severity:** critical
+- **Description:** Documented body: `{ assistant_id, input }`. Reality (runtime-server.ts:358-416): the validator rejects any body that does not also include `metadata.dawn.mode` (string), `metadata.dawn.route_id` (string), `metadata.dawn.route_path` (string), and `on_completion: "delete"`. A naive client posting `{ assistant_id, input }` gets a 400 with "Request body must include metadata.dawn." `/runs/stream` shares the same validator (line 267).
+- **Suggested fix:** Document the full body shape with the four required envelope fields. Note that `metadata.dawn.{mode, route_id, route_path}` must match the values for the registered `assistant_id` or the server returns 400 with an `expected/received` diff.
+
+### F-061: dev-server.mdx `/runs/stream` body shape includes `stream_mode` — server ignores it
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/dev-server.mdx:41-44
+- **Type:** error
+- **Severity:** important
+- **Description:** Documented `/runs/stream` body: `{ assistant_id, input, stream_mode }`. The server validates the same RunsWait shape (runtime-server.ts:267) and never reads `stream_mode`. Conversely it ignores the documented `stream_mode` field but does require the same envelope (`metadata.dawn`, `on_completion`).
+- **Suggested fix:** Drop `stream_mode` from the documented body. Use the same body shape as `/runs/wait` (per F-060). Note that the response is SSE (`content-type: text/event-stream`).
+
+### F-062: dev-server.mdx hot-reload "Re-runs typegen" claim — typegen is debounced and only fires for tools/state file changes
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/dev-server.mdx:55-69
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** The page says "When you save a route file, a tool, or a state file, the dev server: re-runs typegen." Real behavior (dev-session.ts:173-203 and classify-change.ts): on file change, classifyChange returns either `"typegen"` (debounced 100ms typegen run) or another tag triggering a full child restart. Not every save runs typegen. Also "Restarts the child runtime ... in-flight requests complete before the swap" overstates: the child is `stop()`ed with a forced kill timeout (dev-session.ts:218-223) — in-flight requests are not guaranteed to complete.
+- **Suggested fix:** Tighten the Steps: "(1) Reclassifies the change — typegen-only changes (tool signatures, state schema) re-run typegen with a 100ms debounce; structural changes restart the child. (2) Restarts the child runtime — in-flight requests are given a brief grace window, then force-killed."
+
+### F-063: dev-server.mdx makes no mention of middleware — `src/middleware.ts` is the only place to wire auth/context per request
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/dev-server.mdx (overall)
+- **Type:** gap
+- **Severity:** important
+- **Description:** packages/cli/src/lib/dev/middleware.ts:7-29 looks for `src/middleware.ts` (or `middleware.ts`/`.js`) and runs it before every `/runs/wait` and `/runs/stream` request. The result either continues (with optional context) or rejects with a status. The dev-server doc never mentions this. Authors trying to gate access in dev have no doc surface to find it. Compounded by F-025 (routes.mdx) and F-038 (deployment.mdx) — middleware is undocumented end to end.
+- **Suggested fix:** Add a "Middleware" subsection: `src/middleware.ts` (default-exporting a `defineMiddleware(...)` function) runs before every `/runs/wait` and `/runs/stream` request. `MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. Mention that creating a dedicated middleware page is **deferred to a follow-up issue (new page out of scope for this PR series)**.
+
+### F-064: dev-server.mdx says default port is 3000 — port is dynamically allocated when `--port` is omitted
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/dev-server.mdx:7-15
+- **Type:** error
+- **Severity:** important
+- **Description:** "By default the server listens on port 3000." dev-session.ts:32 calls `allocatePort()` (lines 330-358) which binds an ephemeral port via `server.listen(0, "127.0.0.1")`. The startup line `Dawn dev ready at ${this.url}` shows the actual chosen port. To get a stable port, the user must pass `--port`. Mirrors F-054.
+- **Suggested fix:** Reword to "By default the server binds an ephemeral localhost port (announced on stdout). Pass `--port <n>` for a stable port:".
+
+### F-065: dev-server.mdx tells readers to set `DEBUG=dawn:*` — no `debug` instrumentation exists in the dev path
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/dev-server.mdx:75-77
+- **Type:** error
+- **Severity:** minor
+- **Description:** "Set `DEBUG=dawn:*` for verbose tracing of the parent/child handshake." A grep across the dev-session, runtime-server, and dev-child modules shows no `debug` package usage and no `DAWN_*` debug env var consumption (only `DAWN_DEV_SHUTDOWN_TIMEOUT_MS` exists, dev-session.ts:360-369). The documented env var has no effect.
+- **Suggested fix:** Drop the `DEBUG=dawn:*` claim. Either replace with the real env vars (`DAWN_DEV_SHUTDOWN_TIMEOUT_MS`) or remove the whole logging note until structured logging is wired up.
+
+### F-066: testing.mdx imports `@dawn-ai/sdk/testing` — submodule does not exist
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/testing.mdx:9
+- **Type:** error
+- **Severity:** critical
+- **Description:** `import { describe, test } from "@dawn-ai/sdk/testing"`. packages/sdk/package.json `exports` only declares `"."` — there is no `./testing` subpath (the package re-exports types and middleware/agent helpers, none of which are testing primitives). The real testing helpers live at `@dawn-ai/cli/testing` (packages/cli/package.json declares `"./testing"`) and export `expectError`, `expectMeta`, `expectOutput` — not `describe`/`test`. The fixture at test/generated/fixtures/handwritten-runtime-app/.../run.test.ts:1 uses the correct path: `import { expectMeta, expectOutput } from "@dawn-ai/cli/testing"`.
+- **Suggested fix:** Replace with `import { expectMeta, expectOutput } from "@dawn-ai/cli/testing"` and remove the `describe`/`test` imports (they are not real). See F-067 for the actual scenario file shape.
+
+### F-067: testing.mdx scenario file shape is fictional — real scenarios are `export default [...]`, not `describe()`/`test()` blocks
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/testing.mdx:7-17,44-52
+- **Type:** error
+- **Severity:** critical
+- **Description:** The doc shows `describe("/hello/[tenant]", () => { test("greets a tenant", { input, expected }) })`. The real scenario file (validateScenario at packages/cli/src/lib/runtime/load-run-scenarios.ts:213-322 and the working fixture above) is `export default [{ name, input, expect: { status, output, meta }, run?, assert? }]` — a default-exported array of plain scenario records. There is no `describe`, no `test`, no top-level pathname binding (the route is inferred from file location, not from a `describe` argument). The "expected" key is also wrong — the real key is `expect` with required `status: "passed" | "failed"` and optional `output`, `meta`, `error`. `dawn test`'s declarative-expectation evaluator (test.ts:151-189) reads `expect.{status,output,meta,error}`, never `expected`.
+- **Suggested fix:** Replace the snippet wholesale with the real array form, e.g. `export default [{ name: "greets a tenant", input: { tenant: "acme" }, expect: { status: "passed", output: { tenant: "acme", greeting: "Hello, acme!" } } }]`. Document the full expectation shape: `status` (required), `output`, `meta` (`mode`, `routeId`, `routePath`, `executionSource`), `error` (`kind`, `message: string | { includes }`).
+
+### F-068: testing.mdx `dawn test --url` flag does not exist
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/testing.mdx:31-34
+- **Type:** error
+- **Severity:** critical
+- **Description:** "`dawn test --url http://127.0.0.1:3001`" — but `runTestCommand` (packages/cli/src/commands/test.ts:34-42) only registers `--cwd`. Live-server scenarios are configured per-scenario via the `run: { url }` field (load-run-scenarios.ts:269-279, scenario fixture's "handwritten server scenario" entry). Same defect as F-033 (deployment.mdx) and F-053 (cli.mdx).
+- **Suggested fix:** Replace with the real per-scenario form: `{ name, input, run: { url: "http://127.0.0.1:3001" }, expect: { ... } }`. Drop the command-level `--url` bullet; mention that scenarios opt in individually.
+
+### F-069: testing.mdx documents per-scenario `tools` mocking — feature does not exist
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/testing.mdx:40-54
+- **Type:** error
+- **Severity:** critical
+- **Description:** Snippet: `test("with mocked greet", { input, expected, tools: { greet: async () => ({ greeting: "Hi from mock!" }) } })`. The validator (load-run-scenarios.ts:213-322) accepts only `name`, `input`, `expect`, `assert`, and `run`; any other key is silently ignored. Tool mocking is not part of the scenario surface today. Authors copying this snippet will see their mock ignored and their assertion fail against the real tool's output.
+- **Suggested fix:** Either (a) drop the "Mocking tools" section entirely until the feature lands, or (b) document the actual workaround (a tool-internal stub gated by an env var, or constructing a custom `assert(result)` with `expectOutput`). Mark this section as a known gap and link to a follow-up issue.
+
+### F-070: testing.mdx "Rules" reference `expected.eq` / `expected.contains` matchers — none exist
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/testing.mdx:65-67
+- **Type:** error
+- **Severity:** important
+- **Description:** "Use `expected.eq`, `expected.contains`, or custom matchers for partial or fuzzy matching (see `@dawn-ai/sdk/testing` for the full surface)." `@dawn-ai/sdk/testing` does not exist (F-066), and the real `@dawn-ai/cli/testing` exports `expectError`, `expectMeta`, `expectOutput` — none of which is named `eq` or `contains`. `expectOutput` does deep-equal under the hood (assertions.ts) and there is no documented partial-match helper.
+- **Suggested fix:** Drop the `expected.eq`/`expected.contains` references. Replace with the real matchers and a one-line description of what each does. Show how `assert(result)` lets authors write custom matchers using `expectOutput`/`expectMeta` directly.
+
+### F-071: testing.mdx CI snippet omits `dawn verify` and the deps check, mirroring F-034
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/testing.mdx:75-81
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** The CI YAML runs `dawn check && dawn typegen && dawn test`. Per the audit context, `dawn verify` is the canonical integrity gate (covers app, routes, typegen, deps in one call — verify.ts:162-218). Replacing the three pre-test steps with `dawn verify` shortens CI configs and adds the deps check (missing packages / env vars) that the current sequence omits.
+- **Suggested fix:** Replace the first two YAML steps with `pnpm exec dawn verify` and keep `pnpm exec dawn test`. Mention that verify runs typegen and check internally.
+
+### F-072: testing.mdx never mentions `agent()` retry policies or middleware — both observable in scenario behavior
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/testing.mdx (overall)
+- **Type:** gap
+- **Severity:** important
+- **Description:** Per the audit context, `agent()` accepts `retry: { maxAttempts, baseDelay }` and middleware runs before route execution on `/runs/wait`/`/runs/stream`. Both shape what scenarios assert: a retry policy can change observable output on flaky tools, and middleware that calls `reject(...)` will surface as a failed scenario whose `expect.status` should be `"failed"`. The page never names either primitive.
+- **Suggested fix:** Add a short note on testing agent retries (use `expect.status: "failed"` + `expect.error` for exhausted-retry cases) and middleware (live-server scenarios via `run.url` exercise middleware; in-process scenarios bypass it). Note that creating a dedicated middleware page is **deferred to a follow-up issue (new page out of scope for this PR series)**.
+
+### F-073: No middleware page exists in apps/web/content/docs/ despite middleware shipping today
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/ (gap — page absent)
+- **Type:** gap
+- **Severity:** important
+- **Description:** packages/sdk/src/middleware.ts exports `defineMiddleware`, `reject`, `allow`, plus types `DawnMiddleware`, `MiddlewareRequest`, `MiddlewareResult`, `ContinueResult`, `RejectResult`. packages/cli/src/lib/dev/middleware.ts loads `src/middleware.ts` and runs it before every dev-server request. The website docs directory contains state, cli, dev-server, testing, getting-started, routes, tools, deployment — no middleware page. Cross-cutting findings (F-025, F-038, F-063, F-072) all flag the omission piecewise.
+- **Suggested fix:** Defer to follow-up issue (new page out of scope for this PR series). In the meantime, every existing page that touches request flow should mention `defineMiddleware` and link to `@dawn-ai/sdk` source until the page lands.
+
+### F-074: No `agent()` retry-config documentation page or section exists despite `RetryConfig` shipping
+- **Surface:** Website (supporting)
+- **File:** apps/web/content/docs/ (gap — coverage absent)
+- **Type:** gap
+- **Severity:** important
+- **Description:** `agent({ retry: { maxAttempts, baseDelay } })` ships from packages/sdk/src/agent.ts (per audit context); types are exported from `@dawn-ai/sdk` (`AgentConfig`, `RetryConfig`). No page covers the retry contract — semantics of `maxAttempts` (total attempts vs. retries-after-first), `baseDelay` units (ms vs. seconds), backoff shape (linear, exponential, jittered), or which errors are retried. The supporting pages, like the load-bearing pages, are silent.
+- **Suggested fix:** Defer a dedicated section to the eventual routes/agent expansion (out of scope here as a new page). At minimum, add a one-liner in routes.mdx (per F-025's fix) referencing the `retry` shape and link to the source until full docs land. Track as follow-up issue.
+
+Supporting pages findings: F-040 through F-074 (13 critical, 15 important, 7 minor).
 
 ## 4. Templates (`AGENTS.md`, `CLAUDE.md`)
 
