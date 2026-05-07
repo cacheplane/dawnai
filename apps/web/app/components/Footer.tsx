@@ -55,7 +55,7 @@ const COLUMNS: readonly Column[] = [
     items: [
       { label: "Brand Assets", href: "/brand" },
       { label: "GitHub", href: "https://github.com/cacheplane/dawnai", external: true },
-      { label: "npm", href: "https://www.npmjs.com/org/dawnai.org", external: true },
+      { label: "npm", href: "https://www.npmjs.com/org/dawn-ai", external: true },
       {
         label: "MIT License",
         href: "https://github.com/cacheplane/dawnai/blob/main/LICENSE",
@@ -138,7 +138,7 @@ export function Footer() {
                 <GitHubIcon />
               </a>
               <a
-                href="https://www.npmjs.com/org/dawnai.org"
+                href="https://www.npmjs.com/org/dawn-ai"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center justify-center w-10 h-10 rounded-md border border-border text-text-muted hover:text-accent-amber hover:border-accent-amber/40 transition-colors"
