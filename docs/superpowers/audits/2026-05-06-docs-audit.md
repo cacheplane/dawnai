@@ -640,7 +640,111 @@ Supporting pages findings: F-040 through F-074 (13 critical, 15 important, 7 min
 
 ## 4. Templates (`AGENTS.md`, `CLAUDE.md`)
 
-_(pending — Task 5)_
+### F-075: AGENTS.md and CLAUDE.md are byte-identical duplicates with no divergence
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:1, apps/web/content/templates/CLAUDE.md:1
+- **Type:** gap
+- **Severity:** minor
+- **Description:** The two files are character-for-character identical. Either both should diverge to address audience-specific concerns (Codex vs. Claude), or one should be the canonical source and the other a generated/forwarded copy. Maintaining two identical copies guarantees they will drift out of sync over time, and every finding below applies to both files at the same line.
+- **Suggested fix:** Pick a canonical path (e.g., AGENTS.md) and have CLAUDE.md either be a thin pointer (`See AGENTS.md`) or be generated from the same source during scaffolding. If they must diverge, document the rationale and mark the differences.
+
+### F-076: Route entry directive omits the `agent` route kind shipping today
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:9-12, apps/web/content/templates/CLAUDE.md:9-12
+- **Type:** misalignment
+- **Severity:** critical
+- **Description:** The "Project Shape" section claims a route's `index.ts` "MUST export exactly ONE of `workflow`, `graph`, `chain`." But `packages/sdk/src/route-config.ts` declares `RouteKind = "agent" | "chain" | "graph" | "workflow"`, and `packages/core/src/discovery/discover-routes.ts:94-133` actively detects an `agent` export (and a `default` export of a `DawnAgent` descriptor) as a valid fourth route kind. Coding agents reading this template will believe `agent` is unsupported and avoid the preferred path for LLM-driven routes.
+- **Suggested fix:** Add `agent` (Dawn agent descriptor from `@dawn-ai/sdk`) as a fourth bullet, and note that the descriptor may be the `default` export. Cross-link to the agent authoring guide.
+
+### F-077: No mention of `agent()` descriptor from `@dawn-ai/sdk` or its retry config
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:26-56, apps/web/content/templates/CLAUDE.md:26-56
+- **Type:** gap
+- **Severity:** critical
+- **Description:** `@dawn-ai/sdk` exports `agent({ model, systemPrompt, retry?: { maxAttempts, baseDelay } })` (see `packages/sdk/src/agent.ts:25-32` and `packages/sdk/src/index.ts:1-2`). This is the supported way to author LLM-backed routes today, and `dawn build` has a dedicated `route.kind === "agent"` codepath that auto-binds tools (see `packages/cli/src/commands/build.ts:80-106`). The template never mentions `agent()`, the `model`/`systemPrompt`/`retry` fields, or the known model IDs surface — so an agent following this template will never produce an LLM-driven route.
+- **Suggested fix:** Add a "Defining an agent route" section showing `import { agent } from "@dawn-ai/sdk"` with `export default agent({ model, systemPrompt, retry })`, and explicitly note that tools in the same route's `tools/` directory are auto-bound at build time.
+
+### F-078: Tool authoring example omits the `context` parameter on the runtime signature
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:28-33, apps/web/content/templates/CLAUDE.md:28-33
+- **Type:** misalignment
+- **Severity:** important
+- **Description:** The example shows `export default async (input: { readonly tenant: string }) => { ... }`. The actual runtime signature accepted by tool discovery is `(input, context) => ...` where `context` is `{ middleware?: Readonly<Record<string, unknown>>, signal: AbortSignal }` (see `packages/cli/src/lib/runtime/tool-discovery.ts:14-23` and `packages/cli/src/lib/runtime/dawn-context.ts:3-7`). The `signal` is how a tool participates in cooperative cancellation; `middleware` is how a tool reads request-scoped state populated by `src/middleware.ts`. The single-arg form still works, but the template never tells the agent the second parameter exists.
+- **Suggested fix:** Show the canonical signature `(input, ctx) => ...` and document `ctx.signal` (AbortSignal) and `ctx.middleware` (request-scoped readonly bag). Note the second parameter is optional but recommended for any tool that does network I/O or needs middleware context.
+
+### F-079: Tools-only-in-route directive contradicts shared `src/tools/` discovery
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:14, apps/web/content/templates/CLAUDE.md:14, apps/web/content/templates/AGENTS.md:78, apps/web/content/templates/CLAUDE.md:78
+- **Type:** error
+- **Severity:** critical
+- **Description:** Two directives state tools live in `src/app/**/tools/*.ts` only, and the "Do Not" list explicitly says "Do NOT put tools outside a route's `tools/` directory." But `packages/cli/src/lib/runtime/tool-discovery.ts:31-49` discovers tools from BOTH `src/tools/` (shared scope) and `<routeDir>/tools/` (route-local scope). Shared tools are merged into every route's tool registry; this is a deliberate, supported feature. Following the template's "Do Not" rule would force every shared utility tool to be duplicated per-route.
+- **Suggested fix:** Document both scopes. Recommend route-local tools as the default; explain that `src/tools/*.ts` files are picked up as shared tools available in every route's `ctx.tools`, and that route-local tools override shared tools with the same name.
+
+### F-080: Middleware surface entirely missing from the template
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:1-87, apps/web/content/templates/CLAUDE.md:1-87
+- **Type:** gap
+- **Severity:** critical
+- **Description:** `src/middleware.ts` is a first-class Dawn surface today: `@dawn-ai/sdk` exports `defineMiddleware`, `reject(status, body?)`, `allow(context?)`, and the `MiddlewareRequest`/`MiddlewareResult` types (see `packages/sdk/src/middleware.ts` and `packages/sdk/src/index.ts:13-17`). The middleware result's `context` flows into each tool call as `ctx.middleware` (see `packages/cli/src/lib/runtime/dawn-context.ts:14-26`). The template never mentions middleware, so an agent following it cannot author auth, tenancy, rate-limiting, or request-scoped context — all of which are intended use cases.
+- **Suggested fix:** Add a "Middleware" section after "Tool Authoring" describing `src/middleware.ts`, the `defineMiddleware` helper, the `allow(context)` / `reject(status, body)` outcomes, and how `ctx.middleware` becomes available to tools. Show a minimal example.
+
+### F-081: Commands list is missing `dawn build` and `dawn verify`
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:58-65, apps/web/content/templates/CLAUDE.md:58-65
+- **Type:** gap
+- **Severity:** critical
+- **Description:** The Commands section enumerates `check`, `routes`, `typegen`, `run`, `test`, `dev` but omits two commands shipped under `packages/cli/src/commands/`: `build.ts` (`dawn build` — produces `.dawn/build/langgraph.json` for LangGraph Platform deployment, see `packages/cli/src/commands/build.ts:124-152`) and `verify.ts` (`dawn verify` — runs four integrity checks: app, routes, typegen, deps, see `packages/cli/src/commands/verify.ts:162-218`). Since the template explicitly tells agents not to invent commands and not to deploy from Dawn directly, omitting `dawn build` leaves them with no documented bridge to LangGraph Platform.
+- **Suggested fix:** Add `dawn build` ("write `.dawn/build/langgraph.json` for LangGraph Platform deployment, paths-as-deps + env-as-file") and `dawn verify` ("integrity check across app/routes/typegen/deps; preferred CI gate"). Optionally clarify the relationship between `dawn check` (lightweight) and `dawn verify` (comprehensive).
+
+### F-082: Test helpers reference `@dawn-ai/sdk/testing` which is not an exported subpath
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:15, apps/web/content/templates/CLAUDE.md:15
+- **Type:** broken-example
+- **Severity:** critical
+- **Description:** The bullet says colocated `run.test.ts` files "Use `@dawn-ai/sdk/testing`." But `packages/sdk/package.json:23-28` declares only one export entry — `"."` — and `packages/sdk/src/index.ts` re-exports nothing under a `/testing` namespace. Importing from `@dawn-ai/sdk/testing` will resolve to nothing. The actual test runner today is `dawn test`, which discovers `run.test.ts` scenarios via `loadRunScenarios` (see `packages/cli/src/commands/test.ts:50-56`); these scenarios are JSON-style descriptors, not Vitest tests using SDK helpers.
+- **Suggested fix:** Replace the testing-helper bullet with the actual scenario-file shape (or link to the live test docs page). If a `@dawn-ai/sdk/testing` subpath is genuinely planned, gate the doc on it shipping; otherwise remove the claim.
+
+### F-083: `RouteTools<"/path">` example uses the route's literal pathname, but `dawn:routes` keys depend on generated typegen
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:46-55, apps/web/content/templates/CLAUDE.md:46-55
+- **Type:** misalignment
+- **Severity:** important
+- **Description:** The route entry example does `RouteTools<"/hello/[tenant]">` from `dawn:routes`. The template never explains that `dawn:routes` is a Vite-plugin-provided virtual module (or that typegen feeds the type), nor how this works in non-Vite consumers (e.g., during `dawn run`, which uses tsx). An agent landing in a fresh scaffold will hit a "Cannot find module 'dawn:routes'" error and have no template-provided debugging path. (Cross-reference `packages/vite-plugin/` for the actual provider.)
+- **Suggested fix:** Add a one-liner under "Project Shape" or "Route Entry" explaining that `dawn:routes` is a virtual module emitted by the Vite plugin and backed by `dawn.generated.d.ts` for type-only imports; tell agents to run `dawn typegen` if `RouteTools` does not resolve.
+
+### F-084: `RuntimeContext` description omits the `signal` field that all tools see
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:69, apps/web/content/templates/CLAUDE.md:69
+- **Type:** gap
+- **Severity:** minor
+- **Description:** The "Packages" bullet for `@dawn-ai/sdk` says it provides `RuntimeContext`, but the template never mentions that `RuntimeContext` carries `signal: AbortSignal` (see `packages/sdk/src/runtime-context.ts:7-10`). Combined with F-078, an agent cannot learn from this template that Dawn supports cooperative cancellation.
+- **Suggested fix:** In the Route Entry section or a new "Cancellation" subsection, show `ctx.signal` being passed to `fetch` / awaited operations.
+
+### F-085: `dawn.config.ts` directive is technically correct but understates the parser's strictness
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:7, apps/web/content/templates/CLAUDE.md:7
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** The bullet says "Only supported field is `appDir` (defaults to `src/app`). Do not invent other config." That is correct in spirit, but `packages/core/src/config.ts` is a custom hand-written tokenizer that rejects escaped string literals, all non-`appDir` properties, and any non-string-literal/non-const-binding right-hand side. Agents that try to add helpful patterns (template strings, computed values, JSDoc, even `as const`) will get cryptic "Unsupported dawn.config.ts syntax" errors. The template's directive is true but does not warn agents to expect a strict parser.
+- **Suggested fix:** Add a parenthetical or sub-bullet: "the config is parsed by a strict tokenizer — only string-literal `appDir: "..."` or `const X = "..."; export default { appDir: X }` are supported."
+
+### F-086: `dawn build` artifact (`langgraph.json`) is unmentioned despite being the production handoff
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:80, apps/web/content/templates/CLAUDE.md:80
+- **Type:** gap
+- **Severity:** important
+- **Description:** The "Do Not" bullet says "Do NOT deploy from Dawn directly — Dawn owns local development; production runs on LangGraph Platform." This is correct but leaves the deployment story incomplete: `dawn build` is the supported bridge — it writes `.dawn/build/langgraph.json` with paths-as-dependencies and env-as-file (see `packages/cli/src/commands/build.ts:124-145` and `packages/cli/src/lib/build/deployment-config.ts`). Without this, agents have no template-sanctioned path from "I have a Dawn app" to "I can deploy it."
+- **Suggested fix:** Convert this bullet into a positive directive: "To deploy, run `dawn build` and hand `.dawn/build/langgraph.json` to LangGraph Platform; do not edit the generated `langgraph.json` by hand."
+
+### F-087: Reference URLs (`dawnai.org/llms-full.txt`, `dawnai.org/llms.txt`) are unverified for current content
+- **Surface:** Templates
+- **File:** apps/web/content/templates/AGENTS.md:84-86, apps/web/content/templates/CLAUDE.md:84-86
+- **Type:** gap
+- **Severity:** minor
+- **Description:** The template directs agents to consume `https://dawnai.org/llms-full.txt` and `https://dawnai.org/llms.txt` for fuller reference, but the rest of this audit (Sections 2-3) is producing fixes for the same docs site. If those `llms*.txt` artifacts are generated from the website's content or hand-authored, they need to be kept in sync with the corrections being landed in PR B; otherwise agents pulled to the URLs will get the outdated, incorrect content while the in-repo template lists the same incorrect surface.
+- **Suggested fix:** Confirm whether `llms.txt` / `llms-full.txt` are generated from `apps/web/content/` or hand-authored. If generated, ensure the generator covers the new surfaces (agent, middleware, build, verify, retry, tool context). If hand-authored, file them as a follow-up audit target.
+
+Templates findings: F-075 through F-087 (6 critical, 3 important, 4 minor).
 
 ## 5. Public package READMEs (`@dawn-ai/sdk`, `@dawn-ai/cli`, `create-dawn-ai-app`)
 
