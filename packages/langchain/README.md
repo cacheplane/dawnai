@@ -4,11 +4,10 @@
 
 # @dawn-ai/langchain
 
-LangChain backend adapter for Dawn `chain` route kind.
+LangChain backend adapters Dawn uses to materialize `chain` and `agent` routes (tool conversion, streaming, retry).
 
-Public surface:
-- `ChainAdapter` — `BackendAdapter` implementation for LCEL runnables
-- `convertTools()` — converts Dawn tools to LangChain `DynamicStructuredTool`
-- `toolLoop()` — Dawn-owned ReAct tool execution loop (no AgentExecutor dependency)
+This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
 
-This package enables Dawn routes to use LangChain LCEL chains with filesystem-driven tool discovery and Dawn-owned execution semantics.
+## License
+
+MIT
