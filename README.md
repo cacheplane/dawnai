@@ -168,7 +168,7 @@ pnpm exec dawn build
 - `@dawn-ai/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
 - `@dawn-ai/langgraph` is the LangGraph adapter that implements the `@dawn-ai/sdk` contract.
 - `@dawn-ai/cli` owns the user-facing commands and local runtime behavior.
-- `create-dawn-app` owns scaffolding for new apps.
+- `create-dawn-ai-app` owns scaffolding for new apps.
 - `@dawn-ai/devkit` owns shared template and file-generation helpers.
 - `@dawn-ai/config-typescript` provides the shared TypeScript workspace configuration.
 - `@dawn-ai/config-biome` provides the shared Biome workspace configuration.
@@ -180,6 +180,19 @@ Dawn is not a deployment runtime. Local runtime ownership stops at `dawn dev`.
 Dawn is not a LangSmith trace replacement.
 
 The starter template surface is intentionally small, and the supported config surface is intentionally narrow.
+
+## Documentation
+
+The canonical reference lives on the docs site:
+
+- [Getting started](https://dawn-ai.org/docs/getting-started)
+- [Routes](https://dawn-ai.org/docs/routes)
+- [Tools](https://dawn-ai.org/docs/tools)
+- [State](https://dawn-ai.org/docs/state)
+- [CLI](https://dawn-ai.org/docs/cli)
+- [Dev server](https://dawn-ai.org/docs/dev-server)
+- [Testing](https://dawn-ai.org/docs/testing)
+- [Deployment](https://dawn-ai.org/docs/deployment)
 
 ## Contributing
 
