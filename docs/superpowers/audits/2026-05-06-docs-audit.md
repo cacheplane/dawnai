@@ -904,7 +904,63 @@ Public READMEs findings: F-088 through F-106 (4 critical, 11 important, 4 minor)
 
 ## 6. Internal package READMEs (config-biome, config-typescript, core, devkit, langchain, langgraph, vite-plugin)
 
-_(pending — Task 7)_
+### F-107: No internal package README points to https://dawn-ai.org (stub-with-pointer policy gap, all seven)
+- **Surface:** Internal package READMEs
+- **File:** packages/config-biome/README.md, packages/config-typescript/README.md, packages/core/README.md, packages/devkit/README.md, packages/langchain/README.md, packages/langgraph/README.md, packages/vite-plugin/README.md
+- **Type:** gap
+- **Severity:** important
+- **Description:** The hybrid docs policy specifies internal packages should be stub-with-pointer: a 5–10 line README naming the package, summarizing its purpose in one sentence, and pointing to the website for full docs. None of the seven internal-package READMEs include a link to https://dawn-ai.org (or a more specific page such as `https://dawn-ai.org/docs/internals/<pkg>`). Readers landing on the package on npm or GitHub have no path forward to canonical docs.
+- **Suggested fix:** Add a closing line to each internal README of the form `Full docs: https://dawn-ai.org` (or a more specific URL when one exists). Apply uniformly across all seven files so the stub-with-pointer template is consistent.
+
+### F-108: Internal READMEs use inconsistent body shapes (some have "Exports:", some "Public surface:", vite-plugin is materially longer)
+- **Surface:** Internal package READMEs
+- **File:** packages/config-biome/README.md, packages/config-typescript/README.md, packages/core/README.md, packages/devkit/README.md, packages/langchain/README.md, packages/langgraph/README.md, packages/vite-plugin/README.md
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** The seven READMEs nominally follow the same shape (title, one-line summary, bulleted list, closing remark) but use different section labels: `config-biome` and `config-typescript` use `Exports:` (subpath imports), while `core`, `devkit`, `langchain`, `langgraph`, `vite-plugin` use `Public surface:` (function/symbol names). `vite-plugin` is also noticeably longer (5 listed exports plus a longer closing sentence) than the others. The stub-with-pointer policy expects a single uniform template.
+- **Suggested fix:** Pick one label (recommend `Public surface:` for code packages, `Exports:` for config packages — or normalize to a single label) and trim `vite-plugin` to match the brevity of the others. Document the canonical template once (e.g., as a comment in CONTRIBUTORS.md or the docs spec) so future packages match.
+
+### F-109: `@dawn-ai/langchain` README lists wrong export names (`ChainAdapter`, `convertTools`, `toolLoop`) — none of these symbols exist
+- **Surface:** Internal package READMEs
+- **File:** packages/langchain/README.md
+- **Type:** error
+- **Severity:** important
+- **Description:** The README's "Public surface" lists `ChainAdapter`, `convertTools()`, and `toolLoop()`. None of these names match the actual exports from `packages/langchain/src/index.ts`, which exports `chainAdapter` (camelCase, not PascalCase), `convertToolToLangChain` (singular, different name), and `executeWithToolLoop` (different name). The README also entirely omits the agent surface (`executeAgent`, `streamAgent`, `AgentStreamChunk`), retry helpers (`withRetry`, `isRetryableError`, `RetryOptions`), and state-adapter (`materializeStateSchema`). A reader who copies the README's symbols will get import errors.
+- **Suggested fix:** Replace the bullet list with the actual exports: `chainAdapter`, `executeAgent` / `streamAgent`, `convertToolToLangChain`, `executeWithToolLoop`, `withRetry`, `materializeStateSchema`. Drop the editorial "no AgentExecutor dependency" note or move it to the website.
+
+### F-110: `@dawn-ai/devkit` README references `create-dawn-app` (non-existent npm name)
+- **Surface:** Internal package READMEs
+- **File:** packages/devkit/README.md
+- **Type:** error
+- **Severity:** minor
+- **Description:** The README says "packaged starter templates consumed by `create-dawn-app`". The published scaffolder package is `create-dawn-ai-app` (see `packages/create-dawn-app/package.json` line 2), the same divergence flagged in F-003. The directory is `packages/create-dawn-app/` but the npm name and bin are `create-dawn-ai-app`. The README leaves a reader unsure which name to install.
+- **Suggested fix:** Change the reference to `create-dawn-ai-app` (the published package name). Coordinate with the F-003 fix so the root README, CONTRIBUTORS.md, and devkit README all use one name.
+
+### F-111: `@dawn-ai/core` README "Public surface" omits typegen, state-fields, and route-segment exports
+- **Surface:** Internal package READMEs
+- **File:** packages/core/README.md
+- **Type:** gap
+- **Severity:** minor
+- **Description:** The README lists only `loadDawnConfig()`, `findDawnApp()`, `discoverRoutes()`, `renderRouteTypes()`. The actual `src/index.ts` also exports `extractToolTypesForRoute`, `extractToolSchemasForRoute`, `renderDawnTypes`, `renderStateTypes`, `renderToolTypes`, `resolveStateFields`, `assertDawnRoutesDir`, `isPrivateSegment`, `isRouteGroupSegment`, `toRouteSegments`, plus the bulk of Dawn's shared types (`DawnConfig`, `RouteManifest`, `RouteDefinition`, etc.). Internal consumers (`vite-plugin`, the CLI) rely on these. The README undersells what the package owns.
+- **Suggested fix:** Either (a) replace the curated list with one or two grouped bullets ("config loading, app discovery, route discovery, typegen renderers, state-field resolution") and let the website own the symbol list, or (b) expand the bullet list to include the typegen and state-field exports. Option (a) better fits the stub-with-pointer policy.
+
+### F-112: `@dawn-ai/langgraph` README "Public surface" omits `graphAdapter` and `workflowAdapter`
+- **Surface:** Internal package READMEs
+- **File:** packages/langgraph/README.md
+- **Type:** gap
+- **Severity:** minor
+- **Description:** The README lists `defineEntry()`, `normalizeRouteModule()`, and route module/config types. The actual `src/index.ts` also exports `graphAdapter` and `workflowAdapter` (the `BackendAdapter` implementations that make the package useful at runtime, paralleling `chainAdapter` in `@dawn-ai/langchain`). Without these, the README hides the package's actual integration surface.
+- **Suggested fix:** Add `graphAdapter` and `workflowAdapter` to the public-surface list (or, if going stub-with-pointer per F-108, summarize as "graph and workflow `BackendAdapter` implementations and the `defineEntry` helper" and link to the website).
+
+### F-113: `@dawn-ai/vite-plugin` README leaks internal helpers as public surface
+- **Surface:** Internal package READMEs
+- **File:** packages/vite-plugin/README.md
+- **Type:** misalignment
+- **Severity:** minor
+- **Description:** The README's "Public surface" elevates `extractJsDoc()`, `extractParameterType()`, and `generateZodSchema()` alongside `dawnToolSchemaPlugin()` and `transformToolSource()`. The first three are implementation details re-exported for testability — no consumer imports them in normal use, and listing them in a stub README implies they are part of the user-facing contract. This is the only README of the seven that exposes internal helpers this way, contributing to the F-108 inconsistency.
+- **Suggested fix:** Trim the public-surface list to `dawnToolSchemaPlugin()` (and optionally `transformToolSource()` if it is intentionally documented for advanced users). Move the JSDoc/type/Zod helpers to the website's internals page if they need documenting.
+
+Internal READMEs findings: F-107 through F-113 (0 critical, 2 important, 5 minor).
 
 ## Summary
 
