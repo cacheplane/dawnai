@@ -1,3 +1,7 @@
+<p>
+  <img src="https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/dawn-logo-horizontal-black-on-white.png" alt="Dawn" width="180" />
+</p>
+
 # @dawn-ai/config-typescript
 
 Reusable TypeScript base configs for Dawn libraries, Node packages, and Next.js apps.

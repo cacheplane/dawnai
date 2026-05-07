@@ -1,6 +1,9 @@
 @import "tailwindcss";
 
 @theme {
+  --color-dawn-black: #000000;
+  --color-dawn-white: #ffffff;
+  --color-dawn-neutral-gray: #6b6b6b;
   --color-bg-primary: #0a0806;
   --color-bg-secondary: #0f0c09;
   --color-bg-card: #14110d;
@@ -19,6 +22,13 @@
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", monospace;
+}
+
+:root {
+  --dawn-black: #000000;
+  --dawn-white: #ffffff;
+  --dawn-neutral-gray: #6b6b6b;
+  --dawn-font-sans: var(--font-inter), "Satoshi", "Helvetica Neue", Arial, sans-serif;
 }
 
 @layer base {

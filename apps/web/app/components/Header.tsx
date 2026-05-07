@@ -1,18 +1,10 @@
 import Link from "next/link"
+import { BrandLogo } from "./BrandLogo"
 
 export function Header() {
   return (
     <header className="flex justify-between items-center px-8 py-4 border-b border-border-subtle">
-      <Link
-        href="/"
-        className="font-display font-semibold text-lg text-text-primary"
-        style={{
-          fontVariationSettings: "'opsz' 144, 'SOFT' 50",
-          letterSpacing: "-0.02em",
-        }}
-      >
-        dawn
-      </Link>
+      <BrandLogo imageClassName="h-8" />
       <nav className="flex items-center gap-6 text-sm text-text-secondary">
         <Link href="/docs/getting-started" className="hover:text-text-primary transition-colors">
           Docs

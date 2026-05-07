@@ -1,3 +1,7 @@
+<p>
+  <img src="https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/dawn-logo-horizontal-black-on-white.png" alt="Dawn" width="180" />
+</p>
+
 # @dawn-ai/devkit
 
 Shared template and file-writing helpers used by Dawn tooling.
