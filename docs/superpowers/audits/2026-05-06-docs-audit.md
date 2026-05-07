@@ -1,6 +1,6 @@
 # Dawn Docs Audit — 2026-05-06
 
-**Status:** in progress
+**Status:** complete
 **Spec:** `docs/superpowers/specs/2026-05-06-docs-review-design.md`
 **Plan:** `docs/superpowers/plans/2026-05-06-docs-review.md`
 **Last refresh:** 2026-05-07 — audit refreshed against main HEAD 7a96d3b (Add Dawn brand assets, PR #38). Affected sections: 1, 5, 6.
@@ -981,4 +981,28 @@ Internal READMEs findings: F-107 through F-113, plus F-115 (0 critical, 2 import
 
 ## Summary
 
-_(pending — populated at the findings cut after Tasks 2–7)_
+| Section | Critical | Important | Minor | Total |
+|---------|---------:|----------:|------:|------:|
+| 1. Root README                | 3  | 6  | 5  | 14  |
+| 2. Website load-bearing       | 12 | 10 | 4  | 26  |
+| 3. Website supporting         | 14 | 14 | 7  | 35  |
+| 4. Templates                  | 6  | 3  | 4  | 13  |
+| 5. Public package READMEs     | 4  | 10 | 5  | 19  |
+| 6. Internal package READMEs   | 0  | 2  | 6  | 8   |
+| **Total**                     | **39** | **45** | **31** | **115** |
+
+**In scope for fix PRs (PR A, B, C, D):** all critical + important findings = 84 total.
+
+**Deferred to follow-up issue:** 31 minor findings will be filed as a single GitHub issue after the fix PRs land.
+
+**Recategorization decisions:** none. The refresh against main HEAD 7a96d3b added two brand-asset minor findings (F-114, F-115) but did not invalidate or change the severity of any prior finding.
+
+**Notable cross-cutting observations:**
+
+- `testing.mdx` and `cli.mdx` (section 3) drifted heavily — testing.mdx imports a non-existent `@dawn-ai/sdk/testing` subpath; `cli.mdx` lists 3 of 8 commands and documents non-existent flags. Section 3 carries the largest individual-page issue density.
+- `deployment.mdx` (section 2) tells users to hand-write `langgraph.json` despite `dawn build` shipping that file with the correct format.
+- Templates (section 4) and several website docs entirely omit middleware (`defineMiddleware`, `reject`, `allow`) and the agent retry config — both first-class shipped surfaces.
+- Templates `AGENTS.md` and `CLAUDE.md` are byte-identical (F-075). PR B should canonicalize one as the source-of-truth (or document them as intentionally identical).
+- F-082 (`@dawn-ai/sdk/testing` import) is an escape-hatch candidate: the right fix depends on intent (delete the directive vs. add a `./testing` subpath export). PR B implementer must decide and call it out.
+
+**Next:** This report is the basis for PR 0 (lands the audit) followed by four fix PRs (B → A → C → D).
