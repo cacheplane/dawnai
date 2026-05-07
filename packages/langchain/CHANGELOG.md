@@ -1,5 +1,40 @@
 # @dawn-ai/langchain
 
+## 0.1.7
+
+### Patch Changes
+
+- db635b1: Middleware context now flows through to tools.
+
+  A tool's second argument is now `{ middleware?: Readonly<Record<string, unknown>>, signal: AbortSignal }`. Whatever the global middleware passes via `allow({ ... })` is available to every tool invocation as `ctx.middleware` — for both `/runs/wait` and `/runs/stream` paths.
+
+  Example:
+
+  ```ts
+  // src/middleware.ts
+  export default defineMiddleware(async (req) => {
+    const userId = await verifyToken(req.headers.authorization);
+    return allow({ userId });
+  });
+
+  // src/app/.../tools/lookup.ts
+  export default async (input, { middleware }) => {
+    const userId = middleware?.userId;
+    return await db.lookup(userId, input);
+  };
+  ```
+
+- db635b1: Production readiness: deployment config, LLM retry, request middleware.
+
+  - **@dawn-ai/sdk:** `agent()` descriptor now accepts an optional `retry: { maxAttempts, baseDelay }`. Adds `defineMiddleware`, `reject(status, body?)`, `allow(context?)` for request middleware, plus `MiddlewareRequest`, `MiddlewareResult`, and `RetryConfig` types.
+  - **@dawn-ai/cli:** `dawn build` produces a correctly-shaped `langgraph.json` for LangGraph Platform (`dependencies: ["."]`, `env` as file path). `dawn verify` adds an advisory `deps` check (4 checks total). Dev server loads `.env` files and runs middleware before route execution.
+  - **@dawn-ai/langchain:** Per-agent retry config (`maxAttempts`, `baseDelayMs`) is wired through the agent adapter and applies to streaming and non-streaming paths.
+
+- Updated dependencies [db635b1]
+- Updated dependencies [db635b1]
+- Updated dependencies [db635b1]
+  - @dawn-ai/sdk@0.1.7
+
 ## 0.1.6
 
 ### Patch Changes
