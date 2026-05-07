@@ -53,6 +53,7 @@ const COLUMNS: readonly Column[] = [
   {
     heading: "Source",
     items: [
+      { label: "Brand Assets", href: "/brand" },
       { label: "GitHub", href: "https://github.com/cacheplane/dawnai", external: true },
       { label: "npm", href: "https://www.npmjs.com/org/dawnai.org", external: true },
       {
