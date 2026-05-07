@@ -83,7 +83,7 @@ export default agent({
 
 - `model` — a `KnownModelId` (typed string covering OpenAI, Anthropic, and Google model ids).
 - `systemPrompt` — the system message for the agent.
-- `retry?: RetryConfig` — optional `{ maxAttempts?: number, baseDelay?: number }` policy. See `packages/sdk/src/agent.ts` for the exact shape; a dedicated retry-policy reference is tracked as a follow-up.
+- `retry?: RetryConfig` — optional `{ maxAttempts?: number, baseDelay?: number }` policy. See [Retry](/docs/retry) for the full reference.
 
 At build time, `dawn build` emits a LangGraph entry that calls `agent.bindTools(...)` with every tool discovered for the route, so any tool in the route's `tools/` directory (and any shared tool in `src/tools/`) is automatically available to the LLM.
 
@@ -103,7 +103,7 @@ export default defineMiddleware(async (req) => {
 })
 ```
 
-`MiddlewareRequest` exposes `assistantId`, `routeId`, `headers`, `params`, `method`, and `url`. The optional `context` passed to `allow(...)` is forwarded to every tool as `ctx.middleware` (see [Tools](/docs/tools)). A dedicated middleware page is tracked as a follow-up; until then, the source of truth is `packages/sdk/src/middleware.ts`.
+`MiddlewareRequest` exposes `assistantId`, `routeId`, `headers`, `params`, `method`, and `url`. The optional `context` passed to `allow(...)` is forwarded to every tool as `ctx.middleware` (see [Tools](/docs/tools)). For the full reference, see [Middleware](/docs/middleware).
 
 ## Pathname rules
 
