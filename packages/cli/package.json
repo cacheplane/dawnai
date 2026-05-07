@@ -52,7 +52,7 @@
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
     "@dawn-ai/sdk": "workspace:*",
-    "@langchain/core": "0.3.62",
+    "@langchain/core": "0.3.80",
     "@types/node": "25.6.0"
   }
 }
