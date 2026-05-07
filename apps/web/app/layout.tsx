@@ -25,12 +25,53 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://dawnai.org"),
+  applicationName: "Dawn AI",
   title: {
     default: "Dawn — The App Router for AI Agents",
     template: "%s | Dawn",
   },
   description:
     "A TypeScript-first framework for building and deploying graph-based AI systems with the ergonomics of Next.js.",
+  manifest: "/site.webmanifest",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
+      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon-48x48.png", sizes: "48x48", type: "image/png" },
+      { url: "/favicon-64x64.png", sizes: "64x64", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  openGraph: {
+    type: "website",
+    url: "https://dawnai.org",
+    siteName: "Dawn AI",
+    title: "Dawn — The App Router for AI Agents",
+    description:
+      "A TypeScript-first framework for building and deploying graph-based AI systems with the ergonomics of Next.js.",
+    images: [
+      {
+        url: "/social/dawn-og-white-on-black.png",
+        width: 1024,
+        height: 1024,
+        alt: "Dawn AI",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary",
+    title: "Dawn — The App Router for AI Agents",
+    description:
+      "A TypeScript-first framework for building and deploying graph-based AI systems with the ergonomics of Next.js.",
+    images: ["/social/dawn-og-white-on-black.png"],
+  },
+  appleWebApp: {
+    title: "Dawn AI",
+    capable: true,
+    statusBarStyle: "black-translucent",
+  },
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {

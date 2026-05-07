@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/brand/dawn-logo-horizontal-black-on-white.png" alt="Dawn" width="360" />
+</p>
+
 # Dawn
 
 Dawn is a TypeScript meta-framework for filesystem-based route discovery, route validation, type generation, local route execution, and a local development runtime.
