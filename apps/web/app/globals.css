@@ -106,3 +106,20 @@ body {
     --landing-border: rgba(15, 18, 32, 0.08);
   }
 }
+
+/* Landing-aware utilities — read from --landing-* and follow the scroll arc.
+   Use these on landing-page elements that previously used bg-bg-card,
+   border-border, or text-text-* brand tokens. */
+.landing-surface {
+  background: var(--landing-surface);
+  border-color: var(--landing-border);
+}
+.landing-text {
+  color: var(--landing-fg);
+}
+.landing-text-muted {
+  color: var(--landing-muted);
+}
+.landing-border {
+  border-color: var(--landing-border);
+}

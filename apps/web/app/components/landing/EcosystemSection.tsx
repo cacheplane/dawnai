@@ -18,19 +18,19 @@ const packages = [
 
 export function EcosystemSection() {
   return (
-    <section className="py-16 px-8 border-t border-border-subtle">
+    <section className="py-16 px-8 border-t landing-border">
       <div className="text-center max-w-2xl mx-auto">
-        <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+        <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-green" aria-hidden />
           Ecosystem
         </p>
         <h2
-          className="font-display text-3xl md:text-4xl font-semibold text-text-primary leading-[1.15] tracking-tight"
+          className="font-display text-3xl md:text-4xl font-semibold landing-text leading-[1.15] tracking-tight"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
         >
           Built for the LangChain ecosystem.
         </h2>
-        <p className="text-text-secondary mt-3 leading-7">
+        <p className="landing-text mt-3 leading-7">
           Dawn is a meta-framework for LangGraph and LangChain. Use the tools and models you already
           know.
         </p>
@@ -40,8 +40,8 @@ export function EcosystemSection() {
         {packages.map((pkg) => (
           <div
             key={pkg.name}
-            className={`relative flex-1 bg-bg-card border rounded-lg p-5 text-center ${
-              pkg.accent ? "border-accent-green/30" : "border-border"
+            className={`relative flex-1 landing-surface border rounded-lg p-5 text-center ${
+              pkg.accent ? "border-accent-green/30" : ""
             }`}
           >
             {pkg.accent && (
@@ -58,12 +58,12 @@ export function EcosystemSection() {
               className={`relative text-base font-bold mb-2 ${
                 pkg.accent
                   ? "text-accent-green"
-                  : "text-text-muted border border-dashed border-border rounded inline-block px-2"
+                  : "landing-text-muted border border-dashed landing-border rounded inline-block px-2"
               }`}
             >
               {pkg.name}
             </p>
-            <p className="relative text-sm text-text-muted leading-relaxed">{pkg.body}</p>
+            <p className="relative text-sm landing-text-muted leading-relaxed">{pkg.body}</p>
           </div>
         ))}
       </div>

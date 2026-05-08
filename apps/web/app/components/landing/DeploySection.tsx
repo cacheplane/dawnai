@@ -18,19 +18,19 @@ const steps = [
 
 export function DeploySection() {
   return (
-    <section className="py-20 px-8 border-t border-border-subtle">
+    <section className="py-20 px-8 border-t landing-border">
       <div className="text-center max-w-2xl mx-auto">
-        <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+        <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
           The Deploy Story
         </p>
         <h2
-          className="font-display text-4xl md:text-5xl font-semibold text-text-primary leading-[1.1] tracking-tight text-balance"
+          className="font-display text-4xl md:text-5xl font-semibold landing-text leading-[1.1] tracking-tight text-balance"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
         >
           Build locally. Deploy to LangSmith.
         </h2>
-        <p className="text-text-secondary mt-4 leading-7">
+        <p className="landing-text mt-4 leading-7">
           Dawn owns your local development lifecycle. When you&apos;re ready to ship, your routes
           speak the LangGraph Platform protocol natively &mdash; deploy as LangSmith assistants with
           the infrastructure you already trust.
@@ -46,7 +46,7 @@ export function DeploySection() {
                 className={`w-14 h-14 rounded-[10px] flex items-center justify-center mx-auto mb-3 ${
                   step.accent
                     ? "bg-gradient-to-br from-[#1a1005] to-[#2a1a08] border border-accent-amber/40"
-                    : "bg-bg-card border border-border"
+                    : "landing-surface border"
                 }`}
               >
                 {i === 0 && (
@@ -93,11 +93,11 @@ export function DeploySection() {
                 )}
               </div>
               <p
-                className={`text-sm font-semibold ${step.accent ? "text-accent-amber" : "text-text-primary"}`}
+                className={`text-sm font-semibold ${step.accent ? "text-accent-amber" : "landing-text"}`}
               >
                 {step.label}
               </p>
-              <div className="text-xs text-text-muted mt-1.5 leading-5">
+              <div className="text-xs landing-text-muted mt-1.5 leading-5">
                 {step.commands.map((cmd) => (
                   <div key={cmd}>{cmd}</div>
                 ))}
@@ -118,15 +118,15 @@ export function DeploySection() {
       </div>
 
       {/* Protocol note */}
-      <div className="max-w-[550px] mx-auto mt-8 bg-bg-card border border-border rounded-lg px-5 py-4 flex gap-4 items-start">
+      <div className="max-w-[550px] mx-auto mt-8 landing-surface border rounded-lg px-5 py-4 flex gap-4 items-start">
         <span className="text-accent-amber text-base mt-0.5">&#9432;</span>
-        <p className="text-sm text-text-secondary leading-relaxed">
+        <p className="text-sm landing-text leading-relaxed">
           Dawn&apos;s dev server speaks the{" "}
-          <span className="text-text-primary">LangGraph Platform protocol</span> natively &mdash;{" "}
-          <code className="text-xs text-text-secondary font-mono">/runs/wait</code>,{" "}
-          <code className="text-xs text-text-secondary font-mono">/runs/stream</code>,{" "}
-          <code className="text-xs text-text-secondary font-mono">assistant_id</code> routing. What
-          runs locally deploys without translation.
+          <span className="landing-text">LangGraph Platform protocol</span> natively &mdash;{" "}
+          <code className="text-xs landing-text font-mono">/runs/wait</code>,{" "}
+          <code className="text-xs landing-text font-mono">/runs/stream</code>,{" "}
+          <code className="text-xs landing-text font-mono">assistant_id</code> routing. What runs
+          locally deploys without translation.
         </p>
       </div>
     </section>

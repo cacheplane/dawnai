@@ -58,14 +58,14 @@ const pillars = [
 
 export function SolutionSection() {
   return (
-    <section className="py-20 px-8 border-t border-border-subtle">
+    <section className="py-20 px-8 border-t landing-border">
       <div className="text-center max-w-2xl mx-auto">
-        <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+        <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
           The Solution
         </p>
         <h2
-          className="font-display text-4xl md:text-5xl font-semibold text-text-primary leading-[1.1] text-balance tracking-tight"
+          className="font-display text-4xl md:text-5xl font-semibold landing-text leading-[1.1] text-balance tracking-tight"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
         >
           Dawn gives your agents the structure they deserve.
@@ -75,11 +75,11 @@ export function SolutionSection() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl mx-auto mt-10">
         {pillars.map((pillar) => (
           <div key={pillar.title} className="text-center">
-            <div className="w-12 h-12 rounded-[10px] bg-bg-card border border-border flex items-center justify-center mx-auto mb-4 text-text-primary">
+            <div className="w-12 h-12 rounded-[10px] landing-surface border flex items-center justify-center mx-auto mb-4 landing-text">
               {pillar.icon}
             </div>
-            <h3 className="text-base font-semibold text-text-primary">{pillar.title}</h3>
-            <p className="text-sm text-text-muted mt-2 leading-relaxed">{pillar.body}</p>
+            <h3 className="text-base font-semibold landing-text">{pillar.title}</h3>
+            <p className="text-sm landing-text-muted mt-2 leading-relaxed">{pillar.body}</p>
           </div>
         ))}
       </div>
