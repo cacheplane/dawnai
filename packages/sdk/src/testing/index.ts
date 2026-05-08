@@ -1,8 +1,29 @@
-import type { RuntimeExecutionResult } from "./result.js"
+/**
+ * Assertion helpers for `dawn test` scenario `assert(result)` callbacks.
+ *
+ * @example
+ * ```ts
+ * import { expectError, expectMeta, expectOutput } from "@dawn-ai/sdk/testing"
+ *
+ * export default [
+ *   {
+ *     name: "greets",
+ *     input: { tenant: "acme" },
+ *     run: { url: "http://localhost:3000" },
+ *     assert: (result) => {
+ *       expectMeta(result, { mode: "agent", routeId: "/hello/[tenant]" })
+ *       expectOutput(result, { greeting: "Hello, acme!" })
+ *     },
+ *   },
+ * ]
+ * ```
+ */
+
+import type { RuntimeExecutionResult } from "../runtime-result.js"
 
 export interface RuntimeMetaExpectation {
   readonly executionSource?: "in-process" | "server"
-  readonly mode?: "graph" | "workflow" | null
+  readonly mode?: "agent" | "chain" | "graph" | "workflow" | null
   readonly routeId?: string | null
   readonly routePath?: string | null
 }
@@ -152,3 +173,14 @@ function formatValue(value: unknown): string {
 
   return JSON.stringify(value)
 }
+
+export type {
+  RuntimeExecutionBaseResult,
+  RuntimeExecutionError,
+  RuntimeExecutionErrorKind,
+  RuntimeExecutionFailureResult,
+  RuntimeExecutionMode,
+  RuntimeExecutionResult,
+  RuntimeExecutionSuccessResult,
+  RuntimeExecutionTiming,
+} from "../runtime-result.js"

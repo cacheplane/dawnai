@@ -1,0 +1,95 @@
+# Retry
+
+Agent routes can opt into automatic retry of transient LLM failures via the `retry` field on `agent()`. Retries apply to rate limits, server errors, network timeouts, and OpenAI overload responses — but not to non-transient errors like invalid API keys or model-not-found.
+
+## Configuring retry
+
+Set `retry` on the `agent()` descriptor:
+
+```ts
+// src/app/(public)/hello/[tenant]/index.ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  retry: { maxAttempts: 5, baseDelay: 500 },
+  systemPrompt: "You are a helpful assistant.",
+})
+```
+
+| Field | Default | Notes |
+|---|---|---|
+| `maxAttempts` | `3` | Total number of attempts (including the first call). `1` disables retry. |
+| `baseDelay` | `1000` (ms) | Base delay before the first retry. Backoff is exponential with jitter. |
+
+If `retry` is omitted, agents use the defaults (3 attempts, 1s base delay). To disable retry entirely, set `maxAttempts: 1`.
+
+## What's retried
+
+The retry policy retries on errors whose message indicates a transient condition:
+
+- **Rate limits:** `429`, `rate limit`
+- **Server errors:** `500`, `502`, `503`
+- **Network errors:** `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `timeout`, `network`
+- **OpenAI transient:** `overloaded`, `server_error`
+
+Anything else (invalid API key, model not found, schema validation errors, abort) fails immediately without retry.
+
+## Backoff
+
+Delay before retry `n` (zero-indexed) is:
+
+```
+delay = min(baseDelay * 2^n + jitter, 10s)
+jitter = random(0, 500ms)
+```
+
+So with the defaults (1s base, 3 attempts):
+
+| Attempt | Delay before this attempt |
+|---|---|
+| 1 (initial) | 0 |
+| 2 | ~1000–1500 ms |
+| 3 | ~2000–2500 ms |
+
+The cap at 10 seconds prevents pathological backoff for long retry chains.
+
+## Streaming behavior
+
+For streaming routes, retry only applies if the failure happens **before any token is yielded to the client**. Once tokens have been streamed, the partial response is committed — Dawn cannot retry a partially-emitted stream because the client has already seen content. In that case the error propagates to the SSE stream's `done` event.
+
+If you need stronger retry guarantees in streaming mode, lower `baseDelay` to make the initial connection retry faster, or wrap the call at a higher level in your client.
+
+## Abort signals
+
+If the request's `AbortSignal` fires mid-retry (client disconnect, server shutdown), the retry chain aborts immediately with `Operation aborted`. This is the same signal that propagates to your tool implementations as `ctx.signal`.
+
+## Per-route, not global
+
+Retry is configured per `agent()` descriptor. Different routes can have different policies:
+
+```ts
+// Critical billing-related route — fail fast on transient errors
+export default agent({
+  model: "gpt-4o-mini",
+  retry: { maxAttempts: 1 },
+  systemPrompt: "...",
+})
+```
+
+```ts
+// Best-effort summarization route — patient retry
+export default agent({
+  model: "gpt-4o-mini",
+  retry: { maxAttempts: 5, baseDelay: 2000 },
+  systemPrompt: "...",
+})
+```
+
+There is no global retry config — each route states its own intent.
+
+## Related
+
+- [Routes](/docs/routes) — `agent()` descriptor and the four route kinds
+- [Tools](/docs/tools) — tool error handling and the `ctx.signal` contract
+- [Deployment](/docs/deployment) — how retry composes with `dawn build` output

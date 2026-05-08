@@ -45,10 +45,10 @@ The `expect` object accepts:
 - `meta?` — match against `{ mode, routeId, routePath, executionSource }`.
 - `error?` — for `status: "failed"`, match `{ kind, message: string | { includes: string } }`.
 
-For programmatic assertions in `assert(result)`, import the helpers from `@dawn-ai/cli/testing`:
+For programmatic assertions in `assert(result)`, import the helpers from `@dawn-ai/sdk/testing`:
 
 ```ts
-import { expectError, expectMeta, expectOutput } from "@dawn-ai/cli/testing"
+import { expectError, expectMeta, expectOutput } from "@dawn-ai/sdk/testing"
 
 export default [
   {
@@ -96,10 +96,8 @@ dawn test
 
 Two cross-cutting features shape what scenarios assert:
 
-- **Agent retries** — `agent({ retry: { maxAttempts, baseDelay } })` retries on transient errors. To assert the exhausted-retry path, set `expect.status: "failed"` and use `expect.error` (or an `assert` callback with `expectError`).
-- **Middleware** — `src/middleware.ts` runs before every `/runs/wait` and `/runs/stream` request. **Live-server scenarios (`run: { url }`) exercise middleware; in-process scenarios bypass it.** A scenario whose middleware calls `reject(...)` should set `expect.status: "failed"` with a matching `expect.error`.
-
-A dedicated middleware page is tracked as a follow-up.
+- **Agent retries** — `agent({ retry: { maxAttempts, baseDelay } })` retries on transient errors. To assert the exhausted-retry path, set `expect.status: "failed"` and use `expect.error` (or an `assert` callback with `expectError`). See [Retry](/docs/retry).
+- **Middleware** — `src/middleware.ts` runs before every `/runs/wait` and `/runs/stream` request. **Live-server scenarios (`run: { url }`) exercise middleware; in-process scenarios bypass it.** A scenario whose middleware calls `reject(...)` should set `expect.status: "failed"` with a matching `expect.error`. See [Middleware](/docs/middleware).
 
 ## Mocking tools
 
@@ -116,7 +114,7 @@ A dedicated middleware page is tracked as a follow-up.
   <Step title="Default-exported array">
     The file's default export is the array of scenario records. There is no `describe()` or `test()` wrapper.
   </Step>
-  <Step title="Use the helpers from @dawn-ai/cli/testing for custom assertions">
+  <Step title="Use the helpers from @dawn-ai/sdk/testing for custom assertions">
     `expectOutput`, `expectMeta`, and `expectError` cover deep-equal match (with helpful diffs). For partial or fuzzy matching today, use the declarative `expect` shape (`output`/`meta`/`error`) or write a custom predicate in `assert(result)`.
   </Step>
   <Step title="Keep scenarios focused">

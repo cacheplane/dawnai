@@ -78,7 +78,7 @@ The `assistant_id` format `<routeId>#<kind>` is the same format `dawn build` wri
 
 `src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request. It can short-circuit a request with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
 
-`MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Routes](/docs/routes#middleware) for the full reference; a dedicated middleware page is tracked as a follow-up.
+`MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Middleware](/docs/middleware) for the full reference.
 
 ## Hot reload
 

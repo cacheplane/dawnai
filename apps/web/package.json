@@ -18,7 +18,9 @@
     "next": "16.2.3",
     "react": "19.2.0",
     "react-dom": "19.2.0",
+    "rehype-pretty-code": "^0.14.3",
     "remark-gfm": "^4.0.1",
+    "shiki": "^4.0.2",
     "tailwindcss": "^4.2.4"
   },
   "devDependencies": {

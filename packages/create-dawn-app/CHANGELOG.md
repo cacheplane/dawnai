@@ -1,5 +1,24 @@
 # create-dawn-app
 
+## 0.1.8
+
+### Patch Changes
+
+- @dawn-ai/devkit@0.1.8
+
+## 0.1.7
+
+### Patch Changes
+
+- db635b1: Docs overhaul.
+
+  - **Public package READMEs** (`@dawn-ai/sdk`, `@dawn-ai/cli`, `create-dawn-ai-app`) fleshed out with overview, install, key APIs, and links to the website.
+  - All package READMEs include the Dawn brand image header.
+
+  No code or runtime behavior changes — README content only.
+
+  - @dawn-ai/devkit@0.1.7
+
 ## 0.1.6
 
 ### Patch Changes

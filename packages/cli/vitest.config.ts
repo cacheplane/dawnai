@@ -11,6 +11,7 @@ export default defineConfig({
       "@dawn-ai/core": resolve(rootDir, "../core/src/index.ts"),
       "@dawn-ai/langchain": resolve(rootDir, "../langchain/src/index.ts"),
       "@dawn-ai/langgraph": resolve(rootDir, "../langgraph/src/index.ts"),
+      "@dawn-ai/sdk/testing": resolve(rootDir, "../sdk/src/testing/index.ts"),
       "@dawn-ai/sdk": resolve(rootDir, "../sdk/src/index.ts"),
     },
   },
