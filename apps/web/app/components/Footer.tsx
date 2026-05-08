@@ -67,7 +67,7 @@ const COLUMNS: readonly Column[] = [
 
 function FooterLink({ label, href, external }: LinkItem) {
   const className =
-    "text-sm text-text-secondary hover:text-accent-amber transition-colors block py-0.5"
+    "text-sm landing-text-muted hover:text-accent-amber-deep transition-colors block py-0.5"
   if (external) {
     return (
       <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
@@ -102,29 +102,13 @@ function NpmIcon() {
 
 export function Footer() {
   return (
-    <footer
-      className="relative px-8 pt-16 pb-10 mt-12 border-t border-border-subtle"
-      style={{
-        background:
-          "linear-gradient(to bottom, transparent 0%, rgba(2,6,23,0.4) 50%, #020617 100%)",
-      }}
-    >
-      {/* Subtle starfield echo — closes the cosmic loop one final time */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-32 opacity-30 bg-no-repeat bg-top"
-        style={{
-          backgroundImage: "url('/backgrounds/dawn-stars.svg')",
-          backgroundSize: "100% auto",
-        }}
-      />
-
-      <div className="relative max-w-6xl mx-auto">
+    <footer className="relative px-8 pt-20 pb-12 border-t landing-border">
+      <div className="max-w-6xl mx-auto">
         <div className="grid grid-cols-2 md:grid-cols-6 gap-10 md:gap-8">
           {/* Brand block — spans 2 cols on desktop, full width on mobile */}
           <div className="col-span-2 md:col-span-2">
             <BrandLogo imageClassName="h-8" />
-            <p className="text-sm text-text-muted mt-3 leading-relaxed max-w-[36ch]">
+            <p className="text-sm landing-text-muted mt-3 leading-relaxed max-w-[36ch]">
               The App Router for AI agents. A TypeScript-first meta-framework for LangChain.
             </p>
             <div className="flex items-center gap-3 mt-5">
@@ -132,7 +116,8 @@ export function Footer() {
                 href="https://github.com/cacheplane/dawnai"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center w-10 h-10 rounded-md border border-border text-text-muted hover:text-accent-amber hover:border-accent-amber/40 transition-colors"
+                className="inline-flex items-center justify-center w-10 h-10 rounded-md border landing-border landing-text-muted hover:text-accent-amber-deep transition-colors"
+                style={{ borderColor: "var(--landing-border)" }}
                 aria-label="GitHub"
               >
                 <GitHubIcon />
@@ -141,7 +126,8 @@ export function Footer() {
                 href="https://www.npmjs.com/org/dawn-ai"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center w-10 h-10 rounded-md border border-border text-text-muted hover:text-accent-amber hover:border-accent-amber/40 transition-colors"
+                className="inline-flex items-center justify-center w-10 h-10 rounded-md border landing-border landing-text-muted hover:text-accent-amber-deep transition-colors"
+                style={{ borderColor: "var(--landing-border)" }}
                 aria-label="npm"
               >
                 <NpmIcon />
@@ -152,7 +138,7 @@ export function Footer() {
           {/* Link columns */}
           {COLUMNS.map((col) => (
             <div key={col.heading} className="flex flex-col gap-1">
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-accent-amber mb-2">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-accent-amber-deep mb-3">
                 {col.heading}
               </p>
               {col.items.map((item) => (
@@ -163,7 +149,10 @@ export function Footer() {
         </div>
 
         {/* Bottom bar */}
-        <div className="mt-12 pt-6 border-t border-border-subtle text-xs text-text-muted text-center md:text-left">
+        <div
+          className="mt-16 pt-6 border-t landing-border text-xs landing-text-muted text-center md:text-left"
+          style={{ borderColor: "var(--landing-border)" }}
+        >
           {`© ${new Date().getFullYear()} Dawn · MIT-licensed · Built on the LangChain ecosystem`}
         </div>
       </div>
