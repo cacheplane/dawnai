@@ -9,6 +9,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@dawn-ai/langchain": resolve(rootDir, "src/index.ts"),
+      "@dawn-ai/sdk/testing": resolve(rootDir, "../sdk/src/testing/index.ts"),
       "@dawn-ai/sdk": resolve(rootDir, "../sdk/src/index.ts"),
     },
   },

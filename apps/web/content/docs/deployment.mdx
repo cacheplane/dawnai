@@ -54,7 +54,7 @@ Dawn does not host or run production traffic itself. It owns local development (
     - If you keep a hand-authored `langgraph.json` at the app root, `dawn build` shallow-merges it on top of the generated values.
   </Step>
   <Step title="Per-route middleware (optional)">
-    `src/middleware.ts` (default-exporting a function from `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request — identically in `dawn dev` and on LangGraph Platform. Use it to gate access by header, populate request-scoped context, or `reject(status, body)` unauthorized callers. See [Routes](/docs/routes#middleware) for the API.
+    `src/middleware.ts` (default-exporting a function from `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request — identically in `dawn dev` and on LangGraph Platform. Use it to gate access by header, populate request-scoped context, or `reject(status, body)` unauthorized callers. See [Middleware](/docs/middleware) for the API.
   </Step>
   <Step title="Push to your Platform-connected remote">
     The LangGraph Platform builds the image from `.dawn/build/` and provisions assistants keyed by the `<routeId>#<kind>` ids in the generated `langgraph.json`. From there, your agents and harnesses can hit the deployed endpoints using the same protocol they already speak locally.
