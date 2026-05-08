@@ -38,20 +38,6 @@ export function HeroSection() {
         ergonomics of Next.js. File-system routing, type-safe tools, zero boilerplate.
       </p>
 
-      {/* Trust strip — placed in the cosmic dark above the atmospheric glow */}
-      <div className="relative mt-8 flex justify-center flex-wrap gap-x-8 gap-y-2 opacity-60">
-        {[
-          { name: "LangGraph", color: "text-accent-green" },
-          { name: "LangChain", color: "text-accent-green" },
-          { name: "TypeScript", color: "text-accent-blue" },
-          { name: "Vite", color: "text-accent-purple" },
-        ].map((item) => (
-          <span key={item.name} className={`text-xs font-medium ${item.color}`}>
-            {item.name}
-          </span>
-        ))}
-      </div>
-
       <div className="relative mt-8 flex gap-3 justify-center">
         <CopyPromptButton prompt={scaffoldPrompt.body} label="Copy prompt" variant="hero" />
         <a
