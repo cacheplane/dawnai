@@ -1,11 +1,14 @@
 import type { MDXComponents } from "mdx/types"
 import { Callout } from "./app/components/mdx/Callout"
+import { InlineCode, Pre } from "./app/components/mdx/CodeBlock"
+import { CodeGroup } from "./app/components/mdx/CodeGroup"
 import { Step, Steps } from "./app/components/mdx/Steps"
 import { Tab, Tabs } from "./app/components/mdx/Tabs"
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
     Callout,
+    CodeGroup,
     Steps,
     Step,
     Tabs,
@@ -30,16 +33,8 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
       <h3 className="text-lg font-semibold text-text-primary mt-8 mb-3">{children}</h3>
     ),
     p: ({ children }) => <p className="text-text-secondary leading-7 mb-4">{children}</p>,
-    code: ({ children }) => (
-      <code className="bg-bg-card border border-border rounded px-1.5 py-0.5 text-sm font-mono text-text-secondary">
-        {children}
-      </code>
-    ),
-    pre: ({ children }) => (
-      <pre className="bg-bg-card border border-border rounded-lg p-4 overflow-x-auto mb-4 text-sm font-mono leading-relaxed">
-        {children}
-      </pre>
-    ),
+    code: InlineCode,
+    pre: Pre,
     ul: ({ children }) => (
       <ul className="list-disc list-inside text-text-secondary leading-7 mb-4 space-y-1">
         {children}

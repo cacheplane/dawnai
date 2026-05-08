@@ -11,7 +11,6 @@ import { LandingAmbient } from "./components/landing/LandingAmbient"
 import { LogoWall } from "./components/landing/LogoWall"
 import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
-import { StatsStrip } from "./components/landing/StatsStrip"
 import { ScrollReveal } from "./components/ScrollReveal"
 
 export default function HomePage() {
@@ -21,7 +20,6 @@ export default function HomePage() {
       {/* Hero / Stats / Problem aren't wrapped — the seamless navy bleed across them
           would break if their bgs faded in independently. Reveals begin at ComparisonTable. */}
       <HeroSection />
-      <StatsStrip />
       <LogoWall />
       <ProblemSection />
       <ScrollReveal>
