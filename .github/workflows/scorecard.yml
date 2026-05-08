@@ -1,7 +1,10 @@
-name: Scorecard
+name: OpenSSF Scorecard
 
 on:
   branch_protection_rule:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "17 12 * * 2"
   workflow_dispatch:
@@ -10,12 +13,12 @@ permissions:
   contents: read
   security-events: write
   id-token: write
-  actions: read
 
 jobs:
-  analysis:
-    name: Scorecard analysis
+  scorecard:
+    name: Scorecard
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -25,11 +28,11 @@ jobs:
       - name: Run Scorecard
         uses: ossf/scorecard-action@v2.4.3
         with:
-          results_file: results.sarif
+          results_file: scorecard.sarif
           results_format: sarif
           publish_results: true
 
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: results.sarif
+          sarif_file: scorecard.sarif

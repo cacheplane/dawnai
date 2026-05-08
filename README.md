@@ -4,6 +4,10 @@
 
 # Dawn
 
+[![CI](https://github.com/cacheplane/dawnai/actions/workflows/ci.yml/badge.svg)](https://github.com/cacheplane/dawnai/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml/badge.svg)](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](./LICENSE)
+
 Dawn is a TypeScript meta-framework for authoring agents and workflows: filesystem-based route discovery, the `agent()` descriptor, route-local tools, per-route middleware, type generation, a local development runtime, and `dawn build` for producing LangGraph Platform deployment artifacts.
 
 ## Status
@@ -38,6 +42,22 @@ echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]"
 pnpm exec dawn dev --port 3001
 echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]" --url http://127.0.0.1:3001
 ```
+
+## 30-Second Route
+
+Dawn routes live under `src/app` and export one runtime entry. New agent routes should use the `agent()` descriptor from `@dawn-ai/sdk`; Dawn discovers the route, binds route-local tools, generates types, and emits LangGraph deployment artifacts.
+
+```ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "You are a helpful assistant for the {tenant} organization.",
+  retry: { maxAttempts: 3, baseDelay: 250 },
+})
+```
+
+Add `state.ts` for a route state schema, `tools/*.ts` for route-local tools, `middleware.ts` for access control or request context, and `run.test.ts` for colocated route scenarios.
 
 ## App Contract
 
@@ -200,6 +220,34 @@ The canonical reference lives on the docs site:
 - [Testing](https://dawn-ai.org/docs/testing)
 - [Deployment](https://dawn-ai.org/docs/deployment)
 
+## Development
+
+Use Node.js `>=22.12.0` and pnpm `10.33.0`.
+
+```bash
+pnpm install
+pnpm ci:validate
+```
+
+For day-to-day work, run the smallest validation lane that proves the change:
+
+```bash
+pnpm lint
+pnpm build
+pnpm typecheck
+pnpm test
+node scripts/check-docs.mjs
+pnpm pack:check
+```
+
+The detailed repository guide is [CONTRIBUTORS.md](./CONTRIBUTORS.md).
+
 ## Contributing
 
 For the public contribution workflow, see [CONTRIBUTING.md](./CONTRIBUTING.md). For repository layout, test lanes, and local verification commands, see [CONTRIBUTORS.md](./CONTRIBUTORS.md).
+
+Please follow the [Code of Conduct](./CODE_OF_CONDUCT.md). For security issues, do not open a public issue; follow [SECURITY.md](./SECURITY.md).
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
