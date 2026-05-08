@@ -57,16 +57,47 @@ export async function CodeExample() {
           <p className="text-text-secondary text-xs uppercase tracking-wide mb-2 font-sans font-semibold">
             Project Structure
           </p>
-          <div><span className="text-yellow-400">src/app/</span></div>
-          <div>&nbsp;&nbsp;<span className="text-text-muted">(public)/</span> <span className="text-text-dim text-xs">&larr; route group, excluded from pathname</span></div>
+          <div>
+            <span className="text-yellow-400">src/app/</span>
+          </div>
+          <div>
+            &nbsp;&nbsp;<span className="text-text-muted">(public)/</span>{" "}
+            <span className="text-text-dim text-xs">
+              &larr; route group, excluded from pathname
+            </span>
+          </div>
           <div>&nbsp;&nbsp;&nbsp;&nbsp;hello/</div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-purple-400">[tenant]/</span> <span className="text-text-dim text-xs">&larr; dynamic segment</span></div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-blue-400">index.ts</span> <span className="text-text-dim text-xs">&larr; route entry</span></div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-text-secondary">state.ts</span> <span className="text-text-dim text-xs">&larr; route state type</span></div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-yellow-400">tools/</span> <span className="text-text-dim text-xs">&larr; co-located tools</span></div>
-          <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-green-400">greet.ts</span> <span className="text-text-dim text-xs">&larr; typed at build time</span></div>
-          <div>&nbsp;&nbsp;<span className="text-text-secondary">dawn.generated.d.ts</span> <span className="text-text-dim text-xs">&larr; auto-generated ambient types</span></div>
-          <div><span className="text-text-secondary">dawn.config.ts</span></div>
+          <div>
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-purple-400">[tenant]/</span>{" "}
+            <span className="text-text-dim text-xs">&larr; dynamic segment</span>
+          </div>
+          <div>
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+            <span className="text-blue-400">index.ts</span>{" "}
+            <span className="text-text-dim text-xs">&larr; route entry</span>
+          </div>
+          <div>
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+            <span className="text-text-secondary">state.ts</span>{" "}
+            <span className="text-text-dim text-xs">&larr; route state type</span>
+          </div>
+          <div>
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+            <span className="text-yellow-400">tools/</span>{" "}
+            <span className="text-text-dim text-xs">&larr; co-located tools</span>
+          </div>
+          <div>
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+            <span className="text-green-400">greet.ts</span>{" "}
+            <span className="text-text-dim text-xs">&larr; typed at build time</span>
+          </div>
+          <div>
+            &nbsp;&nbsp;<span className="text-text-secondary">dawn.generated.d.ts</span>{" "}
+            <span className="text-text-dim text-xs">&larr; auto-generated ambient types</span>
+          </div>
+          <div>
+            <span className="text-text-secondary">dawn.config.ts</span>
+          </div>
         </div>
       </div>
 

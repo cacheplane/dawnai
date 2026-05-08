@@ -24,6 +24,7 @@ export function LogoWall() {
               key={logo.name}
               className="inline-flex items-center gap-2.5 text-sm font-semibold text-text-secondary opacity-70 hover:opacity-100 transition-opacity"
             >
+              {/* biome-ignore lint/performance/noImgElement: small inline SVG, next/image overhead not warranted */}
               <img src={logo.src} alt="" width={22} height={22} className="shrink-0" />
               {logo.name}
             </span>

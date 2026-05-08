@@ -65,11 +65,11 @@
 /* Diff markers ([!code ++] / [!code --]) */
 [data-highlighted-line-id="add"],
 .line.diff.add {
-  background: rgb(from var(--color-accent-green) r g b / 0.10);
+  background: rgb(from var(--color-accent-green) r g b / 0.1);
   border-left-color: var(--color-accent-green);
 }
 [data-highlighted-line-id="remove"],
 .line.diff.remove {
-  background: rgb(239 68 68 / 0.10);
+  background: rgb(239 68 68 / 0.1);
   border-left-color: rgb(239 68 68);
 }
