@@ -1,0 +1,50 @@
+# Code blocks smoke test
+
+## Bare command (no title)
+
+```bash
+npx create-dawn-app my-agent
+```
+
+## Titled TypeScript with line highlights
+
+```ts title="src/app/hello/[tenant]/index.ts" {3,5-7}
+import type { RuntimeContext } from "@dawn-ai/sdk"
+import type { RouteTools } from "dawn:routes"
+import type { HelloState } from "./state.js"
+
+export async function workflow(state: HelloState, ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>) {
+  const result = await ctx.tools.greet({ tenant: state.tenant })
+  return { ...state, greeting: result.greeting }
+}
+```
+
+## Diff markers
+
+```ts title="route.ts"
+export async function workflow(state, ctx) {
+  const result = await ctx.tools.greet({ tenant: state.tenant }) // [!code --]
+  const result = await ctx.tools.greet({ tenant: state.tenant, locale: state.locale }) // [!code ++]
+  return { ...state, greeting: result.greeting }
+}
+```
+
+## Inline code
+
+Run `dawn run` to start the dev server. The `--port` flag overrides the default.
+
+## CodeGroup with two files
+
+<CodeGroup>
+```ts title="route.ts"
+export async function workflow(state, ctx) {
+  const r = await ctx.tools.greet({ tenant: state.tenant })
+  return { ...state, greeting: r.greeting }
+}
+```
+```ts title="tool.ts"
+export default async (input: { readonly tenant: string }) => {
+  return { greeting: `Hello, ${input.tenant}!` }
+}
+```
+</CodeGroup>
