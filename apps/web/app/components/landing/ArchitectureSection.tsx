@@ -1,102 +1,163 @@
-interface Layer {
-  readonly label: string
-  readonly items: readonly string[]
-  readonly accent: "neutral" | "dawn" | "ecosystem"
+interface TreeToken {
+  readonly text: string
+  readonly color?: "yellow" | "purple" | "blue" | "green" | "muted" | "default"
 }
 
-const LAYERS: readonly Layer[] = [
+interface TreeNote {
+  readonly text: string
+}
+
+interface TreeLine {
+  readonly indent: number
+  readonly tokens: readonly TreeToken[]
+  readonly note?: TreeNote
+}
+
+const NEXTJS_TREE: readonly TreeLine[] = [
+  { indent: 0, tokens: [{ text: "app/", color: "yellow" }] },
+  { indent: 1, tokens: [{ text: "middleware.ts", color: "green" }] },
   {
-    label: "You",
-    items: ["Routes", "Tools", "State", "Tests"],
-    accent: "neutral",
+    indent: 1,
+    tokens: [{ text: "(public)/", color: "yellow" }],
+    note: { text: "← route group" },
+  },
+  { indent: 2, tokens: [{ text: "hello/", color: "yellow" }] },
+  {
+    indent: 3,
+    tokens: [{ text: "[tenant]/", color: "purple" }],
+    note: { text: "← dynamic segment" },
   },
   {
-    label: "Dawn",
-    items: ["Conventions", "Type inference", "Dev server", "CLI", "Deployment protocol"],
-    accent: "dawn",
+    indent: 4,
+    tokens: [{ text: "page.tsx", color: "blue" }],
+    note: { text: "← UI route" },
   },
   {
-    label: "LangChain",
-    items: ["LangGraph runtime", "LangGraph Platform", "LangSmith Assistants"],
-    accent: "ecosystem",
+    indent: 4,
+    tokens: [{ text: "route.ts", color: "green" }],
+    note: { text: "← API endpoint" },
   },
 ]
 
-function Connector() {
-  return (
-    <div aria-hidden className="flex justify-center">
-      <div className="w-px h-6 bg-gradient-to-b from-border via-border to-transparent" />
-    </div>
-  )
+const DAWN_TREE: readonly TreeLine[] = [
+  { indent: 0, tokens: [{ text: "app/", color: "yellow" }] },
+  { indent: 1, tokens: [{ text: "middleware.ts", color: "green" }] },
+  {
+    indent: 1,
+    tokens: [{ text: "(public)/", color: "yellow" }],
+    note: { text: "← route group" },
+  },
+  { indent: 2, tokens: [{ text: "hello/", color: "yellow" }] },
+  {
+    indent: 3,
+    tokens: [{ text: "[tenant]/", color: "purple" }],
+    note: { text: "← dynamic segment" },
+  },
+  {
+    indent: 4,
+    tokens: [{ text: "index.ts", color: "blue" }],
+    note: { text: "← agent workflow" },
+  },
+  {
+    indent: 4,
+    tokens: [{ text: "tools/greet.ts", color: "green" }],
+    note: { text: "← typed tool" },
+  },
+]
+
+interface MappingRow {
+  readonly nextjs: { readonly cell: string; readonly desc: string }
+  readonly dawn: { readonly cell: string; readonly desc: string }
 }
 
-function LayerCard({ layer }: { layer: Layer }) {
-  const isDawn = layer.accent === "dawn"
-  const isEcosystem = layer.accent === "ecosystem"
-  const borderClass = isDawn
-    ? "border-accent-amber/40"
-    : isEcosystem
-      ? "border-accent-green/25"
-      : ""
-  const labelClass = isDawn
-    ? "text-accent-amber"
-    : isEcosystem
-      ? "text-accent-green"
-      : "landing-text"
+const MAPPING: readonly MappingRow[] = [
+  {
+    nextjs: { cell: "app/page.tsx", desc: "A route's UI — what gets rendered for a path." },
+    dawn: { cell: "app/index.ts", desc: "A route's agent workflow — what runs for a path." },
+  },
+  {
+    nextjs: { cell: "app/route.ts", desc: "An HTTP handler at this path." },
+    dawn: {
+      cell: "app/tools/*.ts",
+      desc: "A typed tool the agent at this path can call. Co-located.",
+    },
+  },
+  {
+    nextjs: {
+      cell: "[slug]/",
+      desc: "Dynamic segment — typed at build via generated params.",
+    },
+    dawn: {
+      cell: "[tenant]/",
+      desc: "Dynamic segment — typed at build via generated RouteState.",
+    },
+  },
+  {
+    nextjs: {
+      cell: "middleware.ts",
+      desc: "Edge / request middleware. Runs before the handler.",
+    },
+    dawn: {
+      cell: "middleware.ts",
+      desc: "Auth, retry, logging — same semantics, runs before the workflow.",
+    },
+  },
+  {
+    nextjs: { cell: "next dev", desc: "Type-aware dev server with HMR." },
+    dawn: {
+      cell: "dawn dev",
+      desc: "Type-aware dev server with HMR — speaks the LangGraph deployment protocol.",
+    },
+  },
+]
 
+const TOKEN_COLOR_CLASS: Record<NonNullable<TreeToken["color"]>, string> = {
+  yellow: "text-yellow-400",
+  purple: "text-purple-400",
+  blue: "text-blue-400",
+  green: "text-green-400",
+  muted: "text-text-muted",
+  default: "text-text-secondary",
+}
+
+interface FileTreeProps {
+  readonly tag: string
+  readonly meta: string
+  readonly tagColor: "white" | "amber"
+  readonly rows: readonly TreeLine[]
+}
+
+function FileTree({ tag, meta, tagColor, rows }: FileTreeProps) {
+  const tagClass = tagColor === "amber" ? "text-accent-amber" : "text-text-primary"
   return (
-    <div
-      className={`relative landing-surface border rounded-xl p-6 overflow-hidden ${borderClass}`}
-    >
-      {/* Illuminated glow for the Dawn layer — this is the piece that was missing */}
-      {isDawn && (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-xl opacity-80"
-          style={{
-            background:
-              "radial-gradient(ellipse 80% 60% at 50% 50%, rgba(245,158,11,0.08), transparent 70%)",
-          }}
-        />
-      )}
-      {/* Soft green tint for the ecosystem layer */}
-      {isEcosystem && (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-20 rounded-b-xl opacity-50"
-          style={{
-            background:
-              "radial-gradient(ellipse 80% 100% at 50% 100%, rgba(0,166,126,0.12), transparent 70%)",
-          }}
-        />
-      )}
-      <div className="relative flex flex-col md:flex-row md:items-center gap-4 md:gap-8">
-        <div className="md:w-40 shrink-0">
-          <p
-            className={`font-display text-2xl md:text-3xl font-semibold tracking-tight ${labelClass}`}
-            style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
-          >
-            {layer.label}
-          </p>
-          {isDawn && (
-            <p className="text-[10px] uppercase tracking-widest text-accent-amber/80 mt-1">
-              The missing layer
-            </p>
+    <div className="bg-bg-card border border-border rounded-xl p-6 font-mono text-sm leading-[2] text-text-muted shadow-[0_12px_32px_-16px_rgba(33,24,12,0.18)]">
+      <div className="flex items-center justify-between pb-3 mb-3 border-b border-border-subtle">
+        <span className={`font-sans text-[10px] uppercase tracking-[0.15em] font-bold ${tagClass}`}>
+          {tag}
+        </span>
+        <span className="font-sans text-[11px] text-text-dim">{meta}</span>
+      </div>
+      {rows.map((row, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: tree is static and stable
+        <div key={i}>
+          {Array.from({ length: row.indent }).map((_, j) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: indent is static
+            <span key={j}>&nbsp;&nbsp;</span>
+          ))}
+          {row.tokens.map((tok, j) => (
+            <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: tokens are static
+              key={j}
+              className={tok.color ? TOKEN_COLOR_CLASS[tok.color] : TOKEN_COLOR_CLASS.default}
+            >
+              {tok.text}
+            </span>
+          ))}
+          {row.note && (
+            <span className="text-text-dim text-[11px] font-sans pl-2 italic">{row.note.text}</span>
           )}
         </div>
-        <ul className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm font-mono landing-text">
-          {layer.items.map((item, i) => (
-            <li key={item} className="flex items-center gap-4">
-              <span>{item}</span>
-              {i < layer.items.length - 1 && (
-                <span aria-hidden className="text-text-dim">
-                  ·
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      </div>
+      ))}
     </div>
   )
 }
@@ -104,38 +165,178 @@ function LayerCard({ layer }: { layer: Layer }) {
 export function ArchitectureSection() {
   return (
     <section className="relative py-36 px-8 border-t landing-border">
-      <div className="text-center max-w-2xl mx-auto mb-12">
-        <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+      <div className="max-w-[1100px] mx-auto">
+        {/* Eyebrow */}
+        <p className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-accent-amber font-semibold mb-3">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
-          The Architecture
+          The pattern
         </p>
+
+        {/* Headline */}
         <h2
-          className="font-display text-4xl md:text-5xl font-semibold landing-text leading-[1.1] tracking-tight text-balance"
-          style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
+          className="font-display font-bold tracking-tight leading-[1.05] mb-4 max-w-[720px] landing-text"
+          style={{
+            fontSize: "clamp(40px, 6vw, 56px)",
+            letterSpacing: "-0.025em",
+            fontVariationSettings: "'opsz' 144, 'SOFT' 50",
+          }}
         >
-          Between your code and LangChain.
+          It&apos;s <span style={{ color: "#d97706", fontStyle: "italic" }}>App Router</span>.
+          <br />
+          For agents.
         </h2>
-        <p className="landing-text mt-4 leading-7">
-          Dawn is the conventions layer &mdash; everything you&apos;d build by hand, we built in the
-          open.
-        </p>
-      </div>
 
-      <div className="max-w-3xl mx-auto">
-        {LAYERS.map((layer, i) => (
-          <div key={layer.label}>
-            <LayerCard layer={layer} />
-            {i < LAYERS.length - 1 && <Connector />}
+        {/* Lede */}
+        <p className="landing-text-muted text-lg leading-relaxed max-w-[600px] mb-14">
+          If you can build a Next.js app, you can build a Dawn agent. Same file-system conventions,
+          same type inference, same dev server ergonomics — applied to LangGraph.
+        </p>
+
+        {/* File trees */}
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_60px_1fr] gap-4 md:gap-0 items-stretch mb-16">
+          <FileTree
+            tag="Next.js · App Router"
+            meta="a web app"
+            tagColor="white"
+            rows={NEXTJS_TREE}
+          />
+          <div className="hidden md:flex flex-col items-center justify-center gap-2 text-accent-amber-deep">
+            <svg
+              width="28"
+              height="28"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              role="img"
+            >
+              <title>arrow right</title>
+              <path d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
+            <span
+              className="font-mono text-[9px] uppercase font-bold tracking-[0.18em]"
+              style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", padding: "8px 0" }}
+            >
+              same conventions
+            </span>
+            <svg
+              width="28"
+              height="28"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              role="img"
+            >
+              <title>arrow right</title>
+              <path d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
           </div>
-        ))}
-      </div>
+          {/* Mobile-only horizontal connector between trees */}
+          <div className="md:hidden flex items-center justify-center gap-2 text-accent-amber-deep py-2">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              role="img"
+            >
+              <title>arrow down</title>
+              <path d="M12 5v14M6 13l6 6 6-6" />
+            </svg>
+            <span className="font-mono text-[9px] uppercase font-bold tracking-[0.18em]">
+              same conventions
+            </span>
+          </div>
+          <FileTree
+            tag="Dawn · App Router for agents"
+            meta="an AI agent"
+            tagColor="amber"
+            rows={DAWN_TREE}
+          />
+        </div>
 
-      <div className="max-w-2xl mx-auto mt-10 text-center">
-        <p className="text-sm landing-text-muted leading-relaxed">
-          <span className="landing-text">You</span> write the agent logic.{" "}
-          <span className="text-accent-amber">Dawn</span> writes the framework.{" "}
-          <span className="text-accent-green">LangChain</span> runs the runtime.
-        </p>
+        {/* Translation table */}
+        <div
+          className="rounded-xl overflow-hidden border"
+          style={{
+            background: "white",
+            borderColor: "rgba(33,24,12,0.10)",
+            boxShadow: "0 4px 16px -8px rgba(33,24,12,0.08)",
+          }}
+        >
+          {/* Header row */}
+          <div
+            className="grid grid-cols-[1fr_60px_1fr] px-7 py-3.5 text-[11px] uppercase tracking-[0.15em] font-bold"
+            style={{ background: "rgba(217,119,6,0.06)", color: "#d97706" }}
+          >
+            <div>Next.js · App Router</div>
+            <div />
+            <div>Dawn</div>
+          </div>
+          {MAPPING.map((row, i) => (
+            <div
+              key={row.nextjs.cell + row.dawn.cell}
+              className={`grid grid-cols-[1fr_60px_1fr] px-7 py-5 items-start ${
+                i < MAPPING.length - 1 ? "border-b" : ""
+              }`}
+              style={{ borderColor: "rgba(33,24,12,0.06)" }}
+            >
+              <div>
+                <span className="font-mono text-sm" style={{ color: "#21180c" }}>
+                  {row.nextjs.cell}
+                </span>
+                <p className="text-[13px] leading-relaxed mt-1.5" style={{ color: "#6d5638" }}>
+                  {row.nextjs.desc}
+                </p>
+              </div>
+              <div
+                className="text-center font-bold pt-0.5"
+                style={{ color: "#d97706" }}
+                aria-hidden
+              >
+                →
+              </div>
+              <div>
+                <span className="font-mono text-sm" style={{ color: "#21180c" }}>
+                  {row.dawn.cell}
+                </span>
+                <p className="text-[13px] leading-relaxed mt-1.5" style={{ color: "#6d5638" }}>
+                  {row.dawn.desc}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Closing line */}
+        <div className="text-center mt-12 max-w-[640px] mx-auto">
+          <p className="landing-text-muted leading-relaxed" style={{ fontSize: "17px" }}>
+            Same patterns.{" "}
+            <span
+              className="inline-block px-2.5 py-0.5 rounded-full font-mono text-[13px]"
+              style={{ background: "rgba(33,24,12,0.06)", color: "#21180c" }}
+            >
+              Next.js
+            </span>{" "}
+            ergonomics,{" "}
+            <span
+              className="inline-block px-2.5 py-0.5 rounded-full font-mono text-[13px]"
+              style={{ background: "rgba(217,119,6,0.12)", color: "#d97706" }}
+            >
+              Dawn
+            </span>{" "}
+            conventions, LangGraph runtime.
+          </p>
+        </div>
       </div>
     </section>
   )
