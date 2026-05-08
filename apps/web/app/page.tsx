@@ -1,4 +1,5 @@
 import { ArchitectureSection } from "./components/landing/ArchitectureSection"
+import { BigReveal } from "./components/landing/BigReveal"
 import { CodeExample } from "./components/landing/CodeExample"
 import { ComparisonTable } from "./components/landing/ComparisonTable"
 import { CtaSection } from "./components/landing/CtaSection"
@@ -7,10 +8,10 @@ import { EcosystemSection } from "./components/landing/EcosystemSection"
 import { FeatureGrid } from "./components/landing/FeatureGrid"
 import { HeroSection } from "./components/landing/HeroSection"
 import { HowItWorks } from "./components/landing/HowItWorks"
-import { PaletteScroller } from "./components/PaletteScroller"
 import { LogoWall } from "./components/landing/LogoWall"
 import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
+import { PaletteScroller } from "./components/PaletteScroller"
 import { ScrollReveal } from "./components/ScrollReveal"
 
 export default function HomePage() {
@@ -24,6 +25,9 @@ export default function HomePage() {
       <ProblemSection />
       <ScrollReveal>
         <ComparisonTable />
+      </ScrollReveal>
+      <ScrollReveal>
+        <BigReveal />
       </ScrollReveal>
       <ScrollReveal>
         <SolutionSection />
