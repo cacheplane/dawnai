@@ -37,15 +37,17 @@ function LayerCard({ layer }: { layer: Layer }) {
     ? "border-accent-amber/40"
     : isEcosystem
       ? "border-accent-green/25"
-      : "border-border"
+      : ""
   const labelClass = isDawn
     ? "text-accent-amber"
     : isEcosystem
       ? "text-accent-green"
-      : "text-text-primary"
+      : "landing-text"
 
   return (
-    <div className={`relative bg-bg-card border rounded-xl p-6 overflow-hidden ${borderClass}`}>
+    <div
+      className={`relative landing-surface border rounded-xl p-6 overflow-hidden ${borderClass}`}
+    >
       {/* Illuminated glow for the Dawn layer — this is the piece that was missing */}
       {isDawn && (
         <div
@@ -82,7 +84,7 @@ function LayerCard({ layer }: { layer: Layer }) {
             </p>
           )}
         </div>
-        <ul className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm font-mono text-text-secondary">
+        <ul className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm font-mono landing-text">
           {layer.items.map((item, i) => (
             <li key={item} className="flex items-center gap-4">
               <span>{item}</span>
@@ -101,19 +103,19 @@ function LayerCard({ layer }: { layer: Layer }) {
 
 export function ArchitectureSection() {
   return (
-    <section className="relative py-20 px-8 border-t border-border-subtle">
+    <section className="relative py-36 px-8 border-t landing-border">
       <div className="text-center max-w-2xl mx-auto mb-12">
-        <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+        <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
           The Architecture
         </p>
         <h2
-          className="font-display text-4xl md:text-5xl font-semibold text-text-primary leading-[1.1] tracking-tight text-balance"
+          className="font-display text-4xl md:text-5xl font-semibold landing-text leading-[1.1] tracking-tight text-balance"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
         >
           Between your code and LangChain.
         </h2>
-        <p className="text-text-secondary mt-4 leading-7">
+        <p className="landing-text mt-4 leading-7">
           Dawn is the conventions layer &mdash; everything you&apos;d build by hand, we built in the
           open.
         </p>
@@ -129,8 +131,8 @@ export function ArchitectureSection() {
       </div>
 
       <div className="max-w-2xl mx-auto mt-10 text-center">
-        <p className="text-sm text-text-muted leading-relaxed">
-          <span className="text-text-primary">You</span> write the agent logic.{" "}
+        <p className="text-sm landing-text-muted leading-relaxed">
+          <span className="landing-text">You</span> write the agent logic.{" "}
           <span className="text-accent-amber">Dawn</span> writes the framework.{" "}
           <span className="text-accent-green">LangChain</span> runs the runtime.
         </p>
