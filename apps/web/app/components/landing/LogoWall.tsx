@@ -13,7 +13,7 @@ const LOGOS: readonly Logo[] = [
 
 export function LogoWall() {
   return (
-    <section className="relative px-8 py-14">
+    <section className="relative px-8 py-10">
       <div className="max-w-5xl mx-auto">
         <p className="text-center text-xs uppercase tracking-widest text-text-muted mb-8">
           Built on
