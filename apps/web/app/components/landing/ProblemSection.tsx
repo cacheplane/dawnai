@@ -32,13 +32,13 @@ function CodeColumn({
 }) {
   return (
     <div
-      className={`flex-1 min-w-0 bg-bg-card/80 border rounded-lg overflow-hidden ${borderClass}`}
+      className={`flex-1 min-w-0 landing-surface border rounded-lg overflow-hidden ${borderClass}`}
     >
-      <div className="px-4 py-2.5 border-b border-border-subtle flex items-center justify-between">
+      <div className="px-4 py-2.5 border-b landing-border flex items-center justify-between">
         <span className={`text-xs font-mono uppercase tracking-wider ${labelClass}`}>{label}</span>
-        <span className="text-[10px] text-text-muted font-mono">{caption}</span>
+        <span className="text-[10px] landing-text-muted font-mono">{caption}</span>
       </div>
-      <pre className="px-4 py-3 text-xs leading-6 font-mono text-text-secondary overflow-x-auto whitespace-pre">
+      <pre className="px-4 py-3 text-xs leading-6 font-mono landing-text overflow-x-auto whitespace-pre">
         {children}
       </pre>
     </div>
@@ -55,17 +55,17 @@ export function ProblemSection() {
       }}
     >
       <div className="text-center max-w-2xl mx-auto">
-        <p className="text-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
+        <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
           The Problem
         </p>
         <h2
-          className="font-display text-4xl md:text-5xl font-semibold text-text-primary leading-[1.1] text-balance tracking-tight"
+          className="font-display text-4xl md:text-5xl font-semibold landing-text leading-[1.1] text-balance tracking-tight"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
         >
           LangChain gave us the runtime. Every team builds the framework around it by hand.
         </h2>
-        <p className="text-text-secondary mt-5 leading-7">
+        <p className="landing-text mt-5 leading-7">
           LangGraph is powerful and unopinionated &mdash; that&apos;s the design. So every team
           adopting it &mdash; including ours &mdash; ends up inventing project structure, type
           wiring, dev tooling, and deployment scripts from scratch. We&apos;ve watched this happen
@@ -77,7 +77,7 @@ export function ProblemSection() {
         {painPoints.map((point) => (
           <div
             key={point.title}
-            className="relative bg-bg-card border border-indigo-500/20 rounded-lg p-5 overflow-hidden"
+            className="relative landing-surface border border-indigo-500/20 rounded-lg p-5 overflow-hidden"
           >
             {/* Cool indigo glow at the bottom — these are unsolved pre-dawn problems */}
             <div
@@ -88,20 +88,20 @@ export function ProblemSection() {
                   "radial-gradient(ellipse 80% 100% at 50% 100%, rgba(99,102,241,0.15), transparent 70%)",
               }}
             />
-            <h3 className="relative text-sm font-semibold text-text-primary leading-snug">
+            <h3 className="relative text-sm font-semibold landing-text leading-snug">
               {point.title}
             </h3>
-            <p className="relative text-sm text-text-muted mt-2 leading-relaxed">{point.body}</p>
+            <p className="relative text-sm landing-text-muted mt-2 leading-relaxed">{point.body}</p>
           </div>
         ))}
       </div>
 
       {/* Side-by-side: same agent, two ways. The visual difference is the argument. */}
       <div className="max-w-5xl mx-auto mt-16">
-        <p className="text-center text-xs uppercase tracking-widest text-text-muted mb-2">
+        <p className="text-center text-xs uppercase tracking-widest landing-text-muted mb-2">
           The same agent, two ways
         </p>
-        <p className="text-center font-display text-2xl md:text-3xl font-semibold text-text-primary tracking-tight mb-8">
+        <p className="text-center font-display text-2xl md:text-3xl font-semibold landing-text tracking-tight mb-8">
           One greets a tenant.
         </p>
         <div className="flex flex-col md:flex-row gap-4">
@@ -174,7 +174,7 @@ export async function workflow(
 // $ dawn run "/hello/acme"  · dawn dev · dawn test`}
           </CodeColumn>
         </div>
-        <p className="text-center text-sm text-text-muted mt-6 max-w-2xl mx-auto leading-relaxed">
+        <p className="text-center text-sm landing-text-muted mt-6 max-w-2xl mx-auto leading-relaxed">
           Dawn writes the StateGraph wiring, generates the tool types from your function signatures,
           runs the dev server, and speaks the LangGraph Platform protocol. You write the agent
           logic. The framework gives you back the time.

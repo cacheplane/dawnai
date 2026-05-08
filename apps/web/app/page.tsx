@@ -1,4 +1,5 @@
 import { ArchitectureSection } from "./components/landing/ArchitectureSection"
+import { BigReveal } from "./components/landing/BigReveal"
 import { CodeExample } from "./components/landing/CodeExample"
 import { ComparisonTable } from "./components/landing/ComparisonTable"
 import { CtaSection } from "./components/landing/CtaSection"
@@ -7,16 +8,16 @@ import { EcosystemSection } from "./components/landing/EcosystemSection"
 import { FeatureGrid } from "./components/landing/FeatureGrid"
 import { HeroSection } from "./components/landing/HeroSection"
 import { HowItWorks } from "./components/landing/HowItWorks"
-import { LandingAmbient } from "./components/landing/LandingAmbient"
 import { LogoWall } from "./components/landing/LogoWall"
 import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
+import { PaletteScroller } from "./components/PaletteScroller"
 import { ScrollReveal } from "./components/ScrollReveal"
 
 export default function HomePage() {
   return (
     <div className="relative isolate">
-      <LandingAmbient />
+      <PaletteScroller />
       {/* Hero / Stats / Problem aren't wrapped — the seamless navy bleed across them
           would break if their bgs faded in independently. Reveals begin at ComparisonTable. */}
       <HeroSection />
@@ -24,6 +25,9 @@ export default function HomePage() {
       <ProblemSection />
       <ScrollReveal>
         <ComparisonTable />
+      </ScrollReveal>
+      <ScrollReveal>
+        <BigReveal />
       </ScrollReveal>
       <ScrollReveal>
         <SolutionSection />
