@@ -2,7 +2,9 @@
 
 ## Questions
 
-Use GitHub Discussions when available for usage questions, design discussions, and integration help.
+Use GitHub Discussions for usage questions, design discussions, and integration help:
+
+https://github.com/cacheplane/dawnai/discussions
 
 The public documentation is available at https://dawn-ai.org/docs/getting-started.
 

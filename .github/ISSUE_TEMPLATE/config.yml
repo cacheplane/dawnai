@@ -3,6 +3,12 @@ contact_links:
   - name: Documentation
     url: https://dawn-ai.org/docs/getting-started
     about: Read Dawn's public documentation.
+  - name: Discussions
+    url: https://github.com/cacheplane/dawnai/discussions
+    about: Ask usage questions and discuss designs.
+  - name: Security reports
+    url: https://github.com/cacheplane/dawnai/security/advisories/new
+    about: Report vulnerabilities privately.
   - name: Brand assets
     url: https://dawn-ai.org/brand
     about: Download Dawn logos and media assets.

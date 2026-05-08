@@ -28,3 +28,14 @@ body:
     attributes:
       label: Additional context
       description: Add links, examples, or prior art if useful.
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Agent authoring
+        - CLI
+        - Local runtime
+        - LangGraph deployment
+        - Documentation
+        - Other
