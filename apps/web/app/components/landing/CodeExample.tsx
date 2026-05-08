@@ -51,17 +51,17 @@ export async function CodeExample() {
         </h2>
       </div>
 
-      {/* Project tree (unchanged — stylized directory listing, not source code) */}
+      {/* Project tree — code surface, fixed dark so token colors stay legible */}
       <div className="max-w-3xl mx-auto mb-8">
-        <div className="landing-surface border rounded-lg p-5 font-mono text-sm leading-8 landing-text-muted">
-          <p className="landing-text text-xs uppercase tracking-wide mb-2 font-sans font-semibold">
+        <div className="bg-bg-card border border-border rounded-lg p-5 font-mono text-sm leading-8 text-text-muted">
+          <p className="text-text-secondary text-xs uppercase tracking-wide mb-2 font-sans font-semibold">
             Project Structure
           </p>
           <div>
             <span className="text-yellow-400">src/app/</span>
           </div>
           <div>
-            &nbsp;&nbsp;<span className="landing-text-muted">(public)/</span>{" "}
+            &nbsp;&nbsp;<span className="text-text-muted">(public)/</span>{" "}
             <span className="text-text-dim text-xs">
               &larr; route group, excluded from pathname
             </span>
@@ -78,7 +78,7 @@ export async function CodeExample() {
           </div>
           <div>
             &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-            <span className="landing-text">state.ts</span>{" "}
+            <span className="text-text-secondary">state.ts</span>{" "}
             <span className="text-text-dim text-xs">&larr; route state type</span>
           </div>
           <div>
@@ -92,16 +92,16 @@ export async function CodeExample() {
             <span className="text-text-dim text-xs">&larr; typed at build time</span>
           </div>
           <div>
-            &nbsp;&nbsp;<span className="landing-text">dawn.generated.d.ts</span>{" "}
+            &nbsp;&nbsp;<span className="text-text-secondary">dawn.generated.d.ts</span>{" "}
             <span className="text-text-dim text-xs">&larr; auto-generated ambient types</span>
           </div>
           <div>
-            <span className="landing-text">dawn.config.ts</span>
+            <span className="text-text-secondary">dawn.config.ts</span>
           </div>
         </div>
       </div>
 
-      {/* Code panels (highlighted via shiki) */}
+      {/* Code panels (highlighted via shiki, fixed dark surfaces) */}
       <div className="flex flex-col md:flex-row gap-4 max-w-3xl mx-auto">
         <CodePanel filename="src/app/(public)/hello/[tenant]/index.ts" html={routeHtml} />
         <div className="flex-1 flex flex-col gap-4">
@@ -110,17 +110,17 @@ export async function CodeExample() {
         </div>
       </div>
 
-      {/* CLI output (unchanged — terminal output, not source code) */}
+      {/* CLI output (terminal — fixed dark) */}
       <div className="max-w-3xl mx-auto mt-6">
-        <div className="landing-surface border rounded-lg p-4 font-mono text-sm leading-7">
-          <p className="landing-text-muted text-[0.65rem] mb-2 font-sans">Terminal</p>
-          <div className="landing-text">
+        <div className="bg-bg-card border border-border rounded-lg p-4 font-mono text-sm leading-7">
+          <p className="text-text-muted text-[0.65rem] mb-2 font-sans">Terminal</p>
+          <div className="text-text-secondary">
             <span className="text-accent-amber">$</span>{" "}
-            <span className="landing-text">dawn run &apos;/hello/acme&apos;</span>
+            <span className="text-text-primary">dawn run &apos;/hello/acme&apos;</span>
           </div>
-          <div className="landing-text-muted mt-1">Route&nbsp;&nbsp;&nbsp; /hello/[tenant]</div>
-          <div className="landing-text-muted">Mode&nbsp;&nbsp;&nbsp;&nbsp; workflow</div>
-          <div className="landing-text-muted">Tenant&nbsp;&nbsp; acme</div>
+          <div className="text-text-muted mt-1">Route&nbsp;&nbsp;&nbsp; /hello/[tenant]</div>
+          <div className="text-text-muted">Mode&nbsp;&nbsp;&nbsp;&nbsp; workflow</div>
+          <div className="text-text-muted">Tenant&nbsp;&nbsp; acme</div>
           <div className="text-accent-amber mt-1">
             &#10003; {"{"} greeting: &quot;Hello, acme!&quot; {"}"}
           </div>
@@ -141,9 +141,9 @@ interface CodePanelProps {
 
 function CodePanel({ filename, html }: CodePanelProps) {
   return (
-    <div className="flex-1 landing-surface border rounded-lg overflow-hidden">
-      <div className="px-4 py-2 border-b landing-border">
-        <p className="landing-text-muted text-[0.65rem] font-mono">{filename}</p>
+    <div className="flex-1 bg-bg-card border border-border rounded-lg overflow-hidden">
+      <div className="px-4 py-2 border-b border-border-subtle">
+        <p className="text-text-muted text-[0.65rem] font-mono">{filename}</p>
       </div>
       <div
         className="text-xs leading-6 overflow-x-auto p-4 [&_pre]:bg-transparent [&_pre]:m-0 [&_pre]:p-0"
