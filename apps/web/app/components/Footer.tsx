@@ -107,7 +107,7 @@ export function Footer() {
         <div className="grid grid-cols-2 md:grid-cols-6 gap-10 md:gap-8">
           {/* Brand block — spans 2 cols on desktop, full width on mobile */}
           <div className="col-span-2 md:col-span-2">
-            <BrandLogo imageClassName="h-8" />
+            <BrandLogo imageClassName="h-8" variant="dark" />
             <p className="text-sm landing-text-muted mt-3 leading-relaxed max-w-[36ch]">
               The App Router for AI agents. A TypeScript-first meta-framework for LangChain.
             </p>
