@@ -34,9 +34,21 @@ export const PALETTE_STOPS: readonly PaletteStop[] = [
     hue: [245, 165, 36],
     border: [255, 255, 255, 0.08],
   },
-  // 0.15 — twilight violet
+  // 0.08 — pre-dawn plateau (extends cosmic so LogoWall + ProblemSection top sit
+  // seamlessly on the hero's dark, no visible engine transition during the band)
   {
-    at: 0.15,
+    at: 0.08,
+    bg: [2, 6, 23],
+    fg: [200, 200, 204],
+    muted: [139, 143, 163],
+    surface: [10, 15, 31],
+    accent: [251, 191, 36],
+    hue: [245, 165, 36],
+    border: [255, 255, 255, 0.08],
+  },
+  // 0.18 — twilight violet
+  {
+    at: 0.18,
     bg: [26, 21, 48],
     fg: [218, 210, 224],
     muted: [173, 158, 192],
@@ -45,9 +57,9 @@ export const PALETTE_STOPS: readonly PaletteStop[] = [
     hue: [245, 165, 36],
     border: [255, 255, 255, 0.1],
   },
-  // 0.30 — dusk peach
+  // 0.26 — dusk peach (early — by the time BigReveal mounts, page is in dusk)
   {
-    at: 0.3,
+    at: 0.26,
     bg: [58, 40, 64],
     fg: [240, 220, 220],
     muted: [200, 170, 170],
@@ -56,9 +68,9 @@ export const PALETTE_STOPS: readonly PaletteStop[] = [
     hue: [251, 146, 60],
     border: [255, 255, 255, 0.14],
   },
-  // 0.50 — sunrise (resolved to daylight palette)
+  // 0.36 — sunrise (resolved earlier than before — Solution lands in cream, not mid-fade)
   {
-    at: 0.5,
+    at: 0.36,
     bg: [254, 244, 230],
     fg: [33, 24, 12],
     muted: [109, 86, 56],
