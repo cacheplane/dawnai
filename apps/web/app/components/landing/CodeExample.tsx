@@ -37,7 +37,7 @@ export async function CodeExample() {
   ])
 
   return (
-    <section className="py-20 px-8 border-t landing-border">
+    <section className="py-36 px-8 border-t landing-border">
       <div className="text-center mb-10">
         <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />

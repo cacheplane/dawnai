@@ -18,7 +18,7 @@ const packages = [
 
 export function EcosystemSection() {
   return (
-    <section className="py-16 px-8 border-t landing-border">
+    <section className="py-32 px-8 border-t landing-border">
       <div className="text-center max-w-2xl mx-auto">
         <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-green" aria-hidden />

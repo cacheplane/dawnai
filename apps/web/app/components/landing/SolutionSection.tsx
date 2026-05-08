@@ -58,7 +58,7 @@ const pillars = [
 
 export function SolutionSection() {
   return (
-    <section className="py-20 px-8 border-t landing-border">
+    <section className="py-36 px-8 border-t landing-border">
       <div className="text-center max-w-2xl mx-auto">
         <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
