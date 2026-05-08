@@ -40,6 +40,11 @@ body:
       label: Affected package or command
       placeholder: "@dawn-ai/cli, @dawn-ai/sdk, dawn build, dawn dev"
   - type: input
+    id: version
+    attributes:
+      label: Dawn version or commit
+      placeholder: "0.0.0 or commit SHA"
+  - type: input
     id: node
     attributes:
       label: Node.js version
@@ -55,3 +60,10 @@ body:
       label: Logs
       description: Paste relevant logs or error output.
       render: shell
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Security check
+      options:
+        - label: This is not a security vulnerability. I will follow SECURITY.md for security reports.
+          required: true
