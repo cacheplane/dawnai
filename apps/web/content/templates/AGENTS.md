@@ -15,7 +15,7 @@ This project uses **Dawn**, a TypeScript-first meta-framework for building graph
 - **`src/app/**/tools/*.ts`** — co-located tools. Each file has a default export that is an async function. Types are inferred and written to `dawn.generated.d.ts`.
 - **`src/tools/*.ts`** — shared tools (optional). Discovered alongside route-local tools and merged into every route's tool registry. Route-local tools override shared tools with the same name.
 - **`src/middleware.ts`** — optional. Default-exports a function returned by `defineMiddleware(...)`. Runs before every `/runs/wait` and `/runs/stream` request, on `dawn dev` and on LangGraph Platform.
-- **`src/app/**/run.test.ts`** — colocated scenario tests. Default-export an array of scenario records (`{ name, input, expect, run?, assert? }`). Custom assertion helpers live at `@dawn-ai/cli/testing` (`expectOutput`, `expectMeta`, `expectError`).
+- **`src/app/**/run.test.ts`** — colocated scenario tests. Default-export an array of scenario records (`{ name, input, expect, run?, assert? }`). Custom assertion helpers live at `@dawn-ai/sdk/testing` (`expectOutput`, `expectMeta`, `expectError`).
 - **`dawn.generated.d.ts`** — auto-generated. Do NOT edit by hand.
 - **`dawn:routes`** — virtual module emitted by the Dawn Vite plugin and backed by `dawn.generated.d.ts`. If `RouteTools` does not resolve, run `dawn typegen`.
 
@@ -124,7 +124,7 @@ The `RouteTools<"/hello/[tenant]">` lookup uses the route's pathname as the key 
 - `@dawn-ai/sdk` — backend-neutral contract: `agent`, `defineMiddleware`, `allow`, `reject`, types (`RuntimeContext` carries `signal: AbortSignal`, `AgentConfig`, `RetryConfig`, `MiddlewareRequest`, etc.).
 - `@dawn-ai/langgraph` — adapter for LangGraph graphs and workflows.
 - `@dawn-ai/langchain` — adapter for LangChain LCEL chains.
-- `@dawn-ai/cli` — the `dawn` CLI. Test helpers live at `@dawn-ai/cli/testing`.
+- `@dawn-ai/cli` — the `dawn` CLI. Test helpers live at `@dawn-ai/sdk/testing`.
 
 ## Do Not
 

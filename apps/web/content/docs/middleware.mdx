@@ -1,0 +1,116 @@
+# Middleware
+
+Dawn supports a single global request middleware for authentication, request shaping, and per-request context. The middleware runs once per request, before any route executes, and its decision (allow or reject) gates execution.
+
+## File location
+
+Define middleware as a default-exported function in `src/middleware.ts` (or `middleware.ts` at the app root):
+
+```ts
+// src/middleware.ts
+import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"
+
+export default defineMiddleware(async (req) => {
+  if (!req.headers["x-api-key"]) {
+    return reject(401, { error: "Missing x-api-key" })
+  }
+  return allow()
+})
+```
+
+If `src/middleware.ts` is absent, every request is allowed.
+
+## API
+
+### `defineMiddleware(fn)`
+
+Identity helper that types `fn` as `DawnMiddleware`. Use it for editor inference:
+
+```ts
+type DawnMiddleware = (
+  req: MiddlewareRequest,
+) => Promise<MiddlewareResult> | MiddlewareResult
+```
+
+### `MiddlewareRequest`
+
+The argument every middleware receives. All values are pre-parsed:
+
+| Field | Shape | Notes |
+|---|---|---|
+| `headers` | `Readonly<Record<string, string>>` | Lowercase keys (Node convention). Multi-value headers joined with `, `. |
+| `params` | `Readonly<Record<string, string>>` | Dynamic-segment values extracted from the request input, e.g. `{ tenant: "acme" }` for `/hello/[tenant]`. |
+| `routeId` | `string` | E.g. `"/hello/[tenant]"`. |
+| `assistantId` | `string` | E.g. `"/hello/[tenant]#agent"`. |
+| `method` | `string` | HTTP method. |
+| `url` | `string` | Path + query, e.g. `"/runs/wait"`. |
+
+### `reject(status, body?)`
+
+Stops execution and responds with the given HTTP status. Optional `body` is JSON-encoded into the response.
+
+```ts
+return reject(401, { error: "Unauthorized" })
+return reject(403)  // body omitted
+```
+
+### `allow(context?)`
+
+Lets the request proceed. Optional `context` is a record of arbitrary values that flows into every tool invocation as `ctx.middleware`. See [Context flow to tools](#context-flow-to-tools) below.
+
+```ts
+return allow()
+return allow({ userId, plan: "pro" })
+```
+
+## Context flow to tools
+
+Whatever you pass to `allow({ ... })` is delivered to every tool call for that request via the second argument:
+
+```ts
+// src/middleware.ts
+export default defineMiddleware(async (req) => {
+  const userId = await verifyJwt(req.headers.authorization)
+  return allow({ userId })
+})
+
+// src/app/(public)/hello/[tenant]/tools/lookup.ts
+export default async (
+  input: { readonly query: string },
+  ctx: { readonly middleware?: Readonly<Record<string, unknown>>; readonly signal: AbortSignal },
+) => {
+  const userId = ctx.middleware?.userId as string | undefined
+  return await db.search(userId, input.query)
+}
+```
+
+Context is per-request — there is no shared state between requests. The `middleware` field is `undefined` if no middleware is defined, or if the middleware called `allow()` without arguments.
+
+## Single-function model
+
+Dawn middleware is intentionally a single global function, not an array of layered middlewares. If you need branching by route, do it with normal control flow inside the function:
+
+```ts
+export default defineMiddleware(async (req) => {
+  if (req.routeId.startsWith("/admin/")) {
+    return await requireAdmin(req)
+  }
+  return await requireApiKey(req)
+})
+```
+
+This keeps the request lifecycle predictable and avoids ordering questions about per-route middleware.
+
+## Where middleware runs
+
+Middleware runs in the dev server (`dawn dev`) and is included in the deployment artifacts produced by `dawn build`. Both `/runs/wait` and `/runs/stream` invoke middleware before any route executes. The `/healthz` endpoint bypasses middleware (it's a liveness probe).
+
+## Errors thrown from middleware
+
+If the middleware function throws, the request is rejected with HTTP `500`. Prefer explicit `reject(status, body?)` over throwing — it gives users a meaningful response.
+
+## Related
+
+- [Routes](/docs/routes) — how route discovery and dynamic segments work
+- [Tools](/docs/tools) — full tool authoring contract, including the `ctx` shape
+- [Dev Server](/docs/dev-server) — request envelope and assistant-id format

@@ -1,5 +1,21 @@
 # @dawn-ai/core
 
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies [8c63c1a]
+  - @dawn-ai/sdk@0.1.8
+
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [db635b1]
+- Updated dependencies [db635b1]
+- Updated dependencies [db635b1]
+  - @dawn-ai/sdk@0.1.7
+
 ## 0.1.6
 
 ### Patch Changes
