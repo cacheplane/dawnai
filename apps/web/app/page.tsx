@@ -7,7 +7,7 @@ import { EcosystemSection } from "./components/landing/EcosystemSection"
 import { FeatureGrid } from "./components/landing/FeatureGrid"
 import { HeroSection } from "./components/landing/HeroSection"
 import { HowItWorks } from "./components/landing/HowItWorks"
-import { LandingAmbient } from "./components/landing/LandingAmbient"
+import { PaletteScroller } from "./components/PaletteScroller"
 import { LogoWall } from "./components/landing/LogoWall"
 import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
@@ -16,7 +16,7 @@ import { ScrollReveal } from "./components/ScrollReveal"
 export default function HomePage() {
   return (
     <div className="relative isolate">
-      <LandingAmbient />
+      <PaletteScroller />
       {/* Hero / Stats / Problem aren't wrapped — the seamless navy bleed across them
           would break if their bgs faded in independently. Reveals begin at ComparisonTable. */}
       <HeroSection />
