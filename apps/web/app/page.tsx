@@ -36,6 +36,9 @@ export default function HomePage() {
         <ArchitectureSection />
       </ScrollReveal>
       <ScrollReveal>
+        <EcosystemSection />
+      </ScrollReveal>
+      <ScrollReveal>
         <CodeExample />
       </ScrollReveal>
       <ScrollReveal>
@@ -46,9 +49,6 @@ export default function HomePage() {
       </ScrollReveal>
       <ScrollReveal>
         <HowItWorks />
-      </ScrollReveal>
-      <ScrollReveal>
-        <EcosystemSection />
       </ScrollReveal>
       <ScrollReveal>
         <CtaSection />
