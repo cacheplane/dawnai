@@ -74,7 +74,7 @@ export function ComparisonTable() {
           {META_FRAMEWORKS.map((row, i) => (
             <div
               key={row.runtime}
-              className={`grid grid-cols-[1fr_auto_1fr] items-center gap-6 px-7 py-5 ${
+              className={`grid grid-cols-[1fr_auto_1fr] items-center gap-4 md:gap-6 px-4 md:px-7 py-5 ${
                 i < META_FRAMEWORKS.length - 1 ? "border-b" : ""
               }`}
               style={{
@@ -91,7 +91,7 @@ export function ComparisonTable() {
                   {row.runtime}
                 </span>
                 <span
-                  className="font-sans text-[11px] px-2 py-0.5 rounded border inline-block"
+                  className="font-sans text-[11px] px-2 py-0.5 rounded border hidden md:inline-block"
                   style={{
                     background: "rgb(from var(--landing-fg) r g b / 0.05)",
                     borderColor: "var(--landing-border)",
@@ -120,7 +120,7 @@ export function ComparisonTable() {
                   {row.meta}
                 </span>
                 <span
-                  className="font-sans text-[11px] px-2 py-0.5 rounded border inline-block"
+                  className="font-sans text-[11px] px-2 py-0.5 rounded border hidden md:inline-block"
                   style={
                     row.highlight
                       ? {
