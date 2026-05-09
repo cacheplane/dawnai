@@ -1,3 +1,62 @@
+import { highlight } from "../../../lib/shiki/highlight"
+
+const RAW_LANGGRAPH_CODE = `import { StateGraph, START, END } from "@langchain/langgraph"
+import { z } from "zod"
+
+const GreetSchema = z.object({ tenant: z.string() })
+type State = { tenant: string; greeting?: string }
+
+async function greet(i: z.infer<typeof GreetSchema>) {
+  return { greeting: \`Hello, \${i.tenant}!\` }
+}
+
+const graph = new StateGraph<State>({
+  channels: {
+    tenant:   { value: (_, y) => y, default: () => "" },
+    greeting: { value: (_, y) => y, default: () => "" },
+  },
+})
+  .addNode("greet", async (state) => {
+    const r = await greet({ tenant: state.tenant })
+    return { greeting: r.greeting }
+  })
+  .addEdge(START, "greet")
+  .addEdge("greet", END)
+
+const app = graph.compile()
+const result = await app.invoke({ tenant: "acme" })
+
+// + write your own dev loop, types, server, and deploy.
+`
+
+const WITH_DAWN_CODE = `// src/app/(public)/hello/[tenant]/state.ts
+export interface HelloState {
+  tenant: string
+  greeting?: string
+}
+
+// src/app/(public)/hello/[tenant]/tools/greet.ts
+export default async (i: { readonly tenant: string }) =>
+  ({ greeting: \`Hello, \${i.tenant}!\` })
+
+// src/app/(public)/hello/[tenant]/index.ts
+import type { RuntimeContext } from "@dawn-ai/sdk"
+import type { RouteTools } from "dawn:routes"
+import type { HelloState } from "./state.js"
+
+export async function workflow(
+  state: HelloState,
+  ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
+) {
+  const { greeting } = await ctx.tools.greet({
+    tenant: state.tenant,
+  })
+  return { ...state, greeting }
+}
+
+// $ dawn run "/hello/acme"  · dawn dev · dawn test
+`
+
 const painPoints = [
   {
     title: "You've written the same StateGraph boilerplate five times.",
@@ -17,43 +76,38 @@ const painPoints = [
   },
 ]
 
-function CodeColumn({
-  label,
-  caption,
-  borderClass,
-  labelClass,
-  children,
-}: {
-  label: string
-  caption: string
-  borderClass: string
-  labelClass: string
-  children: React.ReactNode
-}) {
+interface CodeColumnProps {
+  readonly label: string
+  readonly caption: string
+  readonly borderClass: string
+  readonly labelClass: string
+  readonly html: string
+}
+
+function CodeColumn({ label, caption, borderClass, labelClass, html }: CodeColumnProps) {
   return (
-    <div
-      className={`flex-1 min-w-0 landing-surface border rounded-lg overflow-hidden ${borderClass}`}
-    >
-      <div className="px-4 py-2.5 border-b landing-border flex items-center justify-between">
+    <div className={`flex-1 min-w-0 bg-bg-card border rounded-lg overflow-hidden ${borderClass}`}>
+      <div className="px-4 py-2.5 border-b border-border-subtle flex items-center justify-between">
         <span className={`text-xs font-mono uppercase tracking-wider ${labelClass}`}>{label}</span>
-        <span className="text-[10px] landing-text-muted font-mono">{caption}</span>
+        <span className="text-[10px] text-text-muted font-mono">{caption}</span>
       </div>
-      <pre className="px-4 py-3 text-xs leading-6 font-mono landing-text overflow-x-auto whitespace-pre">
-        {children}
-      </pre>
+      <div
+        className="px-4 py-3 text-xs leading-6 overflow-x-auto [&_pre]:bg-transparent [&_pre]:m-0 [&_pre]:p-0"
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   )
 }
 
-export function ProblemSection() {
+export async function ProblemSection() {
+  const [rawHtml, dawnHtml] = await Promise.all([
+    highlight(RAW_LANGGRAPH_CODE, "typescript"),
+    highlight(WITH_DAWN_CODE, "typescript"),
+  ])
+
   return (
-    <section
-      className="relative py-20 px-8"
-      style={{
-        background:
-          "linear-gradient(to bottom, #020617 0%, #050a1a 25%, var(--color-bg-primary) 100%)",
-      }}
-    >
+    <section className="relative py-20 px-8">
       <div className="text-center max-w-2xl mx-auto">
         <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
@@ -96,13 +150,13 @@ export function ProblemSection() {
         ))}
       </div>
 
-      {/* Side-by-side: same agent, two ways. The visual difference is the argument. */}
+      {/* Side-by-side: same workflow, two stacks. The diff is the argument. */}
       <div className="max-w-5xl mx-auto mt-16">
         <p className="text-center text-xs uppercase tracking-widest landing-text-muted mb-2">
-          The same agent, two ways
+          The same workflow, two stacks
         </p>
         <p className="text-center font-display text-2xl md:text-3xl font-semibold landing-text tracking-tight mb-8">
-          One greets a tenant.
+          Same agent. No plumbing.
         </p>
         <div className="flex flex-col md:flex-row gap-4">
           <CodeColumn
@@ -110,69 +164,15 @@ export function ProblemSection() {
             caption="one file · ~30 lines"
             borderClass="border-indigo-500/25"
             labelClass="text-indigo-300"
-          >
-            {`import { StateGraph, START, END } from "@langchain/langgraph"
-import { z } from "zod"
-
-const GreetSchema = z.object({ tenant: z.string() })
-type State = { tenant: string; greeting?: string }
-
-async function greet(i: z.infer<typeof GreetSchema>) {
-  return { greeting: \`Hello, \${i.tenant}!\` }
-}
-
-const graph = new StateGraph<State>({
-  channels: {
-    tenant:   { value: (_, y) => y, default: () => "" },
-    greeting: { value: (_, y) => y, default: () => "" },
-  },
-})
-  .addNode("greet", async (state) => {
-    const r = await greet({ tenant: state.tenant })
-    return { greeting: r.greeting }
-  })
-  .addEdge(START, "greet")
-  .addEdge("greet", END)
-
-const app = graph.compile()
-const result = await app.invoke({ tenant: "acme" })
-
-// + write your own dev loop, types, server, and deploy.`}
-          </CodeColumn>
-
+            html={rawHtml}
+          />
           <CodeColumn
             label="With Dawn"
             caption="three focused files · zero plumbing"
             borderClass="border-accent-amber/40"
             labelClass="text-accent-amber"
-          >
-            {`// src/app/(public)/hello/[tenant]/state.ts
-export interface HelloState {
-  tenant: string
-  greeting?: string
-}
-
-// src/app/(public)/hello/[tenant]/tools/greet.ts
-export default async (i: { readonly tenant: string }) =>
-  ({ greeting: \`Hello, \${i.tenant}!\` })
-
-// src/app/(public)/hello/[tenant]/index.ts
-import type { RuntimeContext } from "@dawn-ai/sdk"
-import type { RouteTools } from "dawn:routes"
-import type { HelloState } from "./state.js"
-
-export async function workflow(
-  state: HelloState,
-  ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
-) {
-  const { greeting } = await ctx.tools.greet({
-    tenant: state.tenant,
-  })
-  return { ...state, greeting }
-}
-
-// $ dawn run "/hello/acme"  · dawn dev · dawn test`}
-          </CodeColumn>
+            html={dawnHtml}
+          />
         </div>
         <p className="text-center text-sm landing-text-muted mt-6 max-w-2xl mx-auto leading-relaxed">
           Dawn writes the StateGraph wiring, generates the tool types from your function signatures,
