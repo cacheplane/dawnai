@@ -4,9 +4,19 @@ import Link from "next/link"
 interface Props {
   readonly className?: string
   readonly imageClassName?: string
+  /**
+   * Logo color variant.
+   * - `light` (default) — white logo, for use on dark backgrounds (header)
+   * - `dark` — black logo, for use on light backgrounds (footer in daylight context)
+   */
+  readonly variant?: "light" | "dark"
 }
 
-export function BrandLogo({ className, imageClassName }: Props) {
+export function BrandLogo({ className, imageClassName, variant = "light" }: Props) {
+  const src =
+    variant === "dark"
+      ? "/brand/dawn-logo-horizontal-black.svg"
+      : "/brand/dawn-logo-horizontal-white.svg"
   return (
     <Link
       href="/"
@@ -14,7 +24,7 @@ export function BrandLogo({ className, imageClassName }: Props) {
       aria-label="Dawn home"
     >
       <Image
-        src="/brand/dawn-logo-horizontal-white.svg"
+        src={src}
         alt="Dawn"
         width={720}
         height={220}
