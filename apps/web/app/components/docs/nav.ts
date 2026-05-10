@@ -37,7 +37,10 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
   },
   {
     label: "Reference",
-    items: [{ label: "CLI", href: "/docs/cli" }],
+    items: [
+      { label: "API", href: "/docs/api" },
+      { label: "CLI", href: "/docs/cli" },
+    ],
   },
 ]
 

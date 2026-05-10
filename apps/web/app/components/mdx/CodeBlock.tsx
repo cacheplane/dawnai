@@ -77,7 +77,7 @@ export function Pre({ children, className, ...rest }: PreProps) {
           </div>
         </div>
       ) : (
-        <div className="absolute top-2 right-2 z-10">
+        <div className="absolute inset-y-0 right-2 flex items-center z-10">
           <CopyButton onCopy={copy} copied={copied} />
         </div>
       )}
