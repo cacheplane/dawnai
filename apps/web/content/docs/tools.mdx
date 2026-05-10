@@ -110,3 +110,10 @@ dawn typegen
 - **Database reads** — input includes the filters; output is the record(s). Keep queries cheap — tools are meant to be fast.
 - **LLM calls** — input is the prompt variables; output is the parsed model response. Defer orchestration to the route entry.
 - **Pure transformations** — no side effects, just shape-to-shape mapping. Dawn's testing makes these trivial to verify.
+
+## Related
+
+- [Routes](/docs/routes) — how `agent` routes bind tools automatically at build time
+- [Middleware](/docs/middleware) — how `ctx.middleware` is populated for every tool call
+- [State](/docs/state) — the state contract that tools read and routes return
+- [Testing](/docs/testing) — asserting tool outputs via scenario tests

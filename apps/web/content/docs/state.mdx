@@ -81,3 +81,10 @@ State crosses the runtime boundary at every entry point:
 - `/runs/wait` and `/runs/stream` (locally under `dawn dev`, on LangGraph Platform in prod) — JSON over HTTP keyed by `assistant_id`.
 
 Tool results, intermediate values, and other in-route data live inside the entry for the duration of a single run; only the final state crosses the boundary.
+
+## Related
+
+- [Routes](/docs/routes) — how state types flow into route entries
+- [Tools](/docs/tools) — tools that read or mutate state
+- [Testing](/docs/testing) — asserting state shape in scenarios
+- [Deployment](/docs/deployment) — how state serialization requirements apply across the runtime boundary

@@ -10,13 +10,14 @@ export interface DocsNavSection {
 
 export const DOCS_NAV: readonly DocsNavSection[] = [
   {
-    label: "Start",
+    label: "Get Started",
     items: [{ label: "Getting Started", href: "/docs/getting-started" }],
   },
   {
-    label: "Core Concepts",
+    label: "Concepts",
     items: [
       { label: "Routes", href: "/docs/routes" },
+      { label: "Agents", href: "/docs/agents" },
       { label: "Tools", href: "/docs/tools" },
       { label: "State", href: "/docs/state" },
       { label: "Middleware", href: "/docs/middleware" },
@@ -24,10 +25,10 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     ],
   },
   {
-    label: "Workflow",
+    label: "Tooling",
     items: [
-      { label: "Testing", href: "/docs/testing" },
       { label: "Dev Server", href: "/docs/dev-server" },
+      { label: "Testing", href: "/docs/testing" },
       { label: "Deployment", href: "/docs/deployment" },
     ],
   },
