@@ -220,6 +220,102 @@ export function CopyButton({
   )
 }
 
+/**
+ * MDX `<figure>` mapping for rehype-pretty-code output. When a fence carries a
+ * `title="..."` meta, the plugin wraps the code in a `<figure>` containing a
+ * `<figcaption>` (the title) and the `<pre>`. Without this mapping, the
+ * figcaption renders as plain text above the code block. RehypeFigure absorbs
+ * the figcaption into the standard header chrome and renders the inner Pre
+ * headless.
+ */
+export function RehypeFigure({
+  children,
+  ...rest
+}: {
+  readonly children?: ReactNode
+} & Record<string, unknown>) {
+  const isRehype = rest["data-rehype-pretty-code-figure"] !== undefined
+  // Walk children to find the figcaption (title source) and the inner pre.
+  let title: string | undefined
+  let preLanguage: string | undefined
+  let preChild: ReactNode = null
+  const childArray = []
+
+  // We can't import from React top-level here in JSX, just inline iterate.
+  const innerChildren = Array.isArray(children)
+    ? children
+    : children !== undefined
+      ? [children]
+      : []
+  for (const c of innerChildren) {
+    childArray.push(c)
+  }
+
+  for (const c of childArray) {
+    if (!c || typeof c !== "object") continue
+    const el = c as { type?: unknown; props?: Record<string, unknown> }
+    if (el.type === "figcaption") {
+      const captionTitle = el.props?.["data-rehype-pretty-code-title"]
+      if (typeof captionTitle === "string" && captionTitle.length > 0) {
+        title = captionTitle
+      } else {
+        const kids = el.props?.children
+        if (typeof kids === "string" && kids.length > 0) title = kids
+        else if (Array.isArray(kids)) {
+          const first = kids.find((k) => typeof k === "string" && k.length > 0)
+          if (typeof first === "string") title = first
+        }
+      }
+      continue
+    }
+    // Otherwise it's the Pre (or anything else we should pass through).
+    const lang = el.props?.["data-language"]
+    if (typeof lang === "string") preLanguage = lang
+    preChild = c
+  }
+
+  if (!isRehype || !preChild) {
+    return <figure {...rest}>{children}</figure>
+  }
+
+  const label = tabLabel(preLanguage, title)
+
+  return (
+    <figure
+      {...rest}
+      className="relative my-6 rounded-lg border border-border bg-bg-card overflow-hidden"
+    >
+      <RehypeFigureHeader label={label} preChild={preChild} />
+      <HeadlessPreContext.Provider value={true}>{preChild}</HeadlessPreContext.Provider>
+    </figure>
+  )
+}
+
+function RehypeFigureHeader({ label, preChild }: { label: string; preChild: ReactNode }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    // The DOM <pre> is the next sibling of this header; resolve via the
+    // wrapping figure to find it.
+    const figure = ref.current?.closest("figure")
+    const pre = figure?.querySelector("pre")
+    const text = pre?.textContent ?? ""
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  // Silence preChild-unused warning when the header doesn't need it:
+  void preChild
+  return (
+    <span ref={ref}>
+      <CodeHeaderRow
+        left={<TabPill label={label} active />}
+        right={<CopyButton onCopy={copy} copied={copied} />}
+      />
+    </span>
+  )
+}
+
 export function InlineCode({
   children,
   className,
