@@ -1,0 +1,426 @@
+# API Reference
+
+This page lists every public symbol exported from `@dawn-ai/sdk` and the generated `dawn:routes` module. It is reference documentation — for concepts and examples, see the individual concept pages. Symbols are grouped by category and linked back to the page that explains them in depth.
+
+## @dawn-ai/sdk
+
+### Agent
+
+Functions and types for declaring an LLM-driven agent route. See [Agents](/docs/agents).
+
+### `agent(config)`
+
+```ts
+export function agent(config: AgentConfig): DawnAgent
+```
+
+Creates an agent route entry from a config object. The return value is the default export of a route's `index.ts`. Dawn auto-binds any tool files found in the sibling `tools/` directory.
+
+```ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "You are a helpful assistant.",
+})
+```
+
+See [Agents](/docs/agents).
+
+### `AgentConfig`
+
+```ts
+export interface AgentConfig {
+  readonly model: KnownModelId
+  readonly retry?: RetryConfig
+  readonly systemPrompt: string
+}
+```
+
+Configuration passed to `agent()`. `model` must be a `KnownModelId` string. `systemPrompt` is sent as the system message on every invocation. `retry` controls automatic retries on transient failures.
+
+See [Agents](/docs/agents).
+
+### `RetryConfig`
+
+```ts
+export interface RetryConfig {
+  readonly maxAttempts?: number
+  readonly baseDelay?: number  // milliseconds
+}
+```
+
+Controls how the runtime retries a failed invocation. `maxAttempts` caps total attempts (default: 3). `baseDelay` sets the initial backoff in milliseconds before exponential growth.
+
+See [Retry](/docs/retry).
+
+### `DawnAgent`
+
+```ts
+export interface DawnAgent {
+  readonly model: string
+  readonly retry?: RetryConfig
+  readonly systemPrompt: string
+}
+```
+
+Opaque branded type returned by `agent()`. Carry it as a route export; do not construct it manually. Use `isDawnAgent()` to check values at runtime.
+
+See [Agents](/docs/agents).
+
+### `isDawnAgent(value)`
+
+```ts
+export function isDawnAgent(value: unknown): value is DawnAgent
+```
+
+Type guard that returns `true` when `value` was created by `agent()`. Checks the internal brand symbol — plain objects with matching keys return `false`.
+
+---
+
+### Middleware
+
+Functions and types for writing global request middleware. See [Middleware](/docs/middleware).
+
+### `defineMiddleware(fn)`
+
+```ts
+export function defineMiddleware(fn: DawnMiddleware): DawnMiddleware
+```
+
+Identity helper that types `fn` as `DawnMiddleware` so editors infer the argument and return types. Use it as the default export wrapper in `src/middleware.ts`.
+
+```ts
+import { defineMiddleware, allow, reject } from "@dawn-ai/sdk"
+
+export default defineMiddleware(async (req) => {
+  if (!req.headers["x-api-key"]) return reject(401)
+  return allow()
+})
+```
+
+See [Middleware](/docs/middleware).
+
+### `allow(context?)`
+
+```ts
+export function allow(context?: Record<string, unknown>): ContinueResult
+```
+
+Returns a `ContinueResult` that lets the request proceed. Pass an optional `context` record to inject arbitrary values into every tool invocation for this request.
+
+See [Middleware](/docs/middleware).
+
+### `reject(status, body?)`
+
+```ts
+export function reject(status: number, body?: unknown): RejectResult
+```
+
+Returns a `RejectResult` that stops execution and responds with the given HTTP status. When `body` is provided it is JSON-encoded into the response.
+
+See [Middleware](/docs/middleware).
+
+### `DawnMiddleware`
+
+```ts
+export type DawnMiddleware = (
+  req: MiddlewareRequest,
+) => Promise<MiddlewareResult> | MiddlewareResult
+```
+
+The function signature for middleware. Either synchronous or async. Must return `allow(...)` or `reject(...)`.
+
+See [Middleware](/docs/middleware).
+
+### `MiddlewareRequest`
+
+```ts
+export interface MiddlewareRequest {
+  readonly assistantId: string              // e.g. "/hello/[tenant]#agent"
+  readonly headers: Readonly<Record<string, string>>  // lowercase keys
+  readonly method: string                   // HTTP method
+  readonly params: Readonly<Record<string, string>>   // dynamic-segment values
+  readonly routeId: string                  // e.g. "/hello/[tenant]"
+  readonly url: string                      // path + query
+}
+```
+
+The request object passed to every middleware invocation. Header keys follow Node convention (lowercase). `params` contains dynamic-segment values extracted from the route path.
+
+See [Middleware](/docs/middleware).
+
+### `MiddlewareResult`
+
+```ts
+export type MiddlewareResult = ContinueResult | RejectResult
+```
+
+The union type that middleware must return. Resolved to either `ContinueResult` (allow) or `RejectResult` (reject).
+
+See [Middleware](/docs/middleware).
+
+### `ContinueResult`
+
+```ts
+export interface ContinueResult {
+  readonly action: "continue"
+  readonly context?: Record<string, unknown>
+}
+```
+
+Returned by `allow()`. The optional `context` field carries arbitrary data into tool invocations for the current request.
+
+See [Middleware](/docs/middleware).
+
+### `RejectResult`
+
+```ts
+export interface RejectResult {
+  readonly action: "reject"
+  readonly status: number
+  readonly body?: unknown
+}
+```
+
+Returned by `reject()`. `status` becomes the HTTP response status code. `body` is JSON-serialized when present.
+
+See [Middleware](/docs/middleware).
+
+---
+
+### Route configuration
+
+Types that shape route-level behaviour. See [Routes](/docs/routes).
+
+### `RouteConfig`
+
+```ts
+export interface RouteConfig {
+  readonly runtime?: "node" | "edge"
+  readonly streaming?: boolean
+  readonly tags?: readonly string[]
+}
+```
+
+Optional metadata that a route's `index.ts` may export alongside its entry. `runtime` pins the route to a specific execution environment. `streaming` enables token-streaming responses. `tags` are arbitrary labels exposed by the Dev Server UI.
+
+See [Routes](/docs/routes).
+
+### `RouteKind`
+
+```ts
+export type RouteKind = "agent" | "chain" | "graph" | "workflow"
+```
+
+Discriminant for the four entry shapes Dawn supports. Determined at build time from the default export of a route's `index.ts`.
+
+See [Routes](/docs/routes).
+
+---
+
+### Route types
+
+Open interfaces for module augmentation. Dawn's codegen populates them. See [Routes](/docs/routes).
+
+### `RouteStateMap`
+
+```ts
+export interface RouteStateMap {}
+```
+
+Open interface that `dawn typegen` augments with per-route state shapes. Keyed by route path string (e.g. `"/hello/[tenant]"`). Access via `RouteState<P>` from `dawn:routes`.
+
+See [Routes](/docs/routes).
+
+### `RouteToolMap`
+
+```ts
+export interface RouteToolMap {}
+```
+
+Open interface that `dawn typegen` augments with per-route tool type information. Keyed by route path string. Access via `RouteTools<P>` from `dawn:routes`.
+
+See [Agents](/docs/agents), [Tools](/docs/tools).
+
+---
+
+### Runtime
+
+Types available inside a running route handler. See [Tools](/docs/tools).
+
+### `RuntimeContext<Tools>`
+
+```ts
+export interface RuntimeContext<TTools extends ToolRegistry = ToolRegistry> {
+  readonly signal: AbortSignal
+  readonly tools: TTools
+}
+```
+
+Injected into every tool invocation. `signal` is aborted when the client disconnects. `tools` is the registry of all tools bound to the current route, typed as `TTools`.
+
+See [Tools](/docs/tools).
+
+### `RuntimeTool`
+
+```ts
+export type RuntimeTool<TInput = unknown, TOutput = unknown> = (
+  input: TInput,
+) => Promise<TOutput> | TOutput
+```
+
+The shape of a single tool function. A tool receives typed input and returns a value or a promise. Dawn infers `TInput` and `TOutput` from the function signature at build time.
+
+See [Tools](/docs/tools).
+
+### `ToolRegistry`
+
+```ts
+export type ToolRegistry = Record<string, RuntimeTool<never, unknown>>
+```
+
+A map of tool name to `RuntimeTool`. Used as the constraint on `RuntimeContext`'s `TTools` type parameter. The generated `dawn:routes` module provides a concrete `RouteTools<P>` that satisfies this constraint.
+
+See [Tools](/docs/tools).
+
+---
+
+### Models
+
+String literal types for model identifiers. See [Agents](/docs/agents).
+
+### `KnownModelId`
+
+```ts
+export type KnownModelId = OpenAiModelId | AnthropicModelId | GoogleModelId | (string & {})
+```
+
+The accepted type for `AgentConfig.model`. Includes all named model IDs plus an escape hatch (`string & {}`) for models not yet in the union. The escape hatch preserves autocomplete for the named values.
+
+### `OpenAiModelId`
+
+```ts
+export type OpenAiModelId =
+  | "gpt-5.5" | "gpt-5.5-pro" | "gpt-5.4" | "gpt-5.4-pro" | "gpt-5-mini"
+  | "gpt-4.1" | "gpt-4.1-mini" | "gpt-4.1-nano"
+  | "gpt-4o" | "gpt-4o-mini"
+  | "o3" | "o3-mini" | "o4-mini"
+```
+
+String literals for supported OpenAI models.
+
+### `AnthropicModelId`
+
+```ts
+export type AnthropicModelId =
+  | "claude-opus-4-7"
+  | "claude-sonnet-4-6"
+  | "claude-haiku-4-5-20251001"
+```
+
+String literals for supported Anthropic models.
+
+### `GoogleModelId`
+
+```ts
+export type GoogleModelId =
+  | "gemini-3-pro-preview"
+  | "gemini-3-flash-preview"
+  | "gemini-2.5-pro"
+  | "gemini-2.5-flash"
+  | "gemini-2.5-flash-lite"
+```
+
+String literals for supported Google models.
+
+---
+
+### Backend adapter
+
+Low-level interface for custom backend integrations.
+
+### `BackendAdapter`
+
+```ts
+export interface BackendAdapter {
+  readonly kind: RouteKind
+  execute(
+    entry: unknown,
+    input: unknown,
+    context: { readonly signal: AbortSignal },
+  ): Promise<unknown>
+  stream(
+    entry: unknown,
+    input: unknown,
+    context: { readonly signal: AbortSignal },
+  ): AsyncIterable<unknown>
+}
+```
+
+Interface implemented by Dawn's built-in backends (LangChain, LangGraph). `execute` handles non-streaming invocations; `stream` handles token-streaming. Most projects never implement this directly — it is an extension point for custom runtimes.
+
+---
+
+### Utilities
+
+### `Prettify<T>`
+
+```ts
+export type Prettify<T> = { [K in keyof T]: T[K] } & {}
+```
+
+Resolves intersection and mapped types into a flat object shape. Makes IDE hover tooltips show the actual resolved type instead of unexpanded type algebra. Used internally by codegen; also available for project code.
+
+---
+
+## dawn:routes (generated)
+
+The `dawn:routes` module is emitted by `dawn typegen` (and implicitly by `dawn build`). It is never written by hand — the CLI writes `.dawn/generated/route-tools.d.ts` and `.dawn/generated/route-state.d.ts` and re-exports them under the `dawn:routes` specifier. Import from it to get per-route types narrowed to your project's actual routes and tools.
+
+### `RouteTools<P>`
+
+```ts
+import type { RouteTools } from "dawn:routes"
+
+// P is the route path string, e.g. "/hello/[tenant]"
+type Tools = RouteTools<"/hello/[tenant]">
+// resolves to the ToolRegistry for that route
+```
+
+Mapped type that resolves to the `ToolRegistry` for route `P`. The keys are the tool names found in that route's `tools/` directory; the values are `RuntimeTool` instances with inferred input and output types. Pass as the `TTools` argument to `RuntimeContext<TTools>`.
+
+See [Tools](/docs/tools).
+
+### `RouteState<P>`
+
+```ts
+import type { RouteState } from "dawn:routes"
+
+// P is the route path string, e.g. "/hello/[tenant]"
+type State = RouteState<"/hello/[tenant]">
+// resolves to the state shape for that route
+```
+
+Mapped type that resolves to the typed state shape for route `P`. Populated from the route's `state.ts` schema and any dynamic-segment fields extracted from the path. Use it to type workflow and graph handler arguments.
+
+See [Routes](/docs/routes), [State](/docs/state).
+
+---
+
+## Where to read more
+
+1. [Mental Model](/docs/mental-model) — how requests, routes, and tools fit together
+2. [Routes](/docs/routes) — route kinds, pathname conventions, and `RouteConfig`
+3. [Agents](/docs/agents) — `agent()`, tool auto-binding, model selection
+4. [Tools](/docs/tools) — writing tools, `RuntimeContext`, type inference
+5. [Middleware](/docs/middleware) — request gating, `allow()`, `reject()`, context flow
+6. [CLI](/docs/cli) — `dawn dev`, `dawn build`, `dawn typegen`, and other commands
+7. [Dev Server](/docs/dev-server) — local development, hot reload, route playground
+
+## Related
+
+- [Getting Started](/docs/getting-started) — install Dawn and run your first route
+- [Retry](/docs/retry) — configuring `RetryConfig` on an agent
+- [State](/docs/state) — per-route typed state and `RouteState<P>`
+- [Deployment](/docs/deployment) — building and deploying a Dawn project
