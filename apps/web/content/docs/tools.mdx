@@ -4,8 +4,7 @@ Tools are the units of work a route's entry can invoke. They live in a `tools/` 
 
 ## A minimal tool
 
-```ts
-// src/app/(public)/hello/[tenant]/tools/greet.ts
+```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
 export default async (input: { readonly tenant: string }) => {
   return { greeting: `Hello, ${input.tenant}!` }
 }
@@ -21,8 +20,7 @@ That's it. Dawn extracts the input and output types at build time using the Type
 
 The full runtime signature accepted by tool discovery is `(input, ctx) => ...`, where `ctx` is `{ signal: AbortSignal, middleware?: Readonly<Record<string, unknown>> }`:
 
-```ts
-// src/app/(public)/hello/[tenant]/tools/greet.ts
+```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
 export default async (
   input: { readonly tenant: string },
   ctx: { signal: AbortSignal; middleware?: Readonly<Record<string, unknown>> },
@@ -42,8 +40,8 @@ The second parameter is optional but recommended for any tool that does network 
 
 Inside a `workflow` or `graph` route, tools are invoked through `ctx.tools.<name>(...)`:
 
-```ts
-// in the route's index.ts (workflow form)
+```ts title="src/app/(public)/hello/[tenant]/index.ts"
+// workflow form
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { z } from "zod"

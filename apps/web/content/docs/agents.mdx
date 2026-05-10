@@ -6,8 +6,8 @@ An agent is the default scaffolded route in Dawn — an LLM-driven workflow that
 
 A route's `index.ts` exports an agent created by `agent({ model, systemPrompt })`. Tools in the sibling `tools/` directory are auto-registered; the LLM picks when to call them.
 
-```typescript
-// src/app/(public)/hello/[tenant]/index.ts
+<CodeGroup>
+```ts title="src/app/(public)/hello/[tenant]/index.ts"
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
@@ -17,16 +17,14 @@ export default agent({
 })
 ```
 
-Tools live next to the agent:
-
+```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
+export default async (input: { readonly tenant: string }) => {
+  return { greeting: `Hello, ${input.tenant}!` }
+}
 ```
-src/app/(public)/hello/[tenant]/
-├── index.ts          ← the agent
-└── tools/
-    └── greet.ts      ← auto-bound to the agent
-```
+</CodeGroup>
 
-Each tool is a TypeScript file with a default export. Param types are inferred from the function signature at `dawn build` time and made available to the agent.
+Tools live next to the agent — `index.ts` is the agent entry, and any TS file in `tools/` is auto-bound to it. Param types are inferred from the function signature at `dawn build` time and made available to the agent.
 
 ## When to pick an agent
 
@@ -43,8 +41,7 @@ A route's `index.ts` exports exactly one of these. You can mix shapes across rou
 
 Any TypeScript file in a route's `tools/` directory is auto-registered with the agent. No manual `tools: [...]` config — Dawn discovers them at build time.
 
-```typescript
-// src/app/(public)/hello/[tenant]/tools/greet.ts
+```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
 export default async (input: { readonly tenant: string }) => {
   return { greeting: `Hello, ${input.tenant}!` }
 }
@@ -58,7 +55,7 @@ See [Tools](/docs/tools) for the full input/output rules and the generated decla
 
 Agent calls accept a `retry` config that wraps every tool invocation:
 
-```typescript
+```ts title="src/app/.../index.ts"
 export default agent({
   model: "gpt-4o-mini",
   systemPrompt: "...",

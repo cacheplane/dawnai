@@ -4,8 +4,7 @@ You want one route to invoke another — for example, a workflow that delegates 
 
 ## The code
 
-```ts
-// src/app/(public)/orchestrator/[job]/index.ts
+```ts title="src/app/(public)/orchestrator/[job]/index.ts"
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { z } from "zod"
 import type state from "./state.js"

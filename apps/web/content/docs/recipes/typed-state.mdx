@@ -4,8 +4,8 @@ You want a typed state shape for a route, with dynamic URL segments captured int
 
 ## The code
 
-```ts
-// src/app/(public)/hello/[tenant]/state.ts
+<CodeGroup>
+```ts title="src/app/(public)/hello/[tenant]/state.ts"
 import { z } from "zod"
 
 export default z.object({
@@ -16,8 +16,7 @@ export default z.object({
 })
 ```
 
-```ts
-// src/app/(public)/hello/[tenant]/index.ts
+```ts title="src/app/(public)/hello/[tenant]/index.ts"
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { z } from "zod"
@@ -35,6 +34,7 @@ export async function workflow(
   return { ...state, count: records.length }
 }
 ```
+</CodeGroup>
 
 ## Notes
 
