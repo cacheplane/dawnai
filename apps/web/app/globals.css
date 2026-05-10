@@ -65,8 +65,15 @@ pre .mdx-inline-code {
   white-space: inherit;
 }
 
-/* Shiki line container — rehype-pretty-code wraps each line in <span data-line>.
-   Scope to <pre> only so inline-code <code> chips (which also receive a [data-line]
+/* Shiki line container — rehype-pretty-code wraps each line in <span data-line>
+   and emits a literal "\n" newline between adjacent lines. With <pre>'s default
+   white-space: pre, those newlines render as visible empty lines (~doubled
+   spacing). Use grid on the inner <code> so its children flow as grid cells —
+   grid containers collapse whitespace text nodes between items. */
+pre > code {
+  display: grid;
+}
+/* Scope to <pre> only so inline-code <code> chips (which also receive a [data-line]
    wrapper from rehype-pretty-code) don't get block-level line styling. */
 pre [data-line] {
   display: block;
