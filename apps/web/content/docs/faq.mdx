@@ -1,0 +1,61 @@
+# FAQ
+
+The questions developers ask before adopting Dawn. Short, opinionated answers — verdict first, one piece of context, link to the deep page when there is one. This is not a troubleshooting guide and not a roadmap.
+
+## Adopting Dawn
+
+### Do I have to use LangGraph?
+
+Yes. Dawn is a meta-framework for LangGraph the way Next.js is a meta-framework for React. LangGraph runs the graph; Dawn writes the conventions around it — file-system routing, type inference, the dev server, the build step. If you do not want LangGraph, Dawn is the wrong tool. See [Mental Model](/docs/mental-model).
+
+### Can I bring my own model provider?
+
+Yes. The `model` field on `agent()` accepts a `KnownModelId` — OpenAI, Anthropic, and Google IDs are pre-typed, and `(string & {})` keeps the escape hatch open for any LangChain-compatible provider. Dawn does not wrap or proxy provider calls. See [API Reference](/docs/api).
+
+### How does Dawn compare to Mastra / CopilotKit / Vercel AI SDK?
+
+They solve different problems.
+
+- **Vercel AI SDK** is a client-and-server toolkit for chat UIs and provider-agnostic LLM calls. Dawn does not compete with it — it sits one layer up, organizing whole agent projects, and you can use the AI SDK inside a Dawn route.
+- **CopilotKit** is a frontend-first framework for embedding copilots in existing apps. Dawn is backend-first; the deliverable is a deployable agent runtime, not in-app UI.
+- **Mastra** is a general-purpose agent framework with its own runtime and abstractions. Dawn is narrower: it does not replace LangGraph, it deletes the boilerplate around it.
+
+If you are already on LangGraph, Dawn fits. If you are not, pick the framework whose runtime you want to live in.
+
+### Does Dawn support Python?
+
+No. Dawn is TypeScript-only and the type inference is the whole point — tool parameter types are read from function signatures at build time and emitted into `dawn.generated.d.ts`. A Python port would lose that. Use `langgraph` directly in Python; LangGraph Platform deploys both.
+
+### Is Dawn production-ready?
+
+Dawn produces production-ready artifacts; the framework itself is pre-1.0 and the API surface is still moving. `dawn build` writes a `.dawn/build/langgraph.json` plus per-route entry files that LangGraph Platform deploys without further translation. Lock to a pinned version and read release notes between upgrades. See [Deployment](/docs/deployment).
+
+## Working in Dawn
+
+### Can I drop down to raw LangGraph when I need to?
+
+Yes — that is the point. A route's `index.ts` can default-export a `graph`, a `workflow`, an `agent`, or a `chain`; the `graph` shape hands you a raw `StateGraph` with no Dawn abstractions in the way. Mix shapes across routes in one project. See [Routes](/docs/routes).
+
+### What does `dawn build` actually do?
+
+It walks your routes, runs typegen, and writes `.dawn/build/langgraph.json` plus a per-route entry file under `.dawn/build/<routeSlug>.ts`. Each agent route's entry calls `agent.bindTools([...])` so every co-located tool is wired to the LLM. Each `assistant_id` is `<routeId>#<kind>` — for example `/hello/[tenant]#agent`. See [Deployment](/docs/deployment).
+
+### Why a meta-framework instead of a library?
+
+A library is something you call. A meta-framework is something you write inside. The conventions Dawn enforces — folder-as-route, co-located tools, typed state per route — only pay off when the whole project follows them, the same way Next.js routing only pays off because every page lives under `app/`. A library version would surface all the same boilerplate Dawn is built to delete. See [Mental Model](/docs/mental-model).
+
+## Operating Dawn
+
+### Can I deploy outside LangGraph Platform?
+
+Yes, with caveats. `dawn build` emits a standard `langgraph.json` plus entry files; feed `.dawn/build/` to any container that runs the LangGraph runtime. Dawn's in-process dev server is a reference implementation of the same `/runs/wait` and `/runs/stream` protocol but is not intended as a production runtime itself. See [Deployment](/docs/deployment).
+
+### How do I gradually migrate an existing LangGraph project?
+
+Move one graph at a time. Create a Dawn route, default-export your existing `StateGraph` from its `index.ts` as a `graph` route, and point the new `assistant_id` at it. Tools, prompts, and model providers come along unchanged — Dawn surrounds your code, it does not rewrite it. Once the route is live, peel state and tools out into the Dawn shapes if the ergonomics are worth it, or leave the graph as-is.
+
+## Related
+
+- [Mental Model](/docs/mental-model) — the framework's shape
+- [Deployment](/docs/deployment) — runtime targets
+- [Recipes](/docs/recipes) — task-oriented how-tos
