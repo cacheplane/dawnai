@@ -14,6 +14,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     items: [
       { label: "Getting Started", href: "/docs/getting-started" },
       { label: "Mental Model", href: "/docs/mental-model" },
+      { label: "Migrating from LangGraph", href: "/docs/migrating-from-langgraph" },
     ],
   },
   {
