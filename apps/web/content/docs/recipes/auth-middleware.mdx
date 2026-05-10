@@ -1,0 +1,63 @@
+# Auth middleware
+
+You want to reject unauthenticated requests and pass the verified user identity to every tool call. Here's how.
+
+## The code
+
+```ts
+// src/middleware.ts
+import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"
+
+export default defineMiddleware(async (req) => {
+  const auth = req.headers["authorization"]
+  if (!auth?.startsWith("Bearer ")) {
+    return reject(401, { error: "Missing bearer token" })
+  }
+
+  const token = auth.slice("Bearer ".length)
+  const userId = await verifyJwt(token).catch(() => null)
+  if (!userId) {
+    return reject(401, { error: "Invalid token" })
+  }
+
+  return allow({ userId })
+})
+
+async function verifyJwt(token: string): Promise<string> {
+  // Replace with your real verifier.
+  const res = await fetch("https://auth.example.com/verify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+  })
+  if (!res.ok) throw new Error("verify failed")
+  const body = (await res.json()) as { readonly sub: string }
+  return body.sub
+}
+```
+
+```ts
+// src/app/(private)/account/[tenant]/tools/load-profile.ts
+export default async (
+  input: { readonly tenant: string },
+  ctx: { signal: AbortSignal; middleware?: Readonly<Record<string, unknown>> },
+) => {
+  const userId = ctx.middleware?.userId as string | undefined
+  if (!userId) throw new Error("middleware did not populate userId")
+  const profile = await db.profiles.find({ userId, tenant: input.tenant })
+  return { profile }
+}
+```
+
+## Notes
+
+- **One global middleware.** `src/middleware.ts` runs once per request before any route. Branch by `req.routeId` if you need per-route policy — there is no array of layered middlewares.
+- **`reject` short-circuits.** The route never executes; the body of `reject(status, body?)` is the HTTP response.
+- **`allow(context)` flows to tools.** Whatever you pass becomes `ctx.middleware` on every tool call for that request. It is `undefined` if you call `allow()` with no arguments.
+- **Throwing equals 500.** Any uncaught error becomes HTTP 500. Prefer explicit `reject(401, ...)` with a real body so callers see a useful response.
+
+## Related
+
+- [Middleware](/docs/middleware) — the full middleware contract and `MiddlewareRequest` shape
+- [Tools](/docs/tools) — how `ctx.middleware` reaches tool implementations
+- [Dev Server](/docs/dev-server) — middleware runs in `dawn dev` and in production

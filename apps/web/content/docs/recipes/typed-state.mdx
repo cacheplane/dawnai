@@ -1,0 +1,50 @@
+# Typed state
+
+You want a typed state shape for a route, with dynamic URL segments captured into it automatically. Here's how.
+
+## The code
+
+```ts
+// src/app/(public)/hello/[tenant]/state.ts
+import { z } from "zod"
+
+export default z.object({
+  /** Accumulated tool-call results */
+  context: z.string().default(""),
+  /** Number of records returned by the lookup tool */
+  count: z.number().default(0),
+})
+```
+
+```ts
+// src/app/(public)/hello/[tenant]/index.ts
+import type { RuntimeContext } from "@dawn-ai/sdk"
+import type { RouteTools } from "dawn:routes"
+import type { z } from "zod"
+import type state from "./state.js"
+
+type HelloState = z.infer<typeof state> & { readonly tenant: string }
+
+export async function workflow(
+  state: HelloState,
+  ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
+) {
+  // state.tenant is populated from the URL segment.
+  // state.context and state.count have their Zod-defined defaults.
+  const { records } = await ctx.tools.lookup({ tenant: state.tenant, query: "*" })
+  return { ...state, count: records.length }
+}
+```
+
+## Notes
+
+- **Dynamic segments are not in the schema.** `[tenant]` is injected from the pathname onto `state.tenant` at runtime. Adding it to the Zod schema would conflict with the path injection.
+- **Field names match segment names exactly.** Dawn wires `[tenant]` to `state.tenant` by name, not by position.
+- **Defaults come from Zod.** Anything declared with `.default(...)` is filled in when the caller omits it.
+- **State is JSON-serializable.** It crosses the runtime boundary on every `/runs/wait` and `/runs/stream` call. Use primitives, plain objects, arrays.
+
+## Related
+
+- [State](/docs/state) — the full state contract, reducers, and merge rules
+- [Routes](/docs/routes) — pathname conventions and dynamic segments
+- [Add a tool](/docs/recipes/add-a-tool) — read state inside a tool via `ctx`

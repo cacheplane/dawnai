@@ -1,0 +1,55 @@
+# Dispatch from a route
+
+You want one route to invoke another — for example, a workflow that delegates a step to a specialized agent. Here's how, using the same `/runs/wait` protocol an external client would use.
+
+## The code
+
+```ts
+// src/app/(public)/orchestrator/[job]/index.ts
+import type { RuntimeContext } from "@dawn-ai/sdk"
+import type { z } from "zod"
+import type state from "./state.js"
+
+type OrchestratorState = z.infer<typeof state> & { readonly job: string }
+
+export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
+  const baseUrl = process.env.DAWN_RUNTIME_URL ?? "http://127.0.0.1:3001"
+
+  const res = await fetch(`${baseUrl}/runs/wait`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      assistant_id: "/summarize/[doc]#agent",
+      input: { doc: state.job },
+      metadata: {
+        dawn: {
+          mode: "agent",
+          route_id: "/summarize/[doc]",
+          route_path: `/summarize/${state.job}`,
+        },
+      },
+      on_completion: "delete",
+    }),
+  })
+
+  if (!res.ok) {
+    throw new Error(`dispatch failed: ${res.status}`)
+  }
+
+  const summary = (await res.json()) as { readonly summary: string }
+  return { ...state, summary: summary.summary }
+}
+```
+
+## Notes
+
+- **No bespoke API.** The dev server and LangGraph Platform both speak the same protocol. Calling `/runs/wait` from inside a route is the same call an external client makes.
+- **Pass through the URL via env.** `DAWN_RUNTIME_URL` lets the same code work locally (`http://127.0.0.1:<port>` from `dawn dev`) and in production (the platform-provided URL).
+- **Forward headers when needed.** If the target route's middleware expects auth headers, propagate them on the inner `fetch` — middleware runs on every `/runs/wait` and `/runs/stream` call, including this one.
+- **Use `/runs/stream` for long-running children.** Same envelope, SSE response — see [Stream output](/docs/recipes/stream-output).
+
+## Related
+
+- [Dev Server](/docs/dev-server) — `/runs/wait` envelope and the assistant-id format
+- [Routes](/docs/routes) — route entries and the typed `RuntimeContext`
+- [Stream output](/docs/recipes/stream-output) — incremental responses from a dispatched route
