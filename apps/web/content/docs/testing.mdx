@@ -132,3 +132,10 @@ Use `dawn verify` as the integrity gate (it covers app, routes, typegen, and dep
 ```
 
 `dawn verify` runs typegen and check internally, plus the deps check (missing packages, missing env vars) that bare `dawn check && dawn typegen` does not. `dawn test` exits non-zero on any failure and outputs a diff per mismatched scenario.
+
+## Related
+
+- [Routes](/docs/routes) — the four route kinds whose behavior scenarios assert
+- [State](/docs/state) — state schema that `input` and `output` are validated against
+- [Middleware](/docs/middleware) — why live-server scenarios exercise middleware but in-process scenarios bypass it
+- [Dev Server](/docs/dev-server) — starting the server scenarios target via `run.url`

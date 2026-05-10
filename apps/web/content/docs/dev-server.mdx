@@ -104,7 +104,9 @@ When you save a file under `src/app/`, the dev server:
 
 Every request is logged to stdout with the pathname, assistant id, duration, and result status. Set `DAWN_DEV_SHUTDOWN_TIMEOUT_MS` to override the child-restart grace window (default ~5s).
 
-## Next steps
+## Related
 
-- [Testing](/docs/testing) — run scenarios against a live dev server
+- [Testing](/docs/testing) — run scenarios against a live dev server via `run.url`
 - [Deployment](/docs/deployment) — `dawn build` and the LangGraph Platform handoff
+- [Middleware](/docs/middleware) — how `src/middleware.ts` gates requests in dev and production
+- [CLI](/docs/cli) — `dawn dev` flags and all other commands

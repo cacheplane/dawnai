@@ -76,3 +76,10 @@ If you can't or won't use the LangGraph Platform, build with `dawn build` and fe
 - **Tests pass in-process but fail live-server** — a tool or route isn't serializing cleanly. Check that inputs, outputs, and state are JSON-serializable (no Dates, Maps, classes).
 - **Assistant id not found** — the request `assistant_id` doesn't match the `<routeId>#<kind>` keys in `.dawn/build/langgraph.json`. Inspect that file directly (`cat .dawn/build/langgraph.json`) or run `dawn verify --json` to confirm what was discovered.
 - **Type inference drifted** — run `dawn typegen` locally and commit `dawn.generated.d.ts`. The Platform build uses the committed file.
+
+## Related
+
+- [Dev Server](/docs/dev-server) — local protocol parity with production endpoints
+- [Middleware](/docs/middleware) — request gating that runs identically in dev and on the platform
+- [Testing](/docs/testing) — confirming parity before deploy via live-server scenarios
+- [CLI](/docs/cli) — `dawn build`, `dawn verify`, and all other commands

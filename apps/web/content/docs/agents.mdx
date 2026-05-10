@@ -1,0 +1,80 @@
+# Agents
+
+An agent is the default scaffolded route in Dawn — an LLM-driven workflow that picks tools at runtime. It's the path we recommend when you want the model to decide what to do; for deterministic flows, prefer a `workflow`, `graph`, or `chain`.
+
+## A minimal agent
+
+A route's `index.ts` exports an agent created by `agent({ model, systemPrompt })`. Tools in the sibling `tools/` directory are auto-registered; the LLM picks when to call them.
+
+```typescript
+// src/app/(public)/hello/[tenant]/index.ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt:
+    "You are a helpful assistant for the {tenant} organization. Answer questions about the tenant.",
+})
+```
+
+Tools live next to the agent:
+
+```
+src/app/(public)/hello/[tenant]/
+├── index.ts          ← the agent
+└── tools/
+    └── greet.ts      ← auto-bound to the agent
+```
+
+Each tool is a TypeScript file with a default export. Param types are inferred from the function signature at `dawn build` time and made available to the agent.
+
+## When to pick an agent
+
+Dawn supports four route entry shapes. Pick the one that fits the problem:
+
+- **Agent** — LLM-driven, model picks tools at runtime. Default for conversational and discovery-style routes.
+- **Workflow** — deterministic async function with a typed state. Pick when you control the order of operations.
+- **Graph** — full LangGraph DSL with branching, looping, and conditional edges. Pick when the flow has structure the model shouldn't decide.
+- **Chain** — LangChain LCEL `Runnable`. Pick for simple linear pipelines.
+
+A route's `index.ts` exports exactly one of these. You can mix shapes across routes inside the same project.
+
+## Tool auto-binding
+
+Any TypeScript file in a route's `tools/` directory is auto-registered with the agent. No manual `tools: [...]` config — Dawn discovers them at build time.
+
+```typescript
+// src/app/(public)/hello/[tenant]/tools/greet.ts
+export default async (input: { readonly tenant: string }) => {
+  return { greeting: `Hello, ${input.tenant}!` }
+}
+```
+
+The exported parameter type is read by Dawn's compiler integration and turned into a JSON schema for the LLM. The agent calls `tools.greet({ tenant })` at runtime; the model decides when.
+
+See [Tools](/docs/tools) for the full input/output rules and the generated declarations.
+
+## Retry
+
+Agent calls accept a `retry` config that wraps every tool invocation:
+
+```typescript
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "...",
+  retry: { maxAttempts: 3, baseDelay: 250 },
+})
+```
+
+This applies to tool calls and the model call itself. See [Retry](/docs/retry) for backoff strategy, what's retried, and per-tool overrides.
+
+## Streaming
+
+By default, tool results stream back through the dev server. The deployment protocol exposes streaming via `/runs/stream` and the LangGraph Platform contract. See [Dev Server](/docs/dev-server) for the protocol details.
+
+## Related
+
+- [Routes](/docs/routes) — pathname rules and route entry shapes
+- [Tools](/docs/tools) — tool input/output rules, type inference
+- [State](/docs/state) — when an agent reads or returns structured state
+- [Retry](/docs/retry) — retry config and backoff
