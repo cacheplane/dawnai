@@ -41,35 +41,60 @@
 
 /* Inline code (rendered by InlineCode MDX override) */
 .mdx-inline-code {
-  background: rgb(from var(--color-bg-card) r g b / 0.6);
-  color: var(--color-text-secondary);
+  background: rgb(245 158 11 / 0.1);
+  color: #f5b840;
+  border: 1px solid rgb(245 158 11 / 0.2);
   border-radius: 4px;
-  padding: 0.125rem 0.375rem;
+  padding: 0.0625rem 0.375rem;
   font-size: 0.875em;
   font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
 }
 
-/* Shiki line container — rehype-pretty-code wraps each line in <span data-line> */
-[data-line] {
+/* Block code (`<code>` inside `<pre>`) inherits the same MDX `code:` override and
+   therefore gets the .mdx-inline-code class. Strip the chip treatment when it's
+   nested inside a <pre> so shiki's tokenized output renders as a normal block. */
+pre .mdx-inline-code {
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font-size: inherit;
+  font-family: inherit;
+  white-space: inherit;
+}
+
+/* Shiki line container — rehype-pretty-code wraps each line in <span data-line>
+   and emits a literal "\n" newline between adjacent lines. With <pre>'s default
+   white-space: pre, those newlines render as visible empty lines (~doubled
+   spacing). Use grid on the inner <code> so its children flow as grid cells —
+   grid containers collapse whitespace text nodes between items. */
+pre > code {
+  display: grid;
+}
+/* Scope to <pre> only so inline-code <code> chips (which also receive a [data-line]
+   wrapper from rehype-pretty-code) don't get block-level line styling. */
+pre [data-line] {
   display: block;
-  padding: 0 1rem;
+  padding: 0 0.75rem;
   border-left: 2px solid transparent;
 }
 
 /* Highlighted lines (e.g. ```ts {1,3-5} ```) */
-[data-highlighted-line] {
+pre [data-highlighted-line] {
   background: rgb(from var(--color-accent-amber) r g b / 0.06);
   border-left-color: var(--color-accent-amber);
 }
 
 /* Diff markers ([!code ++] / [!code --]) */
-[data-highlighted-line-id="add"],
-.line.diff.add {
+pre [data-highlighted-line-id="add"],
+pre .line.diff.add {
   background: rgb(from var(--color-accent-green) r g b / 0.1);
   border-left-color: var(--color-accent-green);
 }
-[data-highlighted-line-id="remove"],
-.line.diff.remove {
+pre [data-highlighted-line-id="remove"],
+pre .line.diff.remove {
   background: rgb(239 68 68 / 0.1);
   border-left-color: rgb(239 68 68);
 }

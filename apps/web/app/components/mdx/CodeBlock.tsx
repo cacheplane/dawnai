@@ -83,7 +83,7 @@ export function Pre({ children, className, ...rest }: PreProps) {
       )}
       <pre
         ref={ref}
-        className={`overflow-x-auto px-4 py-3 text-sm leading-6 font-mono ${className ?? ""}`}
+        className={`overflow-x-auto px-3 py-2 text-[13px] leading-[1.55] font-mono ${className ?? ""}`}
         {...rest}
       >
         {children}
