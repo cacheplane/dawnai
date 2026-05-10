@@ -67,7 +67,7 @@ Each arrow is real code:
 
 ## Build vs runtime
 
-Dawn does its real magic at *build time*.
+Dawn does most of its work at *build time*.
 
 `dawn build` and `dawn typegen` walk your routes, infer tool parameter types from function signatures, and emit `dawn.generated.d.ts`. That generated file is the route registry, the tool registry, and the typed `RouteTools<P>` map. After build, your editor can autocomplete `ctx.tools.greet` and complain when a tool's signature drifts from its caller.
 
@@ -103,3 +103,5 @@ Pick the path that fits where you are.
 - [Agents](/docs/agents) — the default route entry
 - [Tools](/docs/tools) — co-located tools and type inference
 - [Dev Server](/docs/dev-server) — the runtime protocol
+- [Recipes](/docs/recipes) — task-oriented how-tos
+- [FAQ](/docs/faq) — one-line answers to the recurring questions
