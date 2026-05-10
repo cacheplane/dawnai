@@ -1,0 +1,42 @@
+# Retry flaky tools
+
+You want an agent route to retry transient LLM and tool failures automatically. Here's how.
+
+## The code
+
+```ts
+// src/app/(public)/summarize/[doc]/index.ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  retry: { maxAttempts: 5, baseDelay: 500 },
+  systemPrompt: "Summarize the document the user provides in three bullet points.",
+})
+```
+
+```ts
+// src/app/(public)/billing/[invoice]/index.ts
+import { agent } from "@dawn-ai/sdk"
+
+// Critical path — fail fast, do not retry.
+export default agent({
+  model: "gpt-4o-mini",
+  retry: { maxAttempts: 1 },
+  systemPrompt: "...",
+})
+```
+
+## Notes
+
+- **Per-route, not global.** Each `agent()` declares its own `retry`. Different routes can have different policies.
+- **Transient errors only.** Rate limits (`429`), server errors (`500`/`502`/`503`), network timeouts, and OpenAI `overloaded`/`server_error` are retried. Invalid API keys, missing models, and schema validation errors fail immediately.
+- **Exponential backoff with jitter, capped at 10s.** `delay = min(baseDelay * 2^n + jitter, 10s)`. Lowering `baseDelay` makes the first retry faster.
+- **`maxAttempts: 1` disables retry.** The default is `3` if `retry` is omitted entirely.
+- **Streaming routes only retry before the first token.** Once tokens have streamed, the response is committed.
+
+## Related
+
+- [Retry](/docs/retry) — the full backoff formula and the list of retryable errors
+- [Routes](/docs/routes) — `agent()` and the other route kinds
+- [Stream output](/docs/recipes/stream-output) — the streaming retry caveat in context
