@@ -4,8 +4,7 @@ You want a route's response to arrive incrementally rather than as a single blob
 
 ## The code
 
-```ts
-// scripts/stream-hello.ts
+```ts title="scripts/stream-hello.ts"
 const res = await fetch("http://127.0.0.1:3001/runs/stream", {
   method: "POST",
   headers: { "content-type": "application/json" },

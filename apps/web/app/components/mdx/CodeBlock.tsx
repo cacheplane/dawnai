@@ -1,6 +1,13 @@
 "use client"
 
-import { type HTMLAttributes, type ReactNode, useRef, useState } from "react"
+import {
+  createContext,
+  type HTMLAttributes,
+  type ReactNode,
+  useContext,
+  useRef,
+  useState,
+} from "react"
 
 function CopyIcon() {
   return (
@@ -47,9 +54,45 @@ interface PreProps extends HTMLAttributes<HTMLPreElement> {
   readonly "data-theme"?: string
 }
 
+/**
+ * When a `<Pre>` is rendered inside a `<CodeGroup>`, the group owns the chrome
+ * (frame + header). We use this context to tell the inner `<Pre>` to render
+ * just its code body, with no border or header bar.
+ */
+export const HeadlessPreContext = createContext(false)
+
+const LANGUAGE_LABELS: Record<string, string> = {
+  bash: "bash",
+  sh: "bash",
+  shell: "bash",
+  zsh: "bash",
+  ts: "ts",
+  typescript: "ts",
+  tsx: "tsx",
+  js: "js",
+  javascript: "js",
+  jsx: "jsx",
+  json: "json",
+  text: "text",
+  plaintext: "text",
+  md: "md",
+  markdown: "md",
+  yaml: "yaml",
+  yml: "yaml",
+  html: "html",
+  css: "css",
+}
+
+export function tabLabel(language: string | undefined, title: string | undefined): string {
+  if (title) return title
+  if (!language) return "code"
+  return LANGUAGE_LABELS[language.toLowerCase()] ?? language
+}
+
 export function Pre({ children, className, ...rest }: PreProps) {
   const ref = useRef<HTMLPreElement>(null)
   const [copied, setCopied] = useState(false)
+  const headless = useContext(HeadlessPreContext)
   const title = (rest as Record<string, unknown>)["data-rehype-pretty-code-title"] as
     | string
     | undefined
@@ -62,28 +105,29 @@ export function Pre({ children, className, ...rest }: PreProps) {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  return (
-    <div className="relative my-6 rounded-lg border border-border bg-bg-card overflow-hidden">
-      {title ? (
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border-subtle bg-bg-card/60">
-          <span className="font-mono text-xs text-text-muted">{title}</span>
-          <div className="flex items-center gap-2">
-            {language ? (
-              <span className="font-mono text-[0.65rem] uppercase tracking-wide text-text-dim">
-                {language}
-              </span>
-            ) : null}
-            <CopyButton onCopy={copy} copied={copied} />
-          </div>
-        </div>
-      ) : (
-        <div className="absolute inset-y-0 right-2 flex items-center z-10">
-          <CopyButton onCopy={copy} copied={copied} />
-        </div>
-      )}
+  if (headless) {
+    return (
       <pre
         ref={ref}
-        className={`overflow-x-auto px-3 py-2 text-[13px] leading-[1.55] font-mono ${className ?? ""}`}
+        className={`overflow-x-auto px-4 py-3 text-[13px] leading-[1.55] font-mono ${className ?? ""}`}
+        {...rest}
+      >
+        {children}
+      </pre>
+    )
+  }
+
+  const label = tabLabel(language, title)
+
+  return (
+    <div className="relative my-6 rounded-lg border border-border bg-bg-card overflow-hidden">
+      <CodeHeaderRow
+        left={<TabPill label={label} active />}
+        right={<CopyButton onCopy={copy} copied={copied} />}
+      />
+      <pre
+        ref={ref}
+        className={`overflow-x-auto px-4 py-3 text-[13px] leading-[1.55] font-mono ${className ?? ""}`}
         {...rest}
       >
         {children}
@@ -92,7 +136,74 @@ export function Pre({ children, className, ...rest }: PreProps) {
   )
 }
 
-function CopyButton({ onCopy, copied }: { readonly onCopy: () => void; readonly copied: boolean }) {
+/**
+ * Header bar used above the code body: left-aligned tab pill(s) plus the copy
+ * button pinned to the right. The active pill renders its own underline.
+ */
+export function CodeHeaderRow({
+  left,
+  right,
+}: {
+  readonly left: ReactNode
+  readonly right: ReactNode
+}) {
+  return (
+    <div className="flex items-end justify-between px-3 pt-2 border-b border-border-subtle bg-bg-card/60">
+      <div className="flex items-end gap-1">{left}</div>
+      <div className="pb-1.5">{right}</div>
+    </div>
+  )
+}
+
+export function TabPill({
+  label,
+  active,
+  onClick,
+}: {
+  readonly label: string
+  readonly active: boolean
+  readonly onClick?: () => void
+}) {
+  const isButton = typeof onClick === "function"
+  const baseClasses = `relative px-2 py-1.5 font-mono text-xs transition-colors ${
+    active ? "text-text-primary" : "text-text-muted hover:text-text-primary"
+  }`
+  const underline = active ? (
+    <span
+      aria-hidden
+      className="absolute left-1 right-1 -bottom-px h-[2px] rounded-full bg-gradient-to-r from-accent-amber to-accent-amber-deep"
+    />
+  ) : null
+
+  if (isButton) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        role="tab"
+        aria-selected={active}
+        className={baseClasses}
+      >
+        {label}
+        {underline}
+      </button>
+    )
+  }
+  return (
+    <span className={baseClasses}>
+      {label}
+      {underline}
+    </span>
+  )
+}
+
+export function CopyButton({
+  onCopy,
+  copied,
+}: {
+  readonly onCopy: () => void
+  readonly copied: boolean
+}) {
   return (
     <button
       type="button"

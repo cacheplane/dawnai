@@ -6,8 +6,7 @@ Agent routes can opt into automatic retry of transient LLM failures via the `ret
 
 Set `retry` on the `agent()` descriptor:
 
-```ts
-// src/app/(public)/hello/[tenant]/index.ts
+```ts title="src/app/(public)/hello/[tenant]/index.ts"
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({

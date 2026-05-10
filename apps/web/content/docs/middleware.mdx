@@ -6,8 +6,7 @@ Dawn supports a single global request middleware for authentication, request sha
 
 Define middleware as a default-exported function in `src/middleware.ts` (or `middleware.ts` at the app root):
 
-```ts
-// src/middleware.ts
+```ts title="src/middleware.ts"
 import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"
 
 export default defineMiddleware(async (req) => {
@@ -67,14 +66,15 @@ return allow({ userId, plan: "pro" })
 
 Whatever you pass to `allow({ ... })` is delivered to every tool call for that request via the second argument:
 
-```ts
-// src/middleware.ts
+<CodeGroup>
+```ts title="src/middleware.ts"
 export default defineMiddleware(async (req) => {
   const userId = await verifyJwt(req.headers.authorization)
   return allow({ userId })
 })
+```
 
-// src/app/(public)/hello/[tenant]/tools/lookup.ts
+```ts title="src/app/(public)/hello/[tenant]/tools/lookup.ts"
 export default async (
   input: { readonly query: string },
   ctx: { readonly middleware?: Readonly<Record<string, unknown>>; readonly signal: AbortSignal },
@@ -83,6 +83,7 @@ export default async (
   return await db.search(userId, input.query)
 }
 ```
+</CodeGroup>
 
 Context is per-request — there is no shared state between requests. The `middleware` field is `undefined` if no middleware is defined, or if the middleware called `allow()` without arguments.
 

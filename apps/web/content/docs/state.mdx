@@ -6,8 +6,8 @@ Every route has a state contract declared in a colocated `state.ts` file. State 
 
 `state.ts` default-exports a Zod schema. Dawn extracts defaults from the schema at runtime and you can derive the TS type via `z.infer<typeof state>`:
 
-```ts
-// src/app/(public)/hello/[tenant]/state.ts
+<CodeGroup>
+```ts title="src/app/(public)/hello/[tenant]/state.ts"
 import { z } from "zod"
 
 export default z.object({
@@ -16,8 +16,8 @@ export default z.object({
 })
 ```
 
-```ts
-// src/app/(public)/hello/[tenant]/index.ts (workflow form)
+```ts title="src/app/(public)/hello/[tenant]/index.ts"
+// workflow form
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { z } from "zod"
 import type state from "./state.js"
@@ -28,6 +28,7 @@ export async function workflow(state: HelloState, ctx: RuntimeContext) {
   // state.context is string (Zod-parsed default `""` is applied when caller omits it)
 }
 ```
+</CodeGroup>
 
 <Callout type="info" title="Zod or any Standard Schema">
   State discovery accepts either a Zod schema (matched by `.parse({})`) or any value that implements [Standard Schema](https://standardschema.dev/) (matched by the `~standard.validate({})` slot). The scaffold uses Zod; either works at runtime.
@@ -51,8 +52,7 @@ The schema only covers state your entry produces or the caller supplies. Dawn me
 
 Each route may include a `reducers/` directory with one file per state field. The default export is a `(current, incoming) => merged` function that overrides Dawn's default merge for that field.
 
-```ts
-// src/app/(public)/hello/[tenant]/reducers/context.ts
+```ts title="src/app/(public)/hello/[tenant]/reducers/context.ts"
 export default (current: string, incoming: string) =>
   current ? `${current}\n${incoming}` : incoming
 ```

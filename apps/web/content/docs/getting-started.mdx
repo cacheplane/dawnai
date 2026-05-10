@@ -52,9 +52,25 @@ Each route is a directory under `src/app/` with an `index.ts` that exports exact
 - **`graph`** — a LangGraph graph instance.
 - **`chain`** — a LangChain LCEL Runnable.
 
-The scaffolded app uses an `agent` default export:
+The scaffolded app is three files — a state schema, a tool, and an agent route entry:
 
-```typescript
+<CodeGroup>
+```ts title="src/app/(public)/hello/[tenant]/state.ts"
+import { z } from "zod"
+
+export default z.object({
+  /** The user's last message. */
+  question: z.string().default(""),
+})
+```
+
+```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
+export default async (input: { readonly tenant: string }) => {
+  return { greeting: `Hello, ${input.tenant}!` }
+}
+```
+
+```ts title="src/app/(public)/hello/[tenant]/index.ts"
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
@@ -63,19 +79,13 @@ export default agent({
     "You are a helpful assistant for the {tenant} organization. Answer questions about the tenant.",
 })
 ```
+</CodeGroup>
 
 Tools in the route's `tools/` directory are auto-bound to the agent at `dawn build` time — the LLM picks when to invoke them. See [Routes](/docs/routes) for the `workflow` / `graph` / `chain` alternatives, and the optional `retry: { maxAttempts, baseDelay }` config.
 
 ## Add a tool
 
-Tools live in a `tools/` directory inside a route. Each tool is a TypeScript file with a default export:
-
-```typescript
-// src/app/(public)/hello/[tenant]/tools/greet.ts
-export default async (input: { readonly tenant: string }) => {
-  return { greeting: `Hello, ${input.tenant}!` }
-}
-```
+Tools live in a `tools/` directory inside a route. Each tool is a TypeScript file with a default export — the scaffold's `greet.ts` (above) is the canonical shape.
 
 Dawn extracts the input and output types at build time using the TypeScript compiler API, then writes them to `dawn.generated.d.ts`. Tool inputs and outputs require no Zod schemas — that inference is what makes `ctx.tools.greet()` show up fully typed without any manual wiring. (Route state in `state.ts` does use a Zod schema; see [State](/docs/state).)
 

@@ -4,8 +4,8 @@ You want an agent route to retry transient LLM and tool failures automatically. 
 
 ## The code
 
-```ts
-// src/app/(public)/summarize/[doc]/index.ts
+<CodeGroup>
+```ts title="src/app/(public)/summarize/[doc]/index.ts"
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
@@ -15,8 +15,21 @@ export default agent({
 })
 ```
 
-```ts
-// src/app/(public)/billing/[invoice]/index.ts
+```ts title="src/app/(public)/summarize/[doc]/tools/fetch-doc.ts"
+// The tool the agent calls. Transient fetch failures are retried by the
+// agent's retry policy above — the tool itself stays simple.
+export default async (
+  input: { readonly doc: string },
+  ctx: { signal: AbortSignal },
+) => {
+  const res = await fetch(`https://docs.example.com/${input.doc}`, { signal: ctx.signal })
+  if (!res.ok) throw new Error(`fetch failed: ${res.status}`)
+  const text = await res.text()
+  return { text }
+}
+```
+
+```ts title="src/app/(public)/billing/[invoice]/index.ts"
 import { agent } from "@dawn-ai/sdk"
 
 // Critical path — fail fast, do not retry.
@@ -26,6 +39,7 @@ export default agent({
   systemPrompt: "...",
 })
 ```
+</CodeGroup>
 
 ## Notes
 

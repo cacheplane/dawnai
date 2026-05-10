@@ -6,8 +6,7 @@ Scenario tests are colocated with routes as `run.test.ts` files. Each scenario d
 
 A scenario file is a default-exported array of plain scenario records — there is no `describe()` or `test()` wrapper, and the route is inferred from the file's directory:
 
-```ts
-// src/app/(public)/hello/[tenant]/run.test.ts
+```ts title="src/app/(public)/hello/[tenant]/run.test.ts"
 export default [
   {
     name: "greets a tenant",
@@ -47,7 +46,7 @@ The `expect` object accepts:
 
 For programmatic assertions in `assert(result)`, import the helpers from `@dawn-ai/sdk/testing`:
 
-```ts
+```ts title="src/app/(public)/hello/[tenant]/run.test.ts"
 import { expectError, expectMeta, expectOutput } from "@dawn-ai/sdk/testing"
 
 export default [
@@ -67,7 +66,7 @@ export default [
 
 To exercise protocol parity against a running `dawn dev`, set `run.url` per-scenario. There is no command-level `--url` flag on `dawn test`.
 
-```ts
+```ts title="src/app/(public)/hello/[tenant]/run.test.ts"
 export default [
   {
     name: "greets a tenant via dev server",
