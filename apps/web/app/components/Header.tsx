@@ -1,11 +1,12 @@
 import Link from "next/link"
 import { BrandLogo } from "./BrandLogo"
+import { MobileMenu } from "./MobileMenu"
 
 export function Header() {
   return (
-    <header className="flex justify-between items-center px-8 py-4 border-b border-border-subtle">
+    <header className="flex justify-between items-center px-6 md:px-8 py-4 border-b border-border-subtle">
       <BrandLogo imageClassName="h-8" />
-      <nav className="flex items-center gap-6 text-sm text-text-secondary">
+      <nav className="hidden md:flex items-center gap-6 text-sm text-text-secondary">
         <Link href="/docs/getting-started" className="hover:text-text-primary transition-colors">
           Docs
         </Link>
@@ -24,6 +25,7 @@ export function Header() {
           Read the Docs
         </Link>
       </nav>
+      <MobileMenu />
     </header>
   )
 }
