@@ -1,0 +1,105 @@
+# Mental Model
+
+Dawn is a meta-framework for LangGraph.
+
+Not because LangGraph is missing anything. It runs the graph well.
+Not because we needed another framework. We did not.
+
+It exists because every team building agents on LangGraph ends up writing the same conventions by hand: project structure, type wiring, dev tooling, deployment scripts. We watched it happen at every company.
+
+Dawn writes those conventions once. You write the agent.
+
+## tl;dr
+
+- A *route* is a folder. Its path is the agent endpoint.
+- A route's `index.ts` exports one of: `agent`, `workflow`, `graph`, `chain`.
+- *Tools* live next to routes. Their parameter types are inferred at build time.
+- *State* is a typed shape per route. Dynamic segments become fields.
+- *Middleware* runs before the route. Same shape as Next.js middleware.
+- LangGraph runs the graph. Dawn does everything else.
+
+## The pieces
+
+A *route* is a folder under `src/app/`. The folder path becomes the agent endpoint at runtime — `src/app/(public)/hello/[tenant]/` answers to `/hello/[tenant]`. Everything a route needs lives next to it.
+
+A *route entry* is the route's default behavior. Each route has exactly one `index.ts` that exports an `agent`, a `workflow`, a `graph`, or a `chain`. Pick the shape that fits the problem; mix shapes across routes in the same project.
+
+*Tools* are TypeScript files in a route's `tools/` directory. Each tool is a default-exported async function. Dawn reads each tool's parameter type at build time and turns it into a JSON schema. Agents call tools by name; the model picks when.
+
+*State* is a typed shape declared in `state.ts` next to the route. Dynamic segments — `[tenant]`, `[...rest]` — become fields on that shape automatically. Tools and route entries read state through a typed `RuntimeContext`.
+
+*Middleware* runs before the route entry. Same semantics as Next.js middleware: auth, logging, retry, rate limits. Lives in `middleware.ts` at any level of the route tree; nearest-ancestor wins.
+
+## The runtime
+
+A typical request through Dawn looks like this:
+
+```text
+$ dawn run "/hello/acme"
+        │
+        ▼
+   pathname match    →   src/app/(public)/hello/[tenant]/
+        │
+        ▼
+   state init        →   { tenant: "acme" }
+        │
+        ▼
+   middleware chain  →   middleware.ts (auth, logging, ...)
+        │
+        ▼
+   route entry       →   index.ts (agent | workflow | graph | chain)
+        │
+        ▼
+   tool calls        →   ctx.tools.greet({ tenant })
+        │
+        ▼
+   typed output      →   { greeting: "Hello, acme!" }
+```
+
+Each arrow is real code:
+
+1. **Pathname match.** Dawn's router resolves the path against the file tree. Route groups (`(public)/`) drop from the path. Dynamic segments capture into state.
+2. **State init.** A typed object is built from captured segments, optional defaults from `state.ts`, and any incoming payload.
+3. **Middleware chain.** The nearest `middleware.ts` runs. It can short-circuit the request, mutate state, or pass through with added context.
+4. **Route entry.** The exported `agent`, `workflow`, `graph`, or `chain` runs. Dawn provides the typed `RuntimeContext` with auto-bound tools.
+5. **Tool calls.** Tools called via `ctx.tools.<name>` are typechecked against the schemas Dawn generated at build time.
+6. **Typed output.** The route returns a typed value. Dawn streams or returns it depending on the call (`dawn run`, `/runs/wait`, `/runs/stream`).
+
+## Build vs runtime
+
+Dawn does its real magic at *build time*.
+
+`dawn build` and `dawn typegen` walk your routes, infer tool parameter types from function signatures, and emit `dawn.generated.d.ts`. That generated file is the route registry, the tool registry, and the typed `RouteTools<P>` map. After build, your editor can autocomplete `ctx.tools.greet` and complain when a tool's signature drifts from its caller.
+
+At *runtime*, `dawn run` and `dawn dev` execute. There is no Zod schema parse, no manual `tools: [...]` array, no per-route registration. The build-time types and runtime dispatcher are wired up by Dawn — you write the agent.
+
+## Where Dawn ends and LangGraph begins
+
+The boundary is sharp. Dawn does not replace LangGraph. It surrounds it.
+
+| Dawn owns                          | LangGraph owns           |
+|------------------------------------|--------------------------|
+| File-system routing                | The graph runtime        |
+| Type inference for tools and state | StateGraph, channels     |
+| Dev server with HMR                | Persistence and resume   |
+| The CLI (`dawn dev`, `dawn run`)   | LangGraph Platform deploy|
+| Generated `dawn.generated.d.ts`    | LangSmith integration    |
+
+**Dawn deletes the boilerplate. Not your stack.**
+
+You bring your own LangGraph workflows, your own LCEL chains, your own model providers, your own LangSmith tracing. Dawn does not change any of those. It puts conventions around them so the rest of your codebase stops being plumbing.
+
+## What to read next
+
+Pick the path that fits where you are.
+
+1. **I want to build something now.** → [Getting Started](/docs/getting-started)
+2. **I want to understand a piece in depth.** → [Routes](/docs/routes), [Agents](/docs/agents), [Tools](/docs/tools), [State](/docs/state), [Middleware](/docs/middleware), [Retry](/docs/retry)
+3. **I want to see the surface.** → [CLI](/docs/cli), [Dev Server](/docs/dev-server), [Deployment](/docs/deployment)
+
+## Related
+
+- [Routes](/docs/routes) — the folder-as-route convention
+- [Agents](/docs/agents) — the default route entry
+- [Tools](/docs/tools) — co-located tools and type inference
+- [Dev Server](/docs/dev-server) — the runtime protocol
