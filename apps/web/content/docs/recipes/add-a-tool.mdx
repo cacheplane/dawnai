@@ -4,8 +4,17 @@ You want to add a new tool to a route and call it with full type safety. Here's 
 
 ## The code
 
-```ts
-// src/app/(public)/hello/[tenant]/tools/lookup.ts
+<CodeGroup>
+```ts title="src/app/(public)/hello/[tenant]/state.ts"
+import { z } from "zod"
+
+export default z.object({
+  tenant: z.string(),
+  count: z.number().default(0),
+})
+```
+
+```ts title="src/app/(public)/hello/[tenant]/tools/lookup.ts"
 export default async (
   input: { readonly tenant: string; readonly query: string },
   ctx: { signal: AbortSignal; middleware?: Readonly<Record<string, unknown>> },
@@ -19,8 +28,7 @@ export default async (
 }
 ```
 
-```ts
-// src/app/(public)/hello/[tenant]/index.ts
+```ts title="src/app/(public)/hello/[tenant]/index.ts"
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { RouteTools } from "dawn:routes"
 import type { z } from "zod"
@@ -36,6 +44,7 @@ export async function workflow(
   return { ...state, count: records.length }
 }
 ```
+</CodeGroup>
 
 ## Notes
 

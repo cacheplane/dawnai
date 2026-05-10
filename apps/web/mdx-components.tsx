@@ -1,6 +1,6 @@
 import type { MDXComponents } from "mdx/types"
 import { Callout } from "./app/components/mdx/Callout"
-import { InlineCode, Pre } from "./app/components/mdx/CodeBlock"
+import { InlineCode, Pre, RehypeFigure } from "./app/components/mdx/CodeBlock"
 import { CodeGroup } from "./app/components/mdx/CodeGroup"
 import { Step, Steps } from "./app/components/mdx/Steps"
 import { Tab, Tabs } from "./app/components/mdx/Tabs"
@@ -35,6 +35,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     p: ({ children }) => <p className="text-text-secondary leading-7 mb-4">{children}</p>,
     code: InlineCode,
     pre: Pre,
+    figure: RehypeFigure,
     ul: ({ children }) => (
       <ul className="list-disc list-inside text-text-secondary leading-7 mb-4 space-y-1">
         {children}

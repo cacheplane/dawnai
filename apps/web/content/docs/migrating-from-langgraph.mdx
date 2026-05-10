@@ -67,8 +67,7 @@ The graph itself does not change. What disappears is the file that imports it, r
 
 Before:
 
-```ts
-// src/graphs/support.ts
+```ts title="src/graphs/support.ts"
 import { StateGraph, START, END } from "@langchain/langgraph"
 import type { SupportState } from "../state.js"
 import { lookupOrder } from "../tools/lookupOrder.js"
@@ -95,8 +94,8 @@ export const support = new StateGraph<SupportState>({
 
 After:
 
-```ts
-// src/app/support/index.ts
+<CodeGroup>
+```ts title="src/app/support/index.ts"
 import { StateGraph, START, END } from "@langchain/langgraph"
 import type { z } from "zod"
 import type state from "./state.js"
@@ -116,6 +115,28 @@ export default new StateGraph<SupportState>({
   .compile()
 ```
 
+```ts title="src/app/support/state.ts"
+import { z } from "zod"
+
+export default z.object({
+  orderId: z.string().nullable().default(null),
+  messages: z.array(z.string()).default([]),
+})
+```
+
+```ts title="src/app/support/tools/lookupOrder.ts"
+export default async (
+  input: { readonly orderId: string },
+  ctx: { signal: AbortSignal },
+) => {
+  const res = await fetch(`https://api.example.com/orders/${input.orderId}`, {
+    signal: ctx.signal,
+  })
+  return (await res.json()) as { readonly status: string }
+}
+```
+</CodeGroup>
+
 The graph builder is identical. The folder path `src/app/support/` becomes the endpoint `/support`. The default export is the route entry. The `assistant_id` LangGraph Platform deploys is `/support#graph`, generated for you.
 
 If the graph is the only thing you want to migrate, stop here. Tools and state can stay imported from their old locations and the route still runs.
@@ -126,8 +147,7 @@ Typed state moves to a sibling file. Dawn merges path segments onto the schema-d
 
 Before:
 
-```ts
-// src/state.ts
+```ts title="src/state.ts"
 export interface SupportState {
   readonly tenant: string
   readonly orderId: string | null
@@ -137,8 +157,7 @@ export interface SupportState {
 
 After:
 
-```ts
-// src/app/support/[tenant]/state.ts
+```ts title="src/app/support/[tenant]/state.ts"
 import { z } from "zod"
 
 export default z.object({
@@ -157,8 +176,7 @@ Tools become default-exported async functions in the route's `tools/` directory.
 
 Before:
 
-```ts
-// src/tools/lookupOrder.ts
+```ts title="src/tools/lookupOrder.ts"
 import { tool } from "@langchain/core/tools"
 import { z } from "zod"
 
@@ -177,8 +195,7 @@ export const lookupOrder = tool(
 
 After:
 
-```ts
-// src/app/support/tools/lookupOrder.ts
+```ts title="src/app/support/tools/lookupOrder.ts"
 export default async (
   input: { readonly orderId: string },
   ctx: { signal: AbortSignal },
@@ -200,8 +217,7 @@ Two different mechanisms in LangGraph become two different mechanisms in Dawn. D
 
 *Graph-level conditional edges stay where they are.* `addConditionalEdges` is a runtime concern of the graph. Dawn does not touch it.
 
-```ts
-// inside a graph route — unchanged
+```ts title="inside a graph route — unchanged"
 .addConditionalEdges("triage", (state) => {
   if (state.priority === "p0") return "escalate"
   return "respond"
@@ -212,8 +228,7 @@ Two different mechanisms in LangGraph become two different mechanisms in Dawn. D
 
 Before — branching inside the graph entry point:
 
-```ts
-// src/server.ts (sketch)
+```ts title="src/server.ts (sketch)"
 app.post("/runs/wait", async (req, res) => {
   if (!req.headers["x-api-key"]) return res.status(401).end()
   const which = req.body.tenant === "internal" ? internalGraph : publicGraph
@@ -224,8 +239,7 @@ app.post("/runs/wait", async (req, res) => {
 
 After:
 
-```ts
-// src/middleware.ts
+```ts title="src/middleware.ts"
 import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"
 
 export default defineMiddleware(async (req) => {
@@ -242,7 +256,7 @@ The hand-maintained config becomes a build output.
 
 Before:
 
-```json
+```json title="langgraph.json"
 {
   "dependencies": ["."],
   "graphs": {
@@ -255,8 +269,7 @@ Before:
 
 After — there is no source `langgraph.json`. There is a `dawn.config.ts`:
 
-```ts
-// dawn.config.ts
+```ts title="dawn.config.ts"
 import { defineConfig } from "@dawn-ai/sdk"
 
 export default defineConfig({

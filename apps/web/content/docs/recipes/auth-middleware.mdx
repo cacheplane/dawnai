@@ -4,8 +4,8 @@ You want to reject unauthenticated requests and pass the verified user identity 
 
 ## The code
 
-```ts
-// src/middleware.ts
+<CodeGroup>
+```ts title="src/middleware.ts"
 import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"
 
 export default defineMiddleware(async (req) => {
@@ -36,8 +36,7 @@ async function verifyJwt(token: string): Promise<string> {
 }
 ```
 
-```ts
-// src/app/(private)/account/[tenant]/tools/load-profile.ts
+```ts title="src/app/(private)/account/[tenant]/tools/load-profile.ts"
 export default async (
   input: { readonly tenant: string },
   ctx: { signal: AbortSignal; middleware?: Readonly<Record<string, unknown>> },
@@ -48,6 +47,22 @@ export default async (
   return { profile }
 }
 ```
+
+```ts title="src/app/(private)/account/[tenant]/index.ts"
+import type { RuntimeContext } from "@dawn-ai/sdk"
+import type { RouteTools } from "dawn:routes"
+
+type AccountState = { readonly tenant: string; readonly profile?: unknown }
+
+export async function workflow(
+  state: AccountState,
+  ctx: RuntimeContext<RouteTools<"/account/[tenant]">>,
+) {
+  const { profile } = await ctx.tools.loadProfile({ tenant: state.tenant })
+  return { ...state, profile }
+}
+```
+</CodeGroup>
 
 ## Notes
 
