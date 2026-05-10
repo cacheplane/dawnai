@@ -11,7 +11,10 @@ export interface DocsNavSection {
 export const DOCS_NAV: readonly DocsNavSection[] = [
   {
     label: "Get Started",
-    items: [{ label: "Getting Started", href: "/docs/getting-started" }],
+    items: [
+      { label: "Getting Started", href: "/docs/getting-started" },
+      { label: "Mental Model", href: "/docs/mental-model" },
+    ],
   },
   {
     label: "Concepts",
