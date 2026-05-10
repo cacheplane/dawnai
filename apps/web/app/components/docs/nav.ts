@@ -36,6 +36,18 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     ],
   },
   {
+    label: "Recipes",
+    items: [
+      { label: "Overview", href: "/docs/recipes" },
+      { label: "Add a tool", href: "/docs/recipes/add-a-tool" },
+      { label: "Typed state", href: "/docs/recipes/typed-state" },
+      { label: "Auth middleware", href: "/docs/recipes/auth-middleware" },
+      { label: "Stream output", href: "/docs/recipes/stream-output" },
+      { label: "Retry flaky tools", href: "/docs/recipes/retry-flaky-tools" },
+      { label: "Dispatch from a route", href: "/docs/recipes/dispatch-from-route" },
+    ],
+  },
+  {
     label: "Reference",
     items: [
       { label: "API", href: "/docs/api" },

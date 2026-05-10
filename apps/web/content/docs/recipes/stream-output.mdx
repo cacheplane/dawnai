@@ -1,0 +1,60 @@
+# Stream output
+
+You want a route's response to arrive incrementally rather than as a single blob at the end. Here's how to call `/runs/stream` and read the SSE frames.
+
+## The code
+
+```ts
+// scripts/stream-hello.ts
+const res = await fetch("http://127.0.0.1:3001/runs/stream", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    assistant_id: "/hello/[tenant]#agent",
+    input: { tenant: "acme" },
+    metadata: {
+      dawn: {
+        mode: "agent",
+        route_id: "/hello/[tenant]",
+        route_path: "/hello/acme",
+      },
+    },
+    on_completion: "delete",
+  }),
+})
+
+if (!res.ok || !res.body) {
+  throw new Error(`stream failed: ${res.status}`)
+}
+
+const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+let buffer = ""
+
+while (true) {
+  const { value, done } = await reader.read()
+  if (done) break
+  buffer += value
+  // SSE frames are delimited by a blank line.
+  const frames = buffer.split("\n\n")
+  buffer = frames.pop() ?? ""
+  for (const frame of frames) {
+    const dataLine = frame.split("\n").find((l) => l.startsWith("data: "))
+    if (!dataLine) continue
+    const payload = JSON.parse(dataLine.slice("data: ".length))
+    console.log(payload)
+  }
+}
+```
+
+## Notes
+
+- **Same envelope as `/runs/wait`.** The body shape is identical — `assistant_id`, `input`, `metadata.dawn.{mode,route_id,route_path}`, `on_completion: "delete"`. Only the endpoint differs.
+- **`text/event-stream`, not JSON.** The response is raw SSE. Parse `data:` lines yourself, or use a client like `eventsource-parser`.
+- **Use `/runs/wait` when you don't need progress.** Streaming adds parsing complexity for callers. Pick `/runs/stream` when partial output is meaningful — long agent reasoning, token-by-token text, intermediate workflow states.
+- **Retry has limits during streams.** Once a token has been emitted, the response is committed and cannot be retried. See [Retry](/docs/retry) for the streaming caveat.
+
+## Related
+
+- [Dev Server](/docs/dev-server) — protocol endpoints and the assistant-id format
+- [Retry](/docs/retry) — streaming retry semantics
+- [Deployment](/docs/deployment) — the same envelope works against LangGraph Platform

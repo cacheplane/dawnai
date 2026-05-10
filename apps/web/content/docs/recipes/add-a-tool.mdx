@@ -1,0 +1,51 @@
+# Add a tool
+
+You want to add a new tool to a route and call it with full type safety. Here's how.
+
+## The code
+
+```ts
+// src/app/(public)/hello/[tenant]/tools/lookup.ts
+export default async (
+  input: { readonly tenant: string; readonly query: string },
+  ctx: { signal: AbortSignal; middleware?: Readonly<Record<string, unknown>> },
+) => {
+  const res = await fetch(
+    `https://api.example.com/${input.tenant}/search?q=${encodeURIComponent(input.query)}`,
+    { signal: ctx.signal },
+  )
+  const records = (await res.json()) as readonly { readonly id: string; readonly title: string }[]
+  return { records }
+}
+```
+
+```ts
+// src/app/(public)/hello/[tenant]/index.ts
+import type { RuntimeContext } from "@dawn-ai/sdk"
+import type { RouteTools } from "dawn:routes"
+import type { z } from "zod"
+import type state from "./state.js"
+
+type HelloState = z.infer<typeof state>
+
+export async function workflow(
+  state: HelloState,
+  ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
+) {
+  const { records } = await ctx.tools.lookup({ tenant: state.tenant, query: "*" })
+  return { ...state, count: records.length }
+}
+```
+
+## Notes
+
+- **No registration.** Drop the file into `tools/`. Dawn discovers it on the next `dawn typegen` or dev-server reload.
+- **Inline type on the input.** Dawn's compiler pass reads the inline type from the function signature. Aliases imported from elsewhere are not extracted.
+- **Plain JSON in, plain JSON out.** Tool inputs and outputs cross the runtime boundary. No `Date`, no `Map`, no class instances.
+- **`agent` routes don't call `ctx.tools`.** The LLM picks tools by name once `dawn build` binds them. The example above uses a `workflow` route to show the typed call site.
+
+## Related
+
+- [Tools](/docs/tools) — the full authoring contract
+- [Routes](/docs/routes) — the four route kinds and their tool semantics
+- [Typed state](/docs/recipes/typed-state) — wire dynamic segments into state
