@@ -52,10 +52,20 @@ function slugFromHref(href: string): string {
   return href.replace(/^\/docs\//, "")
 }
 
+function readMdx(slug: string): string {
+  const base = path.join(process.cwd(), "content/docs")
+  // Try `<slug>.mdx` first; fall back to `<slug>/index.mdx` for nested
+  // section landing pages (e.g. `/docs/recipes` → `recipes/index.mdx`).
+  try {
+    return readFileSync(path.join(base, `${slug}.mdx`), "utf8")
+  } catch {
+    return readFileSync(path.join(base, slug, "index.mdx"), "utf8")
+  }
+}
+
 function buildEntry(item: DocsNavItem, section: string): DocsSearchEntry {
   const slug = slugFromHref(item.href)
-  const mdxPath = path.join(process.cwd(), "content/docs", `${slug}.mdx`)
-  const mdx = readFileSync(mdxPath, "utf8")
+  const mdx = readMdx(slug)
   const headings = extractHeadings(mdx)
   const h1 = headings.find((h) => h.level === 1)
   return {
