@@ -19,18 +19,18 @@ This creates a project with the standard Dawn structure:
 
 ```
 my-agent/
-├── dawn.config.ts
+├── dawn.config.ts                  # Dawn config
+├── dawn.generated.d.ts             # Auto-generated types
 ├── package.json
 ├── tsconfig.json
 └── src/app/
-    ├── (public)/
-    │   └── hello/
-    │       └── [tenant]/
-    │           ├── index.ts        # Route entry
-    │           ├── state.ts        # Route state schema (Zod)
-    │           └── tools/
-    │               └── greet.ts    # Co-located tool
-    └── dawn.generated.d.ts         # Auto-generated types
+    └── (public)/
+        └── hello/
+            └── [tenant]/
+                ├── index.ts        # Route entry
+                ├── state.ts        # Route state (Zod)
+                └── tools/
+                    └── greet.ts    # Co-located tool
 ```
 
 ## Validate the app
