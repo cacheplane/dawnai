@@ -29,6 +29,13 @@
   --dawn-white: #ffffff;
   --dawn-neutral-gray: #6b6b6b;
   --dawn-font-sans: var(--font-inter), "Satoshi", "Helvetica Neue", Arial, sans-serif;
+  /* Chrome height — Header has px-6/8 + py-4 + ~h-10 brand row + 1px border.
+     Used by ReadingLayout sticky offsets and anchor scroll padding. */
+  --header-h: 4.5rem;
+}
+
+html {
+  scroll-padding-top: var(--header-h);
 }
 
 /* Landing dark scope — landing-section components author against the dark token
