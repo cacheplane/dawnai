@@ -1,6 +1,16 @@
 import { NextResponse } from "next/server"
+import { getAllPosts } from "../components/blog/post-index"
 
 function buildLlmsTxt(): string {
+  const blogSection = [
+    "",
+    "## Blog",
+    "",
+    ...getAllPosts().map(
+      (p) => `- [${p.title}](https://dawnai.org/blog/${p.slug}): ${p.description}`,
+    ),
+  ].join("\n")
+
   return [
     "# Dawn",
     "",
@@ -92,7 +102,7 @@ function buildLlmsTxt(): string {
     "",
     "## Source",
     "https://github.com/cacheplane/dawnai",
-  ].join("\n")
+  ].join("\n") + blogSection
 }
 
 export async function GET() {
