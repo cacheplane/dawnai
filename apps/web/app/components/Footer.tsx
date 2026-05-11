@@ -27,6 +27,13 @@ const COLUMNS: readonly Column[] = [
     ],
   },
   {
+    heading: "Blog",
+    items: [
+      { label: "Latest posts", href: "/blog" },
+      { label: "RSS feed", href: "/blog/rss.xml", external: true },
+    ],
+  },
+  {
     heading: "For Agents",
     items: [
       { label: "llms.txt", href: "/llms.txt", external: true },

@@ -13,6 +13,7 @@ interface SiteLink {
 }
 
 const SITE_LINKS: readonly SiteLink[] = [
+  { label: "Blog", href: "/blog" },
   { label: "Docs", href: "/docs/getting-started" },
   { label: "GitHub", href: "https://github.com/cacheplane/dawnai", external: true },
   { label: "Read the Docs", href: "/docs/getting-started", cta: true },
