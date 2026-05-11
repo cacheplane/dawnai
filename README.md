@@ -8,11 +8,84 @@
 [![OpenSSF Scorecard](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml/badge.svg)](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](./LICENSE)
 
-Dawn is a TypeScript meta-framework for authoring agents and workflows: filesystem-based route discovery, the `agent()` descriptor, route-local tools, per-route middleware, type generation, a local development runtime, and `dawn build` for producing LangGraph Platform deployment artifacts.
+The meta-framework for LangGraph. Author agents and workflows as filesystem routes, get types and a local dev server for free, and ship to LangSmith with one command.
 
-## Status
+## Why Dawn?
 
-This repository documents the current behavior only. Dawn does not host or run production traffic — `dawn build` produces deployment artifacts (`.dawn/build/langgraph.json` plus per-route entry files) that LangGraph Platform runs. Dawn is not a LangSmith trace replacement and not a hosted platform.
+- **Kill the graph boilerplate.** Export one `agent({ model, systemPrompt })` descriptor. Dawn discovers it, binds route-local tools, and emits a `langgraph.json` package ready for LangSmith.
+- **Real project structure.** Filesystem routes under `src/app/` — colocate state schemas, tools, middleware, and tests next to the route they belong to. No more ad-hoc folders.
+- **A local dev loop LangGraph never shipped.** `dawn dev` runs your routes locally with the same semantics as production. Iterate in seconds, not deploys.
+- **Typed end to end.** Route params, state, and tool I/O are generated as TypeScript types. `dawn verify` is your pre-deploy gate.
+
+## Without Dawn / With Dawn
+
+Same `langgraph.json`, deployable to LangSmith. ~4× less code to author.
+
+### Without Dawn
+
+```ts
+// graph.ts
+import { StateGraph, MessagesAnnotation, START, END } from "@langchain/langgraph"
+import { ToolNode } from "@langchain/langgraph/prebuilt"
+import { ChatOpenAI } from "@langchain/openai"
+import { tool } from "@langchain/core/tools"
+import { z } from "zod"
+
+const greet = tool(async ({ name }) => `Hello, ${name}!`, {
+  name: "greet",
+  description: "Greet a user by name.",
+  schema: z.object({ name: z.string() }),
+})
+
+const model = new ChatOpenAI({ model: "gpt-4o-mini" }).bindTools([greet])
+const tools = new ToolNode([greet])
+
+async function callModel(state: typeof MessagesAnnotation.State) {
+  return { messages: [await model.invoke(state.messages)] }
+}
+
+function shouldContinue(state: typeof MessagesAnnotation.State) {
+  const last = state.messages.at(-1) as any
+  return last?.tool_calls?.length ? "tools" : END
+}
+
+export const graph = new StateGraph(MessagesAnnotation)
+  .addNode("agent", callModel)
+  .addNode("tools", tools)
+  .addEdge(START, "agent")
+  .addConditionalEdges("agent", shouldContinue, ["tools", END])
+  .addEdge("tools", "agent")
+  .compile()
+```
+
+```json
+// langgraph.json
+{
+  "dependencies": ["."],
+  "graphs": { "hello": "./graph.ts:graph" },
+  "node_version": "22",
+  "env": ".env"
+}
+```
+
+### With Dawn
+
+```ts
+// src/app/(public)/hello/[tenant]/index.ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "You are a helpful assistant for the {tenant} organization.",
+})
+```
+
+```ts
+// src/app/(public)/hello/[tenant]/tools/greet.ts
+export default async ({ name }: { name: string }) => `Hello, ${name}!`
+```
+
+`dawn build` emits the `langgraph.json` for you.
 
 ## Quickstart
 
@@ -45,7 +118,7 @@ echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]" 
 
 ## 30-Second Route
 
-Dawn routes live under `src/app` and export one runtime entry. New agent routes should use the `agent()` descriptor from `@dawn-ai/sdk`; Dawn discovers the route, binds route-local tools, generates types, and emits LangGraph deployment artifacts.
+Dawn routes live under `src/app` and export one runtime entry. New agent routes should use the `agent()` descriptor from `@dawn-ai/sdk`; Dawn discovers the route, binds route-local tools, generates types, and produces a `langgraph.json` package for LangSmith.
 
 ```ts
 import { agent } from "@dawn-ai/sdk"
@@ -57,159 +130,9 @@ export default agent({
 })
 ```
 
-Add `state.ts` for a route state schema, `tools/*.ts` for route-local tools, `middleware.ts` for access control or request context, and `run.test.ts` for colocated route scenarios.
+Add `state.ts` for a route state schema, `tools/*.ts` for route-local tools, `middleware.ts` for access control, and `run.test.ts` for colocated scenarios.
 
-## App Contract
-
-A Dawn app root contains `package.json` and `dawn.config.ts`.
-
-Route discovery starts at `src/app` by default.
-
-`appDir` is the only currently supported config option, and it defaults to `src/app`.
-
-A route is a directory containing `index.ts`. The `index.ts` exports exactly one of four route kinds: an `agent` descriptor (the scaffold default), a `workflow` function, a `graph` function/object, or a `chain`:
-
-```ts
-// agent-style route (the basic scaffold default)
-import { agent } from "@dawn-ai/sdk"
-export default agent({
-  model: "gpt-4o-mini",
-  systemPrompt: "You are a helpful assistant for the {tenant} organization.",
-})
-
-// workflow-style route
-export async function workflow(state, ctx) { return state }
-
-// graph-style route
-export async function graph(state, ctx) { return state }
-// or
-export const graph = { invoke: async (state, ctx) => state }
-
-// chain-style route
-export async function chain(state, ctx) { return state }
-```
-
-Route directories support these additional files:
-
-- `state.ts` — default-exported Zod schema describing the route's state shape (the scaffold uses `z.object({...})`).
-- `tools/*.ts` — route-local tools, each exporting `(input, ctx) => ...` where `ctx` is `{ middleware?, signal }`.
-- `reducers/<field>.ts` — optional per-field reducers that override the default merge behavior for state.
-- `run.test.ts` — colocated scenarios picked up by `dawn test`.
-- `page.tsx` — UI route surface.
-
-The current `basic` scaffold ships an agent-style route:
-
-- `src/app/(public)/hello/[tenant]/index.ts` — `export default agent({ model, systemPrompt })`
-- `src/app/(public)/hello/[tenant]/state.ts` — default-exported Zod schema
-- `src/app/(public)/hello/[tenant]/tools/greet.ts` — a route-local tool
-
-### Authoring agents
-
-`agent({ model, systemPrompt, retry?: { maxAttempts, baseDelay } })` is the recommended export for new routes. The optional `retry` config controls how the agent retries failed model calls. `dawn build` binds route-local tools to the agent at build time so the LLM can invoke them on LangGraph Platform.
-
-```ts
-import { agent } from "@dawn-ai/sdk"
-
-export default agent({
-  model: "gpt-4o-mini",
-  systemPrompt: "...",
-  retry: { maxAttempts: 3, baseDelay: 250 },
-})
-```
-
-### Middleware
-
-Per-route middleware runs before each invocation. Use `defineMiddleware` together with `reject(status, body?)` to deny a request, or `allow(context?)` to continue and pass an immutable context bag through to tools via `ctx.middleware`:
-
-```ts
-import { defineMiddleware, allow, reject } from "@dawn-ai/sdk"
-
-export default defineMiddleware(async (req) => {
-  if (!req.headers.authorization) return reject(401, { error: "unauthorized" })
-  return allow({ tenantId: req.params.tenant })
-})
-```
-
-`req` (`MiddlewareRequest`) carries `assistantId`, `headers`, `method`, `params`, `routeId`, and `url`. Middleware runs identically under `dawn dev` and on the deployed runtime.
-
-## Commands
-
-This is the user-first command set the README focuses on today, not an exhaustive internal CLI reference.
-
-### `create-dawn-ai-app`
-
-Scaffold a new Dawn app from the available template set.
-
-```bash
-pnpm create dawn-ai-app my-dawn-app
-```
-
-### `dawn check`
-
-Validate the app structure and configuration for the current workspace.
-
-### `dawn verify`
-
-Run all four integrity checks (app, routes, typegen, deps) in one command. The canonical pre-deploy gate, with optional `--json` output for CI.
-
-### `dawn routes`
-
-Discover and print the routes Dawn sees in the current app.
-
-### `dawn typegen`
-
-Generate route types for the current app.
-
-### `dawn run`
-
-Execute one route invocation with JSON stdin/stdout.
-
-```bash
-echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]"
-```
-
-### `dawn test`
-
-Run colocated `run.test.ts` scenarios against route targets.
-
-### `dawn dev`
-
-Start the local development runtime for interactive route execution.
-
-```bash
-pnpm exec dawn dev
-```
-
-### `dawn build`
-
-Produce LangGraph Platform deployment artifacts under `.dawn/build/`. Emits a `langgraph.json` (with `dependencies: ["."]`, `node_version: "22"`, and an `env` path) plus per-route entry files. Agent routes have their tools bound at build time.
-
-```bash
-pnpm exec dawn build
-```
-
-## Packages
-
-- `@dawn-ai/core` owns discovery, config loading, validation, and route types.
-- `@dawn-ai/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
-- `@dawn-ai/langgraph` is the LangGraph adapter that implements the `@dawn-ai/sdk` contract.
-- `@dawn-ai/langchain` is the LangChain adapter that materializes `chain` and `agent` routes.
-- `@dawn-ai/vite-plugin` is the Vite plugin that drives Dawn's typegen pipeline (extracts tool types, emits ambient route declarations).
-- `@dawn-ai/cli` owns the user-facing commands and local runtime behavior.
-- `create-dawn-ai-app` owns scaffolding for new apps.
-- `@dawn-ai/devkit` owns shared template and file-generation helpers.
-- `@dawn-ai/config-typescript` provides the shared TypeScript workspace configuration.
-- `@dawn-ai/config-biome` provides the shared Biome workspace configuration.
-
-## Current Boundaries
-
-Local runtime ownership stops at `dawn dev`. Production traffic runs on LangGraph Platform from the artifacts `dawn build` emits.
-
-The starter template surface is intentionally small, and the supported config surface is intentionally narrow.
-
-## Documentation
-
-The canonical reference lives on the docs site:
+## Learn more
 
 - [Getting started](https://dawn-ai.org/docs/getting-started)
 - [Routes](https://dawn-ai.org/docs/routes)
@@ -220,33 +143,9 @@ The canonical reference lives on the docs site:
 - [Testing](https://dawn-ai.org/docs/testing)
 - [Deployment](https://dawn-ai.org/docs/deployment)
 
-## Development
+---
 
-Use Node.js `>=22.12.0` and pnpm `10.33.0`.
-
-```bash
-pnpm install
-pnpm ci:validate
-```
-
-For day-to-day work, run the smallest validation lane that proves the change:
-
-```bash
-pnpm lint
-pnpm build
-pnpm typecheck
-pnpm test
-node scripts/check-docs.mjs
-pnpm pack:check
-```
-
-The detailed repository guide is [CONTRIBUTORS.md](./CONTRIBUTORS.md).
-
-## Contributing
-
-For the public contribution workflow, see [CONTRIBUTING.md](./CONTRIBUTING.md). For repository layout, test lanes, and local verification commands, see [CONTRIBUTORS.md](./CONTRIBUTORS.md).
-
-Please follow the [Code of Conduct](./CODE_OF_CONDUCT.md). For security issues, do not open a public issue; follow [SECURITY.md](./SECURITY.md).
+Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md). Repo layout and dev commands in [CONTRIBUTORS.md](./CONTRIBUTORS.md). Security: [SECURITY.md](./SECURITY.md). Please follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 ## License
 
