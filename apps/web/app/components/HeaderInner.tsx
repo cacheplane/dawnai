@@ -2,7 +2,6 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { formatStarCount } from "../../lib/github-stars"
 import { BrandLogo } from "./BrandLogo"
 import { MobileMenu } from "./MobileMenu"
 
@@ -25,11 +24,10 @@ function GitHubIcon() {
 }
 
 interface HeaderInnerProps {
-  readonly stars: number
   readonly repoUrl: string
 }
 
-export function HeaderInner({ stars, repoUrl }: HeaderInnerProps) {
+export function HeaderInner({ repoUrl }: HeaderInnerProps) {
   const pathname = usePathname()
   const isLanding = pathname === "/"
 
@@ -46,11 +44,11 @@ export function HeaderInner({ stars, repoUrl }: HeaderInnerProps) {
           href={repoUrl}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label={`GitHub — ${stars} stars`}
+          aria-label="GitHub — 100+ stars"
           className="inline-flex items-center gap-1.5 hover:text-text-primary transition-colors"
         >
           <GitHubIcon />
-          <span className="text-xs tabular-nums">{formatStarCount(stars)}</span>
+          <span className="text-xs tabular-nums">100+</span>
         </a>
         <Link
           href="/docs/getting-started"
