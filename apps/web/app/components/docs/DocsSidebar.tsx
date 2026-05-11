@@ -35,7 +35,7 @@ export function DocsSidebar({ searchIndex }: Props) {
                       href={item.href}
                       className={`block text-sm px-3 py-1.5 rounded-md transition-colors ${
                         active
-                          ? "text-accent-amber bg-accent-amber/8"
+                          ? "text-accent-amber-deep bg-accent-amber/15"
                           : "text-text-secondary hover:text-text-primary hover:bg-bg-card"
                       }`}
                     >
