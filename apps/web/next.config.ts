@@ -10,7 +10,11 @@ const nextConfig: NextConfig = {
 const withMDX = createMDX({
   options: {
     // Turbopack requires serializable plugin references — pass as module-path strings
-    remarkPlugins: [["remark-gfm", {}]],
+    remarkPlugins: [
+      ["remark-gfm", {}],
+      ["remark-frontmatter", { type: "yaml", marker: "-" }],
+      ["remark-mdx-frontmatter", { name: "frontmatter" }],
+    ],
     rehypePlugins: [
       [
         "rehype-pretty-code",
