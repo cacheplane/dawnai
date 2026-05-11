@@ -1,6 +1,7 @@
 import { ArchitectureSection } from "./components/landing/ArchitectureSection"
 import { BigReveal } from "./components/landing/BigReveal"
 import { CodeExample } from "./components/landing/CodeExample"
+import { ComicStrip } from "./components/landing/ComicStrip"
 import { ComparisonTable } from "./components/landing/ComparisonTable"
 import { CtaSection } from "./components/landing/CtaSection"
 import { DeploySection } from "./components/landing/DeploySection"
@@ -28,6 +29,9 @@ export default function HomePage() {
       <ProblemSection />
       <ScrollReveal>
         <WhoItsFor />
+      </ScrollReveal>
+      <ScrollReveal>
+        <ComicStrip />
       </ScrollReveal>
       <ScrollReveal>
         <ComparisonTable />
