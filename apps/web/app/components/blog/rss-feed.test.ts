@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { buildRssFeed } from "./rss-feed"
 import type { Post } from "./post-index"
+import { buildRssFeed } from "./rss-feed"
 
 const samplePost: Post = {
   slug: "why-we-built-dawn",
@@ -17,7 +17,7 @@ const samplePost: Post = {
 describe("buildRssFeed", () => {
   it("includes channel metadata", () => {
     const xml = buildRssFeed([samplePost], { siteUrl: "https://dawnai.org" })
-    expect(xml).toContain("<rss version=\"2.0\">")
+    expect(xml).toContain('<rss version="2.0">')
     expect(xml).toContain("<title>Dawn</title>")
     expect(xml).toContain("<link>https://dawnai.org/blog</link>")
   })

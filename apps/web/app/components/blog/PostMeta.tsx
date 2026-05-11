@@ -1,6 +1,6 @@
 import Image from "next/image"
 import Link from "next/link"
-import { AUTHORS, type Post } from "./post-index"
+import { AUTHORS, type Author, type Post } from "./post-index"
 
 function formatDate(iso: string): string {
   return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", {
@@ -12,7 +12,11 @@ function formatDate(iso: string): string {
 }
 
 export function PostMeta({ post }: { readonly post: Post }) {
-  const author = AUTHORS[post.author]!
+  const author: Author = AUTHORS[post.author] ?? {
+    name: "Brian Love",
+    avatar: "/brand/brian.jpg",
+    url: "https://github.com/blove",
+  }
   return (
     <div className="flex flex-col gap-6 text-sm">
       <div>
@@ -20,7 +24,9 @@ export function PostMeta({ post }: { readonly post: Post }) {
         <div className="text-text-primary">{formatDate(post.date)}</div>
       </div>
       <div>
-        <div className="text-[10px] uppercase tracking-widest text-text-muted mb-2">Reading time</div>
+        <div className="text-[10px] uppercase tracking-widest text-text-muted mb-2">
+          Reading time
+        </div>
         <div className="text-text-primary">{post.readingTimeMinutes} min</div>
       </div>
       {post.tags.length > 0 && (

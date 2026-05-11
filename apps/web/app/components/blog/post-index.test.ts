@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
 import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { describe, expect, it } from "vitest"
 
 import { loadPostsFromDir } from "./post-index"
 
@@ -55,8 +55,8 @@ describe("loadPostsFromDir", () => {
       (dir) => {
         const posts = loadPostsFromDir(dir, { includeDrafts: false })
         expect(posts).toHaveLength(2)
-        expect(posts[0]!.slug).toBe("dawn-0-4")
-        expect(posts[1]!.slug).toBe("why-we-built-dawn")
+        expect(posts[0]?.slug).toBe("dawn-0-4")
+        expect(posts[1]?.slug).toBe("why-we-built-dawn")
       },
     )
   })
@@ -64,23 +64,23 @@ describe("loadPostsFromDir", () => {
   it("derives slug from filename by stripping leading date prefix", () => {
     withFixture({ "2026-05-12-why-we-built-dawn.mdx": samplePost }, (dir) => {
       const [p] = loadPostsFromDir(dir, { includeDrafts: false })
-      expect(p!.slug).toBe("why-we-built-dawn")
+      expect(p?.slug).toBe("why-we-built-dawn")
     })
   })
 
   it("computes reading time from body word count", () => {
     withFixture({ "2026-05-12-why-we-built-dawn.mdx": samplePost }, (dir) => {
       const [p] = loadPostsFromDir(dir, { includeDrafts: false })
-      expect(p!.readingTimeMinutes).toBeGreaterThanOrEqual(1)
+      expect(p?.readingTimeMinutes).toBeGreaterThanOrEqual(1)
     })
   })
 
   it("auto-tags releases with 'releases' when missing", () => {
     withFixture({ "2026-06-02-dawn-0-4.mdx": sampleRelease }, (dir) => {
       const [p] = loadPostsFromDir(dir, { includeDrafts: false })
-      expect(p!.tags).toContain("releases")
-      expect(p!.type).toBe("release")
-      expect(p!.version).toBe("0.4.0")
+      expect(p?.tags).toContain("releases")
+      expect(p?.type).toBe("release")
+      expect(p?.version).toBe("0.4.0")
     })
   })
 

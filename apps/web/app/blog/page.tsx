@@ -1,8 +1,8 @@
 import { FeaturedPostCard } from "../components/blog/FeaturedPostCard"
 import { PostCard } from "../components/blog/PostCard"
+import { getAllPosts, getAllTags, getFeaturedPost } from "../components/blog/post-index"
 import { TagChips } from "../components/blog/TagChips"
 import { CtaSection } from "../components/landing/CtaSection"
-import { getAllPosts, getAllTags, getFeaturedPost } from "../components/blog/post-index"
 
 export default function BlogIndexPage() {
   const all = getAllPosts()
@@ -13,7 +13,9 @@ export default function BlogIndexPage() {
   return (
     <>
       <div className="max-w-[960px] mx-auto px-6 md:px-8 py-16">
-        <div className="text-[11px] uppercase tracking-widest text-accent-amber-deep mb-2">Blog</div>
+        <div className="text-[11px] uppercase tracking-widest text-accent-amber-deep mb-2">
+          Blog
+        </div>
         <h1
           className="font-display text-4xl md:text-5xl font-semibold tracking-tight mb-3 text-text-primary"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}

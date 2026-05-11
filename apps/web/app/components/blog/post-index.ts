@@ -3,13 +3,7 @@ import { join } from "node:path"
 import matter from "gray-matter"
 import readingTime from "reading-time"
 
-export const KNOWN_TAGS = [
-  "philosophy",
-  "typescript",
-  "agents",
-  "releases",
-  "patterns",
-] as const
+export const KNOWN_TAGS = ["philosophy", "typescript", "agents", "releases", "patterns"] as const
 
 export type KnownTag = (typeof KNOWN_TAGS)[number]
 
@@ -69,7 +63,9 @@ function parsePost(filename: string, raw: string): Post {
   const fm = data as Frontmatter
 
   if (!fm.title || !fm.description || !fm.date || !fm.author) {
-    throw new Error(`Post ${filename} is missing required frontmatter (title/description/date/author)`)
+    throw new Error(
+      `Post ${filename} is missing required frontmatter (title/description/date/author)`,
+    )
   }
 
   const type: PostType = fm.type ?? "post"
@@ -90,9 +86,7 @@ function parsePost(filename: string, raw: string): Post {
 
   // gray-matter parses YAML date scalars as JS Date objects; normalise to YYYY-MM-DD string.
   const dateStr =
-    fm.date instanceof Date
-      ? fm.date.toISOString().slice(0, 10)
-      : String(fm.date).slice(0, 10)
+    fm.date instanceof Date ? fm.date.toISOString().slice(0, 10) : String(fm.date).slice(0, 10)
 
   const stats = readingTime(content)
   return {
@@ -110,10 +104,7 @@ function parsePost(filename: string, raw: string): Post {
   }
 }
 
-export function loadPostsFromDir(
-  dir: string,
-  opts: { includeDrafts: boolean },
-): Post[] {
+export function loadPostsFromDir(dir: string, opts: { includeDrafts: boolean }): Post[] {
   const files = readdirSync(dir).filter((f) => f.endsWith(".mdx"))
   const posts = files.map((f) => parsePost(f, readFileSync(join(dir, f), "utf8")))
   const visible = opts.includeDrafts ? posts : posts.filter((p) => !p.draft)
@@ -149,7 +140,9 @@ export function getAllTags(): readonly { tag: string; count: number }[] {
   for (const p of loadAll()) {
     for (const t of p.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
   }
-  return [...counts.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count)
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count)
 }
 
 export function getRelatedPosts(slug: string, limit = 2): readonly Post[] {

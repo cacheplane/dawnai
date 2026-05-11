@@ -4,7 +4,7 @@ interface BuildOpts {
   readonly siteUrl: string
 }
 
-function escape(s: string): string {
+function escapeXml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -23,11 +23,11 @@ export function buildRssFeed(posts: readonly Post[], opts: BuildOpts): string {
     .map((p) => {
       const url = `${siteUrl}/blog/${p.slug}`
       return `    <item>
-      <title>${escape(p.title)}</title>
+      <title>${escapeXml(p.title)}</title>
       <link>${url}</link>
       <guid>${url}</guid>
       <pubDate>${rfc822(p.date)}</pubDate>
-      <description>${escape(p.description)}</description>
+      <description>${escapeXml(p.description)}</description>
     </item>`
     })
     .join("\n")

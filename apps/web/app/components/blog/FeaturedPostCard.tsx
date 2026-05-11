@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { AUTHORS, type Post } from "./post-index"
+import { AUTHORS, type Author, type Post } from "./post-index"
 
 function formatDate(iso: string): string {
   return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", {
@@ -11,7 +11,11 @@ function formatDate(iso: string): string {
 }
 
 export function FeaturedPostCard({ post }: { readonly post: Post }) {
-  const author = AUTHORS[post.author]!
+  const author: Author = AUTHORS[post.author] ?? {
+    name: "Brian Love",
+    avatar: "/brand/brian.jpg",
+    url: "https://github.com/blove",
+  }
   return (
     <Link
       href={`/blog/${post.slug}`}

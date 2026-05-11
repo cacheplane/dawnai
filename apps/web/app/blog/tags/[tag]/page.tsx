@@ -1,10 +1,10 @@
+import type { Metadata } from "next"
 import Link from "next/link"
 import { notFound } from "next/navigation"
-import type { Metadata } from "next"
 import { PostCard } from "../../../components/blog/PostCard"
+import { getAllTags, getPostsByTag } from "../../../components/blog/post-index"
 import { TagChips } from "../../../components/blog/TagChips"
 import { CtaSection } from "../../../components/landing/CtaSection"
-import { getAllTags, getPostsByTag } from "../../../components/blog/post-index"
 
 interface PageProps {
   readonly params: Promise<{ tag: string }>
@@ -32,7 +32,10 @@ export default async function TagPage({ params }: PageProps) {
   return (
     <>
       <div className="max-w-[960px] mx-auto px-6 md:px-8 py-16">
-        <Link href="/blog" className="text-sm text-text-muted hover:text-text-primary mb-4 inline-block">
+        <Link
+          href="/blog"
+          className="text-sm text-text-muted hover:text-text-primary mb-4 inline-block"
+        >
           ← All posts
         </Link>
         <h1

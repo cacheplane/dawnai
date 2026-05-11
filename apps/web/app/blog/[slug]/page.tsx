@@ -1,12 +1,12 @@
-import { notFound } from "next/navigation"
 import type { Metadata } from "next"
-import { CtaSection } from "../../components/landing/CtaSection"
-import { DocsTOC } from "../../components/docs/DocsTOC"
-import { ReadingLayout } from "../../components/ReadingLayout"
-import { RelatedCards } from "../../components/docs/RelatedCards"
+import { notFound } from "next/navigation"
 import { PostHeader } from "../../components/blog/PostHeader"
 import { PostMeta } from "../../components/blog/PostMeta"
 import { getAllPosts, getPost, getRelatedPosts } from "../../components/blog/post-index"
+import { DocsTOC } from "../../components/docs/DocsTOC"
+import { RelatedCards } from "../../components/docs/RelatedCards"
+import { CtaSection } from "../../components/landing/CtaSection"
+import { ReadingLayout } from "../../components/ReadingLayout"
 
 interface PageProps {
   readonly params: Promise<{ slug: string }>
@@ -34,7 +34,11 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       authors: [post.author],
       siteName: "Dawn AI",
     },
-    twitter: { card: "summary_large_image", title: post.title, description: post.description },
+    twitter: {
+      card: "summary_large_image",
+      title: post.title,
+      description: post.description,
+    },
   }
 }
 
