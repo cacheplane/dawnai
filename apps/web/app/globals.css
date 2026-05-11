@@ -65,6 +65,19 @@ pre .mdx-inline-code {
   white-space: inherit;
 }
 
+/* Prose link affordance — sharp amber underline on cream */
+.prose-dawn a {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-accent-amber-deep);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-thickness 120ms ease;
+}
+.prose-dawn a:hover {
+  text-decoration-thickness: 2px;
+}
+
 /* Shiki line container — rehype-pretty-code wraps each line in <span data-line>
    and emits a literal "\n" newline between adjacent lines. With <pre>'s default
    white-space: pre, those newlines render as visible empty lines (~doubled
@@ -83,7 +96,7 @@ pre [data-line] {
 
 /* Highlighted lines (e.g. ```ts {1,3-5} ```) */
 pre [data-highlighted-line] {
-  background: rgb(from var(--color-accent-amber) r g b / 0.06);
+  background: rgb(from var(--color-accent-amber) r g b / 0.10);
   border-left-color: var(--color-accent-amber);
 }
 
