@@ -45,7 +45,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
-    "@langchain/core": "0.3.80",
+    "@langchain/core": "1.1.45",
     "@langchain/langgraph": "0.2.71",
     "@langchain/openai": "0.3.17",
     "@types/node": "25.6.0",
