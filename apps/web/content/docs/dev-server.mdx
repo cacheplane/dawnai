@@ -1,6 +1,6 @@
 # Dev Server
 
-`dawn dev` starts a local runtime that speaks the **LangGraph Platform protocol** natively. It hot-reloads routes and tools on every file save, and accepts the same `/runs/wait` and `/runs/stream` endpoints your production deployment will.
+`dawn dev` starts a local runtime that speaks the **LangSmith protocol** natively. It hot-reloads routes and tools on every file save, and accepts the same `/runs/wait` and `/runs/stream` endpoints your production deployment will.
 
 ## Starting the server
 
@@ -24,7 +24,7 @@ With the server running in one terminal, you can hit it from another:
 echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]' --url http://127.0.0.1:3001
 ```
 
-`dawn run` resolves the pathname to an `assistant_id` of the form `<routeId>#<kind>` (e.g. `/hello/[tenant]#agent`), POSTs to `/runs/wait`, and prints the result. This is the exact request path a production LangGraph Platform deployment would take.
+`dawn run` resolves the pathname to an `assistant_id` of the form `<routeId>#<kind>` (e.g. `/hello/[tenant]#agent`), POSTs to `/runs/wait`, and prints the result. This is the exact request path a production LangSmith deployment would take.
 
 ## Protocol endpoints
 
@@ -108,7 +108,7 @@ Every request is logged to stdout with the pathname, assistant id, duration, and
 
 <RelatedCards items={[
   { href: "/docs/testing", title: "Testing", subtitle: "run scenarios against a live dev server via run.url" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "dawn build and the LangGraph Platform handoff" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "dawn build and the LangSmith handoff" },
   { href: "/docs/middleware", title: "Middleware", subtitle: "how src/middleware.ts gates requests in dev and production" },
   { href: "/docs/cli", title: "CLI", subtitle: "dawn dev flags and all other commands" },
   { href: "/docs/recipes/stream-output", title: "Stream output", subtitle: "recipe consuming /runs/stream SSE frames" },

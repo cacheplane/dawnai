@@ -174,7 +174,7 @@ Constraints:
 Reference: https://dawnai.org/llms.txt
 `
 
-const DEPLOY = `Help me deploy a Dawn app. Dawn itself is not a deployment runtime — it owns local development. Production runs on the LangGraph Platform, which Dawn's dev server already speaks natively (\`/runs/wait\`, \`/runs/stream\`, \`assistant_id\` routing). What runs locally deploys without translation.
+const DEPLOY = `Help me deploy a Dawn app. Dawn itself is not a deployment runtime — it owns local development. Production runs on LangSmith, which Dawn's dev server already speaks natively (\`/runs/wait\`, \`/runs/stream\`, \`assistant_id\` routing). What runs locally deploys without translation.
 
 1. Verify the app is production-ready:
    \`\`\`
@@ -185,21 +185,21 @@ const DEPLOY = `Help me deploy a Dawn app. Dawn itself is not a deployment runti
    \`\`\`
    All must pass. \`dawn check\` validates the app contract; \`dawn routes\` confirms discovery; \`dawn typegen\` ensures ambient types are current; \`dawn test\` runs scenario tests against the in-process runtime.
 
-2. Confirm protocol parity with LangGraph Platform by pointing \`dawn test\` at a live dev server:
+2. Confirm protocol parity with LangSmith by pointing \`dawn test\` at a live dev server:
    \`\`\`
    dawn dev --port 3001 &
    dawn test --url http://127.0.0.1:3001
    \`\`\`
-   If both pass, the same inputs will pass on LangGraph Platform.
+   If both pass, the same inputs will pass on LangSmith.
 
 3. Each Dawn route becomes a LangSmith Assistant. Configure deployment:
    - Create a \`langgraph.json\` at the app root describing which routes export a \`graph\` or \`workflow\` and should be deployed.
-   - Push to a Git remote connected to the LangGraph Platform.
-   - The Platform builds the image and provisions assistants keyed by \`assistant_id\`.
+   - Push to a Git remote connected to LangSmith.
+   - LangSmith builds the image and provisions assistants keyed by \`assistant_id\`.
 
 4. Show me a minimal \`langgraph.json\` example that maps Dawn's discovered routes to LangGraph assistants.
 
-5. For infrastructure outside LangGraph Platform (self-hosted, other clouds), explain how to wrap Dawn's runtime in a Docker container that exposes the same \`/runs/wait\` and \`/runs/stream\` endpoints — Dawn's dev server implementation is the reference.
+5. For infrastructure outside LangSmith (self-hosted, other clouds), explain how to wrap Dawn's runtime in a Docker container that exposes the same \`/runs/wait\` and \`/runs/stream\` endpoints — Dawn's dev server implementation is the reference.
 
 Reference: https://dawnai.org/llms.txt
 `
@@ -232,7 +232,7 @@ export const PROMPTS: readonly PromptEntry[] = [
   {
     slug: "deploy",
     title: "Deploy",
-    description: "Ship a Dawn app to LangGraph Platform.",
+    description: "Ship a Dawn app to LangSmith.",
     body: DEPLOY,
   },
 ]

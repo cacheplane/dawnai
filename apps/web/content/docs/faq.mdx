@@ -24,11 +24,11 @@ If you are already on LangGraph, Dawn fits. If you are not, pick the framework w
 
 ### Does Dawn support Python?
 
-No. Dawn is TypeScript-only and the type inference is the whole point — tool parameter types are read from function signatures at build time and emitted into `dawn.generated.d.ts`. A Python port would lose that. Use `langgraph` directly in Python; LangGraph Platform deploys both.
+No. Dawn is TypeScript-only and the type inference is the whole point — tool parameter types are read from function signatures at build time and emitted into `dawn.generated.d.ts`. A Python port would lose that. Use `langgraph` directly in Python; LangSmith deploys both.
 
 ### Is Dawn production-ready?
 
-Dawn produces production-ready artifacts; the framework itself is pre-1.0 and the API surface is still moving. `dawn build` writes a `.dawn/build/langgraph.json` plus per-route entry files that LangGraph Platform deploys without further translation. Lock to a pinned version and read release notes between upgrades. See [Deployment](/docs/deployment).
+Dawn produces production-ready artifacts; the framework itself is pre-1.0 and the API surface is still moving. `dawn build` writes a `.dawn/build/langgraph.json` plus per-route entry files that LangSmith deploys without further translation. Lock to a pinned version and read release notes between upgrades. See [Deployment](/docs/deployment).
 
 ## Working in Dawn
 
@@ -46,7 +46,7 @@ A library is something you call. A meta-framework is something you write inside.
 
 ## Operating Dawn
 
-### Can I deploy outside LangGraph Platform?
+### Can I deploy outside LangSmith?
 
 Yes, with caveats. `dawn build` emits a standard `langgraph.json` plus entry files; feed `.dawn/build/` to any container that runs the LangGraph runtime. Dawn's in-process dev server is a reference implementation of the same `/runs/wait` and `/runs/stream` protocol but is not intended as a production runtime itself. See [Deployment](/docs/deployment).
 
