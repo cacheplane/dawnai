@@ -63,7 +63,7 @@ The file basename must equal the state-field name (`context.ts` → reduces `sta
 
 <Steps>
   <Step title="State must be JSON-serializable">
-    Dawn serializes state across runtime boundaries (dev server, scenario tests, LangGraph Platform). Use primitives, plain objects, arrays. No classes, no Dates, no Maps.
+    Dawn serializes state across runtime boundaries (dev server, scenario tests, LangSmith). Use primitives, plain objects, arrays. No classes, no Dates, no Maps.
   </Step>
   <Step title="Prefer readonly">
     Mark fields `readonly` (or use Zod's `.readonly()`) when they should not be mutated. The entry function returns a new state object rather than mutating the input. This keeps scenario tests deterministic and LangGraph checkpoint-safe.
@@ -78,7 +78,7 @@ The file basename must equal the state-field name (`context.ts` → reduces `sta
 State crosses the runtime boundary at every entry point:
 
 - `dawn run` — JSON via stdin, JSON via stdout.
-- `/runs/wait` and `/runs/stream` (locally under `dawn dev`, on LangGraph Platform in prod) — JSON over HTTP keyed by `assistant_id`.
+- `/runs/wait` and `/runs/stream` (locally under `dawn dev`, on LangSmith in prod) — JSON over HTTP keyed by `assistant_id`.
 
 Tool results, intermediate values, and other in-route data live inside the entry for the duration of a single run; only the final state crosses the boundary.
 

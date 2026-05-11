@@ -4,7 +4,7 @@
 
 # @dawn-ai/cli
 
-The `dawn` command-line interface — local development runtime, route execution, validation and typegen, and the build step that produces LangGraph Platform deployment artifacts. It is the primary tool for working on a Dawn app from first scaffold through deploy.
+The `dawn` command-line interface — local development runtime, route execution, validation and typegen, and the build step that produces LangSmith deployment artifacts. It is the primary tool for working on a Dawn app from first scaffold through deploy.
 
 ## Install
 
@@ -33,7 +33,7 @@ Installs a `dawn` binary on your `PATH`. Requires Node.js 22.12+.
 | `dawn dev`     | Start the Dawn local development runtime                     |
 | `dawn check`   | Validate a Dawn app (route discovery, tool definitions)      |
 | `dawn verify`  | Verify dependencies and generated types are in sync          |
-| `dawn build`   | Generate deployment artifacts for LangGraph Platform         |
+| `dawn build`   | Generate deployment artifacts for LangSmith                  |
 | `dawn run`     | Execute one Dawn route invocation                            |
 | `dawn test`    | Run route test scenarios                                     |
 | `dawn routes`  | List discovered Dawn routes (use `--json` for machine output)|
@@ -49,7 +49,7 @@ pnpm dawn dev
 pnpm dawn check
 pnpm dawn typegen
 
-# Produce LangGraph Platform deployment artifacts
+# Produce LangSmith deployment artifacts
 pnpm dawn build
 ```
 
