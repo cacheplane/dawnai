@@ -1,11 +1,33 @@
+import Link from "next/link"
 import { getPrompt } from "../../../content/prompts"
+import { highlight } from "../../../lib/shiki/highlight"
 import { CopyCommand } from "../CopyCommand"
 import { CopyPromptButton } from "../CopyPromptButton"
+import { HeroCodeShowcase } from "./HeroCodeShowcase"
 import { HeroParallaxLayers } from "./HeroEarthParallax"
 
 const scaffoldPrompt = getPrompt("scaffold")
 
-export function HeroSection() {
+const STATE_CODE = `import { z } from "zod"
+
+export default z.object({
+  tenant: z.string(),
+  question: z.string(),
+})`
+
+const INDEX_CODE = `import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "openai:gpt-4o-mini",
+  systemPrompt: "Answer for {tenant}.",
+})`
+
+export async function HeroSection() {
+  const [stateHtml, indexHtml] = await Promise.all([
+    highlight(STATE_CODE, "typescript"),
+    highlight(INDEX_CODE, "typescript"),
+  ])
+
   return (
     <section
       className="relative pt-24 pb-56 text-center isolate"
@@ -17,42 +39,53 @@ export function HeroSection() {
       {/* Starfield (slow drift) + earth (medium lift) + sun bloom (accelerated).
           Sun bloom extends below the hero and bleeds into StatsStrip's transparent top. */}
       <HeroParallaxLayers />
-      {/* Ecosystem badge */}
-      <div className="relative inline-flex items-center gap-2 px-3.5 py-1.5 border border-border rounded-full text-xs text-text-secondary mb-6">
-        <span className="text-text-muted">Built for the</span>
-        <span className="text-accent-green font-semibold">LangChain</span>
-        <span className="text-text-muted">ecosystem</span>
-      </div>
 
       <h1
         className="relative font-display text-5xl md:text-7xl font-semibold text-text-primary tracking-tight leading-[1.05]"
         style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0" }}
       >
-        The App Router
+        Build LangGraph agents
         <br />
-        for AI agents.
+        like Next.js apps.
       </h1>
 
-      <p className="relative text-text-secondary mt-5 text-lg max-w-xl mx-auto leading-relaxed">
-        A TypeScript-first framework for building and deploying graph-based AI systems with the
-        ergonomics of Next.js. File-system routing, type-safe tools, zero boilerplate.
+      <p className="relative text-text-secondary mt-5 text-lg max-w-2xl mx-auto leading-relaxed">
+        Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing
+        LangGraph.js stack.{" "}
+        <strong className="text-text-primary font-medium">
+          Keep the runtime. Drop the boilerplate.
+        </strong>
       </p>
 
       <div className="relative mt-8 flex gap-3 justify-center">
         <CopyPromptButton prompt={scaffoldPrompt.body} label="Copy prompt" variant="hero" />
-        <a
-          href="https://github.com/cacheplane/dawnai"
-          target="_blank"
-          rel="noopener noreferrer"
+        <Link
+          href="/docs/getting-started"
           className="px-6 py-2.5 border border-border text-text-secondary rounded-md text-sm hover:border-text-muted hover:text-text-primary transition-colors"
         >
-          GitHub
-        </a>
+          Read the docs
+        </Link>
       </div>
 
       <div className="relative mt-6">
-        <CopyCommand command="npx create-dawn-app my-agent" />
+        <CopyCommand command="pnpm create dawn-ai-app my-agent" />
       </div>
+
+      <HeroCodeShowcase
+        files={[
+          {
+            label: "src/app/(public)/support/state.ts",
+            html: stateHtml,
+            raw: STATE_CODE,
+          },
+          {
+            label: "src/app/(public)/support/index.ts",
+            html: indexHtml,
+            raw: INDEX_CODE,
+          },
+        ]}
+        defaultIndex={1}
+      />
     </section>
   )
 }
