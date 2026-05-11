@@ -19,7 +19,7 @@ import { ScrollReveal } from "./components/ScrollReveal"
 
 export default function HomePage() {
   return (
-    <div className="relative isolate">
+    <div className="landing-dark relative isolate">
       <PaletteScroller />
       {/* Hero / Ecosystem / Problem aren't wrapped — the seamless navy bleed across them
           would break if their bgs faded in independently. Reveals begin at WhoItsFor. */}

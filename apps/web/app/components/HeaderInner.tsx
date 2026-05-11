@@ -37,7 +37,7 @@ export function HeaderInner({ repoUrl }: HeaderInnerProps) {
     : "border-b border-border-subtle"
 
   return (
-    <header className={`${baseClasses} ${variantClasses}`}>
+    <header className={`landing-dark ${baseClasses} ${variantClasses}`}>
       <BrandLogo imageClassName="h-8" />
       <nav className="hidden md:flex items-center gap-6 text-sm text-text-secondary">
         <Link

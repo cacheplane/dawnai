@@ -49,6 +49,11 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
       </ol>
     ),
     li: ({ children }) => <li className="text-text-secondary">{children}</li>,
+    blockquote: ({ children }) => (
+      <blockquote className="border-l-4 border-accent-amber-deep bg-bg-secondary px-5 py-3 my-6 text-text-secondary italic">
+        {children}
+      </blockquote>
+    ),
     strong: ({ children }) => (
       <strong className="text-text-primary font-semibold">{children}</strong>
     ),
@@ -57,13 +62,13 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
         <table className="w-full text-sm">{children}</table>
       </div>
     ),
-    thead: ({ children }) => <thead className="bg-bg-card">{children}</thead>,
+    thead: ({ children }) => <thead className="bg-bg-secondary">{children}</thead>,
     tbody: ({ children }) => (
       <tbody className="[&>tr]:border-t [&>tr]:border-border-subtle">{children}</tbody>
     ),
     tr: ({ children }) => <tr>{children}</tr>,
     th: ({ children }) => (
-      <th className="text-left px-4 py-2 text-xs font-semibold text-text-secondary uppercase tracking-wide">
+      <th className="text-left px-4 py-2 text-xs font-semibold text-text-secondary uppercase tracking-wide bg-bg-secondary border-b border-border-subtle">
         {children}
       </th>
     ),

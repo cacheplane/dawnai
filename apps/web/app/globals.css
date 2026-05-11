@@ -4,15 +4,15 @@
   --color-dawn-black: #000000;
   --color-dawn-white: #ffffff;
   --color-dawn-neutral-gray: #6b6b6b;
-  --color-bg-primary: #0a0806;
-  --color-bg-secondary: #0f0c09;
-  --color-bg-card: #14110d;
-  --color-border: #241f19;
-  --color-border-subtle: #19150f;
-  --color-text-primary: #f8f5ef;
-  --color-text-secondary: #8a857b;
-  --color-text-muted: #5a554c;
-  --color-text-dim: #3f3b35;
+  --color-bg-primary: #fdfbf7;
+  --color-bg-secondary: #fcfaf3;
+  --color-bg-card: #fbf8ee;
+  --color-border: rgba(26, 21, 48, 0.12);
+  --color-border-subtle: rgba(26, 21, 48, 0.08);
+  --color-text-primary: #1a1530;
+  --color-text-secondary: #6d5638;
+  --color-text-muted: #8a7657;
+  --color-text-dim: #b2a285;
   --color-accent-green: #00a67e;
   --color-accent-blue: #3178c6;
   --color-accent-purple: #646cff;
@@ -31,6 +31,23 @@
   --dawn-font-sans: var(--font-inter), "Satoshi", "Helvetica Neue", Arial, sans-serif;
 }
 
+/* Landing dark scope — landing-section components author against the dark token
+   values they predate (HeroSection, CodeExample, ArchitectureSection, etc.).
+   Apply .landing-dark to the landing page root so `text-text-primary` and
+   `var(--color-bg-primary)` resolve to the cosmic palette inside the scope,
+   while the rest of the site uses the cream defaults. */
+.landing-dark {
+  --color-bg-primary: #0a0806;
+  --color-bg-secondary: #0f0c09;
+  --color-bg-card: #14110d;
+  --color-border: #241f19;
+  --color-border-subtle: #19150f;
+  --color-text-primary: #f8f5ef;
+  --color-text-secondary: #8a857b;
+  --color-text-muted: #5a554c;
+  --color-text-dim: #3f3b35;
+}
+
 @layer base {
   body {
     @apply bg-bg-primary text-text-primary font-sans antialiased;
@@ -41,9 +58,9 @@
 
 /* Inline code (rendered by InlineCode MDX override) */
 .mdx-inline-code {
-  background: rgb(245 158 11 / 0.1);
-  color: #f5b840;
-  border: 1px solid rgb(245 158 11 / 0.2);
+  background: rgba(217, 119, 6, 0.1);
+  color: #b45309;
+  border: 1px solid rgba(217, 119, 6, 0.25);
   border-radius: 4px;
   padding: 0.0625rem 0.375rem;
   font-size: 0.875em;
@@ -65,6 +82,19 @@ pre .mdx-inline-code {
   white-space: inherit;
 }
 
+/* Prose link affordance — sharp amber underline on cream */
+.prose-dawn a {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-accent-amber-deep);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-thickness 120ms ease;
+}
+.prose-dawn a:hover {
+  text-decoration-thickness: 2px;
+}
+
 /* Shiki line container — rehype-pretty-code wraps each line in <span data-line>
    and emits a literal "\n" newline between adjacent lines. With <pre>'s default
    white-space: pre, those newlines render as visible empty lines (~doubled
@@ -83,7 +113,7 @@ pre [data-line] {
 
 /* Highlighted lines (e.g. ```ts {1,3-5} ```) */
 pre [data-highlighted-line] {
-  background: rgb(from var(--color-accent-amber) r g b / 0.06);
+  background: rgb(from var(--color-accent-amber) r g b / 0.1);
   border-left-color: var(--color-accent-amber);
 }
 
