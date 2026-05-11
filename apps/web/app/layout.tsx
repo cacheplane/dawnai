@@ -28,11 +28,11 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://dawnai.org"),
   applicationName: "Dawn AI",
   title: {
-    default: "Dawn — The App Router for AI Agents",
+    default: "Dawn — TypeScript meta-framework for LangGraph.js",
     template: "%s | Dawn",
   },
   description:
-    "A TypeScript-first framework for building and deploying graph-based AI systems with the ergonomics of Next.js.",
+    "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
   manifest: "/site.webmanifest",
   icons: {
     icon: [
@@ -48,9 +48,9 @@ export const metadata: Metadata = {
     type: "website",
     url: "https://dawnai.org",
     siteName: "Dawn AI",
-    title: "Dawn — The App Router for AI Agents",
+    title: "Dawn — TypeScript meta-framework for LangGraph.js",
     description:
-      "A TypeScript-first framework for building and deploying graph-based AI systems with the ergonomics of Next.js.",
+      "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
     images: [
       {
         url: "/social/dawn-og-white-on-black.png",
@@ -62,9 +62,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary",
-    title: "Dawn — The App Router for AI Agents",
+    title: "Dawn — TypeScript meta-framework for LangGraph.js",
     description:
-      "A TypeScript-first framework for building and deploying graph-based AI systems with the ergonomics of Next.js.",
+      "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
     images: ["/social/dawn-og-white-on-black.png"],
   },
   appleWebApp: {
