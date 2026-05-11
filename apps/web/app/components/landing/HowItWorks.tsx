@@ -61,7 +61,7 @@ const MOMENTS: readonly Moment[] = [
     num: "04",
     title: "Iterate.",
     description:
-      "HMR on every save. Scenario tests in milliseconds. When you're ready, deploy speaks the LangGraph Platform protocol natively — no translation layer.",
+      "HMR on every save. Scenario tests in milliseconds. When you're ready, deploy speaks the LangSmith protocol natively — no translation layer.",
     commands: [
       { text: "dawn dev", prompt: true },
       { text: "dawn test --watch", prompt: true },

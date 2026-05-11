@@ -15,7 +15,7 @@ The migration is mostly *moving code*, not rewriting it.
 - Your typed state moves into a sibling `state.ts`. Dynamic path segments populate fields by name.
 - Your `langgraph.json` is replaced by `dawn build`. The output is still a `langgraph.json`.
 - LangSmith, the checkpointer, model providers, every LangChain package — unchanged.
-- LangGraph Platform deploys the build output without further translation.
+- LangSmith deploys the build output without further translation.
 
 ## The shape of the move
 
@@ -137,7 +137,7 @@ export default async (
 ```
 </CodeGroup>
 
-The graph builder is identical. The folder path `src/app/support/` becomes the endpoint `/support`. The default export is the route entry. The `assistant_id` LangGraph Platform deploys is `/support#graph`, generated for you.
+The graph builder is identical. The folder path `src/app/support/` becomes the endpoint `/support`. The default export is the route entry. The `assistant_id` LangSmith deploys is `/support#graph`, generated for you.
 
 If the graph is the only thing you want to migrate, stop here. Tools and state can stay imported from their old locations and the route still runs.
 
@@ -277,7 +277,7 @@ export default defineConfig({
 })
 ```
 
-`dawn build` walks `src/app/`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files. Every route's `assistant_id` is `<routeId>#<kind>` — `/support#graph`, `/support/[tenant]#agent`. That `.dawn/build/` directory is what LangGraph Platform deploys.
+`dawn build` walks `src/app/`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files. Every route's `assistant_id` is `<routeId>#<kind>` — `/support#graph`, `/support/[tenant]#agent`. That `.dawn/build/` directory is what LangSmith deploys.
 
 `dawn.generated.d.ts` is the type side of the same step: the route registry, the tool registry, the typed `RouteTools<P>` map. Commit it or regenerate; both work.
 
@@ -287,7 +287,7 @@ export default defineConfig({
 - **Checkpointer and persistence.** Whatever you pass to `.compile({ checkpointer })` keeps working. Dawn does not own the graph runtime.
 - **Model providers.** OpenAI, Anthropic, Google, Bedrock, any LangChain-compatible provider. The `agent({ model })` field accepts `KnownModelId | (string & {})`.
 - **LangChain ecosystem packages.** `@langchain/core`, `@langchain/openai`, retrievers, document loaders — every one works inside a route.
-- **LangGraph Platform deploy.** Same target. `dawn build` emits the standard schema; Platform takes it without further translation.
+- **LangSmith deploy.** Same target. `dawn build` emits the standard schema; LangSmith takes it without further translation.
 
 ## Migration order
 
@@ -297,7 +297,7 @@ The conversion is incremental. Don't try to land it in one branch.
 
 2. **Move one graph at a time, route by route.** Pick the lowest-risk graph first. Create `src/app/<route>/index.ts` and default-export the existing `StateGraph` directly — tools, state, and prompts can keep their old import paths during this step. Once it deploys and runs at parity in staging, peel the state into `state.ts` and the tools into `tools/<name>.ts`. Repeat per graph.
 
-3. **Cut over deployment last.** Both projects can deploy to LangGraph Platform side by side under different `assistant_id`s. When every graph has a Dawn equivalent at parity, switch the production `assistant_id`s to the Dawn-built ones and retire the old project.
+3. **Cut over deployment last.** Both projects can deploy to LangSmith side by side under different `assistant_id`s. When every graph has a Dawn equivalent at parity, switch the production `assistant_id`s to the Dawn-built ones and retire the old project.
 
 ## What to read next
 

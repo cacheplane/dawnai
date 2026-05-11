@@ -1,6 +1,6 @@
 # Getting Started
 
-Build a typed AI agent in 60 seconds. Then ship the same code to LangGraph Platform with one command. Dawn is file-system routing for agents — no registry, no tool schemas, no glue.
+Build a typed AI agent in 60 seconds. Then ship the same code to LangSmith with one command. Dawn is file-system routing for agents — no registry, no tool schemas, no glue.
 
 By the end of this guide you'll have a typed agent at `/hello/[tenant]` that greets a user by name, running locally, ready to deploy.
 
@@ -78,7 +78,7 @@ In another shell:
 echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]' --url http://127.0.0.1:<port>
 ```
 
-The dev server speaks the LangGraph Platform protocol — `/runs/wait` and `/runs/stream`. What works locally works in production.
+The dev server speaks the LangSmith protocol — `/runs/wait` and `/runs/stream`. What works locally works in production.
 
 ## 5. Ship it
 
@@ -86,7 +86,7 @@ The dev server speaks the LangGraph Platform protocol — `/runs/wait` and `/run
 dawn build
 ```
 
-This walks the routes declared via `dawn.config.ts`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts`. Hand that directory to LangGraph Platform. Same protocol, same `assistant_id`s, no rewrites.
+This walks the routes declared via `dawn.config.ts`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts`. Hand that directory to LangSmith. Same protocol, same `assistant_id`s, no rewrites.
 
 ## Where to go next
 

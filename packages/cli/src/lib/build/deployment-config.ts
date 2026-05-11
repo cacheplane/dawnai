@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 
 /**
- * Configuration for LangGraph Platform deployment.
+ * Configuration for LangSmith deployment.
  * Produces fields compatible with langgraph.json schema.
  */
 
@@ -29,6 +29,6 @@ function detectEnvFilePath(appRoot: string): string {
     return ".env.example"
   }
 
-  // Fall back to .env (may contain secrets — LangGraph Platform reads var names only)
+  // Fall back to .env (may contain secrets — LangSmith reads var names only)
   return ".env"
 }

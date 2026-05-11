@@ -14,7 +14,7 @@ This project uses **Dawn**, a TypeScript-first meta-framework for building graph
 - **`src/app/**/state.ts`** — the route's state schema (default-exported Zod schema). Imported by `index.ts`.
 - **`src/app/**/tools/*.ts`** — co-located tools. Each file has a default export that is an async function. Types are inferred and written to `dawn.generated.d.ts`.
 - **`src/tools/*.ts`** — shared tools (optional). Discovered alongside route-local tools and merged into every route's tool registry. Route-local tools override shared tools with the same name.
-- **`src/middleware.ts`** — optional. Default-exports a function returned by `defineMiddleware(...)`. Runs before every `/runs/wait` and `/runs/stream` request, on `dawn dev` and on LangGraph Platform.
+- **`src/middleware.ts`** — optional. Default-exports a function returned by `defineMiddleware(...)`. Runs before every `/runs/wait` and `/runs/stream` request, on `dawn dev` and on LangSmith.
 - **`src/app/**/run.test.ts`** — colocated scenario tests. Default-export an array of scenario records (`{ name, input, expect, run?, assert? }`). Custom assertion helpers live at `@dawn-ai/sdk/testing` (`expectOutput`, `expectMeta`, `expectError`).
 - **`dawn.generated.d.ts`** — auto-generated. Do NOT edit by hand.
 - **`dawn:routes`** — virtual module emitted by the Dawn Vite plugin and backed by `dawn.generated.d.ts`. If `RouteTools` does not resolve, run `dawn typegen`.
@@ -116,8 +116,8 @@ The `RouteTools<"/hello/[tenant]">` lookup uses the route's pathname as the key 
 - `dawn typegen` — regenerate `dawn.generated.d.ts` and per-route `tools.json`.
 - `dawn run '/hello/acme'` — execute a route once with JSON stdin/stdout.
 - `dawn test` — run colocated `run.test.ts` scenarios.
-- `dawn dev` — local runtime server (LangGraph Platform protocol).
-- `dawn build` — write `.dawn/build/langgraph.json` and per-route entry files for LangGraph Platform deployment. Generated `langgraph.json` includes `dependencies: ["."]`, `env`, and `node_version: "22"`. Assistant ids are `<routeId>#<kind>` (e.g. `/hello/[tenant]#agent`).
+- `dawn dev` — local runtime server (LangSmith protocol).
+- `dawn build` — write `.dawn/build/langgraph.json` and per-route entry files for LangSmith deployment. Generated `langgraph.json` includes `dependencies: ["."]`, `env`, and `node_version: "22"`. Assistant ids are `<routeId>#<kind>` (e.g. `/hello/[tenant]#agent`).
 
 ## Packages
 
@@ -132,7 +132,7 @@ The `RouteTools<"/hello/[tenant]">` lookup uses the route's pathname as the key 
 - Do NOT add Zod schemas for tool input/output — types are inferred from TypeScript source.
 - Do NOT export more than one of `agent`/`workflow`/`graph`/`chain` from a single `index.ts`.
 - Do NOT declare dynamic-segment fields (e.g. `tenant`) in the `state.ts` Zod schema — they are injected from the URL path.
-- Do NOT edit `.dawn/build/langgraph.json` by hand. To deploy, run `dawn build` and hand `.dawn/build/` to LangGraph Platform.
+- Do NOT edit `.dawn/build/langgraph.json` by hand. To deploy, run `dawn build` and hand `.dawn/build/` to LangSmith.
 
 ## Reference
 
