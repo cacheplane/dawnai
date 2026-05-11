@@ -11,6 +11,7 @@ import { HowItWorks } from "./components/landing/HowItWorks"
 import { LogoWall } from "./components/landing/LogoWall"
 import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
+import { StarsSection } from "./components/landing/StarsSection"
 import { PaletteScroller } from "./components/PaletteScroller"
 import { ScrollReveal } from "./components/ScrollReveal"
 
@@ -49,6 +50,9 @@ export default function HomePage() {
       </ScrollReveal>
       <ScrollReveal>
         <HowItWorks />
+      </ScrollReveal>
+      <ScrollReveal>
+        <StarsSection />
       </ScrollReveal>
       <ScrollReveal>
         <CtaSection />
