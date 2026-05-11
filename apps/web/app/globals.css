@@ -41,7 +41,7 @@
 
 /* Inline code (rendered by InlineCode MDX override) */
 .mdx-inline-code {
-  background: rgba(217, 119, 6, 0.10);
+  background: rgba(217, 119, 6, 0.1);
   color: #b45309;
   border: 1px solid rgba(217, 119, 6, 0.25);
   border-radius: 4px;
@@ -96,7 +96,7 @@ pre [data-line] {
 
 /* Highlighted lines (e.g. ```ts {1,3-5} ```) */
 pre [data-highlighted-line] {
-  background: rgb(from var(--color-accent-amber) r g b / 0.10);
+  background: rgb(from var(--color-accent-amber) r g b / 0.1);
   border-left-color: var(--color-accent-amber);
 }
 
