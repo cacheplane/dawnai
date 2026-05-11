@@ -51,8 +51,8 @@ export function PostMeta({ post }: { readonly post: Post }) {
           <Image
             src={author.avatar}
             alt={author.name}
-            width={36}
-            height={36}
+            width={28}
+            height={28}
             className="rounded-full"
           />
           <a

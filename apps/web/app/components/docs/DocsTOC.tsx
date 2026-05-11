@@ -57,7 +57,7 @@ export function DocsTOC() {
   if (headings.length === 0) return null
 
   return (
-    <nav aria-label="On this page" className="sticky top-8 w-52 shrink-0 hidden xl:block text-sm">
+    <nav aria-label="On this page" className="sticky top-8 w-52 shrink-0 hidden lg:block text-sm">
       <p className="text-xs text-text-muted uppercase tracking-widest mb-3">On this page</p>
       <ul className="space-y-2 border-l border-border-subtle">
         {headings.map((h) => (
