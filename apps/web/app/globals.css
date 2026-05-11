@@ -31,6 +31,23 @@
   --dawn-font-sans: var(--font-inter), "Satoshi", "Helvetica Neue", Arial, sans-serif;
 }
 
+/* Landing dark scope — landing-section components author against the dark token
+   values they predate (HeroSection, CodeExample, ArchitectureSection, etc.).
+   Apply .landing-dark to the landing page root so `text-text-primary` and
+   `var(--color-bg-primary)` resolve to the cosmic palette inside the scope,
+   while the rest of the site uses the cream defaults. */
+.landing-dark {
+  --color-bg-primary: #0a0806;
+  --color-bg-secondary: #0f0c09;
+  --color-bg-card: #14110d;
+  --color-border: #241f19;
+  --color-border-subtle: #19150f;
+  --color-text-primary: #f8f5ef;
+  --color-text-secondary: #8a857b;
+  --color-text-muted: #5a554c;
+  --color-text-dim: #3f3b35;
+}
+
 @layer base {
   body {
     @apply bg-bg-primary text-text-primary font-sans antialiased;
