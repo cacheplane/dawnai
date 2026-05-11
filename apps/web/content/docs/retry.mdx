@@ -89,7 +89,9 @@ There is no global retry config — each route states its own intent.
 
 ## Related
 
-- [Routes](/docs/routes) — `agent()` descriptor and the four route kinds
-- [Tools](/docs/tools) — tool error handling and the `ctx.signal` contract
-- [Deployment](/docs/deployment) — how retry composes with `dawn build` output
-- [Retry flaky tools](/docs/recipes/retry-flaky-tools) — recipe applying retry policies per route
+<RelatedCards items={[
+  { href: "/docs/routes", title: "Routes", subtitle: "agent() descriptor and the four route kinds" },
+  { href: "/docs/tools", title: "Tools", subtitle: "tool error handling and the ctx.signal contract" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "how retry composes with dawn build output" },
+  { href: "/docs/recipes/retry-flaky-tools", title: "Retry flaky tools", subtitle: "recipe applying retry policies per route" },
+]} />

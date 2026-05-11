@@ -49,7 +49,9 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
 
 ## Related
 
-- [Dev Server](/docs/dev-server) — `/runs/wait` envelope and the assistant-id format
-- [Routes](/docs/routes) — route entries and the typed `RuntimeContext`
-- [Stream output](/docs/recipes/stream-output) — incremental responses from a dispatched route
-- [API Reference](/docs/api) — `RuntimeContext` and the workflow entry signature
+<RelatedCards items={[
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "/runs/wait envelope and the assistant-id format" },
+  { href: "/docs/routes", title: "Routes", subtitle: "route entries and the typed RuntimeContext" },
+  { href: "/docs/recipes/stream-output", title: "Stream output", subtitle: "incremental responses from a dispatched route" },
+  { href: "/docs/api", title: "API Reference", subtitle: "RuntimeContext and the workflow entry signature" },
+]} />

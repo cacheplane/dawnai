@@ -106,8 +106,10 @@ Every request is logged to stdout with the pathname, assistant id, duration, and
 
 ## Related
 
-- [Testing](/docs/testing) — run scenarios against a live dev server via `run.url`
-- [Deployment](/docs/deployment) — `dawn build` and the LangGraph Platform handoff
-- [Middleware](/docs/middleware) — how `src/middleware.ts` gates requests in dev and production
-- [CLI](/docs/cli) — `dawn dev` flags and all other commands
-- [Stream output](/docs/recipes/stream-output) — recipe consuming `/runs/stream` SSE frames
+<RelatedCards items={[
+  { href: "/docs/testing", title: "Testing", subtitle: "run scenarios against a live dev server via run.url" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "dawn build and the LangGraph Platform handoff" },
+  { href: "/docs/middleware", title: "Middleware", subtitle: "how src/middleware.ts gates requests in dev and production" },
+  { href: "/docs/cli", title: "CLI", subtitle: "dawn dev flags and all other commands" },
+  { href: "/docs/recipes/stream-output", title: "Stream output", subtitle: "recipe consuming /runs/stream SSE frames" },
+]} />
