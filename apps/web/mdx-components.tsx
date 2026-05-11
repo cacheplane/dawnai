@@ -1,4 +1,5 @@
 import type { MDXComponents } from "mdx/types"
+import { RelatedCards } from "./app/components/docs/RelatedCards"
 import { Callout } from "./app/components/mdx/Callout"
 import { InlineCode, Pre, RehypeFigure } from "./app/components/mdx/CodeBlock"
 import { CodeGroup } from "./app/components/mdx/CodeGroup"
@@ -13,6 +14,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     Step,
     Tabs,
     Tab,
+    RelatedCards,
     h1: ({ children }) => (
       <h1
         className="font-display text-4xl md:text-5xl font-semibold text-text-primary mb-6 tracking-tight"
