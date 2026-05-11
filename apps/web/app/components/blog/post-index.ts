@@ -96,9 +96,9 @@ function parsePost(filename: string, raw: string): Post {
     date: fm.date,
     tags,
     type,
-    version: fm.version,
+    ...(fm.version !== undefined && { version: fm.version }),
     author: fm.author,
-    ogImage: fm.ogImage,
+    ...(fm.ogImage !== undefined && { ogImage: fm.ogImage }),
     draft: fm.draft === true,
     readingTimeMinutes: Math.max(1, Math.round(stats.minutes)),
   }
