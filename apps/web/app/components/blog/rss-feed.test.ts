@@ -17,9 +17,16 @@ const samplePost: Post = {
 describe("buildRssFeed", () => {
   it("includes channel metadata", () => {
     const xml = buildRssFeed([samplePost], { siteUrl: "https://dawnai.org" })
-    expect(xml).toContain('<rss version="2.0">')
+    expect(xml).toContain('<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">')
     expect(xml).toContain("<title>Dawn</title>")
     expect(xml).toContain("<link>https://dawnai.org/blog</link>")
+  })
+
+  it("includes atom:link self-reference for validator compliance", () => {
+    const xml = buildRssFeed([samplePost], { siteUrl: "https://dawnai.org" })
+    expect(xml).toContain(
+      '<atom:link href="https://dawnai.org/blog/rss.xml" rel="self" type="application/rss+xml"/>',
+    )
   })
 
   it("includes one item per post with required fields", () => {
