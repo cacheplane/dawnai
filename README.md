@@ -10,6 +10,10 @@
 
 The meta-framework for LangGraph. Author agents and workflows as filesystem routes, get types and a local dev server for free, and ship to LangSmith with one command.
 
+<p align="center">
+  <img src="docs/brand/quickstart.gif" alt="Dawn quickstart — scaffold a route and invoke it in under a minute" width="900" />
+</p>
+
 ## Why Dawn?
 
 - **Kill the graph boilerplate.** Export one `agent({ model, systemPrompt })` descriptor. Dawn discovers it, binds route-local tools, and emits a `langgraph.json` package ready for LangSmith.
