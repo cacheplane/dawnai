@@ -32,7 +32,7 @@ const MOMENTS: readonly Moment[] = [
     title: "Scaffold the project.",
     description:
       "One command writes a working agent: project structure, dawn.config, generated types, and an example route with a typed tool.",
-    commands: [{ text: "npx create-dawn-app my-agent", prompt: true }],
+    commands: [{ text: "pnpm create dawn-ai-app my-agent", prompt: true }],
     proofLabel: "stdout",
     proofBadge: "✓ created",
     proofBadgeAccent: "green",

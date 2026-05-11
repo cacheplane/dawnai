@@ -1,185 +1,143 @@
-import { highlight } from "../../../lib/shiki/highlight"
-
-const RAW_LANGGRAPH_CODE = `import { StateGraph, START, END } from "@langchain/langgraph"
-import { z } from "zod"
-
-const GreetSchema = z.object({ tenant: z.string() })
-type State = { tenant: string; greeting?: string }
-
-async function greet(i: z.infer<typeof GreetSchema>) {
-  return { greeting: \`Hello, \${i.tenant}!\` }
+interface FragmentedProject {
+  readonly name: string
+  readonly stat: string
+  readonly tree: string
 }
 
-const graph = new StateGraph<State>({
-  channels: {
-    tenant:   { value: (_, y) => y, default: () => "" },
-    greeting: { value: (_, y) => y, default: () => "" },
-  },
-})
-  .addNode("greet", async (state) => {
-    const r = await greet({ tenant: state.tenant })
-    return { greeting: r.greeting }
-  })
-  .addEdge(START, "greet")
-  .addEdge("greet", END)
-
-const app = graph.compile()
-const result = await app.invoke({ tenant: "acme" })
-
-// + write your own dev loop, types, server, and deploy.
-`
-
-const WITH_DAWN_CODE = `// src/app/(public)/hello/[tenant]/state.ts
-export interface HelloState {
-  tenant: string
-  greeting?: string
-}
-
-// src/app/(public)/hello/[tenant]/tools/greet.ts
-export default async (i: { readonly tenant: string }) =>
-  ({ greeting: \`Hello, \${i.tenant}!\` })
-
-// src/app/(public)/hello/[tenant]/index.ts
-import type { RuntimeContext } from "@dawn-ai/sdk"
-import type { RouteTools } from "dawn:routes"
-import type { HelloState } from "./state.js"
-
-export async function workflow(
-  state: HelloState,
-  ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
-) {
-  const { greeting } = await ctx.tools.greet({
-    tenant: state.tenant,
-  })
-  return { ...state, greeting }
-}
-
-// $ dawn run "/hello/acme"  · dawn dev · dawn test
-`
-
-const painPoints = [
+const FRAGMENTED_PROJECTS: readonly FragmentedProject[] = [
   {
-    title: "You've written the same StateGraph boilerplate five times.",
-    body: "State channels, nodes, edges, the same pattern in every project. Every repo invents its own structure.",
+    name: "customer-support-bot",
+    stat: "8 tools · 3 agents",
+    tree: `agents/
+  triage.py
+  escalate.py
+  resolve.py
+tools.py
+prompts/`,
   },
   {
-    title: "Your tool's Zod schema drifted from its function signature.",
-    body: "You found out at runtime. Schemas live in one file, the actual function in another, and the types between them quietly disagree.",
+    name: "ops-incident-agent",
+    stat: "12 nodes · 5 tools",
+    tree: `src/
+  graphs/
+    incident.ts
+  nodes/
+    diagnose.ts
+    page-oncall.ts
+  tools/`,
   },
   {
-    title: "You added console.log to find out what state your agent is in.",
-    body: "There's no dev server that shows the graph mid-run. No hot reload when you change a tool. No structured way to test scenarios.",
+    name: "sales-copilot",
+    stat: "4 chains · 2 prompt sets",
+    tree: `lib/
+  llm/
+  chains/
+    qualify.ts
+    handoff.ts
+prompts/
+  v1/
+  v2/`,
   },
   {
-    title: "Your deployment is a hand-rolled Docker image.",
-    body: "You wrote the server, the routing, the protocol adapter. Every team building production agents on LangGraph rebuilds this from scratch.",
+    name: "data-pipeline-bot",
+    stat: "1 graph · 6 tools",
+    tree: `pipeline_bot/
+  __init__.py
+  main.py
+  models.py
+  tools.py
+tests/`,
+  },
+  {
+    name: "research-agent",
+    stat: "1 file · 9 tools inlined",
+    tree: `src/
+  index.ts
+  agent.ts
+  types.ts
+prompts.json`,
   },
 ]
 
-interface CodeColumnProps {
-  readonly label: string
-  readonly caption: string
-  readonly borderClass: string
-  readonly labelClass: string
-  readonly html: string
-}
+const DAWN_TREE = `src/app/
+  (public)/
+    hello/[tenant]/
+      index.ts
+      state.ts
+      tools/
+        greet.ts`
 
-function CodeColumn({ label, caption, borderClass, labelClass, html }: CodeColumnProps) {
-  return (
-    <div className={`flex-1 min-w-0 bg-bg-card border rounded-lg overflow-hidden ${borderClass}`}>
-      <div className="px-4 py-2.5 border-b border-border-subtle flex items-center justify-between">
-        <span className={`text-xs font-mono uppercase tracking-wider ${labelClass}`}>{label}</span>
-        <span className="text-[10px] text-text-muted font-mono">{caption}</span>
-      </div>
-      <div
-        className="px-4 py-3 text-xs leading-6 overflow-x-auto [&_pre]:bg-transparent [&_pre]:m-0 [&_pre]:p-0"
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    </div>
-  )
-}
+const PAINS: readonly string[] = [
+  "Same StateGraph boilerplate. Fifth project running.",
+  "Your tool's Zod schema drifted from its function signature. You found out at runtime.",
+  "Your deploy is a hand-rolled Dockerfile per agent.",
+  "Even your coding agent gets lost — every agent codebase has a different shape.",
+]
 
-export async function ProblemSection() {
-  const [rawHtml, dawnHtml] = await Promise.all([
-    highlight(RAW_LANGGRAPH_CODE, "typescript"),
-    highlight(WITH_DAWN_CODE, "typescript"),
-  ])
-
+export function ProblemSection() {
   return (
     <section className="relative py-20 px-8">
       <div className="text-center max-w-2xl mx-auto">
         <p className="landing-text-muted text-xs uppercase tracking-widest mb-3 inline-flex items-center gap-2">
           <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
-          The Problem
+          Sound familiar?
         </p>
         <h2
-          className="font-display text-4xl md:text-5xl font-semibold landing-text leading-[1.1] text-balance tracking-tight"
+          className="font-display text-4xl md:text-5xl font-semibold landing-text leading-[1.1] tracking-tight text-balance"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
         >
-          LangChain gave us the runtime. Every team builds the framework around it by hand.
+          Five projects in your org. Five different shapes.
         </h2>
-        <p className="landing-text mt-5 leading-7">
-          LangGraph is powerful and unopinionated &mdash; that&apos;s the design. So every team
-          adopting it &mdash; including ours &mdash; ends up inventing project structure, type
-          wiring, dev tooling, and deployment scripts from scratch. We&apos;ve watched this happen
-          at every company building agents on LangChain.
+        <p className="landing-text-muted mt-5 leading-7">
+          We&apos;ve watched this in every company we&apos;ve worked at. It hurts.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto mt-12">
-        {painPoints.map((point) => (
+      <div className="max-w-6xl mx-auto mt-12 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        {FRAGMENTED_PROJECTS.map((project) => (
           <div
-            key={point.title}
-            className="relative landing-surface border border-indigo-500/20 rounded-lg p-5 overflow-hidden"
+            key={project.name}
+            className="landing-surface border border-indigo-500/20 rounded-lg p-3 flex flex-col gap-2"
           >
-            {/* Cool indigo glow at the bottom — these are unsolved pre-dawn problems */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-x-0 bottom-0 h-20 rounded-b-lg opacity-60"
-              style={{
-                background:
-                  "radial-gradient(ellipse 80% 100% at 50% 100%, rgba(99,102,241,0.15), transparent 70%)",
-              }}
-            />
-            <h3 className="relative text-sm font-semibold landing-text leading-snug">
-              {point.title}
-            </h3>
-            <p className="relative text-sm landing-text-muted mt-2 leading-relaxed">{point.body}</p>
+            <p className="text-[10px] font-mono uppercase tracking-wider text-indigo-300/80 truncate">
+              {project.name}
+            </p>
+            <pre className="whitespace-pre font-mono text-[11px] leading-5 landing-text-muted overflow-hidden">
+              {project.tree}
+            </pre>
+            <p className="text-[10px] font-mono landing-text-muted mt-auto pt-1 border-t border-border-subtle/50">
+              {project.stat}
+            </p>
           </div>
         ))}
       </div>
 
-      {/* Side-by-side: same workflow, two stacks. The diff is the argument. */}
-      <div className="max-w-5xl mx-auto mt-16">
-        <p className="text-center text-xs uppercase tracking-widest landing-text-muted mb-2">
-          The same workflow, two stacks
-        </p>
-        <p className="text-center font-display text-2xl md:text-3xl font-semibold landing-text tracking-tight mb-8">
-          Same agent. No plumbing.
-        </p>
-        <div className="flex flex-col md:flex-row gap-4">
-          <CodeColumn
-            label="Raw LangGraph"
-            caption="one file · ~30 lines"
-            borderClass="border-indigo-500/25"
-            labelClass="text-indigo-300"
-            html={rawHtml}
-          />
-          <CodeColumn
-            label="With Dawn"
-            caption="three focused files · zero plumbing"
-            borderClass="border-accent-amber/40"
-            labelClass="text-accent-amber"
-            html={dawnHtml}
-          />
+      <div className="max-w-6xl mx-auto mt-10 flex flex-col items-center">
+        <p className="font-display text-lg landing-text-muted italic mb-4">Or — one shape.</p>
+        <div className="w-full max-w-md landing-surface border border-accent-amber/40 bg-accent-amber/5 rounded-lg p-5 flex flex-col gap-2">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-accent-amber">
+            any dawn project
+          </p>
+          <pre className="whitespace-pre font-mono text-xs leading-6 landing-text">{DAWN_TREE}</pre>
         </div>
-        <p className="text-center text-sm landing-text-muted mt-6 max-w-2xl mx-auto leading-relaxed">
-          Dawn writes the StateGraph wiring, generates the tool types from your function signatures,
-          runs the dev server, and speaks the LangSmith protocol. You write the agent logic. The
-          framework gives you back the time.
-        </p>
       </div>
+
+      <div className="max-w-2xl mx-auto mt-16">
+        {PAINS.map((pain, index) => (
+          <div
+            key={pain}
+            className={`text-base landing-text-muted py-4 leading-relaxed ${
+              index === 0 ? "" : "border-t landing-border"
+            }`}
+          >
+            {pain}
+          </div>
+        ))}
+      </div>
+
+      <p className="text-center font-display text-2xl md:text-3xl font-semibold landing-text tracking-tight mt-12 max-w-2xl mx-auto">
+        Dawn is the convention that makes it stop.
+      </p>
     </section>
   )
 }
