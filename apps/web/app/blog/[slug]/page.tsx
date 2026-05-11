@@ -33,11 +33,13 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       publishedTime: post.date,
       authors: [post.author],
       siteName: "Dawn AI",
+      ...(post.ogImage && { images: [post.ogImage] }),
     },
     twitter: {
       card: "summary_large_image",
       title: post.title,
       description: post.description,
+      ...(post.ogImage && { images: [post.ogImage] }),
     },
   }
 }
