@@ -54,7 +54,7 @@ function slugFromFilename(filename: string): string {
 interface Frontmatter {
   title: string
   description: string
-  date: string
+  date: string | Date
   tags?: string[]
   type?: PostType
   version?: string
@@ -88,12 +88,18 @@ function parsePost(filename: string, raw: string): Post {
     throw new Error(`Release post ${filename} is missing required "version" frontmatter`)
   }
 
+  // gray-matter parses YAML date scalars as JS Date objects; normalise to YYYY-MM-DD string.
+  const dateStr =
+    fm.date instanceof Date
+      ? fm.date.toISOString().slice(0, 10)
+      : String(fm.date).slice(0, 10)
+
   const stats = readingTime(content)
   return {
     slug: fm.slug ?? slugFromFilename(filename),
     title: fm.title,
     description: fm.description,
-    date: fm.date,
+    date: dateStr,
     tags,
     type,
     ...(fm.version !== undefined && { version: fm.version }),
