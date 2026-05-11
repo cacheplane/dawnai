@@ -1,13 +1,10 @@
 # Getting Started
 
-Dawn is a TypeScript-first framework for building graph-based AI agent systems. This guide gets you from zero to a running agent route in under a minute.
+Build a typed AI agent in 60 seconds. Then ship the same code to LangGraph Platform with one command. Dawn is file-system routing for agents — no registry, no tool schemas, no glue.
 
-## Prerequisites
+By the end of this guide you'll have a typed agent at `/hello/[tenant]` that greets a user by name, running locally, ready to deploy.
 
-- **Node.js** 22.12.0 or later
-- **pnpm** (recommended) or npm
-
-## Scaffold a new app
+## 1. Install
 
 ```bash
 pnpm create dawn-ai-app my-agent
@@ -15,56 +12,42 @@ cd my-agent
 pnpm install
 ```
 
-This creates a project with the standard Dawn structure:
+Requires Node.js 22.12 or later.
 
-```
-my-agent/
-├── dawn.config.ts                  # Dawn config
-├── dawn.generated.d.ts             # Auto-generated types
-├── package.json
-├── tsconfig.json
-└── src/app/
-    └── (public)/
-        └── hello/
-            └── [tenant]/
-                ├── index.ts        # Route entry
-                ├── state.ts        # Route state (Zod)
-                └── tools/
-                    └── greet.ts    # Co-located tool
+## 2. Set your API key
+
+The scaffold defaults to `gpt-4o-mini`. Swap providers by editing the `model` string in `index.ts` and exporting the matching key:
+
+<CodeGroup>
+```bash title="OpenAI"
+export OPENAI_API_KEY=sk-...
 ```
 
-## Validate the app
-
-Before you run anything, confirm the app is well-formed and the generated types are up to date:
-
-```bash
-dawn verify
+```bash title="Anthropic"
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-`dawn verify` runs four checks (app contract, route discovery, typegen, deps) in a single call. For a quicker individual gate while iterating, use `dawn check` and `dawn typegen` separately.
+```bash title="Google"
+export GOOGLE_API_KEY=...
+```
+</CodeGroup>
 
-## Understand the route
+## 3. What you got
 
-Each route is a directory under `src/app/` with an `index.ts` that exports exactly one of:
-
-- **`agent`** — a `DawnAgent` descriptor (default-exported) created via `agent({ model, systemPrompt })`. The scaffold default and the recommended path for LLM-driven routes.
-- **`workflow`** — an async function that receives state and a typed context.
-- **`graph`** — a LangGraph graph instance.
-- **`chain`** — a LangChain LCEL Runnable.
-
-The scaffolded app is three files — a state schema, a tool, and an agent route entry:
+Three files. The folder path is the agent endpoint — no registration step.
 
 <CodeGroup>
 ```ts title="src/app/(public)/hello/[tenant]/state.ts"
 import { z } from "zod"
 
+// Route state. The [tenant] segment merges in automatically.
 export default z.object({
-  /** The user's last message. */
   question: z.string().default(""),
 })
 ```
 
 ```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
+// Plain TS. Dawn infers input/output types at build time — no Zod, no schema.
 export default async (input: { readonly tenant: string }) => {
   return { greeting: `Hello, ${input.tenant}!` }
 }
@@ -76,52 +59,40 @@ import { agent } from "@dawn-ai/sdk"
 export default agent({
   model: "gpt-4o-mini",
   systemPrompt:
-    "You are a helpful assistant for the {tenant} organization. Answer questions about the tenant.",
+    "You are a helpful assistant for the {tenant} organization.",
 })
 ```
 </CodeGroup>
 
-Tools in the route's `tools/` directory are auto-bound to the agent at `dawn build` time — the LLM picks when to invoke them. See [Routes](/docs/routes) for the `workflow` / `graph` / `chain` alternatives, and the optional `retry: { maxAttempts, baseDelay }` config.
+Tools under `tools/` are bound to the agent at build time — the LLM picks when to call them. The route's shape is whatever `index.ts` default-exports: `agent`, `workflow`, `graph`, or `chain`.
 
-## Add a tool
-
-Tools live in a `tools/` directory inside a route. Each tool is a TypeScript file with a default export — the scaffold's `greet.ts` (above) is the canonical shape.
-
-Dawn extracts the input and output types at build time using the TypeScript compiler API, then writes them to `dawn.generated.d.ts`. Tool inputs and outputs require no Zod schemas — that inference is what makes `ctx.tools.greet()` show up fully typed without any manual wiring. (Route state in `state.ts` does use a Zod schema; see [State](/docs/state).)
-
-The tool's runtime signature is `(input, ctx) => ...`, where `ctx` is `{ signal: AbortSignal, middleware?: Readonly<Record<string, unknown>> }`. Use `ctx.signal` to cooperate with cancellation; `ctx.middleware` carries request-scoped context populated by `src/middleware.ts`. See [Tools](/docs/tools) for the full reference.
-
-## Run your agent
-
-`dawn run` reads JSON state from stdin, invokes the route, and prints the JSON result to stdout:
-
-```bash
-echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
-```
-
-The output is JSON (`JSON.stringify(result, null, 2)`) — for the scaffold's agent route, that's the LLM's structured response after any tool calls. The `[tenant]` segment is resolved from the matching state field.
-
-## Start the dev server
-
-For iterative development with hot reload:
+## 4. Run it
 
 ```bash
 dawn dev
 ```
 
-The dev server watches for file changes and restarts automatically. It binds an ephemeral localhost port by default (announced on stdout); pass `--port <n>` for a stable port. It exposes the same endpoints used by the LangGraph Platform — `/runs/wait` and `/runs/stream` — so what works locally works in production.
+In another shell:
 
-## Ship to production
+```bash
+echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]' --url http://127.0.0.1:<port>
+```
 
-Run `dawn build` to write `.dawn/build/langgraph.json` plus per-route entry files. That directory is what you hand to LangGraph Platform. See [Deployment](/docs/deployment) for the full bridge.
+The dev server speaks the LangGraph Platform protocol — `/runs/wait` and `/runs/stream`. What works locally works in production.
 
-## Related
+## 5. Ship it
+
+```bash
+dawn build
+```
+
+This walks the routes declared via `dawn.config.ts`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts`. Hand that directory to LangGraph Platform. Same protocol, same `assistant_id`s, no rewrites.
+
+## Where to go next
 
 <RelatedCards items={[
-  { href: "/docs/routes", title: "Routes", subtitle: "agent, workflow, graph, chain, and middleware" },
-  { href: "/docs/tools", title: "Tools", subtitle: "tool inputs, outputs, and runtime context" },
-  { href: "/docs/state", title: "State", subtitle: "Zod state schemas and dynamic-segment merging" },
-  { href: "/docs/cli", title: "CLI", subtitle: "every command flag and exit code" },
-  { href: "/docs/recipes", title: "Recipes", subtitle: "task-oriented how-tos" },
-  { href: "/docs/faq", title: "FAQ", subtitle: "one-line answers to the recurring questions" },
+  { href: "/docs/recipes/add-a-tool", title: "Add a real tool", subtitle: "wire a typed tool the LLM can call" },
+  { href: "/docs/routes", title: "Pick the right route kind", subtitle: "agent, workflow, graph, chain" },
+  { href: "/docs/recipes", title: "All recipes", subtitle: "task-oriented how-tos" },
+  { href: "/docs/mental-model", title: "The mental model", subtitle: "why file-system routing for agents" },
 ]} />
