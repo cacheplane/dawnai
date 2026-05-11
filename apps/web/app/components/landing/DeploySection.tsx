@@ -21,8 +21,8 @@ const STEPS: readonly DeployStep[] = [
   },
   {
     label: "Deploy",
-    description: "Your routes already speak the LangGraph Platform protocol. No translation layer.",
-    items: ["LangGraph Platform", "LangSmith Assistants", "Your infrastructure"],
+    description: "Your routes already speak the LangSmith protocol. No translation layer.",
+    items: ["LangSmith Deployment", "LangSmith Assistants", "Your infrastructure"],
     accent: true,
   },
 ]
@@ -105,8 +105,8 @@ export function DeploySection() {
         </h2>
         <p className="landing-text mt-4 leading-7">
           Dawn owns your local development lifecycle. When you&apos;re ready to ship, your routes
-          speak the LangGraph Platform protocol natively &mdash; deploy as LangSmith assistants with
-          the infrastructure you already trust.
+          speak the LangSmith protocol natively &mdash; deploy as LangSmith assistants with the
+          infrastructure you already trust.
         </p>
       </div>
 
@@ -137,8 +137,7 @@ export function DeploySection() {
         <span className="text-accent-amber-deep text-base mt-0.5">&#9432;</span>
         <p className="text-sm landing-text leading-relaxed">
           Dawn&apos;s dev server speaks the{" "}
-          <span className="font-semibold landing-text">LangGraph Platform protocol</span> natively
-          &mdash;{" "}
+          <span className="font-semibold landing-text">LangSmith protocol</span> natively &mdash;{" "}
           <code
             className="text-xs font-mono px-1.5 py-0.5 rounded"
             style={{ background: "var(--landing-surface)", color: "var(--landing-fg)" }}

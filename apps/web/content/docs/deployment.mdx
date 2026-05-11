@@ -1,6 +1,6 @@
 # Deployment
 
-Dawn does not host or run production traffic itself. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). Production runs on the **LangGraph Platform**, which Dawn's dev server already speaks natively. What runs locally runs in production after `dawn build` materializes the platform-ready entry files.
+Dawn does not host or run production traffic itself. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). Production runs on **LangSmith**, which Dawn's dev server already speaks natively. What runs locally runs in production after `dawn build` materializes the deployment-ready entry files.
 
 ## The deployment path
 
@@ -49,39 +49,39 @@ Dawn does not host or run production traffic itself. It owns local development (
 
     Notes:
     - Each `assistant_id` is `<routeId>#<kind>` — e.g. `/hello/[tenant]#agent`. Use this exact string as `assistant_id` in any client request.
-    - `dependencies: ["."]` and `node_version: "22"` are required by LangGraph Platform.
+    - `dependencies: ["."]` and `node_version: "22"` are required by LangSmith.
     - `env` resolves to `.env.example` when that file exists, else `.env`.
     - If you keep a hand-authored `langgraph.json` at the app root, `dawn build` shallow-merges it on top of the generated values.
   </Step>
   <Step title="Per-route middleware (optional)">
-    `src/middleware.ts` (default-exporting a function from `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request — identically in `dawn dev` and on LangGraph Platform. Use it to gate access by header, populate request-scoped context, or `reject(status, body)` unauthorized callers. See [Middleware](/docs/middleware) for the API.
+    `src/middleware.ts` (default-exporting a function from `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request — identically in `dawn dev` and on LangSmith. Use it to gate access by header, populate request-scoped context, or `reject(status, body)` unauthorized callers. See [Middleware](/docs/middleware) for the API.
   </Step>
-  <Step title="Push to your Platform-connected remote">
-    The LangGraph Platform builds the image from `.dawn/build/` and provisions assistants keyed by the `<routeId>#<kind>` ids in the generated `langgraph.json`. From there, your agents and harnesses can hit the deployed endpoints using the same protocol they already speak locally.
+  <Step title="Push to your LangSmith-connected remote">
+    LangSmith builds the image from `.dawn/build/` and provisions assistants keyed by the `<routeId>#<kind>` ids in the generated `langgraph.json`. From there, your agents and harnesses can hit the deployed endpoints using the same protocol they already speak locally.
   </Step>
 </Steps>
 
 ## What Dawn does not do
 
 <Callout type="warn" title="Not a hosted platform">
-  Dawn does not provision infrastructure, manage secrets, or replace LangSmith. If you want a hosted runtime, use the LangGraph Platform. If you want observability, use LangSmith.
+  Dawn does not provision infrastructure or manage secrets. If you want a hosted runtime, use LangSmith. LangSmith also provides the observability layer (tracing, evaluations).
 </Callout>
 
 ## Self-hosting
 
-If you can't or won't use the LangGraph Platform, build with `dawn build` and feed `.dawn/build/` to your own container. The generated entry files and `langgraph.json` are the canonical interface — the in-process `dawn dev` runtime is a reference for the same protocol surface (`/runs/wait`, `/runs/stream`, `/healthz`), but is not intended as a production runtime itself.
+If you can't or won't use LangSmith, build with `dawn build` and feed `.dawn/build/` to your own container. The generated entry files and `langgraph.json` are the canonical interface — the in-process `dawn dev` runtime is a reference for the same protocol surface (`/runs/wait`, `/runs/stream`, `/healthz`), but is not intended as a production runtime itself.
 
 ## Troubleshooting
 
 - **Tests pass in-process but fail live-server** — a tool or route isn't serializing cleanly. Check that inputs, outputs, and state are JSON-serializable (no Dates, Maps, classes).
 - **Assistant id not found** — the request `assistant_id` doesn't match the `<routeId>#<kind>` keys in `.dawn/build/langgraph.json`. Inspect that file directly (`cat .dawn/build/langgraph.json`) or run `dawn verify --json` to confirm what was discovered.
-- **Type inference drifted** — run `dawn typegen` locally and commit `dawn.generated.d.ts`. The Platform build uses the committed file.
+- **Type inference drifted** — run `dawn typegen` locally and commit `dawn.generated.d.ts`. The LangSmith build uses the committed file.
 
 ## Related
 
 <RelatedCards items={[
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "local protocol parity with production endpoints" },
-  { href: "/docs/middleware", title: "Middleware", subtitle: "request gating that runs identically in dev and on the platform" },
+  { href: "/docs/middleware", title: "Middleware", subtitle: "request gating that runs identically in dev and on LangSmith" },
   { href: "/docs/testing", title: "Testing", subtitle: "confirming parity before deploy via live-server scenarios" },
   { href: "/docs/cli", title: "CLI", subtitle: "dawn build, dawn verify, and all other commands" },
 ]} />

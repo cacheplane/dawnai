@@ -42,7 +42,7 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
 
 ## Notes
 
-- **No bespoke API.** The dev server and LangGraph Platform both speak the same protocol. Calling `/runs/wait` from inside a route is the same call an external client makes.
+- **No bespoke API.** The dev server and LangSmith both speak the same protocol. Calling `/runs/wait` from inside a route is the same call an external client makes.
 - **Pass through the URL via env.** `DAWN_RUNTIME_URL` lets the same code work locally (`http://127.0.0.1:<port>` from `dawn dev`) and in production (the platform-provided URL).
 - **Forward headers when needed.** If the target route's middleware expects auth headers, propagate them on the inner `fetch` — middleware runs on every `/runs/wait` and `/runs/stream` call, including this one.
 - **Use `/runs/stream` for long-running children.** Same envelope, SSE response — see [Stream output](/docs/recipes/stream-output).

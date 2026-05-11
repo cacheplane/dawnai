@@ -21,7 +21,7 @@ interface BuildOptions {
 export function registerBuildCommand(program: Command, io: CommandIo): void {
   program
     .command("build")
-    .description("Generate deployment artifacts for LangGraph Platform")
+    .description("Generate deployment artifacts for LangSmith")
     .option("--clean", "Remove .dawn/build/ before generating")
     .option("--cwd <path>", "Path to the Dawn app root")
     .action(async (options: BuildOptions) => {
