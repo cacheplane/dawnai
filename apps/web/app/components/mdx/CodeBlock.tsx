@@ -109,7 +109,7 @@ export function Pre({ children, className, ...rest }: PreProps) {
     return (
       <pre
         ref={ref}
-        className={`overflow-x-auto px-4 py-3 text-[13px] leading-[1.55] font-mono ${className ?? ""}`}
+        className={`overflow-x-auto pl-3 pr-4 py-3 text-[13px] leading-[1.55] font-mono ${className ?? ""}`}
         {...rest}
       >
         {children}
@@ -127,7 +127,7 @@ export function Pre({ children, className, ...rest }: PreProps) {
       />
       <pre
         ref={ref}
-        className={`overflow-x-auto px-4 py-3 text-[13px] leading-[1.55] font-mono ${className ?? ""}`}
+        className={`overflow-x-auto pl-3 pr-4 py-3 text-[13px] leading-[1.55] font-mono ${className ?? ""}`}
         {...rest}
       >
         {children}
