@@ -8,10 +8,11 @@ import { EcosystemSection } from "./components/landing/EcosystemSection"
 import { FeatureGrid } from "./components/landing/FeatureGrid"
 import { HeroSection } from "./components/landing/HeroSection"
 import { HowItWorks } from "./components/landing/HowItWorks"
-import { LogoWall } from "./components/landing/LogoWall"
+import { NotAReplacement } from "./components/landing/NotAReplacement"
 import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
 import { StarsSection } from "./components/landing/StarsSection"
+import { WhoItsFor } from "./components/landing/WhoItsFor"
 import { PaletteScroller } from "./components/PaletteScroller"
 import { ScrollReveal } from "./components/ScrollReveal"
 
@@ -19,11 +20,14 @@ export default function HomePage() {
   return (
     <div className="relative isolate">
       <PaletteScroller />
-      {/* Hero / Stats / Problem aren't wrapped — the seamless navy bleed across them
-          would break if their bgs faded in independently. Reveals begin at ComparisonTable. */}
+      {/* Hero / Ecosystem / Problem aren't wrapped — the seamless navy bleed across them
+          would break if their bgs faded in independently. Reveals begin at WhoItsFor. */}
       <HeroSection />
-      <LogoWall />
+      <EcosystemSection />
       <ProblemSection />
+      <ScrollReveal>
+        <WhoItsFor />
+      </ScrollReveal>
       <ScrollReveal>
         <ComparisonTable />
       </ScrollReveal>
@@ -35,9 +39,6 @@ export default function HomePage() {
       </ScrollReveal>
       <ScrollReveal>
         <ArchitectureSection />
-      </ScrollReveal>
-      <ScrollReveal>
-        <EcosystemSection />
       </ScrollReveal>
       <ScrollReveal>
         <CodeExample />
@@ -53,6 +54,9 @@ export default function HomePage() {
       </ScrollReveal>
       <ScrollReveal>
         <StarsSection />
+      </ScrollReveal>
+      <ScrollReveal>
+        <NotAReplacement />
       </ScrollReveal>
       <ScrollReveal>
         <CtaSection />
