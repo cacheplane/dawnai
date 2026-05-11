@@ -8,6 +8,7 @@ import { EcosystemSection } from "./components/landing/EcosystemSection"
 import { FeatureGrid } from "./components/landing/FeatureGrid"
 import { HeroSection } from "./components/landing/HeroSection"
 import { HowItWorks } from "./components/landing/HowItWorks"
+import { MigrateCta } from "./components/landing/MigrateCta"
 import { NotAReplacement } from "./components/landing/NotAReplacement"
 import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
@@ -57,6 +58,9 @@ export default function HomePage() {
       </ScrollReveal>
       <ScrollReveal>
         <NotAReplacement />
+      </ScrollReveal>
+      <ScrollReveal>
+        <MigrateCta />
       </ScrollReveal>
       <ScrollReveal>
         <CtaSection />
