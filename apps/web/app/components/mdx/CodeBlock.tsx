@@ -1,8 +1,10 @@
 "use client"
 
 import {
+  Children,
   createContext,
   type HTMLAttributes,
+  isValidElement,
   type ReactNode,
   useContext,
   useRef,
@@ -228,6 +230,30 @@ export function CopyButton({
  * the figcaption into the standard header chrome and renders the inner Pre
  * headless.
  */
+// Recursively pull the first non-empty string descendant out of a React node.
+// Used to extract the figcaption's title text regardless of whether MDX
+// delivers it as a bare string, an array, or nested inside a wrapper element —
+// hydration mismatches happen when server and client see different shapes here.
+function extractTextContent(node: ReactNode): string | undefined {
+  if (typeof node === "string") {
+    const trimmed = node.trim()
+    return trimmed.length > 0 ? trimmed : undefined
+  }
+  if (typeof node === "number") return String(node)
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = extractTextContent(child)
+      if (found) return found
+    }
+    return undefined
+  }
+  if (isValidElement(node)) {
+    const props = (node.props ?? {}) as { children?: ReactNode }
+    return extractTextContent(props.children)
+  }
+  return undefined
+}
+
 export function RehypeFigure({
   children,
   ...rest
@@ -235,41 +261,28 @@ export function RehypeFigure({
   readonly children?: ReactNode
 } & Record<string, unknown>) {
   const isRehype = rest["data-rehype-pretty-code-figure"] !== undefined
-  // Walk children to find the figcaption (title source) and the inner pre.
+  // Walk children deterministically with Children.toArray so server and client
+  // see the same shape — manual iteration on a possibly-single-child `children`
+  // was producing different `el.props` reads under hydration in some MDX
+  // configurations.
   let title: string | undefined
   let preLanguage: string | undefined
   let preChild: ReactNode = null
-  const childArray = []
 
-  // We can't import from React top-level here in JSX, just inline iterate.
-  const innerChildren = Array.isArray(children)
-    ? children
-    : children !== undefined
-      ? [children]
-      : []
-  for (const c of innerChildren) {
-    childArray.push(c)
-  }
-
-  for (const c of childArray) {
-    if (!c || typeof c !== "object") continue
-    const el = c as { type?: unknown; props?: Record<string, unknown> }
-    if (el.type === "figcaption") {
-      const captionTitle = el.props?.["data-rehype-pretty-code-title"]
-      if (typeof captionTitle === "string" && captionTitle.length > 0) {
-        title = captionTitle
+  for (const c of Children.toArray(children)) {
+    if (!isValidElement(c)) continue
+    const props = (c.props ?? {}) as Record<string, unknown> & { children?: ReactNode }
+    if (c.type === "figcaption") {
+      const direct = props["data-rehype-pretty-code-title"]
+      if (typeof direct === "string" && direct.length > 0) {
+        title = direct
       } else {
-        const kids = el.props?.children
-        if (typeof kids === "string" && kids.length > 0) title = kids
-        else if (Array.isArray(kids)) {
-          const first = kids.find((k) => typeof k === "string" && k.length > 0)
-          if (typeof first === "string") title = first
-        }
+        title = extractTextContent(props.children)
       }
       continue
     }
-    // Otherwise it's the Pre (or anything else we should pass through).
-    const lang = el.props?.["data-language"]
+    // Otherwise treat as the inner Pre (or anything else passed through).
+    const lang = props["data-language"]
     if (typeof lang === "string") preLanguage = lang
     preChild = c
   }

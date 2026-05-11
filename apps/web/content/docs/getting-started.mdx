@@ -86,7 +86,7 @@ The dev server speaks the LangGraph Platform protocol — `/runs/wait` and `/run
 dawn build
 ```
 
-This writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts`. Hand that directory to LangGraph Platform. Same protocol, same `assistant_id`s, no rewrites.
+This walks the routes declared via `dawn.config.ts`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts`. Hand that directory to LangGraph Platform. Same protocol, same `assistant_id`s, no rewrites.
 
 ## Where to go next
 
