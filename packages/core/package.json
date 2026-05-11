@@ -38,7 +38,7 @@
   "dependencies": {
     "@dawn-ai/sdk": "workspace:*",
     "tsx": "^4.8.1",
-    "typescript": "5.8.3"
+    "typescript": "6.0.3"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
