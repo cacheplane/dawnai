@@ -8,15 +8,35 @@ version: 0.4.0
 author: brian
 ---
 
-Dawn 0.4 is out. The headline is a preview of **Deep Agents** — composable sub-agents with their own routes, tools, and state — plus a tighter streaming story and a stabilized middleware API.
+Sub-agents are becoming one of the more important boundaries in agentic software.
 
-This is a backward-compatible release for projects already on 0.3.x. The upgrade is a single `pnpm` command.
+Not because chaining LLM calls is new.
+And not because "agent calls agent" is a fresh idea.
+
+It matters because the boundary between a parent agent and a specialist is starting to look like a route boundary. And route boundaries deserve to be first-class.
+
+That is what Dawn 0.4 ships.
+
+## tl;dr
+
+- deep agents preview: composable sub-agents declared with the same `agent({...})` ergonomics
+- a sub-agent is a folder under the parent, with its own tools, state, and middleware
+- token-level streaming now flows through sub-agent boundaries, tagged by route id
+- `/runs/stream` is byte-identical to the langsmith production protocol
+- middleware api is stable; the experimental flag is gone
+- backward-compatible upgrade from 0.3.x
 
 ## Deep Agents preview
 
-Real agent systems are rarely one agent. A support assistant calls a research sub-agent. A triage flow hands off to a domain specialist. Until now in Dawn, "sub-agent" meant "another route you invoke via `ctx.run()`" — workable, but the boundary wasn't first-class.
+Real agent systems are rarely one agent.
 
-`createSubAgent` makes the boundary first-class. A sub-agent is a route under the parent, declared with the same `agent({...})` ergonomics, and reachable as a typed call from the parent.
+A support assistant calls a research sub-agent. A triage flow hands off to a domain specialist.
+
+Until now in Dawn, "sub-agent" meant "another route you invoke via `ctx.run()`". That worked. But the boundary was not first-class.
+
+`createSubAgent` makes the boundary first-class.
+
+A sub-agent is a route under the parent, declared with the same `agent({...})` ergonomics, and reachable as a typed call from the parent.
 
 ```ts
 // src/app/support/[tenant]/index.ts
@@ -43,25 +63,39 @@ export default createSubAgent({
 })
 ```
 
-The parent route's prompt can reference `research` by name. Dawn binds it as a callable from the parent agent — the LLM picks when to delegate, just like a tool call, but the sub-agent runs with its own state, its own tools (under `research/tools/`), and its own middleware.
+The parent route's prompt can reference `research` by name. Dawn binds it as a callable from the parent — the LLM picks when to delegate, just like a tool call.
 
-Why this matters: each sub-agent is a folder. You can test it in isolation with `dawn run "/support/[tenant]/research"`, deploy it as its own `assistant_id`, and reuse it from a different parent by referencing the path. The boundary is on disk, not in a config file.
+But the sub-agent runs with its own state, its own tools under `research/tools/`, and its own middleware.
 
-Deep Agents is a preview. The shape of `subAgents` and the streaming contract for delegated calls may shift before 0.5. We'll call out breaking changes explicitly in the changelog.
+That is the difference. The sub-agent is not a function call. It is a route.
+
+Each sub-agent is a folder. You can test it in isolation with `dawn run "/support/[tenant]/research"`, deploy it as its own `assistant_id`, and reuse it from a different parent by referencing the path.
+
+The boundary is on disk. Not in a config file.
+
+**A sub-agent is a route, not a function. That is the whole shift.**
+
+Deep Agents is a preview. The shape of `subAgents` and the streaming contract for delegated calls may shift before 0.5. Breaking changes will be called out explicitly in the changelog.
 
 ## Streaming improvements
 
-Three concrete changes:
+Three concrete changes.
 
-- **Token-level streaming through sub-agent boundaries.** In 0.3, a delegated call buffered until the sub-agent finished. In 0.4, the parent's stream interleaves the sub-agent's tokens, tagged with the sub-agent's route id.
-- **`/runs/stream` matches LangSmith verbatim.** The event names, ordering, and payload shapes are now byte-identical to the production protocol, so dev-server output and deployed output line up in tooling that consumes both.
-- **`dawn dev` shows streamed events in the terminal.** The local dev server prints tool calls, state mutations, and token deltas as they happen. No more attaching a curl to watch progress.
+**Token-level streaming through sub-agent boundaries.** In 0.3, a delegated call buffered until the sub-agent finished. In 0.4, the parent's stream interleaves the sub-agent's tokens, tagged with the sub-agent's route id.
 
-The streaming work also shaved roughly 30% off cold-start time for the dev server on projects with more than 20 routes — a side effect of moving route metadata into a lazy import path.
+**`/runs/stream` matches LangSmith verbatim.** The event names, ordering, and payload shapes are byte-identical to the production protocol. Dev-server output and deployed output line up in any tooling that consumes both.
+
+**`dawn dev` shows streamed events in the terminal.** The local dev server prints tool calls, state mutations, and token deltas as they happen. No more attaching a curl to watch progress.
+
+The streaming work also shaved roughly 30% off cold-start time for the dev server on projects with more than 20 routes. A side effect of moving route metadata into a lazy import path.
 
 ## Middleware API stabilized
 
-The middleware shape that landed in 0.3 behind a flag is stable as of 0.4. The flag is gone. `defineMiddleware`, the `allow` / `reject` helpers, and nearest-ancestor resolution are the supported API.
+The middleware shape that landed in 0.3 behind a flag is stable as of 0.4.
+
+The flag is gone.
+
+`defineMiddleware`, the `allow` / `reject` helpers, and nearest-ancestor resolution are the supported API.
 
 ```ts
 // src/app/support/middleware.ts
@@ -75,7 +109,9 @@ export default defineMiddleware(async (req) => {
 })
 ```
 
-If you were using the experimental flag in `dawn.config.ts`, remove it. The behavior is the same; the gate is just gone.
+If you were using the experimental flag in `dawn.config.ts`, remove it.
+
+The behavior is the same. The gate is just gone.
 
 ## Upgrading
 
@@ -84,10 +120,18 @@ pnpm add @dawn-ai/cli@0.4.0 @dawn-ai/sdk@0.4.0
 pnpm exec dawn verify
 ```
 
-`dawn verify` will regenerate `dawn.generated.d.ts` against the new SDK types. If your project compiles after that, you're done.
+`dawn verify` regenerates `dawn.generated.d.ts` against the new SDK types. If your project compiles after that, you are done.
 
-If you're coming from a raw LangGraph project and haven't moved yet, the migration walkthrough at [`/docs/migrating-from-langgraph`](/docs/migrating-from-langgraph) is the construct-by-construct guide. Nothing in 0.4 changes the migration path described there.
+The runtime is unchanged. The output is still a `langgraph.json` that LangSmith deploys without translation. That contract has not moved.
 
-## What's next
+If you are coming from a raw LangGraph project and have not moved yet, the migration walkthrough at [`/docs/migrating-from-langgraph`](/docs/migrating-from-langgraph) is the construct-by-construct guide. Nothing in 0.4 changes the path described there.
 
-0.5 will lift the Deep Agents preview flag, ship a typed evaluations API, and add the durable-execution story for long-running workflows. Tracking issue in the repo; feedback on the sub-agent shape is especially welcome while it's still in preview.
+## What is next
+
+0.5 will lift the Deep Agents preview flag, ship a typed evaluations API, and add the durable-execution story for long-running workflows.
+
+The tracking issue is in the repo. Feedback on the sub-agent shape is especially welcome while it is still in preview.
+
+Sub-agents are becoming routes. Routes are becoming the unit of composition.
+
+That is what makes this interesting.

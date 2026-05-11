@@ -7,28 +7,55 @@ type: post
 author: brian
 ---
 
-The Next.js App Router did something subtle but important. It didn't introduce a new runtime, and it didn't change how React rendered. What it changed was the *answer to the question "where does this code go?"*.
+The Next.js App Router did something subtle and important.
 
-Every concern got a coordinate. A page is `page.tsx`. A layout is `layout.tsx`. A server action is a function in a server file. Middleware lives at `middleware.ts`. There is one place each concept lives, and that place is a file on disk.
+Not because it introduced a new runtime.
+And not because it changed how React rendered.
 
-Agent codebases don't have that yet. Dawn is an attempt to fix it.
+What it changed was the answer to the question *"where does this code go?"*.
+
+A page is `page.tsx`. A layout is `layout.tsx`. A server action is a function in a server file. Middleware lives at `middleware.ts`. One place each concept lives, and that place is a file on disk.
+
+Agent codebases do not have that yet.
+
+Dawn is an attempt to fix it.
+
+## tl;dr
+
+- agent codebases need a coordinate system, not just a runtime
+- file-system routes give every concern a folder, not a registry entry
+- co-location is a feature: refactors work, search works, tests do not drift
+- typescript function signatures are the tool contract — no zod, no `tool()` wrapper
+- the win is not the first agent. it is the tenth.
 
 ## The missing coordinate system
 
-If you've worked on a LangGraph project past the second graph, you know the shape of the problem. You have graphs in one folder, tools in another, state definitions in a third, and a registry that ties them together. The connections between those files are implicit — a tool is "for" a graph because it's imported by it, not because it lives next to it.
+If you have worked on a LangGraph project past the second graph, you know the shape of the problem.
 
-That works fine at the kitchen-table scale. It stops working when you need to answer questions like:
+Graphs in one folder. Tools in another. State definitions in a third. A registry tying them together.
 
-- Which tools does the `support` graph have access to?
-- If I rename `lookupOrder`, what else needs to change?
-- Where do I add the tenant-aware auth check for the `triage` route?
-- Can I delete this tool? Who calls it?
+The connections between those files are implicit. A tool is "for" a graph because it is imported by it, not because it lives next to it.
 
-These are all answerable, but the answer lives in your head or in a wiki page, not on disk. The codebase doesn't know its own structure.
+That works at the kitchen-table scale.
+
+It stops working when you need to answer questions like:
+
+- which tools does the `support` graph have access to?
+- if I rename `lookupOrder`, what else needs to change?
+- where do I add the tenant-aware auth check for the `triage` route?
+- can I delete this tool? who calls it?
+
+These are all answerable.
+
+The answer just does not live on disk. It lives in your head, or in a wiki page, or in the import graph you have to trace by hand.
+
+That is the gap. The codebase does not know its own structure.
 
 ## File-system routes as the answer
 
-The fix is borrowed wholesale from web frameworks. A route is a folder. The folder path is the endpoint. Everything that belongs to the route lives next to it.
+The fix is borrowed wholesale from web frameworks.
+
+A route is a folder. The folder path is the endpoint. Everything that belongs to the route lives next to it.
 
 A real Dawn project tree:
 
@@ -53,27 +80,41 @@ my-agents/
             └── state.ts
 ```
 
-Read that tree out loud and you've read the architecture. `support/[tenant]/` is a parameterized route. It has its own state shape, its own auth middleware, and two tools the agent can call. `support/internal/` is a separate route — a different endpoint, a different graph. `triage/` is unrelated to either.
+Read that tree out loud and you have read the architecture.
 
-There's no registry. There's no `tools: [...]` array. The connection between a tool and the route that uses it is the *folder it's in*.
+`support/[tenant]/` is a parameterized route. It has its own state shape, its own auth middleware, and two tools the agent can call. `support/internal/` is a separate route — a different endpoint, a different graph. `triage/` is unrelated to either.
 
-## Co-location as a feature, not aesthetics
+There is no registry. There is no `tools: [...]` array.
 
-Putting files near the thing they belong to isn't a style preference. It changes what your tools can do.
+The connection between a tool and the route that uses it is the *folder it is in*.
 
-**Refactoring works.** Move a folder, move the route. Delete a folder, delete the route. There's no central registry whose edits you'll forget.
+That is the whole trick.
 
-**Search works.** "Find references" on a tool finds the route that uses it because the route imports it directly. "Find references" on a state field finds the agent prompt that mentions it.
+## Co-location is a feature, not aesthetics
 
-**Tests don't drift.** A scenario test for `support/[tenant]/` lives in `support/[tenant]/run.test.ts`. When you change the route, the test is right there in the same diff. The chance of test rot drops a lot when the test is sitting next to the thing it tests.
+Putting files near the thing they belong to is not a style preference.
+
+It changes what your tools can do.
+
+**Refactoring works.** Move a folder, move the route. Delete a folder, delete the route. There is no central registry whose edits you will forget.
+
+**Search works.** "Find references" on a tool finds the route that uses it, because the route imports it directly. "Find references" on a state field finds the agent prompt that mentions it.
+
+**Tests do not drift.** A scenario test for `support/[tenant]/` lives in `support/[tenant]/run.test.ts`. When you change the route, the test is right there in the same diff.
 
 **Onboarding works.** New engineers can open the tree and read the surface area without a Loom video. The structure is the documentation.
 
-Frameworks that hide structure behind a builder API give all of this up. Once your routes are constructed at runtime from a `.register()` call, your editor cannot tell you what your codebase looks like — only the running process can.
+Frameworks that hide structure behind a builder API give all of this up.
+
+Once your routes are constructed at runtime from a `.register()` call, your editor cannot tell you what your codebase looks like. Only the running process can.
+
+That is a real cost. It just shows up late.
 
 ## Types as the route boundary
 
-The other half of the coordinate system is types. A route is a contract, and the contract should be checked at the boundary.
+The other half of the coordinate system is types.
+
+A route is a contract. The contract should be checked at the boundary.
 
 In Dawn, a tool is just a TypeScript function:
 
@@ -90,18 +131,38 @@ export default async (
 }
 ```
 
-There's no Zod schema. There's no `tool()` wrapper. The parameter type *is* the schema — `dawn typegen` reads it at build time and emits both a JSON schema for the LLM and a typed `ctx.tools.lookupOrder` for any code that calls it directly.
+There is no Zod schema. There is no `tool()` wrapper.
 
-This sounds like a small convenience. It's actually a forcing function. Because the type is the contract, drift is impossible. If you change the tool's signature, callers fail to typecheck. If you misspell a tool name in a workflow route, the editor underlines it. The route boundary is checked the same way the rest of your TypeScript is checked.
+The parameter type *is* the schema. `dawn typegen` reads it at build time and emits both a JSON schema for the LLM and a typed `ctx.tools.lookupOrder` for any code that calls it directly.
+
+This sounds like a small convenience.
+
+It is actually a forcing function.
+
+Because the type is the contract, drift is impossible. If you change the tool signature, callers fail to typecheck. If you misspell a tool name in a workflow route, the editor underlines it.
+
+The route boundary is checked the same way the rest of your TypeScript is checked.
 
 Generated types live in `dawn.generated.d.ts`. Commit it or regenerate on the fly — both work, the same way `next-env.d.ts` works.
 
 ## What this unlocks at scale
 
-The interesting thing isn't the first agent. It's the tenth.
+The interesting thing is not the first agent.
 
-A codebase with ten agents, forty tools, and a dozen middleware files needs the same code-intelligence features a web app does — go-to-definition that works, refactors that don't break things in production, tests that run on a tight loop, deploys that don't require a memo. Those features don't show up by accident; they require the codebase to have a *shape* the tools can reason about.
+It is the tenth.
 
-That's the whole pitch. Dawn isn't asking you to learn a new graph runtime. The graph runtime is fine. Dawn is the coordinate system around it — the answer to "where does this code go" — and the type machinery that makes the answer load-bearing.
+A codebase with ten agents, forty tools, and a dozen middleware files needs the same code-intelligence features a web app does. Go-to-definition that works. Refactors that do not break things in production. Tests that run on a tight loop. Deploys that do not require a memo.
+
+Those features do not show up by accident.
+
+They require the codebase to have a *shape* the tools can reason about.
+
+That is the whole pitch.
+
+Dawn is not asking you to learn a new graph runtime. The graph runtime is fine. Dawn is the coordinate system around it — the answer to "where does this code go" — and the type machinery that makes the answer load-bearing.
 
 If the mental model resonates, [`/docs/mental-model`](/docs/mental-model) is the one-page version, and [`/docs/routes`](/docs/routes) is where the conventions are spelled out in full.
+
+A runtime is becoming a routing problem. A routing problem is becoming a type problem.
+
+That is what makes this interesting.

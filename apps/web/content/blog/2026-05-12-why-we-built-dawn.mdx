@@ -7,35 +7,62 @@ type: post
 author: brian
 ---
 
-Dawn started as a folder of helper scripts that kept showing up in every LangGraph project we touched. By the third project, it was clear the helpers were a framework wearing a trench coat.
+Agent codebases are becoming one of the harder shapes in TypeScript right now.
 
-This post is about the friction those scripts were absorbing, and why we decided to make that work explicit.
+Not because the runtimes are bad.
+And not because the model providers have failed us.
+
+The runtime is fine. LangGraph holds up. What does not hold up is the *code around* the graph.
+
+That is the gap Dawn was built to close.
+
+## tl;dr
+
+- dawn is a meta-framework for LangGraph, not a replacement for it
+- the runtime, the channels, the checkpointer, LangSmith — all unchanged
+- `dawn build` emits a `langgraph.json` that deploys to LangSmith without translation
+- the thing dawn replaces is the boilerplate, the registry files, and the implicit project layout
+- agent code should feel like Next.js code: filesystem routes, inferred types, a real dev loop
 
 ## The moment it stopped scaling
 
-LangGraph is excellent at what it does. The runtime, the channels, the checkpointer — they all hold up. What didn't hold up was the *code around* the graph.
+Dawn started as a folder of helper scripts that kept showing up in every LangGraph project I touched.
 
-Our second production agent project had four graphs, eleven tools, and a `langgraph.json` that no one wanted to touch. The graphs lived in one folder, the tools in another, the state shapes in a third, and a `registry.ts` glued them together. Every new feature touched all four locations.
+By the third project, it was clear the helpers were a framework wearing a trench coat.
 
-We started writing internal docs explaining where things were supposed to go. That was the moment. If the framework is making you write a memo about file layout, the framework is missing a piece.
+The trigger was a single project. Four graphs, eleven tools, and a `langgraph.json` that nobody wanted to touch. Graphs in one folder. Tools in another. State shapes in a third. A `registry.ts` gluing them together. Every new feature touched all four locations.
+
+I started writing internal docs explaining where things were supposed to go.
+
+That was the moment.
+
+If the framework is making you write a memo about file layout, the framework is missing a piece.
 
 ## The friction list
 
-The same pain showed up in every project. None of it is LangGraph's fault — these are just things LangGraph leaves to you.
+The same pain shows up in every LangGraph project past the second graph. None of it is LangGraph's fault. These are things LangGraph leaves to you.
 
-- **Graph boilerplate.** Every agent route involves the same `StateGraph` plumbing — `addNode`, `addConditionalEdges`, `bindTools`, an exported `compile()`. The interesting code is twenty lines; the wiring is sixty.
-- **No project structure.** LangGraph has no opinion on where graphs, tools, or state live. So every team invents their own layout, then re-invents it six months later when the first one stops working.
-- **Hand-written tool schemas.** Every tool means a function, a Zod schema, and a `tool()` wrapper. The schema duplicates the TypeScript types you already wrote, and drifts the moment you forget.
-- **No local dev loop.** `langgraph dev` works but is heavyweight. Iterating against a route meant pushing to staging, watching the deploy, and waiting on traces. Tight loops aren't tight.
-- **Lost types at the boundary.** Tool inputs, state shape, dynamic routing parameters — none of these are typed across the graph boundary by default. You learn at runtime what a misspelled key costs.
+- **graph boilerplate.** every route involves the same `StateGraph` plumbing — `addNode`, `addConditionalEdges`, `bindTools`, an exported `compile()`. the interesting code is twenty lines; the wiring is sixty.
+- **no project structure.** langgraph has no opinion on where graphs, tools, or state live. so every team invents a layout, then re-invents it six months later.
+- **hand-written tool schemas.** every tool means a function, a zod schema, and a `tool()` wrapper. the schema duplicates the typescript types you already wrote.
+- **no local dev loop.** `langgraph dev` works but is heavyweight. iterating against a route meant pushing to staging.
+- **lost types at the boundary.** tool inputs, state shape, dynamic routing parameters — none typed across the graph boundary by default.
 
-Each item is solvable on its own. The trouble is that every team solves them slightly differently, and the solutions don't compose.
+Each item is solvable on its own.
 
-## What "meta-framework" means here
+The trouble is that every team solves them slightly differently, and the solutions do not compose.
 
-Dawn is not a competitor to LangGraph. The runtime, the graph compiler, the checkpointer, LangSmith — all unchanged. The output of `dawn build` is a `langgraph.json` that LangSmith deploys without translation.
+That is the real cost. Not the boilerplate. The lack of a shared shape.
 
-What Dawn replaces is the *code around* the graph. Concretely:
+## What "meta-framework" actually means here
+
+Dawn is not a competitor to LangGraph.
+
+It is the layer above it.
+
+The runtime, the graph compiler, the checkpointer, LangSmith — all unchanged. The output of `dawn build` is a `langgraph.json` that LangSmith deploys without translation.
+
+What Dawn replaces is the *code around* the graph.
 
 Without Dawn, a hello-world tool-calling agent looks like this:
 
@@ -76,7 +103,7 @@ export const graph = new StateGraph(MessagesAnnotation)
 
 Plus a hand-maintained `langgraph.json` pointing at the export.
 
-With Dawn, it's two files:
+With Dawn, it is two files:
 
 ```ts
 // src/app/(public)/hello/[tenant]/index.ts
@@ -93,24 +120,44 @@ export default agent({
 export default async ({ name }: { name: string }) => `Hello, ${name}!`
 ```
 
-`dawn build` produces the `langgraph.json`. The `greet` tool is bound to the agent because it lives under `tools/`. The `[tenant]` segment becomes a typed field on state. Same deploy target; roughly a quarter of the code.
+`dawn build` produces the `langgraph.json`. The `greet` tool is bound to the agent because it lives under `tools/`. The `[tenant]` segment becomes a typed field on state.
 
-The point isn't lines saved. The point is that every concept — route, tool, state, middleware — has *one place* it lives, and that place is on disk where your editor can find it.
+Same deploy target. Roughly a quarter of the code.
+
+The point is not lines saved.
+
+The point is that every concept — route, tool, state, middleware — has one place it lives. And that place is on disk where your editor can find it.
+
+That is the difference between "we wrote some helpers" and "we built a framework."
 
 ## The bet: agent code should feel like Next.js code
 
-The Next.js App Router did one thing extraordinarily well: it gave every concern a coordinate. A route is a folder. A layout is `layout.tsx`. A server action is a function in a route file. You can point at a thing, search for it, refactor it, write a test next to it.
+The Next.js App Router did one thing extraordinarily well.
 
-Agent codebases lack that. The runtime is reasonable, but the *codebase shape* is whatever you negotiated with your team last quarter.
+It gave every concern a coordinate.
 
-Our bet is that agent code should feel like Next.js code. A route is a folder under `src/app/`. The folder path is the agent endpoint. Tools, state, middleware, and tests live next to the route they belong to. Types are generated from the file tree, not maintained by hand.
+A route is a folder. A layout is `layout.tsx`. A server action is a function in a route file. You can point at a thing, search for it, refactor it, write a test next to it.
 
-That's the whole framework. Filesystem routes, inferred types, a real dev server, and a build step that emits the artifact LangSmith already understands.
+Agent codebases lack that. The runtime is reasonable, but the codebase shape is whatever you negotiated with your team last quarter.
 
-## Where we are now
+My bet is that agent code should feel like Next.js code. A route is a folder under `src/app/`. The folder path is the agent endpoint. Tools, state, middleware, and tests live next to the route they belong to. Types are generated from the file tree, not maintained by hand.
 
-Dawn 0.3 ships the route conventions, the typed tool inference, the dev server, and the build step. The mental model is documented at [`/docs/mental-model`](/docs/mental-model) and the route conventions at [`/docs/routes`](/docs/routes). If you have a working LangGraph project, the migration walkthrough at [`/docs/migrating-from-langgraph`](/docs/migrating-from-langgraph) covers the construct-by-construct move.
+That is the whole framework.
 
-What's next is Deep Agents — composable sub-agents — and a deeper streaming story. Both are coming in 0.4.
+Filesystem routes. Inferred types. A real dev server. A build step that emits the artifact LangSmith already understands.
 
-If you've felt the friction described above, the [getting started](/docs/getting-started) guide takes about a minute end to end. That's the right way to evaluate whether Dawn matches the mental model you already have.
+## Where Dawn is now
+
+Dawn 0.3 ships the route conventions, the typed tool inference, the dev server, and the build step.
+
+The mental model is documented at [`/docs/mental-model`](/docs/mental-model). The route conventions live at [`/docs/routes`](/docs/routes). If you have a working LangGraph project, the migration walkthrough at [`/docs/migrating-from-langgraph`](/docs/migrating-from-langgraph) covers the construct-by-construct move.
+
+What is next is Deep Agents — composable sub-agents — and a deeper streaming story. Both ship in 0.4.
+
+If you have felt the friction described above, the [getting started](/docs/getting-started) guide takes about a minute end to end.
+
+That is the right way to evaluate whether Dawn matches the mental model you already have.
+
+The runtime is becoming policy. The framework around it is becoming product behavior.
+
+That is what makes this interesting.
