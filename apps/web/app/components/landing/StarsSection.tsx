@@ -1,22 +1,13 @@
-import { formatStarCount, getGitHubStats } from "../../../lib/github-stars"
-
 interface Stat {
   readonly value: string
   readonly label: string
 }
 
-export async function StarsSection() {
-  const { stars, forks, url } = await getGitHubStats()
+const REPO_URL = "https://github.com/cacheplane/dawnai"
 
-  // Tune the milestone framing based on how far past 100 we are.
-  const crossed = stars >= 100
-  const subHeadline = crossed
-    ? `Dawn just crossed ${stars} stars on GitHub. Join the early adopters.`
-    : `Dawn is approaching 100 stars on GitHub. Join the early adopters.`
-
+export function StarsSection() {
   const stats: readonly Stat[] = [
-    { value: formatStarCount(stars), label: "Stars" },
-    { value: String(forks), label: "Forks" },
+    { value: "100+", label: "Stars" },
     { value: "MIT", label: "Licensed" },
     { value: "TS", label: "Strict types" },
   ]
@@ -50,9 +41,11 @@ export async function StarsSection() {
         >
           Loved by builders.
         </h2>
-        <p className="landing-text mt-4 leading-7 max-w-xl mx-auto">{subHeadline}</p>
+        <p className="landing-text mt-4 leading-7 max-w-xl mx-auto">
+          Dawn just crossed 100 stars on GitHub. Join the early adopters.
+        </p>
 
-        <div className="mt-12 grid grid-cols-2 md:grid-cols-4 gap-6 max-w-2xl mx-auto">
+        <div className="mt-12 grid grid-cols-3 gap-6 max-w-2xl mx-auto">
           {stats.map((stat) => (
             <div key={stat.label} className="flex flex-col items-center">
               <span
@@ -70,7 +63,7 @@ export async function StarsSection() {
 
         <div className="mt-12">
           <a
-            href={url}
+            href={REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 bg-accent-amber text-bg-primary px-5 py-3 rounded-md font-semibold hover:bg-accent-amber-deep transition-colors"
