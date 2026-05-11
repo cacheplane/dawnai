@@ -7,16 +7,110 @@ type: post
 author: brian
 ---
 
-Agents are the new frontier of application development, but the tooling has lagged the moment. The Python ecosystem moved first, and TypeScript got bolt-ons.
+Dawn started as a folder of helper scripts that kept showing up in every LangGraph project we touched. By the third project, it was clear the helpers were a framework wearing a trench coat.
 
-## The mismatch
+This post is about the friction those scripts were absorbing, and why we decided to make that work explicit.
 
-When we started prototyping in LangGraph from a Next.js app, the friction wasn't the framework, it was the impedance. Stack-trace boundaries, type erasure, and a runtime mental model that didn't match the rest of our code.
+## The moment it stopped scaling
 
-## What we wanted
+LangGraph is excellent at what it does. The runtime, the channels, the checkpointer — they all hold up. What didn't hold up was the *code around* the graph.
 
-Type-safety everywhere. File-system routing for agent graphs. No DSL overhead. The same authoring ergonomics that Next.js brought to web apps, applied to agent stacks.
+Our second production agent project had four graphs, eleven tools, and a `langgraph.json` that no one wanted to touch. The graphs lived in one folder, the tools in another, the state shapes in a third, and a `registry.ts` glued them together. Every new feature touched all four locations.
+
+We started writing internal docs explaining where things were supposed to go. That was the moment. If the framework is making you write a memo about file layout, the framework is missing a piece.
+
+## The friction list
+
+The same pain showed up in every project. None of it is LangGraph's fault — these are just things LangGraph leaves to you.
+
+- **Graph boilerplate.** Every agent route involves the same `StateGraph` plumbing — `addNode`, `addConditionalEdges`, `bindTools`, an exported `compile()`. The interesting code is twenty lines; the wiring is sixty.
+- **No project structure.** LangGraph has no opinion on where graphs, tools, or state live. So every team invents their own layout, then re-invents it six months later when the first one stops working.
+- **Hand-written tool schemas.** Every tool means a function, a Zod schema, and a `tool()` wrapper. The schema duplicates the TypeScript types you already wrote, and drifts the moment you forget.
+- **No local dev loop.** `langgraph dev` works but is heavyweight. Iterating against a route meant pushing to staging, watching the deploy, and waiting on traces. Tight loops aren't tight.
+- **Lost types at the boundary.** Tool inputs, state shape, dynamic routing parameters — none of these are typed across the graph boundary by default. You learn at runtime what a misspelled key costs.
+
+Each item is solvable on its own. The trouble is that every team solves them slightly differently, and the solutions don't compose.
+
+## What "meta-framework" means here
+
+Dawn is not a competitor to LangGraph. The runtime, the graph compiler, the checkpointer, LangSmith — all unchanged. The output of `dawn build` is a `langgraph.json` that LangSmith deploys without translation.
+
+What Dawn replaces is the *code around* the graph. Concretely:
+
+Without Dawn, a hello-world tool-calling agent looks like this:
+
+```ts
+// graph.ts
+import { StateGraph, MessagesAnnotation, START, END } from "@langchain/langgraph"
+import { ToolNode } from "@langchain/langgraph/prebuilt"
+import { ChatOpenAI } from "@langchain/openai"
+import { tool } from "@langchain/core/tools"
+import { z } from "zod"
+
+const greet = tool(async ({ name }) => `Hello, ${name}!`, {
+  name: "greet",
+  description: "Greet a user by name.",
+  schema: z.object({ name: z.string() }),
+})
+
+const model = new ChatOpenAI({ model: "gpt-4o-mini" }).bindTools([greet])
+const tools = new ToolNode([greet])
+
+async function callModel(state: typeof MessagesAnnotation.State) {
+  return { messages: [await model.invoke(state.messages)] }
+}
+
+function shouldContinue(state: typeof MessagesAnnotation.State) {
+  const last = state.messages.at(-1) as any
+  return last?.tool_calls?.length ? "tools" : END
+}
+
+export const graph = new StateGraph(MessagesAnnotation)
+  .addNode("agent", callModel)
+  .addNode("tools", tools)
+  .addEdge(START, "agent")
+  .addConditionalEdges("agent", shouldContinue, ["tools", END])
+  .addEdge("tools", "agent")
+  .compile()
+```
+
+Plus a hand-maintained `langgraph.json` pointing at the export.
+
+With Dawn, it's two files:
+
+```ts
+// src/app/(public)/hello/[tenant]/index.ts
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "You are a helpful assistant for the {tenant} organization.",
+})
+```
+
+```ts
+// src/app/(public)/hello/[tenant]/tools/greet.ts
+export default async ({ name }: { name: string }) => `Hello, ${name}!`
+```
+
+`dawn build` produces the `langgraph.json`. The `greet` tool is bound to the agent because it lives under `tools/`. The `[tenant]` segment becomes a typed field on state. Same deploy target; roughly a quarter of the code.
+
+The point isn't lines saved. The point is that every concept — route, tool, state, middleware — has *one place* it lives, and that place is on disk where your editor can find it.
+
+## The bet: agent code should feel like Next.js code
+
+The Next.js App Router did one thing extraordinarily well: it gave every concern a coordinate. A route is a folder. A layout is `layout.tsx`. A server action is a function in a route file. You can point at a thing, search for it, refactor it, write a test next to it.
+
+Agent codebases lack that. The runtime is reasonable, but the *codebase shape* is whatever you negotiated with your team last quarter.
+
+Our bet is that agent code should feel like Next.js code. A route is a folder under `src/app/`. The folder path is the agent endpoint. Tools, state, middleware, and tests live next to the route they belong to. Types are generated from the file tree, not maintained by hand.
+
+That's the whole framework. Filesystem routes, inferred types, a real dev server, and a build step that emits the artifact LangSmith already understands.
 
 ## Where we are now
 
-Dawn is in active development. The docs cover the working pieces; what's next is detailed on the roadmap and in the upcoming release notes.
+Dawn 0.3 ships the route conventions, the typed tool inference, the dev server, and the build step. The mental model is documented at [`/docs/mental-model`](/docs/mental-model) and the route conventions at [`/docs/routes`](/docs/routes). If you have a working LangGraph project, the migration walkthrough at [`/docs/migrating-from-langgraph`](/docs/migrating-from-langgraph) covers the construct-by-construct move.
+
+What's next is Deep Agents — composable sub-agents — and a deeper streaming story. Both are coming in 0.4.
+
+If you've felt the friction described above, the [getting started](/docs/getting-started) guide takes about a minute end to end. That's the right way to evaluate whether Dawn matches the mental model you already have.
