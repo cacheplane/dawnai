@@ -40,6 +40,16 @@ export function HeaderInner({ repoUrl }: HeaderInnerProps) {
     <header className={`${baseClasses} ${variantClasses}`}>
       <BrandLogo imageClassName="h-8" />
       <nav className="hidden md:flex items-center gap-6 text-sm text-text-secondary">
+        <Link
+          href="/blog"
+          className={
+            pathname.startsWith("/blog")
+              ? "text-text-primary transition-colors"
+              : "hover:text-text-primary transition-colors"
+          }
+        >
+          Blog
+        </Link>
         <a
           href={repoUrl}
           target="_blank"

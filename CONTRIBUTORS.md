@@ -66,6 +66,10 @@ Use this path only when you intentionally want the generated app wired to the lo
 - `node scripts/publish-smoke.mjs` runs the publish smoke check.
 - `node scripts/check-docs.mjs` checks that the website docs contain the required current-copy text.
 
+## Brand assets
+
+- Rebuild the README demo gif with `./docs/brand/build-gif.sh` (requires `brew install vhs`). The script scaffolds a temp app, starts `node docs/brand/stub-openai.mjs --fixture docs/brand/quickstart-fixture.json --port 4317`, and runs `vhs docs/brand/quickstart.tape`. See [docs/brand/README.md](./docs/brand/README.md) for details and the fixture-recapture flow.
+
 ## Verification And Test Lanes
 
 The repo uses a layered verification model:

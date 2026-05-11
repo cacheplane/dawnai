@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
-import path from "node:path"
+import path, { join } from "node:path"
 import { NextResponse } from "next/server"
 import { PROMPTS } from "../../content/prompts"
+import { getAllPosts } from "../components/blog/post-index"
 
 const CONTENT_ROOT = path.join(process.cwd(), "content")
 
@@ -56,6 +58,13 @@ async function buildLlmsFull(): Promise<string> {
   sections.push("## Agent Config Templates", "")
   for (const { title, path: p } of TEMPLATES) {
     sections.push(`### ${title}`, "", await readContent(p), "", "---", "")
+  }
+
+  sections.push("\n\n# Blog\n")
+  for (const post of getAllPosts()) {
+    const filename = `${post.date}-${post.slug}.mdx`
+    const raw = readFileSync(join(process.cwd(), "content", "blog", filename), "utf8")
+    sections.push(`\n## ${post.title}\n\n${raw}\n`)
   }
 
   return sections.join("\n")

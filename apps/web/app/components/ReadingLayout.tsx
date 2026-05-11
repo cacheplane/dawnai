@@ -1,0 +1,23 @@
+import type { ReactNode } from "react"
+
+interface ReadingLayoutProps {
+  readonly left: ReactNode
+  readonly right: ReactNode
+  readonly children: ReactNode
+}
+
+export function ReadingLayout({ left, right, children }: ReadingLayoutProps) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)] lg:grid-cols-[240px_minmax(0,1fr)_240px] xl:grid-cols-[280px_minmax(0,1fr)_240px]">
+      <aside className="hidden md:block sticky top-16 self-start h-[calc(100vh-4rem)] overflow-y-auto px-6 py-8 border-r border-border-subtle">
+        {left}
+      </aside>
+      <section className="min-w-0 px-6 md:px-12 py-12 max-w-[760px] mx-auto w-full">
+        {children}
+      </section>
+      <aside className="hidden lg:block sticky top-16 self-start h-[calc(100vh-4rem)] overflow-y-auto px-6 py-8 border-l border-border-subtle">
+        {right}
+      </aside>
+    </div>
+  )
+}
