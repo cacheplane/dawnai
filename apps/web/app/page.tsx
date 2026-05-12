@@ -22,10 +22,9 @@ export default function HomePage() {
   return (
     <div className="landing-dark relative isolate">
       <PaletteScroller />
-      {/* Hero / Ecosystem / Problem aren't wrapped — the seamless navy bleed across them
+      {/* Hero / Problem aren't wrapped — the seamless navy bleed across them
           would break if their bgs faded in independently. Reveals begin at WhoItsFor. */}
       <HeroSection />
-      <EcosystemSection />
       <ProblemSection />
       <ScrollReveal>
         <WhoItsFor />
@@ -50,6 +49,9 @@ export default function HomePage() {
       </ScrollReveal>
       <ScrollReveal>
         <DeploySection />
+      </ScrollReveal>
+      <ScrollReveal>
+        <EcosystemSection />
       </ScrollReveal>
       <ScrollReveal>
         <FeatureGrid />
