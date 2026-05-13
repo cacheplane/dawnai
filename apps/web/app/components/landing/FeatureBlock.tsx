@@ -38,7 +38,7 @@ export function FeatureBlock({
   imageSide = "right",
 }: FeatureBlockProps) {
   const textColumn = (
-    <div>
+    <div className="min-w-0">
       <Eyebrow>{eyebrow}</Eyebrow>
       <h3
         className="font-display font-semibold text-ink mt-3 text-[28px] leading-[34px] md:text-[36px] md:leading-[42px]"
@@ -69,7 +69,7 @@ export function FeatureBlock({
     </div>
   )
 
-  const visualColumn = <div className="w-full">{visual}</div>
+  const visualColumn = <div className="w-full min-w-0 overflow-hidden">{visual}</div>
 
   return (
     <section className="bg-page border-b border-divider">

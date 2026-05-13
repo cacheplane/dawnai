@@ -3,6 +3,7 @@ import { PostCard } from "../components/blog/PostCard"
 import { getAllPosts, getAllTags, getFeaturedPost } from "../components/blog/post-index"
 import { TagChips } from "../components/blog/TagChips"
 import { FinalCta } from "../components/landing/FinalCta"
+import { Eyebrow } from "../components/ui/Eyebrow"
 
 export default function BlogIndexPage() {
   const all = getAllPosts()
@@ -13,7 +14,9 @@ export default function BlogIndexPage() {
   return (
     <>
       <div className="max-w-[960px] mx-auto px-6 md:px-8 py-16">
-        <div className="text-[11px] uppercase tracking-widest text-accent-saas mb-2">Blog</div>
+        <div className="mb-2">
+          <Eyebrow tone="accent">Blog</Eyebrow>
+        </div>
         <h1
           className="font-display text-4xl md:text-5xl font-semibold tracking-tight mb-3 text-ink"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}

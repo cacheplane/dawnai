@@ -1,5 +1,6 @@
 import Image from "next/image"
 import Link from "next/link"
+import { Eyebrow } from "../ui/Eyebrow"
 import { AUTHORS, type Author, type Post } from "./post-index"
 
 function formatDate(iso: string): string {
@@ -23,7 +24,9 @@ export function PostHeader({ post }: { readonly post: Post }) {
   }
   return (
     <header className="mb-8 pb-8 border-b border-divider">
-      <div className="text-[11px] uppercase tracking-widest text-ink-dim mb-2">{eyebrow}</div>
+      <div className="mb-2">
+        <Eyebrow tone="accent">{eyebrow}</Eyebrow>
+      </div>
       <h1
         className="font-display text-4xl md:text-5xl font-semibold tracking-tight mb-3 text-ink"
         style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
