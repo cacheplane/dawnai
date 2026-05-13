@@ -27,7 +27,7 @@ const NOT_DOING = [
 export function KeepTheRuntime() {
   return (
     <section className="bg-surface border-b border-divider">
-      <div className="max-w-[1100px] mx-auto px-6 md:px-8 py-20 md:py-28">
+      <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-20 md:py-28">
         <Eyebrow>Compatibility</Eyebrow>
         <h2
           className="font-display font-semibold text-ink mt-3 text-[32px] leading-[38px] md:text-[44px] md:leading-[50px] max-w-[20ch]"

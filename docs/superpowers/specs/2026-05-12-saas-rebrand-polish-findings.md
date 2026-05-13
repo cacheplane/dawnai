@@ -82,3 +82,93 @@
 - **Important 4 — Hero eyebrow:** ✅ Fixed — `/` Hero eyebrow ("TypeScript meta-framework · for LangGraph.js"): `text-xs font-semibold uppercase tracking-[0.06em] text-ink-dim` → 12px, 0.72px ls, fw 600. Now uses `<Eyebrow>` component (rendered as `<p>` tag) instead of inline class string. Matches spec.
 
 - **Important 5 — Landing feature blocks (mobile overflow):** ⚠️ Partial — Same as Critical 1. Sections 0–3 and 5 show no overflow at 330px. Sections 4 (FeatureTools) and 6 (FeatureDevLoop) still overflow at 330px due to the missing `min-w-0` on the `imageSide="left"` order-wrapper grid cells. Fix needed in `apps/web/app/components/landing/FeatureBlock.tsx`: add `min-w-0` to both `<div className="lg:order-1 order-2">` and `<div className="lg:order-2 order-1">` wrappers.
+
+---
+
+## Desktop sweep (1024 + 1440)
+
+**Date:** 2026-05-13
+**Viewports:** 1024 × 768, 1440 × 900 (true viewports — DevTools closed, `window.innerWidth` confirmed at each resize)
+**Routes covered:** All 9 routes, both viewports = 18 screens
+
+### Critical
+
+**C1 — IntelliSenseVisual tooltip clips at both 1024 and 1440**
+`apps/web/app/components/landing/IntelliSenseVisual.tsx:36` · both viewports
+
+The tooltip is `absolute left-[58%] w-[320px]` inside a `relative` wrapper that is itself inside `FeatureBlock`'s `visualColumn` div (`overflow-hidden`). At 1024px the visual column is ~500px wide; 58% + 320px = ~610px, overflowing by ~110px. At 1440px the column is wider but the tooltip still clips the last few characters of code lines and its own content (visible: `content: string` truncated, comment lines ending in `-st`, `{ st`).
+Fix: add `overflow-visible` to the `visualColumn` wrapper in `FeatureBlock.tsx` for this section, or change tooltip positioning to `right-4` / `bottom-4` so it stays within the panel bounds. Alternative: reduce `left-[58%]` to `left-[40%]` and add `max-w-[calc(100%-40%-1rem)]`.
+
+**C2 — Cmd+K search modal: "Copy prompt" and "···" buttons visually bleed through overlay**
+`apps/web/app/components/docs/` (search overlay component) · 1440px
+
+When the Cmd+K search modal is open, the docs page's "Copy prompt" button and ellipsis "···" button appear on top of or adjacent to the modal panel's upper-right corner (confirmed in zoomed screenshot). The overlay is `z-50 bg-page/80 backdrop-blur-sm` — near-white with 80% opacity — so the underlying page is barely dimmed, making the button visually appear to poke through. The modal panel itself does not extend to cover this area.
+Fix: darken the backdrop to `bg-ink/40` or `bg-page/60` (designer call), or increase the `pt-[12vh]` offset so the modal panel clears the breadcrumb toolbar row. Also verify the breadcrumb toolbar row has a z-index lower than 50.
+
+### Important
+
+**I1 — Container max-width inconsistency across landing sections**
+`apps/web/app/page.tsx` + section components · both viewports
+
+Landing sections use four different `max-w` values on inner containers: `max-w-[1200px]` (Hero, proof strip, Routes, Tools, Types, DevLoop), `max-w-[920px]` (Why Dawn/problem statement section), `max-w-[1100px]` (LangGraph bet, Ecosystem, Three steps), `max-w-[820px]` (FAQ). This creates subtle rhythm drift: at 1440px all are unconstrained and differ visually. The problem statement at 920px feels noticeably narrower than its neighbours, and the 1100px sections create a mid-tier band.
+Fix: Consolidate to two intentional widths — e.g. `max-w-[1200px]` for full-bleed feature sections and `max-w-[820px]` for reading-focused sections (FAQ, problem statement). The current 920px and 1100px values appear accidental.
+
+**I2 — Hero H1 not responsive — same 64px at 1024 and 1440**
+`apps/web/app/components/landing/Hero.tsx` (or global typography) · both viewports
+
+H1 on landing is `64px / fw600 / ls-0.96px` at both 1024 and 1440 (Fraunces). No fluid/responsive scaling between breakpoints. The /brand type specimen documents Display XL as "72/76" and H1 as "40/44" — neither matches the landing's 64px. At 1440 the headline ("Build LangGraph agents like Next.js apps.") feels undersized relative to the large viewport and adjacent code panel.
+Fix: Either update the /brand spec to reflect 64px as the canonical landing display size, or add a `lg:text-[80px]` / `xl:text-[88px]` step to the Hero H1 to scale up at wider viewports. Also resolve the spec vs. implementation mismatch in `/brand`.
+
+**I3 — /brand H1 size (72px) doesn't match landing H1 (64px) or brand spec H1 (40px)**
+`apps/web/app/brand/page.tsx` · 1440px
+
+The /brand page H1 ("Dawn brand.") renders at 72px, which matches the brand specimen's "Display XL · 72/76" label — but the landing H1 is 64px and the brand specimen's "H1" entry is 40px. Three different sizes for the same semantic level across three contexts. This creates inconsistency for anyone using /brand as a reference.
+Fix: Clarify in /brand that "Display XL" is a one-off hero-only size, "H1 (page title)" is 48px (as used in docs/blog), and the landing hero uses a custom `text-[64px]` — or rationalise to a single display scale token.
+
+**I4 — Code panels overflow container at 1024px (Tools and Types sections)**
+`apps/web/app/components/landing/FeatureTools.tsx`, `IntelliSenseVisual.tsx` · 1024px
+
+The `pre` inside `CodeFrame` has `overflow-x-auto`, but the code in FeatureTools overflows by ~65px and IntelliSenseVisual overflows by ~183px at 1024px. The `overflow-x-auto` should allow horizontal scrolling within the panel, but combined with the `overflow-hidden` on `CodeFrame` the code is clipped rather than scrollable. Visual result: code lines are truncated with no scroll affordance visible to the user.
+Fix: Verify that `CodeFrame`'s `overflow-hidden` is not suppressing the scroll. If so, remove `overflow-hidden` from the `CodeFrame` wrapper or move it to only the header bar element, leaving the content area as `overflow-auto`.
+
+**I5 — Hero → proof strip gap: large dead space below hero content at 1024**
+`apps/web/app/components/landing/Hero.tsx` · 1024px
+
+At 1024×768 the hero section is 645px tall but the hero inner content (headline + code panel + CTA row) visually ends around 550–560px, leaving ~90px of empty cream background before the proof strip border. This gap is more prominent at 1024 than at 1440 (where the hero section still fills the viewport more naturally).
+Fix: Inspect whether the hero uses `min-h-screen` or a fixed padding that over-extends at this breakpoint. Reduce `pt-20 md:pt-28` or add a `max-h` cap at lg breakpoint to tighten the hero-to-proof-strip transition.
+
+### Minor
+
+**M1 — /brand type specimen "H1" label (40/44) doesn't reflect live site**
+`apps/web/app/brand/page.tsx` · both viewports
+
+The brand specimen labels the H1 demo as "Fraunces 600 · 40/44" but docs/blog H1 renders at 48px/lh-48px/-1.2px. The specimen is displaying a smaller size than what's actually used.
+Fix: Update the specimen size and label to match the live H1 token (48px/48px).
+
+**M2 — Proof strip "WORKS WITH" label alignment at 1440**
+`apps/web/app/components/landing/ProofStrip.tsx` · 1440px
+
+At 1440px the proof strip is full-width with "BUILT ON · LangGraph.js · 98 stars · 3 contributors" left-aligned and "WORKS WITH · OpenAI · Anthropic · Google · Ollama" right-aligned. The label "WORKS WITH" sits inline with the provider names, creating a run-on feel. At 1024px this tightens further. Minor visual rhythm issue.
+Fix: Separate "WORKS WITH" label onto its own column or add more spacing between the label and the list items to match the "BUILT ON" treatment.
+
+**M3 — TOC rail at 1024: appears on blog posts but not explicitly tested for docs sidebar scroll behaviour**
+`apps/web/app/components/docs/Sidebar.tsx` · 1024px
+
+The left docs sidebar navigation is visible at 1024px (confirmed via screenshot) but its height/scroll behaviour was not tested. At 1024px with a long page, the sidebar may not be sticky-scrollable if it lacks `overflow-y-auto h-screen sticky top-[72px]`.
+Fix: Confirm sidebar has sticky scroll at 1024 — if not, add `sticky top-[72px] h-[calc(100vh-72px)] overflow-y-auto` to the sidebar wrapper.
+
+### Cross-route consistency observations
+
+- **Fraunces H1 is consistent across all content routes** (blog index, blog post, docs page) at 48px/fw600/-1.2px. Landing hero H1 is 64px — intentionally larger as a display headline. /brand H1 is 72px, which is the "Display XL" specimen size. The three-tier scale (72 → 64 → 48) is defensible but undocumented.
+
+- **Sticky header**: position:sticky, top:0, height 72px, scroll-padding-top:72px — confirmed working correctly at both viewports. No anchor-link overlap issues observed.
+
+- **Footer is identical across all routes** — same four-column layout, same link set, same "Built on the LangChain ecosystem" tagline. Consistent.
+
+- **DevLoopAnimation**: Renders cleanly as a terminal-style animated component at both viewports. Animation (compile → preserve → watch → update lines) visible and polished. No overflow or clipping issues.
+
+- **Blog post three-column layout** (meta rail 240px | article max-w-760px | TOC 240px) is correct and present at both 1024 and 1440. TOC rail visible at both breakpoints (uses `lg:grid-cols-[240px_1fr_240px]` which activates at 1024px).
+
+- **Search modal (Cmd+K)**: Opens correctly, shows structured results grouped by section. Functionally correct. Visual issue: backdrop too light (`bg-page/80` ≈ near-white) — provides minimal dimming effect; modal doesn't feel "elevated" from the page. The "Copy prompt" bleed-through (C2) worsens this.
+
+- **No orphan dark/cosmic tokens found** across all 9 routes at both viewports. Color token migration is complete — all backgrounds resolve to `page`, `surface`, `surface-sunk`, or transparent.
