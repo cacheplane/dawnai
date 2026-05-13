@@ -2,7 +2,7 @@ import { FeaturedPostCard } from "../components/blog/FeaturedPostCard"
 import { PostCard } from "../components/blog/PostCard"
 import { getAllPosts, getAllTags, getFeaturedPost } from "../components/blog/post-index"
 import { TagChips } from "../components/blog/TagChips"
-import { FinalCta } from "../components/landing-v2/FinalCta"
+import { FinalCta } from "../components/landing/FinalCta"
 
 export default function BlogIndexPage() {
   const all = getAllPosts()
