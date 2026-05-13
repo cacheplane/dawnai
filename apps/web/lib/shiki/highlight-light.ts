@@ -14,8 +14,8 @@ function getHighlighter() {
 
 /**
  * Highlight code with shiki's bundled `github-light` theme. Intended for the
- * cream SaaS-rebrand surfaces where the existing dark `dawnTheme` would be
- * unreadable. Background is owned by the surrounding container (transparent).
+ * cream SaaS-rebrand surfaces where a dark theme would be unreadable.
+ * Background is owned by the surrounding container (transparent).
  */
 export async function highlightLight(
   code: string,

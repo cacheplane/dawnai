@@ -4,7 +4,7 @@ import { notFound } from "next/navigation"
 import { PostCard } from "../../../components/blog/PostCard"
 import { getAllTags, getPostsByTag } from "../../../components/blog/post-index"
 import { TagChips } from "../../../components/blog/TagChips"
-import { FinalCta } from "../../../components/landing-v2/FinalCta"
+import { FinalCta } from "../../../components/landing/FinalCta"
 
 interface PageProps {
   readonly params: Promise<{ tag: string }>

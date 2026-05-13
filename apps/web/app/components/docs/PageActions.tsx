@@ -307,7 +307,7 @@ export function PageActions({ slug, promptSlug, promptBody }: PageActionsProps) 
         <button
           type="button"
           onClick={handleCopyPrompt}
-          className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 border border-accent-amber/40 text-accent-saas rounded-md text-xs font-mono hover:border-accent-amber hover:bg-accent-saas/5 transition-colors"
+          className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 border border-accent-saas/40 text-accent-saas rounded-md text-xs font-mono hover:border-accent-saas hover:bg-accent-saas/5 transition-colors"
           aria-label={primaryFeedback === "copied" ? "Prompt copied" : "Copy prompt to clipboard"}
         >
           {primaryFeedback === "copied" ? (
