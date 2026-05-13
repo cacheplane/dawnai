@@ -29,36 +29,47 @@ const variantClasses: Record<ButtonVariant, string> = {
     "px-4 py-2 text-ink hover:text-accent-saas border border-divider hover:border-divider-strong bg-page",
 }
 
+function LinkButton({
+  href,
+  external,
+  children,
+  variant: _v,
+  className,
+  ...rest
+}: ButtonAsLink & { className: string }) {
+  if (external === true) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className={className} {...rest}>
+        {children}
+      </a>
+    )
+  }
+  return (
+    <Link href={href} className={className} {...rest}>
+      {children}
+    </Link>
+  )
+}
+
+function NativeButton({
+  children,
+  variant: _v,
+  className,
+  ...rest
+}: ButtonAsButton & { className: string }) {
+  return (
+    <button type="button" className={className} {...rest}>
+      {children}
+    </button>
+  )
+}
+
 export function Button(props: ButtonProps) {
   const variant = props.variant ?? "primary"
   const className = `${baseClasses} ${variantClasses[variant]}`
 
   if (props.href !== undefined) {
-    const { href, external, children, variant: _v, ...rest } = props as ButtonAsLink & Record<string, unknown>
-    if (external) {
-      return (
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={className}
-          {...(rest as Record<string, unknown>)}
-        >
-          {children}
-        </a>
-      )
-    }
-    return (
-      <Link href={href} className={className} {...(rest as Record<string, unknown>)}>
-        {children}
-      </Link>
-    )
+    return <LinkButton {...props} className={className} />
   }
-
-  const { children, variant: _v, ...rest } = props as ButtonAsButton & Record<string, unknown>
-  return (
-    <button type="button" className={className} {...(rest as Record<string, unknown>)}>
-      {children}
-    </button>
-  )
+  return <NativeButton {...props} className={className} />
 }
