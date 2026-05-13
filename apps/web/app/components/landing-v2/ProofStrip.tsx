@@ -1,5 +1,5 @@
-import { getGitHubStars } from "../../../lib/github-stars"
 import { getGitHubContributors } from "../../../lib/github-contributors"
+import { getGitHubStars } from "../../../lib/github-stars"
 import { ProviderMark } from "../ui/ProviderMark"
 
 function formatCount(n: number): string {
@@ -40,16 +40,12 @@ function UsersIcon() {
 }
 
 export async function ProofStrip() {
-  const [stars, contributors] = await Promise.all([
-    getGitHubStars(),
-    getGitHubContributors(),
-  ])
+  const [stars, contributors] = await Promise.all([getGitHubStars(), getGitHubContributors()])
 
   return (
     <section className="bg-surface border-b border-divider">
       <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-8 md:py-10">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 md:gap-10">
-
           <div className="flex items-center gap-3">
             <span className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-dim">
               Built on
@@ -94,7 +90,6 @@ export async function ProofStrip() {
               <ProviderMark name="Ollama" />
             </div>
           </div>
-
         </div>
       </div>
     </section>

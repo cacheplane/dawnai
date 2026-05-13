@@ -17,27 +17,23 @@ export function WhyDawn() {
 
         <div className="mt-8 space-y-5 text-lg text-ink-muted leading-[30px] max-w-[64ch]">
           <p>
-            LangGraph.js gives you a graph runtime, durable state, and a
-            production-grade execution model — the right primitives. What it
-            doesn't give you is structure. Real agents drift into a single
-            file, hand-rolled tool plumbing, types that don't follow the data,
-            and a dev loop that means restarting the graph every time you
-            change a prompt.
+            LangGraph.js gives you a graph runtime, durable state, and a production-grade execution
+            model — the right primitives. What it doesn't give you is structure. Real agents drift
+            into a single file, hand-rolled tool plumbing, types that don't follow the data, and a
+            dev loop that means restarting the graph every time you change a prompt.
           </p>
           <p>
-            Dawn is a meta-framework for LangGraph in the same shape Next.js is
-            for React. File-system routes for agents, route-local tools with
-            inferred argument types, end-to-end generated types from your
-            state schema, and an HMR dev server that doesn't lose graph state
-            between edits.
+            Dawn is a meta-framework for LangGraph in the same shape Next.js is for React.
+            File-system routes for agents, route-local tools with inferred argument types,
+            end-to-end generated types from your state schema, and an HMR dev server that doesn't
+            lose graph state between edits.
           </p>
           <p>
             <strong className="text-ink font-medium">
               Dawn is not a runtime, an LLM router, or a hosting product.
             </strong>{" "}
-            Your graphs stay valid LangGraph code. Your model calls stay your
-            model calls. Your deployment target stays yours. Dawn is the
-            scaffolding between you and the runtime.
+            Your graphs stay valid LangGraph code. Your model calls stay your model calls. Your
+            deployment target stays yours. Dawn is the scaffolding between you and the runtime.
           </p>
         </div>
       </div>
