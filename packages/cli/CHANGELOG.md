@@ -1,5 +1,14 @@
 # @dawn-ai/cli
 
+## 0.1.9
+
+### Patch Changes
+
+- d456d31: docs: rebrand "LangGraph Platform" → "LangSmith" in user-visible CLI strings, README, and comments. The `langgraph.json` artifact format is unchanged.
+  - @dawn-ai/core@0.1.9
+  - @dawn-ai/langchain@0.1.9
+  - @dawn-ai/langgraph@0.1.9
+
 ## 0.1.8
 
 ### Patch Changes
