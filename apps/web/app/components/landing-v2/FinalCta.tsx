@@ -32,8 +32,8 @@ export function FinalCta() {
           Start building.
         </h2>
         <p className="mt-5 text-lg text-ink-muted leading-[30px] max-w-[48ch] mx-auto">
-          Scaffold a Dawn app, open the example, and see whether the shape
-          fits your team in under five minutes.
+          Scaffold a Dawn app, open the example, and see whether the shape fits your team in under
+          five minutes.
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
           <CopyCommand command="pnpm create dawn-ai-app my-agent" />
