@@ -31,17 +31,13 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
         {children}
       </h2>
     ),
-    h3: ({ children }) => (
-      <h3 className="text-lg font-semibold text-ink mt-8 mb-3">{children}</h3>
-    ),
+    h3: ({ children }) => <h3 className="text-lg font-semibold text-ink mt-8 mb-3">{children}</h3>,
     p: ({ children }) => <p className="text-ink-muted leading-7 mb-4">{children}</p>,
     code: InlineCode,
     pre: Pre,
     figure: RehypeFigure,
     ul: ({ children }) => (
-      <ul className="list-disc list-inside text-ink-muted leading-7 mb-4 space-y-1">
-        {children}
-      </ul>
+      <ul className="list-disc list-inside text-ink-muted leading-7 mb-4 space-y-1">{children}</ul>
     ),
     ol: ({ children }) => (
       <ol className="list-decimal list-inside text-ink-muted leading-7 mb-4 space-y-1">
@@ -54,9 +50,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
         {children}
       </blockquote>
     ),
-    strong: ({ children }) => (
-      <strong className="text-ink font-semibold">{children}</strong>
-    ),
+    strong: ({ children }) => <strong className="text-ink font-semibold">{children}</strong>,
     table: ({ children }) => (
       <div className="my-6 overflow-x-auto border border-divider rounded-lg">
         <table className="w-full text-sm">{children}</table>

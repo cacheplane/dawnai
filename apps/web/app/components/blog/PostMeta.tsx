@@ -24,9 +24,7 @@ export function PostMeta({ post }: { readonly post: Post }) {
         <div className="text-ink">{formatDate(post.date)}</div>
       </div>
       <div>
-        <div className="text-[10px] uppercase tracking-widest text-ink-dim mb-2">
-          Reading time
-        </div>
+        <div className="text-[10px] uppercase tracking-widest text-ink-dim mb-2">Reading time</div>
         <div className="text-ink">{post.readingTimeMinutes} min</div>
       </div>
       {post.tags.length > 0 && (

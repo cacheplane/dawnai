@@ -13,9 +13,7 @@ export default function BlogIndexPage() {
   return (
     <>
       <div className="max-w-[960px] mx-auto px-6 md:px-8 py-16">
-        <div className="text-[11px] uppercase tracking-widest text-accent-saas mb-2">
-          Blog
-        </div>
+        <div className="text-[11px] uppercase tracking-widest text-accent-saas mb-2">Blog</div>
         <h1
           className="font-display text-4xl md:text-5xl font-semibold tracking-tight mb-3 text-ink"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}

@@ -32,10 +32,7 @@ export default async function TagPage({ params }: PageProps) {
   return (
     <>
       <div className="max-w-[960px] mx-auto px-6 md:px-8 py-16">
-        <Link
-          href="/blog"
-          className="text-sm text-ink-dim hover:text-ink mb-4 inline-block"
-        >
+        <Link href="/blog" className="text-sm text-ink-dim hover:text-ink mb-4 inline-block">
           ← All posts
         </Link>
         <h1
