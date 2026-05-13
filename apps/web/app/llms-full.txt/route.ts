@@ -36,7 +36,6 @@ async function buildLlmsFull(): Promise<string> {
     "",
     "## Brand Assets",
     "Official Dawn AI logos, icons, favicons, and social assets:",
-    "- Brand page: https://dawnai.org/brand",
     "- Asset manifest: https://dawnai.org/brand/assets.json",
     "- Full brand kit ZIP: https://dawnai.org/brand/dawn-ai-brand-assets.zip",
     "",
