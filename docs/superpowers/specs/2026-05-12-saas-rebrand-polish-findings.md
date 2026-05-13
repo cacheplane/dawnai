@@ -60,3 +60,25 @@
 **Color token usage**: No orphan cream (`#f5f0e8`, `#fffbf5`) or cosmic surface (`#0a0a1a`, deep navy) values found anywhere in computed styles across all 9 routes. All background colors resolve to the SaaS token set (`page`, `surface`, `surface-sunk`) or transparent. The rebrand token migration appears complete.
 
 **Reading column width**: Blog posts and docs both use `ReadingLayout`'s center column (`max-w-[760px] mx-auto`). Blog post body text renders at 18px/29.25px (Inter, `ink-muted`), docs body at 16px/28px. The slightly larger blog body type is appropriate for long-form reading. Both feel intentional rather than accidental.
+
+---
+
+## Re-verify results
+
+**Re-verified against commit `a3298b5` (2026-05-13). Viewport note: DevTools responsive mode locked at 330×715px; `resize_window` accepted but `window.innerWidth` remained 330px. Checks at 537px (after `resize_window 1280px`) are also noted where relevant.**
+
+- **Critical 1 — Landing mobile overflow:** ⚠️ Partial — `document.documentElement.scrollWidth === innerWidth` at 537px viewport (no page-level overflow). However per-section JS check at 330px confirms sections 4 ("FeatureTools", sw=537px) and 6 ("FeatureDevLoop", sw=419px) still overflow at true mobile width. Root cause: the `imageSide="left"` render path in `FeatureBlock.tsx` wraps `textColumn`/`visualColumn` in `<div className="lg:order-1 order-2">` / `<div className="lg:order-2 order-1">` wrappers that were not given `min-w-0`. The fix added `min-w-0` to the inner column divs but not to these outer order-wrapper grid cells. The red-border overflow indicator was visible in the DevTools responsive-mode screenshot at 330px.
+
+- **Critical 2 — Blog post inline code overflow:** ✅ Fixed — `/blog/dawn-0-4-release` at 330px: `document.documentElement.scrollWidth === innerWidth` (no overflow). Inline `<code>` elements now have `overflow-wrap: break-word` computed style (previously `normal`). `white-space: nowrap` is still set but the `overflow-wrap` fallback prevents page-level blowout.
+
+- **Critical 3 — Brand page Scale overflow:** ✅ Fixed — `/brand` at 330px: `scrollWidth === innerWidth` (no overflow). The Scale section display text was reduced from `text-[72px]` to `text-3xl md:text-4xl`; section `scrollWidth` is 327px within the 330px viewport. `overflow-hidden` was not needed — the font-size reduction itself resolved the overflow.
+
+- **Important 1 — Sticky header:** ✅ Fixed — `/docs/getting-started` scrolled to 1000px: `getComputedStyle(header).position === "sticky"`, `top === "0px"`. Header remains pinned. `HeaderInner.tsx` now applies `sticky top-0 z-50` (or equivalent) to the `<header>` element.
+
+- **Important 2 — Brand page accent hex:** ✅ Fixed — `/brand` accent-saas swatch now displays `#b45309`. Previously showed `#d97706`. Confirmed via DOM text search — the correct amber-700 value is rendered.
+
+- **Important 3 — Eyebrow consistency (blog index vs post):** ✅ Fixed — Blog index "Blog" eyebrow: `text-xs font-semibold uppercase tracking-[0.06em] text-accent-saas` → 12px, 0.72px ls, fw 600. Post header "Essay · 5 min read" eyebrow: `text-xs font-semibold uppercase tracking-[0.06em] text-accent-saas` → 12px, 0.72px ls, fw 600. Both pages now resolve to identical computed font-size and letter-spacing, matching the `<Eyebrow>` component spec.
+
+- **Important 4 — Hero eyebrow:** ✅ Fixed — `/` Hero eyebrow ("TypeScript meta-framework · for LangGraph.js"): `text-xs font-semibold uppercase tracking-[0.06em] text-ink-dim` → 12px, 0.72px ls, fw 600. Now uses `<Eyebrow>` component (rendered as `<p>` tag) instead of inline class string. Matches spec.
+
+- **Important 5 — Landing feature blocks (mobile overflow):** ⚠️ Partial — Same as Critical 1. Sections 0–3 and 5 show no overflow at 330px. Sections 4 (FeatureTools) and 6 (FeatureDevLoop) still overflow at 330px due to the missing `min-w-0` on the `imageSide="left"` order-wrapper grid cells. Fix needed in `apps/web/app/components/landing/FeatureBlock.tsx`: add `min-w-0` to both `<div className="lg:order-1 order-2">` and `<div className="lg:order-2 order-1">` wrappers.
