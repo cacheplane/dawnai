@@ -33,6 +33,12 @@
   --color-accent-saas-ink: #ffffff;
   --color-accent-saas-soft: #fef3c7;
 
+  /* Display sizes used by the SaaS-rebrand Hero (PR 2). */
+  --text-display-xl: 4.5rem;
+  --text-display-xl--line-height: 4.75rem;
+  --text-display-l: 3.5rem;
+  --text-display-l--line-height: 3.75rem;
+
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", monospace;
