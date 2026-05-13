@@ -1,187 +1,235 @@
 import type { Metadata } from "next"
-import Image from "next/image"
-import Link from "next/link"
+import { Button } from "../components/ui/Button"
+import { Card } from "../components/ui/Card"
+import { CodeFrame } from "../components/ui/CodeFrame"
+import { Eyebrow } from "../components/ui/Eyebrow"
+import { ProviderMark } from "../components/ui/ProviderMark"
+import { StarBadge } from "../components/ui/StarBadge"
+import { Accordion } from "../components/ui/Accordion"
 
 export const metadata: Metadata = {
-  title: "Brand Assets",
-  description:
-    "Download official Dawn AI logos, icons, favicons, social images, and machine-readable asset metadata.",
+  title: "Brand",
+  description: "Dawn brand and design system.",
 }
 
-const downloads = [
-  {
-    label: "Horizontal logo",
-    format: "SVG",
-    href: "/brand/dawn-logo-horizontal-white.svg",
-    note: "White horizontal logo for dark backgrounds, website headers, and documentation.",
-  },
-  {
-    label: "Icon",
-    format: "SVG",
-    href: "/brand/dawn-icon-white.svg",
-    note: "Compact mark for logo grids, integrations, and small UI surfaces.",
-  },
-  {
-    label: "Social avatar",
-    format: "PNG",
-    href: "/social/dawn-social-avatar-white-on-black-1024.png",
-    note: "Square 1024px avatar for profiles, marketplaces, and social surfaces.",
-  },
-  {
-    label: "Favicon",
-    format: "ICO",
-    href: "/favicon.ico",
-    note: "Browser favicon file for web projects and references.",
-  },
-  {
-    label: "Web manifest",
-    format: "JSON",
-    href: "/site.webmanifest",
-    note: "Installable web app metadata for browsers and app surfaces.",
-  },
-  {
-    label: "Asset manifest",
-    format: "JSON",
-    href: "/brand/assets.json",
-    note: "Machine-readable index for coding agents and automation.",
-  },
-] as const
+interface SwatchProps {
+  readonly name: string
+  readonly token: string
+  readonly value: string
+}
 
-const dos = [
-  "Use the official files as provided.",
-  "Use white assets on dark backgrounds and black assets on light backgrounds.",
-  "Keep clear space around the logo and icon.",
-] as const
+function Swatch({ name, token, value }: SwatchProps) {
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <span
+        className="inline-block w-10 h-10 rounded-md border border-divider"
+        style={{ backgroundColor: value }}
+        aria-hidden="true"
+      />
+      <div className="flex flex-col">
+        <span className="text-sm text-ink font-medium">{name}</span>
+        <span className="text-xs text-ink-muted font-mono">{token}</span>
+        <span className="text-xs text-ink-dim font-mono">{value}</span>
+      </div>
+    </div>
+  )
+}
 
-const donts = [
-  "Do not stretch, recolor, redraw, or modify the mark.",
-  "Do not place the logo on low-contrast backgrounds.",
-  "Do not use Dawn marks in a way that implies endorsement.",
-] as const
+const SWATCHES: readonly SwatchProps[] = [
+  { name: "Page", token: "--color-page", value: "#ffffff" },
+  { name: "Surface", token: "--color-surface", value: "#fafaf7" },
+  { name: "Surface (sunk)", token: "--color-surface-sunk", value: "#f4f2ec" },
+  { name: "Ink", token: "--color-ink", value: "#14110d" },
+  { name: "Ink (muted)", token: "--color-ink-muted", value: "#5a554c" },
+  { name: "Ink (dim)", token: "--color-ink-dim", value: "#8a857b" },
+  { name: "Divider", token: "--color-divider", value: "#e6e3da" },
+  { name: "Divider (strong)", token: "--color-divider-strong", value: "#cfcabd" },
+  { name: "Accent", token: "--color-accent-saas", value: "#d97706" },
+  { name: "Accent (soft)", token: "--color-accent-saas-soft", value: "#fef3c7" },
+]
 
 export default function BrandPage() {
   return (
-    <div className="px-6 py-14 sm:px-8 sm:py-20">
-      <section className="mx-auto grid max-w-6xl gap-10 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-center">
-        <div>
-          <p className="mb-4 text-xs font-semibold uppercase tracking-widest text-accent-amber">
-            Brand Assets
-          </p>
+    <div className="bg-page">
+      <div className="max-w-[1100px] mx-auto px-6 md:px-8 py-16 md:py-24">
+
+        <section className="mb-16 md:mb-24">
+          <Eyebrow>Design system · v2 (in progress)</Eyebrow>
           <h1
-            className="font-display text-5xl font-semibold tracking-tight text-text-primary md:text-6xl"
-            style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
+            className="font-display text-[56px] leading-[60px] md:text-[72px] md:leading-[76px] font-semibold text-ink mt-3"
+            style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0", letterSpacing: "-0.01em" }}
           >
-            Dawn Brand Assets
+            Dawn brand.
           </h1>
-          <p className="mt-5 max-w-2xl text-lg leading-relaxed text-text-secondary">
-            Official Dawn AI logos, icons, favicons, social images, and machine-readable metadata
-            for developers, documentation, and coding agents.
+          <p className="text-lg text-ink-muted mt-5 max-w-2xl leading-relaxed">
+            The visual language for Dawn — a restrained, infrastructure-grade
+            system built on off-white surfaces, near-black ink, and a single
+            amber accent. This page is the source of truth as the SaaS rebrand
+            lands across the site.
           </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <a
-              href="/brand/dawn-ai-brand-assets.zip"
-              className="rounded-md bg-accent-amber px-5 py-2.5 text-sm font-semibold text-bg-primary transition-colors hover:bg-accent-amber-deep"
-            >
-              Download full brand kit
-            </a>
-            <a
-              href="/brand/assets.json"
-              className="rounded-md border border-border px-5 py-2.5 text-sm font-medium text-text-secondary transition-colors hover:border-text-muted hover:text-text-primary"
-            >
-              View asset manifest
-            </a>
-          </div>
-        </div>
+        </section>
 
-        <div className="rounded-lg border border-border bg-bg-card/60 p-6 sm:p-8">
-          <div className="rounded-md bg-black p-7 sm:p-8">
-            <Image
-              src="/brand/dawn-logo-horizontal-white.svg"
-              alt="Dawn AI horizontal logo"
-              width={720}
-              height={220}
-              className="h-auto w-full"
-              priority
-            />
-          </div>
-          <p className="mt-4 text-sm leading-relaxed text-text-muted">
-            Use the horizontal logo when space allows. Use the icon for compact placements.
-          </p>
-        </div>
-      </section>
+        <section className="mb-16 md:mb-24">
+          <Eyebrow>Color</Eyebrow>
+          <h2 className="font-display text-3xl md:text-4xl font-semibold text-ink mt-2 mb-6">
+            Tokens
+          </h2>
+          <Card className="p-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1">
+              {SWATCHES.map((s) => (
+                <Swatch key={s.token} {...s} />
+              ))}
+            </div>
+          </Card>
+        </section>
 
-      <section className="mx-auto mt-16 max-w-6xl">
-        <div className="mb-6">
-          <h2 className="text-2xl font-semibold text-text-primary">Common Downloads</h2>
-          <p className="mt-2 text-sm text-text-muted">
-            Direct links for the files developers and agents most often need.
-          </p>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {downloads.map((asset) => (
-            <a
-              key={asset.href}
-              href={asset.href}
-              className="rounded-lg border border-border bg-bg-card/50 p-4 transition-colors hover:border-accent-amber/50"
-            >
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-accent-amber">
-                {asset.format}
-              </span>
-              <h3 className="mt-3 text-base font-semibold text-text-primary">{asset.label}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-text-muted">{asset.note}</p>
-            </a>
-          ))}
-        </div>
-      </section>
-
-      <section className="mx-auto mt-16 grid max-w-6xl gap-6 lg:grid-cols-2">
-        <div className="rounded-lg border border-border bg-bg-card/40 p-6">
-          <h2 className="text-xl font-semibold text-text-primary">Usage Guidance</h2>
-          <div className="mt-5 grid gap-6 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+        <section className="mb-16 md:mb-24">
+          <Eyebrow>Type</Eyebrow>
+          <h2 className="font-display text-3xl md:text-4xl font-semibold text-ink mt-2 mb-6">
+            Scale
+          </h2>
+          <Card className="p-6 space-y-6">
             <div>
-              <h3 className="text-sm font-semibold text-text-primary">Do</h3>
-              <ul className="mt-3 space-y-3">
-                {dos.map((item) => (
-                  <li key={item} className="text-sm leading-relaxed text-text-secondary">
-                    {item}
-                  </li>
-                ))}
-              </ul>
+              <p className="text-xs text-ink-dim font-mono mb-1">Display XL · Fraunces 600 · 72/76</p>
+              <p
+                className="font-display text-[72px] leading-[76px] font-semibold text-ink"
+                style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0", letterSpacing: "-0.01em" }}
+              >
+                Build LangGraph agents.
+              </p>
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-text-primary">Don't</h3>
-              <ul className="mt-3 space-y-3">
-                {donts.map((item) => (
-                  <li key={item} className="text-sm leading-relaxed text-text-secondary">
-                    {item}
-                  </li>
-                ))}
-              </ul>
+              <p className="text-xs text-ink-dim font-mono mb-1">H1 · Fraunces 600 · 40/44</p>
+              <p
+                className="font-display text-[40px] leading-[44px] font-semibold text-ink"
+                style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0" }}
+              >
+                Routes for agents, not just pages.
+              </p>
             </div>
-          </div>
-        </div>
+            <div>
+              <p className="text-xs text-ink-dim font-mono mb-1">Body L · Inter 400 · 18/30</p>
+              <p className="text-lg text-ink leading-[30px] max-w-2xl">
+                Dawn adds file-system routing, route-local tools, generated
+                types, and HMR to your existing LangGraph.js stack.
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-dim font-mono mb-1">Body · Inter 400 · 16/26</p>
+              <p className="text-base text-ink leading-[26px] max-w-2xl">
+                Keep the runtime. Drop the boilerplate.
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-dim font-mono mb-1">Small · Inter 400 · 14/22</p>
+              <p className="text-sm text-ink-muted leading-[22px] max-w-2xl">
+                Production caveats, links, and supporting copy live at this size.
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-dim font-mono mb-1">Code · JetBrains Mono 400 · 14/22</p>
+              <code className="text-sm text-ink font-mono">pnpm create dawn-ai-app my-agent</code>
+            </div>
+          </Card>
+        </section>
 
-        <div className="rounded-lg border border-border bg-bg-card/40 p-6">
-          <h2 className="text-xl font-semibold text-text-primary">For Coding Agents</h2>
-          <p className="mt-4 text-sm leading-relaxed text-text-secondary">
-            Use <code className="text-text-primary">/brand/assets.json</code> as the canonical
-            machine-readable index. It lists the full ZIP, common direct URLs, formats, dimensions,
-            background guidance, and recommended use cases without requiring HTML scraping.
-          </p>
-          <div className="mt-5 flex flex-wrap gap-3 text-sm">
-            <a href="/brand/assets.json" className="text-accent-amber hover:text-accent-amber-deep">
-              Open assets.json
-            </a>
-            <Link href="/llms.txt" className="text-accent-amber hover:text-accent-amber-deep">
-              llms.txt
-            </Link>
-            <Link href="/llms-full.txt" className="text-accent-amber hover:text-accent-amber-deep">
-              llms-full.txt
-            </Link>
+        <section className="mb-16 md:mb-24">
+          <Eyebrow>Primitives</Eyebrow>
+          <h2 className="font-display text-3xl md:text-4xl font-semibold text-ink mt-2 mb-6">
+            Components
+          </h2>
+
+          <div className="space-y-6">
+            <Card className="p-6">
+              <p className="text-xs text-ink-dim font-mono mb-3">Button</p>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button variant="primary" href="/docs/getting-started">
+                  Read the docs
+                </Button>
+                <Button variant="secondary" href="https://github.com/cacheplane/dawnai" external>
+                  Star on GitHub
+                </Button>
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <p className="text-xs text-ink-dim font-mono mb-3">StarBadge</p>
+              <StarBadge />
+            </Card>
+
+            <Card className="p-6">
+              <p className="text-xs text-ink-dim font-mono mb-3">ProviderMark</p>
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+                <ProviderMark name="OpenAI" href="https://openai.com" />
+                <ProviderMark name="Anthropic" href="https://www.anthropic.com" />
+                <ProviderMark name="Google" />
+                <ProviderMark name="Ollama" />
+              </div>
+            </Card>
+
+            <Card className="p-6">
+              <p className="text-xs text-ink-dim font-mono mb-3">CodeFrame</p>
+              <CodeFrame label="src/app/(public)/support/index.ts">
+                <pre className="m-0 px-4 py-4 text-sm font-mono text-ink leading-[22px] overflow-x-auto">
+{`import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "openai:gpt-4o-mini",
+  systemPrompt: "Answer for {tenant}.",
+})`}
+                </pre>
+              </CodeFrame>
+            </Card>
+
+            <Card className="p-6">
+              <p className="text-xs text-ink-dim font-mono mb-3">Accordion</p>
+              <Accordion
+                defaultOpenId="ex-1"
+                items={[
+                  {
+                    id: "ex-1",
+                    question: "What is this primitive used for?",
+                    answer: (
+                      <p>
+                        The FAQ section on the rebranded landing page uses this
+                        primitive. It's keyboard-accessible and respects
+                        prefers-reduced-motion.
+                      </p>
+                    ),
+                  },
+                  {
+                    id: "ex-2",
+                    question: "Can multiple items be open at once?",
+                    answer: <p>No — only one item is open at a time by design.</p>,
+                  },
+                ]}
+              />
+            </Card>
           </div>
-        </div>
-      </section>
+        </section>
+
+        <section>
+          <Eyebrow>Status</Eyebrow>
+          <h2 className="font-display text-3xl md:text-4xl font-semibold text-ink mt-2 mb-3">
+            Rebrand progress
+          </h2>
+          <p className="text-base text-ink-muted leading-relaxed max-w-2xl">
+            This page reflects PR 1 of the SaaS-style rebrand: tokens,
+            primitives, refreshed Header and Footer. The landing page, docs, and
+            blog are migrated in subsequent PRs. See{" "}
+            <a
+              className="text-accent-saas hover:opacity-80"
+              href="https://github.com/cacheplane/dawnai/pulls"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              open PRs on GitHub
+            </a>
+            .
+          </p>
+        </section>
+
+      </div>
     </div>
   )
 }
