@@ -66,7 +66,7 @@ export function DocsTOC() {
               href={`#${h.id}`}
               className={`block py-0.5 transition-colors -ml-px border-l ${
                 activeId === h.id
-                  ? "text-accent-saas border-accent-amber"
+                  ? "text-accent-saas border-accent-saas"
                   : "text-ink-dim border-transparent hover:text-ink"
               }`}
               style={{ paddingLeft: h.level === 3 ? 12 : 12 }}

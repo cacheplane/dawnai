@@ -173,7 +173,7 @@ export function TabPill({
   const underline = active ? (
     <span
       aria-hidden
-      className="absolute left-1 right-1 -bottom-px h-[2px] rounded-full bg-gradient-to-r from-accent-amber to-accent-amber-deep"
+      className="absolute left-1 right-1 -bottom-px h-[2px] rounded-full bg-accent-saas"
     />
   ) : null
 
@@ -213,7 +213,7 @@ export function CopyButton({
       aria-label={copied ? "Copied" : "Copy code"}
       className={`p-1.5 rounded border transition-colors ${
         copied
-          ? "border-accent-amber/40 text-accent-saas bg-accent-saas/10"
+          ? "border-accent-saas/40 text-accent-saas bg-accent-saas/10"
           : "border-divider text-ink-dim hover:text-ink hover:border-text-muted"
       }`}
     >
