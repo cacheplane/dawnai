@@ -37,7 +37,7 @@ export function HeaderInner({ repoUrl }: HeaderInnerProps) {
   return (
     <header className="bg-page border-b border-divider">
       <div className="max-w-[1280px] mx-auto flex justify-between items-center px-6 md:px-8 py-4">
-        <BrandLogo imageClassName="h-8" />
+        <BrandLogo imageClassName="h-8" variant="dark" />
         <nav className="hidden md:flex items-center gap-6 text-sm">
           <Link href="/docs/getting-started" className={linkClass(pathname.startsWith("/docs"))}>
             Docs
