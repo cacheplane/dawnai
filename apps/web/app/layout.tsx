@@ -1,7 +1,6 @@
 import type { Metadata } from "next"
 import { Fraunces, Inter, JetBrains_Mono } from "next/font/google"
 import type { ReactNode } from "react"
-import { CreamSurface } from "./components/CreamSurface"
 import { Footer } from "./components/Footer"
 import { Header } from "./components/Header"
 import "./globals.css"
@@ -81,9 +80,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <div className="min-h-screen flex flex-col">
           <Header />
-          <main className="flex-1">
-            <CreamSurface>{children}</CreamSurface>
-          </main>
+          <main className="flex-1">{children}</main>
           <Footer />
         </div>
       </body>
