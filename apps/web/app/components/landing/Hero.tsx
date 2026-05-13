@@ -22,12 +22,12 @@ export async function Hero() {
 
   return (
     <section className="relative bg-page border-b border-divider">
-      <div className="max-w-[1200px] mx-auto px-6 md:px-8 pt-20 md:pt-28 pb-20 md:pb-28">
+      <div className="max-w-[1200px] mx-auto px-6 md:px-8 pt-20 md:pt-28 pb-16 md:pb-20">
         <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr] gap-12 lg:gap-16 items-center">
           <div className="min-w-0">
             <Eyebrow>TypeScript meta-framework · for LangGraph.js</Eyebrow>
             <h1
-              className="font-display font-semibold text-ink mt-4 text-[40px] leading-[44px] md:text-[56px] md:leading-[60px] lg:text-[64px] lg:leading-[68px] text-balance"
+              className="font-display font-semibold text-ink mt-4 text-[40px] leading-[44px] md:text-[56px] md:leading-[60px] lg:text-[64px] lg:leading-[68px] xl:text-[80px] xl:leading-[84px] text-balance"
               style={{
                 fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0",
                 letterSpacing: "-0.015em",

@@ -163,7 +163,7 @@ export function DocsSearch({ index }: Props) {
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] bg-page/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] bg-ink/40 backdrop-blur-sm"
           onClick={close}
           onKeyDown={(e) => {
             if (e.key === "Escape") close()
