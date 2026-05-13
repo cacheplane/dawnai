@@ -1,7 +1,6 @@
 import { getGitHubStars } from "../../../lib/github-stars"
 
 interface StarBadgeProps {
-  readonly repoUrl?: string
   readonly className?: string
 }
 
@@ -26,14 +25,15 @@ function formatStars(count: number): string {
   return `${count}`
 }
 
-export async function StarBadge({
-  repoUrl = "https://github.com/cacheplane/dawnai",
-  className = "",
-}: StarBadgeProps) {
+/**
+ * GitHub star badge for the Dawn repo. Server component — wrap in
+ * <Suspense fallback={...}> at the call site to avoid blocking page streaming.
+ */
+export async function StarBadge({ className = "" }: StarBadgeProps) {
   const stars = await getGitHubStars()
   return (
     <a
-      href={repoUrl}
+      href="https://github.com/cacheplane/dawnai"
       target="_blank"
       rel="noopener noreferrer"
       aria-label={`Star Dawn on GitHub — ${stars} stars`}
