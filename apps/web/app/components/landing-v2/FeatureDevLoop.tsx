@@ -1,24 +1,7 @@
-import { highlightLight } from "../../../lib/shiki/highlight-light"
-import { CodeFrame } from "../ui/CodeFrame"
+import { DevLoopAnimation } from "./DevLoopAnimation"
 import { FeatureBlock } from "./FeatureBlock"
 
-const TERMINAL = `$ pnpm dev
-
-  ▲ Dawn dev server
-
-  - Local:        http://localhost:3000
-  - Network:      http://192.168.1.42:3000
-
-  ✓ Compiled in 412ms
-  ✓ Graph state preserved across reload
-
-  ‒ Watching for changes…
-
-  ✓ Updated route /support in 87ms
-  ✓ Tool tools/lookup-order updated in 31ms`
-
-export async function FeatureDevLoop() {
-  const html = await highlightLight(TERMINAL, "bash")
+export function FeatureDevLoop() {
   return (
     <FeatureBlock
       eyebrow="Dev loop"
@@ -32,15 +15,7 @@ export async function FeatureDevLoop() {
       ]}
       link={{ href: "/docs/dev-server", label: "See dev server docs" }}
       imageSide="left"
-      visual={
-        <CodeFrame label="pnpm dev">
-          <div
-            className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
-            // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
-        </CodeFrame>
-      }
+      visual={<DevLoopAnimation />}
     />
   )
 }
