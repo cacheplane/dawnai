@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { Eyebrow } from "../ui/Eyebrow"
 import type { Post } from "./post-index"
 
 function formatDate(iso: string): string {
@@ -26,9 +27,7 @@ export function PostCard({ post }: { readonly post: Post }) {
           v{post.version}
         </span>
       ) : (
-        <span className="text-[11px] uppercase tracking-widest text-ink-dim">
-          Essay · {post.readingTimeMinutes} min
-        </span>
+        <Eyebrow>Essay · {post.readingTimeMinutes} min</Eyebrow>
       )}
       <h3 className="font-display text-lg font-semibold text-ink mt-2 mb-1 leading-snug">
         {post.title}
