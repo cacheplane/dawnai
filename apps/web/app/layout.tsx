@@ -63,7 +63,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     title: "Dawn AI",
     capable: true,
-    statusBarStyle: "black-translucent",
+    statusBarStyle: "default",
   },
 }
 
