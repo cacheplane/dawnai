@@ -5,7 +5,7 @@ import { PostMeta } from "../../components/blog/PostMeta"
 import { getAllPosts, getPost, getRelatedPosts } from "../../components/blog/post-index"
 import { DocsTOC } from "../../components/docs/DocsTOC"
 import { RelatedCards } from "../../components/docs/RelatedCards"
-import { CtaSection } from "../../components/landing/CtaSection"
+import { FinalCta } from "../../components/landing-v2/FinalCta"
 import { ReadingLayout } from "../../components/ReadingLayout"
 
 interface PageProps {
@@ -75,7 +75,7 @@ export default async function BlogPostPage({ params }: PageProps) {
           )}
         </article>
       </ReadingLayout>
-      <CtaSection />
+      <FinalCta />
     </>
   )
 }

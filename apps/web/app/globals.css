@@ -58,23 +58,6 @@ html {
   scroll-padding-top: var(--header-h);
 }
 
-/* Landing dark scope — landing-section components author against the dark token
-   values they predate (HeroSection, CodeExample, ArchitectureSection, etc.).
-   Apply .landing-dark to the landing page root so `text-text-primary` and
-   `var(--color-bg-primary)` resolve to the cosmic palette inside the scope,
-   while the rest of the site uses the cream defaults. */
-.landing-dark {
-  --color-bg-primary: #0a0806;
-  --color-bg-secondary: #0f0c09;
-  --color-bg-card: #14110d;
-  --color-border: #241f19;
-  --color-border-subtle: #19150f;
-  --color-text-primary: #f8f5ef;
-  --color-text-secondary: #8a857b;
-  --color-text-muted: #5a554c;
-  --color-text-dim: #3f3b35;
-}
-
 @layer base {
   body {
     @apply bg-bg-primary text-text-primary font-sans antialiased;
@@ -154,54 +137,4 @@ pre [data-highlighted-line-id="remove"],
 pre .line.diff.remove {
   background: rgb(239 68 68 / 0.1);
   border-left-color: rgb(239 68 68);
-}
-
-/* Landing dawn arc — palette variables driven by PaletteScroller.
-   Defaults match the pre-dawn stop in lib/palette/stops.ts so server-rendered
-   HTML is correct before the engine mounts on the client. */
-:root {
-  --landing-bg: rgb(2, 6, 23);
-  --landing-fg: rgb(200, 200, 204);
-  --landing-muted: rgb(139, 143, 163);
-  --landing-surface: rgb(10, 15, 31);
-  --landing-accent: rgb(251, 191, 36);
-  --landing-hue: rgb(245, 165, 36);
-  --landing-border: rgba(255, 255, 255, 0.08);
-}
-
-body {
-  background: var(--landing-bg);
-  color: var(--landing-fg);
-}
-
-/* Reduced motion — snap to daylight palette and disable any palette
-   transition. PaletteScroller also bails out, but this guarantees the
-   visual end-state even before the script runs. */
-@media (prefers-reduced-motion: reduce) {
-  :root {
-    --landing-bg: rgb(254, 254, 254);
-    --landing-fg: rgb(15, 18, 32);
-    --landing-muted: rgb(85, 95, 117);
-    --landing-surface: rgb(248, 250, 254);
-    --landing-accent: rgb(217, 119, 6);
-    --landing-hue: rgb(251, 191, 36);
-    --landing-border: rgba(15, 18, 32, 0.08);
-  }
-}
-
-/* Landing-aware utilities — read from --landing-* and follow the scroll arc.
-   Use these on landing-page elements that previously used bg-bg-card,
-   border-border, or text-text-* brand tokens. */
-.landing-surface {
-  background: var(--landing-surface);
-  border-color: var(--landing-border);
-}
-.landing-text {
-  color: var(--landing-fg);
-}
-.landing-text-muted {
-  color: var(--landing-muted);
-}
-.landing-border {
-  border-color: var(--landing-border);
 }

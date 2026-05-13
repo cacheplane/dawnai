@@ -4,7 +4,7 @@ import { notFound } from "next/navigation"
 import { PostCard } from "../../../components/blog/PostCard"
 import { getAllTags, getPostsByTag } from "../../../components/blog/post-index"
 import { TagChips } from "../../../components/blog/TagChips"
-import { CtaSection } from "../../../components/landing/CtaSection"
+import { FinalCta } from "../../../components/landing-v2/FinalCta"
 
 interface PageProps {
   readonly params: Promise<{ tag: string }>
@@ -51,7 +51,7 @@ export default async function TagPage({ params }: PageProps) {
           ))}
         </div>
       </div>
-      <CtaSection />
+      <FinalCta />
     </>
   )
 }

@@ -2,7 +2,7 @@ import { FeaturedPostCard } from "../components/blog/FeaturedPostCard"
 import { PostCard } from "../components/blog/PostCard"
 import { getAllPosts, getAllTags, getFeaturedPost } from "../components/blog/post-index"
 import { TagChips } from "../components/blog/TagChips"
-import { CtaSection } from "../components/landing/CtaSection"
+import { FinalCta } from "../components/landing-v2/FinalCta"
 
 export default function BlogIndexPage() {
   const all = getAllPosts()
@@ -33,7 +33,7 @@ export default function BlogIndexPage() {
           ))}
         </div>
       </div>
-      <CtaSection />
+      <FinalCta />
     </>
   )
 }
