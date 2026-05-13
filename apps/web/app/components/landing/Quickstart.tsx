@@ -55,7 +55,7 @@ export function Quickstart() {
               <p className="mt-3 text-sm text-ink-muted leading-[22px] flex-1">{step.body}</p>
               {step.n === 1 ? (
                 <div className="mt-5">
-                  <CopyCommand command="pnpm create dawn-ai-app my-agent" />
+                  <CopyCommand command="pnpm create dawn-ai-app" />
                 </div>
               ) : null}
             </Card>

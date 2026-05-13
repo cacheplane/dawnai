@@ -43,7 +43,7 @@ export async function Hero() {
               </strong>
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-4">
-              <CopyCommand command="pnpm create dawn-ai-app my-agent" />
+              <CopyCommand command="pnpm create dawn-ai-app" />
               <Link
                 href="/docs/getting-started"
                 className="text-sm font-medium text-ink hover:text-accent-saas transition-colors inline-flex items-center gap-1.5"
