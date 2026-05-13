@@ -35,7 +35,7 @@ export function HeaderInner({ repoUrl }: HeaderInnerProps) {
     active ? "text-ink transition-colors" : "text-ink-muted hover:text-ink transition-colors"
 
   return (
-    <header className="bg-page border-b border-divider">
+    <header className="sticky top-0 z-50 bg-page border-b border-divider">
       <div className="max-w-[1280px] mx-auto flex justify-between items-center px-6 md:px-8 py-4">
         <BrandLogo imageClassName="h-8" variant="dark" />
         <nav className="hidden md:flex items-center gap-6 text-sm">

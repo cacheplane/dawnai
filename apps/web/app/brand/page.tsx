@@ -44,7 +44,7 @@ const SWATCHES: readonly SwatchProps[] = [
   { name: "Ink (dim)", token: "--color-ink-dim", value: "#8a857b" },
   { name: "Divider", token: "--color-divider", value: "#e6e3da" },
   { name: "Divider (strong)", token: "--color-divider-strong", value: "#cfcabd" },
-  { name: "Accent", token: "--color-accent-saas", value: "#d97706" },
+  { name: "Accent", token: "--color-accent-saas", value: "#b45309" },
   { name: "Accent (soft)", token: "--color-accent-saas-soft", value: "#fef3c7" },
 ]
 
@@ -89,13 +89,13 @@ export default function BrandPage() {
           <h2 className="font-display text-3xl md:text-4xl font-semibold text-ink mt-2 mb-6">
             Scale
           </h2>
-          <Card className="p-6 space-y-6">
+          <Card className="p-6 space-y-6 overflow-hidden">
             <div>
               <p className="text-xs text-ink-dim font-mono mb-1">
                 Display XL · Fraunces 600 · 72/76
               </p>
               <p
-                className="font-display text-[72px] leading-[76px] font-semibold text-ink"
+                className="font-display text-[48px] leading-[52px] sm:text-[72px] sm:leading-[76px] font-semibold text-ink break-words"
                 style={{
                   fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0",
                   letterSpacing: "-0.01em",

@@ -18,7 +18,7 @@ export function PostCard({ post }: { readonly post: Post }) {
       className={`block p-5 rounded-xl border transition-colors ${
         isRelease
           ? "border-divider bg-surface/30 hover:bg-surface/60"
-          : "border-divider bg-surface/60 hover:border-accent-amber/40"
+          : "border-divider bg-surface/60 hover:border-accent-saas/40"
       }`}
     >
       {isRelease ? (

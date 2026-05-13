@@ -59,6 +59,7 @@ html {
   font-size: 0.875em;
   font-family: var(--font-mono, ui-monospace, monospace);
   white-space: nowrap;
+  overflow-wrap: break-word;
 }
 
 /* Block code (`<code>` inside `<pre>`) inherits the same MDX `code:` override and

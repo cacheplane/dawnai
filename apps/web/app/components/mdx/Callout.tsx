@@ -10,7 +10,7 @@ interface Props {
 
 const STYLES: Record<CalloutType, { border: string; icon: string; glyph: string }> = {
   info: {
-    border: "border-accent-amber/40",
+    border: "border-accent-saas/40",
     icon: "text-accent-saas",
     glyph: "\u24D8", // ⓘ
   },

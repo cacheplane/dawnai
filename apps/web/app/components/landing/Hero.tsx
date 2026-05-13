@@ -2,6 +2,7 @@ import Link from "next/link"
 import { highlightLight } from "../../../lib/shiki/highlight-light"
 import { CopyCommand } from "../CopyCommand"
 import { CodeFrame } from "../ui/CodeFrame"
+import { Eyebrow } from "../ui/Eyebrow"
 
 const ROUTE_CODE = `import { agent } from "@dawn-ai/sdk"
 import { z } from "zod"
@@ -23,10 +24,8 @@ export async function Hero() {
     <section className="relative bg-page border-b border-divider">
       <div className="max-w-[1200px] mx-auto px-6 md:px-8 pt-20 md:pt-28 pb-20 md:pb-28">
         <div className="grid lg:grid-cols-[1.25fr_1fr] gap-12 lg:gap-16 items-center">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-dim">
-              TypeScript meta-framework · for LangGraph.js
-            </p>
+          <div className="min-w-0">
+            <Eyebrow>TypeScript meta-framework · for LangGraph.js</Eyebrow>
             <h1
               className="font-display font-semibold text-ink mt-4 text-[40px] leading-[44px] md:text-[56px] md:leading-[60px] lg:text-[64px] lg:leading-[68px] text-balance"
               style={{
@@ -54,7 +53,7 @@ export async function Hero() {
             </div>
           </div>
 
-          <div className="w-full">
+          <div className="w-full min-w-0 overflow-hidden">
             <CodeFrame label="src/app/(public)/support/index.ts">
               <div
                 className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
