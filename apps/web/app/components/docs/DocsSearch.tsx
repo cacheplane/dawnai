@@ -137,7 +137,7 @@ export function DocsSearch({ index }: Props) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="w-full flex items-center justify-between gap-3 px-3 py-2 border border-border rounded-md bg-bg-card/50 text-sm text-text-muted hover:border-text-muted hover:text-text-secondary transition-colors mb-6"
+        className="w-full flex items-center justify-between gap-3 px-3 py-2 border border-divider rounded-md bg-surface/50 text-sm text-ink-dim hover:border-text-muted hover:text-ink-muted transition-colors mb-6"
         aria-label="Search docs (press Cmd+K)"
       >
         <span className="flex items-center gap-2">
@@ -156,14 +156,14 @@ export function DocsSearch({ index }: Props) {
           </svg>
           Search
         </span>
-        <kbd className="font-mono text-[10px] text-text-muted border border-border-subtle rounded px-1.5 py-0.5">
+        <kbd className="font-mono text-[10px] text-ink-dim border border-divider rounded px-1.5 py-0.5">
           ⌘K
         </kbd>
       </button>
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] bg-bg-primary/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] bg-page/80 backdrop-blur-sm"
           onClick={close}
           onKeyDown={(e) => {
             if (e.key === "Escape") close()
@@ -174,11 +174,11 @@ export function DocsSearch({ index }: Props) {
         >
           {/* biome-ignore lint/a11y/noStaticElementInteractions: wrapper stops modal-close propagation; roles are on ancestor dialog */}
           <div
-            className="w-full max-w-xl mx-4 bg-bg-secondary border border-border rounded-xl shadow-2xl overflow-hidden"
+            className="w-full max-w-xl mx-4 bg-surface border border-divider rounded-xl shadow-2xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-divider">
               <svg
                 width="16"
                 height="16"
@@ -186,7 +186,7 @@ export function DocsSearch({ index }: Props) {
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="2"
-                className="text-text-muted"
+                className="text-ink-dim"
                 role="img"
               >
                 <title>Search</title>
@@ -203,12 +203,12 @@ export function DocsSearch({ index }: Props) {
                 }}
                 onKeyDown={onInputKey}
                 placeholder="Search Dawn docs..."
-                className="flex-1 bg-transparent text-text-primary placeholder-text-muted focus:outline-none text-sm"
+                className="flex-1 bg-transparent text-ink placeholder-text-muted focus:outline-none text-sm"
               />
               <button
                 type="button"
                 onClick={close}
-                className="text-xs text-text-muted border border-border-subtle rounded px-1.5 py-0.5 font-mono hover:text-text-primary"
+                className="text-xs text-ink-dim border border-divider rounded px-1.5 py-0.5 font-mono hover:text-ink"
               >
                 ESC
               </button>
@@ -216,7 +216,7 @@ export function DocsSearch({ index }: Props) {
 
             <ul ref={listRef} className="max-h-[60vh] overflow-y-auto py-2">
               {results.length === 0 ? (
-                <li className="px-4 py-6 text-sm text-text-muted text-center">
+                <li className="px-4 py-6 text-sm text-ink-dim text-center">
                   No results for &quot;{query}&quot;
                 </li>
               ) : (
@@ -228,12 +228,12 @@ export function DocsSearch({ index }: Props) {
                       onMouseEnter={() => setActive(i)}
                       onClick={() => navigate(r.href)}
                       className={`w-full text-left px-4 py-2.5 flex items-center gap-3 ${
-                        i === active ? "bg-accent-amber/10" : ""
+                        i === active ? "bg-accent-saas/10" : ""
                       }`}
                     >
                       <span
                         className={`text-[10px] uppercase tracking-wider font-semibold w-20 shrink-0 ${
-                          i === active ? "text-accent-amber" : "text-text-muted"
+                          i === active ? "text-accent-saas" : "text-ink-dim"
                         }`}
                       >
                         {r.section}
@@ -241,13 +241,13 @@ export function DocsSearch({ index }: Props) {
                       <span className="flex-1 min-w-0">
                         <span
                           className={`block text-sm font-semibold ${
-                            i === active ? "text-accent-amber" : "text-text-primary"
+                            i === active ? "text-accent-saas" : "text-ink"
                           }`}
                         >
                           {r.title}
                         </span>
                         {r.heading && (
-                          <span className="block text-xs text-text-muted truncate">
+                          <span className="block text-xs text-ink-dim truncate">
                             <span aria-hidden>#</span> {r.heading.text}
                           </span>
                         )}

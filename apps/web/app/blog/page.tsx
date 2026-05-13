@@ -13,16 +13,16 @@ export default function BlogIndexPage() {
   return (
     <>
       <div className="max-w-[960px] mx-auto px-6 md:px-8 py-16">
-        <div className="text-[11px] uppercase tracking-widest text-accent-amber-deep mb-2">
+        <div className="text-[11px] uppercase tracking-widest text-accent-saas mb-2">
           Blog
         </div>
         <h1
-          className="font-display text-4xl md:text-5xl font-semibold tracking-tight mb-3 text-text-primary"
+          className="font-display text-4xl md:text-5xl font-semibold tracking-tight mb-3 text-ink"
           style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
         >
           Notes on Dawn
         </h1>
-        <p className="text-lg text-text-secondary mb-8 max-w-[60ch]">
+        <p className="text-lg text-ink-muted mb-8 max-w-[60ch]">
           Writing on the agent stack, type-safety, and the tools we're building.
         </p>
         <TagChips tags={tags} />

@@ -31,8 +31,8 @@ export function CopyPromptButton({
 
   const isHero = variant === "hero"
   const baseClass = isHero
-    ? "px-6 py-2.5 bg-accent-amber text-bg-primary rounded-md text-sm font-semibold hover:bg-accent-amber-deep transition-colors inline-flex items-center gap-2"
-    : "px-4 py-1.5 border border-accent-amber/40 text-accent-amber rounded-md text-xs font-mono hover:border-accent-amber hover:bg-accent-amber/5 transition-colors inline-flex items-center gap-2"
+    ? "px-6 py-2.5 bg-accent-saas text-bg-primary rounded-md text-sm font-semibold hover:bg-accent-saas transition-colors inline-flex items-center gap-2"
+    : "px-4 py-1.5 border border-accent-amber/40 text-accent-saas rounded-md text-xs font-mono hover:border-accent-amber hover:bg-accent-saas/5 transition-colors inline-flex items-center gap-2"
 
   return (
     <button
