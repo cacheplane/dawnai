@@ -104,10 +104,12 @@ export default function BrandPage() {
                 Build LangGraph agents.
               </p>
             </div>
+            {/* Display XL = 72px (one-off hero / brand title). Hero display = 64-80px (responsive).
+                H1 page title = 48px (docs/blog). H2 = 32px. H3 = 24px. */}
             <div>
-              <p className="text-xs text-ink-dim font-mono mb-1">H1 · Fraunces 600 · 40/44</p>
+              <p className="text-xs text-ink-dim font-mono mb-1">H1 · Fraunces 600 · 48/48</p>
               <p
-                className="font-display text-[40px] leading-[44px] font-semibold text-ink"
+                className="font-display text-[48px] leading-[48px] font-semibold text-ink"
                 style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0" }}
               >
                 Routes for agents, not just pages.

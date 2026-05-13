@@ -3,7 +3,7 @@ import { Eyebrow } from "../ui/Eyebrow"
 export function WhyDawn() {
   return (
     <section className="bg-page border-b border-divider">
-      <div className="max-w-[920px] mx-auto px-6 md:px-8 py-20 md:py-28">
+      <div className="max-w-[820px] mx-auto px-6 md:px-8 py-20 md:py-28">
         <Eyebrow>Why Dawn</Eyebrow>
         <h2
           className="font-display font-semibold text-ink mt-3 text-[32px] leading-[38px] md:text-[44px] md:leading-[50px]"

@@ -33,7 +33,7 @@ export async function IntelliSenseVisual() {
 
       {/* IntelliSense popover — positioned over the .history member access */}
       <div
-        className="absolute hidden md:block left-[58%] top-[68%] w-[320px] rounded-lg border border-divider bg-page text-left z-10"
+        className="absolute hidden md:block right-4 bottom-4 w-[280px] max-w-[calc(100%-2rem)] rounded-lg border border-divider bg-page text-left z-10"
         role="tooltip"
         aria-label="Inferred TypeScript type for state.history"
         style={{
