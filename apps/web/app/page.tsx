@@ -10,11 +10,10 @@ import { FeatureGrid } from "./components/landing/FeatureGrid"
 import { HowItWorks } from "./components/landing/HowItWorks"
 import { MigrateCta } from "./components/landing/MigrateCta"
 import { NotAReplacement } from "./components/landing/NotAReplacement"
-import { ProblemSection } from "./components/landing/ProblemSection"
-import { SolutionSection } from "./components/landing/SolutionSection"
 import { StarsSection } from "./components/landing/StarsSection"
-import { WhoItsFor } from "./components/landing/WhoItsFor"
 import { Hero } from "./components/landing-v2/Hero"
+import { ProofStrip } from "./components/landing-v2/ProofStrip"
+import { WhyDawn } from "./components/landing-v2/WhyDawn"
 import { PaletteScroller } from "./components/PaletteScroller"
 import { ScrollReveal } from "./components/ScrollReveal"
 
@@ -22,12 +21,10 @@ export default function HomePage() {
   return (
     <>
       <Hero />
+      <ProofStrip />
+      <WhyDawn />
       <div className="landing-dark relative isolate">
         <PaletteScroller />
-        <ProblemSection />
-        <ScrollReveal>
-          <WhoItsFor />
-        </ScrollReveal>
         <ScrollReveal>
           <ComicStrip />
         </ScrollReveal>
@@ -36,9 +33,6 @@ export default function HomePage() {
         </ScrollReveal>
         <ScrollReveal>
           <BigReveal />
-        </ScrollReveal>
-        <ScrollReveal>
-          <SolutionSection />
         </ScrollReveal>
         <ScrollReveal>
           <ArchitectureSection />
