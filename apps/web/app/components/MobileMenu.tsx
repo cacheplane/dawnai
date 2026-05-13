@@ -104,9 +104,7 @@ export function MobileMenu() {
         <div className="h-full overflow-y-auto">
           {/* Header strip */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-divider">
-            <span className="text-xs uppercase tracking-widest text-ink-dim font-mono">
-              Menu
-            </span>
+            <span className="text-xs uppercase tracking-widest text-ink-dim font-mono">Menu</span>
             <button
               ref={closeRef}
               type="button"

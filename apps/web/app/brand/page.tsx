@@ -1,11 +1,11 @@
 import type { Metadata } from "next"
+import { Accordion } from "../components/ui/Accordion"
 import { Button } from "../components/ui/Button"
 import { Card } from "../components/ui/Card"
 import { CodeFrame } from "../components/ui/CodeFrame"
 import { Eyebrow } from "../components/ui/Eyebrow"
 import { ProviderMark } from "../components/ui/ProviderMark"
 import { StarBadge } from "../components/ui/StarBadge"
-import { Accordion } from "../components/ui/Accordion"
 
 export const metadata: Metadata = {
   title: "Brand",
@@ -52,20 +52,21 @@ export default function BrandPage() {
   return (
     <div className="bg-page">
       <div className="max-w-[1100px] mx-auto px-6 md:px-8 py-16 md:py-24">
-
         <section className="mb-16 md:mb-24">
           <Eyebrow>Design system · v2 (in progress)</Eyebrow>
           <h1
             className="font-display text-[56px] leading-[60px] md:text-[72px] md:leading-[76px] font-semibold text-ink mt-3"
-            style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0", letterSpacing: "-0.01em" }}
+            style={{
+              fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0",
+              letterSpacing: "-0.01em",
+            }}
           >
             Dawn brand.
           </h1>
           <p className="text-lg text-ink-muted mt-5 max-w-2xl leading-relaxed">
-            The visual language for Dawn — a restrained, infrastructure-grade
-            system built on off-white surfaces, near-black ink, and a single
-            amber accent. This page is the source of truth as the SaaS rebrand
-            lands across the site.
+            The visual language for Dawn — a restrained, infrastructure-grade system built on
+            off-white surfaces, near-black ink, and a single amber accent. This page is the source
+            of truth as the SaaS rebrand lands across the site.
           </p>
         </section>
 
@@ -90,10 +91,15 @@ export default function BrandPage() {
           </h2>
           <Card className="p-6 space-y-6">
             <div>
-              <p className="text-xs text-ink-dim font-mono mb-1">Display XL · Fraunces 600 · 72/76</p>
+              <p className="text-xs text-ink-dim font-mono mb-1">
+                Display XL · Fraunces 600 · 72/76
+              </p>
               <p
                 className="font-display text-[72px] leading-[76px] font-semibold text-ink"
-                style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0", letterSpacing: "-0.01em" }}
+                style={{
+                  fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0",
+                  letterSpacing: "-0.01em",
+                }}
               >
                 Build LangGraph agents.
               </p>
@@ -110,8 +116,8 @@ export default function BrandPage() {
             <div>
               <p className="text-xs text-ink-dim font-mono mb-1">Body L · Inter 400 · 18/30</p>
               <p className="text-lg text-ink leading-[30px] max-w-2xl">
-                Dawn adds file-system routing, route-local tools, generated
-                types, and HMR to your existing LangGraph.js stack.
+                Dawn adds file-system routing, route-local tools, generated types, and HMR to your
+                existing LangGraph.js stack.
               </p>
             </div>
             <div>
@@ -127,7 +133,9 @@ export default function BrandPage() {
               </p>
             </div>
             <div>
-              <p className="text-xs text-ink-dim font-mono mb-1">Code · JetBrains Mono 400 · 14/22</p>
+              <p className="text-xs text-ink-dim font-mono mb-1">
+                Code · JetBrains Mono 400 · 14/22
+              </p>
               <code className="text-sm text-ink font-mono">pnpm create dawn-ai-app my-agent</code>
             </div>
           </Card>
@@ -171,7 +179,7 @@ export default function BrandPage() {
               <p className="text-xs text-ink-dim font-mono mb-3">CodeFrame</p>
               <CodeFrame label="src/app/(public)/support/index.ts">
                 <pre className="m-0 px-4 py-4 text-sm font-mono text-ink leading-[22px] overflow-x-auto">
-{`import { agent } from "@dawn-ai/sdk"
+                  {`import { agent } from "@dawn-ai/sdk"
 
 export default agent({
   model: "openai:gpt-4o-mini",
@@ -191,9 +199,8 @@ export default agent({
                     question: "What is this primitive used for?",
                     answer: (
                       <p>
-                        The FAQ section on the rebranded landing page uses this
-                        primitive. It's keyboard-accessible and respects
-                        prefers-reduced-motion.
+                        The FAQ section on the rebranded landing page uses this primitive. It's
+                        keyboard-accessible and respects prefers-reduced-motion.
                       </p>
                     ),
                   },
@@ -214,9 +221,8 @@ export default agent({
             Rebrand progress
           </h2>
           <p className="text-base text-ink-muted leading-relaxed max-w-2xl">
-            This page reflects PR 1 of the SaaS-style rebrand: tokens,
-            primitives, refreshed Header and Footer. The landing page, docs, and
-            blog are migrated in subsequent PRs. See{" "}
+            This page reflects PR 1 of the SaaS-style rebrand: tokens, primitives, refreshed Header
+            and Footer. The landing page, docs, and blog are migrated in subsequent PRs. See{" "}
             <a
               className="text-accent-saas hover:opacity-80"
               href="https://github.com/cacheplane/dawnai/pulls"
@@ -228,7 +234,6 @@ export default agent({
             .
           </p>
         </section>
-
       </div>
     </div>
   )

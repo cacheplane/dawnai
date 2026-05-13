@@ -3,8 +3,8 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { BrandLogo } from "./BrandLogo"
-import { MobileMenu } from "./MobileMenu"
 import { CopyCommand } from "./CopyCommand"
+import { MobileMenu } from "./MobileMenu"
 
 function GitHubIcon() {
   return (
@@ -32,9 +32,7 @@ export function HeaderInner({ repoUrl }: HeaderInnerProps) {
   const pathname = usePathname()
 
   const linkClass = (active: boolean) =>
-    active
-      ? "text-ink transition-colors"
-      : "text-ink-muted hover:text-ink transition-colors"
+    active ? "text-ink transition-colors" : "text-ink-muted hover:text-ink transition-colors"
 
   return (
     <header className="bg-page border-b border-divider">

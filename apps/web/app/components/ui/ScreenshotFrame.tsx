@@ -28,8 +28,7 @@ export function ScreenshotFrame({
       <div
         className="rounded-xl border border-divider bg-page overflow-hidden"
         style={{
-          boxShadow:
-            "0 1px 2px rgba(20,17,13,0.04), 0 8px 24px -8px rgba(20,17,13,0.08)",
+          boxShadow: "0 1px 2px rgba(20,17,13,0.04), 0 8px 24px -8px rgba(20,17,13,0.08)",
         }}
       >
         <div className="flex items-center gap-2 px-4 py-2.5 border-b border-divider bg-surface-sunk">
@@ -40,18 +39,10 @@ export function ScreenshotFrame({
             <span className="ml-3 text-xs text-ink-muted font-mono truncate">{label}</span>
           ) : null}
         </div>
-        <Image
-          src={src}
-          alt={alt}
-          width={width}
-          height={height}
-          className="block w-full h-auto"
-        />
+        <Image src={src} alt={alt} width={width} height={height} className="block w-full h-auto" />
       </div>
       {caption !== undefined ? (
-        <figcaption className="mt-2 text-xs text-ink-muted text-center">
-          {caption}
-        </figcaption>
+        <figcaption className="mt-2 text-xs text-ink-muted text-center">{caption}</figcaption>
       ) : null}
     </figure>
   )

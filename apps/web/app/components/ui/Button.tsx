@@ -29,8 +29,7 @@ const baseClasses =
   "inline-flex items-center gap-1.5 font-medium text-sm rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-page focus-visible:ring-divider-strong"
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary:
-    "px-4 py-2 bg-accent-saas text-accent-saas-ink hover:opacity-90 active:opacity-80",
+  primary: "px-4 py-2 bg-accent-saas text-accent-saas-ink hover:opacity-90 active:opacity-80",
   secondary:
     "px-4 py-2 text-ink hover:text-accent-saas border border-divider hover:border-divider-strong bg-page",
 }
@@ -55,12 +54,7 @@ export function Button(props: ButtonProps) {
       )
     }
     return (
-      <Link
-        href={props.href}
-        className={className}
-        id={props.id}
-        aria-label={props["aria-label"]}
-      >
+      <Link href={props.href} className={className} id={props.id} aria-label={props["aria-label"]}>
         {props.children}
       </Link>
     )

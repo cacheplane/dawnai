@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, type ReactNode } from "react"
+import { type ReactNode, useState } from "react"
 
 interface AccordionItem {
   readonly id: string
@@ -34,23 +34,19 @@ export function Accordion({ items, defaultOpenId }: AccordionProps) {
                 className="w-full flex items-center justify-between gap-4 py-5 text-left text-ink font-medium hover:text-accent-saas transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-divider-strong rounded"
               >
                 <span>{item.question}</span>
-                <span
-                  aria-hidden="true"
-                  className="text-ink-dim text-xl leading-none select-none"
-                >
+                <span aria-hidden="true" className="text-ink-dim text-xl leading-none select-none">
                   {isOpen ? "−" : "+"}
                 </span>
               </button>
             </h3>
-            <div
+            <section
               id={panelId}
-              role="region"
               aria-labelledby={buttonId}
               hidden={!isOpen}
               className="pb-5 pr-8 text-ink-muted text-sm leading-relaxed"
             >
               {item.answer}
-            </div>
+            </section>
           </li>
         )
       })}
