@@ -34,7 +34,7 @@ export function Quickstart() {
       <div className="max-w-[1100px] mx-auto px-6 md:px-8 py-20 md:py-28">
         <Eyebrow>Try it</Eyebrow>
         <h2
-          className="font-display font-semibold text-ink mt-3 text-[32px] leading-[38px] md:text-[44px] md:leading-[50px] max-w-[20ch]"
+          className="font-display font-semibold text-ink mt-3 text-[32px] leading-[38px] md:text-[44px] md:leading-[50px] text-balance max-w-[24ch]"
           style={{
             fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0",
             letterSpacing: "-0.01em",
