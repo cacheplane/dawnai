@@ -36,6 +36,7 @@ export async function FeatureRouting() {
         <CodeFrame label="src/app/(public)/support/">
           <div
             className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
             dangerouslySetInnerHTML={{ __html: html }}
           />
         </CodeFrame>

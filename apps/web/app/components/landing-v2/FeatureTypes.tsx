@@ -36,6 +36,7 @@ export async function FeatureTypes() {
         <CodeFrame label="state.ts → tools/*.ts">
           <div
             className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
             dangerouslySetInnerHTML={{ __html: html }}
           />
         </CodeFrame>
