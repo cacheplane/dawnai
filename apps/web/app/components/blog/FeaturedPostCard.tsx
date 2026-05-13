@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { Eyebrow } from "../ui/Eyebrow"
 import { AUTHORS, type Author, type Post } from "./post-index"
 
 function formatDate(iso: string): string {
@@ -22,9 +23,7 @@ export function FeaturedPostCard({ post }: { readonly post: Post }) {
       className="block p-8 rounded-2xl border border-accent-saas/35 mb-6 transition-transform hover:scale-[1.005]"
       style={{ background: "linear-gradient(180deg,#fff7e0 0%,#ffeec2 100%)" }}
     >
-      <span className="text-[11px] uppercase tracking-widest text-accent-saas">
-        Essay · {post.readingTimeMinutes} min read
-      </span>
+      <Eyebrow tone="accent">Essay · {post.readingTimeMinutes} min read</Eyebrow>
       <h2
         className="font-display text-2xl md:text-3xl font-semibold mt-2 mb-2 tracking-tight"
         style={{ color: "#1a1530" }}
