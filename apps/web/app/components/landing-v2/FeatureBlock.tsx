@@ -49,9 +49,7 @@ export function FeatureBlock({
       >
         {heading}
       </h3>
-      <p className="mt-5 text-base text-ink-muted leading-[26px] max-w-[52ch]">
-        {paragraph}
-      </p>
+      <p className="mt-5 text-base text-ink-muted leading-[26px] max-w-[52ch]">{paragraph}</p>
       <ul className="mt-6 space-y-2.5">
         {bullets.map((b) => (
           <li key={b} className="flex items-start gap-2.5 text-sm text-ink leading-[22px]">
