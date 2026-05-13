@@ -36,7 +36,7 @@ export function FinalCta() {
           five minutes.
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
-          <CopyCommand command="pnpm create dawn-ai-app my-agent" />
+          <CopyCommand command="pnpm create dawn-ai-app" />
           <a
             href="https://github.com/cacheplane/dawnai"
             target="_blank"
