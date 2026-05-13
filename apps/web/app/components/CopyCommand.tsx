@@ -22,18 +22,18 @@ export function CopyCommand({ command, className }: Props) {
 
   return (
     <div
-      className={`font-mono text-sm text-text-muted bg-bg-card inline-flex items-center gap-2 pl-4 pr-2 py-2 rounded-md border border-border ${
+      className={`font-mono text-sm text-ink-muted bg-surface inline-flex items-center gap-2 pl-4 pr-2 py-2 rounded-md border border-divider ${
         className ?? ""
       }`}
     >
       <span>
-        <span className="text-accent-amber">$</span> {command}
+        <span className="text-accent-saas">$</span> {command}
       </span>
       <button
         type="button"
         onClick={handleCopy}
         aria-label={copied ? "Copied" : `Copy command: ${command}`}
-        className="ml-1 p-1 rounded hover:bg-accent-amber/10 text-text-muted hover:text-accent-amber transition-colors"
+        className="ml-1 p-1 rounded hover:bg-accent-saas-soft text-ink-muted hover:text-accent-saas transition-colors"
       >
         {copied ? (
           <svg
@@ -44,7 +44,7 @@ export function CopyCommand({ command, className }: Props) {
             stroke="currentColor"
             strokeWidth="3"
             role="img"
-            className="text-accent-amber"
+            className="text-accent-saas"
           >
             <title>Copied</title>
             <polyline points="20 6 9 17 4 12" />
