@@ -14,12 +14,12 @@ interface CodeFrameProps {
 export function CodeFrame({ children, label, className = "" }: CodeFrameProps) {
   return (
     <div
-      className={`rounded-xl border border-divider bg-page overflow-hidden ${className}`}
+      className={`rounded-xl border border-divider bg-page ${className}`}
       style={{
         boxShadow: "0 1px 2px rgba(20,17,13,0.04), 0 8px 24px -8px rgba(20,17,13,0.08)",
       }}
     >
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-divider bg-surface-sunk">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-divider bg-surface-sunk rounded-t-xl overflow-hidden">
         <span className="inline-block w-2.5 h-2.5 rounded-full bg-divider-strong" />
         <span className="inline-block w-2.5 h-2.5 rounded-full bg-divider-strong" />
         <span className="inline-block w-2.5 h-2.5 rounded-full bg-divider-strong" />
@@ -27,7 +27,7 @@ export function CodeFrame({ children, label, className = "" }: CodeFrameProps) {
           <span className="ml-3 text-xs text-ink-muted font-mono truncate">{label}</span>
         ) : null}
       </div>
-      <div>{children}</div>
+      <div className="rounded-b-xl overflow-hidden">{children}</div>
     </div>
   )
 }

@@ -31,7 +31,7 @@ const STEPS: readonly Step[] = [
 export function Quickstart() {
   return (
     <section className="bg-surface-sunk border-b border-divider">
-      <div className="max-w-[1100px] mx-auto px-6 md:px-8 py-20 md:py-28">
+      <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-20 md:py-28">
         <Eyebrow>Try it</Eyebrow>
         <h2
           className="font-display font-semibold text-ink mt-3 text-[32px] leading-[38px] md:text-[44px] md:leading-[50px] text-balance max-w-[24ch]"

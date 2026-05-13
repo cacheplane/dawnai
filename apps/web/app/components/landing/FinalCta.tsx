@@ -21,7 +21,7 @@ function GitHubIcon() {
 export function FinalCta() {
   return (
     <section className="bg-surface-sunk">
-      <div className="max-w-[1100px] mx-auto px-6 md:px-8 py-24 md:py-32 text-center">
+      <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-24 md:py-32 text-center">
         <h2
           className="font-display font-semibold text-ink text-[40px] leading-[46px] md:text-[56px] md:leading-[62px]"
           style={{
