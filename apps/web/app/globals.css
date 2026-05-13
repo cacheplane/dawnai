@@ -1,23 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --color-dawn-black: #000000;
-  --color-dawn-white: #ffffff;
-  --color-dawn-neutral-gray: #6b6b6b;
-  --color-bg-primary: #fdfbf7;
-  --color-bg-secondary: #fcfaf3;
-  --color-bg-card: #fbf8ee;
-  --color-border: rgba(26, 21, 48, 0.12);
-  --color-border-subtle: rgba(26, 21, 48, 0.08);
-  --color-text-primary: #1a1530;
-  --color-text-secondary: #6d5638;
-  --color-text-muted: #8a7657;
-  --color-text-dim: #b2a285;
   --color-accent-green: #00a67e;
   --color-accent-blue: #3178c6;
   --color-accent-purple: #646cff;
-  --color-accent-amber: #f59e0b;
-  --color-accent-amber-deep: #d97706;
 
   /* SaaS rebrand tokens (PR 1) — additive, do not modify existing cosmic/cream tokens.
      Renamed to spec names in PR 6 cleanup. */
@@ -45,9 +31,6 @@
 }
 
 :root {
-  --dawn-black: #000000;
-  --dawn-white: #ffffff;
-  --dawn-neutral-gray: #6b6b6b;
   --dawn-font-sans: var(--font-inter), "Satoshi", "Helvetica Neue", Arial, sans-serif;
   /* Chrome height — Header has px-6/8 + py-4 + ~h-10 brand row + 1px border.
      Used by ReadingLayout sticky offsets and anchor scroll padding. */
