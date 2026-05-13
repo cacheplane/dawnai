@@ -36,7 +36,7 @@ export async function StarBadge({ className = "" }: StarBadgeProps) {
       href="https://github.com/cacheplane/dawnai"
       target="_blank"
       rel="noopener noreferrer"
-      aria-label={`Star Dawn on GitHub — ${stars} stars`}
+      aria-label={`${formatStars(stars)} stars on GitHub — star Dawn`}
       className={`inline-flex items-center gap-1.5 text-sm text-ink-muted hover:text-ink transition-colors ${className}`}
     >
       <StarIcon />
