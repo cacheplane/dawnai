@@ -51,21 +51,14 @@ export const metadata: Metadata = {
     title: "Dawn — TypeScript meta-framework for LangGraph.js",
     description:
       "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
-    images: [
-      {
-        url: "/social/dawn-og-white-on-black.png",
-        width: 1024,
-        height: 1024,
-        alt: "Dawn AI",
-      },
-    ],
+    // Image is provided by app/opengraph-image.tsx (1200×630, cream palette).
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "Dawn — TypeScript meta-framework for LangGraph.js",
     description:
       "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
-    images: ["/social/dawn-og-white-on-black.png"],
+    // Image is provided by app/twitter-image.tsx (re-exports opengraph-image).
   },
   appleWebApp: {
     title: "Dawn AI",
