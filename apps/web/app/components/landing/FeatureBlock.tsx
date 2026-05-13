@@ -77,8 +77,8 @@ export function FeatureBlock({
         <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
           {imageSide === "left" ? (
             <>
-              <div className="lg:order-1 order-2">{visualColumn}</div>
-              <div className="lg:order-2 order-1">{textColumn}</div>
+              <div className="lg:order-1 order-2 min-w-0">{visualColumn}</div>
+              <div className="lg:order-2 order-1 min-w-0">{textColumn}</div>
             </>
           ) : (
             <>
