@@ -122,7 +122,7 @@ export function Pre({ children, className, ...rest }: PreProps) {
   const label = tabLabel(language, title)
 
   return (
-    <div className="relative my-6 rounded-lg border border-border bg-bg-card overflow-hidden">
+    <div className="relative my-6 rounded-lg border border-divider bg-surface overflow-hidden">
       <CodeHeaderRow
         left={<TabPill label={label} active />}
         right={<CopyButton onCopy={copy} copied={copied} />}
@@ -150,7 +150,7 @@ export function CodeHeaderRow({
   readonly right: ReactNode
 }) {
   return (
-    <div className="flex items-end justify-between px-3 pt-2 border-b border-border-subtle bg-bg-card/60">
+    <div className="flex items-end justify-between px-3 pt-2 border-b border-divider bg-surface/60">
       <div className="flex items-end gap-1">{left}</div>
       <div className="pb-1.5">{right}</div>
     </div>
@@ -168,7 +168,7 @@ export function TabPill({
 }) {
   const isButton = typeof onClick === "function"
   const baseClasses = `relative px-2 py-1.5 font-mono text-xs transition-colors ${
-    active ? "text-text-primary" : "text-text-muted hover:text-text-primary"
+    active ? "text-ink" : "text-ink-dim hover:text-ink"
   }`
   const underline = active ? (
     <span
@@ -213,8 +213,8 @@ export function CopyButton({
       aria-label={copied ? "Copied" : "Copy code"}
       className={`p-1.5 rounded border transition-colors ${
         copied
-          ? "border-accent-amber/40 text-accent-amber bg-accent-amber/10"
-          : "border-border text-text-muted hover:text-text-primary hover:border-text-muted"
+          ? "border-accent-amber/40 text-accent-saas bg-accent-saas/10"
+          : "border-divider text-ink-dim hover:text-ink hover:border-text-muted"
       }`}
     >
       {copied ? <CheckIcon /> : <CopyIcon />}
@@ -296,7 +296,7 @@ export function RehypeFigure({
   return (
     <figure
       {...rest}
-      className="relative my-6 rounded-lg border border-border bg-bg-card overflow-hidden"
+      className="relative my-6 rounded-lg border border-divider bg-surface overflow-hidden"
     >
       <RehypeFigureHeader label={label} preChild={preChild} />
       <HeadlessPreContext.Provider value={true}>{preChild}</HeadlessPreContext.Provider>

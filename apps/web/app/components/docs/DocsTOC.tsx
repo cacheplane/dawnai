@@ -58,16 +58,16 @@ export function DocsTOC() {
 
   return (
     <nav aria-label="On this page" className="sticky top-8 w-52 shrink-0 hidden lg:block text-sm">
-      <p className="text-xs text-text-muted uppercase tracking-widest mb-3">On this page</p>
-      <ul className="space-y-2 border-l border-border-subtle">
+      <p className="text-xs text-ink-dim uppercase tracking-widest mb-3">On this page</p>
+      <ul className="space-y-2 border-l border-divider">
         {headings.map((h) => (
           <li key={h.id} className={h.level === 3 ? "pl-5" : "pl-3"}>
             <a
               href={`#${h.id}`}
               className={`block py-0.5 transition-colors -ml-px border-l ${
                 activeId === h.id
-                  ? "text-accent-amber border-accent-amber"
-                  : "text-text-muted border-transparent hover:text-text-primary"
+                  ? "text-accent-saas border-accent-amber"
+                  : "text-ink-dim border-transparent hover:text-ink"
               }`}
               style={{ paddingLeft: h.level === 3 ? 12 : 12 }}
             >

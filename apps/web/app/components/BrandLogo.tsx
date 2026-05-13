@@ -20,7 +20,7 @@ export function BrandLogo({ className, imageClassName, variant = "light" }: Prop
   return (
     <Link
       href="/"
-      className={`inline-flex items-center text-text-primary ${className ?? ""}`}
+      className={`inline-flex items-center text-ink ${className ?? ""}`}
       aria-label="Dawn home"
     >
       <Image

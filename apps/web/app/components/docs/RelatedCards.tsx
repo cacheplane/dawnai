@@ -37,15 +37,15 @@ export function RelatedCards({ items }: RelatedCardsProps) {
         <Link
           key={item.href}
           href={item.href}
-          className="group relative block rounded-lg border border-border bg-bg-card/40 px-4 py-3 hover:border-text-muted hover:bg-bg-card transition-colors"
+          className="group relative block rounded-lg border border-divider bg-surface/40 px-4 py-3 hover:border-text-muted hover:bg-surface transition-colors"
         >
-          <span className="absolute top-3 right-3 text-text-muted group-hover:text-text-primary transition-colors">
+          <span className="absolute top-3 right-3 text-ink-dim group-hover:text-ink transition-colors">
             <ArrowIcon />
           </span>
           <div className="pr-6">
-            <div className="text-base font-semibold text-text-primary">{item.title}</div>
+            <div className="text-base font-semibold text-ink">{item.title}</div>
             {item.subtitle && (
-              <div className="mt-1 text-sm text-text-muted leading-snug">{item.subtitle}</div>
+              <div className="mt-1 text-sm text-ink-dim leading-snug">{item.subtitle}</div>
             )}
           </div>
         </Link>
