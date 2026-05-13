@@ -37,6 +37,9 @@ export interface Post {
   readonly ogImage?: string
   readonly draft: boolean
   readonly readingTimeMinutes: number
+  /** Original MDX filename (e.g. "2026-05-12-why-we-built-dawn.mdx").
+   *  Source of truth for locating the file — do not reconstruct from date/slug. */
+  readonly sourceFile: string
 }
 
 const DATE_PREFIX = /^\d{4}-\d{2}-\d{2}-/
@@ -101,6 +104,7 @@ function parsePost(filename: string, raw: string): Post {
     ...(fm.ogImage !== undefined && { ogImage: fm.ogImage }),
     draft: fm.draft === true,
     readingTimeMinutes: Math.max(1, Math.round(stats.minutes)),
+    sourceFile: filename,
   }
 }
 

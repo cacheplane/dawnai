@@ -68,6 +68,13 @@ describe("loadPostsFromDir", () => {
     })
   })
 
+  it("preserves the on-disk filename as sourceFile", () => {
+    withFixture({ "2026-05-12-why-we-built-dawn.mdx": samplePost }, (dir) => {
+      const [p] = loadPostsFromDir(dir, { includeDrafts: false })
+      expect(p?.sourceFile).toBe("2026-05-12-why-we-built-dawn.mdx")
+    })
+  })
+
   it("computes reading time from body word count", () => {
     withFixture({ "2026-05-12-why-we-built-dawn.mdx": samplePost }, (dir) => {
       const [p] = loadPostsFromDir(dir, { includeDrafts: false })

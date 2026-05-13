@@ -12,6 +12,7 @@ const samplePost: Post = {
   author: "brian",
   draft: false,
   readingTimeMinutes: 8,
+  sourceFile: "2026-05-12-why-we-built-dawn.mdx",
 }
 
 describe("buildRssFeed", () => {

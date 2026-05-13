@@ -62,8 +62,7 @@ async function buildLlmsFull(): Promise<string> {
 
   sections.push("\n\n# Blog\n")
   for (const post of getAllPosts()) {
-    const filename = `${post.date}-${post.slug}.mdx`
-    const raw = readFileSync(join(process.cwd(), "content", "blog", filename), "utf8")
+    const raw = readFileSync(join(process.cwd(), "content", "blog", post.sourceFile), "utf8")
     sections.push(`\n## ${post.title}\n\n${raw}\n`)
   }
 
