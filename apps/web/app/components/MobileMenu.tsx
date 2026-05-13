@@ -78,7 +78,7 @@ export function MobileMenu() {
         aria-label="Open menu"
         aria-expanded={isOpen}
         aria-controls={menuId}
-        className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-card transition-colors"
+        className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-md text-ink-muted hover:text-ink hover:bg-surface transition-colors"
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden role="img">
           <title>Menu</title>
@@ -97,22 +97,20 @@ export function MobileMenu() {
         role="dialog"
         aria-modal="true"
         aria-label="Site menu"
-        className={`md:hidden fixed inset-0 z-50 bg-bg-primary transition-opacity duration-200 ease-out ${
+        className={`md:hidden fixed inset-0 z-50 bg-page transition-opacity duration-200 ease-out ${
           isOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         }`}
       >
         <div className="h-full overflow-y-auto">
           {/* Header strip */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
-            <span className="text-xs uppercase tracking-widest text-text-muted font-mono">
-              Menu
-            </span>
+          <div className="flex items-center justify-between px-6 py-4 border-b border-divider">
+            <span className="text-xs uppercase tracking-widest text-ink-dim font-mono">Menu</span>
             <button
               ref={closeRef}
               type="button"
               onClick={() => setIsOpen(false)}
               aria-label="Close menu"
-              className="inline-flex items-center justify-center w-10 h-10 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-card transition-colors"
+              className="inline-flex items-center justify-center w-10 h-10 rounded-md text-ink-muted hover:text-ink hover:bg-surface transition-colors"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden role="img">
                 <title>Close</title>
@@ -128,7 +126,7 @@ export function MobileMenu() {
 
           {/* Site section */}
           <div className="px-6 py-6">
-            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-text-muted mb-3">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim mb-3">
               Site
             </p>
             <ul className="flex flex-col gap-0.5">
@@ -140,7 +138,7 @@ export function MobileMenu() {
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={() => setIsOpen(false)}
-                      className="block text-base px-3 py-2.5 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-card transition-colors"
+                      className="block text-base px-3 py-2.5 rounded-md text-ink-muted hover:text-ink hover:bg-surface transition-colors"
                     >
                       {link.label} <span aria-hidden>↗</span>
                     </a>
@@ -148,7 +146,7 @@ export function MobileMenu() {
                     <Link
                       href={link.href}
                       onClick={() => setIsOpen(false)}
-                      className="block text-base px-3 py-2.5 rounded-md bg-accent-amber text-bg-primary font-semibold mt-2"
+                      className="block text-base px-3 py-2.5 rounded-md bg-accent-saas text-accent-saas-ink font-semibold mt-2"
                     >
                       {link.label}
                     </Link>
@@ -156,7 +154,7 @@ export function MobileMenu() {
                     <Link
                       href={link.href}
                       onClick={() => setIsOpen(false)}
-                      className="block text-base px-3 py-2.5 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-card transition-colors"
+                      className="block text-base px-3 py-2.5 rounded-md text-ink-muted hover:text-ink hover:bg-surface transition-colors"
                     >
                       {link.label}
                     </Link>
@@ -168,14 +166,14 @@ export function MobileMenu() {
 
           {/* Documentation section — only on docs pages */}
           {isDocsPage && (
-            <div className="px-6 pb-10 border-t border-border-subtle pt-6">
-              <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-text-muted mb-3">
+            <div className="px-6 pb-10 border-t border-divider pt-6">
+              <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim mb-3">
                 Documentation
               </p>
               <nav className="space-y-5">
                 {DOCS_NAV.map((section) => (
                   <div key={section.label}>
-                    <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-text-muted mb-1.5 px-3">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim mb-1.5 px-3">
                       {section.label}
                     </p>
                     <ul className="space-y-0.5">
@@ -188,8 +186,8 @@ export function MobileMenu() {
                               onClick={() => setIsOpen(false)}
                               className={`block text-sm px-3 py-2 rounded-md transition-colors ${
                                 active
-                                  ? "text-accent-amber bg-accent-amber/8"
-                                  : "text-text-secondary hover:text-text-primary hover:bg-bg-card"
+                                  ? "text-accent-saas bg-accent-saas-soft"
+                                  : "text-ink-muted hover:text-ink hover:bg-surface"
                               }`}
                             >
                               {item.label}

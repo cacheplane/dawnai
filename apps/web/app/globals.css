@@ -19,6 +19,20 @@
   --color-accent-amber: #f59e0b;
   --color-accent-amber-deep: #d97706;
 
+  /* SaaS rebrand tokens (PR 1) — additive, do not modify existing cosmic/cream tokens.
+     Renamed to spec names in PR 6 cleanup. */
+  --color-page: #ffffff;
+  --color-surface: #fafaf7;
+  --color-surface-sunk: #f4f2ec;
+  --color-ink: #14110d;
+  --color-ink-muted: #5a554c;
+  --color-ink-dim: #8a857b;
+  --color-divider: #e6e3da;
+  --color-divider-strong: #cfcabd;
+  --color-accent-saas: #d97706;
+  --color-accent-saas-ink: #ffffff;
+  --color-accent-saas-soft: #fef3c7;
+
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", monospace;
