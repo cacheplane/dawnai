@@ -74,7 +74,7 @@ export function FeatureBlock({
   return (
     <section className="bg-page border-b border-divider">
       <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-20 md:py-28">
-        <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-16 items-center min-w-0">
           {imageSide === "left" ? (
             <>
               <div className="lg:order-1 order-2 min-w-0">{visualColumn}</div>

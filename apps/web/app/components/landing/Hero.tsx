@@ -23,7 +23,7 @@ export async function Hero() {
   return (
     <section className="relative bg-page border-b border-divider">
       <div className="max-w-[1200px] mx-auto px-6 md:px-8 pt-20 md:pt-28 pb-20 md:pb-28">
-        <div className="grid lg:grid-cols-[1.25fr_1fr] gap-12 lg:gap-16 items-center">
+        <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr] gap-12 lg:gap-16 items-center">
           <div className="min-w-0">
             <Eyebrow>TypeScript meta-framework · for LangGraph.js</Eyebrow>
             <h1
