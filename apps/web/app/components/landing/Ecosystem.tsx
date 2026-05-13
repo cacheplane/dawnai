@@ -4,6 +4,8 @@ import { ProviderMark } from "../ui/ProviderMark"
 interface CategoryItem {
   readonly name: string
   readonly href?: string | undefined
+  readonly logoSrc?: string | undefined
+  readonly logoIsWordmark?: boolean | undefined
 }
 
 interface Category {
@@ -15,11 +17,28 @@ const CATEGORIES: readonly Category[] = [
   {
     label: "Models",
     items: [
-      { name: "OpenAI", href: "https://openai.com" },
-      { name: "Anthropic", href: "https://www.anthropic.com" },
-      { name: "Google", href: "https://ai.google.dev" },
+      {
+        name: "OpenAI",
+        href: "https://openai.com",
+        logoSrc: "/logos/providers/openai.svg",
+      },
+      {
+        name: "Anthropic",
+        href: "https://www.anthropic.com",
+        logoSrc: "/logos/providers/anthropic.svg",
+      },
+      {
+        name: "Google",
+        href: "https://ai.google.dev",
+        logoSrc: "/logos/providers/google.svg",
+      },
       { name: "Mistral", href: "https://mistral.ai" },
-      { name: "Ollama", href: "https://ollama.com" },
+      {
+        name: "Ollama",
+        href: "https://ollama.com",
+        logoSrc: "/logos/providers/ollama.svg",
+        logoIsWordmark: true,
+      },
       { name: "Any LangGraph-compatible model" },
     ],
   },
@@ -78,7 +97,12 @@ export function Ecosystem() {
               <ul className="mt-4 space-y-2">
                 {cat.items.map((item) => (
                   <li key={item.name}>
-                    <ProviderMark name={item.name} {...(item.href ? { href: item.href } : {})} />
+                    <ProviderMark
+                      name={item.name}
+                      {...(item.href ? { href: item.href } : {})}
+                      {...(item.logoSrc ? { logoSrc: item.logoSrc } : {})}
+                      {...(item.logoIsWordmark ? { logoIsWordmark: true } : {})}
+                    />
                   </li>
                 ))}
               </ul>

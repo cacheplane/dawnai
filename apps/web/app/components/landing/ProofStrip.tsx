@@ -84,10 +84,18 @@ export async function ProofStrip() {
               Works with
             </span>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <ProviderMark name="OpenAI" href="https://openai.com" />
-              <ProviderMark name="Anthropic" href="https://www.anthropic.com" />
-              <ProviderMark name="Google" />
-              <ProviderMark name="Ollama" />
+              <ProviderMark
+                name="OpenAI"
+                href="https://openai.com"
+                logoSrc="/logos/providers/openai.svg"
+              />
+              <ProviderMark
+                name="Anthropic"
+                href="https://www.anthropic.com"
+                logoSrc="/logos/providers/anthropic.svg"
+              />
+              <ProviderMark name="Google" logoSrc="/logos/providers/google.svg" />
+              <ProviderMark name="Ollama" logoSrc="/logos/providers/ollama.svg" logoIsWordmark />
             </div>
           </div>
         </div>
