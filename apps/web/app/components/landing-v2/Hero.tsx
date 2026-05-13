@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { highlightLight } from "../../../lib/shiki/highlight-light"
-import { CodeFrame } from "../ui/CodeFrame"
 import { CopyCommand } from "../CopyCommand"
+import { CodeFrame } from "../ui/CodeFrame"
 
 const ROUTE_CODE = `import { agent } from "@dawn-ai/sdk"
 import { z } from "zod"
@@ -35,12 +35,11 @@ export async function Hero() {
               }}
             >
               Build LangGraph agents
-              <br className="hidden md:inline" />
-              {" "}like Next.js apps.
+              <br className="hidden md:inline" /> like Next.js apps.
             </h1>
             <p className="mt-6 text-lg text-ink-muted leading-[30px] max-w-[44ch]">
-              Dawn adds file-system routing, route-local tools, generated types,
-              and HMR to your existing LangGraph.js stack.{" "}
+              Dawn adds file-system routing, route-local tools, generated types, and HMR to your
+              existing LangGraph.js stack.{" "}
               <strong className="text-ink font-medium">
                 Keep the runtime. Drop the boilerplate.
               </strong>
@@ -60,6 +59,7 @@ export async function Hero() {
             <CodeFrame label="src/app/(public)/support/index.ts">
               <div
                 className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
                 dangerouslySetInnerHTML={{ __html: codeHtml }}
               />
             </CodeFrame>

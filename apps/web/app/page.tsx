@@ -1,4 +1,3 @@
-import { Hero } from "./components/landing-v2/Hero"
 import { ArchitectureSection } from "./components/landing/ArchitectureSection"
 import { BigReveal } from "./components/landing/BigReveal"
 import { CodeExample } from "./components/landing/CodeExample"
@@ -15,6 +14,7 @@ import { ProblemSection } from "./components/landing/ProblemSection"
 import { SolutionSection } from "./components/landing/SolutionSection"
 import { StarsSection } from "./components/landing/StarsSection"
 import { WhoItsFor } from "./components/landing/WhoItsFor"
+import { Hero } from "./components/landing-v2/Hero"
 import { PaletteScroller } from "./components/PaletteScroller"
 import { ScrollReveal } from "./components/ScrollReveal"
 
