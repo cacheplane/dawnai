@@ -27,7 +27,7 @@ export async function Hero() {
           <div className="min-w-0">
             <Eyebrow>TypeScript meta-framework · for LangGraph.js</Eyebrow>
             <h1
-              className="font-display font-semibold text-ink mt-4 text-[40px] leading-[44px] md:text-[56px] md:leading-[60px] lg:text-[64px] lg:leading-[68px] text-balance"
+              className="font-display font-semibold text-ink mt-4 text-[40px] leading-[44px] md:text-[56px] md:leading-[60px] lg:text-[56px] lg:leading-[60px] xl:text-[64px] xl:leading-[68px] text-balance"
               style={{
                 fontVariationSettings: "'opsz' 144, 'SOFT' 50, 'WONK' 0",
                 letterSpacing: "-0.015em",
