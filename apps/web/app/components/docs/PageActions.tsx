@@ -288,14 +288,14 @@ export function PageActions({ slug, promptSlug, promptBody }: PageActionsProps) 
           await item.onSelect()
           if (item.external) setOpen(false)
         }}
-        className="w-full text-left px-3 py-2 flex items-start gap-3 hover:bg-bg-card focus:bg-bg-card focus:outline-none transition-colors"
+        className="w-full text-left px-3 py-2 flex items-start gap-3 hover:bg-surface focus:bg-surface focus:outline-none transition-colors"
       >
-        <span className="mt-0.5 text-text-muted shrink-0">{item.icon}</span>
+        <span className="mt-0.5 text-ink-dim shrink-0">{item.icon}</span>
         <span className="flex-1 min-w-0">
-          <span className="block text-sm font-medium text-text-primary">
+          <span className="block text-sm font-medium text-ink">
             {flashed ? "Copied" : item.title}
           </span>
-          <span className="block text-xs text-text-muted leading-snug">{item.subtitle}</span>
+          <span className="block text-xs text-ink-dim leading-snug">{item.subtitle}</span>
         </span>
       </button>
     )
@@ -307,7 +307,7 @@ export function PageActions({ slug, promptSlug, promptBody }: PageActionsProps) 
         <button
           type="button"
           onClick={handleCopyPrompt}
-          className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 border border-accent-amber/40 text-accent-amber rounded-md text-xs font-mono hover:border-accent-amber hover:bg-accent-amber/5 transition-colors"
+          className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 border border-accent-amber/40 text-accent-saas rounded-md text-xs font-mono hover:border-accent-amber hover:bg-accent-saas/5 transition-colors"
           aria-label={primaryFeedback === "copied" ? "Prompt copied" : "Copy prompt to clipboard"}
         >
           {primaryFeedback === "copied" ? (
@@ -331,7 +331,7 @@ export function PageActions({ slug, promptSlug, promptBody }: PageActionsProps) 
         aria-expanded={open}
         aria-controls={menuId}
         aria-label="Page actions"
-        className="inline-flex items-center justify-center h-7 w-7 rounded-md border border-border text-text-muted hover:text-text-primary hover:border-border-strong transition-colors"
+        className="inline-flex items-center justify-center h-7 w-7 rounded-md border border-divider text-ink-dim hover:text-ink hover:border-divider-strong transition-colors"
       >
         <DotsIcon />
       </button>
@@ -340,7 +340,7 @@ export function PageActions({ slug, promptSlug, promptBody }: PageActionsProps) 
         <div
           id={menuId}
           role="menu"
-          className="absolute right-0 top-full mt-2 w-72 rounded-lg border border-border bg-bg-card shadow-lg z-30 py-1 focus:outline-none"
+          className="absolute right-0 top-full mt-2 w-72 rounded-lg border border-divider bg-surface shadow-lg z-30 py-1 focus:outline-none"
         >
           {mobilePromptItem && <div className="md:hidden">{renderItem(mobilePromptItem)}</div>}
           {baseItems.map(renderItem)}

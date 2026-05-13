@@ -22,16 +22,16 @@ export function PostHeader({ post }: { readonly post: Post }) {
     url: "https://github.com/blove",
   }
   return (
-    <header className="mb-8 pb-8 border-b border-border-subtle">
-      <div className="text-[11px] uppercase tracking-widest text-text-muted mb-2">{eyebrow}</div>
+    <header className="mb-8 pb-8 border-b border-divider">
+      <div className="text-[11px] uppercase tracking-widest text-ink-dim mb-2">{eyebrow}</div>
       <h1
-        className="font-display text-4xl md:text-5xl font-semibold tracking-tight mb-3 text-text-primary"
+        className="font-display text-4xl md:text-5xl font-semibold tracking-tight mb-3 text-ink"
         style={{ fontVariationSettings: "'opsz' 144, 'SOFT' 50" }}
       >
         {post.title}
       </h1>
-      <p className="text-lg text-text-secondary leading-relaxed">{post.description}</p>
-      <div className="text-sm text-text-muted mt-4">{formatDate(post.date)}</div>
+      <p className="text-lg text-ink-muted leading-relaxed">{post.description}</p>
+      <div className="text-sm text-ink-dim mt-4">{formatDate(post.date)}</div>
 
       {/* Mobile-only: author byline + tags. Desktop sees these in the PostMeta left rail. */}
       <div className="md:hidden mt-5 flex items-center gap-3">
@@ -46,7 +46,7 @@ export function PostHeader({ post }: { readonly post: Post }) {
           href={author.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sm text-text-primary hover:text-accent-amber-deep transition-colors"
+          className="text-sm text-ink hover:text-accent-saas transition-colors"
         >
           {author.name}
         </a>
@@ -57,7 +57,7 @@ export function PostHeader({ post }: { readonly post: Post }) {
             <Link
               key={tag}
               href={`/blog/tags/${tag}`}
-              className="text-xs px-2 py-0.5 rounded-full bg-bg-card/60 text-text-secondary hover:text-accent-amber-deep transition-colors"
+              className="text-xs px-2 py-0.5 rounded-full bg-surface/60 text-ink-muted hover:text-accent-saas transition-colors"
             >
               {tag}
             </Link>

@@ -20,24 +20,22 @@ export function PostMeta({ post }: { readonly post: Post }) {
   return (
     <div className="flex flex-col gap-6 text-sm">
       <div>
-        <div className="text-[10px] uppercase tracking-widest text-text-muted mb-2">Published</div>
-        <div className="text-text-primary">{formatDate(post.date)}</div>
+        <div className="text-[10px] uppercase tracking-widest text-ink-dim mb-2">Published</div>
+        <div className="text-ink">{formatDate(post.date)}</div>
       </div>
       <div>
-        <div className="text-[10px] uppercase tracking-widest text-text-muted mb-2">
-          Reading time
-        </div>
-        <div className="text-text-primary">{post.readingTimeMinutes} min</div>
+        <div className="text-[10px] uppercase tracking-widest text-ink-dim mb-2">Reading time</div>
+        <div className="text-ink">{post.readingTimeMinutes} min</div>
       </div>
       {post.tags.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-widest text-text-muted mb-2">Tags</div>
+          <div className="text-[10px] uppercase tracking-widest text-ink-dim mb-2">Tags</div>
           <div className="flex flex-wrap gap-1.5">
             {post.tags.map((tag) => (
               <Link
                 key={tag}
                 href={`/blog/tags/${tag}`}
-                className="text-xs px-2 py-0.5 rounded-full bg-bg-card/60 text-text-secondary hover:text-accent-amber-deep transition-colors"
+                className="text-xs px-2 py-0.5 rounded-full bg-surface/60 text-ink-muted hover:text-accent-saas transition-colors"
               >
                 {tag}
               </Link>
@@ -45,8 +43,8 @@ export function PostMeta({ post }: { readonly post: Post }) {
           </div>
         </div>
       )}
-      <div className="pt-4 border-t border-border-subtle">
-        <div className="text-[10px] uppercase tracking-widest text-text-muted mb-2">Author</div>
+      <div className="pt-4 border-t border-divider">
+        <div className="text-[10px] uppercase tracking-widest text-ink-dim mb-2">Author</div>
         <div className="flex items-center gap-3">
           <Image
             src={author.avatar}
@@ -59,7 +57,7 @@ export function PostMeta({ post }: { readonly post: Post }) {
             href={author.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-text-primary hover:text-accent-amber-deep transition-colors"
+            className="text-ink hover:text-accent-saas transition-colors"
           >
             {author.name}
           </a>

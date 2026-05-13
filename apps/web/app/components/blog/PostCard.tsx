@@ -17,8 +17,8 @@ export function PostCard({ post }: { readonly post: Post }) {
       href={`/blog/${post.slug}`}
       className={`block p-5 rounded-xl border transition-colors ${
         isRelease
-          ? "border-border-subtle bg-bg-card/30 hover:bg-bg-card/60"
-          : "border-border-subtle bg-bg-card/60 hover:border-accent-amber/40"
+          ? "border-divider bg-surface/30 hover:bg-surface/60"
+          : "border-divider bg-surface/60 hover:border-accent-amber/40"
       }`}
     >
       {isRelease ? (
@@ -26,15 +26,15 @@ export function PostCard({ post }: { readonly post: Post }) {
           v{post.version}
         </span>
       ) : (
-        <span className="text-[11px] uppercase tracking-widest text-text-muted">
+        <span className="text-[11px] uppercase tracking-widest text-ink-dim">
           Essay · {post.readingTimeMinutes} min
         </span>
       )}
-      <h3 className="font-display text-lg font-semibold text-text-primary mt-2 mb-1 leading-snug">
+      <h3 className="font-display text-lg font-semibold text-ink mt-2 mb-1 leading-snug">
         {post.title}
       </h3>
-      <p className="text-sm text-text-secondary leading-relaxed mb-3">{post.description}</p>
-      <div className="text-xs text-text-muted">{formatDate(post.date)}</div>
+      <p className="text-sm text-ink-muted leading-relaxed mb-3">{post.description}</p>
+      <div className="text-xs text-ink-dim">{formatDate(post.date)}</div>
     </Link>
   )
 }

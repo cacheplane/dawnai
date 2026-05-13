@@ -22,7 +22,7 @@ export function FeaturedPostCard({ post }: { readonly post: Post }) {
       className="block p-8 rounded-2xl border border-accent-amber/35 mb-6 transition-transform hover:scale-[1.005]"
       style={{ background: "linear-gradient(180deg,#fff7e0 0%,#ffeec2 100%)" }}
     >
-      <span className="text-[11px] uppercase tracking-widest text-accent-amber-deep">
+      <span className="text-[11px] uppercase tracking-widest text-accent-saas">
         Essay · {post.readingTimeMinutes} min read
       </span>
       <h2

@@ -15,15 +15,15 @@ export function DocsSidebar({ searchIndex }: Props) {
 
   return (
     <div>
-      <p className="text-xs text-text-muted uppercase tracking-widest mb-4 inline-flex items-center gap-2">
-        <span className="inline-block w-1 h-1 rounded-full bg-accent-amber" aria-hidden />
+      <p className="text-xs text-ink-dim uppercase tracking-widest mb-4 inline-flex items-center gap-2">
+        <span className="inline-block w-1 h-1 rounded-full bg-accent-saas" aria-hidden />
         Documentation
       </p>
       <DocsSearch index={searchIndex} />
       <nav className="space-y-6 mt-4">
         {DOCS_NAV.map((section) => (
           <div key={section.label}>
-            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-text-muted mb-1.5 px-3">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-dim mb-1.5 px-3">
               {section.label}
             </p>
             <ul className="space-y-0.5">
@@ -35,8 +35,8 @@ export function DocsSidebar({ searchIndex }: Props) {
                       href={item.href}
                       className={`block text-sm px-3 py-1.5 rounded-md transition-colors ${
                         active
-                          ? "text-accent-amber-deep bg-accent-amber/15"
-                          : "text-text-secondary hover:text-text-primary hover:bg-bg-card"
+                          ? "text-accent-saas bg-accent-saas/15"
+                          : "text-ink-muted hover:text-ink hover:bg-surface"
                       }`}
                     >
                       {item.label}
