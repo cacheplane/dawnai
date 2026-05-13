@@ -1,4 +1,4 @@
-import type { AnthropicModelId, GoogleModelId, KnownModelId, OpenAiModelId } from "@dawn-ai/sdk"
+import type { GoogleModelId, KnownModelId, OpenAiModelId } from "@dawn-ai/sdk"
 import { agent } from "@dawn-ai/sdk"
 import { describe, expect, expectTypeOf, test } from "vitest"
 
@@ -6,11 +6,6 @@ describe("KnownModelId", () => {
   test("accepts OpenAI model IDs", () => {
     const descriptor = agent({ model: "gpt-5.5", systemPrompt: "test" })
     expect(descriptor.model).toBe("gpt-5.5")
-  })
-
-  test("accepts Anthropic model IDs", () => {
-    const descriptor = agent({ model: "assistant-opus-4-7", systemPrompt: "test" })
-    expect(descriptor.model).toBe("assistant-opus-4-7")
   })
 
   test("accepts Google model IDs", () => {
@@ -25,7 +20,6 @@ describe("KnownModelId", () => {
 
   test("per-provider types are subtypes of KnownModelId", () => {
     expectTypeOf<OpenAiModelId>().toMatchTypeOf<KnownModelId>()
-    expectTypeOf<AnthropicModelId>().toMatchTypeOf<KnownModelId>()
     expectTypeOf<GoogleModelId>().toMatchTypeOf<KnownModelId>()
   })
 })

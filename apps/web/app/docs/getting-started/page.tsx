@@ -12,7 +12,7 @@ export default function Page() {
       href="/docs/getting-started"
       Content={GettingStarted}
       promptSlug="scaffold"
-      promptPitch="Copy a prompt that instructs assistant Code, Cursor, or any coding agent to scaffold a Dawn app and walk through the structure with you."
+      promptPitch="Copy a prompt that instructs your coding agent to scaffold a Dawn app and walk through the structure with you."
     />
   )
 }

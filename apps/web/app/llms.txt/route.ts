@@ -90,7 +90,6 @@ function buildLlmsTxt(): string {
       "## Agent Config Templates",
       "Drop-in agent configuration for a Dawn project:",
       "- https://dawnai.org/AGENTS.md",
-      "- https://dawnai.org/assistant.md",
       "",
       "## Brand Assets",
       "Official Dawn AI logos, icons, favicons, and social assets:",

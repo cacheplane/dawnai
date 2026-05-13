@@ -18,8 +18,7 @@ const DOCS_PAGES = [
   { title: "CLI Reference", path: "docs/cli.mdx" },
 ]
 
-// Single source — `/AGENTS.md` and `/assistant.md` both serve this file.
-const TEMPLATES = [{ title: "AGENTS.md / assistant.md template", path: "templates/AGENTS.md" }]
+const TEMPLATES = [{ title: "AGENTS.md template", path: "templates/AGENTS.md" }]
 
 async function readContent(relPath: string): Promise<string> {
   return readFile(path.join(CONTENT_ROOT, relPath), "utf8")

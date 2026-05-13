@@ -293,7 +293,7 @@ String literal types for model identifiers. See [Agents](/docs/agents).
 ### `KnownModelId`
 
 ```ts
-export type KnownModelId = OpenAiModelId | AnthropicModelId | GoogleModelId | (string & {})
+export type KnownModelId = OpenAiModelId | GoogleModelId | (string & {})
 ```
 
 The accepted type for `AgentConfig.model`. Includes all named model IDs plus an escape hatch (`string & {}`) for models not yet in the union. The escape hatch preserves autocomplete for the named values.
@@ -309,17 +309,6 @@ export type OpenAiModelId =
 ```
 
 String literals for supported OpenAI models.
-
-### `AnthropicModelId`
-
-```ts
-export type AnthropicModelId =
-  | "assistant-opus-4-7"
-  | "assistant-sonnet-4-6"
-  | "assistant-haiku-4-5-20251001"
-```
-
-String literals for supported Anthropic models.
 
 ### `GoogleModelId`
 

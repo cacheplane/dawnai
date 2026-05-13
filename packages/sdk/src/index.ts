@@ -1,12 +1,7 @@
 export type { AgentConfig, DawnAgent, RetryConfig } from "./agent.js"
 export { agent, isDawnAgent } from "./agent.js"
 export type { BackendAdapter } from "./backend-adapter.js"
-export type {
-  AnthropicModelId,
-  GoogleModelId,
-  KnownModelId,
-  OpenAiModelId,
-} from "./known-model-ids.js"
+export type { GoogleModelId, KnownModelId, OpenAiModelId } from "./known-model-ids.js"
 export type {
   ContinueResult,
   DawnMiddleware,

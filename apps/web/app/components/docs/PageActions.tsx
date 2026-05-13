@@ -112,24 +112,6 @@ function ChatBubbleIcon() {
   )
 }
 
-function SparkIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 2l2.39 6.96L21 11l-6.61 2.04L12 20l-2.39-6.96L3 11l6.61-2.04L12 2z" />
-    </svg>
-  )
-}
-
 function PencilIcon() {
   return (
     <svg
@@ -203,11 +185,6 @@ export function PageActions({ slug, promptSlug, promptBody }: PageActionsProps) 
     window.open(url, "_blank", "noopener,noreferrer")
   }, [slug])
 
-  const openassistant = useCallback(() => {
-    const url = `https://assistant.ai/new?q=${encodeURIComponent(aiPrompt(slug))}`
-    window.open(url, "_blank", "noopener,noreferrer")
-  }, [slug])
-
   const openGitHub = useCallback(() => {
     window.open(`${GITHUB_EDIT_BASE}/${slug}.mdx`, "_blank", "noopener,noreferrer")
   }, [slug])
@@ -227,14 +204,6 @@ export function PageActions({ slug, promptSlug, promptBody }: PageActionsProps) 
       title: "Open in ChatGPT",
       subtitle: "Send this page to ChatGPT",
       onSelect: openChatGPT,
-      external: true,
-    },
-    {
-      key: "assistant",
-      icon: <SparkIcon />,
-      title: "Open in assistant",
-      subtitle: "Send this page to assistant",
-      onSelect: openassistant,
       external: true,
     },
     {

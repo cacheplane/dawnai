@@ -42,7 +42,7 @@ export default agent({
 })
 ```
 
-- `model` is a `KnownModelId` (covers OpenAI, Anthropic, and Google ids).
+- `model` is a `KnownModelId` (covers OpenAI and Google ids, plus any custom string).
 - `retry?: { maxAttempts?: number, baseDelay?: number }` — applied per agent call.
 - Tools in the same route's `tools/` directory (and shared tools in `src/tools/`) are automatically bound to the agent at `dawn build` time.
 

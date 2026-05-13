@@ -212,7 +212,7 @@ Screen Studio → Export:
 - Frame rate: **60 fps**
 - Quality: **Web (recommended)** preset
 
-Save to: `~/Desktop/dawn-hero.mp4` (you'll move it into the repo with help from assistant after).
+Save to: `~/Desktop/dawn-hero.mp4` before moving it into the repo.
 
 ### Check before saving
 
@@ -224,13 +224,13 @@ Save to: `~/Desktop/dawn-hero.mp4` (you'll move it into the repo with help from 
 
 ---
 
-## Hand-off to assistant
+## Hand-off
 
-When the MP4 is ready, paste this in chat:
+When the MP4 is ready, use this note:
 
 > `dawn-hero.mp4 is at /Users/blove/Desktop/dawn-hero.mp4`
 
-assistant will:
+Next steps:
 1. Move the file into `docs/brand/hero.mp4`
 2. Delete the obsolete VHS infra (stub, capture script, .tape, fixture, gif, build-gif.sh)
 3. Update [README.md](../../README.md) to embed via `<video>` tag
