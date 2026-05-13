@@ -50,8 +50,8 @@ export default async function BlogPostPage({ params }: PageProps) {
   if (!post) notFound()
 
   // Dynamic import resolves at build time because generateStaticParams enumerates slugs.
-  // Filename convention: YYYY-MM-DD-<slug>.mdx, reconstructed from post.date + post.slug.
-  const mod = (await import(`../../../content/blog/${post.date}-${post.slug}.mdx`)) as {
+  // post.sourceFile is the on-disk filename — authoritative even if frontmatter date drifts.
+  const mod = (await import(`../../../content/blog/${post.sourceFile}`)) as {
     default: React.ComponentType
   }
   const MdxContent = mod.default
