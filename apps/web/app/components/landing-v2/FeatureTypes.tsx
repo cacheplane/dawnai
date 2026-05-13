@@ -1,25 +1,7 @@
-import { highlightLight } from "../../../lib/shiki/highlight-light"
-import { CodeFrame } from "../ui/CodeFrame"
 import { FeatureBlock } from "./FeatureBlock"
+import { IntelliSenseVisual } from "./IntelliSenseVisual"
 
-const TYPES_CODE = `// state.ts — single source of truth
-export default z.object({
-  tenant: z.string(),
-  question: z.string(),
-  history: z.array(z.object({
-    role: z.enum(["user", "assistant"]),
-    content: z.string(),
-  })),
-})
-
-// inside a tool handler — state is inferred end-to-end
-async function summarize({ state }: ToolContext) {
-  // state.history is { role: "user" | "assistant"; content: string }[]
-  return state.history.map((m) => \`\${m.role}: \${m.content}\`).join("\\n")
-}`
-
-export async function FeatureTypes() {
-  const html = await highlightLight(TYPES_CODE, "typescript")
+export function FeatureTypes() {
   return (
     <FeatureBlock
       eyebrow="Types"
@@ -32,15 +14,7 @@ export async function FeatureTypes() {
         "Works with your existing tsconfig.json",
       ]}
       link={{ href: "/docs/state", label: "See type generation docs" }}
-      visual={
-        <CodeFrame label="state.ts → tools/*.ts">
-          <div
-            className="px-4 py-4 text-sm font-mono leading-[22px] overflow-x-auto"
-            // biome-ignore lint/security/noDangerouslySetInnerHtml: shiki output is server-generated
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
-        </CodeFrame>
-      }
+      visual={<IntelliSenseVisual />}
     />
   )
 }
