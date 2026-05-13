@@ -1,7 +1,7 @@
 import Link from "next/link"
-import { Eyebrow } from "../ui/Eyebrow"
-import { Card } from "../ui/Card"
 import { CopyCommand } from "../CopyCommand"
+import { Card } from "../ui/Card"
+import { Eyebrow } from "../ui/Eyebrow"
 
 interface Step {
   readonly n: number
@@ -52,9 +52,7 @@ export function Quickstart() {
               <h3 className="mt-4 font-display text-xl font-semibold text-ink leading-tight">
                 {step.title}
               </h3>
-              <p className="mt-3 text-sm text-ink-muted leading-[22px] flex-1">
-                {step.body}
-              </p>
+              <p className="mt-3 text-sm text-ink-muted leading-[22px] flex-1">{step.body}</p>
               {step.n === 1 ? (
                 <div className="mt-5">
                   <CopyCommand command="pnpm create dawn-ai-app my-agent" />

@@ -1,5 +1,5 @@
-import { Eyebrow } from "../ui/Eyebrow"
 import { Card } from "../ui/Card"
+import { Eyebrow } from "../ui/Eyebrow"
 
 function XIcon() {
   return (
@@ -42,20 +42,19 @@ export function KeepTheRuntime() {
         <div className="mt-8 grid lg:grid-cols-[1.2fr_1fr] gap-10 lg:gap-16">
           <div className="space-y-5 text-lg text-ink-muted leading-[30px] max-w-[58ch]">
             <p>
-              Dawn compiles to LangGraph constructs. Routes become nodes, tools
-              become callable bindings, state becomes a typed channel. You can
-              read the generated graph, drop into raw{" "}
+              Dawn compiles to LangGraph constructs. Routes become nodes, tools become callable
+              bindings, state becomes a typed channel. You can read the generated graph, drop into
+              raw{" "}
               <code className="text-sm font-mono text-ink bg-page px-1.5 py-0.5 rounded border border-divider">
                 StateGraph
               </code>{" "}
-              for any node, or swap a Dawn route for a hand-written one without
-              touching the rest of your app.
+              for any node, or swap a Dawn route for a hand-written one without touching the rest of
+              your app.
             </p>
             <p>
-              If Dawn disappears tomorrow, your graphs are still valid
-              LangGraph.js. Your model calls are still your model calls. Your
-              deployment target is still yours. Dawn is the scaffolding between
-              you and the runtime — not a replacement for it.
+              If Dawn disappears tomorrow, your graphs are still valid LangGraph.js. Your model
+              calls are still your model calls. Your deployment target is still yours. Dawn is the
+              scaffolding between you and the runtime — not a replacement for it.
             </p>
           </div>
 
@@ -65,10 +64,7 @@ export function KeepTheRuntime() {
             </p>
             <ul className="mt-4 space-y-3">
               {NOT_DOING.map((line) => (
-                <li
-                  key={line}
-                  className="flex items-start gap-2.5 text-sm text-ink leading-[22px]"
-                >
+                <li key={line} className="flex items-start gap-2.5 text-sm text-ink leading-[22px]">
                   <XIcon />
                   <span>{line}</span>
                 </li>

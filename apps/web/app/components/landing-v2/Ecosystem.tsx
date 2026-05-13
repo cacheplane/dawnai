@@ -65,8 +65,8 @@ export function Ecosystem() {
           Plays well with your stack.
         </h2>
         <p className="mt-5 text-base text-ink-muted leading-[26px] max-w-[58ch]">
-          Anything LangGraph.js supports, Dawn supports. Bring your own models,
-          observability, vector storage, and deployment target.
+          Anything LangGraph.js supports, Dawn supports. Bring your own models, observability,
+          vector storage, and deployment target.
         </p>
 
         <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-x-10 gap-y-10">
