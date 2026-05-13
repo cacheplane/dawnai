@@ -34,7 +34,7 @@ export function Button(props: ButtonProps) {
   const className = `${baseClasses} ${variantClasses[variant]}`
 
   if (props.href !== undefined) {
-    const { href, external, children, variant: _v, ...rest } = props
+    const { href, external, children, variant: _v, ...rest } = props as ButtonAsLink & Record<string, unknown>
     if (external) {
       return (
         <a
@@ -42,22 +42,22 @@ export function Button(props: ButtonProps) {
           target="_blank"
           rel="noopener noreferrer"
           className={className}
-          {...rest}
+          {...(rest as Record<string, unknown>)}
         >
           {children}
         </a>
       )
     }
     return (
-      <Link href={href} className={className} {...rest}>
+      <Link href={href} className={className} {...(rest as Record<string, unknown>)}>
         {children}
       </Link>
     )
   }
 
-  const { children, variant: _v, ...rest } = props
+  const { children, variant: _v, ...rest } = props as ButtonAsButton & Record<string, unknown>
   return (
-    <button type="button" className={className} {...rest}>
+    <button type="button" className={className} {...(rest as Record<string, unknown>)}>
       {children}
     </button>
   )
