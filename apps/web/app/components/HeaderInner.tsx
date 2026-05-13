@@ -4,6 +4,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { BrandLogo } from "./BrandLogo"
 import { MobileMenu } from "./MobileMenu"
+import { CopyCommand } from "./CopyCommand"
 
 function GitHubIcon() {
   return (
@@ -29,45 +30,39 @@ interface HeaderInnerProps {
 
 export function HeaderInner({ repoUrl }: HeaderInnerProps) {
   const pathname = usePathname()
-  const isLanding = pathname === "/"
 
-  const baseClasses = "flex justify-between items-center px-6 md:px-8 py-4"
-  const variantClasses = isLanding
-    ? "absolute top-0 left-0 right-0 z-10 bg-transparent"
-    : "border-b border-border-subtle"
+  const linkClass = (active: boolean) =>
+    active
+      ? "text-ink transition-colors"
+      : "text-ink-muted hover:text-ink transition-colors"
 
   return (
-    <header className={`landing-dark ${baseClasses} ${variantClasses}`}>
-      <BrandLogo imageClassName="h-8" />
-      <nav className="hidden md:flex items-center gap-6 text-sm text-text-secondary">
-        <Link
-          href="/blog"
-          className={
-            pathname.startsWith("/blog")
-              ? "text-text-primary transition-colors"
-              : "hover:text-text-primary transition-colors"
-          }
-        >
-          Blog
-        </Link>
-        <a
-          href={repoUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="GitHub — 100+ stars"
-          className="inline-flex items-center gap-1.5 hover:text-text-primary transition-colors"
-        >
-          <GitHubIcon />
-          <span className="text-xs tabular-nums">100+</span>
-        </a>
-        <Link
-          href="/docs/getting-started"
-          className="bg-accent-amber text-bg-primary px-3 py-1.5 rounded-md font-semibold hover:bg-accent-amber-deep transition-colors"
-        >
-          Read the Docs
-        </Link>
-      </nav>
-      <MobileMenu />
+    <header className="bg-page border-b border-divider">
+      <div className="max-w-[1280px] mx-auto flex justify-between items-center px-6 md:px-8 py-4">
+        <BrandLogo imageClassName="h-8" />
+        <nav className="hidden md:flex items-center gap-6 text-sm">
+          <Link href="/docs/getting-started" className={linkClass(pathname.startsWith("/docs"))}>
+            Docs
+          </Link>
+          <Link href="/blog" className={linkClass(pathname.startsWith("/blog"))}>
+            Blog
+          </Link>
+          <Link href="/brand" className={linkClass(pathname === "/brand")}>
+            Brand
+          </Link>
+          <a
+            href={repoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="GitHub"
+            className="inline-flex items-center gap-1.5 text-ink-muted hover:text-ink transition-colors"
+          >
+            <GitHubIcon />
+          </a>
+          <CopyCommand command="pnpm create dawn-ai-app" />
+        </nav>
+        <MobileMenu />
+      </div>
     </header>
   )
 }
