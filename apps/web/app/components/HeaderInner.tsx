@@ -45,9 +45,6 @@ export function HeaderInner({ repoUrl }: HeaderInnerProps) {
           <Link href="/blog" className={linkClass(pathname.startsWith("/blog"))}>
             Blog
           </Link>
-          <Link href="/brand" className={linkClass(pathname === "/brand")}>
-            Brand
-          </Link>
           <a
             href={repoUrl}
             target="_blank"

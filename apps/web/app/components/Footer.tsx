@@ -19,7 +19,6 @@ const COLUMNS: readonly Column[] = [
       { label: "Docs", href: "/docs/getting-started" },
       { label: "Examples", href: "/docs/recipes" },
       { label: "Blog", href: "/blog" },
-      { label: "Brand", href: "/brand" },
     ],
   },
   {
