@@ -1,6 +1,5 @@
 import createMDX from "@next/mdx"
 import type { NextConfig } from "next"
-import { dawnTheme } from "./lib/shiki/dawn-theme"
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -19,7 +18,7 @@ const withMDX = createMDX({
       [
         "rehype-pretty-code",
         {
-          theme: dawnTheme,
+          theme: "github-light",
           keepBackground: false,
           defaultLang: "plaintext",
         },
