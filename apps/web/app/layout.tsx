@@ -28,8 +28,8 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://dawnai.org"),
   applicationName: "Dawn AI",
   title: {
-    default: "Dawn — TypeScript meta-framework for LangGraph.js",
-    template: "%s | Dawn",
+    default: "Dawn AI — TypeScript meta-framework for LangGraph.js",
+    template: "%s | Dawn AI",
   },
   description:
     "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
@@ -48,14 +48,14 @@ export const metadata: Metadata = {
     type: "website",
     url: "https://dawnai.org",
     siteName: "Dawn AI",
-    title: "Dawn — TypeScript meta-framework for LangGraph.js",
+    title: "Dawn AI — TypeScript meta-framework for LangGraph.js",
     description:
       "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
     // Image is provided by app/opengraph-image.tsx (1200×630, cream palette).
   },
   twitter: {
     card: "summary_large_image",
-    title: "Dawn — TypeScript meta-framework for LangGraph.js",
+    title: "Dawn AI — TypeScript meta-framework for LangGraph.js",
     description:
       "Dawn adds file-system routing, route-local tools, generated types, and HMR to your existing LangGraph.js stack. Keep the runtime. Drop the boilerplate.",
     // Image is provided by app/twitter-image.tsx (re-exports opengraph-image).

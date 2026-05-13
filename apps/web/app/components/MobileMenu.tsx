@@ -3,28 +3,29 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useId, useRef, useState } from "react"
+import { CopyCommand } from "./CopyCommand"
 import { DOCS_NAV } from "./docs/nav"
 
 interface SiteLink {
   readonly label: string
   readonly href: string
   readonly external?: boolean
-  readonly cta?: boolean
 }
 
 const SITE_LINKS: readonly SiteLink[] = [
-  { label: "Blog", href: "/blog" },
   { label: "Docs", href: "/docs/getting-started" },
+  { label: "Blog", href: "/blog" },
+  { label: "Brand", href: "/brand" },
   { label: "GitHub", href: "https://github.com/cacheplane/dawnai", external: true },
-  { label: "Read the Docs", href: "/docs/getting-started", cta: true },
 ]
 
 /**
  * Full-screen mobile menu. Visible only below the md breakpoint.
  *
  * Trigger: hamburger button in the header.
- * Overlay: covers the full viewport with the cosmic-dark backdrop, lists
- *          Site links and (when on a docs page) the Documentation nav.
+ * Overlay: cream-palette full-viewport sheet listing site links and (on
+ *          a docs page) the Documentation nav. Primary action is the
+ *          install command — same as the desktop nav.
  * Close: × button, Esc, or tapping any link.
  */
 export function MobileMenu() {
@@ -142,14 +143,6 @@ export function MobileMenu() {
                     >
                       {link.label} <span aria-hidden>↗</span>
                     </a>
-                  ) : link.cta ? (
-                    <Link
-                      href={link.href}
-                      onClick={() => setIsOpen(false)}
-                      className="block text-base px-3 py-2.5 rounded-md bg-accent-saas text-accent-saas-ink font-semibold mt-2"
-                    >
-                      {link.label}
-                    </Link>
                   ) : (
                     <Link
                       href={link.href}
@@ -162,6 +155,9 @@ export function MobileMenu() {
                 </li>
               ))}
             </ul>
+            <div className="mt-5 px-3">
+              <CopyCommand command="pnpm create dawn-ai-app" />
+            </div>
           </div>
 
           {/* Documentation section — only on docs pages */}
