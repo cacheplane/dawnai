@@ -1,0 +1,26 @@
+{
+  "name": "@dawn-example/chat-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node node_modules/@dawn-ai/cli/dist/index.js dev --port 3001",
+    "build": "node node_modules/@dawn-ai/cli/dist/index.js build",
+    "typecheck": "tsc -p . --noEmit",
+    "check": "node node_modules/@dawn-ai/cli/dist/index.js check",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dawn-ai/cli": "workspace:*",
+    "@dawn-ai/core": "workspace:*",
+    "@dawn-ai/langchain": "workspace:*",
+    "@dawn-ai/sdk": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@dawn-ai/config-typescript": "workspace:*",
+    "@types/node": "25.6.0",
+    "typescript": "6.0.2",
+    "vitest": "3.0.0"
+  }
+}
