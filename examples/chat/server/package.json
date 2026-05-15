@@ -4,10 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "dawn dev --port 3001",
-    "build": "dawn build",
+    "dev": "pnpm exec dawn dev --port 3001",
+    "build": "pnpm exec dawn build",
     "typecheck": "tsc -p . --noEmit",
-    "check": "dawn check",
+    "check": "pnpm exec dawn check",
     "test": "vitest run"
   },
   "dependencies": {
@@ -15,7 +15,7 @@
     "@dawn-ai/core": "workspace:*",
     "@dawn-ai/langchain": "workspace:*",
     "@dawn-ai/sdk": "workspace:*",
-    "zod": "^3.24.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
