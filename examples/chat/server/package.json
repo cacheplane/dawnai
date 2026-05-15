@@ -4,10 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "pnpm exec dawn dev --port 3001",
-    "build": "pnpm exec dawn build",
+    "dev": "node node_modules/@dawn-ai/cli/dist/index.js dev --port 3001",
+    "build": "node node_modules/@dawn-ai/cli/dist/index.js build",
     "typecheck": "tsc -p . --noEmit",
-    "check": "pnpm exec dawn check",
+    "check": "node node_modules/@dawn-ai/cli/dist/index.js check",
     "test": "vitest run"
   },
   "dependencies": {
