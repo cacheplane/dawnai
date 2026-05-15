@@ -1,0 +1,5 @@
+workspace/*
+!workspace/AGENTS.md
+.env
+.env.local
+.env.*.local

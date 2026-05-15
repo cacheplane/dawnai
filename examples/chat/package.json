@@ -1,0 +1,12 @@
+{
+  "name": "@dawn-example/chat",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter ./server --filter ./web dev",
+    "dev:server": "pnpm --filter ./server dev",
+    "dev:web": "pnpm --filter ./web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  }
+}
