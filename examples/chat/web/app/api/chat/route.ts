@@ -26,6 +26,7 @@ export async function POST(req: NextRequest): Promise<Response> {
           thread_id: body.threadId,
         },
       },
+      on_completion: "delete",
     }),
   })
 
