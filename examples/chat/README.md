@@ -31,7 +31,7 @@ examples/chat/
 │       ├── state.ts
 │       ├── system-prompt.ts
 │       ├── workspace-path.ts
-│       └── tools/          # list-dir, read-file, write-file, run-bash
+│       └── tools/          # listDir, readFile, writeFile, runBash
 └── web/                    # @dawn-example/chat-web (Next.js smoke client)
     └── app/
         ├── page.tsx        # textarea + Send + raw event log
@@ -40,18 +40,9 @@ examples/chat/
 
 ## Security caveats
 
-**`run-bash` executes shell commands on your machine with `cwd: workspace/` and a timeout.
+**`runBash` executes shell commands on your machine with `cwd: workspace/` and a timeout.
 This is NOT a sandbox.** Network calls, package installs, file ops outside `workspace/` via
 shell expansion — all possible. Do not point untrusted users at this example.
-
-## Known issues
-
-- **`zod-to-json-schema` peer-dep mismatch** — running the agent currently surfaces
-  `Package subpath './v3' is not defined by "exports" in zod@3.24.4`. This is a Dawn-side
-  resolution issue: `zod-to-json-schema@3.25.2` requires `zod@^3.25.28 || ^4`, but Dawn's
-  `packages/langchain` pins `zod@3.24.4`. The example's `dawn check`, `dawn build`, and
-  dev-server boot all pass; the error appears only when the LangChain bridge generates
-  tool schemas. Tracked separately from this example.
 
 ## Deferred (Dawn phase-3 preview)
 
@@ -61,7 +52,7 @@ These v1 deferrals are the explicit forcing function for Dawn's opinionated harn
 - Planning state (`write_todos`) — needs build-time agent middleware + state channel composition
 - `AGENTS.md` auto-injection — same
 - Skills (`skills/` dir + `SKILL.md` loader) — mirror of the `tools/` convention
-- Real sandbox isolation for `run-bash` — needs pluggable execution backends
+- Real sandbox isolation for `runBash` — needs pluggable execution backends
 - Tool-output offloading and context summarization — needs lifecycle hooks
 - Nested-object tool inputs (e.g., `edit_file({ edits: [{ old, new }] })`) — typegen extension
 - Polished web UI — wait for harness primitives to stabilize
