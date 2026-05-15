@@ -20,12 +20,10 @@ export function convertToolToLangChain(
 ): DynamicStructuredTool {
   const schema = toZodSchema(tool.schema)
 
-  // Cast through unknown to bridge the dual-Zod version type incompatibility
-  // (package uses zod@3.24.4; @langchain/core uses zod@3.25.x — structurally identical at runtime)
   return new DynamicStructuredTool({
     name: tool.name,
     description: tool.description ?? "",
-    schema: schema as unknown as z.ZodObject<z.ZodRawShape>,
+    schema,
     func: async (input, _runManager, config) => {
       const signal = config?.signal ?? new AbortController().signal
       const result = await tool.run(input, {
@@ -34,13 +32,13 @@ export function convertToolToLangChain(
       })
       return JSON.stringify(result)
     },
-  }) as unknown as DynamicStructuredTool
+  })
 }
 
-function toZodSchema(value: unknown): z.ZodObject<z.ZodRawShape> {
+function toZodSchema(value: unknown): z.ZodTypeAny {
   if (isZodObject(value)) return value
   if (isJsonSchemaObject(value)) return jsonSchemaToZod(value)
-  return z.record(z.string(), z.unknown()) as unknown as z.ZodObject<z.ZodRawShape>
+  return z.record(z.string(), z.unknown())
 }
 
 function isZodObject(value: unknown): value is z.ZodObject<z.ZodRawShape> {
@@ -69,7 +67,7 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
 }
 
 function jsonSchemaToZod(schema: JsonSchemaObject): z.ZodObject<z.ZodRawShape> {
-  const shape: z.ZodRawShape = {}
+  const shape: Record<string, z.ZodTypeAny> = {}
   const required = new Set(schema.required ?? [])
 
   for (const [key, prop] of Object.entries(schema.properties ?? {})) {
