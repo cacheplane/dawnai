@@ -1,3 +1,4 @@
+import type { PromptFragment, StreamTransformer } from "@dawn-ai/core"
 import type { DawnAgent, RetryConfig } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { HumanMessage } from "@langchain/core/messages"
@@ -33,6 +34,10 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
   }
 }
 
+// Cache keyed on descriptor only. Assumption: a given descriptor is always
+// invoked with the same capability contributions (prompt fragments come from
+// the route directory, which is stable per descriptor). If that assumption
+// changes, the cache key must include a hash of the fragments/transformers.
 const materializedAgents = new WeakMap<DawnAgent, AgentLike>()
 
 async function materializeAgent(
@@ -40,6 +45,7 @@ async function materializeAgent(
   tools: readonly DawnToolDefinition[],
   stateFields?: readonly ResolvedStateField[],
   middlewareContext?: Readonly<Record<string, unknown>>,
+  promptFragments?: readonly PromptFragment[],
 ): Promise<AgentLike> {
   const cached = materializedAgents.get(descriptor)
   if (cached) {
@@ -55,10 +61,23 @@ async function materializeAgent(
     model: descriptor.model,
   })
 
+  const fragments = promptFragments ?? []
   const agentOptions: Record<string, unknown> = {
     llm,
     tools: langchainTools,
-    prompt: descriptor.systemPrompt,
+    // Function-form prompt re-renders fragments on every model turn so they
+    // can reflect live state (e.g., the current todos list).
+    prompt:
+      fragments.length > 0
+        ? (state: Record<string, unknown>) => {
+            const rendered = fragments
+              .filter((f) => f.placement === "after_user_prompt")
+              .map((f) => f.render(state))
+              .filter((s) => s.length > 0)
+            const composed = [descriptor.systemPrompt, ...rendered].join("\n\n")
+            return [{ role: "system", content: composed }]
+          }
+        : descriptor.systemPrompt,
   }
 
   if (stateFields && stateFields.length > 0) {
@@ -73,7 +92,7 @@ async function materializeAgent(
 }
 
 export interface AgentStreamChunk {
-  readonly type: "token" | "tool_call" | "tool_result" | "done"
+  readonly type: "token" | "tool_call" | "tool_result" | "done" | (string & {})
   readonly data: unknown
 }
 
@@ -86,6 +105,8 @@ export interface AgentOptions {
   readonly signal: AbortSignal
   readonly stateFields?: readonly ResolvedStateField[]
   readonly tools: readonly DawnToolDefinition[]
+  readonly promptFragments?: readonly PromptFragment[]
+  readonly streamTransformers?: readonly StreamTransformer[]
 }
 
 export async function executeAgent(options: AgentOptions): Promise<unknown> {
@@ -109,9 +130,16 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       options.tools,
       options.stateFields,
       options.middlewareContext,
+      options.promptFragments,
     )
     const retryConfig = options.entry.retry
-    yield* streamFromRunnable(materializedAgent, { messages }, config, retryConfig)
+    yield* streamFromRunnable(
+      materializedAgent,
+      { messages },
+      config,
+      retryConfig,
+      options.streamTransformers,
+    )
     return
   }
 
@@ -125,7 +153,13 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     config.tools = langchainTools
   }
 
-  yield* streamFromRunnable(options.entry, { messages }, config, options.retry)
+  yield* streamFromRunnable(
+    options.entry,
+    { messages },
+    config,
+    options.retry,
+    options.streamTransformers,
+  )
 }
 
 function prepareAgentCall(options: AgentOptions): {
@@ -160,6 +194,7 @@ async function* streamFromRunnable(
   input: unknown,
   config: Record<string, unknown>,
   retryConfig?: RetryConfig,
+  streamTransformers?: readonly StreamTransformer[],
 ): AsyncGenerator<AgentStreamChunk> {
   const streamable = runnable as AgentLike & {
     streamEvents?: (
@@ -229,6 +264,18 @@ async function* streamFromRunnable(
             yield {
               type: "tool_result" as const,
               data: { name: event.name, output: event.data.output },
+            }
+            for (const transformer of streamTransformers ?? []) {
+              if (transformer.observes !== "tool_result") continue
+              for await (const out of transformer.transform({
+                toolName: event.name,
+                toolOutput: event.data.output,
+              })) {
+                yield {
+                  type: out.event as AgentStreamChunk["type"],
+                  data: out.data,
+                }
+              }
             }
             break
           }
