@@ -1,14 +1,18 @@
 # Chat — canonical Dawn harness example
 
-> **v1 status:** foundational harness primitives only (filesystem + bash).
-> Subagents, planning state, sandbox isolation, auto-summarization, and skills
-> are deferred — see "Deferred" below.
+> **Status:** foundational harness primitives (filesystem + bash) + the **planning capability**.
+> Subagents, sandbox isolation, auto-summarization, and skills are still deferred — see
+> "Deferred" below.
 
 ## What this shows
 
 - Dawn route discovery and the `tools/` convention
 - Filesystem tools (read/write/list) + bash, path-jailed to `./workspace`
-- `AGENTS.md` memory convention (manual in v1)
+- `AGENTS.md` memory convention (manual)
+- **Planning** — `plan.md` in the route directory opts the agent into the built-in
+  `write_todos` tool, a `todos` state channel, and a `plan_update` SSE event. Open the
+  smoke client's event log; you'll see `event: plan_update` lines whenever the agent
+  updates its plan.
 - End-to-end streaming from a Next.js client over SSE
 
 ## Quickstart
@@ -31,6 +35,7 @@ examples/chat/
 │       ├── state.ts
 │       ├── system-prompt.ts
 │       ├── workspace-path.ts
+│       ├── plan.md         # presence enables planning; seeds initial todos
 │       └── tools/          # listDir, readFile, writeFile, runBash
 └── web/                    # @dawn-example/chat-web (Next.js smoke client)
     └── app/
@@ -49,8 +54,7 @@ shell expansion — all possible. Do not point untrusted users at this example.
 These v1 deferrals are the explicit forcing function for Dawn's opinionated harness work:
 
 - Subagent delegation (`task`-style tool) — needs first-class subagent declarations
-- Planning state (`write_todos`) — needs build-time agent middleware + state channel composition
-- `AGENTS.md` auto-injection — same
+- `AGENTS.md` auto-injection — needs the skills convention
 - Skills (`skills/` dir + `SKILL.md` loader) — mirror of the `tools/` convention
 - Real sandbox isolation for `runBash` — needs pluggable execution backends
 - Tool-output offloading and context summarization — needs lifecycle hooks

@@ -1,0 +1,3 @@
+- [ ] Read AGENTS.md if it exists in the workspace
+- [ ] Survey workspace contents before acting
+- [ ] Break multi-step requests into a written plan via write_todos
