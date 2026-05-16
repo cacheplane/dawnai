@@ -52,3 +52,5 @@ export type {
   CapabilityRegistry,
 } from "./capabilities/registry.js"
 export { applyCapabilities, createCapabilityRegistry } from "./capabilities/registry.js"
+export type { RuntimeTodo } from "./capabilities/built-in/planning.js"
+export { createPlanningMarker } from "./capabilities/built-in/planning.js"
