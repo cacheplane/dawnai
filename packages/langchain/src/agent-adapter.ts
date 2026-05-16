@@ -59,6 +59,10 @@ async function materializeAgent(
 
   const llm = new ChatOpenAI({
     model: descriptor.model,
+    // Maps to OpenAI's reasoningEffort param. Non-reasoning models ignore it.
+    // Default is `medium` for pre-gpt-5.1 reasoning models per OpenAI docs.
+    // Bump to `high` for tool-use-heavy agents that aren't following directives.
+    ...(descriptor.reasoning?.effort ? { reasoningEffort: descriptor.reasoning.effort } : {}),
   })
 
   const fragments = promptFragments ?? []
