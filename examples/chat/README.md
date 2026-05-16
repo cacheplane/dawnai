@@ -8,7 +8,7 @@
 
 - Dawn route discovery and the `tools/` convention
 - Filesystem tools (read/write/list) + bash, path-jailed to `./workspace`
-- `AGENTS.md` memory convention (manual)
+- `AGENTS.md` memory autoload — Dawn auto-injects `workspace/AGENTS.md` into the system prompt on every turn; the agent updates it via `writeFile`
 - **Planning** — `plan.md` in the route directory opts the agent into the built-in
   `write_todos` tool, a `todos` state channel, and a `plan_update` SSE event. Open the
   smoke client's event log; you'll see `event: plan_update` lines whenever the agent
@@ -54,7 +54,6 @@ shell expansion — all possible. Do not point untrusted users at this example.
 These v1 deferrals are the explicit forcing function for Dawn's opinionated harness work:
 
 - Subagent delegation (`task`-style tool) — needs first-class subagent declarations
-- `AGENTS.md` auto-injection — needs the skills convention
 - Skills (`skills/` dir + `SKILL.md` loader) — mirror of the `tools/` convention
 - Real sandbox isolation for `runBash` — needs pluggable execution backends
 - Tool-output offloading and context summarization — needs lifecycle hooks
