@@ -1,5 +1,8 @@
+import { ToolMessage } from "@langchain/core/messages"
 import { DynamicStructuredTool } from "@langchain/core/tools"
+import { Command } from "@langchain/langgraph"
 import { z } from "zod"
+import { unwrapToolResult } from "./unwrap-tool-result.js"
 
 interface DawnToolDefinition {
   readonly description?: string
@@ -26,11 +29,29 @@ export function convertToolToLangChain(
     schema,
     func: async (input, _runManager, config) => {
       const signal = config?.signal ?? new AbortController().signal
-      const result = await tool.run(input, {
+      const rawResult = await tool.run(input, {
         ...(middlewareContext ? { middleware: middlewareContext } : {}),
         signal,
       })
-      return JSON.stringify(result)
+      const { content, stateUpdates } = unwrapToolResult(rawResult)
+
+      if (stateUpdates) {
+        const toolCallId = extractToolCallId(config)
+        return new Command({
+          update: {
+            ...stateUpdates,
+            messages: [
+              new ToolMessage({
+                content,
+                tool_call_id: toolCallId,
+                name: tool.name,
+              }),
+            ],
+          },
+        })
+      }
+
+      return content
     },
   })
 }
@@ -103,4 +124,18 @@ function jsonSchemaFieldToZod(prop: {
     default:
       return z.unknown()
   }
+}
+
+function extractToolCallId(config: unknown): string {
+  if (typeof config !== "object" || config === null) return ""
+  const c = config as Record<string, unknown>
+  // LangGraph 1.x exposes the tool call id in different ways depending on
+  // the calling code path; try the most likely locations.
+  const direct = (c.toolCall as { id?: string } | undefined)?.id
+  if (typeof direct === "string") return direct
+  const configurable = c.configurable as { toolCallId?: string } | undefined
+  if (typeof configurable?.toolCallId === "string") return configurable.toolCallId
+  const metadata = c.metadata as { tool_call_id?: string } | undefined
+  if (typeof metadata?.tool_call_id === "string") return metadata.tool_call_id
+  return ""
 }

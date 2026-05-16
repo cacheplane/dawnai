@@ -41,11 +41,11 @@ export function createPlanningMarker(): CapabilityMarker {
           "Replace the agent's plan with the given list of todos. Pass the full list every time; this tool is not incremental.",
         schema: WRITE_TODOS_INPUT,
         run: (input: unknown) => {
-          // The actual state mutation happens in the langchain runtime;
-          // this run() just echoes the canonicalized input back so the
-          // tool result event carries the new todos.
           const validated = validateWriteTodosInput(input)
-          return { todos: validated }
+          return {
+            result: { todos: validated },
+            state: { todos: validated },
+          }
         },
       }
 
@@ -65,10 +65,23 @@ export function createPlanningMarker(): CapabilityMarker {
         observes: "tool_result",
         transform: async function* (input) {
           if (input.toolName !== "write_todos") return
-          const out = input.toolOutput as { todos?: ReadonlyArray<RuntimeTodo> } | undefined
+          // toolOutput shape depends on what the tool returned:
+          //  - Bare object `{ todos }` (legacy / direct test invocation).
+          //  - LangGraph Command instance whose `update.todos` carries the new todos
+          //    (the {result, state} wrapped return path goes through the langchain
+          //    bridge and arrives here as a Command).
+          // Read defensively from both locations; future capability authors
+          // shouldn't have to remember which one they're in.
+          const out = input.toolOutput as
+            | {
+                todos?: ReadonlyArray<RuntimeTodo>
+                update?: { todos?: ReadonlyArray<RuntimeTodo> }
+              }
+            | undefined
+          const todos = out?.update?.todos ?? out?.todos ?? []
           yield {
             event: "plan_update",
-            data: { todos: out?.todos ?? [] },
+            data: { todos },
           }
         },
       }

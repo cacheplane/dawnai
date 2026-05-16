@@ -100,6 +100,34 @@ describe("createPlanningMarker", () => {
     ])
   })
 
+  it("stream transformer reads todos from a Command-shaped toolOutput (post-2c bridge)", async () => {
+    writeFileSync(join(routeDir, "plan.md"), "")
+    const marker = createPlanningMarker()
+    const contribution = await marker.load(routeDir)
+    const transformer = contribution.streamTransformers?.[0]
+
+    const events: Array<{ event: string; data: unknown }> = []
+    if (transformer) {
+      const newTodos = [{ content: "from command", status: "in_progress" }]
+      // Simulate the shape that arrives after tool-converter wraps a
+      // {result, state} return into a Command — the toolOutput's `update`
+      // carries the state mutation.
+      for await (const out of transformer.transform({
+        toolName: "write_todos",
+        toolOutput: { update: { todos: newTodos } },
+      })) {
+        events.push(out)
+      }
+    }
+
+    expect(events).toEqual([
+      {
+        event: "plan_update",
+        data: { todos: [{ content: "from command", status: "in_progress" }] },
+      },
+    ])
+  })
+
   it("stream transformer ignores tool results from other tools", async () => {
     writeFileSync(join(routeDir, "plan.md"), "")
     const marker = createPlanningMarker()
