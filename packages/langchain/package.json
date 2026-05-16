@@ -36,6 +36,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dawn-ai/core": "workspace:*",
     "@dawn-ai/sdk": "workspace:*",
     "@langchain/langgraph": "^1.3.0",
     "@langchain/openai": "^1.4.5"

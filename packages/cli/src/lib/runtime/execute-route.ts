@@ -1,7 +1,15 @@
 import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 
-import { findDawnApp, type ResolvedStateField, resolveStateFields } from "@dawn-ai/core"
+import {
+  applyCapabilities,
+  type CapabilityContribution,
+  createCapabilityRegistry,
+  createPlanningMarker,
+  findDawnApp,
+  type ResolvedStateField,
+  resolveStateFields,
+} from "@dawn-ai/core"
 import { executeAgent, streamAgent } from "@dawn-ai/langchain"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
@@ -123,7 +131,7 @@ export async function* streamResolvedRoute(options: {
     return
   }
 
-  const { normalized, tools, stateFields } = prepared
+  const { normalized, tools, stateFields, promptFragments, streamTransformers } = prepared
 
   if (normalized.kind !== "agent") {
     // Non-agent routes don't support incremental streaming — execute and emit done
@@ -147,6 +155,8 @@ export async function* streamResolvedRoute(options: {
     signal: options.signal ?? new AbortController().signal,
     ...(stateFields ? { stateFields } : {}),
     tools,
+    ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
+    ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
   })) {
     switch (chunk.type) {
       case "token":
@@ -165,6 +175,13 @@ export async function* streamResolvedRoute(options: {
       case "done":
         yield { type: "done", output: chunk.data }
         break
+      default: {
+        // Capability-contributed event types (e.g. plan_update from the planning capability).
+        // The langchain layer widened AgentStreamChunk["type"] to allow arbitrary strings;
+        // pass them through verbatim with their literal type as the SSE event name.
+        yield { type: chunk.type, data: chunk.data }
+        break
+      }
     }
   }
 }
@@ -177,6 +194,10 @@ interface PreparedRoute {
   readonly ok: true
   readonly stateFields: readonly ResolvedStateField[] | undefined
   readonly tools: readonly DiscoveredToolDefinition[]
+  readonly promptFragments?: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>>
+  readonly streamTransformers?: ReadonlyArray<
+    NonNullable<CapabilityContribution["streamTransformers"]>[number]
+  >
 }
 
 interface PreparedRouteError {
@@ -227,7 +248,85 @@ async function prepareRouteExecution(options: {
     }
   }
 
-  return { normalized, ok: true, stateFields, tools }
+  // Apply capability markers (planning, etc.). Only for agent routes.
+  let promptFragments: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>> = []
+  let streamTransformers: ReadonlyArray<
+    NonNullable<CapabilityContribution["streamTransformers"]>[number]
+  > = []
+
+  if (normalized.kind === "agent") {
+    const registry = createCapabilityRegistry([createPlanningMarker()])
+    const applied = await applyCapabilities(registry, routeDir)
+
+    if (applied.errors.length > 0) {
+      const messages = applied.errors
+        .map((e) => `[${e.markerName}#${e.phase}] ${e.message}`)
+        .join("\n  ")
+      return { message: `Capability error during route prep:\n  ${messages}`, ok: false }
+    }
+
+    const capTools: DiscoveredToolDefinition[] = []
+    const capStateFields: ResolvedStateField[] = []
+    const capPromptFragments: NonNullable<CapabilityContribution["promptFragment"]>[] = []
+    const capStreamTransformers: NonNullable<
+      CapabilityContribution["streamTransformers"]
+    >[number][] = []
+
+    for (const { contribution } of applied.contributions) {
+      if (contribution.tools) {
+        for (const t of contribution.tools) {
+          // Adapt capability-contributed tools (which lack filePath/scope)
+          // into the DiscoveredToolDefinition shape used by the runtime.
+          capTools.push({
+            ...(t.description !== undefined ? { description: t.description } : {}),
+            filePath: `<capability:${t.name}>`,
+            name: t.name,
+            run: t.run,
+            ...(t.schema !== undefined ? { schema: t.schema } : {}),
+            scope: "route-local",
+          })
+        }
+      }
+      if (contribution.stateFields) capStateFields.push(...contribution.stateFields)
+      if (contribution.promptFragment) capPromptFragments.push(contribution.promptFragment)
+      if (contribution.streamTransformers)
+        capStreamTransformers.push(...contribution.streamTransformers)
+    }
+
+    // Conflict detection
+    const userToolNames = new Set(tools.map((t) => t.name))
+    const userStateNames = new Set((stateFields ?? []).map((f) => f.name))
+    for (const t of capTools) {
+      if (userToolNames.has(t.name)) {
+        return {
+          message: `Capability conflict: tool "${t.name}" is contributed by a capability and also defined in tools/. Remove the file in tools/ or remove the capability marker file.`,
+          ok: false,
+        }
+      }
+    }
+    for (const f of capStateFields) {
+      if (userStateNames.has(f.name)) {
+        return {
+          message: `Capability conflict: state field "${f.name}" is contributed by a capability and also declared in state.ts. Remove the field from state.ts or remove the capability marker file.`,
+          ok: false,
+        }
+      }
+    }
+
+    tools = [...tools, ...capTools]
+    stateFields = stateFields ? [...stateFields, ...capStateFields] : capStateFields
+    promptFragments = capPromptFragments
+    streamTransformers = capStreamTransformers
+  }
+
+  return {
+    normalized,
+    ok: true,
+    ...(promptFragments.length > 0 ? { promptFragments } : {}),
+    stateFields,
+    ...(streamTransformers.length > 0 ? { streamTransformers } : {}),
+    tools,
+  }
 }
 
 async function executeRouteAtResolvedPath(options: {
@@ -258,7 +357,7 @@ async function executeRouteAtResolvedPath(options: {
       })
     }
 
-    const { normalized, tools, stateFields } = prepared
+    const { normalized, tools, stateFields, promptFragments, streamTransformers } = prepared
     mode = normalized.kind
 
     const context = createDawnContext({
@@ -273,6 +372,8 @@ async function executeRouteAtResolvedPath(options: {
       ...(stateFields ? { stateFields } : {}),
       tools,
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
+      ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
     })
 
     return createRuntimeSuccessResult({
@@ -323,6 +424,10 @@ async function invokeEntry(
       ) => Promise<unknown> | unknown
       readonly schema?: unknown
     }>
+    readonly promptFragments?: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>>
+    readonly streamTransformers?: ReadonlyArray<
+      NonNullable<CapabilityContribution["streamTransformers"]>[number]
+    >
   },
 ): Promise<unknown> {
   if (kind === "agent") {
@@ -337,6 +442,12 @@ async function invokeEntry(
       signal: agentContext?.signal ?? new AbortController().signal,
       ...(agentContext?.stateFields ? { stateFields: agentContext.stateFields } : {}),
       tools: agentContext?.tools ?? [],
+      ...(agentContext?.promptFragments && agentContext.promptFragments.length > 0
+        ? { promptFragments: agentContext.promptFragments }
+        : {}),
+      ...(agentContext?.streamTransformers && agentContext.streamTransformers.length > 0
+        ? { streamTransformers: agentContext.streamTransformers }
+        : {}),
     })
   }
 

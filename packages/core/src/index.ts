@@ -1,3 +1,21 @@
+export type { RuntimeTodo } from "./capabilities/built-in/planning.js"
+export { createPlanningMarker } from "./capabilities/built-in/planning.js"
+export type {
+  AppliedContribution,
+  ApplyResult,
+  CapabilityError,
+  CapabilityRegistry,
+} from "./capabilities/registry.js"
+export { applyCapabilities, createCapabilityRegistry } from "./capabilities/registry.js"
+export type {
+  CapabilityContribution,
+  CapabilityMarker,
+  DawnToolDefinition,
+  PromptFragment,
+  StreamTransformer,
+  StreamTransformerInput,
+  StreamTransformerOutput,
+} from "./capabilities/types.js"
 export { loadDawnConfig } from "./config.js"
 export { discoverRoutes } from "./discovery/discover-routes.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"
