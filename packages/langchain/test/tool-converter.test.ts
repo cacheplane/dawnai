@@ -1,6 +1,6 @@
-import { ToolMessage } from "@langchain/core/messages"
-import { Command, isCommand } from "@langchain/langgraph"
 import { convertToolToLangChain } from "@dawn-ai/langchain"
+import { ToolMessage } from "@langchain/core/messages"
+import { type Command, isCommand } from "@langchain/langgraph"
 import { describe, expect, it, test } from "vitest"
 
 describe("convertToolToLangChain", () => {

@@ -121,7 +121,10 @@ describe("createPlanningMarker", () => {
     }
 
     expect(events).toEqual([
-      { event: "plan_update", data: { todos: [{ content: "from command", status: "in_progress" }] } },
+      {
+        event: "plan_update",
+        data: { todos: [{ content: "from command", status: "in_progress" }] },
+      },
     ])
   })
 

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { applyCapabilities, createCapabilityRegistry, createPlanningMarker } from "@dawn-ai/core"
-import { Command, isCommand } from "@langchain/langgraph"
+import { type Command, isCommand } from "@langchain/langgraph"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { convertToolToLangChain } from "../src/tool-converter.js"
 

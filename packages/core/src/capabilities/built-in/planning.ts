@@ -73,7 +73,10 @@ export function createPlanningMarker(): CapabilityMarker {
           // Read defensively from both locations; future capability authors
           // shouldn't have to remember which one they're in.
           const out = input.toolOutput as
-            | { todos?: ReadonlyArray<RuntimeTodo>; update?: { todos?: ReadonlyArray<RuntimeTodo> } }
+            | {
+                todos?: ReadonlyArray<RuntimeTodo>
+                update?: { todos?: ReadonlyArray<RuntimeTodo> }
+              }
             | undefined
           const todos = out?.update?.todos ?? out?.todos ?? []
           yield {
