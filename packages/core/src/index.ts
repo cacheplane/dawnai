@@ -45,3 +45,10 @@ export type {
   StreamTransformerInput,
   StreamTransformerOutput,
 } from "./capabilities/types.js"
+export type {
+  AppliedContribution,
+  ApplyResult,
+  CapabilityError,
+  CapabilityRegistry,
+} from "./capabilities/registry.js"
+export { applyCapabilities, createCapabilityRegistry } from "./capabilities/registry.js"
