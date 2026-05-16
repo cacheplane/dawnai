@@ -28,9 +28,7 @@ export function toNdjsonLine(chunk: StreamChunk): string {
  * deep. The double-wrap was a real bug observed in live smoke testing.
  */
 export function toSseEvent(chunk: StreamChunk): string {
-  const payload = isDataOnlyChunk(chunk)
-    ? chunk.data
-    : omitType(chunk)
+  const payload = isDataOnlyChunk(chunk) ? chunk.data : omitType(chunk)
   return `event: ${chunk.type}\ndata: ${JSON.stringify(payload)}\n\n`
 }
 

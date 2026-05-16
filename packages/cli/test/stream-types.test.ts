@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest"
-import {
-  type StreamChunk,
-  toNdjsonLine,
-  toSseEvent,
-} from "../src/lib/runtime/stream-types.js"
+import { type StreamChunk, toNdjsonLine, toSseEvent } from "../src/lib/runtime/stream-types.js"
 
 describe("toSseEvent", () => {
   it("emits a tool_call event with name + input as the payload", () => {
