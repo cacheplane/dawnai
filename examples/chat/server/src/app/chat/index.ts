@@ -2,6 +2,7 @@ import { agent } from "@dawn-ai/sdk"
 import { HARNESS_SYSTEM_PROMPT } from "./system-prompt.js"
 
 export default agent({
-  model: "gpt-5-mini",
+  model: "gpt-5",
+  reasoning: { effort: "high" },
   systemPrompt: HARNESS_SYSTEM_PROMPT,
 })

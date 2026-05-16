@@ -15,6 +15,12 @@
   updates its plan.
 - End-to-end streaming from a Next.js client over SSE
 
+## Model choice
+
+This example uses `gpt-5` with `reasoning: { effort: "high" }`. In live testing, smaller models (`gpt-5-mini`, `gpt-5-nano`) tend to ignore explicit tool-use directives and produce generic "what can I help you with?" responses on the first turn — they don't reliably exercise the planning + memory capabilities. `gpt-5` engages with tools and actually drives an agent loop. The tradeoff: each turn costs more.
+
+If you swap to a smaller model, expect to do more prompt-engineering work to get tool calls to fire.
+
 ## Quickstart
 
 ```bash
