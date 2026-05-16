@@ -95,7 +95,9 @@ describe("createPlanningMarker", () => {
       }
     }
 
-    expect(events).toEqual([{ event: "plan_update", data: { todos: [{ content: "x", status: "pending" }] } }])
+    expect(events).toEqual([
+      { event: "plan_update", data: { todos: [{ content: "x", status: "pending" }] } },
+    ])
   })
 
   it("stream transformer ignores tool results from other tools", async () => {

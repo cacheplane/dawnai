@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { applyCapabilities, createCapabilityRegistry, createPlanningMarker } from "@dawn-ai/core"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 describe("planning capability — end-to-end shape", () => {
   let routeDir: string
@@ -35,10 +35,7 @@ describe("planning capability — end-to-end shape", () => {
   })
 
   it("seeds the todos channel from a populated plan.md", async () => {
-    writeFileSync(
-      join(routeDir, "plan.md"),
-      "- [ ] survey workspace\n- [x] read AGENTS.md\n",
-    )
+    writeFileSync(join(routeDir, "plan.md"), "- [ ] survey workspace\n- [x] read AGENTS.md\n")
     const registry = createCapabilityRegistry([createPlanningMarker()])
     const result = await applyCapabilities(registry, routeDir)
     const todosField = result.contributions[0]?.contribution.stateFields?.[0]
@@ -54,8 +51,7 @@ describe("planning capability — end-to-end shape", () => {
     const result = await applyCapabilities(registry, routeDir)
     const fragment = result.contributions[0]?.contribution.promptFragment
     const r1 = fragment?.render({ todos: [] }) ?? ""
-    const r2 =
-      fragment?.render({ todos: [{ content: "x", status: "in_progress" }] }) ?? ""
+    const r2 = fragment?.render({ todos: [{ content: "x", status: "in_progress" }] }) ?? ""
     expect(r1).toContain("(empty)")
     expect(r2).toContain("[in_progress] x")
   })

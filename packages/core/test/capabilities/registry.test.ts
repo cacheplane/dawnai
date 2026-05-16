@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
-  type CapabilityMarker,
   applyCapabilities,
+  type CapabilityMarker,
   createCapabilityRegistry,
 } from "../../src/capabilities/registry.js"
 
