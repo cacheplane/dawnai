@@ -2,7 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { applyCapabilities, createCapabilityRegistry, createPlanningMarker } from "@dawn-ai/core"
+import { Command, isCommand } from "@langchain/langgraph"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { convertToolToLangChain } from "../src/tool-converter.js"
 
 describe("planning capability — end-to-end shape", () => {
   let routeDir: string
@@ -74,5 +76,44 @@ describe("planning capability — end-to-end shape", () => {
     expect(events).toEqual([
       { event: "plan_update", data: { todos: [{ content: "x", status: "pending" }] } },
     ])
+  })
+})
+
+describe("planning capability — state mutation end-to-end", () => {
+  it("write_todos tool returns a Command that updates the todos channel", async () => {
+    const routeDir = mkdtempSync(join(tmpdir(), "dawn-planning-state-"))
+    writeFileSync(join(routeDir, "plan.md"), "")
+
+    try {
+      const registry = createCapabilityRegistry([createPlanningMarker()])
+      const result = await applyCapabilities(registry, routeDir)
+      const writeTodos = result.contributions[0]?.contribution.tools?.[0]
+      expect(writeTodos?.name).toBe("write_todos")
+
+      const newTodos = [
+        { content: "first task", status: "in_progress" as const },
+        { content: "second task", status: "pending" as const },
+      ]
+
+      const converted = convertToolToLangChain(writeTodos!)
+      const langchainResult = await converted.func(
+        { todos: newTodos },
+        undefined as unknown as never,
+        { signal: new AbortController().signal } as unknown as never,
+      )
+
+      expect(isCommand(langchainResult)).toBe(true)
+      const cmd = langchainResult as InstanceType<typeof Command>
+      const update = cmd.update as Record<string, unknown> & {
+        messages?: Array<{ content?: unknown }>
+      }
+      expect(update.todos).toEqual(newTodos)
+      // Confirms the ToolMessage is present so the agent still sees the result
+      expect(Array.isArray(update.messages)).toBe(true)
+      const msg = update.messages?.[0]
+      expect(msg?.content).toBe(JSON.stringify({ todos: newTodos }))
+    } finally {
+      rmSync(routeDir, { recursive: true, force: true })
+    }
   })
 })
