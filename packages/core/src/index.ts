@@ -36,3 +36,12 @@ export type {
   RouteToolTypes,
   StateFieldReducer,
 } from "./types.js"
+export type {
+  CapabilityContribution,
+  CapabilityMarker,
+  DawnToolDefinition,
+  PromptFragment,
+  StreamTransformer,
+  StreamTransformerInput,
+  StreamTransformerOutput,
+} from "./capabilities/types.js"
