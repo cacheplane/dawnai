@@ -1,7 +1,18 @@
 # Workspace memory
 
-This file is the persistent memory for this chat session. It survives across turns and threads.
+Dawn auto-injects this file's contents into the agent's system prompt on every
+turn. The agent updates it via `writeFile({ path: "AGENTS.md", content: ... })`
+when it learns something worth remembering across sessions.
 
-When you start a task, read this file first. When you finish meaningful work, append a short note here so the next session knows what you learned or built.
+This file is intentionally pre-seeded with a few illustrative facts so you can
+see the autoload in action on a fresh run. Replace this block with whatever
+matters for your project once the agent starts recording real notes.
 
-(Replace this seed text once you have something worth recording.)
+## Project facts (example seeds)
+
+- Workspace tools use camelCase names: `listDir`, `readFile`, `writeFile`, `runBash`.
+- The workspace root is `examples/chat/server/workspace`. Anything outside it is
+  off-limits — the tool layer path-jails reads and writes.
+- Plans live in the `todos` state channel (managed by `write_todos`), not in
+  this file. Use this file for things that should survive across sessions; use
+  planning for the current task's checklist.
