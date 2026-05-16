@@ -41,11 +41,11 @@ export function createPlanningMarker(): CapabilityMarker {
           "Replace the agent's plan with the given list of todos. Pass the full list every time; this tool is not incremental.",
         schema: WRITE_TODOS_INPUT,
         run: (input: unknown) => {
-          // The actual state mutation happens in the langchain runtime;
-          // this run() just echoes the canonicalized input back so the
-          // tool result event carries the new todos.
           const validated = validateWriteTodosInput(input)
-          return { todos: validated }
+          return {
+            result: { todos: validated },
+            state: { todos: validated },
+          }
         },
       }
 
