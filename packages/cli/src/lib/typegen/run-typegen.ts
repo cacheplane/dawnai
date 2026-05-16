@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type {
   ExtractedToolSchema,
+  ExtractedToolType,
   ResolvedStateField,
   RouteManifest,
   RouteStateFields,
@@ -15,6 +17,13 @@ import {
 } from "@dawn-ai/core"
 
 import { discoverStateDefinition } from "../runtime/state-discovery.js"
+
+const PLANNING_EXTRA_TOOL: ExtractedToolType = {
+  name: "write_todos",
+  description: "Write or update the planning todo list for this agent.",
+  inputType: `{ todos: ReadonlyArray<{ content: string; status: "pending" | "in_progress" | "completed" }> }`,
+  outputType: `{ todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }`,
+}
 
 export interface TypegenResult {
   readonly routeCount: number
@@ -40,7 +49,20 @@ export async function runTypegen(options: {
       routeDir: route.routeDir,
       sharedToolsDir,
     })
-    routeToolTypes.push({ pathname: route.pathname, tools })
+
+    // Capability-contributed tools: include them in the generated type surface
+    // so user code can reference them type-safely. Currently hard-coded to the
+    // planning capability's write_todos. When a second capability contributes a
+    // tool, source these from capability markers instead.
+    const extraTools: ExtractedToolType[] = []
+    if (existsSync(join(route.routeDir, "plan.md"))) {
+      extraTools.push(PLANNING_EXTRA_TOOL)
+    }
+
+    routeToolTypes.push({
+      pathname: route.pathname,
+      tools: [...tools, ...extraTools],
+    })
 
     // Extract tool schemas for JSON
     const schemas = await extractToolSchemasForRoute({

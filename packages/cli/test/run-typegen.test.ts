@@ -90,6 +90,35 @@ describe("runTypegen", () => {
     expect(existsSync(stateJsonPath)).toBe(false)
   })
 
+  test("includes write_todos in generated types when plan.md exists", async () => {
+    const { appRoot, routeDir } = await setupApp()
+    await createFile(join(routeDir, "plan.md"), "# Plan\n\nDo the thing.\n")
+
+    const manifest = await discoverRoutes({ appRoot })
+    await runTypegen({ appRoot, manifest })
+
+    const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const content = await readFile(dtsPath, "utf8")
+
+    expect(content).toContain("write_todos")
+    expect(content).toContain('"pending"')
+    expect(content).toContain('"in_progress"')
+    expect(content).toContain('"completed"')
+    // Existing user tool still present alongside the capability-contributed one
+    expect(content).toContain("greet")
+  })
+
+  test("omits write_todos when plan.md is absent", async () => {
+    const { appRoot } = await setupApp()
+    const manifest = await discoverRoutes({ appRoot })
+    await runTypegen({ appRoot, manifest })
+
+    const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const content = await readFile(dtsPath, "utf8")
+
+    expect(content).not.toContain("write_todos")
+  })
+
   test("writes state.json when state.ts exists", async () => {
     const { appRoot } = await setupApp({ withState: true })
     const manifest = await discoverRoutes({ appRoot })
