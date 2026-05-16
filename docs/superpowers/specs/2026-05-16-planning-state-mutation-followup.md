@@ -1,7 +1,7 @@
 # Planning capability — state mutation gap (follow-up)
 
 **Date:** 2026-05-16
-**Status:** Diagnosis only — needs its own brainstorm + fix cycle
+**Status:** **RESOLVED in PR #150** — adopted the `{result, state}` wrapped-return shape via sub-project 2c. Planning's `write_todos` now mutates the `todos` channel. The "re-emission loop" observed in live LLM smoke turned out to be a model-behavior issue, not a framework issue — see [the runtime bug followup](2026-05-16-tool-state-mutation-runtime-bug-followup.md) for the full retrospective.
 **Owner:** Brian Love
 
 ## The bug
