@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve } from "node:path"
 import {
   applyCapabilities,
   type CapabilityContribution,
+  createAgentsMdMarker,
   createCapabilityRegistry,
   createPlanningMarker,
   findDawnApp,
@@ -255,7 +256,7 @@ async function prepareRouteExecution(options: {
   > = []
 
   if (normalized.kind === "agent") {
-    const registry = createCapabilityRegistry([createPlanningMarker()])
+    const registry = createCapabilityRegistry([createPlanningMarker(), createAgentsMdMarker()])
     const applied = await applyCapabilities(registry, routeDir)
 
     if (applied.errors.length > 0) {
