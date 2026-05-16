@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
+import { z } from "zod"
 import type { CapabilityMarker, PromptFragment, StreamTransformer } from "../types.js"
 import { type PlanTodo, parsePlanMarkdown } from "./plan-md-parser.js"
 
@@ -10,6 +11,16 @@ export interface RuntimeTodo {
   readonly content: string
   readonly status: "pending" | "in_progress" | "completed"
 }
+
+const TODO_STATUS = z.enum(["pending", "in_progress", "completed"])
+const WRITE_TODOS_INPUT = z.object({
+  todos: z.array(
+    z.object({
+      content: z.string().min(1),
+      status: TODO_STATUS,
+    }),
+  ),
+})
 
 const PLANNING_PROMPT_HEADER = `# Planning
 
@@ -28,6 +39,7 @@ export function createPlanningMarker(): CapabilityMarker {
         name: "write_todos",
         description:
           "Replace the agent's plan with the given list of todos. Pass the full list every time; this tool is not incremental.",
+        schema: WRITE_TODOS_INPUT,
         run: (input: unknown) => {
           // The actual state mutation happens in the langchain runtime;
           // this run() just echoes the canonicalized input back so the

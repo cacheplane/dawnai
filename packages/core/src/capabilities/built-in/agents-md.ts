@@ -3,7 +3,11 @@ import { resolve } from "node:path"
 import type { CapabilityMarker } from "../types.js"
 
 const MAX_MEMORY_BYTES = 64 * 1024
-const MEMORY_HEADER = "# Memory"
+const MEMORY_HEADER = `# Memory
+
+The block below is the live contents of \`workspace/AGENTS.md\`, re-read on every turn. This IS your persistent memory — do NOT re-read this file with any tool; the content here is always current. Update it by calling \`writeFile({ path: "AGENTS.md", content: "..." })\` when you learn something worth remembering.
+
+---`
 
 /**
  * Auto-injects the contents of <process.cwd()>/workspace/AGENTS.md into the
