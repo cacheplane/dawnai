@@ -256,10 +256,7 @@ async function prepareRouteExecution(options: {
   > = []
 
   if (normalized.kind === "agent") {
-    const registry = createCapabilityRegistry([
-      createPlanningMarker(),
-      createAgentsMdMarker(),
-    ])
+    const registry = createCapabilityRegistry([createPlanningMarker(), createAgentsMdMarker()])
     const applied = await applyCapabilities(registry, routeDir)
 
     if (applied.errors.length > 0) {

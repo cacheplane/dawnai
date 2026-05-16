@@ -1,12 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { applyCapabilities, createAgentsMdMarker, createCapabilityRegistry } from "@dawn-ai/core"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import {
-  applyCapabilities,
-  createAgentsMdMarker,
-  createCapabilityRegistry,
-} from "@dawn-ai/core"
 
 describe("agents-md capability — end-to-end shape", () => {
   let routeDir: string
