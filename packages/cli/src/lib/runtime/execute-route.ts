@@ -175,6 +175,13 @@ export async function* streamResolvedRoute(options: {
       case "done":
         yield { type: "done", output: chunk.data }
         break
+      default: {
+        // Capability-contributed event types (e.g. plan_update from the planning capability).
+        // The langchain layer widened AgentStreamChunk["type"] to allow arbitrary strings;
+        // pass them through verbatim with their literal type as the SSE event name.
+        yield { type: chunk.type, data: chunk.data }
+        break
+      }
     }
   }
 }
