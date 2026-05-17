@@ -33,4 +33,9 @@ describe("classifyChange", () => {
   test(".d.ts file in tools returns restart (not a real tool)", () => {
     expect(classifyChange("src/app/hello/[tenant]/tools/greet.d.ts")).toBe("restart")
   })
+
+  test("workspace runtime data changes are ignored", () => {
+    expect(classifyChange("workspace/AGENTS.md")).toBe("ignore")
+    expect(classifyChange("workspace/notes/output.md")).toBe("ignore")
+  })
 })

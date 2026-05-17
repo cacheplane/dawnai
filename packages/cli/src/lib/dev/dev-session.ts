@@ -184,6 +184,10 @@ class InternalDevSession {
 
     const classification = classifyChange(relative)
 
+    if (classification === "ignore") {
+      return
+    }
+
     if (classification === "typegen") {
       this.scheduleTypegen()
     } else {

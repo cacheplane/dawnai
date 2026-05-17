@@ -1,6 +1,10 @@
-export type ChangeClassification = "typegen" | "restart"
+export type ChangeClassification = "ignore" | "typegen" | "restart"
 
 export function classifyChange(relativePath: string): ChangeClassification {
+  if (relativePath === "workspace" || relativePath.startsWith("workspace/")) {
+    return "ignore"
+  }
+
   // Tool files: any path containing /tools/<name>.ts (not .d.ts)
   if (/\/tools\/[^/]+\.ts$/.test(relativePath) && !relativePath.endsWith(".d.ts")) {
     return "typegen"
