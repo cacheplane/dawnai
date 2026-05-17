@@ -1,7 +1,7 @@
 import type { PromptFragment, StreamTransformer } from "@dawn-ai/core"
 import type { DawnAgent, RetryConfig } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
-import { HumanMessage } from "@langchain/core/messages"
+import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
 import { convertToolToLangChain } from "./tool-converter.js"
@@ -40,6 +40,20 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
 // changes, the cache key must include a hash of the fragments/transformers.
 const materializedAgents = new WeakMap<DawnAgent, AgentLike>()
 
+export function composePromptMessages(
+  systemPrompt: string,
+  promptFragments: readonly PromptFragment[],
+  state: Record<string, unknown>,
+): BaseMessageLike[] {
+  const rendered = promptFragments
+    .filter((f) => f.placement === "after_user_prompt")
+    .map((f) => f.render(state))
+    .filter((s) => s.length > 0)
+  const composed = [systemPrompt, ...rendered].join("\n\n")
+  const messages = Array.isArray(state.messages) ? (state.messages as BaseMessageLike[]) : []
+  return [{ role: "system", content: composed }, ...messages]
+}
+
 async function materializeAgent(
   descriptor: DawnAgent,
   tools: readonly DawnToolDefinition[],
@@ -73,14 +87,8 @@ async function materializeAgent(
     // can reflect live state (e.g., the current todos list).
     prompt:
       fragments.length > 0
-        ? (state: Record<string, unknown>) => {
-            const rendered = fragments
-              .filter((f) => f.placement === "after_user_prompt")
-              .map((f) => f.render(state))
-              .filter((s) => s.length > 0)
-            const composed = [descriptor.systemPrompt, ...rendered].join("\n\n")
-            return [{ role: "system", content: composed }]
-          }
+        ? (state: Record<string, unknown>) =>
+            composePromptMessages(descriptor.systemPrompt, fragments, state)
         : descriptor.systemPrompt,
   }
 
