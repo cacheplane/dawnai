@@ -1,5 +1,12 @@
 # @dawn-ai/langgraph
 
+## 1.0.0
+
+### Patch Changes
+
+- Updated dependencies [e8462db]
+  - @dawn-ai/sdk@1.0.0
+
 ## 0.1.8
 
 ### Patch Changes
