@@ -7,6 +7,7 @@ import {
   createAgentsMdMarker,
   createCapabilityRegistry,
   createPlanningMarker,
+  createSkillsMarker,
   findDawnApp,
   type ResolvedStateField,
   resolveStateFields,
@@ -256,7 +257,11 @@ async function prepareRouteExecution(options: {
   > = []
 
   if (normalized.kind === "agent") {
-    const registry = createCapabilityRegistry([createPlanningMarker(), createAgentsMdMarker()])
+    const registry = createCapabilityRegistry([
+      createPlanningMarker(),
+      createAgentsMdMarker(),
+      createSkillsMarker(),
+    ])
     const applied = await applyCapabilities(registry, routeDir)
 
     if (applied.errors.length > 0) {
