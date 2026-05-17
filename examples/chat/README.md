@@ -1,8 +1,8 @@
 # Chat — canonical Dawn harness example
 
-> **Status:** foundational harness primitives (filesystem + bash) + the **planning capability**.
-> Subagents, sandbox isolation, auto-summarization, and skills are still deferred — see
-> "Deferred" below.
+> **Status:** foundational harness primitives (filesystem + bash) + the **planning** and
+> **skills** capabilities. Subagents, sandbox isolation, and auto-summarization are still
+> deferred — see "Deferred" below.
 
 ## What this shows
 
@@ -13,6 +13,10 @@
   `write_todos` tool, a `todos` state channel, and a `plan_update` SSE event. Open the
   smoke client's event log; you'll see `event: plan_update` lines whenever the agent
   updates its plan.
+- **Skills** — `src/app/chat/skills/<name>/SKILL.md` files are auto-listed in
+  the agent's system prompt (name + description). The agent calls
+  `readSkill({ name })` to load a skill's full body on demand. Two example
+  skills ship with the demo: `workspace-conventions` and `recover-from-failure`.
 - End-to-end streaming from a Next.js client over SSE
 
 ## Model choice
@@ -60,7 +64,6 @@ shell expansion — all possible. Do not point untrusted users at this example.
 These v1 deferrals are the explicit forcing function for Dawn's opinionated harness work:
 
 - Subagent delegation (`task`-style tool) — needs first-class subagent declarations
-- Skills (`skills/` dir + `SKILL.md` loader) — mirror of the `tools/` convention
 - Real sandbox isolation for `runBash` — needs pluggable execution backends
 - Tool-output offloading and context summarization — needs lifecycle hooks
 - Nested-object tool inputs (e.g., `edit_file({ edits: [{ old, new }] })`) — typegen extension
