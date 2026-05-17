@@ -1,7 +1,7 @@
 {
   "name": "@dawn-example/chat-server",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "node node_modules/@dawn-ai/cli/dist/index.js dev --port 3001",

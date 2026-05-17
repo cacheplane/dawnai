@@ -1,5 +1,11 @@
 # @dawn-ai/sdk
 
+## 1.0.0
+
+### Minor Changes
+
+- e8462db: `agent({...})` now accepts an optional `reasoning: { effort }` field. Maps to OpenAI's `reasoningEffort` parameter (`none | minimal | low | medium | high | xhigh`). Non-reasoning models silently ignore it. Useful for tool-use-heavy agents that aren't following directives at the default reasoning depth.
+
 ## 0.1.8
 
 ### Patch Changes
