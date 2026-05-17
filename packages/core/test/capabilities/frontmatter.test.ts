@@ -27,8 +27,7 @@ describe("parseFrontmatter", () => {
   })
 
   it("parses multiple keys", () => {
-    const input =
-      "---\nname: debug-python\ndescription: Debug stack traces.\n---\n\n# Body content"
+    const input = "---\nname: debug-python\ndescription: Debug stack traces.\n---\n\n# Body content"
     expect(parseFrontmatter(input)).toEqual({
       frontmatter: { name: "debug-python", description: "Debug stack traces." },
       body: "# Body content",

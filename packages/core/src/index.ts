@@ -1,6 +1,7 @@
 export { createAgentsMdMarker } from "./capabilities/built-in/agents-md.js"
 export type { RuntimeTodo } from "./capabilities/built-in/planning.js"
 export { createPlanningMarker } from "./capabilities/built-in/planning.js"
+export { createSkillsMarker } from "./capabilities/built-in/skills.js"
 export type {
   AppliedContribution,
   ApplyResult,
@@ -17,7 +18,6 @@ export type {
   StreamTransformerInput,
   StreamTransformerOutput,
 } from "./capabilities/types.js"
-export { createSkillsMarker } from "./capabilities/built-in/skills.js"
 export { loadDawnConfig } from "./config.js"
 export { discoverRoutes } from "./discovery/discover-routes.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"

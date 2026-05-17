@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
 import type { CapabilityMarker, PromptFragment } from "../types.js"
@@ -40,7 +40,10 @@ export function createSkillsMarker(): CapabilityMarker {
           const { name } = READ_SKILL_INPUT.parse(input)
           const found = skills.find((s) => s.name === name)
           if (!found) {
-            const available = skills.map((s) => s.name).sort().join(", ")
+            const available = skills
+              .map((s) => s.name)
+              .sort()
+              .join(", ")
             return `Unknown skill: ${name}. Available: ${available}`
           }
           return found.body
@@ -79,7 +82,7 @@ function discoverSkillDirs(routeDir: string): readonly string[] {
   return entries.filter((name) => {
     if (!VALID_DIR_NAME.test(name)) return false
     const full = join(skillsDir, name)
-    let stat
+    let stat: ReturnType<typeof statSync>
     try {
       stat = statSync(full)
     } catch {

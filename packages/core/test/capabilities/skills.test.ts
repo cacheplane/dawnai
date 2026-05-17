@@ -75,7 +75,9 @@ describe("createSkillsMarker", () => {
   it("fails fast when a SKILL.md has no frontmatter", async () => {
     writeSkill("bare", "", "# Just a body with no frontmatter")
     const marker = createSkillsMarker()
-    await expect(marker.load(routeDir)).rejects.toThrow(/missing required frontmatter|missing required `description`/i)
+    await expect(marker.load(routeDir)).rejects.toThrow(
+      /missing required frontmatter|missing required `description`/i,
+    )
   })
 
   it("fails fast when frontmatter lacks description", async () => {
@@ -127,9 +129,12 @@ describe("createSkillsMarker", () => {
     const marker = createSkillsMarker()
     const contribution = await marker.load(routeDir)
     const readSkill = contribution.tools?.[0]
-    const result = await readSkill?.run({ name: "foo" }, {
-      signal: new AbortController().signal,
-    })
+    const result = await readSkill?.run(
+      { name: "foo" },
+      {
+        signal: new AbortController().signal,
+      },
+    )
     expect(result).toBe("FOO BODY CONTENT")
   })
 
@@ -139,9 +144,12 @@ describe("createSkillsMarker", () => {
     const marker = createSkillsMarker()
     const contribution = await marker.load(routeDir)
     const readSkill = contribution.tools?.[0]
-    const result = await readSkill?.run({ name: "nope" }, {
-      signal: new AbortController().signal,
-    })
+    const result = await readSkill?.run(
+      { name: "nope" },
+      {
+        signal: new AbortController().signal,
+      },
+    )
     expect(result).toContain("Unknown skill: nope")
     expect(result).toContain("bar")
     expect(result).toContain("foo")

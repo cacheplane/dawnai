@@ -1,12 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { applyCapabilities, createCapabilityRegistry, createSkillsMarker } from "@dawn-ai/core"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import {
-  applyCapabilities,
-  createCapabilityRegistry,
-  createSkillsMarker,
-} from "@dawn-ai/core"
 
 describe("skills capability — end-to-end shape", () => {
   let routeDir: string
@@ -22,11 +18,7 @@ describe("skills capability — end-to-end shape", () => {
   function writeSkill(name: string, description: string, body: string): void {
     const dir = join(routeDir, "skills", name)
     mkdirSync(dir, { recursive: true })
-    writeFileSync(
-      join(dir, "SKILL.md"),
-      `---\ndescription: ${description}\n---\n\n${body}`,
-      "utf8",
-    )
+    writeFileSync(join(dir, "SKILL.md"), `---\ndescription: ${description}\n---\n\n${body}`, "utf8")
   }
 
   it("contributes nothing when skills/ is absent", async () => {
