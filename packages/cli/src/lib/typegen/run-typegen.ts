@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs"
+import { existsSync, readdirSync, statSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type {
@@ -23,6 +23,36 @@ const PLANNING_EXTRA_TOOL: ExtractedToolType = {
   description: "Write or update the planning todo list for this agent.",
   inputType: `{ todos: ReadonlyArray<{ content: string; status: "pending" | "in_progress" | "completed" }> }`,
   outputType: `{ todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }`,
+}
+
+const SKILLS_EXTRA_TOOL: ExtractedToolType = {
+  name: "readSkill",
+  description: "Load the full instructions for a named skill.",
+  inputType: `{ name: string }`,
+  outputType: `string`,
+}
+
+const SKILL_DIR_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+
+function hasSkills(routeDir: string): boolean {
+  const skillsDir = join(routeDir, "skills")
+  if (!existsSync(skillsDir)) return false
+  let entries: string[]
+  try {
+    entries = readdirSync(skillsDir)
+  } catch {
+    return false
+  }
+  return entries.some((name) => {
+    if (!SKILL_DIR_NAME_RE.test(name)) return false
+    const full = join(skillsDir, name)
+    try {
+      if (!statSync(full).isDirectory()) return false
+    } catch {
+      return false
+    }
+    return existsSync(join(full, "SKILL.md"))
+  })
 }
 
 export interface TypegenResult {
@@ -57,6 +87,9 @@ export async function runTypegen(options: {
     const extraTools: ExtractedToolType[] = []
     if (existsSync(join(route.routeDir, "plan.md"))) {
       extraTools.push(PLANNING_EXTRA_TOOL)
+    }
+    if (hasSkills(route.routeDir)) {
+      extraTools.push(SKILLS_EXTRA_TOOL)
     }
 
     routeToolTypes.push({
