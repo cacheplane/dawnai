@@ -279,17 +279,12 @@ async function prepareRouteExecution(options: {
     const descriptor =
       normalized.kind === "agent" && isDawnAgent(normalized.entry) ? normalized.entry : undefined
 
-    // Lazily build a descriptor->routeId identity map by dynamically importing
-    // each route's entry file. This is required by the subagents marker to
-    // resolve `descriptor.subagents: [...]` overrides. Built once per
-    // prepareRouteExecution call (which is per request) — not a hot loop.
-    let cachedDescriptorMap: ReadonlyMap<DawnAgent, string> | undefined
-    const getDescriptorRouteMap = async (): Promise<ReadonlyMap<DawnAgent, string>> => {
-      if (cachedDescriptorMap) return cachedDescriptorMap
-      cachedDescriptorMap = await buildDescriptorRouteMap(routeManifest)
-      return cachedDescriptorMap
-    }
-    const descriptorRouteMap = await getDescriptorRouteMap()
+    // Build (or reuse) the descriptor->routeId identity map used by the
+    // subagents marker to resolve `agent({ subagents: [imported] })` overrides.
+    // The cache is keyed on the manifest object identity: stable across
+    // requests in production (one manifest per CLI invocation), naturally
+    // invalidated in dev when the runtime rebuilds the manifest.
+    const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
 
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
@@ -615,6 +610,29 @@ function extractRouteParamNames(routeId: string): string[] {
  * Cost: this opens every agent route module in the manifest. Acceptable for
  * the current scale; if it becomes hot, cache by (appRoot, manifest-hash).
  */
+let descriptorRouteMapCache = new WeakMap<RouteManifest, Promise<ReadonlyMap<DawnAgent, string>>>()
+
+async function getCachedDescriptorRouteMap(
+  manifest: RouteManifest,
+): Promise<ReadonlyMap<DawnAgent, string>> {
+  let promise = descriptorRouteMapCache.get(manifest)
+  if (!promise) {
+    promise = buildDescriptorRouteMap(manifest)
+    descriptorRouteMapCache.set(manifest, promise)
+  }
+  return promise
+}
+
+export { getCachedDescriptorRouteMap }
+
+/**
+ * Test-only: reset the WeakMap-backed cache. Not exported via the package
+ * barrel — internal to this module's test suite.
+ */
+export function __resetDescriptorRouteMapCacheForTests(): void {
+  descriptorRouteMapCache = new WeakMap()
+}
+
 async function buildDescriptorRouteMap(
   manifest: RouteManifest,
 ): Promise<ReadonlyMap<DawnAgent, string>> {
