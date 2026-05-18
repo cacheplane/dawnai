@@ -58,17 +58,22 @@ function buildChildConfig(
 ): Record<string, unknown> {
   const parentMeta = (parentConfig.metadata as Record<string, unknown> | undefined) ?? {}
   const parentDawn = (parentMeta.dawn as Record<string, unknown> | undefined) ?? {}
-  return {
-    ...parentConfig,
+  // Build a CLEAN child config: only Dawn metadata + abort signal.
+  // We deliberately omit `callbacks`, `runId`, `tags`, `runName`, etc. that
+  // LangChain's streamEvents v2 uses to propagate child events to the parent
+  // listener. Without this, every child token would also appear as a raw
+  // chunk on the parent stream (duplicating subagent.message envelopes).
+  const childConfig: Record<string, unknown> = {
     metadata: {
-      ...parentMeta,
-      dawn: {
-        ...parentDawn,
-        subagent_depth: nextDepth,
-        parent_call_id: callId,
-      },
+      // Preserve Dawn-namespaced metadata so depth + thread continuity work,
+      // but drop everything else.
+      dawn: { ...parentDawn, subagent_depth: nextDepth, parent_call_id: callId },
     },
   }
+  // Forward the abort signal if the parent provided one — the child should
+  // cancel when the parent cancels.
+  if (parentConfig.signal) childConfig.signal = parentConfig.signal
+  return childConfig
 }
 
 function extractFinalText(graphOutput: unknown): string {
