@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest"
+import { agent } from "@dawn-ai/sdk"
+import type { DawnAgent } from "@dawn-ai/sdk"
 import { createSubagentsMarker } from "../../src/capabilities/built-in/subagents.js"
 import type { CapabilityMarkerContext } from "../../src/capabilities/types.js"
 import type { RouteManifest } from "../../src/types.js"
@@ -82,5 +84,87 @@ describe("createSubagentsMarker — convention discovery", () => {
     await expect(
       taskTool.run({ subagent: "research", input: "x" }, { signal: new AbortController().signal }),
     ).rejects.toThrow(/dispatcher not wired/i)
+  })
+})
+
+describe("createSubagentsMarker — descriptor override", () => {
+  it("detects subagents from agent({subagents:[...]}) even without a /subagents folder", async () => {
+    const shared = agent({
+      model: "gpt-5",
+      systemPrompt: "shared",
+      description: "Shared specialist",
+    })
+    const parent = agent({
+      model: "gpt-5",
+      systemPrompt: "parent",
+      subagents: [shared],
+    })
+
+    const marker = createSubagentsMarker()
+    const context: CapabilityMarkerContext = {
+      routeManifest: manifest([
+        { id: "/parent", routeDir: "/app/src/app/parent" },
+        { id: "/shared", routeDir: "/app/src/app/shared" },
+      ]),
+      descriptor: parent,
+      descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/shared"]]),
+    }
+    const detected = await marker.detect("/app/src/app/parent", context)
+    expect(detected).toBe(true)
+  })
+
+  it("includes override routes in the task enum and prompt fragment", async () => {
+    const shared = agent({
+      model: "gpt-5",
+      systemPrompt: "shared",
+      description: "Shared specialist",
+    })
+    const parent = agent({
+      model: "gpt-5",
+      systemPrompt: "parent",
+      subagents: [shared],
+    })
+
+    const marker = createSubagentsMarker()
+    const context: CapabilityMarkerContext = {
+      routeManifest: manifest([
+        { id: "/parent", routeDir: "/app/src/app/parent" },
+        { id: "/shared", routeDir: "/app/src/app/shared" },
+      ]),
+      descriptor: parent,
+      descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/shared"]]),
+    }
+    const contribution = await marker.load("/app/src/app/parent", context)
+    expect(contribution.tools).toBeDefined()
+    const rendered = contribution.promptFragment!.render({})
+    expect(rendered).toMatch(/shared/)
+  })
+
+  it("throws on leaf-name collision between convention and override", async () => {
+    const shared = agent({
+      model: "gpt-5",
+      systemPrompt: "shared",
+      description: "Shared",
+    })
+    const parent = agent({
+      model: "gpt-5",
+      systemPrompt: "parent",
+      subagents: [shared],
+    })
+
+    const marker = createSubagentsMarker()
+    const context: CapabilityMarkerContext = {
+      routeManifest: manifest([
+        { id: "/parent", routeDir: "/app/src/app/parent" },
+        {
+          id: "/parent/subagents/research",
+          routeDir: "/app/src/app/parent/subagents/research",
+        },
+        { id: "/research", routeDir: "/app/src/app/research" }, // same leaf name!
+      ]),
+      descriptor: parent,
+      descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/research"]]),
+    }
+    await expect(marker.load("/app/src/app/parent", context)).rejects.toThrow(/duplicate.*leaf.*research/i)
   })
 })

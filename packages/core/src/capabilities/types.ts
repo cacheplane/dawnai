@@ -4,6 +4,7 @@ import type { ResolvedStateField, RouteManifest } from "../types.js"
 export interface CapabilityMarkerContext {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
+  readonly descriptorRouteMap?: ReadonlyMap<DawnAgent, string>
 }
 
 export interface DawnToolDefinition {
