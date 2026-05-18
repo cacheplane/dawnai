@@ -119,6 +119,38 @@ describe("runTypegen", () => {
     expect(content).not.toContain("writeTodos")
   })
 
+  test("includes task tool in generated types when subagents/<name>/index.ts exists", async () => {
+    const { appRoot, routeDir } = await setupApp()
+    await createFile(
+      join(routeDir, "subagents", "research", "index.ts"),
+      "export const agent = async () => ({});\n",
+    )
+
+    const manifest = await discoverRoutes({ appRoot })
+    await runTypegen({ appRoot, manifest })
+
+    const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const content = await readFile(dtsPath, "utf8")
+
+    expect(content).toContain("task")
+    expect(content).toContain("subagent: string")
+    expect(content).toContain("greet")
+  })
+
+  test("omits task tool when subagents/ is absent or empty", async () => {
+    const { appRoot, routeDir } = await setupApp()
+    // Create an empty subagents/ directory — should NOT trigger the task tool
+    await mkdir(join(routeDir, "subagents"), { recursive: true })
+
+    const manifest = await discoverRoutes({ appRoot })
+    await runTypegen({ appRoot, manifest })
+
+    const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const content = await readFile(dtsPath, "utf8")
+
+    expect(content).not.toContain("Dispatch a sub-task")
+  })
+
   test("writes state.json when state.ts exists", async () => {
     const { appRoot } = await setupApp({ withState: true })
     const manifest = await discoverRoutes({ appRoot })

@@ -32,6 +32,13 @@ const SKILLS_EXTRA_TOOL: ExtractedToolType = {
   outputType: `string`,
 }
 
+const SUBAGENTS_EXTRA_TOOL: ExtractedToolType = {
+  name: "task",
+  description: "Dispatch a sub-task to a specialized subagent.",
+  inputType: `{ subagent: string; input: string }`,
+  outputType: `string`,
+}
+
 const SKILL_DIR_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 
 function hasSkills(routeDir: string): boolean {
@@ -52,6 +59,26 @@ function hasSkills(routeDir: string): boolean {
       return false
     }
     return existsSync(join(full, "SKILL.md"))
+  })
+}
+
+function hasSubagents(routeDir: string): boolean {
+  const subagentsDir = join(routeDir, "subagents")
+  if (!existsSync(subagentsDir)) return false
+  let entries: string[]
+  try {
+    entries = readdirSync(subagentsDir)
+  } catch {
+    return false
+  }
+  return entries.some((name) => {
+    const full = join(subagentsDir, name)
+    try {
+      if (!statSync(full).isDirectory()) return false
+    } catch {
+      return false
+    }
+    return existsSync(join(full, "index.ts"))
   })
 }
 
@@ -90,6 +117,9 @@ export async function runTypegen(options: {
     }
     if (hasSkills(route.routeDir)) {
       extraTools.push(SKILLS_EXTRA_TOOL)
+    }
+    if (hasSubagents(route.routeDir)) {
+      extraTools.push(SUBAGENTS_EXTRA_TOOL)
     }
 
     routeToolTypes.push({
