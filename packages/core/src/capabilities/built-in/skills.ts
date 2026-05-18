@@ -28,8 +28,8 @@ interface LoadedSkill {
 export function createSkillsMarker(): CapabilityMarker {
   return {
     name: "skills",
-    detect: async (routeDir) => discoverSkillDirs(routeDir).length > 0,
-    load: async (routeDir) => {
+    detect: async (routeDir, _context) => discoverSkillDirs(routeDir).length > 0,
+    load: async (routeDir, _context) => {
       const skills = loadSkills(routeDir)
 
       const readSkill = {

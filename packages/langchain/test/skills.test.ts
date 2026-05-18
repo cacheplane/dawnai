@@ -23,7 +23,7 @@ describe("skills capability — end-to-end shape", () => {
 
   it("contributes nothing when skills/ is absent", async () => {
     const registry = createCapabilityRegistry([createSkillsMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, { routeManifest: { appRoot: routeDir, routes: [] }, descriptor: undefined })
     expect(result.contributions).toEqual([])
   })
 
@@ -31,7 +31,7 @@ describe("skills capability — end-to-end shape", () => {
     writeSkill("foo", "A foo skill.", "Foo body")
     writeSkill("bar", "A bar skill.", "Bar body")
     const registry = createCapabilityRegistry([createSkillsMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, { routeManifest: { appRoot: routeDir, routes: [] }, descriptor: undefined })
     expect(result.contributions).toHaveLength(1)
     const contrib = result.contributions[0]?.contribution
     expect(contrib?.tools?.map((t) => t.name)).toEqual(["readSkill"])
@@ -45,7 +45,7 @@ describe("skills capability — end-to-end shape", () => {
   it("readSkill returns the body content for the named skill", async () => {
     writeSkill("recipe", "Cooking recipe.", "Step 1: heat the pan.\nStep 2: add oil.")
     const registry = createCapabilityRegistry([createSkillsMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, { routeManifest: { appRoot: routeDir, routes: [] }, descriptor: undefined })
     const readSkill = result.contributions[0]?.contribution.tools?.[0]
     const output = await readSkill?.run(
       { name: "recipe" },

@@ -19,14 +19,14 @@ describe("planning capability — end-to-end shape", () => {
 
   it("contributes nothing when plan.md is absent", async () => {
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, { routeManifest: { appRoot: routeDir, routes: [] }, descriptor: undefined })
     expect(result.contributions).toEqual([])
   })
 
   it("contributes writeTodos + todos channel + prompt fragment + transformer when plan.md is present", async () => {
     writeFileSync(join(routeDir, "plan.md"), "")
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, { routeManifest: { appRoot: routeDir, routes: [] }, descriptor: undefined })
 
     expect(result.contributions).toHaveLength(1)
     const contrib = result.contributions[0]?.contribution
@@ -39,7 +39,7 @@ describe("planning capability — end-to-end shape", () => {
   it("seeds the todos channel from a populated plan.md", async () => {
     writeFileSync(join(routeDir, "plan.md"), "- [ ] survey workspace\n- [x] read AGENTS.md\n")
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, { routeManifest: { appRoot: routeDir, routes: [] }, descriptor: undefined })
     const todosField = result.contributions[0]?.contribution.stateFields?.[0]
     expect(todosField?.default).toEqual([
       { content: "survey workspace", status: "pending" },
@@ -50,7 +50,7 @@ describe("planning capability — end-to-end shape", () => {
   it("renders prompt with current todos on each call", async () => {
     writeFileSync(join(routeDir, "plan.md"), "")
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, { routeManifest: { appRoot: routeDir, routes: [] }, descriptor: undefined })
     const fragment = result.contributions[0]?.contribution.promptFragment
     const r1 = fragment?.render({ todos: [] }) ?? ""
     const r2 = fragment?.render({ todos: [{ content: "x", status: "in_progress" }] }) ?? ""
@@ -61,7 +61,7 @@ describe("planning capability — end-to-end shape", () => {
   it("transformer emits plan_update when writeTodos result flows through", async () => {
     writeFileSync(join(routeDir, "plan.md"), "")
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, { routeManifest: { appRoot: routeDir, routes: [] }, descriptor: undefined })
     const transformer = result.contributions[0]?.contribution.streamTransformers?.[0]
 
     const events: Array<{ event: string; data: unknown }> = []
@@ -86,7 +86,7 @@ describe("planning capability — state mutation end-to-end", () => {
 
     try {
       const registry = createCapabilityRegistry([createPlanningMarker()])
-      const result = await applyCapabilities(registry, routeDir)
+      const result = await applyCapabilities(registry, routeDir, { routeManifest: { appRoot: routeDir, routes: [] }, descriptor: undefined })
       const writeTodos = result.contributions[0]?.contribution.tools?.[0]
       expect(writeTodos?.name).toBe("writeTodos")
 

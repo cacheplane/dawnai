@@ -1,4 +1,10 @@
-import type { ResolvedStateField } from "../types.js"
+import type { DawnAgent } from "@dawn-ai/sdk"
+import type { ResolvedStateField, RouteManifest } from "../types.js"
+
+export interface CapabilityMarkerContext {
+  readonly routeManifest: RouteManifest
+  readonly descriptor: DawnAgent | undefined
+}
 
 export interface DawnToolDefinition {
   readonly description?: string
@@ -49,6 +55,9 @@ export interface CapabilityContribution {
 
 export interface CapabilityMarker {
   readonly name: string
-  readonly detect: (routeDir: string) => Promise<boolean>
-  readonly load: (routeDir: string) => Promise<CapabilityContribution>
+  readonly detect: (routeDir: string, context: CapabilityMarkerContext) => Promise<boolean>
+  readonly load: (
+    routeDir: string,
+    context: CapabilityMarkerContext,
+  ) => Promise<CapabilityContribution>
 }

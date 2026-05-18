@@ -31,8 +31,8 @@ finished. Always include the full list — \`writeTodos\` is full-replace, not i
 export function createPlanningMarker(): CapabilityMarker {
   return {
     name: "planning",
-    detect: async (routeDir) => existsSync(join(routeDir, PLAN_MD)),
-    load: async (routeDir) => {
+    detect: async (routeDir, _context) => existsSync(join(routeDir, PLAN_MD)),
+    load: async (routeDir, _context) => {
       const seedTodos = readSeedTodos(routeDir)
 
       const writeTodos = {

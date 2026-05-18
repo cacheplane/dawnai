@@ -12,6 +12,7 @@ export { applyCapabilities, createCapabilityRegistry } from "./capabilities/regi
 export type {
   CapabilityContribution,
   CapabilityMarker,
+  CapabilityMarkerContext,
   DawnToolDefinition,
   PromptFragment,
   StreamTransformer,

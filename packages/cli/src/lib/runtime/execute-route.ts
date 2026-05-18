@@ -8,11 +8,13 @@ import {
   createCapabilityRegistry,
   createPlanningMarker,
   createSkillsMarker,
+  discoverRoutes,
   findDawnApp,
   type ResolvedStateField,
   resolveStateFields,
 } from "@dawn-ai/core"
 import { executeAgent, streamAgent } from "@dawn-ai/langchain"
+import { isDawnAgent } from "@dawn-ai/sdk"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
@@ -263,7 +265,14 @@ async function prepareRouteExecution(options: {
       createAgentsMdMarker(),
       createSkillsMarker(),
     ])
-    const applied = await applyCapabilities(registry, routeDir)
+    const routeManifest = await discoverRoutes({ appRoot: options.appRoot })
+    const descriptor =
+      normalized.kind === "agent" && isDawnAgent(normalized.entry) ? normalized.entry : undefined
+
+    const applied = await applyCapabilities(registry, routeDir, {
+      routeManifest,
+      descriptor,
+    })
 
     if (applied.errors.length > 0) {
       const messages = applied.errors

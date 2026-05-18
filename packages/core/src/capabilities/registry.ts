@@ -1,6 +1,10 @@
-import type { CapabilityContribution, CapabilityMarker } from "./types.js"
+import type {
+  CapabilityContribution,
+  CapabilityMarker,
+  CapabilityMarkerContext,
+} from "./types.js"
 
-export type { CapabilityMarker }
+export type { CapabilityMarker, CapabilityMarkerContext }
 
 export interface CapabilityRegistry {
   readonly markers: ReadonlyArray<CapabilityMarker>
@@ -31,6 +35,7 @@ export function createCapabilityRegistry(
 export async function applyCapabilities(
   registry: CapabilityRegistry,
   routeDir: string,
+  context: CapabilityMarkerContext,
 ): Promise<ApplyResult> {
   const contributions: AppliedContribution[] = []
   const errors: CapabilityError[] = []
@@ -38,7 +43,7 @@ export async function applyCapabilities(
   for (const marker of registry.markers) {
     let detected: boolean
     try {
-      detected = await marker.detect(routeDir)
+      detected = await marker.detect(routeDir, context)
     } catch (error) {
       errors.push({
         markerName: marker.name,
@@ -51,7 +56,7 @@ export async function applyCapabilities(
     if (!detected) continue
 
     try {
-      const contribution = await marker.load(routeDir)
+      const contribution = await marker.load(routeDir, context)
       contributions.push({ markerName: marker.name, contribution })
     } catch (error) {
       errors.push({
