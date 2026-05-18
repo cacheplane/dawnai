@@ -279,17 +279,12 @@ async function prepareRouteExecution(options: {
     const descriptor =
       normalized.kind === "agent" && isDawnAgent(normalized.entry) ? normalized.entry : undefined
 
-    // Lazily build a descriptor->routeId identity map by dynamically importing
-    // each route's entry file. This is required by the subagents marker to
-    // resolve `descriptor.subagents: [...]` overrides. Built once per
-    // prepareRouteExecution call (which is per request) — not a hot loop.
-    let cachedDescriptorMap: ReadonlyMap<DawnAgent, string> | undefined
-    const getDescriptorRouteMap = async (): Promise<ReadonlyMap<DawnAgent, string>> => {
-      if (cachedDescriptorMap) return cachedDescriptorMap
-      cachedDescriptorMap = await buildDescriptorRouteMap(routeManifest)
-      return cachedDescriptorMap
-    }
-    const descriptorRouteMap = await getDescriptorRouteMap()
+    // Build (or reuse) the descriptor->routeId identity map used by the
+    // subagents marker to resolve `agent({ subagents: [imported] })` overrides.
+    // The cache is keyed on the manifest object identity: stable across
+    // requests in production (one manifest per CLI invocation), naturally
+    // invalidated in dev when the runtime rebuilds the manifest.
+    const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
 
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
@@ -615,6 +610,29 @@ function extractRouteParamNames(routeId: string): string[] {
  * Cost: this opens every agent route module in the manifest. Acceptable for
  * the current scale; if it becomes hot, cache by (appRoot, manifest-hash).
  */
+let descriptorRouteMapCache = new WeakMap<RouteManifest, Promise<ReadonlyMap<DawnAgent, string>>>()
+
+async function getCachedDescriptorRouteMap(
+  manifest: RouteManifest,
+): Promise<ReadonlyMap<DawnAgent, string>> {
+  let promise = descriptorRouteMapCache.get(manifest)
+  if (!promise) {
+    promise = buildDescriptorRouteMap(manifest)
+    descriptorRouteMapCache.set(manifest, promise)
+  }
+  return promise
+}
+
+export { getCachedDescriptorRouteMap }
+
+/**
+ * Test-only: reset the WeakMap-backed cache. Not exported via the package
+ * barrel — internal to this module's test suite.
+ */
+export function __resetDescriptorRouteMapCacheForTests(): void {
+  descriptorRouteMapCache = new WeakMap()
+}
+
 async function buildDescriptorRouteMap(
   manifest: RouteManifest,
 ): Promise<ReadonlyMap<DawnAgent, string>> {
@@ -644,8 +662,10 @@ async function buildDescriptorRouteMap(
  *   1. Convention: route at `<routeDir>/subagents/<leaf>`
  *   2. Override: descriptor.subagents[i] whose routeId's last segment === leaf
  *
- * Streaming child events through executeResolvedRoute is deferred for v1;
- * the dispatcher's `invoke()` fallback emits one final subagent.end event.
+ * The returned graph exposes both `invoke` (one-shot) and `dawnStream`
+ * (yields Dawn StreamChunks). The dispatcher prefers `dawnStream` so
+ * intermediate child events (tool calls, tokens, capability events) bubble
+ * up to the parent stream as `subagent.<type>` envelopes.
  */
 function buildSubagentResolver(args: {
   readonly appRoot: string
@@ -702,6 +722,19 @@ function buildSubagentResolver(args: {
         // executeAgent's output for an agent-kind route is the raw
         // LangGraph state ({messages, ...}). Forward as-is.
         return result.output
+      },
+      // Stream child events so the parent stream can bubble subagent.*
+      // envelopes for intermediate tool calls, tokens, and capability events.
+      dawnStream: async function* (input: unknown, _config: unknown) {
+        for await (const chunk of streamResolvedRoute({
+          appRoot,
+          input,
+          routeFile: route.entryFile,
+          routeId: route.id,
+          routePath: route.pathname,
+        })) {
+          yield chunk
+        }
       },
     }
 

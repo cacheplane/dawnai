@@ -13,6 +13,19 @@ type Streamable = {
     name?: string
     data: { chunk?: unknown; output?: unknown }
   }>
+  // Dawn-native stream. Yields StreamChunks directly. When present,
+  // the dispatcher prefers this over streamEvents/invoke so intermediate
+  // child events bubble up as subagent.<type> envelopes.
+  dawnStream?: (
+    input: unknown,
+    config: unknown,
+  ) => AsyncIterable<{
+    type: string
+    data?: unknown
+    name?: string
+    input?: unknown
+    output?: unknown
+  }>
 }
 
 export interface DispatchArgs {
@@ -93,7 +106,62 @@ export async function dispatchSubagent(args: DispatchArgs): Promise<DispatchResu
   let output: unknown
   try {
     const streamable = args.childGraph as Streamable
-    if (typeof streamable.streamEvents === "function") {
+    if (typeof streamable.dawnStream === "function") {
+      for await (const chunk of streamable.dawnStream(
+        { messages: [{ role: "user", content: args.input }] },
+        childConfig,
+      )) {
+        switch (chunk.type) {
+          case "done":
+            output = (chunk as { output?: unknown }).output
+            break
+          case "tool_call":
+            args.writer({
+              event: "subagent.tool_call",
+              data: {
+                call_id: args.callId,
+                tool: (chunk as { name?: string }).name,
+                input: (chunk as { input?: unknown }).input,
+              },
+            })
+            break
+          case "tool_result":
+            args.writer({
+              event: "subagent.tool_result",
+              data: {
+                call_id: args.callId,
+                tool: (chunk as { name?: string }).name,
+                output: (chunk as { output?: unknown }).output,
+              },
+            })
+            break
+          case "chunk": {
+            const data = (chunk as { data?: unknown }).data
+            if (typeof data === "string" && data.length > 0) {
+              args.writer({
+                event: "subagent.message",
+                data: { call_id: args.callId, chunk: data },
+              })
+            }
+            break
+          }
+          default: {
+            // Capability-contributed events (e.g. plan_update). Prefix with
+            // subagent. and forward the chunk's data payload verbatim,
+            // attaching call_id.
+            const data = (chunk as { data?: unknown }).data
+            args.writer({
+              event: `subagent.${chunk.type}`,
+              data: {
+                call_id: args.callId,
+                ...(typeof data === "object" && data !== null ? (data as object) : { value: data }),
+              },
+            })
+            break
+          }
+        }
+      }
+    } else if (typeof streamable.streamEvents === "function") {
       for await (const event of streamable.streamEvents(
         { messages: [{ role: "user", content: args.input }] },
         { ...childConfig, version: "v2" },

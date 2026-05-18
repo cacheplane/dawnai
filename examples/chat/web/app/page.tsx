@@ -6,11 +6,22 @@ function newThreadId(): string {
   return `t-${Math.random().toString(36).slice(2, 10)}`
 }
 
+type RouteId = "chat" | "coordinator"
+
 export default function Page() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const [input, setInput] = useState("")
   const [events, setEvents] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  const [route, setRoute] = useState<RouteId>("chat")
+
+  function switchRoute(next: RouteId) {
+    if (next === route) return
+    setRoute(next)
+    // New conversation when switching routes — each route has its own thread.
+    setThreadId(null)
+    setEvents([])
+  }
 
   async function send() {
     const tid = threadId ?? newThreadId()
@@ -24,7 +35,7 @@ export default function Page() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ threadId: tid, message: msg }),
+      body: JSON.stringify({ threadId: tid, message: msg, route }),
     })
 
     if (!res.body) {
@@ -57,6 +68,34 @@ export default function Page() {
       <p style={{ color: "#666", fontSize: "0.9rem" }}>
         Disposable. Streams raw SSE events from <code>/api/chat</code>. See <code>README.md</code> for context.
       </p>
+      <div
+        role="radiogroup"
+        aria-label="Route"
+        style={{ display: "flex", gap: "0.5rem", margin: "0.5rem 0", fontSize: "0.9rem" }}
+      >
+        <label style={{ cursor: "pointer" }}>
+          <input
+            type="radio"
+            name="route"
+            value="chat"
+            checked={route === "chat"}
+            onChange={() => switchRoute("chat")}
+            disabled={busy}
+          />{" "}
+          /chat <span style={{ color: "#888" }}>(planning + skills + workspace tools)</span>
+        </label>
+        <label style={{ cursor: "pointer" }}>
+          <input
+            type="radio"
+            name="route"
+            value="coordinator"
+            checked={route === "coordinator"}
+            onChange={() => switchRoute("coordinator")}
+            disabled={busy}
+          />{" "}
+          /coordinator <span style={{ color: "#888" }}>(dispatches to research + summarizer)</span>
+        </label>
+      </div>
       <textarea
         value={input}
         onChange={(e) => setInput(e.target.value)}
