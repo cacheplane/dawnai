@@ -4,7 +4,11 @@ import { isDawnAgent } from "@dawn-ai/sdk"
 import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
+import { bridgeSubagentTool, type SubagentResolverResult } from "./subagent-tool-bridge.js"
+import type { SubagentEvent } from "./subagent-dispatcher.js"
 import { convertToolToLangChain } from "./tool-converter.js"
+
+export type SubagentResolver = (leafName: string) => SubagentResolverResult | undefined
 
 interface DawnToolDefinition {
   readonly description?: string
@@ -60,10 +64,13 @@ async function materializeAgent(
   stateFields?: readonly ResolvedStateField[],
   middlewareContext?: Readonly<Record<string, unknown>>,
   promptFragments?: readonly PromptFragment[],
+  options?: { readonly bypassCache?: boolean },
 ): Promise<AgentLike> {
-  const cached = materializedAgents.get(descriptor)
-  if (cached) {
-    return cached
+  if (!options?.bypassCache) {
+    const cached = materializedAgents.get(descriptor)
+    if (cached) {
+      return cached
+    }
   }
 
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
@@ -99,7 +106,9 @@ async function materializeAgent(
   // biome-ignore lint/suspicious/noExplicitAny: dynamically-built options don't satisfy strict StateDefinition type
   const compiled = createReactAgent(agentOptions as any)
 
-  materializedAgents.set(descriptor, compiled as unknown as AgentLike)
+  if (!options?.bypassCache) {
+    materializedAgents.set(descriptor, compiled as unknown as AgentLike)
+  }
   return compiled as unknown as AgentLike
 }
 
@@ -119,6 +128,14 @@ export interface AgentOptions {
   readonly tools: readonly DawnToolDefinition[]
   readonly promptFragments?: readonly PromptFragment[]
   readonly streamTransformers?: readonly StreamTransformer[]
+  /**
+   * Resolves a subagent leaf name to a child graph + routeId. When set, the
+   * `task` tool contributed by the subagents capability marker is intercepted
+   * inside `streamFromRunnable` and replaced with a bridge that dispatches the
+   * call via `dispatchSubagent`. Emitted `subagent.*` events are queued and
+   * drained alongside normal stream chunks (no module-level mutable state).
+   */
+  readonly subagentResolver?: SubagentResolver
 }
 
 export async function executeAgent(options: AgentOptions): Promise<unknown> {
@@ -135,14 +152,48 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
   const { agentInput, config } = prepareAgentCall(options)
   const messages = extractMessages(agentInput)
 
+  // Per-call subagent event queue. The bridge's writer pushes here; the
+  // streaming generator drains the queue alongside normal stream chunks. This
+  // avoids the module-level mutable-writer anti-pattern: each call has its
+  // own queue scoped to the surrounding generator frame.
+  const subagentEvents: AgentStreamChunk[] = []
+  const queueWriter = (event: SubagentEvent): void => {
+    subagentEvents.push({
+      type: event.event as AgentStreamChunk["type"],
+      data: event.data,
+    })
+  }
+
+  const resolver = options.subagentResolver
+  const hasTaskTool = options.tools.some((t) => t.name === "task")
+  const effectiveTools: readonly DawnToolDefinition[] =
+    resolver && hasTaskTool
+      ? options.tools.map((t) =>
+          t.name === "task"
+            ? {
+                ...t,
+                run: bridgeSubagentTool({
+                  subagentResolver: resolver,
+                  writer: queueWriter,
+                  parentConfig: config,
+                }).run as DawnToolDefinition["run"],
+              }
+            : t,
+        )
+      : options.tools
+
   // DawnAgent descriptor path — materialize on first use
   if (isDawnAgent(options.entry)) {
+    // Bypass the per-descriptor cache when a resolver is wired: the bridged
+    // tool closes over the per-call queue + parent config, so caching would
+    // bind those to a single call.
     const materializedAgent = await materializeAgent(
       options.entry,
-      options.tools,
+      effectiveTools,
       options.stateFields,
       options.middlewareContext,
       options.promptFragments,
+      resolver && hasTaskTool ? { bypassCache: true } : undefined,
     )
     const retryConfig = options.entry.retry
     yield* streamFromRunnable(
@@ -151,6 +202,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       config,
       retryConfig,
       options.streamTransformers,
+      subagentEvents,
     )
     return
   }
@@ -158,7 +210,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
   // Legacy path — raw Runnable with .invoke()
   assertAgentLike(options.entry)
 
-  const langchainTools = options.tools.map((tool) =>
+  const langchainTools = effectiveTools.map((tool) =>
     convertToolToLangChain(tool, options.middlewareContext),
   )
   if (langchainTools.length > 0) {
@@ -171,6 +223,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     config,
     options.retry,
     options.streamTransformers,
+    subagentEvents,
   )
 }
 
@@ -207,7 +260,17 @@ async function* streamFromRunnable(
   config: Record<string, unknown>,
   retryConfig?: RetryConfig,
   streamTransformers?: readonly StreamTransformer[],
+  subagentEvents?: AgentStreamChunk[],
 ): AsyncGenerator<AgentStreamChunk> {
+  // Drains any pending subagent events queued by the bridge. Called before
+  // each normal yield to keep ordering predictable on the single event loop.
+  function* drainSubagentEvents(): Generator<AgentStreamChunk> {
+    if (!subagentEvents) return
+    while (subagentEvents.length > 0) {
+      const next = subagentEvents.shift()
+      if (next) yield next
+    }
+  }
   const streamable = runnable as AgentLike & {
     streamEvents?: (
       input: unknown,
@@ -251,6 +314,9 @@ async function* streamFromRunnable(
         ...config,
         version: "v2",
       })) {
+        // Drain any subagent.* events queued by the bridge's writer before
+        // emitting the next normal stream chunk, so ordering is predictable.
+        yield* drainSubagentEvents()
         switch (event.event) {
           case "on_chat_model_stream": {
             const content = (event.data.chunk as { content?: unknown })?.content
@@ -317,6 +383,9 @@ async function* streamFromRunnable(
     }
   }
 
+  // Final drain in case the last tool call was the bridged task tool —
+  // its events would otherwise be stranded after the stream ends.
+  yield* drainSubagentEvents()
   yield { type: "done", data: finalOutput }
 }
 

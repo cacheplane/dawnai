@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 
 import {
   applyCapabilities,
@@ -8,13 +9,16 @@ import {
   createCapabilityRegistry,
   createPlanningMarker,
   createSkillsMarker,
+  createSubagentsMarker,
   discoverRoutes,
   findDawnApp,
   type ResolvedStateField,
+  type RouteDefinition,
+  type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
-import { executeAgent, streamAgent } from "@dawn-ai/langchain"
-import { isDawnAgent } from "@dawn-ai/sdk"
+import { executeAgent, streamAgent, type SubagentResolver } from "@dawn-ai/langchain"
+import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
@@ -136,7 +140,8 @@ export async function* streamResolvedRoute(options: {
     return
   }
 
-  const { normalized, tools, stateFields, promptFragments, streamTransformers } = prepared
+  const { normalized, tools, stateFields, promptFragments, streamTransformers, subagentResolver } =
+    prepared
 
   if (normalized.kind !== "agent") {
     // Non-agent routes don't support incremental streaming — execute and emit done
@@ -162,6 +167,7 @@ export async function* streamResolvedRoute(options: {
     tools,
     ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
     ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
+    ...(subagentResolver ? { subagentResolver } : {}),
   })) {
     switch (chunk.type) {
       case "token":
@@ -203,6 +209,7 @@ interface PreparedRoute {
   readonly streamTransformers?: ReadonlyArray<
     NonNullable<CapabilityContribution["streamTransformers"]>[number]
   >
+  readonly subagentResolver?: SubagentResolver
 }
 
 interface PreparedRouteError {
@@ -259,19 +266,35 @@ async function prepareRouteExecution(options: {
     NonNullable<CapabilityContribution["streamTransformers"]>[number]
   > = []
 
+  let subagentResolver: SubagentResolver | undefined
+
   if (normalized.kind === "agent") {
     const registry = createCapabilityRegistry([
       createPlanningMarker(),
       createAgentsMdMarker(),
       createSkillsMarker(),
+      createSubagentsMarker(),
     ])
     const routeManifest = await discoverRoutes({ appRoot: options.appRoot })
     const descriptor =
       normalized.kind === "agent" && isDawnAgent(normalized.entry) ? normalized.entry : undefined
 
+    // Lazily build a descriptor->routeId identity map by dynamically importing
+    // each route's entry file. This is required by the subagents marker to
+    // resolve `descriptor.subagents: [...]` overrides. Built once per
+    // prepareRouteExecution call (which is per request) — not a hot loop.
+    let cachedDescriptorMap: ReadonlyMap<DawnAgent, string> | undefined
+    const getDescriptorRouteMap = async (): Promise<ReadonlyMap<DawnAgent, string>> => {
+      if (cachedDescriptorMap) return cachedDescriptorMap
+      cachedDescriptorMap = await buildDescriptorRouteMap(routeManifest)
+      return cachedDescriptorMap
+    }
+    const descriptorRouteMap = await getDescriptorRouteMap()
+
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
+      descriptorRouteMap,
     })
 
     if (applied.errors.length > 0) {
@@ -334,6 +357,19 @@ async function prepareRouteExecution(options: {
     stateFields = stateFields ? [...stateFields, ...capStateFields] : capStateFields
     promptFragments = capPromptFragments
     streamTransformers = capStreamTransformers
+
+    // Build a resolver only when this route actually has subagents — either
+    // by convention (<routeDir>/subagents/*) or by descriptor.subagents override.
+    const hasTaskTool = capTools.some((t) => t.name === "task")
+    if (hasTaskTool) {
+      subagentResolver = buildSubagentResolver({
+        appRoot: options.appRoot,
+        routeDir,
+        routeManifest,
+        descriptor,
+        descriptorRouteMap,
+      })
+    }
   }
 
   return {
@@ -342,6 +378,7 @@ async function prepareRouteExecution(options: {
     ...(promptFragments.length > 0 ? { promptFragments } : {}),
     stateFields,
     ...(streamTransformers.length > 0 ? { streamTransformers } : {}),
+    ...(subagentResolver ? { subagentResolver } : {}),
     tools,
   }
 }
@@ -374,7 +411,14 @@ async function executeRouteAtResolvedPath(options: {
       })
     }
 
-    const { normalized, tools, stateFields, promptFragments, streamTransformers } = prepared
+    const {
+      normalized,
+      tools,
+      stateFields,
+      promptFragments,
+      streamTransformers,
+      subagentResolver,
+    } = prepared
     mode = normalized.kind
 
     const context = createDawnContext({
@@ -391,6 +435,7 @@ async function executeRouteAtResolvedPath(options: {
       ...(options.signal ? { signal: options.signal } : {}),
       ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
+      ...(subagentResolver ? { subagentResolver } : {}),
     })
 
     return createRuntimeSuccessResult({
@@ -445,6 +490,7 @@ async function invokeEntry(
     readonly streamTransformers?: ReadonlyArray<
       NonNullable<CapabilityContribution["streamTransformers"]>[number]
     >
+    readonly subagentResolver?: SubagentResolver
   },
 ): Promise<unknown> {
   if (kind === "agent") {
@@ -465,6 +511,7 @@ async function invokeEntry(
       ...(agentContext?.streamTransformers && agentContext.streamTransformers.length > 0
         ? { streamTransformers: agentContext.streamTransformers }
         : {}),
+      ...(agentContext?.subagentResolver ? { subagentResolver: agentContext.subagentResolver } : {}),
     })
   }
 
@@ -555,6 +602,109 @@ async function discoverApp(options: ExecuteRouteOptions): Promise<
 function extractRouteParamNames(routeId: string): string[] {
   const matches = routeId.matchAll(/\[(\w+)\]/g)
   return [...matches].map((match) => match[1]).filter((s): s is string => s !== undefined)
+}
+
+/**
+ * Dynamically imports each route's entry file and records descriptor->routeId
+ * for any default export that satisfies `isDawnAgent`. Used so the subagents
+ * capability marker can resolve `descriptor.subagents: [...]` override entries
+ * back to a routeId.
+ *
+ * Cost: this opens every agent route module in the manifest. Acceptable for
+ * the current scale; if it becomes hot, cache by (appRoot, manifest-hash).
+ */
+async function buildDescriptorRouteMap(
+  manifest: RouteManifest,
+): Promise<ReadonlyMap<DawnAgent, string>> {
+  const map = new Map<DawnAgent, string>()
+  await Promise.all(
+    manifest.routes.map(async (route) => {
+      try {
+        const mod = (await import(pathToFileURL(route.entryFile).href)) as { default?: unknown }
+        if (isDawnAgent(mod.default)) {
+          map.set(mod.default, route.id)
+        }
+      } catch {
+        // Best-effort: skip routes whose module fails to import.
+      }
+    }),
+  )
+  return map
+}
+
+/**
+ * Builds the subagentResolver passed into streamAgent/executeAgent. Given a
+ * leaf name (e.g. "researcher"), the resolver returns:
+ *   - the child route's id
+ *   - a graph object whose .invoke(input, config) re-enters executeResolvedRoute
+ *
+ * Resolution order:
+ *   1. Convention: route at `<routeDir>/subagents/<leaf>`
+ *   2. Override: descriptor.subagents[i] whose routeId's last segment === leaf
+ *
+ * Streaming child events through executeResolvedRoute is deferred for v1;
+ * the dispatcher's `invoke()` fallback emits one final subagent.end event.
+ */
+function buildSubagentResolver(args: {
+  readonly appRoot: string
+  readonly routeDir: string
+  readonly routeManifest: RouteManifest
+  readonly descriptor: DawnAgent | undefined
+  readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
+}): SubagentResolver {
+  const { appRoot, routeDir, routeManifest, descriptor, descriptorRouteMap } = args
+
+  const findConventionRoute = (leaf: string): RouteDefinition | undefined => {
+    const conventionDir = `${routeDir}/subagents/${leaf}`
+    return routeManifest.routes.find((r) => r.routeDir === conventionDir)
+  }
+
+  const findOverrideRoute = (leaf: string): RouteDefinition | undefined => {
+    for (const desc of descriptor?.subagents ?? []) {
+      const routeId = descriptorRouteMap.get(desc)
+      if (!routeId) continue
+      const route = routeManifest.routes.find((r) => r.id === routeId)
+      if (!route) continue
+      const lastSegment = route.segments.at(-1)
+      const lastName =
+        typeof lastSegment === "string"
+          ? lastSegment
+          : (lastSegment?.raw ?? route.id.replace(/^\//, ""))
+      if (lastName === leaf) return route
+    }
+    return undefined
+  }
+
+  return (leafName: string) => {
+    const route = findConventionRoute(leafName) ?? findOverrideRoute(leafName)
+    if (!route) return undefined
+
+    const graph = {
+      invoke: async (input: unknown, _config: unknown): Promise<unknown> => {
+        // Re-enter the same runtime; capabilities are re-applied for the
+        // child route. The dispatcher passes `{messages: [HumanMessage]}` —
+        // forward verbatim as the child's input so the agent-route path
+        // sees the protocol shape it expects.
+        const result = await executeResolvedRoute({
+          appRoot,
+          input,
+          routeFile: route.entryFile,
+          routeId: route.id,
+          routePath: route.pathname,
+        })
+        if (result.status === "failed") {
+          // Surface the failure to the dispatcher in a shape that
+          // extractFinalText can survive; the dispatcher wraps it.
+          throw new Error(result.error.message)
+        }
+        // executeAgent's output for an agent-kind route is the raw
+        // LangGraph state ({messages, ...}). Forward as-is.
+        return result.output
+      },
+    }
+
+    return { routeId: route.id, graph }
+  }
 }
 
 function isBoundaryError(error: unknown): boolean {
