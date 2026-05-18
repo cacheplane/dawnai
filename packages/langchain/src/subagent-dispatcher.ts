@@ -28,6 +28,21 @@ type Streamable = {
   }>
 }
 
+export interface SubagentStreamContext {
+  /**
+   * Active child-run depth. While > 0, the parent's streamFromRunnable should
+   * suppress on_chat_model_stream emissions because those events are firing
+   * for the child run via LangChain v2 streamEvents async-local-storage
+   * tracing. The dispatcher already emits a `subagent.message` envelope for
+   * each child token, so suppressing avoids duplicates on the parent stream.
+   */
+  activeChildRuns: number
+}
+
+export function createSubagentStreamContext(): SubagentStreamContext {
+  return { activeChildRuns: 0 }
+}
+
 export interface DispatchArgs {
   readonly childGraph: { invoke: (input: unknown, config: unknown) => Promise<unknown> }
   readonly input: string
@@ -36,6 +51,7 @@ export interface DispatchArgs {
   readonly callId: string
   readonly childRouteId: string
   readonly subagentName: string
+  readonly streamContext?: SubagentStreamContext
 }
 
 export interface DispatchResult {
@@ -108,6 +124,18 @@ export async function dispatchSubagent(args: DispatchArgs): Promise<DispatchResu
     },
   })
 
+  if (args.streamContext) args.streamContext.activeChildRuns++
+  try {
+    return await runChild(args, childConfig)
+  } finally {
+    if (args.streamContext) args.streamContext.activeChildRuns--
+  }
+}
+
+async function runChild(
+  args: DispatchArgs,
+  childConfig: Record<string, unknown>,
+): Promise<DispatchResult> {
   let output: unknown
   try {
     const streamable = args.childGraph as Streamable

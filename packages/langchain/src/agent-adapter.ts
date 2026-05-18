@@ -4,7 +4,11 @@ import { isDawnAgent } from "@dawn-ai/sdk"
 import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
-import type { SubagentEvent } from "./subagent-dispatcher.js"
+import {
+  createSubagentStreamContext,
+  type SubagentEvent,
+  type SubagentStreamContext,
+} from "./subagent-dispatcher.js"
 import { bridgeSubagentTool, type SubagentResolverResult } from "./subagent-tool-bridge.js"
 import { convertToolToLangChain } from "./tool-converter.js"
 
@@ -164,6 +168,14 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     })
   }
 
+  // Per-call counter shared with the dispatcher. While a child is active, the
+  // parent's on_chat_model_stream events are suppressed (LangChain v2
+  // streamEvents propagates child events to the parent listener via
+  // async-local-storage tracing, so without this gate every child token
+  // appears twice on the parent stream: once as a raw token chunk and once
+  // wrapped in a subagent.message envelope).
+  const streamContext = createSubagentStreamContext()
+
   const resolver = options.subagentResolver
   const hasTaskTool = options.tools.some((t) => t.name === "task")
   const effectiveTools: readonly DawnToolDefinition[] =
@@ -176,6 +188,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
                   subagentResolver: resolver,
                   writer: queueWriter,
                   parentConfig: config,
+                  streamContext,
                 }).run as DawnToolDefinition["run"],
               }
             : t,
@@ -203,6 +216,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       retryConfig,
       options.streamTransformers,
       subagentEvents,
+      streamContext,
     )
     return
   }
@@ -224,6 +238,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     options.retry,
     options.streamTransformers,
     subagentEvents,
+    streamContext,
   )
 }
 
@@ -261,6 +276,7 @@ async function* streamFromRunnable(
   retryConfig?: RetryConfig,
   streamTransformers?: readonly StreamTransformer[],
   subagentEvents?: AgentStreamChunk[],
+  streamContext?: SubagentStreamContext,
 ): AsyncGenerator<AgentStreamChunk> {
   // Drains any pending subagent events queued by the bridge. Called before
   // each normal yield to keep ordering predictable on the single event loop.
@@ -319,6 +335,12 @@ async function* streamFromRunnable(
         yield* drainSubagentEvents()
         switch (event.event) {
           case "on_chat_model_stream": {
+            // Suppress while a child subagent run is active — child token
+            // events leak onto the parent's streamEvents listener via
+            // LangChain v2 async-local-storage tracing. The dispatcher
+            // already emits a `subagent.message` envelope for each child
+            // token, so emitting the raw token here would duplicate.
+            if (streamContext && streamContext.activeChildRuns > 0) break
             const content = (event.data.chunk as { content?: unknown })?.content
             if (content && typeof content === "string" && content.length > 0) {
               hasYielded = true

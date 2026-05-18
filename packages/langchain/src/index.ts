@@ -4,8 +4,12 @@ export { chainAdapter } from "./chain-adapter.js"
 export type { RetryOptions } from "./retry.js"
 export { isRetryableError, withRetry } from "./retry.js"
 export { materializeStateSchema } from "./state-adapter.js"
-export type { SubagentEvent } from "./subagent-dispatcher.js"
-export { dispatchSubagent, MAX_SUBAGENT_DEPTH } from "./subagent-dispatcher.js"
+export type { SubagentEvent, SubagentStreamContext } from "./subagent-dispatcher.js"
+export {
+  createSubagentStreamContext,
+  dispatchSubagent,
+  MAX_SUBAGENT_DEPTH,
+} from "./subagent-dispatcher.js"
 export type { SubagentResolverResult } from "./subagent-tool-bridge.js"
 export { bridgeSubagentTool } from "./subagent-tool-bridge.js"
 export { convertToolToLangChain } from "./tool-converter.js"
