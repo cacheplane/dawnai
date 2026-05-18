@@ -5,6 +5,18 @@ export interface SubagentEvent {
   readonly data: Record<string, unknown>
 }
 
+type Streamable = {
+  invoke: (input: unknown, config: unknown) => Promise<unknown>
+  streamEvents?: (
+    input: unknown,
+    options: Record<string, unknown>,
+  ) => AsyncIterable<{
+    event: string
+    name?: string
+    data: { chunk?: unknown; output?: unknown }
+  }>
+}
+
 export interface DispatchArgs {
   readonly childGraph: { invoke: (input: unknown, config: unknown) => Promise<unknown> }
   readonly input: string
@@ -82,10 +94,52 @@ export async function dispatchSubagent(args: DispatchArgs): Promise<DispatchResu
 
   let output: unknown
   try {
-    output = await args.childGraph.invoke(
-      { messages: [new HumanMessage(args.input)] },
-      childConfig,
-    )
+    const streamable = args.childGraph as Streamable
+    if (typeof streamable.streamEvents === "function") {
+      for await (const event of streamable.streamEvents(
+        { messages: [new HumanMessage(args.input)] },
+        { ...childConfig, version: "v2" },
+      )) {
+        switch (event.event) {
+          case "on_tool_start":
+            args.writer({
+              event: "subagent.tool_call",
+              data: {
+                call_id: args.callId,
+                tool: event.name,
+                input: event.data.chunk ?? event.data.output,
+              },
+            })
+            break
+          case "on_tool_end":
+            args.writer({
+              event: "subagent.tool_result",
+              data: { call_id: args.callId, tool: event.name, output: event.data.output },
+            })
+            break
+          case "on_chat_model_stream": {
+            const content = (event.data.chunk as { content?: unknown })?.content
+            if (typeof content === "string" && content.length > 0) {
+              args.writer({
+                event: "subagent.message",
+                data: { call_id: args.callId, chunk: content },
+              })
+            }
+            break
+          }
+          case "on_chain_end":
+            if (event.name === "LangGraph") {
+              output = event.data.output
+            }
+            break
+        }
+      }
+    } else {
+      output = await streamable.invoke(
+        { messages: [new HumanMessage(args.input)] },
+        childConfig,
+      )
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     args.writer({
