@@ -196,6 +196,55 @@ describe("dispatchSubagent — event bubbling", () => {
   })
 })
 
+describe("dispatchSubagent — dawnStream path", () => {
+  it("prefers dawnStream over streamEvents/invoke and bubbles Dawn StreamChunks as subagent.* envelopes", async () => {
+    const childGraph = {
+      invoke: vi.fn(),
+      // streamEvents not provided — confirm dawnStream takes precedence even if it were
+      dawnStream: async function* () {
+        yield { type: "tool_call", name: "readFile", input: { path: "x.md" } }
+        yield { type: "tool_result", name: "readFile", output: "contents" }
+        yield { type: "chunk", data: "Hello " }
+        yield {
+          type: "plan_update",
+          data: { todos: [{ content: "do thing", status: "pending" }] },
+        }
+        yield {
+          type: "done",
+          output: {
+            messages: [{ type: "ai", content: "child final", getType: () => "ai" }],
+          },
+        }
+      },
+    }
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = []
+    const result = await dispatchSubagent({
+      childGraph: childGraph as never,
+      input: "x",
+      parentConfig: {},
+      writer: (e) => events.push(e),
+      callId: "C",
+      childRouteId: "/r",
+      subagentName: "r",
+    })
+
+    expect(result.finalText).toBe("child final")
+    expect(childGraph.invoke).not.toHaveBeenCalled()
+
+    const tags = events.map((e) => e.event)
+    expect(tags).toContain("subagent.tool_call")
+    expect(tags).toContain("subagent.tool_result")
+    expect(tags).toContain("subagent.message")
+    expect(tags).toContain("subagent.plan_update")
+    expect(tags).toContain("subagent.end")
+
+    const planEvent = events.find((e) => e.event === "subagent.plan_update")!
+    expect(planEvent.data.call_id).toBe("C")
+    expect((planEvent.data as { todos?: unknown }).todos).toBeDefined()
+  })
+})
+
 import { bridgeSubagentTool } from "../src/subagent-tool-bridge.js"
 
 describe("bridgeSubagentTool — wraps run() with dispatcher", () => {

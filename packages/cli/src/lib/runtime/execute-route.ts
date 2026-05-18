@@ -644,8 +644,10 @@ async function buildDescriptorRouteMap(
  *   1. Convention: route at `<routeDir>/subagents/<leaf>`
  *   2. Override: descriptor.subagents[i] whose routeId's last segment === leaf
  *
- * Streaming child events through executeResolvedRoute is deferred for v1;
- * the dispatcher's `invoke()` fallback emits one final subagent.end event.
+ * The returned graph exposes both `invoke` (one-shot) and `dawnStream`
+ * (yields Dawn StreamChunks). The dispatcher prefers `dawnStream` so
+ * intermediate child events (tool calls, tokens, capability events) bubble
+ * up to the parent stream as `subagent.<type>` envelopes.
  */
 function buildSubagentResolver(args: {
   readonly appRoot: string
@@ -702,6 +704,19 @@ function buildSubagentResolver(args: {
         // executeAgent's output for an agent-kind route is the raw
         // LangGraph state ({messages, ...}). Forward as-is.
         return result.output
+      },
+      // Stream child events so the parent stream can bubble subagent.*
+      // envelopes for intermediate tool calls, tokens, and capability events.
+      dawnStream: async function* (input: unknown, _config: unknown) {
+        for await (const chunk of streamResolvedRoute({
+          appRoot,
+          input,
+          routeFile: route.entryFile,
+          routeId: route.id,
+          routePath: route.pathname,
+        })) {
+          yield chunk
+        }
       },
     }
 
