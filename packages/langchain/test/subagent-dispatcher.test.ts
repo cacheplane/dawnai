@@ -195,3 +195,70 @@ describe("dispatchSubagent — event bubbling", () => {
     expect(childGraph.invoke).toHaveBeenCalledOnce()
   })
 })
+
+import { bridgeSubagentTool } from "../src/subagent-tool-bridge.js"
+
+describe("bridgeSubagentTool — wraps run() with dispatcher", () => {
+  it("replaces task.run with a closure that dispatches to the resolved child graph", async () => {
+    const childGraph = {
+      invoke: vi.fn(async (input: unknown) => ({
+        messages: [
+          ...(input as { messages: unknown[] }).messages,
+          { type: "ai", content: "from child", getType: () => "ai" },
+        ],
+      })),
+    }
+    const subagentResolver = (leaf: string) => {
+      if (leaf === "research") return { routeId: "/parent/subagents/research", graph: childGraph }
+      return undefined
+    }
+
+    const taskTool = bridgeSubagentTool({ subagentResolver, writer: () => {} })
+
+    expect(taskTool.name).toBe("task")
+    const result = await taskTool.run(
+      { subagent: "research", input: "go" },
+      { signal: new AbortController().signal },
+    )
+
+    expect(result).toBe("from child")
+    expect(childGraph.invoke).toHaveBeenCalledOnce()
+  })
+
+  it("returns subagent_unknown when resolver returns undefined", async () => {
+    const taskTool = bridgeSubagentTool({
+      subagentResolver: () => undefined,
+      writer: () => {},
+    })
+
+    const result = await taskTool.run(
+      { subagent: "ghost", input: "x" },
+      { signal: new AbortController().signal },
+    )
+
+    expect(result).toMatch(/subagent_unknown/)
+    expect(result).toMatch(/ghost/)
+  })
+
+  it("forwards parentConfig when provided", async () => {
+    let seenConfig: { metadata?: { dawn?: { subagent_depth?: number } } } | undefined
+    const childGraph = {
+      invoke: vi.fn(async (_input: unknown, config: unknown) => {
+        seenConfig = config as typeof seenConfig
+        return { messages: [{ type: "ai", content: "ok", getType: () => "ai" }] }
+      }),
+    }
+    const taskTool = bridgeSubagentTool({
+      subagentResolver: () => ({ routeId: "/r", graph: childGraph }),
+      writer: () => {},
+      parentConfig: { metadata: { dawn: { subagent_depth: 1 } } },
+    })
+
+    await taskTool.run(
+      { subagent: "x", input: "y" },
+      { signal: new AbortController().signal },
+    )
+
+    expect(seenConfig?.metadata?.dawn?.subagent_depth).toBe(2)
+  })
+})
