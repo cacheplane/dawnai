@@ -1,5 +1,3 @@
-import { HumanMessage } from "@langchain/core/messages"
-
 export interface SubagentEvent {
   readonly event: string
   readonly data: Record<string, unknown>
@@ -97,7 +95,7 @@ export async function dispatchSubagent(args: DispatchArgs): Promise<DispatchResu
     const streamable = args.childGraph as Streamable
     if (typeof streamable.streamEvents === "function") {
       for await (const event of streamable.streamEvents(
-        { messages: [new HumanMessage(args.input)] },
+        { messages: [{ role: "user", content: args.input }] },
         { ...childConfig, version: "v2" },
       )) {
         switch (event.event) {
@@ -136,7 +134,7 @@ export async function dispatchSubagent(args: DispatchArgs): Promise<DispatchResu
       }
     } else {
       output = await streamable.invoke(
-        { messages: [new HumanMessage(args.input)] },
+        { messages: [{ role: "user", content: args.input }] },
         childConfig,
       )
     }
