@@ -4,8 +4,8 @@ import { isDawnAgent } from "@dawn-ai/sdk"
 import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
-import { bridgeSubagentTool, type SubagentResolverResult } from "./subagent-tool-bridge.js"
 import type { SubagentEvent } from "./subagent-dispatcher.js"
+import { bridgeSubagentTool, type SubagentResolverResult } from "./subagent-tool-bridge.js"
 import { convertToolToLangChain } from "./tool-converter.js"
 
 export type SubagentResolver = (leafName: string) => SubagentResolverResult | undefined

@@ -254,10 +254,7 @@ describe("bridgeSubagentTool — wraps run() with dispatcher", () => {
       parentConfig: { metadata: { dawn: { subagent_depth: 1 } } },
     })
 
-    await taskTool.run(
-      { subagent: "x", input: "y" },
-      { signal: new AbortController().signal },
-    )
+    await taskTool.run({ subagent: "x", input: "y" }, { signal: new AbortController().signal })
 
     expect(seenConfig?.metadata?.dawn?.subagent_depth).toBe(2)
   })
