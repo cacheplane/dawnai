@@ -154,9 +154,7 @@ export async function dispatchSubagent(args: DispatchArgs): Promise<DispatchResu
               event: `subagent.${chunk.type}`,
               data: {
                 call_id: args.callId,
-                ...(typeof data === "object" && data !== null
-                  ? (data as object)
-                  : { value: data }),
+                ...(typeof data === "object" && data !== null ? (data as object) : { value: data }),
               },
             })
             break

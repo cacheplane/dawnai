@@ -9,9 +9,7 @@ import {
   getCachedDescriptorRouteMap,
 } from "../src/lib/runtime/execute-route.js"
 
-function manifest(
-  routes: { id: string; entryFile: string; routeDir: string }[],
-): RouteManifest {
+function manifest(routes: { id: string; entryFile: string; routeDir: string }[]): RouteManifest {
   return {
     appRoot: "/tmp",
     routes: routes.map((r) => ({
