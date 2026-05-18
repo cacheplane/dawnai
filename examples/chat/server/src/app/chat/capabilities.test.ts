@@ -2,7 +2,7 @@
  * Verifies that Dawn's capability autowiring engine, when run against this
  * chat route's directory, produces the expected contributions:
  *
- * - planning (because src/app/chat/plan.md is present) → write_todos tool,
+ * - planning (because src/app/chat/plan.md is present) → writeTodos tool,
  *   todos state channel, planning prompt fragment, plan_update transformer.
  * - agents-md (always-on) → memory prompt fragment that reads
  *   <process.cwd()>/workspace/AGENTS.md on every render.
@@ -62,7 +62,7 @@ describe("chat route — autowired capabilities", () => {
     const result = await applyCapabilities(registry, ROUTE_DIR)
     const planning = result.contributions[0]?.contribution
 
-    expect(planning?.tools?.map((t) => t.name)).toEqual(["write_todos"])
+    expect(planning?.tools?.map((t) => t.name)).toEqual(["writeTodos"])
     expect(planning?.stateFields?.map((f) => f.name)).toEqual(["todos"])
     expect(planning?.promptFragment?.placement).toBe("after_user_prompt")
   })

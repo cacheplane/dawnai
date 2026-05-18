@@ -19,7 +19,7 @@ import {
 import { discoverStateDefinition } from "../runtime/state-discovery.js"
 
 const PLANNING_EXTRA_TOOL: ExtractedToolType = {
-  name: "write_todos",
+  name: "writeTodos",
   description: "Write or update the planning todo list for this agent.",
   inputType: `{ todos: ReadonlyArray<{ content: string; status: "pending" | "in_progress" | "completed" }> }`,
   outputType: `{ todos: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }`,
@@ -82,7 +82,7 @@ export async function runTypegen(options: {
 
     // Capability-contributed tools: include them in the generated type surface
     // so user code can reference them type-safely. Currently hard-coded to the
-    // planning capability's write_todos. When a second capability contributes a
+    // planning capability's writeTodos. When a second capability contributes a
     // tool, source these from capability markers instead.
     const extraTools: ExtractedToolType[] = []
     if (existsSync(join(route.routeDir, "plan.md"))) {

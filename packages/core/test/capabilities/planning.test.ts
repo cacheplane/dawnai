@@ -26,11 +26,11 @@ describe("createPlanningMarker", () => {
     expect(await marker.detect(routeDir)).toBe(true)
   })
 
-  it("contributes a write_todos tool when loaded", async () => {
+  it("contributes a writeTodos tool when loaded", async () => {
     writeFileSync(join(routeDir, "plan.md"), "")
     const marker = createPlanningMarker()
     const contribution = await marker.load(routeDir)
-    expect(contribution.tools?.[0]?.name).toBe("write_todos")
+    expect(contribution.tools?.[0]?.name).toBe("writeTodos")
   })
 
   it("contributes a todos state field when loaded", async () => {
@@ -59,7 +59,7 @@ describe("createPlanningMarker", () => {
     expect(contribution.promptFragment?.placement).toBe("after_user_prompt")
     const rendered = contribution.promptFragment?.render({ todos: [] }) ?? ""
     expect(rendered).toContain("# Planning")
-    expect(rendered).toContain("write_todos")
+    expect(rendered).toContain("writeTodos")
   })
 
   it("renders the current todos in the prompt fragment", async () => {
@@ -77,7 +77,7 @@ describe("createPlanningMarker", () => {
     expect(rendered).toContain("[pending] second")
   })
 
-  it("contributes a stream transformer that maps write_todos results to plan_update events", async () => {
+  it("contributes a stream transformer that maps writeTodos results to plan_update events", async () => {
     writeFileSync(join(routeDir, "plan.md"), "")
     const marker = createPlanningMarker()
     const contribution = await marker.load(routeDir)
@@ -88,7 +88,7 @@ describe("createPlanningMarker", () => {
     if (transformer) {
       const newTodos = [{ content: "x", status: "pending" }]
       for await (const out of transformer.transform({
-        toolName: "write_todos",
+        toolName: "writeTodos",
         toolOutput: { todos: newTodos },
       })) {
         events.push(out)
@@ -113,7 +113,7 @@ describe("createPlanningMarker", () => {
       // {result, state} return into a Command — the toolOutput's `update`
       // carries the state mutation.
       for await (const out of transformer.transform({
-        toolName: "write_todos",
+        toolName: "writeTodos",
         toolOutput: { update: { todos: newTodos } },
       })) {
         events.push(out)
