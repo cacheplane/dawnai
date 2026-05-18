@@ -1,109 +1,95 @@
 ---
 title: Why we built Dawn
-description: A TypeScript-first framework for AI agents, with the ergonomics of Next.js. Where the idea came from, and what we're trying to fix.
+description: Dawn is a TypeScript-first framework for building LangGraph.js agents with file-system routes, route-local tools, generated types, and a local dev loop.
 date: 2026-05-12
 tags: [philosophy]
 type: post
 author: brian
 ---
 
-Agent codebases are becoming one of the harder shapes in TypeScript right now.
+I built Dawn because agent codebases were starting to feel harder to maintain than they needed to be.
 
-Not because the runtimes are bad.
-And not because the model providers have failed us.
+Not because LangGraph.js is the wrong runtime.
 
-The runtime is fine. LangGraph holds up. What does not hold up is the *code around* the graph.
+In fact, I like the runtime. I like the graph model. I like that LangSmith gives teams a real deployment target.
 
-That is the gap Dawn was built to close.
+The problem I kept running into was the code around the graph: the project layout, the tool wiring, the generated artifacts, the local feedback loop, and the small conventions every team has to invent before they can build the thing they actually care about.
 
-## tl;dr
+This is the problem Dawn is trying to solve.
 
-- dawn is a meta-framework for LangGraph, not a replacement for it
-- the runtime, the channels, the checkpointer, LangSmith — all unchanged
-- `dawn build` emits a generated `langgraph.json` plus route entry files for LangSmith-style deployment
-- the thing dawn replaces is the boilerplate, the registry files, and the implicit project layout
-- agent code should feel like Next.js code: filesystem routes, inferred types, a real dev loop
+## The short version
 
-## The moment it stopped scaling
+Dawn is a TypeScript-first framework for building LangGraph.js agents.
 
-Dawn started as a folder of helper scripts that kept showing up in every LangGraph project I touched.
+The goal is not to replace LangGraph.js. The goal is to make the application around LangGraph.js easier to build, test, and deploy.
 
-By the third project, it was clear the helpers were a framework wearing a trench coat.
+In practice, Dawn gives you:
 
-The trigger was a single project. Four graphs, eleven tools, and a `langgraph.json` that nobody wanted to touch. Graphs in one folder. Tools in another. State shapes in a third. A `registry.ts` gluing them together. Every new feature touched all four locations.
+- file-system routes under `src/app/`
+- route-local tools with input and output types inferred from TypeScript
+- optional route state through `state.ts`
+- a local `dawn dev` runtime with `/runs/wait` and `/runs/stream`
+- `dawn typegen` for `.dawn/dawn.generated.d.ts`
+- `dawn build` for `.dawn/build/langgraph.json` and per-route LangGraph entry files
+- built-in agent capabilities for memory, planning, skills, and sub-agents
 
-I started writing internal docs explaining where things were supposed to go.
+That list is intentionally practical. It is the stuff you otherwise end up writing by hand.
 
-That was the moment.
+## The problem I kept seeing
 
-If the framework is making you write a memo about file layout, the framework is missing a piece.
+The first version of Dawn was not a framework.
 
-## The friction list
+It was a folder of helpers that kept showing up in LangGraph.js projects.
 
-The same pain shows up in every LangGraph project past the second graph. None of it is LangGraph's fault. These are things LangGraph leaves to you.
+One project had four graphs, eleven tools, a hand-written `langgraph.json`, and a registry file that existed mostly to explain the rest of the files to each other. Graphs lived in one directory. Tools lived in another. State definitions lived somewhere else. Tests drifted from the route they were meant to protect.
 
-- **graph boilerplate.** every route involves the same `StateGraph` plumbing — `addNode`, `addConditionalEdges`, `bindTools`, an exported `compile()`. the interesting code is twenty lines; the wiring is sixty.
-- **no project structure.** langgraph has no opinion on where graphs, tools, or state live. so every team invents a layout, then re-invents it six months later.
-- **hand-written tool schemas.** every tool means a function, a zod schema, and a `tool()` wrapper. the schema duplicates the typescript types you already wrote.
-- **no local dev loop.** `langgraph dev` works but is heavyweight. iterating against a route meant pushing to staging.
-- **lost types at the boundary.** tool inputs, state shape, dynamic routing parameters — none typed across the graph boundary by default.
+Every new feature touched too many places.
 
-Each item is solvable on its own.
+At some point I started writing internal documentation that explained where new code was supposed to go.
 
-The trouble is that every team solves them slightly differently, and the solutions do not compose.
+That was the signal.
 
-That is the real cost. Not the boilerplate. The lack of a shared shape.
+If I need a memo to explain the file layout, the framework is missing a piece.
 
-## What "meta-framework" actually means here
+## What I wanted instead
 
-Dawn is not a competitor to LangGraph.
+I wanted the same thing I like about good web application frameworks: a boring answer to "where does this code go?"
 
-It is the layer above it.
+A route should be a folder.
 
-The runtime, the graph compiler, the checkpointer, LangSmith — all unchanged. The output of `dawn build` is a generated `langgraph.json` plus route entry files that LangSmith-style runtimes consume.
+A tool should live with the route that uses it.
 
-What Dawn replaces is the *code around* the graph.
+State should have one file.
 
-Without Dawn, a hello-world tool-calling agent looks like this:
+The dev server should notice changes.
 
-```ts
-// graph.ts
-import { StateGraph, MessagesAnnotation, START, END } from "@langchain/langgraph"
-import { ToolNode } from "@langchain/langgraph/prebuilt"
-import { ChatOpenAI } from "@langchain/openai"
-import { tool } from "@langchain/core/tools"
-import { z } from "zod"
+The build step should produce the artifact the runtime expects.
 
-const greet = tool(async ({ name }) => `Hello, ${name}!`, {
-  name: "greet",
-  description: "Greet a user by name.",
-  schema: z.object({ name: z.string() }),
-})
+Types should follow the code instead of asking the developer to copy a shape from one file into another.
 
-const model = new ChatOpenAI({ model: "gpt-4o-mini" }).bindTools([greet])
-const tools = new ToolNode([greet])
+None of that is especially magical. That is the point. The best framework conventions usually feel obvious after you use them for a week.
 
-async function callModel(state: typeof MessagesAnnotation.State) {
-  return { messages: [await model.invoke(state.messages)] }
-}
+## What a route looks like
 
-function shouldContinue(state: typeof MessagesAnnotation.State) {
-  const last = state.messages.at(-1) as any
-  return last?.tool_calls?.length ? "tools" : END
-}
+A Dawn route is just a folder under `src/app/`.
 
-export const graph = new StateGraph(MessagesAnnotation)
-  .addNode("agent", callModel)
-  .addNode("tools", tools)
-  .addEdge(START, "agent")
-  .addConditionalEdges("agent", shouldContinue, ["tools", END])
-  .addEdge("tools", "agent")
-  .compile()
+For example:
+
+```text
+src/
+  app/
+    (public)/
+      hello/
+        [tenant]/
+          index.ts
+          state.ts
+          tools/
+            greet.ts
 ```
 
-Plus a hand-maintained `langgraph.json` pointing at the export.
+The route id is `/hello/[tenant]`. The route group `(public)` is ignored, the same way route groups work in modern web frameworks.
 
-With Dawn, it is two files:
+The route entry can be an `agent()` descriptor:
 
 ```ts
 // src/app/(public)/hello/[tenant]/index.ts
@@ -115,49 +101,141 @@ export default agent({
 })
 ```
 
+And a tool is a plain TypeScript function:
+
 ```ts
 // src/app/(public)/hello/[tenant]/tools/greet.ts
-export default async ({ name }: { name: string }) => `Hello, ${name}!`
+export const description = "Greet a user by name."
+
+export default async ({ name }: { readonly name: string }) => {
+  return `Hello, ${name}!`
+}
 ```
 
-`dawn build` produces the deployment artifacts. The `greet` tool is wired into the generated agent graph because it lives under `tools/`. The `[tenant]` segment stays in the route id; pass the tenant value in the route input when invoking `/hello/[tenant]`.
+There is no `tool()` wrapper here.
 
-Same deploy target. Roughly a quarter of the code.
+There is no hand-written Zod schema for the tool input.
 
-The point is not lines saved.
+Dawn reads the function signature, generates the tool schema for the model, and writes the typed route registry to `.dawn/dawn.generated.d.ts`. The same discovered tool is wired into generated agent deployment entries when you run `dawn build`.
 
-The point is that every concept — route, tool, state, middleware — has one place it lives. And that place is on disk where your editor can find it.
+That is the core bet: your TypeScript source should be the contract.
 
-That is the difference between "we wrote some helpers" and "we built a framework."
+## What happens at build time
 
-## The bet: agent code should feel like Next.js code
+`dawn build` does three things that I used to do by hand:
 
-The Next.js App Router did one thing extraordinarily well.
+1. It discovers the routes in `src/app/`.
+2. It runs type generation for route state and route-local tools.
+3. It writes `.dawn/build/langgraph.json` plus per-route entry files.
 
-It gave every concern a coordinate.
+For an agent route, the generated entry imports your default `agent()` descriptor, materializes it as a LangGraph graph, wires in the route-local tools, and maps the assistant id to the generated graph export.
 
-A route is a folder. A layout is `layout.tsx`. A server action is a function in a route file. You can point at a thing, search for it, refactor it, write a test next to it.
+So a route like `/hello/[tenant]` becomes an assistant id like:
 
-Agent codebases lack that. The runtime is reasonable, but the codebase shape is whatever you negotiated with your team last quarter.
+```text
+/hello/[tenant]#agent
+```
 
-My bet is that agent code should feel like Next.js code. A route is a folder under `src/app/`. The folder path is the agent endpoint. Tools, state, middleware, and tests live next to the route they belong to. Types are generated from the file tree, not maintained by hand.
+This matters because the Dawn project structure stays a TypeScript authoring experience, while the output is still a LangGraph-compatible deployment package.
 
-That is the whole framework.
+## What has changed recently
 
-Filesystem routes. Inferred types. A real dev server. A build step that emits the artifact LangSmith already understands.
+The first shape of Dawn was routing, tools, types, a dev server, and build output.
 
-## Where Dawn is now
+That was enough to prove the idea, but real agent applications need more than a single tool-calling loop.
 
-Dawn 0.3 ships the route conventions, the typed tool inference, the dev server, and the build step.
+The current work adds the pieces I kept wanting once the route structure was in place.
 
-The mental model is documented at [`/docs/mental-model`](/docs/mental-model). The route conventions live at [`/docs/routes`](/docs/routes). If you have a working LangGraph project, the migration walkthrough at [`/docs/migrating-from-langgraph`](/docs/migrating-from-langgraph) covers the construct-by-construct move.
+### Memory
 
-What is next is Deep Agents — composable sub-agents — and a deeper streaming story. Both ship in 0.4.
+If `workspace/AGENTS.md` exists, Dawn injects it into the agent prompt under a `# Memory` heading on every model turn.
 
-If you have felt the friction described above, the [getting started](/docs/getting-started) guide takes about a minute end to end.
+This is intentionally simple. The file is the memory. The model sees the current contents. If the agent updates the file, the next turn sees the updated memory.
 
-That is the right way to evaluate whether Dawn matches the mental model you already have.
+There is a size limit and there are no hidden databases involved. That is a tradeoff I like for this layer.
 
-The runtime is becoming policy. The framework around it is becoming product behavior.
+### Skills
 
-That is what makes this interesting.
+A route can include skills under:
+
+```text
+src/app/<route>/skills/<name>/SKILL.md
+```
+
+Dawn lists the available skills in the prompt and exposes a `readSkill({ name })` tool so the agent can load the full instructions when it needs them.
+
+This keeps long-form instructions out of the prompt until they are useful.
+
+### Planning
+
+A route with a `plan.md` file opts into the planning capability.
+
+Dawn gives the agent a `writeTodos` tool, a `todos` state channel, and a `plan_update` stream event. The agent can maintain a real plan during multi-step work, and the runtime can stream those updates to a UI.
+
+The important part is not the todo list itself. The important part is that a capability can add tools, prompt fragments, state, and stream behavior as one unit.
+
+### Sub-agents
+
+Sub-agents are becoming a first-class composition boundary.
+
+A parent route can expose child agents through the `subagents` field on `agent({...})`, or by placing child routes under a `subagents/` directory. Dawn adds a `task({ subagent, input })` tool and a prompt section that tells the parent what specialists are available.
+
+That makes a sub-agent feel less like an imported helper function and more like a route with its own prompt, tools, and state.
+
+### Reasoning effort
+
+`agent({...})` also accepts:
+
+```ts
+reasoning: { effort: "high" }
+```
+
+For OpenAI-backed agent routes, Dawn maps that to the model's reasoning effort parameter when the model supports it. Non-reasoning models ignore it.
+
+That is the kind of option I want in the descriptor: close to the route, explicit, and easy to review in code.
+
+## What Dawn is not
+
+It is important to be precise here.
+
+Dawn is not a new model provider abstraction.
+
+Dawn is not trying to hide LangGraph.js.
+
+Dawn is not necessary for every agent project.
+
+If you have one graph, two tools, and no need for a framework, raw LangGraph.js may be the better choice.
+
+But if your project is starting to need route conventions, generated types, a dev server, tests beside the routes, generated deployment artifacts, and reusable agent capabilities, then the framework starts to earn its place.
+
+## Try it
+
+The fastest way to get a feel for the framework is still the scaffold:
+
+```bash
+pnpm create dawn-ai-app my-agents
+cd my-agents
+pnpm dev
+```
+
+Then run the example route:
+
+```bash
+echo '{"tenant":"acme"}' | pnpm exec dawn run '/hello/[tenant]'
+```
+
+If you want the mental model first, start with [Mental Model](/docs/mental-model). If you want the file conventions, start with [Routes](/docs/routes). If you have an existing LangGraph.js project, the [migration guide](/docs/migrating-from-langgraph) walks through the move construct by construct.
+
+## Conclusion
+
+Dawn exists because I wanted agent code to have a shape that editors, tests, dev servers, and deployment tools could all understand.
+
+The runtime is still LangGraph.js.
+
+The difference is the application structure around it.
+
+Routes are folders. Tools are local. Types are generated. Capabilities compose. The build output is explicit.
+
+That is the ordinary work of a framework.
+
+And for agent applications, I think that ordinary work matters.
