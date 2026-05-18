@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest"
-import { agent } from "@dawn-ai/sdk"
 import type { DawnAgent } from "@dawn-ai/sdk"
+import { agent } from "@dawn-ai/sdk"
+import { describe, expect, it } from "vitest"
 import { createSubagentsMarker } from "../../src/capabilities/built-in/subagents.js"
 import type { CapabilityMarkerContext } from "../../src/capabilities/types.js"
 import type { RouteManifest } from "../../src/types.js"
@@ -165,6 +165,8 @@ describe("createSubagentsMarker — descriptor override", () => {
       descriptor: parent,
       descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/research"]]),
     }
-    await expect(marker.load("/app/src/app/parent", context)).rejects.toThrow(/duplicate.*leaf.*research/i)
+    await expect(marker.load("/app/src/app/parent", context)).rejects.toThrow(
+      /duplicate.*leaf.*research/i,
+    )
   })
 })

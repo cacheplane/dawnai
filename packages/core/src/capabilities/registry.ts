@@ -1,8 +1,4 @@
-import type {
-  CapabilityContribution,
-  CapabilityMarker,
-  CapabilityMarkerContext,
-} from "./types.js"
+import type { CapabilityContribution, CapabilityMarker, CapabilityMarkerContext } from "./types.js"
 
 export type { CapabilityMarker, CapabilityMarkerContext }
 
