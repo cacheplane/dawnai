@@ -1,5 +1,7 @@
 # Next Iterations Roadmap
 
+> Historical note: this roadmap captured the continuation plan after the route-authoring milestone. It is useful project history, not the current product status page.
+
 This roadmap is the recommended continuation path after the route-authoring milestone now merged on `main`.
 
 Its purpose is to close the gap between Dawn’s current state and the original product hypothesis:

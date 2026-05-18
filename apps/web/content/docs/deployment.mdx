@@ -1,6 +1,6 @@
 # Deployment
 
-Dawn does not host or run production traffic itself. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). Production runs on **LangSmith**, which Dawn's dev server already speaks natively. What runs locally runs in production after `dawn build` materializes the deployment-ready entry files.
+Dawn does not host or run production traffic itself. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). Production runs on **LangSmith** or another runtime that consumes the generated LangGraph entry files. Use live-server scenario tests to catch protocol-shape issues before deployment.
 
 ## The deployment path
 
@@ -19,7 +19,7 @@ Dawn does not host or run production traffic itself. It owns local development (
     ```
   </Step>
   <Step title="Confirm protocol parity">
-    Run scenarios against a live dev server by setting `run.url` per-scenario in your `run.test.ts` files (the command-level `--url` flag does not exist on `dawn test`). `dawn dev` exposes the same protocol endpoints as the deployed runtime — `/runs/wait` and `/runs/stream` — so request/response shape parity is guaranteed for those endpoints. Process boundaries, state persistence, and tool bindings are still re-materialized by `dawn build` for production, so this step is necessary but not sufficient.
+    Run scenarios against a live dev server by setting `run.url` per-scenario in your `run.test.ts` files (the command-level `--url` flag does not exist on `dawn test`). `dawn dev` exposes LangSmith-style protocol endpoints — `/runs/wait` and `/runs/stream` — so this catches request/response shape issues before deploy. Process boundaries, state persistence, and tool bindings are still re-materialized by `dawn build` for production, so this step is necessary but not sufficient.
 
     ```
     dawn dev --port 3001 &
@@ -28,7 +28,7 @@ Dawn does not host or run production traffic itself. It owns local development (
     ```
   </Step>
   <Step title="Build the deployment artifact">
-    `dawn build` writes `.dawn/build/langgraph.json` along with per-route entry files under `.dawn/build/<routeSlug>.ts`. For `agent` routes, the generated entry calls `agent.bindTools([...])` so every tool discovered for the route is wired to the LLM.
+    `dawn build` writes `.dawn/build/langgraph.json` along with per-route entry files under `.dawn/build/<routeSlug>.ts`. For `agent` routes, the generated entry imports your default `agent()` descriptor, materializes it as a LangGraph graph, and wires in every discovered route tool.
 
     ```
     dawn build --clean
@@ -39,7 +39,7 @@ Dawn does not host or run production traffic itself. It owns local development (
     ```json
     {
       "graphs": {
-        "/hello/[tenant]#agent": "./.dawn/build/hello-tenant.ts:default"
+        "/hello/[tenant]#agent": "./.dawn/build/hello-tenant.ts:graph"
       },
       "dependencies": ["."],
       "env": ".env.example",
@@ -53,11 +53,11 @@ Dawn does not host or run production traffic itself. It owns local development (
     - `env` resolves to `.env.example` when that file exists, else `.env`.
     - If you keep a hand-authored `langgraph.json` at the app root, `dawn build` shallow-merges it on top of the generated values.
   </Step>
-  <Step title="Per-route middleware (optional)">
-    `src/middleware.ts` (default-exporting a function from `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request — identically in `dawn dev` and on LangSmith. Use it to gate access by header, populate request-scoped context, or `reject(status, body)` unauthorized callers. See [Middleware](/docs/middleware) for the API.
+  <Step title="Local middleware (optional)">
+    `src/middleware.ts` (default-exporting a function from `defineMiddleware`) runs before local `/runs/wait` and `/runs/stream` requests handled by `dawn dev`. Use it to gate access by header, populate request-scoped context, or `reject(status, body)` unauthorized callers during local development and live-server tests. `dawn build` does not currently materialize this middleware into the generated LangSmith entry files. See [Middleware](/docs/middleware) for the API.
   </Step>
   <Step title="Push to your LangSmith-connected remote">
-    LangSmith builds the image from `.dawn/build/` and provisions assistants keyed by the `<routeId>#<kind>` ids in the generated `langgraph.json`. From there, your agents and harnesses can hit the deployed endpoints using the same protocol they already speak locally.
+    LangSmith builds from the generated `langgraph.json` and route entry files, then provisions assistants keyed by the `<routeId>#<kind>` ids. From there, your agents and harnesses can hit the deployed endpoints using those assistant ids.
   </Step>
 </Steps>
 
@@ -75,13 +75,13 @@ If you can't or won't use LangSmith, build with `dawn build` and feed `.dawn/bui
 
 - **Tests pass in-process but fail live-server** — a tool or route isn't serializing cleanly. Check that inputs, outputs, and state are JSON-serializable (no Dates, Maps, classes).
 - **Assistant id not found** — the request `assistant_id` doesn't match the `<routeId>#<kind>` keys in `.dawn/build/langgraph.json`. Inspect that file directly (`cat .dawn/build/langgraph.json`) or run `dawn verify --json` to confirm what was discovered.
-- **Type inference drifted** — run `dawn typegen` locally and commit `dawn.generated.d.ts`. The LangSmith build uses the committed file.
+- **Type inference drifted** — run `dawn typegen` locally and inspect `.dawn/dawn.generated.d.ts`. The generated file is ignored by the starter template, so regenerate it in CI/build steps unless your project chooses to commit `.dawn/`.
 
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/dev-server", title: "Dev Server", subtitle: "local protocol parity with production endpoints" },
-  { href: "/docs/middleware", title: "Middleware", subtitle: "request gating that runs identically in dev and on LangSmith" },
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "local protocol endpoints and live-server scenarios" },
+  { href: "/docs/middleware", title: "Middleware", subtitle: "request gating in the local Dawn runtime" },
   { href: "/docs/testing", title: "Testing", subtitle: "confirming parity before deploy via live-server scenarios" },
   { href: "/docs/cli", title: "CLI", subtitle: "dawn build, dawn verify, and all other commands" },
 ]} />

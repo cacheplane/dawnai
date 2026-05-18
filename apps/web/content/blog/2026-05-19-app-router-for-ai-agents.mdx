@@ -5,6 +5,7 @@ date: 2026-05-19
 tags: [philosophy, typescript, agents]
 type: post
 author: brian
+draft: true
 ---
 
 The Next.js App Router did something subtle and important.
@@ -143,7 +144,7 @@ Because the type is the contract, drift is impossible. If you change the tool si
 
 The route boundary is checked the same way the rest of your TypeScript is checked.
 
-Generated types live in `dawn.generated.d.ts`. Commit it or regenerate on the fly — both work, the same way `next-env.d.ts` works.
+Generated types live in `.dawn/dawn.generated.d.ts`. The starter template ignores `.dawn/`, so regenerate it during development and CI unless your project explicitly chooses to commit generated artifacts.
 
 ## What this unlocks at scale
 

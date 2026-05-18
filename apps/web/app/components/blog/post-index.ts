@@ -108,10 +108,16 @@ function parsePost(filename: string, raw: string): Post {
   }
 }
 
-export function loadPostsFromDir(dir: string, opts: { includeDrafts: boolean }): Post[] {
+export function loadPostsFromDir(
+  dir: string,
+  opts: { currentDate?: string; includeDrafts: boolean },
+): Post[] {
   const files = readdirSync(dir).filter((f) => f.endsWith(".mdx"))
   const posts = files.map((f) => parsePost(f, readFileSync(join(dir, f), "utf8")))
-  const visible = opts.includeDrafts ? posts : posts.filter((p) => !p.draft)
+  const currentDate = opts.currentDate ?? new Date().toISOString().slice(0, 10)
+  const visible = opts.includeDrafts
+    ? posts
+    : posts.filter((p) => !p.draft && p.date <= currentDate)
   return visible.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
 }
 

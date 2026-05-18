@@ -10,7 +10,7 @@ Yes. Dawn is a meta-framework for LangGraph the way Next.js is a meta-framework 
 
 ### Can I bring my own model provider?
 
-Yes. The `model` field on `agent()` accepts a `KnownModelId` — OpenAI and Google IDs are pre-typed, and `(string & {})` keeps the escape hatch open for any LangChain-compatible provider. Dawn does not wrap or proxy provider calls. See [API Reference](/docs/api).
+Yes, but the route kind matters. The current `agent({ model })` materialization path is OpenAI-backed. For Anthropic, Google, Bedrock, local models, or any custom LangChain-compatible provider, use a raw `graph` or `chain` route and instantiate the provider yourself. The `KnownModelId` type provides autocomplete plus an arbitrary string fallback; it is not a provider adapter matrix. See [API Reference](/docs/api).
 
 ### How does Dawn compare to Mastra / CopilotKit / Vercel AI SDK?
 
@@ -24,21 +24,21 @@ If you are already on LangGraph, Dawn fits. If you are not, pick the framework w
 
 ### Does Dawn support Python?
 
-No. Dawn is TypeScript-only and the type inference is the whole point — tool parameter types are read from function signatures at build time and emitted into `dawn.generated.d.ts`. A Python port would lose that. Use `langgraph` directly in Python; LangSmith deploys both.
+No. Dawn is TypeScript-only and the type inference is the whole point — tool parameter types are read from function signatures at build time and emitted into `.dawn/dawn.generated.d.ts`. A Python port would lose that. Use `langgraph` directly in Python; LangSmith deploys both.
 
 ### Is Dawn production-ready?
 
-Dawn produces production-ready artifacts; the framework itself is pre-1.0 and the API surface is still moving. `dawn build` writes a `.dawn/build/langgraph.json` plus per-route entry files that LangSmith deploys without further translation. Lock to a pinned version and read release notes between upgrades. See [Deployment](/docs/deployment).
+Dawn produces deployment artifacts; the framework itself is pre-1.0 and the API surface is still moving. `dawn build` writes a `.dawn/build/langgraph.json` plus per-route entry files for LangSmith-style deployment. Lock to a pinned version and read release notes between upgrades. See [Deployment](/docs/deployment).
 
 ## Working in Dawn
 
 ### Can I drop down to raw LangGraph when I need to?
 
-Yes — that is the point. A route's `index.ts` can default-export a `graph`, a `workflow`, an `agent`, or a `chain`; the `graph` shape hands you a raw `StateGraph` with no Dawn abstractions in the way. Mix shapes across routes in one project. See [Routes](/docs/routes).
+Yes — that is the point. A route's `index.ts` can default-export an `agent()` descriptor or named-export a `workflow`, `graph`, or `chain`; the `graph` shape hands you a raw `StateGraph` with no Dawn abstractions in the way. Mix shapes across routes in one project. See [Routes](/docs/routes).
 
 ### What does `dawn build` actually do?
 
-It walks your routes, runs typegen, and writes `.dawn/build/langgraph.json` plus a per-route entry file under `.dawn/build/<routeSlug>.ts`. Each agent route's entry calls `agent.bindTools([...])` so every co-located tool is wired to the LLM. Each `assistant_id` is `<routeId>#<kind>` — for example `/hello/[tenant]#agent`. See [Deployment](/docs/deployment).
+It walks your routes, runs typegen, and writes `.dawn/build/langgraph.json` plus a per-route entry file under `.dawn/build/<routeSlug>.ts`. Each agent route's entry imports your default `agent()` descriptor, materializes it as a LangGraph graph, and wires in discovered tools. Each `assistant_id` is `<routeId>#<kind>` — for example `/hello/[tenant]#agent`. See [Deployment](/docs/deployment).
 
 ### Why a meta-framework instead of a library?
 
@@ -52,7 +52,7 @@ Yes, with caveats. `dawn build` emits a standard `langgraph.json` plus entry fil
 
 ### How do I gradually migrate an existing LangGraph project?
 
-Move one graph at a time. Create a Dawn route, default-export your existing `StateGraph` from its `index.ts` as a `graph` route, and point the new `assistant_id` at it. Tools, prompts, and model providers come along unchanged — Dawn surrounds your code, it does not rewrite it. Once the route is live, peel state and tools out into the Dawn shapes if the ergonomics are worth it, or leave the graph as-is.
+Move one graph at a time. Create a Dawn route, named-export your existing `StateGraph` from its `index.ts` as `graph`, and point the new `assistant_id` at it. Tools, prompts, and model providers come along unchanged — Dawn surrounds your code, it does not rewrite it. Once the route is live, peel state and tools out into the Dawn shapes if the ergonomics are worth it, or leave the graph as-is.
 
 ## Related
 

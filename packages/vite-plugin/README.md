@@ -6,7 +6,7 @@
 
 Vite plugin for Dawn's typegen pipeline (extracts tool types and generates route ambient declarations).
 
-This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
+This is an internal Dawn workspace package. For Dawn documentation, see <https://github.com/cacheplane/dawnai/tree/main/apps/web/content/docs>.
 
 ## License
 

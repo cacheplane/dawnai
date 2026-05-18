@@ -6,7 +6,7 @@
 
 Shared Biome lint/format configuration used by Dawn workspace packages.
 
-This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
+This is an internal Dawn workspace package. For Dawn documentation, see <https://github.com/cacheplane/dawnai/tree/main/apps/web/content/docs>.
 
 ## License
 

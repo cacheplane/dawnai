@@ -1,10 +1,10 @@
 # State
 
-Every route has a state contract declared in a colocated `state.ts` file. State is the contract between the caller, the route's entry, and any tools the entry invokes.
+Routes may declare a state contract in a colocated `state.ts` file. State is the JSON payload passed to the route entry and returned by the route runtime.
 
 ## The shape
 
-`state.ts` default-exports a Zod schema. Dawn extracts defaults from the schema at runtime and you can derive the TS type via `z.infer<typeof state>`:
+When present, `state.ts` default-exports a Zod schema or Standard Schema value. Agent routes use it to parse defaults at runtime, and you can derive the TypeScript type via `z.infer<typeof state>`:
 
 <CodeGroup>
 ```ts title="src/app/(public)/hello/[tenant]/state.ts"
@@ -34,18 +34,24 @@ export async function workflow(state: HelloState, ctx: RuntimeContext) {
   State discovery accepts either a Zod schema (matched by `.parse({})`) or any value that implements [Standard Schema](https://standardschema.dev/) (matched by the `~standard.validate({})` slot). The scaffold uses Zod; either works at runtime.
 </Callout>
 
-## Dynamic segments become state fields
+## Dynamic segments are route params
 
-If your route's directory contains a dynamic segment like `[tenant]`, that segment's value is populated on the state field of the same name at runtime — **injected from the URL path, not declared in the Zod schema**.
+If your route's directory contains a dynamic segment like `[tenant]`, Dawn records that segment in generated route metadata. Today, route execution is input-driven: pass the value in the JSON input you send to `dawn run`, `/runs/wait`, or `/runs/stream`.
 
 ```
-src/app/(public)/hello/[tenant]/  →  state.tenant populated from the pathname
+src/app/(public)/hello/[tenant]/  →  route id /hello/[tenant]
 ```
 
-The schema only covers state your entry produces or the caller supplies. Dawn merges dynamic-segment values on top of the schema-derived defaults; double-declaring `tenant` in the Zod schema would conflict with the path injection.
+For example:
+
+```bash
+echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
+```
+
+The schema covers state your entry reads or the caller supplies. Do not rely on a concrete pathname with an inline tenant value to populate `tenant`; the current resolver matches the parameterized route id (`/hello/[tenant]`) or the route entry file path.
 
 <Callout type="info" title="Naming matters">
-  The dynamic segment name and the state field name must match exactly. Dawn wires them up by name, not by position.
+  When you include a dynamic segment value in input state, keep the field name aligned with the segment name. Generated route parameter types use the segment names.
 </Callout>
 
 ## Custom reducers
@@ -69,7 +75,7 @@ The file basename must equal the state-field name (`context.ts` → reduces `sta
     Mark fields `readonly` (or use Zod's `.readonly()`) when they should not be mutated. The entry function returns a new state object rather than mutating the input. This keeps scenario tests deterministic and LangGraph checkpoint-safe.
   </Step>
   <Step title="Outputs accumulate">
-    A workflow returns `{ ...state, newField }` — merging new outputs into the existing state. Custom reducers (above) override the merge for a specific field.
+    A workflow can return `{ ...state, newField }` when you want to preserve incoming state. Dawn returns the route output; it does not automatically merge workflow output with the input for you.
   </Step>
 </Steps>
 
@@ -80,7 +86,7 @@ State crosses the runtime boundary at every entry point:
 - `dawn run` — JSON via stdin, JSON via stdout.
 - `/runs/wait` and `/runs/stream` (locally under `dawn dev`, on LangSmith in prod) — JSON over HTTP keyed by `assistant_id`.
 
-Tool results, intermediate values, and other in-route data live inside the entry for the duration of a single run; only the final state crosses the boundary.
+Tool results, intermediate values, and other in-route data live inside the entry for the duration of a single run; only the route result crosses the boundary.
 
 ## Related
 

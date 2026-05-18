@@ -22,13 +22,13 @@ Requires Node.js 22.12+.
 
 The SDK groups around three surfaces:
 
-- **Agents** — `agent()`, `AgentConfig`, `DawnAgent`, `RetryConfig`, `isDawnAgent`
+- **Agents** — `agent()`, `AgentConfig`, `DawnAgent`, `ReasoningConfig`, `RetryConfig`, `isDawnAgent`
 - **Middleware** — `defineMiddleware()`, `allow()`, `reject()`, `DawnMiddleware`, `MiddlewareRequest`, `MiddlewareResult`
 - **Route and runtime types** — `RouteConfig`, `RouteKind`, `RuntimeContext`, `RuntimeTool`, `ToolRegistry`, `KnownModelId`
 
 ### Declaring an agent route
 
-A Dawn route's `index.ts` exports an `agent()` descriptor. The `model` field is typed against `KnownModelId`; `retry` is optional.
+A Dawn route's `index.ts` exports an `agent()` descriptor. The `model` field is typed against `KnownModelId`; `reasoning` and `retry` are optional.
 
 ```ts
 // src/app/hello/index.ts
@@ -61,10 +61,10 @@ export default defineMiddleware((req) => {
 
 Full reference and guides:
 
-- Routes — https://dawn-ai.org/docs/routes
-- Tools — https://dawn-ai.org/docs/tools
-- State — https://dawn-ai.org/docs/state
-- Getting started — https://dawn-ai.org/docs/getting-started
+- Routes — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/routes.mdx
+- Tools — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/tools.mdx
+- State — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/state.mdx
+- Getting started — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/getting-started.mdx
 
 ## License
 

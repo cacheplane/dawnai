@@ -1,6 +1,6 @@
 # Getting Started
 
-Build a typed AI agent in 60 seconds. Then ship the same code to LangSmith with one command. Dawn is file-system routing for agents — no registry, no tool schemas, no glue.
+Build a typed AI agent in 60 seconds. Then generate the LangGraph artifacts LangSmith consumes with one command. Dawn is file-system routing for agents — no registry, no hand-written tool schemas, no glue.
 
 By the end of this guide you'll have a typed agent at `/hello/[tenant]` that greets a user by name, running locally, ready to deploy.
 
@@ -16,21 +16,11 @@ Requires Node.js 22.12 or later.
 
 ## 2. Set your API key
 
-The scaffold defaults to `gpt-4o-mini`. Swap providers by editing the `model` string in `index.ts` and exporting the matching key:
+The scaffolded `agent()` route uses OpenAI through Dawn's LangChain adapter. Export an OpenAI API key before running it:
 
-<CodeGroup>
 ```bash title="OpenAI"
 export OPENAI_API_KEY=sk-...
 ```
-
-```bash title="Anthropic"
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-```bash title="Google"
-export GOOGLE_API_KEY=...
-```
-</CodeGroup>
 
 ## 3. What you got
 
@@ -40,7 +30,7 @@ Three files. The folder path is the agent endpoint — no registration step.
 ```ts title="src/app/(public)/hello/[tenant]/state.ts"
 import { z } from "zod"
 
-// Route state. The [tenant] segment merges in automatically.
+// Route state. Provide tenant in the route input when invoking /hello/[tenant].
 export default z.object({
   question: z.string().default(""),
 })
@@ -78,7 +68,7 @@ In another shell:
 echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]' --url http://127.0.0.1:<port>
 ```
 
-The dev server speaks the LangSmith protocol — `/runs/wait` and `/runs/stream`. What works locally works in production.
+The dev server exposes LangSmith-style `/runs/wait` and `/runs/stream` endpoints, so local clients can use the same request envelope before you build deployment artifacts.
 
 ## 5. Ship it
 
@@ -86,7 +76,7 @@ The dev server speaks the LangSmith protocol — `/runs/wait` and `/runs/stream`
 dawn build
 ```
 
-This walks the routes declared via `dawn.config.ts`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts`. Hand that directory to LangSmith. Same protocol, same `assistant_id`s, no rewrites.
+This walks the routes declared via `dawn.config.ts`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts`. The generated `assistant_id`s match the local ids, such as `/hello/[tenant]#agent`.
 
 ## Where to go next
 

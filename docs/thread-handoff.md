@@ -1,5 +1,7 @@
 # Thread Handoff
 
+> Historical note: this handoff records the route-authoring milestone. For current user-facing behavior, prefer the website docs in `apps/web/content/docs` and the root `README.md`.
+
 This document is the operational handoff for the Dawn work completed through the route-authoring milestone now on `main`.
 
 It is intended to let a new thread re-orient quickly without rereading the full superpowers history.
@@ -36,7 +38,7 @@ If either fails before new work starts, stop and resolve that baseline issue fir
 
 The plumbing needed to unblock real authoring work is now in place.
 
-- `pnpm create dawn-app` is the public scaffold path
+- `pnpm create dawn-ai-app` is the public scaffold path
 - contributor-local scaffold flow is documented in [`../CONTRIBUTORS.md`](../CONTRIBUTORS.md)
 - `dawn.config.ts` is intentionally narrow
 - `appDir` is the only supported config option today
@@ -66,7 +68,7 @@ The route-execution stack is now established:
 - in-process `dawn run`
 - server-backed `dawn run --url`
 - `dawn test` layered on the same execution contract
-- `dawn dev` exposing the local `/runs/wait` path
+- `dawn dev` exposing local `/runs/wait` and `/runs/stream` endpoints
 - runtime, smoke, and generated-app parity coverage
 
 The normalized execution result contract now includes route identity, execution source, timing, normalized status, output, and normalized error shape.
@@ -77,7 +79,7 @@ The newest completed milestone introduced a backend-neutral `@dawn-ai/sdk` packa
 
 What changed:
 
-- A route is a directory containing `index.ts`; the `index.ts` exports a `workflow` or `graph` function/object
+- A route is a directory containing `index.ts`; the `index.ts` exports exactly one route entry: default `agent(...)`, named `workflow`, named `graph`, or named `chain`
 - `@dawn-ai/sdk` is the canonical author-facing package: types, helpers, runtime context, and tool authoring
 - `@dawn-ai/langgraph` is now an adapter that implements the `@dawn-ai/sdk` contract and wires it to LangGraph
 - route-local tools under `tools/*.ts` are part of the authoring model
@@ -112,7 +114,7 @@ Primary packages:
 - `@dawn-ai/core`
 - `@dawn-ai/langgraph`
 - `@dawn-ai/cli`
-- `create-dawn-app`
+- `create-dawn-ai-app`
 
 ### Harness Lanes
 

@@ -153,7 +153,7 @@ Open this directory in VS Code: `code /tmp/dawn-hero-scene23/my-app`. Pre-open t
 4. **Start Screen Studio recording.**
 5. Wait 1 beat. Type at human pace:
    ```
-   echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]"
+   echo '{"tenant":"acme"}' | pnpm exec dawn run "/hello/[tenant]"
    ```
 6. Press Enter. Don't touch the keyboard while response streams.
 7. When response is fully streamed, wait 2 seconds. Don't touch the keyboard.

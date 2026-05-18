@@ -14,7 +14,7 @@ import { convertToolToLangChain } from "./tool-converter.js"
 
 export type SubagentResolver = (leafName: string) => SubagentResolverResult | undefined
 
-interface DawnToolDefinition {
+export interface DawnToolDefinition {
   readonly description?: string
   readonly name: string
   readonly run: (
@@ -114,6 +114,21 @@ async function materializeAgent(
     materializedAgents.set(descriptor, compiled as unknown as AgentLike)
   }
   return compiled as unknown as AgentLike
+}
+
+export async function materializeAgentGraph(options: {
+  readonly descriptor: DawnAgent
+  readonly tools?: readonly DawnToolDefinition[]
+  readonly stateFields?: readonly ResolvedStateField[]
+  readonly promptFragments?: readonly PromptFragment[]
+}): Promise<unknown> {
+  return materializeAgent(
+    options.descriptor,
+    options.tools ?? [],
+    options.stateFields,
+    undefined,
+    options.promptFragments,
+  )
 }
 
 export interface AgentStreamChunk {

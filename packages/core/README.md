@@ -6,7 +6,7 @@
 
 Filesystem-based route discovery, app config loading, state-field resolution, and typegen primitives that the Dawn CLI builds on.
 
-This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
+This is an internal Dawn workspace package. For Dawn documentation, see <https://github.com/cacheplane/dawnai/tree/main/apps/web/content/docs>.
 
 ## License
 

@@ -45,7 +45,7 @@ The capture script:
 
 - Reads `OPENAI_API_KEY` from `.env`.
 - Starts a local recording proxy on `127.0.0.1:4318` that forwards `/v1/chat/completions` to `api.openai.com` and saves the response body.
-- Scaffolds a temp `basic` app, installs deps, points `OPENAI_BASE_URL` at the proxy, and runs `pnpm exec dawn run "hello/[tenant]"` with a JSON input on stdin.
+- Scaffolds a temp `basic` app, installs deps, points `OPENAI_BASE_URL` at the proxy, and runs `pnpm exec dawn run "/hello/[tenant]"` with a JSON input on stdin.
 - Writes `{ contentType, body }` to `docs/brand/quickstart-fixture.json`.
 - Cleans up the temp app.
 

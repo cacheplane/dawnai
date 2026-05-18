@@ -41,7 +41,7 @@ Enter
 Sleep 2500ms
 
 # 2. Run it. Real `dawn run`, stubbed LLM.
-Type `echo '{"tenant":"acme"}' | pnpm exec dawn run "hello/[tenant]"`
+Type `echo '{"tenant":"acme"}' | pnpm exec dawn run "/hello/[tenant]"`
 Sleep 400ms
 Enter
 Sleep 4500ms

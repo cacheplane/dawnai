@@ -54,9 +54,9 @@ The generated `package.json` wires `@dawn-ai/sdk`, `@dawn-ai/cli`, `@dawn-ai/cor
 
 ## Next steps
 
-- Getting started — https://dawn-ai.org/docs/getting-started
-- Routes — https://dawn-ai.org/docs/routes
-- CLI — https://dawn-ai.org/docs/cli
+- Getting started — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/getting-started.mdx
+- Routes — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/routes.mdx
+- CLI — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/cli.mdx
 
 ## License
 

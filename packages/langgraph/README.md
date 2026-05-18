@@ -6,7 +6,7 @@
 
 LangGraph runtime adapters and route module contracts (`graphAdapter`, `workflowAdapter`, `defineEntry`) used by the Dawn CLI.
 
-This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
+This is an internal Dawn workspace package. For Dawn documentation, see <https://github.com/cacheplane/dawnai/tree/main/apps/web/content/docs>.
 
 ## License
 

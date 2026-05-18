@@ -6,7 +6,7 @@ A route is a folder under `src/app/`. Its path becomes the agent endpoint. A rou
 
 Every route has an `index.ts` that exports one of:
 
-- **`agent`** — an LLM-driven flow with auto-bound tools. The default scaffold export. See [Agents](/docs/agents).
+- **`agent`** — an LLM-driven flow with auto-discovered tools. The default scaffold export. See [Agents](/docs/agents).
 - **`workflow`** — a deterministic async function with typed state. See [Routes / workflow](#workflow) below.
 - **`graph`** — a LangGraph graph. Branching, looping, conditional edges.
 - **`chain`** — a LangChain LCEL `Runnable`. Simple linear pipelines.
@@ -16,7 +16,7 @@ Every route has an `index.ts` that exports one of:
 Routes follow the same conventions as the Next.js App Router:
 
 - `(group)/` — route group, excluded from the path
-- `[segment]/` — dynamic segment, becomes a typed field on the route's state
+- `[segment]/` — dynamic segment, preserved in the route id and exposed in generated route params
 - `[...rest]/` — catch-all
 - `[[...optional]]/` — optional catch-all
 
@@ -30,20 +30,22 @@ src/app/
         index.ts        ← exports agent | workflow | graph | chain
         state.ts        ← optional, route state schema
         tools/
-          greet.ts      ← auto-bound to agents
-        middleware.ts   ← optional, runs before the route
+          greet.ts      ← auto-discovered for agents and RuntimeContext
 ```
 
 The `(public)/` segment is excluded from the path, so this route is `/hello/[tenant]`.
 
 ## workflow
 
-A `workflow` is a deterministic async function. The first argument is the typed route state; the second is a `RuntimeContext` that exposes auto-bound tools.
+A `workflow` is a deterministic async function. The first argument is the typed route state; the second is a `RuntimeContext` that exposes the route's discovered tools.
 
 ```ts title="src/app/(public)/hello/[tenant]/index.ts"
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { RouteTools } from "dawn:routes"
-import type { HelloState } from "./state.js"
+import type { z } from "zod"
+import type state from "./state.js"
+
+type HelloState = z.infer<typeof state> & { readonly tenant: string }
 
 export async function workflow(
   state: HelloState,
@@ -58,13 +60,13 @@ The `RouteTools<"/hello/[tenant]">` generic resolves to the union of tools auto-
 
 ## graph
 
-Export a compiled LangGraph graph as `default`:
+Export a compiled LangGraph graph as a named `graph` export:
 
 ```ts title="src/app/(public)/hello/[tenant]/index.ts"
 import { StateGraph, START, END } from "@langchain/langgraph"
 import type { HelloState } from "./state.js"
 
-export default new StateGraph<HelloState>({ channels: { /* ... */ } })
+export const graph = new StateGraph<HelloState>({ channels: { /* ... */ } })
   .addNode("greet", async (state) => state)
   .addEdge(START, "greet")
   .addEdge("greet", END)
@@ -75,12 +77,12 @@ The graph receives the same typed state and runs through Dawn's runtime. State c
 
 ## chain
 
-Export a LangChain LCEL `Runnable`:
+Export a LangChain LCEL `Runnable` as a named `chain` export:
 
 ```ts title="src/app/(public)/hello/[tenant]/index.ts"
 import { RunnableSequence } from "@langchain/core/runnables"
 
-export default RunnableSequence.from([
+export const chain = RunnableSequence.from([
   // chain steps
 ])
 ```
@@ -90,7 +92,7 @@ export default RunnableSequence.from([
 Routes dispatch by path:
 
 ```bash
-$ dawn run '/hello/acme'
+$ echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
 $ dawn dev    # HMR + dev server
 ```
 
@@ -101,7 +103,7 @@ Programmatic dispatch is also available — see [Dev Server](/docs/dev-server) f
 <RelatedCards items={[
   { href: "/docs/agents", title: "Agents", subtitle: "the default scaffold export" },
   { href: "/docs/tools", title: "Tools", subtitle: "co-located tool files, type inference" },
-  { href: "/docs/state", title: "State", subtitle: "typed route state, dynamic segment binding" },
+  { href: "/docs/state", title: "State", subtitle: "typed JSON input and output" },
   { href: "/docs/middleware", title: "Middleware", subtitle: "auth, logging, request gates" },
   { href: "/docs/retry", title: "Retry", subtitle: "retry strategy at agent / tool level" },
   { href: "/docs/recipes/dispatch-from-route", title: "Dispatch from a route", subtitle: "recipe calling one route from another over /runs/wait" },
