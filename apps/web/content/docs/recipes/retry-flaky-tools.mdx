@@ -1,6 +1,6 @@
 # Retry flaky tools
 
-You want an agent route to retry transient LLM and tool failures automatically. Here's how.
+You want an agent route to retry transient execution failures automatically. Here's how.
 
 ## The code
 
@@ -16,8 +16,8 @@ export default agent({
 ```
 
 ```ts title="src/app/(public)/summarize/[doc]/tools/fetch-doc.ts"
-// The tool the agent calls. Transient fetch failures are retried by the
-// agent's retry policy above — the tool itself stays simple.
+// The tool the agent calls. Keep the tool itself simple and let route-level
+// retry handle retryable execution failures before streaming output commits.
 export default async (
   input: { readonly doc: string },
   ctx: { signal: AbortSignal },
@@ -47,7 +47,7 @@ export default agent({
 - **Transient errors only.** Rate limits (`429`), server errors (`500`/`502`/`503`), network timeouts, and OpenAI `overloaded`/`server_error` are retried. Invalid API keys, missing models, and schema validation errors fail immediately.
 - **Exponential backoff with jitter, capped at 10s.** `delay = min(baseDelay * 2^n + jitter, 10s)`. Lowering `baseDelay` makes the first retry faster.
 - **`maxAttempts: 1` disables retry.** The default is `3` if `retry` is omitted entirely.
-- **Streaming routes only retry before the first token.** Once tokens have streamed, the response is committed.
+- **Streaming routes only retry before the first token or event.** Once content has streamed, the response is committed.
 
 ## Related
 

@@ -6,11 +6,7 @@ import { discoverRoutes } from "@dawn-ai/core"
 import type { Command } from "commander"
 import { extractDeploymentConfig } from "../lib/build/deployment-config.js"
 import { type CommandIo, writeLine } from "../lib/output.js"
-import {
-  type DiscoveredToolDefinition,
-  discoverToolDefinitions,
-  injectGeneratedSchemas,
-} from "../lib/runtime/tool-discovery.js"
+import { discoverToolDefinitions, injectGeneratedSchemas } from "../lib/runtime/tool-discovery.js"
 import { runTypegen } from "../lib/typegen/run-typegen.js"
 
 interface BuildOptions {
@@ -77,31 +73,33 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
 
     let entryContent: string
 
-    if (route.kind === "agent" && tools.length > 0) {
-      const toolImports = tools.map((tool) => {
+    if (route.kind === "agent") {
+      const toolImports = tools.map((tool, index) => {
         const relToolPath = relative(dirname(entryFilePath), dirname(tool.filePath))
         const toolFileName =
           tool.filePath.split("/").pop()?.replace(/\.ts$/, ".js") ?? `${tool.name}.js`
-        return `import ${tool.name} from "${relToolPath}/${toolFileName}"`
+        return `import tool${index} from "${relToolPath}/${toolFileName}"`
       })
 
-      const toolBindings = tools.map((tool) => {
-        const description = tool.description ?? ""
-        const schema = toolSchemaToZodSource(tool)
-        return `const ${tool.name}Tool = tool(${tool.name}, {\n  name: "${tool.name}",\n  description: "${description}",\n  schema: ${schema},\n})`
+      const toolBindings = tools.map((tool, index) => {
+        const schema =
+          tool.schema === undefined ? "undefined" : JSON.stringify(tool.schema, null, 2)
+        return `const tool${index}Definition = {\n  name: ${JSON.stringify(tool.name)},\n  description: ${JSON.stringify(tool.description ?? "")},\n  schema: ${schema},\n  run: typeof tool${index} === "function" ? tool${index} : tool${index}.run,\n}`
       })
 
-      const toolNames = tools.map((tool) => `${tool.name}Tool`)
+      const toolNames = tools.map((_, index) => `tool${index}Definition`)
 
       entryContent = [
-        `import { agent } from "${routeImportPath}"`,
+        `import agentDescriptor from "${routeImportPath}"`,
         ...toolImports,
-        `import { tool } from "@langchain/core/tools"`,
-        `import { z } from "zod"`,
+        `import { materializeAgentGraph } from "@dawn-ai/langchain"`,
         ``,
         ...toolBindings,
         ``,
-        `export const graph = agent.bindTools([${toolNames.join(", ")}])`,
+        `export const graph = await materializeAgentGraph({`,
+        `  descriptor: agentDescriptor,`,
+        `  tools: [${toolNames.join(", ")}],`,
+        `})`,
         ``,
       ].join("\n")
     } else {
@@ -150,61 +148,4 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
     io.stdout,
     `  langgraph.json written to ${relative(process.cwd(), outputLanggraphPath)}`,
   )
-}
-
-interface JsonSchemaProperty {
-  readonly type?: string
-  readonly items?: { readonly type?: string }
-}
-
-function toolSchemaToZodSource(tool: DiscoveredToolDefinition): string {
-  const schema = tool.schema as
-    | {
-        readonly type?: string
-        readonly properties?: Record<string, JsonSchemaProperty>
-        readonly required?: readonly string[]
-      }
-    | undefined
-
-  if (
-    !schema ||
-    typeof schema !== "object" ||
-    schema.type !== "object" ||
-    !schema.properties ||
-    Object.keys(schema.properties).length === 0
-  ) {
-    return "z.record(z.string(), z.unknown())"
-  }
-
-  const required = new Set(schema.required ?? [])
-  const fields = Object.entries(schema.properties).map(([key, prop]) => {
-    let zodType = jsonSchemaTypeToZod(prop)
-    if (!required.has(key)) {
-      zodType += ".optional()"
-    }
-    return `  ${key}: ${zodType}`
-  })
-
-  return `z.object({\n${fields.join(",\n")},\n})`
-}
-
-function jsonSchemaTypeToZod(prop: JsonSchemaProperty): string {
-  switch (prop.type) {
-    case "string":
-      return "z.string()"
-    case "number":
-    case "integer":
-      return "z.number()"
-    case "boolean":
-      return "z.boolean()"
-    case "array": {
-      const itemType = prop.items?.type
-      if (itemType === "string") return "z.array(z.string())"
-      if (itemType === "number" || itemType === "integer") return "z.array(z.number())"
-      if (itemType === "boolean") return "z.array(z.boolean())"
-      return "z.array(z.unknown())"
-    }
-    default:
-      return "z.unknown()"
-  }
 }

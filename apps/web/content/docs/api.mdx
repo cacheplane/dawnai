@@ -14,7 +14,7 @@ Functions and types for declaring an LLM-driven agent route. See [Agents](/docs/
 export function agent(config: AgentConfig): DawnAgent
 ```
 
-Creates an agent route entry from a config object. The return value is the default export of a route's `index.ts`. Dawn auto-binds any tool files found in the sibling `tools/` directory.
+Creates an agent route entry from a config object. The return value is the default export of a route's `index.ts`. Dawn discovers tool files found in the sibling `tools/` directory and wires them into generated agent graphs.
 
 ```ts
 import { agent } from "@dawn-ai/sdk"
@@ -31,13 +31,28 @@ See [Agents](/docs/agents).
 
 ```ts
 export interface AgentConfig {
+  readonly description?: string
   readonly model: KnownModelId
+  readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
+  readonly subagents?: readonly DawnAgent[]
   readonly systemPrompt: string
 }
 ```
 
-Configuration passed to `agent()`. `model` must be a `KnownModelId` string. `systemPrompt` is sent as the system message on every invocation. `retry` controls automatic retries on transient failures.
+Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `subagents` lists child agent descriptors exposed through Dawn's subagent capability. `systemPrompt` is sent as the system message on every invocation. The current `agent()` materialization path is OpenAI-backed; use raw `graph` or `chain` routes when you instantiate another provider yourself.
+
+See [Agents](/docs/agents).
+
+### `ReasoningConfig`
+
+```ts
+export interface ReasoningConfig {
+  readonly effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+}
+```
+
+Optional reasoning-effort tuning for OpenAI-backed `agent()` routes. Non-reasoning models ignore it.
 
 See [Agents](/docs/agents).
 
@@ -58,13 +73,16 @@ See [Retry](/docs/retry).
 
 ```ts
 export interface DawnAgent {
+  readonly description?: string
   readonly model: string
+  readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
+  readonly subagents?: readonly DawnAgent[]
   readonly systemPrompt: string
 }
 ```
 
-Opaque branded type returned by `agent()`. Carry it as a route export; do not construct it manually. Use `isDawnAgent()` to check values at runtime.
+Opaque branded type returned by `agent()`. Carry it as a route export; do not construct it manually. It preserves the public agent config fields plus Dawn's internal brand. Use `isDawnAgent()` to check values at runtime.
 
 See [Agents](/docs/agents).
 
@@ -296,7 +314,7 @@ String literal types for model identifiers. See [Agents](/docs/agents).
 export type KnownModelId = OpenAiModelId | GoogleModelId | (string & {})
 ```
 
-The accepted type for `AgentConfig.model`. Includes all named model IDs plus an escape hatch (`string & {}`) for models not yet in the union. The escape hatch preserves autocomplete for the named values.
+The accepted type for `AgentConfig.model`. Includes named model IDs plus an escape hatch (`string & {}`) for models not yet in the union. The escape hatch preserves autocomplete for the named values; it does not imply every provider has an adapter in the built-in `agent()` path.
 
 ### `OpenAiModelId`
 
@@ -321,7 +339,7 @@ export type GoogleModelId =
   | "gemini-2.5-flash-lite"
 ```
 
-String literals for supported Google models.
+String literals accepted by the `KnownModelId` type for autocomplete. To run these models today, instantiate the matching provider in a raw `graph` or `chain` route.
 
 ---
 
@@ -365,7 +383,7 @@ Resolves intersection and mapped types into a flat object shape. Makes IDE hover
 
 ## dawn:routes (generated)
 
-The `dawn:routes` module is emitted by `dawn typegen` (and implicitly by `dawn build`). It is never written by hand — the CLI writes `.dawn/generated/route-tools.d.ts` and `.dawn/generated/route-state.d.ts` and re-exports them under the `dawn:routes` specifier. Import from it to get per-route types narrowed to your project's actual routes and tools.
+The `dawn:routes` module is emitted by `dawn typegen` (and implicitly by `dawn build`). It is never written by hand — the CLI writes `.dawn/dawn.generated.d.ts`, which declares the `dawn:routes` module for your app. Import from it to get per-route types narrowed to your project's actual routes and tools.
 
 ### `RouteTools<P>`
 

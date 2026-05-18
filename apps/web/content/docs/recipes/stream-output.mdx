@@ -15,7 +15,7 @@ const res = await fetch("http://127.0.0.1:3001/runs/stream", {
       dawn: {
         mode: "agent",
         route_id: "/hello/[tenant]",
-        route_path: "/hello/acme",
+        route_path: "src/app/(public)/hello/[tenant]/index.ts",
       },
     },
     on_completion: "delete",
@@ -57,5 +57,5 @@ while (true) {
 <RelatedCards items={[
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "protocol endpoints and the assistant-id format" },
   { href: "/docs/retry", title: "Retry", subtitle: "streaming retry semantics" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "the same envelope works against LangSmith" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "building deployable route artifacts" },
 ]} />

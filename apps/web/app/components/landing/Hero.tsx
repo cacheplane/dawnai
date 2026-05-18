@@ -5,15 +5,9 @@ import { CodeFrame } from "../ui/CodeFrame"
 import { Eyebrow } from "../ui/Eyebrow"
 
 const ROUTE_CODE = `import { agent } from "@dawn-ai/sdk"
-import { z } from "zod"
-
-export const state = z.object({
-  tenant: z.string(),
-  question: z.string(),
-})
 
 export default agent({
-  model: "openai:gpt-4o-mini",
+  model: "gpt-4o-mini",
   systemPrompt: "Answer for {tenant}.",
 })`
 

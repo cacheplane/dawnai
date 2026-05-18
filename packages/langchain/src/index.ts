@@ -1,10 +1,21 @@
-export type { AgentStreamChunk, SubagentResolver } from "./agent-adapter.js"
-export { executeAgent, streamAgent } from "./agent-adapter.js"
+export type {
+  AgentStreamChunk,
+  DawnToolDefinition,
+  SubagentResolver,
+} from "./agent-adapter.js"
+export {
+  executeAgent,
+  materializeAgentGraph,
+  streamAgent,
+} from "./agent-adapter.js"
 export { chainAdapter } from "./chain-adapter.js"
 export type { RetryOptions } from "./retry.js"
 export { isRetryableError, withRetry } from "./retry.js"
 export { materializeStateSchema } from "./state-adapter.js"
-export type { SubagentEvent, SubagentStreamContext } from "./subagent-dispatcher.js"
+export type {
+  SubagentEvent,
+  SubagentStreamContext,
+} from "./subagent-dispatcher.js"
 export {
   createSubagentStreamContext,
   dispatchSubagent,

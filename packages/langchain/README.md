@@ -4,9 +4,9 @@
 
 # @dawn-ai/langchain
 
-LangChain backend adapters Dawn uses to materialize `chain` and `agent` routes (tool conversion, streaming, retry).
+LangChain backend adapters Dawn uses to materialize `chain` and OpenAI-backed `agent` routes (tool conversion, streaming, retry).
 
-This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
+This is an internal Dawn workspace package. For Dawn documentation, see <https://github.com/cacheplane/dawnai/tree/main/apps/web/content/docs>.
 
 ## License
 

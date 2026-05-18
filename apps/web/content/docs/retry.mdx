@@ -55,9 +55,9 @@ The cap at 10 seconds prevents pathological backoff for long retry chains.
 
 ## Streaming behavior
 
-For streaming routes, retry only applies if the failure happens **before any token is yielded to the client**. Once tokens have been streamed, the partial response is committed — Dawn cannot retry a partially-emitted stream because the client has already seen content. In that case the error propagates to the SSE stream's `done` event.
+For streaming routes, retry only applies if the failure happens **before any token or event is yielded to the client**. Once content has streamed, the partial response is committed — Dawn cannot retry a partially-emitted stream because the client has already seen content. In that case the error propagates through the stream.
 
-If you need stronger retry guarantees in streaming mode, lower `baseDelay` to make the initial connection retry faster, or wrap the call at a higher level in your client.
+If you need stronger retry guarantees in streaming mode, wrap the call at a higher level in your client or use `/runs/wait` for operations where partial output is not useful.
 
 ## Abort signals
 

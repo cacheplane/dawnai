@@ -35,7 +35,7 @@ Words here. ${"word ".repeat(200)}
 const sampleRelease = `---
 title: Dawn 0.4
 description: Release notes.
-date: 2026-06-02
+date: 2026-05-18
 tags: []
 type: release
 version: 0.4.0
@@ -107,6 +107,34 @@ Body
     withFixture({ "2026-05-01-draft.mdx": draft }, (dir) => {
       expect(loadPostsFromDir(dir, { includeDrafts: false })).toHaveLength(0)
       expect(loadPostsFromDir(dir, { includeDrafts: true })).toHaveLength(1)
+    })
+  })
+
+  it("excludes future-dated posts when includeDrafts is false", () => {
+    const future = `---
+title: Future post
+description: Not published yet.
+date: 2026-06-02
+tags: []
+type: post
+author: brian
+---
+
+Body
+`
+    withFixture({ "2026-06-02-future.mdx": future }, (dir) => {
+      expect(
+        loadPostsFromDir(dir, {
+          currentDate: "2026-05-18",
+          includeDrafts: false,
+        }),
+      ).toHaveLength(0)
+      expect(
+        loadPostsFromDir(dir, {
+          currentDate: "2026-05-18",
+          includeDrafts: true,
+        }),
+      ).toHaveLength(1)
     })
   })
 })

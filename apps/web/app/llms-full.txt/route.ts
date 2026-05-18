@@ -4,24 +4,19 @@ import path, { join } from "node:path"
 import { NextResponse } from "next/server"
 import { PROMPTS } from "../../content/prompts"
 import { getAllPosts } from "../components/blog/post-index"
+import { DOCS_PAGES } from "../components/docs/nav"
 
 const CONTENT_ROOT = path.join(process.cwd(), "content")
-
-const DOCS_PAGES = [
-  { title: "Getting Started", path: "docs/getting-started.mdx" },
-  { title: "Routes", path: "docs/routes.mdx" },
-  { title: "Tools", path: "docs/tools.mdx" },
-  { title: "State", path: "docs/state.mdx" },
-  { title: "Testing", path: "docs/testing.mdx" },
-  { title: "Dev Server", path: "docs/dev-server.mdx" },
-  { title: "Deployment", path: "docs/deployment.mdx" },
-  { title: "CLI Reference", path: "docs/cli.mdx" },
-]
 
 const TEMPLATES = [{ title: "AGENTS.md template", path: "templates/AGENTS.md" }]
 
 async function readContent(relPath: string): Promise<string> {
   return readFile(path.join(CONTENT_ROOT, relPath), "utf8")
+}
+
+function docHrefToContentPath(href: string): string {
+  const slug = href.replace(/^\/docs\/?/, "")
+  return slug === "recipes" ? "docs/recipes/index.mdx" : `docs/${slug}.mdx`
 }
 
 async function buildLlmsFull(): Promise<string> {
@@ -44,8 +39,15 @@ async function buildLlmsFull(): Promise<string> {
     "",
   ]
 
-  for (const { title, path: p } of DOCS_PAGES) {
-    sections.push(`### ${title}`, "", await readContent(p), "", "---", "")
+  for (const page of DOCS_PAGES) {
+    sections.push(
+      `### ${page.label}`,
+      "",
+      await readContent(docHrefToContentPath(page.href)),
+      "",
+      "---",
+      "",
+    )
   }
 
   sections.push("## Task-Specific Prompts", "")

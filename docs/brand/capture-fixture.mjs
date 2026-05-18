@@ -6,7 +6,7 @@
 //      api.openai.com and saves the response body to disk.
 //   2. Scaffold a temp Dawn app under /tmp/dawn-demo-capture-$$ using
 //      `pnpm create dawn-ai-app` (template: basic).
-//   3. Run `pnpm exec dawn run "src/app/(public)/hello/[tenant]"` against the
+//   3. Run `pnpm exec dawn run "/hello/[tenant]"` against the
 //      proxy with OPENAI_BASE_URL set. ChatOpenAI honors OPENAI_BASE_URL.
 //   4. Write the captured response to docs/brand/quickstart-fixture.json.
 //   5. Always clean up the temp app on exit.
@@ -217,7 +217,7 @@ async function main() {
 
 		await runWithInput(
 			"pnpm",
-			["exec", "dawn", "run", "hello/[tenant]"],
+			["exec", "dawn", "run", "/hello/[tenant]"],
 			{
 				cwd: appDir,
 				env: {

@@ -20,9 +20,9 @@ const ITEMS = [
     answer: (
       <p>
         Dawn is a meta-framework. LangGraph.js is the runtime that actually executes your agents.
-        Dawn compiles routes, tools, and state into LangGraph constructs at build time. You can read
-        the generated StateGraph, drop into raw LangGraph for any node, or eject entirely — your
-        graphs are valid LangGraph code without Dawn.
+        Dawn discovers routes, tools, and state, then writes LangGraph-compatible deployment
+        artifacts at build time. You can drop into raw LangGraph by named-exporting a graph route
+        whenever you need direct control.
       </p>
     ),
   },
@@ -73,9 +73,10 @@ const ITEMS = [
     question: "Can we use Dawn with hosted LangGraph platforms?",
     answer: (
       <p>
-        Yes. Dawn produces standard LangGraph.js graphs that you can deploy anywhere LangGraph runs
-        — your own infrastructure, LangChain's hosted platform, or a serverless target. Dawn doesn't
-        introduce a hosting dependency.
+        Yes, with the deployment target doing the runtime work. `dawn build` produces
+        LangGraph-compatible entry files and `langgraph.json`; LangSmith can consume those directly,
+        and self-hosted setups should run the generated artifacts in their own LangGraph runtime.
+        Dawn doesn't introduce a hosting dependency.
       </p>
     ),
   },
@@ -84,9 +85,9 @@ const ITEMS = [
     question: "How does Dawn affect our LangSmith / observability setup?",
     answer: (
       <p>
-        Unchanged. Dawn-compiled graphs report to LangSmith (and any OpenTelemetry-compatible
-        observability tool) using the same hooks LangGraph already provides. You don't reconfigure
-        tracing because you're using Dawn.
+        Dawn does not proxy LangSmith. Raw graph and chain routes keep whatever tracing setup you
+        already configure through LangGraph or LangChain. The local Dawn dev server also loads
+        LangSmith tracing env vars when present.
       </p>
     ),
   },
@@ -96,8 +97,9 @@ const ITEMS = [
     answer: (
       <p>
         Nothing. Dawn is MIT-licensed open source with no paid tier, no usage meter, no hosted
-        service to sign up for. You bring your own model provider and your own deployment target —
-        those costs are yours and flow directly to the providers you choose.
+        service to sign up for. The built-in `agent()` materialization path is OpenAI-backed today;
+        raw graph and chain routes can instantiate other providers directly. Provider and deployment
+        costs are yours and flow directly to the services you choose.
       </p>
     ),
   },

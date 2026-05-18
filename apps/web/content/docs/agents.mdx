@@ -4,7 +4,7 @@ An agent is the default scaffolded route in Dawn — an LLM-driven workflow that
 
 ## A minimal agent
 
-A route's `index.ts` exports an agent created by `agent({ model, systemPrompt })`. Tools in the sibling `tools/` directory are auto-registered; the LLM picks when to call them.
+A route's `index.ts` exports an agent created by `agent({ model, systemPrompt })`. Tools in the sibling `tools/` directory are auto-discovered and wired into the generated graph; the LLM picks when to call them.
 
 <CodeGroup>
 ```ts title="src/app/(public)/hello/[tenant]/index.ts"
@@ -24,7 +24,7 @@ export default async (input: { readonly tenant: string }) => {
 ```
 </CodeGroup>
 
-Tools live next to the agent — `index.ts` is the agent entry, and any TS file in `tools/` is auto-bound to it. Param types are inferred from the function signature at `dawn build` time and made available to the agent.
+Tools live next to the agent — `index.ts` is the agent entry, and any TS file in `tools/` is discovered for it. Param types are inferred from the function signature at `dawn build` time and made available to the generated graph.
 
 ## When to pick an agent
 
@@ -39,7 +39,7 @@ A route's `index.ts` exports exactly one of these. You can mix shapes across rou
 
 ## Tool auto-binding
 
-Any TypeScript file in a route's `tools/` directory is auto-registered with the agent. No manual `tools: [...]` config — Dawn discovers them at build time.
+Any TypeScript file in a route's `tools/` directory is discovered for the agent. No manual `tools: [...]` config — Dawn wires them into the generated graph at build time.
 
 ```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
 export default async (input: { readonly tenant: string }) => {
@@ -53,7 +53,7 @@ See [Tools](/docs/tools) for the full input/output rules and the generated decla
 
 ## Retry
 
-Agent calls accept a `retry` config that wraps every tool invocation:
+Agent calls accept a `retry` config for transient route execution failures:
 
 ```ts title="src/app/.../index.ts"
 export default agent({
@@ -63,11 +63,11 @@ export default agent({
 })
 ```
 
-This applies to tool calls and the model call itself. See [Retry](/docs/retry) for backoff strategy, what's retried, and per-tool overrides.
+See [Retry](/docs/retry) for the backoff strategy, what is retried, and the streaming caveat. Dawn does not expose per-tool retry overrides today.
 
 ## Streaming
 
-By default, tool results stream back through the dev server. The deployment protocol exposes streaming via `/runs/stream` and the LangSmith contract. See [Dev Server](/docs/dev-server) for the protocol details.
+The local dev server exposes streaming via `/runs/stream`. See [Dev Server](/docs/dev-server) for the protocol details.
 
 ## Related
 

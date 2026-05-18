@@ -14,8 +14,8 @@ Dawn writes those conventions once. You write the agent.
 - A *route* is a folder. Its path is the agent endpoint.
 - A route's `index.ts` exports one of: `agent`, `workflow`, `graph`, `chain`.
 - *Tools* live next to routes. Their parameter types are inferred at build time.
-- *State* is a typed shape per route. Dynamic segments become fields.
-- *Middleware* runs before the route. Same shape as Next.js middleware.
+- *State* is the JSON payload passed through the route runtime.
+- *Middleware* is an optional app-level request gate for the local Dawn runtime.
 - LangGraph runs the graph. Dawn does everything else.
 
 ## The pieces
@@ -26,25 +26,25 @@ A *route entry* is the route's default behavior. Each route has exactly one `ind
 
 *Tools* are TypeScript files in a route's `tools/` directory. Each tool is a default-exported async function. Dawn reads each tool's parameter type at build time and turns it into a JSON schema. Agents call tools by name; the model picks when.
 
-*State* is a typed shape declared in `state.ts` next to the route. Dynamic segments — `[tenant]`, `[...rest]` — become fields on that shape automatically. Tools and route entries read state through a typed `RuntimeContext`.
+*State* is an optional typed shape declared in `state.ts` next to the route. Dynamic segments — `[tenant]`, `[...rest]` — are preserved in the route id and generated route metadata; callers pass the corresponding values in the JSON input they send to the runtime.
 
-*Middleware* runs before the route entry. Same semantics as Next.js middleware: auth, logging, retry, rate limits. Lives in `middleware.ts` at any level of the route tree; nearest-ancestor wins.
+*Middleware* runs before route execution in the local Dawn runtime. It lives at `src/middleware.ts` (or root `middleware.ts`) and can reject a request or attach request-scoped context for tools.
 
 ## The runtime
 
 A typical request through Dawn looks like this:
 
 ```text
-$ dawn run "/hello/acme"
+$ echo '{"tenant":"acme"}' | dawn run "/hello/[tenant]"
         │
         ▼
-   pathname match    →   src/app/(public)/hello/[tenant]/
+   route id match    →   src/app/(public)/hello/[tenant]/index.ts
         │
         ▼
-   state init        →   { tenant: "acme" }
+   input state       →   { tenant: "acme" }
         │
         ▼
-   middleware chain  →   middleware.ts (auth, logging, ...)
+   middleware        →   src/middleware.ts (auth, request context, ...)
         │
         ▼
    route entry       →   index.ts (agent | workflow | graph | chain)
@@ -58,10 +58,10 @@ $ dawn run "/hello/acme"
 
 Each arrow is real code:
 
-1. **Pathname match.** Dawn's router resolves the path against the file tree. Route groups (`(public)/`) drop from the path. Dynamic segments capture into state.
-2. **State init.** A typed object is built from captured segments, optional defaults from `state.ts`, and any incoming payload.
-3. **Middleware chain.** The nearest `middleware.ts` runs. It can short-circuit the request, mutate state, or pass through with added context.
-4. **Route entry.** The exported `agent`, `workflow`, `graph`, or `chain` runs. Dawn provides the typed `RuntimeContext` with auto-bound tools.
+1. **Route id match.** Dawn resolves the parameterized route id against the discovered file tree. Route groups (`(public)/`) drop from the path, so `src/app/(public)/hello/[tenant]/index.ts` becomes `/hello/[tenant]`.
+2. **Input state.** The JSON input is passed to the route. Agent routes may apply defaults from `state.ts`; workflow, graph, and chain routes receive the runtime input for their adapter.
+3. **Middleware.** The app-level middleware runs when present. It can short-circuit the request or pass through with request-scoped context for tools.
+4. **Route entry.** The exported `agent`, `workflow`, `graph`, or `chain` runs. Dawn provides the typed `RuntimeContext` with the route's discovered tools.
 5. **Tool calls.** Tools called via `ctx.tools.<name>` are typechecked against the schemas Dawn generated at build time.
 6. **Typed output.** The route returns a typed value. Dawn streams or returns it depending on the call (`dawn run`, `/runs/wait`, `/runs/stream`).
 
@@ -69,9 +69,9 @@ Each arrow is real code:
 
 Dawn does most of its work at *build time*.
 
-`dawn build` and `dawn typegen` walk your routes, infer tool parameter types from function signatures, and emit `dawn.generated.d.ts`. That generated file is the route registry, the tool registry, and the typed `RouteTools<P>` map. After build, your editor can autocomplete `ctx.tools.greet` and complain when a tool's signature drifts from its caller.
+`dawn build` and `dawn typegen` walk your routes, infer tool parameter types from function signatures, and emit `.dawn/dawn.generated.d.ts`. That generated file is the route registry, the tool registry, and the typed `RouteTools<P>` map. After build, your editor can autocomplete `ctx.tools.greet` and complain when a tool's signature drifts from its caller.
 
-At *runtime*, `dawn run` and `dawn dev` execute. There is no Zod schema parse, no manual `tools: [...]` array, no per-route registration. The build-time types and runtime dispatcher are wired up by Dawn — you write the agent.
+At *runtime*, `dawn run` and `dawn dev` execute. There is no manual `tools: [...]` array and no per-route registration. The build-time types and runtime dispatcher are wired up by Dawn — you write the agent.
 
 ## Where Dawn ends and LangGraph begins
 
@@ -83,7 +83,7 @@ The boundary is sharp. Dawn does not replace LangGraph. It surrounds it.
 | Type inference for tools and state | StateGraph, channels     |
 | Dev server with HMR                | Persistence and resume   |
 | The CLI (`dawn dev`, `dawn run`)   | LangSmith deploy         |
-| Generated `dawn.generated.d.ts`    | LangSmith integration    |
+| Generated `.dawn/dawn.generated.d.ts` | LangSmith integration    |
 
 **Dawn deletes the boilerplate. Not your stack.**
 

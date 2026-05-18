@@ -15,10 +15,11 @@ This guide is for engineers working inside the Dawn monorepo. It covers the curr
 ## Package Responsibilities
 
 - `@dawn-ai/core` owns app discovery, config loading, validation, and route type generation.
-- `@dawn-ai/sdk` owns the backend-neutral author-facing contract: types, helpers, runtime context, and tool authoring.
-- `@dawn-ai/langgraph` is the LangGraph adapter that implements the `@dawn-ai/sdk` contract and wires it to LangGraph.
+- `@dawn-ai/sdk` owns the author-facing contract: types, helpers, runtime context, middleware, and tool authoring.
+- `@dawn-ai/langgraph` owns LangGraph-specific route module contracts and adapter code.
+- `@dawn-ai/langchain` owns LCEL chain support and OpenAI-backed `agent()` materialization.
 - `@dawn-ai/cli` owns the user-facing commands and the local runtime behavior.
-- `create-dawn-app` owns app scaffolding.
+- `create-dawn-ai-app` owns app scaffolding.
 - `@dawn-ai/devkit` owns shared template and file-generation helpers.
 - `@dawn-ai/config-typescript` and `@dawn-ai/config-biome` own the shared workspace configuration packages.
 
@@ -33,7 +34,7 @@ This guide is for engineers working inside the Dawn monorepo. It covers the curr
 For local authoring work, the canonical contributor-local path is:
 
 ```bash
-pnpm --filter create-dawn-app build
+pnpm --filter create-dawn-ai-app build
 node packages/create-dawn-app/dist/bin.js ../my-dawn-app --mode internal
 cd ../my-dawn-app
 pnpm install
@@ -43,7 +44,7 @@ From that generated app root, the supported contributor-local commands are:
 
 ```bash
 pnpm exec dawn verify
-pnpm exec dawn run "src/app/(public)/hello/[tenant]"
+echo '{"tenant":"acme"}' | pnpm exec dawn run '/hello/[tenant]'
 pnpm exec dawn test
 pnpm exec dawn dev
 ```
@@ -53,7 +54,7 @@ The generated `basic` app now demonstrates the route authoring lane with:
 - `src/app/(public)/hello/[tenant]/index.ts`
 - `src/app/(public)/hello/[tenant]/tools/greet.ts`
 
-Use this path only when you intentionally want the generated app wired to the local Dawn checkout. The public user path remains `pnpm create dawn-app`.
+Use this path only when you intentionally want the generated app wired to the local Dawn checkout. The public user path remains `pnpm create dawn-ai-app`.
 
 ## Common Commands
 

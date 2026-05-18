@@ -16,14 +16,14 @@ The meta-framework for LangGraph. Author agents and workflows as filesystem rout
 
 ## Why Dawn?
 
-- **Kill the graph boilerplate.** Export one `agent({ model, systemPrompt })` descriptor. Dawn discovers it, binds route-local tools, and emits a `langgraph.json` package ready for LangSmith.
+- **Kill the graph boilerplate.** Export one `agent({ model, systemPrompt })` descriptor. Dawn discovers it, wires route-local tools into the generated graph, and emits a `langgraph.json` package ready for LangSmith.
 - **Real project structure.** Filesystem routes under `src/app/` — colocate state schemas, tools, middleware, and tests next to the route they belong to. No more ad-hoc folders.
-- **A local dev loop LangGraph never shipped.** `dawn dev` runs your routes locally with the same semantics as production. Iterate in seconds, not deploys.
+- **A local dev loop for Dawn routes.** `dawn dev` runs your routes locally with LangSmith-style endpoints. Iterate in seconds, then verify the generated deployment artifact before shipping.
 - **Typed end to end.** Route params, state, and tool I/O are generated as TypeScript types. `dawn verify` is your pre-deploy gate.
 
 ## Without Dawn / With Dawn
 
-Same `langgraph.json`, deployable to LangSmith. ~4× less code to author.
+Same LangGraph deployment shape, less code to author.
 
 ### Without Dawn
 
@@ -110,19 +110,19 @@ pnpm exec dawn verify
 3. Run the scaffolded route. The route path must be quoted because it contains `(`, `)`, and `[]`.
 
 ```bash
-echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]"
+echo '{"tenant":"acme"}' | pnpm exec dawn run '/hello/[tenant]'
 ```
 
 4. Optionally start the local runtime in one terminal and send the same route through `--url` from another terminal.
 
 ```bash
 pnpm exec dawn dev --port 3001
-echo '{"tenant":"acme"}' | pnpm exec dawn run "src/app/(public)/hello/[tenant]" --url http://127.0.0.1:3001
+echo '{"tenant":"acme"}' | pnpm exec dawn run '/hello/[tenant]' --url http://127.0.0.1:3001
 ```
 
 ## 30-Second Route
 
-Dawn routes live under `src/app` and export one runtime entry. New agent routes should use the `agent()` descriptor from `@dawn-ai/sdk`; Dawn discovers the route, binds route-local tools, generates types, and produces a `langgraph.json` package for LangSmith.
+Dawn routes live under `src/app` and export one runtime entry. New agent routes should use the `agent()` descriptor from `@dawn-ai/sdk`; Dawn discovers the route, wires route-local tools into the generated graph, generates types, and produces a `langgraph.json` package for LangSmith.
 
 ```ts
 import { agent } from "@dawn-ai/sdk"
@@ -138,14 +138,14 @@ Add `state.ts` for a route state schema, `tools/*.ts` for route-local tools, `mi
 
 ## Learn more
 
-- [Getting started](https://dawn-ai.org/docs/getting-started)
-- [Routes](https://dawn-ai.org/docs/routes)
-- [Tools](https://dawn-ai.org/docs/tools)
-- [State](https://dawn-ai.org/docs/state)
-- [CLI](https://dawn-ai.org/docs/cli)
-- [Dev server](https://dawn-ai.org/docs/dev-server)
-- [Testing](https://dawn-ai.org/docs/testing)
-- [Deployment](https://dawn-ai.org/docs/deployment)
+- [Getting started](apps/web/content/docs/getting-started.mdx)
+- [Routes](apps/web/content/docs/routes.mdx)
+- [Tools](apps/web/content/docs/tools.mdx)
+- [State](apps/web/content/docs/state.mdx)
+- [CLI](apps/web/content/docs/cli.mdx)
+- [Dev server](apps/web/content/docs/dev-server.mdx)
+- [Testing](apps/web/content/docs/testing.mdx)
+- [Deployment](apps/web/content/docs/deployment.mdx)
 
 ---
 

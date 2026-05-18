@@ -1,6 +1,6 @@
 # CLI Reference
 
-Dawn ships a single `dawn` binary with eight commands: `build`, `check`, `dev`, `routes`, `run`, `test`, `typegen`, and `verify`. Every command reads `dawn.config.ts` from the current working directory (or from `--cwd <path>`) and operates on the app rooted there.
+Dawn ships a single `dawn` binary with eight commands: `build`, `check`, `dev`, `routes`, `run`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
 
 ## `dawn check`
 
@@ -13,7 +13,7 @@ dawn check
 Internally, `dawn check` loads `dawn.config.ts`, resolves the app root, runs `discoverRoutes`, and parses each route's tool definitions with `discoverToolDefinitions`. It surfaces:
 
 - A `dawn.config.ts` that fails to load.
-- Any route whose `index.ts` exports more than one (or none) of `agent`, `workflow`, `graph`, `chain`.
+- Any discovered route whose `index.ts` exports more than one of `agent`, `workflow`, `graph`, `chain`.
 - Any tool file that fails to parse.
 
 Output is a `Dawn app is valid: N routes discovered.` line followed by a per-route `- <pathname> (<kind>)` summary. Exits non-zero on any violation with a detailed message.
@@ -54,7 +54,7 @@ Use this to confirm that route groups and dynamic segments are being parsed the 
 
 ## `dawn typegen`
 
-Regenerates `dawn.generated.d.ts` and per-route `.dawn/routes/<routeSlug>/tools.json` schema manifests.
+Regenerates `.dawn/dawn.generated.d.ts` plus per-route `.dawn/routes/<routeSlug>/tools.json` and `.dawn/routes/<routeSlug>/state.json` manifests.
 
 ```
 dawn typegen
@@ -79,7 +79,7 @@ Flags:
 - `--cwd <path>` — operate on a different app root.
 - `--clean` — wipe `.dawn/build/` before writing.
 
-The generated `langgraph.json` includes `graphs` (keyed by `<routeId>#<kind>`), `dependencies: ["."]`, `env` (`.env.example` if present, else `.env`), and `node_version: "22"`. For `agent` routes, the generated entry calls `agent.bindTools([...])` with every tool discovered for the route.
+The generated `langgraph.json` includes `graphs` (keyed by `<routeId>#<kind>`), `dependencies: ["."]`, `env` (`.env.example` if present, else `.env`), and `node_version: "22"`. For `agent` routes, the generated entry imports the default `agent()` descriptor, materializes it as a LangGraph graph, and wires in every discovered route tool.
 
 See [Deployment](/docs/deployment) for the full bridge.
 
@@ -95,7 +95,7 @@ Flags:
 - `--cwd <path>` — operate on a different app root.
 - `--url <url>` — run against a live dev server instead of the in-process runtime.
 
-The route argument can be the parameterized id (`/hello/[tenant]`) or the concrete pathname (`/hello/acme`); the input JSON's matching field supplies the dynamic-segment value.
+The route argument can be the parameterized id (`/hello/[tenant]`) or the relative route entry file path (`src/app/(public)/hello/[tenant]/index.ts`). Dynamic segment values come from the JSON input.
 
 <Callout type="tip" title="Quote the path">
   Route paths contain `(`, `)`, `[`, and `]`. Always quote them in shell so they aren't expanded.
@@ -142,7 +142,7 @@ Non-zero exit codes from underlying tools (Commander, child processes) may be pr
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/getting-started", title: "Getting Started", subtitle: "dawn create, dawn verify, and dawn run in a first-run walkthrough" },
+  { href: "/docs/getting-started", title: "Getting Started", subtitle: "create-dawn-ai-app, dawn verify, and dawn run in a first-run walkthrough" },
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "full protocol reference for dawn dev" },
   { href: "/docs/testing", title: "Testing", subtitle: "scenario authoring for dawn test" },
   { href: "/docs/deployment", title: "Deployment", subtitle: "dawn build and dawn verify in the deploy workflow" },

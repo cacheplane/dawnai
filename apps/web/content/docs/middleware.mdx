@@ -104,7 +104,9 @@ This keeps the request lifecycle predictable and avoids ordering questions about
 
 ## Where middleware runs
 
-Middleware runs in the dev server (`dawn dev`) and is included in the deployment artifacts produced by `dawn build`. Both `/runs/wait` and `/runs/stream` invoke middleware before any route executes. The `/healthz` endpoint bypasses middleware (it's a liveness probe).
+Middleware runs in the local dev server (`dawn dev`). Both local `/runs/wait` and `/runs/stream` requests invoke middleware before any route executes. The `/healthz` endpoint bypasses middleware because it is a liveness probe.
+
+`dawn build` does not currently materialize this middleware into the generated LangSmith entry files. Treat middleware as a local Dawn runtime feature unless your deployment target wires it in separately.
 
 ## Errors thrown from middleware
 

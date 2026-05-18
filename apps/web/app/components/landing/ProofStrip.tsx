@@ -81,7 +81,7 @@ export async function ProofStrip() {
 
           <div className="flex items-center gap-3">
             <span className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-dim hidden md:inline">
-              Works with
+              Graph/chain providers
             </span>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <ProviderMark

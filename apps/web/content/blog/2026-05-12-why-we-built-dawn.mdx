@@ -20,7 +20,7 @@ That is the gap Dawn was built to close.
 
 - dawn is a meta-framework for LangGraph, not a replacement for it
 - the runtime, the channels, the checkpointer, LangSmith — all unchanged
-- `dawn build` emits a `langgraph.json` that deploys to LangSmith without translation
+- `dawn build` emits a generated `langgraph.json` plus route entry files for LangSmith-style deployment
 - the thing dawn replaces is the boilerplate, the registry files, and the implicit project layout
 - agent code should feel like Next.js code: filesystem routes, inferred types, a real dev loop
 
@@ -60,7 +60,7 @@ Dawn is not a competitor to LangGraph.
 
 It is the layer above it.
 
-The runtime, the graph compiler, the checkpointer, LangSmith — all unchanged. The output of `dawn build` is a `langgraph.json` that LangSmith deploys without translation.
+The runtime, the graph compiler, the checkpointer, LangSmith — all unchanged. The output of `dawn build` is a generated `langgraph.json` plus route entry files that LangSmith-style runtimes consume.
 
 What Dawn replaces is the *code around* the graph.
 
@@ -120,7 +120,7 @@ export default agent({
 export default async ({ name }: { name: string }) => `Hello, ${name}!`
 ```
 
-`dawn build` produces the `langgraph.json`. The `greet` tool is bound to the agent because it lives under `tools/`. The `[tenant]` segment becomes a typed field on state.
+`dawn build` produces the deployment artifacts. The `greet` tool is wired into the generated agent graph because it lives under `tools/`. The `[tenant]` segment stays in the route id; pass the tenant value in the route input when invoking `/hello/[tenant]`.
 
 Same deploy target. Roughly a quarter of the code.
 

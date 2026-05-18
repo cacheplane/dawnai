@@ -6,7 +6,7 @@
 
 Shared TypeScript compiler configurations (`base`, `library`, `node`, `nextjs`) for Dawn workspace packages.
 
-This is an internal Dawn workspace package. For Dawn documentation, see <https://dawn-ai.org>.
+This is an internal Dawn workspace package. For Dawn documentation, see <https://github.com/cacheplane/dawnai/tree/main/apps/web/content/docs>.
 
 ## License
 

@@ -19,8 +19,8 @@ function XIcon() {
 
 const NOT_DOING = [
   "Dawn is not a runtime — your graphs run on LangGraph.js, full stop.",
-  "Dawn does not mediate model calls — you talk to OpenAI / Anthropic / your provider directly.",
-  "Dawn does not host your agents — deploy anywhere Node runs.",
+  "Dawn does not proxy provider calls — raw graph and chain routes use the clients you instantiate.",
+  "Dawn does not host your agents — it emits artifacts for your deployment target.",
   "Dawn does not lock you in — eject to raw StateGraph at any time without rewriting.",
 ]
 
@@ -52,9 +52,9 @@ export function KeepTheRuntime() {
               your app.
             </p>
             <p>
-              If Dawn disappears tomorrow, your graphs are still valid LangGraph.js. Your model
-              calls are still your model calls. Your deployment target is still yours. Dawn is the
-              scaffolding between you and the runtime — not a replacement for it.
+              If Dawn disappears tomorrow, your raw graphs are still valid LangGraph.js. Your
+              provider clients in graph and chain routes are still your provider clients. Dawn is
+              the scaffolding between you and the runtime — not a replacement for it.
             </p>
           </div>
 

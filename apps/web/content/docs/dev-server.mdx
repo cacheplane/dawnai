@@ -1,6 +1,6 @@
 # Dev Server
 
-`dawn dev` starts a local runtime that speaks the **LangSmith protocol** natively. It hot-reloads routes and tools on every file save, and accepts the same `/runs/wait` and `/runs/stream` endpoints your production deployment will.
+`dawn dev` starts a local runtime with LangSmith-style `/runs/wait` and `/runs/stream` endpoints. It watches route and tool files, regenerates types when signatures change, and restarts the child route runtime for structural changes.
 
 ## Starting the server
 
@@ -24,7 +24,7 @@ With the server running in one terminal, you can hit it from another:
 echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]' --url http://127.0.0.1:3001
 ```
 
-`dawn run` resolves the pathname to an `assistant_id` of the form `<routeId>#<kind>` (e.g. `/hello/[tenant]#agent`), POSTs to `/runs/wait`, and prints the result. This is the exact request path a production LangSmith deployment would take.
+`dawn run` resolves the route id to an `assistant_id` of the form `<routeId>#<kind>` (e.g. `/hello/[tenant]#agent`), POSTs to `/runs/wait`, and prints the result.
 
 ## Protocol endpoints
 
@@ -53,7 +53,7 @@ The dev server handles three endpoints. Anything else returns 404.
         "dawn": {
           "mode": "agent",
           "route_id": "/hello/[tenant]",
-          "route_path": "/hello/acme"
+          "route_path": "src/app/(public)/hello/[tenant]/index.ts"
         }
       },
       "on_completion": "delete"
@@ -76,7 +76,7 @@ The `assistant_id` format `<routeId>#<kind>` is the same format `dawn build` wri
 
 ## Middleware
 
-`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every `/runs/wait` and `/runs/stream` request. It can short-circuit a request with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
+`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every local `/runs/wait` and `/runs/stream` request handled by `dawn dev`. It can short-circuit a request with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
 
 `MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Middleware](/docs/middleware) for the full reference.
 
@@ -102,14 +102,14 @@ When you save a file under `src/app/`, the dev server:
 
 ## Logging
 
-Every request is logged to stdout with the pathname, assistant id, duration, and result status. Set `DAWN_DEV_SHUTDOWN_TIMEOUT_MS` to override the child-restart grace window (default ~5s).
+The parent process keeps the HTTP server alive while child route runtimes restart. Set `DAWN_DEV_SHUTDOWN_TIMEOUT_MS` to override the child-restart grace window.
 
 ## Related
 
 <RelatedCards items={[
   { href: "/docs/testing", title: "Testing", subtitle: "run scenarios against a live dev server via run.url" },
   { href: "/docs/deployment", title: "Deployment", subtitle: "dawn build and the LangSmith handoff" },
-  { href: "/docs/middleware", title: "Middleware", subtitle: "how src/middleware.ts gates requests in dev and production" },
+  { href: "/docs/middleware", title: "Middleware", subtitle: "how src/middleware.ts gates local runtime requests" },
   { href: "/docs/cli", title: "CLI", subtitle: "dawn dev flags and all other commands" },
   { href: "/docs/recipes/stream-output", title: "Stream output", subtitle: "recipe consuming /runs/stream SSE frames" },
 ]} />
