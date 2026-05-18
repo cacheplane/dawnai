@@ -1,4 +1,8 @@
-import { dispatchSubagent, type SubagentEvent } from "./subagent-dispatcher.js"
+import {
+  dispatchSubagent,
+  type SubagentEvent,
+  type SubagentStreamContext,
+} from "./subagent-dispatcher.js"
 
 export interface SubagentResolverResult {
   readonly routeId: string
@@ -15,6 +19,11 @@ export interface BridgeOptions {
   readonly subagentResolver: (leafName: string) => SubagentResolverResult | undefined
   readonly writer: (event: SubagentEvent) => void
   readonly parentConfig?: Record<string, unknown>
+  /**
+   * Shared counter that gates the parent's `on_chat_model_stream` emissions
+   * while a child run is active. See `SubagentStreamContext`.
+   */
+  readonly streamContext?: SubagentStreamContext
 }
 
 export interface BridgedTaskTool {
@@ -51,6 +60,7 @@ export function bridgeSubagentTool(options: BridgeOptions): BridgedTaskTool {
         callId: generateCallId(),
         childRouteId: resolved.routeId,
         subagentName: subagent,
+        ...(options.streamContext ? { streamContext: options.streamContext } : {}),
       })
       return result.finalText
     },

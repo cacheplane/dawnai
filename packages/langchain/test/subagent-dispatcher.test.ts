@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { dispatchSubagent } from "../src/subagent-dispatcher.js"
+import { createSubagentStreamContext, dispatchSubagent } from "../src/subagent-dispatcher.js"
 
 describe("dispatchSubagent — happy path", () => {
   it("calls the child graph with a fresh state seeded by input and returns the final assistant text", async () => {
@@ -366,5 +366,68 @@ describe("bridgeSubagentTool — wraps run() with dispatcher", () => {
     await taskTool.run({ subagent: "x", input: "y" }, { signal: new AbortController().signal })
 
     expect(seenConfig?.metadata?.dawn?.subagent_depth).toBe(2)
+  })
+})
+
+describe("dispatchSubagent — stream context", () => {
+  it("increments and decrements activeChildRuns around the run", async () => {
+    const seenCounts: number[] = []
+    const streamContext = createSubagentStreamContext()
+    const childGraph = {
+      invoke: vi.fn(async () => {
+        seenCounts.push(streamContext.activeChildRuns)
+        return { messages: [{ type: "ai", content: "ok", getType: () => "ai" }] }
+      }),
+    }
+    expect(streamContext.activeChildRuns).toBe(0)
+    await dispatchSubagent({
+      childGraph,
+      input: "x",
+      parentConfig: {},
+      writer: () => {},
+      callId: "c",
+      childRouteId: "/r",
+      subagentName: "r",
+      streamContext,
+    })
+    expect(seenCounts).toEqual([1])
+    expect(streamContext.activeChildRuns).toBe(0)
+  })
+
+  it("decrements activeChildRuns even when the child throws", async () => {
+    const streamContext = createSubagentStreamContext()
+    const childGraph = {
+      invoke: vi.fn(async () => {
+        throw new Error("boom")
+      }),
+    }
+    await dispatchSubagent({
+      childGraph,
+      input: "x",
+      parentConfig: {},
+      writer: () => {},
+      callId: "c",
+      childRouteId: "/r",
+      subagentName: "r",
+      streamContext,
+    })
+    expect(streamContext.activeChildRuns).toBe(0)
+  })
+
+  it("does NOT increment when depth_exceeded short-circuit fires", async () => {
+    const streamContext = createSubagentStreamContext()
+    const childGraph = { invoke: vi.fn() }
+    await dispatchSubagent({
+      childGraph,
+      input: "x",
+      parentConfig: { metadata: { dawn: { subagent_depth: 3 } } },
+      writer: () => {},
+      callId: "c",
+      childRouteId: "/r",
+      subagentName: "r",
+      streamContext,
+    })
+    expect(streamContext.activeChildRuns).toBe(0)
+    expect(childGraph.invoke).not.toHaveBeenCalled()
   })
 })
