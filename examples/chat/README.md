@@ -10,7 +10,7 @@
 - Filesystem tools (read/write/list) + bash, path-jailed to `./workspace`
 - `AGENTS.md` memory autoload — Dawn auto-injects `workspace/AGENTS.md` into the system prompt on every turn; the agent updates it via `writeFile`
 - **Planning** — `plan.md` in the route directory opts the agent into the built-in
-  `write_todos` tool, a `todos` state channel, and a `plan_update` SSE event. Open the
+  `writeTodos` tool, a `todos` state channel, and a `plan_update` SSE event. Open the
   smoke client's event log; you'll see `event: plan_update` lines whenever the agent
   updates its plan.
 - **Skills** — `src/app/chat/skills/<name>/SKILL.md` files are auto-listed in

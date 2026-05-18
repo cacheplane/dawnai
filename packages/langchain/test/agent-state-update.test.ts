@@ -56,7 +56,7 @@ describe("agent loop — state channel updates after Command-returning tool", ()
         tool_calls: [
           {
             id: "call_test_1",
-            name: "write_todos",
+            name: "writeTodos",
             args: { todos: [{ content: "first", status: "in_progress" }] },
             type: "tool_call",
           },
@@ -66,7 +66,7 @@ describe("agent loop — state channel updates after Command-returning tool", ()
     ])
 
     const writeTodosTool = {
-      name: "write_todos",
+      name: "writeTodos",
       description: "Write todos to state",
       run: (input: unknown) => {
         const validated = (input as { todos: Array<{ content: string; status: string }> }).todos

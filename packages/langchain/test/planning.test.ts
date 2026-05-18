@@ -23,14 +23,14 @@ describe("planning capability — end-to-end shape", () => {
     expect(result.contributions).toEqual([])
   })
 
-  it("contributes write_todos + todos channel + prompt fragment + transformer when plan.md is present", async () => {
+  it("contributes writeTodos + todos channel + prompt fragment + transformer when plan.md is present", async () => {
     writeFileSync(join(routeDir, "plan.md"), "")
     const registry = createCapabilityRegistry([createPlanningMarker()])
     const result = await applyCapabilities(registry, routeDir)
 
     expect(result.contributions).toHaveLength(1)
     const contrib = result.contributions[0]?.contribution
-    expect(contrib?.tools?.map((t) => t.name)).toEqual(["write_todos"])
+    expect(contrib?.tools?.map((t) => t.name)).toEqual(["writeTodos"])
     expect(contrib?.stateFields?.map((f) => f.name)).toEqual(["todos"])
     expect(contrib?.promptFragment?.placement).toBe("after_user_prompt")
     expect(contrib?.streamTransformers?.[0]?.observes).toBe("tool_result")
@@ -58,7 +58,7 @@ describe("planning capability — end-to-end shape", () => {
     expect(r2).toContain("[in_progress] x")
   })
 
-  it("transformer emits plan_update when write_todos result flows through", async () => {
+  it("transformer emits plan_update when writeTodos result flows through", async () => {
     writeFileSync(join(routeDir, "plan.md"), "")
     const registry = createCapabilityRegistry([createPlanningMarker()])
     const result = await applyCapabilities(registry, routeDir)
@@ -67,7 +67,7 @@ describe("planning capability — end-to-end shape", () => {
     const events: Array<{ event: string; data: unknown }> = []
     if (transformer) {
       for await (const out of transformer.transform({
-        toolName: "write_todos",
+        toolName: "writeTodos",
         toolOutput: { todos: [{ content: "x", status: "pending" }] },
       })) {
         events.push(out)
@@ -80,7 +80,7 @@ describe("planning capability — end-to-end shape", () => {
 })
 
 describe("planning capability — state mutation end-to-end", () => {
-  it("write_todos tool returns a Command that updates the todos channel", async () => {
+  it("writeTodos tool returns a Command that updates the todos channel", async () => {
     const routeDir = mkdtempSync(join(tmpdir(), "dawn-planning-state-"))
     writeFileSync(join(routeDir, "plan.md"), "")
 
@@ -88,7 +88,7 @@ describe("planning capability — state mutation end-to-end", () => {
       const registry = createCapabilityRegistry([createPlanningMarker()])
       const result = await applyCapabilities(registry, routeDir)
       const writeTodos = result.contributions[0]?.contribution.tools?.[0]
-      expect(writeTodos?.name).toBe("write_todos")
+      expect(writeTodos?.name).toBe("writeTodos")
 
       const newTodos = [
         { content: "first task", status: "in_progress" as const },

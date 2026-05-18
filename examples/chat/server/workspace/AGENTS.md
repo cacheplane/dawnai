@@ -13,6 +13,6 @@ matters for your project once the agent starts recording real notes.
 - Workspace tools use camelCase names: `listDir`, `readFile`, `writeFile`, `runBash`.
 - The workspace root is `examples/chat/server/workspace`. Anything outside it is
   off-limits — the tool layer path-jails reads and writes.
-- Plans live in the `todos` state channel (managed by `write_todos`), not in
+- Plans live in the `todos` state channel (managed by `writeTodos`), not in
   this file. Use this file for things that should survive across sessions; use
   planning for the current task's checklist.

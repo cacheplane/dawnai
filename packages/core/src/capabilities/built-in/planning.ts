@@ -24,9 +24,9 @@ const WRITE_TODOS_INPUT = z.object({
 
 const PLANNING_PROMPT_HEADER = `# Planning
 
-For tasks with multiple steps, maintain a plan using \`write_todos({ todos: [...] })\`.
+For tasks with multiple steps, maintain a plan using \`writeTodos({ todos: [...] })\`.
 Mark items \`in_progress\` immediately before working on them and \`completed\` when
-finished. Always include the full list — \`write_todos\` is full-replace, not incremental.`
+finished. Always include the full list — \`writeTodos\` is full-replace, not incremental.`
 
 export function createPlanningMarker(): CapabilityMarker {
   return {
@@ -36,7 +36,7 @@ export function createPlanningMarker(): CapabilityMarker {
       const seedTodos = readSeedTodos(routeDir)
 
       const writeTodos = {
-        name: "write_todos",
+        name: "writeTodos",
         description:
           "Replace the agent's plan with the given list of todos. Pass the full list every time; this tool is not incremental.",
         schema: WRITE_TODOS_INPUT,
@@ -64,7 +64,7 @@ export function createPlanningMarker(): CapabilityMarker {
       const streamTransformer: StreamTransformer = {
         observes: "tool_result",
         transform: async function* (input) {
-          if (input.toolName !== "write_todos") return
+          if (input.toolName !== "writeTodos") return
           // toolOutput shape depends on what the tool returned:
           //  - Bare object `{ todos }` (legacy / direct test invocation).
           //  - LangGraph Command instance whose `update.todos` carries the new todos
@@ -119,24 +119,24 @@ function readSeedTodos(routeDir: string): RuntimeTodo[] {
 
 function validateWriteTodosInput(input: unknown): RuntimeTodo[] {
   if (!isRecord(input)) {
-    throw new Error("write_todos: input must be an object with a `todos` array")
+    throw new Error("writeTodos: input must be an object with a `todos` array")
   }
   const todos = input.todos
   if (!Array.isArray(todos)) {
-    throw new Error("write_todos: `todos` must be an array")
+    throw new Error("writeTodos: `todos` must be an array")
   }
   return todos.map((t, i) => {
     if (!isRecord(t)) {
-      throw new Error(`write_todos: todos[${i}] must be an object`)
+      throw new Error(`writeTodos: todos[${i}] must be an object`)
     }
     const content = t.content
     const status = t.status
     if (typeof content !== "string" || content.length === 0) {
-      throw new Error(`write_todos: todos[${i}].content must be a non-empty string`)
+      throw new Error(`writeTodos: todos[${i}].content must be a non-empty string`)
     }
     if (status !== "pending" && status !== "in_progress" && status !== "completed") {
       throw new Error(
-        `write_todos: todos[${i}].status must be one of pending, in_progress, completed`,
+        `writeTodos: todos[${i}].status must be one of pending, in_progress, completed`,
       )
     }
     return { content, status }
