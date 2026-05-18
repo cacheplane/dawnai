@@ -46,7 +46,7 @@ describe("chat route — autowired capabilities", () => {
       createPlanningMarker(),
       createAgentsMdMarker(),
     ])
-    const result = await applyCapabilities(registry, ROUTE_DIR)
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined })
 
     expect(result.errors).toEqual([])
     expect(result.contributions.map((c) => c.markerName)).toEqual([
@@ -59,7 +59,7 @@ describe("chat route — autowired capabilities", () => {
     expect(existsSync(resolve(ROUTE_DIR, "plan.md"))).toBe(true)
 
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR)
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined })
     const planning = result.contributions[0]?.contribution
 
     expect(planning?.tools?.map((t) => t.name)).toEqual(["writeTodos"])
@@ -75,7 +75,7 @@ describe("chat route — autowired capabilities", () => {
     )
 
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR)
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined })
     const fragment = result.contributions[0]?.contribution.promptFragment
     const rendered = fragment?.render({}) ?? ""
 
@@ -85,7 +85,7 @@ describe("chat route — autowired capabilities", () => {
 
   it("agents-md fragment is empty when workspace/AGENTS.md is absent", async () => {
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR)
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined })
     const fragment = result.contributions[0]?.contribution.promptFragment
     expect(fragment?.render({})).toBe("")
   })
@@ -96,7 +96,7 @@ describe("chat route — autowired capabilities", () => {
 
     writeFileSync(path, "Iteration 1: tools should be camelCase")
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR)
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined })
     const fragment = result.contributions[0]?.contribution.promptFragment
 
     const first = fragment?.render({}) ?? ""
@@ -112,7 +112,7 @@ describe("chat route — autowired capabilities", () => {
 
   it("planning prompt re-renders todos from live state on each call", async () => {
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR)
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined })
     const fragment = result.contributions[0]?.contribution.promptFragment
 
     const empty = fragment?.render({ todos: [] }) ?? ""

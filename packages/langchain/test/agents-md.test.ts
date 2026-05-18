@@ -24,7 +24,10 @@ describe("agents-md capability — end-to-end shape", () => {
 
   it("always contributes a promptFragment", async () => {
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, {
+      routeManifest: { appRoot: routeDir, routes: [] },
+      descriptor: undefined,
+    })
     expect(result.contributions).toHaveLength(1)
     expect(result.contributions[0]?.contribution.promptFragment?.placement).toBe(
       "after_user_prompt",
@@ -35,7 +38,10 @@ describe("agents-md capability — end-to-end shape", () => {
     mkdirSync(join(workDir, "workspace"), { recursive: true })
     writeFileSync(join(workDir, "workspace", "AGENTS.md"), "Use pnpm, not npm.")
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, {
+      routeManifest: { appRoot: routeDir, routes: [] },
+      descriptor: undefined,
+    })
     const fragment = result.contributions[0]?.contribution.promptFragment
     const rendered = fragment?.render({}) ?? ""
     expect(rendered).toContain("# Memory")
@@ -44,7 +50,10 @@ describe("agents-md capability — end-to-end shape", () => {
 
   it("renders empty when workspace/AGENTS.md is absent", async () => {
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, {
+      routeManifest: { appRoot: routeDir, routes: [] },
+      descriptor: undefined,
+    })
     const fragment = result.contributions[0]?.contribution.promptFragment
     expect(fragment?.render({})).toBe("")
   })
@@ -54,7 +63,10 @@ describe("agents-md capability — end-to-end shape", () => {
     const path = join(workDir, "workspace", "AGENTS.md")
     writeFileSync(path, "before")
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, {
+      routeManifest: { appRoot: routeDir, routes: [] },
+      descriptor: undefined,
+    })
     const fragment = result.contributions[0]?.contribution.promptFragment
     expect(fragment?.render({})).toContain("before")
     writeFileSync(path, "after")

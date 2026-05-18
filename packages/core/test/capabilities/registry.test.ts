@@ -27,7 +27,10 @@ describe("CapabilityRegistry + applyCapabilities", () => {
         load: async () => ({ tools: [{ name: "x", run: () => undefined }] }),
       } satisfies CapabilityMarker,
     ])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, {
+      routeManifest: { appRoot: routeDir, routes: [] },
+      descriptor: undefined,
+    })
     expect(result.contributions).toEqual([])
   })
 
@@ -44,7 +47,10 @@ describe("CapabilityRegistry + applyCapabilities", () => {
         load: async () => ({ tools: [{ name: "beta", run: () => undefined }] }),
       } satisfies CapabilityMarker,
     ])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, {
+      routeManifest: { appRoot: routeDir, routes: [] },
+      descriptor: undefined,
+    })
     expect(result.contributions.map((c) => c.markerName)).toEqual(["first", "second"])
     expect(result.contributions[0]?.contribution.tools?.[0]?.name).toBe("alpha")
     expect(result.contributions[1]?.contribution.tools?.[0]?.name).toBe("beta")
@@ -66,7 +72,10 @@ describe("CapabilityRegistry + applyCapabilities", () => {
         load: async () => ({ tools: [{ name: "ok-tool", run: () => undefined }] }),
       } satisfies CapabilityMarker,
     ])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, {
+      routeManifest: { appRoot: routeDir, routes: [] },
+      descriptor: undefined,
+    })
     expect(result.contributions.map((c) => c.markerName)).toEqual(["ok"])
     expect(result.errors).toHaveLength(1)
     expect(result.errors[0]?.markerName).toBe("throwing")
@@ -82,7 +91,10 @@ describe("CapabilityRegistry + applyCapabilities", () => {
         },
       } satisfies CapabilityMarker,
     ])
-    const result = await applyCapabilities(registry, routeDir)
+    const result = await applyCapabilities(registry, routeDir, {
+      routeManifest: { appRoot: routeDir, routes: [] },
+      descriptor: undefined,
+    })
     expect(result.contributions).toEqual([])
     expect(result.errors).toHaveLength(1)
     expect(result.errors[0]?.markerName).toBe("bad-load")

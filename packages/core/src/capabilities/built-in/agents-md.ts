@@ -18,8 +18,8 @@ The block below is the live contents of \`workspace/AGENTS.md\`, re-read on ever
 export function createAgentsMdMarker(): CapabilityMarker {
   return {
     name: "agents-md",
-    detect: async () => true,
-    load: async () => ({
+    detect: async (_routeDir, _context) => true,
+    load: async (_routeDir, _context) => ({
       promptFragment: {
         placement: "after_user_prompt",
         render: () => renderMemoryFragment(workspaceAgentsMdPath()),

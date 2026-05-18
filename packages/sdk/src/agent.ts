@@ -25,18 +25,22 @@ export interface ReasoningConfig {
 
 export interface DawnAgent {
   readonly [brand]: "DawnAgent"
+  readonly description?: string
   readonly model: string
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
+  readonly subagents?: readonly DawnAgent[]
   readonly systemPrompt: string
 }
 
 import type { KnownModelId } from "./known-model-ids.js"
 
 export interface AgentConfig {
+  readonly description?: string
   readonly model: KnownModelId
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
+  readonly subagents?: readonly DawnAgent[]
   readonly systemPrompt: string
 }
 
@@ -46,6 +50,8 @@ export function agent(config: AgentConfig): DawnAgent {
     model: config.model,
     ...(config.reasoning ? { reasoning: config.reasoning } : {}),
     ...(config.retry ? { retry: config.retry } : {}),
+    ...(config.description !== undefined ? { description: config.description } : {}),
+    ...(config.subagents !== undefined ? { subagents: config.subagents } : {}),
     systemPrompt: config.systemPrompt,
   } as unknown as DawnAgent
 }
