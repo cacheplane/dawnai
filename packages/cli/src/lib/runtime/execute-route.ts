@@ -17,7 +17,7 @@ import {
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
-import { executeAgent, streamAgent, type SubagentResolver } from "@dawn-ai/langchain"
+import { executeAgent, type SubagentResolver, streamAgent } from "@dawn-ai/langchain"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
@@ -511,7 +511,9 @@ async function invokeEntry(
       ...(agentContext?.streamTransformers && agentContext.streamTransformers.length > 0
         ? { streamTransformers: agentContext.streamTransformers }
         : {}),
-      ...(agentContext?.subagentResolver ? { subagentResolver: agentContext.subagentResolver } : {}),
+      ...(agentContext?.subagentResolver
+        ? { subagentResolver: agentContext.subagentResolver }
+        : {}),
     })
   }
 
