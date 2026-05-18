@@ -245,6 +245,66 @@ describe("dispatchSubagent — dawnStream path", () => {
   })
 })
 
+describe("dispatchSubagent — config isolation", () => {
+  it("does not leak parent callbacks/tags/runId into the child config", async () => {
+    let seenConfig: Record<string, unknown> | undefined
+    const childGraph = {
+      invoke: vi.fn(async (_input: unknown, config: unknown) => {
+        seenConfig = config as Record<string, unknown>
+        return { messages: [{ type: "ai", content: "ok", getType: () => "ai" }] }
+      }),
+    }
+    const sentinel = {}
+    await dispatchSubagent({
+      childGraph,
+      input: "x",
+      parentConfig: {
+        callbacks: [sentinel],
+        runId: "parent-run-id",
+        tags: ["parent-tag"],
+        runName: "ParentName",
+        metadata: { dawn: { thread_id: "t-1" } },
+      },
+      writer: () => {},
+      callId: "c",
+      childRouteId: "/r",
+      subagentName: "r",
+    })
+    expect(seenConfig?.callbacks).toBeUndefined()
+    expect(seenConfig?.runId).toBeUndefined()
+    expect(seenConfig?.tags).toBeUndefined()
+    expect(seenConfig?.runName).toBeUndefined()
+    // Dawn-namespaced metadata IS forwarded
+    const meta = seenConfig?.metadata as
+      | { dawn?: { thread_id?: string; subagent_depth?: number; parent_call_id?: string } }
+      | undefined
+    expect(meta?.dawn?.thread_id).toBe("t-1")
+    expect(meta?.dawn?.subagent_depth).toBe(1)
+    expect(meta?.dawn?.parent_call_id).toBe("c")
+  })
+
+  it("forwards the abort signal", async () => {
+    let seenConfig: Record<string, unknown> | undefined
+    const childGraph = {
+      invoke: vi.fn(async (_input: unknown, config: unknown) => {
+        seenConfig = config as Record<string, unknown>
+        return { messages: [{ type: "ai", content: "ok", getType: () => "ai" }] }
+      }),
+    }
+    const controller = new AbortController()
+    await dispatchSubagent({
+      childGraph,
+      input: "x",
+      parentConfig: { signal: controller.signal },
+      writer: () => {},
+      callId: "c",
+      childRouteId: "/r",
+      subagentName: "r",
+    })
+    expect(seenConfig?.signal).toBe(controller.signal)
+  })
+})
+
 import { bridgeSubagentTool } from "../src/subagent-tool-bridge.js"
 
 describe("bridgeSubagentTool — wraps run() with dispatcher", () => {
