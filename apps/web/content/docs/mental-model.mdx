@@ -15,6 +15,7 @@ Dawn writes those conventions once. You write the agent.
 - A route's `index.ts` exports one of: `agent`, `workflow`, `graph`, `chain`.
 - *Tools* live next to routes. Their parameter types are inferred at build time.
 - *State* is the JSON payload passed through the route runtime.
+- *Capabilities* add route-level agent behavior such as memory, planning, skills, and sub-agents.
 - *Middleware* is an optional app-level request gate for the local Dawn runtime.
 - LangGraph runs the graph. Dawn does everything else.
 
@@ -27,6 +28,8 @@ A *route entry* is the route's default behavior. Each route has exactly one `ind
 *Tools* are TypeScript files in a route's `tools/` directory. Each tool is a default-exported async function. Dawn reads each tool's parameter type at build time and turns it into a JSON schema. Agents call tools by name; the model picks when.
 
 *State* is an optional typed shape declared in `state.ts` next to the route. Dynamic segments — `[tenant]`, `[...rest]` — are preserved in the route id and generated route metadata; callers pass the corresponding values in the JSON input they send to the runtime.
+
+*Capabilities* are opt-in behavior discovered from files and descriptors. `workspace/AGENTS.md` provides memory, `plan.md` provides planning, `skills/<name>/SKILL.md` provides route-local skills, and `subagents/` provides child specialists.
 
 *Middleware* runs before route execution in the local Dawn runtime. It lives at `src/middleware.ts` (or root `middleware.ts`) and can reject a request or attach request-scoped context for tools.
 
@@ -94,7 +97,7 @@ You bring your own LangGraph workflows, your own LCEL chains, your own model pro
 Pick the path that fits where you are.
 
 1. **I want to build something now.** → [Getting Started](/docs/getting-started)
-2. **I want to understand a piece in depth.** → [Routes](/docs/routes), [Agents](/docs/agents), [Tools](/docs/tools), [State](/docs/state), [Middleware](/docs/middleware), [Retry](/docs/retry)
+2. **I want to understand a piece in depth.** → [Routes](/docs/routes), [Agents](/docs/agents), [Tools](/docs/tools), [State](/docs/state), [Capabilities](/docs/capabilities), [Middleware](/docs/middleware), [Retry](/docs/retry)
 3. **I want to see the surface.** → [CLI](/docs/cli), [Dev Server](/docs/dev-server), [Deployment](/docs/deployment)
 
 ## Related
@@ -103,6 +106,7 @@ Pick the path that fits where you are.
   { href: "/docs/routes", title: "Routes", subtitle: "the folder-as-route convention" },
   { href: "/docs/agents", title: "Agents", subtitle: "the default route entry" },
   { href: "/docs/tools", title: "Tools", subtitle: "co-located tools and type inference" },
+  { href: "/docs/capabilities", title: "Capabilities", subtitle: "memory, planning, skills, and sub-agents" },
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "the runtime protocol" },
   { href: "/docs/recipes", title: "Recipes", subtitle: "task-oriented how-tos" },
   { href: "/docs/faq", title: "FAQ", subtitle: "one-line answers to the recurring questions" },
