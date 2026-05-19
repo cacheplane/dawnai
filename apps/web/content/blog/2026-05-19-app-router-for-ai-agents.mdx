@@ -1,129 +1,122 @@
 ---
 title: The App Router for AI Agents
-description: File-system routes, type-safe tools, and why the mental model matters for agent codebases that grow.
+description: File-system routes, type-safe tools, and the capability layer Dawn adds around real LangGraph.js agent applications.
 date: 2026-05-19
 tags: [philosophy, typescript, agents]
 type: post
 author: brian
-draft: true
 ---
 
-The Next.js App Router did something subtle and important.
+The Next.js App Router changed how many of us think about application structure.
 
-Not because it introduced a new runtime.
-And not because it changed how React rendered.
+Not because a file-system router is a new idea.
 
-What it changed was the answer to the question *"where does this code go?"*.
+The important part was that it gave common web application concepts a place to live. A page is a file. A layout is a file. A route group is a folder. You can open the tree and get a useful read on the application.
 
-A page is `page.tsx`. A layout is `layout.tsx`. A server action is a function in a server file. Middleware lives at `middleware.ts`. One place each concept lives, and that place is a file on disk.
+I want the same thing for agent applications.
 
-Agent codebases do not have that yet.
+Agent codebases need more than a runtime. They need a project shape that can hold tools, state, tests, memory, planning, skills, and sub-agents without turning into a pile of registries.
 
-Dawn is an attempt to fix it.
+That is the App Router idea behind Dawn.
 
-## tl;dr
+## Goals
 
-- agent codebases need a coordinate system, not just a runtime
-- file-system routes give every concern a folder, not a registry entry
-- co-location is a feature: refactors work, search works, tests do not drift
-- typescript function signatures are the tool contract — no zod, no `tool()` wrapper
-- the win is not the first agent. it is the tenth.
+Here is the practical version:
 
-## The missing coordinate system
+- A route should be a folder under `src/app/`.
+- The route path should be the agent endpoint.
+- Tools should live next to the route that uses them.
+- Tool types should come from TypeScript, not duplicated schemas.
+- Tests should live beside the route they protect.
+- Agent capabilities should compose through files and descriptors, not hidden setup code.
 
-If you have worked on a LangGraph project past the second graph, you know the shape of the problem.
+If a developer can open the file tree and understand where to add the next thing, the framework is doing useful work.
 
-Graphs in one folder. Tools in another. State definitions in a third. A registry tying them together.
+## What the route tree tells you
 
-The connections between those files are implicit. A tool is "for" a graph because it is imported by it, not because it lives next to it.
-
-That works at the kitchen-table scale.
-
-It stops working when you need to answer questions like:
-
-- which tools does the `support` graph have access to?
-- if I rename `lookupOrder`, what else needs to change?
-- where do I add the tenant-aware auth check for the `triage` route?
-- can I delete this tool? who calls it?
-
-These are all answerable.
-
-The answer just does not live on disk. It lives in your head, or in a wiki page, or in the import graph you have to trace by hand.
-
-That is the gap. The codebase does not know its own structure.
-
-## File-system routes as the answer
-
-The fix is borrowed wholesale from web frameworks.
-
-A route is a folder. The folder path is the endpoint. Everything that belongs to the route lives next to it.
-
-A real Dawn project tree:
+Here is a small Dawn application:
 
 ```text
-my-agents/
-├── dawn.config.ts
-├── package.json
-└── src/
-    └── app/
-        ├── support/
-        │   ├── [tenant]/
-        │   │   ├── index.ts
-        │   │   ├── state.ts
-        │   │   ├── middleware.ts
-        │   │   └── tools/
-        │   │       ├── lookupOrder.ts
-        │   │       └── escalate.ts
-        │   └── internal/
-        │       └── index.ts
-        └── triage/
-            ├── index.ts
-            └── state.ts
+src/
+  app/
+    support/
+      [tenant]/
+        index.ts
+        state.ts
+        plan.md
+        run.test.ts
+        tools/
+          lookupOrder.ts
+          escalate.ts
+        skills/
+          refund-policy/
+            SKILL.md
+        subagents/
+          research/
+            index.ts
+            tools/
+              searchDocs.ts
 ```
 
-Read that tree out loud and you have read the architecture.
+Read that tree out loud and you already know quite a bit.
 
-`support/[tenant]/` is a parameterized route. It has its own state shape, its own auth middleware, and two tools the agent can call. `support/internal/` is a separate route — a different endpoint, a different graph. `triage/` is unrelated to either.
+There is a parameterized route at `/support/[tenant]`.
 
-There is no registry. There is no `tools: [...]` array.
+It has its own route entry in `index.ts`, its own state schema, a seeded plan, a scenario test, two route-local tools, one route-local skill, and a research sub-agent.
 
-The connection between a tool and the route that uses it is the *folder it is in*.
+That is not just aesthetic. It changes how the codebase behaves.
 
-That is the whole trick.
+You can move the route. You can delete it. You can review it in a pull request. You can ask, "what tools does this agent have?" and answer the question from the folder.
 
-## Co-location is a feature, not aesthetics
+The structure is doing work.
 
-Putting files near the thing they belong to is not a style preference.
+## Routes
 
-It changes what your tools can do.
+A Dawn route is a folder under `src/app/`. The folder path becomes the route id.
 
-**Refactoring works.** Move a folder, move the route. Delete a folder, delete the route. There is no central registry whose edits you will forget.
+Route groups are ignored:
 
-**Search works.** "Find references" on a tool finds the route that uses it, because the route imports it directly. "Find references" on a state field finds the agent prompt that mentions it.
+```text
+src/app/(public)/hello/[tenant]/index.ts
+```
 
-**Tests do not drift.** A scenario test for `support/[tenant]/` lives in `support/[tenant]/run.test.ts`. When you change the route, the test is right there in the same diff.
+becomes:
 
-**Onboarding works.** New engineers can open the tree and read the surface area without a Loom video. The structure is the documentation.
+```text
+/hello/[tenant]
+```
 
-Frameworks that hide structure behind a builder API give all of this up.
+The route entry is `index.ts`. It exports exactly one route shape:
 
-Once your routes are constructed at runtime from a `.register()` call, your editor cannot tell you what your codebase looks like. Only the running process can.
+- `agent` for an LLM-driven route
+- `workflow` for a deterministic async function
+- `graph` for a raw LangGraph graph
+- `chain` for a LangChain runnable
 
-That is a real cost. It just shows up late.
+The default scaffold uses an agent:
 
-## Types as the route boundary
+```ts
+import { agent } from "@dawn-ai/sdk"
 
-The other half of the coordinate system is types.
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "You are a helpful assistant for the {tenant} organization.",
+})
+```
 
-A route is a contract. The contract should be checked at the boundary.
+If you need full LangGraph control, export a named `graph`. If you need a deterministic flow, export a `workflow`. The route folder is the stable boundary either way.
 
-In Dawn, a tool is just a TypeScript function:
+## Tools
+
+In Dawn, a tool is a TypeScript file in `tools/`.
 
 ```ts
 // src/app/support/[tenant]/tools/lookupOrder.ts
+export const description = "Look up an order by id."
+
 export default async (
   input: { readonly orderId: string },
-  ctx: { signal: AbortSignal },
+  ctx: { readonly signal: AbortSignal },
 ) => {
   const res = await fetch(`https://api.example.com/orders/${input.orderId}`, {
     signal: ctx.signal,
@@ -132,38 +125,129 @@ export default async (
 }
 ```
 
-There is no Zod schema. There is no `tool()` wrapper.
+There is no `tool()` wrapper in the route.
 
-The parameter type *is* the schema. `dawn typegen` reads it at build time and emits both a JSON schema for the LLM and a typed `ctx.tools.lookupOrder` for any code that calls it directly.
+There is no duplicate input schema.
 
-This sounds like a small convenience.
+Dawn reads the function signature during type generation and build. The input type becomes the JSON schema exposed to the model, and the generated `dawn:routes` module gives route code typed access to `ctx.tools.lookupOrder`.
 
-It is actually a forcing function.
+This is the part I care about most: the TypeScript type is the contract.
 
-Because the type is the contract, drift is impossible. If you change the tool signature, callers fail to typecheck. If you misspell a tool name in a workflow route, the editor underlines it.
+## State and tests
 
-The route boundary is checked the same way the rest of your TypeScript is checked.
+Routes can also define `state.ts`.
 
-Generated types live in `.dawn/dawn.generated.d.ts`. The starter template ignores `.dawn/`, so regenerate it during development and CI unless your project explicitly chooses to commit generated artifacts.
+State is the JSON shape that flows through the route runtime. The scaffold uses Zod, but Dawn accepts Zod or any Standard Schema value.
 
-## What this unlocks at scale
+```ts
+// src/app/support/[tenant]/state.ts
+import { z } from "zod"
 
-The interesting thing is not the first agent.
+export default z.object({
+  tenant: z.string(),
+  orderId: z.string().optional(),
+})
+```
 
-It is the tenth.
+Dawn generates route state types from this file and the route path. If you rename a dynamic segment, or change the state shape, TypeScript can catch the places that still assume the old shape.
 
-A codebase with ten agents, forty tools, and a dozen middleware files needs the same code-intelligence features a web app does. Go-to-definition that works. Refactors that do not break things in production. Tests that run on a tight loop. Deploys that do not require a memo.
+Tests live next to the route too:
 
-Those features do not show up by accident.
+```text
+src/app/support/[tenant]/run.test.ts
+```
 
-They require the codebase to have a *shape* the tools can reason about.
+That sounds small, but it matters. The test changes in the same pull request as the route. It does not live in a distant test directory that slowly stops explaining the feature it was written for.
 
-That is the whole pitch.
+## Capabilities
 
-Dawn is not asking you to learn a new graph runtime. The graph runtime is fine. Dawn is the coordinate system around it — the answer to "where does this code go" — and the type machinery that makes the answer load-bearing.
+The route tree gives Dawn a place to add higher-level agent behavior.
 
-If the mental model resonates, [`/docs/mental-model`](/docs/mental-model) is the one-page version, and [`/docs/routes`](/docs/routes) is where the conventions are spelled out in full.
+Here is what we have built to date.
 
-A runtime is becoming a routing problem. A routing problem is becoming a type problem.
+### Memory
 
-That is what makes this interesting.
+If `workspace/AGENTS.md` exists, Dawn injects it into the agent prompt under `# Memory` on every model turn.
+
+The file is the memory. The agent can update it, and the next turn sees the updated content.
+
+### Planning
+
+If a route has `plan.md`, Dawn adds a planning prompt, a `writeTodos` tool, a `todos` state channel, and a `plan_update` stream event.
+
+The seed file uses normal markdown checklist syntax:
+
+```md
+- [ ] Review the customer request
+- [ ] Check order history
+- [ ] Write a concise response
+```
+
+The useful part is that planning is not just a prompt. It is prompt, tool, state, and stream behavior composed together.
+
+### Skills
+
+If a route has `skills/<name>/SKILL.md`, Dawn lists the available skills in the prompt and gives the agent a `readSkill({ name })` tool.
+
+That lets the agent load longer instructions only when it needs them.
+
+### Sub-agents
+
+A route can expose sub-agents through child routes under `subagents/` or through the `subagents` field on `agent({...})`.
+
+Dawn adds a `task({ subagent, input })` tool and a `# Subagents` prompt section. The parent agent can delegate to a specialist without the specialist becoming a random helper function hidden in another folder.
+
+The boundary stays visible on disk.
+
+### Reasoning effort
+
+For OpenAI-backed agent routes, the descriptor can include:
+
+```ts
+reasoning: { effort: "high" }
+```
+
+Non-reasoning models ignore it. For models that support the setting, the option stays close to the route that needs it.
+
+## What this buys you
+
+The benefit is not the first route.
+
+The first route is always easy.
+
+The benefit shows up when the app has ten routes, forty tools, a few specialists, and enough state that a hand-written registry starts to feel like another product you have to maintain.
+
+At that point, the App Router idea earns its place:
+
+- file moves are meaningful
+- type generation has one source of truth
+- tests have a home
+- generated deployment artifacts are predictable
+- capabilities compose around the route instead of around a hidden framework object
+
+This does not make Dawn necessary for every project.
+
+If you have one graph and two tools, raw LangGraph.js may be exactly right.
+
+But if your agent application is starting to look like an application, it needs application structure.
+
+That is what Dawn is trying to provide.
+
+## Getting started
+
+The fastest way to try the shape is still the scaffold:
+
+```bash
+pnpm create dawn-ai-app my-agents
+cd my-agents
+pnpm dev
+```
+
+Then run the example route:
+
+```bash
+echo '{"tenant":"acme"}' | pnpm exec dawn run '/hello/[tenant]'
+```
+
+For the deeper read, start with [Mental Model](/docs/mental-model), [Routes](/docs/routes), and [Capabilities](/docs/capabilities).
+

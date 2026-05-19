@@ -65,6 +65,12 @@ export default agent({
 
 See [Retry](/docs/retry) for the backoff strategy, what is retried, and the streaming caveat. Dawn does not expose per-tool retry overrides today.
 
+## Capabilities
+
+Agent routes can opt into higher-level behavior from files and descriptor fields: memory from `workspace/AGENTS.md`, planning from `plan.md`, skills from `skills/<name>/SKILL.md`, sub-agents from `subagents/` or `agent({ subagents })`, and model reasoning effort from `reasoning`.
+
+See [Capabilities](/docs/capabilities) for the file conventions and runtime behavior.
+
 ## Streaming
 
 The local dev server exposes streaming via `/runs/stream`. See [Dev Server](/docs/dev-server) for the protocol details.
@@ -75,5 +81,6 @@ The local dev server exposes streaming via `/runs/stream`. See [Dev Server](/doc
   { href: "/docs/routes", title: "Routes", subtitle: "pathname rules and route entry shapes" },
   { href: "/docs/tools", title: "Tools", subtitle: "tool input/output rules, type inference" },
   { href: "/docs/state", title: "State", subtitle: "when an agent reads or returns structured state" },
+  { href: "/docs/capabilities", title: "Capabilities", subtitle: "memory, planning, skills, and sub-agents" },
   { href: "/docs/retry", title: "Retry", subtitle: "retry config and backoff" },
 ]} />
