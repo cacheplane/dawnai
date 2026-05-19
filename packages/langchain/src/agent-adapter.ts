@@ -2,6 +2,8 @@ import type { PromptFragment, StreamTransformer } from "@dawn-ai/core"
 import type { DawnAgent, RetryConfig } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
+import { createChatModel } from "./chat-model-factory.js"
+import { resolveProvider } from "./model-provider-resolver.js"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
 import {
@@ -78,16 +80,17 @@ async function materializeAgent(
   }
 
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
-  const { ChatOpenAI } = await import("@langchain/openai")
 
   const langchainTools = tools.map((tool) => convertToolToLangChain(tool, middlewareContext))
 
-  const llm = new ChatOpenAI({
+  const provider = resolveProvider({
     model: descriptor.model,
-    // Maps to OpenAI's reasoningEffort param. Non-reasoning models ignore it.
-    // Default is `medium` for pre-gpt-5.1 reasoning models per OpenAI docs.
-    // Bump to `high` for tool-use-heavy agents that aren't following directives.
-    ...(descriptor.reasoning?.effort ? { reasoningEffort: descriptor.reasoning.effort } : {}),
+    ...(descriptor.provider ? { provider: descriptor.provider } : {}),
+  })
+  const llm = await createChatModel({
+    model: descriptor.model,
+    provider,
+    ...(descriptor.reasoning ? { reasoning: descriptor.reasoning } : {}),
   })
 
   const fragments = promptFragments ?? []

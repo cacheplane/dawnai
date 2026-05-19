@@ -9,7 +9,7 @@ describe("agent() descriptor integration", () => {
       systemPrompt: "You are a test assistant.",
     })
 
-    // Without a real LLM key, materialization will fail on ChatOpenAI creation
+    // Without a real LLM key, materialization will fail on provider construction
     // or network call — but it should NOT fail with "must expose invoke(input)"
     const error = await executeAgent({
       entry: descriptor,

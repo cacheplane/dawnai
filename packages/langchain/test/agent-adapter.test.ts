@@ -10,7 +10,8 @@ describe("executeAgent with DawnAgent descriptors", () => {
       systemPrompt: "You are helpful.",
     })
 
-    // Without a real LLM key, materialization will fail on ChatOpenAI/network
+    // Without a real LLM key, materialization will fail on provider construction
+    // or network call.
     // but the error should NOT be "Agent entry must expose invoke(input)"
     const error = await executeAgent({
       entry: descriptor,
@@ -21,6 +22,69 @@ describe("executeAgent with DawnAgent descriptors", () => {
     }).catch((e: Error) => e)
 
     expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).not.toContain("must expose invoke")
+  })
+
+  test("DawnAgent descriptor accepts explicit non-OpenAI provider", async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {
+        constructor() {
+          throw new Error("ChatOpenAI should not materialize non-OpenAI provider")
+        }
+      },
+    }))
+
+    const descriptor = agent({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      systemPrompt: "You are helpful.",
+    })
+
+    const error = await executeAgent({
+      entry: descriptor,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    })
+      .catch((e: Error) => e)
+      .finally(() => {
+        vi.doUnmock("@langchain/openai")
+      })
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).not.toContain("ChatOpenAI")
+    expect((error as Error).message).not.toContain("must expose invoke")
+  })
+
+  test("DawnAgent descriptor infers non-OpenAI provider from model", async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {
+        constructor() {
+          throw new Error("ChatOpenAI should not materialize inferred non-OpenAI provider")
+        }
+      },
+    }))
+
+    const descriptor = agent({
+      model: "claude-sonnet-4-5",
+      systemPrompt: "You are helpful.",
+    })
+
+    const error = await executeAgent({
+      entry: descriptor,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    })
+      .catch((e: Error) => e)
+      .finally(() => {
+        vi.doUnmock("@langchain/openai")
+      })
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).not.toContain("ChatOpenAI")
     expect((error as Error).message).not.toContain("must expose invoke")
   })
 
