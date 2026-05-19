@@ -5,24 +5,46 @@ import { executeAgent } from "../src/agent-adapter.js"
 
 describe("executeAgent with DawnAgent descriptors", () => {
   test("DawnAgent descriptor is recognized and does not throw invoke error", async () => {
+    let openAIModel: unknown
+
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({
+      createReactAgent: vi.fn((options: { llm: unknown }) => {
+        openAIModel = options.llm
+        return {
+          invoke: vi.fn().mockResolvedValue(new AIMessage({ content: "OpenAI!" })),
+        }
+      }),
+    }))
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {
+        readonly options: Record<string, unknown>
+
+        constructor(options: Record<string, unknown>) {
+          this.options = options
+        }
+      },
+    }))
+
     const descriptor = agent({
       model: "gpt-4o-mini",
       systemPrompt: "You are helpful.",
     })
 
-    // Without a real LLM key, materialization will fail on provider construction
-    // or network call.
-    // but the error should NOT be "Agent entry must expose invoke(input)"
-    const error = await executeAgent({
+    const result = await executeAgent({
       entry: descriptor,
       input: { question: "hi" },
       routeParamNames: [],
       signal: new AbortController().signal,
       tools: [],
-    }).catch((e: Error) => e)
+    }).finally(() => {
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+    })
 
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).not.toContain("must expose invoke")
+    expect((result as AIMessage).content).toBe("OpenAI!")
+    expect((openAIModel as { options: Record<string, unknown> }).options).toEqual({
+      model: "gpt-4o-mini",
+    })
   })
 
   test("DawnAgent descriptor explicit provider overrides model inference", async () => {
