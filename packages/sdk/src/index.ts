@@ -12,10 +12,6 @@ export type {
   OpenAiModelId,
 } from "./known-model-ids.js"
 export type {
-  BuiltInModelProviderId,
-  ModelProviderId,
-} from "./model-provider.js"
-export type {
   ContinueResult,
   DawnMiddleware,
   MiddlewareRequest,
@@ -23,6 +19,10 @@ export type {
   RejectResult,
 } from "./middleware.js"
 export { allow, defineMiddleware, reject } from "./middleware.js"
+export type {
+  BuiltInModelProviderId,
+  ModelProviderId,
+} from "./model-provider.js"
 export type { RouteConfig, RouteKind } from "./route-config.js"
 export type { RouteStateMap, RouteToolMap } from "./route-types.js"
 export type {
