@@ -42,7 +42,7 @@ export async function createChatModel(options: {
   try {
     moduleExports = await importer(spec.packageName)
   } catch (error) {
-    if (isMissingModuleError(error)) {
+    if (isMissingModuleError(error, spec.packageName)) {
       throw new Error(missingProviderPackageMessage(options.provider, spec.packageName))
     }
     throw error
@@ -63,10 +63,19 @@ export async function createChatModel(options: {
   return new (Constructor as ChatModelConstructor)(constructorOptions)
 }
 
-function isMissingModuleError(error: unknown): boolean {
+function isMissingModuleError(error: unknown, expectedPackageName: string): boolean {
   return (
     error instanceof Error &&
     ("code" in error ? (error as { code?: unknown }).code === "ERR_MODULE_NOT_FOUND" : true) &&
+    referencesPackageSpecifier(error.message, expectedPackageName) &&
     /Cannot find (package|module)|ERR_MODULE_NOT_FOUND/i.test(error.message)
+  )
+}
+
+function referencesPackageSpecifier(message: string, packageName: string): boolean {
+  return (
+    message.includes(`'${packageName}'`) ||
+    message.includes(`"${packageName}"`) ||
+    message.includes(`\`${packageName}\``)
   )
 }

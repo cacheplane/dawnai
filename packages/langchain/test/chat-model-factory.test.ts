@@ -39,11 +39,11 @@ describe("chat model factory", () => {
   })
 
   test("wraps missing optional peer with install command", async () => {
-    const importer = vi
-      .fn()
-      .mockRejectedValue(
-        Object.assign(new Error("Cannot find package"), { code: "ERR_MODULE_NOT_FOUND" }),
-      )
+    const importer = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Cannot find package '@langchain/anthropic'"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      }),
+    )
 
     await expect(
       createChatModel({ model: "claude-sonnet-4-5", provider: "anthropic", importer }),
@@ -64,14 +64,39 @@ describe("chat model factory", () => {
   })
 
   test("reports missing Google @langchain/google-genai optional peer", async () => {
-    const importer = vi
-      .fn()
-      .mockRejectedValue(
-        Object.assign(new Error("Cannot find package"), { code: "ERR_MODULE_NOT_FOUND" }),
-      )
+    const importer = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Cannot find package '@langchain/google-genai'"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      }),
+    )
 
     await expect(
       createChatModel({ model: "gemini-2.5-flash", provider: "google", importer }),
     ).rejects.toThrow(missingProviderPackageMessage("google", "@langchain/google-genai"))
+  })
+
+  test("preserves missing transitive dependency errors", async () => {
+    const transitiveError = Object.assign(new Error("Cannot find package 'some-transitive-dep'"), {
+      code: "ERR_MODULE_NOT_FOUND",
+    })
+    const importer = vi.fn().mockRejectedValue(transitiveError)
+
+    await expect(
+      createChatModel({ model: "claude-sonnet-4-5", provider: "anthropic", importer }),
+    ).rejects.toBe(transitiveError)
+  })
+
+  test("preserves errors for similarly named missing packages", async () => {
+    const similarPackageError = Object.assign(
+      new Error("Cannot find package '@langchain/anthropic-extra'"),
+      {
+        code: "ERR_MODULE_NOT_FOUND",
+      },
+    )
+    const importer = vi.fn().mockRejectedValue(similarPackageError)
+
+    await expect(
+      createChatModel({ model: "claude-sonnet-4-5", provider: "anthropic", importer }),
+    ).rejects.toBe(similarPackageError)
   })
 })
