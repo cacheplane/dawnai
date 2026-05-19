@@ -31,10 +31,9 @@ const ITEMS = [
     question: "What about Deep Agents and other planned features?",
     answer: (
       <p>
-        Phases 1 and 2 — routing, tools, types, dev loop — are shipped. Phase 3, Deep Agents
-        (multi-step planning, sub-agents, durable evaluation harness), is on the roadmap and not yet
-        started. Expect concrete proposals before implementation; everything ships incrementally on
-        main with semver-honest releases.
+        Routing, tools, types, the dev loop, planning, skills, memory, and subagents are shipped.
+        Durable evaluation harness work is still on the roadmap. Expect concrete proposals before
+        implementation; everything ships incrementally on main with semver-honest releases.
       </p>
     ),
   },

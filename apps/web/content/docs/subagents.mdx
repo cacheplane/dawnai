@@ -1,0 +1,141 @@
+# Subagents
+
+Subagents let one agent route delegate a bounded task to another agent route.
+
+The parent gets a `task({ subagent, input })` tool and a `# Subagents` prompt section. The child remains a real Dawn route with its own prompt, tools, state, memory, planning, skills, and subagents.
+
+Use subagents when a specialist should own a piece of work instead of becoming another helper function in the parent prompt.
+
+## Quick start
+
+Put child agent routes under the parent's `subagents/` directory:
+
+```text
+src/app/support/[tenant]/
+  index.ts
+  subagents/
+    research/
+      index.ts
+      tools/
+        searchDocs.ts
+```
+
+The child route should export an `agent()` descriptor. Give it a `description`; the parent uses that description to decide when to delegate.
+
+```ts title="src/app/support/[tenant]/subagents/research/index.ts"
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-4o-mini",
+  description: "Find relevant policy and product documentation before a support reply.",
+  systemPrompt: "You research internal documentation and return concise findings.",
+})
+```
+
+When the parent route runs, Dawn exposes a `task` tool. The model can call:
+
+```ts
+task({
+  subagent: "research",
+  input: "Find the current refund policy for annual plans.",
+})
+```
+
+The parent receives the child's final text as the tool result.
+
+## Convention discovery
+
+Dawn discovers immediate child routes at:
+
+```text
+<parent route>/subagents/<leaf>/index.ts
+```
+
+The model-facing `subagent` value is the child folder name, such as `"research"`.
+
+Only immediate children count for the parent prompt. A child can have its own `subagents/` directory, but those are available to that child, not directly to the original parent.
+
+If a child route has no `description`, Dawn lists it as `No description provided.` The route still works, but selection quality will be worse.
+
+## Descriptor overrides
+
+You can also expose child descriptors through `agent({ subagents })`:
+
+```ts title="src/app/support/[tenant]/index.ts"
+import { agent } from "@dawn-ai/sdk"
+import researcher from "./shared-researcher/index.js"
+
+export default agent({
+  model: "gpt-4o-mini",
+  systemPrompt: "You coordinate customer support work.",
+  subagents: [researcher],
+})
+```
+
+Dawn resolves descriptor overrides by importing route modules and mapping each `DawnAgent` descriptor back to its route id.
+
+Prefer the `subagents/<leaf>/index.ts` convention when possible. It is easier to read in the tree, and current type generation detects the convention path when adding the generated `task` tool type.
+
+Descriptor-only subagents work at runtime, but current type generation does not discover them. If you want generated `RouteTools` to include `task`, use the convention path.
+
+## What the model sees
+
+Dawn renders a prompt fragment like:
+
+```text
+# Subagents
+
+The following subagents are available. Call `task({ subagent, input })`
+to dispatch a sub-task. Use the description to choose the right subagent
+for each piece of work.
+
+- **research** - Find relevant policy and product documentation before a support reply.
+```
+
+The runtime `task` tool schema uses an enum of available leaf names, so the model is constrained to known subagents. Generated TypeScript currently represents the subagent field as `string`.
+
+## Runtime behavior
+
+At runtime, the `task` tool is first contributed by the core subagents marker, then replaced by the LangChain bridge before the agent runs.
+
+The bridge resolves the child route, calls back into Dawn's route executor, and passes the task as a user message:
+
+```ts
+{ messages: [{ role: "user", content: input }] }
+```
+
+If the child route fails, the parent receives a string beginning with `subagent_failed:`. If the resolver cannot find the child, the parent receives `subagent_unknown:`.
+
+Dawn's dispatcher has a depth guard with a maximum depth of 3. In the current Dawn route re-entry path, depth metadata is not preserved through nested `task` calls, so do not design recursive subagent systems around that guard yet. Treat subagents as a one-level or carefully bounded delegation boundary.
+
+## Streaming
+
+When the parent is run through `/runs/stream`, child activity is forwarded with `subagent.*` events:
+
+- `subagent.start`
+- `subagent.tool_call`
+- `subagent.tool_result`
+- `subagent.message`
+- capability events such as `subagent.plan_update`
+- `subagent.end`
+
+Each forwarded event includes a generated `call_id`. `subagent.start` also includes the subagent name, route id, and depth. `subagent.end` includes either `final_message` or `error`.
+
+Dawn suppresses duplicate parent token events while a child run is active, so child tokens should appear as `subagent.message` rather than also leaking into the parent stream as ordinary message chunks.
+
+## Name conflicts
+
+Convention subagents and descriptor overrides share the same leaf-name namespace.
+
+If two child routes resolve to the same leaf name, route preparation fails with a duplicate leaf-name error. Rename one of the routes or adjust the descriptor override.
+
+The `task` name is reserved for this capability. Do not create your own route tool named `task`.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/agents", title: "Agents", subtitle: "child routes are still Dawn agents" },
+  { href: "/docs/routes", title: "Routes", subtitle: "how folder paths become route ids" },
+  { href: "/docs/planning", title: "Planning", subtitle: "child plan updates stream as subagent.plan_update" },
+  { href: "/docs/tools", title: "Tools", subtitle: "the parent sees task as a capability tool" },
+]} />

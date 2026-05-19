@@ -15,7 +15,7 @@ The important part was that it gave common web application concepts a place to l
 
 I want the same thing for agent applications.
 
-Agent codebases need more than a runtime. They need a project shape that can hold tools, state, tests, memory, planning, skills, and sub-agents without turning into a pile of registries.
+Agent codebases need more than a runtime. They need a project shape that can hold tools, state, tests, memory, planning, skills, and subagents without turning into a pile of registries.
 
 That is the App Router idea behind Dawn.
 
@@ -28,7 +28,7 @@ Here is the practical version:
 - Tools should live next to the route that uses them.
 - Tool types should come from TypeScript, not duplicated schemas.
 - Tests should live beside the route they protect.
-- Agent capabilities should compose through files and descriptors, not hidden setup code.
+- Agent behavior should compose through files and descriptors, not hidden setup code.
 
 If a developer can open the file tree and understand where to add the next thing, the framework is doing useful work.
 
@@ -62,7 +62,7 @@ Read that tree out loud and you already know quite a bit.
 
 There is a parameterized route at `/support/[tenant]`.
 
-It has its own route entry in `index.ts`, its own state schema, a seeded plan, a scenario test, two route-local tools, one route-local skill, and a research sub-agent.
+It has its own route entry in `index.ts`, its own state schema, a seeded plan, a scenario test, two route-local tools, one route-local skill, and a research subagent.
 
 That is not just aesthetic. It changes how the codebase behaves.
 
@@ -159,7 +159,7 @@ src/app/support/[tenant]/run.test.ts
 
 That sounds small, but it matters. The test changes in the same pull request as the route. It does not live in a distant test directory that slowly stops explaining the feature it was written for.
 
-## Capabilities
+## Agent behavior
 
 The route tree gives Dawn a place to add higher-level agent behavior.
 
@@ -191,9 +191,9 @@ If a route has `skills/<name>/SKILL.md`, Dawn lists the available skills in the 
 
 That lets the agent load longer instructions only when it needs them.
 
-### Sub-agents
+### Subagents
 
-A route can expose sub-agents through child routes under `subagents/` or through the `subagents` field on `agent({...})`.
+A route can expose subagents through child routes under `subagents/` or through the `subagents` field on `agent({...})`.
 
 Dawn adds a `task({ subagent, input })` tool and a `# Subagents` prompt section. The parent agent can delegate to a specialist without the specialist becoming a random helper function hidden in another folder.
 
@@ -223,7 +223,7 @@ At that point, the App Router idea earns its place:
 - type generation has one source of truth
 - tests have a home
 - generated deployment artifacts are predictable
-- capabilities compose around the route instead of around a hidden framework object
+- memory, planning, skills, and subagents compose around the route instead of around a hidden framework object
 
 This does not make Dawn necessary for every project.
 
@@ -249,5 +249,4 @@ Then run the example route:
 echo '{"tenant":"acme"}' | pnpm exec dawn run '/hello/[tenant]'
 ```
 
-For the deeper read, start with [Mental Model](/docs/mental-model), [Routes](/docs/routes), and [Capabilities](/docs/capabilities).
-
+For the deeper read, start with [Mental Model](/docs/mental-model), [Routes](/docs/routes), [Memory](/docs/memory), [Planning](/docs/planning), [Skills](/docs/skills), [Subagents](/docs/subagents), and [Reasoning Effort](/docs/reasoning-effort).
