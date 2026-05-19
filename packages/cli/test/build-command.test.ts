@@ -135,13 +135,14 @@ export default async function tenantGreet(input: { tenant: string }) {
     )
     expect(entry).toContain('import { materializeAgentGraph } from "@dawn-ai/langchain"')
     expect(entry).toContain('name: "tenant-greet"')
-    expect(entry).toContain(`export const graph = await materializeAgentGraph({
-  descriptor: agentDescriptor,
-  tools: [tool0Definition],
-})`)
+    expect(entry).toContain("export const graph = await materializeAgentGraph({")
+    expect(entry).toContain("descriptor: agentDescriptor")
+    expect(entry).toContain("tools: [tool0Definition]")
     expect(entry).not.toContain("@anthropic-ai")
     expect(entry).not.toContain("@langchain/anthropic")
+    expect(entry).not.toContain("@langchain/openai")
     expect(entry).not.toContain("ChatAnthropic")
+    expect(entry).not.toContain("ChatOpenAI")
     expect(entry).not.toContain("bindTools")
     expect(entry).not.toContain("import { agent }")
 
