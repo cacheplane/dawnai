@@ -110,10 +110,29 @@ describe("executeAgent with DawnAgent descriptors", () => {
   })
 
   test("DawnAgent descriptor infers non-OpenAI provider from model", async () => {
+    let anthropicModel: unknown
+
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({
+      createReactAgent: vi.fn((options: { llm: unknown }) => {
+        anthropicModel = options.llm
+        return {
+          invoke: vi.fn().mockResolvedValue(new AIMessage({ content: "Anthropic!" })),
+        }
+      }),
+    }))
     vi.doMock("@langchain/openai", () => ({
       ChatOpenAI: class {
         constructor() {
           throw new Error("ChatOpenAI should not materialize inferred non-OpenAI provider")
+        }
+      },
+    }))
+    vi.doMock("@langchain/anthropic", () => ({
+      ChatAnthropic: class {
+        readonly options: Record<string, unknown>
+
+        constructor(options: Record<string, unknown>) {
+          this.options = options
         }
       },
     }))
@@ -123,21 +142,22 @@ describe("executeAgent with DawnAgent descriptors", () => {
       systemPrompt: "You are helpful.",
     })
 
-    const error = await executeAgent({
+    const result = await executeAgent({
       entry: descriptor,
       input: { question: "hi" },
       routeParamNames: [],
       signal: new AbortController().signal,
       tools: [],
+    }).finally(() => {
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+      vi.doUnmock("@langchain/anthropic")
     })
-      .catch((e: Error) => e)
-      .finally(() => {
-        vi.doUnmock("@langchain/openai")
-      })
 
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).not.toContain("ChatOpenAI")
-    expect((error as Error).message).not.toContain("must expose invoke")
+    expect((result as AIMessage).content).toBe("Anthropic!")
+    expect((anthropicModel as { options: Record<string, unknown> }).options).toEqual({
+      model: "claude-sonnet-4-5",
+    })
   })
 
   test("legacy agent with invoke() still works", async () => {
