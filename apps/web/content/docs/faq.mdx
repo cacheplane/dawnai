@@ -10,7 +10,7 @@ Yes. Dawn is a meta-framework for LangGraph the way Next.js is a meta-framework 
 
 ### Can I bring my own model provider?
 
-Yes, but the route kind matters. The current `agent({ model })` materialization path is OpenAI-backed. For Anthropic, Google, Bedrock, local models, or any custom LangChain-compatible provider, use a raw `graph` or `chain` route and instantiate the provider yourself. The `KnownModelId` type provides autocomplete plus an arbitrary string fallback; it is not a provider adapter matrix. See [API Reference](/docs/api).
+Yes. The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Set `provider` explicitly for aliases, ambiguous model names, local models, or provider routers. Raw `graph` and `chain` routes can still instantiate any provider directly. See [API Reference](/docs/api).
 
 ### How does Dawn compare to Mastra / CopilotKit / Vercel AI SDK?
 

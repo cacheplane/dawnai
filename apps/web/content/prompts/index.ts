@@ -41,7 +41,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app. Dawn is a TypeScript-first me
 
 5. Summarize what I can build next: add a tool, add a new route, write a scenario test.
 
-Key packages: \`@dawn-ai/sdk\` (authoring contract), \`@dawn-ai/langgraph\` (graphs/workflows), \`@dawn-ai/langchain\` (LCEL and OpenAI-backed agent materialization), \`@dawn-ai/cli\` (CLI).
+Key packages: \`@dawn-ai/sdk\` (authoring contract), \`@dawn-ai/langgraph\` (graphs/workflows), \`@dawn-ai/langchain\` (LCEL and provider-aware agent materialization), \`@dawn-ai/cli\` (CLI).
 
 Reference: https://dawnai.org/llms.txt
 `;

@@ -96,9 +96,10 @@ const ITEMS = [
     answer: (
       <p>
         Nothing. Dawn is MIT-licensed open source with no paid tier, no usage meter, no hosted
-        service to sign up for. The built-in `agent()` materialization path is OpenAI-backed today;
-        raw graph and chain routes can instantiate other providers directly. Provider and deployment
-        costs are yours and flow directly to the services you choose.
+        service to sign up for. The built-in `agent()` route materializes to a LangChain chat model
+        and can infer known provider families; raw graph and chain routes can instantiate providers
+        directly. Provider and deployment costs are yours and flow directly to the services you
+        choose.
       </p>
     ),
   },

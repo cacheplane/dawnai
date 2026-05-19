@@ -22,13 +22,13 @@ Requires Node.js 22.12+.
 
 The SDK groups around three surfaces:
 
-- **Agents** — `agent()`, `AgentConfig`, `DawnAgent`, `ReasoningConfig`, `RetryConfig`, `isDawnAgent`
+- **Agents** — `agent()`, `AgentConfig`, `DawnAgent`, `ModelProviderId`, `ReasoningConfig`, `RetryConfig`, `isDawnAgent`
 - **Middleware** — `defineMiddleware()`, `allow()`, `reject()`, `DawnMiddleware`, `MiddlewareRequest`, `MiddlewareResult`
 - **Route and runtime types** — `RouteConfig`, `RouteKind`, `RuntimeContext`, `RuntimeTool`, `ToolRegistry`, `KnownModelId`
 
 ### Declaring an agent route
 
-A Dawn route's `index.ts` exports an `agent()` descriptor. The `model` field is typed against `KnownModelId`; `reasoning` and `retry` are optional.
+A Dawn route's `index.ts` exports an `agent()` descriptor. The `model` field is typed against `KnownModelId`; `provider`, `reasoning`, and `retry` are optional.
 
 ```ts
 // src/app/hello/index.ts
@@ -40,6 +40,8 @@ export default agent({
   retry: { maxAttempts: 3, baseDelay: 250 },
 })
 ```
+
+`provider?: ModelProviderId` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly for aliases, ambiguous model names, local models, or provider routers.
 
 ### Defining middleware
 

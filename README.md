@@ -136,6 +136,8 @@ export default agent({
 
 Add `state.ts` for a route state schema, `tools/*.ts` for route-local tools, `middleware.ts` for access control, and `run.test.ts` for colocated scenarios.
 
+The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families; set `provider` explicitly for aliases, ambiguous model names, local models, or provider routers. Raw `graph` and `chain` routes can still instantiate any provider directly.
+
 ## Learn more
 
 - [Getting started](apps/web/content/docs/getting-started.mdx)

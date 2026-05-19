@@ -26,6 +26,30 @@ export default async (input: { readonly tenant: string }) => {
 
 Tools live next to the agent — `index.ts` is the agent entry, and any TS file in `tools/` is discovered for it. Param types are inferred from the function signature at `dawn build` time and made available to the generated graph.
 
+## Model providers
+
+The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Raw `graph` and `chain` routes can still instantiate any provider directly.
+
+Set `provider` when the model name is an alias, ambiguous, local, or routed through a provider gateway:
+
+```ts title="src/app/(public)/hello/[tenant]/index.ts"
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "llama3.1",
+  provider: "ollama",
+  systemPrompt: "You are a helpful assistant.",
+})
+```
+
+Dawn includes the OpenAI integration for the default path. Install other LangChain provider packages as your app needs them:
+
+```bash
+pnpm add @langchain/anthropic
+pnpm add @langchain/google-genai
+pnpm add @langchain/openrouter
+```
+
 ## When to pick an agent
 
 Dawn supports four route entry shapes. Pick the one that fits the problem:
