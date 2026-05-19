@@ -41,7 +41,7 @@ export default agent({
 })
 ```
 
-`provider?: ModelProviderId` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly for aliases, ambiguous model names, local models, or provider routers.
+`provider?: ModelProviderId` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids.
 
 ### Defining middleware
 

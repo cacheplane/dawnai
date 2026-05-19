@@ -283,7 +283,7 @@ export default {
 
 - **LangSmith.** Tracing, evaluations, datasets — Dawn does not wrap or proxy. Set `LANGSMITH_API_KEY` and traces flow.
 - **Checkpointer and persistence.** Whatever you pass to `.compile({ checkpointer })` keeps working. Dawn does not own the graph runtime.
-- **Model providers.** Raw `graph` and `chain` routes keep whatever LangChain-compatible providers you instantiate yourself. The built-in `agent()` route materializes to a LangChain chat model; Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Set `provider` explicitly for aliases, ambiguous model names, local models, or provider routers.
+- **Model providers.** Raw `graph` and `chain` routes keep whatever LangChain-compatible providers you instantiate yourself. The built-in `agent()` route materializes to a LangChain chat model; Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Set `provider` explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids.
 - **LangChain ecosystem packages.** `@langchain/core`, `@langchain/openai`, retrievers, document loaders — every one works inside a route.
 - **LangSmith deploy.** Same target. `dawn build` emits the generated `langgraph.json` and entry files LangSmith consumes.
 

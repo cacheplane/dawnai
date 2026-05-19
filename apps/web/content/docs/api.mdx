@@ -41,7 +41,7 @@ export interface AgentConfig {
 }
 ```
 
-Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `provider` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly for aliases, ambiguous model names, local models, or provider routers. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `subagents` lists child agent descriptors exposed through Dawn's subagent capability. `systemPrompt` is sent as the system message on every invocation.
+Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `provider` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `subagents` lists child agent descriptors exposed through Dawn's subagent capability. `systemPrompt` is sent as the system message on every invocation.
 
 The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Raw `graph` and `chain` routes can still instantiate any provider directly.
 
@@ -326,9 +326,9 @@ The accepted type for `AgentConfig.model`. Includes named model IDs plus an esca
 export type ModelProviderId = BuiltInModelProviderId | (string & {})
 ```
 
-The accepted type for `AgentConfig.provider`. Built-in values are `openai`, `anthropic`, `google`, `mistral`, `groq`, `ollama`, `xai`, and `openrouter`. Custom strings are accepted for provider routers and downstream integrations.
+The accepted type for `AgentConfig.provider`. Built-in values are `openai`, `anthropic`, `google`, `mistral`, `groq`, `ollama`, `xai`, and `openrouter`. The type includes a custom-string escape hatch for future and downstream typing, but built-in `agent()` materialization currently accepts only the built-in provider ids.
 
-Use `provider` when `model` is an alias, an ambiguous local model name, or a provider-routed identifier. Without an explicit provider, Dawn conservatively infers OpenAI `gpt-*`, `o3*`, and `o4*`; Anthropic `claude-*`; Google `gemini-*`; Mistral `mistral-*`, `mixtral-*`, and `codestral-*`; and xAI `grok-*`.
+Use `provider` when `model` is an alias, an ambiguous local model name, or a provider-routed identifier. Set it to one of the supported built-in provider ids. Without an explicit provider, Dawn conservatively infers OpenAI `gpt-*`, `o3*`, and `o4*`; Anthropic `claude-*`; Google `gemini-*`; Mistral `mistral-*`, `mixtral-*`, and `codestral-*`; and xAI `grok-*`.
 
 ### `OpenAiModelId`
 
