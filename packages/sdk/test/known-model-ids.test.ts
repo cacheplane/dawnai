@@ -1,4 +1,4 @@
-import type { GoogleModelId, KnownModelId, OpenAiModelId } from "@dawn-ai/sdk"
+import type { GoogleModelId, KnownModelId, ModelProviderId, OpenAiModelId } from "@dawn-ai/sdk"
 import { agent } from "@dawn-ai/sdk"
 import { describe, expect, expectTypeOf, test } from "vitest"
 
@@ -21,5 +21,11 @@ describe("KnownModelId", () => {
   test("per-provider types are subtypes of KnownModelId", () => {
     expectTypeOf<OpenAiModelId>().toMatchTypeOf<KnownModelId>()
     expectTypeOf<GoogleModelId>().toMatchTypeOf<KnownModelId>()
+  })
+
+  test("ModelProviderId accepts known providers and custom strings", () => {
+    expectTypeOf<"openai">().toMatchTypeOf<ModelProviderId>()
+    expectTypeOf<"anthropic">().toMatchTypeOf<ModelProviderId>()
+    expectTypeOf<string & {}>().toMatchTypeOf<ModelProviderId>()
   })
 })

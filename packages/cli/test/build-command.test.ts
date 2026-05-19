@@ -89,4 +89,70 @@ export default async function tenantGreet(input: { tenant: string }) {
     }
     expect(langgraph.graphs["/hello/[tenant]#agent"]).toBe("./.dawn/build/hello-tenant.ts:graph")
   })
+
+  test("generates a provider-agnostic materialized entry for non-OpenAI agent descriptors", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/(public)/support/[tenant]/index.ts": `import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "claude-sonnet-4-5",
+  systemPrompt: "Answer tenant support questions.",
+})
+`,
+      "src/app/(public)/support/[tenant]/tools/tenant-greet.ts": `export const description = "Greet a tenant"
+export const schema = {
+  type: "object",
+  properties: {
+    tenant: { type: "string" },
+  },
+  required: ["tenant"],
+}
+
+export default async function tenantGreet(input: { tenant: string }) {
+  return { message: \`Hello, \${input.tenant}!\` }
+}
+`,
+    })
+    const stdout: string[] = []
+    const stderr: string[] = []
+
+    await runBuildCommand(
+      { clean: true, cwd: appRoot },
+      {
+        stderr: (message) => stderr.push(message),
+        stdout: (message) => stdout.push(message),
+      },
+    )
+
+    expect(stderr.join("")).toBe("")
+
+    const entry = await readFile(join(appRoot, ".dawn/build/support-tenant.ts"), "utf8")
+    expect(entry).toContain(
+      'import agentDescriptor from "../../src/app/(public)/support/[tenant]/index.js"',
+    )
+    expect(entry).toContain(
+      'import tool0 from "../../src/app/(public)/support/[tenant]/tools/tenant-greet.js"',
+    )
+    expect(entry).toContain('import { materializeAgentGraph } from "@dawn-ai/langchain"')
+    expect(entry).toContain('name: "tenant-greet"')
+    expect(entry).toContain("export const graph = await materializeAgentGraph({")
+    expect(entry).toContain("descriptor: agentDescriptor")
+    expect(entry).toContain("tools: [tool0Definition]")
+    expect(entry).not.toContain("@anthropic-ai")
+    expect(entry).not.toContain("@langchain/anthropic")
+    expect(entry).not.toContain("@langchain/openai")
+    expect(entry).not.toContain("ChatAnthropic")
+    expect(entry).not.toContain("ChatOpenAI")
+    expect(entry).not.toContain("bindTools")
+    expect(entry).not.toContain("import { agent }")
+
+    const langgraph = JSON.parse(
+      await readFile(join(appRoot, ".dawn/build/langgraph.json"), "utf8"),
+    ) as {
+      readonly graphs: Record<string, string>
+    }
+    expect(langgraph.graphs["/support/[tenant]#agent"]).toBe(
+      "./.dawn/build/support-tenant.ts:graph",
+    )
+  })
 })

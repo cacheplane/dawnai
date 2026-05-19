@@ -1,3 +1,6 @@
+import type { KnownModelId } from "./known-model-ids.js"
+import type { ModelProviderId } from "./model-provider.js"
+
 const DAWN_AGENT: unique symbol = Symbol.for("dawn.agent") as unknown as typeof DAWN_AGENT
 
 declare const brand: unique symbol
@@ -27,17 +30,17 @@ export interface DawnAgent {
   readonly [brand]: "DawnAgent"
   readonly description?: string
   readonly model: string
+  readonly provider?: ModelProviderId
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
   readonly subagents?: readonly DawnAgent[]
   readonly systemPrompt: string
 }
 
-import type { KnownModelId } from "./known-model-ids.js"
-
 export interface AgentConfig {
   readonly description?: string
   readonly model: KnownModelId
+  readonly provider?: ModelProviderId
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
   readonly subagents?: readonly DawnAgent[]
@@ -48,6 +51,7 @@ export function agent(config: AgentConfig): DawnAgent {
   return {
     [DAWN_AGENT]: true,
     model: config.model,
+    ...(config.provider !== undefined ? { provider: config.provider } : {}),
     ...(config.reasoning ? { reasoning: config.reasoning } : {}),
     ...(config.retry ? { retry: config.retry } : {}),
     ...(config.description !== undefined ? { description: config.description } : {}),

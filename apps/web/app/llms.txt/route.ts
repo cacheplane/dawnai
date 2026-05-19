@@ -81,7 +81,7 @@ function buildLlmsTxt(): string {
       "## Packages",
       "- `@dawn-ai/sdk` — authoring contract (types, `RuntimeContext`, test helpers)",
       "- `@dawn-ai/langgraph` — LangGraph graphs/workflows adapter",
-      "- `@dawn-ai/langchain` — LangChain LCEL adapter and OpenAI-backed agent materialization",
+      "- `@dawn-ai/langchain` — LangChain LCEL adapter and provider-aware agent materialization",
       "- `@dawn-ai/cli` — the `dawn` CLI",
       "",
       "## Deployment",

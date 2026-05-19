@@ -17,7 +17,7 @@ This guide is for engineers working inside the Dawn monorepo. It covers the curr
 - `@dawn-ai/core` owns app discovery, config loading, validation, and route type generation.
 - `@dawn-ai/sdk` owns the author-facing contract: types, helpers, runtime context, middleware, and tool authoring.
 - `@dawn-ai/langgraph` owns LangGraph-specific route module contracts and adapter code.
-- `@dawn-ai/langchain` owns LCEL chain support and OpenAI-backed `agent()` materialization.
+- `@dawn-ai/langchain` owns LCEL chain support and provider-aware `agent()` materialization.
 - `@dawn-ai/cli` owns the user-facing commands and the local runtime behavior.
 - `create-dawn-ai-app` owns app scaffolding.
 - `@dawn-ai/devkit` owns shared template and file-generation helpers.
