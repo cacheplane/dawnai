@@ -66,4 +66,19 @@ describe("agent()", () => {
 
     expect(descriptor.retry).toBeUndefined()
   })
+
+  test("preserves optional provider on the descriptor", () => {
+    const descriptor = agent({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      systemPrompt: "Hello",
+    })
+
+    expect(descriptor.provider).toBe("anthropic")
+  })
+
+  test("provider defaults to undefined when not provided", () => {
+    const descriptor = agent({ model: "gpt-4o-mini", systemPrompt: "Hello" })
+    expect(descriptor.provider).toBeUndefined()
+  })
 })

@@ -12,6 +12,10 @@ export type {
   OpenAiModelId,
 } from "./known-model-ids.js"
 export type {
+  BuiltInModelProviderId,
+  ModelProviderId,
+} from "./model-provider.js"
+export type {
   ContinueResult,
   DawnMiddleware,
   MiddlewareRequest,
