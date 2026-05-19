@@ -25,18 +25,70 @@ describe("executeAgent with DawnAgent descriptors", () => {
     expect((error as Error).message).not.toContain("must expose invoke")
   })
 
-  test("DawnAgent descriptor accepts explicit non-OpenAI provider", async () => {
+  test("DawnAgent descriptor explicit provider overrides model inference", async () => {
+    let groqModel: unknown
+
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({
+      createReactAgent: vi.fn((options: { llm: unknown }) => {
+        groqModel = options.llm
+        return {
+          invoke: vi.fn().mockResolvedValue(new AIMessage({ content: "Groq!" })),
+        }
+      }),
+    }))
     vi.doMock("@langchain/openai", () => ({
       ChatOpenAI: class {
         constructor() {
-          throw new Error("ChatOpenAI should not materialize non-OpenAI provider")
+          throw new Error("ChatOpenAI should not materialize explicit Groq provider")
+        }
+      },
+    }))
+    vi.doMock("@langchain/groq", () => ({
+      ChatGroq: class {
+        readonly options: Record<string, unknown>
+
+        constructor(options: Record<string, unknown>) {
+          this.options = options
         }
       },
     }))
 
     const descriptor = agent({
-      provider: "anthropic",
-      model: "claude-sonnet-4-5",
+      provider: "groq",
+      model: "gpt-4o-mini",
+      systemPrompt: "You are helpful.",
+    })
+
+    const result = await executeAgent({
+      entry: descriptor,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    }).finally(() => {
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+      vi.doUnmock("@langchain/groq")
+    })
+
+    expect((result as AIMessage).content).toBe("Groq!")
+    expect((groqModel as { options: Record<string, unknown> }).options).toEqual({
+      model: "gpt-4o-mini",
+    })
+  })
+
+  test("DawnAgent descriptor rejects explicit falsy invalid provider", async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {
+        constructor() {
+          throw new Error("ChatOpenAI should not materialize invalid explicit provider")
+        }
+      },
+    }))
+
+    const descriptor = agent({
+      provider: "" as never,
+      model: "gpt-4o-mini",
       systemPrompt: "You are helpful.",
     })
 
@@ -53,8 +105,8 @@ describe("executeAgent with DawnAgent descriptors", () => {
       })
 
     expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('Unsupported agent provider ""')
     expect((error as Error).message).not.toContain("ChatOpenAI")
-    expect((error as Error).message).not.toContain("must expose invoke")
   })
 
   test("DawnAgent descriptor infers non-OpenAI provider from model", async () => {

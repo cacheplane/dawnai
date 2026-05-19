@@ -85,7 +85,7 @@ async function materializeAgent(
 
   const provider = resolveProvider({
     model: descriptor.model,
-    ...(descriptor.provider ? { provider: descriptor.provider } : {}),
+    ...(descriptor.provider !== undefined ? { provider: descriptor.provider } : {}),
   })
   const llm = await createChatModel({
     model: descriptor.model,
