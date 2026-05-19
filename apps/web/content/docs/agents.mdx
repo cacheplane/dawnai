@@ -28,7 +28,7 @@ Tools live next to the agent — `index.ts` is the agent entry, and any TS file 
 
 ## Model providers
 
-The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Raw `graph` and `chain` routes can still instantiate any provider directly.
+The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Supported built-in provider ids are `openai`, `anthropic`, `google`, `mistral`, `groq`, `ollama`, `xai`, and `openrouter`; see [`ModelProviderId`](/docs/api#modelproviderid). Raw `graph` and `chain` routes can still instantiate any provider directly.
 
 Set `provider` to one of the supported built-in provider ids when the model name is an alias, ambiguous, local, or routed through a provider gateway:
 
@@ -45,9 +45,13 @@ export default agent({
 Dawn includes the OpenAI integration for the default path. Install other LangChain provider packages as your app needs them:
 
 ```bash
-pnpm add @langchain/anthropic
-pnpm add @langchain/google-genai
-pnpm add @langchain/openrouter
+pnpm add @langchain/anthropic     # anthropic
+pnpm add @langchain/google-genai  # google
+pnpm add @langchain/mistralai     # mistral
+pnpm add @langchain/groq          # groq
+pnpm add @langchain/ollama        # ollama
+pnpm add @langchain/xai           # xai
+pnpm add @langchain/openrouter    # openrouter
 ```
 
 ## When to pick an agent

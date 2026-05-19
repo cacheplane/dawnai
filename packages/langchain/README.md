@@ -11,9 +11,13 @@ LangChain backend adapters Dawn uses to materialize `chain` routes and provider-
 Install optional provider integrations in applications as needed:
 
 ```bash
-pnpm add @langchain/anthropic
-pnpm add @langchain/google-genai
-pnpm add @langchain/openrouter
+pnpm add @langchain/anthropic     # anthropic
+pnpm add @langchain/google-genai  # google
+pnpm add @langchain/mistralai     # mistral
+pnpm add @langchain/groq          # groq
+pnpm add @langchain/ollama        # ollama
+pnpm add @langchain/xai           # xai
+pnpm add @langchain/openrouter    # openrouter
 ```
 
 This is an internal Dawn workspace package. For Dawn documentation, see <https://github.com/cacheplane/dawnai/tree/main/apps/web/content/docs>.

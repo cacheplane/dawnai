@@ -39,7 +39,7 @@ const CATEGORIES: readonly Category[] = [
         logoSrc: "/logos/providers/ollama.svg",
         logoIsWordmark: true,
       },
-      { name: "Bring-your-own graph/chain providers" },
+      { name: "Agent providers + BYO graph/chain" },
     ],
   },
   {
@@ -84,8 +84,9 @@ export function Ecosystem() {
           Plays well with your stack.
         </h2>
         <p className="mt-5 text-base text-ink-muted leading-[26px] max-w-[58ch]">
-          Dawn keeps the LangGraph.js ecosystem close: bring your own graph or chain providers,
-          observability, vector storage, and deployment target.
+          Dawn keeps the LangGraph.js ecosystem close: built-in agent providers where supported,
+          bring-your-own providers in graph and chain routes, plus observability, vector storage,
+          and deployment targets.
         </p>
 
         <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-x-10 gap-y-10">
