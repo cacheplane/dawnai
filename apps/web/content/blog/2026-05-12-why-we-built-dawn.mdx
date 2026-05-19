@@ -31,7 +31,7 @@ In practice, Dawn gives you:
 - a local `dawn dev` runtime with `/runs/wait` and `/runs/stream`
 - `dawn typegen` for `.dawn/dawn.generated.d.ts`
 - `dawn build` for `.dawn/build/langgraph.json` and per-route LangGraph entry files
-- built-in agent capabilities for memory, planning, skills, and sub-agents
+- built-in agent behavior for memory, planning, skills, and subagents
 
 That list is intentionally practical. It is the stuff you otherwise end up writing by hand.
 
@@ -150,7 +150,7 @@ Here is what we have built to date around that route structure.
 
 If `workspace/AGENTS.md` exists, Dawn injects it into the agent prompt under a `# Memory` heading on every model turn.
 
-This is intentionally simple. The file is the memory. The model sees the current contents. If the agent updates the file, the next turn sees the updated memory.
+This is intentionally simple. The file is the memory. The model sees the current contents. If your app updates the file, the next turn sees the updated memory.
 
 There is a size limit and there are no hidden databases involved. That is a tradeoff I like for this layer.
 
@@ -174,13 +174,13 @@ Dawn gives the agent a `writeTodos` tool, a `todos` state channel, and a `plan_u
 
 The important part is not the todo list itself. The important part is that a capability can add tools, prompt fragments, state, and stream behavior as one unit.
 
-### Sub-agents
+### Subagents
 
-Sub-agents are becoming a first-class composition boundary.
+Subagents are becoming a first-class composition boundary.
 
 A parent route can expose child agents through the `subagents` field on `agent({...})`, or by placing child routes under a `subagents/` directory. Dawn adds a `task({ subagent, input })` tool and a prompt section that tells the parent what specialists are available.
 
-That makes a sub-agent feel less like an imported helper function and more like a route with its own prompt, tools, and state.
+That makes a subagent feel less like an imported helper function and more like a route with its own prompt, tools, and state.
 
 ### Reasoning effort
 
@@ -206,7 +206,7 @@ Dawn is not necessary for every agent project.
 
 If you have one graph, two tools, and no need for a framework, raw LangGraph.js may be the better choice.
 
-But if your project is starting to need route conventions, generated types, a dev server, tests beside the routes, generated deployment artifacts, and reusable agent capabilities, then the framework starts to earn its place.
+But if your project is starting to need route conventions, generated types, a dev server, tests beside the routes, generated deployment artifacts, and reusable agent behavior, then the framework starts to earn its place.
 
 ## Try it
 
@@ -234,7 +234,7 @@ The runtime is still LangGraph.js.
 
 The difference is the application structure around it.
 
-Routes are folders. Tools are local. Types are generated. Capabilities compose. The build output is explicit.
+Routes are folders. Tools are local. Types are generated. Agent behavior composes around the route. The build output is explicit.
 
 That is the ordinary work of a framework.
 

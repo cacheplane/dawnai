@@ -1,0 +1,120 @@
+# Reasoning Effort
+
+Reasoning effort is route-level model tuning for OpenAI-backed `agent()` routes.
+
+Use it when one agent route needs a different reasoning budget than the rest of the app. A support coordinator might stay cheap and fast, while a tool-heavy planning route might ask for deeper reasoning.
+
+## Quick start
+
+Set `reasoning.effort` on an `agent()` descriptor:
+
+```ts title="src/app/support/[tenant]/index.ts"
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-5.1",
+  reasoning: { effort: "high" },
+  systemPrompt: "You are a careful support assistant.",
+})
+```
+
+`ReasoningConfig` is exported from `@dawn-ai/sdk`.
+
+## Supported values
+
+Dawn's type surface accepts:
+
+```ts
+type ReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+```
+
+The model provider decides which values are meaningful for a given model. Non-reasoning models ignore the setting in Dawn's current OpenAI-backed materialization path.
+
+If you omit `reasoning`, Dawn does not pass a `reasoningEffort` value. The model/provider default applies.
+
+## Where it applies
+
+Reasoning effort applies to Dawn's `agent()` descriptor path, where `@dawn-ai/langchain` materializes the descriptor with `ChatOpenAI`.
+
+It does not automatically affect:
+
+- `workflow` routes
+- raw `graph` routes
+- `chain` routes
+- models you instantiate manually inside your own graph or chain
+
+For those paths, configure reasoning on the model instance you create.
+
+## What Dawn passes through
+
+Dawn maps:
+
+```ts
+reasoning: { effort: "high" }
+```
+
+to the `ChatOpenAI` option:
+
+```ts
+{ reasoningEffort: "high" }
+```
+
+No prompt fragment, tool, state field, or stream event is added. Reasoning effort is descriptor configuration, not a file-based marker.
+
+## Choosing a value
+
+Start without a value unless you have evidence that a route needs one.
+
+Use lower values for routes where latency and cost matter more than deliberation:
+
+```ts
+reasoning: { effort: "minimal" }
+```
+
+Use higher values when the route is tool-heavy, planning-heavy, or asked to synthesize several pieces of evidence:
+
+```ts
+reasoning: { effort: "high" }
+```
+
+Avoid using reasoning effort as a substitute for better tools or clearer route design. If the agent lacks the right context, increasing reasoning will not create it.
+
+## Subagents
+
+Reasoning effort is per descriptor.
+
+If a parent and child route need different budgets, set them separately:
+
+```ts
+// parent
+export default agent({
+  model: "gpt-5.1",
+  reasoning: { effort: "low" },
+  systemPrompt: "Coordinate the work.",
+})
+
+// child
+export default agent({
+  model: "gpt-5.1",
+  reasoning: { effort: "high" },
+  systemPrompt: "Analyze the evidence carefully.",
+})
+```
+
+The parent setting does not automatically override the child setting.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/agents", title: "Agents", subtitle: "agent descriptors and runtime materialization" },
+  { href: "/docs/api", title: "API Reference", subtitle: "AgentConfig and ReasoningConfig" },
+  { href: "/docs/subagents", title: "Subagents", subtitle: "children configure their own reasoning effort" },
+  { href: "/docs/retry", title: "Retry", subtitle: "another route-level agent setting" },
+]} />
+

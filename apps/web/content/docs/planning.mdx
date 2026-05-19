@@ -1,0 +1,151 @@
+# Planning
+
+Planning gives an agent route a visible todo list that can be seeded from a file, updated by the model, stored in route state, and streamed to clients.
+
+Use planning when the route regularly does multi-step work and you want the plan to be inspectable instead of buried in the model's hidden reasoning.
+
+## Quick start
+
+Add `plan.md` next to an `agent()` route:
+
+```text
+src/app/support/[tenant]/
+  index.ts
+  plan.md
+```
+
+Seed it with markdown checklist items:
+
+```md title="src/app/support/[tenant]/plan.md"
+- [ ] Understand the customer request
+- [ ] Check account context
+- [ ] Decide whether to answer or escalate
+- [ ] Write the final response
+```
+
+When the route runs, Dawn adds four things:
+
+- a `writeTodos` tool
+- a `todos` state channel
+- a planning prompt fragment
+- a `plan_update` stream event after `writeTodos` runs
+
+The model can then keep the plan current during the run.
+
+## The `plan.md` file
+
+The file is route-local. Only the route with that `plan.md` gets planning.
+
+The parser reads markdown checklist lines:
+
+```md
+- [ ] pending item
+- [x] completed item
+- [X] also completed
+```
+
+Other markdown is ignored. Empty checklist items are ignored. Seed items can start as `pending` or `completed`; runtime updates can also use `in_progress`.
+
+If `plan.md` exists but is empty, the route still opts into planning and starts with an empty todo list.
+
+Dawn skips seed loading for files larger than 64 KiB. The capability still exists, but the initial todo list is empty.
+
+## The `writeTodos` tool
+
+Planning adds this capability tool:
+
+```ts
+writeTodos({
+  todos: [
+    { content: "Understand the customer request", status: "completed" },
+    { content: "Check account context", status: "in_progress" },
+    { content: "Write the final response", status: "pending" },
+  ],
+})
+```
+
+Each todo has:
+
+- `content`: non-empty string
+- `status`: `"pending"`, `"in_progress"`, or `"completed"`
+
+`writeTodos` is full-replace. The agent must pass the entire list every time, not just the changed item.
+
+The tool updates runtime state only. It does not write changes back to `plan.md`; that file is the seed, not a persistence target.
+
+The tool returns the new todos and updates the route state:
+
+```ts
+{
+  result: { todos },
+  state: { todos },
+}
+```
+
+The LangChain bridge turns that into a state update so later model turns see the new list.
+
+## State and prompts
+
+Planning contributes a `todos` state field with a `replace` reducer.
+
+Do not also declare a `todos` field in `state.ts`. Dawn treats that as a capability conflict and fails route preparation with a message telling you to remove either the state field or the planning marker file.
+
+Do not create a route-local tool named `writeTodos`. Dawn treats user tools and capability tools with the same name as a conflict.
+
+The planning prompt fragment is re-rendered with the current state. If there are todos, the model sees:
+
+```text
+# Planning
+
+For tasks with multiple steps, maintain a plan using `writeTodos({ todos: [...] })`.
+...
+
+Current plan:
+- [completed] Understand the customer request
+- [in_progress] Check account context
+- [pending] Write the final response
+```
+
+That prompt is what keeps the plan visible between tool calls.
+
+## Streaming
+
+When `/runs/stream` sees a `writeTodos` tool result, Dawn emits:
+
+```json
+{
+  "type": "plan_update",
+  "data": {
+    "todos": [
+      { "content": "Check account context", "status": "in_progress" }
+    ]
+  }
+}
+```
+
+If a subagent emits a planning event, the parent stream forwards it with a `subagent.` prefix, such as `subagent.plan_update`.
+
+Use `/runs/wait` when you only need the final output. Use `/runs/stream` when a UI should show progress.
+
+## Generated types
+
+`dawn typegen` includes `writeTodos` in the generated route tool types when the route directory contains `plan.md`.
+
+That makes the tool visible to route-aware TypeScript surfaces, but planning is still only applied automatically to `agent()` routes at runtime. The contributed `todos` state field is runtime state; generated route state types still come from `state.ts`.
+
+## Under the hood
+
+Planning is implemented by `createPlanningMarker()`.
+
+During agent route preparation, Dawn detects `plan.md`, reads seed todos with the checklist parser, contributes the `writeTodos` tool, contributes the `todos` state field, and contributes a stream transformer that watches tool results.
+
+The stream transformer accepts both direct `{ todos }` outputs and LangGraph Command-shaped outputs where the update is stored at `update.todos`. That keeps planning events stable across the current LangChain bridge path.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/state", title: "State", subtitle: "how route state is declared and merged" },
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "streaming protocol and /runs/stream" },
+  { href: "/docs/memory", title: "Memory", subtitle: "workspace-level prompt context" },
+  { href: "/docs/subagents", title: "Subagents", subtitle: "child runs can stream subagent.plan_update" },
+]} />

@@ -1,0 +1,159 @@
+# Skills
+
+Skills let a route expose longer instructions without putting all of them in the system prompt.
+
+The model sees a short list of available skills and can call `readSkill({ name })` when one is relevant. That keeps the baseline prompt smaller while still making detailed procedures available on demand.
+
+Use skills for route-local instructions that are too long or too conditional for the main `systemPrompt`: refund rules, triage procedures, coding standards for a particular workflow, or escalation playbooks.
+
+## Quick start
+
+Create a skill under a route's `skills/` directory:
+
+```text
+src/app/support/[tenant]/
+  index.ts
+  skills/
+    refund-policy/
+      SKILL.md
+```
+
+Every skill file must include frontmatter with a `description`:
+
+```md title="src/app/support/[tenant]/skills/refund-policy/SKILL.md"
+---
+description: Instructions for refund, exchange, and exception questions.
+---
+
+Use this skill when the customer asks about refunds, exchanges, credits, or exceptions.
+
+## Process
+
+1. Check the order date.
+2. Check whether the item is final sale.
+3. Offer the standard path before requesting an exception.
+```
+
+When this route runs, Dawn adds:
+
+- a `# Skills` prompt section listing `refund-policy` and its description
+- a `readSkill({ name })` tool that returns the body of `SKILL.md`
+
+The body is not injected until the model asks for it.
+
+## Skill names
+
+By default, the skill name is the directory name.
+
+```text
+skills/refund-policy/SKILL.md
+```
+
+creates a skill named `refund-policy`.
+
+You can override the model-facing name with frontmatter:
+
+```md
+---
+name: refunds
+description: Instructions for refund, exchange, and exception questions.
+---
+```
+
+Skill names must be unique within the route. If two skills resolve to the same name, route preparation fails with a duplicate-name error.
+
+Directory names must start with a letter or number and can contain letters, numbers, underscores, and hyphens. Dotfiles, spaces, and punctuation-heavy names are ignored during discovery.
+
+## What the model sees
+
+Dawn renders a compact prompt fragment:
+
+```text
+# Skills
+
+The following skills are available. To use one, call `readSkill({ name: "<name>" })`
+to load its full instructions before acting.
+
+- **refund-policy** - Instructions for refund, exchange, and exception questions.
+```
+
+Skill entries are sorted by name in the prompt.
+
+The `readSkill` tool accepts:
+
+```ts
+{ name: string }
+```
+
+For a known skill, it returns the markdown body after frontmatter. For an unknown skill, it returns a helpful string listing the available names. If the input shape is invalid, the tool schema validation rejects it.
+
+The full skill bodies are read during route preparation, not from disk on every `readSkill` call.
+
+## Frontmatter requirements
+
+`description` is required because it is the only information the model sees before choosing whether to load the skill.
+
+This is valid:
+
+```md
+---
+description: Use for billing dispute triage.
+---
+
+...
+```
+
+This fails route preparation:
+
+```md
+Use for billing dispute triage.
+```
+
+So does this:
+
+```md
+---
+name: billing-disputes
+---
+
+...
+```
+
+The description should be short and action-oriented. It is not the full skill.
+
+Dawn's frontmatter parser is intentionally small. Use simple `key: value` fields; do not rely on full YAML features.
+
+## Generated types
+
+`dawn typegen` includes `readSkill` in generated route tool types when a route has at least one valid `skills/<name>/SKILL.md` file.
+
+The generated input type is:
+
+```ts
+{ name: string }
+```
+
+The output type is:
+
+```ts
+string
+```
+
+## Under the hood
+
+Skills are implemented by `createSkillsMarker()`.
+
+During agent route preparation, Dawn discovers skill directories, reads frontmatter and body content, contributes the `readSkill` tool, and contributes the prompt fragment.
+
+Skills do not add state fields or stream transformers. They are prompt plus tool only.
+
+The list of skills is loaded during route preparation. The full skill body is held by the tool and returned when `readSkill` runs.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/tools", title: "Tools", subtitle: "route-local tools and schemas" },
+  { href: "/docs/agents", title: "Agents", subtitle: "agent descriptors and system prompts" },
+  { href: "/docs/memory", title: "Memory", subtitle: "workspace-wide context loaded every turn" },
+  { href: "/docs/subagents", title: "Subagents", subtitle: "delegate work to another agent route" },
+]} />

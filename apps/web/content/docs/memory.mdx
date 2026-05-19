@@ -1,0 +1,109 @@
+# Memory
+
+Memory lets every Dawn agent route read the same workspace-level facts without adding a database or a custom prompt loader.
+
+It is intentionally simple: if `workspace/AGENTS.md` exists and has content, Dawn injects that content into the agent system prompt on every model turn.
+
+Use memory for stable, project-level context that should follow all agent routes: repository conventions, product facts, user preferences, account assumptions for a local workspace, or anything else that should be visible before the model chooses tools.
+
+## Quick start
+
+Create a workspace memory file:
+
+```text
+workspace/
+  AGENTS.md
+```
+
+Add concise instructions:
+
+```md title="workspace/AGENTS.md"
+# Workspace Memory
+
+- Use pnpm for package commands.
+- Prefer short, direct customer replies.
+- Escalate billing exceptions to the finance queue.
+```
+
+Run any `agent()` route. Dawn adds a `# Memory` prompt fragment after the route's `systemPrompt` and before the current conversation messages.
+
+You do not import anything in the route to enable this. The presence of the file is the opt-in.
+
+## What Dawn injects
+
+Dawn renders memory like this:
+
+```text
+# Memory
+
+The block below is the live contents of `workspace/AGENTS.md`, re-read on every turn.
+...
+
+---
+
+<trimmed file contents>
+```
+
+The exact instructional text is owned by Dawn, but the important behavior is stable:
+
+- The file path is `workspace/AGENTS.md` under the current process working directory.
+- The feature applies to `agent()` routes during route preparation.
+- Empty files are skipped.
+- Files larger than 64 KiB are not loaded; the prompt says the file exceeded the limit.
+- Files that cannot be read are skipped.
+- The file is re-read when the prompt fragment renders, so a later model turn can see an updated file.
+
+Because the memory file is workspace-level, it is shared by all agent routes in the same running app. It is not route-local.
+
+If you run Dawn from a different working directory while pointing at an app root explicitly, remember that memory follows `process.cwd()`, not the route directory.
+
+## Updating memory
+
+Dawn does not currently add a generic `writeFile` or `writeMemory` tool.
+
+If an agent should update `workspace/AGENTS.md`, expose that intentionally as one of your route tools:
+
+```ts title="src/app/support/tools/updateMemory.ts"
+import { readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+
+export const description = "Replace the workspace memory file."
+
+export default async (input: { readonly content: string }) => {
+  const path = join(process.cwd(), "workspace", "AGENTS.md")
+  const previous = await readFile(path, "utf8").catch(() => "")
+  await writeFile(path, input.content, "utf8")
+  return { previousLength: previous.length, nextLength: input.content.length }
+}
+```
+
+Keep that kind of tool narrow. Memory can change every route that uses the workspace, so it should not be a casual scratchpad.
+
+## Under the hood
+
+The runtime applies built-in agent behavior in `prepareRouteExecution` before invoking an agent route. For memory, Dawn registers `createAgentsMdMarker()`.
+
+That marker always participates for agent routes, but its rendered prompt fragment returns an empty string unless the file exists and has usable content.
+
+When `@dawn-ai/langchain` materializes an `agent()` descriptor, it uses a function-form prompt if any prompt fragments exist. That function calls every fragment renderer with the current state before each model call, then builds:
+
+```ts
+[{ role: "system", content: composedSystemPrompt }, ...messages]
+```
+
+Memory is one of those prompt fragments. That is why the file can be re-read across turns without rebuilding the route.
+
+## What memory is not
+
+Memory is not a vector store, retrieval system, or per-user profile service. It is not automatically summarized. It is not scoped by tenant, route, or session.
+
+If you need tenant-specific or user-specific memory, keep that in your own storage and expose it through route-local tools. Use `workspace/AGENTS.md` for facts that are safe and useful across the whole workspace.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/agents", title: "Agents", subtitle: "agent descriptors and prompt composition" },
+  { href: "/docs/tools", title: "Tools", subtitle: "add an explicit memory writer when needed" },
+  { href: "/docs/planning", title: "Planning", subtitle: "route-local plan state for multi-step work" },
+  { href: "/docs/skills", title: "Skills", subtitle: "load long instructions only when needed" },
+]} />

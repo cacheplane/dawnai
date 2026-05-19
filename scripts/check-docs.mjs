@@ -44,6 +44,18 @@ function frontmatterDate(source) {
   return match?.[1] ?? null
 }
 
+function docHrefToContentPath(href) {
+  const slug = href.replace(/^\/docs\/?/, "")
+  return slug === "recipes"
+    ? "apps/web/content/docs/recipes/index.mdx"
+    : `apps/web/content/docs/${slug}.mdx`
+}
+
+function docHrefToPagePath(href) {
+  const slug = href.replace(/^\/docs\/?/, "")
+  return `apps/web/app/docs/${slug}/page.tsx`
+}
+
 for (const check of checks) {
   const filePath = resolve(repoRoot, check.file)
   const source = readFileSync(filePath, "utf8")
@@ -52,6 +64,29 @@ for (const check of checks) {
     if (!source.includes(pattern)) {
       failures.push(`${check.file} is missing required docs text: ${pattern}`)
     }
+  }
+}
+
+// Docs topology check — every docs page in nav must have a content file and
+// a matching app wrapper, and every internal docs link must point to a known
+// docs page. This catches stale links when docs pages are split or moved.
+const docsNavPath = resolve(repoRoot, "apps/web/app/components/docs/nav.ts")
+const docsNav = readFileSync(docsNavPath, "utf8")
+const navDocHrefs = [...docsNav.matchAll(/href:\s*"((?:\/docs\/)[^"]+)"/g)].map((m) => m[1])
+const uniqueNavDocHrefs = [...new Set(navDocHrefs)]
+
+for (const href of uniqueNavDocHrefs) {
+  const contentPath = resolve(repoRoot, docHrefToContentPath(href))
+  const pagePath = resolve(repoRoot, docHrefToPagePath(href))
+  try {
+    statSync(contentPath)
+  } catch {
+    failures.push(`DOCS_NAV references ${href}, but ${relativeToRoot(contentPath)} is missing`)
+  }
+  try {
+    statSync(pagePath)
+  } catch {
+    failures.push(`DOCS_NAV references ${href}, but ${relativeToRoot(pagePath)} is missing`)
   }
 }
 
@@ -181,6 +216,18 @@ for (const root of userFacingRoots) {
     )
   } else {
     userFacingFiles.push(full)
+  }
+}
+
+const knownDocHrefs = new Set(uniqueNavDocHrefs)
+for (const filePath of userFacingFiles) {
+  const source = readFileSync(filePath, "utf8")
+  const links = source.matchAll(/(?:href:\s*|]\()["']?(\/docs\/[^"',)\s#}]+)/g)
+  for (const match of links) {
+    const href = match[1]
+    if (href && !knownDocHrefs.has(href)) {
+      failures.push(`${relativeToRoot(filePath)} links to unknown docs page ${href}`)
+    }
   }
 }
 

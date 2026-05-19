@@ -40,9 +40,9 @@ export interface AgentConfig {
 }
 ```
 
-Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `subagents` lists child agent descriptors exposed through Dawn's subagent capability. `systemPrompt` is sent as the system message on every invocation. The current `agent()` materialization path is OpenAI-backed; use raw `graph` or `chain` routes when you instantiate another provider yourself.
+Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `subagents` lists child agent descriptors exposed through Dawn's subagent feature. `systemPrompt` is sent as the system message on every invocation. The current `agent()` materialization path is OpenAI-backed; use raw `graph` or `chain` routes when you instantiate another provider yourself.
 
-See [Agents](/docs/agents).
+See [Agents](/docs/agents), [Reasoning Effort](/docs/reasoning-effort), and [Subagents](/docs/subagents).
 
 ### `ReasoningConfig`
 
@@ -54,7 +54,7 @@ export interface ReasoningConfig {
 
 Optional reasoning-effort tuning for OpenAI-backed `agent()` routes. Non-reasoning models ignore it.
 
-See [Agents](/docs/agents).
+See [Reasoning Effort](/docs/reasoning-effort).
 
 ### `RetryConfig`
 
@@ -84,7 +84,7 @@ export interface DawnAgent {
 
 Opaque branded type returned by `agent()`. Carry it as a route export; do not construct it manually. It preserves the public agent config fields plus Dawn's internal brand. Use `isDawnAgent()` to check values at runtime.
 
-See [Agents](/docs/agents).
+See [Agents](/docs/agents) and [Subagents](/docs/subagents).
 
 ### `isDawnAgent(value)`
 
@@ -421,15 +421,18 @@ See [Routes](/docs/routes), [State](/docs/state).
 2. [Routes](/docs/routes) — route kinds, pathname conventions, and `RouteConfig`
 3. [Agents](/docs/agents) — `agent()`, tool auto-binding, model selection
 4. [Tools](/docs/tools) — writing tools, `RuntimeContext`, type inference
-5. [Middleware](/docs/middleware) — request gating, `allow()`, `reject()`, context flow
-6. [CLI](/docs/cli) — `dawn dev`, `dawn build`, `dawn typegen`, and other commands
-7. [Dev Server](/docs/dev-server) — local development, hot reload, route playground
+5. [Memory](/docs/memory), [Planning](/docs/planning), [Skills](/docs/skills), [Subagents](/docs/subagents), and [Reasoning Effort](/docs/reasoning-effort) — route-level agent behavior
+6. [Middleware](/docs/middleware) — request gating, `allow()`, `reject()`, context flow
+7. [CLI](/docs/cli) — `dawn dev`, `dawn build`, `dawn typegen`, and other commands
+8. [Dev Server](/docs/dev-server) — local development, hot reload, route playground
 
 ## Related
 
 <RelatedCards items={[
   { href: "/docs/getting-started", title: "Getting Started", subtitle: "install Dawn and run your first route" },
   { href: "/docs/retry", title: "Retry", subtitle: "configuring RetryConfig on an agent" },
+  { href: "/docs/reasoning-effort", title: "Reasoning Effort", subtitle: "configuring ReasoningConfig on an agent" },
+  { href: "/docs/subagents", title: "Subagents", subtitle: "using AgentConfig.subagents" },
   { href: "/docs/state", title: "State", subtitle: "per-route typed state and RouteState<P>" },
   { href: "/docs/deployment", title: "Deployment", subtitle: "building and deploying a Dawn project" },
 ]} />

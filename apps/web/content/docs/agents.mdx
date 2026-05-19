@@ -65,11 +65,15 @@ export default agent({
 
 See [Retry](/docs/retry) for the backoff strategy, what is retried, and the streaming caveat. Dawn does not expose per-tool retry overrides today.
 
-## Capabilities
+## Built-in agent features
 
-Agent routes can opt into higher-level behavior from files and descriptor fields: memory from `workspace/AGENTS.md`, planning from `plan.md`, skills from `skills/<name>/SKILL.md`, sub-agents from `subagents/` or `agent({ subagents })`, and model reasoning effort from `reasoning`.
+Agent routes can opt into higher-level behavior from files and descriptor fields.
 
-See [Capabilities](/docs/capabilities) for the file conventions and runtime behavior.
+- [Memory](/docs/memory) loads `workspace/AGENTS.md` into the prompt.
+- [Planning](/docs/planning) adds `plan.md`, `writeTodos`, `todos`, and `plan_update`.
+- [Skills](/docs/skills) adds `skills/<name>/SKILL.md` and `readSkill`.
+- [Subagents](/docs/subagents) adds child routes and `task`.
+- [Reasoning Effort](/docs/reasoning-effort) maps `reasoning.effort` to OpenAI-backed `agent()` routes.
 
 ## Streaming
 
@@ -81,6 +85,10 @@ The local dev server exposes streaming via `/runs/stream`. See [Dev Server](/doc
   { href: "/docs/routes", title: "Routes", subtitle: "pathname rules and route entry shapes" },
   { href: "/docs/tools", title: "Tools", subtitle: "tool input/output rules, type inference" },
   { href: "/docs/state", title: "State", subtitle: "when an agent reads or returns structured state" },
-  { href: "/docs/capabilities", title: "Capabilities", subtitle: "memory, planning, skills, and sub-agents" },
+  { href: "/docs/memory", title: "Memory", subtitle: "workspace-level prompt context" },
+  { href: "/docs/planning", title: "Planning", subtitle: "route-local todo state" },
+  { href: "/docs/skills", title: "Skills", subtitle: "long instructions on demand" },
+  { href: "/docs/subagents", title: "Subagents", subtitle: "delegate to child agent routes" },
+  { href: "/docs/reasoning-effort", title: "Reasoning Effort", subtitle: "route-level model tuning" },
   { href: "/docs/retry", title: "Retry", subtitle: "retry config and backoff" },
 ]} />
