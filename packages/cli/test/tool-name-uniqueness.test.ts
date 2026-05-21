@@ -35,3 +35,40 @@ describe("checkToolNameUniqueness", () => {
     expect(result.message).toContain("task")
   })
 })
+
+describe("checkToolNameUniqueness — overridable", () => {
+  it("when a capability tool is overridable, a user tool with the same name does NOT error and replaces it", () => {
+    const result = checkToolNameUniqueness({
+      userTools: [{ name: "readFile" }],
+      capabilityTools: [{ name: "readFile", overridable: true }],
+      reservedNames: new Set(),
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // The returned effectiveCapabilityTools drops the overridden tool.
+    expect(result.effectiveCapabilityTools).toEqual([])
+  })
+
+  it("when a capability tool is NOT overridable, a user tool with the same name still errors", () => {
+    const result = checkToolNameUniqueness({
+      userTools: [{ name: "writeTodos" }],
+      capabilityTools: [{ name: "writeTodos" }], // no overridable flag = not overridable
+      reservedNames: new Set(),
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it("returns the un-shadowed capability tools in effectiveCapabilityTools", () => {
+    const result = checkToolNameUniqueness({
+      userTools: [{ name: "readFile" }],
+      capabilityTools: [
+        { name: "readFile", overridable: true },
+        { name: "writeFile", overridable: true },
+      ],
+      reservedNames: new Set(),
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.effectiveCapabilityTools.map((t) => t.name)).toEqual(["writeFile"])
+  })
+})
