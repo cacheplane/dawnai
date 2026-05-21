@@ -279,7 +279,9 @@ describe("streamAgent — interrupt propagation", () => {
 
     const pending = getPending(threadId)
     expect(pending).toBeDefined()
-    expect(pending?.interruptId).toBe("abc")
+    // Pending map uses the workspace capability's payload interruptId (the
+    // same value the SSE envelope emits), NOT LangGraph's outer entry.id.
+    expect(pending?.interruptId).toBe("perm-resume-1")
 
     pending?.resolve("once")
     await consumer

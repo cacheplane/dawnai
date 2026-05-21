@@ -654,8 +654,17 @@ async function* streamFromRunnable(
     // and we'd need to await N decisions. None of today's capabilities do
     // that; revisit when one does.
     const entry = pass.interrupts[0]
+    // Use the workspace capability's payload interruptId (the same id the SSE
+    // envelope emits via entry.value) so resume requests from the client match
+    // the pending-map key. LangGraph's outer entry.id is a different value.
+    const payloadInterruptId =
+      entry && typeof entry.value === "object" && entry.value !== null
+        ? (entry.value as { interruptId?: unknown }).interruptId
+        : undefined
     const interruptId =
-      (typeof entry?.id === "string" ? entry.id : undefined) ?? `generated-${Date.now()}`
+      (typeof payloadInterruptId === "string" ? payloadInterruptId : undefined) ??
+      (typeof entry?.id === "string" ? entry.id : undefined) ??
+      `generated-${Date.now()}`
 
     const decision = await new Promise<ResumeDecision>((resolve) => {
       const pending: PendingInterrupt = { interruptId, resolve }
