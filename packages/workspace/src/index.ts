@@ -8,3 +8,4 @@ export type {
   FilesystemBackend,
   FilesystemMiddleware,
 } from "./types.js"
+export { type LoggingOptions, withExecLogging, withFilesystemLogging } from "./with-logging.js"
