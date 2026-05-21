@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs"
 import { join, resolve, sep } from "node:path"
+import type { PermissionsStore } from "@dawn-ai/permissions"
+import { suggestedCommandPattern, suggestedPathPattern } from "@dawn-ai/permissions"
 import type { BackendContext, ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
-
 import { localExec, localFilesystem } from "@dawn-ai/workspace"
+import { interrupt } from "@langchain/langgraph"
 import { z } from "zod"
 
 import type { CapabilityMarker, DawnToolDefinition } from "../types.js"
@@ -23,16 +25,110 @@ const WRITE_FILE_INPUT = z.object({ path: z.string().min(1), content: z.string()
 const LIST_DIR_INPUT = z.object({ path: z.string().default(".") })
 const RUN_BASH_INPUT = z.object({ command: z.string().min(1) })
 
-function pathJail(userPath: string, workspaceRoot: string): string {
-  const resolved = resolve(workspaceRoot, userPath)
-  if (resolved !== workspaceRoot && !resolved.startsWith(workspaceRoot + sep)) {
-    throw new Error(`Path is outside workspace: ${userPath}`)
-  }
-  return resolved
-}
-
 function backendContext(workspaceRoot: string, signal: AbortSignal): BackendContext {
   return { signal, workspaceRoot }
+}
+
+type GateResult = { allowed: true } | { allowed: false; reason: string }
+
+async function gatePathOp(
+  permissions: PermissionsStore | undefined,
+  operation: "readFile" | "writeFile" | "listDir",
+  absPath: string,
+  workspaceRoot: string,
+): Promise<GateResult> {
+  // If permissions store is absent, allow (legacy behavior — capability used without permissions context).
+  if (!permissions) return { allowed: true }
+  if (permissions.mode === "bypass") return { allowed: true }
+
+  const insideWorkspace = absPath === workspaceRoot || absPath.startsWith(workspaceRoot + sep)
+
+  // Inside workspace: always allow silently.
+  if (insideWorkspace) return { allowed: true }
+
+  // Outside workspace: consult the store.
+  const decision = permissions.match(operation, absPath)
+  if (decision === "allow") return { allowed: true }
+  if (decision === "deny") {
+    return { allowed: false, reason: `Permission denied by user: ${absPath}` }
+  }
+  // decision === "unknown"
+  if (permissions.mode === "non-interactive") {
+    return { allowed: false, reason: `Permission denied (fail-closed): ${absPath}` }
+  }
+  // Interactive: emit LangGraph interrupt and await user decision.
+  const result = await emitPermissionInterrupt({
+    kind: "path",
+    operation,
+    path: absPath,
+    permissions,
+  })
+  if (result === "deny") {
+    return { allowed: false, reason: `Permission denied by user: ${absPath}` }
+  }
+  return { allowed: true }
+}
+
+async function gateBashOp(
+  permissions: PermissionsStore | undefined,
+  command: string,
+): Promise<GateResult> {
+  if (!permissions) return { allowed: true }
+  if (permissions.mode === "bypass") return { allowed: true }
+
+  const decision = permissions.match("bash", command)
+  if (decision === "allow") return { allowed: true }
+  if (decision === "deny") {
+    return { allowed: false, reason: `Permission denied by user: ${command}` }
+  }
+  if (permissions.mode === "non-interactive") {
+    return { allowed: false, reason: `Permission denied (fail-closed): ${command}` }
+  }
+  const result = await emitPermissionInterrupt({
+    kind: "command",
+    command,
+    permissions,
+  })
+  if (result === "deny") {
+    return { allowed: false, reason: `Permission denied by user: ${command}` }
+  }
+  return { allowed: true }
+}
+
+interface InterruptArgs {
+  kind: "command" | "path"
+  command?: string
+  operation?: "readFile" | "writeFile" | "listDir"
+  path?: string
+  permissions: PermissionsStore
+}
+
+async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "deny"> {
+  const interruptId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const suggestedPattern =
+    args.kind === "command"
+      ? suggestedCommandPattern(args.command ?? "")
+      : suggestedPathPattern(args.path ?? "")
+  const payload = {
+    interruptId,
+    type: "permission-request" as const,
+    kind: args.kind,
+    detail:
+      args.kind === "command"
+        ? { command: args.command ?? "", suggestedPattern }
+        : {
+            operation: args.operation ?? "readFile",
+            path: args.path ?? "",
+            suggestedPattern,
+          },
+  }
+  const decision = interrupt(payload) as "once" | "always" | "deny"
+  if (decision === "deny") return "deny"
+  if (decision === "always") {
+    const tool = args.kind === "command" ? "bash" : (args.operation ?? "readFile")
+    await args.permissions.addAllow(tool, suggestedPattern)
+  }
+  return "allow"
 }
 
 interface OverridableTool extends DawnToolDefinition {
@@ -43,6 +139,7 @@ function buildWorkspaceTools(
   workspaceRoot: string,
   fs: FilesystemBackend,
   exec: ExecBackend,
+  permissions: PermissionsStore | undefined,
 ): readonly OverridableTool[] {
   const readFile: OverridableTool = {
     name: "readFile",
@@ -51,8 +148,12 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { path } = READ_FILE_INPUT.parse(input)
-      const safe = pathJail(path, workspaceRoot)
-      return fs.readFile(safe, backendContext(workspaceRoot, ctx.signal))
+      const absPath = resolve(workspaceRoot, path)
+      const gate = await gatePathOp(permissions, "readFile", absPath, workspaceRoot)
+      if (!gate.allowed) {
+        throw new Error(gate.reason)
+      }
+      return fs.readFile(absPath, backendContext(workspaceRoot, ctx.signal))
     },
   }
   const writeFile: OverridableTool = {
@@ -62,8 +163,12 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { path, content } = WRITE_FILE_INPUT.parse(input)
-      const safe = pathJail(path, workspaceRoot)
-      const result = await fs.writeFile(safe, content, backendContext(workspaceRoot, ctx.signal))
+      const absPath = resolve(workspaceRoot, path)
+      const gate = await gatePathOp(permissions, "writeFile", absPath, workspaceRoot)
+      if (!gate.allowed) {
+        throw new Error(gate.reason)
+      }
+      const result = await fs.writeFile(absPath, content, backendContext(workspaceRoot, ctx.signal))
       return `wrote ${result.bytesWritten} bytes to ${path}`
     },
   }
@@ -74,8 +179,12 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { path } = LIST_DIR_INPUT.parse(input)
-      const safe = pathJail(path, workspaceRoot)
-      const entries = await fs.listDir(safe, backendContext(workspaceRoot, ctx.signal))
+      const absPath = resolve(workspaceRoot, path)
+      const gate = await gatePathOp(permissions, "listDir", absPath, workspaceRoot)
+      if (!gate.allowed) {
+        throw new Error(gate.reason)
+      }
+      const entries = await fs.listDir(absPath, backendContext(workspaceRoot, ctx.signal))
       return [...entries]
     },
   }
@@ -86,6 +195,10 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { command } = RUN_BASH_INPUT.parse(input)
+      const gate = await gateBashOp(permissions, command)
+      if (!gate.allowed) {
+        throw new Error(gate.reason)
+      }
       return exec.runCommand({ command }, backendContext(workspaceRoot, ctx.signal))
     },
   }
@@ -101,7 +214,15 @@ export function createWorkspaceMarker(): CapabilityMarker {
       if (!existsSync(root)) return {}
       const fs = context.backends?.filesystem ?? localFilesystem()
       const exec = context.backends?.exec ?? localExec()
-      return { tools: buildWorkspaceTools(root, fs, exec) }
+      const permissions = context.permissions
+
+      if (permissions?.mode === "bypass") {
+        console.warn(
+          "[dawn:permissions] mode=bypass — path-jail disabled, all bash unrestricted. Do not use in production.",
+        )
+      }
+
+      return { tools: buildWorkspaceTools(root, fs, exec, permissions) }
     },
   }
 }

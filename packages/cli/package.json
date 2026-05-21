@@ -46,6 +46,7 @@
     "@dawn-ai/core": "workspace:*",
     "@dawn-ai/langchain": "workspace:*",
     "@dawn-ai/langgraph": "workspace:*",
+    "@dawn-ai/permissions": "workspace:*",
     "commander": "14.0.3",
     "tsx": "^4.8.1"
   },
