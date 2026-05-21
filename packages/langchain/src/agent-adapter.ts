@@ -164,10 +164,17 @@ export interface AgentStreamChunk {
 }
 
 /**
- * LangGraph 1.x surfaces `interrupt()` calls in the graph's final output under
- * the `__interrupt__` key — there is no dedicated `on_interrupt` streamEvents
- * v2 event. We detect interrupts by inspecting `on_chain_end` for the
- * top-level `LangGraph` chain.
+ * LangGraph 1.x's `interrupt()` throws a `GraphInterrupt` from inside the tool
+ * node. Under `streamEvents` v2 this surfaces as an `on_tool_error` whose
+ * `event.data.error` is the `GraphInterrupt` instance — its `.name` is
+ * `"GraphInterrupt"` and its `.interrupts` array carries the `{ id, value }`
+ * entries we need. The top-level `on_chain_end` for `LangGraph` does NOT
+ * include `__interrupt__` in this code path (that key appears only on the
+ * `invoke`/`stream` return value), so detection must happen at the tool error.
+ *
+ * We still keep the `__interrupt__` extractor for `on_chain_end` as a
+ * defensive fallback in case a future LangGraph version surfaces interrupts
+ * via the chain output too.
  */
 const INTERRUPT_KEY = "__interrupt__"
 
@@ -183,6 +190,97 @@ function extractInterrupts(output: unknown): readonly RawInterruptEntry[] | unde
   const maybe = (output as Record<string, unknown>)[INTERRUPT_KEY]
   if (!Array.isArray(maybe)) return undefined
   return maybe as readonly RawInterruptEntry[]
+}
+
+/**
+ * Detects a thrown `GraphInterrupt` surfaced via `on_tool_error`.
+ *
+ * LangGraph's `interrupt()` throws a `GraphInterrupt` whose `.message` is
+ * `JSON.stringify(interrupts)` and whose `.interrupts` array carries the
+ * `{ id, value }` entries. By the time the error reaches `streamEvents`'
+ * `data.error` it has already been stringified — typically into
+ * `<JSON interrupts>\n\nGraphInterrupt: <JSON interrupts>\n    at ...stack`.
+ *
+ * We handle three shapes defensively:
+ *   - object with `.name === "GraphInterrupt"` and `.interrupts` array
+ *     (in case a future LangGraph version surfaces the live error)
+ *   - object/Error whose stringified message starts with a JSON array
+ *   - bare string with the `GraphInterrupt:` marker
+ */
+function extractInterruptsFromError(error: unknown): readonly RawInterruptEntry[] | undefined {
+  if (!error) return undefined
+
+  if (typeof error === "object") {
+    const e = error as { name?: unknown; interrupts?: unknown; message?: unknown }
+    if (
+      e.name === "GraphInterrupt" &&
+      Array.isArray(e.interrupts) &&
+      e.interrupts.length > 0
+    ) {
+      return e.interrupts as readonly RawInterruptEntry[]
+    }
+    if (typeof e.message === "string") {
+      const parsed = parseInterruptStringMessage(e.message)
+      if (parsed) return parsed
+    }
+  }
+
+  if (typeof error === "string") {
+    const parsed = parseInterruptStringMessage(error)
+    if (parsed) return parsed
+  }
+
+  return undefined
+}
+
+/**
+ * Parses the stringified form of a GraphInterrupt's message. The string
+ * begins with `JSON.stringify(interrupts, null, 2)` and is followed by
+ * `\n\nGraphInterrupt: ...\n    at ...` stack metadata. We slice the leading
+ * JSON array up to the first `]` followed by a newline + non-JSON sentinel
+ * and parse it.
+ */
+function parseInterruptStringMessage(
+  text: string,
+): readonly RawInterruptEntry[] | undefined {
+  const trimmed = text.trimStart()
+  if (!trimmed.startsWith("[")) return undefined
+  // Find the matching closing bracket by bracket counting at depth 0 — robust
+  // against nested arrays in the interrupt payloads.
+  let depth = 0
+  let inString = false
+  let escape = false
+  let end = -1
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (inString) {
+      if (ch === "\\") escape = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === "[") depth++
+    else if (ch === "]") {
+      depth--
+      if (depth === 0) {
+        end = i
+        break
+      }
+    }
+  }
+  if (end === -1) return undefined
+  const json = trimmed.slice(0, end + 1)
+  try {
+    const parsed = JSON.parse(json)
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined
+    return parsed as readonly RawInterruptEntry[]
+  } catch {
+    return undefined
+  }
 }
 
 export interface AgentOptions {
@@ -372,7 +470,7 @@ async function* streamFromRunnable(
       options: Record<string, unknown>,
     ) => AsyncIterable<{
       event: string
-      data: { chunk?: unknown; output?: unknown }
+      data: { chunk?: unknown; output?: unknown; error?: unknown }
       name: string
     }>
   }
@@ -468,6 +566,29 @@ async function* streamFromRunnable(
                   yield {
                     type: out.event as AgentStreamChunk["type"],
                     data: out.data,
+                  }
+                }
+              }
+              break
+            }
+            case "on_tool_error": {
+              // LangGraph's interrupt() throws a GraphInterrupt from inside
+              // the tool node. The error bubbles through streamEvents as
+              // on_tool_error with the GraphInterrupt instance on data.error.
+              // LangGraph itself catches it to park the checkpointer state,
+              // so the outer iterator continues normally afterwards.
+              const interrupts = extractInterruptsFromError(event.data.error)
+              if (interrupts && interrupts.length > 0) {
+                capturedInterrupts = interrupts
+                for (const entry of interrupts) {
+                  hasYielded = true
+                  yield {
+                    type: "interrupt" as const,
+                    // The capability's interrupt() payload is wrapped in
+                    // entry.value by LangGraph — surface it verbatim so the
+                    // SSE consumer sees the original {interruptId, kind, ...}
+                    // envelope the workspace capability emitted.
+                    data: entry.value,
                   }
                 }
               }
