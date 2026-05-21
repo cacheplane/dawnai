@@ -1,3 +1,4 @@
+export { type LocalExecOptions, localExec } from "./local-exec.js"
 export { type LocalFilesystemOptions, localFilesystem } from "./local-filesystem.js"
 export type {
   BackendContext,
