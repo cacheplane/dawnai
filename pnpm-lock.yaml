@@ -235,6 +235,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
+      '@dawn-ai/permissions':
+        specifier: workspace:*
+        version: link:../permissions
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
@@ -315,6 +318,15 @@ importers:
       '@dawn-ai/sdk':
         specifier: workspace:*
         version: link:../sdk
+    devDependencies:
+      '@dawn-ai/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
+  packages/permissions:
     devDependencies:
       '@dawn-ai/config-typescript':
         specifier: workspace:*

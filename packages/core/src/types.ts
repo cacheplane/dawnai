@@ -1,3 +1,4 @@
+import type { PermissionMode } from "@dawn-ai/permissions"
 import type { RouteKind } from "@dawn-ai/sdk"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 
@@ -8,6 +9,11 @@ export interface DawnConfig {
   readonly backends?: {
     readonly filesystem?: FilesystemBackend
     readonly exec?: ExecBackend
+  }
+  readonly permissions?: {
+    readonly mode?: PermissionMode
+    readonly allow?: Readonly<Record<string, readonly string[]>>
+    readonly deny?: Readonly<Record<string, readonly string[]>>
   }
 }
 
