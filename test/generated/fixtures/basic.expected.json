@@ -27,7 +27,9 @@
         "@dawn-ai/core": "<tarball:@dawn-ai/core>",
         "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
         "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
-        "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>"
+        "@dawn-ai/permissions": "<tarball:@dawn-ai/permissions>",
+        "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
+        "@dawn-ai/workspace": "<tarball:@dawn-ai/workspace>"
       }
     }
   },

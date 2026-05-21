@@ -178,7 +178,9 @@ function createTemplateReplacements(
   readonly dawnCoreSpecifier: string
   readonly dawnLangchainSpecifier: string
   readonly dawnLanggraphSpecifier: string
+  readonly dawnPermissionsSpecifier: string
   readonly dawnSdkSpecifier: string
+  readonly dawnWorkspaceSpecifier: string
 } {
   if (options.mode === "internal") {
     return {
@@ -190,7 +192,11 @@ function createTemplateReplacements(
       dawnCoreSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/core")),
       dawnLangchainSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langchain")),
       dawnLanggraphSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langgraph")),
+      dawnPermissionsSpecifier: createAbsoluteFileSpecifier(
+        resolve(repoRoot, "packages/permissions"),
+      ),
       dawnSdkSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/sdk")),
+      dawnWorkspaceSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/workspace")),
     }
   }
 
@@ -201,7 +207,9 @@ function createTemplateReplacements(
     dawnCoreSpecifier: options.distTag,
     dawnLangchainSpecifier: options.distTag,
     dawnLanggraphSpecifier: options.distTag,
+    dawnPermissionsSpecifier: options.distTag,
     dawnSdkSpecifier: options.distTag,
+    dawnWorkspaceSpecifier: options.distTag,
   }
 }
 
@@ -227,7 +235,9 @@ async function applyInternalModePackageOverrides(
       "@dawn-ai/core": replacements.dawnCoreSpecifier,
       "@dawn-ai/langchain": replacements.dawnLangchainSpecifier,
       "@dawn-ai/langgraph": replacements.dawnLanggraphSpecifier,
+      "@dawn-ai/permissions": replacements.dawnPermissionsSpecifier,
       "@dawn-ai/sdk": replacements.dawnSdkSpecifier,
+      "@dawn-ai/workspace": replacements.dawnWorkspaceSpecifier,
     },
   }
 

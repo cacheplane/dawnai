@@ -31,7 +31,9 @@ interface PackedTarballs {
   readonly devkit: string
   readonly langchain: string
   readonly langgraph: string
+  readonly permissions: string
   readonly sdk: string
+  readonly workspace: string
 }
 
 interface GeneratedAppScenarioResult {
@@ -170,7 +172,9 @@ async function runGeneratedAppScenario(
           "@dawn-ai/core",
           "@dawn-ai/langchain",
           "@dawn-ai/langgraph",
+          "@dawn-ai/permissions",
           "@dawn-ai/sdk",
+          "@dawn-ai/workspace",
         ],
         tempRoot,
         transcriptPath,
@@ -310,7 +314,9 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/core": options.tarballs.core,
       "@dawn-ai/langchain": options.tarballs.langchain,
       "@dawn-ai/langgraph": options.tarballs.langgraph,
+      "@dawn-ai/permissions": options.tarballs.permissions,
       "@dawn-ai/sdk": options.tarballs.sdk,
+      "@dawn-ai/workspace": options.tarballs.workspace,
     },
   }
 
@@ -522,7 +528,9 @@ async function createExpectedInternalFixture(
           "@dawn-ai/core": "<repo:@dawn-ai/core>",
           "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
           "@dawn-ai/langgraph": "<repo:@dawn-ai/langgraph>",
+          "@dawn-ai/permissions": "<repo:@dawn-ai/permissions>",
           "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
+          "@dawn-ai/workspace": "<repo:@dawn-ai/workspace>",
         },
       },
     },
@@ -538,7 +546,9 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     devkit: tarballs["@dawn-ai/devkit"],
     langchain: tarballs["@dawn-ai/langchain"],
     langgraph: tarballs["@dawn-ai/langgraph"],
+    permissions: tarballs["@dawn-ai/permissions"]!,
     sdk: tarballs["@dawn-ai/sdk"],
+    workspace: tarballs["@dawn-ai/workspace"]!,
   }
 }
 
@@ -556,7 +566,9 @@ function normalizeForFixture(
     [context.tarballs.devkit, "<tarball:@dawn-ai/devkit>"],
     [context.tarballs.langchain, "<tarball:@dawn-ai/langchain>"],
     [context.tarballs.langgraph, "<tarball:@dawn-ai/langgraph>"],
+    [context.tarballs.permissions, "<tarball:@dawn-ai/permissions>"],
     [context.tarballs.sdk, "<tarball:@dawn-ai/sdk>"],
+    [context.tarballs.workspace, "<tarball:@dawn-ai/workspace>"],
     [`/private${dirname(context.tarballs.cli)}`, "<packs-dir>"],
     [dirname(context.tarballs.cli), "<packs-dir>"],
     ["25.6.0", "<version:@types/node>"],
@@ -576,7 +588,9 @@ function normalizeForInternalFixture(
     [pathToRepoPackageFileSpecifier("@dawn-ai/core"), "<repo:@dawn-ai/core>"],
     [pathToRepoPackageFileSpecifier("@dawn-ai/langchain"), "<repo:@dawn-ai/langchain>"],
     [pathToRepoPackageFileSpecifier("@dawn-ai/langgraph"), "<repo:@dawn-ai/langgraph>"],
+    [pathToRepoPackageFileSpecifier("@dawn-ai/permissions"), "<repo:@dawn-ai/permissions>"],
     [pathToRepoPackageFileSpecifier("@dawn-ai/sdk"), "<repo:@dawn-ai/sdk>"],
+    [pathToRepoPackageFileSpecifier("@dawn-ai/workspace"), "<repo:@dawn-ai/workspace>"],
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
   ]) as GeneratedAppScenarioResult
@@ -589,7 +603,9 @@ function pathToRepoPackageFileSpecifier(
     | "@dawn-ai/core"
     | "@dawn-ai/langchain"
     | "@dawn-ai/langgraph"
-    | "@dawn-ai/sdk",
+    | "@dawn-ai/permissions"
+    | "@dawn-ai/sdk"
+    | "@dawn-ai/workspace",
 ): string {
   const packageDirByName = {
     "@dawn-ai/cli": "packages/cli",
@@ -597,7 +613,9 @@ function pathToRepoPackageFileSpecifier(
     "@dawn-ai/core": "packages/core",
     "@dawn-ai/langchain": "packages/langchain",
     "@dawn-ai/langgraph": "packages/langgraph",
+    "@dawn-ai/permissions": "packages/permissions",
     "@dawn-ai/sdk": "packages/sdk",
+    "@dawn-ai/workspace": "packages/workspace",
   } as const
 
   return pathToFileURL(resolve(REPO_ROOT, packageDirByName[packageName])).toString()

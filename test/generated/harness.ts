@@ -39,7 +39,9 @@ interface PackedTarballs {
   readonly devkit: string
   readonly langchain: string
   readonly langgraph: string
+  readonly permissions: string
   readonly sdk: string
+  readonly workspace: string
 }
 
 interface RuntimeFixtureSpec {
@@ -173,7 +175,9 @@ export async function prepareGeneratedRuntimeApp(options: {
           "@dawn-ai/core",
           "@dawn-ai/langchain",
           "@dawn-ai/langgraph",
+          "@dawn-ai/permissions",
           "@dawn-ai/sdk",
+          "@dawn-ai/workspace",
         ],
         tempRoot: options.tempRoot,
         transcriptPath,
@@ -469,7 +473,9 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/core": options.tarballs.core,
       "@dawn-ai/langchain": options.tarballs.langchain,
       "@dawn-ai/langgraph": options.tarballs.langgraph,
+      "@dawn-ai/permissions": options.tarballs.permissions,
       "@dawn-ai/sdk": options.tarballs.sdk,
+      "@dawn-ai/workspace": options.tarballs.workspace,
     },
   }
 
@@ -663,7 +669,9 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     devkit: tarballs["@dawn-ai/devkit"],
     langchain: tarballs["@dawn-ai/langchain"],
     langgraph: tarballs["@dawn-ai/langgraph"],
+    permissions: tarballs["@dawn-ai/permissions"]!,
     sdk: tarballs["@dawn-ai/sdk"],
+    workspace: tarballs["@dawn-ai/workspace"]!,
   }
 }
 

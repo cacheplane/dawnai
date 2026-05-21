@@ -26,7 +26,15 @@ describe.each([
   }, async () => {
     const tempRoot = await createTrackedTempDir(`dawn-${label}-testing-pack-`, tempDirs)
     const { installerDir, tarballs } = await createPackagedInstaller({
-      packageNames: ["@dawn-ai/core", "@dawn-ai/langchain", "@dawn-ai/langgraph", "@dawn-ai/sdk", "@dawn-ai/cli"],
+      packageNames: [
+        "@dawn-ai/core",
+        "@dawn-ai/langchain",
+        "@dawn-ai/langgraph",
+        "@dawn-ai/permissions",
+        "@dawn-ai/sdk",
+        "@dawn-ai/workspace",
+        "@dawn-ai/cli",
+      ],
       tempRoot,
     })
 
@@ -38,7 +46,9 @@ describe.each([
         requiredTarball(tarballs, "@dawn-ai/core"),
         requiredTarball(tarballs, "@dawn-ai/langchain"),
         requiredTarball(tarballs, "@dawn-ai/langgraph"),
+        requiredTarball(tarballs, "@dawn-ai/permissions"),
         requiredTarball(tarballs, "@dawn-ai/sdk"),
+        requiredTarball(tarballs, "@dawn-ai/workspace"),
         requiredTarball(tarballs, "@dawn-ai/cli"),
       ],
       installerDir,
@@ -136,7 +146,9 @@ async function writeInstallerOverrides(
     "@dawn-ai/core": requiredTarball(tarballs, "@dawn-ai/core"),
     "@dawn-ai/langchain": requiredTarball(tarballs, "@dawn-ai/langchain"),
     "@dawn-ai/langgraph": requiredTarball(tarballs, "@dawn-ai/langgraph"),
+    "@dawn-ai/permissions": requiredTarball(tarballs, "@dawn-ai/permissions"),
     "@dawn-ai/sdk": requiredTarball(tarballs, "@dawn-ai/sdk"),
+    "@dawn-ai/workspace": requiredTarball(tarballs, "@dawn-ai/workspace"),
   }
 
   await writeFile(
