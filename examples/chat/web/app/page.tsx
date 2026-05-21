@@ -8,12 +8,39 @@ function newThreadId(): string {
 
 type RouteId = "chat" | "coordinator"
 
+type PendingInterrupt = {
+  interruptId: string
+  type: string
+  kind: "command" | "path"
+  detail: {
+    command?: string
+    operation?: string
+    path?: string
+    suggestedPattern: string
+  }
+}
+
 export default function Page() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const [input, setInput] = useState("")
   const [events, setEvents] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [route, setRoute] = useState<RouteId>("chat")
+  const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(null)
+
+  async function resolveInterrupt(decision: "once" | "always" | "deny") {
+    if (!pendingInterrupt || !threadId) return
+    await fetch("/api/permission-resume", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        threadId,
+        interruptId: pendingInterrupt.interruptId,
+        decision,
+      }),
+    })
+    setPendingInterrupt(null)
+  }
 
   function switchRoute(next: RouteId) {
     if (next === route) return
@@ -47,6 +74,7 @@ export default function Page() {
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buf = ""
+    let nextLineIsInterruptData = false
     while (true) {
       const { value, done } = await reader.read()
       if (done) break
@@ -54,7 +82,27 @@ export default function Page() {
       const lines = buf.split("\n")
       buf = lines.pop() ?? ""
       for (const line of lines) {
-        if (line.trim()) setEvents((e) => [...e, line])
+        if (!line.trim()) continue
+        if (line === "event: interrupt") {
+          nextLineIsInterruptData = true
+          setEvents((e) => [...e, line])
+          continue
+        }
+        if (nextLineIsInterruptData && line.startsWith("data: ")) {
+          try {
+            const payload = JSON.parse(line.slice("data: ".length))
+            setPendingInterrupt({
+              interruptId: payload.interruptId,
+              type: payload.type,
+              kind: payload.kind,
+              detail: payload.detail,
+            })
+          } catch {
+            /* ignore parse errors */
+          }
+          nextLineIsInterruptData = false
+        }
+        setEvents((e) => [...e, line])
       }
     }
     if (buf.trim()) setEvents((e) => [...e, buf])
@@ -111,6 +159,52 @@ export default function Page() {
       >
         {busy ? "Streaming…" : "Send"}
       </button>
+      {pendingInterrupt && (
+        <div
+          style={{
+            border: "2px solid #f0ad4e",
+            background: "#fdf7e7",
+            padding: "1rem",
+            marginTop: "0.5rem",
+            borderRadius: "4px",
+          }}
+        >
+          <strong>⚠️ Permission request</strong>
+          <p style={{ margin: "0.5rem 0" }}>
+            {pendingInterrupt.kind === "command"
+              ? "The agent wants to run command:"
+              : `The agent wants to ${pendingInterrupt.detail.operation}:`}
+          </p>
+          <code
+            style={{
+              display: "block",
+              background: "#fff",
+              padding: "0.5rem",
+              border: "1px solid #ddd",
+              fontFamily: "monospace",
+              fontSize: 13,
+            }}
+          >
+            {pendingInterrupt.kind === "command"
+              ? pendingInterrupt.detail.command
+              : pendingInterrupt.detail.path}
+          </code>
+          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+            <button onClick={() => resolveInterrupt("once")} style={{ padding: "0.5rem 1rem" }}>
+              Allow once
+            </button>
+            <button onClick={() => resolveInterrupt("always")} style={{ padding: "0.5rem 1rem" }}>
+              Allow always for `{pendingInterrupt.detail.suggestedPattern}`
+            </button>
+            <button
+              onClick={() => resolveInterrupt("deny")}
+              style={{ padding: "0.5rem 1rem", background: "#f5c6cb" }}
+            >
+              Deny
+            </button>
+          </div>
+        </div>
+      )}
       <pre
         data-testid="event-log"
         style={{

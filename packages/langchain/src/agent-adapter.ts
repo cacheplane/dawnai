@@ -2,8 +2,15 @@ import type { PromptFragment, StreamTransformer } from "@dawn-ai/core"
 import type { DawnAgent, RetryConfig } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
+import { Command, MemorySaver } from "@langchain/langgraph"
 import { createChatModel } from "./chat-model-factory.js"
 import { resolveProvider } from "./model-provider-resolver.js"
+import {
+  clearPending,
+  type PendingInterrupt,
+  type ResumeDecision,
+  setPending,
+} from "./pending-interrupts.js"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
 import {
@@ -49,6 +56,20 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
 // the route directory, which is stable per descriptor). If that assumption
 // changes, the cache key must include a hash of the fragments/transformers.
 const materializedAgents = new WeakMap<DawnAgent, AgentLike>()
+
+/**
+ * Process-level checkpointer shared by every materialized agent. LangGraph
+ * requires a checkpointer + a stable `thread_id` for `interrupt()` to park
+ * graph state and for `new Command({resume})` to replay from the parked
+ * step. The dev/runtime server passes the client-supplied
+ * `metadata.dawn.thread_id` through to `streamAgent`, which forwards it to
+ * `config.configurable.thread_id`.
+ *
+ * Single shared instance is fine for in-process runtimes; revisit if the
+ * runtime ever runs across processes (each would have its own saver and
+ * resume would need a distributed checkpointer like SQLite/Postgres).
+ */
+const sharedCheckpointer = new MemorySaver()
 
 export function composePromptMessages(
   systemPrompt: string,
@@ -104,6 +125,9 @@ async function materializeAgent(
         ? (state: Record<string, unknown>) =>
             composePromptMessages(descriptor.systemPrompt, fragments, state)
         : descriptor.systemPrompt,
+    // Required so `interrupt()` can park graph state and `Command({resume})`
+    // can replay it. Paired with `config.configurable.thread_id`.
+    checkpointer: sharedCheckpointer,
   }
 
   if (stateFields && stateFields.length > 0) {
@@ -135,8 +159,122 @@ export async function materializeAgentGraph(options: {
 }
 
 export interface AgentStreamChunk {
-  readonly type: "token" | "tool_call" | "tool_result" | "done" | (string & {})
+  readonly type: "token" | "tool_call" | "tool_result" | "interrupt" | "done" | (string & {})
   readonly data: unknown
+}
+
+/**
+ * LangGraph 1.x's `interrupt()` throws a `GraphInterrupt` from inside the tool
+ * node. Under `streamEvents` v2 this surfaces as an `on_tool_error` whose
+ * `event.data.error` is the `GraphInterrupt` instance — its `.name` is
+ * `"GraphInterrupt"` and its `.interrupts` array carries the `{ id, value }`
+ * entries we need. The top-level `on_chain_end` for `LangGraph` does NOT
+ * include `__interrupt__` in this code path (that key appears only on the
+ * `invoke`/`stream` return value), so detection must happen at the tool error.
+ *
+ * We still keep the `__interrupt__` extractor for `on_chain_end` as a
+ * defensive fallback in case a future LangGraph version surfaces interrupts
+ * via the chain output too.
+ */
+const INTERRUPT_KEY = "__interrupt__"
+
+interface RawInterruptEntry {
+  readonly value?: unknown
+  readonly id?: string
+  readonly when?: string
+  readonly resumable?: boolean
+}
+
+function extractInterrupts(output: unknown): readonly RawInterruptEntry[] | undefined {
+  if (!output || typeof output !== "object") return undefined
+  const maybe = (output as Record<string, unknown>)[INTERRUPT_KEY]
+  if (!Array.isArray(maybe)) return undefined
+  return maybe as readonly RawInterruptEntry[]
+}
+
+/**
+ * Detects a thrown `GraphInterrupt` surfaced via `on_tool_error`.
+ *
+ * LangGraph's `interrupt()` throws a `GraphInterrupt` whose `.message` is
+ * `JSON.stringify(interrupts)` and whose `.interrupts` array carries the
+ * `{ id, value }` entries. By the time the error reaches `streamEvents`'
+ * `data.error` it has already been stringified — typically into
+ * `<JSON interrupts>\n\nGraphInterrupt: <JSON interrupts>\n    at ...stack`.
+ *
+ * We handle three shapes defensively:
+ *   - object with `.name === "GraphInterrupt"` and `.interrupts` array
+ *     (in case a future LangGraph version surfaces the live error)
+ *   - object/Error whose stringified message starts with a JSON array
+ *   - bare string with the `GraphInterrupt:` marker
+ */
+function extractInterruptsFromError(error: unknown): readonly RawInterruptEntry[] | undefined {
+  if (!error) return undefined
+
+  if (typeof error === "object") {
+    const e = error as { name?: unknown; interrupts?: unknown; message?: unknown }
+    if (e.name === "GraphInterrupt" && Array.isArray(e.interrupts) && e.interrupts.length > 0) {
+      return e.interrupts as readonly RawInterruptEntry[]
+    }
+    if (typeof e.message === "string") {
+      const parsed = parseInterruptStringMessage(e.message)
+      if (parsed) return parsed
+    }
+  }
+
+  if (typeof error === "string") {
+    const parsed = parseInterruptStringMessage(error)
+    if (parsed) return parsed
+  }
+
+  return undefined
+}
+
+/**
+ * Parses the stringified form of a GraphInterrupt's message. The string
+ * begins with `JSON.stringify(interrupts, null, 2)` and is followed by
+ * `\n\nGraphInterrupt: ...\n    at ...` stack metadata. We slice the leading
+ * JSON array up to the first `]` followed by a newline + non-JSON sentinel
+ * and parse it.
+ */
+function parseInterruptStringMessage(text: string): readonly RawInterruptEntry[] | undefined {
+  const trimmed = text.trimStart()
+  if (!trimmed.startsWith("[")) return undefined
+  // Find the matching closing bracket by bracket counting at depth 0 — robust
+  // against nested arrays in the interrupt payloads.
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let end = -1
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (inString) {
+      if (ch === "\\") escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === "[") depth++
+    else if (ch === "]") {
+      depth--
+      if (depth === 0) {
+        end = i
+        break
+      }
+    }
+  }
+  if (end === -1) return undefined
+  const json = trimmed.slice(0, end + 1)
+  try {
+    const parsed = JSON.parse(json)
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined
+    return parsed as readonly RawInterruptEntry[]
+  } catch {
+    return undefined
+  }
 }
 
 export interface AgentOptions {
@@ -158,6 +296,14 @@ export interface AgentOptions {
    * drained alongside normal stream chunks (no module-level mutable state).
    */
   readonly subagentResolver?: SubagentResolver
+  /**
+   * Stable per-conversation identifier used as LangGraph's `thread_id`. When
+   * set, the agent-adapter wires it into `config.configurable.thread_id` so
+   * the checkpointer can park interrupted state. Required for resume to work
+   * — without a thread_id, an interrupt ends the stream with no way to
+   * replay.
+   */
+  readonly threadId?: string
 }
 
 export async function executeAgent(options: AgentOptions): Promise<unknown> {
@@ -235,6 +381,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       options.streamTransformers,
       subagentEvents,
       streamContext,
+      options.threadId,
     )
     return
   }
@@ -257,6 +404,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     options.streamTransformers,
     subagentEvents,
     streamContext,
+    options.threadId,
   )
 }
 
@@ -280,8 +428,12 @@ function prepareAgentCall(options: AgentOptions): {
     signal: options.signal,
   }
 
-  if (Object.keys(params).length > 0) {
-    config.configurable = params
+  const configurable: Record<string, unknown> = { ...params }
+  if (options.threadId !== undefined && options.threadId.length > 0) {
+    configurable.thread_id = options.threadId
+  }
+  if (Object.keys(configurable).length > 0) {
+    config.configurable = configurable
   }
 
   return { agentInput, config }
@@ -295,6 +447,7 @@ async function* streamFromRunnable(
   streamTransformers?: readonly StreamTransformer[],
   subagentEvents?: AgentStreamChunk[],
   streamContext?: SubagentStreamContext,
+  threadId?: string,
 ): AsyncGenerator<AgentStreamChunk> {
   // Drains any pending subagent events queued by the bridge. Called before
   // each normal yield to keep ordering predictable on the single event loop.
@@ -311,7 +464,7 @@ async function* streamFromRunnable(
       options: Record<string, unknown>,
     ) => AsyncIterable<{
       event: string
-      data: { chunk?: unknown; output?: unknown }
+      data: { chunk?: unknown; output?: unknown; error?: unknown }
       name: string
     }>
   }
@@ -332,101 +485,193 @@ async function* streamFromRunnable(
     return
   }
 
-  let finalOutput: unknown
-  let hasYielded = false
-  let lastStreamError: Error | undefined
+  // Capture into a typed const so TS narrowing survives across the nested
+  // async-generator closure below. Bind to `streamable` — LangGraph's
+  // Pregel.streamEvents reads `this.config?.recursionLimit`, so calling it
+  // unbound throws "Cannot read properties of undefined (reading 'config')".
+  const streamEventsFn = streamable.streamEvents.bind(streamable)
 
-  // Retry the entire stream if it fails before producing any output
-  const maxStreamAttempts = retryConfig?.maxAttempts ?? 3
-  for (let attempt = 0; attempt < maxStreamAttempts; attempt++) {
-    hasYielded = false
-    lastStreamError = undefined
-    finalOutput = undefined
+  // Tracks the most recent invocation's outcome. The outer resume loop
+  // inspects this to decide whether to park + replay or finish.
+  interface PassResult {
+    readonly finalOutput: unknown
+    readonly interrupts: readonly RawInterruptEntry[]
+  }
 
-    try {
-      for await (const event of streamable.streamEvents(input, {
-        ...config,
-        version: "v2",
-      })) {
-        // Drain any subagent.* events queued by the bridge's writer before
-        // emitting the next normal stream chunk, so ordering is predictable.
-        yield* drainSubagentEvents()
-        switch (event.event) {
-          case "on_chat_model_stream": {
-            // Suppress while a child subagent run is active — child token
-            // events leak onto the parent's streamEvents listener via
-            // LangChain v2 async-local-storage tracing. The dispatcher
-            // already emits a `subagent.message` envelope for each child
-            // token, so emitting the raw token here would duplicate.
-            if (streamContext && streamContext.activeChildRuns > 0) break
-            const content = (event.data.chunk as { content?: unknown })?.content
-            if (content && typeof content === "string" && content.length > 0) {
+  // Process a single streamEvents iterator: yield AgentStreamChunks and
+  // return whatever __interrupt__ entries appeared in the graph's final
+  // on_chain_end output. Shared between the initial invocation and any
+  // resume re-invocations so the chunk-shaping logic stays in one place.
+  async function* processEventStream(
+    invocationInput: unknown,
+    invocationConfig: Record<string, unknown>,
+    allowRetryOnError: boolean,
+  ): AsyncGenerator<AgentStreamChunk, PassResult, void> {
+    let finalOutput: unknown
+    let capturedInterrupts: readonly RawInterruptEntry[] = []
+    let hasYielded = false
+
+    const maxStreamAttempts = allowRetryOnError ? (retryConfig?.maxAttempts ?? 3) : 1
+
+    for (let attempt = 0; attempt < maxStreamAttempts; attempt++) {
+      hasYielded = false
+      finalOutput = undefined
+      capturedInterrupts = []
+
+      try {
+        for await (const event of streamEventsFn(invocationInput, {
+          ...invocationConfig,
+          version: "v2",
+        })) {
+          yield* drainSubagentEvents()
+          switch (event.event) {
+            case "on_chat_model_stream": {
+              if (streamContext && streamContext.activeChildRuns > 0) break
+              const content = (event.data.chunk as { content?: unknown })?.content
+              if (content && typeof content === "string" && content.length > 0) {
+                hasYielded = true
+                yield { type: "token" as const, data: content }
+              }
+              break
+            }
+            case "on_tool_start": {
               hasYielded = true
-              yield { type: "token" as const, data: content }
+              yield {
+                type: "tool_call" as const,
+                data: {
+                  name: event.name,
+                  input: event.data.chunk ?? event.data.output,
+                },
+              }
+              break
             }
-            break
-          }
-          case "on_tool_start": {
-            hasYielded = true
-            yield {
-              type: "tool_call" as const,
-              data: {
-                name: event.name,
-                input: event.data.chunk ?? event.data.output,
-              },
-            }
-            break
-          }
-          case "on_tool_end": {
-            hasYielded = true
-            yield {
-              type: "tool_result" as const,
-              data: { name: event.name, output: event.data.output },
-            }
-            for (const transformer of streamTransformers ?? []) {
-              if (transformer.observes !== "tool_result") continue
-              for await (const out of transformer.transform({
-                toolName: event.name,
-                toolOutput: event.data.output,
-              })) {
-                yield {
-                  type: out.event as AgentStreamChunk["type"],
-                  data: out.data,
+            case "on_tool_end": {
+              hasYielded = true
+              yield {
+                type: "tool_result" as const,
+                data: { name: event.name, output: event.data.output },
+              }
+              for (const transformer of streamTransformers ?? []) {
+                if (transformer.observes !== "tool_result") continue
+                for await (const out of transformer.transform({
+                  toolName: event.name,
+                  toolOutput: event.data.output,
+                })) {
+                  yield {
+                    type: out.event as AgentStreamChunk["type"],
+                    data: out.data,
+                  }
                 }
               }
+              break
             }
-            break
-          }
-          case "on_chain_end": {
-            if (event.name === "LangGraph") {
-              finalOutput = event.data.output
+            case "on_tool_error": {
+              // LangGraph's interrupt() throws a GraphInterrupt from inside
+              // the tool node. The error bubbles through streamEvents as
+              // on_tool_error with the GraphInterrupt instance on data.error.
+              // LangGraph itself catches it to park the checkpointer state,
+              // so the outer iterator continues normally afterwards.
+              const interrupts = extractInterruptsFromError(event.data.error)
+              if (interrupts && interrupts.length > 0) {
+                capturedInterrupts = interrupts
+                for (const entry of interrupts) {
+                  hasYielded = true
+                  yield {
+                    type: "interrupt" as const,
+                    // The capability's interrupt() payload is wrapped in
+                    // entry.value by LangGraph — surface it verbatim so the
+                    // SSE consumer sees the original {interruptId, kind, ...}
+                    // envelope the workspace capability emitted.
+                    data: entry.value,
+                  }
+                }
+              }
+              break
             }
-            break
+            case "on_chain_end": {
+              if (event.name === "LangGraph") {
+                finalOutput = event.data.output
+                const interrupts = extractInterrupts(event.data.output)
+                if (interrupts && interrupts.length > 0) {
+                  capturedInterrupts = interrupts
+                  for (const entry of interrupts) {
+                    hasYielded = true
+                    yield {
+                      type: "interrupt" as const,
+                      // The capability's interrupt() payload is wrapped in
+                      // entry.value by LangGraph — surface it verbatim so the
+                      // SSE consumer sees the original {interruptId, kind, ...}
+                      // envelope the workspace capability emitted.
+                      data: entry.value,
+                    }
+                  }
+                }
+              }
+              break
+            }
           }
         }
+        // Stream completed successfully
+        return { finalOutput, interrupts: capturedInterrupts }
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error))
+        if (hasYielded || !isRetryableError(error) || attempt === maxStreamAttempts - 1) {
+          throw err
+        }
+        const delay = Math.min(1000 * 2 ** attempt + Math.random() * 500, 10_000)
+        await new Promise((resolve) => setTimeout(resolve, delay))
       }
-
-      // Stream completed successfully
-      break
-    } catch (error) {
-      lastStreamError = error instanceof Error ? error : new Error(String(error))
-
-      // If we already yielded chunks, we can't retry (client has partial data)
-      // Or if the error isn't retryable, rethrow immediately
-      if (hasYielded || !isRetryableError(error) || attempt === maxStreamAttempts - 1) {
-        throw lastStreamError
-      }
-
-      // Backoff before retry
-      const delay = Math.min(1000 * 2 ** attempt + Math.random() * 500, 10_000)
-      await new Promise((resolve) => setTimeout(resolve, delay))
     }
+    // Unreachable: the loop either returns or throws.
+    return { finalOutput, interrupts: capturedInterrupts }
+  }
+
+  // Initial invocation. Retries on transient errors before any chunk yields.
+  let pass = yield* processEventStream(input, config, /* allowRetryOnError */ true)
+
+  // Resume loop. Each interrupt → park → await decision → re-invoke with
+  // Command({resume}). The resume invocation may itself interrupt (e.g. a
+  // capability gates another tool call mid-run) — loop until either no
+  // interrupt remains or we cannot resume (no threadId / no resolved
+  // decision).
+  while (pass.interrupts.length > 0) {
+    if (!threadId) {
+      // Without a thread_id there is no checkpointer key to replay from;
+      // the parked state will be discarded. End the stream cleanly so the
+      // SSE consumer can surface the interrupt to the user, but they have
+      // no way to resume this run.
+      break
+    }
+
+    // We only resume the first interrupt — if a capability ever fans out
+    // multiple parallel interrupts in a single step, this becomes lossy
+    // and we'd need to await N decisions. None of today's capabilities do
+    // that; revisit when one does.
+    const entry = pass.interrupts[0]
+    const interruptId =
+      (typeof entry?.id === "string" ? entry.id : undefined) ?? `generated-${Date.now()}`
+
+    const decision = await new Promise<ResumeDecision>((resolve) => {
+      const pending: PendingInterrupt = { interruptId, resolve }
+      setPending(threadId, pending)
+    })
+    clearPending(threadId)
+
+    // Resume invocations reuse the same config (same thread_id, signal,
+    // configurable). Retry-on-error is disabled because we have already
+    // yielded the interrupt chunk; if the resume call fails we surface
+    // the error rather than silently restarting.
+    pass = yield* processEventStream(
+      new Command({ resume: decision }),
+      config,
+      /* allowRetryOnError */ false,
+    )
   }
 
   // Final drain in case the last tool call was the bridged task tool —
   // its events would otherwise be stranded after the stream ends.
   yield* drainSubagentEvents()
-  yield { type: "done", data: finalOutput }
+  yield { type: "done", data: pass.finalOutput }
 }
 
 interface InputMessage {

@@ -1,13 +1,17 @@
 # Chat — canonical Dawn harness example
 
-> **Status:** foundational harness primitives (filesystem + bash) + the **planning** and
-> **skills** capabilities. Subagents, sandbox isolation, and auto-summarization are still
-> deferred — see "Deferred" below.
+> **Status:** foundational harness primitives (filesystem + bash) plus the **planning**,
+> **skills**, **subagents**, and **workspace** capabilities. Pluggable backend
+> implementations (in-memory, remote sandbox) are available — see `dawn.config.ts`. HITL
+> permission gating and auto-summarization are still deferred — see "Deferred" below.
 
 ## What this shows
 
 - Dawn route discovery and the `tools/` convention
-- Filesystem tools (read/write/list) + bash, path-jailed to `./workspace`
+- **Workspace capability** — when a route's working directory contains `workspace/`, Dawn
+  auto-contributes `readFile`/`writeFile`/`listDir`/`runBash` tools wired through pluggable
+  backends. The filesystem and exec backends default to local node:fs / child_process; swap
+  them in `dawn.config.ts` for in-memory storage, remote sandboxes, etc.
 - `AGENTS.md` memory autoload — Dawn auto-injects `workspace/AGENTS.md` into the system prompt on every turn; the agent updates it via `writeFile`
 - **Planning** — `plan.md` in the route directory opts the agent into the built-in
   `writeTodos` tool, a `todos` state channel, and a `plan_update` SSE event. Open the
@@ -17,6 +21,10 @@
   the agent's system prompt (name + description). The agent calls
   `readSkill({ name })` to load a skill's full body on demand. Two example
   skills ship with the demo: `workspace-conventions` and `recover-from-failure`.
+- **Subagents** — `/coordinator` dispatches to specialist subagents (`research`,
+  `summarizer`) via an auto-generated `task({ subagent, input })` tool. Subagent runs
+  bubble `subagent.*` SSE events with `call_id` correlation. Pick the `/coordinator` route
+  in the smoke client to drive it.
 - End-to-end streaming from a Next.js client over SSE
 
 ## Model choice
@@ -39,17 +47,24 @@ pnpm dev
 
 ```
 examples/chat/
-├── server/                 # @dawn-example/chat-server (Dawn route + tools)
-│   └── src/app/chat/
-│       ├── index.ts        # agent({ model, systemPrompt })
-│       ├── state.ts
-│       ├── system-prompt.ts
-│       ├── workspace-path.ts
-│       ├── plan.md         # presence enables planning; seeds initial todos
-│       └── tools/          # listDir, readFile, writeFile, runBash
+├── server/                 # @dawn-example/chat-server (Dawn routes)
+│   ├── dawn.config.ts      # appDir + optional backends config
+│   ├── workspace/          # shared workspace (AGENTS.md lives here)
+│   └── src/app/
+│       ├── chat/                              # /chat route
+│       │   ├── index.ts                       # agent({ model, systemPrompt })
+│       │   ├── state.ts
+│       │   ├── system-prompt.ts
+│       │   ├── plan.md                        # presence enables planning
+│       │   └── skills/                        # SKILL.md files per skill
+│       └── coordinator/                       # /coordinator route + subagents
+│           ├── index.ts
+│           └── subagents/
+│               ├── research/index.ts
+│               └── summarizer/index.ts
 └── web/                    # @dawn-example/chat-web (Next.js smoke client)
     └── app/
-        ├── page.tsx        # textarea + Send + raw event log
+        ├── page.tsx        # route picker + textarea + Send + raw event log
         └── api/chat/route.ts   # SSE proxy
 ```
 
@@ -63,8 +78,8 @@ shell expansion — all possible. Do not point untrusted users at this example.
 
 These v1 deferrals are the explicit forcing function for Dawn's opinionated harness work:
 
-- Subagent delegation (`task`-style tool) — needs first-class subagent declarations
-- Real sandbox isolation for `runBash` — needs pluggable execution backends
+- HITL permission gating — interrupt the run when a path is outside the workspace or a
+  command is high-risk, ask the user, persist the decision
 - Tool-output offloading and context summarization — needs lifecycle hooks
 - Nested-object tool inputs (e.g., `edit_file({ edits: [{ old, new }] })`) — typegen extension
 - Polished web UI — wait for harness primitives to stabilize

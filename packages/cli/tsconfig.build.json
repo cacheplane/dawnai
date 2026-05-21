@@ -8,7 +8,8 @@
       "@dawn-ai/core": ["../core/src/index.ts"],
       "@dawn-ai/langchain": ["../langchain/src/index.ts"],
       "@dawn-ai/langgraph": ["../langgraph/src/index.ts"],
-      "@dawn-ai/langgraph/*": ["../langgraph/src/*.ts"]
+      "@dawn-ai/langgraph/*": ["../langgraph/src/*.ts"],
+      "@dawn-ai/permissions": ["../permissions/src/index.ts"]
     },
     "rootDir": "src"
   },
@@ -22,6 +23,9 @@
     },
     {
       "path": "../langgraph"
+    },
+    {
+      "path": "../permissions"
     }
   ]
 }

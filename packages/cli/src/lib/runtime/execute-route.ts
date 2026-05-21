@@ -10,15 +10,23 @@ import {
   createPlanningMarker,
   createSkillsMarker,
   createSubagentsMarker,
+  createWorkspaceMarker,
   discoverRoutes,
   findDawnApp,
+  loadDawnConfig,
   type ResolvedStateField,
   type RouteDefinition,
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
 import { executeAgent, type SubagentResolver, streamAgent } from "@dawn-ai/langchain"
+import {
+  createPermissionsStore,
+  type PermissionMode,
+  type PermissionsStore,
+} from "@dawn-ai/permissions"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
+import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
@@ -132,6 +140,14 @@ export async function* streamResolvedRoute(options: {
   readonly routeId: string
   readonly routePath: string
   readonly signal?: AbortSignal
+  /**
+   * Stable per-conversation identifier forwarded to the agent-adapter as
+   * LangGraph's `thread_id`. When set, `interrupt()` calls park graph
+   * state in the checkpointer and the `/threads/:thread_id/resume`
+   * endpoint can replay them by handing a `PermissionDecision` back to the
+   * adapter via the pending-interrupts map.
+   */
+  readonly threadId?: string
 }): AsyncGenerator<StreamChunk> {
   const prepared = await prepareRouteExecution(options)
 
@@ -168,6 +184,7 @@ export async function* streamResolvedRoute(options: {
     ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
     ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
     ...(subagentResolver ? { subagentResolver } : {}),
+    ...(options.threadId ? { threadId: options.threadId } : {}),
   })) {
     switch (chunk.type) {
       case "token":
@@ -186,6 +203,14 @@ export async function* streamResolvedRoute(options: {
       case "done":
         yield { type: "done", output: chunk.data }
         break
+      case "interrupt": {
+        // The agent-adapter registers the pending entry in
+        // pending-interrupts so the /threads/:thread_id/resume endpoint
+        // can correlate the POST. We just forward the chunk to the SSE
+        // consumer.
+        yield { type: "interrupt", data: chunk.data }
+        break
+      }
       default: {
         // Capability-contributed event types (e.g. plan_update from the planning capability).
         // The langchain layer widened AgentStreamChunk["type"] to allow arbitrary strings;
@@ -274,6 +299,7 @@ async function prepareRouteExecution(options: {
       createAgentsMdMarker(),
       createSkillsMarker(),
       createSubagentsMarker(),
+      createWorkspaceMarker(),
     ])
     const routeManifest = await discoverRoutes({ appRoot: options.appRoot })
     const descriptor =
@@ -286,10 +312,51 @@ async function prepareRouteExecution(options: {
     // invalidated in dev when the runtime rebuilds the manifest.
     const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
 
+    let configBackends:
+      | { readonly filesystem?: FilesystemBackend; readonly exec?: ExecBackend }
+      | undefined
+    let permissionsConfig:
+      | {
+          readonly mode?: PermissionMode
+          readonly allow?: Readonly<Record<string, readonly string[]>>
+          readonly deny?: Readonly<Record<string, readonly string[]>>
+        }
+      | undefined
+    try {
+      const loaded = await loadDawnConfig({ appRoot: options.appRoot })
+      configBackends = loaded.config.backends
+      permissionsConfig = loaded.config.permissions
+    } catch {
+      // No dawn.config.ts (or unreadable). The workspace capability falls
+      // back to its defaults (localFilesystem + localExec); permissions
+      // defaults to "interactive" with empty allow/deny.
+    }
+
+    const envMode = process.env.DAWN_PERMISSIONS_MODE
+    const mode: PermissionMode =
+      envMode === "interactive" || envMode === "non-interactive" || envMode === "bypass"
+        ? envMode
+        : (permissionsConfig?.mode ?? "interactive")
+
+    const permissionsStore: PermissionsStore = createPermissionsStore({
+      appRoot: options.appRoot,
+      config: permissionsConfig
+        ? {
+            version: 1,
+            allow: permissionsConfig.allow ?? {},
+            deny: permissionsConfig.deny ?? {},
+          }
+        : undefined,
+      mode,
+    })
+    await permissionsStore.load()
+
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
       descriptorRouteMap,
+      ...(configBackends ? { backends: configBackends } : {}),
+      permissions: permissionsStore,
     })
 
     if (applied.errors.length > 0) {
@@ -311,14 +378,16 @@ async function prepareRouteExecution(options: {
         for (const t of contribution.tools) {
           // Adapt capability-contributed tools (which lack filePath/scope)
           // into the DiscoveredToolDefinition shape used by the runtime.
+          const overridable = (t as unknown as { overridable?: boolean }).overridable
           capTools.push({
             ...(t.description !== undefined ? { description: t.description } : {}),
             filePath: `<capability:${t.name}>`,
             name: t.name,
+            ...(overridable ? { overridable: true } : {}),
             run: t.run,
             ...(t.schema !== undefined ? { schema: t.schema } : {}),
             scope: "route-local",
-          })
+          } as DiscoveredToolDefinition)
         }
       }
       if (contribution.stateFields) capStateFields.push(...contribution.stateFields)
@@ -331,12 +400,19 @@ async function prepareRouteExecution(options: {
     const RESERVED_TOOL_NAMES = new Set(["task"]) // names auto-generated by capabilities
     const check = checkToolNameUniqueness({
       userTools: tools.map((t) => ({ name: t.name })),
-      capabilityTools: capTools.map((t) => ({ name: t.name })),
+      capabilityTools: capTools.map((t) => ({
+        name: t.name,
+        ...((t as unknown as { overridable?: boolean }).overridable ? { overridable: true } : {}),
+      })),
       reservedNames: RESERVED_TOOL_NAMES,
     })
     if (!check.ok) {
       return { message: check.message, ok: false }
     }
+
+    // Use the effective set so overridden tools are dropped before merging.
+    const effectiveCapNames = new Set(check.effectiveCapabilityTools.map((t) => t.name))
+    const filteredCapTools = capTools.filter((t) => effectiveCapNames.has(t.name))
 
     const userStateNames = new Set((stateFields ?? []).map((f) => f.name))
     for (const f of capStateFields) {
@@ -348,7 +424,7 @@ async function prepareRouteExecution(options: {
       }
     }
 
-    tools = [...tools, ...capTools]
+    tools = [...tools, ...filteredCapTools]
     stateFields = stateFields ? [...stateFields, ...capStateFields] : capStateFields
     promptFragments = capPromptFragments
     streamTransformers = capStreamTransformers

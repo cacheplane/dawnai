@@ -46,12 +46,14 @@
     "@dawn-ai/core": "workspace:*",
     "@dawn-ai/langchain": "workspace:*",
     "@dawn-ai/langgraph": "workspace:*",
+    "@dawn-ai/permissions": "workspace:*",
     "commander": "14.0.3",
     "tsx": "^4.8.1"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
     "@dawn-ai/sdk": "workspace:*",
+    "@dawn-ai/workspace": "workspace:*",
     "@langchain/core": "1.1.46",
     "@types/node": "25.6.0"
   }

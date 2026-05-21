@@ -146,8 +146,7 @@ describe("dawn verify", () => {
       checks: [
         {
           error: {
-            message:
-              'Unsupported dawn.config.ts syntax: unexpected token "(". Supported subset: optional const string declarations followed by export default { appDir } or export default { appDir: "..." }.',
+            message: "defineConfig is not defined",
           },
           name: "app",
           status: "failed",

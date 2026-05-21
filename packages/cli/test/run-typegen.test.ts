@@ -8,8 +8,10 @@ import { afterEach, describe, expect, test } from "vitest"
 import { runTypegen } from "../src/lib/typegen/run-typegen.js"
 
 const tempDirs: string[] = []
+const originalCwd = process.cwd()
 
 afterEach(async () => {
+  process.chdir(originalCwd)
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
 
@@ -149,6 +151,39 @@ describe("runTypegen", () => {
     const content = await readFile(dtsPath, "utf8")
 
     expect(content).not.toContain("Dispatch a sub-task")
+  })
+
+  test("includes workspace tools in generated types when workspace/ directory exists", async () => {
+    const { appRoot } = await setupApp()
+    await mkdir(join(appRoot, "workspace"), { recursive: true })
+    process.chdir(appRoot)
+
+    const manifest = await discoverRoutes({ appRoot })
+    await runTypegen({ appRoot, manifest })
+
+    const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const content = await readFile(dtsPath, "utf8")
+
+    expect(content).toContain("readFile")
+    expect(content).toContain("writeFile")
+    expect(content).toContain("listDir")
+    expect(content).toContain("runBash")
+    expect(content).toContain("greet")
+  })
+
+  test("omits workspace tools when workspace/ directory is absent", async () => {
+    const { appRoot } = await setupApp()
+    process.chdir(appRoot)
+    const manifest = await discoverRoutes({ appRoot })
+    await runTypegen({ appRoot, manifest })
+
+    const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const content = await readFile(dtsPath, "utf8")
+
+    expect(content).not.toContain("Read a UTF-8 file from the workspace")
+    expect(content).not.toContain("Write a UTF-8 file inside the workspace")
+    expect(content).not.toContain("List entries in a workspace directory")
+    expect(content).not.toContain("Run a shell command inside the workspace")
   })
 
   test("writes state.json when state.ts exists", async () => {

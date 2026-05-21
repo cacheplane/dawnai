@@ -159,7 +159,9 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
           "@dawn-ai/core",
           "@dawn-ai/langchain",
           "@dawn-ai/langgraph",
+          "@dawn-ai/permissions",
           "@dawn-ai/sdk",
+          "@dawn-ai/workspace",
         ],
         tempRoot,
         transcriptPath,
@@ -312,7 +314,9 @@ async function rewriteDependenciesToTarballs(options: {
     "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],
     "@dawn-ai/core": options.tarballs["@dawn-ai/core"],
     "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
+    "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
     "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
+    "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
   }
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
@@ -327,7 +331,9 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/core": options.tarballs["@dawn-ai/core"],
       "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
       "@dawn-ai/langgraph": options.tarballs["@dawn-ai/langgraph"],
+      "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
       "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
+      "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
     },
   }
 

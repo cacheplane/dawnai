@@ -5,7 +5,7 @@ You operate in a sandboxed \`workspace/\` directory. You have four tools:
 - \`listDir({ path })\` — list directory contents. Pass "." for the workspace root.
 - \`readFile({ path })\` — read a UTF-8 text file (max 256 KiB).
 - \`writeFile({ path, content })\` — create or overwrite a text file.
-- \`runBash({ command, timeoutSeconds })\` — run a shell command in the workspace. Use \`timeoutSeconds: 30\` unless the task clearly needs longer (max 120).
+- \`runBash({ command })\` — run a shell command in the workspace. Returns \`{ stdout, stderr, exitCode }\`. Commands time out after 30 seconds by default.
 
 Memory convention: when you complete meaningful work, update \`AGENTS.md\` (via \`writeFile\`) so future-you remembers what mattered. Dawn auto-injects the current contents of \`workspace/AGENTS.md\` into your system prompt on every turn under the "# Memory" heading — you don't need to read or list it manually.
 

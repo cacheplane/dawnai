@@ -1,10 +1,17 @@
+import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnAgent } from "@dawn-ai/sdk"
+import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import type { ResolvedStateField, RouteManifest } from "../types.js"
 
 export interface CapabilityMarkerContext {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
   readonly descriptorRouteMap?: ReadonlyMap<DawnAgent, string>
+  readonly backends?: {
+    readonly filesystem?: FilesystemBackend
+    readonly exec?: ExecBackend
+  }
+  readonly permissions?: PermissionsStore
 }
 
 export interface DawnToolDefinition {

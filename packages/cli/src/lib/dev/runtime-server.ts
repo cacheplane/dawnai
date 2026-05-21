@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net"
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import { executeResolvedRoute, streamResolvedRoute } from "../runtime/execute-route.js"
+import { clearPending, getPending } from "../runtime/pending-interrupts.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
@@ -128,6 +129,19 @@ async function handleRequest(options: {
       request,
       response,
       signal,
+    })
+    return
+  }
+
+  const resumeMatch =
+    request.method === "POST" && request.url
+      ? /^\/threads\/([^/?#]+)\/resume(?:\?.*)?$/.exec(request.url)
+      : null
+  if (resumeMatch) {
+    await handleResumeRequest({
+      request,
+      response,
+      threadId: decodeURIComponent(resumeMatch[1] ?? ""),
     })
     return
   }
@@ -304,6 +318,15 @@ async function handleStreamRequest(options: {
   })
 
   try {
+    // The web client sends a stable per-conversation `thread_id` in
+    // `metadata.dawn.thread_id` (see examples/chat/web/app/api/chat/route.ts).
+    // We forward it so the agent-adapter can park interrupts in the
+    // checkpointer and the resume endpoint can replay them.
+    const threadId =
+      typeof validatedBody.value.metadata.dawn.thread_id === "string"
+        ? validatedBody.value.metadata.dawn.thread_id
+        : undefined
+
     for await (const chunk of streamResolvedRoute({
       appRoot: registry.appRoot,
       input: validatedBody.value.input,
@@ -312,6 +335,7 @@ async function handleStreamRequest(options: {
       routeFile: route.routeFile,
       routeId: route.routeId,
       routePath: route.routePath,
+      ...(threadId ? { threadId } : {}),
     })) {
       response.write(toSseEvent(chunk))
     }
@@ -324,6 +348,52 @@ async function handleStreamRequest(options: {
   }
 
   response.end()
+}
+
+async function handleResumeRequest(options: {
+  readonly request: IncomingMessage
+  readonly response: ServerResponse
+  readonly threadId: string
+}): Promise<void> {
+  const { request, response, threadId } = options
+
+  if (!threadId) {
+    sendJson(response, 400, createRequestErrorBody("Missing thread_id in resume URL"))
+    return
+  }
+
+  const rawBody = await readRequestBody(request)
+  const parsedBody = parseJson(rawBody)
+  if (!parsedBody.ok || !isRecord(parsedBody.value)) {
+    sendJson(response, 400, createRequestErrorBody("Malformed resume request body"))
+    return
+  }
+
+  const body = parsedBody.value
+  const interruptId = typeof body.interrupt_id === "string" ? body.interrupt_id : undefined
+  const decision = body.decision
+  if (!interruptId) {
+    sendJson(response, 400, createRequestErrorBody("Missing interrupt_id"))
+    return
+  }
+  if (decision !== "once" && decision !== "always" && decision !== "deny") {
+    sendJson(response, 400, createRequestErrorBody("decision must be 'once', 'always', or 'deny'"))
+    return
+  }
+
+  const pending = getPending(threadId)
+  if (!pending) {
+    sendJson(response, 400, createRequestErrorBody("No parked interrupt for thread"))
+    return
+  }
+  if (pending.interruptId !== interruptId) {
+    sendJson(response, 409, createRequestErrorBody("Stale interrupt_id"))
+    return
+  }
+
+  pending.resolve(decision)
+  clearPending(threadId)
+  sendJson(response, 200, { ok: true })
 }
 
 const SHUTDOWN_ABORTED = Symbol("shutdown-aborted")
@@ -423,6 +493,7 @@ interface RunsWaitRequest {
       readonly mode: "agent" | "chain" | "graph" | "workflow"
       readonly route_id: string
       readonly route_path: string
+      readonly thread_id?: string
     }
   }
   readonly on_completion: "delete"

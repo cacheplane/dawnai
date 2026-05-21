@@ -1,0 +1,12 @@
+export { matchPermission } from "./pattern-matching.js"
+export { createPermissionsStore } from "./permissions-store.js"
+export { suggestedCommandPattern, suggestedPathPattern } from "./suggested-pattern.js"
+export type {
+  CommandDetail,
+  PathDetail,
+  PermissionDecision,
+  PermissionMode,
+  PermissionRequest,
+  PermissionsFile,
+  PermissionsStore,
+} from "./types.js"
