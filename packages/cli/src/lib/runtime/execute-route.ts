@@ -10,8 +10,10 @@ import {
   createPlanningMarker,
   createSkillsMarker,
   createSubagentsMarker,
+  createWorkspaceMarker,
   discoverRoutes,
   findDawnApp,
+  loadDawnConfig,
   type ResolvedStateField,
   type RouteDefinition,
   type RouteManifest,
@@ -19,6 +21,7 @@ import {
 } from "@dawn-ai/core"
 import { executeAgent, type SubagentResolver, streamAgent } from "@dawn-ai/langchain"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
+import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
@@ -274,6 +277,7 @@ async function prepareRouteExecution(options: {
       createAgentsMdMarker(),
       createSkillsMarker(),
       createSubagentsMarker(),
+      createWorkspaceMarker(),
     ])
     const routeManifest = await discoverRoutes({ appRoot: options.appRoot })
     const descriptor =
@@ -286,10 +290,22 @@ async function prepareRouteExecution(options: {
     // invalidated in dev when the runtime rebuilds the manifest.
     const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
 
+    let configBackends:
+      | { readonly filesystem?: FilesystemBackend; readonly exec?: ExecBackend }
+      | undefined
+    try {
+      const loaded = await loadDawnConfig({ appRoot: options.appRoot })
+      configBackends = loaded.config.backends
+    } catch {
+      // No dawn.config.ts (or unreadable). The workspace capability falls
+      // back to its defaults (localFilesystem + localExec).
+    }
+
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
       descriptorRouteMap,
+      ...(configBackends ? { backends: configBackends } : {}),
     })
 
     if (applied.errors.length > 0) {
