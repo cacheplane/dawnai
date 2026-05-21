@@ -135,8 +135,30 @@ export async function materializeAgentGraph(options: {
 }
 
 export interface AgentStreamChunk {
-  readonly type: "token" | "tool_call" | "tool_result" | "done" | (string & {})
+  readonly type: "token" | "tool_call" | "tool_result" | "interrupt" | "done" | (string & {})
   readonly data: unknown
+}
+
+/**
+ * LangGraph 1.x surfaces `interrupt()` calls in the graph's final output under
+ * the `__interrupt__` key — there is no dedicated `on_interrupt` streamEvents
+ * v2 event. We detect interrupts by inspecting `on_chain_end` for the
+ * top-level `LangGraph` chain.
+ */
+const INTERRUPT_KEY = "__interrupt__"
+
+interface RawInterruptEntry {
+  readonly value?: unknown
+  readonly id?: string
+  readonly when?: string
+  readonly resumable?: boolean
+}
+
+function extractInterrupts(output: unknown): readonly RawInterruptEntry[] | undefined {
+  if (!output || typeof output !== "object") return undefined
+  const maybe = (output as Record<string, unknown>)[INTERRUPT_KEY]
+  if (!Array.isArray(maybe)) return undefined
+  return maybe as readonly RawInterruptEntry[]
 }
 
 export interface AgentOptions {
@@ -400,6 +422,20 @@ async function* streamFromRunnable(
           case "on_chain_end": {
             if (event.name === "LangGraph") {
               finalOutput = event.data.output
+              const interrupts = extractInterrupts(event.data.output)
+              if (interrupts && interrupts.length > 0) {
+                for (const entry of interrupts) {
+                  hasYielded = true
+                  yield {
+                    type: "interrupt" as const,
+                    // The capability's interrupt() payload is wrapped in
+                    // entry.value by LangGraph — surface it verbatim so the
+                    // SSE consumer sees the original {interruptId, kind, ...}
+                    // envelope the workspace capability emitted.
+                    data: entry.value,
+                  }
+                }
+              }
             }
             break
           }
