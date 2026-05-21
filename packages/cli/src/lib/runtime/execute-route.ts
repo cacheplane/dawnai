@@ -20,11 +20,17 @@ import {
   resolveStateFields,
 } from "@dawn-ai/core"
 import { executeAgent, type SubagentResolver, streamAgent } from "@dawn-ai/langchain"
+import {
+  createPermissionsStore,
+  type PermissionMode,
+  type PermissionsStore,
+} from "@dawn-ai/permissions"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
+import { setPending } from "./pending-interrupts.js"
 import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,
@@ -135,6 +141,14 @@ export async function* streamResolvedRoute(options: {
   readonly routeId: string
   readonly routePath: string
   readonly signal?: AbortSignal
+  /**
+   * When set, `interrupt` chunks emitted during the stream register an entry
+   * in the pending-interrupts map keyed by this id, so the resume endpoint
+   * can correlate the POST. The actual resolution mechanism (replaying via
+   * LangGraph Command + checkpointer) is not yet wired — see
+   * `pending-interrupts.ts` for the TODO.
+   */
+  readonly threadId?: string
 }): AsyncGenerator<StreamChunk> {
   const prepared = await prepareRouteExecution(options)
 
@@ -189,6 +203,24 @@ export async function* streamResolvedRoute(options: {
       case "done":
         yield { type: "done", output: chunk.data }
         break
+      case "interrupt": {
+        const payload = chunk.data as { interruptId?: string } | undefined
+        if (options.threadId && payload?.interruptId) {
+          setPending(options.threadId, {
+            interruptId: payload.interruptId,
+            // STUB: until a LangGraph checkpointer + thread_id is wired through
+            // createReactAgent (Agent Protocol work, sub-project 7), there is
+            // no mechanism to hand the decision back to the parked
+            // tool-call. The resume endpoint will accept the decision and
+            // remove the entry; the parked invocation cannot be resumed yet.
+            resolve: (_decision) => {
+              /* no-op stub */
+            },
+          })
+        }
+        yield { type: "interrupt", data: chunk.data }
+        break
+      }
       default: {
         // Capability-contributed event types (e.g. plan_update from the planning capability).
         // The langchain layer widened AgentStreamChunk["type"] to allow arbitrary strings;
@@ -293,19 +325,48 @@ async function prepareRouteExecution(options: {
     let configBackends:
       | { readonly filesystem?: FilesystemBackend; readonly exec?: ExecBackend }
       | undefined
+    let permissionsConfig:
+      | {
+          readonly mode?: PermissionMode
+          readonly allow?: Readonly<Record<string, readonly string[]>>
+          readonly deny?: Readonly<Record<string, readonly string[]>>
+        }
+      | undefined
     try {
       const loaded = await loadDawnConfig({ appRoot: options.appRoot })
       configBackends = loaded.config.backends
+      permissionsConfig = loaded.config.permissions
     } catch {
       // No dawn.config.ts (or unreadable). The workspace capability falls
-      // back to its defaults (localFilesystem + localExec).
+      // back to its defaults (localFilesystem + localExec); permissions
+      // defaults to "interactive" with empty allow/deny.
     }
+
+    const envMode = process.env.DAWN_PERMISSIONS_MODE
+    const mode: PermissionMode =
+      envMode === "interactive" || envMode === "non-interactive" || envMode === "bypass"
+        ? envMode
+        : (permissionsConfig?.mode ?? "interactive")
+
+    const permissionsStore: PermissionsStore = createPermissionsStore({
+      appRoot: options.appRoot,
+      config: permissionsConfig
+        ? {
+            version: 1,
+            allow: permissionsConfig.allow ?? {},
+            deny: permissionsConfig.deny ?? {},
+          }
+        : undefined,
+      mode,
+    })
+    await permissionsStore.load()
 
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
       descriptorRouteMap,
       ...(configBackends ? { backends: configBackends } : {}),
+      permissions: permissionsStore,
     })
 
     if (applied.errors.length > 0) {
