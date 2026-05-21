@@ -8,8 +8,10 @@ import { afterEach, describe, expect, test } from "vitest"
 import { runTypegen } from "../src/lib/typegen/run-typegen.js"
 
 const tempDirs: string[] = []
+const originalCwd = process.cwd()
 
 afterEach(async () => {
+  process.chdir(originalCwd)
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
 
@@ -152,8 +154,9 @@ describe("runTypegen", () => {
   })
 
   test("includes workspace tools in generated types when workspace/ directory exists", async () => {
-    const { appRoot, routeDir } = await setupApp()
-    await mkdir(join(routeDir, "workspace"), { recursive: true })
+    const { appRoot } = await setupApp()
+    await mkdir(join(appRoot, "workspace"), { recursive: true })
+    process.chdir(appRoot)
 
     const manifest = await discoverRoutes({ appRoot })
     await runTypegen({ appRoot, manifest })
@@ -170,6 +173,7 @@ describe("runTypegen", () => {
 
   test("omits workspace tools when workspace/ directory is absent", async () => {
     const { appRoot } = await setupApp()
+    process.chdir(appRoot)
     const manifest = await discoverRoutes({ appRoot })
     await runTypegen({ appRoot, manifest })
 

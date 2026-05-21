@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createWorkspaceMarker } from "../../src/capabilities/built-in/workspace.js"
 import type { CapabilityMarkerContext, DawnToolDefinition } from "../../src/capabilities/types.js"
 
+const originalCwd = process.cwd()
+
 function emptyManifest() {
   return { appRoot: "/app", routes: [] }
 }
@@ -28,34 +30,46 @@ function findTool(
 }
 
 describe("createWorkspaceMarker — detect", () => {
+  let appRoot: string
   let routeDir: string
   beforeEach(() => {
-    routeDir = mkdtempSync(join(tmpdir(), "dawn-workspace-cap-"))
+    appRoot = mkdtempSync(join(tmpdir(), "dawn-workspace-cap-"))
+    routeDir = join(appRoot, "route")
+    mkdirSync(routeDir)
+    process.chdir(appRoot)
   })
   afterEach(() => {
-    rmSync(routeDir, { recursive: true, force: true })
+    process.chdir(originalCwd)
+    rmSync(appRoot, { recursive: true, force: true })
   })
 
-  it("returns false when no workspace/ directory exists", async () => {
+  it("returns false when no workspace/ directory exists at cwd", async () => {
     const detected = await createWorkspaceMarker().detect(routeDir, ctx())
     expect(detected).toBe(false)
   })
 
-  it("returns true when workspace/ exists", async () => {
-    mkdirSync(join(routeDir, "workspace"))
+  it("returns true when workspace/ exists at cwd", async () => {
+    mkdirSync(join(appRoot, "workspace"))
     const detected = await createWorkspaceMarker().detect(routeDir, ctx())
     expect(detected).toBe(true)
   })
 })
 
 describe("createWorkspaceMarker — load", () => {
+  let appRoot: string
   let routeDir: string
+  let workspaceDir: string
   beforeEach(() => {
-    routeDir = mkdtempSync(join(tmpdir(), "dawn-workspace-cap-"))
-    mkdirSync(join(routeDir, "workspace"))
+    appRoot = mkdtempSync(join(tmpdir(), "dawn-workspace-cap-"))
+    routeDir = join(appRoot, "route")
+    mkdirSync(routeDir)
+    workspaceDir = join(appRoot, "workspace")
+    mkdirSync(workspaceDir)
+    process.chdir(appRoot)
   })
   afterEach(() => {
-    rmSync(routeDir, { recursive: true, force: true })
+    process.chdir(originalCwd)
+    rmSync(appRoot, { recursive: true, force: true })
   })
 
   it("contributes exactly four tools when workspace/ exists", async () => {
@@ -65,13 +79,13 @@ describe("createWorkspaceMarker — load", () => {
   })
 
   it("contributes no tools when workspace/ is absent", async () => {
-    rmSync(join(routeDir, "workspace"), { recursive: true })
+    rmSync(workspaceDir, { recursive: true })
     const contribution = await createWorkspaceMarker().load(routeDir, ctx())
     expect(contribution.tools).toBeUndefined()
   })
 
   it("readFile tool calls the configured backend with an absolute path inside the jail", async () => {
-    writeFileSync(join(routeDir, "workspace", "hello.txt"), "hi", "utf8")
+    writeFileSync(join(workspaceDir, "hello.txt"), "hi", "utf8")
     const fakeBackend = {
       readFile: vi.fn().mockResolvedValue("hi"),
       writeFile: vi.fn(),
@@ -90,7 +104,7 @@ describe("createWorkspaceMarker — load", () => {
     expect(fakeBackend.readFile).toHaveBeenCalledOnce()
     const firstCall = fakeBackend.readFile.mock.calls[0]
     if (!firstCall) throw new Error("readFile was not called")
-    expect(firstCall[0]).toBe(join(routeDir, "workspace", "hello.txt"))
+    expect(firstCall[0]).toBe(join(process.cwd(), "workspace", "hello.txt"))
   })
 
   it("rejects path-jail escapes with a clear error", async () => {
@@ -102,7 +116,7 @@ describe("createWorkspaceMarker — load", () => {
   })
 
   it("uses the default local backends when none configured", async () => {
-    writeFileSync(join(routeDir, "workspace", "ok.txt"), "ok", "utf8")
+    writeFileSync(join(workspaceDir, "ok.txt"), "ok", "utf8")
     const contribution = await createWorkspaceMarker().load(routeDir, ctx())
     const readTool = findTool(contribution.tools, "readFile")
     const result = await readTool.run({ path: "ok.txt" }, { signal: new AbortController().signal })

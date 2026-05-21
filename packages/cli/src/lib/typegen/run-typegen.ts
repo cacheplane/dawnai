@@ -66,8 +66,8 @@ const WORKSPACE_EXTRA_TOOLS: readonly ExtractedToolType[] = [
   },
 ]
 
-function hasWorkspace(routeDir: string): boolean {
-  return existsSync(join(routeDir, "workspace"))
+function hasWorkspace(_routeDir: string): boolean {
+  return existsSync(join(process.cwd(), "workspace"))
 }
 
 const SKILL_DIR_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
