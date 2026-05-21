@@ -37,13 +37,13 @@
   },
   "dependencies": {
     "@dawn-ai/sdk": "workspace:*",
+    "@dawn-ai/workspace": "workspace:*",
     "tsx": "^4.8.1",
     "typescript": "5.8.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
-    "@dawn-ai/workspace": "workspace:*",
     "@types/node": "25.6.0"
   }
 }

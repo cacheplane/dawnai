@@ -187,6 +187,7 @@ describe("dawn typegen", () => {
     const langchainTarball = await packPackage("@dawn-ai/langchain", packsRoot)
     const langgraphTarball = await packPackage("@dawn-ai/langgraph", packsRoot)
     const sdkTarball = await packPackage("@dawn-ai/sdk", packsRoot)
+    const workspaceTarball = await packPackage("@dawn-ai/workspace", packsRoot)
 
     await writeFile(
       join(installerRoot, "package.json"),
@@ -207,6 +208,7 @@ describe("dawn typegen", () => {
               "@dawn-ai/langchain": `file:${langchainTarball}`,
               "@dawn-ai/langgraph": `file:${langgraphTarball}`,
               "@dawn-ai/sdk": `file:${sdkTarball}`,
+              "@dawn-ai/workspace": `file:${workspaceTarball}`,
             },
           },
         },

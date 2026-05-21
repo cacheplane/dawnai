@@ -216,6 +216,9 @@ importers:
       '@dawn-ai/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@dawn-ai/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       tsx:
         specifier: ^4.8.1
         version: 4.21.0
@@ -229,9 +232,6 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
-      '@dawn-ai/workspace':
-        specifier: workspace:*
-        version: link:../workspace
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
