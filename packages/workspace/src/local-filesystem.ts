@@ -1,0 +1,36 @@
+import { readdir, readFile, stat, writeFile } from "node:fs/promises"
+import type { BackendContext, FilesystemBackend } from "./types.js"
+
+const DEFAULT_MAX_FILE_BYTES = 256 * 1024
+
+export interface LocalFilesystemOptions {
+  /**
+   * Reject `readFile` when the target file exceeds this size.
+   * Default: 256 KiB.
+   */
+  readonly maxFileBytes?: number
+}
+
+export function localFilesystem(opts: LocalFilesystemOptions = {}): FilesystemBackend {
+  const maxBytes = opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
+  return {
+    async readFile(path: string, _ctx: BackendContext): Promise<string> {
+      const s = await stat(path)
+      if (s.size > maxBytes) {
+        throw new Error(`File too large: ${s.size} bytes (max ${maxBytes}) at ${path}`)
+      }
+      return await readFile(path, "utf8")
+    },
+    async writeFile(
+      path: string,
+      content: string,
+      _ctx: BackendContext,
+    ): Promise<{ readonly bytesWritten: number }> {
+      await writeFile(path, content, "utf8")
+      return { bytesWritten: Buffer.byteLength(content, "utf8") }
+    },
+    async listDir(path: string, _ctx: BackendContext): Promise<readonly string[]> {
+      return await readdir(path)
+    },
+  }
+}
