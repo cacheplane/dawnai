@@ -394,8 +394,10 @@ async function* streamFromRunnable(
   }
 
   // Capture into a typed const so TS narrowing survives across the nested
-  // async-generator closure below.
-  const streamEventsFn = streamable.streamEvents
+  // async-generator closure below. Bind to `streamable` — LangGraph's
+  // Pregel.streamEvents reads `this.config?.recursionLimit`, so calling it
+  // unbound throws "Cannot read properties of undefined (reading 'config')".
+  const streamEventsFn = streamable.streamEvents.bind(streamable)
 
   // Tracks the most recent invocation's outcome. The outer resume loop
   // inspects this to decide whether to park + replay or finish.
