@@ -39,6 +39,37 @@ const SUBAGENTS_EXTRA_TOOL: ExtractedToolType = {
   outputType: `string`,
 }
 
+const WORKSPACE_EXTRA_TOOLS: readonly ExtractedToolType[] = [
+  {
+    name: "readFile",
+    description: "Read a UTF-8 file from the workspace.",
+    inputType: `{ path: string }`,
+    outputType: `string`,
+  },
+  {
+    name: "writeFile",
+    description: "Write a UTF-8 file inside the workspace.",
+    inputType: `{ path: string; content: string }`,
+    outputType: `string`,
+  },
+  {
+    name: "listDir",
+    description: "List entries in a workspace directory.",
+    inputType: `{ path?: string }`,
+    outputType: `string[]`,
+  },
+  {
+    name: "runBash",
+    description: "Run a shell command inside the workspace.",
+    inputType: `{ command: string }`,
+    outputType: `{ stdout: string; stderr: string; exitCode: number }`,
+  },
+]
+
+function hasWorkspace(routeDir: string): boolean {
+  return existsSync(join(routeDir, "workspace"))
+}
+
 const SKILL_DIR_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 
 function hasSkills(routeDir: string): boolean {
@@ -120,6 +151,9 @@ export async function runTypegen(options: {
     }
     if (hasSubagents(route.routeDir)) {
       extraTools.push(SUBAGENTS_EXTRA_TOOL)
+    }
+    if (hasWorkspace(route.routeDir)) {
+      extraTools.push(...WORKSPACE_EXTRA_TOOLS)
     }
 
     routeToolTypes.push({
