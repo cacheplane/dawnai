@@ -1,9 +1,14 @@
 import type { RouteKind } from "@dawn-ai/sdk"
+import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 
 export type { RouteKind }
 
 export interface DawnConfig {
   readonly appDir?: string
+  readonly backends?: {
+    readonly filesystem?: FilesystemBackend
+    readonly exec?: ExecBackend
+  }
 }
 
 export type RouteSegment =

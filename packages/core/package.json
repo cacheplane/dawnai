@@ -43,6 +43,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
+    "@dawn-ai/workspace": "workspace:*",
     "@types/node": "25.6.0"
   }
 }
