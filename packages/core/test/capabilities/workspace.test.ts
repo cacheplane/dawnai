@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { createPermissionsStore } from "@dawn-ai/permissions"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { createWorkspaceMarker } from "../../src/capabilities/built-in/workspace.js"
@@ -107,12 +108,63 @@ describe("createWorkspaceMarker — load", () => {
     expect(firstCall[0]).toBe(join(process.cwd(), "workspace", "hello.txt"))
   })
 
-  it("rejects path-jail escapes with a clear error", async () => {
-    const contribution = await createWorkspaceMarker().load(routeDir, ctx())
+  it("rejects path-jail escapes when permissions store is present (non-interactive mode)", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: undefined,
+      mode: "non-interactive",
+    })
+    await permissions.load()
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx({ permissions }))
     const readTool = findTool(contribution.tools, "readFile")
     await expect(
       readTool.run({ path: "../../etc/passwd" }, { signal: new AbortController().signal }),
-    ).rejects.toThrow(/outside workspace/i)
+    ).rejects.toThrow(/permission denied/i)
+  })
+
+  it("in bypass mode, every operation proceeds (path-jail disabled)", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: undefined,
+      mode: "bypass",
+    })
+    await permissions.load()
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx({ permissions }))
+    const readTool = findTool(contribution.tools, "readFile")
+    // The file doesn't exist outside the workspace, so we expect ENOENT, NOT "outside workspace"
+    await expect(
+      readTool.run({ path: "../../etc/some-fake-file" }, { signal: new AbortController().signal }),
+    ).rejects.not.toThrow(/outside workspace|permission denied/i)
+  })
+
+  it("in non-interactive mode, unknown bash commands hard-refuse", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: undefined,
+      mode: "non-interactive",
+    })
+    await permissions.load()
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx({ permissions }))
+    const runBash = findTool(contribution.tools, "runBash")
+    await expect(
+      runBash.run({ command: "ls" }, { signal: new AbortController().signal }),
+    ).rejects.toThrow(/permission denied|fail-closed/i)
+  })
+
+  it("config-seeded allow lets a bash command through in non-interactive mode", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: { version: 1, allow: { bash: ["echo"] }, deny: {} },
+      mode: "non-interactive",
+    })
+    await permissions.load()
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx({ permissions }))
+    const runBash = findTool(contribution.tools, "runBash")
+    const result = await runBash.run(
+      { command: "echo hi" },
+      { signal: new AbortController().signal },
+    )
+    expect((result as { stdout: string }).stdout.trim()).toBe("hi")
   })
 
   it("uses the default local backends when none configured", async () => {
