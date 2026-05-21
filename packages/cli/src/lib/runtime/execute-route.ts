@@ -30,7 +30,6 @@ import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
-import { setPending } from "./pending-interrupts.js"
 import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,
@@ -142,11 +141,11 @@ export async function* streamResolvedRoute(options: {
   readonly routePath: string
   readonly signal?: AbortSignal
   /**
-   * When set, `interrupt` chunks emitted during the stream register an entry
-   * in the pending-interrupts map keyed by this id, so the resume endpoint
-   * can correlate the POST. The actual resolution mechanism (replaying via
-   * LangGraph Command + checkpointer) is not yet wired — see
-   * `pending-interrupts.ts` for the TODO.
+   * Stable per-conversation identifier forwarded to the agent-adapter as
+   * LangGraph's `thread_id`. When set, `interrupt()` calls park graph
+   * state in the checkpointer and the `/threads/:thread_id/resume`
+   * endpoint can replay them by handing a `PermissionDecision` back to the
+   * adapter via the pending-interrupts map.
    */
   readonly threadId?: string
 }): AsyncGenerator<StreamChunk> {
@@ -185,6 +184,7 @@ export async function* streamResolvedRoute(options: {
     ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
     ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
     ...(subagentResolver ? { subagentResolver } : {}),
+    ...(options.threadId ? { threadId: options.threadId } : {}),
   })) {
     switch (chunk.type) {
       case "token":
@@ -204,20 +204,10 @@ export async function* streamResolvedRoute(options: {
         yield { type: "done", output: chunk.data }
         break
       case "interrupt": {
-        const payload = chunk.data as { interruptId?: string } | undefined
-        if (options.threadId && payload?.interruptId) {
-          setPending(options.threadId, {
-            interruptId: payload.interruptId,
-            // STUB: until a LangGraph checkpointer + thread_id is wired through
-            // createReactAgent (Agent Protocol work, sub-project 7), there is
-            // no mechanism to hand the decision back to the parked
-            // tool-call. The resume endpoint will accept the decision and
-            // remove the entry; the parked invocation cannot be resumed yet.
-            resolve: (_decision) => {
-              /* no-op stub */
-            },
-          })
-        }
+        // The agent-adapter registers the pending entry in
+        // pending-interrupts so the /threads/:thread_id/resume endpoint
+        // can correlate the POST. We just forward the chunk to the SSE
+        // consumer.
         yield { type: "interrupt", data: chunk.data }
         break
       }
