@@ -4,10 +4,7 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { createWorkspaceMarker } from "../../src/capabilities/built-in/workspace.js"
-import type {
-  CapabilityMarkerContext,
-  DawnToolDefinition,
-} from "../../src/capabilities/types.js"
+import type { CapabilityMarkerContext, DawnToolDefinition } from "../../src/capabilities/types.js"
 
 function emptyManifest() {
   return { appRoot: "/app", routes: [] }
@@ -108,10 +105,7 @@ describe("createWorkspaceMarker — load", () => {
     writeFileSync(join(routeDir, "workspace", "ok.txt"), "ok", "utf8")
     const contribution = await createWorkspaceMarker().load(routeDir, ctx())
     const readTool = findTool(contribution.tools, "readFile")
-    const result = await readTool.run(
-      { path: "ok.txt" },
-      { signal: new AbortController().signal },
-    )
+    const result = await readTool.run({ path: "ok.txt" }, { signal: new AbortController().signal })
     expect(result).toBe("ok")
   })
 
