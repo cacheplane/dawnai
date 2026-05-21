@@ -20,9 +20,7 @@ import { __resetPendingForTests, getPending } from "../src/pending-interrupts.js
  * fallback in case a future LangGraph version surfaces interrupts that way.
  */
 
-function makeInterruptErrorString(
-  entries: ReadonlyArray<{ id?: string; value: unknown }>,
-): string {
+function makeInterruptErrorString(entries: ReadonlyArray<{ id?: string; value: unknown }>): string {
   return `${JSON.stringify(entries, null, 2)}\n\nGraphInterrupt: ${JSON.stringify(
     entries,
     null,

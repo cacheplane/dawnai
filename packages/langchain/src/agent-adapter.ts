@@ -212,11 +212,7 @@ function extractInterruptsFromError(error: unknown): readonly RawInterruptEntry[
 
   if (typeof error === "object") {
     const e = error as { name?: unknown; interrupts?: unknown; message?: unknown }
-    if (
-      e.name === "GraphInterrupt" &&
-      Array.isArray(e.interrupts) &&
-      e.interrupts.length > 0
-    ) {
+    if (e.name === "GraphInterrupt" && Array.isArray(e.interrupts) && e.interrupts.length > 0) {
       return e.interrupts as readonly RawInterruptEntry[]
     }
     if (typeof e.message === "string") {
@@ -240,25 +236,23 @@ function extractInterruptsFromError(error: unknown): readonly RawInterruptEntry[
  * JSON array up to the first `]` followed by a newline + non-JSON sentinel
  * and parse it.
  */
-function parseInterruptStringMessage(
-  text: string,
-): readonly RawInterruptEntry[] | undefined {
+function parseInterruptStringMessage(text: string): readonly RawInterruptEntry[] | undefined {
   const trimmed = text.trimStart()
   if (!trimmed.startsWith("[")) return undefined
   // Find the matching closing bracket by bracket counting at depth 0 — robust
   // against nested arrays in the interrupt payloads.
   let depth = 0
   let inString = false
-  let escape = false
+  let escaped = false
   let end = -1
   for (let i = 0; i < trimmed.length; i++) {
     const ch = trimmed[i]
-    if (escape) {
-      escape = false
+    if (escaped) {
+      escaped = false
       continue
     }
     if (inString) {
-      if (ch === "\\") escape = true
+      if (ch === "\\") escaped = true
       else if (ch === '"') inString = false
       continue
     }
