@@ -345,6 +345,15 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
+  packages/workspace:
+    devDependencies:
+      '@dawn-ai/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
 packages:
 
   '@alloc/quick-lru@5.2.0':
