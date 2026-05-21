@@ -496,25 +496,21 @@ describe("dawn dev lifecycle", () => {
     expect(await response.json()).toMatchObject({ version: "healthy" })
   })
 
-  test("terminates the session for fatal appDir changes outside the discovered app root", {
+  test("terminates the session when configured appDir falls outside the discovered app root", {
     timeout: 15_000,
   }, async () => {
     const appRoot = await createFixtureApp({
-      "dawn.config.ts": "export default {};\n",
+      "dawn.config.ts": 'const appDir = "../outside";\nexport default { appDir };\n',
       "package.json": "{}\n",
       "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ version: "healthy" });\n`,
     })
-    const configPath = join(appRoot, "dawn.config.ts")
+    // Ensure the configured appDir target (one level above appRoot) actually
+    // exists so we exercise the appRoot containment check rather than the
+    // "missing routes directory" check.
+    await mkdir(join(appRoot, "..", "outside"), { recursive: true })
 
     const dev = await startDevProcess({ cwd: appRoot })
     devProcesses.push(dev)
-
-    await dev.waitForReady()
-    await writeFile(
-      configPath,
-      'const appDir = "../outside";\nexport default { appDir };\n',
-      "utf8",
-    )
 
     const exitCode = await dev.waitForExit()
 

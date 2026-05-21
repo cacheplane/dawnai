@@ -1,77 +1,60 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtempSync, rmSync } from "node:fs"
+import { writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { fileURLToPath } from "node:url"
-import { afterEach, describe, expect, test } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
-import { loadDawnConfig } from "../src/config"
-
-const CONTRACT_FIXTURES_DIR = fileURLToPath(
-  new URL("../../../test/fixtures/contracts/", import.meta.url),
-)
-const tempDirs: string[] = []
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
-})
-
-function fixtureRoot(name: string) {
-  return join(CONTRACT_FIXTURES_DIR, name)
-}
-
-async function createConfigFixture(source: string) {
-  const appRoot = await mkdtemp(join(tmpdir(), "dawn-core-config-"))
-  tempDirs.push(appRoot)
-
-  await writeFile(join(appRoot, "package.json"), "{}\n")
-  await writeFile(join(appRoot, "dawn.config.ts"), source)
-  await mkdir(join(appRoot, "src", "app"), { recursive: true })
-
-  return appRoot
-}
+import { DAWN_CONFIG_FILE, loadDawnConfig } from "../src/config.js"
 
 describe("loadDawnConfig", () => {
-  test("loads appDir from an inline string literal", async () => {
-    const appRoot = await createConfigFixture('export default { appDir: "src/custom-app" }\n')
+  let appRoot: string
 
-    await expect(loadDawnConfig({ appRoot })).resolves.toMatchObject({
-      appRoot,
-      config: { appDir: "src/custom-app" },
-      configPath: join(appRoot, "dawn.config.ts"),
-    })
+  beforeEach(() => {
+    appRoot = mkdtempSync(join(tmpdir(), "dawn-config-"))
   })
 
-  test("loads appDir from the checked-in custom appDir fixture", async () => {
-    const appRoot = fixtureRoot("valid-custom-app-dir")
-
-    await expect(loadDawnConfig({ appRoot })).resolves.toMatchObject({
-      appRoot,
-      config: { appDir: "src/dawn-app" },
-      configPath: join(appRoot, "dawn.config.ts"),
-    })
+  afterEach(() => {
+    rmSync(appRoot, { recursive: true, force: true })
   })
 
-  test("rejects the checked-in invalid config fixture with a Dawn-specific parser error", async () => {
-    const appRoot = fixtureRoot("invalid-config")
+  async function writeConfig(source: string): Promise<void> {
+    await writeFile(join(appRoot, DAWN_CONFIG_FILE), source, "utf8")
+  }
 
-    await expect(loadDawnConfig({ appRoot })).rejects.toThrow("Unsupported dawn.config.ts syntax")
+  it("loads a config with just appDir", async () => {
+    await writeConfig(`export default { appDir: "src/app" }\n`)
+    const loaded = await loadDawnConfig({ appRoot })
+    expect(loaded.config).toMatchObject({ appDir: "src/app" })
+    expect(loaded.configPath).toBe(join(appRoot, DAWN_CONFIG_FILE))
   })
 
-  test("rejects unsupported config properties with a stable parser error", async () => {
-    const appRoot = await createConfigFixture('export default { appDir: "src/app", mode: "dev" }\n')
-
-    await expect(loadDawnConfig({ appRoot })).rejects.toThrow(
-      'Unsupported dawn.config.ts syntax: unsupported property "mode". Supported subset: optional const string declarations followed by export default { appDir } or export default { appDir: "..." }.',
-    )
+  it("loads a config with no fields (empty object)", async () => {
+    await writeConfig(`export default {}\n`)
+    const loaded = await loadDawnConfig({ appRoot })
+    expect(loaded.config).toEqual({})
   })
 
-  test("rejects non-string const appDir bindings with a stable parser error", async () => {
-    const appRoot = await createConfigFixture(
-      "const appDir = getAppDir()\nexport default { appDir }\n",
-    )
+  it("loads a config that uses a const binding for appDir", async () => {
+    await writeConfig(`
+      const APP_DIR = "src/app"
+      export default { appDir: APP_DIR }
+    `)
+    const loaded = await loadDawnConfig({ appRoot })
+    expect(loaded.config).toMatchObject({ appDir: "src/app" })
+  })
 
-    await expect(loadDawnConfig({ appRoot })).rejects.toThrow(
-      'Unsupported dawn.config.ts syntax: unexpected token "(". Supported subset: optional const string declarations followed by export default { appDir } or export default { appDir: "..." }.',
-    )
+  it("rejects missing default export", async () => {
+    await writeConfig(`export const named = { appDir: "x" }\n`)
+    await expect(loadDawnConfig({ appRoot })).rejects.toThrow(/must export default/i)
+  })
+
+  it("rejects non-object default export", async () => {
+    await writeConfig(`export default "hello"\n`)
+    await expect(loadDawnConfig({ appRoot })).rejects.toThrow(/must export default an object/i)
+  })
+
+  it("propagates TS syntax errors from the imported module", async () => {
+    await writeConfig(`export default { appDir:\n`)
+    await expect(loadDawnConfig({ appRoot })).rejects.toThrow()
   })
 })
