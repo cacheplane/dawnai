@@ -350,6 +350,18 @@ importers:
         specifier: 25.6.0
         version: 25.6.0
 
+  packages/sqlite-storage:
+    devDependencies:
+      '@dawn-ai/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@langchain/langgraph-checkpoint':
+        specifier: ^1.0.2
+        version: 1.0.2(@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1))
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
   packages/vite-plugin:
     dependencies:
       '@dawn-ai/core':

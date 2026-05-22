@@ -1,0 +1,46 @@
+{
+  "name": "@dawn-ai/sqlite-storage",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/sqlite-storage#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cacheplane/dawnai.git",
+    "directory": "packages/sqlite-storage"
+  },
+  "bugs": {
+    "url": "https://github.com/cacheplane/dawnai/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json vitest.config.ts",
+    "test": "vitest --run --config vitest.config.ts --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@langchain/langgraph-checkpoint": "^1.0.2"
+  },
+  "devDependencies": {
+    "@dawn-ai/config-typescript": "workspace:*",
+    "@langchain/langgraph-checkpoint": "^1.0.2",
+    "@types/node": "25.6.0"
+  }
+}
