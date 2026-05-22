@@ -125,6 +125,9 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
     }
     const rows = this.db.prepare(sql).all(...params) as unknown as CheckpointRow[]
     for (const row of rows) {
+      // Note: list returns lightweight tuples without pendingWrites. Callers that
+      // need writes should call getTuple(specificCheckpointId) for full hydration.
+      // This matches the @langchain/langgraph-checkpoint-sqlite reference behavior.
       yield buildTuple(row, [])
     }
   }
@@ -135,9 +138,14 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
     metadata: CheckpointMetadata,
     _newVersions: Record<string, string | number>,
   ): Promise<RunnableConfig> {
-    const threadId = config.configurable?.thread_id as string
+    const threadId = config.configurable?.thread_id as string | undefined
+    if (!threadId) {
+      throw new Error("[DawnSqliteSaver] config.configurable.thread_id is required")
+    }
     const ns = (config.configurable?.checkpoint_ns as string | undefined) ?? ""
     const parentId = (config.configurable?.checkpoint_id as string | undefined) ?? null
+    // _newVersions is provided by LangGraph for version-tracking purposes but is
+    // not persisted separately — versions live inside the serialized checkpoint payload.
     this.db
       .prepare(
         `INSERT OR REPLACE INTO checkpoints
@@ -163,9 +171,15 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
     writes: [string, unknown][],
     taskId: string,
   ): Promise<void> {
-    const threadId = config.configurable?.thread_id as string
+    const threadId = config.configurable?.thread_id as string | undefined
+    if (!threadId) {
+      throw new Error("[DawnSqliteSaver] config.configurable.thread_id is required")
+    }
     const ns = (config.configurable?.checkpoint_ns as string | undefined) ?? ""
-    const ckptId = config.configurable?.checkpoint_id as string
+    const ckptId = config.configurable?.checkpoint_id as string | undefined
+    if (!ckptId) {
+      throw new Error("[DawnSqliteSaver] config.configurable.checkpoint_id is required")
+    }
     const stmt = this.db.prepare(
       `INSERT OR REPLACE INTO writes
        (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value)
@@ -193,6 +207,7 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
   }
 
   async deleteThread(threadId: string): Promise<void> {
+    if (!threadId) throw new Error("[DawnSqliteSaver] deleteThread requires a thread_id")
     this.db.exec("BEGIN")
     try {
       this.db.prepare("DELETE FROM writes WHERE thread_id = ?").run(threadId)
