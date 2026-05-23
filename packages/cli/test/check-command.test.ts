@@ -86,6 +86,7 @@ async function executeCli(entryPath: string, args: readonly string[]) {
     readonly stderr: string
   }>((resolvePromise, rejectPromise) => {
     const child = spawn(entryPath, [...args], {
+      env: { ...process.env, NODE_NO_WARNINGS: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     })
 

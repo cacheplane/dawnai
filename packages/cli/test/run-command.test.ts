@@ -538,18 +538,10 @@ export const graph = async () => ({ ok: true })
 
     expect(result.exitCode).toBe(0)
     expect(receivedRequest).toMatchObject({
-      assistant_id: "/support/[tenant]#workflow",
       input: {
         tenant: "assistant-id",
       },
-      metadata: {
-        dawn: {
-          mode: "workflow",
-          route_id: "/support/[tenant]",
-          route_path: "src/app/support/[tenant]/index.ts",
-        },
-      },
-      on_completion: "delete",
+      route: "/support/[tenant]#workflow",
     })
   })
 
@@ -569,7 +561,7 @@ export const graph = async () => ({ ok: true })
         },
         statusCode: 200,
       }
-    }, "/api/runs/wait")
+    }, /^\/api\/threads\/[^/]+\/runs\/wait$/)
 
     const result = await invoke(
       [
@@ -587,7 +579,7 @@ export const graph = async () => ({ ok: true })
 
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
-    expect(receivedRequestPath).toBe("/api/runs/wait")
+    expect(receivedRequestPath).toMatch(/^\/api\/threads\/[^/]+\/runs\/wait$/)
     const payload = JSON.parse(result.stdout) as Record<string, unknown>
 
     expectTiming(payload)
@@ -610,7 +602,7 @@ export const graph = async () => ({ ok: true })
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
     })
-    const server = await startHangingAgentServer("/runs/wait")
+    const server = await startHangingAgentServer()
 
     const result = await executeRouteServer({
       appRoot,
@@ -839,10 +831,12 @@ async function startFakeAgentServer(
     readonly rawBody?: string
     readonly statusCode: number
   }>,
-  requestPath = "/runs/wait",
+  requestPath: string | RegExp = /^\/threads\/[^/]+\/runs\/wait$/,
 ): Promise<{ readonly close: () => Promise<void>; readonly url: string }> {
+  const matches = (url: string) =>
+    typeof requestPath === "string" ? url === requestPath : requestPath.test(url)
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
-    if (request.method !== "POST" || request.url !== requestPath) {
+    if (request.method !== "POST" || !matches(request.url ?? "")) {
       response.statusCode = 404
       response.setHeader("content-type", "application/json")
       response.end(JSON.stringify({ error: "not found" }))
@@ -894,10 +888,12 @@ async function startFakeAgentServer(
 }
 
 async function startHangingAgentServer(
-  requestPath = "/runs/wait",
+  requestPath: string | RegExp = /^\/threads\/[^/]+\/runs\/wait$/,
 ): Promise<{ readonly close: () => Promise<void>; readonly url: string }> {
+  const matches = (url: string) =>
+    typeof requestPath === "string" ? url === requestPath : requestPath.test(url)
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    if (request.method !== "POST" || request.url !== requestPath) {
+    if (request.method !== "POST" || !matches(request.url ?? "")) {
       response.statusCode = 404
       response.setHeader("content-type", "application/json")
       response.end(JSON.stringify({ error: "not found" }))
