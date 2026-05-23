@@ -1,6 +1,8 @@
 import type { PermissionMode } from "@dawn-ai/permissions"
 import type { RouteKind } from "@dawn-ai/sdk"
+import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 
 export type { RouteKind }
 
@@ -15,6 +17,8 @@ export interface DawnConfig {
     readonly allow?: Readonly<Record<string, readonly string[]>>
     readonly deny?: Readonly<Record<string, readonly string[]>>
   }
+  readonly checkpointer?: BaseCheckpointSaver
+  readonly threadsStore?: ThreadsStore
 }
 
 export type RouteSegment =
