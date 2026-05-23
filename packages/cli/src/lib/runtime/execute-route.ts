@@ -26,7 +26,9 @@ import {
   type PermissionsStore,
 } from "@dawn-ai/permissions"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
+import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
@@ -132,6 +134,26 @@ export async function executeResolvedRoute(options: {
   })
 }
 
+/**
+ * Resolves the ThreadsStore for the given appRoot.
+ *
+ * Uses `config.threadsStore` if the user's `dawn.config.ts` provides one;
+ * otherwise falls back to the default SQLite-backed store at
+ * `<appRoot>/.dawn/threads.sqlite`. Exported so the HTTP server layer (T11+)
+ * can obtain the same store instance independently of route execution.
+ */
+export async function resolveThreadsStore(appRoot: string): Promise<ThreadsStore> {
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    if (loaded.config.threadsStore) {
+      return loaded.config.threadsStore
+    }
+  } catch {
+    // No dawn.config.ts or unreadable — fall through to default.
+  }
+  return createThreadsStore({ path: join(appRoot, ".dawn/threads.sqlite") })
+}
+
 export async function* streamResolvedRoute(options: {
   readonly appRoot: string
   readonly input: unknown
@@ -156,8 +178,15 @@ export async function* streamResolvedRoute(options: {
     return
   }
 
-  const { normalized, tools, stateFields, promptFragments, streamTransformers, subagentResolver } =
-    prepared
+  const {
+    normalized,
+    tools,
+    stateFields,
+    promptFragments,
+    streamTransformers,
+    subagentResolver,
+    checkpointer,
+  } = prepared
 
   if (normalized.kind !== "agent") {
     // Non-agent routes don't support incremental streaming — execute and emit done
@@ -174,6 +203,7 @@ export async function* streamResolvedRoute(options: {
   const routeParamNames = extractRouteParamNames(options.routeId)
 
   for await (const chunk of streamAgent({
+    checkpointer,
     entry: normalized.entry,
     input: options.input,
     ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
@@ -228,6 +258,8 @@ interface PreparedRoute {
     readonly entry: unknown
   }
   readonly ok: true
+  readonly checkpointer: BaseCheckpointSaver
+  readonly threadsStore: ThreadsStore
   readonly stateFields: readonly ResolvedStateField[] | undefined
   readonly tools: readonly DiscoveredToolDefinition[]
   readonly promptFragments?: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>>
@@ -293,6 +325,38 @@ async function prepareRouteExecution(options: {
 
   let subagentResolver: SubagentResolver | undefined
 
+  // Load dawn.config.ts once — used for checkpointer, threadsStore, backends,
+  // and permissions. Falls back to defaults when the config is absent/unreadable.
+  let configBackends:
+    | { readonly filesystem?: FilesystemBackend; readonly exec?: ExecBackend }
+    | undefined
+  let permissionsConfig:
+    | {
+        readonly mode?: PermissionMode
+        readonly allow?: Readonly<Record<string, readonly string[]>>
+        readonly deny?: Readonly<Record<string, readonly string[]>>
+      }
+    | undefined
+  let configCheckpointer: BaseCheckpointSaver | undefined
+  let configThreadsStore: ThreadsStore | undefined
+  try {
+    const loaded = await loadDawnConfig({ appRoot: options.appRoot })
+    configBackends = loaded.config.backends
+    permissionsConfig = loaded.config.permissions
+    configCheckpointer = loaded.config.checkpointer
+    configThreadsStore = loaded.config.threadsStore
+  } catch {
+    // No dawn.config.ts (or unreadable). Fall back to defaults for all fields.
+  }
+
+  const checkpointer: BaseCheckpointSaver =
+    configCheckpointer ??
+    sqliteCheckpointer({ path: join(options.appRoot, ".dawn/checkpoints.sqlite") })
+
+  const threadsStore: ThreadsStore =
+    configThreadsStore ??
+    createThreadsStore({ path: join(options.appRoot, ".dawn/threads.sqlite") })
+
   if (normalized.kind === "agent") {
     const registry = createCapabilityRegistry([
       createPlanningMarker(),
@@ -311,26 +375,6 @@ async function prepareRouteExecution(options: {
     // requests in production (one manifest per CLI invocation), naturally
     // invalidated in dev when the runtime rebuilds the manifest.
     const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
-
-    let configBackends:
-      | { readonly filesystem?: FilesystemBackend; readonly exec?: ExecBackend }
-      | undefined
-    let permissionsConfig:
-      | {
-          readonly mode?: PermissionMode
-          readonly allow?: Readonly<Record<string, readonly string[]>>
-          readonly deny?: Readonly<Record<string, readonly string[]>>
-        }
-      | undefined
-    try {
-      const loaded = await loadDawnConfig({ appRoot: options.appRoot })
-      configBackends = loaded.config.backends
-      permissionsConfig = loaded.config.permissions
-    } catch {
-      // No dawn.config.ts (or unreadable). The workspace capability falls
-      // back to its defaults (localFilesystem + localExec); permissions
-      // defaults to "interactive" with empty allow/deny.
-    }
 
     const envMode = process.env.DAWN_PERMISSIONS_MODE
     const mode: PermissionMode =
@@ -446,6 +490,8 @@ async function prepareRouteExecution(options: {
   return {
     normalized,
     ok: true,
+    checkpointer,
+    threadsStore,
     ...(promptFragments.length > 0 ? { promptFragments } : {}),
     stateFields,
     ...(streamTransformers.length > 0 ? { streamTransformers } : {}),
@@ -489,6 +535,7 @@ async function executeRouteAtResolvedPath(options: {
       promptFragments,
       streamTransformers,
       subagentResolver,
+      checkpointer,
     } = prepared
     mode = normalized.kind
 
@@ -499,6 +546,7 @@ async function executeRouteAtResolvedPath(options: {
     })
 
     const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
+      checkpointer,
       ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
       routeId: options.routeId,
       ...(stateFields ? { stateFields } : {}),
@@ -541,6 +589,7 @@ async function invokeEntry(
   input: unknown,
   context: unknown,
   agentContext?: {
+    readonly checkpointer?: BaseCheckpointSaver
     readonly middlewareContext?: Readonly<Record<string, unknown>>
     readonly routeId: string
     readonly signal?: AbortSignal
@@ -565,8 +614,14 @@ async function invokeEntry(
   },
 ): Promise<unknown> {
   if (kind === "agent") {
+    if (!agentContext?.checkpointer) {
+      throw new Error(
+        "[dawn] invokeEntry called for an agent route without a checkpointer. This is an internal bug — please report it.",
+      )
+    }
     const routeParamNames = extractRouteParamNames(agentContext?.routeId ?? "")
     return await executeAgent({
+      checkpointer: agentContext.checkpointer,
       entry,
       input,
       ...(agentContext?.middlewareContext
