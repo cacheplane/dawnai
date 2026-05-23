@@ -166,6 +166,11 @@ export async function runPackagedCommand(options: {
           args: options.args,
           command: options.command,
           cwd: options.cwd,
+          env: {
+            // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
+            // so the harness does not treat non-empty stderr as a failure.
+            NODE_NO_WARNINGS: "1",
+          },
         })
       : await spawnWithStdin(options)
 
@@ -241,7 +246,12 @@ async function spawnWithStdin(options: {
   return await new Promise((resolve, reject) => {
     const child = spawn(options.command, [...options.args], {
       cwd: options.cwd,
-      env: process.env,
+      env: {
+        ...process.env,
+        // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
+        // so the harness does not treat non-empty stderr as a failure.
+        NODE_NO_WARNINGS: "1",
+      },
       stdio: ["pipe", "pipe", "pipe"],
     })
 

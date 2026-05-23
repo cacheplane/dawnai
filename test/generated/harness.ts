@@ -78,16 +78,8 @@ export interface GeneratedRuntimeScenarioResult {
   readonly runJson: unknown
   readonly runServerJson: unknown
   readonly serverRequest: {
-    readonly assistant_id: string
     readonly input: unknown
-    readonly metadata: {
-      readonly dawn: {
-        readonly mode: "agent" | "chain" | "graph" | "workflow"
-        readonly route_id: string
-        readonly route_path: string
-      }
-    }
-    readonly on_completion: "delete"
+    readonly route: string
   }
   readonly serverRequestUrl: string | null
   readonly testStdout: string

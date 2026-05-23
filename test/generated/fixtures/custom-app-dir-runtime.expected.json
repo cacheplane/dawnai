@@ -24,18 +24,10 @@
     "status": "passed"
   },
   "serverRequest": {
-    "assistant_id": "/support/[tenant]#graph",
     "input": {
       "tenant": "custom-tenant"
     },
-    "metadata": {
-      "dawn": {
-        "mode": "graph",
-        "route_id": "/support/[tenant]",
-        "route_path": "src/dawn-app/support/[tenant]/index.ts"
-      }
-    },
-    "on_completion": "delete"
+    "route": "/support/[tenant]#graph"
   },
   "testStdout": "PASS custom appDir in-process scenario\nPASS custom appDir server scenario\nSummary: 2 passed, 0 failed"
 }

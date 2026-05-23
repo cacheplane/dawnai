@@ -24,18 +24,10 @@
     "status": "passed"
   },
   "serverRequest": {
-    "assistant_id": "/hello/[tenant]#graph",
     "input": {
       "tenant": "handwritten-tenant"
     },
-    "metadata": {
-      "dawn": {
-        "mode": "graph",
-        "route_id": "/hello/[tenant]",
-        "route_path": "src/app/(public)/hello/[tenant]/index.ts"
-      }
-    },
-    "on_completion": "delete"
+    "route": "/hello/[tenant]#graph"
   },
   "testStdout": "PASS handwritten in-process scenario\nPASS handwritten server scenario\nSummary: 2 passed, 0 failed"
 }

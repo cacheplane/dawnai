@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+
 import { normalizeServerResult } from "./normalize-server-result.js"
 import {
   createRuntimeFailureResult,
@@ -31,18 +33,12 @@ export async function executeRouteServer(
   }, timeoutMs)
 
   try {
-    const response = await fetch(createRunsWaitUrl(options.baseUrl), {
+    const assistantId = createRouteAssistantId(options.routeId, options.mode)
+    const threadId = `t-cli-${randomUUID().slice(0, 8)}`
+    const response = await fetch(createRunsWaitUrl(options.baseUrl, threadId), {
       body: JSON.stringify({
-        assistant_id: createRouteAssistantId(options.routeId, options.mode),
         input: options.input,
-        metadata: {
-          dawn: {
-            mode: options.mode,
-            route_id: options.routeId,
-            route_path: options.routePath,
-          },
-        },
-        on_completion: "delete",
+        route: assistantId,
       }),
       headers: {
         "content-type": "application/json",
@@ -86,12 +82,9 @@ export async function executeRouteServer(
   }
 }
 
-function createRunsWaitUrl(baseUrl: string): URL {
+function createRunsWaitUrl(baseUrl: string, threadId: string): URL {
   const url = new URL(baseUrl)
-  url.pathname = `${ensureTrailingSlash(url.pathname)}runs/wait`
+  const base = url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname
+  url.pathname = `${base}/threads/${encodeURIComponent(threadId)}/runs/wait`
   return url
-}
-
-function ensureTrailingSlash(pathname: string): string {
-  return pathname.endsWith("/") ? pathname : `${pathname}/`
 }
