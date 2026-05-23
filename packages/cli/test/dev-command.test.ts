@@ -45,19 +45,16 @@ describe("dawn dev runtime server", () => {
     const server = await startRuntimeServer({ appRoot })
     servers.push(server)
 
-    const graphResponse = await fetch(
-      new URL("/threads/thread-test-graph/runs/wait", server.url),
-      {
-        body: JSON.stringify({
-          input: { tenant: "graph" },
-          route: "/support/[tenant]#graph",
-        }),
-        headers: {
-          "content-type": "application/json",
-        },
-        method: "POST",
+    const graphResponse = await fetch(new URL("/threads/thread-test-graph/runs/wait", server.url), {
+      body: JSON.stringify({
+        input: { tenant: "graph" },
+        route: "/support/[tenant]#graph",
+      }),
+      headers: {
+        "content-type": "application/json",
       },
-    )
+      method: "POST",
+    })
 
     expect(graphResponse.status).toBe(200)
     expect(await graphResponse.json()).toMatchObject({ mode: "graph", tenant: "graph" })
