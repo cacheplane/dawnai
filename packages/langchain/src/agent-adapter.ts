@@ -2,7 +2,8 @@ import type { PromptFragment, StreamTransformer } from "@dawn-ai/core"
 import type { DawnAgent, RetryConfig } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
-import { Command, MemorySaver } from "@langchain/langgraph"
+import { Command } from "@langchain/langgraph"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { createChatModel } from "./chat-model-factory.js"
 import { resolveProvider } from "./model-provider-resolver.js"
 import {
@@ -57,20 +58,6 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
 // changes, the cache key must include a hash of the fragments/transformers.
 const materializedAgents = new WeakMap<DawnAgent, AgentLike>()
 
-/**
- * Process-level checkpointer shared by every materialized agent. LangGraph
- * requires a checkpointer + a stable `thread_id` for `interrupt()` to park
- * graph state and for `new Command({resume})` to replay from the parked
- * step. The dev/runtime server passes the client-supplied
- * `metadata.dawn.thread_id` through to `streamAgent`, which forwards it to
- * `config.configurable.thread_id`.
- *
- * Single shared instance is fine for in-process runtimes; revisit if the
- * runtime ever runs across processes (each would have its own saver and
- * resume would need a distributed checkpointer like SQLite/Postgres).
- */
-const sharedCheckpointer = new MemorySaver()
-
 export function composePromptMessages(
   systemPrompt: string,
   promptFragments: readonly PromptFragment[],
@@ -88,6 +75,7 @@ export function composePromptMessages(
 async function materializeAgent(
   descriptor: DawnAgent,
   tools: readonly DawnToolDefinition[],
+  checkpointer: BaseCheckpointSaver,
   stateFields?: readonly ResolvedStateField[],
   middlewareContext?: Readonly<Record<string, unknown>>,
   promptFragments?: readonly PromptFragment[],
@@ -127,7 +115,7 @@ async function materializeAgent(
         : descriptor.systemPrompt,
     // Required so `interrupt()` can park graph state and `Command({resume})`
     // can replay it. Paired with `config.configurable.thread_id`.
-    checkpointer: sharedCheckpointer,
+    checkpointer,
   }
 
   if (stateFields && stateFields.length > 0) {
@@ -144,6 +132,7 @@ async function materializeAgent(
 }
 
 export async function materializeAgentGraph(options: {
+  readonly checkpointer: BaseCheckpointSaver
   readonly descriptor: DawnAgent
   readonly tools?: readonly DawnToolDefinition[]
   readonly stateFields?: readonly ResolvedStateField[]
@@ -152,6 +141,7 @@ export async function materializeAgentGraph(options: {
   return materializeAgent(
     options.descriptor,
     options.tools ?? [],
+    options.checkpointer,
     options.stateFields,
     undefined,
     options.promptFragments,
@@ -278,6 +268,13 @@ function parseInterruptStringMessage(text: string): readonly RawInterruptEntry[]
 }
 
 export interface AgentOptions {
+  /**
+   * Checkpointer used by LangGraph to park interrupted graph state and replay
+   * from it on resume. Required — the CLI runtime supplies a SQLite-backed
+   * instance by default. If you call agent-adapter directly (e.g. in tests),
+   * pass `new MemorySaver()` from `@langchain/langgraph`.
+   */
+  readonly checkpointer: BaseCheckpointSaver
   readonly entry: unknown
   readonly input: unknown
   readonly middlewareContext?: Readonly<Record<string, unknown>>
@@ -317,6 +314,12 @@ export async function executeAgent(options: AgentOptions): Promise<unknown> {
 }
 
 export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentStreamChunk> {
+  if (!options.checkpointer) {
+    throw new Error(
+      "[dawn] agent-adapter requires a checkpointer in AgentOptions. The CLI runtime instantiates sqliteCheckpointer by default; if you're calling agent-adapter directly, pass one explicitly.",
+    )
+  }
+
   const { agentInput, config } = prepareAgentCall(options)
   const messages = extractMessages(agentInput)
 
@@ -367,6 +370,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     const materializedAgent = await materializeAgent(
       options.entry,
       effectiveTools,
+      options.checkpointer,
       options.stateFields,
       options.middlewareContext,
       options.promptFragments,

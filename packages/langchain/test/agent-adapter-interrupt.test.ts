@@ -1,4 +1,4 @@
-import { Command } from "@langchain/langgraph"
+import { Command, MemorySaver } from "@langchain/langgraph"
 import { afterEach, describe, expect, test } from "vitest"
 import { streamAgent } from "../src/agent-adapter.js"
 import { __resetPendingForTests, getPending } from "../src/pending-interrupts.js"
@@ -68,6 +68,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string; data: unknown }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -109,6 +110,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string; data: unknown }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -139,6 +141,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string; data: unknown }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -166,6 +169,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -197,6 +201,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -259,6 +264,7 @@ describe("streamAgent — interrupt propagation", () => {
     const chunks: Array<{ type: string; data?: unknown }> = []
     const consumer = (async () => {
       for await (const chunk of streamAgent({
+        checkpointer: new MemorySaver(),
         entry: mockRunnable,
         input: { messages: [{ role: "user", content: "test" }] },
         routeParamNames: [],
@@ -318,6 +324,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
