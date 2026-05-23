@@ -45,30 +45,25 @@ describe("dawn dev runtime server", () => {
     const server = await startRuntimeServer({ appRoot })
     servers.push(server)
 
-    const graphResponse = await fetch(new URL("/runs/wait", server.url), {
-      body: JSON.stringify({
-        assistant_id: "/support/[tenant]#graph",
-        input: { tenant: "graph" },
-        metadata: {
-          dawn: {
-            mode: "graph",
-            route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/index.ts",
-          },
+    const graphResponse = await fetch(
+      new URL("/threads/thread-test-graph/runs/wait", server.url),
+      {
+        body: JSON.stringify({
+          input: { tenant: "graph" },
+          route: "/support/[tenant]#graph",
+        }),
+        headers: {
+          "content-type": "application/json",
         },
-        on_completion: "delete",
-      }),
-      headers: {
-        "content-type": "application/json",
+        method: "POST",
       },
-      method: "POST",
-    })
+    )
 
     expect(graphResponse.status).toBe(200)
     expect(await graphResponse.json()).toMatchObject({ mode: "graph", tenant: "graph" })
   })
 
-  test("rejects metadata mismatches as non-execution request failures", async () => {
+  test("rejects unknown route as not found", async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
       "package.json": "{}\n",
@@ -78,18 +73,10 @@ describe("dawn dev runtime server", () => {
     const server = await startRuntimeServer({ appRoot })
     servers.push(server)
 
-    const response = await fetch(new URL("/runs/wait", server.url), {
+    const response = await fetch(new URL("/threads/t1/runs/wait", server.url), {
       body: JSON.stringify({
-        assistant_id: "/support/[tenant]#graph",
-        input: { tenant: "graph" },
-        metadata: {
-          dawn: {
-            mode: "workflow",
-            route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/index.ts",
-          },
-        },
-        on_completion: "delete",
+        input: {},
+        route: "/support/[tenant]#workflow",
       }),
       headers: {
         "content-type": "application/json",
@@ -97,7 +84,7 @@ describe("dawn dev runtime server", () => {
       method: "POST",
     })
 
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(404)
     expect(await response.json()).toMatchObject({
       error: {
         kind: "request_error",
@@ -115,7 +102,7 @@ describe("dawn dev runtime server", () => {
     const server = await startRuntimeServer({ appRoot })
     servers.push(server)
 
-    const malformedResponse = await fetch(new URL("/runs/wait", server.url), {
+    const malformedResponse = await fetch(new URL("/threads/t1/runs/wait", server.url), {
       body: "{not-json",
       headers: {
         "content-type": "application/json",
@@ -123,18 +110,10 @@ describe("dawn dev runtime server", () => {
       method: "POST",
     })
 
-    const unknownAssistantResponse = await fetch(new URL("/runs/wait", server.url), {
+    const unknownAssistantResponse = await fetch(new URL("/threads/t1/runs/wait", server.url), {
       body: JSON.stringify({
-        assistant_id: "/support/[tenant]#workflow",
         input: { tenant: "graph" },
-        metadata: {
-          dawn: {
-            mode: "workflow",
-            route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/index.ts",
-          },
-        },
-        on_completion: "delete",
+        route: "/support/[tenant]#workflow",
       }),
       headers: {
         "content-type": "application/json",
@@ -156,18 +135,10 @@ describe("dawn dev runtime server", () => {
     const server = await startRuntimeServer({ appRoot })
     servers.push(server)
 
-    const response = await fetch(new URL("/runs/wait", server.url), {
+    const response = await fetch(new URL("/threads/t1/runs/wait", server.url), {
       body: JSON.stringify({
-        assistant_id: "/support/[tenant]#graph",
         input: { tenant: "graph" },
-        metadata: {
-          dawn: {
-            mode: "graph",
-            route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/index.ts",
-          },
-        },
-        on_completion: "delete",
+        route: "/support/[tenant]#graph",
       }),
       headers: {
         "content-type": "application/json",
@@ -210,18 +181,10 @@ describe("dawn dev runtime server", () => {
     const server = await startRuntimeServer({ appRoot })
     servers.push(server)
 
-    const responsePromise = fetch(new URL("/runs/wait", server.url), {
+    const responsePromise = fetch(new URL("/threads/t1/runs/wait", server.url), {
       body: JSON.stringify({
-        assistant_id: "/support/[tenant]#graph",
         input: {},
-        metadata: {
-          dawn: {
-            mode: "graph",
-            route_id: "/support/[tenant]",
-            route_path: "src/app/support/[tenant]/index.ts",
-          },
-        },
-        on_completion: "delete",
+        route: "/support/[tenant]#graph",
       }),
       headers: {
         "content-type": "application/json",
@@ -642,18 +605,12 @@ async function invokeRunsWait(
     readonly routePath: string
   },
 ) {
-  return await fetch(new URL("/runs/wait", baseUrl), {
+  // Use a stable test thread ID derived from the assistant + routeId.
+  const threadId = `test-${options.assistantId.replace(/[^a-z0-9]/gi, "-")}`
+  return await fetch(new URL(`/threads/${encodeURIComponent(threadId)}/runs/wait`, baseUrl), {
     body: JSON.stringify({
-      assistant_id: options.assistantId,
       input: options.input,
-      metadata: {
-        dawn: {
-          mode: options.mode,
-          route_id: options.routeId,
-          route_path: options.routePath,
-        },
-      },
-      on_completion: "delete",
+      route: options.assistantId,
     }),
     headers: {
       "content-type": "application/json",

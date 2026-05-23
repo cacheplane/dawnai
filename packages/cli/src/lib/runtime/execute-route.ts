@@ -154,6 +154,49 @@ export async function resolveThreadsStore(appRoot: string): Promise<ThreadsStore
   return createThreadsStore({ path: join(appRoot, ".dawn/threads.sqlite") })
 }
 
+/**
+ * Resolves the checkpointer for the given appRoot.
+ *
+ * Uses `config.checkpointer` if the user's `dawn.config.ts` provides one;
+ * otherwise falls back to the default SQLite-backed saver at
+ * `<appRoot>/.dawn/checkpoints.sqlite`. Exported so the HTTP server layer
+ * (T11+) can obtain a checkpointer independently of route execution (e.g.
+ * for the GET /threads/:id/state endpoint).
+ */
+export async function resolveCheckpointer(appRoot: string): Promise<BaseCheckpointSaver> {
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    if (loaded.config.checkpointer) {
+      return loaded.config.checkpointer
+    }
+  } catch {
+    // No dawn.config.ts or unreadable — fall through to default.
+  }
+  return sqliteCheckpointer({ path: join(appRoot, ".dawn/checkpoints.sqlite") })
+}
+
+/**
+ * Invoke a resolved route with a stable thread ID, returning the final
+ * execution result. Used by the AP `POST /threads/:id/runs/wait` endpoint.
+ * Behaves identically to `executeResolvedRoute` but forwards `threadId` to
+ * the agent-adapter so LangGraph parks state in the checkpointer.
+ */
+export async function invokeResolvedRoute(options: {
+  readonly appRoot: string
+  readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly signal?: AbortSignal
+  readonly threadId?: string
+}): Promise<RuntimeExecutionResult> {
+  return await executeRouteAtResolvedPath({
+    ...options,
+    startedAt: Date.now(),
+  })
+}
+
 export async function* streamResolvedRoute(options: {
   readonly appRoot: string
   readonly input: unknown
@@ -509,6 +552,7 @@ async function executeRouteAtResolvedPath(options: {
   readonly routePath: string
   readonly signal?: AbortSignal
   readonly startedAt: number
+  readonly threadId?: string
 }): Promise<RuntimeExecutionResult> {
   let mode: RuntimeExecutionMode | null = null
 
@@ -555,6 +599,7 @@ async function executeRouteAtResolvedPath(options: {
       ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
       ...(subagentResolver ? { subagentResolver } : {}),
+      ...(options.threadId ? { threadId: options.threadId } : {}),
     })
 
     return createRuntimeSuccessResult({
@@ -611,6 +656,7 @@ async function invokeEntry(
       NonNullable<CapabilityContribution["streamTransformers"]>[number]
     >
     readonly subagentResolver?: SubagentResolver
+    readonly threadId?: string
   },
 ): Promise<unknown> {
   if (kind === "agent") {
@@ -640,6 +686,7 @@ async function invokeEntry(
       ...(agentContext?.subagentResolver
         ? { subagentResolver: agentContext.subagentResolver }
         : {}),
+      ...(agentContext?.threadId ? { threadId: agentContext.threadId } : {}),
     })
   }
 
