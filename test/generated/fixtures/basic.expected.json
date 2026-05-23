@@ -13,6 +13,7 @@
       "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
       "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
       "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
+      "@dawn-ai/sqlite-storage": "<tarball:@dawn-ai/sqlite-storage>",
       "zod": "^3.24.0"
     },
     "devDependencies": {
@@ -29,6 +30,7 @@
         "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
         "@dawn-ai/permissions": "<tarball:@dawn-ai/permissions>",
         "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
+        "@dawn-ai/sqlite-storage": "<tarball:@dawn-ai/sqlite-storage>",
         "@dawn-ai/workspace": "<tarball:@dawn-ai/workspace>"
       }
     }

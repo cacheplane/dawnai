@@ -41,6 +41,7 @@ interface PackedTarballs {
   readonly langgraph: string
   readonly permissions: string
   readonly sdk: string
+  readonly sqliteStorage: string
   readonly workspace: string
 }
 
@@ -177,6 +178,7 @@ export async function prepareGeneratedRuntimeApp(options: {
           "@dawn-ai/langgraph",
           "@dawn-ai/permissions",
           "@dawn-ai/sdk",
+          "@dawn-ai/sqlite-storage",
           "@dawn-ai/workspace",
         ],
         tempRoot: options.tempRoot,
@@ -459,6 +461,7 @@ async function rewriteDependenciesToTarballs(options: {
     "@dawn-ai/core": options.tarballs.core,
     "@dawn-ai/langgraph": options.tarballs.langgraph,
     "@dawn-ai/sdk": options.tarballs.sdk,
+    "@dawn-ai/sqlite-storage": options.tarballs.sqliteStorage,
   }
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
@@ -475,6 +478,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/langgraph": options.tarballs.langgraph,
       "@dawn-ai/permissions": options.tarballs.permissions,
       "@dawn-ai/sdk": options.tarballs.sdk,
+      "@dawn-ai/sqlite-storage": options.tarballs.sqliteStorage,
       "@dawn-ai/workspace": options.tarballs.workspace,
     },
   }
@@ -671,6 +675,7 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     langgraph: tarballs["@dawn-ai/langgraph"],
     permissions: tarballs["@dawn-ai/permissions"]!,
     sdk: tarballs["@dawn-ai/sdk"],
+    sqliteStorage: tarballs["@dawn-ai/sqlite-storage"]!,
     workspace: tarballs["@dawn-ai/workspace"]!,
   }
 }

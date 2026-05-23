@@ -32,6 +32,7 @@ describe.each([
         "@dawn-ai/langgraph",
         "@dawn-ai/permissions",
         "@dawn-ai/sdk",
+        "@dawn-ai/sqlite-storage",
         "@dawn-ai/workspace",
         "@dawn-ai/cli",
       ],
@@ -48,6 +49,7 @@ describe.each([
         requiredTarball(tarballs, "@dawn-ai/langgraph"),
         requiredTarball(tarballs, "@dawn-ai/permissions"),
         requiredTarball(tarballs, "@dawn-ai/sdk"),
+        requiredTarball(tarballs, "@dawn-ai/sqlite-storage"),
         requiredTarball(tarballs, "@dawn-ai/workspace"),
         requiredTarball(tarballs, "@dawn-ai/cli"),
       ],
@@ -148,6 +150,7 @@ async function writeInstallerOverrides(
     "@dawn-ai/langgraph": requiredTarball(tarballs, "@dawn-ai/langgraph"),
     "@dawn-ai/permissions": requiredTarball(tarballs, "@dawn-ai/permissions"),
     "@dawn-ai/sdk": requiredTarball(tarballs, "@dawn-ai/sdk"),
+    "@dawn-ai/sqlite-storage": requiredTarball(tarballs, "@dawn-ai/sqlite-storage"),
     "@dawn-ai/workspace": requiredTarball(tarballs, "@dawn-ai/workspace"),
   }
 

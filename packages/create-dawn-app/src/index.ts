@@ -180,6 +180,7 @@ function createTemplateReplacements(
   readonly dawnLanggraphSpecifier: string
   readonly dawnPermissionsSpecifier: string
   readonly dawnSdkSpecifier: string
+  readonly dawnSqliteStorageSpecifier: string
   readonly dawnWorkspaceSpecifier: string
 } {
   if (options.mode === "internal") {
@@ -196,6 +197,9 @@ function createTemplateReplacements(
         resolve(repoRoot, "packages/permissions"),
       ),
       dawnSdkSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/sdk")),
+      dawnSqliteStorageSpecifier: createAbsoluteFileSpecifier(
+        resolve(repoRoot, "packages/sqlite-storage"),
+      ),
       dawnWorkspaceSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/workspace")),
     }
   }
@@ -209,6 +213,7 @@ function createTemplateReplacements(
     dawnLanggraphSpecifier: options.distTag,
     dawnPermissionsSpecifier: options.distTag,
     dawnSdkSpecifier: options.distTag,
+    dawnSqliteStorageSpecifier: options.distTag,
     dawnWorkspaceSpecifier: options.distTag,
   }
 }
@@ -237,6 +242,7 @@ async function applyInternalModePackageOverrides(
       "@dawn-ai/langgraph": replacements.dawnLanggraphSpecifier,
       "@dawn-ai/permissions": replacements.dawnPermissionsSpecifier,
       "@dawn-ai/sdk": replacements.dawnSdkSpecifier,
+      "@dawn-ai/sqlite-storage": replacements.dawnSqliteStorageSpecifier,
       "@dawn-ai/workspace": replacements.dawnWorkspaceSpecifier,
     },
   }
