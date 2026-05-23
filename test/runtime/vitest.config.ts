@@ -18,7 +18,10 @@ export default defineConfig({
   test: {
     environment: "node",
     hookTimeout: 60_000,
-    include: ["test/runtime/run-runtime-contract.test.ts"],
+    include: [
+      "test/runtime/run-runtime-contract.test.ts",
+      "test/runtime/run-agent-protocol.test.ts",
+    ],
     testTimeout: 240_000,
   },
 })
