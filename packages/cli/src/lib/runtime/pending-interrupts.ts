@@ -1,16 +1,11 @@
 /**
- * Re-exports the pending-interrupts registry from `@dawn-ai/langchain`.
+ * This module previously re-exported the in-memory pending-interrupts registry
+ * from `@dawn-ai/langchain`. The interrupt resume mechanism has been replaced
+ * with a state-based approach that reads from the SQLite checkpoint's
+ * `__interrupt__` pending writes — no in-memory promise parking is needed.
  *
- * The map itself lives in the langchain package so the agent-adapter (which
- * parks the stream on interrupt) and the CLI's resume endpoint (which
- * dispatches the user's decision) share the same module-level state without
- * introducing a circular dep cli <-> langchain.
+ * This file is kept as a placeholder to avoid breaking any external imports
+ * during the transition. It will be deleted in the follow-on cleanup commit.
+ *
+ * @deprecated Use the checkpoint-based resume endpoint instead.
  */
-
-export type { PendingInterrupt, ResumeDecision } from "@dawn-ai/langchain"
-export {
-  __resetPendingForTests,
-  clearPending,
-  getPending,
-  setPending,
-} from "@dawn-ai/langchain"
