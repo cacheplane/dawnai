@@ -9,7 +9,6 @@ import {
   resolveThreadsStore,
   streamResolvedRoute,
 } from "../runtime/execute-route.js"
-import { clearPending, getPending } from "../runtime/pending-interrupts.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
@@ -155,6 +154,11 @@ function buildRouteTable(ctx: {
 }): RouteMatcher[] {
   const { appRoot, checkpointer, middleware, registry, signal, threadsStore } = ctx
 
+  // Server-scoped map: thread_id → last routeKey used for that thread.
+  // Populated by runs/stream and runs/wait; read by the resume endpoint so it
+  // can re-invoke the correct route without requiring the client to repeat it.
+  const threadRouteMap = new Map<string, string>()
+
   return [
     // ------------------------------------------------------------------
     // GET /healthz
@@ -247,6 +251,7 @@ function buildRouteTable(ctx: {
           response: res,
           signal,
           threadId: params.thread_id ?? "",
+          threadRouteMap,
           threadsStore,
         })
       },
@@ -267,6 +272,7 @@ function buildRouteTable(ctx: {
           response: res,
           signal,
           threadId: params.thread_id ?? "",
+          threadRouteMap,
           threadsStore,
         })
       },
@@ -307,9 +313,16 @@ function buildRouteTable(ctx: {
     {
       handle: async (req, res, params) => {
         await handleResumeRequest({
+          appRoot,
+          checkpointer,
+          middleware,
+          registry,
           request: req,
           response: res,
+          signal,
           threadId: params.thread_id ?? "",
+          threadRouteMap,
+          threadsStore,
         })
       },
       method: "POST",
@@ -365,10 +378,20 @@ async function handleApStreamRequest(options: {
   readonly response: ServerResponse
   readonly signal: AbortSignal
   readonly threadId: string
+  readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
 }): Promise<void> {
-  const { appRoot, middleware, registry, request, response, signal, threadId, threadsStore } =
-    options
+  const {
+    appRoot,
+    middleware,
+    registry,
+    request,
+    response,
+    signal,
+    threadId,
+    threadRouteMap,
+    threadsStore,
+  } = options
 
   const rawBody = await readRequestBody(request)
   const parsedBody = parseJson(rawBody)
@@ -412,6 +435,11 @@ async function handleApStreamRequest(options: {
   if (!thread) {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }
+
+  // Record which route last ran on this thread so the resume endpoint can
+  // re-invoke it without requiring the client to repeat the route key.
+  // The map is scoped to the server instance (lives in buildRouteTable's closure).
+  threadRouteMap.set(threadId, routeKey)
 
   // Mark thread busy
   await threadsStore.updateStatus(threadId, "busy")
@@ -460,10 +488,20 @@ async function handleApWaitRequest(options: {
   readonly response: ServerResponse
   readonly signal: AbortSignal
   readonly threadId: string
+  readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
 }): Promise<void> {
-  const { appRoot, middleware, registry, request, response, signal, threadId, threadsStore } =
-    options
+  const {
+    appRoot,
+    middleware,
+    registry,
+    request,
+    response,
+    signal,
+    threadId,
+    threadRouteMap,
+    threadsStore,
+  } = options
 
   const rawBody = await readRequestBody(request)
   const parsedBody = parseJson(rawBody)
@@ -507,6 +545,9 @@ async function handleApWaitRequest(options: {
   if (!thread) {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }
+
+  // Record route for potential resume
+  threadRouteMap.set(threadId, routeKey)
 
   await threadsStore.updateStatus(threadId, "busy")
 
@@ -562,15 +603,33 @@ async function handleApWaitRequest(options: {
 }
 
 // ---------------------------------------------------------------------------
-// Resume handler (moved from /api/permission-resume → /threads/:id/resume)
+// Resume handler — state-based, reads __interrupt__ from SQLite checkpoint
 // ---------------------------------------------------------------------------
 
 async function handleResumeRequest(options: {
+  readonly appRoot: string
+  readonly checkpointer: BaseCheckpointSaver
+  readonly middleware: DawnMiddleware | undefined
+  readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
+  readonly signal: AbortSignal
   readonly threadId: string
+  readonly threadRouteMap: Map<string, string>
+  readonly threadsStore: ThreadsStore
 }): Promise<void> {
-  const { request, response, threadId } = options
+  const {
+    appRoot,
+    checkpointer,
+    middleware,
+    registry,
+    request,
+    response,
+    signal,
+    threadId,
+    threadRouteMap,
+    threadsStore,
+  } = options
 
   if (!threadId) {
     sendJson(response, 400, createRequestErrorBody("Missing thread_id in resume URL"))
@@ -596,19 +655,118 @@ async function handleResumeRequest(options: {
     return
   }
 
-  const pending = getPending(threadId)
-  if (!pending) {
-    sendJson(response, 400, createRequestErrorBody("No parked interrupt for thread"))
-    return
-  }
-  if (pending.interruptId !== interruptId) {
-    sendJson(response, 409, createRequestErrorBody("Stale interrupt_id"))
+  // Load the checkpoint tuple to verify the interrupt_id exists in
+  // pendingWrites. Each entry is [task_id, channel, value] where channel is
+  // "__interrupt__" and value is {id, value: {interruptId, ...}}.
+  const tuple = await checkpointer.getTuple({
+    configurable: { thread_id: threadId, checkpoint_ns: "" },
+  })
+  if (!tuple) {
+    sendJson(
+      response,
+      404,
+      createRequestErrorBody("Thread not found", { code: "thread_not_found" }),
+    )
     return
   }
 
-  pending.resolve(decision)
-  clearPending(threadId)
-  sendJson(response, 200, { ok: true })
+  const interruptWrites = (tuple.pendingWrites ?? []).filter(
+    ([, channel]) => channel === "__interrupt__",
+  )
+  const matchedWrite = interruptWrites.find(([, , value]) => {
+    if (!value || typeof value !== "object") return false
+    const v = value as { id?: unknown; value?: unknown }
+    // Match on the capability-level interruptId (inside entry.value)
+    if (v.value && typeof v.value === "object") {
+      const inner = v.value as { interruptId?: unknown }
+      if (inner.interruptId === interruptId) return true
+    }
+    // Defensive fallback: match on the outer LangGraph entry id
+    if (v.id === interruptId) return true
+    return false
+  })
+
+  if (!matchedWrite) {
+    sendJson(
+      response,
+      409,
+      createRequestErrorBody("Stale interrupt_id", { code: "stale_interrupt" }),
+    )
+    return
+  }
+
+  // Look up which route last ran on this thread. Prefer the in-memory map
+  // (populated during this server session) for reliability.
+  const routeKey = threadRouteMap.get(threadId)
+  if (!routeKey) {
+    sendJson(
+      response,
+      409,
+      createRequestErrorBody(
+        "Cannot resume: no route recorded for this thread in the current server session. " +
+          "This can happen after a server restart — re-send the original message to restart the run.",
+        { code: "route_not_found" },
+      ),
+    )
+    return
+  }
+
+  const route = registry.lookup(routeKey)
+  if (!route) {
+    sendJson(response, 404, createRequestErrorBody(`Unknown route: ${routeKey}`))
+    return
+  }
+
+  // Run middleware with the resume URL
+  const mwRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: parseHeaders(request),
+    method: "POST",
+    params: {},
+    routeId: route.routeId,
+    url: request.url ?? `/threads/${threadId}/resume`,
+  }
+  const mwResult = await runMiddleware(middleware, mwRequest)
+  if (mwResult.action === "reject") {
+    sendJson(response, mwResult.status, mwResult.body)
+    return
+  }
+
+  // Mark thread busy
+  await threadsStore.updateStatus(threadId, "busy")
+
+  // Open a new SSE stream, passing Command({resume: decision}) as input.
+  response.writeHead(200, {
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "content-type": "text/event-stream",
+  })
+
+  try {
+    for await (const chunk of streamResolvedRoute({
+      appRoot,
+      input: {},
+      resumeDecision: decision as "once" | "always" | "deny",
+      ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
+      routeFile: route.routeFile,
+      routeId: route.routeId,
+      routePath: route.routePath,
+      signal,
+      threadId,
+    })) {
+      response.write(toSseEvent(chunk))
+    }
+    await threadsStore.updateStatus(threadId, "idle")
+  } catch (error) {
+    const errorChunk: StreamChunk = {
+      output: { error: error instanceof Error ? error.message : String(error) },
+      type: "done",
+    }
+    response.write(toSseEvent(errorChunk))
+    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+  }
+
+  response.end()
 }
 
 // ---------------------------------------------------------------------------

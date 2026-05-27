@@ -19,7 +19,7 @@ import {
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
-import { executeAgent, type SubagentResolver, streamAgent } from "@dawn-ai/langchain"
+import { Command, executeAgent, type SubagentResolver, streamAgent } from "@dawn-ai/langchain"
 import {
   createPermissionsStore,
   type PermissionMode,
@@ -201,6 +201,12 @@ export async function* streamResolvedRoute(options: {
   readonly appRoot: string
   readonly input: unknown
   readonly middlewareContext?: Readonly<Record<string, unknown>>
+  /**
+   * When set, the agent-adapter receives `Command({resume: resumeDecision})`
+   * as its input instead of the normal `input` field. Used by the resume
+   * endpoint to replay a parked graph state after a permission interrupt.
+   */
+  readonly resumeDecision?: "once" | "always" | "deny"
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
@@ -209,8 +215,7 @@ export async function* streamResolvedRoute(options: {
    * Stable per-conversation identifier forwarded to the agent-adapter as
    * LangGraph's `thread_id`. When set, `interrupt()` calls park graph
    * state in the checkpointer and the `/threads/:thread_id/resume`
-   * endpoint can replay them by handing a `PermissionDecision` back to the
-   * adapter via the pending-interrupts map.
+   * endpoint can replay them.
    */
   readonly threadId?: string
 }): AsyncGenerator<StreamChunk> {
@@ -245,10 +250,16 @@ export async function* streamResolvedRoute(options: {
 
   const routeParamNames = extractRouteParamNames(options.routeId)
 
+  // For resume runs, pass Command({resume}) directly to the agent-adapter so
+  // LangGraph replays from the parked checkpoint state.
+  const agentInput = options.resumeDecision
+    ? new Command({ resume: options.resumeDecision })
+    : options.input
+
   for await (const chunk of streamAgent({
     checkpointer,
     entry: normalized.entry,
-    input: options.input,
+    input: agentInput,
     ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
     routeParamNames,
     signal: options.signal ?? new AbortController().signal,
