@@ -14,7 +14,7 @@
     "url": "https://github.com/cacheplane/dawnai/issues"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "files": [
     "dist"
