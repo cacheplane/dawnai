@@ -438,8 +438,10 @@ async function handleApStreamRequest(options: {
 
   // Record which route last ran on this thread so the resume endpoint can
   // re-invoke it without requiring the client to repeat the route key.
-  // The map is scoped to the server instance (lives in buildRouteTable's closure).
+  // The in-memory map is fast-path for the current server session; the thread
+  // metadata persists it to SQLite so resume survives a server restart.
   threadRouteMap.set(threadId, routeKey)
+  await threadsStore.updateMetadata(threadId, { route: routeKey })
 
   // Mark thread busy
   await threadsStore.updateStatus(threadId, "busy")
@@ -546,8 +548,9 @@ async function handleApWaitRequest(options: {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }
 
-  // Record route for potential resume
+  // Record route for potential resume (in-memory fast-path + durable metadata)
   threadRouteMap.set(threadId, routeKey)
+  await threadsStore.updateMetadata(threadId, { route: routeKey })
 
   await threadsStore.updateStatus(threadId, "busy")
 
@@ -699,18 +702,22 @@ async function handleResumeRequest(options: {
     return
   }
 
-  // Look up which route last ran on this thread. Prefer the in-memory map
-  // (populated during this server session). Fall back to the client-supplied
-  // `route` field in the resume body, which allows clients to resume across a
-  // server restart without re-sending the original message.
-  const routeKey = threadRouteMap.get(threadId) ?? bodyRoute
+  // Resolve which route last ran on this thread, in priority order:
+  //   1. in-memory map (fast-path, current server session)
+  //   2. durable thread metadata (survives a server restart)
+  //   3. client-supplied `route` in the resume body (explicit override)
+  const persistedRoute = (await threadsStore.getThread(threadId))?.metadata.route
+  const routeKey =
+    threadRouteMap.get(threadId) ??
+    (typeof persistedRoute === "string" ? persistedRoute : undefined) ??
+    bodyRoute
   if (!routeKey) {
     sendJson(
       response,
       409,
       createRequestErrorBody(
-        "Cannot resume: no route recorded for this thread in the current server session. " +
-          "Pass `route` in the resume body (e.g. '/chat#agent') to resume after a server restart.",
+        "Cannot resume: no route recorded for this thread. " +
+          "Pass `route` in the resume body (e.g. '/chat#agent') to resume explicitly.",
         { code: "route_not_found" },
       ),
     )

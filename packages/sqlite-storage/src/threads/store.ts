@@ -22,6 +22,12 @@ export interface ThreadsStore {
   deleteThread(threadId: string): Promise<void>
   listThreads(): Promise<Thread[]>
   updateStatus(threadId: string, status: ThreadStatus): Promise<void>
+  /**
+   * Shallow-merge `patch` into the thread's existing metadata. No-op if the
+   * thread does not exist. Used to persist durable per-thread runtime facts
+   * (e.g. the last route key) so they survive a server restart.
+   */
+  updateMetadata(threadId: string, patch: Record<string, unknown>): Promise<void>
 }
 
 interface ThreadRow {
@@ -86,6 +92,20 @@ export function makeThreadsStore(db: Db): ThreadsStore {
       const now = new Date().toISOString()
       db.prepare("UPDATE threads SET status = ?, updated_at = ? WHERE thread_id = ?").run(
         status,
+        now,
+        threadId,
+      )
+    },
+    async updateMetadata(threadId, patch) {
+      const row = db
+        .prepare("SELECT metadata FROM threads WHERE thread_id = ?")
+        .get(threadId) as unknown as { metadata: string } | undefined
+      if (!row) return
+      const current = JSON.parse(row.metadata) as Record<string, unknown>
+      const merged = JSON.stringify({ ...current, ...patch })
+      const now = new Date().toISOString()
+      db.prepare("UPDATE threads SET metadata = ?, updated_at = ? WHERE thread_id = ?").run(
+        merged,
         now,
         threadId,
       )

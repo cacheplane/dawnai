@@ -517,15 +517,16 @@ describe("agent protocol permission interrupt + resume", () => {
       try {
         const url2 = await server2.waitForReady(30_000)
 
-        // POST resume — pass `route` so the server can re-invoke the correct route
-        // even though its in-memory threadRouteMap is empty after the restart.
+        // POST resume WITHOUT a `route` field — the server's in-memory
+        // threadRouteMap is empty after the restart, so this exercises the
+        // durable fallback: the route persisted to thread metadata in SQLite
+        // at run-start. If metadata persistence regresses, this 409s.
         const resumeResp = await fetch(
           new URL(`/threads/${encodeURIComponent(threadId)}/resume`, url2),
           {
             body: JSON.stringify({
               interrupt_id: capturedInterruptId,
               decision: "once",
-              route: routeKey,
             }),
             headers: { "content-type": "application/json" },
             method: "POST",

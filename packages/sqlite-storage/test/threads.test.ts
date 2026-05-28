@@ -49,4 +49,21 @@ describe("createThreadsStore", () => {
     expect(list[0]?.thread_id).toBe(b.thread_id)
     expect(list[1]?.thread_id).toBe(a.thread_id)
   })
+
+  it("updateMetadata shallow-merges and survives a fresh store instance", async () => {
+    const path = join(dir, "threads.sqlite")
+    const s1 = createThreadsStore({ path })
+    await s1.createThread({ thread_id: "t-meta", metadata: { user: "brian" } })
+    await s1.updateMetadata("t-meta", { route: "/chat#agent" })
+    // Re-open from disk to prove durability across server restart.
+    const s2 = createThreadsStore({ path })
+    const fetched = await s2.getThread("t-meta")
+    expect(fetched?.metadata).toEqual({ user: "brian", route: "/chat#agent" })
+  })
+
+  it("updateMetadata is a no-op for unknown thread", async () => {
+    const store = newStore()
+    await store.updateMetadata("t-missing", { route: "/chat#agent" })
+    expect(await store.getThread("t-missing")).toBeUndefined()
+  })
 })
