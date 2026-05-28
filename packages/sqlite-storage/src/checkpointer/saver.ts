@@ -39,17 +39,17 @@ async function buildTuple(
   writes: WriteRow[],
   serde: Serde,
 ): Promise<CheckpointTuple> {
-  const checkpoint = (await serde.loadsTyped(
-    row.type ?? "json",
-    row.checkpoint,
-  )) as Checkpoint
+  const checkpoint = (await serde.loadsTyped(row.type ?? "json", row.checkpoint)) as Checkpoint
   const metadata = (await serde.loadsTyped("json", row.metadata)) as CheckpointMetadata
   const pendingWrites: [string, string, unknown][] = await Promise.all(
-    writes.map(async (w) => [
-      w.task_id,
-      w.channel,
-      w.value != null ? await serde.loadsTyped(w.type ?? "json", w.value) : null,
-    ] as [string, string, unknown]),
+    writes.map(
+      async (w) =>
+        [
+          w.task_id,
+          w.channel,
+          w.value != null ? await serde.loadsTyped(w.type ?? "json", w.value) : null,
+        ] as [string, string, unknown],
+    ),
   )
 
   const config: RunnableConfig = {
@@ -175,15 +175,7 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
          (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(
-        threadId,
-        ns,
-        checkpoint.id,
-        parentId,
-        checkpointType,
-        checkpointBytes,
-        metadataBytes,
-      )
+      .run(threadId, ns, checkpoint.id, parentId, checkpointType, checkpointBytes, metadataBytes)
     return {
       configurable: { thread_id: threadId, checkpoint_ns: ns, checkpoint_id: checkpoint.id },
     }

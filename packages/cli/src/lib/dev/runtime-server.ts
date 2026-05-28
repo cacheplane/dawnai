@@ -646,6 +646,10 @@ async function handleResumeRequest(options: {
   const body = parsedBody.value
   const interruptId = typeof body.interrupt_id === "string" ? body.interrupt_id : undefined
   const decision = body.decision
+  // Optional route key supplied by the client — used when the in-memory map
+  // has been cleared (e.g. after a server restart). Populated by the resume
+  // endpoint before starting the SSE stream.
+  const bodyRoute = typeof body.route === "string" ? body.route : undefined
   if (!interruptId) {
     sendJson(response, 400, createRequestErrorBody("Missing interrupt_id"))
     return
@@ -696,15 +700,17 @@ async function handleResumeRequest(options: {
   }
 
   // Look up which route last ran on this thread. Prefer the in-memory map
-  // (populated during this server session) for reliability.
-  const routeKey = threadRouteMap.get(threadId)
+  // (populated during this server session). Fall back to the client-supplied
+  // `route` field in the resume body, which allows clients to resume across a
+  // server restart without re-sending the original message.
+  const routeKey = threadRouteMap.get(threadId) ?? bodyRoute
   if (!routeKey) {
     sendJson(
       response,
       409,
       createRequestErrorBody(
         "Cannot resume: no route recorded for this thread in the current server session. " +
-          "This can happen after a server restart — re-send the original message to restart the run.",
+          "Pass `route` in the resume body (e.g. '/chat#agent') to resume after a server restart.",
         { code: "route_not_found" },
       ),
     )
