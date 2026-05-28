@@ -57,7 +57,9 @@ export async function cleanupTrackedTempDirs(registry: TrackedTempDir[]): Promis
   await Promise.all(
     tracked
       .filter((entry) => !entry.preserve)
-      .map((entry) => rm(entry.path, { force: true, recursive: true })),
+      // maxRetries handles the ENOTEMPTY race where a just-killed dev server's
+      // child flushes a SQLite WAL file into .dawn/ between readdir and rmdir.
+      .map((entry) => rm(entry.path, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 })),
   )
 }
 
