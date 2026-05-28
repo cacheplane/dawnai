@@ -7,7 +7,6 @@ import type {
 } from "@langchain/langgraph-checkpoint"
 import { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import type { Db } from "../internal/db.js"
-import { decodeBlob, encodeBlob } from "./serde.js"
 
 interface CheckpointRow {
   thread_id: string
@@ -26,14 +25,32 @@ interface WriteRow {
   value: Uint8Array | null
 }
 
-function buildTuple(row: CheckpointRow, writes: WriteRow[]): CheckpointTuple {
-  const checkpoint = decodeBlob(row.checkpoint) as Checkpoint
-  const metadata = decodeBlob(row.metadata) as CheckpointMetadata
-  const pendingWrites: [string, string, unknown][] = writes.map((w) => [
-    w.task_id,
-    w.channel,
-    w.value != null ? decodeBlob(w.value) : null,
-  ])
+/**
+ * Serializer protocol — matches the shape of BaseCheckpointSaver.serde
+ * (JsonPlusSerializer) without importing the private type.
+ */
+interface Serde {
+  dumpsTyped(data: unknown): Promise<[string, Uint8Array]>
+  loadsTyped(type: string, data: Uint8Array | string): Promise<unknown>
+}
+
+async function buildTuple(
+  row: CheckpointRow,
+  writes: WriteRow[],
+  serde: Serde,
+): Promise<CheckpointTuple> {
+  const checkpoint = (await serde.loadsTyped(
+    row.type ?? "json",
+    row.checkpoint,
+  )) as Checkpoint
+  const metadata = (await serde.loadsTyped("json", row.metadata)) as CheckpointMetadata
+  const pendingWrites: [string, string, unknown][] = await Promise.all(
+    writes.map(async (w) => [
+      w.task_id,
+      w.channel,
+      w.value != null ? await serde.loadsTyped(w.type ?? "json", w.value) : null,
+    ] as [string, string, unknown]),
+  )
 
   const config: RunnableConfig = {
     configurable: {
@@ -98,7 +115,7 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
         typedRow.checkpoint_id,
       ) as unknown as WriteRow[]
 
-    return buildTuple(typedRow, writeRows)
+    return buildTuple(typedRow, writeRows, this.serde as Serde)
   }
 
   async *list(
@@ -128,7 +145,7 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
       // Note: list returns lightweight tuples without pendingWrites. Callers that
       // need writes should call getTuple(specificCheckpointId) for full hydration.
       // This matches the @langchain/langgraph-checkpoint-sqlite reference behavior.
-      yield buildTuple(row, [])
+      yield await buildTuple(row, [], this.serde as Serde)
     }
   }
 
@@ -146,6 +163,12 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
     const parentId = (config.configurable?.checkpoint_id as string | undefined) ?? null
     // _newVersions is provided by LangGraph for version-tracking purposes but is
     // not persisted separately — versions live inside the serialized checkpoint payload.
+
+    // Use the inherited serde (JsonPlusSerializer) so that LangChain objects such
+    // as BaseMessage instances survive the round-trip through SQLite.
+    const [checkpointType, checkpointBytes] = await this.serde.dumpsTyped(checkpoint)
+    const [, metadataBytes] = await this.serde.dumpsTyped(metadata)
+
     this.db
       .prepare(
         `INSERT OR REPLACE INTO checkpoints
@@ -157,9 +180,9 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
         ns,
         checkpoint.id,
         parentId,
-        null,
-        encodeBlob(checkpoint),
-        encodeBlob(metadata),
+        checkpointType,
+        checkpointBytes,
+        metadataBytes,
       )
     return {
       configurable: { thread_id: threadId, checkpoint_ns: ns, checkpoint_id: checkpoint.id },
@@ -180,6 +203,16 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
     if (!ckptId) {
       throw new Error("[DawnSqliteSaver] config.configurable.checkpoint_id is required")
     }
+
+    // Serialize all values before opening the transaction (serde is async).
+    const serialized: Array<{ channel: string; type: string; bytes: Uint8Array }> =
+      await Promise.all(
+        writes.map(async ([channel, value]) => {
+          const [type, bytes] = await this.serde.dumpsTyped(value)
+          return { channel, type, bytes }
+        }),
+      )
+
     const stmt = this.db.prepare(
       `INSERT OR REPLACE INTO writes
        (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value)
@@ -187,17 +220,8 @@ export class DawnSqliteSaver extends BaseCheckpointSaver {
     )
     this.db.exec("BEGIN")
     try {
-      writes.forEach(([channel, value], idx) => {
-        stmt.run(
-          threadId,
-          ns,
-          ckptId,
-          taskId,
-          idx,
-          channel,
-          null,
-          value == null ? null : encodeBlob(value),
-        )
+      serialized.forEach(({ channel, type, bytes }, idx) => {
+        stmt.run(threadId, ns, ckptId, taskId, idx, channel, type, bytes)
       })
       this.db.exec("COMMIT")
     } catch (err) {

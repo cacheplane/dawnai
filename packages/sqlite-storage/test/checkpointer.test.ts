@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { HumanMessage, AIMessage } from "@langchain/core/messages"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { sqliteCheckpointer } from "../src/checkpointer/index.js"
 
@@ -75,5 +76,57 @@ describe("DawnSqliteSaver", () => {
     const s2 = sqliteCheckpointer({ path })
     const t = await s2.getTuple({ configurable: { thread_id: "t1", checkpoint_ns: "", checkpoint_id: "c1" } })
     expect(t?.checkpoint.channel_values).toEqual({ x: 1 })
+  })
+
+  it("round-trips LangChain BaseMessage instances through checkpoint serde", async () => {
+    // This test guards against the resume bug: plain JSON.parse loses BaseMessage
+    // prototype chains, causing ToolNode.isMessagesState() to reject the input.
+    // The saver must use JsonPlusSerializer (not plain JSON) to preserve instances.
+    const saver = newSaver()
+    const human = new HumanMessage("hello")
+    const ai = new AIMessage({ content: "hi", tool_calls: [{ name: "runBash", args: { command: "echo hi" }, id: "call_1" }] })
+    const cfg = { configurable: { thread_id: "t-msg", checkpoint_ns: "" } }
+    const checkpoint = {
+      v: 1,
+      id: "ckpt-msg",
+      ts: "2026-05-28T00:00:00Z",
+      channel_values: { messages: [human, ai] },
+      channel_versions: { messages: 3, "branch:to:tools": 3 },
+      versions_seen: { agent: { "branch:to:agent": 2 } },
+      pending_sends: [],
+    }
+    await saver.put(cfg, checkpoint as never, { source: "loop", step: 1, writes: null, parents: {} } as never, {})
+
+    // Also store a pending write (the interrupt) — must also survive serde
+    await saver.putWrites(
+      { configurable: { thread_id: "t-msg", checkpoint_ns: "", checkpoint_id: "ckpt-msg" } },
+      [["__interrupt__", { id: "test-interrupt", value: "perm-request" }]],
+      "tools-task-1",
+    )
+
+    const tuple = await saver.getTuple({
+      configurable: { thread_id: "t-msg", checkpoint_ns: "", checkpoint_id: "ckpt-msg" },
+    })
+
+    expect(tuple).toBeDefined()
+    const msgs = tuple!.checkpoint.channel_values.messages as unknown[]
+    expect(msgs).toHaveLength(2)
+
+    // The deserialized messages must be actual BaseMessage instances
+    // (not plain JSON objects) so that ToolNode's isBaseMessage() passes.
+    const { isBaseMessage } = await import("@langchain/core/messages")
+    expect(isBaseMessage(msgs[0])).toBe(true)
+    expect(isBaseMessage(msgs[1])).toBe(true)
+
+    // Check that the AI message still has its tool_calls intact
+    const aiMsg = msgs[1] as AIMessage
+    expect(aiMsg.tool_calls?.[0]?.name).toBe("runBash")
+
+    // Pending writes must also round-trip correctly
+    expect(tuple!.pendingWrites).toHaveLength(1)
+    const [taskId, channel, value] = tuple!.pendingWrites![0]
+    expect(taskId).toBe("tools-task-1")
+    expect(channel).toBe("__interrupt__")
+    expect((value as Record<string, unknown>).id).toBe("test-interrupt")
   })
 })
