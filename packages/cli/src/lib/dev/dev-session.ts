@@ -177,6 +177,15 @@ class InternalDevSession {
       ? absolutePath.slice(this.appRoot.length + 1)
       : absolutePath
 
+    // Node's recursive fs.watch can fire with a null/empty fileName (notably
+    // under high-frequency writes like the checkpointer's .dawn/*.sqlite-wal
+    // updates). We cannot attribute such an event to a source file, so treat
+    // it as a no-op rather than triggering a restart — a spurious restart can
+    // fail to rebind the still-held port and crash the dev session.
+    if (relative === "") {
+      return
+    }
+
     // Ignore generated output inside .dawn/
     if (relative.startsWith(".dawn/") || relative === ".dawn") {
       return
