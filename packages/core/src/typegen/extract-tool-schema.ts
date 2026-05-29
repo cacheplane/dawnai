@@ -135,6 +135,7 @@ function tsTypeToJsonSchema(
   description?: string
   items?: JsonSchemaProperty
   enum?: string[]
+  anyOf?: JsonSchemaProperty[]
   properties?: Record<string, JsonSchemaProperty>
   required?: string[]
   additionalProperties?: boolean | JsonSchemaProperty
@@ -153,6 +154,24 @@ function tsTypeToJsonSchema(
     if (allStringLiterals && nonUndefined.length > 0) {
       const enumValues = nonUndefined.map((t) => (t as ts.StringLiteralType).value)
       return { type: "string", enum: enumValues }
+    }
+
+    // Union of object shapes → anyOf. Require a genuine object type
+    // (ts.TypeFlags.Object) so intrinsic unions like `boolean` (modeled as
+    // `true | false` BooleanLiteral members that carry Boolean.prototype
+    // props) fall through to the primitive checks below instead of becoming
+    // a bogus anyOf.
+    if (nonUndefined.length > 1) {
+      const allObjects = nonUndefined.every(
+        (t) =>
+          (t.flags & ts.TypeFlags.Object) !== 0 &&
+          (t.getProperties().length > 0 || checker.getIndexTypeOfType(t, ts.IndexKind.String)),
+      )
+      if (allObjects) {
+        return {
+          anyOf: nonUndefined.map((t) => tsTypeToJsonSchema(t, checker, depth + 1)),
+        }
+      }
     }
   }
 

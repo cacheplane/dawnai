@@ -336,4 +336,16 @@ export default async function sharedTool(input: { a: number }): Promise<{ b: num
       expect(byId?.additionalProperties).toMatchObject({ type: "object" })
     })
   })
+
+  test("extracts an object union as anyOf", async () => {
+    const schemas = await extractSchemasFromSource(`
+      export default async function f(input: {
+        action: { kind: "create"; name: string } | { kind: "delete"; id: number }
+      }) { return input }
+    `)
+    const action = schemas[0]?.parameters.properties.action
+    expect(action?.anyOf).toHaveLength(2)
+    expect(action?.anyOf?.[0]?.type).toBe("object")
+    expect(action?.anyOf?.[1]?.properties?.id).toEqual({ type: "number" })
+  })
 })
