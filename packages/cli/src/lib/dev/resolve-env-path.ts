@@ -3,9 +3,9 @@ import { isAbsolute, resolve } from "node:path"
 export interface ResolveEnvPathOptions {
   readonly appRoot: string
   /** From the --env-file CLI flag. Highest precedence. */
-  readonly flag?: string
+  readonly flag?: string | undefined
   /** From dawn.config.ts `env`. */
-  readonly configEnv?: string
+  readonly configEnv?: string | undefined
 }
 
 export interface ResolvedEnvPath {

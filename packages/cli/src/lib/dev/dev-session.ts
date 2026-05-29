@@ -8,7 +8,8 @@ import { runTypegen } from "../typegen/run-typegen.js"
 import { classifyChange } from "./classify-change.js"
 import { DevChildStartupError, type SpawnedDevChild, spawnDevChild } from "./dev-child.js"
 import { waitForDevServerReady } from "./health.js"
-import { loadEnvFile } from "./load-env.js"
+import { loadEnvFiles } from "./load-env.js"
+import { resolveEnvPath } from "./resolve-env-path.js"
 import { type AppWatcher, watchApp } from "./watch-app.js"
 
 export interface DevSession {
@@ -21,14 +22,32 @@ export async function startDevSession(options: {
   readonly cwd: string
   readonly io: CommandIo
   readonly port?: number
+  readonly envFile?: string
 }): Promise<DevSession> {
-  // Load .env from the working directory before discovering the app
-  const envLoaded = loadEnvFile(options.cwd)
-  if (envLoaded > 0) {
-    writeLine(options.io.stdout, `Loaded ${envLoaded} variable(s) from .env`)
+  const discoveredApp = await discoverInitialApp(options.cwd)
+
+  let configEnv: string | undefined
+  try {
+    const loaded = await loadDawnConfig({ appRoot: discoveredApp.appRoot })
+    configEnv = loaded.config.env
+  } catch {
+    // No dawn.config.ts (or it failed to load) — fall through to default.
+    configEnv = undefined
   }
 
-  const discoveredApp = await discoverInitialApp(options.cwd)
+  const resolved = resolveEnvPath({
+    appRoot: discoveredApp.appRoot,
+    flag: options.envFile,
+    configEnv,
+  })
+  const envLoaded = loadEnvFiles([resolved.absPath])
+  if (envLoaded > 0) {
+    writeLine(
+      options.io.stdout,
+      `Loaded ${envLoaded} variable(s) from ${relative(options.cwd, resolved.absPath) || ".env"}`,
+    )
+  }
+
   const port = options.port ?? (await allocatePort())
   const url = `http://127.0.0.1:${port}`
   const session = new InternalDevSession({
