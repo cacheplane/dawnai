@@ -30,7 +30,7 @@ function saveEnv(...keys: string[]) {
 }
 
 describe("checkDependencies", () => {
-  test("reports missing packages not in package.json or node_modules", () => {
+  test("reports missing packages not in package.json or node_modules", async () => {
     writeFileSync(
       join(tempDir, "package.json"),
       JSON.stringify({
@@ -38,14 +38,14 @@ describe("checkDependencies", () => {
       }),
     )
 
-    const result = checkDependencies(tempDir)
+    const result = await checkDependencies({ appRoot: tempDir })
 
     expect(result.missingPackages).toContain("@langchain/core")
     expect(result.missingPackages).toContain("@langchain/openai")
     expect(result.missingPackages).toContain("@langchain/langgraph")
   })
 
-  test("passes when packages are declared in dependencies", () => {
+  test("passes when packages are declared in dependencies", async () => {
     writeFileSync(
       join(tempDir, "package.json"),
       JSON.stringify({
@@ -57,12 +57,12 @@ describe("checkDependencies", () => {
       }),
     )
 
-    const result = checkDependencies(tempDir)
+    const result = await checkDependencies({ appRoot: tempDir })
 
     expect(result.missingPackages).toEqual([])
   })
 
-  test("passes when packages are in devDependencies", () => {
+  test("passes when packages are in devDependencies", async () => {
     writeFileSync(
       join(tempDir, "package.json"),
       JSON.stringify({
@@ -74,49 +74,63 @@ describe("checkDependencies", () => {
       }),
     )
 
-    const result = checkDependencies(tempDir)
+    const result = await checkDependencies({ appRoot: tempDir })
 
     expect(result.missingPackages).toEqual([])
   })
 
-  test("reports missing env var when not in process.env or .env file", () => {
+  test("reports missing env var when not in process.env or .env file", async () => {
     saveEnv("OPENAI_API_KEY")
     delete process.env.OPENAI_API_KEY
 
     writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
 
-    const result = checkDependencies(tempDir)
+    const result = await checkDependencies({ appRoot: tempDir })
 
     expect(result.missingEnvVars).toContain("OPENAI_API_KEY")
   })
 
-  test("passes env check when var is in process.env", () => {
+  test("passes env check when var is in process.env", async () => {
     saveEnv("OPENAI_API_KEY")
     process.env.OPENAI_API_KEY = "sk-test"
 
     writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
 
-    const result = checkDependencies(tempDir)
+    const result = await checkDependencies({ appRoot: tempDir })
 
     expect(result.missingEnvVars).not.toContain("OPENAI_API_KEY")
   })
 
-  test("passes env check when var is in .env file", () => {
+  test("passes env check when var is in .env file", async () => {
     saveEnv("OPENAI_API_KEY")
     delete process.env.OPENAI_API_KEY
 
     writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
     writeFileSync(join(tempDir, ".env"), "OPENAI_API_KEY=sk-test-key\n")
 
-    const result = checkDependencies(tempDir)
+    const result = await checkDependencies({ appRoot: tempDir })
 
     expect(result.missingEnvVars).not.toContain("OPENAI_API_KEY")
   })
 
-  test("returns empty results when package.json is missing", () => {
-    const result = checkDependencies(tempDir)
+  test("returns empty results when package.json is missing", async () => {
+    const result = await checkDependencies({ appRoot: tempDir })
 
     expect(result.missingPackages).toEqual([])
     expect(result.missingEnvVars).toEqual([])
+  })
+
+  test("passes env check when var is in a file pointed to by envFile", async () => {
+    saveEnv("OPENAI_API_KEY")
+    delete process.env.OPENAI_API_KEY
+
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
+    // Recommended var is absent from <appRoot>/.env but present in custom.env.
+    writeFileSync(join(tempDir, ".env"), "SOMETHING_ELSE=1\n")
+    writeFileSync(join(tempDir, "custom.env"), "OPENAI_API_KEY=sk-from-custom\n")
+
+    const result = await checkDependencies({ appRoot: tempDir, envFile: "custom.env" })
+
+    expect(result.missingEnvVars).not.toContain("OPENAI_API_KEY")
   })
 })

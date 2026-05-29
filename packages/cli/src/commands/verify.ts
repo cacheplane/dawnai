@@ -15,6 +15,7 @@ import { checkDependencies } from "../lib/verify/check-dependencies.js"
 interface VerifyOptions {
   readonly cwd?: string
   readonly json?: boolean
+  readonly envFile?: string
 }
 
 interface VerifyCheckCounts {
@@ -91,6 +92,10 @@ export function registerVerifyCommand(program: Command, io: CommandIo): void {
     .description("Verify Dawn app integrity")
     .option("--cwd <path>", "Path to the Dawn app root or a child directory within it")
     .option("--json", "Print the normalized verify result as JSON")
+    .option(
+      "--env-file <path>",
+      "Path to a .env file (overrides dawn.config.ts env and the default ./.env)",
+    )
     .action(async (options: VerifyOptions) => {
       await runVerifyCommand(options, io)
     })
@@ -208,7 +213,10 @@ async function verifyApp(
   })
 
   // Check dependencies and environment variables (advisory, not blocking)
-  const depsResult = checkDependencies(app.appRoot)
+  const depsResult = await checkDependencies({
+    appRoot: app.appRoot,
+    ...(options.envFile !== undefined ? { envFile: options.envFile } : {}),
+  })
   const hasWarnings = depsResult.missingPackages.length > 0 || depsResult.missingEnvVars.length > 0
   checks.push({
     missingEnvVars: depsResult.missingEnvVars,
