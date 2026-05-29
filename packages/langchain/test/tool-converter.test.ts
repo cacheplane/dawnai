@@ -194,4 +194,15 @@ describe("jsonSchemaToZod nesting", () => {
       items: [{ id: 1 }, { id: 2 }],
     })
   })
+
+  it("builds a z.record from additionalProperties schema", () => {
+    const zodSchema = jsonSchemaToZod({
+      type: "object",
+      properties: { meta: { type: "object", additionalProperties: { type: "number" } } },
+      required: ["meta"],
+      additionalProperties: false,
+    })
+    expect(zodSchema.parse({ meta: { a: 1, b: 2 } })).toEqual({ meta: { a: 1, b: 2 } })
+    expect(() => zodSchema.parse({ meta: { a: "x" } })).toThrow()
+  })
 })

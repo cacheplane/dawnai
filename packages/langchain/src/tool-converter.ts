@@ -89,6 +89,15 @@ export function jsonSchemaToZod(schema: JsonSchemaProperty): z.ZodObject<z.ZodRa
 }
 
 function objectToZod(prop: JsonSchemaProperty, depth: number): z.ZodTypeAny {
+  // Record<string,T>: schema-valued additionalProperties and no named properties.
+  if (
+    typeof prop.additionalProperties === "object" &&
+    prop.additionalProperties !== null &&
+    (!prop.properties || Object.keys(prop.properties).length === 0)
+  ) {
+    return z.record(z.string(), jsonSchemaFieldToZod(prop.additionalProperties, depth + 1))
+  }
+
   const shape: Record<string, z.ZodTypeAny> = {}
   const required = new Set(prop.required ?? [])
   for (const [key, sub] of Object.entries(prop.properties ?? {})) {
