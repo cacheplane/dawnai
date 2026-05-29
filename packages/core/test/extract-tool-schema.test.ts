@@ -21,6 +21,12 @@ function writeToolFile(dir: string, name: string, content: string): void {
   writeFileSync(join(toolsDir, `${name}.ts`), content)
 }
 
+async function extractSchemasFromSource(source: string) {
+  const routeDir = join(tempDir, `route-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  writeToolFile(routeDir, "tool", source)
+  return extractToolSchemasForRoute({ routeDir, sharedToolsDir: undefined })
+}
+
 describe("extractToolSchemasForRoute", () => {
   test("extracts full JSON Schema with JSDoc descriptions", async () => {
     const routeDir = join(tempDir, "route")
@@ -277,5 +283,38 @@ export default async function sharedTool(input: { a: number }): Promise<{ b: num
     expect(result).toHaveLength(2)
     expect(result[0]?.name).toBe("local-tool")
     expect(result[1]?.name).toBe("shared-tool")
+  })
+
+  test("extracts a nested object property", async () => {
+    const schemas = await extractSchemasFromSource(`
+      /** Search tool */
+      export default async function search(input: {
+        filter: { status: "open" | "closed"; limit: number }
+      }) { return input }
+    `)
+    const filter = schemas[0]?.parameters.properties.filter
+    expect(filter?.type).toBe("object")
+    expect(filter?.properties?.status).toEqual({ type: "string", enum: ["open", "closed"] })
+    expect(filter?.properties?.limit).toEqual({ type: "number" })
+    expect(filter?.required).toEqual(["status", "limit"])
+    expect(filter?.additionalProperties).toBe(false)
+  })
+
+  test("extracts an array of objects", async () => {
+    const schemas = await extractSchemasFromSource(`
+      export default async function f(input: { items: { id: number; label: string }[] }) { return input }
+    `)
+    const items = schemas[0]?.parameters.properties.items
+    expect(items?.type).toBe("array")
+    expect(items?.items?.type).toBe("object")
+    expect(items?.items?.properties?.id).toEqual({ type: "number" })
+  })
+
+  test("falls back to string past the depth cap", async () => {
+    const deep = Array.from({ length: 10 }).reduce((inner) => `{ n: ${inner} }`, "string")
+    const schemas = await extractSchemasFromSource(`
+      export default async function f(input: { root: ${deep} }) { return input }
+    `)
+    expect(JSON.stringify(schemas[0]?.parameters.properties.root)).toContain('"type":"string"')
   })
 })
