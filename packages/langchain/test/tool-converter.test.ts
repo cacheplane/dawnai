@@ -205,4 +205,37 @@ describe("jsonSchemaToZod nesting", () => {
     expect(zodSchema.parse({ meta: { a: 1, b: 2 } })).toEqual({ meta: { a: 1, b: 2 } })
     expect(() => zodSchema.parse({ meta: { a: "x" } })).toThrow()
   })
+
+  it("builds a z.union from anyOf", () => {
+    const zodSchema = jsonSchemaToZod({
+      type: "object",
+      properties: {
+        action: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { kind: { type: "string", enum: ["create"] }, name: { type: "string" } },
+              required: ["kind", "name"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: { kind: { type: "string", enum: ["delete"] }, id: { type: "number" } },
+              required: ["kind", "id"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    })
+    expect(zodSchema.parse({ action: { kind: "create", name: "x" } })).toEqual({
+      action: { kind: "create", name: "x" },
+    })
+    expect(zodSchema.parse({ action: { kind: "delete", id: 7 } })).toEqual({
+      action: { kind: "delete", id: 7 },
+    })
+    expect(() => zodSchema.parse({ action: { kind: "create" } })).toThrow()
+  })
 })
