@@ -82,25 +82,31 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaProperty & { typ
   )
 }
 
-function jsonSchemaToZod(schema: JsonSchemaProperty): z.ZodObject<z.ZodRawShape> {
-  const shape: Record<string, z.ZodTypeAny> = {}
-  const required = new Set(schema.required ?? [])
+const MAX_ZOD_DEPTH = 8
 
-  for (const [key, prop] of Object.entries(schema.properties ?? {})) {
-    let field: z.ZodTypeAny = jsonSchemaFieldToZod(prop)
-    if (!required.has(key)) {
-      field = field.optional()
-    }
+export function jsonSchemaToZod(schema: JsonSchemaProperty): z.ZodObject<z.ZodRawShape> {
+  return objectToZod(schema, 0) as z.ZodObject<z.ZodRawShape>
+}
+
+function objectToZod(prop: JsonSchemaProperty, depth: number): z.ZodTypeAny {
+  const shape: Record<string, z.ZodTypeAny> = {}
+  const required = new Set(prop.required ?? [])
+  for (const [key, sub] of Object.entries(prop.properties ?? {})) {
+    let field = jsonSchemaFieldToZod(sub, depth + 1)
+    if (!required.has(key)) field = field.optional()
     shape[key] = field
   }
-
   return z.object(shape)
 }
 
-function jsonSchemaFieldToZod(prop: JsonSchemaProperty): z.ZodTypeAny {
+function jsonSchemaFieldToZod(prop: JsonSchemaProperty, depth = 0): z.ZodTypeAny {
+  if (depth > MAX_ZOD_DEPTH) return z.string()
+
   switch (prop.type) {
     case "string":
-      return z.string()
+      return prop.enum && prop.enum.length > 0
+        ? z.enum([...prop.enum] as [string, ...string[]])
+        : z.string()
     case "number":
     case "integer":
       return z.number()
@@ -108,11 +114,10 @@ function jsonSchemaFieldToZod(prop: JsonSchemaProperty): z.ZodTypeAny {
       return z.boolean()
     case "array": {
       const items = prop.items
-      if (items?.type === "string") return z.array(z.string())
-      if (items?.type === "number" || items?.type === "integer") return z.array(z.number())
-      if (items?.type === "boolean") return z.array(z.boolean())
-      return z.array(z.unknown())
+      return items ? z.array(jsonSchemaFieldToZod(items, depth + 1)) : z.array(z.unknown())
     }
+    case "object":
+      return objectToZod(prop, depth)
     default:
       return z.unknown()
   }

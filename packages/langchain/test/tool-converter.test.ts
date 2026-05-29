@@ -2,6 +2,7 @@ import { convertToolToLangChain } from "@dawn-ai/langchain"
 import { ToolMessage } from "@langchain/core/messages"
 import { type Command, isCommand } from "@langchain/langgraph"
 import { describe, expect, it, test } from "vitest"
+import { jsonSchemaToZod } from "../src/tool-converter.js"
 
 describe("convertToolToLangChain", () => {
   test("converts a basic Dawn tool to a DynamicStructuredTool", async () => {
@@ -148,5 +149,49 @@ describe("convertToolToLangChain — {result, state} wrapped returns", () => {
     )
     expect(typeof result).toBe("string")
     expect(result).toBe("ok")
+  })
+})
+
+describe("jsonSchemaToZod nesting", () => {
+  it("builds a nested object schema that validates", () => {
+    const zodSchema = jsonSchemaToZod({
+      type: "object",
+      properties: {
+        filter: {
+          type: "object",
+          properties: { status: { type: "string" }, limit: { type: "number" } },
+          required: ["status"],
+          additionalProperties: false,
+        },
+      },
+      required: ["filter"],
+      additionalProperties: false,
+    })
+    expect(zodSchema.parse({ filter: { status: "open", limit: 5 } })).toEqual({
+      filter: { status: "open", limit: 5 },
+    })
+    expect(() => zodSchema.parse({ filter: { limit: 5 } })).toThrow()
+  })
+
+  it("builds an array-of-objects schema", () => {
+    const zodSchema = jsonSchemaToZod({
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { id: { type: "number" } },
+            required: ["id"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["items"],
+      additionalProperties: false,
+    })
+    expect(zodSchema.parse({ items: [{ id: 1 }, { id: 2 }] })).toEqual({
+      items: [{ id: 1 }, { id: 2 }],
+    })
   })
 })
