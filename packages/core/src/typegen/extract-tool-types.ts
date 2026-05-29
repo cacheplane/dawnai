@@ -66,7 +66,7 @@ export async function extractToolTypesForRoute(
       const firstParam = params[0]
       if (!firstParam) continue
       const paramType = checker.getTypeOfSymbolAtLocation(firstParam, sourceFile)
-      inputType = checker.typeToString(paramType)
+      inputType = checker.typeToString(paramType, undefined, ts.TypeFormatFlags.NoTruncation)
     }
 
     const returnType = checker.getReturnTypeOfSignature(signature)
@@ -78,7 +78,7 @@ export async function extractToolTypesForRoute(
       description,
       name,
       inputType,
-      outputType: checker.typeToString(outputType),
+      outputType: checker.typeToString(outputType, undefined, ts.TypeFormatFlags.NoTruncation),
     })
   }
 
