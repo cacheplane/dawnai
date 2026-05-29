@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, beforeEach, describe, expect, test } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, test } from "vitest"
 
-import { loadEnvFile } from "../src/lib/dev/load-env.js"
+import { loadEnvFile, loadEnvFiles } from "../src/lib/dev/load-env.js"
 
 let tempDir: string
 const originalEnv: Record<string, string | undefined> = {}
@@ -121,5 +121,61 @@ describe("loadEnvFile", () => {
     const _count = loadEnvFile(tempDir)
 
     expect(process.env.LANGCHAIN_TRACING_V2).toBe("false")
+  })
+})
+
+describe("loadEnvFiles", () => {
+  let dir: string
+  const saved = { ...process.env }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dawn-loadenvfiles-"))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    for (const k of Object.keys(process.env)) {
+      if (!(k in saved)) delete process.env[k]
+    }
+  })
+
+  it("loads from an explicit absolute path", () => {
+    const p = join(dir, "custom.env")
+    writeFileSync(p, "DAWN_TEST_A=1\n")
+    delete process.env.DAWN_TEST_A
+    const n = loadEnvFiles([p])
+    expect(n).toBeGreaterThanOrEqual(1)
+    expect(process.env.DAWN_TEST_A).toBe("1")
+  })
+
+  it("does not override an already-set var (shell wins)", () => {
+    const p = join(dir, ".env")
+    writeFileSync(p, "DAWN_TEST_B=fromfile\n")
+    process.env.DAWN_TEST_B = "fromshell"
+    loadEnvFiles([p])
+    expect(process.env.DAWN_TEST_B).toBe("fromshell")
+  })
+
+  it("loads multiple paths in order; first to set a key wins", () => {
+    const a = join(dir, "a.env")
+    const b = join(dir, "b.env")
+    writeFileSync(a, "DAWN_TEST_C=fromA\n")
+    writeFileSync(b, "DAWN_TEST_C=fromB\n")
+    delete process.env.DAWN_TEST_C
+    loadEnvFiles([a, b])
+    expect(process.env.DAWN_TEST_C).toBe("fromA")
+  })
+
+  it("missing file contributes zero", () => {
+    const n = loadEnvFiles([join(dir, "nope.env")])
+    expect(n).toBe(0)
+  })
+
+  it("auto-enables LANGCHAIN_TRACING_V2 when LANGSMITH_API_KEY present", () => {
+    const p = join(dir, ".env")
+    writeFileSync(p, "LANGSMITH_API_KEY=ls-xyz\n")
+    delete process.env.LANGSMITH_API_KEY
+    delete process.env.LANGCHAIN_TRACING_V2
+    loadEnvFiles([p])
+    expect(process.env.LANGCHAIN_TRACING_V2).toBe("true")
   })
 })
