@@ -1,3 +1,4 @@
+import type { JsonSchemaProperty } from "@dawn-ai/core"
 import { ToolMessage } from "@langchain/core/messages"
 import { DynamicStructuredTool } from "@langchain/core/tools"
 import { Command } from "@langchain/langgraph"
@@ -72,13 +73,7 @@ function isZodObject(value: unknown): value is z.ZodObject<z.ZodRawShape> {
   )
 }
 
-interface JsonSchemaObject {
-  readonly type: "object"
-  readonly properties?: Record<string, { readonly type?: string; readonly items?: unknown }>
-  readonly required?: readonly string[]
-}
-
-function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
+function isJsonSchemaObject(value: unknown): value is JsonSchemaProperty & { type: "object" } {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -87,7 +82,7 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
   )
 }
 
-function jsonSchemaToZod(schema: JsonSchemaObject): z.ZodObject<z.ZodRawShape> {
+function jsonSchemaToZod(schema: JsonSchemaProperty): z.ZodObject<z.ZodRawShape> {
   const shape: Record<string, z.ZodTypeAny> = {}
   const required = new Set(schema.required ?? [])
 
@@ -102,10 +97,7 @@ function jsonSchemaToZod(schema: JsonSchemaObject): z.ZodObject<z.ZodRawShape> {
   return z.object(shape)
 }
 
-function jsonSchemaFieldToZod(prop: {
-  readonly type?: string
-  readonly items?: unknown
-}): z.ZodTypeAny {
+function jsonSchemaFieldToZod(prop: JsonSchemaProperty): z.ZodTypeAny {
   switch (prop.type) {
     case "string":
       return z.string()
@@ -115,7 +107,7 @@ function jsonSchemaFieldToZod(prop: {
     case "boolean":
       return z.boolean()
     case "array": {
-      const items = prop.items as { readonly type?: string } | undefined
+      const items = prop.items
       if (items?.type === "string") return z.array(z.string())
       if (items?.type === "number" || items?.type === "integer") return z.array(z.number())
       if (items?.type === "boolean") return z.array(z.boolean())

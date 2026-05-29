@@ -92,12 +92,13 @@ export interface RouteToolTypes {
 }
 
 export interface JsonSchemaProperty {
-  readonly type: string
+  readonly type?: string
   readonly description?: string
   readonly items?: JsonSchemaProperty
   readonly properties?: Record<string, JsonSchemaProperty>
   readonly required?: readonly string[]
-  readonly additionalProperties?: boolean
+  readonly additionalProperties?: boolean | JsonSchemaProperty
+  readonly anyOf?: readonly JsonSchemaProperty[]
   readonly enum?: readonly string[]
 }
 
