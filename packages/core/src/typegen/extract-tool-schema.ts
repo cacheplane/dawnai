@@ -137,7 +137,7 @@ function tsTypeToJsonSchema(
   enum?: string[]
   properties?: Record<string, JsonSchemaProperty>
   required?: string[]
-  additionalProperties?: boolean
+  additionalProperties?: boolean | JsonSchemaProperty
 } {
   if (depth > MAX_SCHEMA_DEPTH) return { type: "string" }
 
@@ -189,10 +189,22 @@ function tryObjectSchema(
       type: string
       properties: Record<string, JsonSchemaProperty>
       required: string[]
-      additionalProperties: boolean
+      additionalProperties: boolean | JsonSchemaProperty
     }
   | undefined {
   const props = type.getProperties()
+  const indexType = checker.getIndexTypeOfType(type, ts.IndexKind.String)
+
+  // Record<string, T>: no named properties, string index signature present.
+  if (props.length === 0 && indexType) {
+    return {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: tsTypeToJsonSchema(indexType, checker, depth + 1),
+    }
+  }
+
   if (props.length === 0) return undefined
 
   const properties: Record<string, JsonSchemaProperty> = {}

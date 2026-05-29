@@ -317,4 +317,23 @@ export default async function sharedTool(input: { a: number }): Promise<{ b: num
     `)
     expect(JSON.stringify(schemas[0]?.parameters.properties.root)).toContain('"type":"string"')
   })
+
+  describe("Record<string,T> support", () => {
+    test("extracts a Record<string,T> map as additionalProperties", async () => {
+      const schemas = await extractSchemasFromSource(`
+        export default async function f(input: { meta: Record<string, number> }) { return input }
+      `)
+      const meta = schemas[0]?.parameters.properties.meta
+      expect(meta?.type).toBe("object")
+      expect(meta?.additionalProperties).toEqual({ type: "number" })
+    })
+
+    test("extracts a Record of objects", async () => {
+      const schemas = await extractSchemasFromSource(`
+        export default async function f(input: { byId: Record<string, { name: string }> }) { return input }
+      `)
+      const byId = schemas[0]?.parameters.properties.byId
+      expect(byId?.additionalProperties).toMatchObject({ type: "object" })
+    })
+  })
 })
