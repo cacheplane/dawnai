@@ -2,6 +2,7 @@ import { convertToolToLangChain } from "@dawn-ai/langchain"
 import { ToolMessage } from "@langchain/core/messages"
 import { type Command, isCommand } from "@langchain/langgraph"
 import { describe, expect, it, test } from "vitest"
+import { jsonSchemaToZod } from "../src/tool-converter.js"
 
 describe("convertToolToLangChain", () => {
   test("converts a basic Dawn tool to a DynamicStructuredTool", async () => {
@@ -148,5 +149,93 @@ describe("convertToolToLangChain — {result, state} wrapped returns", () => {
     )
     expect(typeof result).toBe("string")
     expect(result).toBe("ok")
+  })
+})
+
+describe("jsonSchemaToZod nesting", () => {
+  it("builds a nested object schema that validates", () => {
+    const zodSchema = jsonSchemaToZod({
+      type: "object",
+      properties: {
+        filter: {
+          type: "object",
+          properties: { status: { type: "string" }, limit: { type: "number" } },
+          required: ["status"],
+          additionalProperties: false,
+        },
+      },
+      required: ["filter"],
+      additionalProperties: false,
+    })
+    expect(zodSchema.parse({ filter: { status: "open", limit: 5 } })).toEqual({
+      filter: { status: "open", limit: 5 },
+    })
+    expect(() => zodSchema.parse({ filter: { limit: 5 } })).toThrow()
+  })
+
+  it("builds an array-of-objects schema", () => {
+    const zodSchema = jsonSchemaToZod({
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { id: { type: "number" } },
+            required: ["id"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["items"],
+      additionalProperties: false,
+    })
+    expect(zodSchema.parse({ items: [{ id: 1 }, { id: 2 }] })).toEqual({
+      items: [{ id: 1 }, { id: 2 }],
+    })
+  })
+
+  it("builds a z.record from additionalProperties schema", () => {
+    const zodSchema = jsonSchemaToZod({
+      type: "object",
+      properties: { meta: { type: "object", additionalProperties: { type: "number" } } },
+      required: ["meta"],
+      additionalProperties: false,
+    })
+    expect(zodSchema.parse({ meta: { a: 1, b: 2 } })).toEqual({ meta: { a: 1, b: 2 } })
+    expect(() => zodSchema.parse({ meta: { a: "x" } })).toThrow()
+  })
+
+  it("builds a z.union from anyOf", () => {
+    const zodSchema = jsonSchemaToZod({
+      type: "object",
+      properties: {
+        action: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { kind: { type: "string", enum: ["create"] }, name: { type: "string" } },
+              required: ["kind", "name"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: { kind: { type: "string", enum: ["delete"] }, id: { type: "number" } },
+              required: ["kind", "id"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    })
+    expect(zodSchema.parse({ action: { kind: "create", name: "x" } })).toEqual({
+      action: { kind: "create", name: "x" },
+    })
+    expect(zodSchema.parse({ action: { kind: "delete", id: 7 } })).toEqual({
+      action: { kind: "delete", id: 7 },
+    })
+    expect(() => zodSchema.parse({ action: { kind: "create" } })).toThrow()
   })
 })

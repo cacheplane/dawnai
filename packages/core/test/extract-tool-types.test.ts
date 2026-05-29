@@ -260,6 +260,32 @@ export default async function ping(): Promise<{ pong: boolean }> {
     expect(result[0]?.description).toBe("")
   })
 
+  test("renders a nested object input type in full (no truncation)", async () => {
+    const routeDir = join(tempDir, "route")
+    writeToolFile(
+      routeDir,
+      "search",
+      `
+export default async function search(input: {
+  filter: { status: "open" | "closed"; tags: string[]; range: { min: number; max: number }; labels: string[] }
+}): Promise<{ results: string[] }> {
+  return { results: [] }
+}
+`,
+    )
+
+    const result = await extractToolTypesForRoute({
+      routeDir,
+      sharedToolsDir: undefined,
+    })
+
+    const inputType = result[0]?.inputType ?? ""
+    expect(inputType).toContain("filter")
+    expect(inputType).toContain("status")
+    expect(inputType).toContain("range")
+    expect(inputType).not.toContain("...")
+  })
+
   test("skips .d.ts files", async () => {
     const routeDir = join(tempDir, "route")
     const toolsDir = join(routeDir, "tools")
