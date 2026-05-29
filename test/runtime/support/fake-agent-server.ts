@@ -21,13 +21,14 @@ export interface FakeAgentServer {
   readonly url: string
 }
 
+const AP_RUNS_WAIT_PATTERN = /^\/threads\/[^/?#]+\/runs\/wait(?:\?.*)?$/
+
 export async function startFakeAgentServer(
   handler: (request: FakeAgentServerRequest) => Promise<FakeAgentServerResponse>,
-  requestPath = "/runs/wait",
 ): Promise<FakeAgentServer> {
   const requests: FakeAgentServerRequest[] = []
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
-    if (request.method !== "POST" || request.url !== requestPath) {
+    if (request.method !== "POST" || !AP_RUNS_WAIT_PATTERN.test(request.url ?? "")) {
       response.statusCode = 404
       response.setHeader("content-type", "application/json")
       response.end(JSON.stringify({ error: "not found" }))

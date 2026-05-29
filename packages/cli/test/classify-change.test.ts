@@ -38,4 +38,17 @@ describe("classifyChange", () => {
     expect(classifyChange("workspace/AGENTS.md")).toBe("ignore")
     expect(classifyChange("workspace/notes/output.md")).toBe("ignore")
   })
+
+  test("empty path (unattributable watcher event) is ignored, never restart", () => {
+    // Node's recursive fs.watch can fire with a null fileName under
+    // high-frequency writes; we must not restart the dev server on it.
+    expect(classifyChange("")).toBe("ignore")
+  })
+
+  test(".dawn runtime state changes are ignored (checkpoints, threads, wal)", () => {
+    expect(classifyChange(".dawn")).toBe("ignore")
+    expect(classifyChange(".dawn/checkpoints.sqlite")).toBe("ignore")
+    expect(classifyChange(".dawn/checkpoints.sqlite-wal")).toBe("ignore")
+    expect(classifyChange(".dawn/threads.sqlite")).toBe("ignore")
+  })
 })

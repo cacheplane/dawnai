@@ -20,6 +20,53 @@ type PendingInterrupt = {
   }
 }
 
+/**
+ * Reads SSE lines from a ReadableStreamDefaultReader and pipes them into
+ * setEvents. Also detects interrupt events and calls setPendingInterrupt.
+ * Returns when the stream is exhausted.
+ */
+async function readSseInto(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  setEvents: React.Dispatch<React.SetStateAction<string[]>>,
+  setPendingInterrupt: React.Dispatch<React.SetStateAction<PendingInterrupt | null>>,
+): Promise<void> {
+  const decoder = new TextDecoder()
+  let buf = ""
+  let nextLineIsInterruptData = false
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split("\n")
+    buf = lines.pop() ?? ""
+    for (const line of lines) {
+      if (!line.trim()) continue
+      if (line === "event: interrupt") {
+        nextLineIsInterruptData = true
+        setEvents((e) => [...e, line])
+        continue
+      }
+      if (nextLineIsInterruptData && line.startsWith("data: ")) {
+        try {
+          const payload = JSON.parse(line.slice("data: ".length)) as PendingInterrupt
+          setPendingInterrupt({
+            interruptId: payload.interruptId,
+            type: payload.type,
+            kind: payload.kind,
+            detail: payload.detail,
+          })
+        } catch {
+          /* ignore parse errors */
+        }
+        nextLineIsInterruptData = false
+      }
+      setEvents((e) => [...e, line])
+    }
+  }
+  if (buf.trim()) setEvents((e) => [...e, buf])
+}
+
 export default function Page() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const [input, setInput] = useState("")
@@ -30,7 +77,10 @@ export default function Page() {
 
   async function resolveInterrupt(decision: "once" | "always" | "deny") {
     if (!pendingInterrupt || !threadId) return
-    await fetch("/api/permission-resume", {
+    setPendingInterrupt(null)
+    setBusy(true)
+
+    const res = await fetch("/api/permission-resume", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -39,7 +89,17 @@ export default function Page() {
         decision,
       }),
     })
-    setPendingInterrupt(null)
+
+    if (!res.body) {
+      setEvents((e) => [...e, `✖ resume error: no response body (status ${res.status})`])
+      setBusy(false)
+      return
+    }
+
+    const reader = res.body.getReader()
+    await readSseInto(reader, setEvents, setPendingInterrupt)
+    setEvents((e) => [...e, "■ done"])
+    setBusy(false)
   }
 
   function switchRoute(next: RouteId) {
@@ -72,40 +132,7 @@ export default function Page() {
     }
 
     const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ""
-    let nextLineIsInterruptData = false
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split("\n")
-      buf = lines.pop() ?? ""
-      for (const line of lines) {
-        if (!line.trim()) continue
-        if (line === "event: interrupt") {
-          nextLineIsInterruptData = true
-          setEvents((e) => [...e, line])
-          continue
-        }
-        if (nextLineIsInterruptData && line.startsWith("data: ")) {
-          try {
-            const payload = JSON.parse(line.slice("data: ".length))
-            setPendingInterrupt({
-              interruptId: payload.interruptId,
-              type: payload.type,
-              kind: payload.kind,
-              detail: payload.detail,
-            })
-          } catch {
-            /* ignore parse errors */
-          }
-          nextLineIsInterruptData = false
-        }
-        setEvents((e) => [...e, line])
-      }
-    }
-    if (buf.trim()) setEvents((e) => [...e, buf])
+    await readSseInto(reader, setEvents, setPendingInterrupt)
     setEvents((e) => [...e, "■ done"])
     setBusy(false)
   }

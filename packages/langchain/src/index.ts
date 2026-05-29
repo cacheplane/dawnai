@@ -1,4 +1,5 @@
 export type { BuiltInModelProviderId, ModelProviderId } from "@dawn-ai/sdk"
+export { Command } from "@langchain/langgraph"
 export type {
   AgentStreamChunk,
   DawnToolDefinition,
@@ -12,13 +13,6 @@ export {
 export { chainAdapter } from "./chain-adapter.js"
 export { createChatModel } from "./chat-model-factory.js"
 export { inferProvider, resolveProvider } from "./model-provider-resolver.js"
-export type { PendingInterrupt, ResumeDecision } from "./pending-interrupts.js"
-export {
-  __resetPendingForTests,
-  clearPending,
-  getPending,
-  setPending,
-} from "./pending-interrupts.js"
 export type { RetryOptions } from "./retry.js"
 export { isRetryableError, withRetry } from "./retry.js"
 export { materializeStateSchema } from "./state-adapter.js"

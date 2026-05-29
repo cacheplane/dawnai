@@ -67,6 +67,7 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
   }>((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
       cwd,
+      env: { ...process.env, NODE_NO_WARNINGS: "1" },
       stdio: "pipe",
     })
 
@@ -188,6 +189,7 @@ describe("dawn typegen", () => {
     const langgraphTarball = await packPackage("@dawn-ai/langgraph", packsRoot)
     const permissionsTarball = await packPackage("@dawn-ai/permissions", packsRoot)
     const sdkTarball = await packPackage("@dawn-ai/sdk", packsRoot)
+    const sqliteStorageTarball = await packPackage("@dawn-ai/sqlite-storage", packsRoot)
     const workspaceTarball = await packPackage("@dawn-ai/workspace", packsRoot)
 
     await writeFile(
@@ -202,6 +204,7 @@ describe("dawn typegen", () => {
             "@dawn-ai/core": `file:${coreTarball}`,
             "@dawn-ai/langchain": `file:${langchainTarball}`,
             "@dawn-ai/langgraph": `file:${langgraphTarball}`,
+            "@dawn-ai/sqlite-storage": `file:${sqliteStorageTarball}`,
           },
           pnpm: {
             overrides: {
@@ -210,6 +213,7 @@ describe("dawn typegen", () => {
               "@dawn-ai/langgraph": `file:${langgraphTarball}`,
               "@dawn-ai/permissions": `file:${permissionsTarball}`,
               "@dawn-ai/sdk": `file:${sdkTarball}`,
+              "@dawn-ai/sqlite-storage": `file:${sqliteStorageTarball}`,
               "@dawn-ai/workspace": `file:${workspaceTarball}`,
             },
           },

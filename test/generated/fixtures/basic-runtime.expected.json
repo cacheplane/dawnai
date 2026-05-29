@@ -24,18 +24,10 @@
     "status": "passed"
   },
   "serverRequest": {
-    "assistant_id": "/hello/[tenant]#agent",
     "input": {
       "tenant": "basic-tenant"
     },
-    "metadata": {
-      "dawn": {
-        "mode": "agent",
-        "route_id": "/hello/[tenant]",
-        "route_path": "src/app/(public)/hello/[tenant]/index.ts"
-      }
-    },
-    "on_completion": "delete"
+    "route": "/hello/[tenant]#agent"
   },
   "testStdout": "PASS basic in-process scenario\nPASS basic server scenario\nSummary: 2 passed, 0 failed"
 }

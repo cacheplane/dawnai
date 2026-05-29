@@ -2,15 +2,10 @@ import type { PromptFragment, StreamTransformer } from "@dawn-ai/core"
 import type { DawnAgent, RetryConfig } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
-import { Command, MemorySaver } from "@langchain/langgraph"
+import { Command } from "@langchain/langgraph"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { createChatModel } from "./chat-model-factory.js"
 import { resolveProvider } from "./model-provider-resolver.js"
-import {
-  clearPending,
-  type PendingInterrupt,
-  type ResumeDecision,
-  setPending,
-} from "./pending-interrupts.js"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
 import {
@@ -57,20 +52,6 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
 // changes, the cache key must include a hash of the fragments/transformers.
 const materializedAgents = new WeakMap<DawnAgent, AgentLike>()
 
-/**
- * Process-level checkpointer shared by every materialized agent. LangGraph
- * requires a checkpointer + a stable `thread_id` for `interrupt()` to park
- * graph state and for `new Command({resume})` to replay from the parked
- * step. The dev/runtime server passes the client-supplied
- * `metadata.dawn.thread_id` through to `streamAgent`, which forwards it to
- * `config.configurable.thread_id`.
- *
- * Single shared instance is fine for in-process runtimes; revisit if the
- * runtime ever runs across processes (each would have its own saver and
- * resume would need a distributed checkpointer like SQLite/Postgres).
- */
-const sharedCheckpointer = new MemorySaver()
-
 export function composePromptMessages(
   systemPrompt: string,
   promptFragments: readonly PromptFragment[],
@@ -88,6 +69,7 @@ export function composePromptMessages(
 async function materializeAgent(
   descriptor: DawnAgent,
   tools: readonly DawnToolDefinition[],
+  checkpointer: BaseCheckpointSaver,
   stateFields?: readonly ResolvedStateField[],
   middlewareContext?: Readonly<Record<string, unknown>>,
   promptFragments?: readonly PromptFragment[],
@@ -127,7 +109,7 @@ async function materializeAgent(
         : descriptor.systemPrompt,
     // Required so `interrupt()` can park graph state and `Command({resume})`
     // can replay it. Paired with `config.configurable.thread_id`.
-    checkpointer: sharedCheckpointer,
+    checkpointer,
   }
 
   if (stateFields && stateFields.length > 0) {
@@ -144,6 +126,7 @@ async function materializeAgent(
 }
 
 export async function materializeAgentGraph(options: {
+  readonly checkpointer: BaseCheckpointSaver
   readonly descriptor: DawnAgent
   readonly tools?: readonly DawnToolDefinition[]
   readonly stateFields?: readonly ResolvedStateField[]
@@ -152,6 +135,7 @@ export async function materializeAgentGraph(options: {
   return materializeAgent(
     options.descriptor,
     options.tools ?? [],
+    options.checkpointer,
     options.stateFields,
     undefined,
     options.promptFragments,
@@ -278,7 +262,20 @@ function parseInterruptStringMessage(text: string): readonly RawInterruptEntry[]
 }
 
 export interface AgentOptions {
+  /**
+   * Checkpointer used by LangGraph to park interrupted graph state and replay
+   * from it on resume. Required — the CLI runtime supplies a SQLite-backed
+   * instance by default. If you call agent-adapter directly (e.g. in tests),
+   * pass `new MemorySaver()` from `@langchain/langgraph`.
+   */
+  readonly checkpointer: BaseCheckpointSaver
   readonly entry: unknown
+  /**
+   * The agent input. For a normal invocation, this is a record like
+   * `{messages: [...]}`. For a resume invocation (after a parked interrupt),
+   * pass a `Command({resume: decision})` instance directly — the adapter will
+   * forward it verbatim to `streamEvents` instead of wrapping it in messages.
+   */
   readonly input: unknown
   readonly middlewareContext?: Readonly<Record<string, unknown>>
   readonly retry?: RetryConfig
@@ -317,8 +314,17 @@ export async function executeAgent(options: AgentOptions): Promise<unknown> {
 }
 
 export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentStreamChunk> {
+  if (!options.checkpointer) {
+    throw new Error(
+      "[dawn] agent-adapter requires a checkpointer in AgentOptions. The CLI runtime instantiates sqliteCheckpointer by default; if you're calling agent-adapter directly, pass one explicitly.",
+    )
+  }
+
+  // If the caller is passing a Command directly (resume path), forward it
+  // verbatim without the usual input preparation and message extraction.
+  const isCommandInput = options.input instanceof Command
   const { agentInput, config } = prepareAgentCall(options)
-  const messages = extractMessages(agentInput)
+  const messages = isCommandInput ? [] : extractMessages(agentInput)
 
   // Per-call subagent event queue. The bridge's writer pushes here; the
   // streaming generator drains the queue alongside normal stream chunks. This
@@ -367,21 +373,22 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     const materializedAgent = await materializeAgent(
       options.entry,
       effectiveTools,
+      options.checkpointer,
       options.stateFields,
       options.middlewareContext,
       options.promptFragments,
       resolver && hasTaskTool ? { bypassCache: true } : undefined,
     )
     const retryConfig = options.entry.retry
+    const runnableInput = isCommandInput ? options.input : { messages }
     yield* streamFromRunnable(
       materializedAgent,
-      { messages },
+      runnableInput,
       config,
       retryConfig,
       options.streamTransformers,
       subagentEvents,
       streamContext,
-      options.threadId,
     )
     return
   }
@@ -396,15 +403,15 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     config.tools = langchainTools
   }
 
+  const runnableInput = isCommandInput ? options.input : { messages }
   yield* streamFromRunnable(
     options.entry,
-    { messages },
+    runnableInput,
     config,
     options.retry,
     options.streamTransformers,
     subagentEvents,
     streamContext,
-    options.threadId,
   )
 }
 
@@ -447,7 +454,6 @@ async function* streamFromRunnable(
   streamTransformers?: readonly StreamTransformer[],
   subagentEvents?: AgentStreamChunk[],
   streamContext?: SubagentStreamContext,
-  threadId?: string,
 ): AsyncGenerator<AgentStreamChunk> {
   // Drains any pending subagent events queued by the bridge. Called before
   // each normal yield to keep ordering predictable on the single event loop.
@@ -491,8 +497,6 @@ async function* streamFromRunnable(
   // unbound throws "Cannot read properties of undefined (reading 'config')".
   const streamEventsFn = streamable.streamEvents.bind(streamable)
 
-  // Tracks the most recent invocation's outcome. The outer resume loop
-  // inspects this to decide whether to park + replay or finish.
   interface PassResult {
     readonly finalOutput: unknown
     readonly interrupts: readonly RawInterruptEntry[]
@@ -500,8 +504,7 @@ async function* streamFromRunnable(
 
   // Process a single streamEvents iterator: yield AgentStreamChunks and
   // return whatever __interrupt__ entries appeared in the graph's final
-  // on_chain_end output. Shared between the initial invocation and any
-  // resume re-invocations so the chunk-shaping logic stays in one place.
+  // on_chain_end output.
   async function* processEventStream(
     invocationInput: unknown,
     invocationConfig: Record<string, unknown>,
@@ -576,6 +579,17 @@ async function* streamFromRunnable(
                 capturedInterrupts = interrupts
                 for (const entry of interrupts) {
                   hasYielded = true
+                  if (process.env.DAWN_DEBUG_INTERRUPTS === "1") {
+                    if (
+                      !entry.value ||
+                      typeof (entry.value as Record<string, unknown>).interruptId !== "string"
+                    ) {
+                      console.warn(
+                        "[dawn] interrupt entry.value missing interruptId — capability bug:",
+                        JSON.stringify(entry).slice(0, 300),
+                      )
+                    }
+                  }
                   yield {
                     type: "interrupt" as const,
                     // The capability's interrupt() payload is wrapped in
@@ -626,47 +640,11 @@ async function* streamFromRunnable(
     return { finalOutput, interrupts: capturedInterrupts }
   }
 
-  // Initial invocation. Retries on transient errors before any chunk yields.
-  let pass = yield* processEventStream(input, config, /* allowRetryOnError */ true)
-
-  // Resume loop. Each interrupt → park → await decision → re-invoke with
-  // Command({resume}). The resume invocation may itself interrupt (e.g. a
-  // capability gates another tool call mid-run) — loop until either no
-  // interrupt remains or we cannot resume (no threadId / no resolved
-  // decision).
-  while (pass.interrupts.length > 0) {
-    if (!threadId) {
-      // Without a thread_id there is no checkpointer key to replay from;
-      // the parked state will be discarded. End the stream cleanly so the
-      // SSE consumer can surface the interrupt to the user, but they have
-      // no way to resume this run.
-      break
-    }
-
-    // We only resume the first interrupt — if a capability ever fans out
-    // multiple parallel interrupts in a single step, this becomes lossy
-    // and we'd need to await N decisions. None of today's capabilities do
-    // that; revisit when one does.
-    const entry = pass.interrupts[0]
-    const interruptId =
-      (typeof entry?.id === "string" ? entry.id : undefined) ?? `generated-${Date.now()}`
-
-    const decision = await new Promise<ResumeDecision>((resolve) => {
-      const pending: PendingInterrupt = { interruptId, resolve }
-      setPending(threadId, pending)
-    })
-    clearPending(threadId)
-
-    // Resume invocations reuse the same config (same thread_id, signal,
-    // configurable). Retry-on-error is disabled because we have already
-    // yielded the interrupt chunk; if the resume call fails we surface
-    // the error rather than silently restarting.
-    pass = yield* processEventStream(
-      new Command({ resume: decision }),
-      config,
-      /* allowRetryOnError */ false,
-    )
-  }
+  // Invoke the stream. After yielding any interrupt envelopes, return cleanly.
+  // Resume is state-based: the caller posts to /threads/:id/resume with the
+  // decision, which opens a new SSE stream with Command({resume: decision}) as
+  // input. The adapter does NOT park here waiting for an in-process promise.
+  const pass = yield* processEventStream(input, config, /* allowRetryOnError */ true)
 
   // Final drain in case the last tool call was the bridged task tool —
   // its events would otherwise be stranded after the stream ends.

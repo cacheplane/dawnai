@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { access, appendFile, mkdir, writeFile } from "node:fs/promises"
 import { createServer } from "node:net"
 import { dirname, join } from "node:path"
@@ -68,18 +69,11 @@ export async function delay(ms: number): Promise<void> {
 }
 
 export async function invokeRunsWait(baseUrl: string, invocation: RunsWaitInvocation): Promise<Response> {
-  return await fetch(new URL("/runs/wait", baseUrl), {
+  const threadId = `t-test-${randomUUID().slice(0, 8)}`
+  return await fetch(new URL(`/threads/${encodeURIComponent(threadId)}/runs/wait`, baseUrl), {
     body: JSON.stringify({
-      assistant_id: invocation.assistantId,
       input: invocation.input,
-      metadata: {
-        dawn: {
-          mode: invocation.mode,
-          route_id: invocation.routeId,
-          route_path: invocation.routePath,
-        },
-      },
-      on_completion: "delete",
+      route: invocation.assistantId,
     }),
     headers: {
       "content-type": "application/json",
@@ -92,7 +86,8 @@ export async function postRunsWait(baseUrl: string, options: {
   readonly body: string
   readonly headers?: Readonly<Record<string, string>>
 }): Promise<Response> {
-  return await fetch(new URL("/runs/wait", baseUrl), {
+  const threadId = `t-test-${randomUUID().slice(0, 8)}`
+  return await fetch(new URL(`/threads/${encodeURIComponent(threadId)}/runs/wait`, baseUrl), {
     body: options.body,
     headers: {
       "content-type": "application/json",
@@ -117,6 +112,9 @@ export async function startDevServer(options: {
     cwd: options.cwd,
     env: {
       ...process.env,
+      // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
+      // so the test harness does not treat stderr output as a failure.
+      NODE_NO_WARNINGS: "1",
       ...(options.env ?? {}),
     },
     stdio: ["ignore", "pipe", "pipe"],

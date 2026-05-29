@@ -108,7 +108,7 @@ function expectGeneratedRuntimeScenario(result: unknown, expected: unknown): voi
     devServerHealth: {
       status: "ready",
     },
-    serverRequestUrl: "/runs/wait",
+    serverRequestUrl: expect.stringMatching(/^\/threads\/[^/]+\/runs\/wait$/),
   })
   expect(stripGeneratedRuntimeProof(result)).toEqual(expected)
 }

@@ -1,5 +1,6 @@
 import { agent } from "@dawn-ai/sdk"
 import { AIMessage } from "@langchain/core/messages"
+import { MemorySaver } from "@langchain/langgraph"
 import { describe, expect, test, vi } from "vitest"
 import { executeAgent } from "../src/agent-adapter.js"
 
@@ -31,6 +32,7 @@ describe("executeAgent with DawnAgent descriptors", () => {
     })
 
     const result = await executeAgent({
+      checkpointer: new MemorySaver(),
       entry: descriptor,
       input: { question: "hi" },
       routeParamNames: [],
@@ -82,6 +84,7 @@ describe("executeAgent with DawnAgent descriptors", () => {
     })
 
     const result = await executeAgent({
+      checkpointer: new MemorySaver(),
       entry: descriptor,
       input: { question: "hi" },
       routeParamNames: [],
@@ -115,6 +118,7 @@ describe("executeAgent with DawnAgent descriptors", () => {
     })
 
     const error = await executeAgent({
+      checkpointer: new MemorySaver(),
       entry: descriptor,
       input: { question: "hi" },
       routeParamNames: [],
@@ -165,6 +169,7 @@ describe("executeAgent with DawnAgent descriptors", () => {
     })
 
     const result = await executeAgent({
+      checkpointer: new MemorySaver(),
       entry: descriptor,
       input: { question: "hi" },
       routeParamNames: [],
@@ -188,6 +193,7 @@ describe("executeAgent with DawnAgent descriptors", () => {
     }
 
     const result = await executeAgent({
+      checkpointer: new MemorySaver(),
       entry: mockAgent,
       input: { question: "hi" },
       routeParamNames: [],
@@ -205,6 +211,7 @@ describe("executeAgent with DawnAgent descriptors", () => {
     }
 
     await executeAgent({
+      checkpointer: new MemorySaver(),
       entry: mockAgent,
       input: { tenant: "acme", question: "hello" },
       routeParamNames: ["tenant"],

@@ -23,9 +23,21 @@ export async function POST(req: NextRequest): Promise<Response> {
     },
   )
 
-  const text = await upstream.text()
-  return new Response(text, {
-    status: upstream.status,
-    headers: { "content-type": "application/json" },
+  if (!upstream.ok || !upstream.body) {
+    const text = await upstream.text()
+    return new Response(text, {
+      status: upstream.status,
+      headers: { "content-type": "application/json" },
+    })
+  }
+
+  // Pipe the upstream SSE stream directly to the client. The resume endpoint
+  // now opens a new SSE stream carrying the continuation of the agent run.
+  return new Response(upstream.body, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+    },
   })
 }

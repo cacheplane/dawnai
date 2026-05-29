@@ -43,6 +43,7 @@
   },
   "peerDependencies": {
     "@langchain/core": "^1.1.47",
+    "@langchain/langgraph-checkpoint": "^1.0.2",
     "@langchain/anthropic": "^1.4.0",
     "@langchain/google-genai": "^2.1.31",
     "@langchain/mistralai": "^1.0.8",
@@ -52,6 +53,9 @@
     "@langchain/openrouter": "^0.2.5"
   },
   "peerDependenciesMeta": {
+    "@langchain/langgraph-checkpoint": {
+      "optional": false
+    },
     "@langchain/anthropic": {
       "optional": true
     },
@@ -77,6 +81,7 @@
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
     "@langchain/anthropic": "^1.4.0",
+    "@langchain/langgraph-checkpoint": "^1.0.2",
     "@langchain/core": "1.1.47",
     "@langchain/google-genai": "^2.1.31",
     "@langchain/groq": "^1.2.1",

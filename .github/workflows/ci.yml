@@ -41,7 +41,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22.12.0
+          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
+          # available without the --experimental-sqlite flag from 22.13+.
+          # Matches release.yml and the engines floor.
+          node-version: 22.14.0
           cache: pnpm
 
       - name: Install

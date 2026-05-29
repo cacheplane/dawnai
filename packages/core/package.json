@@ -44,8 +44,14 @@
     "typescript": "5.8.3",
     "zod": "^4.4.3"
   },
+  "peerDependencies": {
+    "@dawn-ai/sqlite-storage": "workspace:*",
+    "@langchain/langgraph-checkpoint": "^1.0.2"
+  },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
+    "@dawn-ai/sqlite-storage": "workspace:*",
+    "@langchain/langgraph-checkpoint": "^1.0.2",
     "@types/node": "25.6.0"
   }
 }

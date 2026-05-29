@@ -1,8 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
-import { executeResolvedRoute, streamResolvedRoute } from "../runtime/execute-route.js"
-import { clearPending, getPending } from "../runtime/pending-interrupts.js"
+import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
+import {
+  invokeResolvedRoute,
+  resolveCheckpointer,
+  resolveThreadsStore,
+  streamResolvedRoute,
+} from "../runtime/execute-route.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
@@ -18,17 +24,49 @@ export interface StartRuntimeServerOptions {
   readonly port?: number
 }
 
+// ---------------------------------------------------------------------------
+// Route-table types
+// ---------------------------------------------------------------------------
+
+type RouteHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  params: Record<string, string>,
+) => Promise<void>
+
+interface RouteMatcher {
+  readonly method: string
+  readonly pattern: RegExp
+  readonly handle: RouteHandler
+}
+
+// ---------------------------------------------------------------------------
+// Server factory
+// ---------------------------------------------------------------------------
+
 export async function startRuntimeServer(
   options: StartRuntimeServerOptions,
 ): Promise<RuntimeServer> {
   const registry = await createRuntimeRegistry(options.appRoot)
   const middleware = await loadMiddleware(options.appRoot)
+  const threadsStore = await resolveThreadsStore(options.appRoot)
+  const checkpointer = await resolveCheckpointer(options.appRoot)
+
   const state = {
     acceptingRequests: true,
     activeRequests: 0,
     closed: false,
   }
   const shutdownController = new AbortController()
+
+  const routes = buildRouteTable({
+    appRoot: options.appRoot,
+    checkpointer,
+    middleware,
+    registry,
+    signal: shutdownController.signal,
+    threadsStore,
+  })
 
   const server = createServer(async (request, response) => {
     if (!state.acceptingRequests) {
@@ -38,13 +76,7 @@ export async function startRuntimeServer(
 
     state.activeRequests++
     try {
-      await handleRequest({
-        middleware,
-        registry,
-        request,
-        response,
-        signal: shutdownController.signal,
-      })
+      await dispatch(routes, request, response, shutdownController.signal)
     } catch (error) {
       if (shutdownController.signal.aborted) {
         sendJson(
@@ -108,83 +140,289 @@ export async function startRuntimeServer(
   }
 }
 
-async function handleRequest(options: {
+// ---------------------------------------------------------------------------
+// Route table builder
+// ---------------------------------------------------------------------------
+
+function buildRouteTable(ctx: {
+  readonly appRoot: string
+  readonly checkpointer: BaseCheckpointSaver
+  readonly middleware: DawnMiddleware | undefined
+  readonly registry: RuntimeRegistry
+  readonly signal: AbortSignal
+  readonly threadsStore: ThreadsStore
+}): RouteMatcher[] {
+  const { appRoot, checkpointer, middleware, registry, signal, threadsStore } = ctx
+
+  // Server-scoped map: thread_id → last routeKey used for that thread.
+  // Populated by runs/stream and runs/wait; read by the resume endpoint so it
+  // can re-invoke the correct route without requiring the client to repeat it.
+  const threadRouteMap = new Map<string, string>()
+
+  return [
+    // ------------------------------------------------------------------
+    // GET /healthz
+    // ------------------------------------------------------------------
+    {
+      handle: async (_req, res) => {
+        sendJson(res, 200, { status: "ready" })
+      },
+      method: "GET",
+      pattern: /^\/healthz(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // POST /threads — create a new thread
+    // ------------------------------------------------------------------
+    {
+      handle: async (req, res) => {
+        const rawBody = await readRequestBody(req)
+        let metadata: Record<string, unknown> | undefined
+        if (rawBody.trim()) {
+          const parsed = parseJson(rawBody)
+          if (!parsed.ok || !isRecord(parsed.value)) {
+            sendJson(res, 400, createRequestErrorBody("Malformed request body"))
+            return
+          }
+          const bodyMetadata = (parsed.value as Record<string, unknown>).metadata
+          if (bodyMetadata !== undefined) {
+            if (!isRecord(bodyMetadata)) {
+              sendJson(res, 400, createRequestErrorBody("metadata must be an object"))
+              return
+            }
+            metadata = bodyMetadata
+          }
+        }
+        const thread = await threadsStore.createThread(metadata !== undefined ? { metadata } : {})
+        sendJson(res, 200, thread)
+      },
+      method: "POST",
+      pattern: /^\/threads(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // GET /threads/:thread_id — fetch a thread
+    // ------------------------------------------------------------------
+    {
+      handle: async (_req, res, params) => {
+        const thread = await threadsStore.getThread(params.thread_id ?? "")
+        if (!thread) {
+          sendJson(res, 404, createRequestErrorBody("Thread not found"))
+          return
+        }
+        sendJson(res, 200, thread)
+      },
+      method: "GET",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // DELETE /threads/:thread_id — delete thread + checkpoints
+    // ------------------------------------------------------------------
+    {
+      handle: async (_req, res, params) => {
+        const threadId = params.thread_id ?? ""
+        await threadsStore.deleteThread(threadId)
+        // Best-effort: delete checkpoints if the saver supports it.
+        if (
+          typeof (checkpointer as unknown as { deleteThread?: unknown }).deleteThread === "function"
+        ) {
+          await (
+            checkpointer as unknown as { deleteThread(id: string): Promise<void> }
+          ).deleteThread(threadId)
+        }
+        res.writeHead(204)
+        res.end()
+      },
+      method: "DELETE",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // POST /threads/:thread_id/runs/stream — stream SSE
+    // ------------------------------------------------------------------
+    {
+      handle: async (req, res, params) => {
+        await handleApStreamRequest({
+          appRoot,
+          middleware,
+          registry,
+          request: req,
+          response: res,
+          signal,
+          threadId: params.thread_id ?? "",
+          threadRouteMap,
+          threadsStore,
+        })
+      },
+      method: "POST",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/stream(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // POST /threads/:thread_id/runs/wait — block and return final state
+    // ------------------------------------------------------------------
+    {
+      handle: async (req, res, params) => {
+        await handleApWaitRequest({
+          appRoot,
+          middleware,
+          registry,
+          request: req,
+          response: res,
+          signal,
+          threadId: params.thread_id ?? "",
+          threadRouteMap,
+          threadsStore,
+        })
+      },
+      method: "POST",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/wait(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // GET /threads/:thread_id/state — latest checkpoint state
+    // ------------------------------------------------------------------
+    {
+      handle: async (_req, res, params) => {
+        const threadId = params.thread_id ?? ""
+        const tuple = await checkpointer.getTuple({
+          configurable: { thread_id: threadId, checkpoint_ns: "" },
+        })
+        if (!tuple) {
+          sendJson(res, 404, createRequestErrorBody("No checkpoint found for thread"))
+          return
+        }
+        const apState = {
+          config: tuple.config,
+          created_at: new Date().toISOString(),
+          metadata: tuple.metadata,
+          next: tuple.pendingWrites?.map(([, channel]) => channel) ?? [],
+          parent_config: tuple.parentConfig ?? null,
+          values: tuple.checkpoint.channel_values ?? {},
+        }
+        sendJson(res, 200, apState)
+      },
+      method: "GET",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/state(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // POST /threads/:thread_id/resume — resolve a parked interrupt
+    // ------------------------------------------------------------------
+    {
+      handle: async (req, res, params) => {
+        await handleResumeRequest({
+          appRoot,
+          checkpointer,
+          middleware,
+          registry,
+          request: req,
+          response: res,
+          signal,
+          threadId: params.thread_id ?? "",
+          threadRouteMap,
+          threadsStore,
+        })
+      },
+      method: "POST",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/resume(?:\?.*)?$/,
+    },
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// Dispatcher
+// ---------------------------------------------------------------------------
+
+async function dispatch(
+  routes: RouteMatcher[],
+  request: IncomingMessage,
+  response: ServerResponse,
+  _signal: AbortSignal,
+): Promise<void> {
+  const method = request.method ?? ""
+  const url = request.url ?? "/"
+
+  for (const route of routes) {
+    if (route.method !== method) continue
+    const match = route.pattern.exec(url)
+    if (!match) continue
+
+    // Collect named capture groups as params
+    const params: Record<string, string> = {}
+    if (match.groups) {
+      for (const [key, value] of Object.entries(match.groups)) {
+        if (value !== undefined) {
+          params[key] = decodeURIComponent(value)
+        }
+      }
+    }
+
+    await route.handle(request, response, params)
+    return
+  }
+
+  sendJson(response, 404, createRequestErrorBody("Not found"))
+}
+
+// ---------------------------------------------------------------------------
+// AP stream handler
+// ---------------------------------------------------------------------------
+
+async function handleApStreamRequest(options: {
+  readonly appRoot: string
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
   readonly signal: AbortSignal
+  readonly threadId: string
+  readonly threadRouteMap: Map<string, string>
+  readonly threadsStore: ThreadsStore
 }): Promise<void> {
-  const { middleware, request, response, registry, signal } = options
-
-  if (request.method === "GET" && request.url === "/healthz") {
-    sendJson(response, 200, { status: "ready" })
-    return
-  }
-
-  if (request.method === "POST" && request.url === "/runs/stream") {
-    await handleStreamRequest({
-      middleware,
-      registry,
-      request,
-      response,
-      signal,
-    })
-    return
-  }
-
-  const resumeMatch =
-    request.method === "POST" && request.url
-      ? /^\/threads\/([^/?#]+)\/resume(?:\?.*)?$/.exec(request.url)
-      : null
-  if (resumeMatch) {
-    await handleResumeRequest({
-      request,
-      response,
-      threadId: decodeURIComponent(resumeMatch[1] ?? ""),
-    })
-    return
-  }
-
-  if (request.method !== "POST" || request.url !== "/runs/wait") {
-    sendJson(response, 404, createRequestErrorBody("Not found"))
-    return
-  }
+  const {
+    appRoot,
+    middleware,
+    registry,
+    request,
+    response,
+    signal,
+    threadId,
+    threadRouteMap,
+    threadsStore,
+  } = options
 
   const rawBody = await readRequestBody(request)
   const parsedBody = parseJson(rawBody)
-
-  if (!parsedBody.ok) {
+  if (!parsedBody.ok || !isRecord(parsedBody.value)) {
     sendJson(response, 400, createRequestErrorBody("Malformed request body"))
     return
   }
 
-  const validatedBody = validateRunsWaitRequest(parsedBody.value)
-
-  if (!validatedBody.ok) {
-    sendJson(response, 400, createRequestErrorBody(validatedBody.message, validatedBody.details))
+  const body = parsedBody.value
+  const validated = validateApRunBody(body)
+  if (!validated.ok) {
+    sendJson(response, 400, createRequestErrorBody(validated.message))
     return
   }
 
-  const route = registry.lookup(validatedBody.value.assistant_id)
+  const { input, routeKey } = validated
 
+  const route = registry.lookup(routeKey)
   if (!route) {
-    sendJson(
-      response,
-      404,
-      createRequestErrorBody(`Unknown assistant_id: ${validatedBody.value.assistant_id}`),
-    )
+    sendJson(response, 404, createRequestErrorBody(`Unknown route: ${routeKey}`))
     return
   }
 
-  // Run middleware before execution
+  // Run middleware
   const mwRequest: MiddlewareRequest = {
     assistantId: route.assistantId,
     headers: parseHeaders(request),
     method: request.method ?? "POST",
-    params: extractRouteParams(route.routeId, validatedBody.value.input),
+    params: extractRouteParams(route.routeId, input),
     routeId: route.routeId,
-    url: request.url ?? "/runs/wait",
+    url: request.url ?? `/threads/${threadId}/runs/stream`,
   }
   const mwResult = await runMiddleware(middleware, mwRequest)
   if (mwResult.action === "reject") {
@@ -192,44 +430,150 @@ async function handleRequest(options: {
     return
   }
 
-  if (
-    validatedBody.value.metadata.dawn.route_id !== route.routeId ||
-    validatedBody.value.metadata.dawn.route_path !== route.routePath ||
-    validatedBody.value.metadata.dawn.mode !== route.mode ||
-    validatedBody.value.assistant_id !== route.assistantId
-  ) {
-    sendJson(
-      response,
-      400,
-      createRequestErrorBody("Request metadata does not match the registered route", {
-        assistant_id: validatedBody.value.assistant_id,
-        expected: {
-          assistant_id: route.assistantId,
-          mode: route.mode,
-          route_id: route.routeId,
-          route_path: route.routePath,
-        },
-        received: validatedBody.value.metadata.dawn,
-      }),
-    )
+  // Idempotently ensure the thread exists
+  let thread: Thread | undefined = await threadsStore.getThread(threadId)
+  if (!thread) {
+    thread = await threadsStore.createThread({ thread_id: threadId })
+  }
+
+  // Record which route last ran on this thread so the resume endpoint can
+  // re-invoke it without requiring the client to repeat the route key.
+  // The in-memory map is fast-path for the current server session; the thread
+  // metadata persists it to SQLite so resume survives a server restart.
+  threadRouteMap.set(threadId, routeKey)
+  await threadsStore.updateMetadata(threadId, { route: routeKey })
+
+  // Mark thread busy
+  await threadsStore.updateStatus(threadId, "busy")
+
+  response.writeHead(200, {
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+    "content-type": "text/event-stream",
+  })
+
+  try {
+    for await (const chunk of streamResolvedRoute({
+      appRoot,
+      input,
+      ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
+      routeFile: route.routeFile,
+      routeId: route.routeId,
+      routePath: route.routePath,
+      signal,
+      threadId,
+    })) {
+      response.write(toSseEvent(chunk))
+    }
+    await threadsStore.updateStatus(threadId, "idle")
+  } catch (error) {
+    const errorChunk: StreamChunk = {
+      output: { error: error instanceof Error ? error.message : String(error) },
+      type: "done",
+    }
+    response.write(toSseEvent(errorChunk))
+    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+  }
+
+  response.end()
+}
+
+// ---------------------------------------------------------------------------
+// AP wait handler
+// ---------------------------------------------------------------------------
+
+async function handleApWaitRequest(options: {
+  readonly appRoot: string
+  readonly middleware: DawnMiddleware | undefined
+  readonly registry: RuntimeRegistry
+  readonly request: IncomingMessage
+  readonly response: ServerResponse
+  readonly signal: AbortSignal
+  readonly threadId: string
+  readonly threadRouteMap: Map<string, string>
+  readonly threadsStore: ThreadsStore
+}): Promise<void> {
+  const {
+    appRoot,
+    middleware,
+    registry,
+    request,
+    response,
+    signal,
+    threadId,
+    threadRouteMap,
+    threadsStore,
+  } = options
+
+  const rawBody = await readRequestBody(request)
+  const parsedBody = parseJson(rawBody)
+  if (!parsedBody.ok || !isRecord(parsedBody.value)) {
+    sendJson(response, 400, createRequestErrorBody("Malformed request body"))
     return
   }
 
-  const resultPromise = executeResolvedRoute({
-    appRoot: registry.appRoot,
-    input: validatedBody.value.input,
+  const body = parsedBody.value
+  const validated = validateApRunBody(body)
+  if (!validated.ok) {
+    sendJson(response, 400, createRequestErrorBody(validated.message))
+    return
+  }
+
+  const { input, routeKey } = validated
+
+  const route = registry.lookup(routeKey)
+  if (!route) {
+    sendJson(response, 404, createRequestErrorBody(`Unknown route: ${routeKey}`))
+    return
+  }
+
+  // Run middleware
+  const mwRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: parseHeaders(request),
+    method: request.method ?? "POST",
+    params: extractRouteParams(route.routeId, input),
+    routeId: route.routeId,
+    url: request.url ?? `/threads/${threadId}/runs/wait`,
+  }
+  const mwResult = await runMiddleware(middleware, mwRequest)
+  if (mwResult.action === "reject") {
+    sendJson(response, mwResult.status, mwResult.body)
+    return
+  }
+
+  // Idempotently ensure the thread exists
+  let thread: Thread | undefined = await threadsStore.getThread(threadId)
+  if (!thread) {
+    thread = await threadsStore.createThread({ thread_id: threadId })
+  }
+
+  // Record route for potential resume (in-memory fast-path + durable metadata)
+  threadRouteMap.set(threadId, routeKey)
+  await threadsStore.updateMetadata(threadId, { route: routeKey })
+
+  await threadsStore.updateStatus(threadId, "busy")
+
+  const resultPromise = invokeResolvedRoute({
+    appRoot,
+    input,
     ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
-    signal,
     routeFile: route.routeFile,
     routeId: route.routeId,
     routePath: route.routePath,
+    signal,
+    threadId,
   })
+
   const result = await raceRequestAgainstShutdown(resultPromise, signal)
 
   if (result === SHUTDOWN_ABORTED) {
+    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
     sendJson(response, 503, createRequestErrorBody("Request canceled during server shutdown"))
     return
   }
+
+  await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
 
   if (result.status === "failed") {
     if (signal.aborted) {
@@ -261,101 +605,34 @@ async function handleRequest(options: {
   sendJson(response, 200, result.output)
 }
 
-async function handleStreamRequest(options: {
+// ---------------------------------------------------------------------------
+// Resume handler — state-based, reads __interrupt__ from SQLite checkpoint
+// ---------------------------------------------------------------------------
+
+async function handleResumeRequest(options: {
+  readonly appRoot: string
+  readonly checkpointer: BaseCheckpointSaver
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
   readonly signal: AbortSignal
-}): Promise<void> {
-  const { middleware, request, response, registry, signal } = options
-
-  const rawBody = await readRequestBody(request)
-  const parsedBody = parseJson(rawBody)
-
-  if (!parsedBody.ok) {
-    sendJson(response, 400, createRequestErrorBody("Malformed request body"))
-    return
-  }
-
-  const validatedBody = validateRunsWaitRequest(parsedBody.value)
-
-  if (!validatedBody.ok) {
-    sendJson(response, 400, createRequestErrorBody(validatedBody.message, validatedBody.details))
-    return
-  }
-
-  const route = registry.lookup(validatedBody.value.assistant_id)
-
-  if (!route) {
-    sendJson(
-      response,
-      404,
-      createRequestErrorBody(`Unknown assistant_id: ${validatedBody.value.assistant_id}`),
-    )
-    return
-  }
-
-  // Run middleware before streaming
-  const mwRequest: MiddlewareRequest = {
-    assistantId: route.assistantId,
-    headers: parseHeaders(request),
-    method: request.method ?? "POST",
-    params: extractRouteParams(route.routeId, validatedBody.value.input),
-    routeId: route.routeId,
-    url: request.url ?? "/runs/stream",
-  }
-  const mwResult = await runMiddleware(middleware, mwRequest)
-  if (mwResult.action === "reject") {
-    sendJson(response, mwResult.status, mwResult.body)
-    return
-  }
-
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-    connection: "keep-alive",
-  })
-
-  try {
-    // The web client sends a stable per-conversation `thread_id` in
-    // `metadata.dawn.thread_id` (see examples/chat/web/app/api/chat/route.ts).
-    // We forward it so the agent-adapter can park interrupts in the
-    // checkpointer and the resume endpoint can replay them.
-    const threadId =
-      typeof validatedBody.value.metadata.dawn.thread_id === "string"
-        ? validatedBody.value.metadata.dawn.thread_id
-        : undefined
-
-    for await (const chunk of streamResolvedRoute({
-      appRoot: registry.appRoot,
-      input: validatedBody.value.input,
-      ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
-      signal,
-      routeFile: route.routeFile,
-      routeId: route.routeId,
-      routePath: route.routePath,
-      ...(threadId ? { threadId } : {}),
-    })) {
-      response.write(toSseEvent(chunk))
-    }
-  } catch (error) {
-    const errorChunk: StreamChunk = {
-      type: "done",
-      output: { error: error instanceof Error ? error.message : String(error) },
-    }
-    response.write(toSseEvent(errorChunk))
-  }
-
-  response.end()
-}
-
-async function handleResumeRequest(options: {
-  readonly request: IncomingMessage
-  readonly response: ServerResponse
   readonly threadId: string
+  readonly threadRouteMap: Map<string, string>
+  readonly threadsStore: ThreadsStore
 }): Promise<void> {
-  const { request, response, threadId } = options
+  const {
+    appRoot,
+    checkpointer,
+    middleware,
+    registry,
+    request,
+    response,
+    signal,
+    threadId,
+    threadRouteMap,
+    threadsStore,
+  } = options
 
   if (!threadId) {
     sendJson(response, 400, createRequestErrorBody("Missing thread_id in resume URL"))
@@ -372,6 +649,10 @@ async function handleResumeRequest(options: {
   const body = parsedBody.value
   const interruptId = typeof body.interrupt_id === "string" ? body.interrupt_id : undefined
   const decision = body.decision
+  // Optional route key supplied by the client — used when the in-memory map
+  // has been cleared (e.g. after a server restart). Populated by the resume
+  // endpoint before starting the SSE stream.
+  const bodyRoute = typeof body.route === "string" ? body.route : undefined
   if (!interruptId) {
     sendJson(response, 400, createRequestErrorBody("Missing interrupt_id"))
     return
@@ -381,20 +662,155 @@ async function handleResumeRequest(options: {
     return
   }
 
-  const pending = getPending(threadId)
-  if (!pending) {
-    sendJson(response, 400, createRequestErrorBody("No parked interrupt for thread"))
-    return
-  }
-  if (pending.interruptId !== interruptId) {
-    sendJson(response, 409, createRequestErrorBody("Stale interrupt_id"))
+  // Load the checkpoint tuple to verify the interrupt_id exists in
+  // pendingWrites. Each entry is [task_id, channel, value] where channel is
+  // "__interrupt__" and value is {id, value: {interruptId, ...}}.
+  const tuple = await checkpointer.getTuple({
+    configurable: { thread_id: threadId, checkpoint_ns: "" },
+  })
+  if (!tuple) {
+    sendJson(
+      response,
+      404,
+      createRequestErrorBody("Thread not found", { code: "thread_not_found" }),
+    )
     return
   }
 
-  pending.resolve(decision)
-  clearPending(threadId)
-  sendJson(response, 200, { ok: true })
+  const interruptWrites = (tuple.pendingWrites ?? []).filter(
+    ([, channel]) => channel === "__interrupt__",
+  )
+  const matchedWrite = interruptWrites.find(([, , value]) => {
+    if (!value || typeof value !== "object") return false
+    const v = value as { id?: unknown; value?: unknown }
+    // Match on the capability-level interruptId (inside entry.value)
+    if (v.value && typeof v.value === "object") {
+      const inner = v.value as { interruptId?: unknown }
+      if (inner.interruptId === interruptId) return true
+    }
+    // Defensive fallback: match on the outer LangGraph entry id
+    if (v.id === interruptId) return true
+    return false
+  })
+
+  if (!matchedWrite) {
+    sendJson(
+      response,
+      409,
+      createRequestErrorBody("Stale interrupt_id", { code: "stale_interrupt" }),
+    )
+    return
+  }
+
+  // Resolve which route last ran on this thread, in priority order:
+  //   1. in-memory map (fast-path, current server session)
+  //   2. durable thread metadata (survives a server restart)
+  //   3. client-supplied `route` in the resume body (explicit override)
+  const persistedRoute = (await threadsStore.getThread(threadId))?.metadata.route
+  const routeKey =
+    threadRouteMap.get(threadId) ??
+    (typeof persistedRoute === "string" ? persistedRoute : undefined) ??
+    bodyRoute
+  if (!routeKey) {
+    sendJson(
+      response,
+      409,
+      createRequestErrorBody(
+        "Cannot resume: no route recorded for this thread. " +
+          "Pass `route` in the resume body (e.g. '/chat#agent') to resume explicitly.",
+        { code: "route_not_found" },
+      ),
+    )
+    return
+  }
+
+  const route = registry.lookup(routeKey)
+  if (!route) {
+    sendJson(response, 404, createRequestErrorBody(`Unknown route: ${routeKey}`))
+    return
+  }
+
+  // Run middleware with the resume URL
+  const mwRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: parseHeaders(request),
+    method: "POST",
+    params: {},
+    routeId: route.routeId,
+    url: request.url ?? `/threads/${threadId}/resume`,
+  }
+  const mwResult = await runMiddleware(middleware, mwRequest)
+  if (mwResult.action === "reject") {
+    sendJson(response, mwResult.status, mwResult.body)
+    return
+  }
+
+  // Mark thread busy
+  await threadsStore.updateStatus(threadId, "busy")
+
+  // Open a new SSE stream, passing Command({resume: decision}) as input.
+  response.writeHead(200, {
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "content-type": "text/event-stream",
+  })
+
+  try {
+    for await (const chunk of streamResolvedRoute({
+      appRoot,
+      input: {},
+      resumeDecision: decision as "once" | "always" | "deny",
+      ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
+      routeFile: route.routeFile,
+      routeId: route.routeId,
+      routePath: route.routePath,
+      signal,
+      threadId,
+    })) {
+      response.write(toSseEvent(chunk))
+    }
+    await threadsStore.updateStatus(threadId, "idle")
+  } catch (error) {
+    const errorChunk: StreamChunk = {
+      output: { error: error instanceof Error ? error.message : String(error) },
+      type: "done",
+    }
+    response.write(toSseEvent(errorChunk))
+    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+  }
+
+  response.end()
 }
+
+// ---------------------------------------------------------------------------
+// AP run body validation
+// ---------------------------------------------------------------------------
+
+interface ApRunBody {
+  readonly input: unknown
+  readonly routeKey: string
+}
+
+function validateApRunBody(
+  body: Record<string, unknown>,
+): ({ readonly ok: true } & ApRunBody) | { readonly ok: false; readonly message: string } {
+  // `route` must be a string identifying the assistant/route
+  if (typeof body.route !== "string") {
+    return {
+      message: "Request body must include route as a string (assistant_id or route_id)",
+      ok: false,
+    }
+  }
+  return {
+    input: Object.hasOwn(body, "input") ? body.input : {},
+    ok: true,
+    routeKey: body.route,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared utilities
+// ---------------------------------------------------------------------------
 
 const SHUTDOWN_ABORTED = Symbol("shutdown-aborted")
 
@@ -423,80 +839,6 @@ async function raceRequestAgainstShutdown<T>(
   }
 
   return result
-}
-
-function validateRunsWaitRequest(value: unknown):
-  | { readonly ok: true; readonly value: RunsWaitRequest }
-  | {
-      readonly details?: Record<string, unknown>
-      readonly message: string
-      readonly ok: false
-    } {
-  if (!isRecord(value)) {
-    return { message: "Request body must be an object", ok: false }
-  }
-
-  if (typeof value.assistant_id !== "string") {
-    return {
-      message: "Request body must include assistant_id as a string",
-      ok: false,
-    }
-  }
-
-  if (!isRecord(value.metadata) || !isRecord(value.metadata.dawn)) {
-    return { message: "Request body must include metadata.dawn", ok: false }
-  }
-
-  if (typeof value.metadata.dawn.mode !== "string") {
-    return {
-      message: "Request body must include metadata.dawn.mode as a string",
-      ok: false,
-    }
-  }
-
-  if (typeof value.metadata.dawn.route_id !== "string") {
-    return {
-      message: "Request body must include metadata.dawn.route_id as a string",
-      ok: false,
-    }
-  }
-
-  if (typeof value.metadata.dawn.route_path !== "string") {
-    return {
-      message: "Request body must include metadata.dawn.route_path as a string",
-      ok: false,
-    }
-  }
-
-  if (!Object.hasOwn(value, "input")) {
-    return { message: "Request body must include input", ok: false }
-  }
-
-  if (value.on_completion !== "delete") {
-    return {
-      message: "Request body must set on_completion to delete",
-      ok: false,
-    }
-  }
-
-  return {
-    ok: true as const,
-    value: value as unknown as RunsWaitRequest,
-  }
-}
-
-interface RunsWaitRequest {
-  readonly assistant_id: string
-  readonly input: unknown
-  readonly metadata: {
-    readonly dawn: {
-      readonly mode: "agent" | "chain" | "graph" | "workflow"
-      readonly route_id: string
-      readonly route_path: string
-      readonly thread_id?: string
-    }
-  }
-  readonly on_completion: "delete"
 }
 
 function parseJson(

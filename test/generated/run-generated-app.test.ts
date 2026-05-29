@@ -33,6 +33,7 @@ interface PackedTarballs {
   readonly langgraph: string
   readonly permissions: string
   readonly sdk: string
+  readonly sqliteStorage: string
   readonly workspace: string
 }
 
@@ -174,6 +175,7 @@ async function runGeneratedAppScenario(
           "@dawn-ai/langgraph",
           "@dawn-ai/permissions",
           "@dawn-ai/sdk",
+          "@dawn-ai/sqlite-storage",
           "@dawn-ai/workspace",
         ],
         tempRoot,
@@ -300,6 +302,7 @@ async function rewriteDependenciesToTarballs(options: {
     "@dawn-ai/core": options.tarballs.core,
     "@dawn-ai/langchain": options.tarballs.langchain,
     "@dawn-ai/sdk": options.tarballs.sdk,
+    "@dawn-ai/sqlite-storage": options.tarballs.sqliteStorage,
   }
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
@@ -316,6 +319,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/langgraph": options.tarballs.langgraph,
       "@dawn-ai/permissions": options.tarballs.permissions,
       "@dawn-ai/sdk": options.tarballs.sdk,
+      "@dawn-ai/sqlite-storage": options.tarballs.sqliteStorage,
       "@dawn-ai/workspace": options.tarballs.workspace,
     },
   }
@@ -510,13 +514,18 @@ async function createExpectedInternalFixture(
     packageJson: {
       ...expected.packageJson,
       name: appName,
-      dependencies: {
-        ...expected.packageJson.dependencies,
-        "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
-        "@dawn-ai/core": "<repo:@dawn-ai/core>",
-        "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
-        "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
-      },
+      dependencies: (() => {
+        const deps = {
+          ...expected.packageJson.dependencies,
+          "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
+          "@dawn-ai/core": "<repo:@dawn-ai/core>",
+          "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
+          "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
+        }
+        // sqlite-storage is only in overrides for internal mode, not in direct deps
+        delete deps["@dawn-ai/sqlite-storage"]
+        return deps
+      })(),
       devDependencies: {
         ...expected.packageJson.devDependencies,
         "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
@@ -530,6 +539,7 @@ async function createExpectedInternalFixture(
           "@dawn-ai/langgraph": "<repo:@dawn-ai/langgraph>",
           "@dawn-ai/permissions": "<repo:@dawn-ai/permissions>",
           "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
+          "@dawn-ai/sqlite-storage": "<repo:@dawn-ai/sqlite-storage>",
           "@dawn-ai/workspace": "<repo:@dawn-ai/workspace>",
         },
       },
@@ -548,6 +558,7 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     langgraph: tarballs["@dawn-ai/langgraph"],
     permissions: tarballs["@dawn-ai/permissions"]!,
     sdk: tarballs["@dawn-ai/sdk"],
+    sqliteStorage: tarballs["@dawn-ai/sqlite-storage"]!,
     workspace: tarballs["@dawn-ai/workspace"]!,
   }
 }
@@ -568,6 +579,7 @@ function normalizeForFixture(
     [context.tarballs.langgraph, "<tarball:@dawn-ai/langgraph>"],
     [context.tarballs.permissions, "<tarball:@dawn-ai/permissions>"],
     [context.tarballs.sdk, "<tarball:@dawn-ai/sdk>"],
+    [context.tarballs.sqliteStorage, "<tarball:@dawn-ai/sqlite-storage>"],
     [context.tarballs.workspace, "<tarball:@dawn-ai/workspace>"],
     [`/private${dirname(context.tarballs.cli)}`, "<packs-dir>"],
     [dirname(context.tarballs.cli), "<packs-dir>"],
@@ -590,6 +602,7 @@ function normalizeForInternalFixture(
     [pathToRepoPackageFileSpecifier("@dawn-ai/langgraph"), "<repo:@dawn-ai/langgraph>"],
     [pathToRepoPackageFileSpecifier("@dawn-ai/permissions"), "<repo:@dawn-ai/permissions>"],
     [pathToRepoPackageFileSpecifier("@dawn-ai/sdk"), "<repo:@dawn-ai/sdk>"],
+    [pathToRepoPackageFileSpecifier("@dawn-ai/sqlite-storage"), "<repo:@dawn-ai/sqlite-storage>"],
     [pathToRepoPackageFileSpecifier("@dawn-ai/workspace"), "<repo:@dawn-ai/workspace>"],
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
@@ -605,6 +618,7 @@ function pathToRepoPackageFileSpecifier(
     | "@dawn-ai/langgraph"
     | "@dawn-ai/permissions"
     | "@dawn-ai/sdk"
+    | "@dawn-ai/sqlite-storage"
     | "@dawn-ai/workspace",
 ): string {
   const packageDirByName = {
@@ -615,6 +629,7 @@ function pathToRepoPackageFileSpecifier(
     "@dawn-ai/langgraph": "packages/langgraph",
     "@dawn-ai/permissions": "packages/permissions",
     "@dawn-ai/sdk": "packages/sdk",
+    "@dawn-ai/sqlite-storage": "packages/sqlite-storage",
     "@dawn-ai/workspace": "packages/workspace",
   } as const
 

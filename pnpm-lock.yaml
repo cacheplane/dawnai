@@ -180,6 +180,9 @@ importers:
       '@dawn-ai/permissions':
         specifier: workspace:*
         version: link:../permissions
+      '@dawn-ai/sqlite-storage':
+        specifier: workspace:*
+        version: link:../sqlite-storage
       commander:
         specifier: 14.0.3
         version: 14.0.3
@@ -197,8 +200,11 @@ importers:
         specifier: workspace:*
         version: link:../workspace
       '@langchain/core':
-        specifier: 1.1.46
-        version: 1.1.46(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1)
+        specifier: 1.1.47
+        version: 1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1)
+      '@langchain/langgraph-checkpoint':
+        specifier: ^1.0.2
+        version: 1.0.2(@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1))
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
@@ -244,6 +250,12 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
+      '@dawn-ai/sqlite-storage':
+        specifier: workspace:*
+        version: link:../sqlite-storage
+      '@langchain/langgraph-checkpoint':
+        specifier: ^1.0.2
+        version: 1.0.2(@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1))
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
@@ -300,6 +312,9 @@ importers:
       '@langchain/groq':
         specifier: ^1.2.1
         version: 1.2.1(@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1))
+      '@langchain/langgraph-checkpoint':
+        specifier: ^1.0.2
+        version: 1.0.2(@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1))
       '@langchain/mistralai':
         specifier: ^1.0.8
         version: 1.0.8(@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1))
@@ -346,6 +361,21 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
+  packages/sqlite-storage:
+    devDependencies:
+      '@dawn-ai/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@langchain/core':
+        specifier: ^1.1.47
+        version: 1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1)
+      '@langchain/langgraph-checkpoint':
+        specifier: ^1.0.2
+        version: 1.0.2(@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1))
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
@@ -1002,10 +1032,6 @@ packages:
     engines: {node: '>=20'}
     peerDependencies:
       '@langchain/core': ^1.1.47
-
-  '@langchain/core@1.1.46':
-    resolution: {integrity: sha512-i8rDC83BpItxChCw4Lf+6tAr+k+OUcbirc5ZkrhI9ywYWmvxegUljLGOGYvtJNTbEAIFkhYIODPE5QRqyjF6sA==}
-    engines: {node: '>=20'}
 
   '@langchain/core@1.1.47':
     resolution: {integrity: sha512-+fiPu6ZFnJMrZyKeM77OIVPoMPAY6OKWacnPlojHtXTbMMzb2cEOKAJV0U07cDl86NHSCIYYa0i4CyKZzXbHQQ==}
@@ -3720,22 +3746,6 @@ snapshots:
       '@anthropic-ai/sdk': 0.95.2(zod@4.4.3)
       '@langchain/core': 1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1)
       zod: 4.4.3
-
-  '@langchain/core@1.1.46(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1)':
-    dependencies:
-      '@cfworker/json-schema': 4.1.1
-      '@standard-schema/spec': 1.1.0
-      js-tiktoken: 1.0.21
-      langsmith: 0.5.19(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1)
-      mustache: 4.2.0
-      p-queue: 6.6.2
-      zod: 4.4.3
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - '@opentelemetry/exporter-trace-otlp-proto'
-      - '@opentelemetry/sdk-trace-base'
-      - openai
-      - ws
 
   '@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1)':
     dependencies:

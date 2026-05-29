@@ -1,7 +1,6 @@
-import { Command } from "@langchain/langgraph"
-import { afterEach, describe, expect, test } from "vitest"
+import { Command, MemorySaver } from "@langchain/langgraph"
+import { describe, expect, test } from "vitest"
 import { streamAgent } from "../src/agent-adapter.js"
-import { __resetPendingForTests, getPending } from "../src/pending-interrupts.js"
 
 /**
  * These tests mimic the real LangGraph 1.x streamEvents v2 shape:
@@ -18,6 +17,11 @@ import { __resetPendingForTests, getPending } from "../src/pending-interrupts.js
  * parsing the leading JSON array out of the error string. The legacy
  * `__interrupt__`-on-chain-end path is still supported as a defensive
  * fallback in case a future LangGraph version surfaces interrupts that way.
+ *
+ * Resume is now state-based: after yielding an interrupt, the stream ends
+ * cleanly. The caller posts to /threads/:id/resume with the decision, and
+ * the server opens a new SSE stream with Command({resume: decision}) as
+ * input. The adapter handles Command input directly (no in-process promise).
  */
 
 function makeInterruptErrorString(entries: ReadonlyArray<{ id?: string; value: unknown }>): string {
@@ -29,10 +33,6 @@ function makeInterruptErrorString(entries: ReadonlyArray<{ id?: string; value: u
 }
 
 describe("streamAgent — interrupt propagation", () => {
-  afterEach(() => {
-    __resetPendingForTests()
-  })
-
   test("yields {type: 'interrupt', data} when on_tool_error surfaces a stringified GraphInterrupt", async () => {
     const interruptPayload = {
       interruptId: "perm-test-1",
@@ -68,6 +68,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string; data: unknown }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -109,6 +110,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string; data: unknown }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -139,6 +141,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string; data: unknown }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -166,6 +169,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -197,6 +201,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],
@@ -209,7 +214,7 @@ describe("streamAgent — interrupt propagation", () => {
     expect(chunks.filter((c) => c.type === "interrupt")).toHaveLength(0)
   })
 
-  test("resume: parks on interrupt, re-invokes with Command({resume}) when pending.resolve fires", async () => {
+  test("resume: state-based — second streamAgent call with Command({resume}) re-invokes the graph", async () => {
     const interruptPayload = {
       interruptId: "perm-resume-1",
       type: "permission-request",
@@ -218,7 +223,8 @@ describe("streamAgent — interrupt propagation", () => {
     }
 
     // Mock graph: first streamEvents call emits the stringified GraphInterrupt
-    // via on_tool_error; the resume call emits a normal token + done.
+    // via on_tool_error; the resume call (second invocation) receives
+    // Command({resume}) and emits a normal token + done.
     let callCount = 0
     let observedResumeInput: unknown
     const mockRunnable = {
@@ -255,46 +261,49 @@ describe("streamAgent — interrupt propagation", () => {
     }
 
     const threadId = "thread-resume-test"
+    const checkpointer = new MemorySaver()
 
-    const chunks: Array<{ type: string; data?: unknown }> = []
-    const consumer = (async () => {
-      for await (const chunk of streamAgent({
-        entry: mockRunnable,
-        input: { messages: [{ role: "user", content: "test" }] },
-        routeParamNames: [],
-        signal: new AbortController().signal,
-        threadId,
-        tools: [],
-      })) {
-        chunks.push({ type: chunk.type, data: chunk.data })
-      }
-    })()
-
-    // Poll for the pending entry to appear after the interrupt yields.
-    for (let i = 0; i < 50 && !getPending(threadId); i++) {
-      await new Promise((r) => setTimeout(r, 0))
+    // First invocation: yields interrupt then done. Does NOT park.
+    const firstChunks: Array<{ type: string; data?: unknown }> = []
+    for await (const chunk of streamAgent({
+      checkpointer,
+      entry: mockRunnable,
+      input: { messages: [{ role: "user", content: "test" }] },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      threadId,
+      tools: [],
+    })) {
+      firstChunks.push({ type: chunk.type, data: chunk.data })
     }
 
-    const pending = getPending(threadId)
-    expect(pending).toBeDefined()
-    expect(pending?.interruptId).toBe("abc")
+    expect(callCount).toBe(1)
+    expect(firstChunks.filter((c) => c.type === "interrupt")).toHaveLength(1)
+    expect(firstChunks[firstChunks.length - 1]?.type).toBe("done")
 
-    pending?.resolve("once")
-    await consumer
+    // Second invocation: resume with Command({resume: "once"}).
+    const resumeChunks: Array<{ type: string; data?: unknown }> = []
+    for await (const chunk of streamAgent({
+      checkpointer,
+      entry: mockRunnable,
+      input: new Command({ resume: "once" }),
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      threadId,
+      tools: [],
+    })) {
+      resumeChunks.push({ type: chunk.type, data: chunk.data })
+    }
 
     expect(callCount).toBe(2)
     expect(observedResumeInput).toBeInstanceOf(Command)
     expect((observedResumeInput as Command).resume).toBe("once")
 
-    expect(getPending(threadId)).toBeUndefined()
-
-    const types = chunks.map((c) => c.type)
-    expect(types).toContain("interrupt")
-    expect(types).toContain("token")
-    expect(types[types.length - 1]).toBe("done")
+    expect(resumeChunks.filter((c) => c.type === "token")).toHaveLength(1)
+    expect(resumeChunks[resumeChunks.length - 1]?.type).toBe("done")
   })
 
-  test("resume without threadId ends the stream after interrupt (no replay)", async () => {
+  test("stream ends cleanly after interrupt (no threadId — no in-process parking)", async () => {
     const interruptPayload = { interruptId: "p-noresume", type: "x" }
     let callCount = 0
     const mockRunnable = {
@@ -318,6 +327,7 @@ describe("streamAgent — interrupt propagation", () => {
 
     const chunks: Array<{ type: string }> = []
     for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
       entry: mockRunnable,
       input: { messages: [{ role: "user", content: "test" }] },
       routeParamNames: [],

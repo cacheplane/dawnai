@@ -791,7 +791,7 @@ async function startFakeAgentServer(
   }>,
 ): Promise<{ readonly close: () => Promise<void>; readonly url: string }> {
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
-    if (request.method !== "POST" || request.url !== "/runs/wait") {
+    if (request.method !== "POST" || !/^\/threads\/[^/]+\/runs\/wait$/.test(request.url ?? "")) {
       response.statusCode = 404
       response.setHeader("content-type", "application/json")
       response.end(JSON.stringify({ error: "not found" }))

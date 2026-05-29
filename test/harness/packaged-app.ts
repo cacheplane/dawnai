@@ -57,7 +57,9 @@ export async function cleanupTrackedTempDirs(registry: TrackedTempDir[]): Promis
   await Promise.all(
     tracked
       .filter((entry) => !entry.preserve)
-      .map((entry) => rm(entry.path, { force: true, recursive: true })),
+      // maxRetries handles the ENOTEMPTY race where a just-killed dev server's
+      // child flushes a SQLite WAL file into .dawn/ between readdir and rmdir.
+      .map((entry) => rm(entry.path, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 })),
   )
 }
 
@@ -166,6 +168,11 @@ export async function runPackagedCommand(options: {
           args: options.args,
           command: options.command,
           cwd: options.cwd,
+          env: {
+            // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
+            // so the harness does not treat non-empty stderr as a failure.
+            NODE_NO_WARNINGS: "1",
+          },
         })
       : await spawnWithStdin(options)
 
@@ -241,7 +248,12 @@ async function spawnWithStdin(options: {
   return await new Promise((resolve, reject) => {
     const child = spawn(options.command, [...options.args], {
       cwd: options.cwd,
-      env: process.env,
+      env: {
+        ...process.env,
+        // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
+        // so the harness does not treat non-empty stderr as a failure.
+        NODE_NO_WARNINGS: "1",
+      },
       stdio: ["pipe", "pipe", "pipe"],
     })
 

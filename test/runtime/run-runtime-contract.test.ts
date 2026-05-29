@@ -484,6 +484,7 @@ async function withRuntimeScenario(
           "@dawn-ai/langgraph",
           "@dawn-ai/permissions",
           "@dawn-ai/sdk",
+          "@dawn-ai/sqlite-storage",
           "@dawn-ai/workspace",
         ],
         tempRoot,
@@ -716,6 +717,7 @@ async function rewriteDependenciesToTarballs(options: {
     "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
     "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
     "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
+    "@dawn-ai/sqlite-storage": options.tarballs["@dawn-ai/sqlite-storage"],
     "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
   }
   packageJson.devDependencies = {
@@ -733,6 +735,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/langgraph": options.tarballs["@dawn-ai/langgraph"],
       "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
       "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
+      "@dawn-ai/sqlite-storage": options.tarballs["@dawn-ai/sqlite-storage"],
       "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
     },
   }
@@ -810,6 +813,11 @@ async function runCommand(options: {
     args: options.args,
     command: options.command,
     cwd: options.cwd,
+    env: {
+      // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
+      // so the harness does not treat non-empty stderr as a failure.
+      NODE_NO_WARNINGS: "1",
+    },
   })
 
   await appendTranscript(options.transcriptPath, result)
@@ -960,6 +968,12 @@ async function runCommandWithInput(options: {
   }>((resolvePromise, rejectPromise) => {
     const child = spawn(options.command, [...options.args], {
       cwd: options.cwd,
+      env: {
+        ...process.env,
+        // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
+        // so the harness does not treat non-empty stderr as a failure.
+        NODE_NO_WARNINGS: "1",
+      },
       stdio: ["pipe", "pipe", "pipe"],
     })
 

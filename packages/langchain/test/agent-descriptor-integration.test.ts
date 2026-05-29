@@ -1,5 +1,6 @@
 import { agent } from "@dawn-ai/sdk"
 import { AIMessage } from "@langchain/core/messages"
+import { MemorySaver } from "@langchain/langgraph"
 import { describe, expect, test, vi } from "vitest"
 import { executeAgent } from "../src/agent-adapter.js"
 
@@ -31,6 +32,7 @@ describe("agent() descriptor integration", () => {
     })
 
     const result = await executeAgent({
+      checkpointer: new MemorySaver(),
       entry: descriptor,
       input: { question: "hi" },
       routeParamNames: [],
@@ -76,6 +78,7 @@ describe("agent() descriptor integration", () => {
     ]
 
     const result = await executeAgent({
+      checkpointer: new MemorySaver(),
       entry: descriptor,
       input: { query: "test" },
       routeParamNames: [],

@@ -13,29 +13,21 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   // Route picker: default to /chat for back-compat. /coordinator demonstrates
   // the subagents capability with research + summarizer specialists.
+  // The route field must be the mode-qualified assistant_id (e.g. "/chat#agent").
   const routeId = body.route === "coordinator" ? "/coordinator" : "/chat"
-  const routePath =
-    routeId === "/coordinator" ? "src/app/coordinator/index.ts" : "src/app/chat/index.ts"
+  const route = `${routeId}#agent`
 
-  const upstream = await fetch(`${serverUrl}/runs/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      assistant_id: `${routeId}#agent`,
-      input: {
-        messages: [{ role: "user", content: body.message }],
-      },
-      metadata: {
-        dawn: {
-          mode: "agent",
-          route_id: routeId,
-          route_path: routePath,
-          thread_id: body.threadId,
-        },
-      },
-      on_completion: "delete",
-    }),
-  })
+  const upstream = await fetch(
+    `${serverUrl}/threads/${encodeURIComponent(body.threadId)}/runs/stream`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: { messages: [{ role: "user", content: body.message }] },
+        route,
+      }),
+    },
+  )
 
   if (!upstream.ok || !upstream.body) {
     return new Response(`Upstream error: ${upstream.status}`, { status: 502 })

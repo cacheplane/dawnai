@@ -19,14 +19,16 @@ import {
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
-import { executeAgent, type SubagentResolver, streamAgent } from "@dawn-ai/langchain"
+import { Command, executeAgent, type SubagentResolver, streamAgent } from "@dawn-ai/langchain"
 import {
   createPermissionsStore,
   type PermissionMode,
   type PermissionsStore,
 } from "@dawn-ai/permissions"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
+import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
@@ -132,10 +134,79 @@ export async function executeResolvedRoute(options: {
   })
 }
 
+/**
+ * Resolves the ThreadsStore for the given appRoot.
+ *
+ * Uses `config.threadsStore` if the user's `dawn.config.ts` provides one;
+ * otherwise falls back to the default SQLite-backed store at
+ * `<appRoot>/.dawn/threads.sqlite`. Exported so the HTTP server layer (T11+)
+ * can obtain the same store instance independently of route execution.
+ */
+export async function resolveThreadsStore(appRoot: string): Promise<ThreadsStore> {
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    if (loaded.config.threadsStore) {
+      return loaded.config.threadsStore
+    }
+  } catch {
+    // No dawn.config.ts or unreadable — fall through to default.
+  }
+  return createThreadsStore({ path: join(appRoot, ".dawn/threads.sqlite") })
+}
+
+/**
+ * Resolves the checkpointer for the given appRoot.
+ *
+ * Uses `config.checkpointer` if the user's `dawn.config.ts` provides one;
+ * otherwise falls back to the default SQLite-backed saver at
+ * `<appRoot>/.dawn/checkpoints.sqlite`. Exported so the HTTP server layer
+ * (T11+) can obtain a checkpointer independently of route execution (e.g.
+ * for the GET /threads/:id/state endpoint).
+ */
+export async function resolveCheckpointer(appRoot: string): Promise<BaseCheckpointSaver> {
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    if (loaded.config.checkpointer) {
+      return loaded.config.checkpointer
+    }
+  } catch {
+    // No dawn.config.ts or unreadable — fall through to default.
+  }
+  return sqliteCheckpointer({ path: join(appRoot, ".dawn/checkpoints.sqlite") })
+}
+
+/**
+ * Invoke a resolved route with a stable thread ID, returning the final
+ * execution result. Used by the AP `POST /threads/:id/runs/wait` endpoint.
+ * Behaves identically to `executeResolvedRoute` but forwards `threadId` to
+ * the agent-adapter so LangGraph parks state in the checkpointer.
+ */
+export async function invokeResolvedRoute(options: {
+  readonly appRoot: string
+  readonly input: unknown
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly signal?: AbortSignal
+  readonly threadId?: string
+}): Promise<RuntimeExecutionResult> {
+  return await executeRouteAtResolvedPath({
+    ...options,
+    startedAt: Date.now(),
+  })
+}
+
 export async function* streamResolvedRoute(options: {
   readonly appRoot: string
   readonly input: unknown
   readonly middlewareContext?: Readonly<Record<string, unknown>>
+  /**
+   * When set, the agent-adapter receives `Command({resume: resumeDecision})`
+   * as its input instead of the normal `input` field. Used by the resume
+   * endpoint to replay a parked graph state after a permission interrupt.
+   */
+  readonly resumeDecision?: "once" | "always" | "deny"
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
@@ -144,8 +215,7 @@ export async function* streamResolvedRoute(options: {
    * Stable per-conversation identifier forwarded to the agent-adapter as
    * LangGraph's `thread_id`. When set, `interrupt()` calls park graph
    * state in the checkpointer and the `/threads/:thread_id/resume`
-   * endpoint can replay them by handing a `PermissionDecision` back to the
-   * adapter via the pending-interrupts map.
+   * endpoint can replay them.
    */
   readonly threadId?: string
 }): AsyncGenerator<StreamChunk> {
@@ -156,8 +226,15 @@ export async function* streamResolvedRoute(options: {
     return
   }
 
-  const { normalized, tools, stateFields, promptFragments, streamTransformers, subagentResolver } =
-    prepared
+  const {
+    normalized,
+    tools,
+    stateFields,
+    promptFragments,
+    streamTransformers,
+    subagentResolver,
+    checkpointer,
+  } = prepared
 
   if (normalized.kind !== "agent") {
     // Non-agent routes don't support incremental streaming — execute and emit done
@@ -173,9 +250,16 @@ export async function* streamResolvedRoute(options: {
 
   const routeParamNames = extractRouteParamNames(options.routeId)
 
+  // For resume runs, pass Command({resume}) directly to the agent-adapter so
+  // LangGraph replays from the parked checkpoint state.
+  const agentInput = options.resumeDecision
+    ? new Command({ resume: options.resumeDecision })
+    : options.input
+
   for await (const chunk of streamAgent({
+    checkpointer,
     entry: normalized.entry,
-    input: options.input,
+    input: agentInput,
     ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
     routeParamNames,
     signal: options.signal ?? new AbortController().signal,
@@ -228,6 +312,8 @@ interface PreparedRoute {
     readonly entry: unknown
   }
   readonly ok: true
+  readonly checkpointer: BaseCheckpointSaver
+  readonly threadsStore: ThreadsStore
   readonly stateFields: readonly ResolvedStateField[] | undefined
   readonly tools: readonly DiscoveredToolDefinition[]
   readonly promptFragments?: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>>
@@ -293,6 +379,38 @@ async function prepareRouteExecution(options: {
 
   let subagentResolver: SubagentResolver | undefined
 
+  // Load dawn.config.ts once — used for checkpointer, threadsStore, backends,
+  // and permissions. Falls back to defaults when the config is absent/unreadable.
+  let configBackends:
+    | { readonly filesystem?: FilesystemBackend; readonly exec?: ExecBackend }
+    | undefined
+  let permissionsConfig:
+    | {
+        readonly mode?: PermissionMode
+        readonly allow?: Readonly<Record<string, readonly string[]>>
+        readonly deny?: Readonly<Record<string, readonly string[]>>
+      }
+    | undefined
+  let configCheckpointer: BaseCheckpointSaver | undefined
+  let configThreadsStore: ThreadsStore | undefined
+  try {
+    const loaded = await loadDawnConfig({ appRoot: options.appRoot })
+    configBackends = loaded.config.backends
+    permissionsConfig = loaded.config.permissions
+    configCheckpointer = loaded.config.checkpointer
+    configThreadsStore = loaded.config.threadsStore
+  } catch {
+    // No dawn.config.ts (or unreadable). Fall back to defaults for all fields.
+  }
+
+  const checkpointer: BaseCheckpointSaver =
+    configCheckpointer ??
+    sqliteCheckpointer({ path: join(options.appRoot, ".dawn/checkpoints.sqlite") })
+
+  const threadsStore: ThreadsStore =
+    configThreadsStore ??
+    createThreadsStore({ path: join(options.appRoot, ".dawn/threads.sqlite") })
+
   if (normalized.kind === "agent") {
     const registry = createCapabilityRegistry([
       createPlanningMarker(),
@@ -311,26 +429,6 @@ async function prepareRouteExecution(options: {
     // requests in production (one manifest per CLI invocation), naturally
     // invalidated in dev when the runtime rebuilds the manifest.
     const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
-
-    let configBackends:
-      | { readonly filesystem?: FilesystemBackend; readonly exec?: ExecBackend }
-      | undefined
-    let permissionsConfig:
-      | {
-          readonly mode?: PermissionMode
-          readonly allow?: Readonly<Record<string, readonly string[]>>
-          readonly deny?: Readonly<Record<string, readonly string[]>>
-        }
-      | undefined
-    try {
-      const loaded = await loadDawnConfig({ appRoot: options.appRoot })
-      configBackends = loaded.config.backends
-      permissionsConfig = loaded.config.permissions
-    } catch {
-      // No dawn.config.ts (or unreadable). The workspace capability falls
-      // back to its defaults (localFilesystem + localExec); permissions
-      // defaults to "interactive" with empty allow/deny.
-    }
 
     const envMode = process.env.DAWN_PERMISSIONS_MODE
     const mode: PermissionMode =
@@ -446,6 +544,8 @@ async function prepareRouteExecution(options: {
   return {
     normalized,
     ok: true,
+    checkpointer,
+    threadsStore,
     ...(promptFragments.length > 0 ? { promptFragments } : {}),
     stateFields,
     ...(streamTransformers.length > 0 ? { streamTransformers } : {}),
@@ -463,6 +563,7 @@ async function executeRouteAtResolvedPath(options: {
   readonly routePath: string
   readonly signal?: AbortSignal
   readonly startedAt: number
+  readonly threadId?: string
 }): Promise<RuntimeExecutionResult> {
   let mode: RuntimeExecutionMode | null = null
 
@@ -489,6 +590,7 @@ async function executeRouteAtResolvedPath(options: {
       promptFragments,
       streamTransformers,
       subagentResolver,
+      checkpointer,
     } = prepared
     mode = normalized.kind
 
@@ -499,6 +601,7 @@ async function executeRouteAtResolvedPath(options: {
     })
 
     const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
+      checkpointer,
       ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
       routeId: options.routeId,
       ...(stateFields ? { stateFields } : {}),
@@ -507,6 +610,7 @@ async function executeRouteAtResolvedPath(options: {
       ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
       ...(subagentResolver ? { subagentResolver } : {}),
+      ...(options.threadId ? { threadId: options.threadId } : {}),
     })
 
     return createRuntimeSuccessResult({
@@ -541,6 +645,7 @@ async function invokeEntry(
   input: unknown,
   context: unknown,
   agentContext?: {
+    readonly checkpointer?: BaseCheckpointSaver
     readonly middlewareContext?: Readonly<Record<string, unknown>>
     readonly routeId: string
     readonly signal?: AbortSignal
@@ -562,11 +667,18 @@ async function invokeEntry(
       NonNullable<CapabilityContribution["streamTransformers"]>[number]
     >
     readonly subagentResolver?: SubagentResolver
+    readonly threadId?: string
   },
 ): Promise<unknown> {
   if (kind === "agent") {
+    if (!agentContext?.checkpointer) {
+      throw new Error(
+        "[dawn] invokeEntry called for an agent route without a checkpointer. This is an internal bug — please report it.",
+      )
+    }
     const routeParamNames = extractRouteParamNames(agentContext?.routeId ?? "")
     return await executeAgent({
+      checkpointer: agentContext.checkpointer,
       entry,
       input,
       ...(agentContext?.middlewareContext
@@ -585,6 +697,7 @@ async function invokeEntry(
       ...(agentContext?.subagentResolver
         ? { subagentResolver: agentContext.subagentResolver }
         : {}),
+      ...(agentContext?.threadId ? { threadId: agentContext.threadId } : {}),
     })
   }
 
