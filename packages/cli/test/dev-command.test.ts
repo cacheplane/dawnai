@@ -575,6 +575,27 @@ describe("dawn dev lifecycle", () => {
 
     expect(await replacementResponse.json()).toMatchObject({ version: "replaced" })
   })
+
+  test("loads env from a --env-file path overriding the default ./.env", {
+    timeout: 15_000,
+  }, async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "custom.env": "DAWN_CUSTOM_ENV_VAR=from-custom\n",
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ ok: true });\n`,
+    })
+
+    const dev = await startDevProcess({
+      cwd: appRoot,
+      envFile: "custom.env",
+    })
+    devProcesses.push(dev)
+
+    await dev.waitForReady()
+
+    expect(dev.stdout).toContain("Loaded 1 variable(s) from custom.env")
+  })
 })
 
 async function createFixtureApp(files: Readonly<Record<string, string>>) {
@@ -710,6 +731,7 @@ async function startDevProcess(options: {
   readonly cwd: string
   readonly env?: Readonly<Record<string, string>>
   readonly port?: number
+  readonly envFile?: string
 }): Promise<DevProcessHandle> {
   const packageRoot = join(import.meta.dirname, "..")
   const entryPath = join(import.meta.dirname, "..", "src", "index.ts")
@@ -718,6 +740,10 @@ async function startDevProcess(options: {
 
   if (typeof options.port === "number") {
     args.push("--port", String(options.port))
+  }
+
+  if (typeof options.envFile === "string") {
+    args.push("--env-file", options.envFile)
   }
 
   const child = spawn(process.execPath, args, {
