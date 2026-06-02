@@ -47,4 +47,32 @@ describe("localFilesystem", () => {
     const fs = localFilesystem()
     await expect(fs.readFile(join(root, "ghost.txt"), ctx(root))).rejects.toThrow(/ENOENT/)
   })
+
+  it("statFile returns size and mtimeMs", async () => {
+    const fs = localFilesystem()
+    const p = join(root, "f.txt")
+    await fs.writeFile(p, "hello", ctx(root))
+    const s = await fs.statFile?.(p, ctx(root))
+    expect(s?.size).toBe(5)
+    expect(typeof s?.mtimeMs).toBe("number")
+  })
+
+  it("removeFile deletes a file", async () => {
+    const fs = localFilesystem()
+    const p = join(root, "f.txt")
+    await fs.writeFile(p, "x", ctx(root))
+    await fs.removeFile?.(p, ctx(root))
+    await expect(fs.readFile(p, ctx(root))).rejects.toThrow()
+  })
+
+  it("touchFile updates mtime to now", async () => {
+    const fs = localFilesystem()
+    const p = join(root, "f.txt")
+    await fs.writeFile(p, "x", ctx(root))
+    const before = (await fs.statFile?.(p, ctx(root)))?.mtimeMs ?? 0
+    await new Promise((r) => setTimeout(r, 12))
+    await fs.touchFile?.(p, ctx(root))
+    const after = (await fs.statFile?.(p, ctx(root)))?.mtimeMs ?? 0
+    expect(after).toBeGreaterThan(before)
+  })
 })

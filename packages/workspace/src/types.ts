@@ -31,6 +31,18 @@ export interface FilesystemBackend {
 
   /** List entries in a directory. Returns leaf names (not full paths). */
   listDir(path: string, ctx: BackendContext): Promise<readonly string[]>
+
+  /** Stat a file. Optional — backends that omit it disable offload GC. */
+  statFile?(
+    path: string,
+    ctx: BackendContext,
+  ): Promise<{ readonly size: number; readonly mtimeMs: number }>
+
+  /** Delete a file. Optional — required for offload GC eviction. */
+  removeFile?(path: string, ctx: BackendContext): Promise<void>
+
+  /** Bump a file's mtime to now (LRU-by-access). Optional. */
+  touchFile?(path: string, ctx: BackendContext): Promise<void>
 }
 
 export interface ExecBackend {
