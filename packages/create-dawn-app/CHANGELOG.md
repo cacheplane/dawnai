@@ -1,5 +1,13 @@
 # create-dawn-app
 
+## 0.2.0
+
+### Patch Changes
+
+- 82dd52f: Correct package README links and CLI/runtime examples, export the SDK reasoning type, and fix `dawn build` agent deployment entry generation.
+- Updated dependencies [82dd52f]
+  - @dawn-ai/devkit@0.2.0
+
 ## 0.1.8
 
 ### Patch Changes

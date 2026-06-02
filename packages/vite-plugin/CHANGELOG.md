@@ -1,5 +1,26 @@
 # @dawn-ai/vite-plugin
 
+## 0.2.0
+
+### Minor Changes
+
+- ad17e85: Upgrade `@langchain/core` (0.3 → 1.x), `@langchain/langgraph` (0.2 → 1.x), `@langchain/openai` (0.3 → 1.x), and `zod` (3 → 4). Removes the dual-zod-version cast workaround in `tool-converter.ts`; `DynamicStructuredTool` now accepts Standard Schema directly. Downstream consumers must align on the new peer ranges (`@langchain/core >=1.1.0`).
+
+### Patch Changes
+
+- 82dd52f: Correct package README links and CLI/runtime examples, export the SDK reasoning type, and fix `dawn build` agent deployment entry generation.
+- Updated dependencies [17fa4aa]
+- Updated dependencies [82dd52f]
+- Updated dependencies [8e02fe1]
+- Updated dependencies [cfc3e8c]
+- Updated dependencies [dd242ac]
+- Updated dependencies [c777569]
+- Updated dependencies [34e615b]
+- Updated dependencies [2ba0773]
+- Updated dependencies [affeb46]
+- Updated dependencies [12ee95f]
+  - @dawn-ai/core@0.2.0
+
 ## 0.1.8
 
 ### Patch Changes
