@@ -14,7 +14,7 @@ import {
   type SubagentStreamContext,
 } from "./subagent-dispatcher.js"
 import { bridgeSubagentTool, type SubagentResolverResult } from "./subagent-tool-bridge.js"
-import { convertToolToLangChain } from "./tool-converter.js"
+import { convertToolToLangChain, type OffloadFn } from "./tool-converter.js"
 
 export type SubagentResolver = (leafName: string) => SubagentResolverResult | undefined
 
@@ -74,6 +74,7 @@ async function materializeAgent(
   middlewareContext?: Readonly<Record<string, unknown>>,
   promptFragments?: readonly PromptFragment[],
   options?: { readonly bypassCache?: boolean },
+  offload?: OffloadFn,
 ): Promise<AgentLike> {
   if (!options?.bypassCache) {
     const cached = materializedAgents.get(descriptor)
@@ -84,7 +85,9 @@ async function materializeAgent(
 
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
 
-  const langchainTools = tools.map((tool) => convertToolToLangChain(tool, middlewareContext))
+  const langchainTools = tools.map((tool) =>
+    convertToolToLangChain(tool, middlewareContext, offload),
+  )
 
   const provider = resolveProvider({
     model: descriptor.model,
@@ -278,6 +281,7 @@ export interface AgentOptions {
    */
   readonly input: unknown
   readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly offload?: OffloadFn
   readonly retry?: RetryConfig
   readonly routeParamNames: readonly string[]
   readonly signal: AbortSignal
@@ -378,6 +382,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       options.middlewareContext,
       options.promptFragments,
       resolver && hasTaskTool ? { bypassCache: true } : undefined,
+      options.offload,
     )
     const retryConfig = options.entry.retry
     const runnableInput = isCommandInput ? options.input : { messages }
@@ -397,7 +402,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
   assertAgentLike(options.entry)
 
   const langchainTools = effectiveTools.map((tool) =>
-    convertToolToLangChain(tool, options.middlewareContext),
+    convertToolToLangChain(tool, options.middlewareContext, options.offload),
   )
   if (langchainTools.length > 0) {
     config.tools = langchainTools
