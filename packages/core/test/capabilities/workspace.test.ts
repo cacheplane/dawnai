@@ -201,4 +201,43 @@ describe("createWorkspaceMarker — load", () => {
       expect((t as unknown as { overridable?: boolean }).overridable).toBe(true)
     }
   })
+
+  it("readFile bumps mtime via touchFile when reading a tool-outputs/ path", async () => {
+    const touched: string[] = []
+    const fakeBackend = {
+      readFile: async () => "data",
+      writeFile: async () => ({ bytesWritten: 4 }),
+      listDir: async () => [],
+      touchFile: async (p: string) => {
+        touched.push(p)
+      },
+    }
+    const contribution = await createWorkspaceMarker().load(
+      routeDir,
+      ctx({ backends: { filesystem: fakeBackend } }),
+    )
+    const readTool = findTool(contribution.tools, "readFile")
+    await readTool.run({ path: "tool-outputs/x.txt" }, { signal: new AbortController().signal })
+    expect(touched).toHaveLength(1)
+    expect(touched[0]).toMatch(/tool-outputs[/\\]x\.txt$/)
+  })
+
+  it("readFile does NOT call touchFile for normal (non-tool-outputs) file reads", async () => {
+    const touched: string[] = []
+    const fakeBackend = {
+      readFile: async () => "hello",
+      writeFile: async () => ({ bytesWritten: 5 }),
+      listDir: async () => [],
+      touchFile: async (p: string) => {
+        touched.push(p)
+      },
+    }
+    const contribution = await createWorkspaceMarker().load(
+      routeDir,
+      ctx({ backends: { filesystem: fakeBackend } }),
+    )
+    const readTool = findTool(contribution.tools, "readFile")
+    await readTool.run({ path: "notes.md" }, { signal: new AbortController().signal })
+    expect(touched).toHaveLength(0)
+  })
 })

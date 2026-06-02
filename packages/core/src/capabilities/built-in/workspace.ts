@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { join, resolve, sep } from "node:path"
+import { join, relative, resolve, sep } from "node:path"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import { suggestedCommandPattern, suggestedPathPattern } from "@dawn-ai/permissions"
 import type { BackendContext, ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
@@ -153,7 +153,17 @@ function buildWorkspaceTools(
       if (!gate.allowed) {
         throw new Error(gate.reason)
       }
-      return fs.readFile(absPath, backendContext(workspaceRoot, ctx.signal))
+      const bctx = backendContext(workspaceRoot, ctx.signal)
+      const content = await fs.readFile(absPath, bctx)
+      const rel = relative(workspaceRoot, absPath)
+      if ((rel === "tool-outputs" || rel.startsWith(`tool-outputs${sep}`)) && fs.touchFile) {
+        try {
+          await fs.touchFile(absPath, bctx)
+        } catch {
+          /* touch is best-effort; never fail a read because of it */
+        }
+      }
+      return content
     },
   }
   const writeFile: OverridableTool = {
