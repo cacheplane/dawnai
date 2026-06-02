@@ -18,9 +18,12 @@ interface DawnToolDefinition {
   readonly schema?: unknown
 }
 
+export type OffloadFn = (content: string, toolName: string) => Promise<string>
+
 export function convertToolToLangChain(
   tool: DawnToolDefinition,
   middlewareContext?: Readonly<Record<string, unknown>>,
+  offload?: OffloadFn,
 ): DynamicStructuredTool {
   const schema = toZodSchema(tool.schema)
 
@@ -35,6 +38,7 @@ export function convertToolToLangChain(
         signal,
       })
       const { content, stateUpdates } = unwrapToolResult(rawResult)
+      const finalContent = offload ? await offload(content, tool.name) : content
 
       if (stateUpdates) {
         const toolCallId = extractToolCallId(config)
@@ -43,7 +47,7 @@ export function convertToolToLangChain(
             ...stateUpdates,
             messages: [
               new ToolMessage({
-                content,
+                content: finalContent,
                 tool_call_id: toolCallId,
                 name: tool.name,
               }),
@@ -52,7 +56,7 @@ export function convertToolToLangChain(
         })
       }
 
-      return content
+      return finalContent
     },
   })
 }
