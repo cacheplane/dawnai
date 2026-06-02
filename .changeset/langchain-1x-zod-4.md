@@ -1,5 +1,5 @@
 ---
-"@dawn-ai/langchain": major
+"@dawn-ai/langchain": minor
 "@dawn-ai/cli": minor
 "@dawn-ai/vite-plugin": minor
 ---
