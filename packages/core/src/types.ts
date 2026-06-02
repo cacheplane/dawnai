@@ -25,6 +25,18 @@ export interface DawnConfig {
    * deploy artifact (langgraph.json env is detected separately).
    */
   readonly env?: string
+  readonly toolOutput?: {
+    /** Offload tool outputs whose serialized length exceeds this many characters. Default 40000. */
+    readonly offloadThresholdChars?: number
+    /** Number of leading lines kept in the in-context preview. Default 10. */
+    readonly previewLines?: number
+    /** Max total bytes retained under workspace/tool-outputs/. Default 268435456 (256MB). */
+    readonly maxBytes?: number
+    /** Delete offloaded files older than this many ms. Default 10800000 (3h). */
+    readonly ttlMs?: number
+    /** Minimum ms between GC scans. Default 10000 (10s). */
+    readonly gcThrottleMs?: number
+  }
 }
 
 export type RouteSegment =
