@@ -47,4 +47,49 @@ describe("localFilesystem", () => {
     const fs = localFilesystem()
     await expect(fs.readFile(join(root, "ghost.txt"), ctx(root))).rejects.toThrow(/ENOENT/)
   })
+
+  it("statFile returns size and mtimeMs", async () => {
+    const fs = localFilesystem()
+    const p = join(root, "f.txt")
+    await fs.writeFile(p, "hello", ctx(root))
+    const s = await fs.statFile?.(p, ctx(root))
+    expect(s?.size).toBe(5)
+    expect(typeof s?.mtimeMs).toBe("number")
+  })
+
+  it("removeFile deletes a file", async () => {
+    const fs = localFilesystem()
+    const p = join(root, "f.txt")
+    await fs.writeFile(p, "x", ctx(root))
+    await fs.removeFile?.(p, ctx(root))
+    await expect(fs.readFile(p, ctx(root))).rejects.toThrow()
+  })
+
+  it("touchFile updates mtime to now", async () => {
+    const fs = localFilesystem()
+    const p = join(root, "f.txt")
+    await fs.writeFile(p, "x", ctx(root))
+    const before = (await fs.statFile?.(p, ctx(root)))?.mtimeMs ?? 0
+    await new Promise((r) => setTimeout(r, 12))
+    await fs.touchFile?.(p, ctx(root))
+    const after = (await fs.statFile?.(p, ctx(root)))?.mtimeMs ?? 0
+    expect(after).toBeGreaterThan(before)
+  })
+
+  it("mkdir creates a directory recursively", async () => {
+    const fs = localFilesystem()
+    const nested = join(root, "a", "b", "c")
+    await fs.mkdir?.(nested, ctx(root))
+    // writing into it should now succeed
+    await fs.writeFile(join(nested, "f.txt"), "x", ctx(root))
+    expect(await fs.readFile(join(nested, "f.txt"), ctx(root))).toBe("x")
+  })
+
+  it("readFile honors a per-call maxBytes override", async () => {
+    const fs = localFilesystem({ maxFileBytes: 10 })
+    const p = join(root, "big.txt")
+    await fs.writeFile(p, "x".repeat(100), ctx(root))
+    await expect(fs.readFile(p, ctx(root))).rejects.toThrow(/too large/)            // default cap rejects
+    expect(await fs.readFile(p, ctx(root), { maxBytes: Number.POSITIVE_INFINITY })).toBe("x".repeat(100)) // override allows
+  })
 })

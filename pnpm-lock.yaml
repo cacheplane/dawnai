@@ -290,6 +290,9 @@ importers:
       '@dawn-ai/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@dawn-ai/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       '@langchain/langgraph':
         specifier: ^1.3.0
         version: 1.3.0(@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1))(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(ws@8.20.1)(zod-to-json-schema@3.25.2(zod@4.4.3))(zod@4.4.3)
