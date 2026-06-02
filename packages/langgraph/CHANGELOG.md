@@ -1,5 +1,15 @@
 # @dawn-ai/langgraph
 
+## 0.2.0
+
+### Patch Changes
+
+- 82dd52f: Correct package README links and CLI/runtime examples, export the SDK reasoning type, and fix `dawn build` agent deployment entry generation.
+- Updated dependencies [82dd52f]
+- Updated dependencies [1005b3a]
+- Updated dependencies [e8462db]
+  - @dawn-ai/sdk@0.2.0
+
 ## 0.1.8
 
 ### Patch Changes
