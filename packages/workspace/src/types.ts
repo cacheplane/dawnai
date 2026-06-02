@@ -43,6 +43,9 @@ export interface FilesystemBackend {
 
   /** Bump a file's mtime to now (LRU-by-access). Optional. */
   touchFile?(path: string, ctx: BackendContext): Promise<void>
+
+  /** Create a directory (recursive). Optional — offloading uses it to ensure the tool-outputs/ dir exists. */
+  mkdir?(path: string, ctx: BackendContext): Promise<void>
 }
 
 export interface ExecBackend {

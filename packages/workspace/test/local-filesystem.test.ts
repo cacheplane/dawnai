@@ -75,4 +75,13 @@ describe("localFilesystem", () => {
     const after = (await fs.statFile?.(p, ctx(root)))?.mtimeMs ?? 0
     expect(after).toBeGreaterThan(before)
   })
+
+  it("mkdir creates a directory recursively", async () => {
+    const fs = localFilesystem()
+    const nested = join(root, "a", "b", "c")
+    await fs.mkdir?.(nested, ctx(root))
+    // writing into it should now succeed
+    await fs.writeFile(join(nested, "f.txt"), "x", ctx(root))
+    expect(await fs.readFile(join(nested, "f.txt"), ctx(root))).toBe("x")
+  })
 })

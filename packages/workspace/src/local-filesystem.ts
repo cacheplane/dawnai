@@ -1,4 +1,4 @@
-import { readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
+import { mkdir as mkdirFs, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
 import type { BackendContext, FilesystemBackend } from "./types.js"
 
 const DEFAULT_MAX_FILE_BYTES = 256 * 1024
@@ -42,6 +42,9 @@ export function localFilesystem(opts: LocalFilesystemOptions = {}): FilesystemBa
     async touchFile(path: string, _ctx: BackendContext) {
       const now = new Date()
       await utimes(path, now, now)
+    },
+    async mkdir(path: string, _ctx: BackendContext) {
+      await mkdirFs(path, { recursive: true })
     },
   }
 }

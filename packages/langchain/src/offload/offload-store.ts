@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto"
-import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import type { FilesystemBackend } from "@dawn-ai/workspace"
 
@@ -35,7 +34,7 @@ export class OffloadStore {
     const fileName = `${safeName}-${this.now()}-${randomBytes(3).toString("hex")}.txt`
     const relPath = `${SUBDIR}/${fileName}`
     const dirAbs = join(this.opts.workspaceRoot, SUBDIR)
-    await mkdir(dirAbs, { recursive: true })
+    await this.opts.backend.mkdir?.(dirAbs, this.ctx)
     const absPath = join(this.opts.workspaceRoot, relPath)
     await this.opts.backend.writeFile(absPath, content, this.ctx)
     await this.maybeGc()
