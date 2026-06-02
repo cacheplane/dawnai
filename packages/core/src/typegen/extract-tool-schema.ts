@@ -124,15 +124,29 @@ export async function extractToolSchemasForRoute(
   return results
 }
 
+const MAX_SCHEMA_DEPTH = 8
+
 function tsTypeToJsonSchema(
   type: ts.Type,
   checker: ts.TypeChecker,
-): { type: string; description?: string; items?: JsonSchemaProperty; enum?: string[] } {
+  depth = 0,
+): {
+  type?: string
+  description?: string
+  items?: JsonSchemaProperty
+  enum?: string[]
+  anyOf?: JsonSchemaProperty[]
+  properties?: Record<string, JsonSchemaProperty>
+  required?: string[]
+  additionalProperties?: boolean | JsonSchemaProperty
+} {
+  if (depth > MAX_SCHEMA_DEPTH) return { type: "string" }
+
   // Strip undefined from unions (optional properties resolve as T | undefined)
   if (type.isUnion()) {
     const nonUndefined = type.types.filter((t) => !(t.flags & ts.TypeFlags.Undefined))
     if (nonUndefined.length === 1 && nonUndefined[0]) {
-      return tsTypeToJsonSchema(nonUndefined[0], checker)
+      return tsTypeToJsonSchema(nonUndefined[0], checker, depth)
     }
 
     // String literal union → enum
@@ -141,13 +155,33 @@ function tsTypeToJsonSchema(
       const enumValues = nonUndefined.map((t) => (t as ts.StringLiteralType).value)
       return { type: "string", enum: enumValues }
     }
+
+    // Union of object shapes → anyOf. Require a genuine object type
+    // (ts.TypeFlags.Object) so intrinsic unions like `boolean` (modeled as
+    // `true | false` BooleanLiteral members that carry Boolean.prototype
+    // props) fall through to the primitive checks below instead of becoming
+    // a bogus anyOf.
+    if (nonUndefined.length > 1) {
+      const allObjects = nonUndefined.every(
+        (t) =>
+          (t.flags & ts.TypeFlags.Object) !== 0 &&
+          (t.getProperties().length > 0 || checker.getIndexTypeOfType(t, ts.IndexKind.String)),
+      )
+      if (allObjects) {
+        return {
+          anyOf: nonUndefined.map((t) => tsTypeToJsonSchema(t, checker, depth + 1)),
+        }
+      }
+    }
   }
 
   // Array type
   if (checker.isArrayType(type)) {
     const typeArgs = (type as ts.TypeReference).typeArguments
     const elementType = typeArgs && typeArgs.length > 0 && typeArgs[0]
-    const items = elementType ? tsTypeToJsonSchema(elementType, checker) : { type: "string" }
+    const items = elementType
+      ? tsTypeToJsonSchema(elementType, checker, depth + 1)
+      : { type: "string" }
     return { type: "array", items }
   }
 
@@ -157,8 +191,60 @@ function tsTypeToJsonSchema(
   if (typeString === "number") return { type: "number" }
   if (typeString === "boolean") return { type: "boolean" }
 
+  // Try nested object
+  const objSchema = tryObjectSchema(type, checker, depth)
+  if (objSchema !== undefined) return objSchema
+
   // Fallback to string for unknown types
   return { type: "string" }
+}
+
+function tryObjectSchema(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  depth: number,
+):
+  | {
+      type: string
+      properties: Record<string, JsonSchemaProperty>
+      required: string[]
+      additionalProperties: boolean | JsonSchemaProperty
+    }
+  | undefined {
+  const props = type.getProperties()
+  const indexType = checker.getIndexTypeOfType(type, ts.IndexKind.String)
+
+  // Record<string, T>: no named properties, string index signature present.
+  if (props.length === 0 && indexType) {
+    return {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: tsTypeToJsonSchema(indexType, checker, depth + 1),
+    }
+  }
+
+  if (props.length === 0) return undefined
+
+  const properties: Record<string, JsonSchemaProperty> = {}
+  const required: string[] = []
+  for (const prop of props) {
+    const propType = checker.getTypeOfSymbolAtLocation(
+      prop,
+      prop.valueDeclaration ?? prop.declarations?.[0] ?? ({} as ts.Node),
+    )
+    const schema = tsTypeToJsonSchema(propType, checker, depth + 1)
+    const propDoc = ts.displayPartsToString(prop.getDocumentationComment(checker))
+    if (propDoc) schema.description = propDoc
+    properties[prop.getName()] = schema
+    const declarations = prop.getDeclarations()
+    const isOptional =
+      declarations !== undefined &&
+      declarations.length > 0 &&
+      declarations.some((d) => ts.isPropertySignature(d) && d.questionToken !== undefined)
+    if (!isOptional) required.push(prop.getName())
+  }
+  return { type: "object", properties, required, additionalProperties: false }
 }
 
 function discoverToolFiles(toolsDir: string): Map<string, string> {
