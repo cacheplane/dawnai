@@ -30,6 +30,7 @@ dawn verify --json
 Flags:
 - `--cwd <path>` — operate on a different app root.
 - `--json` — emit a structured report (`{ status, appRoot, checks, counts }`) instead of human-readable text.
+- `--env-file <path>` — path to a `.env` file (overrides `dawn.config.ts` `env` and the default `./.env`).
 
 The `deps` check covers missing packages and missing env vars (advisory) — uniquely useful before a deploy. See [Deployment](/docs/deployment) for the recommended workflow.
 
@@ -126,6 +127,7 @@ dawn dev --port 3001
 
 Flags:
 - `--port <n>` — HTTP port. Default: dynamically allocated. Pass `--port` for a stable address.
+- `--env-file <path>` — path to a `.env` file (overrides `dawn.config.ts` `env` and the default `./.env`).
 
 See [Dev Server](/docs/dev-server) for the full protocol reference and architecture notes.
 

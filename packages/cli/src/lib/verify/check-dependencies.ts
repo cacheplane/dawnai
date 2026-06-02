@@ -1,9 +1,17 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
+import { loadDawnConfig } from "@dawn-ai/core"
+import { resolveEnvPath } from "../dev/resolve-env-path.js"
 
 export interface DependencyCheckResult {
   readonly missingPackages: readonly string[]
   readonly missingEnvVars: readonly string[]
+}
+
+export interface CheckDependenciesOptions {
+  readonly appRoot: string
+  /** From the --env-file CLI flag. Highest precedence. */
+  readonly envFile?: string | undefined
 }
 
 /**
@@ -18,7 +26,10 @@ const REQUIRED_PACKAGES = ["@langchain/core", "@langchain/openai", "@langchain/l
  */
 const RECOMMENDED_ENV_VARS = ["OPENAI_API_KEY"] as const
 
-export function checkDependencies(appRoot: string): DependencyCheckResult {
+export async function checkDependencies(
+  options: CheckDependenciesOptions,
+): Promise<DependencyCheckResult> {
+  const { appRoot } = options
   const missingPackages: string[] = []
   const missingEnvVars: string[] = []
 
@@ -49,14 +60,25 @@ export function checkDependencies(appRoot: string): DependencyCheckResult {
     }
   }
 
-  // Check environment variables (from process.env or .env file)
+  // Resolve the env file the same way dev-session does: flag > config > default.
+  let configEnv: string | undefined
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    configEnv = loaded.config.env
+  } catch {
+    // No dawn.config.ts (or it failed to load) — fall through to default.
+    configEnv = undefined
+  }
+
+  const resolved = resolveEnvPath({ appRoot, flag: options.envFile, configEnv })
+
+  // Check environment variables (from process.env or the resolved env file)
   for (const envVar of RECOMMENDED_ENV_VARS) {
     if (!process.env[envVar]) {
-      // Check if it's in .env file
-      const envPath = join(appRoot, ".env")
-      if (existsSync(envPath)) {
+      // Check if it's in the resolved env file
+      if (existsSync(resolved.absPath)) {
         try {
-          const content = readFileSync(envPath, "utf8")
+          const content = readFileSync(resolved.absPath, "utf8")
           if (content.includes(`${envVar}=`)) {
             continue
           }

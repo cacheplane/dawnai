@@ -19,6 +19,12 @@ export interface DawnConfig {
   }
   readonly checkpointer?: BaseCheckpointSaver
   readonly threadsStore?: ThreadsStore
+  /**
+   * Path to the env file loaded for local `dawn dev` / `dawn verify`,
+   * relative to the app root. Defaults to "./.env". Does NOT affect the
+   * deploy artifact (langgraph.json env is detected separately).
+   */
+  readonly env?: string
 }
 
 export type RouteSegment =
