@@ -84,4 +84,12 @@ describe("localFilesystem", () => {
     await fs.writeFile(join(nested, "f.txt"), "x", ctx(root))
     expect(await fs.readFile(join(nested, "f.txt"), ctx(root))).toBe("x")
   })
+
+  it("readFile honors a per-call maxBytes override", async () => {
+    const fs = localFilesystem({ maxFileBytes: 10 })
+    const p = join(root, "big.txt")
+    await fs.writeFile(p, "x".repeat(100), ctx(root))
+    await expect(fs.readFile(p, ctx(root))).rejects.toThrow(/too large/)            // default cap rejects
+    expect(await fs.readFile(p, ctx(root), { maxBytes: Number.POSITIVE_INFINITY })).toBe("x".repeat(100)) // override allows
+  })
 })

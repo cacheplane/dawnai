@@ -19,8 +19,15 @@ export interface FilesystemBackend {
   /**
    * Read a UTF-8 file. `path` is an already-resolved absolute path
    * inside `ctx.workspaceRoot` — the capability has done the path-jail.
+   * Pass `opts.maxBytes` to override the backend's default size cap for
+   * this single call (e.g. use `Number.POSITIVE_INFINITY` for uncapped reads
+   * of offloaded tool outputs).
    */
-  readFile(path: string, ctx: BackendContext): Promise<string>
+  readFile(
+    path: string,
+    ctx: BackendContext,
+    opts?: { readonly maxBytes?: number },
+  ): Promise<string>
 
   /** Write a UTF-8 file. Returns the byte count of `content`. */
   writeFile(

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto"
 import { join } from "node:path"
 import type { FilesystemBackend } from "@dawn-ai/workspace"
 
+// NOTE: must match the tool-outputs/ predicate in @dawn-ai/core workspace capability readFile.
 const SUBDIR = "tool-outputs"
 
 export interface OffloadStoreOptions {
@@ -84,16 +85,16 @@ export class OffloadStore {
     survivors.sort((a, b) => a.mtimeMs - b.mtimeMs)
     for (const e of survivors) {
       if (total <= this.opts.maxBytes) break
-      await this.safeRemove(e.abs)
-      total -= e.size
+      if (await this.safeRemove(e.abs)) total -= e.size
     }
   }
 
-  private async safeRemove(abs: string): Promise<void> {
+  private async safeRemove(abs: string): Promise<boolean> {
     try {
       await this.opts.backend.removeFile?.(abs, this.ctx)
+      return true
     } catch {
-      /* tolerate single-file delete failure */
+      return false
     }
   }
 }

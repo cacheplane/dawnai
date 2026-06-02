@@ -154,16 +154,22 @@ function buildWorkspaceTools(
         throw new Error(gate.reason)
       }
       const bctx = backendContext(workspaceRoot, ctx.signal)
-      const content = await fs.readFile(absPath, bctx)
       const rel = relative(workspaceRoot, absPath)
-      if ((rel === "tool-outputs" || rel.startsWith(`tool-outputs${sep}`)) && fs.touchFile) {
+      // NOTE: must match SUBDIR ("tool-outputs") in @dawn-ai/langchain offload-store.ts
+      const isToolOutput = rel === "tool-outputs" || rel.startsWith(`tool-outputs${sep}`)
+      const data = await fs.readFile(
+        absPath,
+        bctx,
+        isToolOutput ? { maxBytes: Number.POSITIVE_INFINITY } : undefined,
+      )
+      if (isToolOutput && fs.touchFile) {
         try {
           await fs.touchFile(absPath, bctx)
         } catch {
           /* touch is best-effort; never fail a read because of it */
         }
       }
-      return content
+      return data
     },
   }
   const writeFile: OverridableTool = {

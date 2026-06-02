@@ -240,4 +240,49 @@ describe("createWorkspaceMarker — load", () => {
     await readTool.run({ path: "notes.md" }, { signal: new AbortController().signal })
     expect(touched).toHaveLength(0)
   })
+
+  it("readFile passes maxBytes:Infinity when reading a tool-outputs/ path (uncapped)", async () => {
+    const receivedOpts: Array<{ maxBytes?: number } | undefined> = []
+    const fakeBackend = {
+      readFile: async (_p: string, _c: unknown, opts?: { maxBytes?: number }) => {
+        receivedOpts.push(opts)
+        return "big content"
+      },
+      writeFile: async () => ({ bytesWritten: 0 }),
+      listDir: async () => [],
+    }
+    const contribution = await createWorkspaceMarker().load(
+      routeDir,
+      ctx({ backends: { filesystem: fakeBackend } }),
+    )
+    const readTool = findTool(contribution.tools, "readFile")
+    const result = await readTool.run(
+      { path: "tool-outputs/output.txt" },
+      { signal: new AbortController().signal },
+    )
+    expect(result).toBe("big content")
+    expect(receivedOpts).toHaveLength(1)
+    expect(receivedOpts[0]?.maxBytes).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it("readFile with real localFilesystem reads a >256KB tool-outputs/ file successfully", async () => {
+    const { localFilesystem } = await import("@dawn-ai/workspace")
+    // Use a tiny cap (10 bytes) to prove the override kicks in
+    const tinyFs = localFilesystem({ maxFileBytes: 10 })
+    const outputsDir = join(workspaceDir, "tool-outputs")
+    mkdirSync(outputsDir, { recursive: true })
+    const bigContent = "x".repeat(300 * 1024) // 300 KiB — way over 10-byte cap
+    writeFileSync(join(outputsDir, "result.txt"), bigContent, "utf8")
+
+    const contribution = await createWorkspaceMarker().load(
+      routeDir,
+      ctx({ backends: { filesystem: tinyFs } }),
+    )
+    const readTool = findTool(contribution.tools, "readFile")
+    const result = await readTool.run(
+      { path: "tool-outputs/result.txt" },
+      { signal: new AbortController().signal },
+    )
+    expect(result).toBe(bigContent)
+  })
 })

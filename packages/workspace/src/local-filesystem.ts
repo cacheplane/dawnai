@@ -14,10 +14,15 @@ export interface LocalFilesystemOptions {
 export function localFilesystem(opts: LocalFilesystemOptions = {}): FilesystemBackend {
   const maxBytes = opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
   return {
-    async readFile(path: string, _ctx: BackendContext): Promise<string> {
+    async readFile(
+      path: string,
+      _ctx: BackendContext,
+      opts?: { readonly maxBytes?: number },
+    ): Promise<string> {
+      const limit = opts?.maxBytes ?? maxBytes
       const s = await stat(path)
-      if (s.size > maxBytes) {
-        throw new Error(`File too large: ${s.size} bytes (max ${maxBytes}) at ${path}`)
+      if (s.size > limit) {
+        throw new Error(`File too large: ${s.size} bytes (max ${limit}) at ${path}`)
       }
       return await readFile(path, "utf8")
     },

@@ -7,13 +7,14 @@ export interface BuildStubArgs {
 
 export function buildStub(args: BuildStubArgs): string {
   const lines = args.content.split("\n").slice(0, args.previewLines)
+  const shown = lines.length
   const preview = lines.join("\n")
   const chars = args.content.length.toLocaleString("en-US")
   const threshold = args.thresholdChars.toLocaleString("en-US")
   return [
     `[Tool output offloaded — ${chars} chars exceeded the ${threshold}-char limit.`,
     `Full output saved to: ${args.relPath}`,
-    `Preview (first ${args.previewLines} lines):`,
+    `Preview (first ${shown} lines):`,
     preview,
     `Read the full output with the readFile tool at the path above.]`,
   ].join("\n")
