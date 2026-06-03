@@ -89,7 +89,9 @@ describe("npmView", () => {
 
   it("rethrows non-404 npm errors", async () => {
     const run = async () => {
-      throw new Error("npm view ... failed with exit code 1\nnpm error code E500\nnpm error 500 Internal")
+      throw new Error(
+        "npm view ... failed with exit code 1\nnpm error code E500\nnpm error 500 Internal",
+      )
     }
 
     await assert.rejects(npmView("@dawn-ai/core", run), /E500/)
