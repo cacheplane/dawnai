@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { localFilesystem } from "@dawn-ai/workspace"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { OffloadStore } from "../src/offload/offload-store.js"
+import { buildOffloadFileName, OffloadStore } from "../src/offload/offload-store.js"
 
 describe("OffloadStore", () => {
   let dir: string
@@ -58,5 +58,34 @@ describe("OffloadStore", () => {
     const c = { signal: new AbortController().signal, workspaceRoot: dir }
     expect(await localFilesystem().readFile(join(dir, a), c)).toBe("a".repeat(20))
     expect(await localFilesystem().readFile(join(dir, b), c)).toBe("b".repeat(20))
+  })
+})
+
+describe("buildOffloadFileName", () => {
+  it("uses toolName-toolCallId when a tool_call_id is present", () => {
+    expect(buildOffloadFileName("readFile", "x".repeat(100), "call_abc123")).toBe(
+      "readFile-call_abc123.txt",
+    )
+  })
+
+  it("falls back to a content hash when tool_call_id is absent", () => {
+    const a = buildOffloadFileName("generateReport", "hello world", undefined)
+    const b = buildOffloadFileName("generateReport", "hello world", "")
+    expect(a).toMatch(/^generateReport-[0-9a-f]{16}\.txt$/)
+    expect(b).toBe(a)
+  })
+
+  it("is stable for identical content and distinct for different content", () => {
+    const a = buildOffloadFileName("t", "same", undefined)
+    const b = buildOffloadFileName("t", "same", undefined)
+    const c = buildOffloadFileName("t", "different", undefined)
+    expect(a).toBe(b)
+    expect(a).not.toBe(c)
+  })
+
+  it("sanitizes unsafe characters in toolName and toolCallId", () => {
+    expect(buildOffloadFileName("we/ir d", "y".repeat(50), "id/with space")).toBe(
+      "we_ir_d-id_with_space.txt",
+    )
   })
 })

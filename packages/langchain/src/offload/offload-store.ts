@@ -1,9 +1,32 @@
-import { randomBytes } from "node:crypto"
+import { createHash } from "node:crypto"
 import { join } from "node:path"
 import type { FilesystemBackend } from "@dawn-ai/workspace"
 
 // NOTE: must match the tool-outputs/ predicate in @dawn-ai/core workspace capability readFile.
 const SUBDIR = "tool-outputs"
+
+function sanitizeSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_")
+}
+
+/**
+ * Deterministic offload filename. Keyed on the tool_call_id when present
+ * (unique per call in production; fixture-controlled in replay tests). Falls
+ * back to a content hash when no id is available — still deterministic and
+ * reproducible, since the caller controls the content.
+ */
+export function buildOffloadFileName(
+  toolName: string,
+  content: string,
+  toolCallId?: string,
+): string {
+  const name = sanitizeSegment(toolName)
+  if (toolCallId && toolCallId.length > 0) {
+    return `${name}-${sanitizeSegment(toolCallId)}.txt`
+  }
+  const hash = createHash("sha256").update(content).digest("hex").slice(0, 16)
+  return `${name}-${hash}.txt`
+}
 
 export interface OffloadStoreOptions {
   readonly backend: FilesystemBackend
@@ -30,9 +53,8 @@ export class OffloadStore {
   }
 
   /** Persist full content; returns the workspace-relative path. Runs throttled GC. */
-  async write(toolName: string, content: string): Promise<string> {
-    const safeName = toolName.replace(/[^a-zA-Z0-9_-]/g, "_")
-    const fileName = `${safeName}-${this.now()}-${randomBytes(3).toString("hex")}.txt`
+  async write(toolName: string, content: string, toolCallId?: string): Promise<string> {
+    const fileName = buildOffloadFileName(toolName, content, toolCallId)
     const relPath = `${SUBDIR}/${fileName}`
     const dirAbs = join(this.opts.workspaceRoot, SUBDIR)
     await this.opts.backend.mkdir?.(dirAbs, this.ctx)
