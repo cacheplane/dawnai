@@ -26,6 +26,7 @@ export default defineConfig({
     include: [
       "test/runtime/run-runtime-contract.test.ts",
       "test/runtime/run-agent-protocol.test.ts",
+      "test/runtime/run-aimock-e2e.test.ts",
       "test/runtime/support/aimock-runner.test.ts",
     ],
     testTimeout: 240_000,
