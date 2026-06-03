@@ -11,6 +11,7 @@ import {
   createSkillsMarker,
   createSubagentsMarker,
   createWorkspaceMarker,
+  type DawnConfig,
   discoverRoutes,
   findDawnApp,
   loadDawnConfig,
@@ -19,7 +20,15 @@ import {
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
-import { Command, executeAgent, type SubagentResolver, streamAgent } from "@dawn-ai/langchain"
+import {
+  Command,
+  executeAgent,
+  type OffloadFn,
+  OffloadStore,
+  offloadToolOutput,
+  type SubagentResolver,
+  streamAgent,
+} from "@dawn-ai/langchain"
 import {
   createPermissionsStore,
   type PermissionMode,
@@ -28,6 +37,7 @@ import {
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
+import { localFilesystem } from "@dawn-ai/workspace"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
@@ -234,6 +244,7 @@ export async function* streamResolvedRoute(options: {
     streamTransformers,
     subagentResolver,
     checkpointer,
+    offload,
   } = prepared
 
   if (normalized.kind !== "agent") {
@@ -265,6 +276,7 @@ export async function* streamResolvedRoute(options: {
     signal: options.signal ?? new AbortController().signal,
     ...(stateFields ? { stateFields } : {}),
     tools,
+    ...(offload ? { offload } : {}),
     ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
     ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
     ...(subagentResolver ? { subagentResolver } : {}),
@@ -314,6 +326,7 @@ interface PreparedRoute {
   readonly ok: true
   readonly checkpointer: BaseCheckpointSaver
   readonly threadsStore: ThreadsStore
+  readonly offload?: OffloadFn
   readonly stateFields: readonly ResolvedStateField[] | undefined
   readonly tools: readonly DiscoveredToolDefinition[]
   readonly promptFragments?: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>>
@@ -332,6 +345,7 @@ async function prepareRouteExecution(options: {
   readonly appRoot: string
   readonly routeFile: string
   readonly routeId: string
+  readonly signal?: AbortSignal
 }): Promise<PreparedRoute | PreparedRouteError> {
   const routeDir = resolve(options.routeFile, "..")
 
@@ -393,8 +407,10 @@ async function prepareRouteExecution(options: {
     | undefined
   let configCheckpointer: BaseCheckpointSaver | undefined
   let configThreadsStore: ThreadsStore | undefined
+  let loadedDawnConfig: DawnConfig | undefined
   try {
     const loaded = await loadDawnConfig({ appRoot: options.appRoot })
+    loadedDawnConfig = loaded.config
     configBackends = loaded.config.backends
     permissionsConfig = loaded.config.permissions
     configCheckpointer = loaded.config.checkpointer
@@ -402,6 +418,12 @@ async function prepareRouteExecution(options: {
   } catch {
     // No dawn.config.ts (or unreadable). Fall back to defaults for all fields.
   }
+
+  const offload = buildOffload(
+    loadedDawnConfig,
+    configBackends?.filesystem,
+    options.signal ?? new AbortController().signal,
+  )
 
   const checkpointer: BaseCheckpointSaver =
     configCheckpointer ??
@@ -546,6 +568,7 @@ async function prepareRouteExecution(options: {
     ok: true,
     checkpointer,
     threadsStore,
+    ...(offload ? { offload } : {}),
     ...(promptFragments.length > 0 ? { promptFragments } : {}),
     stateFields,
     ...(streamTransformers.length > 0 ? { streamTransformers } : {}),
@@ -591,6 +614,7 @@ async function executeRouteAtResolvedPath(options: {
       streamTransformers,
       subagentResolver,
       checkpointer,
+      offload,
     } = prepared
     mode = normalized.kind
 
@@ -606,6 +630,7 @@ async function executeRouteAtResolvedPath(options: {
       routeId: options.routeId,
       ...(stateFields ? { stateFields } : {}),
       tools,
+      ...(offload ? { offload } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
@@ -647,6 +672,7 @@ async function invokeEntry(
   agentContext?: {
     readonly checkpointer?: BaseCheckpointSaver
     readonly middlewareContext?: Readonly<Record<string, unknown>>
+    readonly offload?: OffloadFn
     readonly routeId: string
     readonly signal?: AbortSignal
     readonly stateFields?: readonly ResolvedStateField[]
@@ -688,6 +714,7 @@ async function invokeEntry(
       signal: agentContext?.signal ?? new AbortController().signal,
       ...(agentContext?.stateFields ? { stateFields: agentContext.stateFields } : {}),
       tools: agentContext?.tools ?? [],
+      ...(agentContext?.offload ? { offload: agentContext.offload } : {}),
       ...(agentContext?.promptFragments && agentContext.promptFragments.length > 0
         ? { promptFragments: agentContext.promptFragments }
         : {}),
@@ -929,6 +956,44 @@ function buildSubagentResolver(args: {
 
     return { routeId: route.id, graph }
   }
+}
+
+function buildOffload(
+  config: DawnConfig | undefined,
+  filesystem: FilesystemBackend | undefined,
+  signal: AbortSignal,
+): OffloadFn | undefined {
+  const workspaceRoot = join(process.cwd(), "workspace")
+  if (!existsSync(workspaceRoot)) return undefined
+  const t = config?.toolOutput ?? {}
+  const store = new OffloadStore({
+    backend: filesystem ?? localFilesystem(),
+    workspaceRoot,
+    signal,
+    maxBytes: t.maxBytes ?? 268_435_456,
+    ttlMs: t.ttlMs ?? 10_800_000,
+    gcThrottleMs: t.gcThrottleMs ?? 10_000,
+  })
+  const thresholdChars = t.offloadThresholdChars ?? 40_000
+  const previewLines = t.previewLines ?? 10
+  const exempt = exemptToolSet(t.noOffloadTools)
+  return (content, toolName) => {
+    // Retrieval/inspection tools (readFile, listDir, …) must never be
+    // offloaded: their output IS the content the agent asked to read, so
+    // re-offloading it would replace it with another pointer and make the
+    // offloaded data permanently unreadable.
+    if (exempt.has(toolName)) return Promise.resolve(content)
+    return offloadToolOutput(content, { toolName, thresholdChars, previewLines, store })
+  }
+}
+
+/**
+ * Tool names whose output is never offloaded: the built-in retrieval/inspection
+ * tools (always exempt) unioned with any caller-provided names. Exported for
+ * unit testing.
+ */
+export function exemptToolSet(noOffloadTools?: readonly string[]): ReadonlySet<string> {
+  return new Set<string>(["readFile", "listDir", ...(noOffloadTools ?? [])])
 }
 
 function isBoundaryError(error: unknown): boolean {

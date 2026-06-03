@@ -1,5 +1,4 @@
 import { convertToolToLangChain } from "@dawn-ai/langchain"
-import { ToolMessage } from "@langchain/core/messages"
 import { type Command, isCommand } from "@langchain/langgraph"
 import { describe, expect, it, test } from "vitest"
 import { jsonSchemaToZod } from "../src/tool-converter.js"
@@ -237,5 +236,51 @@ describe("jsonSchemaToZod nesting", () => {
       action: { kind: "delete", id: 7 },
     })
     expect(() => zodSchema.parse({ action: { kind: "create" } })).toThrow()
+  })
+})
+
+describe("convertToolToLangChain offloading", () => {
+  it("replaces large plain-return content with a stub", async () => {
+    const big = "x".repeat(50_000)
+    const tool = { name: "dump", description: "", run: async () => big }
+    const offload = async (content: string, toolName: string) =>
+      content.length > 40_000 ? `STUB:${toolName}` : content
+    const converted = convertToolToLangChain(tool, undefined, offload)
+    const result = await converted.func(
+      {},
+      undefined as never,
+      { signal: new AbortController().signal } as never,
+    )
+    expect(result).toBe("STUB:dump")
+  })
+  it("replaces large {result,state} content with a stub in the ToolMessage", async () => {
+    const big = "y".repeat(50_000)
+    const tool = {
+      name: "dump2",
+      description: "",
+      run: async () => ({ result: big, state: { k: 1 } }),
+    }
+    const offload = async (content: string) => (content.length > 40_000 ? "STUB2" : content)
+    const converted = convertToolToLangChain(tool, undefined, offload)
+    const result = await converted.func(
+      {},
+      undefined as never,
+      { signal: new AbortController().signal } as never,
+    )
+    const cmd = result as { update: { messages: Array<{ content: unknown }>; k?: number } }
+    expect(cmd.update.messages[0]?.content).toBe("STUB2")
+    expect(cmd.update.k).toBe(1)
+  })
+  it("is a pass-through when no offload callback is given", async () => {
+    const big = "z".repeat(50_000)
+    const tool = { name: "dump3", description: "", run: async () => big }
+    const converted = convertToolToLangChain(tool)
+    const result = await converted.func(
+      {},
+      undefined as never,
+      { signal: new AbortController().signal } as never,
+    )
+    // unwrapToolResult JSON-stringifies plain values; verify no offload substitution occurred
+    expect(result).toBe(JSON.stringify(big))
   })
 })

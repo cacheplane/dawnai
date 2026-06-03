@@ -348,4 +348,38 @@ export default async function sharedTool(input: { a: number }): Promise<{ b: num
     expect(action?.anyOf?.[0]?.type).toBe("object")
     expect(action?.anyOf?.[1]?.properties?.id).toEqual({ type: "number" })
   })
+
+  describe("standalone literal types (discriminated-union discriminants)", () => {
+    test("discriminated union: each member's discriminant field is a single string literal", async () => {
+      const schemas = await extractSchemasFromSource(`
+        export default async function f(input: {
+          sort: { by: "date"; dir: "asc" | "desc" } | { by: "name" }
+        }) { return input }
+      `)
+      const sort = schemas[0]?.parameters.properties.sort
+      expect(sort?.anyOf).toHaveLength(2)
+      // First member: by: "date"
+      expect(sort?.anyOf?.[0]?.properties?.by).toEqual({ type: "string", enum: ["date"] })
+      // First member: dir: "asc" | "desc"
+      expect(sort?.anyOf?.[0]?.properties?.dir).toEqual({ type: "string", enum: ["asc", "desc"] })
+      // Second member: by: "name"
+      expect(sort?.anyOf?.[1]?.properties?.by).toEqual({ type: "string", enum: ["name"] })
+    })
+
+    test("top-level single string literal field", async () => {
+      const schemas = await extractSchemasFromSource(`
+        export default async function f(input: { mode: "fast" }) { return input }
+      `)
+      expect(schemas[0]?.parameters.properties.mode).toEqual({ type: "string", enum: ["fast"] })
+    })
+
+    test("no String.prototype members (charAt etc.) leak into schema", async () => {
+      const schemas = await extractSchemasFromSource(`
+        export default async function f(input: {
+          sort: { by: "date"; dir: "asc" | "desc" } | { by: "name" }
+        }) { return input }
+      `)
+      expect(JSON.stringify(schemas[0])).not.toContain("charAt")
+    })
+  })
 })

@@ -19,8 +19,15 @@ export interface FilesystemBackend {
   /**
    * Read a UTF-8 file. `path` is an already-resolved absolute path
    * inside `ctx.workspaceRoot` — the capability has done the path-jail.
+   * Pass `opts.maxBytes` to override the backend's default size cap for
+   * this single call (e.g. use `Number.POSITIVE_INFINITY` for uncapped reads
+   * of offloaded tool outputs).
    */
-  readFile(path: string, ctx: BackendContext): Promise<string>
+  readFile(
+    path: string,
+    ctx: BackendContext,
+    opts?: { readonly maxBytes?: number },
+  ): Promise<string>
 
   /** Write a UTF-8 file. Returns the byte count of `content`. */
   writeFile(
@@ -31,6 +38,21 @@ export interface FilesystemBackend {
 
   /** List entries in a directory. Returns leaf names (not full paths). */
   listDir(path: string, ctx: BackendContext): Promise<readonly string[]>
+
+  /** Stat a file. Optional — backends that omit it disable offload GC. */
+  statFile?(
+    path: string,
+    ctx: BackendContext,
+  ): Promise<{ readonly size: number; readonly mtimeMs: number }>
+
+  /** Delete a file. Optional — required for offload GC eviction. */
+  removeFile?(path: string, ctx: BackendContext): Promise<void>
+
+  /** Bump a file's mtime to now (LRU-by-access). Optional. */
+  touchFile?(path: string, ctx: BackendContext): Promise<void>
+
+  /** Create a directory (recursive). Optional — offloading uses it to ensure the tool-outputs/ dir exists. */
+  mkdir?(path: string, ctx: BackendContext): Promise<void>
 }
 
 export interface ExecBackend {
