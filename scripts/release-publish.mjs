@@ -127,9 +127,9 @@ async function readPackageStates(packages, npmViewPackage) {
   )
 }
 
-async function npmView(packageName) {
-  const versions = await npmJson(["view", packageName, "versions", "--json"])
-  const tags = await npmJson(["view", packageName, "dist-tags", "--json"])
+export async function npmView(packageName, run = runCommand) {
+  const versions = await npmJson(["view", packageName, "versions", "--json"], run)
+  const tags = await npmJson(["view", packageName, "dist-tags", "--json"], run)
 
   return {
     versions: Array.isArray(versions) ? versions : [],
@@ -137,12 +137,27 @@ async function npmView(packageName) {
   }
 }
 
-async function npmJson(args) {
-  const output = await runCommand("npm", args, {
-    cwd: repoRoot,
-    stdio: "pipe",
-  })
+async function npmJson(args, run = runCommand) {
+  let output
+  try {
+    output = await run("npm", args, {
+      cwd: repoRoot,
+      stdio: "pipe",
+    })
+  } catch (error) {
+    // A package that has never been published returns npm E404. Treat it as
+    // "no versions yet" so a first-time release publishes it instead of aborting.
+    if (isPackageNotFoundError(error)) {
+      return null
+    }
+    throw error
+  }
   return JSON.parse(output || "null")
+}
+
+export function isPackageNotFoundError(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /E404|404 Not Found|could not be found/i.test(message)
 }
 
 async function runCommand(command, args, options = {}) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { publishRelease } from "./release-publish.mjs"
+import { isPackageNotFoundError, npmView, publishRelease } from "./release-publish.mjs"
 
 const packages = [packageInfo("@dawn-ai/core", "0.1.1"), packageInfo("@dawn-ai/sdk", "0.1.1")]
 
@@ -69,6 +69,56 @@ describe("publishRelease", () => {
 
     assert.deepEqual(calls, [])
     assert.equal(result.status, "already-published")
+  })
+})
+
+describe("npmView", () => {
+  it("treats a never-published package (npm E404) as having no versions", async () => {
+    const run = async () => {
+      throw new Error(
+        "npm view @dawn-ai/sqlite-storage versions --json failed with exit code 1\n" +
+          "npm error code E404\n" +
+          "npm error 404 Not Found - GET https://registry.npmjs.org/@dawn-ai%2fsqlite-storage - Not found",
+      )
+    }
+
+    const view = await npmView("@dawn-ai/sqlite-storage", run)
+
+    assert.deepEqual(view, { versions: [], tags: {} })
+  })
+
+  it("rethrows non-404 npm errors", async () => {
+    const run = async () => {
+      throw new Error(
+        "npm view ... failed with exit code 1\nnpm error code E500\nnpm error 500 Internal",
+      )
+    }
+
+    await assert.rejects(npmView("@dawn-ai/core", run), /E500/)
+  })
+
+  it("parses versions and tags from a published package", async () => {
+    const run = async (_command, args) => {
+      if (args.includes("versions")) {
+        return JSON.stringify(["0.1.0", "0.1.1"])
+      }
+      return JSON.stringify({ latest: "0.1.1" })
+    }
+
+    const view = await npmView("@dawn-ai/core", run)
+
+    assert.deepEqual(view.versions, ["0.1.0", "0.1.1"])
+    assert.deepEqual(view.tags, { latest: "0.1.1" })
+  })
+})
+
+describe("isPackageNotFoundError", () => {
+  it("is true for npm E404 errors", () => {
+    assert.equal(isPackageNotFoundError(new Error("npm error code E404\n404 Not Found")), true)
+  })
+
+  it("is false for other errors", () => {
+    assert.equal(isPackageNotFoundError(new Error("npm error code E500")), false)
   })
 })
 
