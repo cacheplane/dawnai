@@ -976,8 +976,24 @@ function buildOffload(
   })
   const thresholdChars = t.offloadThresholdChars ?? 40_000
   const previewLines = t.previewLines ?? 10
-  return (content, toolName) =>
-    offloadToolOutput(content, { toolName, thresholdChars, previewLines, store })
+  const exempt = exemptToolSet(t.noOffloadTools)
+  return (content, toolName) => {
+    // Retrieval/inspection tools (readFile, listDir, …) must never be
+    // offloaded: their output IS the content the agent asked to read, so
+    // re-offloading it would replace it with another pointer and make the
+    // offloaded data permanently unreadable.
+    if (exempt.has(toolName)) return Promise.resolve(content)
+    return offloadToolOutput(content, { toolName, thresholdChars, previewLines, store })
+  }
+}
+
+/**
+ * Tool names whose output is never offloaded: the built-in retrieval/inspection
+ * tools (always exempt) unioned with any caller-provided names. Exported for
+ * unit testing.
+ */
+export function exemptToolSet(noOffloadTools?: readonly string[]): ReadonlySet<string> {
+  return new Set<string>(["readFile", "listDir", ...(noOffloadTools ?? [])])
 }
 
 function isBoundaryError(error: unknown): boolean {
