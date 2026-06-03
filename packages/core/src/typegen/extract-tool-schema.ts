@@ -191,6 +191,20 @@ function tsTypeToJsonSchema(
   if (typeString === "number") return { type: "number" }
   if (typeString === "boolean") return { type: "boolean" }
 
+  // Standalone literal types (e.g. a discriminant `by: "date"`). A single
+  // string literal is not a union, so the union→enum path above doesn't fire;
+  // without this it would fall through to tryObjectSchema and be misread as an
+  // object carrying String.prototype methods.
+  if (type.isStringLiteral()) {
+    return { type: "string", enum: [(type as ts.StringLiteralType).value] }
+  }
+  if (type.isNumberLiteral()) {
+    return { type: "number" }
+  }
+  if ((type.flags & ts.TypeFlags.BooleanLiteral) !== 0) {
+    return { type: "boolean" }
+  }
+
   // Try nested object
   const objSchema = tryObjectSchema(type, checker, depth)
   if (objSchema !== undefined) return objSchema
@@ -211,6 +225,11 @@ function tryObjectSchema(
       additionalProperties: boolean | JsonSchemaProperty
     }
   | undefined {
+  // Only genuine object types may be expanded into property schemas. Primitives
+  // and literal types expose prototype members via getProperties(); guarding on
+  // the Object type flag prevents emitting e.g. String.prototype as properties.
+  if ((type.flags & ts.TypeFlags.Object) === 0) return undefined
+
   const props = type.getProperties()
   const indexType = checker.getIndexTypeOfType(type, ts.IndexKind.String)
 
