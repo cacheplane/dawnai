@@ -19,7 +19,7 @@ describe("offloadToolOutput", () => {
     const store = fakeStore("tool-outputs/search-1-a.txt")
     const big = "x".repeat(40_001)
     const out = await offloadToolOutput(big, { ...base, store: store as never })
-    expect(store.write).toHaveBeenCalledWith("search", big)
+    expect(store.write).toHaveBeenCalledWith("search", big, undefined)
     expect(out).toContain("Tool output offloaded")
     expect(out).toContain("tool-outputs/search-1-a.txt")
   })
@@ -33,5 +33,25 @@ describe("offloadToolOutput", () => {
     const big = "x".repeat(40_001)
     const out = await offloadToolOutput(big, { ...base, store: store as never })
     expect(out).toBe(big)
+  })
+
+  it("forwards toolCallId to store.write", async () => {
+    const calls: Array<[string, string, string | undefined]> = []
+    const store = {
+      write: async (toolName: string, content: string, toolCallId?: string) => {
+        calls.push([toolName, content, toolCallId])
+        return `tool-outputs/${toolName}-${toolCallId}.txt`
+      },
+    }
+    const big = "z".repeat(50)
+    const out = await offloadToolOutput(big, {
+      toolName: "generateReport",
+      thresholdChars: 10,
+      previewLines: 2,
+      store,
+      toolCallId: "call_xyz",
+    })
+    expect(calls[0]).toEqual(["generateReport", big, "call_xyz"])
+    expect(out).toContain("tool-outputs/generateReport-call_xyz.txt")
   })
 })
