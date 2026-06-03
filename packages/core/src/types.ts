@@ -36,6 +36,13 @@ export interface DawnConfig {
     readonly ttlMs?: number
     /** Minimum ms between GC scans. Default 10000 (10s). */
     readonly gcThrottleMs?: number
+    /**
+     * Tool names whose output is never offloaded. Merged with the built-in
+     * defaults (`readFile`, `listDir`), which are always exempt — exempting
+     * the retrieval tools is required so the agent can read back offloaded
+     * content without it being re-offloaded.
+     */
+    readonly noOffloadTools?: readonly string[]
   }
 }
 
