@@ -60,6 +60,13 @@ export async function createChatModel(options: {
     constructorOptions.reasoningEffort = options.reasoning.effort
   }
 
+  if (options.provider === "openai") {
+    const baseURL = process.env.OPENAI_BASE_URL
+    if (baseURL) {
+      constructorOptions.configuration = { baseURL }
+    }
+  }
+
   return new (Constructor as ChatModelConstructor)(constructorOptions)
 }
 

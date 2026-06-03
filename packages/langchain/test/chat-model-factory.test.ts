@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest"
+import { afterEach, describe, expect, it, test, vi } from "vitest"
 
 import { createChatModel, missingProviderPackageMessage } from "../src/chat-model-factory.js"
 
@@ -98,5 +98,47 @@ describe("chat model factory", () => {
     await expect(
       createChatModel({ model: "claude-sonnet-4-5", provider: "anthropic", importer }),
     ).rejects.toBe(similarPackageError)
+  })
+})
+
+describe("createChatModel OPENAI_BASE_URL", () => {
+  const prev = process.env.OPENAI_BASE_URL
+  afterEach(() => {
+    if (prev === undefined) delete process.env.OPENAI_BASE_URL
+    else process.env.OPENAI_BASE_URL = prev
+  })
+
+  it("passes configuration.baseURL for the openai provider when OPENAI_BASE_URL is set", async () => {
+    process.env.OPENAI_BASE_URL = "http://127.0.0.1:1234/v1"
+    let captured: Record<string, unknown> | undefined
+    class FakeChatOpenAI {
+      constructor(options: Record<string, unknown>) {
+        captured = options
+      }
+    }
+    await createChatModel({
+      model: "gpt-4o-mini",
+      provider: "openai",
+      importer: async () => ({ ChatOpenAI: FakeChatOpenAI }),
+    })
+    expect((captured?.configuration as { baseURL?: string } | undefined)?.baseURL).toBe(
+      "http://127.0.0.1:1234/v1",
+    )
+  })
+
+  it("does not set configuration when OPENAI_BASE_URL is unset", async () => {
+    delete process.env.OPENAI_BASE_URL
+    let captured: Record<string, unknown> | undefined
+    class FakeChatOpenAI {
+      constructor(options: Record<string, unknown>) {
+        captured = options
+      }
+    }
+    await createChatModel({
+      model: "gpt-4o-mini",
+      provider: "openai",
+      importer: async () => ({ ChatOpenAI: FakeChatOpenAI }),
+    })
+    expect(captured?.configuration).toBeUndefined()
   })
 })
