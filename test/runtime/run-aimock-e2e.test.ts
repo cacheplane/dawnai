@@ -226,3 +226,80 @@ it("boots dawn dev against aimock and serves the AP", async () => {
     await aimock.stop()
   }
 }, 180_000)
+
+// ---------------------------------------------------------------------------
+// SP5 regression: discriminated-union tool argument is accepted by Dawn schema
+// ---------------------------------------------------------------------------
+
+it("SP5: a discriminated-union tool argument is accepted by the generated schema", async () => {
+  const { appRoot } = await buildProbeApp()
+  const aimock = await startAimock({
+    fixturePath: join(import.meta.dirname, "fixtures/aimock/sp5-union.json"),
+  })
+  const port = await allocatePort()
+  const server = await startDevServer({
+    cwd: appRoot,
+    port,
+    env: { OPENAI_BASE_URL: aimock.baseUrl, OPENAI_API_KEY: "test-not-used" },
+  })
+  try {
+    const url = await server.waitForReady(30_000)
+
+    const tid = (
+      (await (
+        await fetch(new URL("/threads", url), {
+          method: "POST",
+          body: "{}",
+          headers: { "content-type": "application/json" },
+        })
+      ).json()) as { thread_id: string }
+    ).thread_id
+
+    const run = await fetch(new URL(`/threads/${tid}/runs/wait`, url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        route: "/chat#agent",
+        input: {
+          messages: [
+            {
+              role: "user",
+              content: "Filter the open urgent/backend items, newest first.",
+            },
+          ],
+        },
+      }),
+    })
+
+    const rawBody = await run.text()
+    expect(run.status, `runs/wait returned ${run.status}: ${rawBody}`).toBe(200)
+
+    const state = JSON.parse(rawBody) as { messages?: Array<Record<string, unknown>> }
+    const messages = state.messages ?? []
+
+    // Find the applyFilter ToolMessage — LangChain JsonPlusSerializer shape:
+    // { id: ["langchain_core", "messages", "ToolMessage"], kwargs: { name, content } }
+    const toolMsg = messages.find((m) => {
+      const id = (m as { id?: string[] }).id
+      const kw = (m as { kwargs?: { name?: string } }).kwargs
+      if (Array.isArray(id) && id[2] === "ToolMessage" && kw?.name === "applyFilter") return true
+      // Also accept plain shape: { type: "tool", name: "applyFilter" }
+      const typed = m as { type?: string; name?: string; role?: string }
+      return (typed.type === "tool" || typed.role === "tool") && typed.name === "applyFilter"
+    }) as { kwargs?: { content?: string }; content?: string } | undefined
+
+    expect(toolMsg, `applyFilter ToolMessage not found in: ${JSON.stringify(messages).slice(0, 800)}`).toBeDefined()
+
+    const content =
+      toolMsg?.kwargs?.content ?? (typeof toolMsg?.content === "string" ? toolMsg.content : "") ?? ""
+
+    expect(content, `Schema rejection found in tool content: ${content}`).not.toContain(
+      "did not match expected schema",
+    )
+    expect(content, `Invalid input found in tool content: ${content}`).not.toContain("Invalid input")
+    expect(content, `Expected "matched":2 in tool content but got: ${content}`).toContain('"matched":2')
+  } finally {
+    await server.stop()
+    await aimock.stop()
+  }
+}, 120_000)
