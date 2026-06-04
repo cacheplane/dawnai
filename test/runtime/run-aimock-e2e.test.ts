@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
@@ -245,6 +246,43 @@ it("SP5: a discriminated-union tool argument is accepted by the generated schema
   })
   try {
     const url = await server.waitForReady(30_000)
+
+    // -----------------------------------------------------------------------
+    // Direct schema-shape assertion (closes false-green gap: #188 / SP5).
+    // If the discriminated-union sort field degraded to z.unknown(), the tool
+    // call below would still succeed (no rejection), but THIS assertion would
+    // fail, catching the regression early.
+    // -----------------------------------------------------------------------
+    const routesDir = join(appRoot, ".dawn", "routes")
+    const routeDirName = readdirSync(routesDir).find((d) => d.startsWith("chat"))
+    expect(routeDirName, ".dawn/routes/<chat*> dir present").toBeDefined()
+    const toolsJsonPath = join(routesDir, routeDirName as string, "tools.json")
+    expect(existsSync(toolsJsonPath), `tools.json present at ${toolsJsonPath}`).toBe(true)
+    const tools = JSON.parse(readFileSync(toolsJsonPath, "utf-8")) as Record<
+      string,
+      { description?: string; parameters?: { properties?: Record<string, unknown> } }
+    >
+    const sortSchema = tools.applyFilter?.parameters?.properties?.sort as
+      | { anyOf?: unknown[] }
+      | undefined
+    expect(
+      sortSchema?.anyOf,
+      "applyFilter.sort is an anyOf union (not degraded to a plain/unknown type)",
+    ).toBeDefined()
+    expect(
+      Array.isArray(sortSchema?.anyOf) && (sortSchema?.anyOf?.length ?? 0) >= 2,
+      "applyFilter.sort anyOf has at least 2 members",
+    ).toBe(true)
+    // Each member is an object schema and none leaked String.prototype methods (the original #188 bug).
+    for (const member of (sortSchema?.anyOf ?? []) as Array<{
+      type?: string
+      properties?: Record<string, unknown>
+    }>) {
+      expect(member.type, "each anyOf member has type=object").toBe("object")
+      expect(JSON.stringify(member), "no charAt leak in member (original #188 bug)").not.toContain(
+        "charAt",
+      )
+    }
 
     const tid = (
       (await (
