@@ -129,7 +129,7 @@ async function rewriteDependenciesToTarballs(options: {
 // buildProbeApp — packs all packages, generates app, writes tools + route
 // ---------------------------------------------------------------------------
 
-async function buildProbeApp(): Promise<{ appRoot: string }> {
+async function buildProbeApp(opts?: { summarization?: boolean }): Promise<{ appRoot: string }> {
   const tempRoot = await createTrackedTempDir("aimock-probe-", tempDirs)
 
   try {
@@ -180,6 +180,26 @@ async function buildProbeApp(): Promise<{ appRoot: string }> {
 
     // Create workspace/ so the offload capability activates
     await mkdir(join(appRoot, "workspace"), { recursive: true })
+
+    if (opts?.summarization) {
+      // Overwrite the basic template's `export default {}` with a summarization
+      // config. A custom tokenCounter (char length) + a deterministic summarize
+      // fn keep this fully deterministic and avoid an extra LLM round-trip to
+      // aimock for the summary itself. maxTokens:10 + keepRecentTurns:1 forces
+      // summarization to fire from the 2nd turn onward.
+      const dawnConfigSource = `
+export default {
+  summarization: {
+    enabled: true,
+    maxTokens: 10,
+    keepRecentTurns: 1,
+    tokenCounter: (text: string) => text.length,
+    summarize: async () => "DETERMINISTIC_SUMMARY_OF_OLD_TURNS",
+  },
+};
+`.trimStart()
+      await writeFile(join(appRoot, "dawn.config.ts"), dawnConfigSource, "utf8")
+    }
 
     // Run pnpm install
     const { spawnProcess } = await import("../../packages/devkit/src/testing/index.ts")
@@ -558,3 +578,97 @@ it("SP6a (fallback): content-hash filename is correct and readFile retrieves the
     await aimock.stop()
   }
 }, 120_000)
+
+// ---------------------------------------------------------------------------
+// SUMM: summarization is non-destructive across a tiny token threshold
+// ---------------------------------------------------------------------------
+
+it("SUMM: summarization preserves full history + populates runningSummary across the threshold (non-destructive)", async () => {
+  const { appRoot } = await buildProbeApp({ summarization: true })
+  const aimock = await startAimock({
+    fixturePath: join(import.meta.dirname, "fixtures/aimock/summarization.json"),
+  })
+  const port = await allocatePort()
+  const server = await startDevServer({
+    cwd: appRoot,
+    port,
+    env: { OPENAI_BASE_URL: aimock.baseUrl, OPENAI_API_KEY: "test-not-used" },
+  })
+  try {
+    const url = await server.waitForReady(30_000)
+
+    const tid = (
+      (await (
+        await fetch(new URL("/threads", url), {
+          method: "POST",
+          body: "{}",
+          headers: { "content-type": "application/json" },
+        })
+      ).json()) as { thread_id: string }
+    ).thread_id
+
+    // Three sequential turns on the same thread, each crossing the tiny
+    // threshold. The 2nd and 3rd turns trigger the preModelHook summary fold.
+    const tokens = ["APPLE_TURN", "BANANA_TURN", "CHERRY_TURN"]
+    for (const token of tokens) {
+      const run = await fetch(new URL(`/threads/${tid}/runs/wait`, url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          route: "/chat#agent",
+          input: { messages: [{ role: "user", content: `Question ${token} please.` }] },
+        }),
+      })
+      const body = await run.text()
+      // A 200 across all three turns also proves no orphaned-tool-call / pairing
+      // error was introduced by the condensed llmInputMessages.
+      expect(run.status, `runs/wait(${token}) returned ${run.status}: ${body}`).toBe(200)
+    }
+
+    // Read the persisted checkpoint state.
+    const stateRes = await fetch(new URL(`/threads/${tid}/state`, url))
+    expect(stateRes.status).toBe(200)
+    const state = (await stateRes.json()) as {
+      values?: {
+        messages?: Array<Record<string, unknown>>
+        runningSummary?: { summary?: string; coveredCount?: number } | null
+      }
+    }
+    const values = state.values ?? {}
+    const messages = values.messages ?? []
+
+    // (a) FULL history preserved — 3 HumanMessages survive in the checkpoint.
+    const humanCount = messages.filter((m) => {
+      const id = (m as { id?: string[] }).id
+      if (Array.isArray(id) && id[2] === "HumanMessage") return true
+      const typed = m as { type?: string; role?: string }
+      return typed.type === "human" || typed.role === "user"
+    }).length
+    expect(
+      humanCount,
+      `expected 3 HumanMessages in persisted history, got ${humanCount}: ${JSON.stringify(messages).slice(0, 800)}`,
+    ).toBe(3)
+
+    // (b) runningSummary populated by the incremental fold.
+    const rs = values.runningSummary
+    expect(rs, `runningSummary should be populated: ${JSON.stringify(values).slice(0, 800)}`).toBeTruthy()
+    expect(rs?.summary, "runningSummary.summary should contain the deterministic summary").toContain(
+      "DETERMINISTIC_SUMMARY_OF_OLD_TURNS",
+    )
+    expect(
+      typeof rs?.coveredCount === "number" && (rs?.coveredCount ?? 0) > 0,
+      `runningSummary.coveredCount should be > 0, got ${rs?.coveredCount}`,
+    ).toBe(true)
+
+    // (c) Non-destructive: the derived summary is NOT persisted into messages.
+    // It only ever appears in the per-turn llmInputMessages view.
+    const persisted = JSON.stringify(messages)
+    expect(
+      persisted.includes("DETERMINISTIC_SUMMARY_OF_OLD_TURNS"),
+      "the summary must NOT leak into persisted messages (non-destructive architecture)",
+    ).toBe(false)
+  } finally {
+    await server.stop()
+    await aimock.stop()
+  }
+}, 180_000)
