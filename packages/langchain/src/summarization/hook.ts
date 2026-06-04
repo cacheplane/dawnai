@@ -1,4 +1,6 @@
-import type { BaseMessage } from "@langchain/core/messages"
+import { type BaseMessage, HumanMessage } from "@langchain/core/messages"
+import { splitForSummary } from "./split.js"
+import { countMessagesTokens } from "./token-counter.js"
 
 export interface RunningSummary {
   readonly summary: string
@@ -20,4 +22,48 @@ export interface ResolvedSummarizationConfig {
   readonly model: string
   readonly tokenCounter: TokenCounter
   readonly summarize: SummarizeFn
+}
+
+export interface PreModelHookState {
+  readonly messages: BaseMessage[]
+  readonly runningSummary?: RunningSummary
+}
+
+export interface PreModelHookResult {
+  llmInputMessages?: BaseMessage[]
+  runningSummary?: RunningSummary
+}
+
+export function buildSummarizationHook(config: ResolvedSummarizationConfig) {
+  return async (state: PreModelHookState): Promise<PreModelHookResult> => {
+    const messages = state.messages ?? []
+    const total = await countMessagesTokens(messages, config.tokenCounter)
+    if (total <= config.maxTokens) return {}
+
+    const prev = state.runningSummary
+    const coveredCount = prev?.coveredCount ?? 0
+    const { toSummarize, recent } = splitForSummary(messages, config.keepRecentTurns)
+    const newlyAged = toSummarize.slice(coveredCount)
+
+    let summary = prev?.summary ?? ""
+    if (newlyAged.length > 0) {
+      try {
+        summary = await config.summarize({
+          messages: newlyAged,
+          model: config.model,
+          ...(prev?.summary ? { previousSummary: prev.summary } : {}),
+          signal: new AbortController().signal,
+        })
+      } catch {
+        return {}
+      }
+    }
+    if (!summary) return {}
+
+    const summaryMessage = new HumanMessage(`Summary of earlier conversation:\n${summary}`)
+    return {
+      llmInputMessages: [summaryMessage, ...recent],
+      runningSummary: { summary, coveredCount: toSummarize.length },
+    }
+  }
 }
