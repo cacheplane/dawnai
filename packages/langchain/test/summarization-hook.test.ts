@@ -48,15 +48,22 @@ describe("buildSummarizationHook", () => {
     expect(arg.messages.map((m) => m.content)).toEqual(["u2", "a2"]) // delta only (toSummarize=[u1,a1,u2,a2], minus covered 2)
   })
 
-  it("falls back to {} when the summarizer throws", async () => {
+  it("falls back to full history when the summarizer throws (stale-view avoidance)", async () => {
+    // Fix: returning {} would leave a prior-turn condensed view in the
+    // llmInputMessages channel, causing the model to answer without the
+    // current turn's newest messages. Instead, we explicitly overwrite the
+    // channel with the full message list so the model always sees the latest.
+    const msgs = [H("u1"), A("a1"), H("u2"), A("a2")]
     const hook = makeHook({
       maxTokens: 5,
       summarize: async () => {
         throw new Error("boom")
       },
     })
-    const out = await hook({ messages: [H("u1"), A("a1"), H("u2"), A("a2")] })
-    expect(out).toEqual({})
+    const out = await hook({ messages: msgs })
+    expect(out.llmInputMessages).toHaveLength(msgs.length)
+    expect(out.llmInputMessages?.map((m) => m.content)).toEqual(msgs.map((m) => m.content))
+    expect(out.runningSummary).toBeUndefined()
   })
 
   it("reuses the cached summary with no delta (no summarizer call)", async () => {
