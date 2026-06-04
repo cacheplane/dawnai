@@ -70,13 +70,15 @@ async function materializeAgent(
   descriptor: DawnAgent,
   tools: readonly DawnToolDefinition[],
   checkpointer: BaseCheckpointSaver,
-  stateFields?: readonly ResolvedStateField[],
-  middlewareContext?: Readonly<Record<string, unknown>>,
-  promptFragments?: readonly PromptFragment[],
-  options?: { readonly bypassCache?: boolean },
-  offload?: OffloadFn,
+  opts: {
+    readonly stateFields?: readonly ResolvedStateField[]
+    readonly middlewareContext?: Readonly<Record<string, unknown>>
+    readonly promptFragments?: readonly PromptFragment[]
+    readonly bypassCache?: boolean
+    readonly offload?: OffloadFn
+  } = {},
 ): Promise<AgentLike> {
-  if (!options?.bypassCache) {
+  if (!opts.bypassCache) {
     const cached = materializedAgents.get(descriptor)
     if (cached) {
       return cached
@@ -86,7 +88,7 @@ async function materializeAgent(
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
 
   const langchainTools = tools.map((tool) =>
-    convertToolToLangChain(tool, middlewareContext, offload),
+    convertToolToLangChain(tool, opts.middlewareContext, opts.offload),
   )
 
   const provider = resolveProvider({
@@ -99,7 +101,7 @@ async function materializeAgent(
     ...(descriptor.reasoning ? { reasoning: descriptor.reasoning } : {}),
   })
 
-  const fragments = promptFragments ?? []
+  const fragments = opts.promptFragments ?? []
   const agentOptions: Record<string, unknown> = {
     llm,
     tools: langchainTools,
@@ -115,14 +117,14 @@ async function materializeAgent(
     checkpointer,
   }
 
-  if (stateFields && stateFields.length > 0) {
-    agentOptions.stateSchema = materializeStateSchema(stateFields)
+  if (opts.stateFields && opts.stateFields.length > 0) {
+    agentOptions.stateSchema = materializeStateSchema(opts.stateFields)
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: dynamically-built options don't satisfy strict StateDefinition type
   const compiled = createReactAgent(agentOptions as any)
 
-  if (!options?.bypassCache) {
+  if (!opts.bypassCache) {
     materializedAgents.set(descriptor, compiled as unknown as AgentLike)
   }
   return compiled as unknown as AgentLike
@@ -135,14 +137,10 @@ export async function materializeAgentGraph(options: {
   readonly stateFields?: readonly ResolvedStateField[]
   readonly promptFragments?: readonly PromptFragment[]
 }): Promise<unknown> {
-  return materializeAgent(
-    options.descriptor,
-    options.tools ?? [],
-    options.checkpointer,
-    options.stateFields,
-    undefined,
-    options.promptFragments,
-  )
+  return materializeAgent(options.descriptor, options.tools ?? [], options.checkpointer, {
+    ...(options.stateFields ? { stateFields: options.stateFields } : {}),
+    ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
+  })
 }
 
 export interface AgentStreamChunk {
@@ -378,11 +376,13 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       options.entry,
       effectiveTools,
       options.checkpointer,
-      options.stateFields,
-      options.middlewareContext,
-      options.promptFragments,
-      resolver && hasTaskTool ? { bypassCache: true } : undefined,
-      options.offload,
+      {
+        ...(options.stateFields ? { stateFields: options.stateFields } : {}),
+        ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
+        ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
+        ...(resolver && hasTaskTool ? { bypassCache: true } : {}),
+        ...(options.offload ? { offload: options.offload } : {}),
+      },
     )
     const retryConfig = options.entry.retry
     const runnableInput = isCommandInput ? options.input : { messages }
