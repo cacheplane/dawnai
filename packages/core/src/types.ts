@@ -44,6 +44,25 @@ export interface DawnConfig {
      */
     readonly noOffloadTools?: readonly string[]
   }
+  readonly summarization?: {
+    /** Enable conversation summarization. Default false. */
+    readonly enabled?: boolean
+    /** Token threshold over which older history is summarized. Default 12000. */
+    readonly maxTokens?: number
+    /** Most-recent turns kept verbatim (a turn starts at a HumanMessage). Default 6. */
+    readonly keepRecentTurns?: number
+    /** Model id for the summary LLM call. Defaults to the route's model. */
+    readonly model?: string
+    /** Token counter. Default: a lazy gpt-tokenizer (o200k_base) counter. */
+    readonly tokenCounter?: (text: string) => number | Promise<number>
+    /** Summary generator. Default: a built-in single-LLM-call summarizer. */
+    readonly summarize?: (args: {
+      readonly messages: readonly unknown[]
+      readonly model: string
+      readonly previousSummary?: string
+      readonly signal: AbortSignal
+    }) => Promise<string>
+  }
 }
 
 export type RouteSegment =
