@@ -1,4 +1,4 @@
-import { AIMessage, HumanMessage } from "@langchain/core/messages"
+import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages"
 import { describe, expect, it, vi } from "vitest"
 import { buildSummarizationHook } from "../src/summarization/hook.js"
 
@@ -31,6 +31,7 @@ describe("buildSummarizationHook", () => {
     const texts = (out.llmInputMessages as Array<{ content: string }>).map((m) => m.content)
     expect(texts[0]).toContain("SUMMARY")
     expect(texts.slice(1)).toEqual(["u2", "a2"]) // last turn verbatim
+    expect(out.llmInputMessages?.[0] instanceof SystemMessage).toBe(true)
     expect(out.runningSummary).toMatchObject({ summary: "SUMMARY", coveredCount: 2 })
   })
 

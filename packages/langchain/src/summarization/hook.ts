@@ -1,4 +1,4 @@
-import { type BaseMessage, HumanMessage } from "@langchain/core/messages"
+import { type BaseMessage, SystemMessage } from "@langchain/core/messages"
 import { splitForSummary } from "./split.js"
 import { countMessagesTokens } from "./token-counter.js"
 
@@ -60,7 +60,7 @@ export function buildSummarizationHook(config: ResolvedSummarizationConfig) {
     }
     if (!summary) return {}
 
-    const summaryMessage = new HumanMessage(`Summary of earlier conversation:\n${summary}`)
+    const summaryMessage = new SystemMessage(`Summary of earlier conversation:\n${summary}`)
     return {
       llmInputMessages: [summaryMessage, ...recent],
       runningSummary: { summary, coveredCount: toSummarize.length },

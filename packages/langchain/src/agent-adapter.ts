@@ -14,6 +14,7 @@ import {
   type SubagentStreamContext,
 } from "./subagent-dispatcher.js"
 import { bridgeSubagentTool, type SubagentResolverResult } from "./subagent-tool-bridge.js"
+import { buildSummarizationHook, type ResolvedSummarizationConfig } from "./summarization/index.js"
 import { convertToolToLangChain, type OffloadFn } from "./tool-converter.js"
 
 export type SubagentResolver = (leafName: string) => SubagentResolverResult | undefined
@@ -76,6 +77,7 @@ async function materializeAgent(
     readonly promptFragments?: readonly PromptFragment[]
     readonly bypassCache?: boolean
     readonly offload?: OffloadFn
+    readonly summarization?: ResolvedSummarizationConfig
   } = {},
 ): Promise<AgentLike> {
   if (!opts.bypassCache) {
@@ -117,8 +119,21 @@ async function materializeAgent(
     checkpointer,
   }
 
-  if (opts.stateFields && opts.stateFields.length > 0) {
-    agentOptions.stateSchema = materializeStateSchema(opts.stateFields)
+  const runningSummaryField: ResolvedStateField = {
+    name: "runningSummary",
+    reducer: "replace",
+    default: undefined,
+  }
+  const effectiveStateFields: readonly ResolvedStateField[] = opts.summarization
+    ? [...(opts.stateFields ?? []).filter((f) => f.name !== "runningSummary"), runningSummaryField]
+    : (opts.stateFields ?? [])
+
+  if (effectiveStateFields.length > 0) {
+    agentOptions.stateSchema = materializeStateSchema(effectiveStateFields)
+  }
+
+  if (opts.summarization) {
+    agentOptions.preModelHook = buildSummarizationHook(opts.summarization)
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: dynamically-built options don't satisfy strict StateDefinition type
@@ -136,10 +151,12 @@ export async function materializeAgentGraph(options: {
   readonly tools?: readonly DawnToolDefinition[]
   readonly stateFields?: readonly ResolvedStateField[]
   readonly promptFragments?: readonly PromptFragment[]
+  readonly summarization?: ResolvedSummarizationConfig
 }): Promise<unknown> {
   return materializeAgent(options.descriptor, options.tools ?? [], options.checkpointer, {
     ...(options.stateFields ? { stateFields: options.stateFields } : {}),
     ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
+    ...(options.summarization ? { summarization: options.summarization } : {}),
   })
 }
 
@@ -303,6 +320,7 @@ export interface AgentOptions {
    * replay.
    */
   readonly threadId?: string
+  readonly summarization?: ResolvedSummarizationConfig
 }
 
 export async function executeAgent(options: AgentOptions): Promise<unknown> {
@@ -382,6 +400,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
         ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
         ...(resolver && hasTaskTool ? { bypassCache: true } : {}),
         ...(options.offload ? { offload: options.offload } : {}),
+        ...(options.summarization ? { summarization: options.summarization } : {}),
       },
     )
     const retryConfig = options.entry.retry
