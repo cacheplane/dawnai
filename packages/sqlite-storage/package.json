@@ -37,12 +37,12 @@
   },
   "peerDependencies": {
     "@langchain/core": "^1.1.44",
-    "@langchain/langgraph-checkpoint": "^1.0.2"
+    "@langchain/langgraph-checkpoint": "^1.0.4"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
-    "@langchain/core": "^1.1.47",
-    "@langchain/langgraph-checkpoint": "^1.0.2",
-    "@types/node": "25.6.0"
+    "@langchain/core": "^1.1.48",
+    "@langchain/langgraph-checkpoint": "^1.0.4",
+    "@types/node": "25.9.1"
   }
 }
