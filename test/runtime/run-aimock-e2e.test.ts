@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
 import { afterAll, expect, it } from "vitest"
@@ -298,6 +299,222 @@ it("SP5: a discriminated-union tool argument is accepted by the generated schema
     )
     expect(content, `Invalid input found in tool content: ${content}`).not.toContain("Invalid input")
     expect(content, `Expected "matched":2 in tool content but got: ${content}`).toContain('"matched":2')
+  } finally {
+    await server.stop()
+    await aimock.stop()
+  }
+}, 120_000)
+
+// ---------------------------------------------------------------------------
+// Helpers shared by SP6a tests
+// ---------------------------------------------------------------------------
+
+/**
+ * Reconstruct the deterministic generateReport output string (rows=2000).
+ * Must match generateReportSource() exactly.
+ */
+function buildGenerateReportOutput(rows = 2000): string {
+  const n = Math.max(rows, 2000)
+  const lines: string[] = []
+  for (let i = 0; i < n; i++) lines.push(`row ${i}: ${"x".repeat(40)} value=${i * 7}`)
+  lines.push("MARKER-DEEP-INSIDE-NEEDLE-42")
+  return lines.join("\n")
+}
+
+/**
+ * Returns the serialized content string as it arrives at the offloader.
+ *
+ * generateReport returns a plain string (not a {result} wrapper), so
+ * unwrapToolResult calls JSON.stringify(value), wrapping it in double-quotes.
+ * That JSON-stringified string is what offloadToolOutput receives as `content`.
+ */
+function serializeGenerateReportContent(rows = 2000): string {
+  return JSON.stringify(buildGenerateReportOutput(rows))
+}
+
+function buildFallbackFileName(toolName: string, serializedContent: string): string {
+  const sanitize = (s: string) => s.replace(/[^A-Za-z0-9._-]/g, "_")
+  const hash = createHash("sha256").update(serializedContent).digest("hex").slice(0, 16)
+  return `${sanitize(toolName)}-${hash}.txt`
+}
+
+/** Find a ToolMessage by tool name in runs/wait state output. */
+function findToolMessage(
+  messages: Array<Record<string, unknown>>,
+  toolName: string,
+): { kwargs?: { content?: string }; content?: string } | undefined {
+  return messages.find((m) => {
+    const id = (m as { id?: string[] }).id
+    const kw = (m as { kwargs?: { name?: string } }).kwargs
+    if (Array.isArray(id) && id[2] === "ToolMessage" && kw?.name === toolName) return true
+    const typed = m as { type?: string; name?: string; role?: string }
+    return (typed.type === "tool" || typed.role === "tool") && typed.name === toolName
+  }) as { kwargs?: { content?: string }; content?: string } | undefined
+}
+
+function getToolContent(msg: { kwargs?: { content?: string }; content?: string } | undefined): string {
+  return msg?.kwargs?.content ?? (typeof msg?.content === "string" ? msg.content : "") ?? ""
+}
+
+// ---------------------------------------------------------------------------
+// SP6a: offloaded output is retrieved in full via readFile (tool_call_id path)
+// ---------------------------------------------------------------------------
+
+it("SP6a: an offloaded output is retrieved in full via readFile (no re-offload)", async () => {
+  const { appRoot } = await buildProbeApp()
+  const aimock = await startAimock({
+    fixturePath: join(import.meta.dirname, "fixtures/aimock/sp6a-retrieve.json"),
+  })
+  const port = await allocatePort()
+  const server = await startDevServer({
+    cwd: appRoot,
+    port,
+    env: { OPENAI_BASE_URL: aimock.baseUrl, OPENAI_API_KEY: "test-not-used" },
+  })
+  try {
+    const url = await server.waitForReady(30_000)
+
+    const tid = (
+      (await (
+        await fetch(new URL("/threads", url), {
+          method: "POST",
+          body: "{}",
+          headers: { "content-type": "application/json" },
+        })
+      ).json()) as { thread_id: string }
+    ).thread_id
+
+    const run = await fetch(new URL(`/threads/${tid}/runs/wait`, url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        route: "/chat#agent",
+        input: {
+          messages: [
+            {
+              role: "user",
+              content: "Make a 2000-row report and quote the marker line.",
+            },
+          ],
+        },
+      }),
+    })
+
+    const rawBody = await run.text()
+    expect(run.status, `runs/wait returned ${run.status}: ${rawBody}`).toBe(200)
+
+    const state = JSON.parse(rawBody) as { messages?: Array<Record<string, unknown>> }
+    const messages = state.messages ?? []
+
+    const gen = getToolContent(findToolMessage(messages, "generateReport"))
+    const read = getToolContent(findToolMessage(messages, "readFile"))
+
+    expect(gen, "generateReport ToolMessage should contain offload stub").toContain(
+      "Tool output offloaded",
+    )
+    expect(read, "readFile ToolMessage should NOT contain offload stub (no re-offload)").not.toContain(
+      "Tool output offloaded",
+    )
+    expect(read, "readFile ToolMessage should contain the full-content needle").toContain(
+      "MARKER-DEEP-INSIDE-NEEDLE-42",
+    )
+  } finally {
+    await server.stop()
+    await aimock.stop()
+  }
+}, 120_000)
+
+// ---------------------------------------------------------------------------
+// SP6a: content-hash fallback filename + readFile retrieval
+// ---------------------------------------------------------------------------
+
+it("SP6a (fallback): content-hash filename is correct and readFile retrieves the pre-offloaded output in full", async () => {
+  // Pre-step: compute the expected fallback filename from first principles.
+  //
+  // generateReport returns a plain string (not a {result} wrapper).
+  // unwrapToolResult detects no wrapper → calls JSON.stringify(value), wrapping the
+  // string in double-quotes. THAT is the `content` string the offloader receives.
+  // buildOffloadFileName then hashes it with sha256(content).slice(0,16).
+  //
+  // Note: aimock always auto-generates a tool_call_id even when the fixture omits
+  // the `id` field, so a live end-to-end run of generateReport always uses the
+  // id-based filename. This test therefore pre-populates the hash-named file and
+  // exercises the readFile→full-content path directly, proving:
+  //   (a) our content-hash formula is stable and matches the committed fixture path, and
+  //   (b) readFile retrieves the full pre-offloaded content without re-offloading.
+  const serializedContent = serializeGenerateReportContent(2000)
+  const expectedFileName = buildFallbackFileName("generateReport", serializedContent)
+
+  // Guard: if generateReport source or serialization logic changes, this assertion
+  // will fail loudly, prompting an update to sp6a-fallback.json.
+  expect(expectedFileName, "Computed hash must match committed fixture path").toBe(
+    "generateReport-ca549717dd8da303.txt",
+  )
+
+  const { appRoot } = await buildProbeApp()
+
+  // Pre-populate workspace/tool-outputs/ with the hash-named file so that the
+  // aimock fixture's readFile call can find it.  This simulates what the offloader
+  // would have written had it been called without a tool_call_id.
+  //
+  // The offloader writes `content` to disk.  For generateReport (a plain-string
+  // return), content = JSON.stringify(rawString) — the serialized form.
+  const toolOutputDir = join(appRoot, "workspace", "tool-outputs")
+  await mkdir(toolOutputDir, { recursive: true })
+  await writeFile(join(toolOutputDir, expectedFileName), serializedContent, "utf8")
+
+  const aimock = await startAimock({
+    fixturePath: join(import.meta.dirname, "fixtures/aimock/sp6a-fallback.json"),
+  })
+  const port = await allocatePort()
+  const server = await startDevServer({
+    cwd: appRoot,
+    port,
+    env: { OPENAI_BASE_URL: aimock.baseUrl, OPENAI_API_KEY: "test-not-used" },
+  })
+  try {
+    const url = await server.waitForReady(30_000)
+
+    const tid = (
+      (await (
+        await fetch(new URL("/threads", url), {
+          method: "POST",
+          body: "{}",
+          headers: { "content-type": "application/json" },
+        })
+      ).json()) as { thread_id: string }
+    ).thread_id
+
+    const run = await fetch(new URL(`/threads/${tid}/runs/wait`, url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        route: "/chat#agent",
+        input: {
+          messages: [
+            {
+              role: "user",
+              content: "Retrieve the pre-offloaded report and quote the marker line.",
+            },
+          ],
+        },
+      }),
+    })
+
+    const rawBody = await run.text()
+    expect(run.status, `runs/wait returned ${run.status}: ${rawBody}`).toBe(200)
+
+    const state = JSON.parse(rawBody) as { messages?: Array<Record<string, unknown>> }
+    const messages = state.messages ?? []
+
+    const read = getToolContent(findToolMessage(messages, "readFile"))
+
+    expect(read, "readFile ToolMessage should NOT be re-offloaded (no stub)").not.toContain(
+      "Tool output offloaded",
+    )
+    expect(read, "readFile ToolMessage should contain the full-content needle").toContain(
+      "MARKER-DEEP-INSIDE-NEEDLE-42",
+    )
   } finally {
     await server.stop()
     await aimock.stop()
