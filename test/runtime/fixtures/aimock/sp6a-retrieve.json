@@ -1,0 +1,32 @@
+{
+  "fixtures": [
+    {
+      "match": { "turnIndex": 0 },
+      "response": {
+        "toolCalls": [
+          {
+            "id": "call_gen_report_1",
+            "name": "generateReport",
+            "arguments": { "rows": 2000 }
+          }
+        ]
+      }
+    },
+    {
+      "match": { "turnIndex": 1, "hasToolResult": true },
+      "response": {
+        "toolCalls": [
+          {
+            "id": "call_read_1",
+            "name": "readFile",
+            "arguments": { "path": "tool-outputs/generateReport-call_gen_report_1.txt" }
+          }
+        ]
+      }
+    },
+    {
+      "match": { "turnIndex": 2, "hasToolResult": true },
+      "response": { "content": "Found the marker." }
+    }
+  ]
+}
