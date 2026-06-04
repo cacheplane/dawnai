@@ -22,10 +22,13 @@ import {
 } from "@dawn-ai/core"
 import {
   Command,
+  defaultSummarize,
+  defaultTokenCounter,
   executeAgent,
   type OffloadFn,
   OffloadStore,
   offloadToolOutput,
+  type ResolvedSummarizationConfig,
   type SubagentResolver,
   streamAgent,
 } from "@dawn-ai/langchain"
@@ -245,6 +248,7 @@ export async function* streamResolvedRoute(options: {
     subagentResolver,
     checkpointer,
     offload,
+    summarization,
   } = prepared
 
   if (normalized.kind !== "agent") {
@@ -277,6 +281,7 @@ export async function* streamResolvedRoute(options: {
     ...(stateFields ? { stateFields } : {}),
     tools,
     ...(offload ? { offload } : {}),
+    ...(summarization ? { summarization } : {}),
     ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
     ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
     ...(subagentResolver ? { subagentResolver } : {}),
@@ -327,6 +332,7 @@ interface PreparedRoute {
   readonly checkpointer: BaseCheckpointSaver
   readonly threadsStore: ThreadsStore
   readonly offload?: OffloadFn
+  readonly summarization?: ResolvedSummarizationConfig
   readonly stateFields: readonly ResolvedStateField[] | undefined
   readonly tools: readonly DiscoveredToolDefinition[]
   readonly promptFragments?: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>>
@@ -425,6 +431,8 @@ async function prepareRouteExecution(options: {
     options.signal ?? new AbortController().signal,
   )
 
+  let summarization: ResolvedSummarizationConfig | undefined
+
   const checkpointer: BaseCheckpointSaver =
     configCheckpointer ??
     sqliteCheckpointer({ path: join(options.appRoot, ".dawn/checkpoints.sqlite") })
@@ -444,6 +452,8 @@ async function prepareRouteExecution(options: {
     const routeManifest = await discoverRoutes({ appRoot: options.appRoot })
     const descriptor =
       normalized.kind === "agent" && isDawnAgent(normalized.entry) ? normalized.entry : undefined
+
+    summarization = buildSummarization(loadedDawnConfig, descriptor?.model)
 
     // Build (or reuse) the descriptor->routeId identity map used by the
     // subagents marker to resolve `agent({ subagents: [imported] })` overrides.
@@ -569,6 +579,7 @@ async function prepareRouteExecution(options: {
     checkpointer,
     threadsStore,
     ...(offload ? { offload } : {}),
+    ...(summarization ? { summarization } : {}),
     ...(promptFragments.length > 0 ? { promptFragments } : {}),
     stateFields,
     ...(streamTransformers.length > 0 ? { streamTransformers } : {}),
@@ -615,6 +626,7 @@ async function executeRouteAtResolvedPath(options: {
       subagentResolver,
       checkpointer,
       offload,
+      summarization,
     } = prepared
     mode = normalized.kind
 
@@ -631,6 +643,7 @@ async function executeRouteAtResolvedPath(options: {
       ...(stateFields ? { stateFields } : {}),
       tools,
       ...(offload ? { offload } : {}),
+      ...(summarization ? { summarization } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
@@ -673,6 +686,7 @@ async function invokeEntry(
     readonly checkpointer?: BaseCheckpointSaver
     readonly middlewareContext?: Readonly<Record<string, unknown>>
     readonly offload?: OffloadFn
+    readonly summarization?: ResolvedSummarizationConfig
     readonly routeId: string
     readonly signal?: AbortSignal
     readonly stateFields?: readonly ResolvedStateField[]
@@ -715,6 +729,7 @@ async function invokeEntry(
       ...(agentContext?.stateFields ? { stateFields: agentContext.stateFields } : {}),
       tools: agentContext?.tools ?? [],
       ...(agentContext?.offload ? { offload: agentContext.offload } : {}),
+      ...(agentContext?.summarization ? { summarization: agentContext.summarization } : {}),
       ...(agentContext?.promptFragments && agentContext.promptFragments.length > 0
         ? { promptFragments: agentContext.promptFragments }
         : {}),
@@ -990,6 +1005,28 @@ function buildOffload(
       store,
       ...(toolCallId ? { toolCallId } : {}),
     })
+  }
+}
+
+function buildSummarization(
+  config: DawnConfig | undefined,
+  routeModel: string | undefined,
+): ResolvedSummarizationConfig | undefined {
+  const s = config?.summarization
+  if (!s?.enabled) return undefined
+  const model = s.model ?? routeModel
+  if (!model) return undefined // no model to summarize with — cannot enable
+  return {
+    maxTokens: s.maxTokens ?? 12_000,
+    keepRecentTurns: s.keepRecentTurns ?? 6,
+    model,
+    tokenCounter: s.tokenCounter ?? defaultTokenCounter,
+    // The core config types `messages` as `readonly unknown[]` because
+    // @dawn-ai/core cannot depend on @langchain/core. At runtime these are
+    // BaseMessage instances, so the cast to SummarizeFn is sound.
+    summarize:
+      (s.summarize as unknown as ResolvedSummarizationConfig["summarize"] | undefined) ??
+      defaultSummarize,
   }
 }
 
