@@ -41,7 +41,9 @@ export function expectFinalMessage(run: AgentRunResult) {
   return {
     toContain(s: string) {
       if (!run.finalMessage.includes(s))
-        fail(`final message ${JSON.stringify(run.finalMessage)} does not contain ${JSON.stringify(s)}`)
+        fail(
+          `final message ${JSON.stringify(run.finalMessage)} does not contain ${JSON.stringify(s)}`,
+        )
     },
     toMatch(re: RegExp) {
       if (!re.test(run.finalMessage))
@@ -66,7 +68,9 @@ export function expectOffloaded(run: AgentRunResult, toolName: string): void {
   }) as { kwargs?: { content?: string } } | undefined
   const content = msg?.kwargs?.content ?? ""
   if (!content.includes("Tool output offloaded")) {
-    fail(`expected "${toolName}" output to be offloaded (stub marker), got: ${content.slice(0, 120)}`)
+    fail(
+      `expected "${toolName}" output to be offloaded (stub marker), got: ${content.slice(0, 120)}`,
+    )
   }
 }
 
@@ -75,7 +79,8 @@ export function expectState(run: AgentRunResult) {
   return {
     messages: {
       toHaveLength(n: number) {
-        if (messages.length !== n) fail(`expected state.messages length ${n}, got ${messages.length}`)
+        if (messages.length !== n)
+          fail(`expected state.messages length ${n}, got ${messages.length}`)
       },
     },
     field(name: string) {
@@ -86,7 +91,9 @@ export function expectState(run: AgentRunResult) {
         },
         toEqual(expected: unknown) {
           if (JSON.stringify(value) !== JSON.stringify(expected)) {
-            fail(`expected state.${name} = ${JSON.stringify(expected)}, got ${JSON.stringify(value)}`)
+            fail(
+              `expected state.${name} = ${JSON.stringify(expected)}, got ${JSON.stringify(value)}`,
+            )
           }
         },
       }

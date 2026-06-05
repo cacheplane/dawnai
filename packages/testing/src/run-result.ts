@@ -16,9 +16,16 @@ export interface AgentRunResult {
 }
 
 function finalMessageFrom(state: Record<string, unknown>): string {
-  const messages = Array.isArray(state.messages) ? (state.messages as Record<string, unknown>[]) : []
+  const messages = Array.isArray(state.messages)
+    ? (state.messages as Record<string, unknown>[])
+    : []
   for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as { id?: string[]; kwargs?: { content?: unknown }; content?: unknown; type?: string }
+    const m = messages[i] as {
+      id?: string[]
+      kwargs?: { content?: unknown }
+      content?: unknown
+      type?: string
+    }
     const isAi = (Array.isArray(m.id) && m.id[2] === "AIMessage") || m.type === "ai"
     if (!isAi) continue
     const content = m.kwargs?.content ?? m.content
@@ -43,7 +50,11 @@ export async function collectRunResult(
       case "tool_call": {
         // chunk.name and chunk.input are typed on the tool_call variant
         const c = chunk as unknown as { name: string; input?: unknown; id?: string }
-        toolCalls.push({ name: c.name, args: c.input, id: c.id })
+        const entry: ObservedToolCall =
+          c.id !== undefined
+            ? { name: c.name, args: c.input, id: c.id }
+            : { name: c.name, args: c.input }
+        toolCalls.push(entry)
         break
       }
       case "done": {

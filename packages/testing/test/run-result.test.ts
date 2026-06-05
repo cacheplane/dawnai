@@ -6,7 +6,13 @@ async function* fakeStream() {
   yield { type: "tool_result", name: "applyFilter", output: { matched: 2 } }
   yield { type: "chunk", data: "Found " }
   yield { type: "chunk", data: "2." }
-  yield { type: "done", output: { messages: [{ id: ["x", "y", "AIMessage"], kwargs: { content: "Found 2." } }], runningSummary: null } }
+  yield {
+    type: "done",
+    output: {
+      messages: [{ id: ["x", "y", "AIMessage"], kwargs: { content: "Found 2." } }],
+      runningSummary: null,
+    },
+  }
 }
 
 it("reduces a stream into an AgentRunResult", async () => {

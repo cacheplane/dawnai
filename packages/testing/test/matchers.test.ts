@@ -1,5 +1,10 @@
 import { expect, it } from "vitest"
-import { expectFinalMessage, expectState, expectStreamedTokens, expectToolCalled } from "../src/matchers.js"
+import {
+  expectFinalMessage,
+  expectState,
+  expectStreamedTokens,
+  expectToolCalled,
+} from "../src/matchers.js"
 import type { AgentRunResult } from "../src/run-result.js"
 
 const base: AgentRunResult = {
@@ -40,7 +45,13 @@ it("expectOffloaded asserts the tool output was offloaded to a stub", () => {
   const run = {
     ...base,
     messages: [
-      { id: ["lc", "messages", "ToolMessage"], kwargs: { name: "generateReport", content: "Tool output offloaded — 50000 chars. Full output saved to: tool-outputs/x.txt" } },
+      {
+        id: ["lc", "messages", "ToolMessage"],
+        kwargs: {
+          name: "generateReport",
+          content: "Tool output offloaded — 50000 chars. Full output saved to: tool-outputs/x.txt",
+        },
+      },
     ],
     state: { messages: [] },
   } as unknown as AgentRunResult
