@@ -47,6 +47,7 @@
     "@dawn-ai/cli": "workspace:*",
     "@dawn-ai/config-typescript": "workspace:*",
     "@dawn-ai/core": "workspace:*",
+    "@dawn-ai/sdk": "workspace:*",
     "@langchain/langgraph-checkpoint": "^1.0.2",
     "@types/node": "25.6.0"
   }
