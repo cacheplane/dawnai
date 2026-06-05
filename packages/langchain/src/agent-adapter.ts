@@ -563,43 +563,11 @@ async function* streamFromRunnable(
             }
             case "on_tool_start": {
               hasYielded = true
-              const toolStartData = event.data as {
-                input?: unknown
-                chunk?: unknown
-                output?: unknown
-              }
-              const rawInput = toolStartData.input ?? toolStartData.chunk ?? toolStartData.output
-              // LangChain may deliver tool input either as:
-              //   - a JSON string directly (parse it)
-              //   - an object with a single "input" key containing a JSON string
-              //     (LangGraph tool wrapper pattern — unwrap and parse)
-              //   - an already-parsed object (use as-is)
-              let parsedInput: unknown = rawInput
-              if (typeof rawInput === "string") {
-                try {
-                  parsedInput = JSON.parse(rawInput)
-                } catch {
-                  parsedInput = rawInput
-                }
-              } else if (
-                rawInput !== null &&
-                typeof rawInput === "object" &&
-                "input" in rawInput &&
-                Object.keys(rawInput as object).length === 1 &&
-                typeof (rawInput as { input: unknown }).input === "string"
-              ) {
-                // LangGraph wraps tool args as { input: '<json-string>' }
-                try {
-                  parsedInput = JSON.parse((rawInput as { input: string }).input)
-                } catch {
-                  parsedInput = rawInput
-                }
-              }
               yield {
                 type: "tool_call" as const,
                 data: {
                   name: event.name,
-                  input: parsedInput,
+                  input: event.data.chunk ?? event.data.output,
                 },
               }
               break

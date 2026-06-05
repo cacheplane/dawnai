@@ -31,3 +31,21 @@ it("handles an empty/aborted stream", async () => {
   expect(r.finalMessage).toBe("")
   expect(r.messages).toEqual([])
 })
+
+it("normalizes wrapped/stringified tool-call args", async () => {
+  async function* s() {
+    yield { type: "tool_call", name: "applyFilter", input: { input: '{"status":"open"}' } }
+    yield { type: "done", output: { messages: [] } }
+  }
+  const r = await collectRunResult(s() as never, "t")
+  expect(r.toolCalls[0]).toMatchObject({ name: "applyFilter", args: { status: "open" } })
+})
+
+it("passes through already-parsed tool-call args", async () => {
+  async function* s() {
+    yield { type: "tool_call", name: "t", input: { a: 1 } }
+    yield { type: "done", output: { messages: [] } }
+  }
+  const r = await collectRunResult(s() as never, "t")
+  expect(r.toolCalls[0]?.args).toEqual({ a: 1 })
+})
