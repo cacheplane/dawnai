@@ -2,8 +2,14 @@ import { randomUUID } from "node:crypto"
 import { discoverRoutes } from "@dawn-ai/core"
 import { createRuntimeRegistry, runTypegen, streamResolvedRoute } from "@dawn-ai/cli/runtime"
 import { startAimock, type AimockHandle } from "./aimock-runner.js"
-import type { FixtureSet } from "./fixture-builder.js"
+import type { FixtureSet, ScriptBuilder } from "./fixture-builder.js"
 import { collectRunResult, type AgentRunResult } from "./run-result.js"
+
+/** Normalise a ScriptBuilder or bare FixtureSet to a FixtureSet. */
+function toFixtureSet(f: FixtureSet | ScriptBuilder): FixtureSet {
+  if (Array.isArray(f)) return f
+  return f.build()
+}
 
 export interface AgentHarnessOptions {
   readonly appRoot: string
@@ -14,7 +20,7 @@ export interface AgentHarnessOptions {
 
 export interface AgentHarness {
   readonly baseUrl: string
-  run(opts: { input: string; fixtures?: FixtureSet }): Promise<AgentRunResult>
+  run(opts: { input: string; fixtures?: FixtureSet | ScriptBuilder }): Promise<AgentRunResult>
   reset(): void
   close(): Promise<void>
 }
@@ -58,9 +64,12 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       return aimock.baseUrl
     },
     async run(runOpts) {
-      if (runOpts.fixtures && runOpts.fixtures.length > 0) {
-        registeredFixtures = [...registeredFixtures, ...runOpts.fixtures]
-        await restartAimock(registeredFixtures)
+      if (runOpts.fixtures) {
+        const newFixtures = toFixtureSet(runOpts.fixtures)
+        if (newFixtures.length > 0) {
+          registeredFixtures = [...registeredFixtures, ...newFixtures]
+          await restartAimock(registeredFixtures)
+        }
       }
       const stream = streamResolvedRoute({
         appRoot: options.appRoot,
