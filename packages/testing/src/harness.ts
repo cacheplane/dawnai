@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto"
-import { discoverRoutes } from "@dawn-ai/core"
 import { createRuntimeRegistry, runTypegen, streamResolvedRoute } from "@dawn-ai/cli/runtime"
-import { startAimock, type AimockHandle } from "./aimock-runner.js"
+import { discoverRoutes } from "@dawn-ai/core"
+import { type AimockHandle, startAimock } from "./aimock-runner.js"
 import type { FixtureSet, ScriptBuilder } from "./fixture-builder.js"
-import { collectRunResult, type AgentRunResult } from "./run-result.js"
+import { type AgentRunResult, collectRunResult } from "./run-result.js"
 
 /** Normalise a ScriptBuilder or bare FixtureSet to a FixtureSet. */
 function toFixtureSet(f: FixtureSet | ScriptBuilder): FixtureSet {

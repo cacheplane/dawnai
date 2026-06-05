@@ -1,1 +1,5 @@
-{ "name": "probe-app", "private": true, "type": "module" }
+{
+  "name": "probe-app",
+  "private": true,
+  "type": "module"
+}
