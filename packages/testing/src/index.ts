@@ -9,6 +9,11 @@ export {
 } from "./fixture-builder.js"
 export { type AgentHarness, type AgentHarnessOptions, createAgentHarness } from "./harness.js"
 export {
+  type AgentProtocolInjector,
+  type InjectResult,
+  injectAgentProtocol,
+} from "./http-inject.js"
+export {
   expectFinalMessage,
   expectOffloaded,
   expectState,
