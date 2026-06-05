@@ -22,3 +22,4 @@ export {
 } from "./matchers.js"
 export { type RecordOptions, record } from "./record.js"
 export { type AgentRunResult, collectRunResult, type ObservedToolCall } from "./run-result.js"
+export { type SubprocessApp, startSubprocessApp } from "./subprocess.js"
