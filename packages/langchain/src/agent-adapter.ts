@@ -494,7 +494,7 @@ async function* streamFromRunnable(
       options: Record<string, unknown>,
     ) => AsyncIterable<{
       event: string
-      data: { chunk?: unknown; output?: unknown; error?: unknown }
+      data: { chunk?: unknown; input?: unknown; output?: unknown; error?: unknown }
       name: string
     }>
   }
@@ -567,7 +567,7 @@ async function* streamFromRunnable(
                 type: "tool_call" as const,
                 data: {
                   name: event.name,
-                  input: event.data.chunk ?? event.data.output,
+                  input: event.data.input ?? event.data.chunk ?? event.data.output,
                 },
               }
               break
