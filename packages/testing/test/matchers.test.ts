@@ -33,3 +33,17 @@ it("expectState messages length + field", () => {
   expectState(base).field("runningSummary").toBeTruthy()
   expect(() => expectState(base).messages.toHaveLength(2)).toThrow()
 })
+
+import { expectOffloaded } from "../src/matchers.js"
+
+it("expectOffloaded asserts the tool output was offloaded to a stub", () => {
+  const run = {
+    ...base,
+    messages: [
+      { id: ["lc", "messages", "ToolMessage"], kwargs: { name: "generateReport", content: "Tool output offloaded — 50000 chars. Full output saved to: tool-outputs/x.txt" } },
+    ],
+    state: { messages: [] },
+  } as unknown as AgentRunResult
+  expectOffloaded(run, "generateReport")
+  expect(() => expectOffloaded(run, "applyFilter")).toThrow()
+})

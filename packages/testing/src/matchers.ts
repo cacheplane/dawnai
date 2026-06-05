@@ -58,6 +58,18 @@ export function expectStreamedTokens(run: AgentRunResult): void {
   if (run.tokens.length === 0) fail("expected >=1 streamed token, got none")
 }
 
+export function expectOffloaded(run: AgentRunResult, toolName: string): void {
+  const msg = run.messages.find((m) => {
+    const id = (m as { id?: string[] }).id
+    const kw = (m as { kwargs?: { name?: string } }).kwargs
+    return Array.isArray(id) && id[2] === "ToolMessage" && kw?.name === toolName
+  }) as { kwargs?: { content?: string } } | undefined
+  const content = msg?.kwargs?.content ?? ""
+  if (!content.includes("Tool output offloaded")) {
+    fail(`expected "${toolName}" output to be offloaded (stub marker), got: ${content.slice(0, 120)}`)
+  }
+}
+
 export function expectState(run: AgentRunResult) {
   const messages = Array.isArray(run.state.messages) ? (run.state.messages as unknown[]) : []
   return {
