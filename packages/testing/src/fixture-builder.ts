@@ -28,12 +28,18 @@ export function script(): ScriptBuilder {
   const fixtures: AimockFixture[] = []
   let groupIndex = -1
   let currentUser: string | undefined
-  let stepInGroup = 0
+  let stepInGroup = 0 // kept for tool call id generation only
 
   function pushResponse(response: AimockResponse): void {
     if (currentUser === undefined) {
       throw new Error("script(): call .user(text) before .callsTool()/.replies()")
     }
+    // turnIndex = number of assistant messages already in the thread before this
+    // LLM call (0 for the first call, 1 for the reply-after-tool, etc.).
+    // hasToolResult = true only when there is already a tool-role message in the
+    // thread, which is the case for the post-tool reply but not the initial call.
+    // Both values are stable when the harness creates a fresh thread per test
+    // (via h.reset()), so they unambiguously select the right fixture.
     fixtures.push({
       match: { userMessage: currentUser, turnIndex: stepInGroup, hasToolResult: stepInGroup > 0 },
       response,

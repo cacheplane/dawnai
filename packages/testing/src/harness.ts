@@ -34,41 +34,47 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
   const prevBaseUrl = process.env.OPENAI_BASE_URL
   const prevKey = process.env.OPENAI_API_KEY
 
-  let registeredFixtures: FixtureSet = (options.fixtures ?? []).slice()
-  let aimock: AimockHandle = await startAimock({ fixtures: registeredFixtures })
+  // Start aimock once — port (and thus the cached agent's baseURL) stays stable for the harness lifetime.
+  const aimock: AimockHandle = await startAimock({ fixtures: options.fixtures ?? [] })
   process.env.OPENAI_BASE_URL = aimock.baseUrl
   process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-not-used"
 
-  // typegen once → generated tool schemas exist (dev-boot fidelity)
-  const manifest = await discoverRoutes({ appRoot: options.appRoot })
-  await runTypegen({ appRoot: options.appRoot, manifest })
+  // All construction steps after aimock starts are wrapped so we can clean up on failure.
+  let resolved: Awaited<ReturnType<Awaited<ReturnType<typeof createRuntimeRegistry>>["lookup"]>>
+  try {
+    // typegen once → generated tool schemas exist (dev-boot fidelity)
+    const manifest = await discoverRoutes({ appRoot: options.appRoot })
+    await runTypegen({ appRoot: options.appRoot, manifest })
 
-  const registry = await createRuntimeRegistry(options.appRoot)
-  const resolved = registry.lookup(options.route)
-  if (!resolved) {
+    const registry = await createRuntimeRegistry(options.appRoot)
+    resolved = registry.lookup(options.route)
+    if (!resolved) {
+      throw new Error(`createAgentHarness: unknown route "${options.route}"`)
+    }
+  } catch (err) {
+    // Unified cleanup: stop aimock and restore env vars before re-throwing.
     await aimock.stop()
-    throw new Error(`createAgentHarness: unknown route "${options.route}"`)
+    if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+    else process.env.OPENAI_BASE_URL = prevBaseUrl
+    if (prevKey === undefined) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = prevKey
+    throw err
   }
 
+  const baseUrl = aimock.baseUrl
   let threadId = randomUUID()
   let closed = false
 
-  async function restartAimock(fixtures: FixtureSet): Promise<void> {
-    await aimock.stop()
-    aimock = await startAimock({ fixtures })
-    process.env.OPENAI_BASE_URL = aimock.baseUrl
-  }
-
   const harness: AgentHarness = {
     get baseUrl() {
-      return aimock.baseUrl
+      return baseUrl
     },
     async run(runOpts) {
       if (runOpts.fixtures) {
         const newFixtures = toFixtureSet(runOpts.fixtures)
         if (newFixtures.length > 0) {
-          registeredFixtures = [...registeredFixtures, ...newFixtures]
-          await restartAimock(registeredFixtures)
+          // Append fixtures onto the live mock — no restart, port stays stable.
+          aimock.addFixtures(newFixtures)
         }
       }
       const stream = streamResolvedRoute({

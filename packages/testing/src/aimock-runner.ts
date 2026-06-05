@@ -5,6 +5,8 @@ export interface AimockHandle {
   readonly port: number
   /** Base URL with the `/v1` suffix the OpenAI SDK expects. */
   readonly baseUrl: string
+  /** Append more fixtures onto the live mock without restarting it. */
+  addFixtures(fixtures: readonly AimockFixture[]): void
   stop(): Promise<void>
 }
 
@@ -20,6 +22,11 @@ export async function startAimock(opts: {
   return {
     port: mock.port,
     baseUrl: `${mock.url}/v1`,
+    addFixtures(fixtures: readonly AimockFixture[]) {
+      if (fixtures.length > 0) {
+        mock.addFixturesFromJSON(fixtures as never)
+      }
+    },
     async stop() {
       if (stopped) return
       stopped = true

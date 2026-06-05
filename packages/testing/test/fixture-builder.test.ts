@@ -1,7 +1,7 @@
 import { expect, it } from "vitest"
 import { script } from "../src/fixture-builder.js"
 
-it("compiles a single-turn tool round to aimock fixtures with auto turnIndex + fixed ids", () => {
+it("compiles a single-turn tool round to aimock fixtures with turnIndex + fixed ids", () => {
   const fixtures = script()
     .user("Filter open items")
     .callsTool("applyFilter", { status: "open" })
