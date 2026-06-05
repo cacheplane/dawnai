@@ -7,6 +7,11 @@
 
 export { createRuntimeRegistry, type RuntimeRegistry } from "./lib/dev/runtime-registry.js"
 export {
+  createRuntimeRequestListener,
+  type RuntimeRequestListener,
+  startRuntimeServer,
+} from "./lib/dev/runtime-server.js"
+export {
   executeResolvedRoute,
   invokeResolvedRoute,
   resolveCheckpointer,
