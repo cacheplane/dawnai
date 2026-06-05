@@ -8,16 +8,27 @@ it("compiles a single-turn tool round to aimock fixtures with auto turnIndex + f
     .replies("Found 2.")
     .build()
   expect(fixtures).toEqual([
-    { match: { userMessage: "Filter open items", turnIndex: 0, hasToolResult: false },
-      response: { toolCalls: [{ id: "call_applyFilter_0_0", name: "applyFilter", arguments: { status: "open" } }] } },
-    { match: { userMessage: "Filter open items", turnIndex: 1, hasToolResult: true },
-      response: { content: "Found 2." } },
+    {
+      match: { userMessage: "Filter open items", turnIndex: 0, hasToolResult: false },
+      response: {
+        toolCalls: [
+          { id: "call_applyFilter_0_0", name: "applyFilter", arguments: { status: "open" } },
+        ],
+      },
+    },
+    {
+      match: { userMessage: "Filter open items", turnIndex: 1, hasToolResult: true },
+      response: { content: "Found 2." },
+    },
   ])
 })
 
 it("supports a plain reply with no tools", () => {
   expect(script().user("hi").replies("hello").build()).toEqual([
-    { match: { userMessage: "hi", turnIndex: 0, hasToolResult: false }, response: { content: "hello" } },
+    {
+      match: { userMessage: "hi", turnIndex: 0, hasToolResult: false },
+      response: { content: "hello" },
+    },
   ])
 })
 
