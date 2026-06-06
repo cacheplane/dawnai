@@ -9,7 +9,8 @@
       "@dawn-ai/langchain": ["../langchain/src/index.ts"],
       "@dawn-ai/langgraph": ["../langgraph/src/index.ts"],
       "@dawn-ai/langgraph/*": ["../langgraph/src/*.ts"],
-      "@dawn-ai/permissions": ["../permissions/src/index.ts"]
+      "@dawn-ai/permissions": ["../permissions/src/index.ts"],
+      "@dawn-ai/sqlite-storage": ["../sqlite-storage/src/index.ts"]
     },
     "rootDir": "src"
   },
@@ -26,6 +27,9 @@
     },
     {
       "path": "../permissions"
+    },
+    {
+      "path": "../sqlite-storage"
     }
   ]
 }
