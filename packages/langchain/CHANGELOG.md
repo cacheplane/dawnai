@@ -1,5 +1,58 @@
 # @dawn-ai/langchain
 
+## 0.3.0
+
+### Minor Changes
+
+- 8133553: Add opt-in conversation summarization (Phase 3 sub-project 6b). When a thread's history exceeds a token threshold, the agent is fed a condensed view — a running summary of older turns plus the most recent turns verbatim — while the **full history stays intact in the checkpoint**. This is non-destructive: summarization runs as a LangGraph `preModelHook` that returns `llmInputMessages` for the turn only and never rewrites saved `messages`, so `GET /threads/:id/state`, resume, and restart always see the complete history (and there is no tool-call/result pairing hazard).
+
+  Enable it in `dawn.config.ts`:
+
+  ```ts
+  export default {
+    summarization: {
+      enabled: true, // default false
+      maxTokens: 12_000, // threshold over which older turns are summarized
+      keepRecentTurns: 6, // most-recent turns kept verbatim
+      // model defaults to the route's model
+      // tokenCounter defaults to a lazy gpt-tokenizer (o200k_base) counter
+      // summarize defaults to a built-in single-LLM-call running-summary fold
+    },
+  };
+  ```
+
+  Both the token counter and the summarizer are pluggable (`tokenCounter`, `summarize`). The running summary is cached in agent state and refreshed incrementally — each turn folds only the newly-aged messages, so cost stays bounded. The turn-boundary split is pairing-safe (a tool-call message is never separated from its results). When summarization is disabled (the default), behavior is unchanged and `gpt-tokenizer` is never loaded. If the summarizer call fails on a given turn, the agent falls back to the full history for that turn rather than failing the run.
+
+- 027b1cc: Add tool-output offloading. When a tool returns output larger than `toolOutput.offloadThresholdChars` (default 40,000), the full payload is written to `workspace/tool-outputs/` and the in-context ToolMessage is replaced with a preview+pointer stub; the agent retrieves the full content with the existing `readFile` tool (which bypasses the size cap for `tool-outputs/` paths). Active automatically when a workspace exists. The directory is bounded by a size + TTL cap (defaults 256MB / 3h) with throttled evict-on-write and LRU-by-access eviction (readFile bumps mtime for tool-outputs/ files). Large content never enters message state, so there is no tool-call/result pairing hazard. Configurable via `dawn.config.ts` `toolOutput`. The `FilesystemBackend` interface gains optional `statFile`/`removeFile`/`touchFile`/`mkdir` methods and an optional per-call `maxBytes` override on `readFile`.
+
+### Patch Changes
+
+- 30db6ed: Offloaded tool-output filenames are now deterministic — keyed on the originating `tool_call_id` (with a content-hash fallback when absent) instead of `timestamp+random`. This makes offloaded paths stable and traceable and enables deterministic agent e2e tests. The openai chat model now also honors `OPENAI_BASE_URL`, allowing a local mock provider (used by the new CI-safe aimock-based agent e2e regression tests for the discriminated-union tool-input and tool-output-offload-retrieval paths).
+- b51de58: Add `@dawn-ai/testing` — a productized, aimock-backed package for writing deterministic, CI-safe tests of Dawn agents.
+
+  The model is mocked at the HTTP wire via `@copilotkit/aimock`, so tests exercise the real agent loop, tool calls, streaming, state, offloading, and summarization without a live API key. Three layers, one package:
+
+  - **In-process (default):** `createAgentHarness({ appRoot, route })` runs your route through Dawn's runtime; the fastest layer and the one most users reach for.
+  - **http-inject:** `injectAgentProtocol({ appRoot })` drives the full Agent-Protocol request→response pipeline in-process via `light-my-request` (no port bound) — for framework/SSE coverage.
+  - **subprocess:** `startSubprocessApp({ appRoot })` boots a real `dawn dev` — for restart/persistence scenarios.
+
+  A fluent `script()` builder compiles multi-turn tool-call conversations to aimock fixtures (auto `turnIndex`/`hasToolResult`, fixed `tool_call_id`s), and `expect*` matchers assert agent behavior: `expectToolCalled().withArgs()`, `expectFinalMessage()`, `expectStreamedTokens()`, `expectState().field()`, `expectOffloaded()`. A local-only `record()` helper captures real interactions into fixtures (CI replays strict/read-only).
+
+  `@dawn-ai/cli` gains a `@dawn-ai/cli/runtime` programmatic export subpath (`streamResolvedRoute`, `createRuntimeRegistry`, `runTypegen`, `createRuntimeRequestListener`, …) and `buildOffload` now resolves the workspace relative to the app root (no behavior change under `dawn dev`, where cwd is the app root).
+
+  `@dawn-ai/langchain` fixes a bug where the streamed `tool_call` event carried `undefined` tool arguments — `on_tool_start` now reads `event.data.input` (the field LangChain populates with tool args), so stream consumers (e.g. UI tool-call displays) receive the real arguments.
+
+  Dawn's own aimock e2e lane (SP5 union schema, SP6a tool-output offloading, conversation summarization) was migrated onto this package in-process, removing the per-test `pnpm pack` + install + dev-server boot.
+
+- Updated dependencies [55b69f0]
+- Updated dependencies [2e3bc8d]
+- Updated dependencies [8133553]
+- Updated dependencies [027b1cc]
+- Updated dependencies [d4efa2a]
+  - @dawn-ai/core@0.3.0
+  - @dawn-ai/workspace@0.2.0
+  - @dawn-ai/sdk@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes
