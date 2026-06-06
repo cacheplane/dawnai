@@ -21,6 +21,7 @@ describe("CapabilityMarkerContext is threaded into detect() and load()", () => {
     const fakeContext: CapabilityMarkerContext = {
       routeManifest: { appRoot: "/tmp", routes: [] },
       descriptor: undefined,
+      appRoot: "/tmp",
     }
     await applyCapabilities(registry, "/tmp/route", fakeContext)
     expect(seenDetectContext).toEqual(fakeContext)

@@ -12,6 +12,8 @@ export interface CapabilityMarkerContext {
     readonly exec?: ExecBackend
   }
   readonly permissions?: PermissionsStore
+  /** Absolute path to the Dawn app root. Capabilities should resolve app-relative paths (e.g. workspace/) against this, NOT process.cwd(). */
+  readonly appRoot: string
 }
 
 export interface DawnToolDefinition {

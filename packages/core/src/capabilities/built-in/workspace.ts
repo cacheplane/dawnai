@@ -12,12 +12,13 @@ import type { CapabilityMarker, DawnToolDefinition } from "../types.js"
 const WORKSPACE_DIRNAME = "workspace"
 
 /**
- * Resolve the workspace root to a cwd-relative path. This matches the
- * AGENTS.md capability's resolution (process.cwd() + "workspace") so
- * the agent's memory and workspace tools point at the same directory.
+ * Resolve the workspace root relative to the given app root. In production
+ * (`dawn dev`) appRoot === process.cwd(), so this is a no-op change there.
+ * In-process testing harnesses pass the explicit app root so capabilities
+ * activate regardless of the test runner's working directory.
  */
-function workspaceRoot(): string {
-  return join(process.cwd(), WORKSPACE_DIRNAME)
+function workspaceRoot(appRoot: string): string {
+  return join(appRoot, WORKSPACE_DIRNAME)
 }
 
 const READ_FILE_INPUT = z.object({ path: z.string().min(1) })
@@ -224,9 +225,9 @@ function buildWorkspaceTools(
 export function createWorkspaceMarker(): CapabilityMarker {
   return {
     name: "workspace",
-    detect: async (_routeDir, _context) => existsSync(workspaceRoot()),
+    detect: async (_routeDir, context) => existsSync(workspaceRoot(context.appRoot)),
     load: async (_routeDir, context) => {
-      const root = workspaceRoot()
+      const root = workspaceRoot(context.appRoot)
       if (!existsSync(root)) return {}
       const fs = context.backends?.filesystem ?? localFilesystem()
       const exec = context.backends?.exec ?? localExec()

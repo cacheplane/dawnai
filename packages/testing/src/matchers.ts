@@ -1,5 +1,13 @@
 import { AssertionError } from "node:assert"
-import type { AgentRunResult } from "./run-result.js"
+import type {
+  AgentRunResult,
+  InterruptInfo,
+  SubagentEvent,
+  SubagentRun,
+  Todo,
+} from "./run-result.js"
+
+export type { InterruptInfo, SubagentEvent, SubagentRun, Todo }
 
 function fail(message: string): never {
   throw new AssertionError({ message })
@@ -99,6 +107,121 @@ export function expectOffloaded(run: AgentRunResult, toolName: string): void {
     fail(
       `expected "${toolName}" output to be offloaded (stub marker), got: ${content.slice(0, 120)}`,
     )
+  }
+}
+
+export function expectInterrupt(run: AgentRunResult) {
+  if (run.interrupts.length === 0) {
+    fail("expected at least one interrupt, but none were captured")
+  }
+  const chain = {
+    ofKind(kind: string) {
+      if (!run.interrupts.some((i) => i.kind === kind)) {
+        fail(
+          `expected an interrupt of kind "${kind}"; got: ${run.interrupts.map((i) => i.kind).join(", ") || "(none)"}`,
+        )
+      }
+      return chain
+    },
+    withDetail(partial: Record<string, unknown>) {
+      const found = run.interrupts.some(
+        (i) => i.detail !== undefined && isSubset(partial, i.detail),
+      )
+      if (!found) {
+        fail(
+          `expected an interrupt with detail >= ${JSON.stringify(partial)}; got: ${JSON.stringify(run.interrupts.map((i) => i.detail))}`,
+        )
+      }
+      return chain
+    },
+  }
+  return chain
+}
+
+export function expectNoInterrupt(run: AgentRunResult): void {
+  if (run.interrupts.length > 0) {
+    fail(
+      `expected no interrupts, but got ${run.interrupts.length}: ${run.interrupts.map((i) => i.kind).join(", ")}`,
+    )
+  }
+}
+
+export function expectSubagent(run: AgentRunResult, name: string) {
+  const sub = run.subagents.find((s) => s.name === name)
+  const chain = {
+    called() {
+      if (!sub) {
+        fail(
+          `expected subagent "${name}" to be dispatched; subagents: ${run.subagents.map((s) => s.name).join(", ") || "(none)"}`,
+        )
+      }
+      return chain
+    },
+    calledTool(toolName: string) {
+      if (!sub) {
+        fail(`expected subagent "${name}" to be dispatched (it was not)`)
+      } else if (!sub.toolCalls.some((t) => t.name === toolName)) {
+        fail(
+          `expected subagent "${name}" to call tool "${toolName}"; called: ${sub.toolCalls.map((t) => t.name).join(", ") || "(none)"}`,
+        )
+      }
+      return chain
+    },
+    finalMessageContains(text: string) {
+      if (!sub) {
+        fail(`expected subagent "${name}" to be dispatched (it was not)`)
+      } else if (!(sub.finalMessage ?? "").includes(text)) {
+        fail(
+          `expected subagent "${name}" finalMessage to contain "${text}"; got: ${JSON.stringify(sub?.finalMessage)}`,
+        )
+      }
+      return chain
+    },
+  }
+  return chain
+}
+
+export function expectPlan(run: AgentRunResult) {
+  return {
+    toHaveLength(n: number) {
+      if (run.todos.length !== n) fail(`expected ${n} todos, got ${run.todos.length}`)
+    },
+    toHaveTodo(content: string) {
+      if (!run.todos.some((t) => t.content === content)) {
+        fail(
+          `expected a todo with content "${content}"; todos: ${run.todos.map((t) => t.content).join(", ") || "(none)"}`,
+        )
+      }
+    },
+    toHaveStatus(content: string, status: string) {
+      const todo = run.todos.find((t) => t.content === content)
+      if (!todo) {
+        fail(
+          `expected a todo with content "${content}"; todos: ${run.todos.map((t) => t.content).join(", ") || "(none)"}`,
+        )
+      }
+      if (todo.status !== status) {
+        fail(`expected todo "${content}" to have status "${status}", but got "${todo.status}"`)
+      }
+    },
+  }
+}
+
+export function expectSystemPrompt(run: AgentRunResult) {
+  return {
+    toContain(text: string) {
+      if (!run.systemPrompt.includes(text)) {
+        fail(
+          `expected systemPrompt to contain "${text}"; got: ${JSON.stringify(run.systemPrompt.slice(0, 120))}`,
+        )
+      }
+    },
+    toMatch(re: RegExp) {
+      if (!re.test(run.systemPrompt))
+        fail(
+          `expected systemPrompt to match ${re}; got: ${JSON.stringify(run.systemPrompt.slice(0, 120))}`,
+        )
+    },
   }
 }
 

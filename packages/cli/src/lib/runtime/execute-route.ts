@@ -488,6 +488,7 @@ async function prepareRouteExecution(options: {
       descriptorRouteMap,
       ...(configBackends ? { backends: configBackends } : {}),
       permissions: permissionsStore,
+      appRoot: options.appRoot,
     })
 
     if (applied.errors.length > 0) {

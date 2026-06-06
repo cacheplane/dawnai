@@ -20,7 +20,7 @@ function manifest(routes: Array<{ id: string; routeDir: string }>): RouteManifes
 }
 
 function ctx(routes: Array<{ id: string; routeDir: string }>): CapabilityMarkerContext {
-  return { routeManifest: manifest(routes), descriptor: undefined }
+  return { routeManifest: manifest(routes), descriptor: undefined, appRoot: "/app" }
 }
 
 describe("createSubagentsMarker — convention discovery", () => {
@@ -108,6 +108,7 @@ describe("createSubagentsMarker — descriptor override", () => {
       ]),
       descriptor: parent,
       descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/shared"]]),
+      appRoot: "/app",
     }
     const detected = await marker.detect("/app/src/app/parent", context)
     expect(detected).toBe(true)
@@ -133,6 +134,7 @@ describe("createSubagentsMarker — descriptor override", () => {
       ]),
       descriptor: parent,
       descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/shared"]]),
+      appRoot: "/app",
     }
     const contribution = await marker.load("/app/src/app/parent", context)
     expect(contribution.tools).toBeDefined()
@@ -164,6 +166,7 @@ describe("createSubagentsMarker — descriptor override", () => {
       ]),
       descriptor: parent,
       descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/research"]]),
+      appRoot: "/app",
     }
     await expect(marker.load("/app/src/app/parent", context)).rejects.toThrow(
       /duplicate.*leaf.*research/i,

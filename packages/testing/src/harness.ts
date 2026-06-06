@@ -16,6 +16,24 @@ function toFixtureSet(f: FixtureSet | ScriptBuilder): FixtureSet {
   return f.build()
 }
 
+/** Extract the system prompt from a slice of aimock journal requests. */
+function systemPromptFromRequests(
+  reqs: ReadonlyArray<{ body: { messages?: Array<{ role: string; content: unknown }> } | null }>,
+): string {
+  for (const req of reqs) {
+    const messages = req.body?.messages ?? []
+    for (const m of messages) {
+      // OpenAI chat models use role "system"; gpt-5 / reasoning models send the
+      // system prompt under role "developer". Accept either so the captured
+      // systemPrompt is populated regardless of which model the route uses.
+      if ((m.role === "system" || m.role === "developer") && typeof m.content === "string") {
+        return m.content
+      }
+    }
+  }
+  return ""
+}
+
 export interface AgentHarnessOptions {
   readonly appRoot: string
   readonly route: string
@@ -26,6 +44,10 @@ export interface AgentHarnessOptions {
 export interface AgentHarness {
   readonly baseUrl: string
   run(opts: { input: string; fixtures?: FixtureSet | ScriptBuilder }): Promise<AgentRunResult>
+  resume(opts: {
+    decision: "once" | "always" | "deny"
+    fixtures?: FixtureSet | ScriptBuilder
+  }): Promise<AgentRunResult>
   reset(): void
   close(): Promise<void>
 }
@@ -70,27 +92,57 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
   let threadId = randomUUID()
   let closed = false
 
+  /** Core drive helper — runs a single turn and merges systemPrompt. */
+  async function drive(driveOpts: {
+    fixtures?: FixtureSet | ScriptBuilder
+    input?: string
+    resumeDecision?: "once" | "always" | "deny"
+  }): Promise<AgentRunResult> {
+    if (driveOpts.fixtures) {
+      const newFixtures = toFixtureSet(driveOpts.fixtures)
+      if (newFixtures.length > 0) {
+        aimock.addFixtures(newFixtures)
+      }
+    }
+    const snapshotLen = aimock.getRequests().length
+    // resolved is guaranteed non-null at this point: the catch block re-throws
+    // before returning, so if we reach drive() the null check already passed.
+    const r = resolved!
+    const streamArgs: Parameters<typeof streamResolvedRoute>[0] = {
+      appRoot: options.appRoot,
+      input:
+        driveOpts.input !== undefined
+          ? { messages: [{ role: "user", content: driveOpts.input }] }
+          : { messages: [] },
+      routeFile: r.routeFile,
+      routeId: r.routeId,
+      routePath: r.routePath,
+      threadId,
+      ...(driveOpts.resumeDecision !== undefined
+        ? { resumeDecision: driveOpts.resumeDecision }
+        : {}),
+    }
+    const stream = streamResolvedRoute(streamArgs)
+    const result = await collectRunResult(stream, threadId)
+    const turnReqs = aimock.getRequests().slice(snapshotLen)
+    return { ...result, systemPrompt: systemPromptFromRequests(turnReqs) }
+  }
+
   const harness: AgentHarness = {
     get baseUrl() {
       return baseUrl
     },
     async run(runOpts) {
-      if (runOpts.fixtures) {
-        const newFixtures = toFixtureSet(runOpts.fixtures)
-        if (newFixtures.length > 0) {
-          // Append fixtures onto the live mock — no restart, port stays stable.
-          aimock.addFixtures(newFixtures)
-        }
-      }
-      const stream = streamResolvedRoute({
-        appRoot: options.appRoot,
-        input: { messages: [{ role: "user", content: runOpts.input }] },
-        routeFile: resolved.routeFile,
-        routeId: resolved.routeId,
-        routePath: resolved.routePath,
-        threadId,
+      return drive({
+        input: runOpts.input,
+        ...(runOpts.fixtures !== undefined ? { fixtures: runOpts.fixtures } : {}),
       })
-      return await collectRunResult(stream, threadId)
+    },
+    async resume(resumeOpts) {
+      return drive({
+        resumeDecision: resumeOpts.decision,
+        ...(resumeOpts.fixtures !== undefined ? { fixtures: resumeOpts.fixtures } : {}),
+      })
     },
     reset() {
       threadId = randomUUID()

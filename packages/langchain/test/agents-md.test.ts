@@ -25,8 +25,9 @@ describe("agents-md capability — end-to-end shape", () => {
   it("always contributes a promptFragment", async () => {
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
     const result = await applyCapabilities(registry, routeDir, {
-      routeManifest: { appRoot: routeDir, routes: [] },
+      routeManifest: { appRoot: workDir, routes: [] },
       descriptor: undefined,
+      appRoot: workDir,
     })
     expect(result.contributions).toHaveLength(1)
     expect(result.contributions[0]?.contribution.promptFragment?.placement).toBe(
@@ -39,8 +40,9 @@ describe("agents-md capability — end-to-end shape", () => {
     writeFileSync(join(workDir, "workspace", "AGENTS.md"), "Use pnpm, not npm.")
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
     const result = await applyCapabilities(registry, routeDir, {
-      routeManifest: { appRoot: routeDir, routes: [] },
+      routeManifest: { appRoot: workDir, routes: [] },
       descriptor: undefined,
+      appRoot: workDir,
     })
     const fragment = result.contributions[0]?.contribution.promptFragment
     const rendered = fragment?.render({}) ?? ""
@@ -51,8 +53,9 @@ describe("agents-md capability — end-to-end shape", () => {
   it("renders empty when workspace/AGENTS.md is absent", async () => {
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
     const result = await applyCapabilities(registry, routeDir, {
-      routeManifest: { appRoot: routeDir, routes: [] },
+      routeManifest: { appRoot: workDir, routes: [] },
       descriptor: undefined,
+      appRoot: workDir,
     })
     const fragment = result.contributions[0]?.contribution.promptFragment
     expect(fragment?.render({})).toBe("")
@@ -64,8 +67,9 @@ describe("agents-md capability — end-to-end shape", () => {
     writeFileSync(path, "before")
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
     const result = await applyCapabilities(registry, routeDir, {
-      routeManifest: { appRoot: routeDir, routes: [] },
+      routeManifest: { appRoot: workDir, routes: [] },
       descriptor: undefined,
+      appRoot: workDir,
     })
     const fragment = result.contributions[0]?.contribution.promptFragment
     expect(fragment?.render({})).toContain("before")

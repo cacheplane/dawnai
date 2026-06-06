@@ -37,3 +37,16 @@ it("supports a second run() with new fixtures on the same persistent aimock (mul
   expectToolCalled(run2, "applyFilter").withArgs({ status: "closed" })
   expect(run2.finalMessage).toContain("Found 0")
 }, 60_000)
+
+it("captures the system prompt the model received", async () => {
+  h.reset()
+  const run = await h.run({
+    input: "hello there",
+    fixtures: script().user("hello there").replies("hi"),
+  })
+  expect(run.systemPrompt).toContain("test agent") // probe app agent systemPrompt: "You are a test agent..."
+}, 60_000)
+
+it("exposes a resume method", () => {
+  expect(typeof h.resume).toBe("function")
+})

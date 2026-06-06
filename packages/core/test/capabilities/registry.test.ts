@@ -30,6 +30,7 @@ describe("CapabilityRegistry + applyCapabilities", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     expect(result.contributions).toEqual([])
   })
@@ -50,6 +51,7 @@ describe("CapabilityRegistry + applyCapabilities", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     expect(result.contributions.map((c) => c.markerName)).toEqual(["first", "second"])
     expect(result.contributions[0]?.contribution.tools?.[0]?.name).toBe("alpha")
@@ -75,6 +77,7 @@ describe("CapabilityRegistry + applyCapabilities", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     expect(result.contributions.map((c) => c.markerName)).toEqual(["ok"])
     expect(result.errors).toHaveLength(1)
@@ -94,6 +97,7 @@ describe("CapabilityRegistry + applyCapabilities", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     expect(result.contributions).toEqual([])
     expect(result.errors).toHaveLength(1)
