@@ -256,6 +256,39 @@ it.skipIf(!process.env.OPENAI_API_KEY)("filters open items against real model", 
 
 Do not put your API key in CI. Live tests are local-development tools for validating prompt changes against a real model before you mint or update fixture files.
 
+## Your scaffolded app already has a test
+
+`create-dawn-ai-app` generates `test/agent.test.ts` that imports `@dawn-ai/testing` and covers the default `hello/[tenant]` agent route. Run it immediately after scaffolding:
+
+```bash
+pnpm test
+```
+
+The generated test uses an inline `script()` for the happy-path scenario:
+
+```ts title="test/agent.test.ts"
+import { fileURLToPath } from "node:url"
+import { afterAll, it } from "vitest"
+import { createAgentHarness, expectFinalMessage, script } from "@dawn-ai/testing"
+
+const appRoot = fileURLToPath(new URL("..", import.meta.url))
+const h = await createAgentHarness({ appRoot, route: "/hello/[tenant]#agent" })
+afterAll(() => h.close())
+
+it("greets the tenant", async () => {
+  const run = await h.run({
+    input: "Say hello",
+    fixtures: script().user("Say hello").replies("Hello from Acme!"),
+  })
+  expectFinalMessage(run).toContain("Hello")
+}, 60_000)
+```
+
+Grow it by:
+
+1. **Adding more `script()` scenarios** — one `it` block per behaviour you want to pin.
+2. **Committing fixtures for complex flows** — use `writeFixtures` / `record` + `loadFixtures` for multi-turn or multi-tool scenarios that are tedious to hand-write.
+
 ## Related
 
 <RelatedCards items={[
