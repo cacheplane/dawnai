@@ -23,7 +23,10 @@ function systemPromptFromRequests(
   for (const req of reqs) {
     const messages = req.body?.messages ?? []
     for (const m of messages) {
-      if (m.role === "system" && typeof m.content === "string") {
+      // OpenAI chat models use role "system"; gpt-5 / reasoning models send the
+      // system prompt under role "developer". Accept either so the captured
+      // systemPrompt is populated regardless of which model the route uses.
+      if ((m.role === "system" || m.role === "developer") && typeof m.content === "string") {
         return m.content
       }
     }
