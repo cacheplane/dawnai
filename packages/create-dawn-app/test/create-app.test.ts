@@ -81,7 +81,6 @@ describe("create-dawn-ai-app", () => {
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/tools/greet.ts"))
-    await assertExists(join(targetDir, "test/agent.test.ts"))
 
     const packageJson = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8")) as {
       readonly name: string
@@ -92,18 +91,15 @@ describe("create-dawn-ai-app", () => {
 
     expect(packageJson.name).toBe("hello-dawn")
     expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
-    expect(packageJson.scripts.test).toBe("vitest run")
     expect(packageJson.scripts.typecheck).toBe("tsc --noEmit")
     expect(packageJson.dependencies["@dawn-ai/core"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/cli"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/langchain"]).not.toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).not.toMatch(/^file:/)
-    expect(packageJson.devDependencies["@dawn-ai/testing"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/core"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/cli"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toBe("next")
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toBe("next")
-    expect(packageJson.devDependencies["@dawn-ai/testing"]).toBe("next")
     await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow()
   })
 
@@ -143,16 +139,13 @@ describe("create-dawn-ai-app", () => {
     }
 
     expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
-    expect(packageJson.scripts.test).toBe("vitest run")
     expect(packageJson.dependencies["@dawn-ai/core"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/cli"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toMatch(/^file:/)
-    expect(packageJson.devDependencies["@dawn-ai/testing"]).toMatch(/^file:/)
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/tools/greet.ts"))
-    await assertExists(join(targetDir, "test/agent.test.ts"))
     await assertExists(join(targetDir, ".npmrc"))
   })
 
