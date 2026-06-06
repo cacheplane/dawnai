@@ -256,55 +256,6 @@ it.skipIf(!process.env.OPENAI_API_KEY)("filters open items against real model", 
 
 Do not put your API key in CI. Live tests are local-development tools for validating prompt changes against a real model before you mint or update fixture files.
 
-## Your scaffolded app already has a test
-
-`create-dawn-app` generates `test/agent.test.ts` that imports `@dawn-ai/testing` and covers the default agent route. Run it immediately after scaffolding:
-
-```bash
-pnpm test
-```
-
-The generated test uses an inline `script()` for the happy-path scenario. Grow it by:
-
-1. **Adding more `script()` scenarios** — one `it` block per behaviour you want to pin.
-2. **Committing fixtures for complex flows** — use `writeFixtures` / `record` + `loadFixtures` for multi-turn or multi-tool scenarios that are tedious to hand-write.
-
-```ts title="test/agent.test.ts"
-import { fileURLToPath } from "node:url"
-import { afterAll, it } from "vitest"
-import {
-  createAgentHarness,
-  expectFinalMessage,
-  expectToolCalled,
-  loadFixtures,
-  script,
-  writeFixtures,
-} from "@dawn-ai/testing"
-
-const appRoot = fileURLToPath(new URL("../..", import.meta.url))
-const h = await createAgentHarness({ appRoot, route: "/chat#agent" })
-afterAll(() => h.close())
-
-it("handles the happy path", async () => {
-  const run = await h.run({
-    input: "List my tasks",
-    fixtures: script().user("List my tasks").replies("You have 3 tasks."),
-  })
-  expectFinalMessage(run).toContain("3 tasks")
-}, 60_000)
-
-it("filters open items", async () => {
-  const run = await h.run({
-    input: "Filter open items",
-    fixtures: loadFixtures(
-      fileURLToPath(new URL("fixtures/filter-open.fixture.json", import.meta.url)),
-    ),
-  })
-  expectToolCalled(run, "applyFilter").withArgs({ status: "open" })
-  expectFinalMessage(run).toContain("open")
-}, 60_000)
-```
-
 ## Related
 
 <RelatedCards items={[
