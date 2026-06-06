@@ -41,7 +41,10 @@ export interface AgentHarnessOptions {
 export interface AgentHarness {
   readonly baseUrl: string
   run(opts: { input: string; fixtures?: FixtureSet | ScriptBuilder }): Promise<AgentRunResult>
-  resume(opts: { decision: "once" | "always" | "deny"; fixtures?: FixtureSet | ScriptBuilder }): Promise<AgentRunResult>
+  resume(opts: {
+    decision: "once" | "always" | "deny"
+    fixtures?: FixtureSet | ScriptBuilder
+  }): Promise<AgentRunResult>
   reset(): void
   close(): Promise<void>
 }
@@ -104,12 +107,17 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     const r = resolved!
     const streamArgs: Parameters<typeof streamResolvedRoute>[0] = {
       appRoot: options.appRoot,
-      input: driveOpts.input !== undefined ? { messages: [{ role: "user", content: driveOpts.input }] } : { messages: [] },
+      input:
+        driveOpts.input !== undefined
+          ? { messages: [{ role: "user", content: driveOpts.input }] }
+          : { messages: [] },
       routeFile: r.routeFile,
       routeId: r.routeId,
       routePath: r.routePath,
       threadId,
-      ...(driveOpts.resumeDecision !== undefined ? { resumeDecision: driveOpts.resumeDecision } : {}),
+      ...(driveOpts.resumeDecision !== undefined
+        ? { resumeDecision: driveOpts.resumeDecision }
+        : {}),
     }
     const stream = streamResolvedRoute(streamArgs)
     const result = await collectRunResult(stream, threadId)

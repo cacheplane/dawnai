@@ -8,7 +8,9 @@ export interface AimockHandle {
   /** Append more fixtures onto the live mock without restarting it. */
   addFixtures(fixtures: readonly AimockFixture[]): void
   /** All requests the mock has received (aimock's journal). */
-  getRequests(): ReadonlyArray<{ body: { messages?: Array<{ role: string; content: unknown }> } | null }>
+  getRequests(): ReadonlyArray<{
+    body: { messages?: Array<{ role: string; content: unknown }> } | null
+  }>
   stop(): Promise<void>
 }
 

@@ -1,7 +1,13 @@
 import { AssertionError } from "node:assert"
-import type { AgentRunResult, InterruptInfo, SubagentRun, SubagentEvent, Todo } from "./run-result.js"
+import type {
+  AgentRunResult,
+  InterruptInfo,
+  SubagentEvent,
+  SubagentRun,
+  Todo,
+} from "./run-result.js"
 
-export type { InterruptInfo, SubagentRun, SubagentEvent, Todo }
+export type { InterruptInfo, SubagentEvent, SubagentRun, Todo }
 
 function fail(message: string): never {
   throw new AssertionError({ message })
@@ -117,7 +123,9 @@ export function expectInterrupt(run: AgentRunResult) {
       }
     },
     withDetail(partial: Record<string, unknown>) {
-      const found = run.interrupts.some((i) => i.detail !== undefined && isSubset(partial, i.detail))
+      const found = run.interrupts.some(
+        (i) => i.detail !== undefined && isSubset(partial, i.detail),
+      )
       if (!found) {
         fail(
           `expected an interrupt with detail >= ${JSON.stringify(partial)}; got: ${JSON.stringify(run.interrupts.map((i) => i.detail))}`,
@@ -153,7 +161,9 @@ export function expectSubagent(run: AgentRunResult) {
       }
     },
     finalMessageContains(text: string) {
-      const found = run.subagents.some((s) => s.finalMessage !== undefined && s.finalMessage.includes(text))
+      const found = run.subagents.some(
+        (s) => s.finalMessage !== undefined && s.finalMessage.includes(text),
+      )
       if (!found) {
         fail(
           `expected a subagent finalMessage to contain "${text}"; got: ${run.subagents.map((s) => s.finalMessage ?? "(no finalMessage)").join(", ") || "(no subagents)"}`,
@@ -180,9 +190,7 @@ export function expectPlan(run: AgentRunResult) {
         )
       }
       if (todo.status !== status) {
-        fail(
-          `expected todo "${content}" to have status "${status}", but got "${todo.status}"`,
-        )
+        fail(`expected todo "${content}" to have status "${status}", but got "${todo.status}"`)
       }
     },
   }

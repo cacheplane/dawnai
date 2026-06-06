@@ -111,10 +111,25 @@ export async function collectRunResult(
   const subagentEvents: SubagentEvent[] = []
 
   // In-progress subagent runs keyed by call_id
-  const subagentMap = new Map<string, { callId: string; name: string; toolCalls: SubagentToolCall[]; finalMessage?: string; error?: string }>()
+  const subagentMap = new Map<
+    string,
+    {
+      callId: string
+      name: string
+      toolCalls: SubagentToolCall[]
+      finalMessage?: string
+      error?: string
+    }
+  >()
   const finishedSubagents: SubagentRun[] = []
 
-  function subagentFor(callId: string): { callId: string; name: string; toolCalls: SubagentToolCall[]; finalMessage?: string; error?: string } {
+  function subagentFor(callId: string): {
+    callId: string
+    name: string
+    toolCalls: SubagentToolCall[]
+    finalMessage?: string
+    error?: string
+  } {
     let run = subagentMap.get(callId)
     if (!run) {
       run = { callId, name: callId, toolCalls: [] }
@@ -147,7 +162,11 @@ export async function collectRunResult(
         const d = (chunk as unknown as { data?: Record<string, unknown> }).data ?? {}
         const info: InterruptInfo =
           d.detail !== undefined
-            ? { interruptId: String(d.interruptId ?? ""), kind: String(d.kind ?? ""), detail: d.detail as Record<string, unknown> }
+            ? {
+                interruptId: String(d.interruptId ?? ""),
+                kind: String(d.kind ?? ""),
+                detail: d.detail as Record<string, unknown>,
+              }
             : { interruptId: String(d.interruptId ?? ""), kind: String(d.kind ?? "") }
         interrupts.push(info)
         break
@@ -189,9 +208,20 @@ export async function collectRunResult(
         subagentMap.delete(callId)
         const finished: SubagentRun =
           run.finalMessage !== undefined && run.error !== undefined
-            ? { callId: run.callId, name: run.name, toolCalls: run.toolCalls, finalMessage: run.finalMessage, error: run.error }
+            ? {
+                callId: run.callId,
+                name: run.name,
+                toolCalls: run.toolCalls,
+                finalMessage: run.finalMessage,
+                error: run.error,
+              }
             : run.finalMessage !== undefined
-              ? { callId: run.callId, name: run.name, toolCalls: run.toolCalls, finalMessage: run.finalMessage }
+              ? {
+                  callId: run.callId,
+                  name: run.name,
+                  toolCalls: run.toolCalls,
+                  finalMessage: run.finalMessage,
+                }
               : run.error !== undefined
                 ? { callId: run.callId, name: run.name, toolCalls: run.toolCalls, error: run.error }
                 : { callId: run.callId, name: run.name, toolCalls: run.toolCalls }
