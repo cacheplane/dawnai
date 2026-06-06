@@ -15,10 +15,19 @@ export {
 } from "./http-inject.js"
 export {
   expectFinalMessage,
+  expectInterrupt,
+  expectNoInterrupt,
   expectOffloaded,
+  expectPlan,
   expectState,
   expectStreamedTokens,
+  expectSubagent,
+  expectSystemPrompt,
   expectToolCalled,
+  type InterruptInfo,
+  type SubagentEvent,
+  type SubagentRun,
+  type Todo,
 } from "./matchers.js"
 export { type RecordOptions, record } from "./record.js"
 export { type AgentRunResult, collectRunResult, type ObservedToolCall } from "./run-result.js"

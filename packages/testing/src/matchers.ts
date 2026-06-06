@@ -1,5 +1,7 @@
 import { AssertionError } from "node:assert"
-import type { AgentRunResult } from "./run-result.js"
+import type { AgentRunResult, InterruptInfo, SubagentRun, SubagentEvent, Todo } from "./run-result.js"
+
+export type { InterruptInfo, SubagentRun, SubagentEvent, Todo }
 
 function fail(message: string): never {
   throw new AssertionError({ message })
@@ -99,6 +101,102 @@ export function expectOffloaded(run: AgentRunResult, toolName: string): void {
     fail(
       `expected "${toolName}" output to be offloaded (stub marker), got: ${content.slice(0, 120)}`,
     )
+  }
+}
+
+export function expectInterrupt(run: AgentRunResult) {
+  if (run.interrupts.length === 0) {
+    fail("expected at least one interrupt, but none were captured")
+  }
+  return {
+    ofKind(kind: string) {
+      if (!run.interrupts.some((i) => i.kind === kind)) {
+        fail(
+          `expected an interrupt of kind "${kind}"; got: ${run.interrupts.map((i) => i.kind).join(", ") || "(none)"}`,
+        )
+      }
+    },
+    withDetail(partial: Record<string, unknown>) {
+      const found = run.interrupts.some((i) => i.detail !== undefined && isSubset(partial, i.detail))
+      if (!found) {
+        fail(
+          `expected an interrupt with detail >= ${JSON.stringify(partial)}; got: ${JSON.stringify(run.interrupts.map((i) => i.detail))}`,
+        )
+      }
+    },
+  }
+}
+
+export function expectNoInterrupt(run: AgentRunResult): void {
+  if (run.interrupts.length > 0) {
+    fail(
+      `expected no interrupts, but got ${run.interrupts.length}: ${run.interrupts.map((i) => i.kind).join(", ")}`,
+    )
+  }
+}
+
+export function expectSubagent(run: AgentRunResult) {
+  return {
+    called(name: string) {
+      if (!run.subagents.some((s) => s.name === name)) {
+        fail(
+          `expected subagent "${name}" to be called; subagents: ${run.subagents.map((s) => s.name).join(", ") || "(none)"}`,
+        )
+      }
+    },
+    calledTool(toolName: string) {
+      const found = run.subagents.some((s) => s.toolCalls.some((t) => t.name === toolName))
+      if (!found) {
+        fail(
+          `expected a subagent to call tool "${toolName}"; tool calls: ${run.subagents.flatMap((s) => s.toolCalls.map((t) => t.name)).join(", ") || "(none)"}`,
+        )
+      }
+    },
+    finalMessageContains(text: string) {
+      const found = run.subagents.some((s) => s.finalMessage !== undefined && s.finalMessage.includes(text))
+      if (!found) {
+        fail(
+          `expected a subagent finalMessage to contain "${text}"; got: ${run.subagents.map((s) => s.finalMessage ?? "(no finalMessage)").join(", ") || "(no subagents)"}`,
+        )
+      }
+    },
+  }
+}
+
+export function expectPlan(run: AgentRunResult) {
+  return {
+    toHaveTodo(content: string) {
+      if (!run.todos.some((t) => t.content === content)) {
+        fail(
+          `expected a todo with content "${content}"; todos: ${run.todos.map((t) => t.content).join(", ") || "(none)"}`,
+        )
+      }
+    },
+    toHaveStatus(content: string, status: string) {
+      const todo = run.todos.find((t) => t.content === content)
+      if (!todo) {
+        fail(
+          `expected a todo with content "${content}"; todos: ${run.todos.map((t) => t.content).join(", ") || "(none)"}`,
+        )
+      }
+      if (todo.status !== status) {
+        fail(
+          `expected todo "${content}" to have status "${status}", but got "${todo.status}"`,
+        )
+      }
+    },
+  }
+}
+
+export function expectSystemPrompt(run: AgentRunResult) {
+  return {
+    toContain(text: string) {
+      if (!run.systemPrompt.includes(text)) {
+        fail(
+          `expected systemPrompt to contain "${text}"; got: ${JSON.stringify(run.systemPrompt.slice(0, 120))}`,
+        )
+      }
+    },
   }
 }
 
