@@ -6,6 +6,7 @@ export type {
   SubagentResolver,
 } from "./agent-adapter.js"
 export {
+  __resetMaterializedAgentsForTests,
   executeAgent,
   materializeAgentGraph,
   streamAgent,

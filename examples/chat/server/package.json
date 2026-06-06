@@ -19,8 +19,9 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
+    "@dawn-ai/testing": "workspace:*",
     "@types/node": "25.6.0",
     "typescript": "6.0.2",
-    "vitest": "3.0.0"
+    "vitest": "^4.1.4"
   }
 }

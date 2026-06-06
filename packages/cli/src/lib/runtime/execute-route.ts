@@ -429,6 +429,7 @@ async function prepareRouteExecution(options: {
     loadedDawnConfig,
     configBackends?.filesystem,
     options.signal ?? new AbortController().signal,
+    options.appRoot,
   )
 
   let summarization: ResolvedSummarizationConfig | undefined
@@ -977,8 +978,9 @@ function buildOffload(
   config: DawnConfig | undefined,
   filesystem: FilesystemBackend | undefined,
   signal: AbortSignal,
+  appRoot?: string,
 ): OffloadFn | undefined {
-  const workspaceRoot = join(process.cwd(), "workspace")
+  const workspaceRoot = join(appRoot ?? process.cwd(), "workspace")
   if (!existsSync(workspaceRoot)) return undefined
   const t = config?.toolOutput ?? {}
   const store = new OffloadStore({

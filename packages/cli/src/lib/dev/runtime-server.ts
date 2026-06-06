@@ -41,12 +41,19 @@ interface RouteMatcher {
 }
 
 // ---------------------------------------------------------------------------
-// Server factory
+// Server factory — listener-only (no port binding)
 // ---------------------------------------------------------------------------
 
-export async function startRuntimeServer(
+export interface RuntimeRequestListener {
+  readonly listener: (req: IncomingMessage, res: ServerResponse) => void
+  readonly close: () => Promise<void>
+  readonly state: { acceptingRequests: boolean; activeRequests: number; closed: boolean }
+  readonly shutdownController: AbortController
+}
+
+export async function createRuntimeRequestListener(
   options: StartRuntimeServerOptions,
-): Promise<RuntimeServer> {
+): Promise<RuntimeRequestListener> {
   const registry = await createRuntimeRegistry(options.appRoot)
   const middleware = await loadMiddleware(options.appRoot)
   const threadsStore = await resolveThreadsStore(options.appRoot)
@@ -68,32 +75,76 @@ export async function startRuntimeServer(
     threadsStore,
   })
 
-  const server = createServer(async (request, response) => {
-    if (!state.acceptingRequests) {
-      sendJson(response, 503, createRequestErrorBody("Server is shutting down"))
-      return
-    }
-
-    state.activeRequests++
-    try {
-      await dispatch(routes, request, response, shutdownController.signal)
-    } catch (error) {
-      if (shutdownController.signal.aborted) {
-        sendJson(
-          response,
-          503,
-          createRequestErrorBody("Request canceled during server shutdown", {
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        )
+  const listener = (request: IncomingMessage, response: ServerResponse): void => {
+    void (async () => {
+      if (!state.acceptingRequests) {
+        sendJson(response, 503, createRequestErrorBody("Server is shutting down"))
         return
       }
 
-      sendJson(response, 500, createExecutionErrorBody("Unexpected runtime server failure"))
-    } finally {
-      state.activeRequests--
+      state.activeRequests++
+      try {
+        await dispatch(routes, request, response, shutdownController.signal)
+      } catch (error) {
+        if (shutdownController.signal.aborted) {
+          sendJson(
+            response,
+            503,
+            createRequestErrorBody("Request canceled during server shutdown", {
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          )
+          return
+        }
+
+        sendJson(response, 500, createExecutionErrorBody("Unexpected runtime server failure"))
+      } finally {
+        state.activeRequests--
+      }
+    })()
+  }
+
+  const close = async (): Promise<void> => {
+    if (state.closed) {
+      return
     }
-  })
+
+    state.acceptingRequests = false
+    state.closed = true
+    shutdownController.abort(new Error("Runtime server shutting down"))
+
+    // Drain in-flight requests
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (state.activeRequests === 0) {
+          resolve()
+        } else {
+          const interval = setInterval(() => {
+            if (state.activeRequests > 0) {
+              return
+            }
+            clearInterval(interval)
+            resolve()
+          }, 10)
+        }
+      }
+      check()
+    })
+  }
+
+  return { close, listener, shutdownController, state }
+}
+
+// ---------------------------------------------------------------------------
+// Server factory
+// ---------------------------------------------------------------------------
+
+export async function startRuntimeServer(
+  options: StartRuntimeServerOptions,
+): Promise<RuntimeServer> {
+  const { listener, state, shutdownController } = await createRuntimeRequestListener(options)
+
+  const server = createServer(listener)
 
   await listen(server, options.port)
 
@@ -108,28 +159,23 @@ export async function startRuntimeServer(
       if (state.closed) {
         return
       }
-
       state.acceptingRequests = false
       state.closed = true
       shutdownController.abort(new Error("Runtime server shutting down"))
-
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {
             reject(error)
             return
           }
-
           if (state.activeRequests === 0) {
             resolve()
             return
           }
-
           const interval = setInterval(() => {
             if (state.activeRequests > 0) {
               return
             }
-
             clearInterval(interval)
             resolve()
           }, 10)

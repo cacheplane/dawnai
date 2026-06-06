@@ -1,7 +1,0 @@
-{
-  "fixtures": [
-    { "match": { "userMessage": "APPLE_TURN" }, "response": { "content": "Noted about apples." } },
-    { "match": { "userMessage": "BANANA_TURN" }, "response": { "content": "Noted about bananas." } },
-    { "match": { "userMessage": "CHERRY_TURN" }, "response": { "content": "Noted about cherries." } }
-  ]
-}
