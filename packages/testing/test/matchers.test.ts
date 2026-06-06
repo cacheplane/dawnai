@@ -164,3 +164,12 @@ it("expectSystemPrompt.toContain passes when text is in systemPrompt", () => {
 it("expectSystemPrompt.toContain throws when text not found", () => {
   expect(() => expectSystemPrompt(withSystemPrompt).toContain("evil robot")).toThrow()
 })
+
+it("expectPlan.toHaveLength", () => {
+  expectPlan(withPlan).toHaveLength(1)
+  expect(() => expectPlan(withPlan).toHaveLength(999)).toThrow()
+})
+it("expectSystemPrompt.toMatch", () => {
+  expectSystemPrompt(withSystemPrompt).toMatch(/helpful/)
+  expect(() => expectSystemPrompt(withSystemPrompt).toMatch(/nope-xyz/)).toThrow()
+})

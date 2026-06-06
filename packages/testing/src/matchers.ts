@@ -161,9 +161,7 @@ export function expectSubagent(run: AgentRunResult) {
       }
     },
     finalMessageContains(text: string) {
-      const found = run.subagents.some(
-        (s) => s.finalMessage !== undefined && s.finalMessage.includes(text),
-      )
+      const found = run.subagents.some((s) => s.finalMessage?.includes(text) ?? false)
       if (!found) {
         fail(
           `expected a subagent finalMessage to contain "${text}"; got: ${run.subagents.map((s) => s.finalMessage ?? "(no finalMessage)").join(", ") || "(no subagents)"}`,
@@ -175,6 +173,9 @@ export function expectSubagent(run: AgentRunResult) {
 
 export function expectPlan(run: AgentRunResult) {
   return {
+    toHaveLength(n: number) {
+      if (run.todos.length !== n) fail(`expected ${n} todos, got ${run.todos.length}`)
+    },
     toHaveTodo(content: string) {
       if (!run.todos.some((t) => t.content === content)) {
         fail(
@@ -204,6 +205,12 @@ export function expectSystemPrompt(run: AgentRunResult) {
           `expected systemPrompt to contain "${text}"; got: ${JSON.stringify(run.systemPrompt.slice(0, 120))}`,
         )
       }
+    },
+    toMatch(re: RegExp) {
+      if (!re.test(run.systemPrompt))
+        fail(
+          `expected systemPrompt to match ${re}; got: ${JSON.stringify(run.systemPrompt.slice(0, 120))}`,
+        )
     },
   }
 }
