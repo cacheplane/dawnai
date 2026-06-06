@@ -54,9 +54,11 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
 let materializedAgents = new WeakMap<DawnAgent, AgentLike>()
 
 /**
- * Test-only: reset the materialized-agents cache so the next harness run
- * creates a fresh LLM instance (e.g., pointing to a new aimock port).
- * Not exported via the package barrel — internal to the testing harness.
+ * Test-only escape hatch: reset the materialized-agents cache so the next
+ * harness run creates a fresh LLM instance (e.g. pointing at a new aimock
+ * port). Exported (and re-exported via `@dawn-ai/cli/runtime`) so the
+ * `@dawn-ai/testing` harness can clear the cache on teardown. Not for
+ * production use; the `__`/`ForTests` name marks it internal-by-convention.
  */
 export function __resetMaterializedAgentsForTests(): void {
   materializedAgents = new WeakMap()

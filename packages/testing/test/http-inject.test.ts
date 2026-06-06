@@ -8,6 +8,8 @@ const appRoot = fileURLToPath(new URL("./fixtures/probe-app", import.meta.url))
 
 it("creates a thread + runs/wait over the in-process AP pipeline (no port)", async () => {
   const mock = await startAimock({ fixtures: script().user("hello").replies("hi there").build() })
+  const prevBaseUrl = process.env.OPENAI_BASE_URL
+  const prevKey = process.env.OPENAI_API_KEY
   process.env.OPENAI_BASE_URL = mock.baseUrl
   process.env.OPENAI_API_KEY = "test-not-used"
   const ap = await injectAgentProtocol({ appRoot })
@@ -27,5 +29,9 @@ it("creates a thread + runs/wait over the in-process AP pipeline (no port)", asy
   } finally {
     await ap.close()
     await mock.stop()
+    if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+    else process.env.OPENAI_BASE_URL = prevBaseUrl
+    if (prevKey === undefined) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = prevKey
   }
 }, 60_000)

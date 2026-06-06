@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url"
 import { expect, it } from "vitest"
-import { startAimock, startSubprocessApp, script } from "../src/index.js"
+import { script, startAimock, startSubprocessApp } from "../src/index.js"
 
 const appRoot = fileURLToPath(new URL("./fixtures/probe-app", import.meta.url))
 

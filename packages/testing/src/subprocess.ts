@@ -46,7 +46,7 @@ async function waitReady(url: string, timeoutMs: number): Promise<void> {
  * We look relative to this module's own location inside the testing package.
  */
 function resolveDawnCliEntry(): string {
-  // __filename is something like:
+  // import.meta.url resolves to something like:
   //   .../packages/testing/src/subprocess.ts  (ts-node / source)
   //   .../packages/testing/dist/subprocess.js (compiled)
   const here = dirname(fileURLToPath(import.meta.url))

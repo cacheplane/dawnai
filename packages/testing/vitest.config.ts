@@ -5,9 +5,8 @@ export default defineConfig({
     environment: "node",
     include: ["test/**/*.test.ts"],
     passWithNoTests: true,
-    // Harness tests open the same probe-app SQLite DB; run sequentially to avoid
-    // "database is locked" (ERR_SQLITE_ERROR) errors under concurrent workers.
-    pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    // Several suites boot real servers / share the probe app's SQLite file —
+    // run files sequentially to avoid "database is locked" + port races.
+    fileParallelism: false,
   },
 })
