@@ -2,17 +2,24 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, expect, it } from "vitest"
-import { loadFixtures, writeFixtures } from "../src/fixture-file.js"
 import { script } from "../src/fixture-builder.js"
+import { loadFixtures, writeFixtures } from "../src/fixture-file.js"
 
 let dir = ""
-afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }) })
-function tmp(): string { dir = mkdtempSync(join(tmpdir(), "dt-fx-")); return dir }
+afterEach(() => {
+  if (dir) rmSync(dir, { recursive: true, force: true })
+})
+function tmp(): string {
+  dir = mkdtempSync(join(tmpdir(), "dt-fx-"))
+  return dir
+}
 
 it("writeFixtures + loadFixtures round-trips a script() builder", () => {
   const path = join(tmp(), "x.fixture.json")
   writeFixtures(path, script().user("hi").callsTool("greet", { tenant: "acme" }).replies("hello"))
-  expect(loadFixtures(path)).toEqual(script().user("hi").callsTool("greet", { tenant: "acme" }).replies("hello").build())
+  expect(loadFixtures(path)).toEqual(
+    script().user("hi").callsTool("greet", { tenant: "acme" }).replies("hello").build(),
+  )
 })
 it("writeFixtures accepts a bare FixtureSet", () => {
   const path = join(tmp(), "y.fixture.json")

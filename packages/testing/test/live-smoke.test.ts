@@ -12,7 +12,7 @@ it.skipIf(!process.env.OPENAI_API_KEY)(
     const h = await createAgentHarness({ appRoot, route: "/chat#agent", live: true })
     try {
       const run = await h.run({ input: "Filter the open items, please." })
-      expectToolCalled(run, "applyFilter")              // real model should call the tool
+      expectToolCalled(run, "applyFilter") // real model should call the tool
       expect(run.finalMessage.length).toBeGreaterThan(0)
       expect(run.systemPrompt.length).toBeGreaterThan(0) // proxy-record retains systemPrompt
     } finally {

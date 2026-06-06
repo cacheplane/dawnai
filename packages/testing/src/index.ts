@@ -1,5 +1,4 @@
 export { type AimockHandle, startAimock } from "./aimock-runner.js"
-export { loadFixtures, writeFixtures } from "./fixture-file.js"
 export {
   type AimockFixture,
   type AimockResponse,
@@ -8,6 +7,7 @@ export {
   type ScriptBuilder,
   script,
 } from "./fixture-builder.js"
+export { loadFixtures, writeFixtures } from "./fixture-file.js"
 export { type AgentHarness, type AgentHarnessOptions, createAgentHarness } from "./harness.js"
 export {
   type AgentProtocolInjector,

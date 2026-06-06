@@ -52,5 +52,7 @@ export function loadFixtures(path: string): FixtureSet {
     return (parsed as { fixtures: FixtureSet }).fixtures
   }
 
-  throw new Error(`fixture file does not contain a fixture set (expected array or { fixtures: [...] }): ${path}`)
+  throw new Error(
+    `fixture file does not contain a fixture set (expected array or { fixtures: [...] }): ${path}`,
+  )
 }
