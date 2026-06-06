@@ -1,5 +1,15 @@
 # @dawn-ai/cli
 
+## 0.4.0
+
+### Patch Changes
+
+- @dawn-ai/core@0.4.0
+- @dawn-ai/langchain@0.4.0
+- @dawn-ai/langgraph@0.4.0
+- @dawn-ai/permissions@0.1.8
+- @dawn-ai/sqlite-storage@0.2.0
+
 ## 0.3.0
 
 ### Minor Changes
