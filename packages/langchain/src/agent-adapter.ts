@@ -51,7 +51,16 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
 // invoked with the same capability contributions (prompt fragments come from
 // the route directory, which is stable per descriptor). If that assumption
 // changes, the cache key must include a hash of the fragments/transformers.
-const materializedAgents = new WeakMap<DawnAgent, AgentLike>()
+let materializedAgents = new WeakMap<DawnAgent, AgentLike>()
+
+/**
+ * Test-only: reset the materialized-agents cache so the next harness run
+ * creates a fresh LLM instance (e.g., pointing to a new aimock port).
+ * Not exported via the package barrel — internal to the testing harness.
+ */
+export function __resetMaterializedAgentsForTests(): void {
+  materializedAgents = new WeakMap()
+}
 
 export function composePromptMessages(
   systemPrompt: string,

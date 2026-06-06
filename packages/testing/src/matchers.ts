@@ -60,13 +60,41 @@ export function expectStreamedTokens(run: AgentRunResult): void {
   if (run.tokens.length === 0) fail("expected >=1 streamed token, got none")
 }
 
+/**
+ * Resolve a message object to the `content` string, handling both the
+ * JSON-serialized AP shape (`{ id: [...], kwargs: { content } }`) and the
+ * raw LangChain BaseMessage instance shape (`{ lc_id: [...], content }`).
+ */
+function resolveMessageContent(m: Record<string, unknown>): string | undefined {
+  // JSON-serialized AP shape: { id: ["langchain_core","messages","ToolMessage"], kwargs: { content } }
+  const kwContent = (m as { kwargs?: { content?: string } }).kwargs?.content
+  if (typeof kwContent === "string") return kwContent
+  // Raw BaseMessage instance shape: { lc_id: [...], content }
+  const rawContent = (m as { content?: unknown }).content
+  if (typeof rawContent === "string") return rawContent
+  return undefined
+}
+
+/**
+ * Return true if `m` is a ToolMessage for the given tool name, regardless
+ * of whether the message is a raw LangChain BaseMessage instance or its
+ * JSON-serialized form (as produced by the AP endpoint).
+ */
+function isToolMessage(m: Record<string, unknown>, toolName: string): boolean {
+  // JSON-serialized AP shape
+  const id = (m as { id?: string[] }).id
+  const kw = (m as { kwargs?: { name?: string } }).kwargs
+  if (Array.isArray(id) && id[2] === "ToolMessage" && kw?.name === toolName) return true
+  // Raw BaseMessage instance shape (in-process Layer A harness)
+  const lcId = (m as { lc_id?: string[] }).lc_id
+  const msgName = (m as { name?: string }).name
+  if (Array.isArray(lcId) && lcId[2] === "ToolMessage" && msgName === toolName) return true
+  return false
+}
+
 export function expectOffloaded(run: AgentRunResult, toolName: string): void {
-  const msg = run.messages.find((m) => {
-    const id = (m as { id?: string[] }).id
-    const kw = (m as { kwargs?: { name?: string } }).kwargs
-    return Array.isArray(id) && id[2] === "ToolMessage" && kw?.name === toolName
-  }) as { kwargs?: { content?: string } } | undefined
-  const content = msg?.kwargs?.content ?? ""
+  const msg = run.messages.find((m) => isToolMessage(m, toolName))
+  const content = (msg ? resolveMessageContent(msg) : undefined) ?? ""
   if (!content.includes("Tool output offloaded")) {
     fail(
       `expected "${toolName}" output to be offloaded (stub marker), got: ${content.slice(0, 120)}`,

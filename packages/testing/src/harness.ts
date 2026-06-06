@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { createRuntimeRegistry, runTypegen, streamResolvedRoute } from "@dawn-ai/cli/runtime"
 import { discoverRoutes } from "@dawn-ai/core"
+import { __resetMaterializedAgentsForTests } from "@dawn-ai/langchain"
 import { type AimockHandle, startAimock } from "./aimock-runner.js"
 import type { FixtureSet, ScriptBuilder } from "./fixture-builder.js"
 import { type AgentRunResult, collectRunResult } from "./run-result.js"
@@ -99,6 +100,12 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       else process.env.OPENAI_BASE_URL = prevBaseUrl
       if (prevKey === undefined) delete process.env.OPENAI_API_KEY
       else process.env.OPENAI_API_KEY = prevKey
+      // Reset the per-descriptor LLM cache so the next harness constructs a
+      // fresh ChatOpenAI instance pointing to its own aimock URL. Without this,
+      // successive harnesses that share the same DawnAgent descriptor object
+      // (ESM module cache returns the same export) would reuse an LLM already
+      // bound to the previous (stopped) aimock server.
+      __resetMaterializedAgentsForTests()
     },
   }
   return harness
