@@ -99,12 +99,15 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       }
     }
     const snapshotLen = aimock.getRequests().length
+    // resolved is guaranteed non-null at this point: the catch block re-throws
+    // before returning, so if we reach drive() the null check already passed.
+    const r = resolved!
     const streamArgs: Parameters<typeof streamResolvedRoute>[0] = {
       appRoot: options.appRoot,
       input: driveOpts.input !== undefined ? { messages: [{ role: "user", content: driveOpts.input }] } : { messages: [] },
-      routeFile: resolved.routeFile,
-      routeId: resolved.routeId,
-      routePath: resolved.routePath,
+      routeFile: r.routeFile,
+      routeId: r.routeId,
+      routePath: r.routePath,
       threadId,
       ...(driveOpts.resumeDecision !== undefined ? { resumeDecision: driveOpts.resumeDecision } : {}),
     }
@@ -119,10 +122,16 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       return baseUrl
     },
     async run(runOpts) {
-      return drive({ input: runOpts.input, fixtures: runOpts.fixtures })
+      return drive({
+        input: runOpts.input,
+        ...(runOpts.fixtures !== undefined ? { fixtures: runOpts.fixtures } : {}),
+      })
     },
     async resume(resumeOpts) {
-      return drive({ decision: resumeOpts.decision, fixtures: resumeOpts.fixtures, resumeDecision: resumeOpts.decision })
+      return drive({
+        resumeDecision: resumeOpts.decision,
+        ...(resumeOpts.fixtures !== undefined ? { fixtures: resumeOpts.fixtures } : {}),
+      })
     },
     reset() {
       threadId = randomUUID()
