@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
-    "@types/node": "25.6.0",
+    "@types/node": "25.9.2",
     "zod": "4.4.3"
   }
 }
