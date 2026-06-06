@@ -34,6 +34,7 @@ interface PackedTarballs {
   readonly permissions: string
   readonly sdk: string
   readonly sqliteStorage: string
+  readonly testing: string
   readonly workspace: string
 }
 
@@ -176,6 +177,7 @@ async function runGeneratedAppScenario(
           "@dawn-ai/permissions",
           "@dawn-ai/sdk",
           "@dawn-ai/sqlite-storage",
+          "@dawn-ai/testing",
           "@dawn-ai/workspace",
         ],
         tempRoot,
@@ -307,6 +309,7 @@ async function rewriteDependenciesToTarballs(options: {
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
     "@dawn-ai/config-typescript": options.tarballs.configTypescript,
+    "@dawn-ai/testing": options.tarballs.testing,
   }
   packageJson.pnpm = {
     ...(packageJson.pnpm ?? {}),
@@ -320,6 +323,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/permissions": options.tarballs.permissions,
       "@dawn-ai/sdk": options.tarballs.sdk,
       "@dawn-ai/sqlite-storage": options.tarballs.sqliteStorage,
+      "@dawn-ai/testing": options.tarballs.testing,
       "@dawn-ai/workspace": options.tarballs.workspace,
     },
   }
@@ -529,6 +533,7 @@ async function createExpectedInternalFixture(
       devDependencies: {
         ...expected.packageJson.devDependencies,
         "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
+        "@dawn-ai/testing": "<repo:@dawn-ai/testing>",
       },
       pnpm: {
         overrides: {
@@ -540,6 +545,7 @@ async function createExpectedInternalFixture(
           "@dawn-ai/permissions": "<repo:@dawn-ai/permissions>",
           "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
           "@dawn-ai/sqlite-storage": "<repo:@dawn-ai/sqlite-storage>",
+          "@dawn-ai/testing": "<repo:@dawn-ai/testing>",
           "@dawn-ai/workspace": "<repo:@dawn-ai/workspace>",
         },
       },
@@ -559,6 +565,7 @@ function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTar
     permissions: tarballs["@dawn-ai/permissions"]!,
     sdk: tarballs["@dawn-ai/sdk"],
     sqliteStorage: tarballs["@dawn-ai/sqlite-storage"]!,
+    testing: tarballs["@dawn-ai/testing"]!,
     workspace: tarballs["@dawn-ai/workspace"]!,
   }
 }
@@ -580,11 +587,13 @@ function normalizeForFixture(
     [context.tarballs.permissions, "<tarball:@dawn-ai/permissions>"],
     [context.tarballs.sdk, "<tarball:@dawn-ai/sdk>"],
     [context.tarballs.sqliteStorage, "<tarball:@dawn-ai/sqlite-storage>"],
+    [context.tarballs.testing, "<tarball:@dawn-ai/testing>"],
     [context.tarballs.workspace, "<tarball:@dawn-ai/workspace>"],
     [`/private${dirname(context.tarballs.cli)}`, "<packs-dir>"],
     [dirname(context.tarballs.cli), "<packs-dir>"],
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
+    ["4.1.4", "<version:vitest>"],
   ]) as GeneratedAppScenarioResult
 }
 
@@ -603,9 +612,11 @@ function normalizeForInternalFixture(
     [pathToRepoPackageFileSpecifier("@dawn-ai/permissions"), "<repo:@dawn-ai/permissions>"],
     [pathToRepoPackageFileSpecifier("@dawn-ai/sdk"), "<repo:@dawn-ai/sdk>"],
     [pathToRepoPackageFileSpecifier("@dawn-ai/sqlite-storage"), "<repo:@dawn-ai/sqlite-storage>"],
+    [pathToRepoPackageFileSpecifier("@dawn-ai/testing"), "<repo:@dawn-ai/testing>"],
     [pathToRepoPackageFileSpecifier("@dawn-ai/workspace"), "<repo:@dawn-ai/workspace>"],
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
+    ["4.1.4", "<version:vitest>"],
   ]) as GeneratedAppScenarioResult
 }
 
@@ -619,6 +630,7 @@ function pathToRepoPackageFileSpecifier(
     | "@dawn-ai/permissions"
     | "@dawn-ai/sdk"
     | "@dawn-ai/sqlite-storage"
+    | "@dawn-ai/testing"
     | "@dawn-ai/workspace",
 ): string {
   const packageDirByName = {
@@ -630,6 +642,7 @@ function pathToRepoPackageFileSpecifier(
     "@dawn-ai/permissions": "packages/permissions",
     "@dawn-ai/sdk": "packages/sdk",
     "@dawn-ai/sqlite-storage": "packages/sqlite-storage",
+    "@dawn-ai/testing": "packages/testing",
     "@dawn-ai/workspace": "packages/workspace",
   } as const
 
