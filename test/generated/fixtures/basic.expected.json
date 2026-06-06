@@ -6,6 +6,7 @@
     "scripts": {
       "check": "dawn check",
       "build": "tsc -p tsconfig.json",
+      "test": "vitest run",
       "typecheck": "tsc --noEmit"
     },
     "dependencies": {
@@ -18,8 +19,10 @@
     },
     "devDependencies": {
       "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
+      "@dawn-ai/testing": "<tarball:@dawn-ai/testing>",
       "@types/node": "<version:@types/node>",
-      "typescript": "<version:typescript>"
+      "typescript": "<version:typescript>",
+      "vitest": "<version:vitest>"
     },
     "pnpm": {
       "overrides": {
@@ -31,6 +34,7 @@
         "@dawn-ai/permissions": "<tarball:@dawn-ai/permissions>",
         "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
         "@dawn-ai/sqlite-storage": "<tarball:@dawn-ai/sqlite-storage>",
+        "@dawn-ai/testing": "<tarball:@dawn-ai/testing>",
         "@dawn-ai/workspace": "<tarball:@dawn-ai/workspace>"
       }
     }
