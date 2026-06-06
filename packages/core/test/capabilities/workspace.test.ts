@@ -13,10 +13,14 @@ function emptyManifest() {
   return { appRoot: "/app", routes: [] }
 }
 
-function ctx(extras: Partial<CapabilityMarkerContext> = {}): CapabilityMarkerContext {
+function ctx(
+  appRoot: string,
+  extras: Partial<CapabilityMarkerContext> = {},
+): CapabilityMarkerContext {
   return {
     routeManifest: emptyManifest(),
     descriptor: undefined,
+    appRoot,
     ...extras,
   }
 }
@@ -44,14 +48,14 @@ describe("createWorkspaceMarker — detect", () => {
     rmSync(appRoot, { recursive: true, force: true })
   })
 
-  it("returns false when no workspace/ directory exists at cwd", async () => {
-    const detected = await createWorkspaceMarker().detect(routeDir, ctx())
+  it("returns false when no workspace/ directory exists at appRoot", async () => {
+    const detected = await createWorkspaceMarker().detect(routeDir, ctx(appRoot))
     expect(detected).toBe(false)
   })
 
-  it("returns true when workspace/ exists at cwd", async () => {
+  it("returns true when workspace/ exists at appRoot", async () => {
     mkdirSync(join(appRoot, "workspace"))
-    const detected = await createWorkspaceMarker().detect(routeDir, ctx())
+    const detected = await createWorkspaceMarker().detect(routeDir, ctx(appRoot))
     expect(detected).toBe(true)
   })
 })
@@ -74,14 +78,14 @@ describe("createWorkspaceMarker — load", () => {
   })
 
   it("contributes exactly four tools when workspace/ exists", async () => {
-    const contribution = await createWorkspaceMarker().load(routeDir, ctx())
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx(appRoot))
     const names = (contribution.tools ?? []).map((t) => t.name).sort()
     expect(names).toEqual(["listDir", "readFile", "runBash", "writeFile"])
   })
 
   it("contributes no tools when workspace/ is absent", async () => {
     rmSync(workspaceDir, { recursive: true })
-    const contribution = await createWorkspaceMarker().load(routeDir, ctx())
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx(appRoot))
     expect(contribution.tools).toBeUndefined()
   })
 
@@ -94,7 +98,7 @@ describe("createWorkspaceMarker — load", () => {
     }
     const contribution = await createWorkspaceMarker().load(
       routeDir,
-      ctx({ backends: { filesystem: fakeBackend } }),
+      ctx(appRoot, { backends: { filesystem: fakeBackend } }),
     )
     const readTool = findTool(contribution.tools, "readFile")
     const result = await readTool.run(
@@ -105,7 +109,7 @@ describe("createWorkspaceMarker — load", () => {
     expect(fakeBackend.readFile).toHaveBeenCalledOnce()
     const firstCall = fakeBackend.readFile.mock.calls[0]
     if (!firstCall) throw new Error("readFile was not called")
-    expect(firstCall[0]).toBe(join(process.cwd(), "workspace", "hello.txt"))
+    expect(firstCall[0]).toBe(join(appRoot, "workspace", "hello.txt"))
   })
 
   it("rejects path-jail escapes when permissions store is present (non-interactive mode)", async () => {
@@ -115,7 +119,7 @@ describe("createWorkspaceMarker — load", () => {
       mode: "non-interactive",
     })
     await permissions.load()
-    const contribution = await createWorkspaceMarker().load(routeDir, ctx({ permissions }))
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx(appRoot, { permissions }))
     const readTool = findTool(contribution.tools, "readFile")
     await expect(
       readTool.run({ path: "../../etc/passwd" }, { signal: new AbortController().signal }),
@@ -129,7 +133,7 @@ describe("createWorkspaceMarker — load", () => {
       mode: "bypass",
     })
     await permissions.load()
-    const contribution = await createWorkspaceMarker().load(routeDir, ctx({ permissions }))
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx(appRoot, { permissions }))
     const readTool = findTool(contribution.tools, "readFile")
     // The file doesn't exist outside the workspace, so we expect ENOENT, NOT "outside workspace"
     await expect(
@@ -144,7 +148,7 @@ describe("createWorkspaceMarker — load", () => {
       mode: "non-interactive",
     })
     await permissions.load()
-    const contribution = await createWorkspaceMarker().load(routeDir, ctx({ permissions }))
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx(appRoot, { permissions }))
     const runBash = findTool(contribution.tools, "runBash")
     await expect(
       runBash.run({ command: "ls" }, { signal: new AbortController().signal }),
@@ -158,7 +162,7 @@ describe("createWorkspaceMarker — load", () => {
       mode: "non-interactive",
     })
     await permissions.load()
-    const contribution = await createWorkspaceMarker().load(routeDir, ctx({ permissions }))
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx(appRoot, { permissions }))
     const runBash = findTool(contribution.tools, "runBash")
     const result = await runBash.run(
       { command: "echo hi" },
@@ -169,7 +173,7 @@ describe("createWorkspaceMarker — load", () => {
 
   it("uses the default local backends when none configured", async () => {
     writeFileSync(join(workspaceDir, "ok.txt"), "ok", "utf8")
-    const contribution = await createWorkspaceMarker().load(routeDir, ctx())
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx(appRoot))
     const readTool = findTool(contribution.tools, "readFile")
     const result = await readTool.run({ path: "ok.txt" }, { signal: new AbortController().signal })
     expect(result).toBe("ok")
@@ -181,7 +185,7 @@ describe("createWorkspaceMarker — load", () => {
     }
     const contribution = await createWorkspaceMarker().load(
       routeDir,
-      ctx({ backends: { exec: fakeExec } }),
+      ctx(appRoot, { backends: { exec: fakeExec } }),
     )
     const runBash = findTool(contribution.tools, "runBash")
     const result = await runBash.run(
@@ -196,7 +200,7 @@ describe("createWorkspaceMarker — load", () => {
   })
 
   it("marks all four tools as overridable", async () => {
-    const contribution = await createWorkspaceMarker().load(routeDir, ctx())
+    const contribution = await createWorkspaceMarker().load(routeDir, ctx(appRoot))
     for (const t of contribution.tools ?? []) {
       expect((t as unknown as { overridable?: boolean }).overridable).toBe(true)
     }
@@ -214,7 +218,7 @@ describe("createWorkspaceMarker — load", () => {
     }
     const contribution = await createWorkspaceMarker().load(
       routeDir,
-      ctx({ backends: { filesystem: fakeBackend } }),
+      ctx(appRoot, { backends: { filesystem: fakeBackend } }),
     )
     const readTool = findTool(contribution.tools, "readFile")
     await readTool.run({ path: "tool-outputs/x.txt" }, { signal: new AbortController().signal })
@@ -234,7 +238,7 @@ describe("createWorkspaceMarker — load", () => {
     }
     const contribution = await createWorkspaceMarker().load(
       routeDir,
-      ctx({ backends: { filesystem: fakeBackend } }),
+      ctx(appRoot, { backends: { filesystem: fakeBackend } }),
     )
     const readTool = findTool(contribution.tools, "readFile")
     await readTool.run({ path: "notes.md" }, { signal: new AbortController().signal })
@@ -253,7 +257,7 @@ describe("createWorkspaceMarker — load", () => {
     }
     const contribution = await createWorkspaceMarker().load(
       routeDir,
-      ctx({ backends: { filesystem: fakeBackend } }),
+      ctx(appRoot, { backends: { filesystem: fakeBackend } }),
     )
     const readTool = findTool(contribution.tools, "readFile")
     const result = await readTool.run(
@@ -276,7 +280,7 @@ describe("createWorkspaceMarker — load", () => {
 
     const contribution = await createWorkspaceMarker().load(
       routeDir,
-      ctx({ backends: { filesystem: tinyFs } }),
+      ctx(appRoot, { backends: { filesystem: tinyFs } }),
     )
     const readTool = findTool(contribution.tools, "readFile")
     const result = await readTool.run(

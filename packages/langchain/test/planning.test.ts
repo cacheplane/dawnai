@@ -22,6 +22,7 @@ describe("planning capability — end-to-end shape", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     expect(result.contributions).toEqual([])
   })
@@ -32,6 +33,7 @@ describe("planning capability — end-to-end shape", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
 
     expect(result.contributions).toHaveLength(1)
@@ -48,6 +50,7 @@ describe("planning capability — end-to-end shape", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     const todosField = result.contributions[0]?.contribution.stateFields?.[0]
     expect(todosField?.default).toEqual([
@@ -62,6 +65,7 @@ describe("planning capability — end-to-end shape", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     const fragment = result.contributions[0]?.contribution.promptFragment
     const r1 = fragment?.render({ todos: [] }) ?? ""
@@ -76,6 +80,7 @@ describe("planning capability — end-to-end shape", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     const transformer = result.contributions[0]?.contribution.streamTransformers?.[0]
 

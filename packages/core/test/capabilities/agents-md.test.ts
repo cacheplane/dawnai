@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createAgentsMdMarker } from "../../src/capabilities/built-in/agents-md.js"
+import type { CapabilityMarkerContext } from "../../src/capabilities/types.js"
 
 describe("createAgentsMdMarker", () => {
   let routeDir: string
@@ -14,6 +15,8 @@ describe("createAgentsMdMarker", () => {
     routeDir = join(workDir, "route")
     mkdirSync(routeDir, { recursive: true })
     originalCwd = process.cwd()
+    // NOTE: process.chdir kept for test isolation, but the marker now uses
+    // context.appRoot (workDir) rather than process.cwd() to resolve AGENTS.md.
     process.chdir(workDir)
   })
 
@@ -22,14 +25,22 @@ describe("createAgentsMdMarker", () => {
     rmSync(workDir, { recursive: true, force: true })
   })
 
+  function makeCtx(appRoot: string): CapabilityMarkerContext {
+    return {
+      routeManifest: { appRoot, routes: [] },
+      descriptor: undefined,
+      appRoot,
+    }
+  }
+
   it("always detects (returns true)", async () => {
     const marker = createAgentsMdMarker()
-    expect(await marker.detect(routeDir)).toBe(true)
+    expect(await marker.detect(routeDir, makeCtx(workDir))).toBe(true)
   })
 
   it("load returns a single promptFragment, no tools/state/transformers", async () => {
     const marker = createAgentsMdMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, makeCtx(workDir))
     expect(contribution.promptFragment?.placement).toBe("after_user_prompt")
     expect(contribution.tools).toBeUndefined()
     expect(contribution.stateFields).toBeUndefined()
@@ -38,7 +49,7 @@ describe("createAgentsMdMarker", () => {
 
   it("renders empty string when workspace/AGENTS.md does not exist", async () => {
     const marker = createAgentsMdMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, makeCtx(workDir))
     expect(contribution.promptFragment?.render({})).toBe("")
   })
 
@@ -46,7 +57,7 @@ describe("createAgentsMdMarker", () => {
     mkdirSync(join(workDir, "workspace"), { recursive: true })
     writeFileSync(join(workDir, "workspace", "AGENTS.md"), "Remember the pnpm convention.")
     const marker = createAgentsMdMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, makeCtx(workDir))
     const out = contribution.promptFragment?.render({}) ?? ""
     expect(out).toContain("# Memory")
     expect(out).toContain("Remember the pnpm convention.")
@@ -56,7 +67,7 @@ describe("createAgentsMdMarker", () => {
     mkdirSync(join(workDir, "workspace"), { recursive: true })
     writeFileSync(join(workDir, "workspace", "AGENTS.md"), "   \n\n  \n")
     const marker = createAgentsMdMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, makeCtx(workDir))
     expect(contribution.promptFragment?.render({})).toBe("")
   })
 
@@ -65,7 +76,7 @@ describe("createAgentsMdMarker", () => {
     const big = "x".repeat(65 * 1024)
     writeFileSync(join(workDir, "workspace", "AGENTS.md"), big)
     const marker = createAgentsMdMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, makeCtx(workDir))
     const out = contribution.promptFragment?.render({}) ?? ""
     expect(out).toContain("# Memory")
     expect(out).toContain("exceeds 64 KiB")
@@ -75,7 +86,7 @@ describe("createAgentsMdMarker", () => {
   it("returns empty string when AGENTS.md is a directory (read throws)", async () => {
     mkdirSync(join(workDir, "workspace", "AGENTS.md"), { recursive: true })
     const marker = createAgentsMdMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, makeCtx(workDir))
     expect(contribution.promptFragment?.render({})).toBe("")
   })
 
@@ -84,7 +95,7 @@ describe("createAgentsMdMarker", () => {
     const path = join(workDir, "workspace", "AGENTS.md")
     writeFileSync(path, "first")
     const marker = createAgentsMdMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, makeCtx(workDir))
     const first = contribution.promptFragment?.render({}) ?? ""
     expect(first).toContain("first")
     writeFileSync(path, "second")

@@ -26,6 +26,7 @@ describe("skills capability — end-to-end shape", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     expect(result.contributions).toEqual([])
   })
@@ -37,6 +38,7 @@ describe("skills capability — end-to-end shape", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     expect(result.contributions).toHaveLength(1)
     const contrib = result.contributions[0]?.contribution
@@ -54,6 +56,7 @@ describe("skills capability — end-to-end shape", () => {
     const result = await applyCapabilities(registry, routeDir, {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
+      appRoot: routeDir,
     })
     const readSkill = result.contributions[0]?.contribution.tools?.[0]
     const output = await readSkill?.run(
