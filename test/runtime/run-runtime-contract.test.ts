@@ -485,6 +485,7 @@ async function withRuntimeScenario(
           "@dawn-ai/permissions",
           "@dawn-ai/sdk",
           "@dawn-ai/sqlite-storage",
+          "@dawn-ai/testing",
           "@dawn-ai/workspace",
         ],
         tempRoot,
@@ -723,6 +724,7 @@ async function rewriteDependenciesToTarballs(options: {
   packageJson.devDependencies = {
     ...packageJson.devDependencies,
     "@dawn-ai/config-typescript": options.tarballs["@dawn-ai/config-typescript"],
+    "@dawn-ai/testing": options.tarballs["@dawn-ai/testing"],
   }
   packageJson.pnpm = {
     ...(packageJson.pnpm ?? {}),
@@ -736,6 +738,7 @@ async function rewriteDependenciesToTarballs(options: {
       "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
       "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
       "@dawn-ai/sqlite-storage": options.tarballs["@dawn-ai/sqlite-storage"],
+      "@dawn-ai/testing": options.tarballs["@dawn-ai/testing"],
       "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
     },
   }
