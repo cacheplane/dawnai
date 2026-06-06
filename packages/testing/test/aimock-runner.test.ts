@@ -17,6 +17,16 @@ it("boots an aimock server on an OS-assigned port and serves the /v1 base url", 
   }
 })
 
+it("accepts a proxy option and exposes the journal", async () => {
+  const mock = await startAimock({ fixtures: [], proxy: { openai: "https://api.openai.com" } })
+  try {
+    expect(mock.baseUrl).toMatch(/\/v1$/)
+    expect(Array.isArray(mock.getRequests())).toBe(true)
+  } finally {
+    await mock.stop()
+  }
+})
+
 it("stop() is idempotent", async () => {
   const mock = await startAimock({ fixtures: [] })
   await mock.stop()
