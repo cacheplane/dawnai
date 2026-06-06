@@ -5,6 +5,7 @@
  * `@dawn-ai/cli/runtime` subpath.
  */
 
+export { __resetMaterializedAgentsForTests } from "@dawn-ai/langchain"
 export { createRuntimeRegistry, type RuntimeRegistry } from "./lib/dev/runtime-registry.js"
 export {
   createRuntimeRequestListener,

@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { createRuntimeRegistry, runTypegen, streamResolvedRoute } from "@dawn-ai/cli/runtime"
+import {
+  __resetMaterializedAgentsForTests,
+  createRuntimeRegistry,
+  runTypegen,
+  streamResolvedRoute,
+} from "@dawn-ai/cli/runtime"
 import { discoverRoutes } from "@dawn-ai/core"
-import { __resetMaterializedAgentsForTests } from "@dawn-ai/langchain"
 import { type AimockHandle, startAimock } from "./aimock-runner.js"
 import type { FixtureSet, ScriptBuilder } from "./fixture-builder.js"
 import { type AgentRunResult, collectRunResult } from "./run-result.js"
