@@ -1,4 +1,5 @@
 export { type AimockHandle, startAimock } from "./aimock-runner.js"
+export { loadFixtures, writeFixtures } from "./fixture-file.js"
 export {
   type AimockFixture,
   type AimockResponse,
