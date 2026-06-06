@@ -39,6 +39,11 @@ export interface AgentHarnessOptions {
   readonly route: string
   readonly fixtures?: FixtureSet
   readonly mode?: "in-process" | "http-inject" | "subprocess"
+  /**
+   * When true, proxy all LLM requests through a real upstream (OPENAI_API_KEY
+   * must be set). Requires OPENAI_API_KEY to be present in the environment.
+   */
+  readonly live?: boolean
 }
 
 export interface AgentHarness {
@@ -58,13 +63,28 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     throw new Error(`createAgentHarness: mode "${mode}" not yet implemented`)
   }
 
+  const live = options.live ?? false
+
+  // Guard: live mode requires a real API key before doing anything else.
+  if (live && !process.env.OPENAI_API_KEY) {
+    throw new Error(
+      "createAgentHarness({ live: true }) requires OPENAI_API_KEY to be set in the environment",
+    )
+  }
+
   const prevBaseUrl = process.env.OPENAI_BASE_URL
   const prevKey = process.env.OPENAI_API_KEY
 
   // Start aimock once — port (and thus the cached agent's baseURL) stays stable for the harness lifetime.
-  const aimock: AimockHandle = await startAimock({ fixtures: options.fixtures ?? [] })
+  // In live mode: proxy all requests through to the real OpenAI upstream.
+  const aimock: AimockHandle = live
+    ? await startAimock({ fixtures: [], proxy: { openai: "https://api.openai.com" } })
+    : await startAimock({ fixtures: options.fixtures ?? [] })
   process.env.OPENAI_BASE_URL = aimock.baseUrl
-  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-not-used"
+  // Only inject a dummy key in mock mode; in live mode the real key is already set.
+  if (!live) {
+    process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-not-used"
+  }
 
   // All construction steps after aimock starts are wrapped so we can clean up on failure.
   let resolved: Awaited<ReturnType<Awaited<ReturnType<typeof createRuntimeRegistry>>["lookup"]>>
@@ -98,7 +118,8 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     input?: string
     resumeDecision?: "once" | "always" | "deny"
   }): Promise<AgentRunResult> {
-    if (driveOpts.fixtures) {
+    // In live mode, fixtures are proxied to the real upstream — skip registration.
+    if (!live && driveOpts.fixtures) {
       const newFixtures = toFixtureSet(driveOpts.fixtures)
       if (newFixtures.length > 0) {
         aimock.addFixtures(newFixtures)
