@@ -11,6 +11,7 @@ export interface GeneratedAppSpecifiers {
   readonly dawnCore: string
   readonly dawnLangchain: string
   readonly dawnSdk: string
+  readonly dawnTesting: string
 }
 
 export interface CreateGeneratedAppOptions {
@@ -47,6 +48,7 @@ export async function createGeneratedApp(
       dawnCoreSpecifier: specifiers.dawnCore,
       dawnLangchainSpecifier: specifiers.dawnLangchain,
       dawnSdkSpecifier: specifiers.dawnSdk,
+      dawnTestingSpecifier: specifiers.dawnTesting,
     },
     targetDir: appRoot,
     templateDir,
@@ -71,5 +73,6 @@ function normalizeSpecifiers(
     dawnCore: specifiers?.dawnCore ?? "workspace:*",
     dawnLangchain: specifiers?.dawnLangchain ?? "workspace:*",
     dawnSdk: specifiers?.dawnSdk ?? "workspace:*",
+    dawnTesting: specifiers?.dawnTesting ?? "workspace:*",
   }
 }

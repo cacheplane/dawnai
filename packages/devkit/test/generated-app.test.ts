@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { constants } from "node:fs"
+import { access, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
 
@@ -37,6 +38,11 @@ describe("generated app helper", () => {
       expect(packageJson).toContain('"@dawn-ai/langchain": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/sdk": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/config-typescript": "workspace:*"')
+      expect(packageJson).toContain('"@dawn-ai/testing": "workspace:*"')
+      expect(packageJson).toContain('"test": "vitest run"')
+      await expect(
+        access(resolve(generatedApp.appRoot, "test/agent.test.ts"), constants.F_OK),
+      ).resolves.toBeUndefined()
     } finally {
       await rm(baseDir, { force: true, recursive: true })
     }
