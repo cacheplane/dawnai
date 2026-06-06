@@ -16,8 +16,18 @@ export interface AimockHandle {
 
 export async function startAimock(opts: {
   readonly fixtures: readonly AimockFixture[]
+  /** When set, proxy unmatched requests to the given upstream providers. */
+  readonly proxy?: { openai: string }
 }): Promise<AimockHandle> {
-  const mock = new LLMock({ port: 0, chunkSize: 4096 })
+  const mock = new LLMock(
+    opts.proxy
+      ? {
+          port: 0,
+          chunkSize: 4096,
+          record: { providers: { openai: opts.proxy.openai }, proxyOnly: true },
+        }
+      : { port: 0, chunkSize: 4096 },
+  )
   if (opts.fixtures.length > 0) {
     mock.addFixturesFromJSON(opts.fixtures as never)
   }

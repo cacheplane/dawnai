@@ -134,6 +134,128 @@ No extra setup needed. `@dawn-ai/testing` is CI-safe by default: aimock runs on 
 - run: git diff --exit-code test/fixtures/   # catch uncommitted fixture edits
 ```
 
+## Fixture files: author, commit, replay
+
+For most tests an inline `script()` is all you need. When a scenario grows complex — multi-tool chains, multi-turn conversations — save the fixture to a JSON file so it is shared, version-controlled, and auditable.
+
+### Author inline and snapshot to a file
+
+`writeFixtures` serialises a `script()` builder (or a bare `FixtureSet`) to `{ "fixtures": [...] }` JSON and creates parent directories automatically.
+
+```ts title="test/agent.test.ts"
+import { fileURLToPath } from "node:url"
+import { writeFixtures, loadFixtures, script } from "@dawn-ai/testing"
+
+const fixturesPath = fileURLToPath(new URL("fixtures/filter-open.fixture.json", import.meta.url))
+
+// Run once to mint the file, then commit it.
+writeFixtures(
+  fixturesPath,
+  script()
+    .user("Filter open items")
+    .callsTool("applyFilter", { status: "open" })
+    .replies("Found 2 open items."),
+)
+```
+
+After running this once, commit the resulting `.fixture.json`. From that point on, tests load it rather than re-building the script every time.
+
+### Record from a real model (local only)
+
+When you want the fixture to match what a real model would actually say, record a live interaction:
+
+```ts title="test/agent.test.ts"
+import { record } from "@dawn-ai/testing"
+
+// Run once locally — requires OPENAI_API_KEY. Never run in CI.
+record({ out: "test/fixtures/filter-open.fixture.json" })
+```
+
+`record()` calls aimock's `--record` mode, which proxies through to the real OpenAI API and writes the captured exchange to disk. Trim the JSON to the turns that matter, then commit it.
+
+### Replay a fixture file in tests
+
+Pass `loadFixtures(path)` wherever `fixtures` is accepted — at harness creation or per run:
+
+```ts title="test/agent.test.ts"
+import { fileURLToPath } from "node:url"
+import { afterAll, it } from "vitest"
+import {
+  createAgentHarness,
+  expectFinalMessage,
+  expectToolCalled,
+  loadFixtures,
+} from "@dawn-ai/testing"
+
+const appRoot = fileURLToPath(new URL("../..", import.meta.url))
+const fixturesPath = fileURLToPath(new URL("fixtures/filter-open.fixture.json", import.meta.url))
+
+// Fixture at harness level — used for every run unless overridden.
+const h = await createAgentHarness({
+  appRoot,
+  route: "/chat#agent",
+  fixtures: loadFixtures(fixturesPath),
+})
+afterAll(() => h.close())
+
+it("filters open items", async () => {
+  // Per-run override — loadFixtures() returns a plain FixtureSet.
+  const run = await h.run({
+    input: "Filter open items",
+    fixtures: loadFixtures(fixturesPath),
+  })
+  expectToolCalled(run, "applyFilter").withArgs({ status: "open" })
+  expectFinalMessage(run).toContain("Found 2")
+}, 60_000)
+```
+
+**CI rules.** Commit every `.fixture.json` that tests depend on. CI replays fixtures strict and read-only — aimock never re-records in replay mode. Add a drift guard to catch edits that were not committed:
+
+```yaml title=".github/workflows/ci.yml"
+- run: git diff --exit-code test/fixtures/
+```
+
+## Live mode (real model)
+
+Pass `live: true` to run the agent against the real OpenAI API via aimock's proxy-record mode. The model responses are real; `run.systemPrompt` is still captured from the intercepted requests.
+
+```ts title="test/agent.live.test.ts"
+import { fileURLToPath } from "node:url"
+import { afterAll, it } from "vitest"
+import {
+  createAgentHarness,
+  expectFinalMessage,
+  expectSystemPrompt,
+  expectToolCalled,
+} from "@dawn-ai/testing"
+
+const appRoot = fileURLToPath(new URL("../..", import.meta.url))
+const h = await createAgentHarness({ appRoot, route: "/chat#agent", live: true })
+afterAll(() => h.close())
+
+it("filters open items against real model", async () => {
+  const run = await h.run({ input: "Filter open items" })
+  // Real models are nondeterministic — assert loosely.
+  expectToolCalled(run, "applyFilter")
+  expectFinalMessage(run).toMatch(/open/i)
+  expectSystemPrompt(run).toContain("You are")
+}, 120_000)
+```
+
+**Requirements and constraints.**
+
+- `OPENAI_API_KEY` must be set in the environment. `createAgentHarness` throws immediately without it.
+- Real models are nondeterministic. Assert on presence and shape, not exact values: use `expectToolCalled(run, name)`, `expectFinalMessage(run).toContain(...)`, `expectSystemPrompt(run).toContain(...)`. Avoid `withArgs` with exact values or `expectFinalMessage(run).toEqual(...)`.
+- Gate live tests so CI skips them automatically:
+
+```ts
+it.skipIf(!process.env.OPENAI_API_KEY)("filters open items against real model", async () => {
+  // ...
+})
+```
+
+Do not put your API key in CI. Live tests are local-development tools for validating prompt changes against a real model before you mint or update fixture files.
+
 ## Related
 
 <RelatedCards items={[
