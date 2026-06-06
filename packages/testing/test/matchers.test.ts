@@ -119,6 +119,9 @@ it("expectInterrupt.withDetail throws when detail doesn't match", () => {
 it("expectInterrupt throws when there are no interrupts", () => {
   expect(() => expectInterrupt(base).ofKind("command")).toThrow()
 })
+it("expectInterrupt chains ofKind then withDetail", () => {
+  expectInterrupt(withInterrupt).ofKind("command").withDetail({ command: "rm -rf tmp" })
+})
 it("expectNoInterrupt passes when there are no interrupts", () => {
   expectNoInterrupt(base)
 })
@@ -127,22 +130,28 @@ it("expectNoInterrupt throws when there is an interrupt", () => {
 })
 
 it("expectSubagent.called passes for a known subagent name", () => {
-  expectSubagent(withSubagent).called("research")
+  expectSubagent(withSubagent, "research").called()
 })
 it("expectSubagent.called throws for unknown name", () => {
-  expect(() => expectSubagent(withSubagent).called("unknown")).toThrow()
+  expect(() => expectSubagent(withSubagent, "unknown").called()).toThrow()
 })
 it("expectSubagent.calledTool passes when the subagent used the tool", () => {
-  expectSubagent(withSubagent).calledTool("webSearch")
+  expectSubagent(withSubagent, "research").calledTool("webSearch")
 })
 it("expectSubagent.calledTool throws when tool not called", () => {
-  expect(() => expectSubagent(withSubagent).calledTool("readFile")).toThrow()
+  expect(() => expectSubagent(withSubagent, "research").calledTool("readFile")).toThrow()
+})
+it("expectSubagent.calledTool throws when subagent not dispatched", () => {
+  expect(() => expectSubagent(withSubagent, "unknown").calledTool("webSearch")).toThrow()
 })
 it("expectSubagent.finalMessageContains passes when message contains text", () => {
-  expectSubagent(withSubagent).finalMessageContains("found it")
+  expectSubagent(withSubagent, "research").finalMessageContains("found it")
 })
 it("expectSubagent.finalMessageContains throws when text not found", () => {
-  expect(() => expectSubagent(withSubagent).finalMessageContains("nope")).toThrow()
+  expect(() => expectSubagent(withSubagent, "research").finalMessageContains("nope")).toThrow()
+})
+it("expectSubagent.finalMessageContains throws when subagent not dispatched", () => {
+  expect(() => expectSubagent(withSubagent, "unknown").finalMessageContains("found it")).toThrow()
 })
 
 it("expectPlan.toHaveTodo passes when todo content exists", () => {

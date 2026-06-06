@@ -114,13 +114,14 @@ export function expectInterrupt(run: AgentRunResult) {
   if (run.interrupts.length === 0) {
     fail("expected at least one interrupt, but none were captured")
   }
-  return {
+  const chain = {
     ofKind(kind: string) {
       if (!run.interrupts.some((i) => i.kind === kind)) {
         fail(
           `expected an interrupt of kind "${kind}"; got: ${run.interrupts.map((i) => i.kind).join(", ") || "(none)"}`,
         )
       }
+      return chain
     },
     withDetail(partial: Record<string, unknown>) {
       const found = run.interrupts.some(
@@ -131,8 +132,10 @@ export function expectInterrupt(run: AgentRunResult) {
           `expected an interrupt with detail >= ${JSON.stringify(partial)}; got: ${JSON.stringify(run.interrupts.map((i) => i.detail))}`,
         )
       }
+      return chain
     },
   }
+  return chain
 }
 
 export function expectNoInterrupt(run: AgentRunResult): void {
@@ -143,32 +146,39 @@ export function expectNoInterrupt(run: AgentRunResult): void {
   }
 }
 
-export function expectSubagent(run: AgentRunResult) {
-  return {
-    called(name: string) {
-      if (!run.subagents.some((s) => s.name === name)) {
+export function expectSubagent(run: AgentRunResult, name: string) {
+  const sub = run.subagents.find((s) => s.name === name)
+  const chain = {
+    called() {
+      if (!sub) {
         fail(
-          `expected subagent "${name}" to be called; subagents: ${run.subagents.map((s) => s.name).join(", ") || "(none)"}`,
+          `expected subagent "${name}" to be dispatched; subagents: ${run.subagents.map((s) => s.name).join(", ") || "(none)"}`,
         )
       }
+      return chain
     },
     calledTool(toolName: string) {
-      const found = run.subagents.some((s) => s.toolCalls.some((t) => t.name === toolName))
-      if (!found) {
+      if (!sub) {
+        fail(`expected subagent "${name}" to be dispatched (it was not)`)
+      } else if (!sub.toolCalls.some((t) => t.name === toolName)) {
         fail(
-          `expected a subagent to call tool "${toolName}"; tool calls: ${run.subagents.flatMap((s) => s.toolCalls.map((t) => t.name)).join(", ") || "(none)"}`,
+          `expected subagent "${name}" to call tool "${toolName}"; called: ${sub.toolCalls.map((t) => t.name).join(", ") || "(none)"}`,
         )
       }
+      return chain
     },
     finalMessageContains(text: string) {
-      const found = run.subagents.some((s) => s.finalMessage?.includes(text) ?? false)
-      if (!found) {
+      if (!sub) {
+        fail(`expected subagent "${name}" to be dispatched (it was not)`)
+      } else if (!(sub.finalMessage ?? "").includes(text)) {
         fail(
-          `expected a subagent finalMessage to contain "${text}"; got: ${run.subagents.map((s) => s.finalMessage ?? "(no finalMessage)").join(", ") || "(no subagents)"}`,
+          `expected subagent "${name}" finalMessage to contain "${text}"; got: ${JSON.stringify(sub?.finalMessage)}`,
         )
       }
+      return chain
     },
   }
+  return chain
 }
 
 export function expectPlan(run: AgentRunResult) {

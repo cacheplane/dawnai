@@ -105,9 +105,7 @@ describe("chat capabilities", () => {
     })
     // Confirmed: workspace capability emits interrupt kind "command" with
     // detail { command, suggestedPattern } for bash gate "unknown" in interactive mode.
-    // (ofKind/withDetail are independent assertions — they do not chain.)
-    expectInterrupt(run).ofKind("command")
-    expectInterrupt(run).withDetail({ command: "npm view react version" })
+    expectInterrupt(run).ofKind("command").withDetail({ command: "npm view react version" })
 
     // Resume with a one-time approval; the gate releases and runBash executes.
     const resumed = await chat.resume({ decision: "once" })
@@ -151,7 +149,7 @@ describe("coordinator capabilities", () => {
         .user(childQuestion)
         .replies("Workspace tools use camelCase names: listDir, readFile, writeFile, runBash."),
     })
-    expectSubagent(run).called("research")
-    expectSubagent(run).finalMessageContains("camelCase")
+    expectSubagent(run, "research").called()
+    expectSubagent(run, "research").finalMessageContains("camelCase")
   }, 60_000)
 })
