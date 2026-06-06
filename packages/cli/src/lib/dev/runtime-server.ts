@@ -47,6 +47,8 @@ interface RouteMatcher {
 export interface RuntimeRequestListener {
   readonly listener: (req: IncomingMessage, res: ServerResponse) => void
   readonly close: () => Promise<void>
+  readonly state: { acceptingRequests: boolean; activeRequests: number; closed: boolean }
+  readonly shutdownController: AbortController
 }
 
 export async function createRuntimeRequestListener(
@@ -130,7 +132,7 @@ export async function createRuntimeRequestListener(
     })
   }
 
-  return { close, listener }
+  return { close, listener, shutdownController, state }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +142,7 @@ export async function createRuntimeRequestListener(
 export async function startRuntimeServer(
   options: StartRuntimeServerOptions,
 ): Promise<RuntimeServer> {
-  const { listener, close: closeListener } = await createRuntimeRequestListener(options)
+  const { listener, state, shutdownController } = await createRuntimeRequestListener(options)
 
   const server = createServer(listener)
 
@@ -154,14 +156,29 @@ export async function startRuntimeServer(
 
   return {
     close: async () => {
-      await closeListener()
+      if (state.closed) {
+        return
+      }
+      state.acceptingRequests = false
+      state.closed = true
+      shutdownController.abort(new Error("Runtime server shutting down"))
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {
             reject(error)
             return
           }
-          resolve()
+          if (state.activeRequests === 0) {
+            resolve()
+            return
+          }
+          const interval = setInterval(() => {
+            if (state.activeRequests > 0) {
+              return
+            }
+            clearInterval(interval)
+            resolve()
+          }, 10)
         })
       })
     },
