@@ -10,7 +10,7 @@ export interface BuildStubArgs {
  * single-line JSON blob (e.g. a tool returned an object, so newlines are escaped
  * as `\n`), pretty-print it so the preview shows readable lines instead of one
  * giant escaped line. Plain-text content (the common case) is returned as-is.
- * Only the preview is affected — the stored file and its hash stay byte-identical.
+ * Only the preview is affected — the stored file and its hash are unchanged.
  */
 function previewSource(content: string): string {
   const trimmed = content.trimStart()
