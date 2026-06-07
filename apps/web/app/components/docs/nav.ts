@@ -38,6 +38,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     items: [
       { label: "Dev Server", href: "/docs/dev-server" },
       { label: "Testing", href: "/docs/testing" },
+      { label: "Evals", href: "/docs/evals" },
       { label: "Deployment", href: "/docs/deployment" },
     ],
   },
