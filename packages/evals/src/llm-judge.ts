@@ -46,7 +46,10 @@ export function llmJudge(opts: LlmJudgeOptions): Scorer {
           body: JSON.stringify({
             model,
             messages: [
-              { role: "system", content: "You are a strict grader. Output only the requested JSON." },
+              {
+                role: "system",
+                content: "You are a strict grader. Output only the requested JSON.",
+              },
               { role: "user", content: user },
             ],
           }),
@@ -54,7 +57,10 @@ export function llmJudge(opts: LlmJudgeOptions): Scorer {
         const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
         content = json.choices?.[0]?.message?.content ?? ""
       } catch (err) {
-        return { score: 0, reason: `judge request failed: ${err instanceof Error ? err.message : String(err)}` }
+        return {
+          score: 0,
+          reason: `judge request failed: ${err instanceof Error ? err.message : String(err)}`,
+        }
       }
       try {
         const parsed = JSON.parse(content) as { score: number; reason?: string }

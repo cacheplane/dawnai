@@ -11,13 +11,13 @@ export interface EvalCase {
 }
 
 /** Inline cases, a path to a committed .json/.jsonl, or a (sync/async) factory. */
-export type Dataset =
-  | readonly EvalCase[]
-  | string
-  | (() => EvalCase[] | Promise<EvalCase[]>)
+export type Dataset = readonly EvalCase[] | string | (() => EvalCase[] | Promise<EvalCase[]>)
 
 /** A scorer may return a 0..1 number, a boolean, or a rich verdict. */
-export type Score = number | boolean | { readonly score: number; readonly label?: string; readonly reason?: string }
+export type Score =
+  | number
+  | boolean
+  | { readonly score: number; readonly label?: string; readonly reason?: string }
 
 export interface Scorer {
   readonly name: string

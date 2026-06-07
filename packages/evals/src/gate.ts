@@ -13,7 +13,8 @@ export const gate = {
   },
   passRate(n: number): GatePolicy {
     return (r) => {
-      const rate = r.cases.length === 0 ? 1 : r.cases.filter((c) => c.passed).length / r.cases.length
+      const rate =
+        r.cases.length === 0 ? 1 : r.cases.filter((c) => c.passed).length / r.cases.length
       return rate >= n ? pass() : fail(`pass-rate ${rate.toFixed(2)} < ${n}`)
     }
   },

@@ -11,7 +11,9 @@ export async function resolveDataset(dataset: Dataset, baseDir: string): Promise
     try {
       raw = await readFile(path, "utf8")
     } catch (err) {
-      throw new Error(`resolveDataset: cannot read dataset file "${path}": ${err instanceof Error ? err.message : String(err)}`)
+      throw new Error(
+        `resolveDataset: cannot read dataset file "${path}": ${err instanceof Error ? err.message : String(err)}`,
+      )
     }
     if (path.endsWith(".jsonl")) {
       return raw

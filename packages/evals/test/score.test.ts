@@ -21,4 +21,10 @@ describe("normalizeScore", () => {
   it("treats NaN as 0", () => {
     expect(normalizeScore(Number.NaN)).toEqual({ score: 0 })
   })
+  it("guards non-number values to 0", () => {
+    expect(normalizeScore(undefined as never)).toEqual({ score: 0 })
+    expect(normalizeScore("0.8" as never)).toEqual({ score: 0 })
+    expect(normalizeScore({ score: undefined as never })).toEqual({ score: 0 })
+    expect(normalizeScore({ score: "x" as never })).toEqual({ score: 0 })
+  })
 })

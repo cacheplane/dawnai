@@ -1,7 +1,7 @@
 import type { AgentRunResult } from "@dawn-ai/testing"
 import { resolveGate } from "./gate.js"
 import { resolveDataset } from "./resolve-dataset.js"
-import { normalizeScore } from "./score.js"
+import { type NormalizedScore, normalizeScore } from "./score.js"
 import {
   type CaseResult,
   type CaseScore,
@@ -32,7 +32,7 @@ export async function runEval(def: EvalDefinition, options: RunEvalOptions): Pro
     const run = await options.runCase(testCase)
     const scores: CaseScore[] = []
     for (const scorer of def.scorers) {
-      let normalized
+      let normalized: NormalizedScore
       try {
         normalized = normalizeScore(await scorer.score(run, testCase))
       } catch (err) {
