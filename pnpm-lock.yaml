@@ -134,6 +134,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../../../packages/config-typescript
+      '@dawn-ai/evals':
+        specifier: workspace:*
+        version: link:../../../packages/evals
       '@dawn-ai/testing':
         specifier: workspace:*
         version: link:../../../packages/testing
@@ -287,6 +290,18 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
+  packages/evals:
+    devDependencies:
+      '@dawn-ai/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@dawn-ai/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0

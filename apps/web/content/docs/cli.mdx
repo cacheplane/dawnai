@@ -1,6 +1,6 @@
 # CLI Reference
 
-Dawn ships a single `dawn` binary with eight commands: `build`, `check`, `dev`, `routes`, `run`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
+Dawn ships a single `dawn` binary with nine commands: `build`, `check`, `dev`, `eval`, `routes`, `run`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
 
 ## `dawn check`
 
@@ -115,6 +115,24 @@ Flags:
 - `--cwd <path>` — operate on a different app root.
 
 The optional positional `[path]` argument narrows the discovered scenario set to a subdirectory. To target a live dev server, set `run: { url }` per-scenario inside `run.test.ts` (there is no command-level `--url` flag on `dawn test`). Exits non-zero on any failure with a diff per mismatched scenario. See [Testing](/docs/testing) for scenario authoring.
+
+## `dawn eval`
+
+Runs every colocated `*.eval.ts` over its dataset and reports per-case scores, then gates on the aggregate.
+
+```
+dawn eval
+dawn eval src/app/chat
+dawn eval --live
+dawn eval --json
+```
+
+Flags:
+- `--cwd <path>` — operate on a different app root.
+- `--live` — run against the real model (requires `OPENAI_API_KEY`); never use in CI.
+- `--json [file]` — write a JSON report. Defaults to `.dawn/eval-report.json`.
+
+The optional positional `[path]` narrows discovery to a subdirectory. By default each case replays its aimock fixtures (deterministic, CI-safe); `--live` calls the real provider for local prompt tuning. A gated eval that fails exits non-zero, so CI fails when quality drops below the bar; informational evals (no `gate`/`threshold`) never affect the exit code. See [Evals](/docs/evals) for authoring.
 
 ## `dawn dev`
 

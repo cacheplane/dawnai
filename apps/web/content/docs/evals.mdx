@@ -1,0 +1,214 @@
+# Evaluating your Dawn agent
+
+Scenario tests and `@dawn-ai/testing` pin down behaviour: given this input and these fixtures, the agent calls this tool and says this. They answer "is it correct?" for a handful of cases. Evals answer a different question — "how good is it?" — by running your agent over a whole **dataset** and scoring each output, then aggregating the scores into a single verdict you can **gate** on.
+
+Use evals when you want a quality bar that survives prompt edits, model swaps, and refactors: a number that goes up or down across a dataset, with an optional threshold that fails CI when quality regresses.
+
+Evals are deterministic and CI-safe by default. Like `@dawn-ai/testing`, each case replays pre-written **aimock** fixtures — your tools, prompts, capabilities, and state run normally; only the LLM is replaced. A separate `dawn eval --live` mode runs the real model locally when you want to measure against actual model output.
+
+## Install
+
+```bash
+pnpm add -D @dawn-ai/evals @dawn-ai/testing
+```
+
+`@dawn-ai/evals` provides `defineEval` and the scorers; `@dawn-ai/testing` provides `script()` and the harness the `dawn eval` command drives.
+
+## The `*.eval.ts` convention
+
+Evals live next to the route they exercise, under an `evals/` directory:
+
+```
+src/app/chat/
+  index.ts
+  evals/
+    quality.eval.ts
+```
+
+`dawn eval` discovers `src/app/<route>/evals/*.eval.ts` the same way `dawn test` discovers `run.test.ts`. An eval co-located under a route directory binds to that route automatically; the `route` field is only needed when the file lives elsewhere.
+
+## `defineEval`
+
+```ts title="src/app/chat/evals/quality.eval.ts"
+import { contains, defineEval } from "@dawn-ai/evals"
+import { script } from "@dawn-ai/testing"
+
+export default defineEval({
+  name: "chat quality",
+  // route: "/chat#agent",  // optional — inferred from the file location
+  dataset: [
+    {
+      name: "greets the user",
+      input: "hello",
+      fixtures: script().user("hello").replies("Hi! How can I help?"),
+    },
+  ],
+  scorers: [contains("help", { threshold: 1 })],
+  threshold: 1,
+})
+```
+
+The fields:
+
+- **`name`** — required label for the eval, shown in the report.
+- **`route`** — the Agent Protocol route key (`"/chat#agent"`). Optional when the file is co-located under a route; required otherwise.
+- **`dataset`** — the cases to run (see below).
+- **`scorers`** — one or more scorers; each runs against every case.
+- **`threshold`** — sugar for `gate.mean(threshold)` (see Gating).
+- **`gate`** — a composable gate policy; takes precedence over `threshold`.
+
+A `dataset` case is `{ input, expected?, name?, fixtures?, metadata? }`. `input` is the user message for an agent route. `fixtures` is the per-case aimock script used in replay mode (ignored under `--live`).
+
+## Datasets
+
+`dataset` accepts three shapes:
+
+```ts
+// 1. Inline array of cases
+dataset: [{ input: "hello", expected: "Hi!" }]
+
+// 2. A path to a committed file (.json or .jsonl), relative to the eval file
+dataset: "./cases.json"
+dataset: "./cases.jsonl"
+
+// 3. A sync or async function returning cases
+dataset: async () => loadCasesFromSomewhere()
+```
+
+A `.json` file must contain a JSON array of cases; a `.jsonl` file holds one case object per line. Relative paths resolve against the eval file's directory.
+
+## Scorers
+
+A scorer reads the run result and the case and returns a **score**: a number in `0..1`, a boolean (`true` = `1`, `false` = `0`), or a rich verdict `{ score, label?, reason? }`. Built-in scorers:
+
+- **`exactMatch()`** — final message equals `case.expected`.
+- **`contains(substring)`** — final message includes the substring.
+- **`regex(re)`** — the regex matches the final message.
+- **`jsonEquals()`** — `case.expected` deep-equals the parsed final message (or a value you `select`).
+- **`toolCalled(name, { withArgs? })`** — a tool was called (optionally with matching args).
+- **`tokensUnder(budget)`** — fewer than `budget` tokens were streamed.
+
+Each built-in takes an optional `{ threshold }` — its own pass bar, used by `gate.perScorer` and per-case pass logic.
+
+For anything custom, write your own:
+
+```ts
+import { custom, llmJudge } from "@dawn-ai/evals"
+
+// Arbitrary scoring logic
+custom((run, testCase) => (run.finalMessage.length < 200 ? 1 : 0), { name: "concise" })
+
+// Grade output quality with a model
+llmJudge({
+  criteria: "Does the answer fully address {{input}}? Output: {{output}}",
+  model: "gpt-4o-mini", // optional
+  threshold: 0.7,       // optional
+})
+```
+
+`custom((run, testCase) => Score | Promise<Score>)` gives you the full run result and case. `llmJudge` asks a model to grade the output against `criteria` (which interpolates `{{input}}`, `{{expected}}`, `{{output}}`) and returns `{ score, reason }`. The judge calls a real model, so it needs `OPENAI_API_KEY` — reserve it for `--live` runs.
+
+## Gating
+
+After every case is scored, a **gate** turns the aggregated scores into pass/fail. Gate policies compose via the `gate` helper:
+
+```ts
+import { gate } from "@dawn-ai/evals"
+
+gate: gate.mean(0.8)        // dataset-wide mean ≥ 0.8
+gate: gate.passRate(0.9)    // ≥ 90% of cases pass (every scorer met its bar)
+gate: gate.everyCase(0.6)   // every case's mean ≥ 0.6
+gate: gate.perScorer()      // each scorer's mean ≥ that scorer's own threshold
+
+// Combine them:
+gate: gate.all(gate.mean(0.8), gate.perScorer())   // all must pass
+gate: gate.any(gate.passRate(0.9), gate.mean(0.95)) // any one passing is enough
+```
+
+There are two shorthands:
+
+- **`threshold:`** on the eval is sugar for `gate.mean(threshold)`. If `gate` is set, `threshold` is ignored.
+- A per-scorer **`threshold`** sets that scorer's own bar — used by `gate.perScorer()` and to decide whether a case "passed" (every scorer must meet its bar; default bar `0.5`).
+
+If you set neither `gate` nor `threshold`, the eval is **informational**: it always passes and just reports scores. This lets you land an eval and watch the numbers before you commit to a bar.
+
+## Execution: replay vs live
+
+By default `dawn eval` runs in **replay** mode: each case replays its `fixtures` through aimock, so no real model is called. Fixtures come from a `script()` builder inline on the case, or from committed fixture files — the same deterministic, CI-safe path `@dawn-ai/testing` uses. This is the only mode that should run in CI.
+
+```bash
+dawn eval
+```
+
+Pass `--live` to run the real model locally instead:
+
+```bash
+dawn eval --live
+```
+
+Live mode ignores per-case fixtures and calls the actual provider. It requires `OPENAI_API_KEY` and is meant for local runs while you tune prompts — never wire it into CI.
+
+### Command reference
+
+```
+dawn eval [path] [--live] [--json [file]] [--cwd <path>]
+```
+
+- **`[path]`** — narrow discovery to a subdirectory.
+- **`--live`** — run the real model (requires `OPENAI_API_KEY`); never use in CI.
+- **`--json [file]`** — also write a JSON report. Defaults to `.dawn/eval-report.json`.
+- **`--cwd <path>`** — operate on a different app root.
+
+A gated eval that fails causes a non-zero exit, so CI fails when quality drops below the bar. Informational evals never affect the exit code. See the [CLI reference](/docs/cli) for the full command surface.
+
+## A full example
+
+```ts title="src/app/chat/evals/quality.eval.ts"
+import { contains, defineEval, gate, toolCalled } from "@dawn-ai/evals"
+import { script } from "@dawn-ai/testing"
+
+export default defineEval({
+  name: "chat quality",
+  dataset: [
+    {
+      name: "filters open items",
+      input: "Filter open items",
+      fixtures: script()
+        .user("Filter open items")
+        .callsTool("applyFilter", { status: "open" })
+        .replies("Found 2 open items — let me know if I can help further."),
+    },
+  ],
+  scorers: [
+    contains("help", { threshold: 0.5 }),
+    toolCalled("applyFilter", { threshold: 0.5 }),
+  ],
+  gate: gate.perScorer(),
+})
+```
+
+Run it:
+
+```bash
+dawn eval
+```
+
+The single case calls `applyFilter` and its reply contains "help", so both scorers
+score `1.00`. `gate.perScorer()` checks each scorer's mean against its own bar — both
+are `1.00 ≥ 0.5`, so the eval passes:
+
+```
+PASS chat quality › filters open items mean=1.00 [contains(help)=1.00 toolCalled(applyFilter)=1.00]
+PASS chat quality mean=1.00
+```
+
+Commit the eval and any fixture files alongside your route. In CI, run `dawn eval` (replay only); locally, run `dawn eval --live` when you want to measure against the real model before updating fixtures.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/testing", title: "Scenario testing", subtitle: "declarative run.test.ts scenarios for route-output unit tests" },
+  { href: "/docs/cli", title: "CLI", subtitle: "the dawn eval command and its flags" },
+  { href: "/docs/agents", title: "Agents", subtitle: "the agent route kind evals exercise" },
+  { href: "/docs/tools", title: "Tools", subtitle: "tools that run normally during eval replay" },
+]} />
