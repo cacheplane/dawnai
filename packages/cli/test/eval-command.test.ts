@@ -122,6 +122,27 @@ function makeFailingEvalApp(): Promise<string> {
   )
 }
 
+function makeNoFixturesEvalApp(): Promise<string> {
+  return makeApp(
+    [
+      'import { contains, defineEval } from "@dawn-ai/evals"',
+      "",
+      "export default defineEval({",
+      '  name: "filter",',
+      "  dataset: [",
+      "    {",
+      '      name: "open",',
+      '      input: "Filter open items",',
+      "    },",
+      "  ],",
+      '  scorers: [contains("Found 2", { threshold: 1 })],',
+      "  threshold: 1,",
+      "})",
+      "",
+    ].join("\n"),
+  )
+}
+
 describe("dawn eval (replay)", () => {
   it("passes a satisfied eval (exit 0)", async () => {
     const root = await makePassingEvalApp()
@@ -139,5 +160,12 @@ describe("dawn eval (replay)", () => {
     await expect(
       runEvalCommand(undefined, { cwd: root }, { stdout: () => {}, stderr: () => {} }),
     ).rejects.toBeInstanceOf(CommanderError)
+  }, 60_000)
+
+  it("hard-errors when a replay case has no fixtures", async () => {
+    const root = await makeNoFixturesEvalApp()
+    await expect(
+      runEvalCommand(undefined, { cwd: root }, { stdout: () => {}, stderr: () => {} }),
+    ).rejects.toThrow(/has no fixtures/)
   }, 60_000)
 })

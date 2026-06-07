@@ -171,24 +171,19 @@ export default defineEval({
   name: "chat quality",
   dataset: [
     {
-      name: "answers a greeting",
-      input: "hello",
-      fixtures: script().user("hello").replies("Hi! How can I help?"),
-    },
-    {
       name: "filters open items",
       input: "Filter open items",
       fixtures: script()
         .user("Filter open items")
         .callsTool("applyFilter", { status: "open" })
-        .replies("Found 2 open items."),
+        .replies("Found 2 open items — let me know if I can help further."),
     },
   ],
   scorers: [
     contains("help", { threshold: 0.5 }),
     toolCalled("applyFilter", { threshold: 0.5 }),
   ],
-  gate: gate.passRate(1),
+  gate: gate.perScorer(),
 })
 ```
 
@@ -198,9 +193,12 @@ Run it:
 dawn eval
 ```
 
+The single case calls `applyFilter` and its reply contains "help", so both scorers
+score `1.00`. `gate.perScorer()` checks each scorer's mean against its own bar — both
+are `1.00 ≥ 0.5`, so the eval passes:
+
 ```
-PASS chat quality › answers a greeting mean=1.00 [contains(help)=1.00 toolCalled(applyFilter)=0.00]
-PASS chat quality › filters open items mean=1.00 [contains(help)=0.00 toolCalled(applyFilter)=1.00]
+PASS chat quality › filters open items mean=1.00 [contains(help)=1.00 toolCalled(applyFilter)=1.00]
 PASS chat quality mean=1.00
 ```
 

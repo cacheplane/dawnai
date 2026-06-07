@@ -40,6 +40,7 @@ interface TestingModule {
 }
 
 interface EvalCaseShape {
+  readonly name?: string
   readonly input: unknown
   readonly fixtures?: unknown
 }
@@ -122,6 +123,12 @@ export async function runEvalCommand(
         baseDir: loaded.baseDir,
         runCase: async (testCase) => {
           harness.reset()
+          if (!options.live && !testCase.fixtures) {
+            throw new CliError(
+              `Eval "${loaded.definition.name}" case "${testCase.name ?? "?"}" has no fixtures — add script()/fixtures or run with --live`,
+              2,
+            )
+          }
           const input =
             typeof testCase.input === "string" ? testCase.input : JSON.stringify(testCase.input)
           return harness.run({
