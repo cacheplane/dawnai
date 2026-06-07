@@ -28,4 +28,33 @@ describe("buildStub", () => {
     })
     expect(stub).toContain("only one line")
   })
+
+  it("pretty-prints single-line JSON content for a readable multi-line preview", () => {
+    // A tool that returns an object is JSON.stringify'd to one line with escaped
+    // newlines; the preview should show real lines, not "first 1 line".
+    const content = JSON.stringify({ a: 1, b: { c: 2 }, items: ["x", "y"] })
+    const stub = buildStub({
+      content,
+      relPath: "tool-outputs/obj-1-a.txt",
+      previewLines: 10,
+      thresholdChars: 40000,
+    })
+    // Pretty-printed across multiple readable lines (not one escaped blob).
+    expect(stub).toContain('"a": 1')
+    expect(stub).toContain('"c": 2')
+    expect(stub).not.toContain("first 1 lines")
+  })
+
+  it("leaves non-JSON content untouched in the preview", () => {
+    const content = "plain text line one\nplain text line two"
+    const stub = buildStub({
+      content,
+      relPath: "tool-outputs/txt-1-a.txt",
+      previewLines: 10,
+      thresholdChars: 40000,
+    })
+    expect(stub).toContain("Preview (first 2 lines):")
+    expect(stub).toContain("plain text line one")
+    expect(stub).toContain("plain text line two")
+  })
 })
