@@ -1013,7 +1013,10 @@ async function runCommandWithInput(options: {
 }
 
 function normalizePrivatePath(path: string): string {
-  return path.replaceAll("/private/var/", "/var/")
+  // macOS resolves tmpdir paths under /private (e.g. /private/tmp, /private/var);
+  // drop the prefix wherever it appears (paths AND embedded in messages) so
+  // tmp-derived expected paths match process-realpath'd actuals.
+  return path.replaceAll("/private/", "/")
 }
 
 function createCancellationGraphSource(markerPath: string): string {
