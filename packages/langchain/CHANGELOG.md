@@ -1,5 +1,14 @@
 # @dawn-ai/langchain
 
+## 0.5.0
+
+### Patch Changes
+
+- b6e71a7: Tool-output offload stubs now show a readable multi-line preview when the offloaded content is a single-line JSON blob (e.g. a tool that returned an object, whose newlines were escaped). `buildStub` pretty-prints JSON for the preview slice only — the stored file, its content hash, the size threshold, and the tool message content are all unchanged. Plain-text outputs are unaffected.
+  - @dawn-ai/core@0.5.0
+  - @dawn-ai/sdk@0.5.0
+  - @dawn-ai/workspace@0.2.0
+
 ## 0.4.0
 
 ### Patch Changes

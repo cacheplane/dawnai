@@ -1,5 +1,16 @@
 # @dawn-example/chat-server
 
+## 0.0.4
+
+### Patch Changes
+
+- Updated dependencies [b4a2295]
+- Updated dependencies [b6e71a7]
+  - @dawn-ai/cli@0.5.0
+  - @dawn-ai/langchain@0.5.0
+  - @dawn-ai/core@0.5.0
+  - @dawn-ai/sdk@0.5.0
+
 ## 0.0.3
 
 ### Patch Changes

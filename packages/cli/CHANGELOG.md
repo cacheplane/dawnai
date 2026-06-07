@@ -1,5 +1,20 @@
 # @dawn-ai/cli
 
+## 0.5.0
+
+### Minor Changes
+
+- b4a2295: Add eval authoring: a new `@dawn-ai/evals` package (`defineEval`, built-in + `custom` + `llmJudge` scorers, composable `gate.*` policies, `dataset` as array/path/function) and a `dawn eval` command that runs an agent route over a dataset and reports/gates on scores. Default execution is deterministic replay (per-case aimock fixtures, CI-safe); `dawn eval --live` runs the real model locally (gated on `OPENAI_API_KEY`, never in CI). Evals are discovered from `src/app/<route>/evals/*.eval.ts`, mirroring the `run.test.ts` convention.
+
+### Patch Changes
+
+- Updated dependencies [b6e71a7]
+  - @dawn-ai/langchain@0.5.0
+  - @dawn-ai/core@0.5.0
+  - @dawn-ai/langgraph@0.5.0
+  - @dawn-ai/permissions@0.1.8
+  - @dawn-ai/sqlite-storage@0.2.0
+
 ## 0.4.0
 
 ### Patch Changes
