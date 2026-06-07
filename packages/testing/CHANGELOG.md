@@ -1,5 +1,13 @@
 # @dawn-ai/testing
 
+## 3.0.0
+
+### Patch Changes
+
+- Updated dependencies [b4a2295]
+  - @dawn-ai/cli@0.5.0
+  - @dawn-ai/core@0.5.0
+
 ## 2.0.0
 
 ### Patch Changes
