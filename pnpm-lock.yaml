@@ -134,6 +134,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../../../packages/config-typescript
+      '@dawn-ai/evals':
+        specifier: workspace:*
+        version: link:../../../packages/evals
       '@dawn-ai/testing':
         specifier: workspace:*
         version: link:../../../packages/testing
