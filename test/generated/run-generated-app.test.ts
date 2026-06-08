@@ -471,6 +471,7 @@ async function createExpectedInternalFixture(
       devDependencies: {
         ...expected.packageJson.devDependencies,
         "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
+        "@dawn-ai/evals": "<repo:@dawn-ai/evals>",
         "@dawn-ai/testing": "<repo:@dawn-ai/testing>",
       },
       pnpm: {
@@ -478,6 +479,7 @@ async function createExpectedInternalFixture(
           "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
           "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
           "@dawn-ai/core": "<repo:@dawn-ai/core>",
+          "@dawn-ai/evals": "<repo:@dawn-ai/evals>",
           "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
           "@dawn-ai/langgraph": "<repo:@dawn-ai/langgraph>",
           "@dawn-ai/permissions": "<repo:@dawn-ai/permissions>",
