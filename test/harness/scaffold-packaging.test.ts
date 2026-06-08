@@ -28,6 +28,7 @@ const tarballs = {
 describe("SCAFFOLD_PACKAGES", () => {
   it("lists @dawn-ai workspace packages, excluding devkit/create-dawn-ai-app", () => {
     expect(SCAFFOLD_PACKAGES).toContain("@dawn-ai/cli")
+    expect(SCAFFOLD_PACKAGES).toContain("@dawn-ai/evals")
     expect(SCAFFOLD_PACKAGES).toContain("@dawn-ai/testing")
     expect(SCAFFOLD_PACKAGES).not.toContain("@dawn-ai/devkit")
     expect(SCAFFOLD_PACKAGES).not.toContain("create-dawn-ai-app")

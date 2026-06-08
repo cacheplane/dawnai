@@ -10,6 +10,7 @@ export const SCAFFOLD_PACKAGES: readonly string[] = [
   "@dawn-ai/cli",
   "@dawn-ai/config-typescript",
   "@dawn-ai/core",
+  "@dawn-ai/evals",
   "@dawn-ai/langchain",
   "@dawn-ai/langgraph",
   "@dawn-ai/permissions",

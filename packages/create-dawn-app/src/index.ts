@@ -176,6 +176,7 @@ function createTemplateReplacements(
   readonly dawnCliSpecifier: string
   readonly dawnConfigTypescriptSpecifier: string
   readonly dawnCoreSpecifier: string
+  readonly dawnEvalsSpecifier: string
   readonly dawnLangchainSpecifier: string
   readonly dawnLanggraphSpecifier: string
   readonly dawnPermissionsSpecifier: string
@@ -192,6 +193,7 @@ function createTemplateReplacements(
         resolve(repoRoot, "packages/config-typescript"),
       ),
       dawnCoreSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/core")),
+      dawnEvalsSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/evals")),
       dawnLangchainSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langchain")),
       dawnLanggraphSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langgraph")),
       dawnPermissionsSpecifier: createAbsoluteFileSpecifier(
@@ -211,6 +213,7 @@ function createTemplateReplacements(
     dawnCliSpecifier: options.distTag,
     dawnConfigTypescriptSpecifier: options.distTag,
     dawnCoreSpecifier: options.distTag,
+    dawnEvalsSpecifier: options.distTag,
     dawnLangchainSpecifier: options.distTag,
     dawnLanggraphSpecifier: options.distTag,
     dawnPermissionsSpecifier: options.distTag,
@@ -241,6 +244,7 @@ async function applyInternalModePackageOverrides(
       "@dawn-ai/cli": replacements.dawnCliSpecifier,
       "@dawn-ai/config-typescript": replacements.dawnConfigTypescriptSpecifier,
       "@dawn-ai/core": replacements.dawnCoreSpecifier,
+      "@dawn-ai/evals": replacements.dawnEvalsSpecifier,
       "@dawn-ai/langchain": replacements.dawnLangchainSpecifier,
       "@dawn-ai/langgraph": replacements.dawnLanggraphSpecifier,
       "@dawn-ai/permissions": replacements.dawnPermissionsSpecifier,
