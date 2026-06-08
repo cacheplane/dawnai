@@ -1,5 +1,16 @@
 # create-dawn-app
 
+## 0.6.0
+
+### Minor Changes
+
+- 95ae2f9: `create-dawn-ai-app` now scaffolds a sample `@dawn-ai/evals` eval (`evals/smoke.eval.ts`) plus an `eval` script in new apps, alongside the existing `@dawn-ai/testing` sample test, so a freshly scaffolded app can run `dawn eval` out of the box.
+
+### Patch Changes
+
+- Updated dependencies [95ae2f9]
+  - @dawn-ai/devkit@0.6.0
+
 ## 0.5.0
 
 ### Patch Changes
