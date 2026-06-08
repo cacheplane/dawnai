@@ -1,0 +1,15 @@
+import { contains, defineEval } from "@dawn-ai/evals"
+import { script } from "@dawn-ai/testing"
+
+export default defineEval({
+  name: "greets the tenant",
+  dataset: [
+    {
+      name: "hello",
+      input: "Say hello",
+      fixtures: script().user("Say hello").replies("Hello from Acme!"),
+    },
+  ],
+  scorers: [contains("Hello", { threshold: 1 })],
+  threshold: 1,
+})
