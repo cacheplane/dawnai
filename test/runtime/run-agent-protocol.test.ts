@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
 import { afterEach, describe, expect, it } from "vitest"
@@ -10,6 +10,10 @@ import {
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
+import {
+  rewriteGeneratedAppDependencies,
+  SCAFFOLD_PACKAGES,
+} from "../harness/scaffold-packaging.js"
 import { allocatePort, appendDevServerTranscript, startDevServer } from "./support/dev-server.ts"
 
 // ---------------------------------------------------------------------------
@@ -173,18 +177,7 @@ describe("agent protocol permission interrupt + resume", () => {
 
     try {
       const { tarballs } = await createPackagedInstaller({
-        packageNames: [
-          "@dawn-ai/cli",
-          "@dawn-ai/config-typescript",
-          "@dawn-ai/core",
-          "@dawn-ai/langchain",
-          "@dawn-ai/langgraph",
-          "@dawn-ai/permissions",
-          "@dawn-ai/sdk",
-          "@dawn-ai/sqlite-storage",
-          "@dawn-ai/testing",
-          "@dawn-ai/workspace",
-        ],
+        packageNames: [...SCAFFOLD_PACKAGES],
         tempRoot,
         transcriptPath,
       })
@@ -202,7 +195,17 @@ describe("agent protocol permission interrupt + resume", () => {
       })
 
       appRoot = generatedApp.appRoot
-      await rewriteDependenciesToTarballs({ appRoot, tarballs })
+      await rewriteGeneratedAppDependencies({
+        appRoot,
+        tarballs,
+        extraDependencies: {
+          "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
+          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
+          "@langchain/langgraph": "1.3.0",
+        },
+        removeDependencies: ["langchain", "@langchain/openai"],
+      })
 
       // Write echo agent route and a workspace directory
       const routeFile = join(appRoot, "src/app/echo/index.ts")
@@ -277,18 +280,7 @@ describe("agent protocol permission interrupt + resume", () => {
 
     try {
       const { tarballs } = await createPackagedInstaller({
-        packageNames: [
-          "@dawn-ai/cli",
-          "@dawn-ai/config-typescript",
-          "@dawn-ai/core",
-          "@dawn-ai/langchain",
-          "@dawn-ai/langgraph",
-          "@dawn-ai/permissions",
-          "@dawn-ai/sdk",
-          "@dawn-ai/sqlite-storage",
-          "@dawn-ai/testing",
-          "@dawn-ai/workspace",
-        ],
+        packageNames: [...SCAFFOLD_PACKAGES],
         tempRoot,
         transcriptPath,
       })
@@ -306,7 +298,17 @@ describe("agent protocol permission interrupt + resume", () => {
       })
 
       appRoot = generatedApp.appRoot
-      await rewriteDependenciesToTarballs({ appRoot, tarballs })
+      await rewriteGeneratedAppDependencies({
+        appRoot,
+        tarballs,
+        extraDependencies: {
+          "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
+          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
+          "@langchain/langgraph": "1.3.0",
+        },
+        removeDependencies: ["langchain", "@langchain/openai"],
+      })
 
       const routeFile = join(appRoot, "src/app/echo/index.ts")
       await mkdir(dirname(routeFile), { recursive: true })
@@ -394,7 +396,17 @@ describe("agent protocol permission interrupt + resume", () => {
 
         appRoot = generatedApp.appRoot
 
-        await rewriteDependenciesToTarballs({ appRoot, tarballs })
+        await rewriteGeneratedAppDependencies({
+          appRoot,
+          tarballs,
+          extraDependencies: {
+            "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
+            "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+            "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
+            "@langchain/langgraph": "1.3.0",
+          },
+          removeDependencies: ["langchain", "@langchain/openai"],
+        })
 
         // Write the perm-agent route overlay at src/app/perm-agent/index.ts
         const routeFile = join(appRoot, "src/app/perm-agent/index.ts")
@@ -632,18 +644,7 @@ describe("agent protocol state persistence", () => {
 
     try {
       const { tarballs } = await createPackagedInstaller({
-        packageNames: [
-          "@dawn-ai/cli",
-          "@dawn-ai/config-typescript",
-          "@dawn-ai/core",
-          "@dawn-ai/langchain",
-          "@dawn-ai/langgraph",
-          "@dawn-ai/permissions",
-          "@dawn-ai/sdk",
-          "@dawn-ai/sqlite-storage",
-          "@dawn-ai/testing",
-          "@dawn-ai/workspace",
-        ],
+        packageNames: [...SCAFFOLD_PACKAGES],
         tempRoot,
         transcriptPath,
       })
@@ -663,7 +664,17 @@ describe("agent protocol state persistence", () => {
       appRoot = generatedApp.appRoot
 
       // Rewrite dependencies to tarballs (mirrors run-runtime-contract.test.ts)
-      await rewriteDependenciesToTarballs({ appRoot, tarballs })
+      await rewriteGeneratedAppDependencies({
+        appRoot,
+        tarballs,
+        extraDependencies: {
+          "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
+          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
+          "@langchain/langgraph": "1.3.0",
+        },
+        removeDependencies: ["langchain", "@langchain/openai"],
+      })
 
       // Write the echo-agent route overlay
       const routeFile = join(appRoot, "src/app/echo/index.ts")
@@ -784,59 +795,3 @@ describe("agent protocol state persistence", () => {
     }
   })
 })
-
-// ---------------------------------------------------------------------------
-// Helpers (mirrors run-runtime-contract.test.ts)
-// ---------------------------------------------------------------------------
-
-async function rewriteDependenciesToTarballs(options: {
-  readonly appRoot: string
-  readonly tarballs: Readonly<Record<string, string>>
-}): Promise<void> {
-  const packageJsonPath = join(options.appRoot, "package.json")
-  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-    dependencies?: Record<string, string>
-    devDependencies?: Record<string, string>
-    pnpm?: {
-      overrides?: Record<string, string>
-    }
-  }
-
-  delete packageJson.dependencies?.langchain
-  delete packageJson.dependencies?.["@langchain/openai"]
-  packageJson.dependencies = {
-    ...packageJson.dependencies,
-    "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],
-    "@dawn-ai/core": options.tarballs["@dawn-ai/core"],
-    "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
-    "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
-    "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
-    "@dawn-ai/sqlite-storage": options.tarballs["@dawn-ai/sqlite-storage"],
-    "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
-    // Required so the echo-agent route can import it directly (pnpm strict isolation)
-    "@langchain/langgraph": "1.3.0",
-  }
-  packageJson.devDependencies = {
-    ...packageJson.devDependencies,
-    "@dawn-ai/config-typescript": options.tarballs["@dawn-ai/config-typescript"],
-    "@dawn-ai/testing": options.tarballs["@dawn-ai/testing"],
-  }
-  packageJson.pnpm = {
-    ...(packageJson.pnpm ?? {}),
-    overrides: {
-      ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],
-      "@dawn-ai/config-typescript": options.tarballs["@dawn-ai/config-typescript"],
-      "@dawn-ai/core": options.tarballs["@dawn-ai/core"],
-      "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
-      "@dawn-ai/langgraph": options.tarballs["@dawn-ai/langgraph"],
-      "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
-      "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
-      "@dawn-ai/sqlite-storage": options.tarballs["@dawn-ai/sqlite-storage"],
-      "@dawn-ai/testing": options.tarballs["@dawn-ai/testing"],
-      "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
-    },
-  }
-
-  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
-}

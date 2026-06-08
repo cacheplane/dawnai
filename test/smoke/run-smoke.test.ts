@@ -17,6 +17,10 @@ import {
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
+import {
+  rewriteGeneratedAppDependencies,
+  SCAFFOLD_PACKAGES,
+} from "../harness/scaffold-packaging.js"
 
 const SMOKE_ROOT = resolve(import.meta.dirname)
 const tempDirs: TrackedTempDir[] = []
@@ -153,18 +157,7 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
     const overlay = await readOverlay(fixtureName)
     const { tarballs } = await recordPhase(phases, "packaged-installer", async () => {
       return await createPackagedInstaller({
-        packageNames: [
-          "@dawn-ai/cli",
-          "@dawn-ai/config-typescript",
-          "@dawn-ai/core",
-          "@dawn-ai/langchain",
-          "@dawn-ai/langgraph",
-          "@dawn-ai/permissions",
-          "@dawn-ai/sdk",
-          "@dawn-ai/sqlite-storage",
-          "@dawn-ai/testing",
-          "@dawn-ai/workspace",
-        ],
+        packageNames: [...SCAFFOLD_PACKAGES],
         tempRoot,
         transcriptPath,
       })
@@ -181,9 +174,15 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
       template: "basic",
     })
 
-    await rewriteDependenciesToTarballs({
+    await rewriteGeneratedAppDependencies({
       appRoot: generatedApp.appRoot,
       tarballs,
+      extraDependencies: {
+        "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
+        "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+        "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
+      },
+      removeDependencies: ["langchain", "@langchain/openai"],
     })
     await applyOverlay({ appRoot: generatedApp.appRoot, overlay })
 
@@ -294,56 +293,6 @@ async function applyOverlay(options: {
       await writeFile(outputPath, source, "utf8")
     }),
   )
-}
-
-async function rewriteDependenciesToTarballs(options: {
-  readonly appRoot: string
-  readonly tarballs: Readonly<Record<string, string>>
-}): Promise<void> {
-  const packageJsonPath = join(options.appRoot, "package.json")
-  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-    dependencies?: Record<string, string>
-    devDependencies?: Record<string, string>
-    pnpm?: {
-      overrides?: Record<string, string>
-    }
-  }
-
-  delete packageJson.dependencies?.langchain
-  delete packageJson.dependencies?.["@langchain/openai"]
-  packageJson.dependencies = {
-    ...packageJson.dependencies,
-    "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],
-    "@dawn-ai/core": options.tarballs["@dawn-ai/core"],
-    "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
-    "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
-    "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
-    "@dawn-ai/sqlite-storage": options.tarballs["@dawn-ai/sqlite-storage"],
-    "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
-  }
-  packageJson.devDependencies = {
-    ...packageJson.devDependencies,
-    "@dawn-ai/config-typescript": options.tarballs["@dawn-ai/config-typescript"],
-    "@dawn-ai/testing": options.tarballs["@dawn-ai/testing"],
-  }
-  packageJson.pnpm = {
-    ...(packageJson.pnpm ?? {}),
-    overrides: {
-      ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],
-      "@dawn-ai/config-typescript": options.tarballs["@dawn-ai/config-typescript"],
-      "@dawn-ai/core": options.tarballs["@dawn-ai/core"],
-      "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
-      "@dawn-ai/langgraph": options.tarballs["@dawn-ai/langgraph"],
-      "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
-      "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
-      "@dawn-ai/sqlite-storage": options.tarballs["@dawn-ai/sqlite-storage"],
-      "@dawn-ai/testing": options.tarballs["@dawn-ai/testing"],
-      "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
-    },
-  }
-
-  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
 }
 
 async function discoverRoutes(options: {
