@@ -204,6 +204,16 @@ PASS chat quality mean=1.00
 
 Commit the eval and any fixture files alongside your route. In CI, run `dawn eval` (replay only); locally, run `dawn eval --live` when you want to measure against the real model before updating fixtures.
 
+## Your scaffolded app already has an eval
+
+`create-dawn-ai-app` generates a sample `evals/smoke.eval.ts` next to the default route, adds `@dawn-ai/evals` as a dev dependency, and wires an `eval` script. Run it right after scaffolding:
+
+```bash
+pnpm eval
+```
+
+It replays a committed `script()` fixture against the generated agent route and gates on a `contains` scorer, so it passes deterministically with no API key. Grow it by adding cases to the dataset and more scorers, and switch to `dawn eval --live` when you want to check the real model.
+
 ## Related
 
 <RelatedCards items={[

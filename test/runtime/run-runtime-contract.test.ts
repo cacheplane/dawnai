@@ -5,12 +5,12 @@ import { basename, dirname, join, resolve } from "node:path"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { executeRoute } from "../../packages/cli/src/lib/runtime/execute-route.ts"
-import { createRouteAssistantId } from "../../packages/cli/src/lib/runtime/route-identity.ts"
 import type {
   RuntimeExecutionErrorKind,
   RuntimeExecutionMode,
   RuntimeExecutionResult,
 } from "../../packages/cli/src/lib/runtime/result.ts"
+import { createRouteAssistantId } from "../../packages/cli/src/lib/runtime/route-identity.ts"
 import {
   createArtifactRoot,
   createGeneratedApp,
@@ -26,6 +26,10 @@ import {
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
 import {
+  rewriteGeneratedAppDependencies,
+  SCAFFOLD_PACKAGES,
+} from "../harness/scaffold-packaging.js"
+import {
   appendDevServerTranscript,
   invokeRunsWait,
   postRunsWait,
@@ -37,7 +41,13 @@ const RUNTIME_ROOT = resolve(import.meta.dirname)
 const HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV = "DAWN_RUNTIME_ARTIFACT_BASE_DIR"
 const tempDirs: TrackedTempDir[] = []
 
-type RuntimeFixtureName = "agent-basic" | "agent-failure" | "graph-basic" | "graph-failure" | "workflow-basic" | "workflow-failure"
+type RuntimeFixtureName =
+  | "agent-basic"
+  | "agent-failure"
+  | "graph-basic"
+  | "graph-failure"
+  | "workflow-basic"
+  | "workflow-failure"
 
 interface RuntimeOverlay {
   readonly deleteFiles?: readonly string[]
@@ -476,18 +486,7 @@ async function withRuntimeScenario(
     const overlay = await readOverlay(fixtureName)
     const { tarballs } = await recordPhase(phases, "packaged-installer", async () => {
       return await createPackagedInstaller({
-        packageNames: [
-          "@dawn-ai/cli",
-          "@dawn-ai/config-typescript",
-          "@dawn-ai/core",
-          "@dawn-ai/langchain",
-          "@dawn-ai/langgraph",
-          "@dawn-ai/permissions",
-          "@dawn-ai/sdk",
-          "@dawn-ai/sqlite-storage",
-          "@dawn-ai/testing",
-          "@dawn-ai/workspace",
-        ],
+        packageNames: [...SCAFFOLD_PACKAGES],
         tempRoot,
         transcriptPath,
       })
@@ -504,9 +503,15 @@ async function withRuntimeScenario(
       template: "basic",
     })
 
-    await rewriteDependenciesToTarballs({
+    await rewriteGeneratedAppDependencies({
       appRoot: generatedApp.appRoot,
       tarballs,
+      extraDependencies: {
+        "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
+        "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+        "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
+      },
+      removeDependencies: ["langchain", "@langchain/openai"],
     })
     await applyOverlay({ appRoot: generatedApp.appRoot, overlay })
 
@@ -694,56 +699,6 @@ async function applyOverlay(options: {
       await writeFile(outputPath, source, "utf8")
     }),
   )
-}
-
-async function rewriteDependenciesToTarballs(options: {
-  readonly appRoot: string
-  readonly tarballs: Readonly<Record<string, string>>
-}): Promise<void> {
-  const packageJsonPath = join(options.appRoot, "package.json")
-  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-    dependencies?: Record<string, string>
-    devDependencies?: Record<string, string>
-    pnpm?: {
-      overrides?: Record<string, string>
-    }
-  }
-
-  delete packageJson.dependencies?.langchain
-  delete packageJson.dependencies?.["@langchain/openai"]
-  packageJson.dependencies = {
-    ...packageJson.dependencies,
-    "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],
-    "@dawn-ai/core": options.tarballs["@dawn-ai/core"],
-    "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
-    "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
-    "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
-    "@dawn-ai/sqlite-storage": options.tarballs["@dawn-ai/sqlite-storage"],
-    "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
-  }
-  packageJson.devDependencies = {
-    ...packageJson.devDependencies,
-    "@dawn-ai/config-typescript": options.tarballs["@dawn-ai/config-typescript"],
-    "@dawn-ai/testing": options.tarballs["@dawn-ai/testing"],
-  }
-  packageJson.pnpm = {
-    ...(packageJson.pnpm ?? {}),
-    overrides: {
-      ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawn-ai/cli": options.tarballs["@dawn-ai/cli"],
-      "@dawn-ai/config-typescript": options.tarballs["@dawn-ai/config-typescript"],
-      "@dawn-ai/core": options.tarballs["@dawn-ai/core"],
-      "@dawn-ai/langchain": options.tarballs["@dawn-ai/langchain"],
-      "@dawn-ai/langgraph": options.tarballs["@dawn-ai/langgraph"],
-      "@dawn-ai/permissions": options.tarballs["@dawn-ai/permissions"],
-      "@dawn-ai/sdk": options.tarballs["@dawn-ai/sdk"],
-      "@dawn-ai/sqlite-storage": options.tarballs["@dawn-ai/sqlite-storage"],
-      "@dawn-ai/testing": options.tarballs["@dawn-ai/testing"],
-      "@dawn-ai/workspace": options.tarballs["@dawn-ai/workspace"],
-    },
-  }
-
-  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
 }
 
 async function recordPhase<T>(

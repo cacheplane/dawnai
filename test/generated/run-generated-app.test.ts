@@ -13,6 +13,10 @@ import {
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
+import {
+  rewriteGeneratedAppDependencies,
+  SCAFFOLD_PACKAGES,
+} from "../harness/scaffold-packaging.js"
 import { expectBasicAuthoringLane } from "./harness.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
@@ -22,21 +26,6 @@ const CUSTOM_APP_DIR_FIXTURE_ROOT = resolve(
   "test/fixtures/contracts/valid-custom-app-dir",
 )
 const tempDirs: TrackedTempDir[] = []
-
-interface PackedTarballs {
-  readonly cli: string
-  readonly configTypescript: string
-  readonly core: string
-  readonly createApp: string
-  readonly devkit: string
-  readonly langchain: string
-  readonly langgraph: string
-  readonly permissions: string
-  readonly sdk: string
-  readonly sqliteStorage: string
-  readonly testing: string
-  readonly workspace: string
-}
 
 interface GeneratedAppScenarioResult {
   readonly packageJson: unknown
@@ -162,30 +151,19 @@ async function runGeneratedAppScenario(
   await mkdir(dirname(transcriptPath), { recursive: true })
   try {
     let installerDir: string | undefined
-    let tarballs: PackedTarballs | undefined
+    let tarballs: Readonly<Record<string, string>> | undefined
 
     if (scaffoldMode === "internal") {
       await buildLocalContributorPackages(transcriptPath)
     } else {
       const packagedInstaller = await createPackagedInstaller({
-        packageNames: [
-          "@dawn-ai/cli",
-          "@dawn-ai/config-typescript",
-          "@dawn-ai/core",
-          "@dawn-ai/langchain",
-          "@dawn-ai/langgraph",
-          "@dawn-ai/permissions",
-          "@dawn-ai/sdk",
-          "@dawn-ai/sqlite-storage",
-          "@dawn-ai/testing",
-          "@dawn-ai/workspace",
-        ],
+        packageNames: [...SCAFFOLD_PACKAGES],
         tempRoot,
         transcriptPath,
       })
 
       installerDir = packagedInstaller.installerDir
-      tarballs = toPackedTarballs(packagedInstaller.tarballs)
+      tarballs = packagedInstaller.tarballs
     }
 
     await scaffoldApp({
@@ -222,7 +200,13 @@ async function runGeneratedAppScenario(
     }
 
     if (scaffoldMode === "external" && tarballs) {
-      await rewriteDependenciesToTarballs({ appRoot, tarballs })
+      await rewriteGeneratedAppDependencies({
+        appRoot,
+        tarballs,
+        extraDependencies: {
+          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+        },
+      })
     }
 
     const result = await runLifecycle({ appRoot, transcriptPath })
@@ -283,52 +267,6 @@ async function scaffoldApp(options: {
   await expect(
     access(join(options.appRoot, "package.json"), constants.F_OK),
   ).resolves.toBeUndefined()
-}
-
-async function rewriteDependenciesToTarballs(options: {
-  readonly appRoot: string
-  readonly tarballs: PackedTarballs
-}): Promise<void> {
-  const packageJsonPath = join(options.appRoot, "package.json")
-  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-    devDependencies?: Record<string, string>
-    dependencies?: Record<string, string>
-    pnpm?: {
-      overrides?: Record<string, string>
-    }
-  }
-
-  packageJson.dependencies = {
-    ...packageJson.dependencies,
-    "@dawn-ai/cli": options.tarballs.cli,
-    "@dawn-ai/core": options.tarballs.core,
-    "@dawn-ai/langchain": options.tarballs.langchain,
-    "@dawn-ai/sdk": options.tarballs.sdk,
-    "@dawn-ai/sqlite-storage": options.tarballs.sqliteStorage,
-  }
-  packageJson.devDependencies = {
-    ...packageJson.devDependencies,
-    "@dawn-ai/config-typescript": options.tarballs.configTypescript,
-    "@dawn-ai/testing": options.tarballs.testing,
-  }
-  packageJson.pnpm = {
-    ...(packageJson.pnpm ?? {}),
-    overrides: {
-      ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawn-ai/cli": options.tarballs.cli,
-      "@dawn-ai/config-typescript": options.tarballs.configTypescript,
-      "@dawn-ai/core": options.tarballs.core,
-      "@dawn-ai/langchain": options.tarballs.langchain,
-      "@dawn-ai/langgraph": options.tarballs.langgraph,
-      "@dawn-ai/permissions": options.tarballs.permissions,
-      "@dawn-ai/sdk": options.tarballs.sdk,
-      "@dawn-ai/sqlite-storage": options.tarballs.sqliteStorage,
-      "@dawn-ai/testing": options.tarballs.testing,
-      "@dawn-ai/workspace": options.tarballs.workspace,
-    },
-  }
-
-  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
 }
 
 async function rewriteToCustomAppDirLayout(appRoot: string): Promise<void> {
@@ -533,6 +471,7 @@ async function createExpectedInternalFixture(
       devDependencies: {
         ...expected.packageJson.devDependencies,
         "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
+        "@dawn-ai/evals": "<repo:@dawn-ai/evals>",
         "@dawn-ai/testing": "<repo:@dawn-ai/testing>",
       },
       pnpm: {
@@ -540,6 +479,7 @@ async function createExpectedInternalFixture(
           "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
           "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
           "@dawn-ai/core": "<repo:@dawn-ai/core>",
+          "@dawn-ai/evals": "<repo:@dawn-ai/evals>",
           "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
           "@dawn-ai/langgraph": "<repo:@dawn-ai/langgraph>",
           "@dawn-ai/permissions": "<repo:@dawn-ai/permissions>",
@@ -553,44 +493,20 @@ async function createExpectedInternalFixture(
   }
 }
 
-function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTarballs {
-  return {
-    cli: tarballs["@dawn-ai/cli"],
-    configTypescript: tarballs["@dawn-ai/config-typescript"],
-    core: tarballs["@dawn-ai/core"],
-    createApp: tarballs["create-dawn-ai-app"],
-    devkit: tarballs["@dawn-ai/devkit"],
-    langchain: tarballs["@dawn-ai/langchain"],
-    langgraph: tarballs["@dawn-ai/langgraph"],
-    permissions: tarballs["@dawn-ai/permissions"]!,
-    sdk: tarballs["@dawn-ai/sdk"],
-    sqliteStorage: tarballs["@dawn-ai/sqlite-storage"]!,
-    testing: tarballs["@dawn-ai/testing"]!,
-    workspace: tarballs["@dawn-ai/workspace"]!,
-  }
-}
-
 function normalizeForFixture(
   value: GeneratedAppScenarioResult,
-  context: { readonly appRoot: string; readonly tarballs: PackedTarballs },
+  context: { readonly appRoot: string; readonly tarballs: Readonly<Record<string, string>> },
 ): GeneratedAppScenarioResult {
+  const tarballPairs: Array<readonly [string, string]> = Object.entries(context.tarballs).map(
+    ([name, tarballPath]) => [tarballPath, `<tarball:${name}>`] as const,
+  )
+
   return normalizeValue(value, [
     [`/private${context.appRoot}`, "<app-root>"],
     [context.appRoot, "<app-root>"],
-    [context.tarballs.cli, "<tarball:@dawn-ai/cli>"],
-    [context.tarballs.configTypescript, "<tarball:@dawn-ai/config-typescript>"],
-    [context.tarballs.core, "<tarball:@dawn-ai/core>"],
-    [context.tarballs.createApp, "<tarball:create-dawn-ai-app>"],
-    [context.tarballs.devkit, "<tarball:@dawn-ai/devkit>"],
-    [context.tarballs.langchain, "<tarball:@dawn-ai/langchain>"],
-    [context.tarballs.langgraph, "<tarball:@dawn-ai/langgraph>"],
-    [context.tarballs.permissions, "<tarball:@dawn-ai/permissions>"],
-    [context.tarballs.sdk, "<tarball:@dawn-ai/sdk>"],
-    [context.tarballs.sqliteStorage, "<tarball:@dawn-ai/sqlite-storage>"],
-    [context.tarballs.testing, "<tarball:@dawn-ai/testing>"],
-    [context.tarballs.workspace, "<tarball:@dawn-ai/workspace>"],
-    [`/private${dirname(context.tarballs.cli)}`, "<packs-dir>"],
-    [dirname(context.tarballs.cli), "<packs-dir>"],
+    ...tarballPairs,
+    [`/private${dirname(context.tarballs["@dawn-ai/cli"])}`, "<packs-dir>"],
+    [dirname(context.tarballs["@dawn-ai/cli"]), "<packs-dir>"],
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
     ["4.1.4", "<version:vitest>"],
@@ -601,52 +517,24 @@ function normalizeForInternalFixture(
   value: GeneratedAppScenarioResult,
   context: { readonly appRoot: string },
 ): GeneratedAppScenarioResult {
+  const repoPairs: Array<readonly [string, string]> = SCAFFOLD_PACKAGES.map(
+    (name) => [pathToRepoPackageFileSpecifier(name), `<repo:${name}>`] as const,
+  )
+
   return normalizeValue(value, [
     [`/private${context.appRoot}`, "<app-root>"],
     [context.appRoot, "<app-root>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/cli"), "<repo:@dawn-ai/cli>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/config-typescript"), "<repo:@dawn-ai/config-typescript>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/core"), "<repo:@dawn-ai/core>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/langchain"), "<repo:@dawn-ai/langchain>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/langgraph"), "<repo:@dawn-ai/langgraph>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/permissions"), "<repo:@dawn-ai/permissions>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/sdk"), "<repo:@dawn-ai/sdk>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/sqlite-storage"), "<repo:@dawn-ai/sqlite-storage>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/testing"), "<repo:@dawn-ai/testing>"],
-    [pathToRepoPackageFileSpecifier("@dawn-ai/workspace"), "<repo:@dawn-ai/workspace>"],
+    ...repoPairs,
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
     ["4.1.4", "<version:vitest>"],
   ]) as GeneratedAppScenarioResult
 }
 
-function pathToRepoPackageFileSpecifier(
-  packageName:
-    | "@dawn-ai/cli"
-    | "@dawn-ai/config-typescript"
-    | "@dawn-ai/core"
-    | "@dawn-ai/langchain"
-    | "@dawn-ai/langgraph"
-    | "@dawn-ai/permissions"
-    | "@dawn-ai/sdk"
-    | "@dawn-ai/sqlite-storage"
-    | "@dawn-ai/testing"
-    | "@dawn-ai/workspace",
-): string {
-  const packageDirByName = {
-    "@dawn-ai/cli": "packages/cli",
-    "@dawn-ai/config-typescript": "packages/config-typescript",
-    "@dawn-ai/core": "packages/core",
-    "@dawn-ai/langchain": "packages/langchain",
-    "@dawn-ai/langgraph": "packages/langgraph",
-    "@dawn-ai/permissions": "packages/permissions",
-    "@dawn-ai/sdk": "packages/sdk",
-    "@dawn-ai/sqlite-storage": "packages/sqlite-storage",
-    "@dawn-ai/testing": "packages/testing",
-    "@dawn-ai/workspace": "packages/workspace",
-  } as const
+function pathToRepoPackageFileSpecifier(packageName: string): string {
+  const packageDir = resolve(REPO_ROOT, "packages", packageName.replace("@dawn-ai/", ""))
 
-  return pathToFileURL(resolve(REPO_ROOT, packageDirByName[packageName])).toString()
+  return pathToFileURL(packageDir).toString()
 }
 
 function normalizeValue(

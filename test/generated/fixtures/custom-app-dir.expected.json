@@ -5,6 +5,7 @@
     "type": "module",
     "scripts": {
       "check": "dawn check",
+      "eval": "dawn eval",
       "build": "tsc -p tsconfig.json",
       "test": "vitest run",
       "typecheck": "tsc --noEmit"
@@ -19,6 +20,7 @@
     },
     "devDependencies": {
       "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
+      "@dawn-ai/evals": "<tarball:@dawn-ai/evals>",
       "@dawn-ai/testing": "<tarball:@dawn-ai/testing>",
       "@types/node": "<version:@types/node>",
       "typescript": "<version:typescript>",
@@ -29,6 +31,7 @@
         "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
         "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
         "@dawn-ai/core": "<tarball:@dawn-ai/core>",
+        "@dawn-ai/evals": "<tarball:@dawn-ai/evals>",
         "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
         "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
         "@dawn-ai/permissions": "<tarball:@dawn-ai/permissions>",

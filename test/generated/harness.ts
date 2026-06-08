@@ -14,6 +14,10 @@ import {
   type TrackedTempDir,
   withPackagedDevServer,
 } from "../harness/packaged-app.ts"
+import {
+  rewriteGeneratedAppDependencies,
+  SCAFFOLD_PACKAGES,
+} from "../harness/scaffold-packaging.js"
 import { startFakeAgentServer } from "../runtime/support/fake-agent-server.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
@@ -30,21 +34,6 @@ export {
 
 export type GeneratedRuntimeFixtureName = "basic" | "custom-app-dir" | "handwritten"
 export type GeneratedScaffoldMode = "external" | "internal"
-
-interface PackedTarballs {
-  readonly cli: string
-  readonly configTypescript: string
-  readonly core: string
-  readonly createApp: string
-  readonly devkit: string
-  readonly langchain: string
-  readonly langgraph: string
-  readonly permissions: string
-  readonly sdk: string
-  readonly sqliteStorage: string
-  readonly testing: string
-  readonly workspace: string
-}
 
 interface RuntimeFixtureSpec {
   readonly expectedFixturePath: string
@@ -67,7 +56,7 @@ export interface GeneratedRuntimeApp {
   readonly appRoot: string
   readonly artifactRoot: string
   readonly fixture: RuntimeFixtureSpec
-  readonly tarballs?: PackedTarballs
+  readonly tarballs?: Readonly<Record<string, string>>
   readonly tempRoot: string
   readonly transcriptPath: string
 }
@@ -157,30 +146,19 @@ export async function prepareGeneratedRuntimeApp(options: {
 
   try {
     let installerDir: string | undefined
-    let tarballs: PackedTarballs | undefined
+    let tarballs: Readonly<Record<string, string>> | undefined
 
     if (scaffoldMode === "internal") {
       await buildLocalContributorPackages(transcriptPath)
     } else {
       const packagedInstaller = await createPackagedInstaller({
-        packageNames: [
-          "@dawn-ai/cli",
-          "@dawn-ai/config-typescript",
-          "@dawn-ai/core",
-          "@dawn-ai/langchain",
-          "@dawn-ai/langgraph",
-          "@dawn-ai/permissions",
-          "@dawn-ai/sdk",
-          "@dawn-ai/sqlite-storage",
-          "@dawn-ai/testing",
-          "@dawn-ai/workspace",
-        ],
+        packageNames: [...SCAFFOLD_PACKAGES],
         tempRoot: options.tempRoot,
         transcriptPath,
       })
 
       installerDir = packagedInstaller.installerDir
-      tarballs = toPackedTarballs(packagedInstaller.tarballs)
+      tarballs = packagedInstaller.tarballs
     }
 
     if (fixture.source === "generated") {
@@ -232,7 +210,14 @@ export async function prepareGeneratedRuntimeApp(options: {
     }
 
     if (scaffoldMode === "external" && tarballs) {
-      await rewriteDependenciesToTarballs({ appRoot, tarballs })
+      await rewriteGeneratedAppDependencies({
+        appRoot,
+        tarballs,
+        extraDependencies: {
+          "@dawn-ai/langgraph": tarballs["@dawn-ai/langgraph"]!,
+          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+        },
+      })
     }
     await runPackagedCommand({
       args: ["install"],
@@ -436,52 +421,6 @@ async function buildLocalContributorPackages(transcriptPath: string): Promise<vo
   })
 }
 
-async function rewriteDependenciesToTarballs(options: {
-  readonly appRoot: string
-  readonly tarballs: PackedTarballs
-}): Promise<void> {
-  const packageJsonPath = join(options.appRoot, "package.json")
-  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-    devDependencies?: Record<string, string>
-    dependencies?: Record<string, string>
-    pnpm?: {
-      overrides?: Record<string, string>
-    }
-  }
-
-  packageJson.dependencies = {
-    ...packageJson.dependencies,
-    "@dawn-ai/cli": options.tarballs.cli,
-    "@dawn-ai/core": options.tarballs.core,
-    "@dawn-ai/langgraph": options.tarballs.langgraph,
-    "@dawn-ai/sdk": options.tarballs.sdk,
-    "@dawn-ai/sqlite-storage": options.tarballs.sqliteStorage,
-  }
-  packageJson.devDependencies = {
-    ...packageJson.devDependencies,
-    "@dawn-ai/config-typescript": options.tarballs.configTypescript,
-    "@dawn-ai/testing": options.tarballs.testing,
-  }
-  packageJson.pnpm = {
-    ...(packageJson.pnpm ?? {}),
-    overrides: {
-      ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawn-ai/cli": options.tarballs.cli,
-      "@dawn-ai/config-typescript": options.tarballs.configTypescript,
-      "@dawn-ai/core": options.tarballs.core,
-      "@dawn-ai/langchain": options.tarballs.langchain,
-      "@dawn-ai/langgraph": options.tarballs.langgraph,
-      "@dawn-ai/permissions": options.tarballs.permissions,
-      "@dawn-ai/sdk": options.tarballs.sdk,
-      "@dawn-ai/sqlite-storage": options.tarballs.sqliteStorage,
-      "@dawn-ai/testing": options.tarballs.testing,
-      "@dawn-ai/workspace": options.tarballs.workspace,
-    },
-  }
-
-  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
-}
-
 async function removeLangchainFromPackageJson(appRoot: string): Promise<void> {
   const packageJsonPath = join(appRoot, "package.json")
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
@@ -658,23 +597,6 @@ function normalizeValue(
   }
 
   return value
-}
-
-function toPackedTarballs(tarballs: Readonly<Record<string, string>>): PackedTarballs {
-  return {
-    cli: tarballs["@dawn-ai/cli"],
-    configTypescript: tarballs["@dawn-ai/config-typescript"],
-    core: tarballs["@dawn-ai/core"],
-    createApp: tarballs["create-dawn-ai-app"],
-    devkit: tarballs["@dawn-ai/devkit"],
-    langchain: tarballs["@dawn-ai/langchain"],
-    langgraph: tarballs["@dawn-ai/langgraph"],
-    permissions: tarballs["@dawn-ai/permissions"]!,
-    sdk: tarballs["@dawn-ai/sdk"],
-    sqliteStorage: tarballs["@dawn-ai/sqlite-storage"]!,
-    testing: tarballs["@dawn-ai/testing"]!,
-    workspace: tarballs["@dawn-ai/workspace"]!,
-  }
 }
 
 async function runDawnRunJson(options: {

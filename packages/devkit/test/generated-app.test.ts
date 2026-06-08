@@ -39,9 +39,17 @@ describe("generated app helper", () => {
       expect(packageJson).toContain('"@dawn-ai/sdk": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/config-typescript": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/testing": "workspace:*"')
+      expect(packageJson).toContain('"@dawn-ai/evals": "workspace:*"')
       expect(packageJson).toContain('"test": "vitest run"')
+      expect(packageJson).toContain('"eval": "dawn eval"')
       await expect(
         access(resolve(generatedApp.appRoot, "test/agent.test.ts"), constants.F_OK),
+      ).resolves.toBeUndefined()
+      await expect(
+        access(
+          resolve(generatedApp.appRoot, "src/app/(public)/hello/[tenant]/evals/smoke.eval.ts"),
+          constants.F_OK,
+        ),
       ).resolves.toBeUndefined()
     } finally {
       await rm(baseDir, { force: true, recursive: true })
