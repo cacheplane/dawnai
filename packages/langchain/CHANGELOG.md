@@ -1,5 +1,13 @@
 # @dawn-ai/langchain
 
+## 0.6.0
+
+### Patch Changes
+
+- @dawn-ai/core@0.6.0
+- @dawn-ai/sdk@0.6.0
+- @dawn-ai/workspace@0.2.0
+
 ## 0.5.0
 
 ### Patch Changes

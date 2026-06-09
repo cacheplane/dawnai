@@ -1,5 +1,12 @@
 # @dawn-ai/testing
 
+## 4.0.0
+
+### Patch Changes
+
+- @dawn-ai/cli@0.6.0
+- @dawn-ai/core@0.6.0
+
 ## 3.0.0
 
 ### Patch Changes
