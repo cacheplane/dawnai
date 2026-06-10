@@ -3,7 +3,7 @@ import { access } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-export const TEMPLATE_NAMES = ["basic"] as const
+export const TEMPLATE_NAMES = ["basic", "research"] as const
 
 export type TemplateName = (typeof TEMPLATE_NAMES)[number]
 
