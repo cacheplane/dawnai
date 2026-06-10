@@ -13,18 +13,31 @@ export interface LocalFilesystemOptions {
 
 export function localFilesystem(opts: LocalFilesystemOptions = {}): FilesystemBackend {
   const maxBytes = opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
+
+  async function assertWithinCap(path: string, limit: number): Promise<void> {
+    const s = await stat(path)
+    if (s.size > limit) {
+      throw new Error(`File too large: ${s.size} bytes (max ${limit}) at ${path}`)
+    }
+  }
+
   return {
     async readFile(
       path: string,
       _ctx: BackendContext,
       opts?: { readonly maxBytes?: number },
     ): Promise<string> {
-      const limit = opts?.maxBytes ?? maxBytes
-      const s = await stat(path)
-      if (s.size > limit) {
-        throw new Error(`File too large: ${s.size} bytes (max ${limit}) at ${path}`)
-      }
+      await assertWithinCap(path, opts?.maxBytes ?? maxBytes)
       return await readFile(path, "utf8")
+    },
+    async readBinaryFile(
+      path: string,
+      _ctx: BackendContext,
+      opts?: { readonly maxBytes?: number },
+    ): Promise<Uint8Array> {
+      await assertWithinCap(path, opts?.maxBytes ?? maxBytes)
+      // No encoding arg → Buffer, which satisfies Uint8Array.
+      return await readFile(path)
     },
     async writeFile(
       path: string,

@@ -92,4 +92,33 @@ describe("localFilesystem", () => {
     await expect(fs.readFile(p, ctx(root))).rejects.toThrow(/too large/)            // default cap rejects
     expect(await fs.readFile(p, ctx(root), { maxBytes: Number.POSITIVE_INFINITY })).toBe("x".repeat(100)) // override allows
   })
+
+  it("readBinaryFile returns the exact bytes as a Uint8Array", async () => {
+    const bytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff])
+    writeFileSync(join(root, "blob"), bytes)
+    const fs = localFilesystem()
+    const out = await fs.readBinaryFile?.(join(root, "blob"), ctx(root))
+    expect(out).toBeInstanceOf(Uint8Array)
+    expect([...(out ?? [])]).toEqual([...bytes])
+  })
+
+  it("readBinaryFile rejects files larger than maxFileBytes", async () => {
+    writeFileSync(join(root, "big.bin"), Buffer.alloc(2048))
+    const fs = localFilesystem({ maxFileBytes: 1024 })
+    await expect(fs.readBinaryFile?.(join(root, "big.bin"), ctx(root))).rejects.toThrow(/too large/i)
+  })
+
+  it("readBinaryFile honors a per-call maxBytes override", async () => {
+    const fs = localFilesystem({ maxFileBytes: 10 })
+    const p = join(root, "big.bin")
+    writeFileSync(p, Buffer.alloc(100))
+    await expect(fs.readBinaryFile?.(p, ctx(root))).rejects.toThrow(/too large/) // default cap rejects
+    const out = await fs.readBinaryFile?.(p, ctx(root), { maxBytes: Number.POSITIVE_INFINITY })
+    expect(out?.length).toBe(100) // override allows
+  })
+
+  it("readBinaryFile on missing file raises ENOENT", async () => {
+    const fs = localFilesystem()
+    await expect(fs.readBinaryFile?.(join(root, "ghost.bin"), ctx(root))).rejects.toThrow(/ENOENT/)
+  })
 })
