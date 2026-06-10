@@ -29,6 +29,23 @@ export interface FilesystemBackend {
     opts?: { readonly maxBytes?: number },
   ): Promise<string>
 
+  /**
+   * Read a file's raw bytes. Like `readFile`, `path` is an already-resolved
+   * absolute path inside `ctx.workspaceRoot` — the capability has done the
+   * path-jail. No decoding is applied. `opts.maxBytes` overrides the
+   * backend's default size cap for this single call (same semantics as
+   * `readFile`).
+   *
+   * Optional — backends that omit it provide no binary read; callers must
+   * handle absence with a clear error (mirror how offload GC handles a
+   * missing `statFile`).
+   */
+  readBinaryFile?(
+    path: string,
+    ctx: BackendContext,
+    opts?: { readonly maxBytes?: number },
+  ): Promise<Uint8Array>
+
   /** Write a UTF-8 file. Returns the byte count of `content`. */
   writeFile(
     path: string,
