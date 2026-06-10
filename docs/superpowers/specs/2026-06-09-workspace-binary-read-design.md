@@ -145,6 +145,33 @@ Update the workspace filesystem docs to mention `readBinaryFile` as the binary-r
 
 ## Follow-ups (not this spec)
 
-- **Backlog #3** — sandboxed filesystem handle for route-tool authors (text + binary), threading the backend + path-jail + permission gate into the route-tool execution context. This spec's `readBinaryFile` is the binary primitive it will reuse.
+- **Backlog #3** — sandboxed filesystem handle for route-tool authors (text + binary), threading the backend + path-jail + permission gate into the route-tool execution context. This spec's `readBinaryFile` is the binary primitive it will reuse (see appendix).
 - **`writeBinaryFile`** — not needed by any current consumer (YAGNI). Add when a writer appears.
+
+## Appendix — #3 sketch (deferred, not built here)
+
+Recorded only to confirm `readBinaryFile` is the right primitive. The eventual route-tool handle arrives on the tool's second `context` argument:
+
+```ts
+/** Describe an image in the workspace. */
+export default async function describeImage(
+  { path }: { path: string },
+  { fs }: DawnToolContext,
+) {
+  const bytes = await fs.readBinaryFile(path) // sandboxed, no node:fs
+  const dataUrl = `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`
+  // ...hand dataUrl to a vision model
+}
+
+interface WorkspaceFs {
+  readFile(path: string, opts?: { maxBytes?: number }): Promise<string>
+  readBinaryFile(path: string, opts?: { maxBytes?: number }): Promise<Uint8Array>
+  writeFile(path: string, content: string): Promise<{ bytesWritten: number }>
+  listDir(path?: string): Promise<readonly string[]>
+}
+```
+
+Differences from `FilesystemBackend`: paths are **workspace-relative** (handle resolves + jails), no explicit `ctx`, `readBinaryFile` is **non-optional** (throws a clear error if the backend lacks it), and every call runs the **permission gate**. `fs.readBinaryFile` delegates to `backend.readBinaryFile` — without this spec's primitive it would have no sandboxed binary read to call.
+
+Work #3 requires (hence its own spec): (1) extract `gatePathOp` + path-jail from the core workspace capability into a shared unit; (2) a handle factory closing over `(workspaceRoot, backend, permissions, signal)`; (3) threading `fs` into `createDawnContext` + the tool-context type; (4) non-interactive/test semantics (+ a `@dawn-ai/testing` `WorkspaceFs` over a temp dir, ties into backlog #6).
 ```
