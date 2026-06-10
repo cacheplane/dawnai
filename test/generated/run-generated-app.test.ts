@@ -117,7 +117,7 @@ describe("generated app publish harness", () => {
     await expectBasicAuthoringLane(contributorLocal.artifacts.appRoot)
     expect(transcript).toContain(`$ (cd ${REPO_ROOT} && pnpm --filter create-dawn-ai-app build)`)
     expect(transcript).toContain(
-      `node packages/create-dawn-app/dist/bin.js ${contributorLocal.artifacts.appRoot} --mode internal`,
+      `node packages/create-dawn-app/dist/bin.js ${contributorLocal.artifacts.appRoot} --mode internal --template basic`,
     )
     expect(transcript).toContain(`$ (cd ${contributorLocal.artifacts.appRoot} && pnpm install)`)
     expect(transcript).toContain(
@@ -244,7 +244,7 @@ async function scaffoldApp(options: {
 }): Promise<void> {
   if (options.mode === "internal") {
     await runCommand({
-      args: ["packages/create-dawn-app/dist/bin.js", options.appRoot, "--mode", "internal"],
+      args: ["packages/create-dawn-app/dist/bin.js", options.appRoot, "--mode", "internal", "--template", "basic"],
       command: "node",
       cwd: REPO_ROOT,
       transcriptPath: options.transcriptPath,
@@ -257,7 +257,7 @@ async function scaffoldApp(options: {
     }
 
     await runCommand({
-      args: ["exec", "create-dawn-ai-app", options.appRoot, "--dist-tag", "next"],
+      args: ["exec", "create-dawn-ai-app", options.appRoot, "--dist-tag", "next", "--template", "basic"],
       command: "pnpm",
       cwd: options.installerDir,
       transcriptPath: options.transcriptPath,
