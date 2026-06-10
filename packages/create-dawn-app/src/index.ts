@@ -76,7 +76,7 @@ async function assertInternalModeWorkspace(mode: CliOptions["mode"]): Promise<vo
 function parseArgs(argv: readonly string[]): CliOptions {
   const args = [...argv]
   let targetDir: string | undefined
-  let template = "basic"
+  let template = "research"
   let mode: CliOptions["mode"] = "external"
   let distTag = "latest"
 
