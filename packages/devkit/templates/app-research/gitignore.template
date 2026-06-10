@@ -1,3 +1,7 @@
 node_modules/
 dist/
 .dawn/
+
+# Runtime workspace outputs (the agent writes these at run time).
+workspace/reports/
+workspace/tool-outputs/
