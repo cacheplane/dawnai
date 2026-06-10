@@ -71,17 +71,23 @@ it("offloads a large readDoc result", async () => {
 }, 60_000)
 
 it("gates the external fetch behind a permission prompt, then resumes", async () => {
-  h.reset()
-  const run = await h.run({
-    input: "Fetch external context on context windows",
-    fixtures: script()
-      .user("Fetch external context on context windows")
-      .callsTool("runBash", { command: "node scripts/fetch-source.mjs context windows" })
-      .replies("Fetched external context."),
-  })
-  expectInterrupt(run).ofKind("command").withDetail({
-    command: "node scripts/fetch-source.mjs context windows",
-  })
-  const resumed = await h.resume({ decision: "once" })
-  expectToolCalled(resumed, "runBash")
+  // A permission interrupt is captured on a harness's first run, so this test
+  // uses its own harness rather than the shared one above.
+  const hitl = await createAgentHarness({ appRoot, route: "/research#agent" })
+  try {
+    const run = await hitl.run({
+      input: "Fetch external context on context windows",
+      fixtures: script()
+        .user("Fetch external context on context windows")
+        .callsTool("runBash", { command: "node scripts/fetch-source.mjs context windows" })
+        .replies("Fetched external context."),
+    })
+    expectInterrupt(run).ofKind("command").withDetail({
+      command: "node scripts/fetch-source.mjs context windows",
+    })
+    const resumed = await hitl.resume({ decision: "once" })
+    expectToolCalled(resumed, "runBash")
+  } finally {
+    await hitl.close()
+  }
 }, 60_000)
