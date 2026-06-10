@@ -35,6 +35,14 @@ describe("localFilesystem", () => {
     expect(res.bytesWritten).toBe(3)
   })
 
+  it("writeFile creates missing parent directories", async () => {
+    const fs = localFilesystem()
+    const nested = join(root, "reports", "2026", "result.md")
+    const res = await fs.writeFile(nested, "hello", ctx(root))
+    expect(res.bytesWritten).toBe(5)
+    expect(await fs.readFile(nested, ctx(root))).toBe("hello")
+  })
+
   it("listDir returns directory entries (leaf names only)", async () => {
     writeFileSync(join(root, "a.txt"), "", "utf8")
     mkdirSync(join(root, "sub"))
