@@ -78,11 +78,19 @@ describe("create-dawn-ai-app", () => {
 
     await assertExists(join(targetDir, "package.json"))
     await assertExists(join(targetDir, "dawn.config.ts"))
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/tools/greet.ts"))
-    await assertExists(join(targetDir, "test/agent.test.ts"))
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/evals/smoke.eval.ts"))
+    await assertExists(join(targetDir, "README.md"))
+    await assertExists(join(targetDir, "src/app/research/index.ts"))
+    await assertExists(join(targetDir, "src/app/research/state.ts"))
+    await assertExists(join(targetDir, "src/app/research/plan.md"))
+    await assertExists(join(targetDir, "src/app/research/tools/searchCorpus.ts"))
+    await assertExists(join(targetDir, "src/app/research/tools/readDoc.ts"))
+    await assertExists(join(targetDir, "src/app/research/subagents/researcher/index.ts"))
+    await assertExists(join(targetDir, "src/app/research/skills/cite-sources/SKILL.md"))
+    await assertExists(join(targetDir, "src/app/research/evals/research-quality.eval.ts"))
+    await assertExists(join(targetDir, "test/research.test.ts"))
+    await assertExists(join(targetDir, "workspace/AGENTS.md"))
+    await assertExists(join(targetDir, "workspace/corpus/agent-architectures.md"))
+    await assertExists(join(targetDir, "workspace/scripts/fetch-source.mjs"))
 
     const packageJson = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8")) as {
       readonly name: string
@@ -155,12 +163,37 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/testing"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/evals"]).toMatch(/^file:/)
+    await assertExists(join(targetDir, "README.md"))
+    await assertExists(join(targetDir, "src/app/research/index.ts"))
+    await assertExists(join(targetDir, "src/app/research/state.ts"))
+    await assertExists(join(targetDir, "src/app/research/plan.md"))
+    await assertExists(join(targetDir, "src/app/research/tools/searchCorpus.ts"))
+    await assertExists(join(targetDir, "src/app/research/tools/readDoc.ts"))
+    await assertExists(join(targetDir, "src/app/research/subagents/researcher/index.ts"))
+    await assertExists(join(targetDir, "src/app/research/skills/cite-sources/SKILL.md"))
+    await assertExists(join(targetDir, "src/app/research/evals/research-quality.eval.ts"))
+    await assertExists(join(targetDir, "test/research.test.ts"))
+    await assertExists(join(targetDir, "workspace/AGENTS.md"))
+    await assertExists(join(targetDir, "workspace/corpus/agent-architectures.md"))
+    await assertExists(join(targetDir, "workspace/scripts/fetch-source.mjs"))
+    await assertExists(join(targetDir, ".npmrc"))
+  })
+
+  test("scaffolds the basic tree when --template basic is passed", async () => {
+    const tempRoot = await createTrackedTempDir("create-dawn-app-internal-", tempDirs)
+
+    const targetDir = join(tempRoot, "hello-dawn")
+
+    const exitCode = await run([targetDir, "--mode", "internal", "--template", "basic"])
+
+    expect(exitCode).toBe(0)
+
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/state.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/tools/greet.ts"))
     await assertExists(join(targetDir, "test/agent.test.ts"))
-    await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/evals/smoke.eval.ts"))
-    await assertExists(join(targetDir, ".npmrc"))
+    await expect(
+      access(join(targetDir, "src/app/research/index.ts"), constants.F_OK),
+    ).rejects.toThrow()
   })
 
   test("writes contributor-local package specifiers and overrides as stable repo-local paths", async () => {

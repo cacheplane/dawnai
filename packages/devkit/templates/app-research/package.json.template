@@ -1,0 +1,27 @@
+{
+  "name": "{{appName}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "dawn check",
+    "eval": "dawn eval",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dawn-ai/core": "{{dawnCoreSpecifier}}",
+    "@dawn-ai/cli": "{{dawnCliSpecifier}}",
+    "@dawn-ai/langchain": "{{dawnLangchainSpecifier}}",
+    "@dawn-ai/sdk": "{{dawnSdkSpecifier}}",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@dawn-ai/config-typescript": "{{dawnConfigTypescriptSpecifier}}",
+    "@dawn-ai/evals": "{{dawnEvalsSpecifier}}",
+    "@dawn-ai/testing": "{{dawnTestingSpecifier}}",
+    "@types/node": "25.6.0",
+    "typescript": "6.0.2",
+    "vitest": "4.1.4"
+  }
+}

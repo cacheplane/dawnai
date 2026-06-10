@@ -1,0 +1,93 @@
+import { fileURLToPath } from "node:url"
+import { afterAll, it } from "vitest"
+import type { FixtureSet } from "@dawn-ai/testing"
+import {
+  createAgentHarness,
+  expectFinalMessage,
+  expectInterrupt,
+  expectOffloaded,
+  expectSubagent,
+  expectToolCalled,
+  script,
+} from "@dawn-ai/testing"
+
+const appRoot = fileURLToPath(new URL("..", import.meta.url))
+const h = await createAgentHarness({ appRoot, route: "/research#agent" })
+afterAll(() => h.close())
+
+it("searches the corpus and writes a cited answer", async () => {
+  h.reset()
+  const run = await h.run({
+    input: "What are common agent architectures?",
+    fixtures: script()
+      .user("What are common agent architectures?")
+      .callsTool("searchCorpus", { query: "agent architectures" })
+      .callsTool("readDoc", { path: "corpus/agent-architectures.md" })
+      .replies("ReAct and plan-and-execute are common. [corpus/agent-architectures.md]"),
+  })
+  expectToolCalled(run, "searchCorpus")
+  expectToolCalled(run, "readDoc")
+  expectFinalMessage(run).toContain("[corpus/")
+}, 60_000)
+
+it("dispatches the researcher subagent", async () => {
+  h.reset()
+  const subQuestion = "What are common agent architectures?"
+  const run = await h.run({
+    input: "Research agent architectures",
+    fixtures: script()
+      .user("Research agent architectures")
+      .callsTool("task", { subagent: "researcher", input: subQuestion })
+      .replies("Done — see the cited summary.")
+      .user(subQuestion)
+      .replies("ReAct and plan-and-execute are common. [corpus/agent-architectures.md]"),
+  })
+  expectSubagent(run, "researcher").called()
+}, 60_000)
+
+it("offloads a large readDoc result", async () => {
+  h.reset()
+  const fixtures: FixtureSet = [
+    {
+      match: { turnIndex: 0, hasToolResult: false },
+      response: {
+        toolCalls: [
+          {
+            id: "call_read_big_1",
+            name: "readDoc",
+            arguments: { path: "corpus/context-windows-and-offloading.md" },
+          },
+        ],
+      },
+    },
+    { match: { hasToolResult: true }, response: { content: "Summarized the offloaded document." } },
+  ]
+  const run = await h.run({
+    input: "Summarize the context-windows document.",
+    fixtures,
+  })
+  expectOffloaded(run, "readDoc")
+  expectFinalMessage(run).toContain("Summarized")
+}, 60_000)
+
+it("gates the external fetch behind a permission prompt, then resumes", async () => {
+  // A permission interrupt is captured on a harness's first run, so this test
+  // uses its own harness rather than the shared one above.
+  const hitl = await createAgentHarness({ appRoot, route: "/research#agent" })
+  try {
+    const run = await hitl.run({
+      input: "Fetch external context on context windows",
+      fixtures: script()
+        .user("Fetch external context on context windows")
+        .callsTool("runBash", { command: "node scripts/fetch-source.mjs context windows" })
+        .replies("Fetched external context."),
+    })
+    expectInterrupt(run).ofKind("command").withDetail({
+      command: "node scripts/fetch-source.mjs context windows",
+    })
+    const resumed = await hitl.resume({ decision: "once" })
+    expectToolCalled(resumed, "runBash")
+  } finally {
+    await hitl.close()
+  }
+}, 60_000)
