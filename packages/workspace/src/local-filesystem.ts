@@ -1,4 +1,5 @@
 import { mkdir as mkdirFs, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
+import { dirname } from "node:path"
 import type { BackendContext, FilesystemBackend } from "./types.js"
 
 const DEFAULT_MAX_FILE_BYTES = 256 * 1024
@@ -44,6 +45,10 @@ export function localFilesystem(opts: LocalFilesystemOptions = {}): FilesystemBa
       content: string,
       _ctx: BackendContext,
     ): Promise<{ readonly bytesWritten: number }> {
+      // Create missing parent directories so writing to a nested workspace
+      // path (e.g. "reports/result.md") succeeds without a separate mkdir.
+      // `path` is already resolved and path-jailed inside the workspace root.
+      await mkdirFs(dirname(path), { recursive: true })
       await writeFile(path, content, "utf8")
       return { bytesWritten: Buffer.byteLength(content, "utf8") }
     },
