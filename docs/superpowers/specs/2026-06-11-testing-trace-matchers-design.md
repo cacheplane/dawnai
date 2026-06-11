@@ -20,17 +20,18 @@
 - **Matcher style** (`packages/testing/src/matchers.ts`): standalone `export function expect…(run: AgentRunResult, …)`; failures call a local `fail(msg)` that throws. Exported from `packages/testing/src/index.ts`. New matchers follow this exact shape (no new `expectRun` entry point).
 - **`AgentRunResult`** (`packages/testing/src/run-result.ts:38`): has `toolCalls: ReadonlyArray<ObservedToolCall>` (`{ name; args; id? }`), `interrupts: ReadonlyArray<InterruptInfo>`, `messages`, `finalMessage`, `subagents`, etc. **`toolCalls` is populated in call order** from `tool_call` stream chunks (`collectRunResult` line 146-154). **There is no capture of tool *results*** today.
 - **`collectRunResult`** (`run-result.ts:100`) consumes a `StreamChunk` async-iterable with a `switch (chunk.type)` handling `chunk`/`tool_call`/`done`/`interrupt`/`plan_update`/`subagent.*`. There is **no `case "tool_result"`** — that chunk type is silently dropped today.
-- **`tool_result` chunk shape** (`packages/cli/src/lib/runtime/stream-types.ts:4`): `{ readonly type: "tool_result"; readonly name: string; readonly output: unknown }`, emitted at `execute-route.ts:301` (`yield { type: "tool_result", name: tr.name, output: tr.output }`). The `output` is a **serialized LangChain `ToolMessage`**: `{ lc, type, id: [..., "ToolMessage"], kwargs: { status?: "error" | "success"; content: unknown; name?: string } }`. **Observed live:** a successful `runBash` `tool_result` had `kwargs.status: "success"`. **Verify-first dependency:** that a *thrown* tool error (e.g. `readFile`/`readDoc` ENOENT) surfaces in the `tool_result` chunk as `kwargs.status: "error"` was confirmed at the LangSmith layer (the tool run errored) but **must be confirmed at the harness `tool_result` chunk level as the very first implementation step** — the whole `isError`/`expectNoToolErrors` design hinges on this signal. If a thrown tool error instead arrives as `status: "success"` with error-prefixed `content` (or via a separate `error`/event channel), adjust `isError` accordingly (fall back to a documented `content` heuristic) before building the matcher.
-- **Interrupts are captured separately** (`interrupt` chunk → `run.interrupts`), so a permission-gated tool that pauses produces an `InterruptInfo`, **not** a `tool_result` — i.e. `expectNoToolErrors` reading `toolResults` will naturally exclude HITL interrupts.
+- **VERIFIED — error ToolMessages live in the final state, not in `tool_result` chunks.** Empirically confirmed (a live run that forced a `readDoc` on a missing path): the run emitted **4 `tool_call` chunks but only 3 `tool_result` chunks** — the *errored* `readDoc` produced **no `tool_result` chunk**. Its error surfaced **only in the final `done` chunk's `state.messages`**, as a serialized `ToolMessage` with **`kwargs.status: "error"`** and `kwargs.content` = `"...ENOENT...\n Please fix your mistakes."` (LangGraph's tool-node error handling). Successful tools DO emit `tool_result` chunks (e.g. a `runBash` success had `kwargs.status: "success"`) **and** also appear in `state.messages`. **Conclusion: `state.messages` (`run.messages`) is the complete, reliable source for tool results — capturing `tool_result` *chunks* would silently miss every thrown error.** Each serialized `ToolMessage` is `{ lc, type, id: [..., "ToolMessage"], kwargs: { status?: "error" | "success"; content: unknown; name?: string; tool_call_id?: string } }`.
+- **`run.messages` is already populated** by `collectRunResult` (`messages: Array.isArray(state.messages) ? state.messages : []`, line 242). So **no streaming-capture change is required** — `toolResults` can be *derived* from `run.messages`.
+- **Interrupts are captured separately** (`interrupt` chunk → `run.interrupts`), and a permission-gated tool that pauses produces **no `ToolMessage` at all** (it never executed) — so deriving errors from `ToolMessage` status naturally excludes HITL interrupts.
 - **Replay executes tools for real** (only the model is mocked). So an offline fixture that drives a tool call to a failing path (e.g. `readDoc` on a missing file) yields a *real* error `tool_result` — enabling a deterministic, offline unit test of `expectNoToolErrors`.
 
 ## Architecture
 
 Three units, each small and independently testable.
 
-### 1. Capture tool results in `collectRunResult`
+### 1. Derive tool results from `run.messages`
 
-New type in `run-result.ts`:
+New type + pure helper in `run-result.ts` (NO streaming-capture change — `tool_result` chunks are incomplete; derive from the final messages instead):
 
 ```ts
 export interface ObservedToolResult {
@@ -42,27 +43,33 @@ export interface ObservedToolResult {
   /** True when the tool reported an error (status === "error"). */
   readonly isError: boolean
 }
-```
 
-Add `readonly toolResults: ReadonlyArray<ObservedToolResult>` to `AgentRunResult`. In `collectRunResult`, add:
-
-```ts
-case "tool_result": {
-  const c = chunk as unknown as { name: string; output?: unknown }
-  const out = c.output as { kwargs?: { status?: unknown; content?: unknown } } | undefined
-  const status =
-    out?.kwargs?.status === "error" || out?.kwargs?.status === "success"
-      ? out.kwargs.status
-      : undefined
-  const content = out?.kwargs?.content
-  toolResults.push({ name: c.name, content, isError: status === "error", ...(status ? { status } : {}) })
-  break
+/** Extract tool results from final conversation messages (serialized ToolMessages). */
+export function deriveToolResults(
+  messages: ReadonlyArray<Record<string, unknown>>,
+): ObservedToolResult[] {
+  const results: ObservedToolResult[] = []
+  for (const m of messages) {
+    const id = m.id as unknown
+    const isToolMessage = Array.isArray(id) && id[id.length - 1] === "ToolMessage"
+    if (!isToolMessage) continue
+    const kwargs = (m.kwargs ?? {}) as { name?: unknown; status?: unknown; content?: unknown }
+    const status =
+      kwargs.status === "error" || kwargs.status === "success" ? kwargs.status : undefined
+    results.push({
+      name: typeof kwargs.name === "string" ? kwargs.name : "",
+      content: kwargs.content,
+      isError: status === "error",
+      ...(status ? { status } : {}),
+    })
+  }
+  return results
 }
 ```
 
-(push into a `const toolResults: ObservedToolResult[] = []` declared alongside `toolCalls`, and return it.)
+Add `readonly toolResults: ReadonlyArray<ObservedToolResult>` to `AgentRunResult`, and in `collectRunResult`'s return object set `toolResults: deriveToolResults(messages)` (reusing the same `messages` array already computed for the `messages` field). No new `switch` case.
 
-**Error classification = `status === "error"` only.** Tools that *catch* their own failure and return an error *string* with `status: "success"` are intentionally NOT flagged — the tool chose to handle it (the model still sees the text). The matcher targets *thrown/unhandled* tool errors (the `ENOENT` class), which LangGraph's tool node marks `status: "error"`. The raw `content` is retained on `ObservedToolResult` so consumers can write stricter custom checks if they want.
+**Error classification = `status === "error"` only.** Tools that *catch* their own failure and return an error *string* with `status: "success"` are intentionally NOT flagged — the tool chose to handle it (the model still sees the text). The matcher targets *thrown/unhandled* tool errors (the `ENOENT` class), which LangGraph's tool node marks `status: "error"` (verified). The raw `content` is retained on `ObservedToolResult` so consumers can write stricter custom checks if they want.
 
 ### 2. `expectToolSequence(run, names, opts?)`
 
@@ -94,13 +101,13 @@ Export both from `packages/testing/src/index.ts` next to the other matchers.
 
 ## Data flow
 
-`harness.run({ live? })` → `collectRunResult(stream)` now also folds `tool_result` chunks → `run.toolResults`. `expectToolSequence` reads `run.toolCalls`; `expectNoToolErrors` reads `run.toolResults`. No network, no LangSmith. Identical in replay and live.
+`harness.run({ live? })` → `collectRunResult(stream)` builds `state` from the `done` chunk, then `run.toolResults = deriveToolResults(run.messages)`. `expectToolSequence` reads `run.toolCalls` (captured from `tool_call` chunks, in order); `expectNoToolErrors` reads `run.toolResults` (derived from the final `ToolMessage`s). No network, no LangSmith. Identical in replay and live.
 
 ## Testing
 
 All offline/deterministic (replay; tools execute for real):
 
-1. **`toolResults` capture** — a fixture that calls a tool returning success → `run.toolResults` has one entry, `isError: false`. (Use an existing probe app / the testing package's e2e harness.)
+1. **`deriveToolResults` / `toolResults`** — unit-test `deriveToolResults` directly with a hand-built messages array (a success `ToolMessage` and an `status:"error"` `ToolMessage`) → correct `isError` flags + names; and a fixture-driven run where a tool succeeds → `run.toolResults` has the entry with `isError: false`.
 2. **`expectNoToolErrors` catches a real error** — a fixture driving a tool call to a failing path (e.g. a workspace `readFile`/`readDoc` on a missing file) → `run.toolResults` has `isError: true`; `expectNoToolErrors(run)` throws with the tool name + ENOENT message; the happy path does not throw.
 3. **`expectToolSequence`** — pure-ish: build an `AgentRunResult` (or drive a fixture) with tool calls `[a, x, b, c]`; assert subsequence `[a, b, c]` passes, `[b, a]` fails, and `strict: true` on a non-contiguous set fails. Failure messages match the spec strings.
 4. **HITL interrupt is not a tool error** — reuse the permission-gated `runBash` scenario: the run has an `interrupt` and an empty/error-free `toolResults`; `expectNoToolErrors(run)` passes. (This is the regression guard for the core "interrupt ≠ error" distinction.)
@@ -119,7 +126,7 @@ expectNoToolErrors(run)
 
 ## Tasks (single plan, ordered)
 
-1. Add `ObservedToolResult` + `toolResults` field + `tool_result` capture in `run-result.ts` (test: capture).
+1. Add `ObservedToolResult` + `deriveToolResults(messages)` helper + `toolResults` field (derived from `run.messages`) in `run-result.ts` (test: `deriveToolResults` unit + fixture-run capture).
 2. `expectToolSequence` matcher + export (tests: subsequence pass/fail, strict).
 3. `expectNoToolErrors` matcher + export (tests: real error caught, happy path, interrupt-not-error).
 4. Docs entry + consumer snippet.
