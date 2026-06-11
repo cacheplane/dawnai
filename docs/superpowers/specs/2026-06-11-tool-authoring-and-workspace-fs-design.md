@@ -107,10 +107,21 @@ export interface DawnToolContext {
 
 ### B5. Threading
 
-- cli `createDawnContext` builds the handle once per run and passes it in each `tool.run(input, { middleware?, signal, fs })`; `DiscoveredToolDefinition`'s and core `DawnToolDefinition`'s context types gain `fs`.
-- `execute-route` provides `fs` on the workflow/graph `RuntimeContext`.
-- Backend/permissions sources are the same ones the workspace capability uses (`context.backends?.filesystem ?? localFilesystem()`, `context.permissions`); `workspaceRoot` is `<appRoot>/workspace` regardless of whether the directory exists (honest ENOENT at call time).
-- Capability-contributed tools (planning, skills, subagents, workspace itself) receive the same context shape; they simply ignore `fs` today.
+Tool `run` is invoked from multiple sites — cli `createDawnContext` (workflow/graph `ctx.tools`), and `@dawn-ai/langchain`'s `tool-converter.ts` / `tool-loop.ts` (agent routes). Rather than threading `fs` through every caller, **`prepareRouteExecution` (cli) injects it once by wrapping the assembled tool definitions**:
+
+```ts
+tools = tools.map((t) => ({ ...t, run: (input, ctx) => t.run(input, { ...ctx, fs }) }))
+```
+
+so `@dawn-ai/langchain` requires **no changes** (its locally-declared structural tool type still matches). Additionally:
+
+- `prepareRouteExecution` hoists permissions-store creation out of the agent-only branch (workflow/graph routes need the store's allow/deny rules too) and builds the handle from the same sources the workspace capability uses (`config.backends?.filesystem ?? localFilesystem()`, `<appRoot>/workspace` regardless of whether the directory exists — honest ENOENT at call time).
+- `createDawnContext` gains an `fs` option and exposes it on the workflow/graph `RuntimeContext`.
+- `DiscoveredToolDefinition`'s and core `DawnToolDefinition`'s run-context types gain `readonly fs?: WorkspaceFs` (optional at the definition layer; the author-facing `DawnToolContext` declares it required since the cli always injects it). Capability-contributed tools receive and ignore it.
+
+### B5a. Interrupt reachability (discovered during planning recon)
+
+The interactive permission interrupt is LangGraph machinery — it only works inside a graph node. **Agent-route tools** run inside the generated graph (`DynamicStructuredTool`), so the full interactive prompt works there. **Workflow/graph entries and their `ctx.tools` calls run as plain functions** (`invokeEntry`), where `interrupt()` would throw. Therefore `createWorkspaceFs` takes an `interruptCapable` flag (set from the route kind): when an outside-workspace path is `unknown` in interactive mode and interrupts are not available, the gate **fails closed** with a message telling the user to add an allow rule to `dawn.config.ts` permissions. The extracted `gatePathOp` gains an option to suppress interrupting (default preserves current behavior).
 
 ### B6. Interrupt-resume caveat (documented, inherited)
 
