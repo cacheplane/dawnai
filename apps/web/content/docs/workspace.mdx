@@ -1,12 +1,12 @@
 # Workspace Filesystem
 
-Every Dawn route gets a sandboxed `workspace/` directory at the app root. All file I/O in the runtime flows through one permission gate, whether the request comes from the LLM calling an agent-facing tool or from your own code calling `ctx.fs`.
+A Dawn app's sandboxed file area is the `workspace/` directory at the app root. All file I/O in the runtime flows through one permission gate, whether the request comes from the LLM calling an agent-facing tool or from your own code calling `ctx.fs`.
 
 There are three layers:
 
 - **The pluggable backend** (`@dawn-ai/workspace`) — a plain-object interface that reads, writes, and lists files. `localFilesystem()` ships as the default; you can substitute any backend in `dawn.config.ts`.
-- **Agent-facing workspace tools** — `readFile`, `writeFile`, `listDir`, and `runBash` wired into every agent route. The LLM calls these by name; they gate through the permission system before touching the backend.
-- **`ctx.fs`** — the `WorkspaceFs` handle available on `DawnToolContext` (route tools) and `RuntimeContext` (workflow/graph entries). Same gate, same backend, but your code drives it.
+- **Agent-facing workspace tools** — `readFile`, `writeFile`, `listDir`, and `runBash`, wired into agent routes when a `workspace/` directory exists at the app root. The LLM calls these by name; they gate through the permission system before touching the backend.
+- **`ctx.fs`** — the `WorkspaceFs` handle available on `DawnToolContext` (route tools) and `RuntimeContext` (workflow/graph entries). Same gate, same backend, but your code drives it. Always present on the context; reads simply surface `ENOENT` if the `workspace/` directory doesn't exist yet.
 
 ## The pluggable backend
 
@@ -31,14 +31,13 @@ There are three layers:
 Configure a custom backend in `dawn.config.ts`:
 
 ```ts title="dawn.config.ts"
-import { defineConfig } from "@dawn-ai/sdk"
 import { myRemoteBackend } from "./backends/remote.js"
 
-export default defineConfig({
+export default {
   backends: {
     filesystem: myRemoteBackend(),
   },
-})
+}
 ```
 
 ## Middleware
@@ -46,20 +45,17 @@ export default defineConfig({
 `FilesystemMiddleware` is `(next: FilesystemBackend) => FilesystemBackend`. Wrap the default backend with `compose()` to add cross-cutting behavior:
 
 ```ts title="dawn.config.ts"
-import { defineConfig } from "@dawn-ai/sdk"
 import { compose, localFilesystem, withFilesystemLogging } from "@dawn-ai/workspace"
 
-export default defineConfig({
+export default {
   backends: {
-    filesystem: compose(
-      withFilesystemLogging(),
-      localFilesystem(),
-    ),
+    // compose(...) takes middlewares and returns a wrapper; apply it to the base backend.
+    filesystem: compose(withFilesystemLogging())(localFilesystem()),
   },
-})
+}
 ```
 
-`withFilesystemLogging` writes method names and paths to `stderr` by default. Supply a `destination` function for structured output:
+`withFilesystemLogging` writes method names and arguments to `stderr` by default — note that for `writeFile` this includes the full file content, so route logs accordingly. Supply a `destination` function for structured output:
 
 ```ts
 withFilesystemLogging({
