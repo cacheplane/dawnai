@@ -110,7 +110,7 @@ Consistent template for all 11 (creating the 5 missing ones):
 - Package name (`# @dawn-ai/<name>`).
 - 1–2 sentence purpose statement.
 - "This is an internal Dawn workspace package" note.
-- Link to docs: `https://dawn-ai.org/docs/...` (and/or the repo docs tree).
+- Link to docs: `https://dawn-ai.org/docs/getting-started` (live site, not the repo docs tree).
 - License.
 
 Outcome: no published package renders blank on npm.
