@@ -94,10 +94,17 @@ describe("deriveToolResults", () => {
         id: ["langchain_core", "messages", "ToolMessage"],
         kwargs: { name: "searchCorpus", status: "success", content: "[...]" },
       },
-      { id: ["langchain_core", "messages", "ToolMessage"], kwargs: { name: "writeTodos", content: "{}" } },
       {
         id: ["langchain_core", "messages", "ToolMessage"],
-        kwargs: { name: "readDoc", status: "error", content: "Error: ENOENT no such file\n Please fix your mistakes." },
+        kwargs: { name: "writeTodos", content: "{}" },
+      },
+      {
+        id: ["langchain_core", "messages", "ToolMessage"],
+        kwargs: {
+          name: "readDoc",
+          status: "error",
+          content: "Error: ENOENT no such file\n Please fix your mistakes.",
+        },
       },
     ]
     const results = deriveToolResults(messages)

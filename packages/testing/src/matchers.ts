@@ -277,7 +277,8 @@ export function expectNoToolErrors(run: AgentRunResult): void {
   if (errored.length > 0) {
     const detail = errored
       .map((r) => {
-        const first = typeof r.content === "string" ? (r.content.split("\n")[0] ?? "").slice(0, 140) : ""
+        const first =
+          typeof r.content === "string" ? (r.content.split("\n")[0] ?? "").slice(0, 140) : ""
         return `"${r.name}" returned an error: ${first}`
       })
       .join("; ")

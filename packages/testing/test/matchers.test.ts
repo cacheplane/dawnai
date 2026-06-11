@@ -200,14 +200,24 @@ it("expectToolSequence passes for an in-order subsequence", () => {
 })
 
 it("expectToolSequence throws for out-of-order tools", () => {
-  const run = { ...base, toolCalls: [{ name: "b", args: {} }, { name: "a", args: {} }] }
+  const run = {
+    ...base,
+    toolCalls: [
+      { name: "b", args: {} },
+      { name: "a", args: {} },
+    ],
+  }
   expect(() => expectToolSequence(run, ["a", "b"])).toThrow(/expected tool sequence/)
 })
 
 it("expectToolSequence strict requires contiguity", () => {
   const run = {
     ...base,
-    toolCalls: [{ name: "a", args: {} }, { name: "x", args: {} }, { name: "b", args: {} }],
+    toolCalls: [
+      { name: "a", args: {} },
+      { name: "x", args: {} },
+      { name: "b", args: {} },
+    ],
   }
   expect(() => expectToolSequence(run, ["a", "b"], { strict: true })).toThrow()
   expectToolSequence(run, ["a", "x", "b"], { strict: true })
@@ -216,7 +226,9 @@ it("expectToolSequence strict requires contiguity", () => {
 it("expectNoToolErrors passes when no tool errored", () => {
   const run = {
     ...base,
-    toolResults: [{ name: "searchCorpus", status: "success" as const, content: "ok", isError: false }],
+    toolResults: [
+      { name: "searchCorpus", status: "success" as const, content: "ok", isError: false },
+    ],
   }
   expectNoToolErrors(run)
 })
@@ -225,7 +237,12 @@ it("expectNoToolErrors throws and names the failed tool", () => {
   const run = {
     ...base,
     toolResults: [
-      { name: "readDoc", status: "error" as const, content: "Error: ENOENT no such file\n next line", isError: true },
+      {
+        name: "readDoc",
+        status: "error" as const,
+        content: "Error: ENOENT no such file\n next line",
+        isError: true,
+      },
     ],
   }
   expect(() => expectNoToolErrors(run)).toThrow(/readDoc.*ENOENT/)
