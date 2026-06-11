@@ -9,6 +9,7 @@ import {
   expectSubagent,
   expectSystemPrompt,
   expectToolCalled,
+  expectToolSequence,
 } from "../src/matchers.js"
 import type { AgentRunResult } from "../src/run-result.js"
 
@@ -182,4 +183,31 @@ it("expectPlan.toHaveLength", () => {
 it("expectSystemPrompt.toMatch", () => {
   expectSystemPrompt(withSystemPrompt).toMatch(/helpful/)
   expect(() => expectSystemPrompt(withSystemPrompt).toMatch(/nope-xyz/)).toThrow()
+})
+
+it("expectToolSequence passes for an in-order subsequence", () => {
+  const run = {
+    ...base,
+    toolCalls: [
+      { name: "a", args: {} },
+      { name: "x", args: {} },
+      { name: "b", args: {} },
+      { name: "c", args: {} },
+    ],
+  }
+  expectToolSequence(run, ["a", "b", "c"])
+})
+
+it("expectToolSequence throws for out-of-order tools", () => {
+  const run = { ...base, toolCalls: [{ name: "b", args: {} }, { name: "a", args: {} }] }
+  expect(() => expectToolSequence(run, ["a", "b"])).toThrow(/expected tool sequence/)
+})
+
+it("expectToolSequence strict requires contiguity", () => {
+  const run = {
+    ...base,
+    toolCalls: [{ name: "a", args: {} }, { name: "x", args: {} }, { name: "b", args: {} }],
+  }
+  expect(() => expectToolSequence(run, ["a", "b"], { strict: true })).toThrow()
+  expectToolSequence(run, ["a", "x", "b"], { strict: true })
 })

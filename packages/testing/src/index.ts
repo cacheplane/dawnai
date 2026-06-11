@@ -25,6 +25,7 @@ export {
   expectSubagent,
   expectSystemPrompt,
   expectToolCalled,
+  expectToolSequence,
   type InterruptInfo,
   type SubagentEvent,
   type SubagentRun,
