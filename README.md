@@ -8,7 +8,7 @@
 [![OpenSSF Scorecard](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml/badge.svg)](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](./LICENSE)
 
-The meta-framework for LangGraph. Author agents and workflows as filesystem routes, get types and a local dev server for free, and ship to LangSmith with one command.
+The TypeScript meta-framework for LangGraph. Author AI agents and workflows as filesystem routes, get end-to-end types and a local dev server for free, and deploy to LangSmith with one command.
 
 <p align="center">
   <img src="docs/brand/quickstart.gif" alt="Dawn quickstart — scaffold a route and invoke it in under a minute" width="900" />
@@ -16,10 +16,10 @@ The meta-framework for LangGraph. Author agents and workflows as filesystem rout
 
 ## Why Dawn?
 
-- **Kill the graph boilerplate.** Export one `agent({ model, systemPrompt })` descriptor. Dawn discovers it, wires route-local tools into the generated graph, and emits a `langgraph.json` package ready for LangSmith.
-- **Real project structure.** Filesystem routes under `src/app/` — colocate state schemas, tools, middleware, and tests next to the route they belong to. No more ad-hoc folders.
-- **A local dev loop for Dawn routes.** `dawn dev` runs your routes locally with LangSmith-style endpoints. Iterate in seconds, then verify the generated deployment artifact before shipping.
-- **Typed end to end.** Route params, state, and tool I/O are generated as TypeScript types. `dawn verify` is your pre-deploy gate.
+- **Kill the LangGraph boilerplate.** Export one `agent({ model, systemPrompt })` descriptor. Dawn discovers it, wires route-local tools into the generated graph, and emits a `langgraph.json` package ready for LangSmith.
+- **Filesystem-routed agents.** Filesystem routes under `src/app/` — colocate state schemas, tools, middleware, and tests next to the route they belong to. No more ad-hoc folders.
+- **A real local dev loop.** `dawn dev` runs your routes locally with LangSmith-style endpoints. Iterate in seconds, then verify the generated deployment artifact before shipping.
+- **Typed end to end (TypeScript).** Route params, state, and tool I/O are generated as TypeScript types. `dawn verify` is your pre-deploy gate.
 
 ## Without Dawn / With Dawn
 
@@ -138,16 +138,20 @@ Add `state.ts` for a route state schema, `tools/*.ts` for route-local tools, `mi
 
 The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families; set `provider` explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids. Raw `graph` and `chain` routes can still instantiate any provider directly.
 
+---
+
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
+
 ## Learn more
 
-- [Getting started](apps/web/content/docs/getting-started.mdx)
-- [Routes](apps/web/content/docs/routes.mdx)
-- [Tools](apps/web/content/docs/tools.mdx)
-- [State](apps/web/content/docs/state.mdx)
-- [CLI](apps/web/content/docs/cli.mdx)
-- [Dev server](apps/web/content/docs/dev-server.mdx)
-- [Testing](apps/web/content/docs/testing.mdx)
-- [Deployment](apps/web/content/docs/deployment.mdx)
+- [Getting started](https://dawn-ai.org/docs/getting-started)
+- [Routes](https://dawn-ai.org/docs/routes)
+- [Tools](https://dawn-ai.org/docs/tools)
+- [State](https://dawn-ai.org/docs/state)
+- [CLI](https://dawn-ai.org/docs/cli)
+- [Dev server](https://dawn-ai.org/docs/dev-server)
+- [Testing](https://dawn-ai.org/docs/testing)
+- [Deployment](https://dawn-ai.org/docs/deployment)
 
 ---
 
