@@ -41,7 +41,7 @@ conversion.
 - 6 more public packages have bare "internal package" stubs: `core`,
   `langgraph`, `devkit`, `vite-plugin`, `config-biome`, `config-typescript`.
 - All 15 packages are `private: false` (published).
-- Docs site: `https://dawn-ai.org/docs/...`. Community: GitHub Discussions
+- Docs site: `https://dawnai.org/docs/...`. Community: GitHub Discussions
   (`https://github.com/cacheplane/dawnai/discussions`). No Discord/X.
 - **Correction (verified during planning):** every published package's
   `package.json` already carries `repository`, `homepage`, and `bugs`, so
@@ -82,9 +82,9 @@ conversion.
   "filesystem-routed agents," "deploy agents to LangSmith." Keep
   "meta-framework for LangGraph" as the anchor line.
 - **CTA band.** Insert the shared CTA band (see §4) just above "Learn
-  more": Star on GitHub · Docs at dawn-ai.org · Ask in GitHub Discussions.
+  more": Star on GitHub · Docs at dawnai.org · Ask in GitHub Discussions.
 - **Learn more links.** Repoint the 8 doc links from
-  `apps/web/content/docs/*.mdx` to `https://dawn-ai.org/docs/*`.
+  `apps/web/content/docs/*.mdx` to `https://dawnai.org/docs/*`.
 - **Preserve** the hero gif, "Without / With Dawn," and quickstart
   structurally.
 
@@ -97,12 +97,12 @@ Each Tier-1 README includes:
 - Install section.
 - One minimal, copy-paste example.
 - Shared CTA band (§4).
-- Doc links pointing to `https://dawn-ai.org/docs/*`.
+- Doc links pointing to `https://dawnai.org/docs/*`.
 
 Notes per package:
 
 - `cli`, `sdk` — already close; primarily add SEO tuning + CTA band +
-  fix doc links to dawn-ai.org.
+  fix doc links to dawnai.org.
 - `create-dawn-ai-app`, `langchain` — flesh out to the full template.
 
 ### 3. Tier-2 package READMEs
@@ -113,7 +113,7 @@ Consistent template for all 11 (creating the 5 missing ones):
 - Package name (`# @dawn-ai/<name>`).
 - 1–2 sentence purpose statement.
 - "This is an internal Dawn workspace package" note.
-- Link to docs: `https://dawn-ai.org/docs/getting-started` (live site, not the repo docs tree).
+- Link to docs: `https://dawnai.org/docs/getting-started` (live site, not the repo docs tree).
 - License.
 
 Outcome: no published package renders blank on npm.
@@ -145,6 +145,6 @@ This work item is removed from the plan.
 
 - No published package renders a blank README on npm.
 - Root + Tier-1 READMEs carry a consistent CTA band funneling to GitHub
-  stars, dawn-ai.org docs, and Discussions.
+  stars, dawnai.org docs, and Discussions.
 - Doc links resolve to the live docs site, not raw repo paths.
 - High-intent SEO terms appear in root + Tier-1 headers/first paragraphs.

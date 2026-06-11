@@ -4,9 +4,14 @@
 
 **Goal:** Update the root and package README files to maximize GTM developer growth via an SEO keyword pass, a consistent Star/Docs/Discussions CTA band, live docs links, and complete (no-blank) npm READMEs — without changing Dawn's "meta-framework for LangGraph" positioning.
 
-**Architecture:** Documentation-only change. A single canonical CTA-band snippet is reused across the root and Tier-1 package READMEs. Tier-2 packages get a consistent minimal stub. All doc links repoint from raw `apps/web/content/docs/*.mdx` paths to the live `https://dawn-ai.org/docs/<slug>` site. No source code, no `package.json` changes.
+**Architecture:** Documentation-only change. A single canonical CTA-band snippet is reused across the root and Tier-1 package READMEs. Tier-2 packages get a consistent minimal stub. All doc links repoint from raw `apps/web/content/docs/*.mdx` paths to the live `https://dawnai.org/docs/<slug>` site. No source code, no `package.json` changes.
 
 **Tech Stack:** Markdown. Verification via `grep`, `git`, and the repo's existing `node scripts/check-docs.mjs` / `pnpm pack:check` gates.
+
+> **Domain correction (post-implementation):** the live docs domain is
+> `dawnai.org`. The earlier draft of this plan used `dawn-ai.org`, which
+> `scripts/check-docs.mjs` flags as a retired domain. All doc URLs in this
+> plan now use `https://dawnai.org/docs/<slug>`, matching what was shipped.
 
 ---
 
@@ -17,27 +22,27 @@
 ```md
 ---
 
-⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 ```
 
 **Tier-2 docs line** (one line, replaces the raw repo docs link):
 
 ```md
-For documentation, see [dawn-ai.org/docs](https://dawn-ai.org/docs/getting-started).
+For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
 ```
 
 **Doc-slug map** (raw path → live URL). All slugs verified to exist under `apps/web/content/docs/`:
 
 | Raw path                                          | Live URL                                      |
 |---------------------------------------------------|-----------------------------------------------|
-| `apps/web/content/docs/getting-started.mdx`       | `https://dawn-ai.org/docs/getting-started`    |
-| `apps/web/content/docs/routes.mdx`                | `https://dawn-ai.org/docs/routes`             |
-| `apps/web/content/docs/tools.mdx`                 | `https://dawn-ai.org/docs/tools`              |
-| `apps/web/content/docs/state.mdx`                 | `https://dawn-ai.org/docs/state`              |
-| `apps/web/content/docs/cli.mdx`                   | `https://dawn-ai.org/docs/cli`                |
-| `apps/web/content/docs/dev-server.mdx`            | `https://dawn-ai.org/docs/dev-server`         |
-| `apps/web/content/docs/testing.mdx`               | `https://dawn-ai.org/docs/testing`            |
-| `apps/web/content/docs/deployment.mdx`            | `https://dawn-ai.org/docs/deployment`         |
+| `apps/web/content/docs/getting-started.mdx`       | `https://dawnai.org/docs/getting-started`    |
+| `apps/web/content/docs/routes.mdx`                | `https://dawnai.org/docs/routes`             |
+| `apps/web/content/docs/tools.mdx`                 | `https://dawnai.org/docs/tools`              |
+| `apps/web/content/docs/state.mdx`                 | `https://dawnai.org/docs/state`              |
+| `apps/web/content/docs/cli.mdx`                   | `https://dawnai.org/docs/cli`                |
+| `apps/web/content/docs/dev-server.mdx`            | `https://dawnai.org/docs/dev-server`         |
+| `apps/web/content/docs/testing.mdx`               | `https://dawnai.org/docs/testing`            |
+| `apps/web/content/docs/deployment.mdx`            | `https://dawnai.org/docs/deployment`         |
 
 **Tier-1 packages:** `sdk`, `cli`, `create-dawn-app`, `langchain`
 **Tier-2 packages:** `core`, `langgraph`, `devkit`, `vite-plugin`, `config-biome`, `config-typescript`, `workspace`, `permissions`, `sqlite-storage`, `testing`, `evals`
@@ -77,14 +82,14 @@ In the "## Why Dawn?" list, replace the four bold lead phrases only (leave each 
 Replace the entire "## Learn more" list body with:
 
 ```md
-- [Getting started](https://dawn-ai.org/docs/getting-started)
-- [Routes](https://dawn-ai.org/docs/routes)
-- [Tools](https://dawn-ai.org/docs/tools)
-- [State](https://dawn-ai.org/docs/state)
-- [CLI](https://dawn-ai.org/docs/cli)
-- [Dev server](https://dawn-ai.org/docs/dev-server)
-- [Testing](https://dawn-ai.org/docs/testing)
-- [Deployment](https://dawn-ai.org/docs/deployment)
+- [Getting started](https://dawnai.org/docs/getting-started)
+- [Routes](https://dawnai.org/docs/routes)
+- [Tools](https://dawnai.org/docs/tools)
+- [State](https://dawnai.org/docs/state)
+- [CLI](https://dawnai.org/docs/cli)
+- [Dev server](https://dawnai.org/docs/dev-server)
+- [Testing](https://dawnai.org/docs/testing)
+- [Deployment](https://dawnai.org/docs/deployment)
 ```
 
 - [ ] **Step 4: Insert the CTA band directly above "## Learn more"**
@@ -94,14 +99,14 @@ Insert the canonical CTA band (from Reference constants) on its own lines immedi
 ```md
 ---
 
-⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 
 ## Learn more
 ```
 
 - [ ] **Step 5: Verify the edits**
 
-Run: `grep -c "dawn-ai.org/docs" README.md`
+Run: `grep -c "dawnai.org/docs" README.md`
 Expected: `9` (8 Learn-more links + 1 CTA band docs link)
 
 Run: `grep -F "raw.githubusercontent" README.md; grep -F "apps/web/content/docs" README.md`
@@ -152,10 +157,10 @@ Replace the "## Documentation" list body:
 with:
 
 ```md
-- [Routes](https://dawn-ai.org/docs/routes)
-- [Tools](https://dawn-ai.org/docs/tools)
-- [State](https://dawn-ai.org/docs/state)
-- [Getting started](https://dawn-ai.org/docs/getting-started)
+- [Routes](https://dawnai.org/docs/routes)
+- [Tools](https://dawnai.org/docs/tools)
+- [State](https://dawnai.org/docs/state)
+- [Getting started](https://dawnai.org/docs/getting-started)
 ```
 
 - [ ] **Step 3: Insert the CTA band directly above "## License"**
@@ -212,10 +217,10 @@ Replace the "## Documentation" list body:
 with:
 
 ```md
-- [CLI](https://dawn-ai.org/docs/cli)
-- [Dev server](https://dawn-ai.org/docs/dev-server)
-- [Deployment](https://dawn-ai.org/docs/deployment)
-- [Getting started](https://dawn-ai.org/docs/getting-started)
+- [CLI](https://dawnai.org/docs/cli)
+- [Dev server](https://dawnai.org/docs/dev-server)
+- [Deployment](https://dawnai.org/docs/deployment)
+- [Getting started](https://dawnai.org/docs/getting-started)
 ```
 
 - [ ] **Step 3: Insert the CTA band directly above "## License"**
@@ -271,9 +276,9 @@ Replace the "## Next steps" list body:
 with:
 
 ```md
-- [Getting started](https://dawn-ai.org/docs/getting-started)
-- [Routes](https://dawn-ai.org/docs/routes)
-- [CLI](https://dawn-ai.org/docs/cli)
+- [Getting started](https://dawnai.org/docs/getting-started)
+- [Routes](https://dawnai.org/docs/routes)
+- [CLI](https://dawnai.org/docs/cli)
 ```
 
 - [ ] **Step 3: Insert the CTA band directly above "## License"**
@@ -331,12 +336,12 @@ pnpm add @langchain/openrouter    # openrouter
 
 ## Documentation
 
-- [Routes](https://dawn-ai.org/docs/routes)
-- [Getting started](https://dawn-ai.org/docs/getting-started)
+- [Routes](https://dawnai.org/docs/routes)
+- [Getting started](https://dawnai.org/docs/getting-started)
 
 ---
 
-⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 
 ## License
 
@@ -384,7 +389,7 @@ This is an internal Dawn workspace package. For Dawn documentation, see <https:/
 In each of the six files, replace the line above with:
 
 ```md
-This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawn-ai.org/docs](https://dawn-ai.org/docs/getting-started).
+This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
 ```
 
 - [ ] **Step 2: Verify**
@@ -392,14 +397,14 @@ This is an internal Dawn workspace package, part of [Dawn — the TypeScript met
 Run: `grep -rl "apps/web/content/docs" packages/core/README.md packages/langgraph/README.md packages/devkit/README.md packages/vite-plugin/README.md packages/config-biome/README.md packages/config-typescript/README.md`
 Expected: no output (no matches in any of the six).
 
-Run: `grep -rc "dawn-ai.org/docs" packages/core/README.md packages/langgraph/README.md packages/devkit/README.md packages/vite-plugin/README.md packages/config-biome/README.md packages/config-typescript/README.md`
+Run: `grep -rc "dawnai.org/docs" packages/core/README.md packages/langgraph/README.md packages/devkit/README.md packages/vite-plugin/README.md packages/config-biome/README.md packages/config-typescript/README.md`
 Expected: each file reports `1`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add packages/core/README.md packages/langgraph/README.md packages/devkit/README.md packages/vite-plugin/README.md packages/config-biome/README.md packages/config-typescript/README.md
-git commit -m "docs(packages): repoint internal-stub docs links to dawn-ai.org"
+git commit -m "docs(packages): repoint internal-stub docs links to dawnai.org"
 ```
 
 ---
@@ -426,7 +431,7 @@ Each uses the same template; only the package name and the one-line purpose diff
 
 Filesystem-backed workspace utilities for Dawn agents — reading, writing, and managing files in an agent's working directory.
 
-This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawn-ai.org/docs](https://dawn-ai.org/docs/getting-started).
+This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
 
 ## License
 
@@ -444,7 +449,7 @@ MIT
 
 Permission and access-control primitives for Dawn agents — gating tool and resource access at runtime.
 
-This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawn-ai.org/docs](https://dawn-ai.org/docs/getting-started).
+This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
 
 ## License
 
@@ -462,7 +467,7 @@ MIT
 
 SQLite-backed storage adapter for Dawn — durable persistence for agent state and runtime data.
 
-This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawn-ai.org/docs](https://dawn-ai.org/docs/getting-started).
+This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
 
 ## License
 
@@ -480,7 +485,7 @@ MIT
 
 Testing utilities for Dawn apps — helpers for exercising routes, tools, and agent behavior in unit and scenario tests.
 
-This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawn-ai.org/docs](https://dawn-ai.org/docs/getting-started).
+This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
 
 ## License
 
@@ -498,7 +503,7 @@ MIT
 
 Evaluation harness for Dawn agents — running and scoring agent behavior against datasets and scenarios.
 
-This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawn-ai.org/docs](https://dawn-ai.org/docs/getting-started).
+This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
 
 ## License
 
@@ -573,5 +578,5 @@ git commit -m "docs: verification fixes for README GTM refresh"
 
 - **Spec coverage:** §1 root → Task 1. §2 Tier-1 → Tasks 2–5. §3 Tier-2 (6 stubs + 5 blanks) → Tasks 6–7. §4 CTA band → reused constant in Tasks 1–5. §5 supporting fixes → dropped per planning correction (metadata already present; root is private). Verification → Task 8.
 - **No placeholders:** every README's final content is shown in full or as an exact find/replace.
-- **Consistency:** the CTA band, Tier-2 docs line, and logo header are byte-identical everywhere they appear; doc URLs all use the `dawn-ai.org/docs/<slug>` form from the slug map.
+- **Consistency:** the CTA band, Tier-2 docs line, and logo header are byte-identical everywhere they appear; doc URLs all use the `dawnai.org/docs/<slug>` form from the slug map.
 - **Accuracy caveat:** Task 7 Step 7 requires confirming each new package's purpose line against its actual exports before committing — the one-liners are best-effort from package role and must be verified, not assumed.
