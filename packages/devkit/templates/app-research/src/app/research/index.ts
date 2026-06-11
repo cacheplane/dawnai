@@ -1,7 +1,7 @@
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   description:
     "A deep-research assistant: plans sub-questions, dispatches researchers, and writes a cited report.",
   systemPrompt: `You are a deep-research coordinator. Given a question:

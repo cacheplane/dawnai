@@ -39,7 +39,7 @@ export default defineEval({
       name: "cites-source",
       threshold: 1,
     }),
-    llmJudge({ criteria: JUDGE_CRITERIA, model: "gpt-4o-mini", threshold: 0.7 }),
+    llmJudge({ criteria: JUDGE_CRITERIA, model: "gpt-5-mini", threshold: 0.7 }),
   ],
   gate: gate.all(gate.passRate(1), gate.perScorer()),
 })
