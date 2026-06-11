@@ -1,5 +1,5 @@
-import { expect, it } from "vitest"
-import { collectRunResult } from "../src/run-result.js"
+import { describe, expect, it } from "vitest"
+import { collectRunResult, deriveToolResults } from "../src/run-result.js"
 
 async function* fakeStream() {
   yield { type: "tool_call", name: "applyFilter", input: { status: "open" } }
@@ -86,6 +86,35 @@ it("captures a subagent error end", async () => {
   const r = await collectRunResult(s() as never, "t")
   expect(r.subagents[0]).toMatchObject({ name: "research", error: "boom" })
 })
+describe("deriveToolResults", () => {
+  it("extracts tool results from serialized ToolMessages and flags errors", () => {
+    const messages = [
+      { id: ["langchain_core", "messages", "HumanMessage"], kwargs: { content: "hi" } },
+      {
+        id: ["langchain_core", "messages", "ToolMessage"],
+        kwargs: { name: "searchCorpus", status: "success", content: "[...]" },
+      },
+      {
+        id: ["langchain_core", "messages", "ToolMessage"],
+        kwargs: { name: "writeTodos", content: "{}" },
+      },
+      {
+        id: ["langchain_core", "messages", "ToolMessage"],
+        kwargs: {
+          name: "readDoc",
+          status: "error",
+          content: "Error: ENOENT no such file\n Please fix your mistakes.",
+        },
+      },
+    ]
+    const results = deriveToolResults(messages)
+    expect(results.map((r) => r.name)).toEqual(["searchCorpus", "writeTodos", "readDoc"])
+    expect(results.map((r) => r.isError)).toEqual([false, false, true])
+    expect(results[0].status).toBe("success")
+    expect(results[1].status).toBeUndefined()
+  })
+})
+
 it("defaults the new fields to empty when absent", async () => {
   async function* s() {
     yield { type: "done", output: { messages: [] } }

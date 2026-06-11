@@ -6,6 +6,38 @@ export interface ObservedToolCall {
   readonly id?: string
 }
 
+export interface ObservedToolResult {
+  readonly name: string
+  /** LangChain ToolMessage status, when present. */
+  readonly status?: "error" | "success"
+  /** The tool result content (string when the tool returned text/JSON). */
+  readonly content: unknown
+  /** True when the tool reported an error (status === "error"). */
+  readonly isError: boolean
+}
+
+/** Extract tool results from final conversation messages (serialized ToolMessages). */
+export function deriveToolResults(
+  messages: ReadonlyArray<Record<string, unknown>>,
+): ObservedToolResult[] {
+  const results: ObservedToolResult[] = []
+  for (const m of messages) {
+    const id = m.id as unknown
+    const isToolMessage = Array.isArray(id) && id[id.length - 1] === "ToolMessage"
+    if (!isToolMessage) continue
+    const kwargs = (m.kwargs ?? {}) as { name?: unknown; status?: unknown; content?: unknown }
+    const status =
+      kwargs.status === "error" || kwargs.status === "success" ? kwargs.status : undefined
+    results.push({
+      name: typeof kwargs.name === "string" ? kwargs.name : "",
+      content: kwargs.content,
+      isError: status === "error",
+      ...(status ? { status } : {}),
+    })
+  }
+  return results
+}
+
 export interface InterruptInfo {
   readonly interruptId: string
   readonly kind: string
@@ -39,6 +71,7 @@ export interface AgentRunResult {
   readonly finalMessage: string
   readonly messages: ReadonlyArray<Record<string, unknown>>
   readonly toolCalls: ReadonlyArray<ObservedToolCall>
+  readonly toolResults: ReadonlyArray<ObservedToolResult>
   readonly tokens: ReadonlyArray<string>
   readonly state: Record<string, unknown>
   readonly threadId: string
@@ -234,12 +267,16 @@ export async function collectRunResult(
     }
   }
 
+  const finalMessages = Array.isArray(state.messages)
+    ? (state.messages as Record<string, unknown>[])
+    : []
   return {
     threadId,
     tokens,
     toolCalls,
+    toolResults: deriveToolResults(finalMessages),
     state,
-    messages: Array.isArray(state.messages) ? (state.messages as Record<string, unknown>[]) : [],
+    messages: finalMessages,
     finalMessage: finalMessageFrom(state),
     interrupts,
     planUpdates,
