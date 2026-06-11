@@ -1,5 +1,5 @@
 import type { PermissionsStore } from "@dawn-ai/permissions"
-import type { DawnAgent } from "@dawn-ai/sdk"
+import type { DawnAgent, WorkspaceFs } from "@dawn-ai/sdk"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import type { ResolvedStateField, RouteManifest } from "../types.js"
 
@@ -24,6 +24,7 @@ export interface DawnToolDefinition {
     context: {
       readonly middleware?: Readonly<Record<string, unknown>>
       readonly signal: AbortSignal
+      readonly fs?: WorkspaceFs
     },
   ) => Promise<unknown> | unknown
   readonly schema?: unknown

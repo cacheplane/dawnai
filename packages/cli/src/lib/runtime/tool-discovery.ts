@@ -2,6 +2,8 @@ import { readdir } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { pathToFileURL } from "node:url"
 
+import type { WorkspaceFs } from "@dawn-ai/sdk"
+
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import { isRecord } from "./utils.js"
 
@@ -16,6 +18,7 @@ export interface DiscoveredToolDefinition {
     context: {
       readonly middleware?: Readonly<Record<string, unknown>>
       readonly signal: AbortSignal
+      readonly fs?: WorkspaceFs
     },
   ) => Promise<unknown> | unknown
   readonly schema?: unknown
