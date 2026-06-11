@@ -268,6 +268,23 @@ export function expectSystemPrompt(run: AgentRunResult) {
   }
 }
 
+/**
+ * Assert no tool returned an error result. A HITL permission interrupt is NOT a
+ * tool error — it produces no ToolMessage, so it never appears in toolResults.
+ */
+export function expectNoToolErrors(run: AgentRunResult): void {
+  const errored = run.toolResults.filter((r) => r.isError)
+  if (errored.length > 0) {
+    const detail = errored
+      .map((r) => {
+        const first = typeof r.content === "string" ? (r.content.split("\n")[0] ?? "").slice(0, 140) : ""
+        return `"${r.name}" returned an error: ${first}`
+      })
+      .join("; ")
+    fail(`expected no tool errors; ${detail}`)
+  }
+}
+
 export function expectState(run: AgentRunResult) {
   const messages = Array.isArray(run.state.messages) ? (run.state.messages as unknown[]) : []
   return {

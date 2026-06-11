@@ -3,6 +3,7 @@ import {
   expectFinalMessage,
   expectInterrupt,
   expectNoInterrupt,
+  expectNoToolErrors,
   expectPlan,
   expectState,
   expectStreamedTokens,
@@ -210,4 +211,31 @@ it("expectToolSequence strict requires contiguity", () => {
   }
   expect(() => expectToolSequence(run, ["a", "b"], { strict: true })).toThrow()
   expectToolSequence(run, ["a", "x", "b"], { strict: true })
+})
+
+it("expectNoToolErrors passes when no tool errored", () => {
+  const run = {
+    ...base,
+    toolResults: [{ name: "searchCorpus", status: "success" as const, content: "ok", isError: false }],
+  }
+  expectNoToolErrors(run)
+})
+
+it("expectNoToolErrors throws and names the failed tool", () => {
+  const run = {
+    ...base,
+    toolResults: [
+      { name: "readDoc", status: "error" as const, content: "Error: ENOENT no such file\n next line", isError: true },
+    ],
+  }
+  expect(() => expectNoToolErrors(run)).toThrow(/readDoc.*ENOENT/)
+})
+
+it("expectNoToolErrors treats a HITL interrupt as NOT a tool error", () => {
+  const run = {
+    ...base,
+    interrupts: [{ interruptId: "p1", kind: "command", detail: { command: "x" } }],
+    toolResults: [],
+  }
+  expectNoToolErrors(run)
 })

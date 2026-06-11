@@ -18,6 +18,7 @@ export {
   expectFinalMessage,
   expectInterrupt,
   expectNoInterrupt,
+  expectNoToolErrors,
   expectOffloaded,
   expectPlan,
   expectState,
@@ -32,5 +33,11 @@ export {
   type Todo,
 } from "./matchers.js"
 export { type RecordOptions, record } from "./record.js"
-export { type AgentRunResult, collectRunResult, type ObservedToolCall } from "./run-result.js"
+export {
+  type AgentRunResult,
+  collectRunResult,
+  deriveToolResults,
+  type ObservedToolCall,
+  type ObservedToolResult,
+} from "./run-result.js"
 export { type SubprocessApp, startSubprocessApp } from "./subprocess.js"
