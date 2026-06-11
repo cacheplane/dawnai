@@ -47,10 +47,14 @@ export default async (input: { readonly tenant: string }) => {
 }
 ```
 
-`dawn typegen` extracts the comment into the route's `tools.json` manifest. To set it programmatically instead, export a string constant — an explicit `export const description` takes priority over the JSDoc comment:
+`dawn typegen` extracts the comment into the route's `tools.json` manifest. To set it programmatically instead, export a string constant alongside the default export — an explicit `export const description` takes priority over the JSDoc comment:
 
-```ts
+```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
 export const description = "Greet the tenant organization by name."
+
+export default async (input: { readonly tenant: string }) => {
+  return { greeting: `Hello, ${input.tenant}!` }
+}
 ```
 
 Tools without a description still work, but the LLM only sees the tool name — write the one-liner.
@@ -135,9 +139,13 @@ import { TavilySearch } from "@langchain/tavily"
 const tavily = new TavilySearch({ maxResults: 5 })
 
 /** Search the web for current information. */
-export default async (input: { readonly query: string }) =>
-  tavily.invoke({ query: input.query })
+export default async (input: { readonly query: string }) => {
+  const results = await tavily.invoke({ query: input.query })
+  return { results: String(results) }
+}
 ```
+
+Wrap the wrapped tool's output in a plain object (per the rules above) so Dawn can infer the return shape — community tools often return loosely-typed values.
 
 ## Related
 
