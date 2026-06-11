@@ -43,8 +43,11 @@ conversion.
 - All 15 packages are `private: false` (published).
 - Docs site: `https://dawn-ai.org/docs/...`. Community: GitHub Discussions
   (`https://github.com/cacheplane/dawnai/discussions`). No Discord/X.
-- Root `package.json` has no `homepage`, `repository`, or `bugs` fields,
-  so npm package pages lack sidebar Repository/Homepage links.
+- **Correction (verified during planning):** every published package's
+  `package.json` already carries `repository`, `homepage`, and `bugs`, so
+  npm sidebar links already render. The root `package.json` lacks them but
+  is `private: true` (never published) — adding them has no npm GTM effect.
+  The §5 package-metadata work item is therefore dropped.
 
 ## Package tiers
 
@@ -124,12 +127,12 @@ Author once as canonical markdown, reuse verbatim:
 
 Wording/emoji as sketched in brainstorming and approved by the user.
 
-### 5. Supporting fixes (in scope)
+### 5. Supporting fixes — DROPPED
 
-- Add `homepage`, `repository`, and `bugs` to the root `package.json`.
-- Verify each public package's `package.json` carries `repository`
-  (with `directory`) and `homepage` so npm renders sidebar links. Add
-  where missing.
+Verified during planning: all published packages already carry
+`repository`, `homepage`, and `bugs`. The root `package.json` is
+`private: true` and never published, so no metadata change is needed.
+This work item is removed from the plan.
 
 ## Out of scope
 
@@ -145,4 +148,3 @@ Wording/emoji as sketched in brainstorming and approved by the user.
   stars, dawn-ai.org docs, and Discussions.
 - Doc links resolve to the live docs site, not raw repo paths.
 - High-intent SEO terms appear in root + Tier-1 headers/first paragraphs.
-- npm package pages expose Repository/Homepage sidebar links.
