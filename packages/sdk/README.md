@@ -4,7 +4,7 @@
 
 # @dawn-ai/sdk
 
-The author-facing SDK for Dawn. Use it to declare agent routes, define request middleware, and type the runtime context, tools, and route metadata that the Dawn CLI consumes. Ships small runtime helpers (`agent()`, `defineMiddleware()`, `allow()`, `reject()`, `isDawnAgent()`) alongside the type primitives — it is the canonical entry point for authoring Dawn routes.
+The author-facing TypeScript SDK for Dawn, the meta-framework for LangGraph. Use it to declare AI agent routes, define request middleware, and type the runtime context, tools, and route metadata that the Dawn CLI consumes. Ships small runtime helpers (`agent()`, `defineMiddleware()`, `allow()`, `reject()`, `isDawnAgent()`) alongside the type primitives — it is the canonical entry point for authoring Dawn routes.
 
 ## Install
 
@@ -63,10 +63,14 @@ export default defineMiddleware((req) => {
 
 Full reference and guides:
 
-- Routes — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/routes.mdx
-- Tools — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/tools.mdx
-- State — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/state.mdx
-- Getting started — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/getting-started.mdx
+- [Routes](https://dawn-ai.org/docs/routes)
+- [Tools](https://dawn-ai.org/docs/tools)
+- [State](https://dawn-ai.org/docs/state)
+- [Getting started](https://dawn-ai.org/docs/getting-started)
+
+---
+
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 
 ## License
 
