@@ -12,6 +12,7 @@ export async function gatePathOp(
   operation: PathOperation,
   absPath: string,
   workspaceRoot: string,
+  opts?: { readonly interruptCapable?: boolean },
 ): Promise<GateResult> {
   // If permissions store is absent, allow (legacy behavior — capability used without permissions context).
   if (!permissions) return { allowed: true }
@@ -31,6 +32,15 @@ export async function gatePathOp(
   // decision === "unknown"
   if (permissions.mode === "non-interactive") {
     return { allowed: false, reason: `Permission denied (fail-closed): ${absPath}` }
+  }
+  if (opts?.interruptCapable === false) {
+    return {
+      allowed: false,
+      reason:
+        `Permission denied: ${absPath} is outside the workspace and interactive ` +
+        `permission prompts are not available in this execution context. ` +
+        `Add an allow rule for "${operation}" to the permissions config in dawn.config.ts.`,
+    }
   }
   // Interactive: emit LangGraph interrupt and await user decision.
   const result = await emitPermissionInterrupt({
