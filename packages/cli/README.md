@@ -59,14 +59,14 @@ Run `dawn <command> --help` for command-specific options.
 
 Full reference and guides:
 
-- [CLI](https://dawn-ai.org/docs/cli)
-- [Dev server](https://dawn-ai.org/docs/dev-server)
-- [Deployment](https://dawn-ai.org/docs/deployment)
-- [Getting started](https://dawn-ai.org/docs/getting-started)
+- [CLI](https://dawnai.org/docs/cli)
+- [Dev server](https://dawnai.org/docs/dev-server)
+- [Deployment](https://dawnai.org/docs/deployment)
+- [Getting started](https://dawnai.org/docs/getting-started)
 
 ---
 
-⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 
 ## License
 

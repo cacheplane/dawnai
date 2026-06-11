@@ -54,13 +54,13 @@ The generated `package.json` wires `@dawn-ai/sdk`, `@dawn-ai/cli`, `@dawn-ai/cor
 
 ## Next steps
 
-- [Getting started](https://dawn-ai.org/docs/getting-started)
-- [Routes](https://dawn-ai.org/docs/routes)
-- [CLI](https://dawn-ai.org/docs/cli)
+- [Getting started](https://dawnai.org/docs/getting-started)
+- [Routes](https://dawnai.org/docs/routes)
+- [CLI](https://dawnai.org/docs/cli)
 
 ---
 
-⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 
 ## License
 

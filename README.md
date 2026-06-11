@@ -140,18 +140,18 @@ The built-in `agent()` route materializes to a LangChain chat model. Dawn infers
 
 ---
 
-⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 
 ## Learn more
 
-- [Getting started](https://dawn-ai.org/docs/getting-started)
-- [Routes](https://dawn-ai.org/docs/routes)
-- [Tools](https://dawn-ai.org/docs/tools)
-- [State](https://dawn-ai.org/docs/state)
-- [CLI](https://dawn-ai.org/docs/cli)
-- [Dev server](https://dawn-ai.org/docs/dev-server)
-- [Testing](https://dawn-ai.org/docs/testing)
-- [Deployment](https://dawn-ai.org/docs/deployment)
+- [Getting started](https://dawnai.org/docs/getting-started)
+- [Routes](https://dawnai.org/docs/routes)
+- [Tools](https://dawnai.org/docs/tools)
+- [State](https://dawnai.org/docs/state)
+- [CLI](https://dawnai.org/docs/cli)
+- [Dev server](https://dawnai.org/docs/dev-server)
+- [Testing](https://dawnai.org/docs/testing)
+- [Deployment](https://dawnai.org/docs/deployment)
 
 ---
 

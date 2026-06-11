@@ -24,12 +24,12 @@ pnpm add @langchain/openrouter    # openrouter
 
 ## Documentation
 
-- [Routes](https://dawn-ai.org/docs/routes)
-- [Getting started](https://dawn-ai.org/docs/getting-started)
+- [Routes](https://dawnai.org/docs/routes)
+- [Getting started](https://dawnai.org/docs/getting-started)
 
 ---
 
-⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 
 ## License
 
