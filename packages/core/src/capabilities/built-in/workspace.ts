@@ -5,8 +5,9 @@ import type { BackendContext, ExecBackend, FilesystemBackend } from "@dawn-ai/wo
 import { localExec, localFilesystem } from "@dawn-ai/workspace"
 import { z } from "zod"
 
-import { gateBashOp, gatePathOp } from "../permission-gate.js"
+import { gateBashOp } from "../permission-gate.js"
 import type { CapabilityMarker, DawnToolDefinition } from "../types.js"
+import { createWorkspaceFs } from "../workspace-fs.js"
 
 const WORKSPACE_DIRNAME = "workspace"
 
@@ -39,6 +40,17 @@ function buildWorkspaceTools(
   exec: ExecBackend,
   permissions: PermissionsStore | undefined,
 ): readonly OverridableTool[] {
+  // Agent tools run inside the graph, so the handle may surface the
+  // interactive LangGraph permission interrupt.
+  function handleFor(signal: AbortSignal) {
+    return createWorkspaceFs({
+      workspaceRoot,
+      backend: fs,
+      permissions,
+      signal,
+      interruptCapable: true,
+    })
+  }
   const readFile: OverridableTool = {
     name: "readFile",
     description: "Read a UTF-8 file from the workspace.",
@@ -46,23 +58,18 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { path } = READ_FILE_INPUT.parse(input)
+      const handle = handleFor(ctx.signal)
       const absPath = resolve(workspaceRoot, path)
-      const gate = await gatePathOp(permissions, "readFile", absPath, workspaceRoot)
-      if (!gate.allowed) {
-        throw new Error(gate.reason)
-      }
-      const bctx = backendContext(workspaceRoot, ctx.signal)
       const rel = relative(workspaceRoot, absPath)
       // NOTE: must match SUBDIR ("tool-outputs") in @dawn-ai/langchain offload-store.ts
       const isToolOutput = rel === "tool-outputs" || rel.startsWith(`tool-outputs${sep}`)
-      const data = await fs.readFile(
-        absPath,
-        bctx,
+      const data = await handle.readFile(
+        path,
         isToolOutput ? { maxBytes: Number.POSITIVE_INFINITY } : undefined,
       )
       if (isToolOutput && fs.touchFile) {
         try {
-          await fs.touchFile(absPath, bctx)
+          await fs.touchFile(absPath, backendContext(workspaceRoot, ctx.signal))
         } catch {
           /* touch is best-effort; never fail a read because of it */
         }
@@ -77,12 +84,7 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { path, content } = WRITE_FILE_INPUT.parse(input)
-      const absPath = resolve(workspaceRoot, path)
-      const gate = await gatePathOp(permissions, "writeFile", absPath, workspaceRoot)
-      if (!gate.allowed) {
-        throw new Error(gate.reason)
-      }
-      const result = await fs.writeFile(absPath, content, backendContext(workspaceRoot, ctx.signal))
+      const result = await handleFor(ctx.signal).writeFile(path, content)
       return `wrote ${result.bytesWritten} bytes to ${path}`
     },
   }
@@ -93,13 +95,7 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { path } = LIST_DIR_INPUT.parse(input)
-      const absPath = resolve(workspaceRoot, path)
-      const gate = await gatePathOp(permissions, "listDir", absPath, workspaceRoot)
-      if (!gate.allowed) {
-        throw new Error(gate.reason)
-      }
-      const entries = await fs.listDir(absPath, backendContext(workspaceRoot, ctx.signal))
-      return [...entries]
+      return [...(await handleFor(ctx.signal).listDir(path))]
     },
   }
   const runBash: OverridableTool = {

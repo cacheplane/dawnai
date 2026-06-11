@@ -169,6 +169,31 @@ describe("createWorkspaceFs permission gating", () => {
     await expect(fs.writeFile(join(outsideDir, "new.txt"), "data")).rejects.toThrow(/fail-closed/)
   })
 
+  it("gates relative ../ traversal out of the workspace", async () => {
+    const permissions = createPermissionsStore({
+      appRoot: root,
+      config: undefined,
+      mode: "non-interactive",
+    })
+    await permissions.load()
+    const fs = makeGated(permissions)
+    await expect(fs.readFile(join("..", "shared", "outside.txt"))).rejects.toThrow(/fail-closed/)
+  })
+
+  it("does not treat a sibling dir sharing the workspace prefix as inside", async () => {
+    const evil = `${workspaceRoot}-evil`
+    mkdirSync(evil, { recursive: true })
+    writeFileSync(join(evil, "x.txt"), "evil", "utf8")
+    const permissions = createPermissionsStore({
+      appRoot: root,
+      config: undefined,
+      mode: "non-interactive",
+    })
+    await permissions.load()
+    const fs = makeGated(permissions)
+    await expect(fs.readFile(join(evil, "x.txt"))).rejects.toThrow(/fail-closed/)
+  })
+
   it("skips gating entirely for a bypass-mode store", async () => {
     const permissions = createPermissionsStore({
       appRoot: root,

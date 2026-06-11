@@ -39,7 +39,8 @@ export function createWorkspaceFs(opts: CreateWorkspaceFsOptions): WorkspaceFs {
       return opts.backend.readFile(await gate("readFile", path), bctx, readOpts)
     },
     async readBinaryFile(path, readOpts) {
-      const absPath = await gate("readFile", path)
+      // Check backend capability before gating so users are never prompted to
+      // approve a read that will immediately fail.
       const { readBinaryFile } = opts.backend
       if (!readBinaryFile) {
         throw new Error(
@@ -47,6 +48,7 @@ export function createWorkspaceFs(opts: CreateWorkspaceFsOptions): WorkspaceFs {
             "localFilesystem supports it; custom backends must implement it.",
         )
       }
+      const absPath = await gate("readFile", path)
       return readBinaryFile.call(opts.backend, absPath, bctx, readOpts)
     },
     async writeFile(path, content) {
