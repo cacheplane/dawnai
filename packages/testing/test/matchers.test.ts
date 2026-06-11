@@ -16,6 +16,7 @@ const base: AgentRunResult = {
   threadId: "t",
   tokens: ["Found ", "2."],
   toolCalls: [{ name: "applyFilter", args: { status: "open" }, id: "call_1" }],
+  toolResults: [],
   finalMessage: "Found 2 items.",
   messages: [{}, {}, {}, {}],
   state: { messages: [{}, {}, {}, {}], runningSummary: { summary: "s" } },
