@@ -1,7 +1,7 @@
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   description:
     "Researches one sub-question against the bundled corpus and returns a focused, cited answer.",
   systemPrompt: `You are a research specialist. Answer the single sub-question you are given using the corpus.
