@@ -41,16 +41,16 @@ The second parameter is optional but recommended for any tool that does network 
 The description the LLM sees for an `agent`-route tool comes from a JSDoc comment directly above the default export:
 
 ```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
-/** Greet a user by name in the tenant's locale. */
-export default async (input: { readonly name: string }) => {
-  return { greeting: `Hello, ${input.name}!` }
+/** Greet the tenant organization by name. */
+export default async (input: { readonly tenant: string }) => {
+  return { greeting: `Hello, ${input.tenant}!` }
 }
 ```
 
 `dawn typegen` extracts the comment into the route's `tools.json` manifest. To set it programmatically instead, export a string constant — an explicit `export const description` takes priority over the JSDoc comment:
 
 ```ts
-export const description = "Greet a user by name in the tenant's locale."
+export const description = "Greet the tenant organization by name."
 ```
 
 Tools without a description still work, but the LLM only sees the tool name — write the one-liner.
