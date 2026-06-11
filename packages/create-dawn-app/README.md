@@ -4,7 +4,7 @@
 
 # create-dawn-ai-app
 
-Scaffold a new Dawn application from the supported starter templates. Generates a working app with Dawn's canonical `src/app` route layout, an `agent()` route, and the Dawn packages wired up for local development.
+Scaffold a new Dawn app — the fastest way to start building TypeScript AI agents on LangGraph. Generates a working application from the supported starter templates with Dawn's canonical `src/app` route layout, an `agent()` route, and the Dawn packages wired up for local development.
 
 ## Usage
 
@@ -54,9 +54,13 @@ The generated `package.json` wires `@dawn-ai/sdk`, `@dawn-ai/cli`, `@dawn-ai/cor
 
 ## Next steps
 
-- Getting started — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/getting-started.mdx
-- Routes — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/routes.mdx
-- CLI — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/cli.mdx
+- [Getting started](https://dawn-ai.org/docs/getting-started)
+- [Routes](https://dawn-ai.org/docs/routes)
+- [CLI](https://dawn-ai.org/docs/cli)
+
+---
+
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawn-ai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 
 ## License
 
