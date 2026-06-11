@@ -155,5 +155,41 @@ async function loadToolDefinition(
     }
   }
 
-  throw new Error(`Tool file ${filePath} must default export a function`)
+  if (looksLikeLangChainTool(definition)) {
+    throw new Error(
+      `Tool file ${filePath} default-exports a LangChain tool() (StructuredTool "${definition.name}").\n` +
+        `Dawn tools are plain functions — Dawn infers the input/output types from the\n` +
+        `function signature, so there's no schema wrapper. Convert it like this:\n\n` +
+        `  const search = /* your existing tool or client */\n\n` +
+        `  /** Describe what the tool does. */\n` +
+        `  export default async (input: { readonly query: string }) =>\n` +
+        `    search.invoke({ query: input.query })\n\n` +
+        `Docs: https://dawnai.org/docs/tools`,
+    )
+  }
+
+  throw new Error(
+    `Tool file ${filePath} must default export a function (got ${describeExport(definition)}).\n` +
+      `Docs: https://dawnai.org/docs/tools`,
+  )
+}
+
+/**
+ * Structural detection of a @langchain/core StructuredTool instance —
+ * `.invoke()` plus `.name` plus a `schema` — without importing langchain.
+ */
+function looksLikeLangChainTool(value: unknown): value is { readonly name: string } {
+  return (
+    isRecord(value) &&
+    typeof value.invoke === "function" &&
+    typeof value.name === "string" &&
+    "schema" in value
+  )
+}
+
+function describeExport(value: unknown): string {
+  if (value === undefined) return "no default export"
+  if (value === null) return "null"
+  if (isRecord(value)) return `an object with keys [${Object.keys(value).join(", ")}]`
+  return `a ${typeof value}`
 }
