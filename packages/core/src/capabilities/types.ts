@@ -24,6 +24,9 @@ export interface DawnToolDefinition {
     context: {
       readonly middleware?: Readonly<Record<string, unknown>>
       readonly signal: AbortSignal
+      // Optional here because pre-wrap invokers (langchain tool-converter/loop)
+      // omit it; the cli's prepareRouteExecution wrapper guarantees it at
+      // runtime, which is why the author-facing DawnToolContext requires it.
       readonly fs?: WorkspaceFs
     },
   ) => Promise<unknown> | unknown

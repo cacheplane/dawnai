@@ -18,6 +18,9 @@ export interface DiscoveredToolDefinition {
     context: {
       readonly middleware?: Readonly<Record<string, unknown>>
       readonly signal: AbortSignal
+      // Optional here because pre-wrap invokers (langchain tool-converter/loop)
+      // omit it; the prepareRouteExecution wrapper guarantees it at runtime,
+      // which is why the author-facing DawnToolContext declares it required.
       readonly fs?: WorkspaceFs
     },
   ) => Promise<unknown> | unknown

@@ -446,6 +446,9 @@ async function prepareRouteExecution(options: {
     configThreadsStore ??
     createThreadsStore({ path: join(options.appRoot, ".dawn/threads.sqlite") })
 
+  // Deliberately outside the agent-only branch below: every route kind needs
+  // the loaded store for ctx.fs permission gating, and createWorkspaceFs
+  // requires it loaded. The agent branch reuses this store in applyCapabilities.
   const envMode = process.env.DAWN_PERMISSIONS_MODE
   const mode: PermissionMode =
     envMode === "interactive" || envMode === "non-interactive" || envMode === "bypass"
