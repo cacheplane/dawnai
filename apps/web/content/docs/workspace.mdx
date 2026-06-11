@@ -102,7 +102,7 @@ interface WorkspaceFs {
 }
 ```
 
-Paths are **workspace-relative** — `"images/logo.png"` resolves to `<appRoot>/workspace/images/logo.png`. The handle resolves and jails paths before calling the backend; you never deal with absolute paths.
+Paths are **workspace-relative** — `"images/logo.png"` resolves to `<appRoot>/workspace/images/logo.png`. The handle resolves relative paths against the workspace root and permission-gates anything that lands outside it (see [Permissions](#permissions) below).
 
 **Example: a route tool reading a binary file**
 
