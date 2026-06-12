@@ -110,7 +110,7 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     `route` is required and must be in the form `<routeId>#<kind>` (e.g. `/research#agent`). A bare route id without the `#<kind>` suffix returns 400 "Unknown route". The `input` field is optional and defaults to `{}`.
   </Tab>
   <Tab label="/runs/stream">
-    Streaming run — same body shape as `/runs/wait`, returns an SSE stream (`content-type: text/event-stream`) of events as the route progresses.
+    Streaming run — same body shape as `runs/wait`, returns an SSE stream (`content-type: text/event-stream`) of events as the route progresses.
 
     ```
     POST /threads/:thread_id/runs/stream
@@ -163,7 +163,7 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     ```
   </Tab>
   <Tab label="POST /threads/:thread_id/resume">
-    Resolve a parked human-in-the-loop interrupt. The response streams the continuation as SSE (same event types as `/runs/stream`).
+    Resolve a parked human-in-the-loop interrupt. The response streams the continuation as SSE (same event types as `runs/stream`).
 
     ```
     POST /threads/:thread_id/resume

@@ -36,7 +36,7 @@ export async function workflow(state: HelloState, ctx: RuntimeContext) {
 
 ## Dynamic segments are route params
 
-If your route's directory contains a dynamic segment like `[tenant]`, Dawn records that segment in generated route metadata. Today, route execution is input-driven: pass the value in the JSON input you send to `dawn run`, `/runs/wait`, or `/runs/stream`.
+If your route's directory contains a dynamic segment like `[tenant]`, Dawn records that segment in generated route metadata. Today, route execution is input-driven: pass the value in the JSON input you send to `dawn run`, `runs/wait`, or `runs/stream`.
 
 ```
 src/app/(public)/hello/[tenant]/  →  route id /hello/[tenant]
@@ -84,7 +84,7 @@ The file basename must equal the state-field name (`context.ts` → reduces `sta
 State crosses the runtime boundary at every entry point:
 
 - `dawn run` — JSON via stdin, JSON via stdout.
-- `/runs/wait` and `/runs/stream` (locally under `dawn dev`, on LangSmith in prod) — JSON over HTTP keyed by `assistant_id`.
+- `runs/wait` and `runs/stream` (locally under `dawn dev`, on LangSmith in prod) — JSON over HTTP keyed by the route id (`route` in the request body locally; `assistant_id` on LangSmith).
 
 Tool results, intermediate values, and other in-route data live inside the entry for the duration of a single run; only the route result crosses the boundary.
 

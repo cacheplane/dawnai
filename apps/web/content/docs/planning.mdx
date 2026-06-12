@@ -110,7 +110,7 @@ That prompt is what keeps the plan visible between tool calls.
 
 ## Streaming
 
-When `/runs/stream` sees a `writeTodos` tool result, Dawn emits:
+When `runs/stream` sees a `writeTodos` tool result, Dawn emits:
 
 ```json
 {
@@ -125,7 +125,7 @@ When `/runs/stream` sees a `writeTodos` tool result, Dawn emits:
 
 If a subagent emits a planning event, the parent stream forwards it with a `subagent.` prefix, such as `subagent.plan_update`.
 
-Use `/runs/wait` when you only need the final output. Use `/runs/stream` when a UI should show progress.
+Use `/threads/:id/runs/wait` when you only need the final output. Use `/threads/:id/runs/stream` when a UI should show progress.
 
 ## Generated types
 

@@ -85,7 +85,7 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
 
 - **EPHEMERAL port.** `dawn dev` picks a random port unless you pass `--port <n>`. Never hard-code `127.0.0.1:3001` — pass `DAWN_RUNTIME_URL` via env instead. With a fixed port: `dawn dev --port 3001`.
 - **AP body shape.** The request body is `{ route, input }` where `route` is the `assistant_id` string (e.g. `"/research#agent"`) and `input` is the route's state payload.
-- **Forward headers when needed.** If the target route's middleware expects auth headers, propagate them on the inner `fetch` — middleware runs on every `/runs/wait` and `/runs/stream` call.
+- **Forward headers when needed.** If the target route's middleware expects auth headers, propagate them on the inner `fetch` — middleware runs on every `runs/wait` and `runs/stream` call.
 - **Use `/threads/:id/runs/stream` for long-running children.** Same body, SSE response — see [Stream output](/docs/recipes/stream-output).
 
 ## Related

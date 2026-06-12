@@ -97,7 +97,7 @@ Every frame is `event: <type>\ndata: <json>\n\n`. Parse the `event:` line to rou
 
 - **AP URL shape.** The endpoint is `/threads/:id/runs/stream`; the body is `{ route, input }`. Create or retrieve a thread id via `POST /threads` first.
 - **`text/event-stream`, not JSON.** The response is raw SSE. Parse `event:` and `data:` lines per frame, or use a client like `eventsource-parser`.
-- **Use `/threads/:id/runs/wait` when you don't need progress.** Streaming adds parsing complexity for callers. Pick `/runs/stream` when partial output is meaningful — long agent reasoning, token-by-token text, intermediate workflow states, [planning](/docs/planning) updates, or [subagent](/docs/subagents) activity.
+- **Use `/threads/:id/runs/wait` when you don't need progress.** Streaming adds parsing complexity for callers. Pick `runs/stream` when partial output is meaningful — long agent reasoning, token-by-token text, intermediate workflow states, [planning](/docs/planning) updates, or [subagent](/docs/subagents) activity.
 - **Retry has limits during streams.** Once a token has been emitted, the response is committed and cannot be retried. See [Retry](/docs/retry) for the streaming caveat.
 
 ## Related
