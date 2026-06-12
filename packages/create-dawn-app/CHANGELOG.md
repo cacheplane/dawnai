@@ -1,5 +1,24 @@
 # create-dawn-app
 
+## 0.7.0
+
+### Minor Changes
+
+- 16268a6: Add a "research" scaffold template — a deep-research assistant that showcases
+  Dawn's broad capability set (planning, subagents, custom tools + typegen,
+  tool-output offloading, AGENTS.md memory, skills, HITL permissions, workspace,
+  persistence, tests, and evals) — and make it the default `create-dawn-ai-app`
+  output. It runs offline and deterministically out of the box (replay fixtures)
+  and against a real model under `--live`. The minimal "basic" template remains
+  available via `--template basic`.
+
+### Patch Changes
+
+- c35ccba: The research scaffold template now defaults to the `gpt-5-mini` model (was `gpt-4o-mini`) for its coordinator, researcher subagent, and eval judge.
+- Updated dependencies [c35ccba]
+- Updated dependencies [16268a6]
+  - @dawn-ai/devkit@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes
