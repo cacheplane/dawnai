@@ -41,4 +41,6 @@ export type {
   ToolRegistry,
 } from "./runtime-context.js"
 export type { Prettify } from "./types.js"
+export type { ModelIdValidation } from "./validate-model-id.js"
+export { validateModelId } from "./validate-model-id.js"
 export type { DawnToolContext, WorkspaceFs } from "./workspace-fs.js"
