@@ -1,5 +1,12 @@
 # @dawn-ai/evals
 
+## 0.8.0
+
+### Patch Changes
+
+- README refresh for GTM: SEO keyword pass, a Star/Docs/Discussions CTA band on the root and developer-facing package READMEs, doc links repointed to the live dawnai.org site, and READMEs added for previously-blank packages (`workspace`, `permissions`, `sqlite-storage`, `testing`, `evals`).
+- Version realignment: all public Dawn packages now share a single version (`0.8.0`) and release together going forward. This package is renumbered down from its previous independent 3.x line; the old higher versions were removed from npm.
+
 ## 3.0.0
 
 ### Patch Changes
