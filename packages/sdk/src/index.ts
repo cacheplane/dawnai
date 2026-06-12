@@ -7,9 +7,18 @@ export type {
 export { agent, isDawnAgent } from "./agent.js"
 export type { BackendAdapter } from "./backend-adapter.js"
 export type {
+  AnthropicModelId,
   GoogleModelId,
   KnownModelId,
   OpenAiModelId,
+  XaiModelId,
+} from "./known-model-ids.js"
+export {
+  ANTHROPIC_MODEL_IDS,
+  CURATED_MODEL_IDS,
+  GOOGLE_MODEL_IDS,
+  OPENAI_MODEL_IDS,
+  XAI_MODEL_IDS,
 } from "./known-model-ids.js"
 export type {
   ContinueResult,
