@@ -20,7 +20,7 @@ Creates an agent route entry from a config object. The return value is the defau
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   systemPrompt: "You are a helpful assistant.",
 })
 ```
@@ -159,11 +159,11 @@ See [Middleware](/docs/middleware).
 
 ```ts
 export interface MiddlewareRequest {
-  readonly assistantId: string              // e.g. "/hello/[tenant]#agent"
+  readonly assistantId: string              // e.g. "/research#agent"
   readonly headers: Readonly<Record<string, string>>  // lowercase keys
   readonly method: string                   // HTTP method
   readonly params: Readonly<Record<string, string>>   // dynamic-segment values
-  readonly routeId: string                  // e.g. "/hello/[tenant]"
+  readonly routeId: string                  // e.g. "/research"
   readonly url: string                      // path + query
 }
 ```
@@ -251,7 +251,7 @@ Open interfaces for module augmentation. Dawn's codegen populates them. See [Rou
 export interface RouteStateMap {}
 ```
 
-Open interface that `dawn typegen` augments with per-route state shapes. Keyed by route path string (e.g. `"/hello/[tenant]"`). Access via `RouteState<P>` from `dawn:routes`.
+Open interface that `dawn typegen` augments with per-route state shapes. Keyed by route path string (e.g. `"/research"`). Access via `RouteState<P>` from `dawn:routes`.
 
 See [Routes](/docs/routes).
 
@@ -404,8 +404,8 @@ The `dawn:routes` module is emitted by `dawn typegen` (and implicitly by `dawn b
 ```ts
 import type { RouteTools } from "dawn:routes"
 
-// P is the route path string, e.g. "/hello/[tenant]"
-type Tools = RouteTools<"/hello/[tenant]">
+// P is the route path string, e.g. "/research"
+type Tools = RouteTools<"/research">
 // resolves to the ToolRegistry for that route
 ```
 
@@ -418,8 +418,8 @@ See [Tools](/docs/tools).
 ```ts
 import type { RouteState } from "dawn:routes"
 
-// P is the route path string, e.g. "/hello/[tenant]"
-type State = RouteState<"/hello/[tenant]">
+// P is the route path string, e.g. "/research"
+type State = RouteState<"/research">
 // resolves to the state shape for that route
 ```
 

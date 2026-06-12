@@ -38,7 +38,7 @@ Yes — that is the point. A route's `index.ts` can default-export an `agent()` 
 
 ### What does `dawn build` actually do?
 
-It walks your routes, runs typegen, and writes `.dawn/build/langgraph.json` plus a per-route entry file under `.dawn/build/<routeSlug>.ts`. Each agent route's entry imports your default `agent()` descriptor, materializes it as a LangGraph graph, and wires in discovered tools. Each `assistant_id` is `<routeId>#<kind>` — for example `/hello/[tenant]#agent`. See [Deployment](/docs/deployment).
+It walks your routes, runs typegen, and writes `.dawn/build/langgraph.json` plus a per-route entry file under `.dawn/build/<routeSlug>.ts`. Each agent route's entry imports your default `agent()` descriptor, materializes it as a LangGraph graph, and wires in discovered tools. Each `assistant_id` is `<routeId>#<kind>` — for example `/research#agent`. See [Deployment](/docs/deployment).
 
 ### Why a meta-framework instead of a library?
 
