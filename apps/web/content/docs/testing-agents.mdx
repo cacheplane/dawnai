@@ -94,6 +94,26 @@ When large tool outputs are offloaded to a stub file, assert the offload marker:
 expectOffloaded(run, "generateReport")
 ```
 
+### Assert tools were called in order
+
+```ts
+expectToolSequence(run, ["searchCorpus", "readDoc", "writeFile"])
+```
+
+Asserts that the named tools were called in that order (subsequence match by default — other tools may appear between them). Pass `{ strict: true }` to require contiguity: the tools must appear consecutively with nothing else in between.
+
+```ts
+expectToolSequence(run, ["validate", "save"], { strict: true })
+```
+
+### Assert no tool returned an error
+
+```ts
+expectNoToolErrors(run)
+```
+
+Asserts that no tool returned an error result. HITL permission interrupts are not counted as errors.
+
 ### State assertions
 
 ```ts
@@ -239,6 +259,12 @@ it("filters open items against real model", async () => {
   expectToolCalled(run, "applyFilter")
   expectFinalMessage(run).toMatch(/open/i)
   expectSystemPrompt(run).toContain("You are")
+}, 120_000)
+
+it("calls tools in order and cleanly", async () => {
+  const run = await h.run({ input: "…", live: true })
+  expectToolSequence(run, ["searchCorpus", "readDoc", "writeFile"])
+  expectNoToolErrors(run)
 }, 120_000)
 ```
 

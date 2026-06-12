@@ -18,23 +18,50 @@ That's it. Dawn extracts the input and output types at build time using the Type
 
 ## The runtime signature
 
-The full runtime signature accepted by tool discovery is `(input, ctx) => ...`, where `ctx` is `{ signal: AbortSignal, middleware?: Readonly<Record<string, unknown>> }`:
+The full runtime signature accepted by tool discovery is `(input, ctx) => ...`, where `ctx` is `DawnToolContext` from `@dawn-ai/sdk` — carrying `signal`, `middleware?`, and `fs`:
 
 ```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
+import type { DawnToolContext } from "@dawn-ai/sdk"
+
 export default async (
   input: { readonly tenant: string },
-  ctx: { signal: AbortSignal; middleware?: Readonly<Record<string, unknown>> },
+  ctx: DawnToolContext,
 ) => {
   // Cooperate with cancellation — the AbortSignal is always present.
   const res = await fetch(`https://example.com/hello?tenant=${input.tenant}`, {
     signal: ctx.signal,
   })
   // ctx.middleware is the readonly bag populated by allow({ ... }) in src/middleware.ts.
-  return { greeting: await res.text() }
+  // ctx.fs is a sandboxed WorkspaceFs handle for reading and writing workspace files.
+  const notes = await ctx.fs.readFile("notes.txt").catch(() => "")
+  return { greeting: await res.text(), notes }
 }
 ```
 
-The second parameter is optional but recommended for any tool that does network I/O, holds long-running work, or needs middleware-derived context. See [Middleware](/docs/middleware) for how `defineMiddleware` and `allow(context)` populate `ctx.middleware`.
+The second parameter is optional but recommended for any tool that does network I/O, holds long-running work, needs middleware-derived context, or reads/writes workspace files. See [Middleware](/docs/middleware) for how `defineMiddleware` and `allow(context)` populate `ctx.middleware`, and [Workspace Filesystem](/docs/workspace) for `ctx.fs`.
+
+## Tool descriptions
+
+The description the LLM sees for an `agent`-route tool comes from a JSDoc comment directly above the default export:
+
+```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
+/** Greet the tenant organization by name. */
+export default async (input: { readonly tenant: string }) => {
+  return { greeting: `Hello, ${input.tenant}!` }
+}
+```
+
+`dawn typegen` extracts the comment into the route's `tools.json` manifest. To set it programmatically instead, export a string constant alongside the default export — an explicit `export const description` takes priority over the JSDoc comment:
+
+```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
+export const description = "Greet the tenant organization by name."
+
+export default async (input: { readonly tenant: string }) => {
+  return { greeting: `Hello, ${input.tenant}!` }
+}
+```
+
+Tools without a description still work, but the LLM only sees the tool name — write the one-liner.
 
 ## Invoking a tool
 
@@ -108,12 +135,28 @@ dawn typegen
 - **Database reads** — input includes the filters; output is the record(s). Keep queries cheap — tools are meant to be fast.
 - **LLM calls** — input is the prompt variables; output is the parsed model response. Defer orchestration to the route entry.
 - **Pure transformations** — no side effects, just shape-to-shape mapping. Dawn's testing makes these trivial to verify.
+- **Wrapping an existing LangChain tool** — instantiate the community tool at module scope, then expose it through a plain function with a typed input. Dawn tools are plain functions (not `tool()` wrappers) so the input/output types can be inferred from the signature:
+
+```ts title="src/app/(public)/research/tools/search.ts"
+import { TavilySearch } from "@langchain/tavily"
+
+const tavily = new TavilySearch({ maxResults: 5 })
+
+/** Search the web for current information. */
+export default async (input: { readonly query: string }) => {
+  const results = await tavily.invoke({ query: input.query })
+  return { results: String(results) }
+}
+```
+
+Wrap the wrapped tool's output in a plain object (per the rules above) so Dawn can infer the return shape — community tools often return loosely-typed values.
 
 ## Related
 
 <RelatedCards items={[
   { href: "/docs/routes", title: "Routes", subtitle: "how agent routes bind tools automatically at build time" },
   { href: "/docs/middleware", title: "Middleware", subtitle: "how ctx.middleware is populated for every tool call" },
+  { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "the sandboxed ctx.fs handle and pluggable backend" },
   { href: "/docs/state", title: "State", subtitle: "the state contract that tools read and routes return" },
   { href: "/docs/planning", title: "Planning", subtitle: "writeTodos is a capability-contributed tool" },
   { href: "/docs/skills", title: "Skills", subtitle: "readSkill loads route-local instructions" },

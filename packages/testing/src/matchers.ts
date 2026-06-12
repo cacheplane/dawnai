@@ -13,6 +13,27 @@ function fail(message: string): never {
   throw new AssertionError({ message })
 }
 
+function isSubsequence(actual: readonly string[], wanted: readonly string[]): boolean {
+  let i = 0
+  for (const a of actual) if (i < wanted.length && a === wanted[i]) i++
+  return i === wanted.length
+}
+
+function containsContiguous(actual: readonly string[], wanted: readonly string[]): boolean {
+  if (wanted.length === 0) return true
+  for (let s = 0; s + wanted.length <= actual.length; s++) {
+    let ok = true
+    for (let j = 0; j < wanted.length; j++) {
+      if (actual[s + j] !== wanted[j]) {
+        ok = false
+        break
+      }
+    }
+    if (ok) return true
+  }
+  return false
+}
+
 function isSubset(subset: Record<string, unknown>, actual: unknown): boolean {
   if (typeof actual !== "object" || actual === null) return false
   const a = actual as Record<string, unknown>
@@ -42,6 +63,28 @@ export function expectToolCalled(run: AgentRunResult, name: string) {
     never() {
       fail(`expected "${name}" to NOT be called, but it was ${calls.length}x`)
     },
+  }
+}
+
+/**
+ * Assert the named tools were called IN ORDER. By default a subsequence (other
+ * tool calls may appear between them); `{ strict: true }` requires them to be
+ * contiguous.
+ */
+export function expectToolSequence(
+  run: AgentRunResult,
+  names: readonly string[],
+  opts?: { readonly strict?: boolean },
+): void {
+  const actual = run.toolCalls.map((c) => c.name)
+  const ok = opts?.strict ? containsContiguous(actual, names) : isSubsequence(actual, names)
+  if (!ok) {
+    const missing = names.filter((n) => !actual.includes(n))
+    fail(
+      `expected tool sequence ${names.join(" → ")}${opts?.strict ? " (contiguous)" : ""}; ` +
+        `got ${actual.join(" → ") || "(none)"}` +
+        (missing.length ? ` (missing: ${missing.join(", ")})` : ""),
+    )
   }
 }
 
@@ -222,6 +265,24 @@ export function expectSystemPrompt(run: AgentRunResult) {
           `expected systemPrompt to match ${re}; got: ${JSON.stringify(run.systemPrompt.slice(0, 120))}`,
         )
     },
+  }
+}
+
+/**
+ * Assert no tool returned an error result. A HITL permission interrupt is NOT a
+ * tool error — it produces no ToolMessage, so it never appears in toolResults.
+ */
+export function expectNoToolErrors(run: AgentRunResult): void {
+  const errored = run.toolResults.filter((r) => r.isError)
+  if (errored.length > 0) {
+    const detail = errored
+      .map((r) => {
+        const first =
+          typeof r.content === "string" ? (r.content.split("\n")[0] ?? "").slice(0, 140) : ""
+        return `"${r.name}" returned an error: ${first}`
+      })
+      .join("; ")
+    fail(`expected no tool errors; ${detail}`)
   }
 }
 

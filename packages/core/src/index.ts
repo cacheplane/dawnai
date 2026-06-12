@@ -22,6 +22,8 @@ export type {
   StreamTransformerInput,
   StreamTransformerOutput,
 } from "./capabilities/types.js"
+export type { CreateWorkspaceFsOptions } from "./capabilities/workspace-fs.js"
+export { createWorkspaceFs } from "./capabilities/workspace-fs.js"
 export { loadDawnConfig } from "./config.js"
 export { discoverRoutes } from "./discovery/discover-routes.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"

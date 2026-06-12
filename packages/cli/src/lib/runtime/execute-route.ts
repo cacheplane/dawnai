@@ -10,6 +10,7 @@ import {
   createPlanningMarker,
   createSkillsMarker,
   createSubagentsMarker,
+  createWorkspaceFs,
   createWorkspaceMarker,
   type DawnConfig,
   discoverRoutes,
@@ -37,7 +38,7 @@ import {
   type PermissionMode,
   type PermissionsStore,
 } from "@dawn-ai/permissions"
-import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
+import { type DawnAgent, isDawnAgent, type WorkspaceFs } from "@dawn-ai/sdk"
 import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { localFilesystem } from "@dawn-ai/workspace"
@@ -249,12 +250,14 @@ export async function* streamResolvedRoute(options: {
     checkpointer,
     offload,
     summarization,
+    workspaceFs,
   } = prepared
 
   if (normalized.kind !== "agent") {
     // Non-agent routes don't support incremental streaming — execute and emit done
     const context = createDawnContext({
       ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
+      fs: workspaceFs,
       tools,
       ...(options.signal ? { signal: options.signal } : {}),
     })
@@ -340,6 +343,7 @@ interface PreparedRoute {
     NonNullable<CapabilityContribution["streamTransformers"]>[number]
   >
   readonly subagentResolver?: SubagentResolver
+  readonly workspaceFs: WorkspaceFs
 }
 
 interface PreparedRouteError {
@@ -442,6 +446,36 @@ async function prepareRouteExecution(options: {
     configThreadsStore ??
     createThreadsStore({ path: join(options.appRoot, ".dawn/threads.sqlite") })
 
+  // Deliberately outside the agent-only branch below: every route kind needs
+  // the loaded store for ctx.fs permission gating, and createWorkspaceFs
+  // requires it loaded. The agent branch reuses this store in applyCapabilities.
+  const envMode = process.env.DAWN_PERMISSIONS_MODE
+  const mode: PermissionMode =
+    envMode === "interactive" || envMode === "non-interactive" || envMode === "bypass"
+      ? envMode
+      : (permissionsConfig?.mode ?? "interactive")
+
+  const permissionsStore: PermissionsStore = createPermissionsStore({
+    appRoot: options.appRoot,
+    config: permissionsConfig
+      ? {
+          version: 1,
+          allow: permissionsConfig.allow ?? {},
+          deny: permissionsConfig.deny ?? {},
+        }
+      : undefined,
+    mode,
+  })
+  await permissionsStore.load()
+
+  const workspaceFs = createWorkspaceFs({
+    workspaceRoot: join(options.appRoot, "workspace"),
+    backend: configBackends?.filesystem ?? localFilesystem(),
+    permissions: permissionsStore,
+    signal: options.signal ?? new AbortController().signal,
+    interruptCapable: normalized.kind === "agent",
+  })
+
   if (normalized.kind === "agent") {
     const registry = createCapabilityRegistry([
       createPlanningMarker(),
@@ -462,25 +496,6 @@ async function prepareRouteExecution(options: {
     // requests in production (one manifest per CLI invocation), naturally
     // invalidated in dev when the runtime rebuilds the manifest.
     const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
-
-    const envMode = process.env.DAWN_PERMISSIONS_MODE
-    const mode: PermissionMode =
-      envMode === "interactive" || envMode === "non-interactive" || envMode === "bypass"
-        ? envMode
-        : (permissionsConfig?.mode ?? "interactive")
-
-    const permissionsStore: PermissionsStore = createPermissionsStore({
-      appRoot: options.appRoot,
-      config: permissionsConfig
-        ? {
-            version: 1,
-            allow: permissionsConfig.allow ?? {},
-            deny: permissionsConfig.deny ?? {},
-          }
-        : undefined,
-      mode,
-    })
-    await permissionsStore.load()
 
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
@@ -575,6 +590,19 @@ async function prepareRouteExecution(options: {
     }
   }
 
+  // Inject ctx.fs once here so every downstream invoker (createDawnContext,
+  // the langchain tool converter/loop) hands tools the sandboxed handle.
+  tools = tools.map((t) => ({
+    ...t,
+    run: (
+      input: unknown,
+      ctx: {
+        readonly middleware?: Readonly<Record<string, unknown>>
+        readonly signal: AbortSignal
+      },
+    ) => t.run(input, { ...ctx, fs: workspaceFs }),
+  }))
+
   return {
     normalized,
     ok: true,
@@ -587,6 +615,7 @@ async function prepareRouteExecution(options: {
     ...(streamTransformers.length > 0 ? { streamTransformers } : {}),
     ...(subagentResolver ? { subagentResolver } : {}),
     tools,
+    workspaceFs,
   }
 }
 
@@ -629,11 +658,13 @@ async function executeRouteAtResolvedPath(options: {
       checkpointer,
       offload,
       summarization,
+      workspaceFs,
     } = prepared
     mode = normalized.kind
 
     const context = createDawnContext({
       ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
+      fs: workspaceFs,
       tools,
       ...(options.signal ? { signal: options.signal } : {}),
     })
