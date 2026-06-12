@@ -23,7 +23,7 @@
 - `agent()` descriptor's `model` field is `KnownModelId`; `provider?` is `ModelProviderId`. (`packages/sdk/src/agent.ts`)
 - `inferProvider(model)` prefix-matches (`gpt-|o3|o4` → openai, `claude-` → anthropic, `gemini-` → google, mistral/mixtral/codestral → mistral, `grok-` → xai); `resolveProvider({ model, provider? })` validates explicit providers against `SUPPORTED_AGENT_PROVIDERS` and throws a clear error when inference fails. (`packages/langchain/src/model-provider-resolver.ts`)
 - `dawn check` only runs route + tool discovery; it never loads agent descriptors, so it cannot see `model` values today. (`packages/cli/src/commands/check.ts`)
-- `dawn verify` runs check + typegen (so a check-level warning automatically appears in verify).
+- `dawn verify` does NOT run check; it has its own pipeline (`findDawnApp` → `discoverRoutes` → typegen → deps), so the warning pass is a shared helper wired explicitly into both `dawn check` and `dawn verify`.
 - The repo's warning-prefix convention is `[dawn:<area>]` (e.g. `[dawn:permissions]`, `[dawn:workspace]`).
 
 ## Design
@@ -114,25 +114,25 @@ Rules:
 Dawn app is valid: 3 routes discovered.
 - /draft/[campaign] (agent)
 
-⚠ /draft/[campaign]: model "gpt-5" is not a known openai model id. Did you mean "gpt-5.5", "gpt-5.4"?
+⚠ /draft/[campaign]: model "gpt-5" is not a known openai model id. Did you mean "gpt-5.4", "gpt-5.5"?
   Known-id lists are advisory — new or proxy model ids work if your provider accepts them.
 ```
 
-Warnings go to stdout with the route pathname; **exit code stays 0**. Routes that fail to load for this pass are skipped silently (check's existing discovery errors already cover load failures). `dawn verify` inherits the warning by composition.
+Warnings go to stdout with the route pathname; **exit code stays 0**. Routes that fail to load for this pass are skipped silently (check's existing discovery errors already cover load failures). `dawn verify` surfaces the same warnings via the shared helper.
 
 ### 4. Runtime warning at chat-model construction (langchain)
 
 In the chat-model factory, immediately before constructing the provider client: run `validateModelId({ model, provider })`; on `ok: false`, emit once per `(model, provider)` pair per process (module-level `Set` dedup — dev-server reloads and multi-route apps must not spam):
 
 ```
-[dawn:models] model "gpt-5" is not a known openai model id. Did you mean "gpt-5.5", "gpt-5.4"? Proceeding anyway.
+[dawn:models] model "gpt-5" is not a known openai model id. Did you mean "gpt-5.4", "gpt-5.5"? Proceeding anyway.
 ```
 
 via `console.warn`. Execution proceeds unconditionally.
 
 ### 5. Testing
 
-- **sdk:** `validateModelId` unit tests — curated miss → suggestions ordered by distance (e.g. `gpt-5` → `gpt-5.5` first), curated hit, uncurated provider silent, explicit provider override beats inference, unresolvable provider silent. `inferProvider` move: langchain's existing resolver tests pass unchanged.
+- **sdk:** `validateModelId` unit tests — curated miss → suggestions ordered by distance (e.g. `gpt-5` → `gpt-5.4` first), curated hit, uncurated provider silent, explicit provider override beats inference, unresolvable provider silent. `inferProvider` move: langchain's existing resolver tests pass unchanged.
 - **cli:** check-command test — fixture app with an agent route using `model: "gpt-5"` → stdout contains the warning + suggestions, exit code 0; a valid-model fixture produces no warning.
 - **langchain:** factory test — warn emitted once for a bad id, deduped on second construction, absent for curated hit and for uncurated provider; construction proceeds in all cases.
 
