@@ -1,185 +1,90 @@
 # Workspace Filesystem
 
-A Dawn app's sandboxed file area is the `workspace/` directory at the app root. All file I/O in the runtime flows through one permission gate, whether the request comes from the LLM calling an agent-facing tool or from your own code calling `ctx.fs`.
+Creating a `workspace/` directory at the app root opts an agent route into four built-in tools: `listDir`, `readFile`, `writeFile`, and `runBash`. No configuration is required — the directory's presence is the activation signal.
 
-There are three layers:
+## The four tools
 
-- **The pluggable backend** (`@dawn-ai/workspace`) — a plain-object interface that reads, writes, and lists files. `localFilesystem()` ships as the default; you can substitute any backend in `dawn.config.ts`.
-- **Agent-facing workspace tools** — `readFile`, `writeFile`, `listDir`, and `runBash`, wired into agent routes when a `workspace/` directory exists at the app root. The LLM calls these by name; they gate through the permission system before touching the backend.
-- **`ctx.fs`** — the `WorkspaceFs` handle available on `DawnToolContext` (route tools) and `RuntimeContext` (workflow/graph entries). Same gate, same backend, but your code drives it. Always present on the context; reads simply surface `ENOENT` if the `workspace/` directory doesn't exist yet.
+All paths are workspace-relative and path-jailed: attempts to escape with `..` or an absolute path are rejected before the request reaches the backend.
 
-## The pluggable backend
+### listDir
 
-`FilesystemBackend` is the contract every backend must satisfy:
+Lists the leaf names (not full paths) of a directory inside the workspace.
 
-| Method | Required | Notes |
-|---|---|---|
-| `readFile(path, ctx, opts?)` | Yes | UTF-8; `opts.maxBytes` overrides the default cap |
-| `readBinaryFile(path, ctx, opts?)` | No | Raw bytes (`Uint8Array`); required for `ctx.fs.readBinaryFile` |
-| `writeFile(path, content, ctx)` | Yes | Returns `{ bytesWritten }` |
-| `listDir(path, ctx)` | Yes | Returns leaf names, not full paths |
-| `statFile(path, ctx)` | No | Required for offload GC |
-| `removeFile(path, ctx)` | No | Required for offload GC eviction |
-| `touchFile(path, ctx)` | No | Used by LRU-by-access offload tracking |
-| `mkdir(path, ctx)` | No | Used to create the `tool-outputs/` directory |
+```
+listDir({ path: "corpus" })
+// → ["intro.md", "api-reference.md", "changelog.md"]
+```
 
-`localFilesystem()` implements all of them. Its defaults:
+`path` defaults to `"."` (the workspace root) when omitted.
 
-- **256 KiB read cap** per call. Override per-call with `opts.maxBytes` (e.g. `Number.POSITIVE_INFINITY` for uncapped reads).
-- **`writeFile` creates missing parent directories** — writing to `reports/result.md` works without a separate `mkdir` call.
+### readFile
 
-Configure a custom backend in `dawn.config.ts`:
+Reads a UTF-8 file. The default cap is **256 KiB** — files larger than that return an error rather than partial content. Paths resolve relative to the workspace root and cannot escape it.
+
+```
+readFile({ path: "corpus/intro.md" })
+```
+
+The 256 KiB cap applies to agent tool calls. Files inside `workspace/tool-outputs/` (where offloaded tool results are stored) are read without a size limit — the agent retrieves them with the same `readFile` call.
+
+### writeFile
+
+Writes a UTF-8 file. **Missing parent directories are created automatically** — calling `writeFile({ path: "reports/2024-q1.md", content: "..." })` works even if `reports/` does not exist yet.
+
+```
+writeFile({ path: "reports/summary.md", content: "# Summary\n\n..." })
+// returns: "wrote 1234 bytes to reports/summary.md"
+```
+
+### runBash
+
+Executes a shell command with the workspace root as the working directory. `runBash` is gated by the [permissions](/docs/permissions) system: a command must match an allow rule or pass an interactive prompt before it runs.
+
+```
+runBash({ command: "node scripts/fetch-source.mjs https://example.com/api" })
+```
+
+## Research scaffold example
+
+The `research` template (`create-dawn-app --template research`) shows how these tools fit together:
+
+```text
+workspace/
+  AGENTS.md          ← agent memory (see /docs/memory)
+  corpus/            ← source documents the agent reads
+  scripts/
+    fetch-source.mjs ← network fetch script called via runBash
+  reports/           ← agent-written output (writeFile creates this)
+```
+
+The agent uses `listDir` and `readFile` to explore and read corpus documents. It calls `runBash` to run `scripts/fetch-source.mjs` when it needs to pull a new source — that command is intentionally left off the `allow` list so the fetch step requires human approval. Reports land in `workspace/reports/` via `writeFile`; the directory is created on the first write.
+
+Agent memory lives at `workspace/AGENTS.md` and is automatically injected into the system prompt. See [Memory](/docs/memory) for details.
+
+## Tool-output offloading
+
+When a tool returns a large result, Dawn can spill it to `workspace/tool-outputs/` and replace the in-context payload with a short stub the agent can read back on demand using `readFile`. This keeps the context window tidy without losing information. Tool-output offloading is covered in the context management docs.
+
+## Custom backends
+
+Replace the default local filesystem or exec backend in `dawn.config.ts`:
 
 ```ts title="dawn.config.ts"
-import { myRemoteBackend } from "./backends/remote.js"
-
 export default {
   backends: {
-    filesystem: myRemoteBackend(),
+    filesystem: myRemoteFilesystem(),
+    exec: myContainerExec(),
   },
 }
 ```
 
-## Middleware
-
-`FilesystemMiddleware` is `(next: FilesystemBackend) => FilesystemBackend`. Wrap the default backend with `compose()` to add cross-cutting behavior:
-
-```ts title="dawn.config.ts"
-import { compose, localFilesystem, withFilesystemLogging } from "@dawn-ai/workspace"
-
-export default {
-  backends: {
-    // compose(...) takes middlewares and returns a wrapper; apply it to the base backend.
-    filesystem: compose(withFilesystemLogging())(localFilesystem()),
-  },
-}
-```
-
-`withFilesystemLogging` writes method names and arguments to `stderr` by default — note that for `writeFile` this includes the full file content, so route logs accordingly. Supply a `destination` function for structured output:
-
-```ts
-withFilesystemLogging({
-  destination: ({ method, args }) => {
-    structuredLogger.debug("workspace", { method, args })
-  },
-})
-```
-
-`readBinaryFile` is logged with the **path only** — the bytes are never serialized into the log entry.
-
-<Callout type="warn" title="Forward optional methods">
-  A middleware that returns only `{ readFile, writeFile, listDir }` silently drops `readBinaryFile`, `statFile`, `removeFile`, `touchFile`, and `mkdir`. Dropping `statFile`/`removeFile` disables offload GC; dropping `readBinaryFile` disables `ctx.fs.readBinaryFile`. Use a conditional spread to preserve methods you don't need to intercept:
-
-  ```ts
-  return (next: FilesystemBackend) => ({
-    readFile: async (path, ctx, opts) => {
-      // ... your logic
-      return next.readFile(path, ctx, opts)
-    },
-    writeFile: (path, content, ctx) => next.writeFile(path, content, ctx),
-    listDir: (path, ctx) => next.listDir(path, ctx),
-    ...(next.readBinaryFile && { readBinaryFile: (p, c, o) => next.readBinaryFile!(p, c, o) }),
-    ...(next.statFile && { statFile: (p, c) => next.statFile!(p, c) }),
-    ...(next.removeFile && { removeFile: (p, c) => next.removeFile!(p, c) }),
-    ...(next.touchFile && { touchFile: (p, c) => next.touchFile!(p, c) }),
-    ...(next.mkdir && { mkdir: (p, c) => next.mkdir!(p, c) }),
-  })
-  ```
-
-  `withFilesystemLogging` does this correctly and is safe to use as a reference.
-</Callout>
-
-## ctx.fs for tools and routes
-
-`ctx.fs` is a `WorkspaceFs` handle — a narrower, workspace-relative surface over the backend:
-
-```ts
-interface WorkspaceFs {
-  readFile(path: string, opts?: { readonly maxBytes?: number }): Promise<string>
-  readBinaryFile(path: string, opts?: { readonly maxBytes?: number }): Promise<Uint8Array>
-  writeFile(path: string, content: string): Promise<{ readonly bytesWritten: number }>
-  listDir(path?: string): Promise<readonly string[]>
-}
-```
-
-Paths are **workspace-relative** — `"images/logo.png"` resolves to `<appRoot>/workspace/images/logo.png`. The handle resolves relative paths against the workspace root and permission-gates anything that lands outside it (see [Permissions](#permissions) below).
-
-**Example: a route tool reading a binary file**
-
-```ts title="src/app/(public)/describe/tools/describeImage.ts"
-import type { DawnToolContext } from "@dawn-ai/sdk"
-
-export const description = "Describe an image stored in the workspace."
-
-export default async (
-  input: { readonly path: string },
-  ctx: DawnToolContext,
-) => {
-  const bytes = await ctx.fs.readBinaryFile(input.path)
-  const dataUrl = `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`
-  // Pass dataUrl to a vision model call, return the description, etc.
-  return { dataUrl }
-}
-```
-
-`Buffer.from(bytes).toString("base64")` converts the `Uint8Array` to a base64 string. If the configured backend does not implement `readBinaryFile`, the call throws with a message naming the fix.
-
-**Example: a workflow entry listing and reading files**
-
-```ts title="src/app/(public)/report/index.ts"
-import type { RuntimeContext } from "@dawn-ai/sdk"
-import type { RouteTools } from "dawn:routes"
-
-export async function workflow(
-  state: { readonly topic: string },
-  ctx: RuntimeContext<RouteTools<"/report">>,
-) {
-  const entries = await ctx.fs.listDir("drafts")
-  const first = entries[0]
-  if (!first) return { ...state, summary: "no drafts found" }
-  const content = await ctx.fs.readFile(`drafts/${first}`)
-  return { ...state, summary: content.slice(0, 500) }
-}
-```
-
-`listDir()` with no argument defaults to the workspace root. Both `readFile` and `listDir` run through the permission gate before touching the backend.
-
-## Permissions
-
-All file I/O — whether initiated by the LLM calling a workspace tool or by your code calling `ctx.fs` — goes through the same permission gate.
-
-| Path | Decision |
-|---|---|
-| Inside `workspace/` | Always allowed silently |
-| Outside `workspace/` — allow rule matches | Allowed |
-| Outside `workspace/` — deny rule matches | Denied |
-| Outside `workspace/` — no rule (unknown), interactive mode, agent-route tool | Interactive prompt shown; user approves or denies |
-| Outside `workspace/` — no rule (unknown), non-interactive mode | Fail-closed |
-| Outside `workspace/` — no rule (unknown), workflow/graph entry | Fail-closed with guidance |
-| `bypass` mode | Everything allowed (dev only) |
-
-**Non-interactive and workflow/graph entries fail closed.** Workflow and graph entries run outside the LangGraph graph, where the interrupt mechanism is not available. If a path outside `workspace/` hits an unknown permission, the gate returns an error telling you to add an allow rule:
-
-```
-Permission denied: /etc/hosts is outside the workspace and interactive
-permission prompts are not available in this execution context.
-Add an allow rule for "readFile" to the permissions config in dawn.config.ts.
-```
-
-One permission model regardless of whether the LLM or your code initiates the I/O.
-
-**Path jail is lexical.** The local backend receives an already-resolved absolute path. A symlink inside `workspace/` that points to a path outside the workspace will be followed by the local filesystem — the jail does not dereference symlinks. Don't place untrusted symlinks inside `workspace/`.
-
-<Callout type="warn" title="Interrupt-resume and side effects">
-  When a permission prompt fires from inside tool code — because the tool called `ctx.fs` with a path outside `workspace/` that needs interactive approval — LangGraph pauses execution mid-tool. On resume, LangGraph **re-runs the tool body from the top**. Any side effects that ran before the `ctx.fs` call execute again.
-
-  Keep side effects idempotent around gated `fs` calls, or move them after the call so they only run once the permission is resolved.
-</Callout>
+Both backends are optional. Omitting one uses the local default. See the [Configuration](/docs/configuration) reference for the full `backends` shape.
 
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/tools", title: "Tools", subtitle: "the full tool authoring contract, including DawnToolContext" },
-  { href: "/docs/middleware", title: "Middleware", subtitle: "route request middleware — authentication and ctx.middleware" },
-  { href: "/docs/agents", title: "Agents", subtitle: "agent routes and the workspace tools the LLM calls" },
+  { href: "/docs/permissions", title: "Permissions", subtitle: "control which runBash commands require human approval" },
+  { href: "/docs/memory", title: "Memory", subtitle: "workspace/AGENTS.md injected into every agent turn" },
+  { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including backends" },
+  { href: "/docs/agents", title: "Agents", subtitle: "agent routes and how tools are wired in" },
 ]} />

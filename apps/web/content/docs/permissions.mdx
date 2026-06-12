@@ -1,0 +1,110 @@
+# Permissions
+
+Permissions are Dawn's human-in-the-loop gate for `runBash`. Before a workspace agent tool executes a shell command, the runtime checks it against configured allow and deny lists. Unknown commands pause the run and ask the human rather than failing or silently proceeding.
+
+## Configuration
+
+Set allow and deny lists in `dawn.config.ts`:
+
+```ts title="dawn.config.ts"
+export default {
+  permissions: {
+    // mode?: "interactive" | "non-interactive" | "bypass"  (default "interactive")
+    allow: { bash: ["ls", "cat"] },
+    deny: { bash: ["rm -rf", "sudo"] },
+  },
+}
+```
+
+`allow` and `deny` each map a tool name (`bash`) to an array of pattern strings. The research scaffold, for example, allows safe read-only commands and denies destructive ones — but leaves the network-fetch script off the allow list so the first run surfaces a prompt.
+
+## How matching works
+
+For every `runBash` call the runtime runs this sequence:
+
+1. **Deny first** — if any deny pattern is a prefix of the command string, the call is rejected immediately.
+2. **Then allow** — if any allow pattern is a prefix of the command string, the call proceeds.
+3. **No match → "unknown"** — the outcome depends on the mode.
+
+Prefix matching means `"ls"` covers `ls`, `ls -la`, and `ls workspace/corpus`. Use longer patterns to be more specific.
+
+## Modes
+
+| Mode | Unknown command behavior |
+|---|---|
+| `interactive` (default) | Run pauses; an interrupt is sent to the client for human decision |
+| `non-interactive` | Unknown commands are denied immediately (fail-closed) |
+| `bypass` | All commands are allowed without checking — dev/test only |
+
+Override the mode for a single run without touching the config by setting the `DAWN_PERMISSIONS_MODE` environment variable:
+
+```sh
+DAWN_PERMISSIONS_MODE=non-interactive dawn dev
+```
+
+The env var takes precedence over `permissions.mode` in `dawn.config.ts`.
+
+## The interrupt payload
+
+When a command is "unknown" in interactive mode, the agent run pauses and the runtime emits an SSE event:
+
+```
+event: interrupt
+data: {
+  "interruptId": "perm-abc123",
+  "type": "permission-request",
+  "kind": "command",
+  "detail": {
+    "command": "node scripts/fetch-source.mjs https://example.com/api",
+    "suggestedPattern": "node scripts/fetch-source.mjs"
+  }
+}
+```
+
+`detail.suggestedPattern` is the command prefix Dawn suggests you add to the allow list so the command is approved automatically on future runs. The run stays paused until you resume it.
+
+## Resuming an interrupted run
+
+Send a `POST /threads/:thread_id/resume` request with the `interrupt_id` from the SSE event and a `decision`:
+
+| Decision | Effect |
+|---|---|
+| `once` | Allow this command for this invocation only |
+| `always` | Allow and persist the `suggestedPattern` to `.dawn/permissions.json` |
+| `deny` | Reject the command; the run continues with an error result |
+
+Here is the full sequence using curl:
+
+```sh
+# 1. Create a thread
+THREAD=$(curl -sX POST http://localhost:3000/threads \
+  -H 'Content-Type: application/json' \
+  -d '{}' | jq -r .thread_id)
+
+# 2. Start a run — stream until the interrupt fires
+curl -N http://localhost:3000/threads/$THREAD/runs/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"input":{"messages":[{"role":"user","content":"fetch the API docs"}]},"route":"/research#agent"}'
+# ...SSE output...
+# event: interrupt
+# data: {"interruptId":"perm-abc123","type":"permission-request","kind":"command","detail":{"command":"node scripts/fetch-source.mjs ...","suggestedPattern":"node scripts/fetch-source.mjs"}}
+
+# 3. Resume with a decision
+curl -X POST http://localhost:3000/threads/$THREAD/resume \
+  -H 'Content-Type: application/json' \
+  -d '{"interrupt_id":"perm-abc123","decision":"once"}'
+# The response streams the continuation as SSE
+```
+
+Choosing `"always"` persists the allow entry to `.dawn/permissions.json`. On subsequent runs the command is matched by the allow list and proceeds without prompting.
+
+## Testing
+
+In `@dawn-ai/testing`, use `expectInterrupt` and `harness.resume` to drive the approval flow in automated tests without a live server. See the testing agents docs for the full pattern.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "the runBash tool and the four agent-facing workspace tools" },
+  { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including the full permissions block" },
+]} />

@@ -31,6 +31,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
       { label: "Reasoning Effort", href: "/docs/reasoning-effort" },
       { label: "Middleware", href: "/docs/middleware" },
       { label: "Workspace Filesystem", href: "/docs/workspace" },
+      { label: "Permissions", href: "/docs/permissions" },
       { label: "Retry", href: "/docs/retry" },
     ],
   },
