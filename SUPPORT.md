@@ -6,7 +6,7 @@ Use GitHub Discussions for usage questions, design discussions, and integration 
 
 https://github.com/cacheplane/dawnai/discussions
 
-The public documentation is available at https://dawn-ai.org/docs/getting-started.
+The public documentation is available at https://dawnai.org/docs/getting-started.
 
 ## Bugs
 
