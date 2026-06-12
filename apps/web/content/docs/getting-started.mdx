@@ -1,74 +1,163 @@
 # Getting Started
 
-Build a typed AI agent in 60 seconds. Then generate the LangGraph artifacts LangSmith consumes with one command. Dawn is file-system routing for agents — no registry, no hand-written tool schemas, no glue.
+Build a typed AI agent in 60 seconds. Dawn is file-system routing for agents — no registry, no hand-written tool schemas, no glue.
 
-By the end of this guide you'll have a typed agent at `/hello/[tenant]` that greets a user by name, running locally, ready to deploy.
+By the end of this guide you'll have a working deep-research assistant at `/research` that plans sub-questions, searches a local corpus, and writes cited reports — running offline out of the box, live against a real model when you opt in.
 
 ## 1. Install
 
 ```bash
-pnpm create dawn-ai-app my-agent
+npm create dawn-ai-app@latest my-agent
 cd my-agent
-pnpm install
+npm install
 ```
 
 Requires Node.js 22.12 or later.
 
-## 2. Set your API key
+For a minimal greeter scaffold instead, pass `--template basic`:
 
-The scaffolded `agent()` route uses OpenAI through Dawn's LangChain adapter. Export an OpenAI API key before running it:
-
-```bash title="OpenAI"
-export OPENAI_API_KEY=sk-...
+```bash
+npm create dawn-ai-app@latest my-app -- --template basic
 ```
 
-## 3. What you got
+## 2. What you got
 
-Three files. The folder path is the agent endpoint — no registration step.
+The scaffold is a complete deep-research assistant. The folder structure is the agent — no registration step.
+
+```
+src/app/research/
+  index.ts                          # research coordinator agent
+  state.ts                          # route state shape
+  plan.md                           # seeds the thread's planning todos
+  tools/
+    searchCorpus.ts                 # keyword search over the bundled corpus
+    readDoc.ts                      # reads a corpus document in full
+  subagents/
+    researcher/index.ts             # specialist dispatched per sub-question
+  skills/
+    cite-sources/SKILL.md           # loaded on demand: citation rules
+    synthesize-findings/SKILL.md    # loaded on demand: report structure
+  evals/
+    research-quality.eval.ts        # quality eval with scorers and a gate
+test/
+  research.test.ts                  # harness tests (offline, no API key)
+workspace/
+  AGENTS.md                         # house style injected every turn
+  corpus/                           # bundled documents the agent searches
+dawn.config.ts                      # app config: permissions, tool-output offloading
+```
+
+The route entry (`index.ts`) is a research coordinator. It plans sub-questions, dispatches the `researcher` subagent for each one, and synthesizes a cited report. Tools under `tools/` are bound to both agents at build time — `dawn check` infers their types from function signatures.
 
 <CodeGroup>
-```ts title="src/app/(public)/hello/[tenant]/state.ts"
-import { z } from "zod"
-
-// Route state. Provide tenant in the route input when invoking /hello/[tenant].
-export default z.object({
-  question: z.string().default(""),
-})
-```
-
-```ts title="src/app/(public)/hello/[tenant]/tools/greet.ts"
-// Plain TS. Dawn infers input/output types at build time — no Zod, no schema.
-export default async (input: { readonly tenant: string }) => {
-  return { greeting: `Hello, ${input.tenant}!` }
-}
-```
-
-```ts title="src/app/(public)/hello/[tenant]/index.ts"
+```ts title="src/app/research/index.ts"
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
-  systemPrompt:
-    "You are a helpful assistant for the {tenant} organization.",
+  model: "gpt-5-mini",
+  description:
+    "A deep-research assistant: plans sub-questions, dispatches researchers, and writes a cited report.",
+  systemPrompt: `You are a deep-research coordinator. Given a question:
+
+1. Plan the sub-questions to investigate and record them in your todos.
+2. For each sub-question, dispatch a specialist with \`task({ subagent: "researcher", input: "<sub-question>" })\`.
+3. You may also \`searchCorpus({ query })\` and \`readDoc({ path })\` directly for quick lookups.
+4. Synthesize the findings into a cited report and save it with \`writeFile({ path: "reports/<slug>.md", content: "<report>" })\`.
+
+Cite every claim with its source path in square brackets, e.g. [corpus/agent-architectures.md].`,
 })
+```
+
+```ts title="src/app/research/subagents/researcher/index.ts"
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-5-mini",
+  description: "Researches one sub-question against the bundled corpus and returns a focused, cited answer.",
+  systemPrompt: `You are a research specialist. Answer the single sub-question you are given using the corpus.
+
+- Use \`searchCorpus({ query })\` to find candidate documents, then \`readDoc({ path })\` to read the most relevant ones in full.
+- Return a focused, factual answer. Cite each claim with its source path in square brackets.
+- If the corpus does not cover the question, say so plainly.`,
+})
+```
+
+```ts title="dawn.config.ts"
+export default {
+  appDir: "src/app",
+  permissions: {
+    allow: { bash: ["ls", "cat", "head", "wc"] },
+    deny: { bash: ["rm -rf", "sudo", "curl", "wget"] },
+  },
+  toolOutput: {
+    offloadThresholdChars: 1500,
+    previewLines: 10,
+  },
+  // Persistence (SQLite checkpointer + threads store) is on by default.
+  // Threads survive a restart.
+}
 ```
 </CodeGroup>
 
-Tools under `tools/` are bound to the agent at build time — the LLM picks when to call them. The route's shape is whatever `index.ts` default-exports: `agent`, `workflow`, `graph`, or `chain`.
+The `plan.md` file opts the route into Dawn's planning capability — its checklist items seed each thread's todos. `workspace/AGENTS.md` is injected into the agent's system prompt every turn as durable memory. Skills under `skills/` are loaded on demand by name.
 
-## 4. Run it
+## 3. Verify and test (offline, no API key)
 
-```bash
-dawn dev
-```
-
-In another shell:
+All three commands run without any API key — fixtures replace live model calls.
 
 ```bash
-echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]' --url http://127.0.0.1:<port>
+npm run check
 ```
 
-The dev server exposes LangSmith-style `/runs/wait` and `/runs/stream` endpoints, so local clients can use the same request envelope before you build deployment artifacts.
+Generates route and tool types. Output:
+
+```
+Dawn app is valid: 2 routes discovered.
+  /research (agent)
+  /research/subagents/researcher (agent)
+```
+
+```bash
+npm test
+```
+
+Runs the harness tests in `test/research.test.ts`. The test script drives the agent using recorded fixture responses, covering corpus search, subagent dispatch, tool-output offloading, and the human-in-the-loop permission gate.
+
+```bash
+npm run eval
+```
+
+Runs the quality eval in `src/app/research/evals/research-quality.eval.ts`. Two dataset cases are scored across four scorers (`toolCalled`, `contains`, `cites-source`, `llmJudge`). Both must pass for the gate to clear.
+
+## 4. Run it live
+
+Set your API key and start the dev server:
+
+```bash
+export OPENAI_API_KEY=sk-...
+npx dawn dev --port 2024
+```
+
+The dev server exposes the Agent Protocol. Create a thread, then run it:
+
+```bash
+# 1. Create a thread
+curl -s -X POST http://127.0.0.1:2024/threads \
+  -H "Content-Type: application/json" \
+  -d '{}' | jq .
+
+# 2. Run the agent on that thread (replace <thread_id> with the id from step 1)
+curl -s -X POST http://127.0.0.1:2024/threads/<thread_id>/runs/wait \
+  -H "Content-Type: application/json" \
+  -d '{
+    "route": "/research#agent",
+    "input": {
+      "messages": [{ "role": "user", "content": "What are common agent architectures?" }]
+    }
+  }' | jq .
+```
+
+The `#agent` suffix is required — it selects the agent entry on the route. The report lands in `workspace/reports/` inside the project. Thread state checkpoints to `.dawn/checkpoints.sqlite`; threads persist across dev-server restarts.
 
 ## 5. Ship it
 
@@ -76,7 +165,7 @@ The dev server exposes LangSmith-style `/runs/wait` and `/runs/stream` endpoints
 dawn build
 ```
 
-This walks the routes declared via `dawn.config.ts`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts`. The generated `assistant_id`s match the local ids, such as `/hello/[tenant]#agent`.
+Walks the routes declared via `dawn.config.ts`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files. The generated `assistant_id`s match the local ids, such as `/research#agent`.
 
 ## Where to go next
 

@@ -21,7 +21,7 @@ Dawn writes those conventions once. You write the agent.
 
 ## The pieces
 
-A *route* is a folder under `src/app/`. The folder path becomes the agent endpoint at runtime — `src/app/(public)/hello/[tenant]/` answers to `/hello/[tenant]`. Everything a route needs lives next to it.
+A *route* is a folder under `src/app/`. The folder path becomes the agent endpoint at runtime — `src/app/research/` answers to `/research`. Everything a route needs lives next to it.
 
 A *route entry* is the route's default behavior. Each route has exactly one `index.ts` that exports an `agent`, a `workflow`, a `graph`, or a `chain`. Pick the shape that fits the problem; mix shapes across routes in the same project.
 
@@ -38,41 +38,48 @@ Agent route features are discovered from files and descriptors. `workspace/AGENT
 A typical request through Dawn looks like this:
 
 ```text
-$ echo '{"tenant":"acme"}' | dawn run "/hello/[tenant]"
+POST /threads/<id>/runs/wait  { "route": "/research#agent", "input": { "messages": [...] } }
         │
         ▼
-   route id match    →   src/app/(public)/hello/[tenant]/index.ts
+   thread lookup   →   .dawn/threads.sqlite (created on POST /threads)
         │
         ▼
-   input state       →   { tenant: "acme" }
+   route id match  →   src/app/research/index.ts
         │
         ▼
-   middleware        →   src/middleware.ts (auth, request context, ...)
+   input state     →   { messages: [{ role: "user", content: "What are common agent architectures?" }] }
         │
         ▼
-   route entry       →   index.ts (agent | workflow | graph | chain)
+   middleware       →   src/middleware.ts (auth, request context, ...)
         │
         ▼
-   tool calls        →   ctx.tools.greet({ tenant })
+   route entry      →   index.ts (agent | workflow | graph | chain)
         │
         ▼
-   typed output      →   { greeting: "Hello, acme!" }
+   tool calls       →   searchCorpus({ query: "agent architectures" })
+                         → [{ path: "corpus/agent-architectures.md", snippet: "..." }]
+        │
+        ▼
+   typed output     →   "ReAct and plan-and-execute are common. [corpus/agent-architectures.md]"
 ```
 
 Each arrow is real code:
 
-1. **Route id match.** Dawn resolves the parameterized route id against the discovered file tree. Route groups (`(public)/`) drop from the path, so `src/app/(public)/hello/[tenant]/index.ts` becomes `/hello/[tenant]`.
-2. **Input state.** The JSON input is passed to the route. Agent routes may apply defaults from `state.ts`; workflow, graph, and chain routes receive the runtime input for their adapter.
-3. **Middleware.** The app-level middleware runs when present. It can short-circuit the request or pass through with request-scoped context for tools.
-4. **Route entry.** The exported `agent`, `workflow`, `graph`, or `chain` runs. Dawn provides the typed `RuntimeContext` with the route's discovered tools.
-5. **Tool calls.** Tools called via `ctx.tools.<name>` are typechecked against the schemas Dawn generated at build time.
-6. **Typed output.** The route returns a typed value. Dawn streams or returns it depending on the call (`dawn run`, `/runs/wait`, `/runs/stream`).
+1. **Thread lookup.** The Agent Protocol endpoint resolves the thread from `.dawn/threads.sqlite`. A thread is created with `POST /threads`; its id is passed in subsequent run requests.
+2. **Route id match.** Dawn resolves the route id against the discovered file tree. Route groups (`(public)/`) drop from the path; the `#agent` suffix selects the agent entry on the route.
+3. **Input state.** The JSON input is passed to the route. Agent routes may apply defaults from `state.ts`; workflow, graph, and chain routes receive the runtime input for their adapter.
+4. **Middleware.** The app-level middleware runs when present. It can short-circuit the request or pass through with request-scoped context for tools.
+5. **Route entry.** The exported `agent`, `workflow`, `graph`, or `chain` runs. Dawn provides the typed `RuntimeContext` with the route's discovered tools.
+6. **Tool calls.** Tools called by name are typechecked against the schemas Dawn generated at build time. The `searchCorpus` tool searches the bundled corpus; `readDoc` reads a document in full; the model picks when to call each.
+7. **Typed output.** The route returns a typed value. Dawn streams or returns it depending on the call (`/runs/wait`, `/runs/stream`).
+
+Runs execute on a thread. Between turns, Dawn checkpoints the LangGraph state to SQLite under `.dawn/checkpoints.sqlite`. Threads survive a `dawn dev` restart — a run that resumes after a human-in-the-loop interrupt picks up exactly where it left off.
 
 ## Build vs runtime
 
 Dawn does most of its work at *build time*.
 
-`dawn build` and `dawn typegen` walk your routes, infer tool parameter types from function signatures, and emit `.dawn/dawn.generated.d.ts`. That generated file is the route registry, the tool registry, and the typed `RouteTools<P>` map. After build, your editor can autocomplete `ctx.tools.greet` and complain when a tool's signature drifts from its caller.
+`dawn build` and `dawn typegen` walk your routes, infer tool parameter types from function signatures, and emit `.dawn/dawn.generated.d.ts`. That generated file is the route registry, the tool registry, and the typed `RouteTools<P>` map. After build, your editor can autocomplete `ctx.tools.searchCorpus` and complain when a tool's signature drifts from its caller.
 
 At *runtime*, `dawn run` and `dawn dev` execute. There is no manual `tools: [...]` array and no per-route registration. The build-time types and runtime dispatcher are wired up by Dawn — you write the agent.
 
@@ -80,13 +87,18 @@ At *runtime*, `dawn run` and `dawn dev` execute. There is no manual `tools: [...
 
 The boundary is sharp. Dawn does not replace LangGraph. It surrounds it.
 
-| Dawn owns                          | LangGraph owns           |
-|------------------------------------|--------------------------|
-| File-system routing                | The graph runtime        |
-| Type inference for tools and state | StateGraph, channels     |
-| Dev server with HMR                | Persistence and resume   |
-| The CLI (`dawn dev`, `dawn run`)   | LangSmith deploy         |
-| Generated `.dawn/dawn.generated.d.ts` | LangSmith integration    |
+| Dawn owns                             | LangGraph owns              |
+|---------------------------------------|-----------------------------|
+| File-system routing                   | The graph runtime           |
+| Type inference for tools and state    | StateGraph, channels        |
+| Dev server with HMR                   | Checkpoint interface        |
+| The CLI (`dawn dev`, `dawn run`)      | LangSmith (deploy + observe)|
+| Generated `.dawn/dawn.generated.d.ts` | LangSmith integration       |
+| SQLite checkpointer + threads store   |                             |
+
+On persistence: LangGraph defines the checkpoint interface; Dawn ships the default implementation — `@dawn-ai/sqlite-storage` — which backs both the checkpointer (`.dawn/checkpoints.sqlite`) and the threads store (`.dawn/threads.sqlite`). You can swap it for your own implementation if needed.
+
+On LangSmith: LangSmith is the deployment and observability platform. It is not part of LangGraph itself. Dawn generates the artifacts LangSmith consumes (`langgraph.json`, per-route entry files); you bring your own LangSmith project and tracing setup.
 
 **Dawn deletes the boilerplate. Not your stack.**
 
