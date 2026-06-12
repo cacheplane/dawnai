@@ -1,5 +1,12 @@
 # @dawn-ai/langgraph
 
+## 0.7.0
+
+### Patch Changes
+
+- Updated dependencies [a38ff61]
+  - @dawn-ai/sdk@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes
