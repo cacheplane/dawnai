@@ -53,14 +53,14 @@
     "@dawn-ai/permissions": "workspace:*",
     "@dawn-ai/sqlite-storage": "workspace:*",
     "commander": "14.0.3",
-    "tsx": "^4.8.1"
+    "tsx": "^4.22.4"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
     "@dawn-ai/sdk": "workspace:*",
     "@dawn-ai/workspace": "workspace:*",
-    "@langchain/core": "1.1.47",
-    "@langchain/langgraph-checkpoint": "^1.0.2",
-    "@types/node": "25.6.0"
+    "@langchain/core": "1.1.48",
+    "@langchain/langgraph-checkpoint": "^1.1.0",
+    "@types/node": "25.9.3"
   }
 }

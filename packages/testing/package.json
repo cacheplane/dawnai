@@ -36,7 +36,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@copilotkit/aimock": "^1.28.0",
+    "@copilotkit/aimock": "^1.31.0",
     "light-my-request": "^6.6.0"
   },
   "peerDependencies": {
@@ -48,7 +48,7 @@
     "@dawn-ai/config-typescript": "workspace:*",
     "@dawn-ai/core": "workspace:*",
     "@dawn-ai/sdk": "workspace:*",
-    "@langchain/langgraph-checkpoint": "^1.0.2",
-    "@types/node": "25.6.0"
+    "@langchain/langgraph-checkpoint": "^1.1.0",
+    "@types/node": "25.9.3"
   }
 }
