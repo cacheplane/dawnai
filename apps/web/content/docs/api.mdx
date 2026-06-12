@@ -315,7 +315,12 @@ String literal types for model identifiers. See [Agents](/docs/agents).
 ### `KnownModelId`
 
 ```ts
-export type KnownModelId = OpenAiModelId | GoogleModelId | (string & {})
+export type KnownModelId =
+  | OpenAiModelId
+  | GoogleModelId
+  | AnthropicModelId
+  | XaiModelId
+  | (string & {})
 ```
 
 The accepted type for `AgentConfig.model`. Includes named model IDs plus an escape hatch (`string & {}`) for models not yet in the union. The escape hatch preserves autocomplete for the named values; it does not imply every provider has an adapter in the built-in `agent()` path.
@@ -346,7 +351,7 @@ String literals for supported OpenAI models.
 
 ```ts
 export type GoogleModelId =
-  | "gemini-3-pro-preview"
+  | "gemini-3.1-pro-preview"
   | "gemini-3-flash-preview"
   | "gemini-2.5-pro"
   | "gemini-2.5-flash"
@@ -354,6 +359,27 @@ export type GoogleModelId =
 ```
 
 String literals accepted by the `KnownModelId` type for autocomplete. The built-in `agent()` route infers the Google provider for `gemini-*` model IDs; raw `graph` and `chain` routes can still instantiate Google or any other provider directly.
+
+### `AnthropicModelId`
+
+```ts
+export type AnthropicModelId =
+  | "claude-fable-5"
+  | "claude-opus-4-8"
+  | "claude-sonnet-4-6"
+  | "claude-haiku-4-5"
+  | "claude-haiku-4-5-20251001"
+```
+
+String literals for supported Anthropic models. The built-in `agent()` route infers the Anthropic provider for `claude-*` model IDs.
+
+### `XaiModelId`
+
+```ts
+export type XaiModelId = "grok-4.3"
+```
+
+String literals for supported xAI models. The built-in `agent()` route infers the xAI provider for `grok-*` model IDs.
 
 ---
 

@@ -1,4 +1,5 @@
 import type { BuiltInModelProviderId, ReasoningConfig } from "@dawn-ai/sdk"
+import { validateModelId } from "@dawn-ai/sdk"
 
 type Importer = (specifier: string) => Promise<Record<string, unknown>>
 type ChatModelConstructor = new (options: Record<string, unknown>) => unknown
@@ -20,6 +21,26 @@ const providerSpecs: Record<BuiltInModelProviderId, ProviderSpec> = {
   openrouter: { packageName: "@langchain/openrouter", exportName: "ChatOpenRouter" },
 }
 
+const warnedModelIds = new Set<string>()
+
+/** Advisory once-per-process warning; never blocks model construction. */
+export function warnOnUnknownModelId(opts: {
+  readonly model: string
+  readonly provider: string
+}): void {
+  const key = `${opts.provider} ${opts.model}`
+  if (warnedModelIds.has(key)) return
+  const verdict = validateModelId(opts)
+  if (verdict.ok) return
+  warnedModelIds.add(key)
+  const suggestions = verdict.suggestions.map((s) => `"${s}"`).join(", ")
+  console.warn(
+    `[dawn:models] model "${opts.model}" is not a known ${verdict.provider} model id.` +
+      (suggestions ? ` Did you mean ${suggestions}?` : "") +
+      " Proceeding anyway.",
+  )
+}
+
 export function missingProviderPackageMessage(
   provider: BuiltInModelProviderId,
   packageName: string,
@@ -33,6 +54,7 @@ export async function createChatModel(options: {
   readonly reasoning?: ReasoningConfig
   readonly importer?: Importer
 }): Promise<unknown> {
+  warnOnUnknownModelId({ model: options.model, provider: options.provider })
   const spec = providerSpecs[options.provider]
   const importer =
     options.importer ??

@@ -54,6 +54,8 @@ pnpm add @langchain/xai           # xai
 pnpm add @langchain/openrouter    # openrouter
 ```
 
+`dawn check` (and `dawn verify`) warn when a model id isn't in Dawn's curated list for the resolved provider (`openai`, `google`, `anthropic`, `xai`), with did-you-mean suggestions; the runtime prints the same advisory once when the model is constructed. The lists are advisory — new, proxy, or gateway model ids run fine if your provider accepts them, and providers without curated lists (`mistral`, `groq`, `ollama`, `openrouter`) are never warned about.
+
 ## When to pick an agent
 
 Dawn supports four route entry shapes. Pick the one that fits the problem:

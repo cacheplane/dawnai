@@ -4,7 +4,7 @@
 
 # @dawn-ai/cli
 
-The `dawn` command-line interface — local development runtime, route execution, validation and typegen, and the build step that produces LangSmith deployment artifacts. It is the primary tool for working on a Dawn app from first scaffold through deploy.
+The `dawn` CLI for Dawn, the TypeScript meta-framework for LangGraph — a local development runtime, route execution, validation and typegen, and the build step that produces LangSmith deployment artifacts. It is the primary tool for working on a Dawn agent app from first scaffold through deploy.
 
 ## Install
 
@@ -59,10 +59,14 @@ Run `dawn <command> --help` for command-specific options.
 
 Full reference and guides:
 
-- CLI — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/cli.mdx
-- Dev server — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/dev-server.mdx
-- Deployment — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/deployment.mdx
-- Getting started — https://github.com/cacheplane/dawnai/blob/main/apps/web/content/docs/getting-started.mdx
+- [CLI](https://dawnai.org/docs/cli)
+- [Dev server](https://dawnai.org/docs/dev-server)
+- [Deployment](https://dawnai.org/docs/deployment)
+- [Getting started](https://dawnai.org/docs/getting-started)
+
+---
+
+⭐ [Star Dawn on GitHub](https://github.com/cacheplane/dawnai) · 📚 [Read the docs](https://dawnai.org/docs/getting-started) · 💬 [Ask in GitHub Discussions](https://github.com/cacheplane/dawnai/discussions)
 
 ## License
 

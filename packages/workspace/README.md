@@ -2,9 +2,9 @@
   <img src="https://raw.githubusercontent.com/cacheplane/dawnai/main/docs/brand/dawn-logo-horizontal-black-on-white.png" alt="Dawn" width="180" />
 </p>
 
-# @dawn-ai/config-typescript
+# @dawn-ai/workspace
 
-Shared TypeScript compiler configurations (`base`, `library`, `node`, `nextjs`) for Dawn workspace packages.
+Filesystem-backed workspace utilities for Dawn agents — reading, writing, and managing files in an agent's working directory.
 
 This is an internal Dawn workspace package, part of [Dawn — the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai). For documentation, see [dawnai.org/docs](https://dawnai.org/docs/getting-started).
 
