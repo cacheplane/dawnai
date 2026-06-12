@@ -101,7 +101,7 @@ custom((run, testCase) => (run.finalMessage.length < 200 ? 1 : 0), { name: "conc
 // Grade output quality with a model
 llmJudge({
   criteria: "Does the answer fully address {{input}}? Output: {{output}}",
-  model: "gpt-4o-mini", // optional
+  model: "gpt-5-mini", // optional
   threshold: 0.7,       // optional
 })
 ```
@@ -206,13 +206,48 @@ Commit the eval and any fixture files alongside your route. In CI, run `dawn eva
 
 ## Your scaffolded app already has an eval
 
-`create-dawn-ai-app` generates a sample `evals/smoke.eval.ts` next to the default route, adds `@dawn-ai/evals` as a dev dependency, and wires an `eval` script. Run it right after scaffolding:
+`create-dawn-ai-app` generates `src/app/research/evals/research-quality.eval.ts` next to the default research route, adds `@dawn-ai/evals` as a dev dependency, and wires an `eval` npm script. Run it right after scaffolding:
 
 ```bash
-pnpm eval
+npm run eval
 ```
 
-It replays a committed `script()` fixture against the generated agent route and gates on a `contains` scorer, so it passes deterministically with no API key. Grow it by adding cases to the dataset and more scorers, and switch to `dawn eval --live` when you want to check the real model.
+This wraps `dawn eval` and runs in **offline replay mode by default** — no API key needed. It replays a committed `script()` fixture against the research agent route and gates on a `contains` scorer, so it passes deterministically in CI. To run against the real model locally:
+
+```bash
+npm run eval -- --live
+```
+
+Grow it by adding cases to the dataset and more scorers.
+
+## Programmatic API
+
+`runEval` from `@dawn-ai/evals` lets you drive an eval definition from your own script — useful for custom CI tooling, reporting pipelines, or running evals as part of a larger orchestration.
+
+```ts
+import { defineEval, contains, runEval } from "@dawn-ai/evals"
+import { script } from "@dawn-ai/testing"
+import { fileURLToPath } from "node:url"
+
+const myEval = defineEval({
+  name: "chat quality",
+  dataset: [{ input: "hello", fixtures: script().user("hello").replies("Hi!") }],
+  scorers: [contains("Hi", { threshold: 1 })],
+  threshold: 1,
+})
+
+const report = await runEval(myEval, {
+  runCase: async (testCase) => {
+    // Provide your own AgentRunResult — typically from createAgentHarness.
+    return harness.run({ input: testCase.input, fixtures: testCase.fixtures })
+  },
+  baseDir: fileURLToPath(new URL(".", import.meta.url)), // for resolving dataset paths
+})
+
+console.log(report.passed, report.mean)
+```
+
+`runEval(def, options)` accepts a `RunEvalOptions` with two fields: `runCase` (required — executes one case and returns an `AgentRunResult`) and `baseDir` (optional — base directory for resolving a string dataset path). It returns a `Promise<EvalReport>` containing `{ name, cases, byScorer, mean, gated, passed, reason? }`.
 
 ## Related
 

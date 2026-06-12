@@ -46,7 +46,7 @@ The block below is the live contents of `workspace/AGENTS.md`, re-read on every 
 
 The exact instructional text is owned by Dawn, but the important behavior is stable:
 
-- The file path is `workspace/AGENTS.md` under the current process working directory.
+- The file path is `workspace/AGENTS.md` under the app root (`context.appRoot`), which equals the project directory under `dawn dev`.
 - The feature applies to `agent()` routes during route preparation.
 - Empty files are skipped.
 - Files larger than 64 KiB are not loaded; the prompt says the file exceeded the limit.
@@ -55,29 +55,15 @@ The exact instructional text is owned by Dawn, but the important behavior is sta
 
 Because the memory file is workspace-level, it is shared by all agent routes in the same running app. It is not route-local.
 
-If you run Dawn from a different working directory while pointing at an app root explicitly, remember that memory follows `process.cwd()`, not the route directory.
+If you run Dawn from a different working directory while pointing at an app root explicitly, remember that memory follows `context.appRoot`, not the test runner's working directory. In-process test harnesses that pass an explicit `appRoot` activate memory relative to that root.
 
 ## Updating memory
 
-Dawn does not currently add a generic `writeFile` or `writeMemory` tool.
+When a `workspace/` directory exists, the [workspace tools](/docs/workspace) capability provides a `writeFile` tool that is path-jailed to that directory. Dawn's injected system-prompt instruction already tells the agent to update memory by calling `writeFile({ path: "AGENTS.md", content: "..." })` — no extra tooling is required.
 
-If an agent should update `workspace/AGENTS.md`, expose that intentionally as one of your route tools:
+Because memory is workspace-level, an update affects every agent route in the same running app. Keep write access intentional and the content concise.
 
-```ts title="src/app/support/tools/updateMemory.ts"
-import { readFile, writeFile } from "node:fs/promises"
-import { join } from "node:path"
-
-export const description = "Replace the workspace memory file."
-
-export default async (input: { readonly content: string }) => {
-  const path = join(process.cwd(), "workspace", "AGENTS.md")
-  const previous = await readFile(path, "utf8").catch(() => "")
-  await writeFile(path, input.content, "utf8")
-  return { previousLength: previous.length, nextLength: input.content.length }
-}
-```
-
-Keep that kind of tool narrow. Memory can change every route that uses the workspace, so it should not be a casual scratchpad.
+If your app does not use a `workspace/` directory, you can expose a narrow custom tool that writes the file. Prefer the workspace capability whenever possible; it handles path safety automatically.
 
 ## Under the hood
 

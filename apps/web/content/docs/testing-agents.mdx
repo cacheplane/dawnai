@@ -114,6 +114,15 @@ expectNoToolErrors(run)
 
 Asserts that no tool returned an error result. HITL permission interrupts are not counted as errors.
 
+To inspect tool results manually, use `run.toolResults` — a `ReadonlyArray<ObservedToolResult>` derived from the final conversation messages by `deriveToolResults` (also exported). Each entry has the shape `{ name: string, status?: "error" | "success", content: unknown, isError: boolean }`. This is useful for asserting on specific error messages or content when `expectNoToolErrors` is too broad.
+
+```ts
+import { deriveToolResults } from "@dawn-ai/testing"
+
+const failing = run.toolResults.filter((r) => r.isError)
+expect(failing).toHaveLength(0)
+```
+
 ### State assertions
 
 ```ts
@@ -142,8 +151,10 @@ Then hand-trim the JSON to keep only the turns that matter, commit it, and repla
 `createAgentHarness` supports three modes via the `mode` option (default: `"in-process"`):
 
 - **`"in-process"`** (default) — runs your tools, prompts, capabilities, and state inside the test process via Dawn's runtime. Fastest; covers the vast majority of assertions. No port binding.
-- **`"http-inject"`** — drives the full Agent Protocol request→SSE pipeline in-process via `injectAgentProtocol`, without opening a port. Use this when you need to test SSE framing, middleware, or framework-level behavior.
-- **`"subprocess"`** — boots a real `dawn dev` process with `startSubprocessApp`. Use this for restart/persistence scenarios where you need to kill and restart the server mid-test.
+- **`"http-inject"`** — **not yet implemented**. Passing `mode: "http-inject"` throws at harness construction time. `injectAgentProtocol` is exported as a standalone helper for advanced use, but the harness `mode` option does not support it yet.
+- **`"subprocess"`** — **not yet implemented**. Passing `mode: "subprocess"` throws at harness construction time. `startSubprocessApp` is exported as a standalone helper for advanced use, but the harness `mode` option does not support it yet.
+
+For now, write all harness tests with the default `"in-process"` mode. The standalone `injectAgentProtocol` and `startSubprocessApp` exports are available for custom orchestration outside the harness API.
 
 ## CI setup
 
@@ -262,7 +273,7 @@ it("filters open items against real model", async () => {
 }, 120_000)
 
 it("calls tools in order and cleanly", async () => {
-  const run = await h.run({ input: "…", live: true })
+  const run = await h.run({ input: "…" })
   expectToolSequence(run, ["searchCorpus", "readDoc", "writeFile"])
   expectNoToolErrors(run)
 }, 120_000)
@@ -284,7 +295,7 @@ Do not put your API key in CI. Live tests are local-development tools for valida
 
 ## Your scaffolded app already has a test
 
-`create-dawn-ai-app` generates `test/agent.test.ts` that imports `@dawn-ai/testing` and covers the default `hello/[tenant]` agent route. Run it immediately after scaffolding:
+`create-dawn-ai-app` generates `test/research.test.ts` that imports `@dawn-ai/testing` and covers the default `/research#agent` route. Run it immediately after scaffolding:
 
 ```bash
 pnpm test
@@ -292,21 +303,23 @@ pnpm test
 
 The generated test uses an inline `script()` for the happy-path scenario:
 
-```ts title="test/agent.test.ts"
+```ts title="test/research.test.ts"
 import { fileURLToPath } from "node:url"
 import { afterAll, it } from "vitest"
 import { createAgentHarness, expectFinalMessage, script } from "@dawn-ai/testing"
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url))
-const h = await createAgentHarness({ appRoot, route: "/hello/[tenant]#agent" })
+const h = await createAgentHarness({ appRoot, route: "/research#agent" })
 afterAll(() => h.close())
 
-it("greets the tenant", async () => {
+it("returns a research summary", async () => {
   const run = await h.run({
-    input: "Say hello",
-    fixtures: script().user("Say hello").replies("Hello from Acme!"),
+    input: "Summarize recent work on retrieval-augmented generation",
+    fixtures: script()
+      .user("Summarize recent work on retrieval-augmented generation")
+      .replies("RAG combines retrieval with generation to ground model outputs in documents."),
   })
-  expectFinalMessage(run).toContain("Hello")
+  expectFinalMessage(run).toContain("RAG")
 }, 60_000)
 ```
 
