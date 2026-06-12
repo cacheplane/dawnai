@@ -14,7 +14,8 @@
 
 - **Both surfaces:** `dawn check`/`verify` warns statically; the runtime warns once at chat-model construction. One shared validator feeds both.
 - **Per-provider curated lists, warn-only.** If the resolved provider has a curated list and the model isn't in it → warning with did-you-mean suggestions. Providers without curated lists → always silent. **Never a hard error** anywhere — `(string & {})` stays intentional so brand-new, proxy, and custom model ids keep working.
-- **Expand the curated lists**, initially: openai (existing), google (existing), **anthropic (new)**. Mistral/groq/xai/ollama/openrouter stay uncurated; during implementation, verify current Mistral/xAI ids against vendor docs and add them only if confident — a stale curated list is worse than none.
+- **Expand the curated lists**, initially: openai (existing), google (existing), **anthropic (new)**, **xai (new, per user request)**. Mistral/groq/ollama/openrouter stay uncurated; a stale curated list is worse than none.
+- **xAI churn note** (verified via web, 2026-06-11): `grok-4.3` is the current flagship; as of 2026-05-15 xAI deprecates-and-redirects older ids (`grok-4-fast-*`, `grok-3`, `grok-code-fast-1`, …) to it. The curated xAI list must be small and taken from [docs.x.ai/developers/models](https://docs.x.ai/developers/models) at implementation time; redirected-but-functional ids are fine to omit (warn-only means they still work, and the suggestion nudges users to the current id).
 
 ## Verified facts (against main @ `410a179`)
 
@@ -48,10 +49,20 @@ export const ANTHROPIC_MODEL_IDS = [
   "claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
 ] as const
 
+export const XAI_MODEL_IDS = [
+  "grok-4.3", // current flagship; finalize the list from docs.x.ai at implementation time
+] as const
+
 export type OpenAiModelId = (typeof OPENAI_MODEL_IDS)[number]
 export type GoogleModelId = (typeof GOOGLE_MODEL_IDS)[number]
 export type AnthropicModelId = (typeof ANTHROPIC_MODEL_IDS)[number]
-export type KnownModelId = OpenAiModelId | GoogleModelId | AnthropicModelId | (string & {})
+export type XaiModelId = (typeof XAI_MODEL_IDS)[number]
+export type KnownModelId =
+  | OpenAiModelId
+  | GoogleModelId
+  | AnthropicModelId
+  | XaiModelId
+  | (string & {})
 ```
 
 Existing type names keep their exact exported names (non-breaking); autocomplete gains Anthropic ids. The Anthropic/updated id values above are to be **verified against vendor docs during implementation** (web check), not trusted from this spec.
@@ -63,6 +74,7 @@ export const CURATED_MODEL_IDS: Readonly<Partial<Record<BuiltInModelProviderId, 
   openai: OPENAI_MODEL_IDS,
   google: GOOGLE_MODEL_IDS,
   anthropic: ANTHROPIC_MODEL_IDS,
+  xai: XAI_MODEL_IDS,
 }
 ```
 
@@ -131,7 +143,7 @@ Small additions, same PR: the agents doc's model section (`apps/web/content/docs
 ## Out of scope
 
 - Mapping provider 404s into did-you-mean runtime *errors* (deeper langchain error-path work; revisit only if warnings prove insufficient).
-- Curating fast-churn or local providers (groq, ollama, openrouter); Mistral/xAI only if ids can be confidently verified during implementation.
+- Curating local/router providers (groq, ollama, openrouter); Mistral only if its ids can be confidently verified during implementation.
 - A `dawn models` listing command (YAGNI until asked for).
 
 ## Changeset
