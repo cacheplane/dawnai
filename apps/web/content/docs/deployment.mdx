@@ -39,7 +39,7 @@ Dawn does not host or run production traffic itself. It owns local development (
     ```json
     {
       "graphs": {
-        "/hello/[tenant]#agent": "./.dawn/build/hello-tenant.ts:graph"
+        "/research#agent": "./.dawn/build/research.ts:graph"
       },
       "dependencies": ["."],
       "env": ".env.example",
@@ -48,7 +48,7 @@ Dawn does not host or run production traffic itself. It owns local development (
     ```
 
     Notes:
-    - Each `assistant_id` is `<routeId>#<kind>` — e.g. `/hello/[tenant]#agent`. Use this exact string as `assistant_id` in any client request.
+    - Each graph key is `<routeId>#<kind>` — e.g. `/research#agent`. Use this exact string as the `assistant_id` in any client request.
     - `dependencies: ["."]` and `node_version: "22"` are required by LangSmith.
     - `env` resolves to `.env.example` when that file exists, else `.env`.
     - If you keep a hand-authored `langgraph.json` at the app root, `dawn build` shallow-merges it on top of the generated values.
@@ -74,7 +74,7 @@ If you can't or won't use LangSmith, build with `dawn build` and feed `.dawn/bui
 ## Troubleshooting
 
 - **Tests pass in-process but fail live-server** — a tool or route isn't serializing cleanly. Check that inputs, outputs, and state are JSON-serializable (no Dates, Maps, classes).
-- **Assistant id not found** — the request `assistant_id` doesn't match the `<routeId>#<kind>` keys in `.dawn/build/langgraph.json`. Inspect that file directly (`cat .dawn/build/langgraph.json`) or run `dawn verify --json` to confirm what was discovered.
+- **Assistant id not found** — the `route` in the request body doesn't match a `<routeId>#<kind>` key in `.dawn/build/langgraph.json`. Inspect that file directly (`cat .dawn/build/langgraph.json`) or run `dawn verify --json` to confirm what was discovered.
 - **Type inference drifted** — run `dawn typegen` locally and inspect `.dawn/dawn.generated.d.ts`. The generated file is ignored by the starter template, so regenerate it in CI/build steps unless your project chooses to commit `.dawn/`.
 
 ## Related
