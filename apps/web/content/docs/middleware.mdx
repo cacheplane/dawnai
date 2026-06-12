@@ -42,7 +42,7 @@ The argument every middleware receives. All values are pre-parsed:
 | `routeId` | `string` | E.g. `"/hello/[tenant]"`. |
 | `assistantId` | `string` | E.g. `"/hello/[tenant]#agent"`. |
 | `method` | `string` | HTTP method. |
-| `url` | `string` | Path + query, e.g. `"/runs/wait"`. |
+| `url` | `string` | Path + query, e.g. `"/threads/t-1/runs/wait"`. |
 
 ### `reject(status, body?)`
 
@@ -104,7 +104,7 @@ This keeps the request lifecycle predictable and avoids ordering questions about
 
 ## Where middleware runs
 
-Middleware runs in the local dev server (`dawn dev`). Both local `/runs/wait` and `/runs/stream` requests invoke middleware before any route executes. The `/healthz` endpoint bypasses middleware because it is a liveness probe.
+Middleware runs in the local dev server (`dawn dev`). Both local `/threads/:id/runs/wait` and `/threads/:id/runs/stream` requests invoke middleware before any route executes. The `/healthz` endpoint bypasses middleware because it is a liveness probe.
 
 `dawn build` does not currently materialize this middleware into the generated LangSmith entry files. Treat middleware as a local Dawn runtime feature unless your deployment target wires it in separately.
 

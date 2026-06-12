@@ -31,6 +31,8 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
       { label: "Reasoning Effort", href: "/docs/reasoning-effort" },
       { label: "Middleware", href: "/docs/middleware" },
       { label: "Workspace Filesystem", href: "/docs/workspace" },
+      { label: "Context Management", href: "/docs/context-management" },
+      { label: "Permissions", href: "/docs/permissions" },
       { label: "Retry", href: "/docs/retry" },
     ],
   },
@@ -39,6 +41,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     items: [
       { label: "Dev Server", href: "/docs/dev-server" },
       { label: "Testing", href: "/docs/testing" },
+      { label: "Testing Agents", href: "/docs/testing-agents" },
       { label: "Evals", href: "/docs/evals" },
       { label: "Deployment", href: "/docs/deployment" },
     ],
@@ -60,6 +63,8 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     items: [
       { label: "API", href: "/docs/api" },
       { label: "CLI", href: "/docs/cli" },
+      { label: "Configuration", href: "/docs/configuration" },
+      { label: "Observability", href: "/docs/observability" },
       { label: "FAQ", href: "/docs/faq" },
     ],
   },

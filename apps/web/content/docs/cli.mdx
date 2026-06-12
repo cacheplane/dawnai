@@ -47,7 +47,7 @@ Output:
 
 ```
 Discovered 2 Dawn routes in /path/to/app
-/hello/[tenant] -> src/app/(public)/hello/[tenant]/index.ts
+/research -> src/app/research/index.ts
 /admin/users -> src/app/(internal)/admin/users/index.ts
 ```
 
@@ -89,17 +89,17 @@ See [Deployment](/docs/deployment) for the full bridge.
 Executes a single route invocation with JSON stdin/stdout.
 
 ```
-echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]'
+echo '{"messages":[{"role":"user","content":"Hello"}]}' | dawn run '/research'
 ```
 
 Flags:
 - `--cwd <path>` — operate on a different app root.
 - `--url <url>` — run against a live dev server instead of the in-process runtime.
 
-The route argument can be the parameterized id (`/hello/[tenant]`) or the relative route entry file path (`src/app/(public)/hello/[tenant]/index.ts`). Dynamic segment values come from the JSON input.
+The route argument can be the parameterized id (e.g. `/research`) or the relative route entry file path (e.g. `src/app/research/index.ts`). Dynamic segment values come from the JSON input. When `--url` is set, `dawn run` POSTs to `/threads/<t-cli-uuid>/runs/wait` with `{ route: "<routeId>#<kind>", input }`.
 
 <Callout type="tip" title="Quote the path">
-  Route paths contain `(`, `)`, `[`, and `]`. Always quote them in shell so they aren't expanded.
+  Route paths containing `(`, `)`, `[`, or `]` should be quoted in shell so they aren't expanded.
 </Callout>
 
 ## `dawn test`
@@ -136,7 +136,7 @@ The optional positional `[path]` narrows discovery to a subdirectory. By default
 
 ## `dawn dev`
 
-Starts the local runtime — hot reload + LangSmith protocol. Bind address is fixed at `127.0.0.1`.
+Starts the local runtime — hot reload + [Agent Protocol (AP) HTTP endpoints](/docs/dev-server). Bind address is fixed at `127.0.0.1`.
 
 ```
 dawn dev
@@ -146,6 +146,8 @@ dawn dev --port 3001
 Flags:
 - `--port <n>` — HTTP port. Default: dynamically allocated. Pass `--port` for a stable address.
 - `--env-file <path>` — path to a `.env` file (overrides `dawn.config.ts` `env` and the default `./.env`).
+
+If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically enables LangSmith tracing by setting `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to control which project receives the traces. See [Observability](/docs/observability) for the full tracing guide.
 
 See [Dev Server](/docs/dev-server) for the full protocol reference and architecture notes.
 

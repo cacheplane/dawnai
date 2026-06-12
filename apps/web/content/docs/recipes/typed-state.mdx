@@ -41,7 +41,7 @@ export async function workflow(
 - **Dynamic segments are not in the schema.** `[tenant]` is injected from the pathname onto `state.tenant` at runtime. Adding it to the Zod schema would conflict with the path injection.
 - **Field names match segment names exactly.** Dawn wires `[tenant]` to `state.tenant` by name, not by position.
 - **Defaults come from Zod.** Anything declared with `.default(...)` is filled in when the caller omits it.
-- **State is JSON-serializable.** It crosses the runtime boundary on every `/runs/wait` and `/runs/stream` call. Use primitives, plain objects, arrays.
+- **State is JSON-serializable.** It crosses the runtime boundary on every `runs/wait` and `runs/stream` call. Use primitives, plain objects, arrays.
 
 ## Related
 

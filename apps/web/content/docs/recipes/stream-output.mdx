@@ -1,24 +1,25 @@
 # Stream output
 
-You want a route's response to arrive incrementally rather than as a single blob at the end. Here's how to call `/runs/stream` and read the SSE frames.
+You want a route's response to arrive incrementally rather than as a single blob at the end. Here's how to call `/threads/:id/runs/stream` and read the SSE frames.
 
 ## The code
 
-```ts title="scripts/stream-hello.ts"
-const res = await fetch("http://127.0.0.1:3001/runs/stream", {
+```ts title="scripts/stream-research.ts"
+// 1. Create a thread first (or reuse an existing one).
+const threadRes = await fetch("http://127.0.0.1:3001/threads", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({}),
+})
+const { thread_id } = (await threadRes.json()) as { thread_id: string }
+
+// 2. Start a streaming run on that thread.
+const res = await fetch(`http://127.0.0.1:3001/threads/${thread_id}/runs/stream`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
-    assistant_id: "/hello/[tenant]#agent",
-    input: { tenant: "acme" },
-    metadata: {
-      dawn: {
-        mode: "agent",
-        route_id: "/hello/[tenant]",
-        route_path: "src/app/(public)/hello/[tenant]/index.ts",
-      },
-    },
-    on_completion: "delete",
+    route: "/research#agent",
+    input: { query: "latest LLM benchmarks" },
   }),
 })
 
@@ -37,19 +38,66 @@ while (true) {
   const frames = buffer.split("\n\n")
   buffer = frames.pop() ?? ""
   for (const frame of frames) {
-    const dataLine = frame.split("\n").find((l) => l.startsWith("data: "))
-    if (!dataLine) continue
+    const lines = frame.split("\n")
+    // Every SSE frame has an "event:" line and a "data:" line.
+    const eventLine = lines.find((l) => l.startsWith("event: "))
+    const dataLine = lines.find((l) => l.startsWith("data: "))
+    if (!eventLine || !dataLine) continue
+    const eventType = eventLine.slice("event: ".length)
     const payload = JSON.parse(dataLine.slice("data: ".length))
-    console.log(payload)
+
+    switch (eventType) {
+      case "chunk":
+        // Streamed text fragment — append to display.
+        process.stdout.write(payload.content ?? "")
+        break
+      case "tool_call":
+        console.log(`\n[tool_call] ${payload.name}`, payload.input)
+        break
+      case "tool_result":
+        console.log(`[tool_result] ${payload.name}`, payload.output)
+        break
+      case "plan_update":
+        console.log("[plan_update]", payload)
+        break
+      case "interrupt":
+        console.log("[interrupt]", payload)
+        break
+      case "done":
+        console.log("\n[done]", payload.output)
+        break
+      default:
+        // subagent.start, subagent.tool_call, subagent.tool_result,
+        // subagent.message, subagent.end, etc.
+        console.log(`[${eventType}]`, payload)
+    }
   }
 }
 ```
 
+## SSE event types
+
+Every frame is `event: <type>\ndata: <json>\n\n`. Parse the `event:` line to route frames correctly — do not treat all frames as the same type.
+
+| Event type | Payload shape | Notes |
+|---|---|---|
+| `chunk` | `{ content: string }` | Streamed text fragment from the LLM. |
+| `tool_call` | `{ name: string, input: unknown }` | LLM is calling a tool. |
+| `tool_result` | `{ name: string, output: unknown }` | Tool returned a result. |
+| `plan_update` | plan object | Emitted when [Planning](/docs/planning) updates `plan.md`. |
+| `interrupt` | interrupt object | Emitted when the agent hits a HITL interrupt point. |
+| `subagent.start` | `{ name, routeId, depth, call_id }` | A subagent started. |
+| `subagent.tool_call` | `{ call_id, name, input }` | Tool call inside a subagent. |
+| `subagent.tool_result` | `{ call_id, name, output }` | Tool result inside a subagent. |
+| `subagent.message` | `{ call_id, content }` | Text chunk from a subagent. |
+| `subagent.end` | `{ call_id, final_message?, error? }` | Subagent finished or failed. |
+| `done` | `{ output: unknown }` | Run complete; `output` is the final route result. |
+
 ## Notes
 
-- **Same envelope as `/runs/wait`.** The body shape is identical — `assistant_id`, `input`, `metadata.dawn.{mode,route_id,route_path}`, `on_completion: "delete"`. Only the endpoint differs.
-- **`text/event-stream`, not JSON.** The response is raw SSE. Parse `data:` lines yourself, or use a client like `eventsource-parser`.
-- **Use `/runs/wait` when you don't need progress.** Streaming adds parsing complexity for callers. Pick `/runs/stream` when partial output is meaningful - long agent reasoning, token-by-token text, intermediate workflow states, [planning](/docs/planning) updates, or [subagent](/docs/subagents) activity.
+- **AP URL shape.** The endpoint is `/threads/:id/runs/stream`; the body is `{ route, input }`. Create or retrieve a thread id via `POST /threads` first.
+- **`text/event-stream`, not JSON.** The response is raw SSE. Parse `event:` and `data:` lines per frame, or use a client like `eventsource-parser`.
+- **Use `/threads/:id/runs/wait` when you don't need progress.** Streaming adds parsing complexity for callers. Pick `runs/stream` when partial output is meaningful — long agent reasoning, token-by-token text, intermediate workflow states, [planning](/docs/planning) updates, or [subagent](/docs/subagents) activity.
 - **Retry has limits during streams.** Once a token has been emitted, the response is committed and cannot be retried. See [Retry](/docs/retry) for the streaming caveat.
 
 ## Related

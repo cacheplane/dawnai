@@ -1,8 +1,45 @@
 # Dispatch from a route
 
-You want one route to invoke another — for example, a workflow that delegates a step to a specialized agent. Here's how, using the same `/runs/wait` protocol an external client would use.
+You want one route to invoke another — for example, a coordinator agent that delegates a step to a specialized research subagent. Here's how.
 
-## The code
+## Idiomatic: use `task()` with subagents
+
+The idiomatic approach is to use Dawn's built-in subagent dispatch. Add a `subagents/researcher/` directory next to your coordinator route, and the runtime auto-generates a `task` tool for the coordinator.
+
+```text
+src/app/(public)/research/
+  index.ts              ← coordinator agent
+  subagents/
+    researcher/
+      index.ts          ← specialist subagent
+      tools/
+        webSearch.ts
+```
+
+```ts title="src/app/(public)/research/subagents/researcher/index.ts"
+import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-5-mini",
+  description: "Search the web and return concise findings for a given query.",
+  systemPrompt: "You are a research specialist. Search thoroughly and cite your sources.",
+})
+```
+
+The coordinator calls the subagent by name at runtime:
+
+```ts
+task({
+  subagent: "researcher",
+  input: "Find the latest LLM benchmark results for 2025.",
+})
+```
+
+Dawn wires the child route, runs it, and returns its final output as the tool result — all within the same process. See [Subagents](/docs/subagents) for the full convention and discovery rules.
+
+## Advanced: cross-service dispatch
+
+Use raw HTTP when you need to call an agent in a **different service** (a separately deployed Dawn project or any AP-compatible endpoint). This is not the recommended path for routes within the same project.
 
 ```ts title="src/app/(public)/orchestrator/[job]/index.ts"
 import type { RuntimeContext } from "@dawn-ai/sdk"
@@ -12,22 +49,26 @@ import type state from "./state.js"
 type OrchestratorState = z.infer<typeof state> & { readonly job: string }
 
 export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
-  const baseUrl = process.env.DAWN_RUNTIME_URL ?? "http://127.0.0.1:3001"
+  // The dev server binds an EPHEMERAL port unless `dawn dev --port <n>` is
+  // passed. Set DAWN_RUNTIME_URL explicitly rather than hard-coding a port.
+  const baseUrl = process.env.DAWN_RUNTIME_URL
+  if (!baseUrl) throw new Error("DAWN_RUNTIME_URL is not set")
 
-  const res = await fetch(`${baseUrl}/runs/wait`, {
+  // Create a thread first.
+  const threadRes = await fetch(`${baseUrl}/threads`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  })
+  const { thread_id } = (await threadRes.json()) as { thread_id: string }
+
+  // Run the remote route and wait for the result.
+  const res = await fetch(`${baseUrl}/threads/${thread_id}/runs/wait`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      assistant_id: "/summarize/[doc]#agent",
-      input: { doc: state.job },
-      metadata: {
-        dawn: {
-          mode: "agent",
-          route_id: "/summarize/[doc]",
-          route_path: "src/app/(public)/summarize/[doc]/index.ts",
-        },
-      },
-      on_completion: "delete",
+      route: "/research#agent",
+      input: { query: state.job },
     }),
   })
 
@@ -35,21 +76,22 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
     throw new Error(`dispatch failed: ${res.status}`)
   }
 
-  const summary = (await res.json()) as { readonly summary: string }
-  return { ...state, summary: summary.summary }
+  const result = (await res.json()) as { readonly output: string }
+  return { ...state, summary: result.output }
 }
 ```
 
-## Notes
+### Notes on cross-service dispatch
 
-- **No bespoke API.** Calling `/runs/wait` from inside a route uses the same local runtime envelope an external client sends to `dawn dev`.
-- **Pass through the URL via env.** `DAWN_RUNTIME_URL` lets the same code work locally (`http://127.0.0.1:<port>` from `dawn dev`) and in production (the platform-provided URL).
-- **Forward headers when needed.** If the target route's middleware expects auth headers in local development, propagate them on the inner `fetch` — middleware runs on every local `/runs/wait` and `/runs/stream` call, including this one.
-- **Use `/runs/stream` for long-running children.** Same envelope, SSE response — see [Stream output](/docs/recipes/stream-output).
+- **EPHEMERAL port.** `dawn dev` picks a random port unless you pass `--port <n>`. Never hard-code `127.0.0.1:3001` — pass `DAWN_RUNTIME_URL` via env instead. With a fixed port: `dawn dev --port 3001`.
+- **AP body shape.** The request body is `{ route, input }` where `route` is the `assistant_id` string (e.g. `"/research#agent"`) and `input` is the route's state payload.
+- **Forward headers when needed.** If the target route's middleware expects auth headers, propagate them on the inner `fetch` — middleware runs on every `runs/wait` and `runs/stream` call.
+- **Use `/threads/:id/runs/stream` for long-running children.** Same body, SSE response — see [Stream output](/docs/recipes/stream-output).
 
 ## Related
 
 <RelatedCards items={[
+  { href: "/docs/subagents", title: "Subagents", subtitle: "idiomatic task() dispatch and discovery rules" },
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "/runs/wait envelope and the assistant-id format" },
   { href: "/docs/routes", title: "Routes", subtitle: "route entries and the typed RuntimeContext" },
   { href: "/docs/recipes/stream-output", title: "Stream output", subtitle: "incremental responses from a dispatched route" },

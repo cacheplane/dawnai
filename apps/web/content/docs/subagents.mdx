@@ -26,7 +26,7 @@ The child route should export an `agent()` descriptor. Give it a `description`; 
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   description: "Find relevant policy and product documentation before a support reply.",
   systemPrompt: "You research internal documentation and return concise findings.",
 })
@@ -66,7 +66,7 @@ import { agent } from "@dawn-ai/sdk"
 import researcher from "./shared-researcher/index.js"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   systemPrompt: "You coordinate customer support work.",
   subagents: [researcher],
 })
@@ -110,7 +110,7 @@ Dawn's dispatcher has a depth guard with a maximum depth of 3. In the current Da
 
 ## Streaming
 
-When the parent is run through `/runs/stream`, child activity is forwarded with `subagent.*` events:
+When the parent is run through `runs/stream`, child activity is forwarded with `subagent.*` events:
 
 - `subagent.start`
 - `subagent.tool_call`

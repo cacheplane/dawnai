@@ -1,0 +1,199 @@
+# `dawn.config.ts` Reference
+
+`dawn.config.ts` is a TypeScript file at your app root that exports a single default object conforming to the `DawnConfig` interface. Dawn loads it (via `tsx`) before every CLI command and at runtime startup. If the file is absent, all keys take their documented defaults — no file is required for a working app.
+
+```ts
+// dawn.config.ts
+export default {
+  // ...
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+## Complete annotated example
+
+The snippet below is an extended version of the research starter template's config. It demonstrates every commonly-used key in one place.
+
+```ts
+// dawn.config.ts
+export default {
+  // Where Dawn discovers your routes. Defaults to "src/app".
+  appDir: "src/app",
+
+  // HITL permissions. Default mode is "interactive": any bash command not on
+  // the allow-list pauses the run for human approval via interrupt().
+  // Override at runtime with the DAWN_PERMISSIONS_MODE env variable.
+  permissions: {
+    mode: "interactive",
+    allow: {
+      bash: ["ls", "cat", "head", "wc"],
+    },
+    deny: {
+      bash: ["rm -rf", "sudo", "chmod 777", "curl", "wget"],
+    },
+  },
+
+  // Tool-output offloading. Large results are spilled to
+  // workspace/tool-outputs/ and replaced in-context with a short stub that
+  // the agent reads back on demand via readFile.
+  toolOutput: {
+    offloadThresholdChars: 1500, // default 40000
+    previewLines: 10,            // default 10
+    // maxBytes: 268435456,      // default 256 MB
+    // ttlMs: 10800000,          // default 3 h
+    // gcThrottleMs: 10000,      // default 10 s
+    // noOffloadTools: [],       // merged with built-in exempt tools
+  },
+
+  // Conversation summarization — compress older history once a thread exceeds
+  // maxTokens. Disabled by default.
+  summarization: {
+    enabled: true,
+    maxTokens: 12000,      // default 12000
+    keepRecentTurns: 6,    // default 6
+    // model: "gpt-5-mini",  // defaults to the route's own model
+  },
+
+  // SQLite persistence is on by default — no config needed.
+  // Threads survive a restart. Override only if you need a custom backend.
+  // checkpointer: myCheckpointer,
+  // threadsStore: myThreadsStore,
+
+  // Path to the env file used by `dawn dev` and `dawn verify`.
+  // env: "./.env",  // default
+}
+```
+
+---
+
+## Key reference
+
+### `appDir`
+
+| Type | Default |
+|---|---|
+| `string` | `"src/app"` |
+
+The directory (relative to the app root) where Dawn discovers routes. Dawn walks `appDir` and treats every `index.ts` it finds as a route entry. Most apps never need to set this.
+
+---
+
+### `backends`
+
+Controls the workspace filesystem and exec backends. See [Workspace Filesystem](/docs/workspace) for a full explanation of what backends do and how to swap or layer them.
+
+```ts
+backends?: {
+  filesystem?: FilesystemBackend
+  exec?: ExecBackend
+}
+```
+
+| Sub-key | Type | Default | Description |
+|---|---|---|---|
+| `filesystem` | `FilesystemBackend` | Built-in local FS | Handles `readFile`, `writeFile`, `listDir` workspace operations. |
+| `exec` | `ExecBackend` | Built-in `child_process` exec | Handles `runBash` workspace operations. |
+
+Swap out either backend to sandbox filesystem access, redirect writes, or add custom logging middleware (see `compose()` and `withFilesystemLogging` / `withExecLogging` in `@dawn-ai/workspace`).
+
+---
+
+### `permissions`
+
+Controls the Human-in-the-Loop (HITL) permission gate. The `permissions` key governs which workspace operations require human approval, which are pre-approved, and which are always denied. See the [Permissions](/docs/permissions) reference for the full interrupt/resume lifecycle.
+
+```ts
+permissions?: {
+  mode?: PermissionMode
+  allow?: Record<string, string[]>
+  deny?: Record<string, string[]>
+}
+```
+
+#### `permissions.mode`
+
+| Type | Default | Env override |
+|---|---|---|
+| `"interactive" \| "non-interactive" \| "bypass"` | `"interactive"` | `DAWN_PERMISSIONS_MODE` |
+
+- **`interactive`** — Commands and paths not on the allow-list trigger `interrupt()`, pausing the run for human approval. The default for local development.
+- **`non-interactive`** — Unknown commands are denied automatically without pausing. Use in CI or headless environments.
+- **`bypass`** — All permission checks are skipped. Use only in trusted, sandboxed environments.
+
+`DAWN_PERMISSIONS_MODE` (set to `interactive`, `non-interactive`, or `bypass`) overrides the config-file value at runtime.
+
+#### `permissions.allow` and `permissions.deny`
+
+Pattern maps keyed by tool name (e.g. `bash`, `readFile`). Values are glob-style pattern strings matched against the candidate command or path. `allow` entries are seeded into `.dawn/permissions.json` at startup; `deny` entries are checked first and cannot be overridden by a human approval. Both lists are merged with any patterns the user approves interactively during a session.
+
+---
+
+### `checkpointer`
+
+| Type | Default |
+|---|---|
+| `BaseCheckpointSaver` (LangGraph) | SQLite at `.dawn/checkpoints.sqlite` |
+
+A LangGraph checkpoint saver. Dawn defaults to a SQLite-backed saver that persists graph state across restarts — no configuration is needed for local development. Override to plug in a different storage backend (e.g. Redis, Postgres).
+
+Thread state survives a `dawn dev` restart automatically when the default checkpointer is in use.
+
+---
+
+### `threadsStore`
+
+| Type | Default |
+|---|---|
+| `ThreadsStore` (`@dawn-ai/sqlite-storage`) | SQLite at `.dawn/threads.sqlite` |
+
+Stores Agent Protocol thread metadata (create time, status, latest checkpoint reference). Like `checkpointer`, Dawn defaults to SQLite and no configuration is needed for most apps. The AP thread endpoints (`POST /threads`, `GET /threads/:id/state`, and related) operate on this store — see [Dev Server](/docs/dev-server) for the full endpoint reference. Override to provide a custom store implementation.
+
+---
+
+### `env`
+
+| Type | Default | Scope |
+|---|---|---|
+| `string` | `"./.env"` | `dawn dev`, `dawn verify` only |
+
+Path to the `.env` file loaded for local development commands, relative to the app root. This setting does **not** affect the deploy artifact — environment variables for production are configured separately in `langgraph.json` (see [Deployment](/docs/deployment)).
+
+---
+
+### `toolOutput`
+
+Configures tool-output offloading. When a tool returns a result whose serialized length exceeds `offloadThresholdChars`, Dawn writes the full output to `workspace/tool-outputs/` and injects a compact stub into the agent's context. The agent can retrieve the full content on demand via the `readFile` tool. See [Context Management](/docs/context-management) for the full offloading and summarization picture.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `offloadThresholdChars` | `number` | `40000` | Serialized character length above which a tool output is offloaded. |
+| `previewLines` | `number` | `10` | Number of leading lines kept in the in-context stub (the "preview"). |
+| `maxBytes` | `number` | `268435456` | Maximum total bytes retained under `workspace/tool-outputs/`. Oldest files are removed first when the budget is exceeded. That is 256 MB. |
+| `ttlMs` | `number` | `10800000` | Delete offloaded files older than this many milliseconds. Default is 3 hours (10,800,000 ms). |
+| `gcThrottleMs` | `number` | `10000` | Minimum milliseconds between GC scans. Default is 10 seconds. |
+| `noOffloadTools` | `string[]` | `[]` | Additional tool names whose output is never offloaded. Merged with the built-in exempt set (`readFile`, `listDir`), which are always exempt so the agent can read back offloaded content without triggering re-offload. |
+
+---
+
+### `summarization`
+
+Configures conversation summarization. When enabled, Dawn compresses older message history once the thread exceeds `maxTokens`, keeping the most-recent turns verbatim. See [Context Management](/docs/context-management) for how offloading and summarization interact.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `boolean` | `false` | Enable conversation summarization. Off by default. |
+| `maxTokens` | `number` | `12000` | Token count above which older history is summarized. |
+| `keepRecentTurns` | `number` | `6` | Most-recent turns (each starting at a `HumanMessage`) kept verbatim, never summarized. |
+| `model` | `string` | Route's model | Model used for the summary LLM call. Defaults to the same model the route uses. |
+| `tokenCounter` | `(text: string) => number \| Promise<number>` | Lazy `gpt-tokenizer` (o200k_base) | Custom token counting function. |
+| `summarize` | `(args) => Promise<string>` | Built-in single-LLM-call summarizer | Custom summary generator. Receives `messages`, `model`, `previousSummary`, and `signal`. |
+
+---
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "backends, tools, and the workspace sandbox model" },
+  { href: "/docs/cli", title: "CLI Reference", subtitle: "commands that read dawn.config.ts" },
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "dawn dev flags and the Agent Protocol HTTP endpoints" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "production environment variables and the deploy workflow" },
+]} />

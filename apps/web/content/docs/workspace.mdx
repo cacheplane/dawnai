@@ -1,6 +1,6 @@
 # Workspace Filesystem
 
-A Dawn app's sandboxed file area is the `workspace/` directory at the app root. All file I/O in the runtime flows through one permission gate, whether the request comes from the LLM calling an agent-facing tool or from your own code calling `ctx.fs`.
+A Dawn app's sandboxed file area is the `workspace/` directory at the app root. Creating that directory opts an agent route into four built-in tools: `listDir`, `readFile`, `writeFile`, and `runBash`. No configuration is required — the directory's presence is the activation signal. All file I/O in the runtime flows through one permission gate, whether the request comes from the LLM calling an agent-facing tool or from your own code calling `ctx.fs`.
 
 There are three layers:
 
@@ -89,6 +89,48 @@ withFilesystemLogging({
   `withFilesystemLogging` does this correctly and is safe to use as a reference.
 </Callout>
 
+## The four agent-facing tools
+
+All paths are workspace-relative. Paths outside `workspace/` are permission-gated — see [Permissions](#permissions) below for the full decision table.
+
+### listDir
+
+Lists the leaf names (not full paths) of a directory inside the workspace.
+
+```
+listDir({ path: "corpus" })
+// → ["intro.md", "api-reference.md", "changelog.md"]
+```
+
+`path` defaults to `"."` (the workspace root) when omitted.
+
+### readFile
+
+Reads a UTF-8 file. The default cap is **256 KiB** — files larger than that return an error rather than partial content.
+
+```
+readFile({ path: "corpus/intro.md" })
+```
+
+The 256 KiB cap applies to agent tool calls. Files inside `workspace/tool-outputs/` (where offloaded tool results are stored) are read without a size limit — the agent retrieves them with the same `readFile` call.
+
+### writeFile
+
+Writes a UTF-8 file. **Missing parent directories are created automatically** — calling `writeFile({ path: "reports/2024-q1.md", content: "..." })` works even if `reports/` does not exist yet.
+
+```
+writeFile({ path: "reports/summary.md", content: "# Summary\n\n..." })
+// returns: "wrote 1234 bytes to reports/summary.md"
+```
+
+### runBash
+
+Executes a shell command with the workspace root as the working directory. `runBash` is gated by the [permissions](/docs/permissions) system: a command must match an allow rule or pass an interactive prompt before it runs.
+
+```
+runBash({ command: "node scripts/fetch-source.mjs https://example.com/api" })
+```
+
 ## ctx.fs for tools and routes
 
 `ctx.fs` is a `WorkspaceFs` handle — a narrower, workspace-relative surface over the backend:
@@ -144,6 +186,27 @@ export async function workflow(
 
 `listDir()` with no argument defaults to the workspace root. Both `readFile` and `listDir` run through the permission gate before touching the backend.
 
+## Research scaffold example
+
+The `research` template (`create-dawn-app --template research`) shows how these tools fit together:
+
+```text
+workspace/
+  AGENTS.md          ← agent memory (see /docs/memory)
+  corpus/            ← source documents the agent reads
+  scripts/
+    fetch-source.mjs ← network fetch script called via runBash
+  reports/           ← agent-written output (writeFile creates this)
+```
+
+The agent uses `listDir` and `readFile` to explore and read corpus documents. It calls `runBash` to run `scripts/fetch-source.mjs` when it needs to pull a new source — that command is intentionally left off the `allow` list so the fetch step requires human approval. Reports land in `workspace/reports/` via `writeFile`; the directory is created on the first write.
+
+Agent memory lives at `workspace/AGENTS.md` and is automatically injected into the system prompt. See [Memory](/docs/memory) for details.
+
+## Tool-output offloading
+
+When a tool returns a large result, Dawn can spill it to `workspace/tool-outputs/` and replace the in-context payload with a short stub the agent can read back on demand using `readFile`. This keeps the context window tidy without losing information. See [Context Management](/docs/context-management) for configuration options and how offloading composes with conversation summarization.
+
 ## Permissions
 
 All file I/O — whether initiated by the LLM calling a workspace tool or by your code calling `ctx.fs` — goes through the same permission gate.
@@ -153,7 +216,7 @@ All file I/O — whether initiated by the LLM calling a workspace tool or by you
 | Inside `workspace/` | Always allowed silently |
 | Outside `workspace/` — allow rule matches | Allowed |
 | Outside `workspace/` — deny rule matches | Denied |
-| Outside `workspace/` — no rule (unknown), interactive mode, agent-route tool | Interactive prompt shown; user approves or denies |
+| Outside `workspace/` — no rule (unknown), interactive mode, agent-route tool | Interactive prompt shown; `kind: "path"` interrupt pauses the run for human approval |
 | Outside `workspace/` — no rule (unknown), non-interactive mode | Fail-closed |
 | Outside `workspace/` — no rule (unknown), workflow/graph entry | Fail-closed with guidance |
 | `bypass` mode | Everything allowed (dev only) |
@@ -179,7 +242,9 @@ One permission model regardless of whether the LLM or your code initiates the I/
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/tools", title: "Tools", subtitle: "the full tool authoring contract, including DawnToolContext" },
-  { href: "/docs/middleware", title: "Middleware", subtitle: "route request middleware — authentication and ctx.middleware" },
-  { href: "/docs/agents", title: "Agents", subtitle: "agent routes and the workspace tools the LLM calls" },
+  { href: "/docs/permissions", title: "Permissions", subtitle: "control which paths and runBash commands require human approval" },
+  { href: "/docs/memory", title: "Memory", subtitle: "workspace/AGENTS.md injected into every agent turn" },
+  { href: "/docs/context-management", title: "Context Management", subtitle: "tool-output offloading and conversation summarization" },
+  { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including backends" },
+  { href: "/docs/agents", title: "Agents", subtitle: "agent routes and how tools are wired in" },
 ]} />
