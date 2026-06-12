@@ -3,6 +3,7 @@ import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
 import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
+import { collectUnknownModelIdWarnings } from "../lib/runtime/warn-unknown-model-ids.js"
 
 interface CheckOptions {
   readonly cwd?: string
@@ -33,6 +34,11 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
 
     for (const route of manifest.routes) {
       writeLine(io.stdout, `- ${route.pathname} (${route.kind})`)
+    }
+
+    const warnings = await collectUnknownModelIdWarnings(manifest)
+    for (const warning of warnings) {
+      writeLine(io.stdout, `\n${warning}`)
     }
   } catch (error) {
     throw new CliError(`Validation failed: ${formatErrorMessage(error)}`)
