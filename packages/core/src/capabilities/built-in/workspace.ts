@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs"
 import { join, relative, resolve, sep } from "node:path"
 import type { PermissionsStore } from "@dawn-ai/permissions"
-import { suggestedCommandPattern, suggestedPathPattern } from "@dawn-ai/permissions"
 import type { BackendContext, ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { localExec, localFilesystem } from "@dawn-ai/workspace"
-import { interrupt } from "@langchain/langgraph"
 import { z } from "zod"
 
+import { gateBashOp } from "../permission-gate.js"
 import type { CapabilityMarker, DawnToolDefinition } from "../types.js"
+import { createWorkspaceFs } from "../workspace-fs.js"
 
 const WORKSPACE_DIRNAME = "workspace"
 
@@ -30,108 +30,6 @@ function backendContext(workspaceRoot: string, signal: AbortSignal): BackendCont
   return { signal, workspaceRoot }
 }
 
-type GateResult = { allowed: true } | { allowed: false; reason: string }
-
-async function gatePathOp(
-  permissions: PermissionsStore | undefined,
-  operation: "readFile" | "writeFile" | "listDir",
-  absPath: string,
-  workspaceRoot: string,
-): Promise<GateResult> {
-  // If permissions store is absent, allow (legacy behavior — capability used without permissions context).
-  if (!permissions) return { allowed: true }
-  if (permissions.mode === "bypass") return { allowed: true }
-
-  const insideWorkspace = absPath === workspaceRoot || absPath.startsWith(workspaceRoot + sep)
-
-  // Inside workspace: always allow silently.
-  if (insideWorkspace) return { allowed: true }
-
-  // Outside workspace: consult the store.
-  const decision = permissions.match(operation, absPath)
-  if (decision === "allow") return { allowed: true }
-  if (decision === "deny") {
-    return { allowed: false, reason: `Permission denied by user: ${absPath}` }
-  }
-  // decision === "unknown"
-  if (permissions.mode === "non-interactive") {
-    return { allowed: false, reason: `Permission denied (fail-closed): ${absPath}` }
-  }
-  // Interactive: emit LangGraph interrupt and await user decision.
-  const result = await emitPermissionInterrupt({
-    kind: "path",
-    operation,
-    path: absPath,
-    permissions,
-  })
-  if (result === "deny") {
-    return { allowed: false, reason: `Permission denied by user: ${absPath}` }
-  }
-  return { allowed: true }
-}
-
-async function gateBashOp(
-  permissions: PermissionsStore | undefined,
-  command: string,
-): Promise<GateResult> {
-  if (!permissions) return { allowed: true }
-  if (permissions.mode === "bypass") return { allowed: true }
-
-  const decision = permissions.match("bash", command)
-  if (decision === "allow") return { allowed: true }
-  if (decision === "deny") {
-    return { allowed: false, reason: `Permission denied by user: ${command}` }
-  }
-  if (permissions.mode === "non-interactive") {
-    return { allowed: false, reason: `Permission denied (fail-closed): ${command}` }
-  }
-  const result = await emitPermissionInterrupt({
-    kind: "command",
-    command,
-    permissions,
-  })
-  if (result === "deny") {
-    return { allowed: false, reason: `Permission denied by user: ${command}` }
-  }
-  return { allowed: true }
-}
-
-interface InterruptArgs {
-  kind: "command" | "path"
-  command?: string
-  operation?: "readFile" | "writeFile" | "listDir"
-  path?: string
-  permissions: PermissionsStore
-}
-
-async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "deny"> {
-  const interruptId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const suggestedPattern =
-    args.kind === "command"
-      ? suggestedCommandPattern(args.command ?? "")
-      : suggestedPathPattern(args.path ?? "")
-  const payload = {
-    interruptId,
-    type: "permission-request" as const,
-    kind: args.kind,
-    detail:
-      args.kind === "command"
-        ? { command: args.command ?? "", suggestedPattern }
-        : {
-            operation: args.operation ?? "readFile",
-            path: args.path ?? "",
-            suggestedPattern,
-          },
-  }
-  const decision = interrupt(payload) as "once" | "always" | "deny"
-  if (decision === "deny") return "deny"
-  if (decision === "always") {
-    const tool = args.kind === "command" ? "bash" : (args.operation ?? "readFile")
-    await args.permissions.addAllow(tool, suggestedPattern)
-  }
-  return "allow"
-}
-
 interface OverridableTool extends DawnToolDefinition {
   readonly overridable: true
 }
@@ -142,6 +40,17 @@ function buildWorkspaceTools(
   exec: ExecBackend,
   permissions: PermissionsStore | undefined,
 ): readonly OverridableTool[] {
+  // Agent tools run inside the graph, so the handle may surface the
+  // interactive LangGraph permission interrupt.
+  function handleFor(signal: AbortSignal) {
+    return createWorkspaceFs({
+      workspaceRoot,
+      backend: fs,
+      permissions,
+      signal,
+      interruptCapable: true,
+    })
+  }
   const readFile: OverridableTool = {
     name: "readFile",
     description: "Read a UTF-8 file from the workspace.",
@@ -149,23 +58,18 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { path } = READ_FILE_INPUT.parse(input)
+      const handle = handleFor(ctx.signal)
       const absPath = resolve(workspaceRoot, path)
-      const gate = await gatePathOp(permissions, "readFile", absPath, workspaceRoot)
-      if (!gate.allowed) {
-        throw new Error(gate.reason)
-      }
-      const bctx = backendContext(workspaceRoot, ctx.signal)
       const rel = relative(workspaceRoot, absPath)
       // NOTE: must match SUBDIR ("tool-outputs") in @dawn-ai/langchain offload-store.ts
       const isToolOutput = rel === "tool-outputs" || rel.startsWith(`tool-outputs${sep}`)
-      const data = await fs.readFile(
-        absPath,
-        bctx,
+      const data = await handle.readFile(
+        path,
         isToolOutput ? { maxBytes: Number.POSITIVE_INFINITY } : undefined,
       )
       if (isToolOutput && fs.touchFile) {
         try {
-          await fs.touchFile(absPath, bctx)
+          await fs.touchFile(absPath, backendContext(workspaceRoot, ctx.signal))
         } catch {
           /* touch is best-effort; never fail a read because of it */
         }
@@ -180,12 +84,7 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { path, content } = WRITE_FILE_INPUT.parse(input)
-      const absPath = resolve(workspaceRoot, path)
-      const gate = await gatePathOp(permissions, "writeFile", absPath, workspaceRoot)
-      if (!gate.allowed) {
-        throw new Error(gate.reason)
-      }
-      const result = await fs.writeFile(absPath, content, backendContext(workspaceRoot, ctx.signal))
+      const result = await handleFor(ctx.signal).writeFile(path, content)
       return `wrote ${result.bytesWritten} bytes to ${path}`
     },
   }
@@ -196,13 +95,7 @@ function buildWorkspaceTools(
     overridable: true,
     run: async (input, ctx) => {
       const { path } = LIST_DIR_INPUT.parse(input)
-      const absPath = resolve(workspaceRoot, path)
-      const gate = await gatePathOp(permissions, "listDir", absPath, workspaceRoot)
-      if (!gate.allowed) {
-        throw new Error(gate.reason)
-      }
-      const entries = await fs.listDir(absPath, backendContext(workspaceRoot, ctx.signal))
-      return [...entries]
+      return [...(await handleFor(ctx.signal).listDir(path))]
     },
   }
   const runBash: OverridableTool = {

@@ -31,3 +31,4 @@ export type {
   ToolRegistry,
 } from "./runtime-context.js"
 export type { Prettify } from "./types.js"
+export type { DawnToolContext, WorkspaceFs } from "./workspace-fs.js"
