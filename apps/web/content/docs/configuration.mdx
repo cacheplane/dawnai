@@ -145,7 +145,7 @@ Thread state survives a `dawn dev` restart automatically when the default checkp
 |---|---|
 | `ThreadsStore` (`@dawn-ai/sqlite-storage`) | SQLite at `.dawn/threads.sqlite` |
 
-Stores Agent Protocol thread metadata (create time, status, latest checkpoint reference). Like `checkpointer`, Dawn defaults to SQLite and no configuration is needed for most apps. Override to provide a custom store implementation.
+Stores Agent Protocol thread metadata (create time, status, latest checkpoint reference). Like `checkpointer`, Dawn defaults to SQLite and no configuration is needed for most apps. The AP thread endpoints (`POST /threads`, `GET /threads/:id/state`, and related) operate on this store — see [Dev Server](/docs/dev-server) for the full endpoint reference. Override to provide a custom store implementation.
 
 ---
 
@@ -161,7 +161,7 @@ Path to the `.env` file loaded for local development commands, relative to the a
 
 ### `toolOutput`
 
-Configures tool-output offloading. When a tool returns a result whose serialized length exceeds `offloadThresholdChars`, Dawn writes the full output to `workspace/tool-outputs/` and injects a compact stub into the agent's context. The agent can retrieve the full content on demand via the `readFile` tool. See the Context Management reference (coming soon) for the full offloading and summarization picture.
+Configures tool-output offloading. When a tool returns a result whose serialized length exceeds `offloadThresholdChars`, Dawn writes the full output to `workspace/tool-outputs/` and injects a compact stub into the agent's context. The agent can retrieve the full content on demand via the `readFile` tool. See [Context Management](/docs/context-management) for the full offloading and summarization picture.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -176,7 +176,7 @@ Configures tool-output offloading. When a tool returns a result whose serialized
 
 ### `summarization`
 
-Configures conversation summarization. When enabled, Dawn compresses older message history once the thread exceeds `maxTokens`, keeping the most-recent turns verbatim. See the Context Management reference (coming soon) for how offloading and summarization interact.
+Configures conversation summarization. When enabled, Dawn compresses older message history once the thread exceeds `maxTokens`, keeping the most-recent turns verbatim. See [Context Management](/docs/context-management) for how offloading and summarization interact.
 
 | Key | Type | Default | Description |
 |---|---|---|---|

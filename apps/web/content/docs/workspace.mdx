@@ -63,7 +63,7 @@ Agent memory lives at `workspace/AGENTS.md` and is automatically injected into t
 
 ## Tool-output offloading
 
-When a tool returns a large result, Dawn can spill it to `workspace/tool-outputs/` and replace the in-context payload with a short stub the agent can read back on demand using `readFile`. This keeps the context window tidy without losing information. Tool-output offloading is covered in the context management docs.
+When a tool returns a large result, Dawn can spill it to `workspace/tool-outputs/` and replace the in-context payload with a short stub the agent can read back on demand using `readFile`. This keeps the context window tidy without losing information. See [Context Management](/docs/context-management) for configuration options and how offloading composes with conversation summarization.
 
 ## Custom backends
 

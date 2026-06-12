@@ -147,7 +147,7 @@ Flags:
 - `--port <n>` — HTTP port. Default: dynamically allocated. Pass `--port` for a stable address.
 - `--env-file <path>` — path to a `.env` file (overrides `dawn.config.ts` `env` and the default `./.env`).
 
-If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically enables LangSmith tracing by setting `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to control which project receives the traces.
+If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically enables LangSmith tracing by setting `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to control which project receives the traces. See [Observability](/docs/observability) for the full tracing guide.
 
 See [Dev Server](/docs/dev-server) for the full protocol reference and architecture notes.
 

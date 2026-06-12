@@ -1,0 +1,113 @@
+# Context Management
+
+Long agent runs accumulate messages: tool results, model replies, and subagent exchanges. Left unmanaged, that history can exceed the model's context window and cause errors or truncation. Dawn manages the context window two ways — tool-output offloading (on by default) and conversation summarization (opt-in) — so agents keep working even when a thread grows long.
+
+## Tool-output offloading
+
+When a tool returns a large result, Dawn writes the full output to `workspace/tool-outputs/` and replaces the in-context payload with a short stub. The stub contains a configurable number of preview lines plus a file handle. When the agent needs the full content it calls `readFile` with that handle — the content is retrieved from disk and fed into the next model turn.
+
+Offloading is active as soon as a `workspace/` directory exists at the app root. No additional configuration is required to enable it.
+
+### What the model sees
+
+The in-context stub looks like this:
+
+```text
+[Tool output offloaded — 4 321 lines total]
+Preview (first 10 lines):
+  line 1 …
+  line 2 …
+  …
+Read the full output: readFile({ path: "tool-outputs/abc123.txt" })
+```
+
+The model can proceed with the preview or call `readFile` to fetch more. Because the full content lives on disk, it survives across model turns without consuming context tokens.
+
+### Configuration
+
+```ts title="dawn.config.ts"
+export default {
+  toolOutput: {
+    offloadThresholdChars: 40000, // default
+    previewLines: 10,             // default
+    maxBytes: 268435456,          // default (256 MB)
+    ttlMs: 10800000,              // default (3 h)
+    gcThrottleMs: 10000,          // default (10 s)
+    noOffloadTools: [],           // merged with built-in exempt set
+  },
+}
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `offloadThresholdChars` | `number` | `40000` | Serialized character length above which a result is offloaded. |
+| `previewLines` | `number` | `10` | Number of leading lines kept in the in-context stub. |
+| `maxBytes` | `number` | `268435456` | Maximum total bytes stored under `workspace/tool-outputs/`. Oldest files are evicted first when the budget is exceeded. |
+| `ttlMs` | `number` | `10800000` | Offloaded files older than this many milliseconds are deleted. Default is 3 hours. |
+| `gcThrottleMs` | `number` | `10000` | Minimum milliseconds between GC scans. Default is 10 seconds. |
+| `noOffloadTools` | `string[]` | `[]` | Additional tool names whose output is never offloaded. Merged with the built-in exempt set (`readFile`, `listDir`). |
+
+### Exemptions
+
+`readFile` and `listDir` are always exempt from offloading. Exempting retrieval tools is required so the agent can read back offloaded content without the result being re-offloaded into a second pointer. Use `noOffloadTools` to add more tool names to the exempt set — for example, if you have a tool that already returns a compact summary.
+
+### Garbage collection
+
+Dawn runs a GC pass (at most once per `gcThrottleMs`) that removes files older than `ttlMs` and, if the total size still exceeds `maxBytes`, deletes oldest files first until the budget is satisfied. The GC runs in the background and does not block agent turns.
+
+## Conversation summarization
+
+Summarization compresses older message history once a thread's token count exceeds a threshold. The most recent turns stay verbatim; everything older is folded into a rolling summary that is prepended to the conversation on the next model call.
+
+Summarization is opt-in. Enable it in `dawn.config.ts`:
+
+```ts title="dawn.config.ts"
+export default {
+  summarization: {
+    enabled: true,
+  },
+}
+```
+
+### Configuration
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `boolean` | `false` | Enable conversation summarization. Off by default. |
+| `maxTokens` | `number` | `12000` | Token count above which older history is summarized. |
+| `keepRecentTurns` | `number` | `6` | Most-recent turns (each starting at a `HumanMessage`) kept verbatim, never summarized. |
+| `model` | `string` | Route's model | Model used for the summary LLM call. Defaults to the same model the route uses. |
+| `tokenCounter` | `(text: string) => number \| Promise<number>` | Lazy `gpt-tokenizer` (o200k_base) | Custom token-counting function. |
+| `summarize` | `(args) => Promise<string>` | Built-in single-LLM-call summarizer | Custom summary generator. Receives `messages`, `model`, `previousSummary`, and `signal`. |
+
+The `tokenCounter` hook lets you plug in a different tokenizer. The `summarize` hook replaces the entire summary generation step — useful if you want to use a cheaper model, apply domain-specific compression, or route through a different provider.
+
+## How they compose
+
+Offloading and summarization address different axes of context growth:
+
+- **Tool-output offloading** acts per tool result — it prevents a single large result from blowing up the context.
+- **Conversation summarization** acts per conversation — it compresses history that has accumulated over many turns.
+
+Both can be active at the same time. A typical configuration for a long-running research agent:
+
+```ts title="dawn.config.ts"
+export default {
+  toolOutput: {
+    offloadThresholdChars: 1500, // tight threshold for a research agent
+    previewLines: 10,
+  },
+  summarization: {
+    enabled: true,
+    maxTokens: 12000,
+    keepRecentTurns: 6,
+  },
+}
+```
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/configuration", title: "Configuration", subtitle: "complete dawn.config.ts reference for toolOutput and summarization" },
+  { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "workspace/tool-outputs/ and the readFile tool" },
+]} />

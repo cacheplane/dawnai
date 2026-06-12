@@ -28,7 +28,7 @@ echo '{"messages":[{"role":"user","content":"Hello"}]}' | dawn run '/research' -
 
 ## Protocol endpoints
 
-The dev server exposes eight endpoints organized around a thread lifecycle: create thread → run (wait or stream) → read state → resume. Anything else returns 404.
+The dev server exposes eight endpoints organized around a thread lifecycle: create thread → run (wait or stream) → read state → resume. Anything else returns 404. Thread state persists in SQLite under `.dawn/` and survives server restarts — see [Configuration](/docs/configuration) for the `checkpointer` and `threadsStore` defaults and override options.
 
 ### Thread lifecycle with curl
 
@@ -182,7 +182,7 @@ The `route` format `<routeId>#<kind>` is the same format `dawn build` writes int
 
 ## Tracing
 
-If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically sets `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to name the LangSmith project used for traces. A dedicated observability page with full details is coming later.
+If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically sets `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to name the LangSmith project used for traces. See [Observability](/docs/observability) for a full walkthrough, including how to read traces and the HITL interrupt gotcha.
 
 ## Middleware
 
