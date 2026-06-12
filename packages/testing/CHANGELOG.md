@@ -1,5 +1,20 @@
 # @dawn-ai/testing
 
+## 6.0.0
+
+### Patch Changes
+
+- 777f3eb: Refresh README files for GTM developer growth: SEO keyword pass and a
+  Star/Docs/Discussions CTA band on the root and developer-facing package
+  READMEs, doc links repointed to the live dawnai.org site, and READMEs added
+  for previously-blank published packages (`workspace`, `permissions`,
+  `sqlite-storage`, `testing`, `evals`). Patch bump republishes the packages so
+  the updated READMEs render on npm.
+- Updated dependencies [acb38cd]
+- Updated dependencies [777f3eb]
+  - @dawn-ai/cli@0.8.0
+  - @dawn-ai/core@0.8.0
+
 ## 5.0.0
 
 ### Minor Changes
