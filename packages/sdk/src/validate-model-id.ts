@@ -28,13 +28,27 @@ export function validateModelId(opts: {
   if (!curated) return { ok: true }
   if (curated.includes(opts.model)) return { ok: true }
 
+  // Rank by edit distance, then by longest shared prefix with the input —
+  // "gpt-5" should suggest "gpt-5.5"/"gpt-5.4" ahead of the equally-distant
+  // "gpt-4o" — then alphabetically for determinism.
   const suggestions = [...curated]
-    .map((id) => ({ distance: levenshtein(opts.model, id), id }))
-    .sort((a, b) => a.distance - b.distance || a.id.localeCompare(b.id))
+    .map((id) => ({
+      distance: levenshtein(opts.model, id),
+      id,
+      prefix: commonPrefixLength(opts.model, id),
+    }))
+    .sort((a, b) => a.distance - b.distance || b.prefix - a.prefix || a.id.localeCompare(b.id))
     .slice(0, 3)
     .map((entry) => entry.id)
 
   return { ok: false, provider, suggestions }
+}
+
+function commonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length)
+  let length = 0
+  while (length < max && a[length] === b[length]) length++
+  return length
 }
 
 function levenshtein(a: string, b: string): number {

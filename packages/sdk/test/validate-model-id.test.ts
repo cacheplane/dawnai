@@ -2,15 +2,15 @@ import { describe, expect, it } from "vitest"
 import { validateModelId } from "../src/validate-model-id.js"
 
 describe("validateModelId", () => {
-  it("flags a near-miss on a curated provider with distance-ranked suggestions", () => {
+  it("flags a near-miss on a curated provider with distance-then-prefix-ranked suggestions", () => {
     const result = validateModelId({ model: "gpt-5" })
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.provider).toBe("openai")
-      // levenshtein("gpt-5","gpt-4o")=2, ("gpt-5","gpt-5.4")=2, ("gpt-5","gpt-5.5")=2 — ties broken
-      // alphabetically: "gpt-4o" < "gpt-5.4" < "gpt-5.5", so top 3 are in that order
-      expect(result.suggestions.slice(0, 3)).toEqual(["gpt-4o", "gpt-5.4", "gpt-5.5"])
-      expect(result.suggestions.length).toBeLessThanOrEqual(3)
+      // "gpt-4o", "gpt-5.4", "gpt-5.5" all sit at levenshtein distance 2, but the
+      // 5.x ids share the full "gpt-5" prefix with the input (5 chars vs 4), so the
+      // prefix tie-break ranks them first; alphabetical settles 5.4 vs 5.5.
+      expect(result.suggestions).toEqual(["gpt-5.4", "gpt-5.5", "gpt-4o"])
     }
   })
 
