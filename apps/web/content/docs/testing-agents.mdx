@@ -256,8 +256,10 @@ import { afterAll, it } from "vitest"
 import {
   createAgentHarness,
   expectFinalMessage,
+  expectNoToolErrors,
   expectSystemPrompt,
   expectToolCalled,
+  expectToolSequence,
 } from "@dawn-ai/testing"
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url))
@@ -298,30 +300,46 @@ Do not put your API key in CI. Live tests are local-development tools for valida
 `create-dawn-ai-app` generates `test/research.test.ts` that imports `@dawn-ai/testing` and covers the default `/research#agent` route. Run it immediately after scaffolding:
 
 ```bash
-pnpm test
+npm test
 ```
 
-The generated test uses an inline `script()` for the happy-path scenario:
+The generated file has four tests. The first verifies the corpus search and citation path verbatim:
 
 ```ts title="test/research.test.ts"
 import { fileURLToPath } from "node:url"
 import { afterAll, it } from "vitest"
-import { createAgentHarness, expectFinalMessage, script } from "@dawn-ai/testing"
+import type { FixtureSet } from "@dawn-ai/testing"
+import {
+  createAgentHarness,
+  expectFinalMessage,
+  expectInterrupt,
+  expectOffloaded,
+  expectSubagent,
+  expectToolCalled,
+  script,
+} from "@dawn-ai/testing"
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url))
 const h = await createAgentHarness({ appRoot, route: "/research#agent" })
 afterAll(() => h.close())
 
-it("returns a research summary", async () => {
+it("searches the corpus and writes a cited answer", async () => {
+  h.reset()
   const run = await h.run({
-    input: "Summarize recent work on retrieval-augmented generation",
+    input: "What are common agent architectures?",
     fixtures: script()
-      .user("Summarize recent work on retrieval-augmented generation")
-      .replies("RAG combines retrieval with generation to ground model outputs in documents."),
+      .user("What are common agent architectures?")
+      .callsTool("searchCorpus", { query: "agent architectures" })
+      .callsTool("readDoc", { path: "corpus/agent-architectures.md" })
+      .replies("ReAct and plan-and-execute are common. [corpus/agent-architectures.md]"),
   })
-  expectFinalMessage(run).toContain("RAG")
+  expectToolCalled(run, "searchCorpus")
+  expectToolCalled(run, "readDoc")
+  expectFinalMessage(run).toContain("[corpus/")
 }, 60_000)
 ```
+
+The remaining three tests cover: researcher subagent dispatch (`expectSubagent`); offloading of a large `readDoc` result (`expectOffloaded`); and the HITL permission gate for `runBash` with resume (`expectInterrupt` + `harness.resume`) — the last uses its own dedicated harness so the interrupt is clean.
 
 Grow it by:
 

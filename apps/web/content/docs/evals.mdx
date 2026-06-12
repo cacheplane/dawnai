@@ -212,7 +212,14 @@ Commit the eval and any fixture files alongside your route. In CI, run `dawn eva
 npm run eval
 ```
 
-This wraps `dawn eval` and runs in **offline replay mode by default** — no API key needed. It replays a committed `script()` fixture against the research agent route and gates on a `contains` scorer, so it passes deterministically in CI. To run against the real model locally:
+This wraps `dawn eval` and runs in **offline replay mode by default** — no API key needed. The generated eval (`src/app/research/evals/research-quality.eval.ts`) has two dataset cases and four scorers:
+
+- `toolCalled("searchCorpus", { threshold: 1 })` — asserts the agent called `searchCorpus`.
+- `contains("[corpus/", { threshold: 1 })` — asserts the reply cites a corpus source.
+- A custom `cites-source` scorer: `custom((run) => run.finalMessage.includes("corpus/") ? 1 : 0, { name: "cites-source", threshold: 1 })`.
+- `llmJudge({ criteria: "The report answers the question and cites at least one source document.", model: "gpt-5-mini", threshold: 0.7 })`.
+
+The gate is `gate.all(gate.passRate(1), gate.perScorer())` — every case must pass and every scorer must meet its threshold. To run against the real model locally:
 
 ```bash
 npm run eval -- --live

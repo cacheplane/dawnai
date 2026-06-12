@@ -4,7 +4,7 @@ Creating a `workspace/` directory at the app root opts an agent route into four 
 
 ## The four tools
 
-All paths are workspace-relative and path-jailed: attempts to escape with `..` or an absolute path are rejected before the request reaches the backend.
+All paths are workspace-relative and path-jailed: paths outside `workspace/` trigger the permissions flow rather than being accepted unconditionally. In `interactive` mode (the default), an out-of-workspace path raises a `kind: "path"` interrupt that pauses the run for human approval; in `non-interactive` mode it is denied immediately. An explicit allow rule in `dawn.config.ts` can permit a specific path without interruption, and `bypass` mode disables all checks (dev/test only). The runtime warns when bypass is active.
 
 ### listDir
 

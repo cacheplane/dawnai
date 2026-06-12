@@ -44,6 +44,8 @@ test/
 workspace/
   AGENTS.md                         # house style injected every turn
   corpus/                           # bundled documents the agent searches
+  scripts/
+    fetch-source.mjs                # network fetch script called via runBash
 dawn.config.ts                      # app config: permissions, tool-output offloading
 ```
 
@@ -62,9 +64,10 @@ export default agent({
 1. Plan the sub-questions to investigate and record them in your todos.
 2. For each sub-question, dispatch a specialist with \`task({ subagent: "researcher", input: "<sub-question>" })\`.
 3. You may also \`searchCorpus({ query })\` and \`readDoc({ path })\` directly for quick lookups.
-4. Synthesize the findings into a cited report and save it with \`writeFile({ path: "reports/<slug>.md", content: "<report>" })\`.
+4. When the corpus lacks coverage, you may run \`runBash({ command: "node scripts/fetch-source.mjs <topic>" })\` — the human must approve it.
+5. Synthesize the findings into a cited report and save it with \`writeFile({ path: "reports/<slug>.md", content: "<report>" })\`.
 
-Cite every claim with its source path in square brackets, e.g. [corpus/agent-architectures.md].`,
+Cite every claim with its source path in square brackets, e.g. [corpus/agent-architectures.md]. Keep the final answer concise.`,
 })
 ```
 
@@ -87,7 +90,7 @@ export default {
   appDir: "src/app",
   permissions: {
     allow: { bash: ["ls", "cat", "head", "wc"] },
-    deny: { bash: ["rm -rf", "sudo", "curl", "wget"] },
+    deny: { bash: ["rm -rf", "sudo", "chmod 777", "curl", "wget"] },
   },
   toolOutput: {
     offloadThresholdChars: 1500,
@@ -113,8 +116,8 @@ Generates route and tool types. Output:
 
 ```
 Dawn app is valid: 2 routes discovered.
-  /research (agent)
-  /research/subagents/researcher (agent)
+- /research (agent)
+- /research/subagents/researcher (agent)
 ```
 
 ```bash
@@ -165,7 +168,7 @@ The `#agent` suffix is required — it selects the agent entry on the route. The
 dawn build
 ```
 
-Walks the routes declared via `dawn.config.ts`, runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files. The generated `assistant_id`s match the local ids, such as `/research#agent`.
+Discovers routes from the app directory (`appDir`, defaulting to `src/app`), runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files. The generated `assistant_id`s match the local ids, such as `/research#agent`.
 
 ## Where to go next
 
