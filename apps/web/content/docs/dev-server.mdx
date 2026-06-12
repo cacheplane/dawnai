@@ -1,6 +1,6 @@
 # Dev Server
 
-`dawn dev` starts a local runtime with LangSmith-style `/runs/wait` and `/runs/stream` endpoints. It watches route and tool files, regenerates types when signatures change, and restarts the child route runtime for structural changes.
+`dawn dev` starts a local runtime with Agent Protocol (AP) HTTP endpoints. It watches route and tool files, regenerates types when signatures change, and restarts the child route runtime for structural changes.
 
 ## Starting the server
 
@@ -21,18 +21,44 @@ The bind address is always `127.0.0.1`.
 With the server running in one terminal, you can hit it from another:
 
 ```
-echo '{"tenant":"acme"}' | dawn run '/hello/[tenant]' --url http://127.0.0.1:3001
+echo '{"messages":[{"role":"user","content":"Hello"}]}' | dawn run '/research' --url http://127.0.0.1:3001
 ```
 
-`dawn run` resolves the route id to an `assistant_id` of the form `<routeId>#<kind>` (e.g. `/hello/[tenant]#agent`), POSTs to `/runs/wait`, and prints the result.
+`dawn run` resolves the route id to a `route` key of the form `<routeId>#<kind>` (e.g. `/research#agent`), POSTs to `/threads/<t-cli-uuid>/runs/wait` with `{route, input}`, and prints the result.
 
 ## Protocol endpoints
 
-The dev server handles three endpoints. Anything else returns 404.
+The dev server exposes eight endpoints organized around a thread lifecycle: create thread → run (wait or stream) → read state → resume. Anything else returns 404.
+
+### Thread lifecycle with curl
+
+The following sequence creates a thread, runs a route, and reads the final state:
+
+```bash
+# 1. Create a thread (body is optional)
+curl -X POST http://127.0.0.1:3001/threads \
+  -H 'content-type: application/json' \
+  -d '{}'
+# -> { "thread_id": "...", "created_at": "...", "updated_at": "...", "metadata": {}, "status": "idle" }
+
+THREAD_ID="<thread_id from above>"
+
+# 2. Run the route (blocking)
+curl -X POST http://127.0.0.1:3001/threads/$THREAD_ID/runs/wait \
+  -H 'content-type: application/json' \
+  -d '{
+    "route": "/research#agent",
+    "input": { "messages": [{ "role": "user", "content": "What is LangGraph?" }] }
+  }'
+# -> final state JSON
+
+# 3. Read the latest checkpoint state
+curl http://127.0.0.1:3001/threads/$THREAD_ID/state
+```
 
 <Tabs>
-  <Tab label="/healthz">
-    Readiness check.
+  <Tab label="GET /healthz">
+    Readiness check. Bypasses middleware.
 
     ```
     GET /healthz
@@ -41,42 +67,126 @@ The dev server handles three endpoints. Anything else returns 404.
 
     Returns 200 once the child runtime is up; non-200 means not-ready. `dawn dev` itself uses this endpoint internally to detect readiness.
   </Tab>
+  <Tab label="POST /threads">
+    Create a new thread.
+
+    ```
+    POST /threads
+    Body (optional): { "metadata": { "key": "value" } }
+    -> 200 { "thread_id", "created_at", "updated_at", "metadata", "status" }
+    ```
+
+    Body is optional. If provided, a `metadata` object is stored with the thread.
+  </Tab>
+  <Tab label="GET /threads/:thread_id">
+    Fetch a thread by id.
+
+    ```
+    GET /threads/:thread_id
+    -> 200 { thread object }
+    -> 404 if not found
+    ```
+  </Tab>
+  <Tab label="DELETE /threads/:thread_id">
+    Delete a thread and its checkpoints (best-effort).
+
+    ```
+    DELETE /threads/:thread_id
+    -> 204 No Content
+    ```
+  </Tab>
   <Tab label="/runs/wait">
     Synchronous run — blocks until the route completes, returns the final state as JSON.
 
     ```
-    POST /runs/wait
+    POST /threads/:thread_id/runs/wait
     Body: {
-      "assistant_id": "/hello/[tenant]#agent",
-      "input": { "tenant": "acme" },
-      "metadata": {
-        "dawn": {
-          "mode": "agent",
-          "route_id": "/hello/[tenant]",
-          "route_path": "src/app/(public)/hello/[tenant]/index.ts"
-        }
-      },
-      "on_completion": "delete"
+      "route": "/research#agent",
+      "input": { "messages": [{ "role": "user", "content": "..." }] }
     }
+    -> 200 final state JSON
     ```
 
-    The server validates the full envelope. `metadata.dawn.{mode, route_id, route_path}` must match the values registered for the `assistant_id`, or the server returns 400 with an `expected/received` diff. `on_completion: "delete"` is required.
+    `route` is required and must be in the form `<routeId>#<kind>` (e.g. `/research#agent`). A bare route id without the `#<kind>` suffix returns 400 "Unknown route". The `input` field is optional and defaults to `{}`.
   </Tab>
   <Tab label="/runs/stream">
-    Streaming run — same body shape as `/runs/wait`, returns an SSE stream (`content-type: text/event-stream`) of intermediate events as the route progresses.
+    Streaming run — same body shape as `/runs/wait`, returns an SSE stream (`content-type: text/event-stream`) of events as the route progresses.
 
     ```
-    POST /runs/stream
-    Body: { /* same shape as /runs/wait */ }
+    POST /threads/:thread_id/runs/stream
+    Body: {
+      "route": "/research#agent",
+      "input": { "messages": [{ "role": "user", "content": "..." }] }
+    }
+    -> 200 text/event-stream
     ```
+
+    Each SSE event has an `event:` line (the event type) and a `data:` line (JSON payload):
+
+    ```
+    event: chunk
+    data: "partial text output"
+
+    event: tool_call
+    data: {"name":"search","input":{"query":"..."}}
+
+    event: tool_result
+    data: {"name":"search","output":"..."}
+
+    event: done
+    data: {"output":{...}}
+    ```
+
+    #### SSE event types
+
+    | Event type | Payload shape | Description |
+    |---|---|---|
+    | `chunk` | `"<text>"` | Streamed text fragment from the model |
+    | `tool_call` | `{ name, input }` | Tool invocation about to be executed |
+    | `tool_result` | `{ name, output }` | Result returned by a tool |
+    | `plan_update` | `{ todos: [...] }` | Planning capability progress update |
+    | `interrupt` | `{ interruptId, ... }` | Human-in-the-loop pause; requires a `/resume` call |
+    | `subagent.start` | `{ ... }` | Subagent beginning execution |
+    | `subagent.tool_call` | `{ name, input }` | Tool call inside a subagent |
+    | `subagent.tool_result` | `{ name, output }` | Tool result inside a subagent |
+    | `subagent.message` | `{ ... }` | Message emitted by a subagent |
+    | `subagent.end` | `{ ... }` | Subagent finished |
+    | `done` | `{ output }` | Final event; marks end of stream |
+  </Tab>
+  <Tab label="GET /threads/:thread_id/state">
+    Read the latest checkpoint state for a thread.
+
+    ```
+    GET /threads/:thread_id/state
+    -> 200 { config, created_at, metadata, next, parent_config, values }
+    -> 404 if no checkpoint found
+    ```
+  </Tab>
+  <Tab label="POST /threads/:thread_id/resume">
+    Resolve a parked human-in-the-loop interrupt. The response streams the continuation as SSE (same event types as `/runs/stream`).
+
+    ```
+    POST /threads/:thread_id/resume
+    Body: {
+      "interrupt_id": "<id from the interrupt event>",
+      "decision": "once" | "always" | "deny"
+    }
+    -> 200 text/event-stream (continuation)
+    ```
+
+    Optionally include `"route"` in the body if the server restarted and lost its in-memory route map.
   </Tab>
 </Tabs>
 
-The `assistant_id` format `<routeId>#<kind>` is the same format `dawn build` writes into the `graphs` map of `.dawn/build/langgraph.json`, so the same client request shape works against `dawn dev` and against a deployed runtime.
+The `route` format `<routeId>#<kind>` is the same format `dawn build` writes into the `graphs` map of `.dawn/build/langgraph.json`, so the same client request body works against `dawn dev` and against a deployed runtime.
+
+## Tracing
+
+If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically sets `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to name the LangSmith project used for traces. A dedicated observability page with full details is coming later.
 
 ## Middleware
 
-`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every local `/runs/wait` and `/runs/stream` request handled by `dawn dev`. It can short-circuit a request with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
+`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every local `/threads/:thread_id/runs/wait` and `/threads/:thread_id/runs/stream` request handled by `dawn dev`. It can short-circuit a request with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
 
 `MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Middleware](/docs/middleware) for the full reference.
 
@@ -91,8 +201,8 @@ When you save a file under `src/app/`, the dev server:
   <Step title="Restarts the child runtime when needed">
     Dawn uses a parent-child process architecture. The parent owns the HTTP server and file watcher; the child owns the route graph. On a structural change the child is `stop()`ed (with a forced kill timeout — in-flight requests are given a brief grace window, then force-killed) and a fresh child is started.
   </Step>
-  <Step title="Preserves assistant ids">
-    Assistants keep their stable ids (`<routeId>#<kind>`) across restarts, so any agent or harness holding an `assistant_id` continues to work without reconnection.
+  <Step title="Preserves route ids">
+    Routes keep their stable ids (`<routeId>#<kind>`) across restarts, so any agent or harness holding a `route` key continues to work without reconnection.
   </Step>
 </Steps>
 
