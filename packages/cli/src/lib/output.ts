@@ -7,8 +7,8 @@ export interface CommandIo {
 export class CliError extends Error {
   readonly exitCode: number
 
-  constructor(message: string, exitCode = 1) {
-    super(message)
+  constructor(message: string, exitCode = 1, options?: { readonly cause?: unknown }) {
+    super(message, options)
     this.name = "CliError"
     this.exitCode = exitCode
   }
