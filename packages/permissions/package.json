@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/permissions",
-  "version": "0.1.8",
+  "version": "0.8.0",
   "private": false,
   "type": "module",
   "license": "MIT",
