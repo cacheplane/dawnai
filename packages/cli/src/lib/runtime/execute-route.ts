@@ -359,7 +359,7 @@ async function prepareRouteExecution(options: {
 }): Promise<PreparedRoute | PreparedRouteError> {
   const routeDir = resolve(options.routeFile, "..")
 
-  const normalized = await normalizeRouteModule(options.routeFile)
+  const normalized = await normalizeRouteModule(options.routeFile, options.appRoot)
 
   const discoveredTools = await discoverToolDefinitions({
     appRoot: options.appRoot,

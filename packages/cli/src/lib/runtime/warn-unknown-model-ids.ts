@@ -16,7 +16,7 @@ export async function collectUnknownModelIdWarnings(
     if (route.kind !== "agent") continue
     let normalized: NormalizedRouteModule
     try {
-      normalized = await normalizeRouteModule(route.entryFile)
+      normalized = await normalizeRouteModule(route.entryFile, manifest.appRoot)
     } catch {
       continue // load failures are surfaced by discovery paths, not this advisory pass
     }
