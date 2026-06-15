@@ -16,7 +16,14 @@ import { registerTestCommand } from "./commands/test.js"
 import { registerTypegenCommand } from "./commands/typegen.js"
 import { registerVerifyCommand } from "./commands/verify.js"
 import { registerDevChildCommand } from "./lib/dev/dev-child.js"
+import { diagnose } from "./lib/diagnostics.js"
 import { CliError, type CommandIo, createNodeIo, writeLine } from "./lib/output.js"
+
+export function renderError(error: unknown): string {
+  const diag = diagnose(error)
+  if (diag) return `${diag.summary}\n\n${diag.hint}`
+  return error instanceof Error ? error.message : String(error)
+}
 
 export function createProgram(io: CommandIo): Command {
   const program = new Command()
@@ -67,7 +74,7 @@ export async function run(
       return error.exitCode
     }
 
-    writeLine(io.stderr, error instanceof Error ? error.message : String(error))
+    writeLine(io.stderr, renderError(error))
     return 1
   }
 }

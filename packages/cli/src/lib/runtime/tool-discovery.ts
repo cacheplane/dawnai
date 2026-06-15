@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url"
 
 import type { WorkspaceFs } from "@dawn-ai/sdk"
 
+import { importModule } from "./import-module.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import { isRecord } from "./utils.js"
 
@@ -35,10 +36,12 @@ export async function discoverToolDefinitions(options: {
   await registerTsxLoader()
 
   const sharedTools = await loadToolScope({
+    appRoot: options.appRoot,
     directory: join(options.appRoot, "src", "tools"),
     scope: "shared",
   })
   const routeLocalTools = await loadToolScope({
+    appRoot: options.appRoot,
     directory: join(options.routeDir, "tools"),
     scope: "route-local",
   })
@@ -57,6 +60,7 @@ export async function discoverToolDefinitions(options: {
 }
 
 async function loadToolScope(options: {
+  readonly appRoot: string
   readonly directory: string
   readonly scope: ToolScope
 }): Promise<readonly DiscoveredToolDefinition[]> {
@@ -79,7 +83,7 @@ async function loadToolScope(options: {
   const byName = new Map<string, string>()
 
   for (const filePath of files) {
-    const tool = await loadToolDefinition(filePath, options.scope)
+    const tool = await loadToolDefinition(filePath, options.scope, options.appRoot)
     const existingFile = byName.get(tool.name)
 
     if (existingFile) {
@@ -127,8 +131,13 @@ export function injectGeneratedSchemas(
 async function loadToolDefinition(
   filePath: string,
   scope: ToolScope,
+  appRoot: string,
 ): Promise<DiscoveredToolDefinition> {
-  const toolModule = (await import(`${pathToFileURL(filePath).href}?t=${Date.now()}`)) as {
+  const toolModule = (await importModule(`${pathToFileURL(filePath).href}?t=${Date.now()}`, {
+    kind: "tool",
+    appRoot,
+    sourcePath: filePath,
+  })) as {
     readonly default?: unknown
     readonly description?: unknown
     readonly schema?: unknown

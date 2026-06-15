@@ -3,6 +3,7 @@ import type { NormalizedRouteModule } from "@dawn-ai/core"
 import type { RouteKind } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 
+import { importModule } from "./import-module.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 
 export type { NormalizedRouteModule } from "@dawn-ai/core"
@@ -12,9 +13,16 @@ export async function loadRouteKind(routeFile: string): Promise<RouteKind> {
   return normalized.kind
 }
 
-export async function normalizeRouteModule(routeFile: string): Promise<NormalizedRouteModule> {
+export async function normalizeRouteModule(
+  routeFile: string,
+  appRoot?: string,
+): Promise<NormalizedRouteModule> {
   await registerTsxLoader()
-  const routeModule = (await import(pathToFileURL(routeFile).href)) as {
+  const routeModule = (await importModule(pathToFileURL(routeFile).href, {
+    kind: "route",
+    ...(appRoot ? { appRoot } : {}),
+    sourcePath: routeFile,
+  })) as {
     readonly agent?: unknown
     readonly chain?: unknown
     readonly config?: Record<string, unknown>

@@ -18,6 +18,20 @@ Internally, `dawn check` loads `dawn.config.ts`, resolves the app root, runs `di
 
 Output is a `Dawn app is valid: N routes discovered.` line followed by a per-route `- <pathname> (<kind>)` summary. Exits non-zero on any violation with a detailed message.
 
+### Troubleshooting imports
+
+When a route, tool, or config module fails to load with the opaque ESM error `does not provide an export named X`, Dawn now prints the offending package plus a likely cause and fix instead of the raw `SyntaxError`. Two cases account for almost all of these:
+
+- **An older `@langchain/core` got hoisted.** Run `npm ls @langchain/core` to find the duplicate, then upgrade or dedupe so the installed version satisfies Dawn's peer range (`^1.1.47`).
+- **A CommonJS dependency imported with named bindings.** Under Dawn's ESM resolver a CommonJS package only has a default export, so `import { thing } from "x"` fails. Use a default import and destructure instead:
+
+  ```ts
+  import pkg from "x"
+  const { thing } = pkg
+  ```
+
+  Or import the package's ESM build if it ships one.
+
 ## `dawn verify`
 
 Runs four checks in one call (`app`, `routes`, `typegen`, `deps`) — the canonical pre-deploy integrity gate.
