@@ -38,6 +38,21 @@ describe("diagnose", () => {
     expect(d?.hint).toMatch(/npm ls @langchain\/core/)
   })
 
+  it("includes Dawn's required @langchain/core range in the #3 hint", () => {
+    installPkg("@langchain/core", { name: "@langchain/core", version: "1.1.40", type: "module" })
+    const d = diagnose(esmError("@langchain/core", "tool"), { appRoot })
+    // requiredCoreRange resolves @dawn-ai/langchain from the cli package location,
+    // independent of the temp appRoot. Expect the real floor, e.g. "^1.1.47".
+    expect(d?.hint).toMatch(/satisfying \^?1\.1\.\d+/)
+  })
+
+  it("treats a CommonJS-typed @langchain package as a version issue, not a module-format issue", () => {
+    installPkg("@langchain/core", { name: "@langchain/core", version: "1.1.40", type: "commonjs" })
+    const d = diagnose(esmError("@langchain/core", "tool"), { appRoot })
+    expect(d?.hint).toMatch(/npm ls @langchain\/core/) // #3 hint
+    expect(d?.hint).not.toMatch(/default import and destructure/i) // not the #4 hint
+  })
+
   it("classifies a subpath specifier to its package", () => {
     installPkg("@langchain/core", { name: "@langchain/core", version: "1.1.40", type: "module" })
     const d = diagnose(esmError("@langchain/core/messages", "AIMessage"), { appRoot })
