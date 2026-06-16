@@ -1,5 +1,14 @@
-import { mkdir as mkdirFs, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import {
+  mkdir as mkdirFs,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 import type { BackendContext, FilesystemBackend } from "./types.js"
 
 const DEFAULT_MAX_FILE_BYTES = 256 * 1024
@@ -51,6 +60,22 @@ export function localFilesystem(opts: LocalFilesystemOptions = {}): FilesystemBa
       await mkdirFs(dirname(path), { recursive: true })
       await writeFile(path, content, "utf8")
       return { bytesWritten: Buffer.byteLength(content, "utf8") }
+    },
+    async realPath(path: string, _ctx: BackendContext): Promise<string> {
+      const tail: string[] = []
+      let current = path
+      for (;;) {
+        try {
+          const resolved = await realpath(current)
+          return tail.length === 0 ? resolved : join(resolved, ...tail)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+          const parent = dirname(current)
+          if (parent === current) return path
+          tail.unshift(basename(current))
+          current = parent
+        }
+      }
     },
     async listDir(path: string, _ctx: BackendContext): Promise<readonly string[]> {
       return await readdir(path)
