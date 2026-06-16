@@ -339,7 +339,7 @@ it("searches the corpus and writes a cited answer", async () => {
 }, 60_000)
 ```
 
-The remaining three tests cover: researcher subagent dispatch (`expectSubagent`); offloading of a large `readDoc` result (`expectOffloaded`); and the HITL permission gate for `runBash` with resume (`expectInterrupt` + `harness.resume`) — the last uses its own dedicated harness so the interrupt is clean.
+The remaining three tests cover: researcher subagent dispatch (`expectSubagent`); offloading of a large `readDoc` result (`expectOffloaded`); and the HITL permission gate for `runBash` with resume (`expectInterrupt` + `harness.resume`). All four share one harness and call `h.reset()` per test — `reset()` starts a fresh thread and clears the previous scenario's fixtures, so the tests stay isolated.
 
 Grow it by:
 
