@@ -167,6 +167,17 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     },
     reset() {
       threadId = randomUUID()
+      // Start each scenario from a clean fixture set. Fixtures are registered
+      // additively per run() and findFixture is first-match-in-array-order, so
+      // without this a loosely-matched fixture from a prior scenario (e.g. a raw
+      // FixtureSet with no `userMessage`) would shadow the next run's turn-0
+      // call. Live mode proxies to the real upstream and registers no fixtures.
+      if (!live) {
+        aimock.clearFixtures()
+        if (options.fixtures && options.fixtures.length > 0) {
+          aimock.addFixtures(options.fixtures)
+        }
+      }
     },
     async close() {
       if (closed) return

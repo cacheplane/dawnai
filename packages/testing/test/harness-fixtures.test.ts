@@ -38,6 +38,30 @@ it("supports a second run() with new fixtures on the same persistent aimock (mul
   expect(run2.finalMessage).toContain("Found 0")
 }, 60_000)
 
+it("reset() isolates fixtures across scenarios — a wildcard fixture does not leak", async () => {
+  // Run 1 registers a wildcard turn-0 fixture (no userMessage) — mirrors a raw
+  // FixtureSet like the offload pattern. Before the fix, addFixtures() only
+  // appended and reset() only swapped the threadId, so this fixture stayed
+  // registered and shadowed every later run's turn-0 call (findFixture is
+  // first-match-in-array-order with no specificity preference).
+  h.reset()
+  const run1 = await h.run({
+    input: "alpha",
+    fixtures: [
+      { match: { turnIndex: 0, hasToolResult: false }, response: { content: "RUN_1_WILDCARD" } },
+    ],
+  })
+  expect(run1.finalMessage).toBe("RUN_1_WILDCARD")
+
+  h.reset()
+  const run2 = await h.run({
+    input: "bravo",
+    fixtures: script().user("bravo").replies("RUN_2_OWN"),
+  })
+  // The run-1 wildcard must NOT serve this run; reset() clears it.
+  expect(run2.finalMessage).toBe("RUN_2_OWN")
+}, 60_000)
+
 it("captures the system prompt the model received", async () => {
   h.reset()
   const run = await h.run({

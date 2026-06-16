@@ -7,6 +7,8 @@ export interface AimockHandle {
   readonly baseUrl: string
   /** Append more fixtures onto the live mock without restarting it. */
   addFixtures(fixtures: readonly AimockFixture[]): void
+  /** Remove all registered fixtures (the mock keeps running). */
+  clearFixtures(): void
   /** All requests the mock has received (aimock's journal). */
   getRequests(): ReadonlyArray<{
     body: { messages?: Array<{ role: string; content: unknown }> } | null
@@ -40,6 +42,9 @@ export async function startAimock(opts: {
       if (fixtures.length > 0) {
         mock.addFixturesFromJSON(fixtures as never)
       }
+    },
+    clearFixtures() {
+      mock.clearFixtures()
     },
     getRequests() {
       return mock.getRequests() as ReadonlyArray<{
