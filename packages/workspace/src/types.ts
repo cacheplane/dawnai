@@ -56,6 +56,16 @@ export interface FilesystemBackend {
   /** List entries in a directory. Returns leaf names (not full paths). */
   listDir(path: string, ctx: BackendContext): Promise<readonly string[]>
 
+  /**
+   * Canonicalize an already-resolved absolute path — resolving symlinks and
+   * `..` to a real target location — so the permission gate compares true
+   * locations, not lexical strings. Must tolerate a path that does not exist
+   * yet (e.g. a writeFile target): resolve the deepest existing ancestor and
+   * re-append the non-existent tail. Backends with no symlink concept
+   * (in-memory, remote) may return the path unchanged.
+   */
+  realPath(path: string, ctx: BackendContext): Promise<string>
+
   /** Stat a file. Optional — backends that omit it disable offload GC. */
   statFile?(
     path: string,

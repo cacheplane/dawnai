@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createPermissionsStore } from "@dawn-ai/permissions"
@@ -101,7 +101,10 @@ describe("createWorkspaceFs permission gating", () => {
   const signal = new AbortController().signal
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "dawn-wsfs-gate-"))
+    // Canonicalize the temp root: on macOS tmpdir() is /var -> /private/var, and
+    // the gate now compares canonical paths, so allow-rule patterns (and the
+    // workspace root) must be expressed in canonical form to match.
+    root = realpathSync(mkdtempSync(join(tmpdir(), "dawn-wsfs-gate-")))
     workspaceRoot = join(root, "workspace")
     mkdirSync(workspaceRoot, { recursive: true })
     outsideDir = join(root, "shared")
@@ -203,5 +206,50 @@ describe("createWorkspaceFs permission gating", () => {
     await permissions.load()
     const fs = makeGated(permissions)
     expect(await fs.readFile(outsideFile)).toBe("secret")
+  })
+
+  it("gates a symlink that escapes the workspace (caught, not silently allowed)", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "dawn-escape-"))
+    writeFileSync(join(outside, "secret.txt"), "top secret", "utf8")
+    symlinkSync(join(outside, "secret.txt"), join(workspaceRoot, "escape"))
+    const permissions = createPermissionsStore({
+      appRoot: root,
+      config: undefined,
+      mode: "non-interactive",
+    })
+    await permissions.load()
+    const fs = createWorkspaceFs({
+      workspaceRoot,
+      backend: localFilesystem(),
+      permissions,
+      signal,
+      interruptCapable: false,
+    })
+    await expect(fs.readFile("escape")).rejects.toThrow(/fail-closed/)
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it("still allows a legitimate inside path when the workspace root is reached via a symlink", async () => {
+    const realDir = mkdtempSync(join(tmpdir(), "dawn-realroot-"))
+    const linkParent = mkdtempSync(join(tmpdir(), "dawn-linkroot-"))
+    const linkedRoot = join(linkParent, "ws")
+    symlinkSync(realDir, linkedRoot)
+    writeFileSync(join(realDir, "notes.md"), "hello", "utf8")
+    const permissions = createPermissionsStore({
+      appRoot: root,
+      config: undefined,
+      mode: "non-interactive",
+    })
+    await permissions.load()
+    const fs = createWorkspaceFs({
+      workspaceRoot: linkedRoot,
+      backend: localFilesystem(),
+      permissions,
+      signal,
+      interruptCapable: false,
+    })
+    expect(await fs.readFile("notes.md")).toBe("hello")
+    rmSync(realDir, { recursive: true, force: true })
+    rmSync(linkParent, { recursive: true, force: true })
   })
 })

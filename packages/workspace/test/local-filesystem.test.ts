@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { localFilesystem } from "../src/local-filesystem.js"
@@ -27,6 +27,39 @@ describe("localFilesystem", () => {
     writeFileSync(join(root, "big.txt"), "x".repeat(2048), "utf8")
     const fs = localFilesystem({ maxFileBytes: 1024 })
     await expect(fs.readFile(join(root, "big.txt"), ctx(root))).rejects.toThrow(/too large/i)
+  })
+
+  it("realPath resolves a symlink to its real target", async () => {
+    const fs = localFilesystem()
+    const real = join(root, "real.txt")
+    writeFileSync(real, "x", "utf8")
+    const link = join(root, "link.txt")
+    symlinkSync(real, link)
+    expect(await fs.realPath(link, ctx(root))).toBe(realpathSync(real))
+  })
+
+  it("realPath resolves an escaping symlink to the outside real path", async () => {
+    const fs = localFilesystem()
+    const outside = mkdtempSync(join(tmpdir(), "dawn-outside-"))
+    const target = join(outside, "secret.txt")
+    writeFileSync(target, "s", "utf8")
+    const link = join(root, "escape")
+    symlinkSync(target, link)
+    expect(await fs.realPath(link, ctx(root))).toBe(realpathSync(target))
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it("realPath tolerates a non-existent target (write case): resolves deepest existing ancestor", async () => {
+    const fs = localFilesystem()
+    const want = join(realpathSync(root), "new-dir", "new.md")
+    expect(await fs.realPath(join(root, "new-dir", "new.md"), ctx(root))).toBe(want)
+  })
+
+  it("realPath returns the canonical path for an ordinary existing file", async () => {
+    const fs = localFilesystem()
+    const p = join(root, "plain.txt")
+    writeFileSync(p, "x", "utf8")
+    expect(await fs.realPath(p, ctx(root))).toBe(realpathSync(p))
   })
 
   it("writeFile returns the byte count", async () => {

@@ -27,7 +27,9 @@ export function createWorkspaceFs(opts: CreateWorkspaceFsOptions): WorkspaceFs {
 
   async function gate(operation: PathOperation, path: string): Promise<string> {
     const absPath = resolve(opts.workspaceRoot, path)
-    const result = await gatePathOp(opts.permissions, operation, absPath, opts.workspaceRoot, {
+    const canonicalPath = await opts.backend.realPath(absPath, bctx)
+    const canonicalRoot = await opts.backend.realPath(opts.workspaceRoot, bctx)
+    const result = await gatePathOp(opts.permissions, operation, canonicalPath, canonicalRoot, {
       interruptCapable: opts.interruptCapable,
     })
     if (!result.allowed) throw new Error(result.reason)

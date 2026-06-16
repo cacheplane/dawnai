@@ -38,6 +38,8 @@ export function withFilesystemLogging(opts: LoggingOptions = {}): FilesystemMidd
         emit(opts, "listDir", [path])
         return next.listDir(path, ctx)
       },
+      // Required; internal canonicalization, not a user-facing read/write — passthrough, no log.
+      realPath: (path, ctx) => next.realPath(path, ctx),
     }
 
     // Forward binary read with PATH-ONLY logging — never serialize the bytes.

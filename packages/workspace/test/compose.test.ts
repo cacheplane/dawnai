@@ -6,6 +6,7 @@ const base: FilesystemBackend = {
   async readFile() { return "BASE" },
   async writeFile() { return { bytesWritten: 0 } },
   async listDir() { return [] },
+  async realPath(p) { return p },
 }
 
 describe("compose", () => {
