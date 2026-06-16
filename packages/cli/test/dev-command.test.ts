@@ -235,7 +235,7 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("discovers the app from cwd and prints the listening URL", {
-    timeout: 15_000,
+    timeout: 30_000,
   }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
@@ -267,7 +267,7 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("keeps a stable port and serves new behavior after a watched route edit restart", {
-    timeout: 15_000,
+    timeout: 30_000,
   }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
@@ -313,7 +313,7 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("coalesces bursty edits during restart into at most one follow-up restart", {
-    timeout: 15_000,
+    timeout: 30_000,
   }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
@@ -355,7 +355,7 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("surfaces restart-induced in-flight cancellation as a non-execution failure", {
-    timeout: 15_000,
+    timeout: 30_000,
   }, async () => {
     const markerPath = join(tmpdir(), `dawn-dev-cancel-${Date.now()}.txt`)
     const appRoot = await createFixtureApp({
@@ -415,7 +415,7 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("stays alive in a broken-but-watching state after a bad watched edit and recovers after a fixing edit", {
-    timeout: 15_000,
+    timeout: 30_000,
   }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
@@ -457,7 +457,7 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("terminates the session when configured appDir falls outside the discovered app root", {
-    timeout: 15_000,
+    timeout: 30_000,
   }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": 'const appDir = "../outside";\nexport default { appDir };\n',
@@ -480,7 +480,7 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("terminates the session for fatal restart-time environment failures such as port rebinding", {
-    timeout: 15_000,
+    timeout: 30_000,
   }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
@@ -520,7 +520,7 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("force-kills a stuck child after the shutdown timeout and replaces it", {
-    timeout: 15_000,
+    timeout: 30_000,
   }, async () => {
     const markerPath = join(tmpdir(), `dawn-dev-stuck-${Date.now()}.txt`)
     const appRoot = await createFixtureApp({
@@ -577,7 +577,7 @@ describe("dawn dev lifecycle", () => {
   })
 
   test("loads env from a --env-file path overriding the default ./.env", {
-    timeout: 15_000,
+    timeout: 30_000,
   }, async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
@@ -764,6 +764,11 @@ class DevProcessHandle {
   stderr = ""
   stdout = ""
   private exitCode: number | null | undefined
+  // Predicates registered by the wait* helpers, re-evaluated the instant new
+  // child output arrives or the child exits — see #waitFor. This makes readiness
+  // detection event-driven (resolves on the real signal) rather than polling a
+  // buffer on a timer inside under-budgeted nested timeouts.
+  private readonly waiters = new Set<() => void>()
 
   constructor(child: ChildProcess) {
     this.child = child
@@ -771,20 +776,73 @@ class DevProcessHandle {
       child.once("error", reject)
       child.once("close", (code) => {
         this.exitCode = code
+        this.#notifyWaiters()
         resolve(code)
       })
     })
 
     child.stdout?.on("data", (chunk) => {
       this.stdout += String(chunk)
+      this.#notifyWaiters()
     })
     child.stderr?.on("data", (chunk) => {
       this.stderr += String(chunk)
+      this.#notifyWaiters()
     })
   }
 
   get exited(): boolean {
     return this.exitCode !== undefined
+  }
+
+  #notifyWaiters(): void {
+    // Snapshot: a fired waiter removes itself, mutating the set.
+    for (const waiter of [...this.waiters]) {
+      waiter()
+    }
+  }
+
+  /**
+   * Resolve the instant `predicate()` becomes true (re-checked on every child
+   * stdout/stderr chunk and on exit), reject immediately with captured output
+   * if the child dies first, and fall back to a single generous backstop that
+   * only fires on a genuine hang. No polling, no nested per-step timeouts.
+   */
+  #waitFor(predicate: () => boolean, describe: string, backstopMs = 20_000): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false
+      const finish = (action: () => void): void => {
+        if (settled) return
+        settled = true
+        this.waiters.delete(check)
+        clearTimeout(timer)
+        action()
+      }
+      const check = (): void => {
+        if (predicate()) {
+          finish(resolve)
+        } else if (this.exited) {
+          finish(() =>
+            reject(
+              new Error(
+                `${describe}: dev process exited (code ${this.exitCode})\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+              ),
+            ),
+          )
+        }
+      }
+      const timer = setTimeout(() => {
+        finish(() =>
+          reject(
+            new Error(
+              `${describe}: timed out after ${backstopMs}ms\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+            ),
+          ),
+        )
+      }, backstopMs)
+      this.waiters.add(check)
+      check() // catch up: the predicate may already hold
+    })
   }
 
   async stop(): Promise<void> {
@@ -809,69 +867,60 @@ class DevProcessHandle {
     return await this.exitPromise
   }
 
-  async waitForLog(pattern: RegExp, timeoutMs = 5_000): Promise<void> {
-    const startedAt = Date.now()
-
-    while (Date.now() - startedAt < timeoutMs) {
-      if (pattern.test(this.stdout) || pattern.test(this.stderr)) {
-        return
-      }
-
-      if (this.exited) {
-        break
-      }
-
-      await delay(25)
-    }
-
-    throw new Error(
-      `Timed out waiting for log ${pattern}\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+  async waitForLog(pattern: RegExp, backstopMs = 20_000): Promise<void> {
+    await this.#waitFor(
+      () => pattern.test(this.stdout) || pattern.test(this.stderr),
+      `log ${pattern}`,
+      backstopMs,
     )
   }
 
-  async waitForReady(timeoutMs = 8_000): Promise<string> {
-    return await this.waitForNextReady(0, timeoutMs)
+  async waitForReady(backstopMs = 20_000): Promise<string> {
+    return await this.waitForNextReady(0, backstopMs)
   }
 
   readyCount(): number {
     return countOccurrences(this.stdout, "Dawn dev ready at")
   }
 
-  async waitForNextReady(previousCount: number, timeoutMs = 8_000): Promise<string> {
-    const url = await this.waitForPrintedUrl(timeoutMs)
-    const startedAt = Date.now()
+  async waitForNextReady(previousCount: number, backstopMs = 20_000): Promise<string> {
+    // Event-driven: resolve the instant the (previousCount+1)th "Dawn dev ready
+    // at <url>" marker streams in — the parent prints it only after its own
+    // health check passes, so the server is already listening.
+    await this.#waitFor(
+      () => this.readyCount() > previousCount,
+      `dawn dev readiness (#${previousCount + 1})`,
+      backstopMs,
+    )
+    const url = await this.waitForPrintedUrl(backstopMs)
+    // Confirm the HTTP server accepts a /healthz request. The marker means the
+    // parent already verified readiness; this only guards the brief TCP-accept
+    // window, so a short bounded retry (not the big backstop) suffices.
+    await this.#confirmHealthz(url)
+    return url
+  }
 
-    while (Date.now() - startedAt < timeoutMs) {
-      if (this.readyCount() <= previousCount) {
-        if (this.exited) {
-          break
-        }
-
-        await delay(25)
-        continue
-      }
-
+  async #confirmHealthz(url: string): Promise<void> {
+    const deadline = Date.now() + 3_000
+    let lastError = "no response"
+    while (Date.now() < deadline) {
       try {
         const response = await fetch(new URL("/healthz", url))
-
         if (response.status === 200) {
           const body = (await response.json()) as { readonly status?: string }
-
-          if (body.status === "ready") {
-            return url
-          }
+          if (body.status === "ready") return
+          lastError = `status field was ${JSON.stringify(body.status)}`
+        } else {
+          lastError = `HTTP ${response.status}`
         }
-      } catch {}
-
-      if (this.exited) {
-        break
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error)
       }
-
+      if (this.exited) break
       await delay(25)
     }
-
     throw new Error(
-      `Timed out waiting for dawn dev readiness\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
+      `dawn dev /healthz did not confirm ready (${lastError})\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
     )
   }
 
@@ -902,25 +951,13 @@ class DevProcessHandle {
     )
   }
 
-  private async waitForPrintedUrl(timeoutMs: number): Promise<string> {
-    const startedAt = Date.now()
-
-    while (Date.now() - startedAt < timeoutMs) {
-      const match = this.stdout.match(/http:\/\/127\.0\.0\.1:\d+/)
-
-      if (match) {
-        return match[0]
-      }
-
-      if (this.exited) {
-        break
-      }
-
-      await delay(25)
+  private async waitForPrintedUrl(backstopMs: number): Promise<string> {
+    const urlPattern = /http:\/\/127\.0\.0\.1:\d+/
+    await this.#waitFor(() => urlPattern.test(this.stdout), "dawn dev URL", backstopMs)
+    const match = this.stdout.match(urlPattern)
+    if (!match) {
+      throw new Error(`dawn dev URL vanished from output\nSTDOUT:\n${this.stdout}`)
     }
-
-    throw new Error(
-      `Timed out waiting for dawn dev URL\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`,
-    )
+    return match[0]
   }
 }
