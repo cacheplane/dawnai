@@ -95,6 +95,7 @@ describe("createWorkspaceMarker — load", () => {
       readFile: vi.fn().mockResolvedValue("hi"),
       writeFile: vi.fn(),
       listDir: vi.fn(),
+      realPath: async (p: string) => p,
     }
     const contribution = await createWorkspaceMarker().load(
       routeDir,
@@ -212,6 +213,7 @@ describe("createWorkspaceMarker — load", () => {
       readFile: async () => "data",
       writeFile: async () => ({ bytesWritten: 4 }),
       listDir: async () => [],
+      realPath: async (p: string) => p,
       touchFile: async (p: string) => {
         touched.push(p)
       },
@@ -232,6 +234,7 @@ describe("createWorkspaceMarker — load", () => {
       readFile: async () => "hello",
       writeFile: async () => ({ bytesWritten: 5 }),
       listDir: async () => [],
+      realPath: async (p: string) => p,
       touchFile: async (p: string) => {
         touched.push(p)
       },
@@ -254,6 +257,7 @@ describe("createWorkspaceMarker — load", () => {
       },
       writeFile: async () => ({ bytesWritten: 0 }),
       listDir: async () => [],
+      realPath: async (p: string) => p,
     }
     const contribution = await createWorkspaceMarker().load(
       routeDir,
