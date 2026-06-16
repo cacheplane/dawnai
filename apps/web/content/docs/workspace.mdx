@@ -15,6 +15,7 @@ There are three layers:
 | Method | Required | Notes |
 |---|---|---|
 | `readFile(path, ctx, opts?)` | Yes | UTF-8; `opts.maxBytes` overrides the default cap |
+| `realPath(path, ctx)` | Yes | Canonicalize an absolute path (resolve symlinks) so the permission gate compares real targets; backends without symlinks return the path unchanged |
 | `readBinaryFile(path, ctx, opts?)` | No | Raw bytes (`Uint8Array`); required for `ctx.fs.readBinaryFile` |
 | `writeFile(path, content, ctx)` | Yes | Returns `{ bytesWritten }` |
 | `listDir(path, ctx)` | Yes | Returns leaf names, not full paths |
@@ -231,7 +232,9 @@ Add an allow rule for "readFile" to the permissions config in dawn.config.ts.
 
 One permission model regardless of whether the LLM or your code initiates the I/O.
 
-**Path jail is lexical.** The local backend receives an already-resolved absolute path. A symlink inside `workspace/` that points to a path outside the workspace will be followed by the local filesystem — the jail does not dereference symlinks. Don't place untrusted symlinks inside `workspace/`.
+**Allow rules match canonical paths.** Because the gate compares symlink-resolved paths, an allow rule for a path outside the workspace must reference the **canonical** (symlink-resolved) path. On systems where the workspace or target lives under a symlink — e.g. macOS `/var → /private/var`, or a symlinked home or project directory — a rule written against the non-canonical alias will not match and the operation fails closed.
+
+**Symlinks are resolved before the gate.** `localFilesystem` resolves symlinks before the gate decision (via the required `realPath`), so a symlink inside `workspace/` that points outside is correctly gated — prompted or denied in interactive mode, fail-closed otherwise — rather than silently followed. Custom backends get the same protection by implementing `realPath`, which the type system now requires.
 
 <Callout type="warn" title="Interrupt-resume and side effects">
   When a permission prompt fires from inside tool code — because the tool called `ctx.fs` with a path outside `workspace/` that needs interactive approval — LangGraph pauses execution mid-tool. On resume, LangGraph **re-runs the tool body from the top**. Any side effects that ran before the `ctx.fs` call execute again.
