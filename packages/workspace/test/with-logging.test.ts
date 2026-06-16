@@ -6,6 +6,7 @@ const base: FilesystemBackend = {
   async readFile() { return "ok" },
   async writeFile() { return { bytesWritten: 5 } },
   async listDir() { return ["a"] },
+  async realPath(p) { return p },
 }
 
 const ctx = { signal: new AbortController().signal, workspaceRoot: "/r" }
