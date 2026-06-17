@@ -2,6 +2,14 @@
 
 Dawn ships a single `dawn` binary with nine commands: `build`, `check`, `dev`, `eval`, `routes`, `run`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
 
+## Running the CLI
+
+Always invoke Dawn through the `dawn` **bin** — `pnpm exec dawn <command>` (or `npx dawn …` / a `package.json` script). The bin is what `@dawn-ai/cli` installs into `node_modules/.bin`, and it resolves correctly regardless of where the package physically lives.
+
+<Callout type="warn" title="Monorepos: use the bin, not a direct path">
+  In an npm/pnpm-hoisted monorepo, `@dawn-ai/cli` typically hoists to the workspace root, so a hardcoded path like `node node_modules/@dawn-ai/cli/dist/index.js` from a sub-package will fail to resolve. Run `pnpm exec dawn …` (which finds the bin via the workspace's `node_modules/.bin`) instead of pointing Node at the package's `dist/` directly.
+</Callout>
+
 ## `dawn check`
 
 Validates the app structure and configuration.
