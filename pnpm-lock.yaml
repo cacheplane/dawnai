@@ -428,9 +428,15 @@ importers:
       '@dawn-ai/core':
         specifier: workspace:*
         version: link:../core
+      '@dawn-ai/permissions':
+        specifier: workspace:*
+        version: link:../permissions
       '@dawn-ai/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@dawn-ai/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       '@langchain/langgraph-checkpoint':
         specifier: ^1.0.2
         version: 1.0.2(@langchain/core@1.1.47(openai@6.37.0(ws@8.20.1)(zod@4.4.3))(ws@8.20.1))
