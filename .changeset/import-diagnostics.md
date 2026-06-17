@@ -1,5 +1,5 @@
 ---
-"@dawn-ai/cli": minor
+"@dawn-ai/cli": patch
 "@dawn-ai/sqlite-storage": patch
 ---
 
