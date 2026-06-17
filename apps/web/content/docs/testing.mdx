@@ -197,6 +197,7 @@ The `await using` form auto-disposes the harness (cleaning up the temp dir) at t
 `createMiddlewareHarness(mw)` composes a `FilesystemMiddleware` over a temp `localFilesystem` and exposes the wrapped `backend` plus a `ctx` to call it with. `assertForwardsAll()` catches the most common middleware bug — silently dropping a backend method (required or optional) that the middleware doesn't intercept:
 
 ```ts
+import { join } from "node:path"
 import { createMiddlewareHarness } from "@dawn-ai/testing"
 import type { FilesystemMiddleware } from "@dawn-ai/workspace"
 
@@ -208,8 +209,11 @@ const uppercaseReads: FilesystemMiddleware = (next) => ({
 test("uppercaseReads forwards every other backend method", async () => {
   await using h = await createMiddlewareHarness(uppercaseReads)
 
-  await h.backend.writeFile("a.txt", "hello", h.ctx)
-  expect(await h.backend.readFile("a.txt", h.ctx)).toBe("HELLO")
+  // Backend paths are absolute and inside the harness dir (the gate/jail
+  // normally resolves them for you; here you call the backend directly).
+  const file = join(h.dir, "a.txt")
+  await h.backend.writeFile(file, "hello", h.ctx)
+  expect(await h.backend.readFile(file, h.ctx)).toBe("HELLO")
 
   // Fails loudly if the middleware forgot to spread a method like realPath.
   h.assertForwardsAll()
