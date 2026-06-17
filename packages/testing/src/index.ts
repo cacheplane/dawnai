@@ -32,6 +32,10 @@ export {
   type SubagentRun,
   type Todo,
 } from "./matchers.js"
+export {
+  createMiddlewareHarness,
+  type MiddlewareHarness,
+} from "./middleware-harness.js"
 export { type RecordOptions, record } from "./record.js"
 export {
   type AgentRunResult,
