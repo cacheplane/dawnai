@@ -41,3 +41,8 @@ export {
   type ObservedToolResult,
 } from "./run-result.js"
 export { type SubprocessApp, startSubprocessApp } from "./subprocess.js"
+export {
+  createWorkspaceHarness,
+  type WorkspaceHarness,
+  type WorkspaceHarnessOptions,
+} from "./workspace-harness.js"
