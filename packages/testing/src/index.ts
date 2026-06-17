@@ -42,6 +42,11 @@ export {
 } from "./run-result.js"
 export { type SubprocessApp, startSubprocessApp } from "./subprocess.js"
 export {
+  createToolHarness,
+  type ToolHarness,
+  type ToolHarnessOptions,
+} from "./tool-harness.js"
+export {
   createWorkspaceHarness,
   type WorkspaceHarness,
   type WorkspaceHarnessOptions,
