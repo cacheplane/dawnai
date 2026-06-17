@@ -132,6 +132,90 @@ Use `dawn verify` as the integrity gate (it covers app, routes, typegen, and dep
 
 `dawn verify` runs typegen and check internally, plus the deps check (missing packages, missing env vars) that bare `dawn check && dawn typegen` does not. `dawn test` exits non-zero on any failure and outputs a diff per mismatched scenario.
 
+## Unit-testing tools and middleware
+
+The scenario harness drives a whole route through the runtime. Sometimes you want to test one unit in isolation — a single route tool, a `FilesystemMiddleware`, or `ctx.fs`-using code — without standing up an agent. `@dawn-ai/testing` ships three harnesses for this. They run against the **real** `WorkspaceFs` and filesystem backend over a temp directory, so real permission gating, realpath resolution, and parent-directory creation all apply.
+
+All three are async `create*Harness` factories that return a handle with `.close()` and `[Symbol.asyncDispose]` — the same convention as `createAgentHarness`.
+
+### A tool that uses `ctx.fs`
+
+`createToolHarness(tool)` builds the `DawnToolContext` and gives you a reusable `invoke()`. Assert both the return value and what landed on disk via `h.workspace.read(...)`:
+
+```ts
+import { afterEach } from "vitest"
+import { createToolHarness } from "@dawn-ai/testing"
+import type { DawnToolContext } from "@dawn-ai/sdk"
+
+const saveNote = async (input: { name: string; body: string }, ctx: DawnToolContext) => {
+  const { bytesWritten } = await ctx.fs.writeFile(`notes/${input.name}.md`, input.body)
+  return { bytesWritten }
+}
+
+let h: Awaited<ReturnType<typeof createToolHarness>>
+afterEach(() => h.close())
+
+test("saveNote writes into the workspace", async () => {
+  h = await createToolHarness(saveNote)
+
+  const result = await h.invoke({ name: "todo", body: "ship it" })
+
+  expect(result.bytesWritten).toBe(7)
+  expect(await h.workspace.read("notes/todo.md")).toBe("ship it")
+})
+```
+
+`invoke()` is reusable and shares one workspace across calls, so you can assert cumulative state across several invocations. Pass `{ workspace }` to share a fixture you already own (the harness won't close it), or `{ permissions }` to exercise allow/deny gating instead of the permissive default.
+
+### Testing `ctx.fs` code directly
+
+`createWorkspaceHarness()` is the shared fixture the tool harness builds on. Use it directly when the code under test takes a `WorkspaceFs`. Seed the workspace with `write`, run your code against `h.fs`, and assert with `read`:
+
+```ts
+import { createWorkspaceHarness } from "@dawn-ai/testing"
+import type { WorkspaceFs } from "@dawn-ai/sdk"
+
+const appendLine = async (fs: WorkspaceFs, path: string, line: string) => {
+  const prev = await fs.readFile(path)
+  await fs.writeFile(path, `${prev}\n${line}`)
+}
+
+test("appendLine round-trips through the real WorkspaceFs", async () => {
+  await using h = await createWorkspaceHarness()
+  await h.write("log.txt", "first")
+
+  await appendLine(h.fs, "log.txt", "second")
+
+  expect(await h.read("log.txt")).toBe("first\nsecond")
+})
+```
+
+The `await using` form auto-disposes the harness (cleaning up the temp dir) at the end of the block — the modern alternative to `afterEach(() => h.close())`. It works on all three harnesses.
+
+### A filesystem middleware
+
+`createMiddlewareHarness(mw)` composes a `FilesystemMiddleware` over a temp `localFilesystem` and exposes the wrapped `backend` plus a `ctx` to call it with. `assertForwardsAll()` catches the most common middleware bug — silently dropping a backend method (required or optional) that the middleware doesn't intercept:
+
+```ts
+import { createMiddlewareHarness } from "@dawn-ai/testing"
+import type { FilesystemMiddleware } from "@dawn-ai/workspace"
+
+const uppercaseReads: FilesystemMiddleware = (next) => ({
+  ...next,
+  readFile: async (path, ctx) => (await next.readFile(path, ctx)).toUpperCase(),
+})
+
+test("uppercaseReads forwards every other backend method", async () => {
+  await using h = await createMiddlewareHarness(uppercaseReads)
+
+  await h.backend.writeFile("a.txt", "hello", h.ctx)
+  expect(await h.backend.readFile("a.txt", h.ctx)).toBe("HELLO")
+
+  // Fails loudly if the middleware forgot to spread a method like realPath.
+  h.assertForwardsAll()
+})
+```
+
 ## Related
 
 <RelatedCards items={[

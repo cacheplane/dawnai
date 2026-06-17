@@ -32,6 +32,10 @@ export {
   type SubagentRun,
   type Todo,
 } from "./matchers.js"
+export {
+  createMiddlewareHarness,
+  type MiddlewareHarness,
+} from "./middleware-harness.js"
 export { type RecordOptions, record } from "./record.js"
 export {
   type AgentRunResult,
@@ -41,3 +45,13 @@ export {
   type ObservedToolResult,
 } from "./run-result.js"
 export { type SubprocessApp, startSubprocessApp } from "./subprocess.js"
+export {
+  createToolHarness,
+  type ToolHarness,
+  type ToolHarnessOptions,
+} from "./tool-harness.js"
+export {
+  createWorkspaceHarness,
+  type WorkspaceHarness,
+  type WorkspaceHarnessOptions,
+} from "./workspace-harness.js"
