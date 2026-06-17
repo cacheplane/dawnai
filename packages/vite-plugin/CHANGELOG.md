@@ -1,5 +1,12 @@
 # @dawn-ai/vite-plugin
 
+## 0.8.1
+
+### Patch Changes
+
+- Updated dependencies [89b2a73]
+  - @dawn-ai/core@0.8.1
+
 ## 0.8.0
 
 ### Patch Changes
