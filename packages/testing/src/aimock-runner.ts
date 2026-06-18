@@ -1,7 +1,7 @@
 import { LLMock } from "@copilotkit/aimock"
 import type { AimockFixture } from "./fixture-builder.js"
 
-export interface AimockHandle {
+export interface Aimock {
   readonly port: number
   /** Base URL with the `/v1` suffix the OpenAI SDK expects. */
   readonly baseUrl: string
@@ -13,14 +13,15 @@ export interface AimockHandle {
   getRequests(): ReadonlyArray<{
     body: { messages?: Array<{ role: string; content: unknown }> } | null
   }>
-  stop(): Promise<void>
+  close(): Promise<void>
+  [Symbol.asyncDispose](): Promise<void>
 }
 
-export async function startAimock(opts: {
+export async function createAimock(opts: {
   readonly fixtures: readonly AimockFixture[]
   /** When set, proxy unmatched requests to the given upstream providers. */
   readonly proxy?: { openai: string }
-}): Promise<AimockHandle> {
+}): Promise<Aimock> {
   const mock = new LLMock(
     opts.proxy
       ? {
@@ -35,7 +36,7 @@ export async function startAimock(opts: {
   }
   await mock.start()
   let stopped = false
-  return {
+  const handle: Aimock = {
     port: mock.port,
     baseUrl: `${mock.url}/v1`,
     addFixtures(fixtures: readonly AimockFixture[]) {
@@ -51,10 +52,14 @@ export async function startAimock(opts: {
         body: { messages?: Array<{ role: string; content: unknown }> } | null
       }>
     },
-    async stop() {
+    async close() {
       if (stopped) return
       stopped = true
       await mock.stop()
     },
+    [Symbol.asyncDispose](): Promise<void> {
+      return this.close()
+    },
   }
+  return handle
 }

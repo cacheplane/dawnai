@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url"
 
 export interface SubprocessApp {
   readonly baseUrl: string
-  stop(): Promise<void>
+  close(): Promise<void>
+  [Symbol.asyncDispose](): Promise<void>
 }
 
 /** Bind to port 0, read the OS-assigned port, release it. */
@@ -60,7 +61,7 @@ function resolveDawnCliEntry(): string {
   return resolve(pkgRoot, "node_modules", "@dawn-ai", "cli", "dist", "index.js")
 }
 
-export async function startSubprocessApp(opts: {
+export async function createSubprocessApp(opts: {
   readonly appRoot: string
   readonly env?: Record<string, string>
   readonly port?: number
@@ -94,9 +95,9 @@ export async function startSubprocessApp(opts: {
   }
 
   let stopped = false
-  return {
+  const app: SubprocessApp = {
     baseUrl,
-    async stop() {
+    async close() {
       if (stopped) return
       stopped = true
       if (child.pid) {
@@ -107,5 +108,9 @@ export async function startSubprocessApp(opts: {
         }
       }
     },
+    [Symbol.asyncDispose](): Promise<void> {
+      return this.close()
+    },
   }
+  return app
 }

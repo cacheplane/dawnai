@@ -6,7 +6,7 @@ import {
   streamResolvedRoute,
 } from "@dawn-ai/cli/runtime"
 import { discoverRoutes } from "@dawn-ai/core"
-import { type AimockHandle, startAimock } from "./aimock-runner.js"
+import { type Aimock, createAimock } from "./aimock-runner.js"
 import type { FixtureSet, ScriptBuilder } from "./fixture-builder.js"
 import { type AgentRunResult, collectRunResult } from "./run-result.js"
 
@@ -55,6 +55,7 @@ export interface AgentHarness {
   }): Promise<AgentRunResult>
   reset(): void
   close(): Promise<void>
+  [Symbol.asyncDispose](): Promise<void>
 }
 
 export async function createAgentHarness(options: AgentHarnessOptions): Promise<AgentHarness> {
@@ -77,9 +78,9 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
 
   // Start aimock once — port (and thus the cached agent's baseURL) stays stable for the harness lifetime.
   // In live mode: proxy all requests through to the real OpenAI upstream.
-  const aimock: AimockHandle = live
-    ? await startAimock({ fixtures: [], proxy: { openai: "https://api.openai.com" } })
-    : await startAimock({ fixtures: options.fixtures ?? [] })
+  const aimock: Aimock = live
+    ? await createAimock({ fixtures: [], proxy: { openai: "https://api.openai.com" } })
+    : await createAimock({ fixtures: options.fixtures ?? [] })
   process.env.OPENAI_BASE_URL = aimock.baseUrl
   // Only inject a dummy key in mock mode; in live mode the real key is already set.
   if (!live) {
@@ -100,7 +101,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     }
   } catch (err) {
     // Unified cleanup: stop aimock and restore env vars before re-throwing.
-    await aimock.stop()
+    await aimock.close()
     if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
     else process.env.OPENAI_BASE_URL = prevBaseUrl
     if (prevKey === undefined) delete process.env.OPENAI_API_KEY
@@ -182,7 +183,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     async close() {
       if (closed) return
       closed = true
-      await aimock.stop()
+      await aimock.close()
       // restore env to avoid cross-test bleed
       if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
       else process.env.OPENAI_BASE_URL = prevBaseUrl
@@ -194,6 +195,9 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       // (ESM module cache returns the same export) would reuse an LLM already
       // bound to the previous (stopped) aimock server.
       __resetMaterializedAgentsForTests()
+    },
+    [Symbol.asyncDispose](): Promise<void> {
+      return this.close()
     },
   }
   return harness

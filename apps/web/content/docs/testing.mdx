@@ -136,7 +136,7 @@ Use `dawn verify` as the integrity gate (it covers app, routes, typegen, and dep
 
 The scenario harness drives a whole route through the runtime. Sometimes you want to test one unit in isolation — a single route tool, a `FilesystemMiddleware`, or `ctx.fs`-using code — without standing up an agent. `@dawn-ai/testing` ships three harnesses for this. They run against the **real** `WorkspaceFs` and filesystem backend over a temp directory, so real permission gating, realpath resolution, and parent-directory creation all apply.
 
-All three are async `create*Harness` factories that return a handle with `.close()` and `[Symbol.asyncDispose]` — the same convention as `createAgentHarness`.
+All three are async `create*Harness` factories that return a handle with `.close()` and `[Symbol.asyncDispose]` — the same convention as `createAgentHarness`. Across `@dawn-ai/testing`, every harness/handle is created with a `create*` factory and torn down with `close()` (or `await using`).
 
 ### A tool that uses `ctx.fs`
 
