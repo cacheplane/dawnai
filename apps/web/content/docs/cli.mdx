@@ -146,15 +146,17 @@ Runs every colocated `*.eval.ts` over its dataset and reports per-case scores, t
 dawn eval
 dawn eval src/app/chat
 dawn eval --live
+dawn eval --record
 dawn eval --json
 ```
 
 Flags:
 - `--cwd <path>` — operate on a different app root.
 - `--live` — run against the real model (requires `OPENAI_API_KEY`); never use in CI.
+- `--record` — record real-model responses into sibling fixture files (requires `OPENAI_API_KEY`); never use in CI. Mutually exclusive with `--live`.
 - `--json [file]` — write a JSON report. Defaults to `.dawn/eval-report.json`.
 
-The optional positional `[path]` narrows discovery to a subdirectory. By default each case replays its aimock fixtures (deterministic, CI-safe); `--live` calls the real provider for local prompt tuning. A gated eval that fails exits non-zero, so CI fails when quality drops below the bar; informational evals (no `gate`/`threshold`) never affect the exit code. See [Evals](/docs/evals) for authoring.
+The optional positional `[path]` narrows discovery to a subdirectory. By default each case replays its aimock fixtures (deterministic, CI-safe); `--live` calls the real provider for local prompt tuning; `--record` captures real-model responses as committed fixture files that plain `dawn eval` replays. A gated eval that fails exits non-zero, so CI fails when quality drops below the bar; informational evals (no `gate`/`threshold`) never affect the exit code. See [Evals](/docs/evals) for authoring.
 
 ## `dawn dev`
 

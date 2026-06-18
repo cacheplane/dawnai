@@ -148,14 +148,31 @@ dawn eval --live
 
 Live mode ignores per-case fixtures and calls the actual provider. It requires `OPENAI_API_KEY` and is meant for local runs while you tune prompts — never wire it into CI.
 
+### Recording fixtures with `--record`
+
+`dawn eval --record` runs the suite against the real model (requires `OPENAI_API_KEY`; never run in CI) and writes the responses as committed fixture files you can replay later. For each case that has no inline `script()` fixtures, it writes a sibling file `<evalBasename>.<caseSlug>.fixtures.json` next to the `.eval.ts`. A plain `dawn eval` then auto-loads those files, so the suite stays deterministic in CI without any code changes.
+
+Cases that already have inline `script()` fixtures are left alone — `--record` skips them (logging `skipped record (inline fixtures)`) and never overwrites them. Inline fixtures stay authoritative. The gate still applies during `--record`: scores are aggregated and checked against the threshold after all cases run, but fixture files are written per-case before the verdict, so a gate failure never discards captured responses.
+
+`--record` and `--live` are mutually exclusive.
+
+```bash
+# Record real-model responses into sibling fixture files
+dawn eval --record
+
+# Replay those committed fixtures (no key needed, CI-safe)
+dawn eval
+```
+
 ### Command reference
 
 ```
-dawn eval [path] [--live] [--json [file]] [--cwd <path>]
+dawn eval [path] [--live] [--record] [--json [file]] [--cwd <path>]
 ```
 
 - **`[path]`** — narrow discovery to a subdirectory.
 - **`--live`** — run the real model (requires `OPENAI_API_KEY`); never use in CI.
+- **`--record`** — record real-model responses into sibling fixture files (requires `OPENAI_API_KEY`); never use in CI. Mutually exclusive with `--live`.
 - **`--json [file]`** — also write a JSON report. Defaults to `.dawn/eval-report.json`.
 - **`--cwd <path>`** — operate on a different app root.
 
