@@ -2,7 +2,11 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { rewriteGeneratedAppDependencies, SCAFFOLD_PACKAGES } from "./scaffold-packaging.js"
+import {
+  FAIL_CLOSED_NPMRC,
+  rewriteGeneratedAppDependencies,
+  SCAFFOLD_PACKAGES,
+} from "./scaffold-packaging.js"
 
 async function makePkg(contents: unknown): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "scaffold-pkg-"))
@@ -14,13 +18,21 @@ async function readPkg(dir: string): Promise<any> {
   return JSON.parse(await readFile(join(dir, "package.json"), "utf8"))
 }
 
+// Mirrors createPackagedInstaller: a tarball for every SCAFFOLD_PACKAGES entry
+// plus devkit + create-dawn-ai-app. The fail-loud override loop requires the
+// full set, so an incomplete map would (correctly) throw.
 const tarballs = {
   "@dawn-ai/cli": "/packs/cli.tgz",
-  "@dawn-ai/core": "/packs/core.tgz",
-  "@dawn-ai/permissions": "/packs/permissions.tgz",
-  "@dawn-ai/sqlite-storage": "/packs/sqlite.tgz",
-  "@dawn-ai/workspace": "/packs/workspace.tgz",
   "@dawn-ai/config-typescript": "/packs/config-ts.tgz",
+  "@dawn-ai/core": "/packs/core.tgz",
+  "@dawn-ai/evals": "/packs/evals.tgz",
+  "@dawn-ai/langchain": "/packs/langchain.tgz",
+  "@dawn-ai/langgraph": "/packs/langgraph.tgz",
+  "@dawn-ai/permissions": "/packs/permissions.tgz",
+  "@dawn-ai/sdk": "/packs/sdk.tgz",
+  "@dawn-ai/sqlite-storage": "/packs/sqlite.tgz",
+  "@dawn-ai/testing": "/packs/testing.tgz",
+  "@dawn-ai/workspace": "/packs/workspace.tgz",
   "@dawn-ai/devkit": "/packs/devkit.tgz",
   "create-dawn-ai-app": "/packs/create.tgz",
 }
@@ -80,5 +92,28 @@ describe("rewriteGeneratedAppDependencies", () => {
     expect(pkg.dependencies["@langchain/openai"]).toBeUndefined()
     expect(pkg.dependencies["@dawn-ai/permissions"]).toBe("/packs/permissions.tgz")
     expect(pkg.dependencies["@langchain/langgraph"]).toBe("1.3.0")
+  })
+
+  it("writes the fail-closed .npmrc pinning @dawn-ai to an unreachable registry", async () => {
+    const dir = await makePkg({ dependencies: { "@dawn-ai/cli": "next" } })
+    await rewriteGeneratedAppDependencies({ appRoot: dir, tarballs })
+    const npmrc = await readFile(join(dir, ".npmrc"), "utf8")
+    expect(npmrc).toBe(FAIL_CLOSED_NPMRC)
+    expect(npmrc).toContain("@dawn-ai:registry=http://127.0.0.1:1/")
+  })
+
+  it("throws when a SCAFFOLD package has no packed tarball (silent override skip → loud)", async () => {
+    const { "@dawn-ai/workspace": _omitted, ...incomplete } = tarballs
+    const dir = await makePkg({ dependencies: { "@dawn-ai/cli": "next" } })
+    await expect(
+      rewriteGeneratedAppDependencies({ appRoot: dir, tarballs: incomplete }),
+    ).rejects.toThrow(/@dawn-ai\/workspace/)
+  })
+
+  it("throws when a direct @dawn-ai dependency has no packed tarball", async () => {
+    const dir = await makePkg({ dependencies: { "@dawn-ai/not-packed": "next" } })
+    await expect(rewriteGeneratedAppDependencies({ appRoot: dir, tarballs })).rejects.toThrow(
+      /@dawn-ai\/not-packed/,
+    )
   })
 })
