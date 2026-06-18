@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process"
 import { spawn } from "node:child_process"
-import { writeFile } from "node:fs/promises"
+import { access, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import type { Command } from "commander"
@@ -94,6 +94,14 @@ export async function runDevChildCommand(options: DevChildCommandOptions): Promi
     })
 
     return
+  }
+
+  // Test hook: block the real port bind until a gate file is removed. Lets a
+  // test deterministically occupy the port first and exercise the EADDRINUSE
+  // restart path without racing this child's startup. Never set in production.
+  const bindGatePath = process.env.DAWN_DEV_CHILD_BIND_GATE_PATH
+  if (bindGatePath) {
+    await waitForBindGateRelease(bindGatePath)
   }
 
   let runtimeServer: Awaited<ReturnType<typeof startRuntimeServer>> | null = null
@@ -267,6 +275,20 @@ async function waitForExit(child: ChildProcess): Promise<void> {
 
 async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Poll until the gate file is gone (or the bounded deadline lapses, fail-open so
+// a stray gate file can never wedge a real session). Test-only; see the call site.
+async function waitForBindGateRelease(gatePath: string): Promise<void> {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    try {
+      await access(gatePath)
+    } catch {
+      return
+    }
+    await delay(10)
+  }
 }
 
 function readIntFromEnv(name: string, fallback: number): number {

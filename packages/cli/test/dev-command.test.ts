@@ -489,17 +489,27 @@ describe("dawn dev lifecycle", () => {
     })
     const routePath = join(appRoot, "src/app/support/[tenant]/index.ts")
     const port = await allocatePort()
+    // The gate file lives outside the watched appRoot so creating/removing it
+    // never itself triggers a dev restart.
+    const bindGatePath = join(tmpdir(), `dawn-bind-gate-${process.pid}-${Date.now()}.lock`)
 
     const dev = await startDevProcess({
       cwd: appRoot,
       env: {
-        DAWN_DEV_CHILD_STARTUP_DELAY_MS: "250",
+        DAWN_DEV_CHILD_BIND_GATE_PATH: bindGatePath,
       },
       port,
     })
     devProcesses.push(dev)
 
     await dev.waitForReady()
+
+    // Engage the gate so the *restart* child blocks before it attempts to bind,
+    // then trigger the restart. This makes the rebind failure deterministic:
+    // the child cannot win the port, the test occupies it while the child is
+    // gated, and only then do we release the gate so the real bind hits
+    // EADDRINUSE. No reliance on a timing head-start.
+    await writeFile(bindGatePath, "", "utf8")
     await writeFile(
       routePath,
       `export const graph = async () => ({ version: "restart" });\n`,
@@ -508,14 +518,19 @@ describe("dawn dev lifecycle", () => {
     await dev.waitForLog(/Restarting Dawn dev server/)
     await dev.waitForNotReady()
 
-    const blocker = await bindPort(port)
+    // Retry absorbs the brief window where the old child is exiting but has not
+    // yet released the listening socket; the restart child is gated, so nothing
+    // else competes for the port.
+    const blocker = await bindPortWithRetry(port)
     try {
+      await rm(bindGatePath, { force: true })
       const exitCode = await dev.waitForExit()
       expect(exitCode).toBe(1)
       expect(dev.stderr).toContain("Fatal dev session error")
       expect(dev.stderr).toContain(`Port ${port} is unavailable`)
     } finally {
       await blocker.close()
+      await rm(bindGatePath, { force: true })
     }
   })
 
@@ -693,6 +708,27 @@ async function bindPort(port: number): Promise<{ close: () => Promise<void> }> {
       })
     },
   }
+}
+
+async function bindPortWithRetry(
+  port: number,
+  timeoutMs = 5_000,
+): Promise<{ close: () => Promise<void> }> {
+  const deadline = Date.now() + timeoutMs
+  let lastError: unknown
+
+  while (Date.now() < deadline) {
+    try {
+      return await bindPort(port)
+    } catch (error) {
+      lastError = error
+      await delay(20)
+    }
+  }
+
+  throw new Error(
+    `Failed to bind port ${port} within ${timeoutMs}ms: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+  )
 }
 
 function countOccurrences(input: string, needle: string): number {
