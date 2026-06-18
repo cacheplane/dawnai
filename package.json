@@ -37,7 +37,7 @@
     "@copilotkit/aimock": "^1.28.0",
     "@dawn-ai/sdk": "workspace:*",
     "publint": "0.3.15",
-    "turbo": "2.9.6",
+    "turbo": "2.9.14",
     "typescript": "6.0.2",
     "vitest": "4.1.4"
   }
