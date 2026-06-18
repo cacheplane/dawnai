@@ -151,10 +151,10 @@ Then hand-trim the JSON to keep only the turns that matter, commit it, and repla
 `createAgentHarness` supports three modes via the `mode` option (default: `"in-process"`):
 
 - **`"in-process"`** (default) — runs your tools, prompts, capabilities, and state inside the test process via Dawn's runtime. Fastest; covers the vast majority of assertions. No port binding.
-- **`"http-inject"`** — **not yet implemented**. Passing `mode: "http-inject"` throws at harness construction time. `injectAgentProtocol` is exported as a standalone helper for advanced use, but the harness `mode` option does not support it yet.
-- **`"subprocess"`** — **not yet implemented**. Passing `mode: "subprocess"` throws at harness construction time. `startSubprocessApp` is exported as a standalone helper for advanced use, but the harness `mode` option does not support it yet.
+- **`"http-inject"`** — **not yet implemented**. Passing `mode: "http-inject"` throws at harness construction time. `createAgentProtocolInjector` is exported as a standalone factory for advanced use, but the harness `mode` option does not support it yet.
+- **`"subprocess"`** — **not yet implemented**. Passing `mode: "subprocess"` throws at harness construction time. `createSubprocessApp` is exported as a standalone factory for advanced use, but the harness `mode` option does not support it yet.
 
-For now, write all harness tests with the default `"in-process"` mode. The standalone `injectAgentProtocol` and `startSubprocessApp` exports are available for custom orchestration outside the harness API.
+For now, write all harness tests with the default `"in-process"` mode. The standalone `createAgentProtocolInjector` and `createSubprocessApp` factories are available for custom orchestration outside the harness API.
 
 ## CI setup
 
