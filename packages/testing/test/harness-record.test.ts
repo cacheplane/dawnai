@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterAll, expect, it } from "vitest"
-import { startAimock } from "../src/aimock-runner.js"
+import { createAimock } from "../src/aimock-runner.js"
 import { loadFixtures, writeFixtures } from "../src/fixture-file.js"
 import { createAgentHarness } from "../src/harness.js"
 
@@ -15,7 +15,7 @@ it("records a case against a local upstream, then replays it deterministically",
   // initialises; the fake upstream ignores auth entirely.
   process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-record-placeholder"
 
-  const upstream = await startAimock({
+  const upstream = await createAimock({
     fixtures: [{ match: {}, response: { content: "RECORDED ANSWER" } }],
   })
   const recordH = await createAgentHarness({
@@ -26,7 +26,7 @@ it("records a case against a local upstream, then replays it deterministically",
   })
   afterAll(async () => {
     await recordH.close()
-    await upstream.stop()
+    await upstream.close()
   })
 
   const run = await recordH.run({ input: "what is up" })

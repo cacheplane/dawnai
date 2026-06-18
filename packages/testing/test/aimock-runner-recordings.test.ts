@@ -1,21 +1,21 @@
 import { afterAll, expect, it } from "vitest"
-import { startAimock } from "../src/aimock-runner.js"
+import { createAimock } from "../src/aimock-runner.js"
 
 it("getRecordingsSince windows to a single run (no cross-burst misalignment)", async () => {
-  const upstream = await startAimock({
+  const upstream = await createAimock({
     fixtures: [
       { match: { userMessage: "first" }, response: { content: "ONE" } },
       { match: { userMessage: "second" }, response: { content: "TWO" } },
     ],
   })
-  const recorder = await startAimock({
+  const recorder = await createAimock({
     fixtures: [],
     proxy: { openai: upstream.baseUrl.replace(/\/v1$/, "") },
     record: true,
   })
   afterAll(async () => {
-    await recorder.stop()
-    await upstream.stop()
+    await recorder.close()
+    await upstream.close()
   })
 
   const call = async (content: string) => {
@@ -47,17 +47,17 @@ it("getRecordingsSince windows to a single run (no cross-burst misalignment)", a
 }, 30_000)
 
 it("getRecordings() captures a proxied response from a local upstream", async () => {
-  const upstream = await startAimock({
+  const upstream = await createAimock({
     fixtures: [{ match: {}, response: { content: "from upstream" } }],
   })
-  const recorder = await startAimock({
+  const recorder = await createAimock({
     fixtures: [],
     proxy: { openai: upstream.baseUrl.replace(/\/v1$/, "") },
     record: true,
   })
   afterAll(async () => {
-    await recorder.stop()
-    await upstream.stop()
+    await recorder.close()
+    await upstream.close()
   })
 
   const res = await fetch(`${recorder.baseUrl}/chat/completions`, {

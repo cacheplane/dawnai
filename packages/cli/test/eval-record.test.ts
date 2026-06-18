@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { startAimock } from "../../testing/dist/index.js"
+import { createAimock } from "../../testing/dist/index.js"
 import { runEvalCommand } from "../src/commands/eval.js"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
@@ -140,7 +140,7 @@ describe("dawn eval --record (guards)", () => {
 describe("dawn eval --record (integration)", () => {
   it("records, writes sibling file, then replays PASS", async () => {
     // Start a local aimock as the "real upstream" (record mode will proxy to it).
-    const upstream = await startAimock({
+    const upstream = await createAimock({
       fixtures: [
         {
           match: {},
@@ -184,7 +184,7 @@ describe("dawn eval --record (integration)", () => {
       await runEvalCommand(undefined, { cwd: root }, io2)
       expect(lines2.join("\n")).toContain("PASS")
     } finally {
-      await upstream.stop()
+      await upstream.close()
     }
   }, 120_000)
 })
