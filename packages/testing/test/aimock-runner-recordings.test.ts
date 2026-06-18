@@ -28,7 +28,8 @@ it("getRecordingsSince windows to a single run (no cross-burst misalignment)", a
   }
 
   // Burst 1
-  const j0 = 0, f0 = recorder.getFixtureCount()
+  const j0 = 0,
+    f0 = recorder.getFixtureCount()
   await call("first")
   const burst1 = recorder.getRecordingsSince(j0, f0)
   expect(burst1).toHaveLength(1)

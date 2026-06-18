@@ -1,11 +1,11 @@
-import { fileURLToPath } from "node:url"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterAll, expect, it } from "vitest"
 import { startAimock } from "../src/aimock-runner.js"
-import { createAgentHarness } from "../src/harness.js"
 import { loadFixtures, writeFixtures } from "../src/fixture-file.js"
+import { createAgentHarness } from "../src/harness.js"
 
 const appRoot = fileURLToPath(new URL("./fixtures/probe-app", import.meta.url))
 
@@ -40,7 +40,11 @@ it("records a case against a local upstream, then replays it deterministically",
   const file = join(dir, "smoke.case.fixtures.json")
   writeFixtures(file, fixtures)
 
-  const replayH = await createAgentHarness({ appRoot, route: "/chat#agent", fixtures: loadFixtures(file) })
+  const replayH = await createAgentHarness({
+    appRoot,
+    route: "/chat#agent",
+    fixtures: loadFixtures(file),
+  })
   try {
     const replay = await replayH.run({ input: "what is up" })
     expect(replay.finalMessage).toContain("RECORDED ANSWER")
