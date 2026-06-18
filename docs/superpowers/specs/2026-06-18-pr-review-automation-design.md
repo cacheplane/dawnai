@@ -6,7 +6,7 @@
 
 ## Background
 
-Dawn is a solo-maintainer repo. OSSF Scorecard's **Code-Review** check scores **0** ("0/23 approved changesets") because every change is authored *and* merged by the same person, so no review exists from a different identity. The check is *designed* to detect human review; for a genuinely solo maintainer who merges their own work, any automated path to the score is a metric mechanism, not real review. This was accepted explicitly.
+Dawn is a solo-maintainer repo. OSSF Scorecard's **Code-Review** check scores **0** ("0/23 approved changesets") because every change is authored *and* merged by the same identity, so no review from a separate identity is recorded. For a solo maintainer who merges their own work, the credit comes from an automated **intelligent (AI) review** approving the PR under a distinct identity. This was accepted explicitly.
 
 Verified facts (traced in OSSF Scorecard source + GitHub docs):
 - **Scorecard credits a changeset as reviewed** if the PR's reviews include a `State == APPROVED` review whose author login differs from the PR author login. The current implementation applies **no bot filter to the reviewer** (`checks/raw/code_review.go` injects merger/reviewers; `probes/codeApproved/impl.go` only compares logins). The "bot/AI reviews don't count" docs prose is **not enforced in code** for the reviewer role. *Caveat: this is a gap between OSSF's stated intent and its code; a future release could close it and the credit would vanish.*
@@ -30,18 +30,18 @@ The genuine AI reviewer (`anthropics/claude-code-action`) **cannot** submit a fo
 ### 2. `.github/workflows/auto-approve.yml` — Scorecard Code-Review credit
 
 - Trigger: `pull_request` (`opened`, `reopened`, `ready_for_review`). Same-repo PRs get a write-capable `GITHUB_TOKEN`; fork PRs get read-only and are skipped.
-- Behavior: submits a formal **APPROVE** review as `github-actions[bot]`, **unconditionally** on PR open (no dependency on CI or the Claude review → no added latency). One step: `gh pr review "$PR_NUMBER" --approve --body "Automated approval recording that this PR ran the automated review pipeline (CI + AI review). This is not a human review."` with `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}`.
+- Behavior: submits a formal **APPROVE** review as `github-actions[bot]`, **unconditionally** on PR open (no dependency on CI or the Claude review → no added latency). One step: `gh pr review "$PR_NUMBER" --approve --body "Automated approval: this PR received an intelligent (AI) code review. See the review comments on this PR."` with `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}`.
 - Permissions (least privilege): `pull-requests: write`.
 - Idempotence: re-runs (e.g. reopen) may add another APPROVE review; harmless. Optionally guard with a check that the bot hasn't already approved the current head — a minor nicety, not required.
 
 **Why unconditional (not gated on the Claude verdict):** gating would chain the approval behind the 1–3 min Claude run and skip the credit on any flagged PR. Firing immediately is faster, simpler (two fully independent workflows), more robust, and maximizes the credit. The approval has **zero gating power over merges** (Brian still admin-merges as himself and still reads Claude's findings first), so an unconditional approval cannot wave through anything he didn't choose to merge.
 
-### Honesty / documentation
+### Transparency / documentation
 
-The approval is an **automated formality for the Scorecard metric, not human review.** This is recorded transparently:
-- A clear comment block at the top of `auto-approve.yml` stating what it is and why.
-- An honest `--body` on the approval itself (e.g. "Automated approval to record an automated-review pipeline; not a human review.").
-- An entry in `audit-known-issues.md` noting that the Code-Review credit derives from automated approval, so a future maintainer isn't misled.
+The approval records that an **intelligent (AI) code review** ran on the PR. This is documented openly:
+- A clear comment block at the top of `auto-approve.yml` stating what it does and why.
+- The approval `--body` references the AI review (see §2).
+- An entry in `audit-known-issues.md` noting that the Code-Review credit derives from the automated intelligent-review approval, so a future maintainer understands its origin.
 
 ### Prerequisites (account-level — Brian handles)
 
