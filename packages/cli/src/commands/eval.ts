@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { siblingFixturePath } from "../lib/runtime/eval-fixture-path.js"
 import { type Command, CommanderError } from "commander"
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
 import { EvalLoadError, type LoadedEval, loadEvals } from "../lib/runtime/load-evals.js"
@@ -37,6 +39,7 @@ interface TestingModule {
     route: string
     live?: boolean
   }): Promise<AgentHarnessShape>
+  loadFixtures(path: string): unknown
 }
 
 interface EvalCaseShape {
@@ -106,7 +109,7 @@ export async function runEvalCommand(
   if (evals.length === 0) throw new CliError("No *.eval.ts files found", 1)
 
   const appRoot = evals[0]!.appRoot
-  const { createAgentHarness } = await importFromApp<TestingModule>(appRoot, "@dawn-ai/testing")
+  const { createAgentHarness, loadFixtures } = await importFromApp<TestingModule>(appRoot, "@dawn-ai/testing")
   const { runEval } = await importFromApp<EvalsModule>(appRoot, "@dawn-ai/evals")
 
   const reports = []
@@ -119,22 +122,33 @@ export async function runEvalCommand(
       ...(options.live ? { live: true } : {}),
     })
     try {
+      let caseIndex = -1
       const report = await runEval(loaded.definition, {
         baseDir: loaded.baseDir,
         runCase: async (testCase) => {
+          caseIndex += 1
           harness.reset()
-          if (!options.live && !testCase.fixtures) {
-            throw new CliError(
-              `Eval "${loaded.definition.name}" case "${testCase.name ?? "?"}" has no fixtures — add script()/fixtures or run with --live`,
-              2,
-            )
-          }
           const input =
             typeof testCase.input === "string" ? testCase.input : JSON.stringify(testCase.input)
-          return harness.run({
-            input,
-            ...(!options.live && testCase.fixtures ? { fixtures: testCase.fixtures } : {}),
-          })
+
+          if (!options.live) {
+            // Replay: inline fixtures win; otherwise auto-load the recorded sibling file.
+            let fixtures: unknown = testCase.fixtures
+            if (!fixtures) {
+              const sibling = siblingFixturePath(loaded.evalFile, loaded.baseDir, testCase.name, caseIndex)
+              if (existsSync(sibling)) fixtures = loadFixtures(sibling)
+            }
+            if (!fixtures) {
+              throw new CliError(
+                `Eval "${loaded.definition.name}" case "${testCase.name ?? "?"}" has no fixtures — add script()/fixtures, record with --record, or run with --live`,
+                2,
+              )
+            }
+            return harness.run({ input, fixtures })
+          }
+
+          // Live: real model, no fixtures.
+          return harness.run({ input })
         },
       })
       reports.push(report)
