@@ -20,6 +20,27 @@ export const SCAFFOLD_PACKAGES: readonly string[] = [
   "@dawn-ai/workspace",
 ]
 
+/**
+ * `.npmrc` written into every externally-packaged generated app. A generated
+ * app under test must resolve every `@dawn-ai/*` package from the locally
+ * packed tarballs (direct deps + pnpm overrides), NEVER the public registry.
+ *
+ * Pinning the scope to an unreachable registry enforces that invariant: any
+ * edge the local wiring fails to cover (a missing tarball, or a transitive dep
+ * pnpm declines to apply an override to) fails loudly with an `@dawn-ai`
+ * meta-fetch error on EVERY run, instead of silently fetching whatever happens
+ * to be published. That silent registry fallback is exactly what hid the
+ * missing `@dawn-ai/workspace` direct dep until it broke a release (see the
+ * release-harness postmortem). Non-`@dawn-ai` deps still use the real registry.
+ */
+export const FAIL_CLOSED_NPMRC = [
+  "# Test harness: @dawn-ai/* must resolve from local tarballs only. Pinning the",
+  "# scope to an unreachable registry makes any missing local wiring fail loudly",
+  "# instead of silently falling back to the public registry.",
+  "@dawn-ai:registry=http://127.0.0.1:1/",
+  "",
+].join("\n")
+
 export interface RewriteGeneratedAppDepsOptions {
   readonly appRoot: string
   readonly tarballs: Readonly<Record<string, string>>
@@ -46,11 +67,20 @@ export async function rewriteGeneratedAppDependencies(
     if (pkg.devDependencies) delete pkg.devDependencies[key]
   }
 
+  // Fail loud, not silent: a `@dawn-ai/*` dependency with no packed tarball is a
+  // harness wiring bug. Leaving it as a registry version spec is what let the
+  // gap reach a release; throw here so it surfaces on the introducing change.
   const swap = (deps: Record<string, string> | undefined): void => {
     if (!deps) return
     for (const name of Object.keys(deps)) {
       const tarball = options.tarballs[name]
-      if (tarball) deps[name] = tarball
+      if (tarball) {
+        deps[name] = tarball
+      } else if (name.startsWith("@dawn-ai/")) {
+        throw new Error(
+          `No packed tarball provided for @dawn-ai dependency "${name}". Every @dawn-ai/* dependency of a generated app must be pinned to a local tarball (add it to the createPackagedInstaller package set).`,
+        )
+      }
     }
   }
   swap(pkg.dependencies)
@@ -63,9 +93,16 @@ export async function rewriteGeneratedAppDependencies(
   const overrides: Record<string, string> = { ...(pkg.pnpm?.overrides ?? {}) }
   for (const name of SCAFFOLD_PACKAGES) {
     const tarball = options.tarballs[name]
-    if (tarball) overrides[name] = tarball
+    if (!tarball) {
+      throw new Error(
+        `No packed tarball for scaffold package "${name}". createPackagedInstaller must pack every SCAFFOLD_PACKAGES entry so its override pins to a local tarball.`,
+      )
+    }
+    overrides[name] = tarball
   }
   pkg.pnpm = { ...(pkg.pnpm ?? {}), overrides }
 
   await writeFile(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`, "utf8")
+  // Enforce local-only @dawn-ai resolution (see FAIL_CLOSED_NPMRC).
+  await writeFile(join(options.appRoot, ".npmrc"), FAIL_CLOSED_NPMRC, "utf8")
 }
