@@ -1,4 +1,4 @@
-export { type AimockHandle, startAimock } from "./aimock-runner.js"
+export { type Aimock, createAimock } from "./aimock-runner.js"
 export {
   type AimockFixture,
   type AimockResponse,
@@ -11,8 +11,8 @@ export { loadFixtures, writeFixtures } from "./fixture-file.js"
 export { type AgentHarness, type AgentHarnessOptions, createAgentHarness } from "./harness.js"
 export {
   type AgentProtocolInjector,
+  createAgentProtocolInjector,
   type InjectResult,
-  injectAgentProtocol,
 } from "./http-inject.js"
 export {
   expectFinalMessage,
@@ -44,7 +44,7 @@ export {
   type ObservedToolCall,
   type ObservedToolResult,
 } from "./run-result.js"
-export { type SubprocessApp, startSubprocessApp } from "./subprocess.js"
+export { createSubprocessApp, type SubprocessApp } from "./subprocess.js"
 export {
   createToolHarness,
   type ToolHarness,
