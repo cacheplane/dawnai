@@ -3,9 +3,9 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { siblingFixturePath } from "../lib/runtime/eval-fixture-path.js"
 import { type Command, CommanderError } from "commander"
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { siblingFixturePath } from "../lib/runtime/eval-fixture-path.js"
 import { EvalLoadError, type LoadedEval, loadEvals } from "../lib/runtime/load-evals.js"
 
 interface EvalOptions {
@@ -90,7 +90,10 @@ export function registerEvalCommand(program: Command, io: CommandIo): void {
     .description("Run Dawn agent evals over their datasets")
     .option("--cwd <path>", "Path to the Dawn app root or a child directory within it")
     .option("--live", "Run against the real model (requires OPENAI_API_KEY); never use in CI")
-    .option("--record", "Record fixtures from the real model into sibling files (requires OPENAI_API_KEY); never use in CI")
+    .option(
+      "--record",
+      "Record fixtures from the real model into sibling files (requires OPENAI_API_KEY); never use in CI",
+    )
     .option("--json [file]", "Write a JSON report (default .dawn/eval-report.json)")
     .action(async (path: string | undefined, options: EvalOptions) => {
       await runEvalCommand(path, options, io)
@@ -118,11 +121,17 @@ export async function runEvalCommand(
     throw new CliError("Choose one of --record or --live, not both", 2)
   }
   if (options.record && !process.env.OPENAI_API_KEY) {
-    throw new CliError("dawn eval --record requires OPENAI_API_KEY (records against the real model)", 2)
+    throw new CliError(
+      "dawn eval --record requires OPENAI_API_KEY (records against the real model)",
+      2,
+    )
   }
 
   const appRoot = evals[0]!.appRoot
-  const { createAgentHarness, loadFixtures, writeFixtures } = await importFromApp<TestingModule>(appRoot, "@dawn-ai/testing")
+  const { createAgentHarness, loadFixtures, writeFixtures } = await importFromApp<TestingModule>(
+    appRoot,
+    "@dawn-ai/testing",
+  )
   const { runEval } = await importFromApp<EvalsModule>(appRoot, "@dawn-ai/evals")
 
   const reports = []
@@ -152,7 +161,12 @@ export async function runEvalCommand(
             // Replay: inline fixtures win; otherwise auto-load the recorded sibling file.
             let fixtures: unknown = testCase.fixtures
             if (!fixtures) {
-              const sibling = siblingFixturePath(loaded.evalFile, loaded.baseDir, testCase.name, caseIndex)
+              const sibling = siblingFixturePath(
+                loaded.evalFile,
+                loaded.baseDir,
+                testCase.name,
+                caseIndex,
+              )
               if (existsSync(sibling)) fixtures = loadFixtures(sibling)
             }
             if (!fixtures) {
@@ -176,11 +190,19 @@ export async function runEvalCommand(
               writeLine(io.stdout, `· ${label}: recorded 0 calls — skipped write`)
               return result
             }
-            const sibling = siblingFixturePath(loaded.evalFile, loaded.baseDir, testCase.name, caseIndex)
+            const sibling = siblingFixturePath(
+              loaded.evalFile,
+              loaded.baseDir,
+              testCase.name,
+              caseIndex,
+            )
             try {
               writeFixtures(sibling, recorded)
             } catch (err) {
-              throw new CliError(`Failed to write fixtures ${sibling}: ${formatErrorMessage(err)}`, 2)
+              throw new CliError(
+                `Failed to write fixtures ${sibling}: ${formatErrorMessage(err)}`,
+                2,
+              )
             }
             writeLine(io.stdout, `· recorded ${recorded.length} fixtures → ${sibling}`)
             return result

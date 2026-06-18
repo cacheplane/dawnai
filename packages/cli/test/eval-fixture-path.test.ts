@@ -14,7 +14,12 @@ describe("caseSlug", () => {
 
 describe("siblingFixturePath", () => {
   it("joins baseDir with <evalBasename>.<slug>.fixtures.json", () => {
-    const p = siblingFixturePath("/app/src/app/chat/evals/smoke.eval.ts", "/app/src/app/chat/evals", "greets the user", 0)
+    const p = siblingFixturePath(
+      "/app/src/app/chat/evals/smoke.eval.ts",
+      "/app/src/app/chat/evals",
+      "greets the user",
+      0,
+    )
     expect(p).toBe("/app/src/app/chat/evals/smoke.greets-the-user.fixtures.json")
   })
 })

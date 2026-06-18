@@ -3,9 +3,8 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-
-import { runEvalCommand } from "../src/commands/eval.js"
 import { startAimock } from "../../testing/dist/index.js"
+import { runEvalCommand } from "../src/commands/eval.js"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 // Create temp apps *inside* the repo tree so node module resolution walks up to
