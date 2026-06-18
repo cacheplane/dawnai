@@ -205,6 +205,11 @@ async function runGeneratedAppScenario(
         tarballs,
         extraDependencies: {
           "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+          // workspace is a transitive-only dep (via core + langchain); a pnpm
+          // override alone does not resolve a local tarball for a non-direct
+          // dep, so it must be promoted to a direct dep like the other forced
+          // packages, or install falls back to the (unpublished) registry version.
+          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
         },
       })
     }
@@ -464,8 +469,10 @@ async function createExpectedInternalFixture(
           "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
           "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
         }
-        // sqlite-storage is only in overrides for internal mode, not in direct deps
+        // sqlite-storage and workspace are only in overrides for internal mode,
+        // not in direct deps (external mode promotes them via extraDependencies)
         delete deps["@dawn-ai/sqlite-storage"]
+        delete deps["@dawn-ai/workspace"]
         return deps
       })(),
       devDependencies: {

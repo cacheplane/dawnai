@@ -16,6 +16,7 @@
       "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
       "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
       "@dawn-ai/sqlite-storage": "<tarball:@dawn-ai/sqlite-storage>",
+      "@dawn-ai/workspace": "<tarball:@dawn-ai/workspace>",
       "zod": "^3.24.0"
     },
     "devDependencies": {
