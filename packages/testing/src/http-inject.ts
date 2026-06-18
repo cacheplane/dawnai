@@ -32,14 +32,15 @@ export interface AgentProtocolInjector {
     headers?: Record<string, string>
   }): Promise<InjectResult>
   close(): Promise<void>
+  [Symbol.asyncDispose](): Promise<void>
 }
 
-export async function injectAgentProtocol(options: {
+export async function createAgentProtocolInjector(options: {
   appRoot: string
 }): Promise<AgentProtocolInjector> {
   const { listener, close } = await createRuntimeRequestListener({ appRoot: options.appRoot })
 
-  return {
+  const injector: AgentProtocolInjector = {
     async inject(opts) {
       const res = await lmrInject(listener, {
         method: opts.method,
@@ -54,5 +55,9 @@ export async function injectAgentProtocol(options: {
       }
     },
     close,
+    [Symbol.asyncDispose](): Promise<void> {
+      return this.close()
+    },
   }
+  return injector
 }

@@ -216,6 +216,11 @@ export async function prepareGeneratedRuntimeApp(options: {
         extraDependencies: {
           "@dawn-ai/langgraph": tarballs["@dawn-ai/langgraph"]!,
           "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
+          // workspace is a transitive-only dep (via core + langchain); a pnpm
+          // override alone does not resolve a local tarball for a non-direct
+          // dep, so it must be promoted to a direct dep like the other forced
+          // packages, or install falls back to the (unpublished) registry version.
+          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
         },
       })
     }

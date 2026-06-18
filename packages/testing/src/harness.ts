@@ -6,8 +6,9 @@ import {
   streamResolvedRoute,
 } from "@dawn-ai/cli/runtime"
 import { discoverRoutes } from "@dawn-ai/core"
-import { type AimockHandle, startAimock } from "./aimock-runner.js"
+import { type Aimock, createAimock } from "./aimock-runner.js"
 import type { FixtureSet, ScriptBuilder } from "./fixture-builder.js"
+import { recordingsToFixtures } from "./record-fixtures.js"
 import { type AgentRunResult, collectRunResult } from "./run-result.js"
 
 /** Normalise a ScriptBuilder or bare FixtureSet to a FixtureSet. */
@@ -44,6 +45,10 @@ export interface AgentHarnessOptions {
    * must be set). Requires OPENAI_API_KEY to be present in the environment.
    */
   readonly live?: boolean
+  /** Capture real-model traffic for getRecordedFixtures(). Proxies to recordUpstream. */
+  readonly record?: boolean
+  /** Upstream base URL for record mode (no /v1 suffix). Default https://api.openai.com. */
+  readonly recordUpstream?: string
 }
 
 export interface AgentHarness {
@@ -55,6 +60,9 @@ export interface AgentHarness {
   }): Promise<AgentRunResult>
   reset(): void
   close(): Promise<void>
+  [Symbol.asyncDispose](): Promise<void>
+  /** Fixtures captured from the most recent run() (record mode only); re-keyed for replay. */
+  getRecordedFixtures(): FixtureSet
 }
 
 export async function createAgentHarness(options: AgentHarnessOptions): Promise<AgentHarness> {
@@ -64,6 +72,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
   }
 
   const live = options.live ?? false
+  const record = options.record ?? false
 
   // Guard: live mode requires a real API key before doing anything else.
   if (live && !process.env.OPENAI_API_KEY) {
@@ -77,12 +86,19 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
 
   // Start aimock once — port (and thus the cached agent's baseURL) stays stable for the harness lifetime.
   // In live mode: proxy all requests through to the real OpenAI upstream.
-  const aimock: AimockHandle = live
-    ? await startAimock({ fixtures: [], proxy: { openai: "https://api.openai.com" } })
-    : await startAimock({ fixtures: options.fixtures ?? [] })
+  // In record mode: proxy to recordUpstream and capture responses for getRecordedFixtures().
+  const aimock: Aimock = live
+    ? await createAimock({ fixtures: [], proxy: { openai: "https://api.openai.com" } })
+    : record
+      ? await createAimock({
+          fixtures: [],
+          proxy: { openai: options.recordUpstream ?? "https://api.openai.com" },
+          record: true,
+        })
+      : await createAimock({ fixtures: options.fixtures ?? [] })
   process.env.OPENAI_BASE_URL = aimock.baseUrl
-  // Only inject a dummy key in mock mode; in live mode the real key is already set.
-  if (!live) {
+  // Only inject a dummy key in mock mode; live and record modes use real or no key.
+  if (!live && !record) {
     process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-not-used"
   }
 
@@ -100,7 +116,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     }
   } catch (err) {
     // Unified cleanup: stop aimock and restore env vars before re-throwing.
-    await aimock.stop()
+    await aimock.close()
     if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
     else process.env.OPENAI_BASE_URL = prevBaseUrl
     if (prevKey === undefined) delete process.env.OPENAI_API_KEY
@@ -111,6 +127,8 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
   const baseUrl = aimock.baseUrl
   let threadId = randomUUID()
   let closed = false
+  let lastRunJournalStart = 0
+  let lastRunFixtureStart = 0
 
   /** Core drive helper — runs a single turn and merges systemPrompt. */
   async function drive(driveOpts: {
@@ -118,14 +136,16 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     input?: string
     resumeDecision?: "once" | "always" | "deny"
   }): Promise<AgentRunResult> {
-    // In live mode, fixtures are proxied to the real upstream — skip registration.
-    if (!live && driveOpts.fixtures) {
+    // In live and record modes, fixtures are proxied to the upstream — skip registration.
+    if (!live && !record && driveOpts.fixtures) {
       const newFixtures = toFixtureSet(driveOpts.fixtures)
       if (newFixtures.length > 0) {
         aimock.addFixtures(newFixtures)
       }
     }
     const snapshotLen = aimock.getRequests().length
+    lastRunJournalStart = snapshotLen
+    lastRunFixtureStart = aimock.getFixtureCount()
     // resolved is guaranteed non-null at this point: the catch block re-throws
     // before returning, so if we reach drive() the null check already passed.
     const r = resolved!
@@ -179,10 +199,15 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
         }
       }
     },
+    getRecordedFixtures() {
+      return recordingsToFixtures(
+        aimock.getRecordingsSince(lastRunJournalStart, lastRunFixtureStart),
+      )
+    },
     async close() {
       if (closed) return
       closed = true
-      await aimock.stop()
+      await aimock.close()
       // restore env to avoid cross-test bleed
       if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
       else process.env.OPENAI_BASE_URL = prevBaseUrl
@@ -194,6 +219,9 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       // (ESM module cache returns the same export) would reuse an LLM already
       // bound to the previous (stopped) aimock server.
       __resetMaterializedAgentsForTests()
+    },
+    [Symbol.asyncDispose](): Promise<void> {
+      return this.close()
     },
   }
   return harness

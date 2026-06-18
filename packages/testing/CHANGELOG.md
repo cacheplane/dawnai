@@ -1,5 +1,24 @@
 # @dawn-ai/testing
 
+## 0.8.2
+
+### Patch Changes
+
+- 5372180: Add `dawn eval --record`. Records replayable aimock fixtures from a real-model
+  eval run into per-case sibling `<evalBasename>.<caseSlug>.fixtures.json` files,
+  auto-loaded on a plain (replay) `dawn eval`. Inline `script()` fixtures stay
+  authoritative (record skips those cases); the gate still applies during record
+  but captured fixtures are flushed per-case before the verdict. New
+  `@dawn-ai/testing` harness capability: `createAgentHarness({ record: true })` +
+  `harness.getRecordedFixtures()`.
+- f62b555: Consistent lifecycle API. Every harness/handle is now created with a `create*` factory and torn down with `close()` (plus `[Symbol.asyncDispose]`, so `await using` works everywhere). **Breaking renames:** `startAimock` → `createAimock` (type `AimockHandle` → `Aimock`, `.stop()` → `.close()`); `startSubprocessApp` → `createSubprocessApp` (`.stop()` → `.close()`); `injectAgentProtocol` → `createAgentProtocolInjector`. The `create*Harness` helpers and pure fixture functions are unchanged.
+- 1241d21: Unit-test harnesses for tools, middleware, and the workspace. `createToolHarness(tool)` invokes a route tool against a real, temp-backed `ctx.fs` (reusable `invoke()` for cumulative-state assertions); `createMiddlewareHarness(mw)` exercises a `FilesystemMiddleware` over a temp `localFilesystem` and offers `assertForwardsAll()` to catch dropped backend methods; `createWorkspaceHarness()` is the shared temp-`WorkspaceFs` fixture, also usable to test `ctx.fs` code directly. All are async `create*Harness` factories with `.close()` and `[Symbol.asyncDispose]` (for `await using`), matching `createAgentHarness`. Adds `@dawn-ai/workspace` and `@dawn-ai/sdk` as peer dependencies.
+- Updated dependencies [5372180]
+  - @dawn-ai/cli@0.8.2
+  - @dawn-ai/core@0.8.2
+  - @dawn-ai/sdk@0.8.2
+  - @dawn-ai/workspace@0.8.2
+
 ## 0.8.1
 
 ### Patch Changes

@@ -1,14 +1,17 @@
+import { existsSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { type Command, CommanderError } from "commander"
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { siblingFixturePath } from "../lib/runtime/eval-fixture-path.js"
 import { EvalLoadError, type LoadedEval, loadEvals } from "../lib/runtime/load-evals.js"
 
 interface EvalOptions {
   readonly cwd?: string
   readonly live?: boolean
+  readonly record?: boolean
   readonly json?: string | boolean
 }
 
@@ -27,6 +30,7 @@ interface AgentRunResultShape {
 
 interface AgentHarnessShape {
   run(opts: { input: string; fixtures?: unknown }): Promise<AgentRunResultShape>
+  getRecordedFixtures(): unknown[]
   reset(): void
   close(): Promise<void>
 }
@@ -36,7 +40,11 @@ interface TestingModule {
     appRoot: string
     route: string
     live?: boolean
+    record?: boolean
+    recordUpstream?: string
   }): Promise<AgentHarnessShape>
+  loadFixtures(path: string): unknown
+  writeFixtures(path: string, fixtures: unknown): void
 }
 
 interface EvalCaseShape {
@@ -82,6 +90,10 @@ export function registerEvalCommand(program: Command, io: CommandIo): void {
     .description("Run Dawn agent evals over their datasets")
     .option("--cwd <path>", "Path to the Dawn app root or a child directory within it")
     .option("--live", "Run against the real model (requires OPENAI_API_KEY); never use in CI")
+    .option(
+      "--record",
+      "Record fixtures from the real model into sibling files (requires OPENAI_API_KEY); never use in CI",
+    )
     .option("--json [file]", "Write a JSON report (default .dawn/eval-report.json)")
     .action(async (path: string | undefined, options: EvalOptions) => {
       await runEvalCommand(path, options, io)
@@ -105,8 +117,21 @@ export async function runEvalCommand(
   }
   if (evals.length === 0) throw new CliError("No *.eval.ts files found", 1)
 
+  if (options.record && options.live) {
+    throw new CliError("Choose one of --record or --live, not both", 2)
+  }
+  if (options.record && !process.env.OPENAI_API_KEY) {
+    throw new CliError(
+      "dawn eval --record requires OPENAI_API_KEY (records against the real model)",
+      2,
+    )
+  }
+
   const appRoot = evals[0]!.appRoot
-  const { createAgentHarness } = await importFromApp<TestingModule>(appRoot, "@dawn-ai/testing")
+  const { createAgentHarness, loadFixtures, writeFixtures } = await importFromApp<TestingModule>(
+    appRoot,
+    "@dawn-ai/testing",
+  )
   const { runEval } = await importFromApp<EvalsModule>(appRoot, "@dawn-ai/evals")
 
   const reports = []
@@ -117,24 +142,74 @@ export async function runEvalCommand(
       appRoot: loaded.appRoot,
       route: loaded.route,
       ...(options.live ? { live: true } : {}),
+      ...(options.record ? { record: true } : {}),
+      ...(options.record && process.env.DAWN_RECORD_UPSTREAM
+        ? { recordUpstream: process.env.DAWN_RECORD_UPSTREAM }
+        : {}),
     })
     try {
+      let caseIndex = -1
       const report = await runEval(loaded.definition, {
         baseDir: loaded.baseDir,
         runCase: async (testCase) => {
+          caseIndex += 1
           harness.reset()
-          if (!options.live && !testCase.fixtures) {
-            throw new CliError(
-              `Eval "${loaded.definition.name}" case "${testCase.name ?? "?"}" has no fixtures — add script()/fixtures or run with --live`,
-              2,
-            )
-          }
           const input =
             typeof testCase.input === "string" ? testCase.input : JSON.stringify(testCase.input)
-          return harness.run({
-            input,
-            ...(!options.live && testCase.fixtures ? { fixtures: testCase.fixtures } : {}),
-          })
+
+          if (!options.live && !options.record) {
+            // Replay: inline fixtures win; otherwise auto-load the recorded sibling file.
+            let fixtures: unknown = testCase.fixtures
+            if (!fixtures) {
+              const sibling = siblingFixturePath(
+                loaded.evalFile,
+                loaded.baseDir,
+                testCase.name,
+                caseIndex,
+              )
+              if (existsSync(sibling)) fixtures = loadFixtures(sibling)
+            }
+            if (!fixtures) {
+              throw new CliError(
+                `Eval "${loaded.definition.name}" case "${testCase.name ?? "?"}" has no fixtures — add script()/fixtures, record with --record, or run with --live`,
+                2,
+              )
+            }
+            return harness.run({ input, fixtures })
+          }
+
+          if (options.record) {
+            const label = `${loaded.definition.name} › ${testCase.name ?? `case ${caseIndex + 1}`}`
+            if (testCase.fixtures) {
+              writeLine(io.stdout, `· ${label}: skipped record (inline fixtures)`)
+              return harness.run({ input, fixtures: testCase.fixtures })
+            }
+            const result = await harness.run({ input })
+            const recorded = harness.getRecordedFixtures()
+            if (recorded.length === 0) {
+              writeLine(io.stdout, `· ${label}: recorded 0 calls — skipped write`)
+              return result
+            }
+            const sibling = siblingFixturePath(
+              loaded.evalFile,
+              loaded.baseDir,
+              testCase.name,
+              caseIndex,
+            )
+            try {
+              writeFixtures(sibling, recorded)
+            } catch (err) {
+              throw new CliError(
+                `Failed to write fixtures ${sibling}: ${formatErrorMessage(err)}`,
+                2,
+              )
+            }
+            writeLine(io.stdout, `· recorded ${recorded.length} fixtures → ${sibling}`)
+            return result
+          }
+
+          // Live: real model, no fixtures.
+          return harness.run({ input })
         },
       })
       reports.push(report)
