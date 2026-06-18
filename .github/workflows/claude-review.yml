@@ -28,6 +28,11 @@ jobs:
       - name: Claude review
         uses: anthropics/claude-code-action@806af32823ef69c8ef357086c573a902af641307 # v1
         with:
+          # Pass GITHUB_TOKEN explicitly (maps to OVERRIDE_GITHUB_TOKEN) so the
+          # action skips OIDC token exchange — that path needs `id-token: write`
+          # plus the Claude GitHub App, which this repo doesn't use. Posts as
+          # github-actions[bot] via the job's pull-requests: write scope.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           track_progress: true
           prompt: |
