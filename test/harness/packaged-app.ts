@@ -159,6 +159,7 @@ export async function runPackagedCommand(options: {
   readonly args: readonly string[]
   readonly command: string
   readonly cwd: string
+  readonly env?: NodeJS.ProcessEnv
   readonly stdin?: string
   readonly transcriptPath?: string
 }) {
@@ -172,6 +173,7 @@ export async function runPackagedCommand(options: {
             // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
             // so the harness does not treat non-empty stderr as a failure.
             NODE_NO_WARNINGS: "1",
+            ...options.env,
           },
         })
       : await spawnWithStdin(options)
