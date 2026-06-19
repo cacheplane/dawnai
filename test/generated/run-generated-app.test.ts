@@ -204,6 +204,9 @@ async function runGeneratedAppScenario(
         appRoot,
         tarballs,
         extraDependencies: {
+          // memory is a transitive-only dep (via cli); like workspace it must be
+          // promoted to a direct dep so the local tarball resolves.
+          "@dawn-ai/memory": tarballs["@dawn-ai/memory"]!,
           "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
           // workspace is a transitive-only dep (via core + langchain); a pnpm
           // override alone does not resolve a local tarball for a non-direct
@@ -469,8 +472,9 @@ async function createExpectedInternalFixture(
           "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
           "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
         }
-        // sqlite-storage and workspace are only in overrides for internal mode,
-        // not in direct deps (external mode promotes them via extraDependencies)
+        // memory, sqlite-storage and workspace are only in overrides for internal
+        // mode, not in direct deps (external mode promotes them via extraDependencies)
+        delete deps["@dawn-ai/memory"]
         delete deps["@dawn-ai/sqlite-storage"]
         delete deps["@dawn-ai/workspace"]
         return deps
@@ -489,6 +493,7 @@ async function createExpectedInternalFixture(
           "@dawn-ai/evals": "<repo:@dawn-ai/evals>",
           "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
           "@dawn-ai/langgraph": "<repo:@dawn-ai/langgraph>",
+          "@dawn-ai/memory": "<repo:@dawn-ai/memory>",
           "@dawn-ai/permissions": "<repo:@dawn-ai/permissions>",
           "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
           "@dawn-ai/sqlite-storage": "<repo:@dawn-ai/sqlite-storage>",

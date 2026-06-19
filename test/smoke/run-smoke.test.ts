@@ -178,6 +178,7 @@ async function runSmokeScenario(fixtureName: SmokeFixtureName): Promise<HarnessL
       appRoot: generatedApp.appRoot,
       tarballs,
       extraDependencies: {
+        "@dawn-ai/memory": tarballs["@dawn-ai/memory"]!,
         "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
         "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
         "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,

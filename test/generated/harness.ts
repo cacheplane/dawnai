@@ -215,6 +215,9 @@ export async function prepareGeneratedRuntimeApp(options: {
         tarballs,
         extraDependencies: {
           "@dawn-ai/langgraph": tarballs["@dawn-ai/langgraph"]!,
+          // memory is a transitive-only dep (via cli); like workspace it must be
+          // promoted to a direct dep so the local tarball resolves.
+          "@dawn-ai/memory": tarballs["@dawn-ai/memory"]!,
           "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
           // workspace is a transitive-only dep (via core + langchain); a pnpm
           // override alone does not resolve a local tarball for a non-direct

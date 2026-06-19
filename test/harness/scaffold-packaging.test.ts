@@ -28,6 +28,7 @@ const tarballs = {
   "@dawn-ai/evals": "/packs/evals.tgz",
   "@dawn-ai/langchain": "/packs/langchain.tgz",
   "@dawn-ai/langgraph": "/packs/langgraph.tgz",
+  "@dawn-ai/memory": "/packs/memory.tgz",
   "@dawn-ai/permissions": "/packs/permissions.tgz",
   "@dawn-ai/sdk": "/packs/sdk.tgz",
   "@dawn-ai/sqlite-storage": "/packs/sqlite.tgz",

@@ -199,6 +199,7 @@ describe("agent protocol permission interrupt + resume", () => {
         appRoot,
         tarballs,
         extraDependencies: {
+          "@dawn-ai/memory": tarballs["@dawn-ai/memory"]!,
           "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
           "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
           "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
@@ -302,6 +303,7 @@ describe("agent protocol permission interrupt + resume", () => {
         appRoot,
         tarballs,
         extraDependencies: {
+          "@dawn-ai/memory": tarballs["@dawn-ai/memory"]!,
           "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
           "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
           "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
@@ -372,6 +374,7 @@ describe("agent protocol permission interrupt + resume", () => {
             "@dawn-ai/core",
             "@dawn-ai/langchain",
             "@dawn-ai/langgraph",
+            "@dawn-ai/memory",
             "@dawn-ai/permissions",
             "@dawn-ai/sdk",
             "@dawn-ai/sqlite-storage",
@@ -400,6 +403,7 @@ describe("agent protocol permission interrupt + resume", () => {
           appRoot,
           tarballs,
           extraDependencies: {
+            "@dawn-ai/memory": tarballs["@dawn-ai/memory"]!,
             "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
             "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
             "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
@@ -668,6 +672,7 @@ describe("agent protocol state persistence", () => {
         appRoot,
         tarballs,
         extraDependencies: {
+          "@dawn-ai/memory": tarballs["@dawn-ai/memory"]!,
           "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
           "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
           "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
