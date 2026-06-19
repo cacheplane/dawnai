@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@copilotkit/aimock": "^1.28.0",
+    "@dawn-ai/memory": "workspace:*",
     "light-my-request": "^6.6.0"
   },
   "peerDependencies": {

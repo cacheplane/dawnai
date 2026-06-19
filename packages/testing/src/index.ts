@@ -32,6 +32,7 @@ export {
   type SubagentRun,
   type Todo,
 } from "./matchers.js"
+export { seedMemory } from "./memory.js"
 export {
   createMiddlewareHarness,
   type MiddlewareHarness,
