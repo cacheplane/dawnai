@@ -11,38 +11,19 @@
       "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-      "@dawn-ai/core": "<tarball:@dawn-ai/core>",
-      "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
-      "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
-      "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
-      "@dawn-ai/memory": "<tarball:@dawn-ai/memory>",
-      "@dawn-ai/sqlite-storage": "<tarball:@dawn-ai/sqlite-storage>",
-      "@dawn-ai/workspace": "<tarball:@dawn-ai/workspace>",
+      "@dawn-ai/core": "latest",
+      "@dawn-ai/cli": "latest",
+      "@dawn-ai/langchain": "latest",
+      "@dawn-ai/sdk": "latest",
       "zod": "^3.24.0"
     },
     "devDependencies": {
-      "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
-      "@dawn-ai/evals": "<tarball:@dawn-ai/evals>",
-      "@dawn-ai/testing": "<tarball:@dawn-ai/testing>",
+      "@dawn-ai/config-typescript": "latest",
+      "@dawn-ai/evals": "latest",
+      "@dawn-ai/testing": "latest",
       "@types/node": "<version:@types/node>",
       "typescript": "<version:typescript>",
       "vitest": "<version:vitest>"
-    },
-    "pnpm": {
-      "overrides": {
-        "@dawn-ai/cli": "<tarball:@dawn-ai/cli>",
-        "@dawn-ai/config-typescript": "<tarball:@dawn-ai/config-typescript>",
-        "@dawn-ai/core": "<tarball:@dawn-ai/core>",
-        "@dawn-ai/evals": "<tarball:@dawn-ai/evals>",
-        "@dawn-ai/langchain": "<tarball:@dawn-ai/langchain>",
-        "@dawn-ai/langgraph": "<tarball:@dawn-ai/langgraph>",
-        "@dawn-ai/memory": "<tarball:@dawn-ai/memory>",
-        "@dawn-ai/permissions": "<tarball:@dawn-ai/permissions>",
-        "@dawn-ai/sdk": "<tarball:@dawn-ai/sdk>",
-        "@dawn-ai/sqlite-storage": "<tarball:@dawn-ai/sqlite-storage>",
-        "@dawn-ai/testing": "<tarball:@dawn-ai/testing>",
-        "@dawn-ai/workspace": "<tarball:@dawn-ai/workspace>"
-      }
     }
   },
   "verifyJson": {

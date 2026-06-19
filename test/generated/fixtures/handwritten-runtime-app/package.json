@@ -7,13 +7,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn-ai/core": "next",
-    "@dawn-ai/cli": "next",
-    "@dawn-ai/langgraph": "next",
-    "@dawn-ai/sdk": "next"
+    "@dawn-ai/core": "latest",
+    "@dawn-ai/cli": "latest",
+    "@dawn-ai/langgraph": "latest",
+    "@dawn-ai/sdk": "latest"
   },
   "devDependencies": {
-    "@dawn-ai/config-typescript": "next",
+    "@dawn-ai/config-typescript": "latest",
     "@types/node": "25.6.0",
     "typescript": "6.0.2"
   }

@@ -1,17 +1,29 @@
-import { readFile, writeFile } from "node:fs/promises"
+import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 import { afterEach, describe, expect, test } from "vitest"
 
 import { spawnProcess } from "../../packages/devkit/src/testing/index.ts"
+import { getTestRegistryUrl } from "../harness/local-registry.ts"
 import {
   cleanupTrackedTempDirs,
-  createPackagedInstaller,
   createTrackedTempDir,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
+import { writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
 
 const tempDirs: TrackedTempDir[] = []
+
+const CONSUMER_PACKAGES = [
+  "@dawn-ai/core",
+  "@dawn-ai/langchain",
+  "@dawn-ai/langgraph",
+  "@dawn-ai/permissions",
+  "@dawn-ai/sdk",
+  "@dawn-ai/sqlite-storage",
+  "@dawn-ai/workspace",
+  "@dawn-ai/cli",
+] as const
 
 afterEach(async () => {
   await cleanupTrackedTempDirs(tempDirs)
@@ -21,44 +33,21 @@ describe.each([
   { subpath: "@dawn-ai/sdk/testing", label: "sdk" },
   { subpath: "@dawn-ai/cli/testing", label: "cli" },
 ])("$subpath", ({ subpath, label }) => {
-  test("packed consumers can import the published testing helpers", {
-    timeout: 30_000,
+  test("registry consumers can import the published testing helpers", {
+    timeout: 60_000,
   }, async () => {
-    const tempRoot = await createTrackedTempDir(`dawn-${label}-testing-pack-`, tempDirs)
-    const { installerDir, tarballs } = await createPackagedInstaller({
-      packageNames: [
-        "@dawn-ai/core",
-        "@dawn-ai/langchain",
-        "@dawn-ai/langgraph",
-        "@dawn-ai/memory",
-        "@dawn-ai/permissions",
-        "@dawn-ai/sdk",
-        "@dawn-ai/sqlite-storage",
-        "@dawn-ai/workspace",
-        "@dawn-ai/cli",
-      ],
-      tempRoot,
-    })
+    const consumerDir = await createTrackedTempDir(`dawn-${label}-testing-`, tempDirs)
 
-    await writeInstallerOverrides(installerDir, tarballs)
-    await runCommand(
-      "pnpm",
-      [
-        "add",
-        requiredTarball(tarballs, "@dawn-ai/core"),
-        requiredTarball(tarballs, "@dawn-ai/langchain"),
-        requiredTarball(tarballs, "@dawn-ai/langgraph"),
-        requiredTarball(tarballs, "@dawn-ai/memory"),
-        requiredTarball(tarballs, "@dawn-ai/permissions"),
-        requiredTarball(tarballs, "@dawn-ai/sdk"),
-        requiredTarball(tarballs, "@dawn-ai/sqlite-storage"),
-        requiredTarball(tarballs, "@dawn-ai/workspace"),
-        requiredTarball(tarballs, "@dawn-ai/cli"),
-      ],
-      installerDir,
+    await writeFile(
+      join(consumerDir, "package.json"),
+      `${JSON.stringify({ name: `${label}-testing-consumer`, private: true }, null, 2)}\n`,
+      "utf8",
     )
+    await writeRegistryNpmrc(consumerDir, getTestRegistryUrl())
 
-    const scriptPath = join(installerDir, "testing-check.mjs")
+    await runCommand("pnpm", ["add", ...CONSUMER_PACKAGES], consumerDir)
+
+    const scriptPath = join(consumerDir, "testing-check.mjs")
 
     await writeFile(
       scriptPath,
@@ -95,22 +84,12 @@ describe.each([
       "utf8",
     )
 
-    await expect(runCommand("node", [scriptPath], installerDir)).resolves.toMatchObject({
+    await expect(runCommand("node", [scriptPath], consumerDir)).resolves.toMatchObject({
       stderr: "",
       stdout: "",
     })
   })
 })
-
-function requiredTarball(tarballs: Readonly<Record<string, string>>, packageName: string): string {
-  const tarball = tarballs[packageName]
-
-  if (!tarball) {
-    throw new Error(`Missing tarball for ${packageName}`)
-  }
-
-  return tarball
-}
 
 async function runCommand(command: string, args: readonly string[], cwd: string) {
   const result = await spawnProcess({
@@ -131,45 +110,4 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
     stderr: result.stderr,
     stdout: result.stdout,
   }
-}
-
-async function writeInstallerOverrides(
-  installerDir: string,
-  tarballs: Readonly<Record<string, string>>,
-): Promise<void> {
-  const packageJsonPath = join(installerDir, "package.json")
-  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-    readonly pnpm?: {
-      readonly overrides?: Record<string, string>
-    }
-  } & Record<string, unknown>
-
-  const overrides = {
-    ...(packageJson.pnpm?.overrides ?? {}),
-    "@dawn-ai/cli": requiredTarball(tarballs, "@dawn-ai/cli"),
-    "@dawn-ai/core": requiredTarball(tarballs, "@dawn-ai/core"),
-    "@dawn-ai/langchain": requiredTarball(tarballs, "@dawn-ai/langchain"),
-    "@dawn-ai/langgraph": requiredTarball(tarballs, "@dawn-ai/langgraph"),
-    "@dawn-ai/memory": requiredTarball(tarballs, "@dawn-ai/memory"),
-    "@dawn-ai/permissions": requiredTarball(tarballs, "@dawn-ai/permissions"),
-    "@dawn-ai/sdk": requiredTarball(tarballs, "@dawn-ai/sdk"),
-    "@dawn-ai/sqlite-storage": requiredTarball(tarballs, "@dawn-ai/sqlite-storage"),
-    "@dawn-ai/workspace": requiredTarball(tarballs, "@dawn-ai/workspace"),
-  }
-
-  await writeFile(
-    packageJsonPath,
-    `${JSON.stringify(
-      {
-        ...packageJson,
-        pnpm: {
-          ...(packageJson.pnpm ?? {}),
-          overrides,
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  )
 }

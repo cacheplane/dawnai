@@ -18,6 +18,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
+      attestations: write
     env:
       NPM_CONFIG_PROVENANCE: "true"
 
@@ -32,24 +33,30 @@ jobs:
         with:
           version: 10.33.0
 
+      # Install + validate run on Node 22.14.0 to mirror CI (node:sqlite is
+      # available without a flag from 22.13+). Publishing switches to Node 24
+      # below.
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 22.14.0
           cache: pnpm
-          registry-url: https://registry.npmjs.org
-
-      # Trusted publishing requires npm 11.5.1+. Node 22's bundled npm 10.x
-      # doesn't fully support the OIDC trusted-publishing flow.
-      # Pinned to an exact version (not @latest) for OSSF Pinned-Dependencies.
-      - name: Upgrade npm for trusted publishing
-        run: npm install --global npm@11.17.0
 
       - name: Install
         run: pnpm install --frozen-lockfile
 
       - name: Validate Release Candidate
         run: pnpm ci:validate
+
+      # Publish on Node 24, which bundles npm 11.13+ (>= the 11.5.1 trusted-
+      # publishing floor) — so no `npm install -g npm@x` step is needed. That
+      # removes the one unpinnable npmCommand and keeps OSSF Pinned-Dependencies
+      # clean. registry-url here writes the publish .npmrc for trusted publishing.
+      - name: Setup Node.js for publishing
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.17.0
+          registry-url: https://registry.npmjs.org
 
       # Trusted publishing is configured per-package on npm; no NPM_TOKEN needed.
       # The OIDC token from id-token: write authenticates this workflow as a
@@ -64,3 +71,22 @@ jobs:
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Attest the just-published tarballs (kept in release-artifacts/ by
+      # release-publish.mjs). Keyless OIDC — registers SLSA in-toto provenance
+      # in GitHub's attestation store and emits a bundle file.
+      - name: Attest release tarballs
+        id: attest
+        if: ${{ hashFiles('release-artifacts/*.tgz') != '' }}
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: "release-artifacts/*.tgz"
+
+      # Attach each package tarball + a .intoto.jsonl-named copy of the bundle
+      # to its GitHub Release so OSSF Signed-Releases finds a signature asset.
+      - name: Upload signed release assets
+        if: ${{ steps.attest.outputs.bundle-path != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: node scripts/upload-release-assets.mjs
