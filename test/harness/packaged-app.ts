@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process"
-import { appendFile, mkdtemp, rm } from "node:fs/promises"
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join, resolve } from "node:path"
 
 import { spawnProcess } from "../../packages/devkit/src/testing/index.ts"
 import {
@@ -9,6 +9,8 @@ import {
   type DevServerHandle,
   startDevServer,
 } from "../runtime/support/dev-server.ts"
+
+const REPO_ROOT = resolve(import.meta.dirname, "../..")
 
 export interface TrackedTempDir {
   path: string
@@ -49,6 +51,65 @@ export async function cleanupTrackedTempDirs(registry: TrackedTempDir[]): Promis
         rm(entry.path, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }),
       ),
   )
+}
+
+/**
+ * Pack the CURRENT create-dawn-ai-app source and install it into a temp installer
+ * dir, returning that dir. Lets a standalone test run `pnpm exec create-dawn-ai-app`
+ * with the local build (not the published npmjs version). Self-contained: no registry.
+ */
+export async function installPackagedScaffolder(
+  tempRoot: string,
+): Promise<{ installerDir: string }> {
+  const packsDir = join(tempRoot, "packs")
+  const installerDir = join(tempRoot, "installer")
+
+  await mkdir(packsDir, { recursive: true })
+  await mkdir(installerDir, { recursive: true })
+
+  // 1. Build create-dawn-ai-app
+  await runPackagedCommand({
+    args: ["--filter", "create-dawn-ai-app", "build"],
+    command: "pnpm",
+    cwd: REPO_ROOT,
+  })
+
+  // 2. Pack create-dawn-ai-app into packsDir
+  const packResult = await runPackagedCommand({
+    args: ["--filter", "create-dawn-ai-app", "pack", "--pack-destination", packsDir],
+    command: "pnpm",
+    cwd: REPO_ROOT,
+  })
+
+  const tarballName = packResult.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .find((line) => line.endsWith(".tgz"))
+
+  if (!tarballName) {
+    throw new Error(
+      `Could not determine tarball name for create-dawn-ai-app from pnpm pack stdout:\n${packResult.stdout}`,
+    )
+  }
+
+  const tarballPath = join(packsDir, basename(tarballName))
+
+  // 3. Write a minimal package.json in installerDir
+  await writeFile(
+    join(installerDir, "package.json"),
+    `${JSON.stringify({ name: "installer", private: true }, null, 2)}\n`,
+    "utf8",
+  )
+
+  // 4. Install the tarball into installerDir
+  await runPackagedCommand({
+    args: ["add", tarballPath],
+    command: "pnpm",
+    cwd: installerDir,
+  })
+
+  return { installerDir }
 }
 
 export async function runPackagedCommand(options: {

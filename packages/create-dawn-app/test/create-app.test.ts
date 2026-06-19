@@ -7,8 +7,8 @@ import { afterEach, describe, expect, test } from "vitest"
 
 import {
   cleanupTrackedTempDirs,
-  createPackagedInstaller,
   createTrackedTempDir,
+  installPackagedScaffolder,
   type TrackedTempDir,
 } from "../../../test/harness/packaged-app.ts"
 import { run } from "../src/index.js"
@@ -64,9 +64,7 @@ describe("create-dawn-ai-app", () => {
   }, async () => {
     const tempRoot = await createTrackedTempDir("create-dawn-app-standalone-", tempDirs)
 
-    const { installerDir: installDir } = await createPackagedInstaller({
-      tempRoot,
-    })
+    const { installerDir: installDir } = await installPackagedScaffolder(tempRoot)
     const targetDir = join(tempRoot, "hello-dawn")
 
     const scaffoldResult = await runCommand(
@@ -124,9 +122,7 @@ describe("create-dawn-ai-app", () => {
   }, async () => {
     const tempRoot = await createTrackedTempDir("create-dawn-app-standalone-", tempDirs)
 
-    const { installerDir: installDir } = await createPackagedInstaller({
-      tempRoot,
-    })
+    const { installerDir: installDir } = await installPackagedScaffolder(tempRoot)
 
     const invalidInternalTargetDir = join(tempRoot, "hello-dawn-internal")
     const internalModeResult = await runCommand(
