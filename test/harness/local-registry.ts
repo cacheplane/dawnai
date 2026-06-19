@@ -138,6 +138,21 @@ async function readPublicPackages(): Promise<Array<{ dir: string; name: string }
   return packages.sort((a, b) => a.name.localeCompare(b.name))
 }
 
+const REGISTRY_URL_ENV = "DAWN_TEST_REGISTRY_URL"
+
+/** Read the registry URL published by the lane's globalSetup. Throws if setup did not run. */
+export function getTestRegistryUrl(): string {
+  const url = process.env[REGISTRY_URL_ENV]
+  if (!url) {
+    throw new Error(
+      `${REGISTRY_URL_ENV} is not set — the lane's registry globalSetup must run before scaffolding helpers.`,
+    )
+  }
+  return url
+}
+
+export { REGISTRY_URL_ENV }
+
 async function assertUniformPublishableVersion(): Promise<void> {
   const packagesDir = join(REPO_ROOT, "packages")
   const entries = await readdir(packagesDir, { withFileTypes: true })

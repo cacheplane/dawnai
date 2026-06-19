@@ -25,7 +25,8 @@ export default defineConfig({
     // runner causes server-boot timeouts and port/disk contention. Serialize
     // them — integration parity is the goal here, not raw speed.
     fileParallelism: false,
-    hookTimeout: 60_000,
+    globalSetup: ["test/harness/registry-global-setup.ts"],
+    hookTimeout: 180_000,
     include: [
       "test/runtime/run-runtime-contract.test.ts",
       "test/runtime/run-agent-protocol.test.ts",
