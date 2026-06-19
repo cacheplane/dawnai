@@ -102,7 +102,7 @@ describe("publishRelease", () => {
 
     assert.deepEqual(calls, [])
     assert.equal(result.status, "already-published")
-    assert.equal(result.artifacts, undefined)
+    assert.deepEqual(result.artifacts, [])
     assert.equal(fs.manifests.length, 0)
   })
 })

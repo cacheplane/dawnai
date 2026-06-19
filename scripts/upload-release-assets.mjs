@@ -25,7 +25,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       archiveDir,
       bundlePath,
       run: runCommand,
-      releaseHasAssets: defaultReleaseHasAssets,
       copyProvenance: copyFile,
       log: console.log,
     })
@@ -40,26 +39,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 /**
  * For each release in the manifest, upload its tarball plus a copy of the
  * attestation bundle renamed to <tarball-base>.intoto.jsonl (so Scorecard's
- * Signed-Releases check recognizes the asset). Skips releases that already
- * have assets, so re-runs after a partial failure are safe.
+ * Signed-Releases check recognizes the asset). Uses --clobber so re-runs
+ * after a partial failure are safe/idempotent.
  */
 export async function uploadReleaseAssets({
   manifest,
   archiveDir,
   bundlePath,
   run,
-  releaseHasAssets,
   copyProvenance,
   log,
 }) {
   const uploaded = []
 
   for (const { tag, tarball } of manifest) {
-    if (await releaseHasAssets(tag)) {
-      log(`Skipping ${tag} (already has assets)`)
-      continue
-    }
-
     const tarballPath = resolve(archiveDir, tarball)
     const provenanceName = `${basename(tarball, ".tgz")}.intoto.jsonl`
     const provenancePath = resolve(archiveDir, provenanceName)
@@ -72,19 +65,6 @@ export async function uploadReleaseAssets({
   }
 
   return uploaded
-}
-
-async function defaultReleaseHasAssets(tag) {
-  const out = await runCommand("gh", [
-    "release",
-    "view",
-    tag,
-    "--json",
-    "assets",
-    "--jq",
-    ".assets | length",
-  ])
-  return Number.parseInt(out.trim() || "0", 10) > 0
 }
 
 async function runCommand(command, args, options = {}) {

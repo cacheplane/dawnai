@@ -8,7 +8,7 @@ const manifest = [
   { tag: "@dawn-ai/sdk@0.1.1", tarball: "dawn-ai-sdk-0.1.1.tgz" },
 ]
 
-function fakeDeps(existing = new Set()) {
+function fakeDeps() {
   const calls = []
   return {
     calls,
@@ -16,7 +16,6 @@ function fakeDeps(existing = new Set()) {
       calls.push([command, ...args])
       return ""
     },
-    releaseHasAssets: async (tag) => existing.has(tag),
     copyProvenance: async (bundlePath, destPath) => {
       calls.push(["copy", bundlePath, destPath])
     },
@@ -24,14 +23,13 @@ function fakeDeps(existing = new Set()) {
 }
 
 describe("uploadReleaseAssets", () => {
-  it("uploads tarball + provenance to each release without assets", async () => {
+  it("uploads tarball + provenance to each release", async () => {
     const d = fakeDeps()
     const uploaded = await uploadReleaseAssets({
       manifest,
       archiveDir: "/art",
       bundlePath: "/art/attestation.jsonl",
       run: d.run,
-      releaseHasAssets: d.releaseHasAssets,
       copyProvenance: d.copyProvenance,
       log: () => {},
     })
@@ -61,19 +59,18 @@ describe("uploadReleaseAssets", () => {
     ])
   })
 
-  it("skips releases that already have assets (idempotent)", async () => {
-    const d = fakeDeps(new Set(["@dawn-ai/core@0.1.1"]))
+  it("returns [] and makes no calls for an empty manifest", async () => {
+    const d = fakeDeps()
     const uploaded = await uploadReleaseAssets({
-      manifest,
+      manifest: [],
       archiveDir: "/art",
       bundlePath: "/art/attestation.jsonl",
       run: d.run,
-      releaseHasAssets: d.releaseHasAssets,
       copyProvenance: d.copyProvenance,
       log: () => {},
     })
 
-    assert.deepEqual(uploaded, ["@dawn-ai/sdk@0.1.1"])
-    assert.ok(!d.calls.some((c) => c[3] === "@dawn-ai/core@0.1.1"))
+    assert.deepEqual(uploaded, [])
+    assert.deepEqual(d.calls, [])
   })
 })

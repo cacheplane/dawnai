@@ -42,7 +42,7 @@ export async function publishRelease({
   const unpublished = packageStates.filter((state) => !state.versions.includes(state.version))
 
   if (unpublished.length === 0) {
-    return { status: "already-published", packages: [] }
+    return { status: "already-published", packages: [], artifacts: [] }
   }
 
   const artifacts = []
@@ -84,6 +84,8 @@ export async function publishRelease({
     }
   }
 
+  await writeManifest(archiveDir, artifacts)
+
   for (const state of unpublished) {
     const tagName = `${state.name}@${state.version}`
 
@@ -93,8 +95,6 @@ export async function publishRelease({
     })
     log(`New tag: ${tagName}`)
   }
-
-  await writeManifest(archiveDir, artifacts)
 
   return {
     status: "published",
