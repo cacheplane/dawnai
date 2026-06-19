@@ -6,18 +6,32 @@ import { pathToFileURL } from "node:url"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { createArtifactRoot, spawnProcess } from "../../packages/devkit/src/testing/index.ts"
+import { getTestRegistryUrl } from "../harness/local-registry.ts"
 import {
   cleanupTrackedTempDirs,
-  createPackagedInstaller,
   createTrackedTempDir,
   markTrackedTempDirForPreserve,
+  runPackagedCommand,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
-import {
-  rewriteGeneratedAppDependencies,
-  SCAFFOLD_PACKAGES,
-} from "../harness/scaffold-packaging.js"
+import { writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
 import { expectBasicAuthoringLane } from "./harness.ts"
+
+// @dawn-ai workspace packages a generated app may depend on. Used only to build
+// the internal-mode <repo:...> fixture (external mode installs from the registry).
+const SCAFFOLD_PACKAGES: readonly string[] = [
+  "@dawn-ai/cli",
+  "@dawn-ai/config-typescript",
+  "@dawn-ai/core",
+  "@dawn-ai/evals",
+  "@dawn-ai/langchain",
+  "@dawn-ai/langgraph",
+  "@dawn-ai/permissions",
+  "@dawn-ai/sdk",
+  "@dawn-ai/sqlite-storage",
+  "@dawn-ai/testing",
+  "@dawn-ai/workspace",
+]
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
 const FIXTURE_ROOT = resolve(import.meta.dirname, "fixtures")
@@ -150,25 +164,12 @@ async function runGeneratedAppScenario(
 
   await mkdir(dirname(transcriptPath), { recursive: true })
   try {
-    let installerDir: string | undefined
-    let tarballs: Readonly<Record<string, string>> | undefined
-
     if (scaffoldMode === "internal") {
       await buildLocalContributorPackages(transcriptPath)
-    } else {
-      const packagedInstaller = await createPackagedInstaller({
-        packageNames: [...SCAFFOLD_PACKAGES],
-        tempRoot,
-        transcriptPath,
-      })
-
-      installerDir = packagedInstaller.installerDir
-      tarballs = packagedInstaller.tarballs
     }
 
     await scaffoldApp({
       appRoot,
-      installerDir,
       mode: scaffoldMode,
       transcriptPath,
     })
@@ -199,26 +200,17 @@ async function runGeneratedAppScenario(
       await options.mutateApp(appRoot)
     }
 
-    if (scaffoldMode === "external" && tarballs) {
-      await rewriteGeneratedAppDependencies({
-        appRoot,
-        tarballs,
-        extraDependencies: {
-          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
-          // workspace is a transitive-only dep (via core + langchain); a pnpm
-          // override alone does not resolve a local tarball for a non-direct
-          // dep, so it must be promoted to a direct dep like the other forced
-          // packages, or install falls back to the (unpublished) registry version.
-          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
-        },
-      })
+    if (scaffoldMode === "external") {
+      await writeRegistryNpmrc(appRoot, getTestRegistryUrl())
     }
 
     const result = await runLifecycle({ appRoot, transcriptPath })
-    if (scaffoldMode === "external" && tarballs) {
+    if (scaffoldMode === "external") {
       const expected = await readExpectedFixture(options.expectedFixtureName)
 
-      expect(normalizeForFixture(result, { appRoot, tarballs })).toEqual(expected)
+      expect(
+        normalizeForFixture(result, { appRoot, dawnVersion: await readDawnVersion() }),
+      ).toEqual(expected)
     }
 
     return {
@@ -243,28 +235,33 @@ async function runGeneratedAppScenario(
 
 async function scaffoldApp(options: {
   readonly appRoot: string
-  readonly installerDir?: string
   readonly mode: "external" | "internal"
   readonly transcriptPath: string
 }): Promise<void> {
   if (options.mode === "internal") {
     await runCommand({
-      args: ["packages/create-dawn-app/dist/bin.js", options.appRoot, "--mode", "internal", "--template", "basic"],
+      args: [
+        "packages/create-dawn-app/dist/bin.js",
+        options.appRoot,
+        "--mode",
+        "internal",
+        "--template",
+        "basic",
+      ],
       command: "node",
       cwd: REPO_ROOT,
       transcriptPath: options.transcriptPath,
     })
   } else {
-    if (!options.installerDir) {
-      throw new Error(
-        "Expected packaged installer directory for external generated-app scaffolding",
-      )
-    }
-
-    await runCommand({
-      args: ["exec", "create-dawn-ai-app", options.appRoot, "--dist-tag", "next", "--template", "basic"],
+    // external mode: scaffold using the published create-dawn-ai-app, resolved
+    // from the test registry — exactly what a real user runs. pnpm dlx does not
+    // accept --registry, so the registry is passed via npm_config_registry; the
+    // unique per-run URL busts dlx's cache.
+    await runPackagedCommand({
+      args: ["dlx", "create-dawn-ai-app", options.appRoot, "--template", "basic"],
       command: "pnpm",
-      cwd: options.installerDir,
+      cwd: REPO_ROOT,
+      env: { npm_config_registry: getTestRegistryUrl() },
       transcriptPath: options.transcriptPath,
     })
   }
@@ -502,22 +499,28 @@ async function createExpectedInternalFixture(
 
 function normalizeForFixture(
   value: GeneratedAppScenarioResult,
-  context: { readonly appRoot: string; readonly tarballs: Readonly<Record<string, string>> },
+  context: { readonly appRoot: string; readonly dawnVersion: string },
 ): GeneratedAppScenarioResult {
-  const tarballPairs: Array<readonly [string, string]> = Object.entries(context.tarballs).map(
-    ([name, tarballPath]) => [tarballPath, `<tarball:${name}>`] as const,
-  )
-
   return normalizeValue(value, [
     [`/private${context.appRoot}`, "<app-root>"],
     [context.appRoot, "<app-root>"],
-    ...tarballPairs,
-    [`/private${dirname(context.tarballs["@dawn-ai/cli"])}`, "<packs-dir>"],
-    [dirname(context.tarballs["@dawn-ai/cli"]), "<packs-dir>"],
+    [context.dawnVersion, "<dawn-version>"],
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
     ["4.1.4", "<version:vitest>"],
   ]) as GeneratedAppScenarioResult
+}
+
+async function readDawnVersion(): Promise<string> {
+  const corePackageJson = JSON.parse(
+    await readFile(resolve(REPO_ROOT, "packages/core/package.json"), "utf8"),
+  ) as { version?: string }
+
+  if (!corePackageJson.version) {
+    throw new Error("Could not read @dawn-ai/core version for fixture normalization")
+  }
+
+  return corePackageJson.version
 }
 
 function normalizeForInternalFixture(

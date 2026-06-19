@@ -1,32 +1,18 @@
 import { spawn } from "node:child_process"
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { basename, join, resolve } from "node:path"
+import { join } from "node:path"
 
 import { spawnProcess } from "../../packages/devkit/src/testing/index.ts"
 import {
   appendDevServerTranscript,
-  startDevServer,
   type DevServerHandle,
+  startDevServer,
 } from "../runtime/support/dev-server.ts"
-
-const REPO_ROOT = resolve(import.meta.dirname, "../..")
 
 export interface TrackedTempDir {
   path: string
   preserve: boolean
-}
-
-export interface CreatePackagedInstallerOptions {
-  readonly packageNames?: readonly string[]
-  readonly tempRoot: string
-  readonly transcriptPath?: string
-}
-
-export interface CreatePackagedInstallerResult {
-  readonly installerDir: string
-  readonly packsDir: string
-  readonly tarballs: Readonly<Record<string, string>>
 }
 
 export interface PackagedDevServerSession {
@@ -59,100 +45,10 @@ export async function cleanupTrackedTempDirs(registry: TrackedTempDir[]): Promis
       .filter((entry) => !entry.preserve)
       // maxRetries handles the ENOTEMPTY race where a just-killed dev server's
       // child flushes a SQLite WAL file into .dawn/ between readdir and rmdir.
-      .map((entry) => rm(entry.path, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 })),
+      .map((entry) =>
+        rm(entry.path, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }),
+      ),
   )
-}
-
-export async function createPackagedInstaller(
-  options: CreatePackagedInstallerOptions,
-): Promise<CreatePackagedInstallerResult> {
-  const packsDir = join(options.tempRoot, "packs")
-  const installerDir = join(options.tempRoot, "installer")
-  const packageNames = ["@dawn-ai/devkit", "create-dawn-ai-app", ...(options.packageNames ?? [])].filter(
-    (value, index, allValues) => allValues.indexOf(value) === index,
-  )
-
-  await mkdir(packsDir, { recursive: true })
-  await mkdir(installerDir, { recursive: true })
-
-  await runPackagedCommand({
-    args: ["--filter", "create-dawn-ai-app", "build"],
-    command: "pnpm",
-    cwd: REPO_ROOT,
-    transcriptPath: options.transcriptPath,
-  })
-
-  const tarballs = Object.fromEntries(
-    await Promise.all(
-      packageNames.map(async (packageName) => [
-        packageName,
-        await packPackage(packageName, { packsDir, transcriptPath: options.transcriptPath }),
-      ]),
-    ),
-  )
-
-  await writeFile(
-    join(installerDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: "installer",
-        private: true,
-        packageManager: "pnpm@10.33.0",
-        pnpm: {
-          overrides: {
-            "@dawn-ai/devkit": tarballs["@dawn-ai/devkit"],
-            "@dawn-ai/langchain": tarballs["@dawn-ai/langchain"],
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  )
-
-  await runPackagedCommand({
-    args: ["add", tarballs["@dawn-ai/devkit"]],
-    command: "pnpm",
-    cwd: installerDir,
-    transcriptPath: options.transcriptPath,
-  })
-  await runPackagedCommand({
-    args: ["add", tarballs["create-dawn-ai-app"]],
-    command: "pnpm",
-    cwd: installerDir,
-    transcriptPath: options.transcriptPath,
-  })
-
-  return {
-    installerDir,
-    packsDir,
-    tarballs,
-  }
-}
-
-async function packPackage(
-  packageName: string,
-  options: { readonly packsDir: string; readonly transcriptPath?: string },
-): Promise<string> {
-  const packResult = await runPackagedCommand({
-    args: ["--filter", packageName, "pack", "--pack-destination", options.packsDir],
-    command: "pnpm",
-    cwd: REPO_ROOT,
-    transcriptPath: options.transcriptPath,
-  })
-
-  const tarballName = packResult.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .find((line) => line.endsWith(".tgz"))
-
-  if (!tarballName) {
-    throw new Error(`Could not determine tarball name for ${packageName}`)
-  }
-
-  return join(options.packsDir, basename(tarballName))
 }
 
 export async function runPackagedCommand(options: {
