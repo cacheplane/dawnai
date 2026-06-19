@@ -18,3 +18,4 @@ artifacts/
 packages/testing/test/fixtures/**/.dawn/
 test/runtime/dawn-testing/**/.dawn/
 test/runtime/dawn-testing/**/workspace/tool-outputs/
+release-artifacts/

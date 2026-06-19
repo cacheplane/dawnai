@@ -39,11 +39,25 @@ describe("uploadReleaseAssets", () => {
     assert.deepEqual(uploaded, ["@dawn-ai/core@0.1.1", "@dawn-ai/sdk@0.1.1"])
     assert.deepEqual(d.calls, [
       ["copy", "/art/attestation.jsonl", "/art/dawn-ai-core-0.1.1.intoto.jsonl"],
-      ["gh", "release", "upload", "@dawn-ai/core@0.1.1",
-        "/art/dawn-ai-core-0.1.1.tgz", "/art/dawn-ai-core-0.1.1.intoto.jsonl", "--clobber"],
+      [
+        "gh",
+        "release",
+        "upload",
+        "@dawn-ai/core@0.1.1",
+        "/art/dawn-ai-core-0.1.1.tgz",
+        "/art/dawn-ai-core-0.1.1.intoto.jsonl",
+        "--clobber",
+      ],
       ["copy", "/art/attestation.jsonl", "/art/dawn-ai-sdk-0.1.1.intoto.jsonl"],
-      ["gh", "release", "upload", "@dawn-ai/sdk@0.1.1",
-        "/art/dawn-ai-sdk-0.1.1.tgz", "/art/dawn-ai-sdk-0.1.1.intoto.jsonl", "--clobber"],
+      [
+        "gh",
+        "release",
+        "upload",
+        "@dawn-ai/sdk@0.1.1",
+        "/art/dawn-ai-sdk-0.1.1.tgz",
+        "/art/dawn-ai-sdk-0.1.1.intoto.jsonl",
+        "--clobber",
+      ],
     ])
   })
 

@@ -76,7 +76,13 @@ export async function uploadReleaseAssets({
 
 async function defaultReleaseHasAssets(tag) {
   const out = await runCommand("gh", [
-    "release", "view", tag, "--json", "assets", "--jq", ".assets | length",
+    "release",
+    "view",
+    tag,
+    "--json",
+    "assets",
+    "--jq",
+    ".assets | length",
   ])
   return Number.parseInt(out.trim() || "0", 10) > 0
 }
