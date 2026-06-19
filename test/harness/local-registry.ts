@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
 import type { Server } from "node:http"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
@@ -65,23 +65,39 @@ export async function publishWorkspace(url: string): Promise<void> {
 
   const host = url.replace(/^https?:\/\//, "").replace(/\/$/, "")
 
-  // Write an isolated npmrc that only declares our local registry. We pass
-  // npm_config_userconfig to npm so it reads THIS file instead of ~/.npmrc —
-  // that bypasses any global scope/registry settings that npm 10 would otherwise
-  // apply (including the default replace-registry-host=npmjs behaviour that
-  // silently redirects PUT calls back to registry.npmjs.org).
-  const packsDir = await mkdtemp(join(tmpdir(), "dawn-packs-"))
-  const npmrcPath = join(packsDir, ".npmrc")
-  await writeFile(
-    npmrcPath,
-    [`registry=${url}`, `//${host}/:_authToken=fake`, ""].join("\n"),
-    "utf8",
-  )
+  // npm config passed as env, the highest-precedence config layer after the command
+  // line. Setting these in the publish env makes them authoritative: they override
+  // any `registry`/auth inherited from ~/.npmrc, the project .npmrc, or an
+  // env-injected npm_config_registry, regardless of what the host machine carries.
+  //
+  //   - registry: the local Verdaccio (the publish target for unscoped packages once
+  //     the inherited default scope is cleared — see `--scope=` below).
+  //   - //<host>/:_authToken: Verdaccio accepts $anonymous publish but npm still
+  //     wants an auth token in the env for the target host, else ENEEDAUTH.
+  //   - replace-registry-host=never: npm 10 otherwise rewrites the PUT target host
+  //     back to the public registry; pin it so the tarball PUT stays local.
+  //
+  // ROOT CAUSE this guards against: `npm publish` resolves the *publish* registry by
+  // scope, not from the top-level `registry`. Two failure modes, both silently
+  // routing to registry.npmjs.org → ENEEDAUTH/E404 on a developer or CI machine:
+  //   1. A SCOPED package (@dawn-ai/*) uses `@<scope>:registry` and falls back to
+  //      the public registry — NOT the top-level `registry` — when that scope has no
+  //      registry. We set `npm_config_@<scope>:registry` per package below.
+  //   2. An inherited default `scope=@foo` in ~/.npmrc routes EVERY publish (even
+  //      unscoped create-dawn-ai-app) through `@foo:registry`, ignoring both
+  //      `--registry` and `npm_config_registry`. We pass `--scope=` to clear it so
+  //      unscoped publishes fall back to the top-level `registry`.
+  const baseEnv: NodeJS.ProcessEnv = {
+    npm_config_registry: url,
+    [`npm_config_//${host}/:_authToken`]: "fake",
+    npm_config_replace_registry_host: "never",
+  }
 
   // Pack each public package into a temp dir, then publish the tarball directly
-  // to the local Verdaccio using `npm publish tarball` with an isolated userconfig.
+  // to the local Verdaccio.
+  const packsDir = await mkdtemp(join(tmpdir(), "dawn-packs-"))
   try {
-    for (const { dir } of packages) {
+    for (const { dir, name } of packages) {
       const packResult = await runPackagedCommand({
         args: ["pack", "--pack-destination", packsDir],
         command: "pnpm",
@@ -97,18 +113,15 @@ export async function publishWorkspace(url: string): Promise<void> {
         throw new Error(`Could not determine tarball name from pnpm pack in ${dir}`)
       }
 
+      const scope = name.startsWith("@") ? name.slice(0, name.indexOf("/")) : undefined
       const tarballPath = join(packsDir, basename(tarballName))
       await runPackagedCommand({
-        args: ["publish", tarballPath, "--tag", "latest", "--access", "public"],
+        // `--scope=` clears any inherited default scope so the publish target comes
+        // from `registry` (for unscoped) or the package's own scope (set in env).
+        args: ["publish", tarballPath, "--tag", "latest", "--access", "public", "--scope="],
         command: "npm",
         cwd: dir,
-        env: {
-          // Point npm at our isolated npmrc so it uses the local registry URL.
-          // This is the only reliable way to override registry in npm >=10 — the
-          // --registry flag and npm_config_registry env var are both overridden by
-          // the user's ~/.npmrc when replace-registry-host=npmjs (npm 10 default).
-          npm_config_userconfig: npmrcPath,
-        },
+        env: scope ? { ...baseEnv, [`npm_config_${scope}:registry`]: url } : baseEnv,
       })
     }
   } finally {
