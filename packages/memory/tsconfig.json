@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../config-typescript/node.json",
+  "compilerOptions": { "outDir": "dist", "rootDir": "src" },
+  "references": [{ "path": "../sqlite-storage" }],
+  "include": ["src/**/*.ts"]
+}
