@@ -10,7 +10,7 @@ import {
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
-import { writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
+import { registryLatestSpecifiers, writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
 import { allocatePort, appendDevServerTranscript, startDevServer } from "./support/dev-server.ts"
 
 // ---------------------------------------------------------------------------
@@ -78,20 +78,6 @@ async function collectSseEvents(response: Response, stopOn?: string): Promise<Ss
 
 const HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV = "DAWN_RUNTIME_ARTIFACT_BASE_DIR"
 const tempDirs: TrackedTempDir[] = []
-
-// Every template @dawn-ai dep resolves from the test registry at its published
-// `latest` tag — exactly what a real `npm install` does.
-function registryLatestSpecifiers() {
-  return {
-    dawnCli: "latest",
-    dawnConfigTypescript: "latest",
-    dawnCore: "latest",
-    dawnEvals: "latest",
-    dawnLangchain: "latest",
-    dawnSdk: "latest",
-    dawnTesting: "latest",
-  }
-}
 
 /**
  * Add the direct deps the agent-protocol overlays import but the base template
@@ -596,7 +582,7 @@ describe("agent protocol permission interrupt + resume", () => {
 describe("agent protocol state persistence", () => {
   it("state survives server kill + restart on a new port", { timeout: 300_000 }, async () => {
     // ------------------------------------------------------------------
-    // 1. Build a packed app with the echo-agent overlay
+    // 1. Scaffold the echo-agent app from the test registry
     // ------------------------------------------------------------------
     const tempRoot = await createTrackedTempDir("dap-", tempDirs)
     const artifactBaseDir = process.env[HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV] ?? tempRoot

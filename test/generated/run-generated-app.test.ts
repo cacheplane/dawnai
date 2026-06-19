@@ -466,8 +466,8 @@ async function createExpectedInternalFixture(
           "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
           "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
         }
-        // sqlite-storage and workspace are only in overrides for internal mode,
-        // not in direct deps (external mode promotes them via extraDependencies)
+        // sqlite-storage and workspace are not direct deps in the generated template;
+        // internal mode references them only via overrides
         delete deps["@dawn-ai/sqlite-storage"]
         delete deps["@dawn-ai/workspace"]
         return deps

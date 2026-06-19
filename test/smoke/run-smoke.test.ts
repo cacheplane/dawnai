@@ -17,24 +17,10 @@ import {
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
-import { writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
+import { registryLatestSpecifiers, writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
 
 const SMOKE_ROOT = resolve(import.meta.dirname)
 const tempDirs: TrackedTempDir[] = []
-
-// Every template @dawn-ai dep resolves from the test registry at its published
-// `latest` tag — exactly what a real `npm install` does.
-function registryLatestSpecifiers() {
-  return {
-    dawnCli: "latest",
-    dawnConfigTypescript: "latest",
-    dawnCore: "latest",
-    dawnEvals: "latest",
-    dawnLangchain: "latest",
-    dawnSdk: "latest",
-    dawnTesting: "latest",
-  }
-}
 
 type SmokeRouteKind = "agent" | "chain" | "graph" | "workflow"
 type SmokeFixtureName = "agent-basic" | "graph-basic" | "workflow-basic"

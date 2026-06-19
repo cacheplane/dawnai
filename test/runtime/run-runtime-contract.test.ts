@@ -25,7 +25,7 @@ import {
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
-import { writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
+import { registryLatestSpecifiers, writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
 import {
   appendDevServerTranscript,
   invokeRunsWait,
@@ -37,20 +37,6 @@ import {
 const RUNTIME_ROOT = resolve(import.meta.dirname)
 const HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV = "DAWN_RUNTIME_ARTIFACT_BASE_DIR"
 const tempDirs: TrackedTempDir[] = []
-
-// Every template @dawn-ai dep resolves from the test registry at its published
-// `latest` tag — exactly what a real `npm install` does.
-function registryLatestSpecifiers() {
-  return {
-    dawnCli: "latest",
-    dawnConfigTypescript: "latest",
-    dawnCore: "latest",
-    dawnEvals: "latest",
-    dawnLangchain: "latest",
-    dawnSdk: "latest",
-    dawnTesting: "latest",
-  }
-}
 
 type RuntimeFixtureName =
   | "agent-basic"

@@ -2,6 +2,23 @@ import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 /**
+ * Version specifiers for all @dawn-ai packages that the scaffold templates declare.
+ * Every dep resolves from the test registry at the `latest` dist-tag, exactly what
+ * a real `npm install` does against the Verdaccio uplink.
+ */
+export function registryLatestSpecifiers() {
+  return {
+    dawnCli: "latest",
+    dawnConfigTypescript: "latest",
+    dawnCore: "latest",
+    dawnEvals: "latest",
+    dawnLangchain: "latest",
+    dawnSdk: "latest",
+    dawnTesting: "latest",
+  }
+}
+
+/**
  * Point a scaffolded app at the ephemeral test registry. Real users install from
  * a registry; the generated app does exactly that — no overrides, no tarball pins.
  * A genuinely missing @dawn-ai package now 404s from Verdaccio (the registry is
