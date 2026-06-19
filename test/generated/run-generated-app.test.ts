@@ -447,31 +447,29 @@ async function createExpectedInternalFixture(
       dependencies: Record<string, string>
       devDependencies: Record<string, string>
       name: string
-      pnpm: {
-        overrides: Record<string, string>
-      }
     }
   }
+
+  // Internal mode rewrites every dawn specifier from "latest" to a repo file: URL (normalized
+  // to <repo:...>) and adds a pnpm.overrides block covering all SCAFFOLD_PACKAGES.
+  // We build the overrides block directly from SCAFFOLD_PACKAGES rather than reading
+  // it from the external fixture (which has no pnpm key in the Verdaccio-install shape).
+  const repoOverrides = Object.fromEntries(
+    SCAFFOLD_PACKAGES.map((name) => [name, `<repo:${name}>`]),
+  )
 
   return {
     ...expected,
     packageJson: {
       ...expected.packageJson,
       name: appName,
-      dependencies: (() => {
-        const deps = {
-          ...expected.packageJson.dependencies,
-          "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
-          "@dawn-ai/core": "<repo:@dawn-ai/core>",
-          "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
-          "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
-        }
-        // sqlite-storage and workspace are not direct deps in the generated template;
-        // internal mode references them only via overrides
-        delete deps["@dawn-ai/sqlite-storage"]
-        delete deps["@dawn-ai/workspace"]
-        return deps
-      })(),
+      dependencies: {
+        ...expected.packageJson.dependencies,
+        "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
+        "@dawn-ai/core": "<repo:@dawn-ai/core>",
+        "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
+        "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
+      },
       devDependencies: {
         ...expected.packageJson.devDependencies,
         "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
@@ -479,19 +477,7 @@ async function createExpectedInternalFixture(
         "@dawn-ai/testing": "<repo:@dawn-ai/testing>",
       },
       pnpm: {
-        overrides: {
-          "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
-          "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
-          "@dawn-ai/core": "<repo:@dawn-ai/core>",
-          "@dawn-ai/evals": "<repo:@dawn-ai/evals>",
-          "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
-          "@dawn-ai/langgraph": "<repo:@dawn-ai/langgraph>",
-          "@dawn-ai/permissions": "<repo:@dawn-ai/permissions>",
-          "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
-          "@dawn-ai/sqlite-storage": "<repo:@dawn-ai/sqlite-storage>",
-          "@dawn-ai/testing": "<repo:@dawn-ai/testing>",
-          "@dawn-ai/workspace": "<repo:@dawn-ai/workspace>",
-        },
+        overrides: repoOverrides,
       },
     },
   }
