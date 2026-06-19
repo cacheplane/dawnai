@@ -10,6 +10,7 @@ import { registerBuildCommand } from "./commands/build.js"
 import { registerCheckCommand } from "./commands/check.js"
 import { registerDevCommand } from "./commands/dev.js"
 import { registerEvalCommand } from "./commands/eval.js"
+import { registerMemoryCommand } from "./commands/memory.js"
 import { registerRoutesCommand } from "./commands/routes.js"
 import { registerRunCommand } from "./commands/run.js"
 import { registerTestCommand } from "./commands/test.js"
@@ -45,6 +46,7 @@ export function createProgram(io: CommandIo): Command {
   registerCheckCommand(program, io)
   registerDevCommand(program, io)
   registerEvalCommand(program, io)
+  registerMemoryCommand(program, io)
   registerRunCommand(program, io)
   registerRoutesCommand(program, io)
   registerTestCommand(program, io)
