@@ -1,0 +1,121 @@
+---
+title: Eve validates the shape. Now pick your runtime.
+description: Vercel shipped eve, an open-source agent framework where each agent is a directory of files. It looks great, and it confirms the thesis behind Dawn. Here is an honest side-by-side, and where Dawn fits.
+date: 2026-06-18
+tags: [philosophy, agents]
+type: post
+author: brian
+---
+
+Yesterday Vercel shipped [eve](https://vercel.com/changelog/introducing-eve-an-open-source-agent-framework), an open-source framework for building agents.
+
+I have spent a fair amount of time with the launch material, and I want to say the obvious thing first: it looks great.
+
+An agent in eve is a directory of files. Instructions live in `instructions.md`. The model lives in `agent.ts`. Tools, skills, subagents, channels, and schedules are files and folders you add as you grow. The launch demo even runs on Claude Opus 4.8.
+
+If you have read anything I have written about Dawn, you can probably guess my reaction. This is not a threat. This is validation.
+
+## Why this is good news
+
+I built Dawn on one bet: an agent application needs application *structure*, not just a runtime.
+
+That bet only pays off if it is actually correct. It is easy to convince yourself that the shape in your head is the right one. It is much more convincing when an independent team, at Vercel's level, ships the same idea on the same day you would have argued for it.
+
+Two teams, working separately, landed on agents-as-directories. When that happens, the shape is not a matter of taste anymore. It is a signal.
+
+So I am glad eve exists. Competition is good. It moves the whole space toward conventions, and conventions are what let the rest of us stop hand-wiring the same registries over and over.
+
+## Where eve and Dawn agree
+
+The overlap is striking. Here is the shared thesis, as plainly as I can state it:
+
+- An agent, or a route, is a folder.
+- Tools are files next to the thing that uses them.
+- Instructions and skills are markdown.
+- Subagents, planning, and human-in-the-loop compose through the tree, not through hidden setup code.
+- You can open the file tree and get a useful read on the application.
+
+Both frameworks believe the structure should do work. You can move a folder, delete it, review it in a pull request, and answer "what can this agent do?" from disk. That is the part that matters, and eve clearly gets it.
+
+## An honest side-by-side
+
+Where the two diverge is worth being precise about, including where eve is ahead. Here is the capability matrix as I read it today, June 2026.
+
+| Capability | eve | Dawn |
+| --- | --- | --- |
+| Agent unit | Directory of files | Route folder under `src/app/` |
+| Instructions | `instructions.md` | `systemPrompt` + `AGENTS.md` memory |
+| Tools | Files in the agent directory | Route-local `tools/`, input types inferred from TypeScript |
+| Planning / skills | Markdown files | `plan.md` + `skills/<name>/SKILL.md` |
+| Subagents | Built in | Built in (`subagents/` or descriptor) |
+| Human-in-the-loop | Built-in approvals | Permission gate + Agent Protocol resume |
+| Durable execution | Built in | SQLite checkpointer; threads survive restart |
+| Sandboxed compute | First-class adapter (Vercel Sandbox / Docker / microsandbox / just-bash) | Path-jailed `ctx.fs` guardrail; real isolation on the roadmap |
+| Channels | Slack, Discord, GitHub | None built in; you wire your own over the HTTP API |
+| Observability | OpenTelemetry tracing | LangSmith tracing (automatic via LangGraph) |
+| Evals | Built in | `dawn eval`, replay and live modes, co-located per route |
+| Runtime | Vercel | LangGraph.js |
+| Deploy | `vercel deploy`, unchanged project | `dawn build` → `langgraph.json` → LangSmith |
+| License | Apache 2.0 | MIT |
+
+A table flattens nuance, so let me expand the rows that actually matter.
+
+**File conventions.** Nearly the same philosophy, with small shape differences. eve uses `agent.ts` plus `instructions.md` at the root of an agent directory. Dawn uses a route folder under `src/app/` with an `index.ts` descriptor, route-local `tools/`, `state.ts`, and markdown for memory, planning, and skills. If you are comfortable in one, you will be comfortable in the other. The one Dawn detail I would point to is that a tool's input type comes from the TypeScript function signature, not a hand-written schema, so the type is the contract the model sees.
+
+**Sandboxed compute.** This is where eve leads today, and I am not going to pretend otherwise. eve ships sandboxed compute as a first-class capability, with an adapter that runs on Vercel Sandbox when deployed and on Docker, microsandbox, or just-bash locally. Dawn does not have that yet. What Dawn gives a tool today is a permission-gated, path-jailed, timeout-capped `ctx.fs` handle, and I am careful to call that what it is: a guardrail, not a security sandbox. That is true today. Real isolation is on the Dawn roadmap as a pluggable execution backend, so you can bring Docker, a microVM, or a hosted sandbox without coupling your agent to one of them. For now, if sandboxed compute is load-bearing for you, eve ships it and Dawn does not yet.
+
+**Channels.** eve ships Slack, Discord, and GitHub as built-in surfaces. Dawn does not. Dawn is a headless runtime that exposes the Agent Protocol over HTTP, and you bring the surface: a chat UI, a Slack bot, a cron job, whatever points at the API. That is more wiring up front and more freedom after. If you want a Slack agent this afternoon, eve is the shorter path.
+
+**Durable execution and evals.** Both ship these, and I think they are close. Dawn persists threads through a SQLite checkpointer, so a conversation survives a process restart, and `dawn eval` runs co-located evals in a deterministic replay mode that is safe to run in CI, with a live mode when you want the real model. eve ships durable execution and a built-in evals system in the same spirit. This is convergence again, not a gap.
+
+**Runtime and deploy.** eve is a Vercel project. Its best trick is that `vercel deploy` ships the agent to production unchanged, exactly as it ran on your machine. Dawn is built on LangChain's [Agent Protocol](/docs/dev-server). `dawn dev` serves the Agent Protocol locally, and `dawn build` emits a `langgraph.json` you deploy to LangSmith.
+
+**Ecosystem.** eve sits in the Vercel and AI SDK orbit. Dawn sits in the LangChain and LangGraph.js orbit. Neither is wrong. They are different centers of gravity, and which one fits you is mostly a question of where the rest of your stack already lives.
+
+## When each one is the better choice
+
+I would rather give you a decision than a sales pitch. Here is how I would choose.
+
+**Reach for eve when:**
+
+- You are already deploying on Vercel and want `vercel deploy` to carry the agent too.
+- You need sandboxed compute as a shipped feature, not a roadmap item.
+- You want Slack, Discord, or GitHub as a built-in channel with little wiring.
+- You value a single vendor owning the whole path from dev to production.
+
+**Reach for Dawn when:**
+
+- You are already working with LangChain and LangGraph.js, or you deploy to LangSmith.
+- You want the runtime contract to be an open protocol you can host yourself.
+- You want your agent code to outlive any one vendor's roadmap.
+- You want tool input types inferred from TypeScript rather than written twice.
+
+Neither list is a knock on the other tool. They are honestly different bets, and the right answer depends on where your stack already lives.
+
+## The real difference is the bet
+
+eve's superpower is that an agent is an ordinary Vercel project. That is genuinely great, and it is also the gravity well. The thing that makes deploy effortless is the thing that ties the agent to one platform.
+
+Dawn makes a different bet. The runtime contract is the Agent Protocol, an open HTTP shape you can host yourself, point any Agent Protocol client at, and deploy to LangSmith. There is no single cloud you have to be native to.
+
+That bet is not free. It means Dawn leans on the LangGraph.js runtime and the LangSmith deployment target instead of owning the whole path end to end. From my experience, that is the right trade for teams who want their agent code to outlive any one vendor's roadmap. Your mileage may vary, and if you are already all-in on Vercel, eve removes friction Dawn cannot.
+
+## Try the shape that fits you
+
+Here is the honest summary. Two independent teams converged on the same idea, which means the idea is sound: agent applications should be directories of files, and the file tree should be the source of truth.
+
+So pick the runtime that fits where you already are.
+
+If you are building on Vercel, eve is a great choice and you should try it.
+
+If you love this shape but you are not in the Vercel ecosystem, or you are already working with LangChain and LangGraph.js, Dawn gives you the same file-based conventions on an open runtime:
+
+```bash
+pnpm create dawn-ai-app my-agents
+cd my-agents
+pnpm dev
+```
+
+For the deeper read, start with [Mental Model](/docs/mental-model), [Routes](/docs/routes), and the [Dev Server](/docs/dev-server).
+
+Competition like this is the best thing that can happen to an idea. It is good for eve, it is good for Dawn, and it is good for anyone trying to build agents that read like real applications.
