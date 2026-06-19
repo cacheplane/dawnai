@@ -175,6 +175,33 @@ If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACI
 
 See [Dev Server](/docs/dev-server) for the full protocol reference and architecture notes.
 
+## `dawn memory`
+
+Inspects and manages the app's [long-term memory](/docs/memory) store — the
+typed records the agent writes via its generated `remember` tool. Use it to
+review and promote the `candidate` writes that the default `memory: { writes: "candidate" }`
+config holds back from `recall`.
+
+```
+dawn memory list
+dawn memory search <query>
+dawn memory inspect <id>
+dawn memory approve <id>
+dawn memory reject <id>
+dawn memory forget <id>
+```
+
+Subcommands:
+- `list` — list pending candidate records.
+- `search <query>` — list candidates whose content or namespace matches `<query>`.
+- `inspect <id>` — print one record as formatted JSON.
+- `approve <id>` — promote a candidate to an `active` record so `recall` surfaces it.
+- `reject <id>` — drop a candidate without promoting it.
+- `forget <id>` — delete a record by id.
+
+Flags:
+- `--cwd <path>` — operate on a different app root.
+
 ## Exit codes
 
 | Code | Meaning |
