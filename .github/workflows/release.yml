@@ -41,8 +41,9 @@ jobs:
 
       # Trusted publishing requires npm 11.5.1+. Node 22's bundled npm 10.x
       # doesn't fully support the OIDC trusted-publishing flow.
+      # Pinned to an exact version (not @latest) for OSSF Pinned-Dependencies.
       - name: Upgrade npm for trusted publishing
-        run: npm install --global npm@latest
+        run: npm install --global npm@11.17.0
 
       - name: Install
         run: pnpm install --frozen-lockfile
