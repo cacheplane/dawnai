@@ -7,6 +7,7 @@ import {
   type CapabilityContribution,
   createAgentsMdMarker,
   createCapabilityRegistry,
+  createMemoryMarker,
   createMemoryMdMarker,
   createPlanningMarker,
   createSkillsMarker,
@@ -46,7 +47,9 @@ import { localFilesystem } from "@dawn-ai/workspace"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
+import { loadRouteMemory } from "./load-memory.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
+import { buildMemoryContext, resolveMemoryStore, resolveMemoryWrites } from "./resolve-memory.js"
 import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,
@@ -356,6 +359,7 @@ async function prepareRouteExecution(options: {
   readonly appRoot: string
   readonly routeFile: string
   readonly routeId: string
+  readonly routePath: string
   readonly signal?: AbortSignal
 }): Promise<PreparedRoute | PreparedRouteError> {
   const routeDir = resolve(options.routeFile, "..")
@@ -482,6 +486,7 @@ async function prepareRouteExecution(options: {
       createPlanningMarker(),
       createAgentsMdMarker(),
       createMemoryMdMarker(),
+      createMemoryMarker(),
       createSkillsMarker(),
       createSubagentsMarker(),
       createWorkspaceMarker(),
@@ -499,6 +504,31 @@ async function prepareRouteExecution(options: {
     // invalidated in dev when the runtime rebuilds the manifest.
     const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
 
+    // Build the memory context if this route has a memory.ts.
+    let memoryContext: import("@dawn-ai/core").MemoryContext | undefined
+    const memoryFile = join(routeDir, "memory.ts")
+    if (existsSync(memoryFile)) {
+      const defined = await loadRouteMemory(memoryFile)
+      const store = await resolveMemoryStore(options.appRoot)
+      const writes = await resolveMemoryWrites(options.appRoot)
+      const extraScope = loadedDawnConfig?.memory?.resolveScope?.({
+        routePath: options.routePath,
+        appRoot: options.appRoot,
+      })
+      memoryContext = buildMemoryContext({
+        defined,
+        store,
+        writes,
+        appRoot: options.appRoot,
+        routePath: options.routePath,
+        now: new Date().toISOString(),
+        ...(loadedDawnConfig?.memory?.indexMaxEntries !== undefined
+          ? { indexMaxEntries: loadedDawnConfig.memory.indexMaxEntries }
+          : {}),
+        ...(extraScope ? { extraScope } : {}),
+      })
+    }
+
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
@@ -506,6 +536,7 @@ async function prepareRouteExecution(options: {
       ...(configBackends ? { backends: configBackends } : {}),
       permissions: permissionsStore,
       appRoot: options.appRoot,
+      ...(memoryContext ? { memory: memoryContext } : {}),
     })
 
     if (applied.errors.length > 0) {
