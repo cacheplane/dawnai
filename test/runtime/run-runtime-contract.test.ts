@@ -18,17 +18,14 @@ import {
   type HarnessPhaseResult,
   spawnProcess,
 } from "../../packages/devkit/src/testing/index.ts"
+import { getTestRegistryUrl } from "../harness/local-registry.ts"
 import {
   cleanupTrackedTempDirs,
-  createPackagedInstaller,
   createTrackedTempDir,
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
-import {
-  rewriteGeneratedAppDependencies,
-  SCAFFOLD_PACKAGES,
-} from "../harness/scaffold-packaging.js"
+import { writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
 import {
   appendDevServerTranscript,
   invokeRunsWait,
@@ -40,6 +37,20 @@ import {
 const RUNTIME_ROOT = resolve(import.meta.dirname)
 const HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV = "DAWN_RUNTIME_ARTIFACT_BASE_DIR"
 const tempDirs: TrackedTempDir[] = []
+
+// Every template @dawn-ai dep resolves from the test registry at its published
+// `latest` tag — exactly what a real `npm install` does.
+function registryLatestSpecifiers() {
+  return {
+    dawnCli: "latest",
+    dawnConfigTypescript: "latest",
+    dawnCore: "latest",
+    dawnEvals: "latest",
+    dawnLangchain: "latest",
+    dawnSdk: "latest",
+    dawnTesting: "latest",
+  }
+}
 
 type RuntimeFixtureName =
   | "agent-basic"
@@ -82,7 +93,6 @@ describe("runtime contract harness", () => {
       status: "passed",
     })
     expect(result.phases.map((phase) => phase.name)).toEqual([
-      "packaged-installer",
       "install",
       "execute-direct",
       "execute-cli",
@@ -103,7 +113,6 @@ describe("runtime contract harness", () => {
       status: "passed",
     })
     expect(result.phases.map((phase) => phase.name)).toEqual([
-      "packaged-installer",
       "install",
       "execute-direct",
       "execute-cli",
@@ -124,7 +133,6 @@ describe("runtime contract harness", () => {
       status: "passed",
     })
     expect(result.phases.map((phase) => phase.name)).toEqual([
-      "packaged-installer",
       "install",
       "execute-direct",
       "execute-cli",
@@ -145,7 +153,6 @@ describe("runtime contract harness", () => {
       status: "passed",
     })
     expect(result.phases.map((phase) => phase.name)).toEqual([
-      "packaged-installer",
       "install",
       "execute-direct",
       "execute-cli",
@@ -166,7 +173,6 @@ describe("runtime contract harness", () => {
       status: "passed",
     })
     expect(result.phases.map((phase) => phase.name)).toEqual([
-      "packaged-installer",
       "install",
       "execute-direct",
       "execute-cli",
@@ -187,7 +193,6 @@ describe("runtime contract harness", () => {
       status: "passed",
     })
     expect(result.phases.map((phase) => phase.name)).toEqual([
-      "packaged-installer",
       "install",
       "execute-direct",
       "execute-cli",
@@ -484,35 +489,14 @@ async function withRuntimeScenario(
 
   try {
     const overlay = await readOverlay(fixtureName)
-    const { tarballs } = await recordPhase(phases, "packaged-installer", async () => {
-      return await createPackagedInstaller({
-        packageNames: [...SCAFFOLD_PACKAGES],
-        tempRoot,
-        transcriptPath,
-      })
-    })
     const generatedApp = await createGeneratedApp({
       appName: fixtureName,
       artifactRoot,
-      specifiers: {
-        dawnCli: tarballs["@dawn-ai/cli"],
-        dawnConfigTypescript: tarballs["@dawn-ai/config-typescript"],
-        dawnCore: tarballs["@dawn-ai/core"],
-        dawnLangchain: tarballs["@dawn-ai/langchain"],
-      },
+      specifiers: registryLatestSpecifiers(),
       template: "basic",
     })
 
-    await rewriteGeneratedAppDependencies({
-      appRoot: generatedApp.appRoot,
-      tarballs,
-      extraDependencies: {
-        "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
-        "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
-        "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
-      },
-      removeDependencies: ["langchain", "@langchain/openai"],
-    })
+    await writeRegistryNpmrc(generatedApp.appRoot, getTestRegistryUrl())
     await applyOverlay({ appRoot: generatedApp.appRoot, overlay })
 
     await recordPhase(phases, "install", async () => {

@@ -1,19 +1,16 @@
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
 import { afterEach, describe, expect, it } from "vitest"
 import { createGeneratedApp } from "../../packages/devkit/src/testing/index.ts"
+import { getTestRegistryUrl } from "../harness/local-registry.ts"
 import {
   cleanupTrackedTempDirs,
-  createPackagedInstaller,
   createTrackedTempDir,
   markTrackedTempDirForPreserve,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
-import {
-  rewriteGeneratedAppDependencies,
-  SCAFFOLD_PACKAGES,
-} from "../harness/scaffold-packaging.js"
+import { writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
 import { allocatePort, appendDevServerTranscript, startDevServer } from "./support/dev-server.ts"
 
 // ---------------------------------------------------------------------------
@@ -81,6 +78,43 @@ async function collectSseEvents(response: Response, stopOn?: string): Promise<Ss
 
 const HARNESS_RUNTIME_ARTIFACT_BASE_DIR_ENV = "DAWN_RUNTIME_ARTIFACT_BASE_DIR"
 const tempDirs: TrackedTempDir[] = []
+
+// Every template @dawn-ai dep resolves from the test registry at its published
+// `latest` tag — exactly what a real `npm install` does.
+function registryLatestSpecifiers() {
+  return {
+    dawnCli: "latest",
+    dawnConfigTypescript: "latest",
+    dawnCore: "latest",
+    dawnEvals: "latest",
+    dawnLangchain: "latest",
+    dawnSdk: "latest",
+    dawnTesting: "latest",
+  }
+}
+
+/**
+ * Add the direct deps the agent-protocol overlays import but the base template
+ * does not declare: the echo route imports @dawn-ai/sqlite-storage and
+ * @langchain/langgraph directly, and the workspace/permissions capabilities need
+ * their packages. @dawn-ai/* resolve from the registry at `latest`; the
+ * @langchain/langgraph pin is load-bearing (the overlay compiles a StateGraph
+ * against this major) so it is preserved verbatim.
+ */
+async function addAgentProtocolDependencies(appRoot: string): Promise<void> {
+  const packageJsonPath = join(appRoot, "package.json")
+  const pkg = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+    dependencies?: Record<string, string>
+  }
+  pkg.dependencies = {
+    ...pkg.dependencies,
+    "@dawn-ai/permissions": "latest",
+    "@dawn-ai/sqlite-storage": "latest",
+    "@dawn-ai/workspace": "latest",
+    "@langchain/langgraph": "1.3.0",
+  }
+  await writeFile(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`, "utf8")
+}
 
 afterEach(async () => {
   await cleanupTrackedTempDirs(tempDirs)
@@ -176,36 +210,16 @@ describe("agent protocol permission interrupt + resume", () => {
     let appRoot: string
 
     try {
-      const { tarballs } = await createPackagedInstaller({
-        packageNames: [...SCAFFOLD_PACKAGES],
-        tempRoot,
-        transcriptPath,
-      })
-
       const generatedApp = await createGeneratedApp({
         appName: "resume-neg",
         artifactRoot: tempRoot,
-        specifiers: {
-          dawnCli: tarballs["@dawn-ai/cli"],
-          dawnConfigTypescript: tarballs["@dawn-ai/config-typescript"],
-          dawnCore: tarballs["@dawn-ai/core"],
-          dawnLangchain: tarballs["@dawn-ai/langchain"],
-        },
+        specifiers: registryLatestSpecifiers(),
         template: "basic",
       })
 
       appRoot = generatedApp.appRoot
-      await rewriteGeneratedAppDependencies({
-        appRoot,
-        tarballs,
-        extraDependencies: {
-          "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
-          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
-          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
-          "@langchain/langgraph": "1.3.0",
-        },
-        removeDependencies: ["langchain", "@langchain/openai"],
-      })
+      await addAgentProtocolDependencies(appRoot)
+      await writeRegistryNpmrc(appRoot, getTestRegistryUrl())
 
       // Write echo agent route and a workspace directory
       const routeFile = join(appRoot, "src/app/echo/index.ts")
@@ -279,36 +293,16 @@ describe("agent protocol permission interrupt + resume", () => {
     let appRoot: string
 
     try {
-      const { tarballs } = await createPackagedInstaller({
-        packageNames: [...SCAFFOLD_PACKAGES],
-        tempRoot,
-        transcriptPath,
-      })
-
       const generatedApp = await createGeneratedApp({
         appName: "resume-404",
         artifactRoot: tempRoot,
-        specifiers: {
-          dawnCli: tarballs["@dawn-ai/cli"],
-          dawnConfigTypescript: tarballs["@dawn-ai/config-typescript"],
-          dawnCore: tarballs["@dawn-ai/core"],
-          dawnLangchain: tarballs["@dawn-ai/langchain"],
-        },
+        specifiers: registryLatestSpecifiers(),
         template: "basic",
       })
 
       appRoot = generatedApp.appRoot
-      await rewriteGeneratedAppDependencies({
-        appRoot,
-        tarballs,
-        extraDependencies: {
-          "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
-          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
-          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
-          "@langchain/langgraph": "1.3.0",
-        },
-        removeDependencies: ["langchain", "@langchain/openai"],
-      })
+      await addAgentProtocolDependencies(appRoot)
+      await writeRegistryNpmrc(appRoot, getTestRegistryUrl())
 
       const routeFile = join(appRoot, "src/app/echo/index.ts")
       await mkdir(dirname(routeFile), { recursive: true })
@@ -365,48 +359,17 @@ describe("agent protocol permission interrupt + resume", () => {
       let appRoot: string
 
       try {
-        const { tarballs } = await createPackagedInstaller({
-          packageNames: [
-            "@dawn-ai/cli",
-            "@dawn-ai/config-typescript",
-            "@dawn-ai/core",
-            "@dawn-ai/langchain",
-            "@dawn-ai/langgraph",
-            "@dawn-ai/permissions",
-            "@dawn-ai/sdk",
-            "@dawn-ai/sqlite-storage",
-            "@dawn-ai/testing",
-            "@dawn-ai/workspace",
-          ],
-          tempRoot,
-          transcriptPath,
-        })
-
         const generatedApp = await createGeneratedApp({
           appName: "ap-perm",
           artifactRoot: artifactBaseDir,
-          specifiers: {
-            dawnCli: tarballs["@dawn-ai/cli"],
-            dawnConfigTypescript: tarballs["@dawn-ai/config-typescript"],
-            dawnCore: tarballs["@dawn-ai/core"],
-            dawnLangchain: tarballs["@dawn-ai/langchain"],
-          },
+          specifiers: registryLatestSpecifiers(),
           template: "basic",
         })
 
         appRoot = generatedApp.appRoot
 
-        await rewriteGeneratedAppDependencies({
-          appRoot,
-          tarballs,
-          extraDependencies: {
-            "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
-            "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
-            "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
-            "@langchain/langgraph": "1.3.0",
-          },
-          removeDependencies: ["langchain", "@langchain/openai"],
-        })
+        await addAgentProtocolDependencies(appRoot)
+        await writeRegistryNpmrc(appRoot, getTestRegistryUrl())
 
         // Write the perm-agent route overlay at src/app/perm-agent/index.ts
         const routeFile = join(appRoot, "src/app/perm-agent/index.ts")
@@ -643,38 +606,19 @@ describe("agent protocol state persistence", () => {
     let appRoot: string
 
     try {
-      const { tarballs } = await createPackagedInstaller({
-        packageNames: [...SCAFFOLD_PACKAGES],
-        tempRoot,
-        transcriptPath,
-      })
-
       const generatedApp = await createGeneratedApp({
         appName: "ap-persist",
         artifactRoot: artifactBaseDir,
-        specifiers: {
-          dawnCli: tarballs["@dawn-ai/cli"],
-          dawnConfigTypescript: tarballs["@dawn-ai/config-typescript"],
-          dawnCore: tarballs["@dawn-ai/core"],
-          dawnLangchain: tarballs["@dawn-ai/langchain"],
-        },
+        specifiers: registryLatestSpecifiers(),
         template: "basic",
       })
 
       appRoot = generatedApp.appRoot
 
-      // Rewrite dependencies to tarballs (mirrors run-runtime-contract.test.ts)
-      await rewriteGeneratedAppDependencies({
-        appRoot,
-        tarballs,
-        extraDependencies: {
-          "@dawn-ai/permissions": tarballs["@dawn-ai/permissions"]!,
-          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
-          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
-          "@langchain/langgraph": "1.3.0",
-        },
-        removeDependencies: ["langchain", "@langchain/openai"],
-      })
+      // Install @dawn-ai/* + @langchain/langgraph from the registry, mirroring a
+      // real user (see run-runtime-contract.test.ts).
+      await addAgentProtocolDependencies(appRoot)
+      await writeRegistryNpmrc(appRoot, getTestRegistryUrl())
 
       // Write the echo-agent route overlay
       const routeFile = join(appRoot, "src/app/echo/index.ts")
