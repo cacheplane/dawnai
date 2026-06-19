@@ -18,6 +18,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
+      attestations: write
     env:
       NPM_CONFIG_PROVENANCE: "true"
 
@@ -64,3 +65,22 @@ jobs:
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Attest the just-published tarballs (kept in release-artifacts/ by
+      # release-publish.mjs). Keyless OIDC — registers SLSA in-toto provenance
+      # in GitHub's attestation store and emits a bundle file.
+      - name: Attest release tarballs
+        id: attest
+        if: ${{ hashFiles('release-artifacts/*.tgz') != '' }}
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: "release-artifacts/*.tgz"
+
+      # Attach each package tarball + a .intoto.jsonl-named copy of the bundle
+      # to its GitHub Release so OSSF Signed-Releases finds a signature asset.
+      - name: Upload signed release assets
+        if: ${{ steps.attest.outputs.bundle-path != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: node scripts/upload-release-assets.mjs
