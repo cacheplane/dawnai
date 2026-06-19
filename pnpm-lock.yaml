@@ -195,6 +195,9 @@ importers:
       '@dawn-ai/langgraph':
         specifier: workspace:*
         version: link:../langgraph
+      '@dawn-ai/memory':
+        specifier: workspace:*
+        version: link:../memory
       '@dawn-ai/permissions':
         specifier: workspace:*
         version: link:../permissions
@@ -413,6 +416,9 @@ importers:
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/sqlite-storage:
     devDependencies:

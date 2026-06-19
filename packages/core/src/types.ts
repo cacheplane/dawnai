@@ -63,6 +63,20 @@ export interface DawnConfig {
       readonly signal: AbortSignal
     }) => Promise<string>
   }
+  readonly memory?: {
+    readonly enabled?: boolean
+    /** Custom memory store. Defaults to an SQLite-backed store at <appRoot>/.dawn/memory.sqlite. */
+    readonly store?: import("./capabilities/types.js").MemoryStoreLike
+    /** Write-governance mode. "off" — never write; "candidate" — write as candidate (default); "auto" — write and auto-promote. */
+    readonly writes?: "off" | "candidate" | "auto"
+    /** Maximum number of entries returned by the index. */
+    readonly indexMaxEntries?: number
+    /** Derive the memory namespace scope for a given route. */
+    readonly resolveScope?: (ctx: {
+      readonly routePath: string
+      readonly appRoot: string
+    }) => Record<string, string>
+  }
 }
 
 export type RouteSegment =
