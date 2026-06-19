@@ -50,6 +50,23 @@ export async function uploadReleaseAssets({
   copyProvenance,
   log,
 }) {
+  if (!Array.isArray(manifest)) {
+    throw new Error("Invalid release manifest: expected an array")
+  }
+
+  for (let i = 0; i < manifest.length; i++) {
+    const entry = manifest[i]
+    if (
+      !entry ||
+      typeof entry.tag !== "string" ||
+      !entry.tag ||
+      typeof entry.tarball !== "string" ||
+      !entry.tarball
+    ) {
+      throw new Error(`Invalid release manifest: entry ${i} missing tag/tarball`)
+    }
+  }
+
   const uploaded = []
 
   for (const { tag, tarball } of manifest) {

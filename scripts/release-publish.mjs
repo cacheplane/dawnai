@@ -50,6 +50,7 @@ export async function publishRelease({
   for (const state of unpublished) {
     log(`Publishing ${state.name}@${state.version}`)
 
+    let tarballPath
     try {
       // pnpm pack resolves workspace:* protocol into the tarball
       const packOutput = await run("pnpm", ["pack", "--pack-destination", state.dir], {
@@ -67,7 +68,7 @@ export async function publishRelease({
         throw new Error(`Could not determine tarball name from pnpm pack output`)
       }
 
-      const tarballPath = resolve(state.dir, basename(tarball))
+      tarballPath = resolve(state.dir, basename(tarball))
 
       // OIDC trusted publishing: no token needed, provenance handles auth + signing
       await run(
@@ -75,12 +76,17 @@ export async function publishRelease({
         ["publish", tarballPath, "--tag", "latest", "--access", state.access, "--provenance"],
         { cwd: state.dir, cwdPackage: state.package },
       )
+    } catch (error) {
+      throw new Error(`Failed to publish ${state.name}@${state.version}: ${formatError(error)}`)
+    }
 
-      const tag = `${state.name}@${state.version}`
+    // Archive runs only after a successful publish so errors are not confused with publish failures
+    const tag = `${state.name}@${state.version}`
+    try {
       const archivedName = await archive(tarballPath, archiveDir)
       artifacts.push({ tag, tarball: archivedName })
     } catch (error) {
-      throw new Error(`Failed to publish ${state.name}@${state.version}: ${formatError(error)}`)
+      throw new Error(`Failed to archive ${state.name}@${state.version}: ${formatError(error)}`)
     }
   }
 
