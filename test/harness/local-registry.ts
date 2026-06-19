@@ -91,6 +91,13 @@ export async function publishWorkspace(url: string): Promise<void> {
     npm_config_registry: url,
     [`npm_config_//${host}/:_authToken`]: "fake",
     npm_config_replace_registry_host: "never",
+    // The release workflow exports NPM_CONFIG_PROVENANCE=true (uppercase) at the
+    // job level for trusted publishing to npmjs. Inherited by this `npm publish`
+    // it fails with EUSAGE "provenance generation not supported" — Sigstore
+    // provenance can't be produced for a throwaway local registry. Override the
+    // exact (uppercase) key so it always wins over the job env; harmless on a dev
+    // machine where it is unset.
+    NPM_CONFIG_PROVENANCE: "false",
   }
 
   // Pack each public package into a temp dir, then publish the tarball directly
