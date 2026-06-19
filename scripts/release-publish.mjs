@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { readdir, readFile, rm } from "node:fs/promises"
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -29,17 +29,28 @@ if (import.meta.url === `file://${process.argv[1]}`) {
  * Uses OIDC trusted publishing (--provenance) for authentication — no token needed.
  * Publishes directly with --tag latest so no separate dist-tag promotion is required.
  */
-export async function publishRelease({ packages, npmView, run, log }) {
+export async function publishRelease({
+  packages,
+  npmView,
+  run,
+  log,
+  archiveDir = resolve(repoRoot, "release-artifacts"),
+  archive = defaultArchive,
+  writeManifest = defaultWriteManifest,
+}) {
   const packageStates = await readPackageStates(packages, npmView)
   const unpublished = packageStates.filter((state) => !state.versions.includes(state.version))
 
   if (unpublished.length === 0) {
-    return { status: "already-published", packages: [] }
+    return { status: "already-published", packages: [], artifacts: [] }
   }
+
+  const artifacts = []
 
   for (const state of unpublished) {
     log(`Publishing ${state.name}@${state.version}`)
 
+    let tarballPath
     try {
       // pnpm pack resolves workspace:* protocol into the tarball
       const packOutput = await run("pnpm", ["pack", "--pack-destination", state.dir], {
@@ -57,7 +68,7 @@ export async function publishRelease({ packages, npmView, run, log }) {
         throw new Error(`Could not determine tarball name from pnpm pack output`)
       }
 
-      const tarballPath = resolve(state.dir, basename(tarball))
+      tarballPath = resolve(state.dir, basename(tarball))
 
       // OIDC trusted publishing: no token needed, provenance handles auth + signing
       await run(
@@ -65,12 +76,21 @@ export async function publishRelease({ packages, npmView, run, log }) {
         ["publish", tarballPath, "--tag", "latest", "--access", state.access, "--provenance"],
         { cwd: state.dir, cwdPackage: state.package },
       )
-
-      await rm(tarballPath, { force: true })
     } catch (error) {
       throw new Error(`Failed to publish ${state.name}@${state.version}: ${formatError(error)}`)
     }
+
+    // Archive runs only after a successful publish so errors are not confused with publish failures
+    const tag = `${state.name}@${state.version}`
+    try {
+      const archivedName = await archive(tarballPath, archiveDir)
+      artifacts.push({ tag, tarball: archivedName })
+    } catch (error) {
+      throw new Error(`Failed to archive ${state.name}@${state.version}: ${formatError(error)}`)
+    }
   }
+
+  await writeManifest(archiveDir, artifacts)
 
   for (const state of unpublished) {
     const tagName = `${state.name}@${state.version}`
@@ -85,7 +105,20 @@ export async function publishRelease({ packages, npmView, run, log }) {
   return {
     status: "published",
     packages: unpublished.map((state) => `${state.name}@${state.version}`),
+    artifacts,
   }
+}
+
+async function defaultArchive(tarballPath, archiveDir) {
+  await mkdir(archiveDir, { recursive: true })
+  const name = basename(tarballPath)
+  await rename(tarballPath, resolve(archiveDir, name))
+  return name
+}
+
+async function defaultWriteManifest(archiveDir, artifacts) {
+  await mkdir(archiveDir, { recursive: true })
+  await writeFile(resolve(archiveDir, "manifest.json"), `${JSON.stringify(artifacts, null, 2)}\n`)
 }
 
 export async function readPublicPackages(rootDir) {
