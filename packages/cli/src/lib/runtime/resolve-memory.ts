@@ -5,6 +5,22 @@ import { serializeNamespace, sqliteMemoryStore } from "@dawn-ai/memory"
 import type { LoadedRouteMemory } from "./load-memory.js"
 
 /**
+ * Normalize a route path to a clean namespace key. Converts a route FILE path
+ * like "src/app/memory-chat/index.ts" → "/memory-chat" (and ".../support/[tenant]/index.ts"
+ * → "/support/[tenant]"); leaves an already-clean URL path like "/chat" unchanged.
+ */
+export function routeNamespaceKey(routePath: string): string {
+  let p = routePath.replace(/\\/g, "/")
+  const appMarker = "/app/"
+  const idx = p.lastIndexOf(appMarker)
+  if (idx >= 0) p = p.slice(idx + appMarker.length - 1) // keep leading "/": "/memory-chat/index.ts"
+  p = p.replace(/\/index\.(ts|tsx|js|mjs)$/i, "")
+  p = p.replace(/#.*$/, "") // strip a #agent suffix if present
+  if (!p.startsWith("/")) p = `/${p}`
+  return p === "" ? "/" : p
+}
+
+/**
  * Resolves the MemoryStore for the given appRoot.
  *
  * Uses `config.memory.store` if the user's `dawn.config.ts` provides one;

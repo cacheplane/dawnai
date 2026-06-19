@@ -49,7 +49,12 @@ import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { loadRouteMemory } from "./load-memory.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
-import { buildMemoryContext, resolveMemoryStore, resolveMemoryWrites } from "./resolve-memory.js"
+import {
+  buildMemoryContext,
+  resolveMemoryStore,
+  resolveMemoryWrites,
+  routeNamespaceKey,
+} from "./resolve-memory.js"
 import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,
@@ -511,8 +516,9 @@ async function prepareRouteExecution(options: {
       const defined = await loadRouteMemory(memoryFile)
       const store = await resolveMemoryStore(options.appRoot)
       const writes = await resolveMemoryWrites(options.appRoot)
+      const cleanRoutePath = routeNamespaceKey(options.routePath)
       const extraScope = loadedDawnConfig?.memory?.resolveScope?.({
-        routePath: options.routePath,
+        routePath: cleanRoutePath,
         appRoot: options.appRoot,
       })
       memoryContext = buildMemoryContext({
@@ -520,7 +526,7 @@ async function prepareRouteExecution(options: {
         store,
         writes,
         appRoot: options.appRoot,
-        routePath: options.routePath,
+        routePath: cleanRoutePath,
         now: new Date().toISOString(),
         ...(loadedDawnConfig?.memory?.indexMaxEntries !== undefined
           ? { indexMaxEntries: loadedDawnConfig.memory.indexMaxEntries }
