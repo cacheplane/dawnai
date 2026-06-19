@@ -59,32 +59,74 @@ export function createMemoryMarker(): CapabilityMarker {
           if (!validated.ok) return `Rejected: ${validated.errors}`
           const data = validated.value
           const identityKeys = mem.defined.identity ?? DEFAULT_SEMANTIC_IDENTITY
-          const identityValues = identityKeys.map((k) => data[k] ?? null)
+
+          // id is DATA-derived so contradicting values (same identity, different
+          // value) get distinct ids and can coexist as active/superseded rows.
           const id = `memory_${createHash("sha1")
-            .update(`${mem.namespace}|${JSON.stringify(identityValues)}`)
+            .update(`${mem.namespace}|${JSON.stringify(data)}`)
             .digest("hex")
             .slice(0, 16)}`
+
           const status = mem.writes === "auto" ? "active" : "candidate"
           const content =
             typeof inp.content === "string" && inp.content.length > 0
               ? inp.content
               : JSON.stringify(data)
-          await mem.store.put({
+          const confidence = typeof inp.confidence === "number" ? inp.confidence : 1
+          const tags = inp.tags ?? []
+
+          const record = {
             id,
             kind: mem.defined.kind,
             namespace: mem.namespace,
             content,
             data,
             source: { type: "tool", id: "remember" },
-            confidence: typeof inp.confidence === "number" ? inp.confidence : 1,
-            tags: inp.tags ?? [],
+            confidence,
+            tags,
             status,
             createdAt: mem.now,
             updatedAt: mem.now,
-          })
-          return status === "candidate"
-            ? `Stored memory candidate ${id} (pending approval).`
-            : `Stored memory ${id}.`
+          }
+
+          if (mem.writes === "auto") {
+            // Inline identity key helper — avoids importing from @dawn-ai/memory
+            const identityKey = (d: Record<string, unknown>) =>
+              identityKeys.map((k) => JSON.stringify(d[k] ?? null)).join(" ")
+
+            const existing = await mem.store.search({
+              namespace: mem.namespace,
+              status: "active",
+              limit: 50,
+            })
+            const target = existing.find((m) => identityKey(m.data) === identityKey(data))
+
+            if (target) {
+              if (JSON.stringify(target.data) === JSON.stringify(data)) {
+                // Idempotent update — same identity AND same data
+                await mem.store.update(target.id, {
+                  updatedAt: mem.now,
+                  content,
+                  confidence,
+                  tags,
+                })
+                return `Updated memory ${target.id}.`
+              }
+              // Same identity but different value — write new active row then supersede old
+              await mem.store.put(record)
+              await mem.store.supersede(target.id, id)
+              return `Superseded ${target.id} with ${id}.`
+            }
+
+            // No existing record with same identity — add new active row
+            await mem.store.put(record)
+            return `Stored memory ${id}.`
+          }
+
+          // Candidate mode (and "off" never reaches here — remember tool absent):
+          // write a candidate; reconciliation happens later at CLI approval.
+          await mem.store.put(record)
+          return `Stored memory candidate ${id} (pending approval).`
         },
       }
 
