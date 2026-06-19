@@ -5,6 +5,7 @@ export default defineConfig({
     environment: "node",
     exclude: ["test/generated/fixtures/**"],
     fileParallelism: false,
+    globalSetup: ["test/harness/registry-global-setup.ts"],
     hookTimeout: 180_000,
     // test/harness holds the shared scaffolding helpers the framework lane
     // exercises; include their unit tests here so they actually run in CI

@@ -5,19 +5,16 @@ import { dirname, join, resolve } from "node:path"
 import { expect } from "vitest"
 
 import { createArtifactRoot } from "../../packages/devkit/src/testing/index.ts"
+import { getTestRegistryUrl } from "../harness/local-registry.ts"
 import {
   cleanupTrackedTempDirs,
-  createPackagedInstaller,
   createTrackedTempDir,
   markTrackedTempDirForPreserve,
   runPackagedCommand,
   type TrackedTempDir,
   withPackagedDevServer,
 } from "../harness/packaged-app.ts"
-import {
-  rewriteGeneratedAppDependencies,
-  SCAFFOLD_PACKAGES,
-} from "../harness/scaffold-packaging.js"
+import { writeRegistryNpmrc } from "../harness/scaffold-packaging.js"
 import { startFakeAgentServer } from "../runtime/support/fake-agent-server.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
@@ -56,7 +53,6 @@ export interface GeneratedRuntimeApp {
   readonly appRoot: string
   readonly artifactRoot: string
   readonly fixture: RuntimeFixtureSpec
-  readonly tarballs?: Readonly<Record<string, string>>
   readonly tempRoot: string
   readonly transcriptPath: string
 }
@@ -145,26 +141,13 @@ export async function prepareGeneratedRuntimeApp(options: {
   await mkdir(dirname(transcriptPath), { recursive: true })
 
   try {
-    let installerDir: string | undefined
-    let tarballs: Readonly<Record<string, string>> | undefined
-
     if (scaffoldMode === "internal") {
       await buildLocalContributorPackages(transcriptPath)
-    } else {
-      const packagedInstaller = await createPackagedInstaller({
-        packageNames: [...SCAFFOLD_PACKAGES],
-        tempRoot: options.tempRoot,
-        transcriptPath,
-      })
-
-      installerDir = packagedInstaller.installerDir
-      tarballs = packagedInstaller.tarballs
     }
 
     if (fixture.source === "generated") {
       await scaffoldApp({
         appRoot,
-        installerDir,
         mode: scaffoldMode,
         transcriptPath,
       })
@@ -209,20 +192,8 @@ export async function prepareGeneratedRuntimeApp(options: {
       })
     }
 
-    if (scaffoldMode === "external" && tarballs) {
-      await rewriteGeneratedAppDependencies({
-        appRoot,
-        tarballs,
-        extraDependencies: {
-          "@dawn-ai/langgraph": tarballs["@dawn-ai/langgraph"]!,
-          "@dawn-ai/sqlite-storage": tarballs["@dawn-ai/sqlite-storage"]!,
-          // workspace is a transitive-only dep (via core + langchain); a pnpm
-          // override alone does not resolve a local tarball for a non-direct
-          // dep, so it must be promoted to a direct dep like the other forced
-          // packages, or install falls back to the (unpublished) registry version.
-          "@dawn-ai/workspace": tarballs["@dawn-ai/workspace"]!,
-        },
-      })
+    if (scaffoldMode === "external") {
+      await writeRegistryNpmrc(appRoot, getTestRegistryUrl())
     }
     await runPackagedCommand({
       args: ["install"],
@@ -235,7 +206,6 @@ export async function prepareGeneratedRuntimeApp(options: {
       appRoot,
       artifactRoot,
       fixture,
-      tarballs,
       tempRoot: options.tempRoot,
       transcriptPath,
     }
@@ -380,28 +350,33 @@ async function captureServerRequest(options: {
 
 async function scaffoldApp(options: {
   readonly appRoot: string
-  readonly installerDir?: string
   readonly mode: GeneratedScaffoldMode
   readonly transcriptPath: string
 }): Promise<void> {
   if (options.mode === "internal") {
     await runPackagedCommand({
-      args: ["packages/create-dawn-app/dist/bin.js", options.appRoot, "--mode", "internal", "--template", "basic"],
+      args: [
+        "packages/create-dawn-app/dist/bin.js",
+        options.appRoot,
+        "--mode",
+        "internal",
+        "--template",
+        "basic",
+      ],
       command: "node",
       cwd: REPO_ROOT,
       transcriptPath: options.transcriptPath,
     })
   } else {
-    if (!options.installerDir) {
-      throw new Error(
-        "Expected packaged installer directory for external generated runtime scaffolding",
-      )
-    }
-
+    // external mode: scaffold using the published create-dawn-ai-app, resolved
+    // from the test registry — exactly what a real user runs. pnpm dlx does not
+    // accept --registry, so the registry is passed via npm_config_registry; the
+    // unique per-run URL busts dlx's cache.
     await runPackagedCommand({
-      args: ["exec", "create-dawn-ai-app", options.appRoot, "--dist-tag", "next", "--template", "basic"],
+      args: ["dlx", "create-dawn-ai-app", options.appRoot, "--template", "basic"],
       command: "pnpm",
-      cwd: options.installerDir,
+      cwd: REPO_ROOT,
+      env: { npm_config_registry: getTestRegistryUrl() },
       transcriptPath: options.transcriptPath,
     })
   }

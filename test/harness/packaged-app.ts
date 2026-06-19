@@ -6,8 +6,8 @@ import { basename, join, resolve } from "node:path"
 import { spawnProcess } from "../../packages/devkit/src/testing/index.ts"
 import {
   appendDevServerTranscript,
-  startDevServer,
   type DevServerHandle,
+  startDevServer,
 } from "../runtime/support/dev-server.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
@@ -15,18 +15,6 @@ const REPO_ROOT = resolve(import.meta.dirname, "../..")
 export interface TrackedTempDir {
   path: string
   preserve: boolean
-}
-
-export interface CreatePackagedInstallerOptions {
-  readonly packageNames?: readonly string[]
-  readonly tempRoot: string
-  readonly transcriptPath?: string
-}
-
-export interface CreatePackagedInstallerResult {
-  readonly installerDir: string
-  readonly packsDir: string
-  readonly tarballs: Readonly<Record<string, string>>
 }
 
 export interface PackagedDevServerSession {
@@ -59,87 +47,38 @@ export async function cleanupTrackedTempDirs(registry: TrackedTempDir[]): Promis
       .filter((entry) => !entry.preserve)
       // maxRetries handles the ENOTEMPTY race where a just-killed dev server's
       // child flushes a SQLite WAL file into .dawn/ between readdir and rmdir.
-      .map((entry) => rm(entry.path, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 })),
+      .map((entry) =>
+        rm(entry.path, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }),
+      ),
   )
 }
 
-export async function createPackagedInstaller(
-  options: CreatePackagedInstallerOptions,
-): Promise<CreatePackagedInstallerResult> {
-  const packsDir = join(options.tempRoot, "packs")
-  const installerDir = join(options.tempRoot, "installer")
-  const packageNames = ["@dawn-ai/devkit", "create-dawn-ai-app", ...(options.packageNames ?? [])].filter(
-    (value, index, allValues) => allValues.indexOf(value) === index,
-  )
+/**
+ * Pack the CURRENT create-dawn-ai-app source and install it into a temp installer
+ * dir, returning that dir. Lets a standalone test run `pnpm exec create-dawn-ai-app`
+ * with the local build (not the published npmjs version). Self-contained: no registry.
+ */
+export async function installPackagedScaffolder(
+  tempRoot: string,
+): Promise<{ installerDir: string }> {
+  const packsDir = join(tempRoot, "packs")
+  const installerDir = join(tempRoot, "installer")
 
   await mkdir(packsDir, { recursive: true })
   await mkdir(installerDir, { recursive: true })
 
+  // 1. Build create-dawn-ai-app
   await runPackagedCommand({
     args: ["--filter", "create-dawn-ai-app", "build"],
     command: "pnpm",
     cwd: REPO_ROOT,
-    transcriptPath: options.transcriptPath,
   })
 
-  const tarballs = Object.fromEntries(
-    await Promise.all(
-      packageNames.map(async (packageName) => [
-        packageName,
-        await packPackage(packageName, { packsDir, transcriptPath: options.transcriptPath }),
-      ]),
-    ),
-  )
-
-  await writeFile(
-    join(installerDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: "installer",
-        private: true,
-        packageManager: "pnpm@10.33.0",
-        pnpm: {
-          overrides: {
-            "@dawn-ai/devkit": tarballs["@dawn-ai/devkit"],
-            "@dawn-ai/langchain": tarballs["@dawn-ai/langchain"],
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  )
-
-  await runPackagedCommand({
-    args: ["add", tarballs["@dawn-ai/devkit"]],
-    command: "pnpm",
-    cwd: installerDir,
-    transcriptPath: options.transcriptPath,
-  })
-  await runPackagedCommand({
-    args: ["add", tarballs["create-dawn-ai-app"]],
-    command: "pnpm",
-    cwd: installerDir,
-    transcriptPath: options.transcriptPath,
-  })
-
-  return {
-    installerDir,
-    packsDir,
-    tarballs,
-  }
-}
-
-async function packPackage(
-  packageName: string,
-  options: { readonly packsDir: string; readonly transcriptPath?: string },
-): Promise<string> {
+  // 2. Pack create-dawn-ai-app into packsDir
   const packResult = await runPackagedCommand({
-    args: ["--filter", packageName, "pack", "--pack-destination", options.packsDir],
+    args: ["--filter", "create-dawn-ai-app", "pack", "--pack-destination", packsDir],
     command: "pnpm",
     cwd: REPO_ROOT,
-    transcriptPath: options.transcriptPath,
   })
 
   const tarballName = packResult.stdout
@@ -149,16 +88,35 @@ async function packPackage(
     .find((line) => line.endsWith(".tgz"))
 
   if (!tarballName) {
-    throw new Error(`Could not determine tarball name for ${packageName}`)
+    throw new Error(
+      `Could not determine tarball name for create-dawn-ai-app from pnpm pack stdout:\n${packResult.stdout}`,
+    )
   }
 
-  return join(options.packsDir, basename(tarballName))
+  const tarballPath = join(packsDir, basename(tarballName))
+
+  // 3. Write a minimal package.json in installerDir
+  await writeFile(
+    join(installerDir, "package.json"),
+    `${JSON.stringify({ name: "installer", private: true }, null, 2)}\n`,
+    "utf8",
+  )
+
+  // 4. Install the tarball into installerDir
+  await runPackagedCommand({
+    args: ["add", tarballPath],
+    command: "pnpm",
+    cwd: installerDir,
+  })
+
+  return { installerDir }
 }
 
 export async function runPackagedCommand(options: {
   readonly args: readonly string[]
   readonly command: string
   readonly cwd: string
+  readonly env?: NodeJS.ProcessEnv
   readonly stdin?: string
   readonly transcriptPath?: string
 }) {
@@ -172,6 +130,7 @@ export async function runPackagedCommand(options: {
             // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
             // so the harness does not treat non-empty stderr as a failure.
             NODE_NO_WARNINGS: "1",
+            ...options.env,
           },
         })
       : await spawnWithStdin(options)

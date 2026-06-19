@@ -45,6 +45,7 @@
     "publint": "0.3.15",
     "turbo": "2.9.18",
     "typescript": "6.0.2",
+    "verdaccio": "^6.7.2",
     "vitest": "4.1.9"
   }
 }
