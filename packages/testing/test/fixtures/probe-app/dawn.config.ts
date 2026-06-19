@@ -1,1 +1,1 @@
-export default {}
+export default { memory: { writes: "auto" } }

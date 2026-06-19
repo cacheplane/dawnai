@@ -16,24 +16,45 @@ export interface ObservedToolResult {
   readonly isError: boolean
 }
 
-/** Extract tool results from final conversation messages (serialized ToolMessages). */
+/** Extract tool results from final conversation messages.
+ *
+ * Handles two shapes:
+ * - Serialized LangChain format: `{ lc:1, type:"constructor", id:[...,"ToolMessage"], kwargs:{name,status,content} }`
+ * - Live LangChain instance format: `{ type:"tool", name, status, content, ... }`
+ */
 export function deriveToolResults(
   messages: ReadonlyArray<Record<string, unknown>>,
 ): ObservedToolResult[] {
   const results: ObservedToolResult[] = []
   for (const m of messages) {
+    // Serialized format: id is the class-path array, name/status/content are in kwargs.
     const id = m.id as unknown
-    const isToolMessage = Array.isArray(id) && id[id.length - 1] === "ToolMessage"
-    if (!isToolMessage) continue
-    const kwargs = (m.kwargs ?? {}) as { name?: unknown; status?: unknown; content?: unknown }
-    const status =
-      kwargs.status === "error" || kwargs.status === "success" ? kwargs.status : undefined
-    results.push({
-      name: typeof kwargs.name === "string" ? kwargs.name : "",
-      content: kwargs.content,
-      isError: status === "error",
-      ...(status ? { status } : {}),
-    })
+    const isSerializedToolMessage = Array.isArray(id) && id[id.length - 1] === "ToolMessage"
+    // Live LangChain instance format: type property is "tool" on the live object.
+    const isLiveToolMessage = m.type === "tool"
+
+    if (isSerializedToolMessage) {
+      const kwargs = (m.kwargs ?? {}) as { name?: unknown; status?: unknown; content?: unknown }
+      const status =
+        kwargs.status === "error" || kwargs.status === "success" ? kwargs.status : undefined
+      results.push({
+        name: typeof kwargs.name === "string" ? kwargs.name : "",
+        content: kwargs.content,
+        isError: status === "error",
+        ...(status ? { status } : {}),
+      })
+    } else if (isLiveToolMessage) {
+      const status =
+        m.status === "error" || m.status === "success"
+          ? (m.status as "error" | "success")
+          : undefined
+      results.push({
+        name: typeof m.name === "string" ? m.name : "",
+        content: m.content,
+        isError: status === "error",
+        ...(status ? { status } : {}),
+      })
+    }
   }
   return results
 }
