@@ -68,7 +68,7 @@ A table flattens nuance, so let me expand the rows that actually matter.
 
 **Durable execution and evals.** Both ship these, and I think they are close. Dawn persists threads through a SQLite checkpointer, so a conversation survives a process restart, and `dawn eval` runs co-located evals in a deterministic replay mode that is safe to run in CI, with a live mode when you want the real model. eve ships durable execution and a built-in evals system in the same spirit. This is convergence again, not a gap.
 
-**Runtime and deploy.** eve is a Vercel project. Its best trick is that `vercel deploy` ships the agent to production unchanged, exactly as it ran on your machine. Dawn is built on LangChain's [Agent Protocol](/docs/dev-server). `dawn dev` serves the Agent Protocol locally, and `dawn build` emits a `langgraph.json` you deploy to LangSmith.
+**Runtime and deploy.** eve is a Vercel project. Its best trick is that `vercel deploy` ships the agent to production unchanged, exactly as it ran on your machine. Dawn is built on the open [Agent Protocol](/docs/dev-server), the runtime contract LangGraph.js implements. `dawn dev` serves the Agent Protocol locally, and `dawn build` emits a `langgraph.json` you deploy to LangSmith.
 
 **Ecosystem.** eve sits in the Vercel and AI SDK orbit. Dawn sits in the LangChain and LangGraph.js orbit. Neither is wrong. They are different centers of gravity, and which one fits you is mostly a question of where the rest of your stack already lives.
 
@@ -119,3 +119,5 @@ pnpm dev
 For the deeper read, start with [Mental Model](/docs/mental-model), [Routes](/docs/routes), and the [Dev Server](/docs/dev-server).
 
 Competition like this is the best thing that can happen to an idea. It is good for eve, it is good for Dawn, and it is good for anyone trying to build agents that read like real applications.
+
+**Sources:** [Vercel changelog](https://vercel.com/changelog/introducing-eve-an-open-source-agent-framework) · [eve docs](https://vercel.com/docs/eve) · [The New Stack](https://thenewstack.io/vercel-launches-eve-an-open-source-framework-that-treats-agents-as-directories/) · [MarkTechPost](https://www.marktechpost.com/2026/06/17/vercel-releases-eve/)
