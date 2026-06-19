@@ -113,6 +113,26 @@ function hasSubagents(routeDir: string): boolean {
   })
 }
 
+const MEMORY_EXTRA_TOOLS: readonly ExtractedToolType[] = [
+  {
+    name: "remember",
+    description: "Store a typed long-term memory for later recall.",
+    // NOTE: `data` is typed loosely for v1; the runtime validates it against the route's defineMemory() zod schema. Typing `data` to the route schema is a deferred refinement.
+    inputType: `{ data: Record<string, unknown>; content: string; tags?: string[]; confidence?: number }`,
+    outputType: `string`,
+  },
+  {
+    name: "recall",
+    description: "Recall typed long-term memories by keyword/kind/tags.",
+    inputType: `{ query?: string; kind?: string; tags?: string[]; limit?: number }`,
+    outputType: `string`,
+  },
+]
+
+function hasMemory(routeDir: string): boolean {
+  return existsSync(join(routeDir, "memory.ts"))
+}
+
 export interface TypegenResult {
   readonly routeCount: number
   readonly toolSchemaCount: number
@@ -154,6 +174,9 @@ export async function runTypegen(options: {
     }
     if (hasWorkspace(route.routeDir)) {
       extraTools.push(...WORKSPACE_EXTRA_TOOLS)
+    }
+    if (hasMemory(route.routeDir)) {
+      extraTools.push(...MEMORY_EXTRA_TOOLS)
     }
 
     routeToolTypes.push({
