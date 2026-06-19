@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import type { DocsSearchEntry, DocsSearchHeading } from "./search-index"
 
 interface Props {
@@ -72,6 +73,12 @@ export function DocsSearch({ index }: Props) {
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
+  const [mounted, setMounted] = useState(false)
+
+  // Portal target only exists in the browser; gate on mount to stay SSR-safe.
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   const flat = useMemo(() => flatten(index), [index])
   const results = useMemo(() => filterResults(query, flat), [query, flat])
@@ -161,105 +168,108 @@ export function DocsSearch({ index }: Props) {
         </kbd>
       </button>
 
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] bg-ink/40 backdrop-blur-sm"
-          onClick={close}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") close()
-          }}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Search docs"
-        >
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: wrapper stops modal-close propagation; roles are on ancestor dialog */}
+      {open &&
+        mounted &&
+        createPortal(
           <div
-            className="w-full max-w-xl mx-4 bg-surface border border-divider rounded-xl shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] bg-ink/40 backdrop-blur-sm"
+            onClick={close}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") close()
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search docs"
           >
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-divider">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                className="text-ink-dim"
-                role="img"
-              >
-                <title>Search</title>
-                <circle cx="11" cy="11" r="8" />
-                <path d="m21 21-4.3-4.3" />
-              </svg>
-              <input
-                ref={inputRef}
-                type="text"
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value)
-                  setActive(0)
-                }}
-                onKeyDown={onInputKey}
-                placeholder="Search Dawn docs..."
-                className="flex-1 bg-transparent text-ink placeholder-text-muted focus:outline-none text-sm"
-              />
-              <button
-                type="button"
-                onClick={close}
-                className="text-xs text-ink-dim border border-divider rounded px-1.5 py-0.5 font-mono hover:text-ink"
-              >
-                ESC
-              </button>
-            </div>
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: wrapper stops modal-close propagation; roles are on ancestor dialog */}
+            <div
+              className="w-full max-w-xl mx-4 bg-surface border border-divider rounded-xl shadow-2xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 px-4 py-3 border-b border-divider">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className="text-ink-dim"
+                  role="img"
+                >
+                  <title>Search</title>
+                  <circle cx="11" cy="11" r="8" />
+                  <path d="m21 21-4.3-4.3" />
+                </svg>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value)
+                    setActive(0)
+                  }}
+                  onKeyDown={onInputKey}
+                  placeholder="Search Dawn docs..."
+                  className="flex-1 bg-transparent text-ink placeholder-text-muted focus:outline-none text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={close}
+                  className="text-xs text-ink-dim border border-divider rounded px-1.5 py-0.5 font-mono hover:text-ink"
+                >
+                  ESC
+                </button>
+              </div>
 
-            <ul ref={listRef} className="max-h-[60vh] overflow-y-auto py-2">
-              {results.length === 0 ? (
-                <li className="px-4 py-6 text-sm text-ink-dim text-center">
-                  No results for &quot;{query}&quot;
-                </li>
-              ) : (
-                results.map((r, i) => (
-                  <li key={r.key}>
-                    <button
-                      type="button"
-                      data-active={i === active}
-                      onMouseEnter={() => setActive(i)}
-                      onClick={() => navigate(r.href)}
-                      className={`w-full text-left px-4 py-2.5 flex items-center gap-3 ${
-                        i === active ? "bg-accent-saas/10" : ""
-                      }`}
-                    >
-                      <span
-                        className={`text-[10px] uppercase tracking-wider font-semibold w-20 shrink-0 ${
-                          i === active ? "text-accent-saas" : "text-ink-dim"
+              <ul ref={listRef} className="max-h-[60vh] overflow-y-auto py-2">
+                {results.length === 0 ? (
+                  <li className="px-4 py-6 text-sm text-ink-dim text-center">
+                    No results for &quot;{query}&quot;
+                  </li>
+                ) : (
+                  results.map((r, i) => (
+                    <li key={r.key}>
+                      <button
+                        type="button"
+                        data-active={i === active}
+                        onMouseEnter={() => setActive(i)}
+                        onClick={() => navigate(r.href)}
+                        className={`w-full text-left px-4 py-2.5 flex items-center gap-3 ${
+                          i === active ? "bg-accent-saas/10" : ""
                         }`}
                       >
-                        {r.section}
-                      </span>
-                      <span className="flex-1 min-w-0">
                         <span
-                          className={`block text-sm font-semibold ${
-                            i === active ? "text-accent-saas" : "text-ink"
+                          className={`text-[10px] uppercase tracking-wider font-semibold w-20 shrink-0 ${
+                            i === active ? "text-accent-saas" : "text-ink-dim"
                           }`}
                         >
-                          {r.title}
+                          {r.section}
                         </span>
-                        {r.heading && (
-                          <span className="block text-xs text-ink-dim truncate">
-                            <span aria-hidden>#</span> {r.heading.text}
+                        <span className="flex-1 min-w-0">
+                          <span
+                            className={`block text-sm font-semibold ${
+                              i === active ? "text-accent-saas" : "text-ink"
+                            }`}
+                          >
+                            {r.title}
                           </span>
-                        )}
-                      </span>
-                    </button>
-                  </li>
-                ))
-              )}
-            </ul>
-          </div>
-        </div>
-      )}
+                          {r.heading && (
+                            <span className="block text-xs text-ink-dim truncate">
+                              <span aria-hidden>#</span> {r.heading.text}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+          </div>,
+          document.body,
+        )}
     </>
   )
 }
