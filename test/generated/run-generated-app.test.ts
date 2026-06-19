@@ -26,6 +26,7 @@ const SCAFFOLD_PACKAGES: readonly string[] = [
   "@dawn-ai/evals",
   "@dawn-ai/langchain",
   "@dawn-ai/langgraph",
+  "@dawn-ai/memory",
   "@dawn-ai/permissions",
   "@dawn-ai/sdk",
   "@dawn-ai/sqlite-storage",
