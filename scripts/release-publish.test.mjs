@@ -5,6 +5,23 @@ import { isPackageNotFoundError, npmView, publishRelease } from "./release-publi
 
 const packages = [packageInfo("@dawn-ai/core", "0.1.1"), packageInfo("@dawn-ai/sdk", "0.1.1")]
 
+function recordingFs() {
+  const archived = []
+  const manifests = []
+  return {
+    archive: async (tarballPath, archiveDir) => {
+      const name = `${tarballPath.split("/").pop()}`
+      archived.push({ tarballPath, archiveDir, name })
+      return name
+    },
+    writeManifest: async (archiveDir, artifacts) => {
+      manifests.push({ archiveDir, artifacts })
+    },
+    archived,
+    manifests,
+  }
+}
+
 describe("publishRelease", () => {
   it("publishes unpublished versions directly to latest with git tags", async () => {
     const calls = []
@@ -12,12 +29,15 @@ describe("publishRelease", () => {
       "@dawn-ai/core": { versions: ["0.1.0"] },
       "@dawn-ai/sdk": { versions: ["0.1.0"] },
     })
+    const fs = recordingFs()
 
     const result = await publishRelease({
       packages,
       npmView: state.view,
       run: state.runner(calls),
       log: () => {},
+      archive: fs.archive,
+      writeManifest: fs.writeManifest,
     })
 
     assert.deepEqual(calls, [
@@ -28,6 +48,12 @@ describe("publishRelease", () => {
     ])
     assert.equal(result.status, "published")
     assert.deepEqual(result.packages, ["@dawn-ai/core@0.1.1", "@dawn-ai/sdk@0.1.1"])
+    assert.deepEqual(result.artifacts, [
+      { tag: "@dawn-ai/core@0.1.1", tarball: fs.archived[0].name },
+      { tag: "@dawn-ai/sdk@0.1.1", tarball: fs.archived[1].name },
+    ])
+    assert.equal(fs.manifests.length, 1)
+    assert.deepEqual(fs.manifests[0].artifacts, result.artifacts)
   })
 
   it("does not create git tags when a publish fails", async () => {
@@ -36,6 +62,7 @@ describe("publishRelease", () => {
       "@dawn-ai/core": { versions: ["0.1.0"] },
       "@dawn-ai/sdk": { versions: ["0.1.0"] },
     })
+    const fs = recordingFs()
 
     await assert.rejects(
       publishRelease({
@@ -43,6 +70,8 @@ describe("publishRelease", () => {
         npmView: state.view,
         run: state.runner(calls, { failPublishFor: "@dawn-ai/sdk" }),
         log: () => {},
+        archive: fs.archive,
+        writeManifest: fs.writeManifest,
       }),
       /Failed to publish @dawn-ai\/sdk@0\.1\.1/,
     )
@@ -51,6 +80,7 @@ describe("publishRelease", () => {
       ["publish", "@dawn-ai/core", "0.1.1", "latest"],
       ["publish", "@dawn-ai/sdk", "0.1.1", "latest"],
     ])
+    assert.equal(fs.manifests.length, 0)
   })
 
   it("skips when all versions are already published", async () => {
@@ -59,16 +89,21 @@ describe("publishRelease", () => {
       "@dawn-ai/core": { versions: ["0.1.0", "0.1.1"] },
       "@dawn-ai/sdk": { versions: ["0.1.0", "0.1.1"] },
     })
+    const fs = recordingFs()
 
     const result = await publishRelease({
       packages,
       npmView: state.view,
       run: state.runner(calls),
       log: () => {},
+      archive: fs.archive,
+      writeManifest: fs.writeManifest,
     })
 
     assert.deepEqual(calls, [])
     assert.equal(result.status, "already-published")
+    assert.equal(result.artifacts, undefined)
+    assert.equal(fs.manifests.length, 0)
   })
 })
 
