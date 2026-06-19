@@ -7,6 +7,7 @@ import {
   type CapabilityContribution,
   createAgentsMdMarker,
   createCapabilityRegistry,
+  createMemoryMdMarker,
   createPlanningMarker,
   createSkillsMarker,
   createSubagentsMarker,
@@ -480,6 +481,7 @@ async function prepareRouteExecution(options: {
     const registry = createCapabilityRegistry([
       createPlanningMarker(),
       createAgentsMdMarker(),
+      createMemoryMdMarker(),
       createSkillsMarker(),
       createSubagentsMarker(),
       createWorkspaceMarker(),
