@@ -6,6 +6,7 @@
 
 [![CI](https://github.com/cacheplane/dawnai/actions/workflows/ci.yml/badge.svg)](https://github.com/cacheplane/dawnai/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml/badge.svg)](https://github.com/cacheplane/dawnai/actions/workflows/scorecard.yml)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13317/badge)](https://www.bestpractices.dev/projects/13317)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](./LICENSE)
 
 The TypeScript meta-framework for LangGraph. Author AI agents and workflows as filesystem routes, get end-to-end types and a local dev server for free, and deploy to LangSmith with one command.
