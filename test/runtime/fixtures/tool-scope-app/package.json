@@ -1,0 +1,5 @@
+{
+  "name": "tool-scope-app",
+  "private": true,
+  "type": "module"
+}
