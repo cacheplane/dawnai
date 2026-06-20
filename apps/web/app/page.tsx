@@ -1,4 +1,5 @@
 import { DriveTheModel } from "./components/landing/DriveTheModel"
+import { DurableByDefault } from "./components/landing/DurableByDefault"
 import { Ecosystem } from "./components/landing/Ecosystem"
 import { Faq } from "./components/landing/Faq"
 import { FeatureDevLoop } from "./components/landing/FeatureDevLoop"
@@ -23,6 +24,7 @@ export default function HomePage() {
       <FeatureTools />
       <FeatureTypes />
       <FeatureDevLoop />
+      <DurableByDefault />
       <KeepTheRuntime />
       <Ecosystem />
       <Quickstart />
