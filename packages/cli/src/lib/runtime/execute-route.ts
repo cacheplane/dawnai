@@ -22,6 +22,8 @@ import {
   type RouteDefinition,
   type RouteManifest,
   resolveStateFields,
+  resolveToolScope,
+  toolOrigin,
 } from "@dawn-ai/core"
 import {
   Command,
@@ -618,9 +620,24 @@ async function prepareRouteExecution(options: {
       }
     }
 
-    // isSubagent is threaded here for TS4 which will use it to scope tools.
-    void isSubagent
     tools = [...tools, ...filteredCapTools]
+
+    // Scope the merged tool set at the composition seam. Base set: top route
+    // keeps all; a subagent keeps only authored tools (capability tools, e.g.
+    // workspace runBash/writeFile and the dispatch `task`, are withheld unless
+    // explicitly allowed). descriptor.tools.allow grants, .deny revokes, deny
+    // wins. Unknown names throw and surface as a route-prep failure.
+    const scopeInputs = tools.map((t) => ({ name: t.name, origin: toolOrigin(t) }))
+    let keptToolNames: ReadonlySet<string>
+    try {
+      keptToolNames = resolveToolScope(scopeInputs, descriptor?.tools, {
+        isSubagent: isSubagent ?? false,
+        routeId: options.routeId,
+      })
+    } catch (error) {
+      return { message: formatErrorMessage(error), ok: false }
+    }
+    tools = tools.filter((t) => keptToolNames.has(t.name))
     stateFields = stateFields ? [...stateFields, ...capStateFields] : capStateFields
     promptFragments = capPromptFragments
     streamTransformers = capStreamTransformers

@@ -15,7 +15,10 @@ export interface Aimock {
   clearFixtures(): void
   /** All requests the mock has received (aimock's journal). */
   getRequests(): ReadonlyArray<{
-    body: { messages?: Array<{ role: string; content: unknown }> } | null
+    body: {
+      messages?: Array<{ role: string; content: unknown }>
+      tools?: Array<{ type?: string; function?: { name?: string } }>
+    } | null
   }>
   /** Current count of registered fixtures (snapshot point for getRecordingsSince). */
   getFixtureCount(): number
@@ -73,7 +76,10 @@ export async function createAimock(opts: {
     if (newFixtures.length === 0) return []
     const proxyEntries = (
       mock.getRequests() as ReadonlyArray<{
-        body: { messages?: Array<{ role: string; content: unknown }> } | null
+        body: {
+          messages?: Array<{ role: string; content: unknown }>
+          tools?: Array<{ type?: string; function?: { name?: string } }>
+        } | null
         response?: { source?: string }
       }>
     )
@@ -100,7 +106,10 @@ export async function createAimock(opts: {
     },
     getRequests() {
       return mock.getRequests() as ReadonlyArray<{
-        body: { messages?: Array<{ role: string; content: unknown }> } | null
+        body: {
+          messages?: Array<{ role: string; content: unknown }>
+          tools?: Array<{ type?: string; function?: { name?: string } }>
+        } | null
       }>
     },
     getFixtureCount() {
