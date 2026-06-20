@@ -1,3 +1,4 @@
+import { DriveTheModel } from "./components/landing/DriveTheModel"
 import { Ecosystem } from "./components/landing/Ecosystem"
 import { Faq } from "./components/landing/Faq"
 import { FeatureDevLoop } from "./components/landing/FeatureDevLoop"
@@ -17,6 +18,7 @@ export default function HomePage() {
       <Hero />
       <ProofStrip />
       <WhyDawn />
+      <DriveTheModel />
       <FeatureRouting />
       <FeatureTools />
       <FeatureTypes />
