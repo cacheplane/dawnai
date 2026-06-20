@@ -43,6 +43,10 @@ task({
 
 The parent receives the child's final text as the tool result.
 
+<Callout type="info" title="Subagents are least-privilege by default">
+  A child route does not inherit the parent's capability tools. By default it sees only its own `tools/*.ts`; ambient tools like `writeFile`, `runBash`, and `task` are withheld unless granted via `tools: { allow: [...] }`. See [Scoping a route's tools](/docs/tools#scoping-a-routes-tools).
+</Callout>
+
 ## Convention discovery
 
 Dawn discovers immediate child routes at:

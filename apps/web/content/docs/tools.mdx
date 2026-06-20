@@ -34,6 +34,36 @@ src/
 
 Both sets are merged into the route's `ctx.tools`. When the same tool name exists in both, **the route-local tool shadows the shared one** — in the tree above, `/support` sees its own `escalate` and the shared `lookupOrder`. Put a tool in `src/tools/` when more than one route needs it; keep it in the route's `tools/` when it's specific to that route or you want to override a shared one.
 
+## Scoping a route's tools
+
+By default a top route's agent sees every tool available to it — its own `tools/*.ts`, the shared `src/tools/`, and every capability-contributed tool (`writeFile`, `runBash`, `task`, `writeTodos`, `readSkill`, `remember`/`recall`, …). You can narrow that surface per route by passing `tools: { allow, deny }` to `agent()`:
+
+- **`deny`** revokes a tool — it is never offered to the model.
+- **`allow`** grants a withheld capability tool back into the set.
+- **`deny` wins** when a name appears in both.
+- Omitting `tools` entirely keeps the current behavior (all available tools).
+
+```ts title="src/app/research/index.ts"
+// src/app/research/index.ts — top route: everything except shell
+export default agent({ model: "gpt-5", systemPrompt: "…", tools: { deny: ["runBash"] } })
+```
+
+Scope is enforced at composition time: a withheld tool is never wired into the generated entry, so the model cannot call it. `dawn check` validates the names you reference — an unknown tool name (absent from the route's available set) is a build-time error, so typos fail loud.
+
+### Subagents are least-privilege by default
+
+A subagent does **not** inherit the parent's capability tools. By default it gets only its own route-local `tools/*.ts`; the ambient capability tools (`writeFile`, `runBash`, `task`, `writeTodos`, `remember`/`recall`, …) are withheld unless you name them in `allow`. Grant back exactly what the worker needs:
+
+```ts title="src/app/research/subagents/researcher/index.ts"
+// src/app/research/subagents/researcher/index.ts — read-only worker
+// keeps its own tools/*.ts; writeFile/runBash/task withheld by default; grant readFile:
+export default agent({ model: "gpt-5-mini", systemPrompt: "…", tools: { allow: ["readFile"] } })
+```
+
+<Callout type="warn" title="This scopes the surface, not execution">
+  Tool scoping controls which tools the model can *call* — it does not constrain what an allowed tool may *do* once invoked. A granted `writeFile` can still write anywhere its implementation permits. This is a capability boundary on the tool surface, not a sandbox.
+</Callout>
+
 ## The runtime signature
 
 The full runtime signature accepted by tool discovery is `(input, ctx) => ...`, where `ctx` is `DawnToolContext` from `@dawn-ai/sdk` — carrying `signal`, `middleware?`, and `fs`:

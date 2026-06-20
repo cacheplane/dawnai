@@ -22,6 +22,8 @@ import {
   type RouteDefinition,
   type RouteManifest,
   resolveStateFields,
+  resolveToolScope,
+  toolOrigin,
 } from "@dawn-ai/core"
 import {
   Command,
@@ -145,6 +147,7 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
 export async function executeResolvedRoute(options: {
   readonly appRoot: string
   readonly input: unknown
+  readonly isSubagent?: boolean
   readonly middlewareContext?: Readonly<Record<string, unknown>>
   readonly routeFile: string
   readonly routeId: string
@@ -153,6 +156,7 @@ export async function executeResolvedRoute(options: {
 }): Promise<RuntimeExecutionResult> {
   return await executeRouteAtResolvedPath({
     ...options,
+    isSubagent: options.isSubagent ?? false,
     startedAt: Date.now(),
   })
 }
@@ -223,6 +227,7 @@ export async function invokeResolvedRoute(options: {
 export async function* streamResolvedRoute(options: {
   readonly appRoot: string
   readonly input: unknown
+  readonly isSubagent?: boolean
   readonly middlewareContext?: Readonly<Record<string, unknown>>
   /**
    * When set, the agent-adapter receives `Command({resume: resumeDecision})`
@@ -242,7 +247,10 @@ export async function* streamResolvedRoute(options: {
    */
   readonly threadId?: string
 }): AsyncGenerator<StreamChunk> {
-  const prepared = await prepareRouteExecution(options)
+  const prepared = await prepareRouteExecution({
+    ...options,
+    isSubagent: options.isSubagent ?? false,
+  })
 
   if (!prepared.ok) {
     yield { type: "done", output: { error: prepared.message } }
@@ -362,11 +370,13 @@ interface PreparedRouteError {
 
 async function prepareRouteExecution(options: {
   readonly appRoot: string
+  readonly isSubagent?: boolean
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
   readonly signal?: AbortSignal
 }): Promise<PreparedRoute | PreparedRouteError> {
+  const { isSubagent = false } = options
   const routeDir = resolve(options.routeFile, "..")
 
   const normalized = await normalizeRouteModule(options.routeFile, options.appRoot)
@@ -611,6 +621,23 @@ async function prepareRouteExecution(options: {
     }
 
     tools = [...tools, ...filteredCapTools]
+
+    // Scope the merged tool set at the composition seam. Base set: top route
+    // keeps all; a subagent keeps only authored tools (capability tools, e.g.
+    // workspace runBash/writeFile and the dispatch `task`, are withheld unless
+    // explicitly allowed). descriptor.tools.allow grants, .deny revokes, deny
+    // wins. Unknown names throw and surface as a route-prep failure.
+    const scopeInputs = tools.map((t) => ({ name: t.name, origin: toolOrigin(t) }))
+    let keptToolNames: ReadonlySet<string>
+    try {
+      keptToolNames = resolveToolScope(scopeInputs, descriptor?.tools, {
+        isSubagent: isSubagent ?? false,
+        routeId: options.routeId,
+      })
+    } catch (error) {
+      return { message: formatErrorMessage(error), ok: false }
+    }
+    tools = tools.filter((t) => keptToolNames.has(t.name))
     stateFields = stateFields ? [...stateFields, ...capStateFields] : capStateFields
     promptFragments = capPromptFragments
     streamTransformers = capStreamTransformers
@@ -661,6 +688,7 @@ async function prepareRouteExecution(options: {
 async function executeRouteAtResolvedPath(options: {
   readonly appRoot: string
   readonly input: unknown
+  readonly isSubagent?: boolean
   readonly middlewareContext?: Readonly<Record<string, unknown>>
   readonly routeFile: string
   readonly routeId: string
@@ -672,7 +700,10 @@ async function executeRouteAtResolvedPath(options: {
   let mode: RuntimeExecutionMode | null = null
 
   try {
-    const prepared = await prepareRouteExecution(options)
+    const prepared = await prepareRouteExecution({
+      ...options,
+      isSubagent: options.isSubagent ?? false,
+    })
 
     if (!prepared.ok) {
       return createRuntimeFailureResult({
@@ -1013,6 +1044,7 @@ function buildSubagentResolver(args: {
         const result = await executeResolvedRoute({
           appRoot,
           input,
+          isSubagent: true,
           routeFile: route.entryFile,
           routeId: route.id,
           routePath: route.pathname,
@@ -1032,6 +1064,7 @@ function buildSubagentResolver(args: {
         for await (const chunk of streamResolvedRoute({
           appRoot,
           input,
+          isSubagent: true,
           routeFile: route.entryFile,
           routeId: route.id,
           routePath: route.pathname,

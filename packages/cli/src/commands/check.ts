@@ -2,6 +2,7 @@ import { discoverRoutes } from "@dawn-ai/core"
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { collectToolScopeErrors } from "../lib/runtime/collect-tool-scope-errors.js"
 import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
 import { collectUnknownModelIdWarnings } from "../lib/runtime/warn-unknown-model-ids.js"
 
@@ -40,7 +41,13 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
     for (const warning of warnings) {
       writeLine(io.stdout, `\n${warning}`)
     }
+
+    const scopeErrors = await collectToolScopeErrors(manifest)
+    if (scopeErrors.length > 0) {
+      throw new CliError(`Invalid tool scope:\n${scopeErrors.join("\n")}`)
+    }
   } catch (error) {
+    if (error instanceof CliError) throw error
     throw new CliError(`Validation failed: ${formatErrorMessage(error)}`)
   }
 }
