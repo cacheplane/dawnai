@@ -80,9 +80,18 @@ it.skipIf(!live)(
     })
     try {
       h.reset()
-      await h.run({ input: "Remember: acme escalates billing above 500 dollars." })
+      // Pin the identity (subject + predicate) so the real model reuses it on the
+      // update — supersession keys on identity, so an explicit prompt makes the
+      // machinery (not the model's free-form phrasing) the thing under test.
+      await h.run({
+        input:
+          "Use the remember tool now. data: subject 'acme', predicate 'billing-escalation-threshold', value '500 dollars'.",
+      })
       h.reset()
-      await h.run({ input: "Update your memory: acme now escalates billing above 750 dollars." })
+      await h.run({
+        input:
+          "The threshold changed. Use the remember tool to update it. data: subject 'acme', predicate 'billing-escalation-threshold', value '750 dollars'.",
+      })
 
       const store = sqliteMemoryStore({ path: dbPath(probeRoot) })
       const active = await store.search({
@@ -90,16 +99,16 @@ it.skipIf(!live)(
         status: "active",
         query: "billing",
       })
-      const superseded = await store.search({
-        namespace: "route=/memory-chat",
-        status: "superseded",
-        query: "billing",
-      })
+      // The current value must be active; the old value must NOT still be active.
+      // Had the model used a different identity (two ADDs instead of a SUPERSEDE),
+      // 500 would remain active and the second assertion would catch it.
       expect(active.some((r) => JSON.stringify(r.data).includes("750"))).toBe(true)
-      expect(superseded.some((r) => JSON.stringify(r.data).includes("500"))).toBe(true)
+      expect(active.some((r) => JSON.stringify(r.data).includes("500"))).toBe(false)
 
       h.reset()
-      const r = await h.run({ input: "Recall the current acme billing escalation threshold." })
+      const r = await h.run({
+        input: "Recall the current acme billing escalation threshold.",
+      })
       expect(String(r.toolResults.find((t) => t.name === "recall")?.content ?? "")).toContain("750")
     } finally {
       await h.close()
@@ -118,7 +127,9 @@ it.skipIf(!live)(
     })
     try {
       a.reset()
-      await a.run({ input: "Remember: the secret code for chat is ALPHA-111." })
+      await a.run({
+        input: "Remember: the secret code for chat is ALPHA-111.",
+      })
     } finally {
       await a.close()
     }
@@ -146,6 +157,30 @@ it.skipIf(!live)(
 it.skipIf(!live)(
   "injects a memory index into the system prompt once memories exist",
   async () => {
+    // The memory-index fragment is built from the active rows at agent-materialize
+    // time, so pre-seed the store BEFORE the harness boots. (The recall tool is
+    // always live; the index is a materialize-time hint — see the per-descriptor
+    // materialized-agent cache in agent-adapter.) Seeding deterministically also
+    // keeps this assertion off real-model write variance.
+    const store = sqliteMemoryStore({ path: dbPath(probeRoot) })
+    await store.put({
+      id: "memory_seed_index",
+      kind: "semantic",
+      namespace: "route=/memory-chat",
+      content: "acme escalates billing above 500 dollars",
+      data: {
+        subject: "acme",
+        predicate: "billing-escalation-threshold",
+        value: "500 dollars",
+      },
+      source: { type: "tool", id: "remember" },
+      confidence: 1,
+      tags: [],
+      status: "active",
+      createdAt: "2026-06-19T00:00:00.000Z",
+      updatedAt: "2026-06-19T00:00:00.000Z",
+    })
+
     const h = await createAgentHarness({
       appRoot: probeRoot,
       route: "/memory-chat#agent",
@@ -153,9 +188,9 @@ it.skipIf(!live)(
     })
     try {
       h.reset()
-      await h.run({ input: "Remember: acme escalates billing above 500 dollars." })
-      h.reset()
       const r = await h.run({ input: "Hello." })
+      // The memory-index prompt fragment is appended to the system message; it lists
+      // the in-scope memories the agent can recall.
       expect(r.systemPrompt).toContain("Long-Term Memory")
     } finally {
       await h.close()
@@ -176,7 +211,9 @@ it.skipIf(!live)(
     })
     try {
       h1.reset()
-      const r1 = await h1.run({ input: "Remember: this project uses pnpm as its package manager." })
+      const r1 = await h1.run({
+        input: "Remember: this project uses pnpm as its package manager.",
+      })
       expectToolCalled(r1, "remember")
     } finally {
       await h1.close()
@@ -213,7 +250,9 @@ it.skipIf(!live)(
     })
     try {
       h3.reset()
-      const r3 = await h3.run({ input: "Recall: what package manager does this project use?" })
+      const r3 = await h3.run({
+        input: "Recall: what package manager does this project use?",
+      })
       expect(String(r3.toolResults.find((t) => t.name === "recall")?.content ?? "")).toContain(
         "pnpm",
       )

@@ -42,6 +42,8 @@ export interface MemoryContext {
     readonly scope: readonly string[]
     readonly identity?: readonly string[]
   }
+  /** The route's defineMemory() zod schema — exposed as the `remember` tool's `data` shape so the model knows what to pass. */
+  readonly schema?: unknown
   readonly validate: (
     data: unknown,
   ) =>

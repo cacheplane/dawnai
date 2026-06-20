@@ -92,7 +92,11 @@ export function buildMemoryContext(args: {
     tuple as import("@dawn-ai/memory").MemoryScopeTuple & Record<string, string>,
   )
   const schema = defined.schema as {
-    safeParse(d: unknown): { success: boolean; data?: unknown; error?: { message: string } }
+    safeParse(d: unknown): {
+      success: boolean
+      data?: unknown
+      error?: { message: string }
+    }
   }
   return {
     store: args.store,
@@ -103,11 +107,19 @@ export function buildMemoryContext(args: {
       scope: defined.scope,
       ...(defined.identity ? { identity: defined.identity } : {}),
     },
+    // The route's zod schema — surfaced as the `remember` tool's `data` shape.
+    schema: defined.schema,
     validate: (data: unknown) => {
       const r = schema.safeParse(data)
       return r.success
-        ? { ok: true as const, value: (r.data ?? {}) as Record<string, unknown> }
-        : { ok: false as const, errors: r.error?.message ?? "memory data failed schema validation" }
+        ? {
+            ok: true as const,
+            value: (r.data ?? {}) as Record<string, unknown>,
+          }
+        : {
+            ok: false as const,
+            errors: r.error?.message ?? "memory data failed schema validation",
+          }
     },
     now: args.now,
     ...(args.indexMaxEntries !== undefined ? { indexMaxEntries: args.indexMaxEntries } : {}),
