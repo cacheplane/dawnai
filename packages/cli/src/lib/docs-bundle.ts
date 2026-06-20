@@ -17,12 +17,12 @@ export function parseFrontmatter(raw: string): { data: DocFrontmatter; body: str
     return { data: {}, body: raw }
   }
   const data: DocFrontmatter = {}
-  for (const line of match[1].split("\n")) {
+  for (const line of (match[1] ?? "").split("\n")) {
     const m = /^(\w+):\s*(.*)$/.exec(line)
     if (!m) {
       continue
     }
-    let value = m[2].trim()
+    let value = (m[2] ?? "").trim()
     if (
       (value.startsWith('"') && value.endsWith('"')) ||
       (value.startsWith("'") && value.endsWith("'"))
@@ -77,7 +77,7 @@ export function parseNavOrder(navSource: string): string[] {
   const re = /href:\s*["']\/docs\/([^"']+)["']/g
   let m: RegExpExecArray | null = re.exec(navSource)
   while (m !== null) {
-    if (!slugs.includes(m[1])) {
+    if (m[1] !== undefined && !slugs.includes(m[1])) {
       slugs.push(m[1])
     }
     m = re.exec(navSource)
