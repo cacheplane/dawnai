@@ -39,6 +39,8 @@ export {
 } from "./discovery/route-segments.js"
 export type { ResolveStateFieldsOptions } from "./state/resolve-state-fields.js"
 export { resolveStateFields } from "./state/resolve-state-fields.js"
+export type { ScopeInput, ToolOrigin } from "./tool-scope.js"
+export { resolveToolScope, toolOrigin } from "./tool-scope.js"
 export type { ExtractToolSchemasOptions } from "./typegen/extract-tool-schema.js"
 export { extractToolSchemasForRoute } from "./typegen/extract-tool-schema.js"
 export type { ExtractToolTypesOptions } from "./typegen/extract-tool-types.js"
