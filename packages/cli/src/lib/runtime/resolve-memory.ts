@@ -10,12 +10,23 @@ import type { LoadedRouteMemory } from "./load-memory.js"
  * → "/support/[tenant]"); leaves an already-clean URL path like "/chat" unchanged.
  */
 export function routeNamespaceKey(routePath: string): string {
-  let p = routePath.replace(/\\/g, "/")
+  // Regex-free on purpose: each step is a linear string op, so there is no
+  // ReDoS surface even though routePath ultimately derives from caller input.
+  let p = routePath.split("\\").join("/")
   const appMarker = "/app/"
   const idx = p.lastIndexOf(appMarker)
   if (idx >= 0) p = p.slice(idx + appMarker.length - 1) // keep leading "/": "/memory-chat/index.ts"
-  p = p.replace(/\/index\.(ts|tsx|js|mjs)$/i, "")
-  p = p.replace(/#.*$/, "") // strip a #agent suffix if present
+  // Strip a trailing /index.<ext>.
+  const lower = p.toLowerCase()
+  for (const ext of ["/index.ts", "/index.tsx", "/index.js", "/index.mjs"]) {
+    if (lower.endsWith(ext)) {
+      p = p.slice(0, p.length - ext.length)
+      break
+    }
+  }
+  // Strip a #agent (or any #suffix).
+  const hash = p.indexOf("#")
+  if (hash >= 0) p = p.slice(0, hash)
   if (!p.startsWith("/")) p = `/${p}`
   return p === "" ? "/" : p
 }
