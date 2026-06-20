@@ -1,4 +1,5 @@
 export type { ThreadsStore } from "@dawn-ai/sqlite-storage"
+export { BUILT_IN_TOOL_NAMES } from "./capabilities/built-in-tool-names.js"
 export { createAgentsMdMarker } from "./capabilities/built-in/agents-md.js"
 export { createMemoryMarker } from "./capabilities/built-in/memory.js"
 export { createMemoryMdMarker } from "./capabilities/built-in/memory-md.js"
