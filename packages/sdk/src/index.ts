@@ -3,6 +3,7 @@ export type {
   DawnAgent,
   ReasoningConfig,
   RetryConfig,
+  ToolScope,
 } from "./agent.js"
 export { agent, isDawnAgent } from "./agent.js"
 export type { BackendAdapter } from "./backend-adapter.js"

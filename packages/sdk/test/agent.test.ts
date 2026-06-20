@@ -82,3 +82,19 @@ describe("agent()", () => {
     expect(descriptor.provider).toBeUndefined()
   })
 })
+
+describe("agent() tool scope", () => {
+  test("carries a tools scope through to the descriptor", () => {
+    const a = agent({
+      model: "gpt-5",
+      systemPrompt: "x",
+      tools: { allow: ["readFile"], deny: ["runBash"] },
+    })
+    expect(a.tools).toEqual({ allow: ["readFile"], deny: ["runBash"] })
+  })
+
+  test("omits tools when not provided", () => {
+    const a = agent({ model: "gpt-5", systemPrompt: "x" })
+    expect("tools" in a).toBe(false)
+  })
+})

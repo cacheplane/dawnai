@@ -4,7 +4,7 @@ Scenario tests and `@dawn-ai/testing` pin down behaviour: given this input and t
 
 Use evals when you want a quality bar that survives prompt edits, model swaps, and refactors: a number that goes up or down across a dataset, with an optional threshold that fails CI when quality regresses.
 
-Evals are deterministic and CI-safe by default. Like `@dawn-ai/testing`, each case replays pre-written **aimock** fixtures — your tools, prompts, capabilities, and state run normally; only the LLM is replaced. A separate `dawn eval --live` mode runs the real model locally when you want to measure against actual model output.
+Evals are deterministic and CI-safe by default. Like `@dawn-ai/testing`, each case replays pre-written **aimock** fixtures, so only the LLM is replaced while your tools, prompts, capabilities, and state run normally. A separate `dawn eval --live` mode runs the real model locally when you want to measure against actual model output.
 
 ## Install
 
@@ -134,7 +134,9 @@ If you set neither `gate` nor `threshold`, the eval is **informational**: it alw
 
 ## Execution: replay vs live
 
-By default `dawn eval` runs in **replay** mode: each case replays its `fixtures` through aimock, so no real model is called. Fixtures come from a `script()` builder inline on the case, or from committed fixture files — the same deterministic, CI-safe path `@dawn-ai/testing` uses. This is the only mode that should run in CI.
+Evals use the same aimock fixture system as agent tests — see [Testing Agents](/docs/testing-agents) for how fixtures, `script()`, and replay-vs-live mode work, and why live runs must never touch CI.
+
+By default `dawn eval` runs in **replay** mode: each case replays its `fixtures` (a `script()` builder inline on the case, or a committed fixture file) through aimock, so no real model is called. This is the only mode that should run in CI.
 
 ```bash
 dawn eval

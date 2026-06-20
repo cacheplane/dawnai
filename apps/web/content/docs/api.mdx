@@ -211,6 +211,72 @@ See [Middleware](/docs/middleware).
 
 ---
 
+### Memory
+
+Functions and types for declaring a route's typed long-term memory. See [Memory](/docs/memory).
+
+### `defineMemory(def)`
+
+```ts
+export function defineMemory<S extends z.ZodTypeAny>(def: {
+  kind: "semantic" | "episodic" | "procedural" | "reflection"
+  scope: readonly MemoryScopeDimension[]
+  schema: S
+  identity?: readonly string[]
+}): DefinedMemory<S>
+```
+
+Declares a route's typed long-term memory. Place the call as the default export of a `memory.ts` file next to the route's `index.ts` — that file's presence is what activates the `recall`/`remember` tools. `kind` selects the memory category. `scope` lists the namespace dimensions the memory is partitioned by. `schema` is a [zod](https://zod.dev) schema validating each stored record. `identity` names the fields used for write reconciliation; it defaults to `["subject", "predicate"]`.
+
+```ts
+import { defineMemory } from "@dawn-ai/sdk"
+import { z } from "zod"
+
+export default defineMemory({
+  kind: "semantic",
+  scope: ["workspace", "user"],
+  schema: z.object({
+    subject: z.string(),
+    predicate: z.string(),
+    object: z.string(),
+  }),
+})
+```
+
+See [Memory](/docs/memory) and the [`memory`](/docs/configuration#memory) config key.
+
+### `DefinedMemory`
+
+```ts
+export interface DefinedMemory<S extends z.ZodTypeAny = z.ZodTypeAny> {
+  readonly kind: "semantic" | "episodic" | "procedural" | "reflection"
+  readonly scope: readonly MemoryScopeDimension[]
+  readonly schema: S
+  readonly identity?: readonly string[]
+}
+```
+
+The descriptor returned by `defineMemory()`. Carry it as a route's `memory.ts` default export; do not construct it manually.
+
+See [Memory](/docs/memory).
+
+### `MemoryScopeDimension`
+
+```ts
+export type MemoryScopeDimension =
+  | "workspace"
+  | "route"
+  | "tenant"
+  | "user"
+  | "agent"
+```
+
+The namespace dimensions a memory can be partitioned by, used in `DefinedMemory.scope`. `workspace` and `route` are derived automatically; `tenant`, `user`, and `agent` come from the config-level `memory.resolveScope` callback.
+
+See [Memory](/docs/memory).
+
+---
+
 ### Route configuration
 
 Types that shape route-level behaviour. See [Routes](/docs/routes).
@@ -306,6 +372,35 @@ A map of tool name to `RuntimeTool`. Used as the constraint on `RuntimeContext`'
 
 See [Tools](/docs/tools).
 
+### `DawnToolContext`
+
+```ts
+export interface DawnToolContext {
+  readonly signal: AbortSignal
+  readonly middleware?: Readonly<Record<string, unknown>>
+  readonly fs: WorkspaceFs
+}
+```
+
+The context argument Dawn passes to a route tool's function. `signal` is aborted when the client disconnects. `middleware` carries any context injected by `allow(...)` for the current request. `fs` is a sandboxed [`WorkspaceFs`](#workspacefs) handle scoped to the route's `workspace/` directory.
+
+See [Tools](/docs/tools) and [Workspace Filesystem](/docs/workspace).
+
+### `WorkspaceFs`
+
+```ts
+export interface WorkspaceFs {
+  readFile(path: string, opts?: { readonly maxBytes?: number }): Promise<string>
+  readBinaryFile(path: string, opts?: { readonly maxBytes?: number }): Promise<Uint8Array>
+  writeFile(path: string, content: string): Promise<{ readonly bytesWritten: number }>
+  listDir(path?: string): Promise<readonly string[]>
+}
+```
+
+A sandboxed filesystem handle scoped to the route's `workspace/` directory, available as `ctx.fs` on `DawnToolContext`. Relative paths resolve against the workspace root; paths inside `workspace/` are always allowed, while paths outside consult the permissions store. `readBinaryFile` throws when the configured filesystem backend does not implement binary reads.
+
+See [Workspace Filesystem](/docs/workspace).
+
 ---
 
 ### Models
@@ -380,6 +475,62 @@ export type XaiModelId = "grok-4.3"
 ```
 
 String literals for supported xAI models. The built-in `agent()` route infers the xAI provider for `grok-*` model IDs.
+
+### `inferProvider(model)`
+
+```ts
+export function inferProvider(model: string): BuiltInModelProviderId | undefined
+```
+
+Infers a built-in provider id from a model string for the known families, returning `undefined` when none match. Matches OpenAI (`gpt-*`, `o3*`, `o4*`), Anthropic (`claude-*`), Google (`gemini-*`), Mistral (`mistral-*`, `mixtral-*`, `codestral-*`), and xAI (`grok-*`). This is the same inference the built-in `agent()` path uses when `AgentConfig.provider` is omitted.
+
+### `SUPPORTED_AGENT_PROVIDERS`
+
+```ts
+export const SUPPORTED_AGENT_PROVIDERS: readonly BuiltInModelProviderId[]
+// ["openai", "anthropic", "google", "mistral", "groq", "ollama", "xai", "openrouter"]
+```
+
+The runtime array of built-in provider ids the `agent()` path can materialize. The corresponding type is `BuiltInModelProviderId`.
+
+### `validateModelId(opts)`
+
+```ts
+export function validateModelId(opts: {
+  readonly model: string
+  readonly provider?: string
+}): ModelIdValidation
+```
+
+Advisory check of a model id against the curated per-provider lists ([`CURATED_MODEL_IDS`](#curated_model_ids)). When `provider` is omitted it is inferred via `inferProvider`. Returns `{ ok: true }` for curated ids — and silently for uncurated or unresolvable providers — so consumers warn rather than hard-fail. On a miss it returns the resolved `provider` plus up to three nearest curated id `suggestions`.
+
+### `ModelIdValidation`
+
+```ts
+export type ModelIdValidation =
+  | { readonly ok: true }
+  | {
+      readonly ok: false
+      readonly provider: string
+      readonly suggestions: readonly string[]
+    }
+```
+
+The result of `validateModelId`. The `ok: false` branch carries the resolved `provider` and the nearest curated id `suggestions` (closest first, max 3).
+
+### Model id constants
+
+```ts
+export const CURATED_MODEL_IDS: Readonly<
+  Partial<Record<BuiltInModelProviderId, readonly string[]>>
+>
+export const OPENAI_MODEL_IDS: readonly string[]
+export const GOOGLE_MODEL_IDS: readonly string[]
+export const ANTHROPIC_MODEL_IDS: readonly string[]
+export const XAI_MODEL_IDS: readonly string[]
+```
+
+The runtime arrays backing the model-id literal types. Each per-provider constant (`OPENAI_MODEL_IDS`, `GOOGLE_MODEL_IDS`, `ANTHROPIC_MODEL_IDS`, `XAI_MODEL_IDS`) holds the same ids as its corresponding `*ModelId` type. `CURATED_MODEL_IDS` maps each curated provider id to its list and is consumed by `validateModelId`.
 
 ---
 
