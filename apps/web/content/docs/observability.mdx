@@ -22,7 +22,7 @@ Open any run in the LangSmith UI. The hierarchy follows the LangGraph execution 
 - **Root run** — the full agent turn. Status is `success` when the turn completes normally.
 - **LLM runs** — one per model call, with the full prompt, sampled output, token usage, and latency.
 - **Tool runs** — one per tool call, with input and output. Subagent tool runs appear nested under the subagent's run.
-- **Subagent runs** — each `subagent()` dispatch appears as a child of the root run.
+- **Subagent runs** — each `task({ subagent, input })` dispatch appears as a child of the root run.
 
 ### Human-in-the-loop interrupts in LangSmith
 

@@ -133,19 +133,6 @@ expectState(run).field("todos").toEqual([{ content: "ship it", status: "pending"
 
 `run.state` is the full agent state after the run — the same object a checkpointer would persist.
 
-## Record-first workflow
-
-For complex conversations you don't want to hand-write, record a real provider interaction locally:
-
-```ts
-import { record } from "@dawn-ai/testing"
-
-// Run once locally — requires OPENAI_API_KEY in env. Never run in CI.
-record({ out: "test/fixtures/my-scenario.json" })
-```
-
-Then hand-trim the JSON to keep only the turns that matter, commit it, and replay in CI. CI replays strict and read-only — it never re-records. Add a `git diff --exit-code test/fixtures/` guard in CI to catch uncommitted fixture edits.
-
 ## The three execution modes
 
 `createAgentHarness` supports three modes via the `mode` option (default: `"in-process"`):
