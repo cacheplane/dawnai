@@ -199,6 +199,9 @@ importers:
       '@dawn-ai/langgraph':
         specifier: workspace:*
         version: link:../langgraph
+      '@dawn-ai/memory':
+        specifier: workspace:*
+        version: link:../memory
       '@dawn-ai/permissions':
         specifier: workspace:*
         version: link:../permissions
@@ -387,6 +390,19 @@ importers:
         specifier: 25.6.0
         version: 25.6.0
 
+  packages/memory:
+    dependencies:
+      '@dawn-ai/sqlite-storage':
+        specifier: workspace:*
+        version: link:../sqlite-storage
+    devDependencies:
+      '@dawn-ai/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
   packages/permissions:
     devDependencies:
       '@dawn-ai/config-typescript':
@@ -404,6 +420,9 @@ importers:
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/sqlite-storage:
     devDependencies:
@@ -425,6 +444,9 @@ importers:
       '@copilotkit/aimock':
         specifier: ^1.28.0
         version: 1.28.0(vitest@4.1.9(@types/node@25.6.0)(vite@6.4.3(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.9.0)))
+      '@dawn-ai/memory':
+        specifier: workspace:*
+        version: link:../memory
       light-my-request:
         specifier: ^6.6.0
         version: 6.6.0
@@ -453,6 +475,9 @@ importers:
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/vite-plugin:
     dependencies:

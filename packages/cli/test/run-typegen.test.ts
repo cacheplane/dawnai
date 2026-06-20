@@ -186,6 +186,34 @@ describe("runTypegen", () => {
     expect(content).not.toContain("Run a shell command inside the workspace")
   })
 
+  test("includes remember and recall tools in generated types when memory.ts exists", async () => {
+    const { appRoot, routeDir } = await setupApp()
+    await createFile(join(routeDir, "memory.ts"), "export default {};\n")
+
+    const manifest = await discoverRoutes({ appRoot })
+    await runTypegen({ appRoot, manifest })
+
+    const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const content = await readFile(dtsPath, "utf8")
+
+    expect(content).toContain("remember")
+    expect(content).toContain("recall")
+    // Existing user tool still present alongside the capability-contributed ones
+    expect(content).toContain("greet")
+  })
+
+  test("omits remember and recall tools when memory.ts is absent", async () => {
+    const { appRoot } = await setupApp()
+    const manifest = await discoverRoutes({ appRoot })
+    await runTypegen({ appRoot, manifest })
+
+    const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
+    const content = await readFile(dtsPath, "utf8")
+
+    expect(content).not.toContain("Store a typed long-term memory")
+    expect(content).not.toContain("Recall typed long-term memories")
+  })
+
   test("writes state.json when state.ts exists", async () => {
     const { appRoot } = await setupApp({ withState: true })
     const manifest = await discoverRoutes({ appRoot })

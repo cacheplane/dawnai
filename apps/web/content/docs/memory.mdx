@@ -79,6 +79,106 @@ When `@dawn-ai/langchain` materializes an `agent()` descriptor, it uses a functi
 
 Memory is one of those prompt fragments. That is why the file can be re-read across turns without rebuilding the route.
 
+## Route memory (`memory.md`)
+
+The workspace `AGENTS.md` above is shared by every route. When you want stable
+context that applies to one route only, add a `memory.md` next to that route's
+`index.ts`:
+
+```text
+src/app/research/
+  index.ts
+  memory.md
+```
+
+Dawn injects its trimmed contents under a `# Route Memory` heading, placed
+*after* the workspace `AGENTS.md` fragment, so the route file refines — never
+replaces — the workspace-wide facts. Like `AGENTS.md`, the file is opt-in by
+presence and re-read on every turn, so an edit is visible to the next model call
+without restarting the route.
+
+```md title="src/app/research/memory.md"
+# Research Route Memory
+
+- Every claim in a report must carry an inline citation to a source you read.
+- Prefer primary sources; flag anything you could not verify.
+```
+
+Route memory is plain, human-editable profile text — not a store. Files larger
+than 32 KiB are skipped (the prompt notes the file exceeded the limit), and
+empty files contribute nothing.
+
+## Long-term memory (`memory.ts`)
+
+`AGENTS.md` and `memory.md` are flat text a human edits. Long-term memory is a
+typed, discrete collection the *agent* writes to and reads back across sessions.
+Declare it by adding a `memory.ts` next to a route's `index.ts`:
+
+```ts title="src/app/research/memory.ts"
+import { defineMemory } from "@dawn-ai/sdk"
+import { z } from "zod"
+
+export default defineMemory({
+  kind: "semantic",
+  scope: ["workspace", "route"],
+  schema: z.object({
+    subject: z.string(),
+    predicate: z.string(),
+    value: z.string(),
+  }),
+})
+```
+
+When a route has a `memory.ts`, Dawn generates two tools for it:
+
+- `remember` — store a typed fact. The payload is validated against your
+  `schema` before it is written.
+- `recall` — fetch in-scope memories by keyword, kind, or tags.
+
+Recall is deterministic: a keyword + recency search over a SQLite-backed store
+(`@dawn-ai/memory`, on `node:sqlite`). There is no embedding model or network
+call in the path, so the same query returns the same rows — which keeps evals
+and fixtures stable. A short index of the most recent in-scope memories is also
+injected into the prompt so the agent knows what is available to recall.
+
+### Scope and namespaces
+
+`scope` lists the dimensions a memory is partitioned by. `["workspace", "route"]`
+namespaces records to the workspace *and* the specific route, so two routes do
+not read each other's memories, and an app may supply further namespace
+dimensions (e.g. tenant or user) at runtime. The `schema` is your fact shape;
+for the `semantic` kind, records are reconciled by an identity key that defaults
+to `["subject", "predicate"]` (override with `identity`).
+
+### Writes and governance
+
+Writes default to a review queue rather than landing live. Control this with the
+`memory` config in `dawn.config.ts`:
+
+```ts title="dawn.config.ts"
+export default defineConfig({
+  memory: { writes: "candidate" }, // "off" | "candidate" | "auto"
+})
+```
+
+- `off` — the `remember` tool is not generated; the agent can only `recall`.
+- `candidate` (default) — `remember` writes land as `candidate` records that are
+  not surfaced to `recall` until a human promotes them.
+- `auto` — `remember` writes land as `active` immediately.
+
+Promote, inspect, or remove candidates with the [`dawn memory`](/docs/cli#dawn-memory)
+CLI (`list`, `search`, `inspect`, `approve`, `reject`, `forget`). When a new
+fact contradicts an existing one (same identity, different value), Dawn
+*supersedes* the old record rather than deleting it, so history is preserved.
+
+### What's deferred
+
+Long-term memory ships with the `semantic` kind and deterministic keyword +
+recency recall. Vector / embedding-based recall, the `episodic` and `procedural`
+kinds, and a dev-server inspector UI are planned but not yet implemented. Use
+`memory.md` for stable profile text and `memory.ts` for facts the agent should
+accumulate over time.
+
 ## What memory is not
 
 Memory is not a vector store, retrieval system, or per-user profile service. It is not automatically summarized. It is not scoped by tenant, route, or session.

@@ -3,6 +3,54 @@ import type { DawnAgent, WorkspaceFs } from "@dawn-ai/sdk"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import type { ResolvedStateField, RouteManifest } from "../types.js"
 
+export interface MemoryRecordLike {
+  readonly id: string
+  readonly kind: string
+  readonly namespace: string
+  readonly content: string
+  readonly data: Record<string, unknown>
+  readonly source: { readonly type: string; readonly id: string }
+  readonly confidence: number
+  readonly tags: readonly string[]
+  readonly status: string
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly supersedes?: readonly string[]
+}
+
+export interface MemoryStoreLike {
+  put(rec: MemoryRecordLike): Promise<void>
+  get(id: string): Promise<MemoryRecordLike | null>
+  search(q: {
+    namespace: string
+    query?: string
+    kind?: string
+    tags?: readonly string[]
+    status?: string
+    limit?: number
+  }): Promise<readonly MemoryRecordLike[]>
+  update(id: string, patch: Partial<MemoryRecordLike>): Promise<void>
+  supersede(id: string, bySupersedingId: string): Promise<void>
+}
+
+export interface MemoryContext {
+  readonly store: MemoryStoreLike
+  readonly namespace: string
+  readonly writes: "off" | "candidate" | "auto"
+  readonly defined: {
+    readonly kind: string
+    readonly scope: readonly string[]
+    readonly identity?: readonly string[]
+  }
+  readonly validate: (
+    data: unknown,
+  ) =>
+    | { readonly ok: true; readonly value: Record<string, unknown> }
+    | { readonly ok: false; readonly errors: string }
+  readonly now: string
+  readonly indexMaxEntries?: number
+}
+
 export interface CapabilityMarkerContext {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
@@ -14,6 +62,7 @@ export interface CapabilityMarkerContext {
   readonly permissions?: PermissionsStore
   /** Absolute path to the Dawn app root. Capabilities should resolve app-relative paths (e.g. workspace/) against this, NOT process.cwd(). */
   readonly appRoot: string
+  readonly memory?: MemoryContext
 }
 
 export interface DawnToolDefinition {

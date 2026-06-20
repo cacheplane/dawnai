@@ -187,6 +187,7 @@ describe("dawn typegen", () => {
     const coreTarball = await packPackage("@dawn-ai/core", packsRoot)
     const langchainTarball = await packPackage("@dawn-ai/langchain", packsRoot)
     const langgraphTarball = await packPackage("@dawn-ai/langgraph", packsRoot)
+    const memoryTarball = await packPackage("@dawn-ai/memory", packsRoot)
     const permissionsTarball = await packPackage("@dawn-ai/permissions", packsRoot)
     const sdkTarball = await packPackage("@dawn-ai/sdk", packsRoot)
     const sqliteStorageTarball = await packPackage("@dawn-ai/sqlite-storage", packsRoot)
@@ -211,6 +212,7 @@ describe("dawn typegen", () => {
               "@dawn-ai/core": `file:${coreTarball}`,
               "@dawn-ai/langchain": `file:${langchainTarball}`,
               "@dawn-ai/langgraph": `file:${langgraphTarball}`,
+              "@dawn-ai/memory": `file:${memoryTarball}`,
               "@dawn-ai/permissions": `file:${permissionsTarball}`,
               "@dawn-ai/sdk": `file:${sdkTarball}`,
               "@dawn-ai/sqlite-storage": `file:${sqliteStorageTarball}`,

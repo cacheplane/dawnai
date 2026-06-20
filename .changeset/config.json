@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [["@dawn-ai/cli", "@dawn-ai/config-biome", "@dawn-ai/config-typescript", "@dawn-ai/core", "@dawn-ai/devkit", "@dawn-ai/evals", "@dawn-ai/langchain", "@dawn-ai/langgraph", "@dawn-ai/permissions", "@dawn-ai/sdk", "@dawn-ai/sqlite-storage", "@dawn-ai/testing", "@dawn-ai/vite-plugin", "@dawn-ai/workspace", "create-dawn-ai-app"]],
+  "fixed": [["@dawn-ai/cli", "@dawn-ai/config-biome", "@dawn-ai/config-typescript", "@dawn-ai/core", "@dawn-ai/devkit", "@dawn-ai/evals", "@dawn-ai/langchain", "@dawn-ai/langgraph", "@dawn-ai/memory", "@dawn-ai/permissions", "@dawn-ai/sdk", "@dawn-ai/sqlite-storage", "@dawn-ai/testing", "@dawn-ai/vite-plugin", "@dawn-ai/workspace", "create-dawn-ai-app"]],
   "linked": [],
   "access": "public",
   "baseBranch": "main",

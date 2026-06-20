@@ -1,5 +1,7 @@
 export type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 export { createAgentsMdMarker } from "./capabilities/built-in/agents-md.js"
+export { createMemoryMarker } from "./capabilities/built-in/memory.js"
+export { createMemoryMdMarker } from "./capabilities/built-in/memory-md.js"
 export type { RuntimeTodo } from "./capabilities/built-in/planning.js"
 export { createPlanningMarker } from "./capabilities/built-in/planning.js"
 export { createSkillsMarker } from "./capabilities/built-in/skills.js"
@@ -17,6 +19,9 @@ export type {
   CapabilityMarker,
   CapabilityMarkerContext,
   DawnToolDefinition,
+  MemoryContext,
+  MemoryRecordLike,
+  MemoryStoreLike,
   PromptFragment,
   StreamTransformer,
   StreamTransformerInput,

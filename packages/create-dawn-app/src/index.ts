@@ -179,6 +179,7 @@ function createTemplateReplacements(
   readonly dawnEvalsSpecifier: string
   readonly dawnLangchainSpecifier: string
   readonly dawnLanggraphSpecifier: string
+  readonly dawnMemorySpecifier: string
   readonly dawnPermissionsSpecifier: string
   readonly dawnSdkSpecifier: string
   readonly dawnSqliteStorageSpecifier: string
@@ -196,6 +197,7 @@ function createTemplateReplacements(
       dawnEvalsSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/evals")),
       dawnLangchainSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langchain")),
       dawnLanggraphSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langgraph")),
+      dawnMemorySpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/memory")),
       dawnPermissionsSpecifier: createAbsoluteFileSpecifier(
         resolve(repoRoot, "packages/permissions"),
       ),
@@ -216,6 +218,7 @@ function createTemplateReplacements(
     dawnEvalsSpecifier: options.distTag,
     dawnLangchainSpecifier: options.distTag,
     dawnLanggraphSpecifier: options.distTag,
+    dawnMemorySpecifier: options.distTag,
     dawnPermissionsSpecifier: options.distTag,
     dawnSdkSpecifier: options.distTag,
     dawnSqliteStorageSpecifier: options.distTag,
@@ -247,6 +250,7 @@ async function applyInternalModePackageOverrides(
       "@dawn-ai/evals": replacements.dawnEvalsSpecifier,
       "@dawn-ai/langchain": replacements.dawnLangchainSpecifier,
       "@dawn-ai/langgraph": replacements.dawnLanggraphSpecifier,
+      "@dawn-ai/memory": replacements.dawnMemorySpecifier,
       "@dawn-ai/permissions": replacements.dawnPermissionsSpecifier,
       "@dawn-ai/sdk": replacements.dawnSdkSpecifier,
       "@dawn-ai/sqlite-storage": replacements.dawnSqliteStorageSpecifier,

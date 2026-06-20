@@ -20,6 +20,8 @@ export {
   OPENAI_MODEL_IDS,
   XAI_MODEL_IDS,
 } from "./known-model-ids.js"
+export type { DefinedMemory, MemoryScopeDimension } from "./memory.js"
+export { defineMemory } from "./memory.js"
 export type {
   ContinueResult,
   DawnMiddleware,
