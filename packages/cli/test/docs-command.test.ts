@@ -11,6 +11,7 @@ function fixtureDocs(): string {
   writeFileSync(join(dir, "tools.md"), "# Tools\n\nCo-located tools.\n")
   mkdirSync(join(dir, "recipes"))
   writeFileSync(join(dir, "recipes", "add-a-tool.md"), "# Add a tool\n")
+  writeFileSync(join(dir, "recipes", "index.md"), "# Recipes\n\nTask-oriented how-tos.\n")
   return dir
 }
 
@@ -47,6 +48,19 @@ describe("runDocsCommand()", () => {
     const { io, out } = fakeIo()
     await runDocsCommand({ topic: "recipes/add-a-tool.md", docsDir: dir }, io)
     expect(out.join("\n")).toContain("# Add a tool")
+  })
+
+  it("resolves a directory slug to its index.md and lists it as the bare name", async () => {
+    const dir = fixtureDocs()
+    const { io, out } = fakeIo()
+    await runDocsCommand({ topic: "recipes", docsDir: dir }, io)
+    expect(out.join("\n")).toContain("Task-oriented how-tos.")
+
+    const list = fakeIo()
+    await runDocsCommand({ docsDir: dir }, list.io)
+    const text = list.out.join("\n")
+    expect(text).toContain("recipes")
+    expect(text).not.toContain("recipes/index")
   })
 
   it("errors with the topic list on an unknown topic", async () => {

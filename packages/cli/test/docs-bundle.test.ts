@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest"
 import {
   buildReadme,
+  extractSummary,
+  extractTitle,
   mdxToMarkdown,
   parseFrontmatter,
+  parseNav,
   parseNavOrder,
 } from "../src/lib/docs-bundle.js"
 
@@ -61,6 +64,40 @@ describe("parseNavOrder()", () => {
       { label: "Routes again", href: "/docs/routes" },
     `
     expect(parseNavOrder(nav)).toEqual(["getting-started", "routes"])
+  })
+})
+
+describe("parseNav()", () => {
+  it("returns ordered slug/label pairs, deduped by slug", () => {
+    const nav = `
+      { label: "Getting Started", href: "/docs/getting-started" },
+      { label: "Tools", href: "/docs/tools" },
+      { label: "Tools again", href: "/docs/tools" },
+    `
+    expect(parseNav(nav)).toEqual([
+      { slug: "getting-started", label: "Getting Started" },
+      { slug: "tools", label: "Tools" },
+    ])
+  })
+})
+
+describe("extractTitle()", () => {
+  it("returns the first H1 heading text", () => {
+    expect(extractTitle("# Getting Started\n\nBody.\n")).toBe("Getting Started")
+  })
+  it("returns undefined when there is no H1", () => {
+    expect(extractTitle("Just text.\n")).toBeUndefined()
+  })
+})
+
+describe("extractSummary()", () => {
+  it("uses the first paragraph after the heading, first sentence only", () => {
+    const md = "# Tools\n\nTools are units of work. More detail follows here.\n\n## Next\n"
+    expect(extractSummary(md)).toBe("Tools are units of work.")
+  })
+  it("flattens markdown links and skips lists/code", () => {
+    const md = "# X\n\nSee [State](/docs/state) for more.\n"
+    expect(extractSummary(md)).toBe("See State for more.")
   })
 })
 

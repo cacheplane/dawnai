@@ -71,18 +71,81 @@ export function mdxToMarkdown(raw: string): string {
   return `${result}\n`
 }
 
-/** Extract `/docs/<slug>` hrefs from the website nav source, in order, deduped. */
-export function parseNavOrder(navSource: string): string[] {
-  const slugs: string[] = []
-  const re = /href:\s*["']\/docs\/([^"']+)["']/g
+export interface NavEntry {
+  readonly slug: string
+  readonly label: string
+}
+
+/** Extract ordered `{ slug, label }` pairs from the website nav source, deduped by slug. */
+export function parseNav(navSource: string): NavEntry[] {
+  const entries: NavEntry[] = []
+  const seen = new Set<string>()
+  const re = /label:\s*["']([^"']+)["'],\s*href:\s*["']\/docs\/([^"']+)["']/g
   let m: RegExpExecArray | null = re.exec(navSource)
   while (m !== null) {
-    if (m[1] !== undefined && !slugs.includes(m[1])) {
-      slugs.push(m[1])
+    const label = m[1] ?? ""
+    const slug = m[2] ?? ""
+    if (slug !== "" && !seen.has(slug)) {
+      seen.add(slug)
+      entries.push({ slug, label })
     }
     m = re.exec(navSource)
   }
-  return slugs
+  return entries
+}
+
+/** Extract `/docs/<slug>` hrefs from the website nav source, in order, deduped. */
+export function parseNavOrder(navSource: string): string[] {
+  return parseNav(navSource).map((entry) => entry.slug)
+}
+
+/** The text of the first `# ` heading in a markdown document, if any. */
+export function extractTitle(markdown: string): string | undefined {
+  const m = /^#\s+(.+?)\s*$/m.exec(markdown)
+  return m ? m[1] : undefined
+}
+
+/** A one-line summary built from the first paragraph after the leading heading. */
+export function extractSummary(markdown: string): string {
+  const lines = markdown.split("\n")
+  let i = 0
+  while (i < lines.length && ((lines[i] ?? "").trim() === "" || (lines[i] ?? "").startsWith("#"))) {
+    i++
+  }
+  const para: string[] = []
+  for (; i < lines.length; i++) {
+    const line = lines[i] ?? ""
+    if (line.trim() === "") {
+      if (para.length > 0) {
+        break
+      }
+      continue
+    }
+    if (
+      line.startsWith("#") ||
+      /^\s*```/.test(line) ||
+      /^\s*[-*|]/.test(line) ||
+      line.startsWith("<")
+    ) {
+      if (para.length > 0) {
+        break
+      }
+      continue
+    }
+    para.push(line.trim())
+  }
+  let text = para
+    .join(" ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+  const sentenceEnd = text.indexOf(". ")
+  if (sentenceEnd !== -1 && sentenceEnd <= 160) {
+    text = text.slice(0, sentenceEnd + 1)
+  } else if (text.length > 160) {
+    text = `${text.slice(0, 157).trimEnd()}…`
+  }
+  return text
 }
 
 /** Render the bundled docs `README.md` index. */

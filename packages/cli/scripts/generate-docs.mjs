@@ -12,7 +12,7 @@ import {
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { buildReadme, mdxToMarkdown, parseFrontmatter, parseNavOrder } from "../dist/lib/docs-bundle.js"
+import { buildReadme, extractSummary, extractTitle, mdxToMarkdown, parseNav } from "../dist/lib/docs-bundle.js"
 
 const here = dirname(fileURLToPath(import.meta.url)) // packages/cli/scripts
 const pkgRoot = resolve(here, "..") // packages/cli
@@ -47,31 +47,38 @@ const bySlug = new Map()
 for (const abs of mdxFiles) {
   const outRel = relative(docsSrc, abs).replace(/\.mdx$/, ".md")
   const raw = readFileSync(abs, "utf8")
-  const { data } = parseFrontmatter(raw)
+  const md = mdxToMarkdown(raw)
   const outPath = join(outDir, outRel)
   mkdirSync(dirname(outPath), { recursive: true })
-  writeFileSync(outPath, mdxToMarkdown(raw))
+  writeFileSync(outPath, md)
   const slug = outRel.replace(/\.md$/, "").replace(/\/index$/, "")
   bySlug.set(slug, {
     slug,
     file: outRel,
-    title: data.title ?? slug,
-    description: data.description ?? "",
+    h1: extractTitle(md),
+    description: extractSummary(md),
   })
 }
 
-const navOrder = parseNavOrder(readFileSync(navFile, "utf8"))
+const nav = parseNav(readFileSync(navFile, "utf8"))
+const labelOf = new Map(nav.map((entry) => [entry.slug, entry.label]))
+const finalize = (info) => ({
+  slug: info.slug,
+  file: info.file,
+  title: info.h1 ?? labelOf.get(info.slug) ?? info.slug,
+  description: info.description,
+})
 const ordered = []
 const seen = new Set()
-for (const slug of navOrder) {
-  if (bySlug.has(slug)) {
-    ordered.push(bySlug.get(slug))
-    seen.add(slug)
+for (const entry of nav) {
+  if (bySlug.has(entry.slug)) {
+    ordered.push(finalize(bySlug.get(entry.slug)))
+    seen.add(entry.slug)
   }
 }
 for (const [slug, info] of bySlug) {
   if (!seen.has(slug)) {
-    ordered.push(info)
+    ordered.push(finalize(info))
   }
 }
 writeFileSync(join(outDir, "README.md"), buildReadme(ordered))
