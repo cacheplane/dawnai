@@ -53,6 +53,16 @@ export default {
     // model: "gpt-5-mini",  // defaults to the route's own model
   },
 
+  // Long-term memory governance. A route opts in by adding a memory.ts; the
+  // keys below tune how those typed memories are stored, recalled, and written.
+  // Defaults apply to every route with a memory.ts even when this key is absent.
+  memory: {
+    writes: "candidate",   // default — writes land for review, hidden from recall
+    indexMaxEntries: 20,   // default — cap on memories injected into the prompt index
+    // store: myMemoryStore,  // default: SQLite at .dawn/memory.sqlite
+    // resolveScope: ({ routePath, appRoot }) => ({ tenant: "acme" }),
+  },
+
   // SQLite persistence is on by default — no config needed.
   // Threads survive a restart. Override only if you need a custom backend.
   // checkpointer: myCheckpointer,
@@ -186,6 +196,30 @@ Configures conversation summarization. When enabled, Dawn compresses older messa
 | `model` | `string` | Route's model | Model used for the summary LLM call. Defaults to the same model the route uses. |
 | `tokenCounter` | `(text: string) => number \| Promise<number>` | Lazy `gpt-tokenizer` (o200k_base) | Custom token counting function. |
 | `summarize` | `(args) => Promise<string>` | Built-in single-LLM-call summarizer | Custom summary generator. Receives `messages`, `model`, `previousSummary`, and `signal`. |
+
+---
+
+### `memory`
+
+Configures long-term memory governance. A route opts into memory by adding a `memory.ts` next to its `index.ts` (see [`defineMemory`](/docs/api#definememory) in the [Memory](/docs/memory) reference) — that file's presence is what activates the `recall`/`remember` tools and the memory-index prompt fragment. The keys below tune how those typed memories are stored, recalled, and written. They apply to every memory-enabled route even when the `memory` config key is omitted.
+
+```ts
+memory?: {
+  store?: MemoryStore
+  writes?: "off" | "candidate" | "auto"
+  indexMaxEntries?: number
+  resolveScope?: (ctx: { routePath: string; appRoot: string }) => Record<string, string>
+}
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `store` | `MemoryStore` | SQLite at `.dawn/memory.sqlite` | The memory store backend. Defaults to an SQLite-backed store at `<appRoot>/.dawn/memory.sqlite`. Override to plug in a custom backend. |
+| `writes` | `"off" \| "candidate" \| "auto"` | `"candidate"` | Write governance for the `remember` tool. `off` — recall-only; the `remember` tool is not exposed. `candidate` — writes land as candidates for review, hidden from `recall` until promoted with `dawn memory approve`. `auto` — writes are active immediately, with inline identity reconciliation (idempotent updates and supersede-on-conflict). |
+| `indexMaxEntries` | `number` | `20` | Cap on how many in-scope memories are injected into the prompt memory index. |
+| `resolveScope` | `(ctx: { routePath; appRoot }) => Record<string, string>` | — | Supplies runtime namespace dimensions (e.g. `tenant`, `user`, `agent`) for the memory namespace. Only the dimensions a route declares in its `memory.ts` scope are applied. |
+
+See [Memory](/docs/memory) for the full long-term-memory model and the [`dawn memory`](/docs/cli#dawn-memory) CLI for reviewing candidate writes.
 
 ---
 

@@ -84,7 +84,7 @@ Every frame is `event: <type>\ndata: <json>\n\n`. Parse the `event:` line to rou
 | `chunk` | `{ content: string }` | Streamed text fragment from the LLM. |
 | `tool_call` | `{ name: string, input: unknown }` | LLM is calling a tool. |
 | `tool_result` | `{ name: string, output: unknown }` | Tool returned a result. |
-| `plan_update` | plan object | Emitted when [Planning](/docs/planning) updates `plan.md`. |
+| `plan_update` | plan object | Emitted after a [Planning](/docs/planning) `writeTodos` result updates the route's todo state. (Does not write back to `plan.md`.) |
 | `interrupt` | interrupt object | Emitted when the agent hits a HITL interrupt point. |
 | `subagent.start` | `{ name, routeId, depth, call_id }` | A subagent started. |
 | `subagent.tool_call` | `{ call_id, name, input }` | Tool call inside a subagent. |

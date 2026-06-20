@@ -10,7 +10,7 @@ The migration is mostly *moving code*, not rewriting it.
 
 ## tl;dr
 
-- Your `StateGraph` does not change. Default-export it as a `graph` route.
+- Your `StateGraph` does not change. Export it as a named `graph` route.
 - Your tools become co-located TypeScript files. The hand-written Zod schemas go away.
 - Your typed state moves into a sibling `state.ts`. Dynamic path segments populate fields by name.
 - Your `langgraph.json` is replaced by `dawn build`. The output is still a `langgraph.json`.
@@ -102,7 +102,7 @@ import type state from "./state.js"
 
 type SupportState = z.infer<typeof state>
 
-export default new StateGraph<SupportState>({
+export const graph = new StateGraph<SupportState>({
   channels: {
     messages: { reducer: (a, b) => [...a, ...b], default: () => [] },
     orderId: null,

@@ -1,21 +1,18 @@
 # Memory
 
-Memory lets every Dawn agent route read the same workspace-level facts without adding a database or a custom prompt loader.
+Dawn has three coexisting memory mechanisms; pick by scope and shape. Two are flat profile text a human edits (`workspace/AGENTS.md` and a route-local `memory.md`); the third is a typed, discrete collection the *agent* writes to and recalls across sessions (`memory.ts`). All three are opt-in by presence — no registration call in your route — and all three compose into the same system prompt.
 
-It is intentionally simple: if `workspace/AGENTS.md` exists and has content, Dawn injects that content into the agent system prompt on every model turn.
+| | `workspace/AGENTS.md` (L1) | `memory.md` (L2) | `memory.ts` (L3) |
+|---|---|---|---|
+| **Scope** | Whole app (every route) | One route | Namespaced per declared scope |
+| **Format** | Free-form Markdown | Free-form Markdown | Typed records (Zod schema) |
+| **Who writes** | The agent (via `writeFile`) or you | You (human) | The agent (via `remember`) |
+| **Persistence** | A file, re-read every turn | A file, re-read every turn | SQLite store, queried per turn |
+| **When to use** | Stable facts shared across all routes | Stable facts for one route | Discrete facts the agent accumulates over time |
 
-Use memory for stable, project-level context that should follow all agent routes: repository conventions, product facts, user preferences, account assumptions for a local workspace, or anything else that should be visible before the model chooses tools.
+## Workspace profile (`AGENTS.md`)
 
-## Quick start
-
-Create a workspace memory file:
-
-```text
-workspace/
-  AGENTS.md
-```
-
-Add concise instructions:
+If `workspace/AGENTS.md` exists and has content, Dawn injects it into the agent system prompt on every model turn under a `# Memory` heading. Use it for stable, app-level context that should follow *all* routes: repository conventions, product facts, account assumptions for a local workspace.
 
 ```md title="workspace/AGENTS.md"
 # Workspace Memory
@@ -25,65 +22,22 @@ Add concise instructions:
 - Escalate billing exceptions to the finance queue.
 ```
 
-Run any `agent()` route. Dawn adds a `# Memory` prompt fragment after the route's `systemPrompt` and before the current conversation messages.
+You do not import anything to enable this — the presence of the file is the opt-in. Behavior:
 
-You do not import anything in the route to enable this. The presence of the file is the opt-in.
+- The path is `workspace/AGENTS.md` under the app root (`context.appRoot`), which equals the project directory under `dawn dev`.
+- The capability is `createAgentsMdMarker()`; it always participates for agent routes but renders an empty fragment unless the file exists and has content.
+- The file is re-read when the fragment renders, so a later turn sees an edited file without rebuilding the route.
+- Empty files and unreadable files are skipped. Files larger than **64 KiB** are not loaded; the prompt notes the file exceeded the limit.
 
-## What Dawn injects
+Because `AGENTS.md` is workspace-level, it is shared by every agent route in the same running app — it is not route-local.
 
-Dawn renders memory like this:
+### Updating it
 
-```text
-# Memory
-
-The block below is the live contents of `workspace/AGENTS.md`, re-read on every turn.
-...
-
----
-
-<trimmed file contents>
-```
-
-The exact instructional text is owned by Dawn, but the important behavior is stable:
-
-- The file path is `workspace/AGENTS.md` under the app root (`context.appRoot`), which equals the project directory under `dawn dev`.
-- The feature applies to `agent()` routes during route preparation.
-- Empty files are skipped.
-- Files larger than 64 KiB are not loaded; the prompt says the file exceeded the limit.
-- Files that cannot be read are skipped.
-- The file is re-read when the prompt fragment renders, so a later model turn can see an updated file.
-
-Because the memory file is workspace-level, it is shared by all agent routes in the same running app. It is not route-local.
-
-If you run Dawn from a different working directory while pointing at an app root explicitly, remember that memory follows `context.appRoot`, not the test runner's working directory. In-process test harnesses that pass an explicit `appRoot` activate memory relative to that root.
-
-## Updating memory
-
-When a `workspace/` directory exists, the [workspace tools](/docs/workspace) capability provides a `writeFile` tool that is path-jailed to that directory. Dawn's injected system-prompt instruction already tells the agent to update memory by calling `writeFile({ path: "AGENTS.md", content: "..." })` — no extra tooling is required.
-
-Because memory is workspace-level, an update affects every agent route in the same running app. Keep write access intentional and the content concise.
-
-If your app does not use a `workspace/` directory, you can expose a narrow custom tool that writes the file. Prefer the workspace capability whenever possible; it handles path safety automatically.
-
-## Under the hood
-
-The runtime applies built-in agent behavior in `prepareRouteExecution` before invoking an agent route. For memory, Dawn registers `createAgentsMdMarker()`.
-
-That marker always participates for agent routes, but its rendered prompt fragment returns an empty string unless the file exists and has usable content.
-
-When `@dawn-ai/langchain` materializes an `agent()` descriptor, it uses a function-form prompt if any prompt fragments exist. That function calls every fragment renderer with the current state before each model call, then builds:
-
-```ts
-[{ role: "system", content: composedSystemPrompt }, ...messages]
-```
-
-Memory is one of those prompt fragments. That is why the file can be re-read across turns without rebuilding the route.
+When a `workspace/` directory exists, the [workspace tools](/docs/workspace) capability provides a path-jailed `writeFile` tool. Dawn's injected instruction already tells the agent to update its memory by calling `writeFile({ path: "AGENTS.md", content: "..." })` — no extra tooling required. Because the update affects every route in the app, keep write access intentional and the content concise.
 
 ## Route memory (`memory.md`)
 
-The workspace `AGENTS.md` above is shared by every route. When you want stable
-context that applies to one route only, add a `memory.md` next to that route's
-`index.ts`:
+When you want stable context that applies to **one route only**, add a `memory.md` next to that route's `index.ts`:
 
 ```text
 src/app/research/
@@ -91,11 +45,7 @@ src/app/research/
   memory.md
 ```
 
-Dawn injects its trimmed contents under a `# Route Memory` heading, placed
-*after* the workspace `AGENTS.md` fragment, so the route file refines — never
-replaces — the workspace-wide facts. Like `AGENTS.md`, the file is opt-in by
-presence and re-read on every turn, so an edit is visible to the next model call
-without restarting the route.
+Dawn injects its trimmed contents under a `# Route Memory` heading via `createMemoryMdMarker()`, placed *after* the workspace `AGENTS.md` fragment, so the route file refines — never replaces — the workspace-wide facts.
 
 ```md title="src/app/research/memory.md"
 # Research Route Memory
@@ -104,15 +54,11 @@ without restarting the route.
 - Prefer primary sources; flag anything you could not verify.
 ```
 
-Route memory is plain, human-editable profile text — not a store. Files larger
-than 32 KiB are skipped (the prompt notes the file exceeded the limit), and
-empty files contribute nothing.
+Like `AGENTS.md`, it is opt-in by presence and re-read on every turn. It is a prompt fragment only — not a store, and nothing writes it but you. Empty files contribute nothing, and files larger than **32 KiB** are skipped (the prompt notes the file exceeded the limit).
 
-## Long-term memory (`memory.ts`)
+## Long-term collection (`memory.ts`)
 
-`AGENTS.md` and `memory.md` are flat text a human edits. Long-term memory is a
-typed, discrete collection the *agent* writes to and reads back across sessions.
-Declare it by adding a `memory.ts` next to a route's `index.ts`:
+`AGENTS.md` and `memory.md` are flat text. Long-term memory is a typed, discrete collection the agent writes to and reads back across sessions, backed by `@dawn-ai/memory` on `node:sqlite`. Declare it with a `memory.ts` next to a route's `index.ts`:
 
 ```ts title="src/app/research/memory.ts"
 import { defineMemory } from "@dawn-ai/sdk"
@@ -129,67 +75,165 @@ export default defineMemory({
 })
 ```
 
-When a route has a `memory.ts`, Dawn generates two tools for it:
+`defineMemory({ kind, scope, schema, identity? })`:
 
-- `remember` — store a typed fact. The payload is validated against your
-  `schema` before it is written.
-- `recall` — fetch in-scope memories by keyword, kind, or tags.
+- **`kind`** — `"semantic" | "episodic" | "procedural" | "reflection"`. Only `"semantic"` is wired end-to-end today; the other three are typed but deferred.
+- **`scope`** — a subset of `["workspace", "route", "tenant", "user", "agent"]`. The dimensions a memory is partitioned by; `["workspace", "route"]` namespaces records to the app *and* the specific route, so two routes never read each other's memories.
+- **`schema`** — a Zod schema describing your fact shape.
+- **`identity?`** — the keys used for write reconciliation (in `auto` mode). Defaults to `["subject", "predicate"]`.
 
-Recall is deterministic: a keyword + recency search over a SQLite-backed store
-(`@dawn-ai/memory`, on `node:sqlite`). There is no embedding model or network
-call in the path, so the same query returns the same rows — which keeps evals
-and fixtures stable. A short index of the most recent in-scope memories is also
-injected into the prompt so the agent knows what is available to recall.
+<Callout type="info" title="Deterministic recall">
+  Recall is a tokenized keyword match ordered by recency over a SQLite store — there is no FTS5, embedding model, or network call in the path. The same query returns the same rows, which keeps evals and fixtures stable (and replayable under aimock).
+</Callout>
 
-### Scope and namespaces
+### Generated tools
 
-`scope` lists the dimensions a memory is partitioned by. `["workspace", "route"]`
-namespaces records to the workspace *and* the specific route, so two routes do
-not read each other's memories, and an app may supply further namespace
-dimensions (e.g. tenant or user) at runtime. The `schema` is your fact shape;
-for the `semantic` kind, records are reconciled by an identity key that defaults
-to `["subject", "predicate"]` (override with `identity`).
+Typegen emits two typed tools for any route with a `memory.ts` into `.dawn/dawn.generated.d.ts`:
 
-### Writes and governance
+- **`recall`** — fetch in-scope memories by keyword, kind, or tags.
+- **`remember`** — store a typed fact (omitted entirely when `writes` is `"off"`).
 
-Writes default to a review queue rather than landing live. Control this with the
-`memory` config in `dawn.config.ts`:
+<Callout type="warn" title="remember.data is loosely typed in v1">
+  Typegen types `remember`'s `data` as `Record<string, unknown>`, not your Zod schema. The schema is still enforced at *runtime* — `remember` validates `data` against it and rejects on failure — but you do not yet get compile-time field types on the write path. Schema-typed `remember.data` is deferred.
+</Callout>
 
-```ts title="dawn.config.ts"
-export default defineConfig({
-  memory: { writes: "candidate" }, // "off" | "candidate" | "auto"
-})
+**`recall({ query?, kind?, tags?, limit? })`** searches the store. It defaults `status` to `"active"` and `limit` to `8`, and returns one `id: content` line per match, or `(no memories found)` when empty.
+
+**`remember({ data, content?, tags?, confidence? })`** validates `data` against the schema, then writes a record. The id is **data-derived** — `memory_` + the first 16 hex chars of `sha1(namespace | JSON(data))` — so a contradicting value (same identity, different data) gets a distinct id and can coexist with the old row. `content` defaults to `JSON.stringify(data)`, `confidence` to `1`, `tags` to `[]`.
+
+### The injected index
+
+Dawn also injects an index of the in-scope memories the agent can recall, so it knows what is available without a blind `recall`. It lists up to `indexMaxEntries` (default **20**) active in-scope records, each truncated to 80 chars, under a `# Long-Term Memory` heading placed after the user prompt:
+
+```text
+# Long-Term Memory
+
+These memories are available — call `recall({ query })` to load full details before relying on them.
+
+- memory_a1b2c3d4e5f6a7b8: acme prefers invoices net-30
+- memory_0f1e2d3c4b5a6978: primary contact is jordan@acme.test
 ```
 
-- `off` — the `remember` tool is not generated; the agent can only `recall`.
-- `candidate` (default) — `remember` writes land as `candidate` records that are
-  not surfaced to `recall` until a human promotes them.
-- `auto` — `remember` writes land as `active` immediately.
+The default store lives at `<appRoot>/.dawn/memory.sqlite`.
 
-Promote, inspect, or remove candidates with the [`dawn memory`](/docs/cli#dawn-memory)
-CLI (`list`, `search`, `inspect`, `approve`, `reject`, `forget`). When a new
-fact contradicts an existing one (same identity, different value), Dawn
-*supersedes* the old record rather than deleting it, so history is preserved.
+## Write governance
 
-### What's deferred
+The `memory.writes` mode in `dawn.config.ts` controls what `remember` does. It defaults to `"candidate"`.
 
-Long-term memory ships with the `semantic` kind and deterministic keyword +
-recency recall. Vector / embedding-based recall, the `episodic` and `procedural`
-kinds, and a dev-server inspector UI are planned but not yet implemented. Use
-`memory.md` for stable profile text and `memory.ts` for facts the agent should
-accumulate over time.
+| Mode | `remember` tool | Where writes land | Reconciliation |
+|---|---|---|---|
+| `off` | Not generated (recall-only) | — | — |
+| `candidate` *(default)* | Generated | `candidate` — hidden from `recall` until approved | None |
+| `auto` | Generated | `active` immediately | Inline (see below) |
 
-## What memory is not
+In **`auto`** mode each write reconciles inline against existing active records with the same identity key:
 
-Memory is not a vector store, retrieval system, or per-user profile service. It is not automatically summarized. It is not scoped by tenant, route, or session.
+- **Same identity + same data** → idempotent `UPDATE` (refreshes content/tags/timestamp).
+- **Same identity, different value** → **supersede**: a new active row is written and the old row flips to `superseded` (history preserved, not deleted).
+- **No matching identity** → add a new active row.
 
-If you need tenant-specific or user-specific memory, keep that in your own storage and expose it through route-local tools. Use `workspace/AGENTS.md` for facts that are safe and useful across the whole workspace.
+<Callout type="warn" title="Supersession only fires in auto mode">
+  In the default `candidate` mode there is **no** reconciliation or supersession. A `remember` call simply writes a hidden candidate; `dawn memory approve` only flips its status to `active`. Contradicting facts are *not* reconciled when approved — that logic runs only on `auto` writes. If you rely on contradiction-handling, you must opt into `auto`.
+</Callout>
+
+<Callout type="warn" title="auto writes are not gated by permissions">
+  The design specced a permissions HITL flow (Once / Always / Deny) to gate `auto` writes, but that was **not shipped**. `auto` writes land active immediately and do **not** pass through `@dawn-ai/permissions`. Treat `auto` as fully trusting the agent's writes; use `candidate` when a human should review first.
+</Callout>
+
+## Reviewing candidates
+
+In the default `candidate` mode, the agent's writes queue up for review. Manage them with the [`dawn memory`](/docs/cli) CLI (`--cwd <path>` points at the app root; defaults to the current directory):
+
+<CodeGroup>
+```bash title="list all candidates"
+dawn memory list
+```
+
+```bash title="approve a candidate (→ active)"
+dawn memory approve memory_a1b2c3d4e5f6a7b8
+```
+
+```bash title="reject a candidate (hard delete)"
+dawn memory reject memory_a1b2c3d4e5f6a7b8
+```
+</CodeGroup>
+
+Records print as `${id} [${status}] ${namespace} — ${content}`. The subcommands:
+
+- **`list`** — every candidate across all namespaces.
+- **`search <q>`** — candidates whose content or namespace contains `<q>`.
+- **`inspect <id>`** — the full record as JSON.
+- **`approve <id>`** — flip a candidate to `active`. (Errors if the record is not a candidate.)
+- **`reject <id>`** — hard-delete the record.
+- **`forget <id>`** — also a hard delete; it differs from `reject` only in the printed message.
+
+<Callout type="warn" title="search is a substring filter, not recall">
+  `dawn memory search` is a plain case-insensitive substring filter over candidate content and namespace — it is *not* the tokenized keyword recall the agent uses, and it only sees candidates (not active or superseded records).
+</Callout>
+
+## Configuration
+
+The `memory` block in `dawn.config.ts` configures L3 across the app:
+
+```ts title="dawn.config.ts"
+export default {
+  memory: {
+    // store?       — defaults to a SQLite store at <appRoot>/.dawn/memory.sqlite
+    writes: "candidate", // "off" | "candidate" | "auto" (default "candidate")
+    indexMaxEntries: 20, // index size cap (default 20)
+    // Supply tenant/user/agent dimensions at runtime for namespacing.
+    resolveScope: ({ routePath, appRoot }) => ({
+      tenant: process.env.TENANT_ID ?? "default",
+      user: process.env.USER_ID ?? "anon",
+    }),
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+`resolveScope` runs per request and fills in the `tenant` / `user` / `agent` dimensions a route declared in its `scope`. The `workspace` and `route` dimensions are derived automatically (from the app-root basename and the route path); only dimensions a route lists in `scope` end up in its namespace.
+
+<Callout type="info" title="enabled is not read for memory">
+  `DawnConfig.memory` carries an `enabled` field for historical reasons, but the runtime never reads it. L3 activation is purely the presence of a `memory.ts` next to a route's `index.ts` — setting `enabled: false` does **not** disable it.
+</Callout>
+
+## Testing
+
+Seed memory rows directly in tests with `seedMemory` from `@dawn-ai/testing`. Pass a store instance or a `{ path }`, plus partial records (sensible defaults fill the rest):
+
+```ts
+import { seedMemory } from "@dawn-ai/testing"
+
+const store = await seedMemory(
+  { path: ":memory:" },
+  [
+    {
+      id: "memory_seed1",
+      namespace: "workspace=app|route=/research",
+      content: "acme prefers invoices net-30",
+      status: "active",
+    },
+  ],
+)
+```
+
+## What's deferred
+
+Long-term memory ships with the `semantic` kind and deterministic keyword + recency recall. The following are typed or designed but **not** implemented:
+
+- The `episodic`, `procedural`, and `reflection` kinds.
+- Vector / embedding recall, FTS5 / BM25 ranking, and a memory graph.
+- A dev-server Memory Inspector UI.
+- Postgres / pgvector store adapters.
+- Schema-typed `remember.data` (typed loosely as `Record<string, unknown>` today).
+- Permissions HITL gating for `auto` writes (see the warning above).
+
+For anything beyond the semantic collection, use `memory.md` for stable profile text and `memory.ts` for facts the agent should accumulate over time.
 
 ## Related
 
 <RelatedCards items={[
-  { href: "/docs/agents", title: "Agents", subtitle: "agent descriptors and prompt composition" },
-  { href: "/docs/tools", title: "Tools", subtitle: "add an explicit memory writer when needed" },
-  { href: "/docs/planning", title: "Planning", subtitle: "route-local plan state for multi-step work" },
-  { href: "/docs/skills", title: "Skills", subtitle: "load long instructions only when needed" },
+  { href: "/docs/configuration", title: "Configuration", subtitle: "the dawn.config.ts memory block" },
+  { href: "/docs/cli", title: "CLI", subtitle: "the dawn memory review workflow" },
+  { href: "/docs/workspace", title: "Workspace", subtitle: "the writeFile tool that edits AGENTS.md" },
+  { href: "/docs/testing-agents", title: "Testing agents", subtitle: "seedMemory and deterministic recall" },
 ]} />

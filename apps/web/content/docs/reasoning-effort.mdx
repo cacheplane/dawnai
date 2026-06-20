@@ -12,7 +12,7 @@ Set `reasoning.effort` on an `agent()` descriptor:
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-5.1",
+  model: "gpt-5-mini",
   reasoning: { effort: "high" },
   systemPrompt: "You are a careful support assistant.",
 })
@@ -94,14 +94,14 @@ If a parent and child route need different budgets, set them separately:
 ```ts
 // parent
 export default agent({
-  model: "gpt-5.1",
+  model: "gpt-5-mini",
   reasoning: { effort: "low" },
   systemPrompt: "Coordinate the work.",
 })
 
 // child
 export default agent({
-  model: "gpt-5.1",
+  model: "gpt-5-mini",
   reasoning: { effort: "high" },
   systemPrompt: "Analyze the evidence carefully.",
 })
