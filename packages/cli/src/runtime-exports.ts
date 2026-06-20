@@ -6,6 +6,7 @@
  */
 
 export { __resetMaterializedAgentsForTests } from "@dawn-ai/langchain"
+export { runMemoryCommand } from "./commands/memory.js"
 export { createRuntimeRegistry, type RuntimeRegistry } from "./lib/dev/runtime-registry.js"
 export {
   createRuntimeRequestListener,
