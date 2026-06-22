@@ -1,4 +1,5 @@
 import type { MDXComponents } from "mdx/types"
+import { CopyPromptButton } from "./app/components/CopyPromptButton"
 import { RelatedCards } from "./app/components/docs/RelatedCards"
 import { Callout } from "./app/components/mdx/Callout"
 import { InlineCode, Pre, RehypeFigure } from "./app/components/mdx/CodeBlock"
@@ -15,6 +16,7 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     Tabs,
     Tab,
     RelatedCards,
+    CopyPromptButton,
     h1: ({ children }) => (
       <h1
         className="font-display text-4xl md:text-5xl font-semibold text-ink mb-6 tracking-tight"

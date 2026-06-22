@@ -9,7 +9,7 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13317/badge)](https://www.bestpractices.dev/projects/13317)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](./LICENSE)
 
-The TypeScript meta-framework for LangGraph. Author AI agents and workflows as filesystem routes, get end-to-end types and a local dev server for free, and deploy to LangSmith with one command.
+Build LangGraph agents like Next.js apps. Dawn is the TypeScript meta-framework for LangGraph — author AI agents and workflows as filesystem routes with route-local tools, generated types, durable threads, and an HMR dev server. Keep the runtime, drop the boilerplate.
 
 <p align="center">
   <img src="docs/brand/quickstart.gif" alt="Dawn quickstart — scaffold a route and invoke it in under a minute" width="900" />
@@ -21,6 +21,8 @@ The TypeScript meta-framework for LangGraph. Author AI agents and workflows as f
 - **Filesystem-routed agents.** Filesystem routes under `src/app/` — colocate state schemas, tools, middleware, and tests next to the route they belong to. No more ad-hoc folders.
 - **A real local dev loop.** `dawn dev` runs your routes locally with LangSmith-style endpoints. Iterate in seconds, then verify the generated deployment artifact before shipping.
 - **Typed end to end (TypeScript).** Route params, state, and tool I/O are generated as TypeScript types. `dawn verify` is your pre-deploy gate.
+- **Durable by default.** Every Dawn app ships a working SQLite checkpointer and thread store — no setup. Threads survive a `dawn dev` restart, and an agent that pauses for human input resumes exactly where it left off. LangGraph defines the checkpoint interface; Dawn ships the default implementation.
+- **Two ways to drive the model.** A route exports one of `agent` (LLM picks tools at runtime, can pause for a human), `workflow` (deterministic typed async function when you own the order), `graph`, or `chain`. Same routing, same types, same dev loop — you choose who's in charge.
 
 ## Without Dawn / With Dawn
 
