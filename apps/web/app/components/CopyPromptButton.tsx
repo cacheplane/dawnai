@@ -39,7 +39,7 @@ export function CopyPromptButton({
       type="button"
       onClick={handleCopy}
       className={baseClass}
-      aria-label={ariaLabel ?? (copied ? "Prompt copied" : `${label} to clipboard`)}
+      aria-label={copied ? "Prompt copied" : (ariaLabel ?? `${label} to clipboard`)}
     >
       {copied ? (
         <>
