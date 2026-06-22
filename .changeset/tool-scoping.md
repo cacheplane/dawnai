@@ -1,8 +1,8 @@
 ---
-"@dawn-ai/sdk": minor
-"@dawn-ai/core": minor
-"@dawn-ai/cli": minor
-"@dawn-ai/testing": minor
+"@dawn-ai/sdk": patch
+"@dawn-ai/core": patch
+"@dawn-ai/cli": patch
+"@dawn-ai/testing": patch
 ---
 
 Tool scoping: `agent({ tools: { allow, deny } })` restricts which tools a route's agent may call. `deny` revokes a tool; `allow` grants a withheld capability tool; deny wins.
