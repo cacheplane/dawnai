@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 1
 
       - name: Claude review
-        uses: anthropics/claude-code-action@806af32823ef69c8ef357086c573a902af641307 # v1
+        uses: anthropics/claude-code-action@2fee15510437d71399d9139ed60433470484a8fb # v1
         with:
           # Pass GITHUB_TOKEN explicitly (maps to OVERRIDE_GITHUB_TOKEN) so the
           # action skips OIDC token exchange — that path needs `id-token: write`
