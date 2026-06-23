@@ -153,8 +153,23 @@ export function createMemoryMarker(): CapabilityMarker {
         },
       }
 
+      // Fingerprint the snapshot the render closure froze at load time. `id`
+      // covers adds/removes (supersede flips a row out of the active set);
+      // `updatedAt` covers in-place content/confidence updates that keep the
+      // same id. The agent adapter folds this into its materialize cache key so
+      // a memory written after first materialize re-keys the cache (see
+      // PromptFragment.cacheKey).
+      const indexCacheKey =
+        indexEntries.length === 0
+          ? "memory:empty"
+          : `memory:${createHash("sha1")
+              .update(indexEntries.map((r) => `${r.id}@${r.updatedAt}`).join("\n"))
+              .digest("hex")
+              .slice(0, 16)}`
+
       const promptFragment: PromptFragment = {
         placement: "after_user_prompt",
+        cacheKey: indexCacheKey,
         render: () => {
           if (indexEntries.length === 0) return ""
           const lines = indexEntries.map((r) => `- ${r.id}: ${r.content.slice(0, 80)}`).join("\n")

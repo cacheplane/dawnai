@@ -157,11 +157,11 @@ it.skipIf(!live)(
 it.skipIf(!live)(
   "injects a memory index into the system prompt once memories exist",
   async () => {
-    // The memory-index fragment is built from the active rows at agent-materialize
-    // time, so pre-seed the store BEFORE the harness boots. (The recall tool is
-    // always live; the index is a materialize-time hint — see the per-descriptor
-    // materialized-agent cache in agent-adapter.) Seeding deterministically also
-    // keeps this assertion off real-model write variance.
+    // Seed the store BEFORE the harness boots so this assertion rides on a known
+    // index rather than real-model write variance. (Mid-process refresh of the
+    // index hint — a memory written AFTER first materialize — is covered
+    // deterministically by memory-index-refresh.test.ts; the materialize cache
+    // re-keys on the fragment's cacheKey. The recall tool is always live.)
     const store = sqliteMemoryStore({ path: dbPath(probeRoot) })
     await store.put({
       id: "memory_seed_index",

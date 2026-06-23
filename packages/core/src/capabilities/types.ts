@@ -92,6 +92,17 @@ export interface PromptFragment {
    * (e.g., the current todos list is re-injected each turn).
    */
   readonly render: (state: Readonly<Record<string, unknown>>) => string
+  /**
+   * Optional fingerprint of any load-time data this fragment closed over (i.e.
+   * data NOT derived from the per-turn `state` passed to `render`). The agent
+   * adapter folds it into the materialized-agent cache key, so a fragment whose
+   * frozen snapshot has changed forces a re-materialize instead of serving a
+   * stale prompt. Omit when the fragment is stable per descriptor or reads all
+   * its data live at render time. Example: the memory-index fragment sets this
+   * from the active store rows so a memory written mid-process still appears in
+   * the index hint on the next run without a restart.
+   */
+  readonly cacheKey?: string
 }
 
 export interface StreamTransformerInput {
