@@ -4,7 +4,7 @@
 
 # create-dawn-ai-app
 
-Scaffold a new Dawn app — the fastest way to start building TypeScript AI agents on LangGraph. Generates a working application from the supported starter templates with Dawn's canonical `src/app` route layout, an `agent()` route, and the Dawn packages wired up for local development.
+Scaffold a new Dawn app — the fastest way to start building LangGraph agents like Next.js apps. Generates a working application from the supported starter templates with Dawn's canonical `src/app` route layout, an `agent()` route, durable threads, and the Dawn packages wired up for local development.
 
 ## Usage
 

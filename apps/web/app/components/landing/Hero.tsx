@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { highlightLight } from "../../../lib/shiki/highlight-light"
 import { CopyCommand } from "../CopyCommand"
+import { CopyPromptButton } from "../CopyPromptButton"
 import { CodeFrame } from "../ui/CodeFrame"
 import { Eyebrow } from "../ui/Eyebrow"
 
@@ -10,6 +11,8 @@ export default agent({
   model: "gpt-4o-mini",
   systemPrompt: "Answer for {tenant}.",
 })`
+
+const HERO_PROMPT = `Scaffold a new Dawn app and help me build an agent. Dawn is the TypeScript meta-framework for LangGraph — agents and workflows are file-system routes with route-local tools, generated types, and durable threads. Run \`pnpm create dawn-ai-app\` to scaffold, then read https://dawnai.org/AGENTS.md and https://dawnai.org/llms-full.txt for the full framework reference before writing any routes.`
 
 export async function Hero() {
   const codeHtml = await highlightLight(ROUTE_CODE, "typescript")
@@ -30,14 +33,19 @@ export async function Hero() {
               Build LangGraph agents like Next.js apps.
             </h1>
             <p className="mt-6 text-lg text-ink-muted leading-[30px] max-w-[44ch]">
-              Dawn adds file-system routing, route-local tools, generated types, and HMR to your
-              existing LangGraph.js stack.{" "}
+              Dawn adds file-system routing, route-local tools, generated types, durable threads,
+              and HMR to your existing LangGraph.js stack.{" "}
               <strong className="text-ink font-medium">
                 Keep the runtime. Drop the boilerplate.
               </strong>
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-4">
               <CopyCommand command="pnpm create dawn-ai-app" />
+              <CopyPromptButton
+                prompt={HERO_PROMPT}
+                label="Copy agent prompt"
+                ariaLabel="Copy a prompt to scaffold Dawn with your coding agent"
+              />
               <Link
                 href="/docs/getting-started"
                 className="text-sm font-medium text-ink hover:text-accent-saas transition-colors inline-flex items-center gap-1.5"

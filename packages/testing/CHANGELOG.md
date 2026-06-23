@@ -1,5 +1,29 @@
 # @dawn-ai/testing
 
+## 0.8.3
+
+### Patch Changes
+
+- 2744a5c: Add long-term memory. Routes gain a typed, cross-session memory collection via
+  `defineMemory({ kind, scope, schema })` in `memory.ts` — the agent gets generated
+  `remember`/`recall` tools backed by a namespaced `@dawn-ai/memory` store
+  (node:sqlite, deterministic keyword+recency recall). Plus route-local `memory.md`
+  profile injection and a `dawn memory` CLI (list/search/inspect/approve/reject/forget).
+  Writes default to a `candidate` queue (config `memory.writes`). Ships the `semantic`
+  kind; vector recall, episodic/procedural kinds, and the dev inspector UI are deferred.
+  The research scaffold template now ships a `memory.ts`/`memory.md` example.
+- 7339ded: Tool scoping: `agent({ tools: { allow, deny } })` restricts which tools a route's agent may call. `deny` revokes a tool; `allow` grants a withheld capability tool; deny wins.
+
+  **Behavior change (pre-1.0):** subagents are now least-privilege by default — a subagent gets only its own route-local `tools/*.ts`; ambient capability tools (`writeFile`, `runBash`, `task`, `writeTodos`, `remember`/`recall`, …) are withheld unless named in `tools.allow`. A subagent that relied on inheriting these must add `tools: { allow: [...] }`. `dawn check` validates scope names. This scopes the tool surface, not execution (not a sandbox).
+
+- Updated dependencies [2744a5c]
+- Updated dependencies [7339ded]
+  - @dawn-ai/memory@0.8.3
+  - @dawn-ai/core@0.8.3
+  - @dawn-ai/cli@0.8.3
+  - @dawn-ai/sdk@0.8.3
+  - @dawn-ai/workspace@0.8.3
+
 ## 0.8.2
 
 ### Patch Changes

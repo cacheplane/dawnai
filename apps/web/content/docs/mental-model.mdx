@@ -25,6 +25,8 @@ A *route* is a folder under `src/app/`. The folder path becomes the agent endpoi
 
 A *route entry* is the route's default behavior. Each route has exactly one `index.ts` that exports an `agent`, a `workflow`, a `graph`, or a `chain`. Pick the shape that fits the problem; mix shapes across routes in the same project.
 
+**Two ways to drive the model.** Export an `agent` when the model should decide what to do — it picks tools at runtime and can pause for a human. Export a `workflow` when you own the order of operations — a deterministic, typed async function. Same routing, same types, same dev loop; you choose who's in charge. Drop to `graph` or `chain` for raw LangGraph anytime. See [Agents](/docs/agents) and [Routes](/docs/routes) for each shape.
+
 *Tools* are TypeScript files in a route's `tools/` directory. Each tool is a default-exported async function. Dawn reads each tool's parameter type at build time and turns it into a JSON schema. Agents call tools by name; the model picks when.
 
 *State* is an optional typed shape declared in `state.ts` next to the route. Dynamic segments — `[tenant]`, `[...rest]` — are preserved in the route id and generated route metadata; callers pass the corresponding values in the JSON input they send to the runtime.
@@ -73,7 +75,15 @@ Each arrow is real code:
 6. **Tool calls.** Tools called by name are typechecked against the schemas Dawn generated at build time. The `searchCorpus` tool searches the bundled corpus; `readDoc` reads a document in full; the model picks when to call each.
 7. **Typed output.** The route returns a typed value. Dawn streams or returns it depending on the call (`runs/wait` vs `runs/stream` on the thread).
 
-Runs execute on a thread. Between turns, Dawn checkpoints the LangGraph state to SQLite under `.dawn/checkpoints.sqlite`. Threads survive a `dawn dev` restart — a run that resumes after a human-in-the-loop interrupt picks up exactly where it left off.
+Runs execute on a thread. Between turns, Dawn checkpoints the LangGraph state to SQLite under `.dawn/checkpoints.sqlite`.
+
+<Callout>
+  **Durable by default.** Every Dawn app ships a working checkpointer and thread store — no
+  setup. Threads survive a `dawn dev` restart, and an `agent` route that pauses for human input
+  resumes exactly where it left off. LangGraph defines the checkpoint interface; Dawn ships the
+  default implementation (`@dawn-ai/sqlite-storage`), so durability is the path of least
+  resistance — not a wiring task.
+</Callout>
 
 ## Build vs runtime
 
