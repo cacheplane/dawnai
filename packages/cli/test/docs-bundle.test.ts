@@ -42,6 +42,13 @@ describe("mdxToMarkdown()", () => {
     expect(out).toContain("Text.")
   })
 
+  it("removes the paired <RelatedCards>…</RelatedCards> form too", () => {
+    const raw = "# X\n\nKeep.\n\n<RelatedCards>\n  <Card/>\n</RelatedCards>\n"
+    const out = mdxToMarkdown(raw)
+    expect(out).not.toContain("RelatedCards")
+    expect(out).toContain("Keep.")
+  })
+
   it("preserves import lines inside fenced code blocks", () => {
     const raw = '# X\n\n```ts\nimport { agent } from "@dawn-ai/sdk"\n```\n'
     const out = mdxToMarkdown(raw)

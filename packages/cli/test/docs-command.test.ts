@@ -71,4 +71,13 @@ describe("runDocsCommand()", () => {
     )
     expect(err.join("\n")).toContain("tools")
   })
+
+  it("rejects a path-traversal topic instead of reading outside the docs dir", async () => {
+    const dir = fixtureDocs()
+    const { io, err } = fakeIo()
+    await expect(
+      runDocsCommand({ topic: "../../../../etc/hosts", docsDir: dir }, io),
+    ).rejects.toBeInstanceOf(CliError)
+    expect(err.join("\n")).toContain("Unknown topic")
+  })
 })

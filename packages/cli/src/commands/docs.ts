@@ -1,10 +1,17 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, writeLine } from "../lib/output.js"
+
+/** True when `target` is the same as, or nested inside, `dir`. */
+function isInside(dir: string, target: string): boolean {
+  const base = resolve(dir)
+  const resolved = resolve(target)
+  return resolved === base || resolved.startsWith(base + sep)
+}
 
 interface DocsArgs {
   readonly topic?: string
@@ -20,19 +27,24 @@ function defaultDocsDir(): string {
 
 function listTopics(dir: string): string[] {
   const topics: string[] = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      for (const sub of readdirSync(join(dir, entry.name))) {
-        if (!sub.endsWith(".md")) {
-          continue
-        }
-        const base = sub.replace(/\.md$/, "")
-        topics.push(base === "index" ? entry.name : `${entry.name}/${base}`)
+  const walk = (current: string, prefix: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        walk(join(current, entry.name), prefix ? `${prefix}/${entry.name}` : entry.name)
+        continue
       }
-    } else if (entry.name.endsWith(".md") && entry.name !== "README.md") {
-      topics.push(entry.name.replace(/\.md$/, ""))
+      if (!entry.name.endsWith(".md") || (prefix === "" && entry.name === "README.md")) {
+        continue
+      }
+      const base = entry.name.replace(/\.md$/, "")
+      if (base === "index" && prefix !== "") {
+        topics.push(prefix)
+      } else {
+        topics.push(prefix ? `${prefix}/${base}` : base)
+      }
     }
   }
+  walk(dir, "")
   return topics.sort()
 }
 
@@ -66,9 +78,9 @@ export async function runDocsCommand(args: DocsArgs, io: CommandIo): Promise<voi
 
   const slug = args.topic.replace(/\.md$/, "")
   let file = join(dir, `${slug}.md`)
-  if (!existsSync(file) || !statSync(file).isFile()) {
+  if (!isInside(dir, file) || !existsSync(file) || !statSync(file).isFile()) {
     const indexFile = join(dir, slug, "index.md")
-    if (existsSync(indexFile) && statSync(indexFile).isFile()) {
+    if (isInside(dir, indexFile) && existsSync(indexFile) && statSync(indexFile).isFile()) {
       file = indexFile
     } else {
       writeLine(io.stderr, `Unknown topic: ${args.topic}`)

@@ -63,7 +63,10 @@ export function mdxToMarkdown(raw: string): string {
     }
     out.push(line)
   }
-  let result = out.join("\n").replace(/<RelatedCards[\s\S]*?\/>/g, "")
+  let result = out
+    .join("\n")
+    .replace(/<RelatedCards[\s\S]*?<\/RelatedCards>/g, "")
+    .replace(/<RelatedCards[^>]*\/>/g, "")
   result = result.replace(/\n{3,}/g, "\n\n").trim()
   if (data.title && !/^#\s/.test(result)) {
     result = `# ${data.title}\n\n${result}`
