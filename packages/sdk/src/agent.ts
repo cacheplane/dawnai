@@ -10,6 +10,11 @@ export interface RetryConfig {
   readonly baseDelay?: number
 }
 
+export interface ToolScope {
+  readonly allow?: readonly string[]
+  readonly deny?: readonly string[]
+}
+
 /**
  * Reasoning model tuning. Currently maps to OpenAI's `reasoningEffort`
  * parameter; non-reasoning models silently ignore it.
@@ -34,6 +39,7 @@ export interface DawnAgent {
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
   readonly subagents?: readonly DawnAgent[]
+  readonly tools?: ToolScope
   readonly systemPrompt: string
 }
 
@@ -44,6 +50,7 @@ export interface AgentConfig {
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
   readonly subagents?: readonly DawnAgent[]
+  readonly tools?: ToolScope
   readonly systemPrompt: string
 }
 
@@ -56,6 +63,7 @@ export function agent(config: AgentConfig): DawnAgent {
     ...(config.retry ? { retry: config.retry } : {}),
     ...(config.description !== undefined ? { description: config.description } : {}),
     ...(config.subagents !== undefined ? { subagents: config.subagents } : {}),
+    ...(config.tools !== undefined ? { tools: config.tools } : {}),
     systemPrompt: config.systemPrompt,
   } as unknown as DawnAgent
 }

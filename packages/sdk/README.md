@@ -4,7 +4,7 @@
 
 # @dawn-ai/sdk
 
-The author-facing TypeScript SDK for Dawn, the meta-framework for LangGraph. Use it to declare AI agent routes, define request middleware, and type the runtime context, tools, and route metadata that the Dawn CLI consumes. Ships small runtime helpers (`agent()`, `defineMiddleware()`, `allow()`, `reject()`, `isDawnAgent()`) alongside the type primitives — it is the canonical entry point for authoring Dawn routes.
+The author-facing TypeScript SDK for Dawn, the meta-framework for LangGraph that lets you build LangGraph agents like Next.js apps. Use it to declare AI agent and workflow routes, define request middleware, and type the runtime context, tools, and route metadata that the Dawn CLI consumes. Ships small runtime helpers (`agent()`, `defineMiddleware()`, `allow()`, `reject()`, `isDawnAgent()`) alongside the type primitives — it is the canonical entry point for authoring Dawn routes.
 
 ## Install
 

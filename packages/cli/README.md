@@ -4,7 +4,7 @@
 
 # @dawn-ai/cli
 
-The `dawn` CLI for Dawn, the TypeScript meta-framework for LangGraph — a local development runtime, route execution, validation and typegen, and the build step that produces LangSmith deployment artifacts. It is the primary tool for working on a Dawn agent app from first scaffold through deploy.
+The `dawn` CLI for Dawn, the TypeScript meta-framework for LangGraph that lets you build LangGraph agents like Next.js apps — a local HMR development runtime with durable threads, route execution, validation and typegen, and the build step that produces LangSmith deployment artifacts. It is the primary tool for working on a Dawn agent app from first scaffold through deploy.
 
 ## Install
 
