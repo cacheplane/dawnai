@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
-import type { CapabilityMarker, MemoryContext, PromptFragment } from "../types.js"
+import { z } from "zod"
+import type { CapabilityMarker, PromptFragment } from "../types.js"
 
 const DEFAULT_SEMANTIC_IDENTITY = ["subject", "predicate"] as const
 
@@ -23,9 +24,30 @@ export function createMemoryMarker(): CapabilityMarker {
         limit: mem.indexMaxEntries ?? 20,
       })
 
+      // Tool input schemas exposed to the MODEL (so it knows what to pass). The
+      // `remember.data` shape is the route's own defineMemory() zod schema; without
+      // this the model calls remember/recall with the wrong/empty args and writes
+      // are rejected by validate(). Falls back to a permissive map if absent.
+      const routeDataSchema = (mem.schema ?? z.record(z.string(), z.unknown())) as z.ZodTypeAny
+      const rememberSchema = z.object({
+        data: routeDataSchema,
+        content: z
+          .string()
+          .describe("A short human-readable summary of this memory (what you'd recall)."),
+        tags: z.array(z.string()).optional().describe("Optional tags to filter on later."),
+        confidence: z.number().min(0).max(1).optional(),
+      })
+      const recallSchema = z.object({
+        query: z.string().optional().describe("Keywords to match against stored memories."),
+        kind: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+        limit: z.number().int().positive().optional(),
+      })
+
       const recall = {
         name: "recall",
         description: "Recall typed long-term memories by keyword/kind/tags.",
+        schema: recallSchema,
         run: async (input: unknown) => {
           const q = (input ?? {}) as {
             query?: string
@@ -48,6 +70,7 @@ export function createMemoryMarker(): CapabilityMarker {
       const remember = {
         name: "remember",
         description: "Store a typed long-term memory for later recall.",
+        schema: rememberSchema,
         run: async (input: unknown) => {
           const inp = (input ?? {}) as {
             data?: unknown
@@ -130,8 +153,23 @@ export function createMemoryMarker(): CapabilityMarker {
         },
       }
 
+      // Fingerprint the snapshot the render closure froze at load time. `id`
+      // covers adds/removes (supersede flips a row out of the active set);
+      // `updatedAt` covers in-place content/confidence updates that keep the
+      // same id. The agent adapter folds this into its materialize cache key so
+      // a memory written after first materialize re-keys the cache (see
+      // PromptFragment.cacheKey).
+      const indexCacheKey =
+        indexEntries.length === 0
+          ? "memory:empty"
+          : `memory:${createHash("sha1")
+              .update(indexEntries.map((r) => `${r.id}@${r.updatedAt}`).join("\n"))
+              .digest("hex")
+              .slice(0, 16)}`
+
       const promptFragment: PromptFragment = {
         placement: "after_user_prompt",
+        cacheKey: indexCacheKey,
         render: () => {
           if (indexEntries.length === 0) return ""
           const lines = indexEntries.map((r) => `- ${r.id}: ${r.content.slice(0, 80)}`).join("\n")
