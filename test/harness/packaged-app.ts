@@ -9,6 +9,7 @@ import {
   type DevServerHandle,
   startDevServer,
 } from "../runtime/support/dev-server.ts"
+import { getTestRegistryUrl } from "./local-registry.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
 
@@ -56,7 +57,14 @@ export async function cleanupTrackedTempDirs(registry: TrackedTempDir[]): Promis
 /**
  * Pack the CURRENT create-dawn-ai-app source and install it into a temp installer
  * dir, returning that dir. Lets a standalone test run `pnpm exec create-dawn-ai-app`
- * with the local build (not the published npmjs version). Self-contained: no registry.
+ * with the local build (not the published npmjs version).
+ *
+ * The scaffolder declares `@dawn-ai/devkit` as a runtime dep at the candidate
+ * version, which is NOT on npmjs until AFTER the release publishes — so the
+ * install resolves `@dawn-ai/*` from the ephemeral Verdaccio test registry
+ * (where the lane's globalSetup published the whole workspace), exactly like the
+ * generated lane's external scaffolds. Requires the registry globalSetup to have
+ * run (DAWN_TEST_REGISTRY_URL set); getTestRegistryUrl() throws otherwise.
  */
 export async function installPackagedScaffolder(
   tempRoot: string,
@@ -102,11 +110,14 @@ export async function installPackagedScaffolder(
     "utf8",
   )
 
-  // 4. Install the tarball into installerDir
+  // 4. Install the tarball into installerDir, resolving the scaffolder's
+  //    @dawn-ai/* deps from the ephemeral test registry (the candidate version
+  //    isn't on npmjs until this release publishes).
   await runPackagedCommand({
     args: ["add", tarballPath],
     command: "pnpm",
     cwd: installerDir,
+    env: { npm_config_registry: getTestRegistryUrl() },
   })
 
   return { installerDir }

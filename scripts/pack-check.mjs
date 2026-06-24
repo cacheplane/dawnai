@@ -127,7 +127,15 @@ const packages = [
   },
   {
     dir: "packages/cli",
-    expectedFiles: ["dist/index.js", "README.md"],
+    expectedFiles: [
+      "dist/index.js",
+      "dist/commands/docs.js",
+      "README.md",
+      "SKILL.md",
+      "docs/README.md",
+      "docs/getting-started.md",
+      "docs/tools.md",
+    ],
     requiredFields: [
       "publishConfig.access",
       "repository",
