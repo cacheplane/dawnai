@@ -33,6 +33,11 @@ describe("local-registry", () => {
         args: ["install", "--no-frozen-lockfile"],
         command: "pnpm",
         cwd: dir,
+        // Pin the install onto this registry via npm_config_registry (highest
+        // precedence). The .npmrc alone leaks transitive @dawn-ai/* resolution
+        // to npmjs, which fails mid-release when the candidate is partially
+        // published there.
+        env: { npm_config_registry: registry.url },
       })
 
       const lockfile = await readFile(join(dir, "pnpm-lock.yaml"), "utf8")
@@ -58,6 +63,7 @@ describe("local-registry", () => {
           args: ["install", "--no-frozen-lockfile"],
           command: "pnpm",
           cwd: dir,
+          env: { npm_config_registry: registry.url },
         }),
       ).rejects.toThrow()
     } finally {
