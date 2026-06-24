@@ -9,6 +9,7 @@ import { Command, CommanderError } from "commander"
 import { registerBuildCommand } from "./commands/build.js"
 import { registerCheckCommand } from "./commands/check.js"
 import { registerDevCommand } from "./commands/dev.js"
+import { registerDocsCommand } from "./commands/docs.js"
 import { registerEvalCommand } from "./commands/eval.js"
 import { registerMemoryCommand } from "./commands/memory.js"
 import { registerRoutesCommand } from "./commands/routes.js"
@@ -45,6 +46,7 @@ export function createProgram(io: CommandIo): Command {
   registerBuildCommand(program, io)
   registerCheckCommand(program, io)
   registerDevCommand(program, io)
+  registerDocsCommand(program, io)
   registerEvalCommand(program, io)
   registerMemoryCommand(program, io)
   registerRunCommand(program, io)
