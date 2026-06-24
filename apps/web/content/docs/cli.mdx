@@ -202,6 +202,24 @@ Subcommands:
 Flags:
 - `--cwd <path>` — operate on a different app root.
 
+## `dawn docs`
+
+Prints the **bundled, version-matched** Dawn docs that ship inside the installed
+CLI — so a coding agent (or you) can read the docs for the exact version in use
+without a network round-trip. With no topic it lists the available topics and the
+index; with a topic it prints that doc to stdout.
+
+```
+dawn docs
+dawn docs README
+dawn docs cli
+```
+
+The optional positional `[topic]` selects a single doc by slug (with or without
+the `.md` suffix); an unknown topic exits non-zero and lists the available
+topics. Running from a source checkout requires the CLI to be built first
+(`pnpm --filter @dawn-ai/cli build`) so the bundled docs exist.
+
 ## Exit codes
 
 | Code | Meaning |
