@@ -551,7 +551,7 @@ After merge to `main`, confirm Scorecard's Vulnerabilities check rises from 0 to
 ## Out of scope (tracked elsewhere — see spec)
 
 These need Brian's GitHub account and are **not** implemented by this plan:
-- **Branch-Protection** (-1): create a fine-grained PAT with admin:read, store as the `repo_token`/`SCORECARD_TOKEN` secret, pass it to `ossf/scorecard-action`.
+- **Branch-Protection** (-1): **leave inconclusive — do NOT wire a PAT.** A `-1` is excluded from the Scorecard aggregate mean, so it costs nothing. A *scored* check for this repo's intentionally-weak protection (solo maintainer, `gh pr merge --auto --squash`, `strict: false`, no required reviews, `enforce_admins: false`) would land ~4 and drag the aggregate down. A standing `SCORECARD_TOKEN`/`repo_token` admin:read PAT is also CI supply-chain surface. AAF (`cacheplane/angular-agent-framework`) wired it (#689) then reverted (#708) for exactly this reason — keep `scorecard.yml` token-less.
 - **Code-Review** (0): route future `main` commits through reviewed PRs (start by reviewing/merging Phase 1 and Phase 2 as PRs).
 - **CII-Best-Practices** (0): self-certify at bestpractices.dev.
 - **Maintained** (0): auto-resolves ~2026-07-14 (90-day repo age) — no action.
