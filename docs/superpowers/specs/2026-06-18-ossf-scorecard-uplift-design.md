@@ -18,7 +18,7 @@ Scorecard is a weighted average of per-check scores (Critical=10, High=7.5, Medi
 | Pinned-Dependencies | 0 | Medium | GitHub Actions pinned to tags (`@v6`), not commit SHAs | PR 1 |
 | SAST | 0 | Medium | No CodeQL (or other recognized SAST) workflow | PR 1 |
 | Vulnerabilities | 0 | High | 25 OSV advisories in dev/docs deps (Next.js ×8, vitest, vite, esbuild, turbo, ws, langsmith, js-yaml, uuid) | PR 2 |
-| Branch-Protection | -1 | High | Default `GITHUB_TOKEN` can't read classic branch-protection rules | Follow-up (PAT) |
+| Branch-Protection | -1 | High | Default `GITHUB_TOKEN` can't read classic branch-protection rules | None — leave `-1` (excluded); do NOT wire a PAT (see follow-up #1) |
 | Code-Review | 0 | High | 0/23 recent changesets went through an approved PR | Follow-up (process) |
 | CII-Best-Practices | 0 | Low | No OpenSSF Best Practices badge | Follow-up (badge) |
 | Maintained | 0 | High | Repo created <90 days ago (2026-04-14) | **Auto-resolves ~2026-07-14** |
@@ -56,7 +56,7 @@ Expected: Vulnerabilities 0→10. ≈ +0.86 aggregate. The check stays near 0 un
 
 These are split off because they need account-level actions an agent can't perform:
 
-1. **Branch-Protection (PAT).** Create a fine-grained PAT with **read** access to repository administration, store as the `repo_token` (or `SCORECARD_TOKEN`) secret, and pass it to `ossf/scorecard-action`. Un-excludes Branch-Protection (-1 → ~8, High weight, ≈ +0.85). The repo already has required reviews + status checks + conversation resolution; strengthening with `enforce_admins` and required signatures would push the tier higher.
+1. **Branch-Protection — leave inconclusive (`-1`); do NOT wire a PAT.** It is tempting to create a fine-grained PAT (`Administration: read`) stored as `SCORECARD_TOKEN`/`repo_token` so `ossf/scorecard-action` can read branch-protection settings (the default `GITHUB_TOKEN` can't, which is *why* the check is `-1`). **Don't.** An inconclusive `-1` is **excluded from the Scorecard aggregate mean**, so it costs nothing. Dawn is a solo-maintainer repo that merges via `gh pr merge --auto --squash` with intentionally weak protection (`strict: false`, `required_pull_request_reviews: null`, `enforce_admins: false`); a *scored* Branch-Protection check for that posture lands ~4 (a Medium tier) and would **drag the aggregate down** rather than up. A standing admin:read PAT is also CI supply-chain surface. The sibling repo `cacheplane/angular-agent-framework` proved this empirically: it wired the PAT in #689, then reverted it in #708 ("drop SCORECARD_TOKEN — let Branch-Protection go inconclusive"). Net: keep `scorecard.yml` token-less and let Branch-Protection stay `-1`.
 2. **Code-Review (process).** Route your own commits to `main` through reviewed PRs going forward so approved changesets accumulate. PR 1 and PR 2 themselves should be merged this way to start the count. Climbs 0 → up over time (High weight).
 3. **CII-Best-Practices (badge).** Self-certify at [bestpractices.dev](https://bestpractices.dev) (free). 0 → 5+ (Low weight).
 
@@ -74,8 +74,10 @@ These are split off because they need account-level actions an agent can't perfo
 | Today | 4.1 |
 | After PR 1 (config) | ~6.2 |
 | After PR 2 (deps) | ~7.0 |
-| After follow-ups (PAT + Code-Review + badge) | ~7.8 |
-| ~2026-07-14 (Maintained auto-flips) | ~8.6 |
+| After follow-ups (Code-Review + badge) | ~7.0 |
+| ~2026-07-14 (Maintained auto-flips) | ~7.8 |
+
+Branch-Protection is intentionally **excluded** from this trajectory: it stays inconclusive (`-1`, dropped from the aggregate mean) rather than being un-excluded by a PAT — see follow-up #1. The earlier ≈ +0.85 "un-excludes Branch-Protection" estimate was wrong-signed: a *scored* check for this repo's weak protection would lower the mean, not raise it.
 
 ## Verification
 

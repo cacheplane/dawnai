@@ -47,11 +47,22 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
   }
 }
 
-// Cache keyed on descriptor only. Assumption: a given descriptor is always
-// invoked with the same capability contributions (prompt fragments come from
-// the route directory, which is stable per descriptor). If that assumption
-// changes, the cache key must include a hash of the fragments/transformers.
-let materializedAgents = new WeakMap<DawnAgent, AgentLike>()
+// Cache keyed on descriptor, guarded by a fingerprint of the prompt fragments'
+// load-time data. Prompt fragments come from the route directory (stable per
+// descriptor), but some fragments close over external state captured at load
+// time — e.g. the memory-index fragment snapshots the active store rows. Those
+// fragments expose a `cacheKey`; when it changes (a memory written mid-process)
+// the fingerprint changes and the agent re-materializes instead of serving a
+// stale prompt. Fragments without a cacheKey are treated as stable.
+interface CachedAgent {
+  readonly fingerprint: string
+  readonly agent: AgentLike
+}
+let materializedAgents = new WeakMap<DawnAgent, CachedAgent>()
+
+function fragmentFingerprint(fragments: readonly PromptFragment[]): string {
+  return fragments.map((f) => f.cacheKey ?? "").join("|")
+}
 
 /**
  * Test-only escape hatch: reset the materialized-agents cache so the next
@@ -91,10 +102,12 @@ async function materializeAgent(
     readonly summarization?: ResolvedSummarizationConfig
   } = {},
 ): Promise<AgentLike> {
+  const fingerprint = fragmentFingerprint(opts.promptFragments ?? [])
+
   if (!opts.bypassCache) {
     const cached = materializedAgents.get(descriptor)
-    if (cached) {
-      return cached
+    if (cached && cached.fingerprint === fingerprint) {
+      return cached.agent
     }
   }
 
@@ -151,7 +164,7 @@ async function materializeAgent(
   const compiled = createReactAgent(agentOptions as any)
 
   if (!opts.bypassCache) {
-    materializedAgents.set(descriptor, compiled as unknown as AgentLike)
+    materializedAgents.set(descriptor, { fingerprint, agent: compiled as unknown as AgentLike })
   }
   return compiled as unknown as AgentLike
 }

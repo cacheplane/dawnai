@@ -216,6 +216,10 @@ const store = await seedMemory(
 )
 ```
 
+### Verifying against a real model
+
+For deterministic coverage the aimock harness scripts exact tool arguments — which means it cannot tell you whether a *real* model can drive the generated tools from their schemas. A gated live-smoke suite (`packages/testing/test/memory-live.smoke.test.ts`) closes that gap: it exercises remember, recall, supersession, namespace isolation, the injected index, and the candidate-approval flow against a real model. It runs only when `OPENAI_API_KEY` is set and is skipped in CI. For hands-on behavioral checks — eyeballing the composed prompt and walking the `dawn memory` governance flow by hand — the repo also keeps a manual runbook under `docs/superpowers/runbooks/`.
+
 ## What's deferred
 
 Long-term memory ships with the `semantic` kind and deterministic keyword + recency recall. The following are typed or designed but **not** implemented:

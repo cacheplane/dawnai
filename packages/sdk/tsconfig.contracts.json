@@ -3,7 +3,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "."
+    "rootDir": ".",
+    "tsBuildInfoFile": "dist/tsconfig.contracts.tsbuildinfo"
   },
   "include": ["src/**/*.ts", "test/*.contract.ts"]
 }

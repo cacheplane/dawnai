@@ -1,0 +1,5 @@
+{
+  "name": "probe-app-memory-candidate",
+  "private": true,
+  "type": "module"
+}

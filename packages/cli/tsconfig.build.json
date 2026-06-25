@@ -4,6 +4,7 @@
   "compilerOptions": {
     "noEmit": false,
     "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
     "paths": {
       "@dawn-ai/core": ["../core/src/index.ts"],
       "@dawn-ai/langchain": ["../langchain/src/index.ts"],

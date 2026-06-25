@@ -218,15 +218,21 @@ See [Blueprints](/docs/blueprints) for authoring and catalog details.
 
 ## `dawn docs`
 
-Prints the bundled, version-matched Dawn documentation to stdout.
+Prints the **bundled, version-matched** Dawn docs that ship inside the installed
+CLI — so a coding agent (or you) can read the docs for the exact version in use
+without a network round-trip. With no topic it lists the available topics and the
+index; with a topic it prints that doc to stdout.
 
 ```
-dawn docs                # list available topics
-dawn docs cli            # print the CLI reference
-dawn docs <topic>        # print a single topic by slug
+dawn docs
+dawn docs README
+dawn docs cli
 ```
 
-Docs are bundled into the CLI at build time, so `dawn docs` works offline and always matches the installed version. Topics correspond to the docs pages at `dawnai.org/docs/`.
+The optional positional `[topic]` selects a single doc by slug (with or without
+the `.md` suffix); an unknown topic exits non-zero and lists the available
+topics. Running from a source checkout requires the CLI to be built first
+(`pnpm --filter @dawn-ai/cli build`) so the bundled docs exist.
 
 ## Exit codes
 
