@@ -18,7 +18,7 @@ Scorecard is a weighted average of per-check scores (Critical=10, High=7.5, Medi
 | Pinned-Dependencies | 0 | Medium | GitHub Actions pinned to tags (`@v6`), not commit SHAs | PR 1 |
 | SAST | 0 | Medium | No CodeQL (or other recognized SAST) workflow | PR 1 |
 | Vulnerabilities | 0 | High | 25 OSV advisories in dev/docs deps (Next.js ×8, vitest, vite, esbuild, turbo, ws, langsmith, js-yaml, uuid) | PR 2 |
-| Branch-Protection | -1 | High | Default `GITHUB_TOKEN` can't read classic branch-protection rules | Follow-up (PAT) |
+| Branch-Protection | -1 | High | Default `GITHUB_TOKEN` can't read classic branch-protection rules | None — leave `-1` (excluded); do NOT wire a PAT (see follow-up #1) |
 | Code-Review | 0 | High | 0/23 recent changesets went through an approved PR | Follow-up (process) |
 | CII-Best-Practices | 0 | Low | No OpenSSF Best Practices badge | Follow-up (badge) |
 | Maintained | 0 | High | Repo created <90 days ago (2026-04-14) | **Auto-resolves ~2026-07-14** |
