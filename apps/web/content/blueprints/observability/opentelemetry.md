@@ -38,7 +38,7 @@ You need five packages:
 - **`@opentelemetry/sdk-node`** — the Node.js SDK that wires up the tracer, exporter, and auto-instrumentations.
 - **`@opentelemetry/auto-instrumentations-node`** — a meta-package that enables built-in auto-instrumentations (HTTP, gRPC, DNS, etc.) with a single call.
 - **`@opentelemetry/exporter-trace-otlp-http`** — exports spans to an OTLP/HTTP endpoint.
-- **`@opentelemetry/resources`** — constructs a `Resource` describing this service.
+- **`@opentelemetry/resources`** — provides `resourceFromAttributes` for describing this service (2.x API).
 - **`@opentelemetry/semantic-conventions`** — provides the `ATTR_SERVICE_NAME` constant (and other semantic attribute keys).
 
 Check `package.json` before installing to avoid duplicates. Install only what is missing.
@@ -60,7 +60,7 @@ pnpm add @opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node \
 #   @opentelemetry/semantic-conventions
 ```
 
-Current stable major versions at the time this blueprint was written: `@opentelemetry/sdk-node@0.x`, `@opentelemetry/auto-instrumentations-node@0.x`, `@opentelemetry/exporter-trace-otlp-http@0.x`, `@opentelemetry/resources@1.x`, `@opentelemetry/semantic-conventions@1.x`. Always check `npm info <pkg> version` for the latest before pinning.
+Install the latest majors of each package — do not pin specific minor versions. As of the OTel JS 2.x release, `@opentelemetry/resources` 2.x removed the `Resource` class constructor; the code in this blueprint uses the `resourceFromAttributes` factory (2.x API). Run `npm info <pkg> version` (or the equivalent for your package manager) to confirm the latest before installing.
 
 ## Create the instrumentation module
 
@@ -75,7 +75,7 @@ Write the following file in full. Read the inline comments — adapt the service
 ```ts
 // dawn-blueprint: opentelemetry@1
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
-import { Resource } from "@opentelemetry/resources"
+import { resourceFromAttributes } from "@opentelemetry/resources"
 import { NodeSDK } from "@opentelemetry/sdk-node"
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions"
 import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node"
@@ -90,7 +90,7 @@ const exporter = new OTLPTraceExporter({
 })
 
 const sdk = new NodeSDK({
-  resource: new Resource({
+  resource: resourceFromAttributes({
     // Adapt: replace "dawn-app" with your service name, or rely on the
     // OTEL_SERVICE_NAME environment variable (takes precedence at SDK init time).
     [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME ?? "dawn-app",
@@ -140,13 +140,13 @@ export function startTelemetry(): void {
 
 OTel must initialize **before** any other module loads. Auto-instrumentations work by patching modules at require/import time; if the SDK starts after `http` or `fetch` have already been imported, those patches are missed and spans will not be generated.
 
-### Option A — Custom server entry (recommended for self-hosted apps)
+### Option A — Custom server entry (recommended)
 
-If the project has a custom server entry (e.g. `src/server.ts` or `src/index.ts`), add `startTelemetry()` as the **very first statement**, before any other import:
+If the project has a custom server entry (e.g. `src/server.ts` or `src/index.ts`), import `startTelemetry` from `./lib/otel` and call it as the **very first statement**. This works with the project's existing TypeScript toolchain and requires no extra loader.
 
 ```ts
 // src/server.ts  (or src/index.ts — wherever the server bootstraps)
-import { startTelemetry } from "./lib/otel.js"
+import { startTelemetry } from "./lib/otel"
 startTelemetry()
 
 // All other imports come after — OTel is now active before they load.
@@ -154,11 +154,11 @@ import { createServer } from "http"
 // ... rest of server bootstrap
 ```
 
-In ESM projects, `import` statements are hoisted by the runtime regardless of source order. Use a dynamic `await import()` to guarantee ordering, or use Option B instead:
+In ESM projects, `import` statements are hoisted by the runtime regardless of source order. Use a dynamic `await import()` to guarantee ordering:
 
 ```ts
 // src/server.ts — ESM-safe ordering via dynamic import
-const { startTelemetry } = await import("./lib/otel.js")
+const { startTelemetry } = await import("./lib/otel")
 startTelemetry()
 
 const { createServer } = await import("http")
@@ -167,23 +167,31 @@ const { createServer } = await import("http")
 
 ### Option B — Node preload flag (works without a custom entry)
 
-If there is no custom entry, or to guarantee OTel loads first regardless of ESM hoisting, preload `src/lib/otel.ts` via Node's `--import` flag. Add it to the server start command in `package.json`:
+If there is no custom entry, or to guarantee OTel loads first regardless of ESM hoisting, preload the module via Node's `--import` flag.
 
-```json
-{
-  "scripts": {
-    "start": "node --import ./src/lib/otel.js dist/server.js"
+**Important:** Node cannot preload a bare `.ts` file without a TypeScript loader. You have two sub-options:
+
+- **(B1) Compiled JS** — build the project first, then point `--import` at the compiled output file (e.g. `dist/lib/otel.js`):
+
+  ```json
+  {
+    "scripts": {
+      "start": "node --import ./dist/lib/otel.js dist/server.js"
+    }
   }
-}
-```
+  ```
 
-Or pass it directly when invoking Node:
+- **(B2) tsx loader** — if your project uses `tsx` as a TypeScript runner, chain it with `--import`:
 
-```bash
-node --import ./src/lib/otel.js dist/server.js
-```
+  ```bash
+  node --import tsx --import ./src/lib/otel.ts dist/server.js
+  # or via NODE_OPTIONS:
+  NODE_OPTIONS="--import tsx --import ./src/lib/otel.ts" node dist/server.js
+  ```
 
-> **`dawn dev` note:** `dawn dev` runs a child route runtime inside a managed process. To instrument that child process with OTel, set `NODE_OPTIONS="--import ./src/lib/otel.js"` in your `.env` before starting `dawn dev`. The child runtime inherits `NODE_OPTIONS` from its environment. This is the recommended approach when using `dawn dev` without a separate custom server entry.
+  Do not use `--import ./src/lib/otel.js` while pointing at a `.ts` source file — Node will not resolve it without a loader and the preload will silently fail or error.
+
+> **`dawn dev` note:** `dawn dev` runs a child route runtime inside a managed process. To instrument that child process with OTel, set `NODE_OPTIONS` in your `.env` before starting `dawn dev`. The child runtime inherits `NODE_OPTIONS` from its environment. Use one of the B1/B2 forms above (e.g. `NODE_OPTIONS="--import tsx --import ./src/lib/otel.ts"`) or prefer Option A if a custom entry exists.
 
 ## Configure environment
 
@@ -219,8 +227,8 @@ If the project uses a different env-loading convention (e.g. a vault, a platform
 
    ```bash
    dawn dev
-   # or, for a self-hosted server:
-   node --import ./src/lib/otel.js dist/server.js
+   # or, for a self-hosted server with compiled output:
+   node --import ./dist/lib/otel.js dist/server.js
    ```
 
    The OTel SDK logs nothing on successful start by default. If you see an error like `Error: connect ECONNREFUSED`, the collector endpoint is not reachable — check that the backend is running and the URL is correct.
