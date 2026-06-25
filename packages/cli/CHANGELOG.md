@@ -1,5 +1,25 @@
 # @dawn-ai/cli
 
+## 0.8.4
+
+### Patch Changes
+
+- f8c3a21: Bundle the Dawn documentation inside `@dawn-ai/cli` as a version-matched markdown tree, add a `dawn docs` command to read it locally, ship a `SKILL.md`, and scaffold a root `AGENTS.md` pointer into new apps. Coding agents can now read Dawn's docs offline, matched to the installed version.
+- 4e3e020: Fix long-term memory being unusable by real agents: the generated `remember`/`recall`
+  tools now expose input schemas to the model. `remember.data` is the route's own
+  `defineMemory()` zod schema (threaded through `MemoryContext.schema`), so the model
+  knows exactly what to pass; previously both tools shipped without a schema, so a real
+  model called them with empty/invalid args and every write was rejected by validation.
+  Found by a live smoke test against a real model — the deterministic aimock suite
+  couldn't catch it because it scripts exact tool arguments.
+- Updated dependencies [4e3e020]
+  - @dawn-ai/core@0.8.4
+  - @dawn-ai/langchain@0.8.4
+  - @dawn-ai/langgraph@0.8.4
+  - @dawn-ai/memory@0.8.4
+  - @dawn-ai/permissions@0.8.4
+  - @dawn-ai/sqlite-storage@0.8.4
+
 ## 0.8.3
 
 ### Patch Changes
