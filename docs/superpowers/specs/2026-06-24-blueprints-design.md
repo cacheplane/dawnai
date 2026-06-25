@@ -114,8 +114,10 @@ blueprint can be added or fixed without a CLI release. The base URL is
 `https://dawnai.org` by default, overridable via `DAWN_BLUEPRINTS_URL` (for tests
 and self-hosting).
 
-> **Decision flagged for review:** served-vs-bundled is the one architectural
-> fork chosen without an explicit question. Rationale above; easy to revisit.
+> **Decision (ratified):** served-vs-bundled was reviewed explicitly. Serving is
+> the deliberate counterpart to sub-project B's bundling: docs are tightly
+> coupled to the installed version (bundle, like eve), blueprints are loosely
+> coupled and benefit from freshness + release-free growth (serve, like flue).
 
 ## Components
 
