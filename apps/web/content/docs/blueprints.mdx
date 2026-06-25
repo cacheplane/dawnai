@@ -1,0 +1,41 @@
+# Blueprints
+
+A blueprint is a guide for adding an integration to your Dawn app. `dawn add <name>` fetches the guide and prints it; you hand it to your coding agent (Claude Code, Cursor, …), which applies it to your project — installing dependencies, creating files, and wiring them in.
+
+Blueprints are Markdown, served from `dawnai.org`, and applied by an agent — not npm packages or runtime abstractions. For framework *patterns* (how to write a tool, type state, etc.), see [Recipes](/docs/recipes); blueprints are for wiring in *external systems*.
+
+## Using `dawn add`
+
+```bash
+dawn add                 # list available blueprints, grouped by category
+dawn add pgvector        # print the pgvector blueprint for your agent to apply
+dawn add <url>           # apply a third-party blueprint from any URL
+```
+
+Pipe it straight to your coding agent, or run it and paste the output. `dawn add` only prints the guide — your agent makes the changes, and you review them.
+
+Set `DAWN_BLUEPRINTS_URL` to point at a self-hosted catalog (or a local dev server) instead of `dawnai.org`.
+
+## Authoring a blueprint
+
+Blueprints live under `apps/web/content/blueprints/<category>/<name>.md` in the Dawn repo. The **filename is the blueprint's name** (`dawn add <name>`), and the **directory is its category** (`observability`, `retrieval`, `deploy`) — used for listing only, never in the command.
+
+Frontmatter (only `description` is required):
+
+```yaml
+---
+description: Add OpenTelemetry tracing to a Dawn app.   # required, written for an LLM
+website: https://opentelemetry.io                        # optional
+version: 1                                               # optional (default 1)
+tags: [tracing, otel]                                    # optional
+source: official                                         # optional: official | maintainer | community
+---
+```
+
+The body is an agent-facing guide. Lead with the intent and scope ("you are adding X; it does Y, not Z"), then: prerequisites, inspect the project, install dependencies, create the file(s), wire them in, configure environment, and verify. The primary generated file's first line carries a marker so a future `dawn update` can find it:
+
+```ts
+// dawn-blueprint: opentelemetry@1
+```
+
+Keep guides adaptive: have the agent detect the package manager, read `dawn.config.ts` and `AGENTS.md`, reuse existing dependencies, and follow the project's env conventions rather than assuming.
