@@ -1,6 +1,6 @@
 # CLI Reference
 
-Dawn ships a single `dawn` binary with eleven commands: `build`, `check`, `dev`, `docs`, `eval`, `memory`, `routes`, `run`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
+Dawn ships a single `dawn` binary with twelve commands: `add`, `build`, `check`, `dev`, `docs`, `eval`, `memory`, `routes`, `run`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
 
 ## Running the CLI
 
@@ -201,6 +201,20 @@ Subcommands:
 
 Flags:
 - `--cwd <path>` — operate on a different app root.
+
+## `dawn add`
+
+Fetches a blueprint (an agent-facing integration guide) and prints it to stdout so you can hand it to your coding agent.
+
+```
+dawn add                 # list available blueprints, grouped by category
+dawn add pgvector        # print the pgvector blueprint
+dawn add <url>           # fetch a third-party blueprint from any URL
+```
+
+`dawn add` only prints the guide — your agent applies the changes, and you review them. Set `DAWN_BLUEPRINTS_URL` to point at a self-hosted catalog instead of `dawnai.org`.
+
+See [Blueprints](/docs/blueprints) for authoring and catalog details.
 
 ## `dawn docs`
 
