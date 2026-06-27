@@ -27,8 +27,18 @@ export function createMemoryMarker(): CapabilityMarker {
       // Tool input schemas exposed to the MODEL (so it knows what to pass). The
       // `remember.data` shape is the route's own defineMemory() zod schema; without
       // this the model calls remember/recall with the wrong/empty args and writes
-      // are rejected by validate(). Falls back to a permissive map if absent.
-      const routeDataSchema = (mem.schema ?? z.record(z.string(), z.unknown())) as z.ZodTypeAny
+      // are rejected by validate(). `mem.schema` arrives as `unknown` (loaded via
+      // dynamic import, validated structurally), so guard it rather than casting
+      // blindly: a non-Zod value (absent, or a plain JSON-Schema object) would
+      // otherwise be handed to z.object() below and blow up opaquely at use time.
+      // Falls back to a permissive map in that case.
+      const isZodSchema = (s: unknown): s is z.ZodTypeAny =>
+        typeof s === "object" &&
+        s !== null &&
+        typeof (s as { safeParse?: unknown }).safeParse === "function"
+      const routeDataSchema: z.ZodTypeAny = isZodSchema(mem.schema)
+        ? mem.schema
+        : z.record(z.string(), z.unknown())
       const rememberSchema = z.object({
         data: routeDataSchema,
         content: z
