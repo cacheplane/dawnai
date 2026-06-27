@@ -22,17 +22,25 @@ function isUrl(value: string): boolean {
   return /^https?:\/\//.test(value)
 }
 
+function isValidName(name: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*$/.test(name)
+}
+
 async function fetchText(
   fetchImpl: typeof fetch,
   url: string,
 ): Promise<{ status: number; text: string }> {
   let res: Response
   try {
-    res = await fetchImpl(url)
+    res = await fetchImpl(url, { signal: AbortSignal.timeout(15000) })
   } catch (error) {
-    throw new CliError(
-      `Failed to reach ${url}: ${error instanceof Error ? error.message : String(error)}`,
-    )
+    const reason =
+      error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")
+        ? "timed out after 15s"
+        : error instanceof Error
+          ? error.message
+          : String(error)
+    throw new CliError(`Failed to reach ${url}: ${reason}`)
   }
   return { status: res.status, text: await res.text() }
 }
@@ -42,11 +50,25 @@ async function loadCatalog(fetchImpl: typeof fetch, base: string): Promise<Catal
   if (status !== 200) {
     throw new CliError(`Could not load the blueprint catalog (${status}) from ${base}.`)
   }
+  let parsed: unknown
   try {
-    return JSON.parse(text) as CatalogEntry[]
+    parsed = JSON.parse(text)
   } catch {
     throw new CliError(`Blueprint catalog at ${base} was not valid JSON.`)
   }
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every(
+      (e) =>
+        typeof e === "object" &&
+        e !== null &&
+        typeof (e as CatalogEntry).name === "string" &&
+        typeof (e as CatalogEntry).category === "string",
+    )
+  ) {
+    throw new CliError(`Blueprint catalog at ${base} did not have the expected shape.`)
+  }
+  return parsed as CatalogEntry[]
 }
 
 export function registerAddCommand(program: Command, io: CommandIo): void {
@@ -87,6 +109,12 @@ export async function runAddCommand(args: AddArgs, io: CommandIo): Promise<void>
     }
     writeLine(io.stdout, text)
     return
+  }
+
+  if (!isValidName(args.target)) {
+    throw new CliError(
+      `Invalid blueprint name "${args.target}". Names are lowercase letters, digits, and hyphens (e.g. "pgvector"). Pass a full https:// URL for a third-party blueprint.`,
+    )
   }
 
   const url = `${base}/blueprints/${args.target}.md`

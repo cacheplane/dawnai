@@ -84,4 +84,30 @@ describe("runAddCommand()", () => {
     await runAddCommand({ target: "opentelemetry", baseUrl: base, fetchImpl }, io)
     expect(out.join("\n")).toContain("# X")
   })
+
+  it("throws on a non-200/non-404 server error", async () => {
+    const { io } = fakeIo()
+    const fetchImpl = fetchStub({
+      [`${BASE}/blueprints/opentelemetry.md`]: { status: 500, body: "" },
+    })
+    await expect(runAddCommand({ target: "opentelemetry", fetchImpl }, io)).rejects.toBeInstanceOf(
+      CliError,
+    )
+  })
+
+  it("rejects an invalid (path-y) blueprint name", async () => {
+    const { io } = fakeIo()
+    const fetchImpl = fetchStub({})
+    await expect(runAddCommand({ target: "../../admin", fetchImpl }, io)).rejects.toBeInstanceOf(
+      CliError,
+    )
+  })
+
+  it("errors when the catalog is not an array", async () => {
+    const { io } = fakeIo()
+    const fetchImpl = fetchStub({
+      [`${BASE}/blueprints/index.json`]: { status: 200, body: '{"oops":true}' },
+    })
+    await expect(runAddCommand({ fetchImpl }, io)).rejects.toBeInstanceOf(CliError)
+  })
 })
