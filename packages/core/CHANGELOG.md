@@ -1,5 +1,15 @@
 # @dawn-ai/core
 
+## 0.8.5
+
+### Patch Changes
+
+- f195096: Guard the route memory schema before use: a non-Zod `context.memory.schema` value now falls back to a permissive `data` shape for the `remember` tool instead of being cast and failing opaquely at tool-schema use time.
+  - @dawn-ai/permissions@0.8.5
+  - @dawn-ai/sdk@0.8.5
+  - @dawn-ai/sqlite-storage@0.8.5
+  - @dawn-ai/workspace@0.8.5
+
 ## 0.8.4
 
 ### Patch Changes
