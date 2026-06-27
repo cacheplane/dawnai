@@ -1,5 +1,18 @@
 # @dawn-ai/cli
 
+## 0.8.5
+
+### Patch Changes
+
+- 91d999c: Add `dawn add <name>` — fetch an integration blueprint (a Markdown guide served from dawnai.org) and print it for your coding agent to apply. `dawn add` lists the catalog; `dawn add <url>` applies a third-party blueprint. Ships with pgvector, pinecone, opentelemetry, and docker blueprints.
+- Updated dependencies [f195096]
+  - @dawn-ai/core@0.8.5
+  - @dawn-ai/langchain@0.8.5
+  - @dawn-ai/langgraph@0.8.5
+  - @dawn-ai/memory@0.8.5
+  - @dawn-ai/permissions@0.8.5
+  - @dawn-ai/sqlite-storage@0.8.5
+
 ## 0.8.4
 
 ### Patch Changes
