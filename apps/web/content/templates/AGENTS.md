@@ -34,7 +34,7 @@ Example: `src/app/(public)/hello/[tenant]/index.ts` → pathname `/hello/[tenant
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   systemPrompt:
     "You are a helpful assistant for the {tenant} organization.",
   // Optional retry policy:

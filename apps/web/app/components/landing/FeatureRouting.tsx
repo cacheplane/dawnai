@@ -6,7 +6,7 @@ const ROUTE_CODE = `// src/app/(public)/support/index.ts
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   systemPrompt: "Answer for {tenant}.",
 })
 
