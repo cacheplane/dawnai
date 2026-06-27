@@ -218,6 +218,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
+      '@dawn-ai/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
       '@dawn-ai/sdk':
         specifier: workspace:*
         version: link:../sdk
