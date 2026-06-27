@@ -1,198 +1,212 @@
 ---
-description: Containerize a Dawn app with a production Dockerfile.
-website: https://www.docker.com
-version: 1
-tags: [deploy, docker, self-host]
+description: Containerize a Dawn app as a LangGraph platform image for self-hosting.
+website: https://langchain-ai.github.io/langgraphjs/
+version: 2
+tags: [deploy, docker, self-host, langgraph]
 source: official
 ---
 
 # Containerize your Dawn app with Docker
 
-You are an AI coding agent adding a production Dockerfile to a Dawn app so it can be self-hosted as a container. It builds the app with `dawn build` and runs the result. It does NOT set up CI/CD, a container registry, or orchestration (Kubernetes/Compose) — it produces a `Dockerfile` and `.dockerignore` you can build and run.
+You are an AI coding agent containerizing a Dawn app for self-hosting. Dawn builds a LangGraph **platform** deploy artifact (`langgraph.json` + entry files); this guide uses the LangGraph CLI to turn that artifact into a Docker image. It does NOT replace LangSmith (Dawn's default deploy target), and it does NOT hand-roll a `node server.js` — Dawn has no standalone server; the image runs the LangGraph platform runtime.
 
 ## Prerequisites / when not to apply
 
-Before proceeding, confirm both of the following are true:
+Before proceeding, confirm all of the following are true:
 
 1. **Docker is installed** — run `docker --version` to confirm. If it is not installed, direct the user to [docker.com/get-started](https://www.docker.com/get-started/) and stop.
-2. **The user is self-hosting** — this blueprint is for running a Dawn app in your own container environment. If the user deploys to **LangSmith** (Dawn's default deploy target), they do **not** need a Dockerfile — LangSmith builds and runs the app from the `langgraph.json` artifact that `dawn build` produces. If the user is LangSmith-only, stop here and point them to [Deployment](/docs/deployment).
+2. **The user is self-hosting** — this blueprint is for running a Dawn app in your own container environment. If the user deploys to **LangSmith** (Dawn's default deploy target), they do **not** need this — LangSmith handles containerization itself from the `langgraph.json` artifact `dawn build` produces. If the user is LangSmith-only, stop here and point them to [Deployment](/docs/deployment).
+3. **The user understands the platform requirements** — the Docker image this guide produces is a **LangGraph platform** image. Running it requires:
+   - **Postgres** and **Redis** (the platform stores thread state in Postgres and uses Redis for pub/sub)
+   - A **LangGraph/LangSmith license key** (`LANGGRAPH_CLOUD_LICENSE_KEY` or a LangSmith API key for the self-hosted-lite tier)
+
+   The `langgraphjs up` command (from the LangGraph CLI) provisions Postgres and Redis locally via docker-compose and is the easiest way to run the image locally. See the [LangGraph self-hosting docs](https://langchain-ai.github.io/langgraphjs/) for full infrastructure details.
+
+   If the user only needs a simple `node server.js` container, explain that Dawn does not produce a standalone HTTP server — `dawn build` emits `langgraph.json`, not a runnable server script — and stop.
 
 ## Inspect the project
 
 Run these checks before writing any files:
 
-1. **Package manager** — detect from lockfile: `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm. This determines the install commands in the Dockerfile.
+1. **Package manager** — detect from lockfile: `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm. This determines install commands used later.
 2. **App config** — read `dawn.config.ts` and note the `appDir` field (defaults to `src/app`).
-3. **AGENTS.md** — read it if present for project-specific conventions (naming, style, preferred base images).
-4. **Existing Dockerfile check** — look for a root `Dockerfile`. If it exists and its first line is `# dawn-blueprint: docker@1`, skip to [Updating an existing install](#updating-an-existing-install).
-5. **Start command and port** — determine how the built app is started in production (e.g. `node dist/server.js`, `node .dawn/build/server.js`, or a `start` script in `package.json`) and which port it listens on. Ask the user to confirm if you cannot determine this from the source.
+3. **AGENTS.md** — read it if present for project-specific conventions (naming, style).
+4. **Existing Dockerfile check** — look for a root `Dockerfile`. If it exists and its first line is `# dawn-blueprint: docker@2`, skip to [Updating an existing install](#updating-an-existing-install). If it is `# dawn-blueprint: docker@1`, this is an older version — proceed with the steps below to regenerate it.
+5. **pnpm build script approval** — if the package manager is pnpm, check `package.json` for `pnpm.onlyBuiltDependencies`. Newer Dawn scaffolds include `["esbuild"]` in this list. If it is absent, the `pnpm i` step inside the generated image will fail with `ERR_PNPM_IGNORED_BUILDS` because esbuild's native binary requires a post-install script. Add it now if missing:
 
-## Install dependencies
+   ```json
+   {
+     "pnpm": {
+       "onlyBuiltDependencies": ["esbuild"]
+     }
+   }
+   ```
 
-No npm packages are added — Docker is external tooling. The Dockerfile uses the project's existing package manager (detected in the step above). If `docker` is not installed, point the user to [docker.com](https://www.docker.com/get-started/).
+## Install the LangGraph CLI
 
-## Create the Dockerfile
+Add `@langchain/langgraph-cli` as a dev dependency. Its bin is `langgraphjs`.
 
-Place this file at the **project root** as `Dockerfile`. The first line must be the marker comment exactly as shown — it identifies this file as managed by this blueprint.
+```bash
+# pnpm (detected from pnpm-lock.yaml)
+pnpm add -D @langchain/langgraph-cli
 
-Read the inline comments. You must adapt the **package manager commands**, **start command**, and **port** to match this project before saving.
+# npm equivalent
+# npm install --save-dev @langchain/langgraph-cli
+
+# yarn equivalent
+# yarn add -D @langchain/langgraph-cli
+```
+
+Confirm the bin is available after install:
+
+```bash
+pnpm exec langgraphjs --version
+```
+
+## Build the deploy artifact and the image
+
+### 1. Build the Dawn deploy artifact
+
+```bash
+pnpm exec dawn build --clean
+```
+
+This writes `.dawn/build/langgraph.json` and the compiled entry files. The graph paths inside `langgraph.json` are relative to the **app root** (e.g. `./.dawn/build/hello-tenant.ts:graph`).
+
+### 2. Copy the config to the app root
+
+```bash
+cp .dawn/build/langgraph.json ./langgraph.json
+```
+
+**Why this step is required:** `langgraphjs` resolves graph paths relative to the location of the config file it reads. If you point it at `.dawn/build/langgraph.json`, it resolves `./.dawn/build/hello-tenant.ts` relative to `.dawn/build/` and looks for `.dawn/build/.dawn/build/hello-tenant.ts` — a path that does not exist. Placing `langgraph.json` at the root makes the paths resolve correctly.
+
+Add the generated copy to `.gitignore` (or keep a hand-authored root `langgraph.json` — Dawn shallow-merges it on build):
+
+```bash
+echo 'langgraph.json' >> .gitignore
+```
+
+### 3. Generate the Dockerfile
+
+```bash
+npx @langchain/langgraph-cli dockerfile ./Dockerfile
+```
+
+Then add the blueprint marker as the **first line** of the generated `Dockerfile` (the CLI does not include it; re-add it after each regeneration):
 
 ```dockerfile
-# dawn-blueprint: docker@1
-
-# ── builder ──────────────────────────────────────────────────────────────────
-# Install all dependencies and run `dawn build` to produce the deployment
-# artifacts in .dawn/build/.
-FROM node:22-slim AS builder
-
-WORKDIR /app
-
-# Enable corepack so pnpm is available without a separate install step.
-# Adapt: remove this line (and use npm/yarn commands below) if not using pnpm.
-RUN corepack enable
-
-# Copy manifest and lockfile first so Docker can cache the install layer.
-# Adapt: replace with the files your package manager uses:
-#   pnpm  → package.json pnpm-lock.yaml
-#   npm   → package.json package-lock.json
-#   yarn  → package.json yarn.lock
-COPY package.json pnpm-lock.yaml ./
-
-# Install all dependencies (including devDependencies, needed for the build).
-# Adapt: swap for your package manager:
-#   npm   → npm ci
-#   yarn  → yarn install --frozen-lockfile
-RUN pnpm install --frozen-lockfile
-
-# Copy the rest of the source.
-COPY . .
-
-# Build the Dawn deployment artifacts into .dawn/build/.
-RUN pnpm exec dawn build --clean
-
-# ── runner ────────────────────────────────────────────────────────────────────
-# Smaller final image — only production dependencies + built artifacts.
-FROM node:22-slim AS runner
-
-WORKDIR /app
-
-ENV NODE_ENV=production
-
-# Enable corepack in the runner stage too (needed if the start script uses pnpm).
-# Adapt: remove if not using pnpm.
-RUN corepack enable
-
-# Copy manifest and lockfile so we can install production deps only.
-COPY package.json pnpm-lock.yaml ./
-
-# Install production dependencies only.
-# Adapt: swap for your package manager:
-#   npm   → npm ci --omit=dev
-#   yarn  → yarn install --frozen-lockfile --production
-RUN pnpm install --frozen-lockfile --prod
-
-# Copy the built artifacts from the builder stage.
-COPY --from=builder /app/.dawn/build/ ./.dawn/build/
-
-# Expose the port the app listens on.
-# Adapt: replace 8123 with the actual port your app uses.
-EXPOSE 8123
-
-# Start the app.
-# Adapt: replace with the command that starts your production server,
-# e.g. "node", ".dawn/build/server.js" or a script defined in package.json.
-CMD ["node", ".dawn/build/server.js"]
+# dawn-blueprint: docker@2
+FROM langchain/langgraphjs-api:22
+ADD . /deps/<your-app-name>
+ENV LANGSERVE_GRAPHS=...
+RUN pnpm i --frozen-lockfile
+...
 ```
 
-> **Checklist before saving:**
-> - Package manager commands match the detected lockfile
-> - `EXPOSE` port matches the port your app listens on
-> - `CMD` matches the command that starts your production server
+The generated `FROM langchain/langgraphjs-api:22` base image bundles the LangGraph platform runtime. Note: the LangGraph CLI readme mentions Node 20 only, but Node 22 works — the readme is stale on this point.
 
-## Add a .dockerignore
-
-Create a root `.dockerignore` to prevent large or sensitive directories from being sent to the Docker build context. This keeps builds fast and avoids accidentally baking secrets into the image.
+You may optionally add a brief `.dockerignore` to keep the build context lean. Since `ADD . /deps/<app>` copies the entire context, excluding large or sensitive directories speeds up the build:
 
 ```
-# Dependencies (reinstalled inside the image)
 node_modules
-
-# Dawn build cache and generated files
-.dawn
-
-# Version control
 .git
-.gitignore
-
-# Environment files — never copy these into an image
 .env
 .env.local
 .env.*.local
-
-# Editor and OS artifacts
-.DS_Store
-*.swp
-*.swo
-.vscode
-.idea
-
-# Test and coverage output
 coverage
-.nyc_output
+.DS_Store
+```
+
+### 4. Build the Docker image
+
+Build directly from the generated Dockerfile:
+
+```bash
+docker build -t my-dawn-app .
+```
+
+Or skip the Dockerfile and build in one step using the CLI:
+
+```bash
+npx @langchain/langgraph-cli build -t my-dawn-app
 ```
 
 ## Configure environment
 
-Runtime environment variables (model provider API keys, database URLs, etc.) are passed to the container at run time — they are **not** baked into the image. `.env` is already excluded via `.dockerignore`, so there is no risk of accidentally including secrets.
-
-For local runs, pass variables with `--env-file`:
-
-```bash
-docker run --rm -p 8123:8123 --env-file .env my-dawn-app
-```
-
-In production, inject secrets through your hosting environment's secret management (e.g. `docker run -e KEY=value`, Kubernetes Secrets, AWS ECS task definitions). Never copy `.env` into the image and never commit secrets to the image layers.
-
-Document required variables in `.env.example` so contributors know what to provide:
+Runtime secrets are passed to the container at run time — never baked into the image. The LangGraph platform runtime requires several variables in addition to your model provider keys:
 
 ```
-# Required at runtime
-OPENAI_API_KEY=
-# Add other provider keys and config here
+# Model provider key — required by your agent
+OPENAI_API_KEY=sk-...
+
+# LangGraph platform runtime — required to run the image
+POSTGRES_URI=postgres://user:password@host:5432/langgraph
+REDIS_URI=redis://host:6379
+
+# License — required to run the LangGraph platform runtime.
+# Use your LangSmith API key for the self-hosted-lite tier,
+# or a dedicated LANGGRAPH_CLOUD_LICENSE_KEY for the full platform.
+LANGSMITH_API_KEY=lsv2_...
+# LANGGRAPH_CLOUD_LICENSE_KEY=...
 ```
+
+See the [LangGraph self-hosting docs](https://langchain-ai.github.io/langgraphjs/) for the full list of platform environment variables and tier details.
+
+Document required variables in `.env.example` so contributors know what to provide. Never commit `.env` or bake secrets into the image.
 
 ## Verify
 
-1. **Build the image:**
+1. **Confirm the build succeeds:**
 
    ```bash
    docker build -t my-dawn-app .
    ```
 
-   Confirm the build exits cleanly. If `dawn build` fails inside the container, check that all source files are copied before the build step and that no required env vars are needed at build time (they should not be).
+   A clean exit means the image was built. If `pnpm i` fails inside the image with `ERR_PNPM_IGNORED_BUILDS`, add `esbuild` to `pnpm.onlyBuiltDependencies` in `package.json` (see [Inspect the project](#inspect-the-project)).
 
-2. **Run the container:**
+2. **Run locally with `langgraphjs up`** — this is the fastest path to a local smoke test. The command provisions Postgres and Redis via docker-compose and runs your image against them:
 
    ```bash
-   # Adapt: replace 8123 with your actual port
-   docker run --rm -p 8123:8123 --env-file .env my-dawn-app
+   npx @langchain/langgraph-cli up
    ```
 
-3. **Hit the health endpoint:**
+   You will need the license key (or LangSmith API key) set in your environment for the runtime to start.
+
+3. **Hit the platform endpoints:**
 
    ```bash
    curl http://localhost:8123/healthz
+   curl http://localhost:8123/threads
    ```
 
-   A 200 response confirms the server is up. If the connection is refused, verify that `EXPOSE` and `-p` use the same port, and that the `CMD` actually starts the server on that port.
+   A 200 response on `/healthz` confirms the LangGraph platform runtime is up. `/threads` is the Agent Protocol endpoint for creating and listing conversation threads.
 
-4. **Check env vars** — if the container starts but the agent fails, confirm all required environment variables are present in `.env` and are being passed with `--env-file` (or `-e`).
+4. **Check env vars** — if the runtime starts but the agent fails, confirm all required variables (model key, `POSTGRES_URI`, `REDIS_URI`, license key) are present and being passed to the container.
 
 ## Updating an existing install
 
-If the root `Dockerfile` already exists and its first line is `# dawn-blueprint: docker@1`:
+If the root `Dockerfile` already exists and its first line is `# dawn-blueprint: docker@2`:
 
-1. Compare the existing file against the template in [Create the Dockerfile](#create-the-dockerfile).
-2. Apply relevant improvements from this guide (e.g. layer-caching order, `--frozen-lockfile`, `--prod` flag for the runner stage) while **preserving the user's customisations** — base image variant, package manager, port, extra `COPY` steps, and any additional `RUN` commands they have added.
-3. Do not change the marker line; it must remain `# dawn-blueprint: docker@1` as the first line of the file.
-4. Rebuild with `docker build -t my-dawn-app .` after updating to confirm the image still builds cleanly.
+1. Re-run the build to refresh the artifact:
+
+   ```bash
+   pnpm exec dawn build --clean
+   cp .dawn/build/langgraph.json ./langgraph.json
+   ```
+
+2. Regenerate the Dockerfile (this overwrites it):
+
+   ```bash
+   npx @langchain/langgraph-cli dockerfile ./Dockerfile
+   ```
+
+3. Re-add the marker as the first line of the regenerated `Dockerfile`:
+
+   ```
+   # dawn-blueprint: docker@2
+   ```
+
+4. Preserve any `dockerfile_lines` customizations you had added to `langgraph.json` (the LangGraph CLI reads this field to inject extra Dockerfile instructions — it survives regeneration as long as your `langgraph.json` still contains it).
+
+5. Rebuild with `docker build -t my-dawn-app .` to confirm the image still builds cleanly.
