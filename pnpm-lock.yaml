@@ -412,6 +412,19 @@ importers:
         specifier: 26.1.0
         version: 26.1.0
 
+  packages/sandbox:
+    dependencies:
+      '@dawn-ai/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      '@dawn-ai/config-typescript':
+        specifier: workspace:*
+        version: link:../config-typescript
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+
   packages/sdk:
     devDependencies:
       '@dawn-ai/config-typescript':

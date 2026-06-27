@@ -1,0 +1,49 @@
+{
+  "name": "@dawn-ai/sandbox",
+  "version": "0.8.4",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/sandbox#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cacheplane/dawnai.git",
+    "directory": "packages/sandbox"
+  },
+  "bugs": {
+    "url": "https://github.com/cacheplane/dawnai/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json vitest.config.ts",
+    "test": "vitest --run --config vitest.config.ts --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dawn-ai/workspace": "workspace:*"
+  },
+  "devDependencies": {
+    "@dawn-ai/config-typescript": "workspace:*",
+    "@types/node": "25.6.0"
+  }
+}
