@@ -35,7 +35,7 @@ A Dawn route's `index.ts` exports an `agent()` descriptor. The `model` field is 
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   systemPrompt: "You are a helpful assistant.",
   retry: { maxAttempts: 3, baseDelay: 250 },
 })

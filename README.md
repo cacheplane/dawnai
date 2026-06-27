@@ -44,7 +44,7 @@ const greet = tool(async ({ name }) => `Hello, ${name}!`, {
   schema: z.object({ name: z.string() }),
 })
 
-const model = new ChatOpenAI({ model: "gpt-4o-mini" }).bindTools([greet])
+const model = new ChatOpenAI({ model: "gpt-5-mini" }).bindTools([greet])
 const tools = new ToolNode([greet])
 
 async function callModel(state: typeof MessagesAnnotation.State) {
@@ -82,7 +82,7 @@ export const graph = new StateGraph(MessagesAnnotation)
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   systemPrompt: "You are a helpful assistant for the {tenant} organization.",
 })
 ```
@@ -131,7 +131,7 @@ Dawn routes live under `src/app` and export one runtime entry. New agent routes 
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   systemPrompt: "You are a helpful assistant for the {tenant} organization.",
   retry: { maxAttempts: 3, baseDelay: 250 },
 })

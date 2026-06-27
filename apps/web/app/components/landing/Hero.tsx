@@ -8,7 +8,7 @@ import { Eyebrow } from "../ui/Eyebrow"
 const ROUTE_CODE = `import { agent } from "@dawn-ai/sdk"
 
 export default agent({
-  model: "gpt-4o-mini",
+  model: "gpt-5-mini",
   systemPrompt: "Answer for {tenant}.",
 })`
 

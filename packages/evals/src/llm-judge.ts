@@ -20,7 +20,7 @@ function interpolate(template: string, vars: Record<string, string>): string {
 }
 
 export function llmJudge(opts: LlmJudgeOptions): Scorer {
-  const model = opts.model ?? "gpt-4o-mini"
+  const model = opts.model ?? "gpt-5-mini"
   return {
     name: opts.name ?? "llmJudge",
     ...(opts.threshold !== undefined ? { threshold: opts.threshold } : {}),
