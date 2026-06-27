@@ -478,6 +478,7 @@ async function createExpectedInternalFixture(
         "@dawn-ai/testing": "<repo:@dawn-ai/testing>",
       },
       pnpm: {
+        onlyBuiltDependencies: ["esbuild"],
         overrides: repoOverrides,
       },
     },
