@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import matter from "gray-matter"
 
 export const ALLOWED_CATEGORIES = ["observability", "retrieval", "deploy"] as const
@@ -23,7 +24,17 @@ export interface BlueprintEntry {
 }
 
 const SITE = "https://dawnai.org"
-const DEFAULT_DIR = join(process.cwd(), "content/blueprints")
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
+
+function defaultDir(): string {
+  const cwdDir = join(process.cwd(), "content/blueprints")
+  if (existsSync(cwdDir)) {
+    return cwdDir
+  }
+  // Fallback for when cwd is not apps/web (e.g. the workspace test runner runs
+  // from the repo root): resolve relative to this module (apps/web/lib).
+  return join(MODULE_DIR, "..", "content", "blueprints")
+}
 
 function parseEntry(category: string, name: string, raw: string): BlueprintEntry {
   const { data, content } = matter(raw)
@@ -40,7 +51,7 @@ function parseEntry(category: string, name: string, raw: string): BlueprintEntry
   return { meta, body: content.replace(/^\n+/, "") }
 }
 
-export function loadBlueprints(dir: string = DEFAULT_DIR): BlueprintEntry[] {
+export function loadBlueprints(dir: string = defaultDir()): BlueprintEntry[] {
   if (!existsSync(dir)) {
     return []
   }
@@ -60,11 +71,11 @@ export function loadBlueprints(dir: string = DEFAULT_DIR): BlueprintEntry[] {
   return entries.sort((a, b) => a.meta.name.localeCompare(b.meta.name))
 }
 
-export function getBlueprint(name: string, dir: string = DEFAULT_DIR): BlueprintEntry | undefined {
+export function getBlueprint(name: string, dir: string = defaultDir()): BlueprintEntry | undefined {
   return loadBlueprints(dir).find((entry) => entry.meta.name === name)
 }
 
-export function validateBlueprints(dir: string = DEFAULT_DIR): string[] {
+export function validateBlueprints(dir: string = defaultDir()): string[] {
   const errors: string[] = []
   const seen = new Map<string, string>()
   for (const { meta, body } of loadBlueprints(dir)) {
