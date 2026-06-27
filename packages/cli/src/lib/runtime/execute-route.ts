@@ -65,6 +65,7 @@ import {
   type RuntimeExecutionResult,
 } from "./result.js"
 import { deriveRouteIdentity } from "./route-identity.js"
+import type { SandboxManager } from "./sandbox-manager.js"
 import { discoverStateDefinition } from "./state-discovery.js"
 import type { StreamChunk } from "./stream-types.js"
 import {
@@ -152,7 +153,9 @@ export async function executeResolvedRoute(options: {
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
+  readonly sandboxManager?: SandboxManager
   readonly signal?: AbortSignal
+  readonly threadId?: string
 }): Promise<RuntimeExecutionResult> {
   return await executeRouteAtResolvedPath({
     ...options,
@@ -215,6 +218,7 @@ export async function invokeResolvedRoute(options: {
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
+  readonly sandboxManager?: SandboxManager
   readonly signal?: AbortSignal
   readonly threadId?: string
 }): Promise<RuntimeExecutionResult> {
@@ -238,6 +242,7 @@ export async function* streamResolvedRoute(options: {
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
+  readonly sandboxManager?: SandboxManager
   readonly signal?: AbortSignal
   /**
    * Stable per-conversation identifier forwarded to the agent-adapter as
@@ -375,6 +380,8 @@ async function prepareRouteExecution(options: {
   readonly routeId: string
   readonly routePath: string
   readonly signal?: AbortSignal
+  readonly threadId?: string
+  readonly sandboxManager?: SandboxManager
 }): Promise<PreparedRoute | PreparedRouteError> {
   const { isSubagent = false } = options
   const routeDir = resolve(options.routeFile, "..")
@@ -449,9 +456,24 @@ async function prepareRouteExecution(options: {
     // No dawn.config.ts (or unreadable). Fall back to defaults for all fields.
   }
 
+  // When a SandboxManager is configured and we have a stable thread id, resolve
+  // the thread's sandbox handle and route the workspace filesystem/exec (and the
+  // workspace root) into it. All of readFile/writeFile/listDir/runBash redirect
+  // into the isolated env with no capability-logic change.
+  let sandboxBackends: { filesystem: FilesystemBackend; exec: ExecBackend } | undefined
+  let sandboxWorkspaceRoot: string | undefined
+  if (options.sandboxManager && options.threadId) {
+    const handle = await options.sandboxManager.getForThread(
+      options.threadId,
+      options.signal ?? new AbortController().signal,
+    )
+    sandboxBackends = { filesystem: handle.filesystem, exec: handle.exec }
+    sandboxWorkspaceRoot = handle.workspaceRoot
+  }
+
   const offload = buildOffload(
     loadedDawnConfig,
-    configBackends?.filesystem,
+    sandboxBackends?.filesystem ?? configBackends?.filesystem,
     options.signal ?? new AbortController().signal,
     options.appRoot,
   )
@@ -489,8 +511,8 @@ async function prepareRouteExecution(options: {
   await permissionsStore.load()
 
   const workspaceFs = createWorkspaceFs({
-    workspaceRoot: join(options.appRoot, "workspace"),
-    backend: configBackends?.filesystem ?? localFilesystem(),
+    workspaceRoot: sandboxWorkspaceRoot ?? join(options.appRoot, "workspace"),
+    backend: sandboxBackends?.filesystem ?? configBackends?.filesystem ?? localFilesystem(),
     permissions: permissionsStore,
     signal: options.signal ?? new AbortController().signal,
     interruptCapable: normalized.kind === "agent",
@@ -545,13 +567,15 @@ async function prepareRouteExecution(options: {
       })
     }
 
+    const capabilityBackends = sandboxBackends ?? configBackends
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
       descriptorRouteMap,
-      ...(configBackends ? { backends: configBackends } : {}),
+      ...(capabilityBackends ? { backends: capabilityBackends } : {}),
       permissions: permissionsStore,
       appRoot: options.appRoot,
+      ...(sandboxWorkspaceRoot ? { workspaceRoot: sandboxWorkspaceRoot } : {}),
       ...(memoryContext ? { memory: memoryContext } : {}),
     })
 
@@ -652,6 +676,8 @@ async function prepareRouteExecution(options: {
         routeManifest,
         descriptor,
         descriptorRouteMap,
+        ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
+        ...(options.threadId ? { threadId: options.threadId } : {}),
       })
     }
   }
@@ -693,6 +719,7 @@ async function executeRouteAtResolvedPath(options: {
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
+  readonly sandboxManager?: SandboxManager
   readonly signal?: AbortSignal
   readonly startedAt: number
   readonly threadId?: string
@@ -1007,8 +1034,11 @@ function buildSubagentResolver(args: {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
   readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
+  readonly sandboxManager?: SandboxManager
+  readonly threadId?: string
 }): SubagentResolver {
   const { appRoot, routeDir, routeManifest, descriptor, descriptorRouteMap } = args
+  const { sandboxManager, threadId } = args
 
   const findConventionRoute = (leaf: string): RouteDefinition | undefined => {
     const conventionDir = `${routeDir}/subagents/${leaf}`
@@ -1048,6 +1078,8 @@ function buildSubagentResolver(args: {
           routeFile: route.entryFile,
           routeId: route.id,
           routePath: route.pathname,
+          ...(sandboxManager ? { sandboxManager } : {}),
+          ...(threadId ? { threadId } : {}),
         })
         if (result.status === "failed") {
           // Surface the failure to the dispatcher in a shape that
@@ -1068,6 +1100,8 @@ function buildSubagentResolver(args: {
           routeFile: route.entryFile,
           routeId: route.id,
           routePath: route.pathname,
+          ...(sandboxManager ? { sandboxManager } : {}),
+          ...(threadId ? { threadId } : {}),
         })) {
           yield chunk
         }
