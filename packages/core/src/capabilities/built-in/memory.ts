@@ -4,6 +4,15 @@ import type { CapabilityMarker, PromptFragment } from "../types.js"
 
 const DEFAULT_SEMANTIC_IDENTITY = ["subject", "predicate"] as const
 
+// A route's defineMemory() schema arrives as `unknown` (loaded via dynamic
+// import, validated structurally). Module-scoped (no closure deps) so it isn't
+// recreated on every load(). A non-Zod value must NOT be handed to z.object()
+// as the remember tool's `data` shape — it would blow up opaquely at use time.
+const isZodSchema = (s: unknown): s is z.ZodTypeAny =>
+  typeof s === "object" &&
+  s !== null &&
+  typeof (s as { safeParse?: unknown }).safeParse === "function"
+
 /**
  * Long-term memory (L3): contributes `recall` and `remember` tools backed by a
  * typed, namespaced memory store, plus a memory-index prompt fragment listing
@@ -27,8 +36,11 @@ export function createMemoryMarker(): CapabilityMarker {
       // Tool input schemas exposed to the MODEL (so it knows what to pass). The
       // `remember.data` shape is the route's own defineMemory() zod schema; without
       // this the model calls remember/recall with the wrong/empty args and writes
-      // are rejected by validate(). Falls back to a permissive map if absent.
-      const routeDataSchema = (mem.schema ?? z.record(z.string(), z.unknown())) as z.ZodTypeAny
+      // are rejected by validate(). Guarded (see isZodSchema) so a non-Zod value
+      // falls back to a permissive map instead of failing opaquely.
+      const routeDataSchema: z.ZodTypeAny = isZodSchema(mem.schema)
+        ? mem.schema
+        : z.record(z.string(), z.unknown())
       const rememberSchema = z.object({
         data: routeDataSchema,
         content: z

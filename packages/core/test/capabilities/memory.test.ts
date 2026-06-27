@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { z } from "zod"
 import { createMemoryMarker } from "../../src/capabilities/built-in/memory.js"
 
 function fakeStore() {
@@ -95,6 +96,34 @@ describe("memory capability", () => {
       { signal: new AbortController().signal },
     )) as string
     expect(out).toContain("m1")
+  })
+
+  it("falls back to a permissive data schema when context.memory.schema is not a Zod type", async () => {
+    const ctx = baseCtx(fakeStore())
+    // A non-Zod value (e.g. a plain JSON-Schema object slipping through
+    // loadRouteMemory) must NOT be handed to z.object() as the remember tool's
+    // `data` shape — that would blow up opaquely at tool-schema use time. The
+    // guard falls back to a permissive record instead.
+    ;(ctx.memory as { schema?: unknown }).schema = { type: "object", properties: {} }
+    const c = await createMemoryMarker().load("/r", ctx)
+    const remember = c.tools!.find((t) => t.name === "remember")!
+    // safeParse must not throw and must accept arbitrary data under the fallback.
+    const parsed = (remember.schema as z.ZodTypeAny).safeParse({
+      data: { anything: "goes" },
+      content: "x",
+    })
+    expect(parsed.success).toBe(true)
+  })
+
+  it("uses the route's Zod schema as the remember `data` shape when provided", async () => {
+    const ctx = baseCtx(fakeStore())
+    ;(ctx.memory as { schema?: unknown }).schema = z.object({ subject: z.string() })
+    const c = await createMemoryMarker().load("/r", ctx)
+    const remember = c.tools!.find((t) => t.name === "remember")!
+    const schema = remember.schema as z.ZodTypeAny
+    expect(schema.safeParse({ data: { subject: "acme" }, content: "x" }).success).toBe(true)
+    // The real schema is actually exercised — a wrong-typed field is rejected.
+    expect(schema.safeParse({ data: { subject: 5 }, content: "x" }).success).toBe(false)
   })
 
   it("auto mode ADDs a new active record", async () => {
