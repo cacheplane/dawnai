@@ -28,7 +28,7 @@ The goal is a **hard boundary suitable for untrusted code / multi-tenant**: the 
 
 ### 1. The contract (`@dawn-ai/sandbox`)
 
-New package `@dawn-ai/sandbox` ships the contract + the Docker reference + (under a `/testing` subpath) `fakeSandbox` and a conformance kit. The author-facing **types** live where they avoid a dependency cycle: `SandboxConfig` (referenced by `DawnConfig`) and the contract types go in a types-only location reachable by `@dawn-ai/core`'s `DawnConfig` without `core` depending on `@dawn-ai/sandbox` (mirror the `ToolScope`-in-sdk / `DawnConfig`-in-core precedent; the plan pins exact placement and verifies no cycle). The impl (`dockerSandbox`, `fakeSandbox`) lives in `@dawn-ai/sandbox`.
+New package `@dawn-ai/sandbox` ships the **impl** (`dockerSandbox`) + (under a `/testing` subpath) `fakeSandbox` and a conformance kit. The **contract types** (`SandboxProvider`/`SandboxHandle`/`SandboxPolicy`/`SandboxConfig`) live in **`@dawn-ai/workspace`** — a leaf package that already owns `FilesystemBackend`/`ExecBackend` (which the contract references), and which `@dawn-ai/core` already depends on. So `DawnConfig.sandbox?: SandboxConfig` imports from `workspace` with no new edge and **no cycle** (`core` does NOT depend on `@dawn-ai/sandbox`). Verified against the dep graph during planning.
 
 ```ts
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
@@ -122,7 +122,7 @@ export default config({
 })
 ```
 
-- **`config(c: DawnConfig): DawnConfig`** — pure identity for IDE autocomplete, modeled on `agent()` (`sdk/agent.ts:57`). Exported from `@dawn-ai/sdk` and re-exported from `@dawn-ai/cli` (the import authors already use). The loader (`core/config.ts:22-40`) is unchanged — it reads `mod.default`, so a wrapped or bare object both work.
+- **`config(c: DawnConfig): DawnConfig`** — pure identity for IDE autocomplete, modeled on `agent()` (`sdk/agent.ts:57`). Lives in **`@dawn-ai/core`** (co-located with `DawnConfig`) and is re-exported from `@dawn-ai/cli` (the import authors already use). NOT in `@dawn-ai/sdk`: `core` depends on `sdk`, so `sdk` importing `DawnConfig` from `core` would cycle (verified via the dep graph during planning). The loader (`core/config.ts:22-40`) is unchanged — it reads `mod.default`, so a wrapped or bare object both work.
 - **`DawnConfig.sandbox?: SandboxConfig`** added to `core/types.ts:9-80` (the 10th key), consistent with the existing optional nested keys.
 - **Defaults** (manager-applied): `network: { mode: "allow", denylist: ["169.254.169.254"] }` (the cloud-metadata endpoint, the classic SSRF egress target, denied even in allow mode), `idleTimeoutMs: 600_000`, conservative `resources` caps.
 - **`dawn check`** gains a sandbox pass (mirror `collectToolScopeErrors`, `check.ts:45-48`): validate the `sandbox` config shape and run `provider.preflight?.()` (e.g. "is the Docker daemon reachable / image pullable?") so misconfig fails at check-time, not mid-run.
