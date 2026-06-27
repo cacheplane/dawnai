@@ -9,6 +9,8 @@ import {
   resolveThreadsStore,
   streamResolvedRoute,
 } from "../runtime/execute-route.js"
+import { resolveSandboxManager } from "../runtime/resolve-sandbox.js"
+import type { SandboxManager } from "../runtime/sandbox-manager.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
@@ -58,6 +60,15 @@ export async function createRuntimeRequestListener(
   const middleware = await loadMiddleware(options.appRoot)
   const threadsStore = await resolveThreadsStore(options.appRoot)
   const checkpointer = await resolveCheckpointer(options.appRoot)
+  const sandboxManager = await resolveSandboxManager(options.appRoot)
+
+  let sandboxReaper: ReturnType<typeof setInterval> | undefined
+  if (sandboxManager) {
+    sandboxReaper = setInterval(() => {
+      void sandboxManager.reapIdle()
+    }, 60_000)
+    sandboxReaper.unref?.()
+  }
 
   const state = {
     acceptingRequests: true,
@@ -71,6 +82,7 @@ export async function createRuntimeRequestListener(
     checkpointer,
     middleware,
     registry,
+    ...(sandboxManager ? { sandboxManager } : {}),
     signal: shutdownController.signal,
     threadsStore,
   })
@@ -112,6 +124,9 @@ export async function createRuntimeRequestListener(
     state.acceptingRequests = false
     state.closed = true
     shutdownController.abort(new Error("Runtime server shutting down"))
+
+    if (sandboxReaper) clearInterval(sandboxReaper)
+    if (sandboxManager) await sandboxManager.releaseAll()
 
     // Drain in-flight requests
     await new Promise<void>((resolve) => {
@@ -195,10 +210,11 @@ function buildRouteTable(ctx: {
   readonly checkpointer: BaseCheckpointSaver
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
+  readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly threadsStore: ThreadsStore
 }): RouteMatcher[] {
-  const { appRoot, checkpointer, middleware, registry, signal, threadsStore } = ctx
+  const { appRoot, checkpointer, middleware, registry, sandboxManager, signal, threadsStore } = ctx
 
   // Server-scoped map: thread_id → last routeKey used for that thread.
   // Populated by runs/stream and runs/wait; read by the resume endpoint so it
@@ -277,6 +293,7 @@ function buildRouteTable(ctx: {
             checkpointer as unknown as { deleteThread(id: string): Promise<void> }
           ).deleteThread(threadId)
         }
+        if (sandboxManager) await sandboxManager.destroyThread(threadId)
         res.writeHead(204)
         res.end()
       },
@@ -295,6 +312,7 @@ function buildRouteTable(ctx: {
           registry,
           request: req,
           response: res,
+          ...(sandboxManager ? { sandboxManager } : {}),
           signal,
           threadId: params.thread_id ?? "",
           threadRouteMap,
@@ -316,6 +334,7 @@ function buildRouteTable(ctx: {
           registry,
           request: req,
           response: res,
+          ...(sandboxManager ? { sandboxManager } : {}),
           signal,
           threadId: params.thread_id ?? "",
           threadRouteMap,
@@ -365,6 +384,7 @@ function buildRouteTable(ctx: {
           registry,
           request: req,
           response: res,
+          ...(sandboxManager ? { sandboxManager } : {}),
           signal,
           threadId: params.thread_id ?? "",
           threadRouteMap,
@@ -422,6 +442,7 @@ async function handleApStreamRequest(options: {
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
+  readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
@@ -433,6 +454,7 @@ async function handleApStreamRequest(options: {
     registry,
     request,
     response,
+    sandboxManager,
     signal,
     threadId,
     threadRouteMap,
@@ -506,6 +528,7 @@ async function handleApStreamRequest(options: {
       routeFile: route.routeFile,
       routeId: route.routeId,
       routePath: route.routePath,
+      ...(sandboxManager ? { sandboxManager } : {}),
       signal,
       threadId,
     })) {
@@ -534,6 +557,7 @@ async function handleApWaitRequest(options: {
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
+  readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
@@ -545,6 +569,7 @@ async function handleApWaitRequest(options: {
     registry,
     request,
     response,
+    sandboxManager,
     signal,
     threadId,
     threadRouteMap,
@@ -607,6 +632,7 @@ async function handleApWaitRequest(options: {
     routeFile: route.routeFile,
     routeId: route.routeId,
     routePath: route.routePath,
+    ...(sandboxManager ? { sandboxManager } : {}),
     signal,
     threadId,
   })
@@ -662,6 +688,7 @@ async function handleResumeRequest(options: {
   readonly registry: RuntimeRegistry
   readonly request: IncomingMessage
   readonly response: ServerResponse
+  readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
@@ -674,6 +701,7 @@ async function handleResumeRequest(options: {
     registry,
     request,
     response,
+    sandboxManager,
     signal,
     threadId,
     threadRouteMap,
@@ -810,6 +838,7 @@ async function handleResumeRequest(options: {
       routeFile: route.routeFile,
       routeId: route.routeId,
       routePath: route.routePath,
+      ...(sandboxManager ? { sandboxManager } : {}),
       signal,
       threadId,
     })) {
