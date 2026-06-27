@@ -31,6 +31,7 @@ export default defineConfig({
       "test/runtime/run-runtime-contract.test.ts",
       "test/runtime/run-agent-protocol.test.ts",
       "test/runtime/run-tool-scope.test.ts",
+      "test/runtime/run-sandbox-wiring.test.ts",
       "test/runtime/dawn-testing/agent-behavior.test.ts",
     ],
     testTimeout: 240_000,
