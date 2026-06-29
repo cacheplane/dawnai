@@ -54,7 +54,7 @@
     "@dawn-ai/sdk": "workspace:*",
     "@dawn-ai/workspace": "workspace:*",
     "@langchain/langgraph-checkpoint": "^1.0.2",
-    "@types/node": "25.6.0",
+    "@types/node": "26.0.1",
     "zod": "^4.4.3"
   }
 }
