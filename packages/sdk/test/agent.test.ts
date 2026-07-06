@@ -97,4 +97,14 @@ describe("agent() tool scope", () => {
     const a = agent({ model: "gpt-5", systemPrompt: "x" })
     expect("tools" in a).toBe(false)
   })
+
+  test("passes tools.approve through to the descriptor", () => {
+    const a = agent({
+      model: "gpt-5-mini",
+      systemPrompt: "x",
+      tools: { approve: ["deployProd"], deny: ["runBash"] },
+    })
+    expect(a.tools?.approve).toEqual(["deployProd"])
+    expect(a.tools?.deny).toEqual(["runBash"])
+  })
 })

@@ -13,6 +13,13 @@ export interface RetryConfig {
 export interface ToolScope {
   readonly allow?: readonly string[]
   readonly deny?: readonly string[]
+  /**
+   * Tools that require human approval per call (HITL interrupt) unless
+   * pre-approved via permissions allow.tool or a persisted "always" decision.
+   * Name-level: the prompt shows the call's args, but the decision covers the
+   * tool name. See docs/permissions.
+   */
+  readonly approve?: readonly string[]
 }
 
 /**
