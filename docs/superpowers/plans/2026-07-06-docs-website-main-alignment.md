@@ -812,7 +812,8 @@ Use these batches to execute the audit findings without re-reading the whole aud
 **Verification commands:**
 - `node scripts/check-docs.mjs`
 - `pnpm --filter @dawn-ai/web build`
-- `pnpm --filter @dawn-ai/web exec next start -p 4300 > /tmp/dawn-web.log 2>&1 & WEB_PID=$!; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4300/llms.txt >/tmp/dawn-llms.txt && break; sleep 1; done; test -s /tmp/dawn-llms.txt; rg -n "/research#agent|dawn verify|toolOutput|summarization|sandbox" /tmp/dawn-llms.txt; curl -fsS http://127.0.0.1:4300/api/markdown/getting-started | rg -n "pnpm create dawn-ai-app|/research"; kill "$WEB_PID"`
+- `bash -lc 'set -euo pipefail; pnpm --filter @dawn-ai/web exec next start -p 4300 >/tmp/dawn-web.log 2>&1 & WEB_PID=$!; trap "kill $WEB_PID 2>/dev/null || true" EXIT; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4300/llms.txt >/tmp/dawn-llms.txt && break; sleep 1; done; test -s /tmp/dawn-llms.txt; rg -n "/research#agent|dawn verify|toolOutput|summarization|sandbox" /tmp/dawn-llms.txt; curl -fsS http://127.0.0.1:4300/api/markdown/getting-started | rg -n "pnpm create dawn-ai-app|/research"'`
+- `bash -lc 'set -euo pipefail; tmpdir=$(mktemp -d); trap "rm -rf \"$tmpdir\"" EXIT; corepack pnpm exec turbo run build --filter=@dawn-ai/workspace --filter=@dawn-ai/permissions --filter=@dawn-ai/sdk --filter=@dawn-ai/core --filter=@dawn-ai/langgraph --filter=@dawn-ai/cli; corepack pnpm --filter create-dawn-ai-app build; node packages/create-dawn-app/dist/bin.js "$tmpdir/dawn-audit-app" --mode internal; test -f "$tmpdir/dawn-audit-app/src/app/research/index.ts"; test -f "$tmpdir/dawn-audit-app/test/research.test.ts"; find "$tmpdir/dawn-audit-app" -maxdepth 4 -type f | sort | rg "dawn.config.ts|src/app/research|AGENTS.md"'`
 - `git diff --check`
 
 **Commit message:** `docs: fix scaffold and compact docs accuracy`
@@ -916,7 +917,7 @@ Use these batches to execute the audit findings without re-reading the whole aud
 **Verification commands:**
 - `node scripts/check-docs.mjs`
 - `pnpm --filter @dawn-ai/web build`
-- `pnpm --filter @dawn-ai/web exec next start -p 4300 > /tmp/dawn-web.log 2>&1 & WEB_PID=$!; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4300/llms.txt >/tmp/dawn-llms.txt && break; sleep 1; done; test -s /tmp/dawn-llms.txt; curl -fsS http://127.0.0.1:4300/api/markdown/api | rg -n "@dawn-ai/core|@dawn-ai/testing|@dawn-ai/evals"; kill "$WEB_PID"`
+- `bash -lc 'set -euo pipefail; pnpm --filter @dawn-ai/web exec next start -p 4300 >/tmp/dawn-web.log 2>&1 & WEB_PID=$!; trap "kill $WEB_PID 2>/dev/null || true" EXIT; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4300/llms.txt >/tmp/dawn-llms.txt && break; sleep 1; done; test -s /tmp/dawn-llms.txt; curl -fsS http://127.0.0.1:4300/api/markdown/api | rg -n "@dawn-ai/core|@dawn-ai/testing|@dawn-ai/evals"'`
 - `git diff --check`
 
 **Commit message:** `docs: expand package api references`
@@ -982,8 +983,8 @@ Use these batches to execute the audit findings without re-reading the whole aud
 - [ ] `pnpm --filter @dawn-ai/web build`
 - [ ] targeted route/helper tests when app route/helper code changes: `pnpm --filter @dawn-ai/web exec vitest run app/blueprints/routes.test.ts app/blueprints/blueprints-lib.test.ts app/components/blog/post-index.test.ts app/components/blog/rss-feed.test.ts`
 - [ ] stale-term sweep across README, apps, docs, packages, examples
-- [ ] scaffold smoke check if create-app or onboarding examples changed
-- [ ] generated `llms`/markdown route check when generated docs surfaces changed: `pnpm --filter @dawn-ai/web exec next start -p 4300 > /tmp/dawn-web.log 2>&1 & WEB_PID=$!; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4300/llms.txt >/tmp/dawn-llms.txt && break; sleep 1; done; test -s /tmp/dawn-llms.txt; curl -fsS http://127.0.0.1:4300/api/markdown/getting-started >/tmp/dawn-getting-started.md; test -s /tmp/dawn-getting-started.md; kill "$WEB_PID"`
+- [ ] scaffold smoke check if create-app or onboarding examples changed: `bash -lc 'set -euo pipefail; tmpdir=$(mktemp -d); trap "rm -rf \"$tmpdir\"" EXIT; corepack pnpm exec turbo run build --filter=@dawn-ai/workspace --filter=@dawn-ai/permissions --filter=@dawn-ai/sdk --filter=@dawn-ai/core --filter=@dawn-ai/langgraph --filter=@dawn-ai/cli; corepack pnpm --filter create-dawn-ai-app build; node packages/create-dawn-app/dist/bin.js "$tmpdir/dawn-audit-app" --mode internal; test -f "$tmpdir/dawn-audit-app/src/app/research/index.ts"; test -f "$tmpdir/dawn-audit-app/test/research.test.ts"; find "$tmpdir/dawn-audit-app" -maxdepth 4 -type f | sort | rg "dawn.config.ts|src/app/research|AGENTS.md"'`
+- [ ] generated `llms`/markdown route check when generated docs surfaces changed: `bash -lc 'set -euo pipefail; pnpm --filter @dawn-ai/web exec next start -p 4300 >/tmp/dawn-web.log 2>&1 & WEB_PID=$!; trap "kill $WEB_PID 2>/dev/null || true" EXIT; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4300/llms.txt >/tmp/dawn-llms.txt && break; sleep 1; done; test -s /tmp/dawn-llms.txt; curl -fsS http://127.0.0.1:4300/api/markdown/getting-started >/tmp/dawn-getting-started.md; test -s /tmp/dawn-getting-started.md'`
 - [ ] commit all intended changes
 - [ ] push branch
 - [ ] open PR
