@@ -117,6 +117,8 @@ pnpm exec dawn verify
 
 3. Run the scaffolded research route with JSON stdin.
 
+Live agent runs require model credentials, such as `OPENAI_API_KEY`. For an offline path with recorded fixtures, run `pnpm test` and `pnpm dawn eval` in the scaffolded app.
+
 ```bash
 echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | pnpm exec dawn run /research
 ```
