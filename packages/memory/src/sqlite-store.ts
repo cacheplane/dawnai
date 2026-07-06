@@ -99,6 +99,11 @@ function rowToRecord(row: Record<string, unknown>): MemoryRecord {
   }
 }
 
+// Codepoint compare — matches SQLite BINARY collation, no ICU dependence.
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 function tokensFor(rec: MemoryRecord): string[] {
   const values = Object.values(rec.data).filter((v) => typeof v === "string") as string[]
   return tokenize([rec.content, rec.tags.join(" "), values.join(" ")].join(" "))
@@ -190,7 +195,11 @@ export function sqliteMemoryStore(opts: {
       }
 
       // Ranked path — see docs/superpowers/specs/2026-07-05-smarter-recall-design.md.
-      const pool = opts.recall?.candidatePool ?? DEFAULT_CANDIDATE_POOL
+      const rawPool = opts.recall?.candidatePool
+      const pool =
+        typeof rawPool === "number" && Number.isFinite(rawPool) && rawPool > 0
+          ? Math.floor(rawPool)
+          : DEFAULT_CANDIDATE_POOL
       const placeholders = terms.map(() => "?").join(",")
 
       // 1) Candidate pool: rows matching ≥1 query token, newest first (pool
@@ -243,8 +252,8 @@ export function sqliteMemoryStore(opts: {
       scored.sort(
         (a, b) =>
           b.score - a.score ||
-          b.record.updatedAt.localeCompare(a.record.updatedAt) ||
-          a.record.id.localeCompare(b.record.id),
+          cmp(b.record.updatedAt, a.record.updatedAt) ||
+          cmp(a.record.id, b.record.id),
       )
       let records = scored.slice(0, limit).map((s) => s.record)
 

@@ -137,7 +137,7 @@ describe("sqliteMemoryStore", () => {
     })
     expect(out.map((r) => r.id)).toEqual(["a_new", "b_old"])
   })
-  it("ranked recall: omitted `now` falls back to newest candidate (deterministic)", async () => {
+  it("ranked recall: omitted `now` is accepted and produces a stable order", async () => {
     const s = sqliteMemoryStore({ path: ":memory:" })
     await s.put(
       rec({
@@ -212,6 +212,33 @@ describe("sqliteMemoryStore", () => {
     })
     // Pool of 1 keeps only the NEWEST token-match; "older" never gets scored.
     expect(out.map((r) => r.id)).toEqual(["newer"])
+  })
+  it("ranked recall: candidatePool of 0 falls back to the default (recall not silently dead)", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:", recall: { candidatePool: 0 } })
+    await s.put(
+      rec({
+        id: "older",
+        namespace: "ns",
+        content: "billing threshold exact",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+    )
+    await s.put(
+      rec({
+        id: "newer",
+        namespace: "ns",
+        content: "billing note",
+        updatedAt: "2026-07-04T00:00:00.000Z",
+      }),
+    )
+    const out = await s.search({
+      namespace: "ns",
+      query: "billing threshold",
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    // A 0 pool would be LIMIT 0 → always [] — the guard must default it instead,
+    // so both matches are scored and ranked (full match first).
+    expect(out.map((r) => r.id)).toEqual(["older", "newer"])
   })
   it("query-less search is unchanged: pure recency order", async () => {
     const s = sqliteMemoryStore({ path: ":memory:" })
