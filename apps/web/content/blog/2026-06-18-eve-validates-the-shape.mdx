@@ -39,7 +39,7 @@ Both frameworks believe the structure should do work. You can move a folder, del
 
 ## An honest side-by-side
 
-Where the two diverge is worth being precise about, including where eve is ahead. Here is the capability matrix as I read it today, June 2026.
+Where the two diverge is worth being precise about, including where eve is ahead. This is a dated comparison as of June 18, 2026; current Dawn docs remain the source of truth for APIs and shipped behavior.
 
 | Capability | eve | Dawn |
 | --- | --- | --- |
@@ -50,7 +50,7 @@ Where the two diverge is worth being precise about, including where eve is ahead
 | Subagents | Built in | Built in (`subagents/` or descriptor) |
 | Human-in-the-loop | Built-in approvals | Permission gate + Agent Protocol resume |
 | Durable execution | Built in | SQLite checkpointer; threads survive restart |
-| Sandboxed compute | First-class adapter (Vercel Sandbox / Docker / microsandbox / just-bash) | Path-jailed `ctx.fs` guardrail; real isolation on the roadmap |
+| Sandboxed compute | First-class adapter (Vercel Sandbox / Docker / microsandbox / just-bash) | Opt-in `sandbox` config with a provider contract and Docker reference implementation |
 | Channels | Slack, Discord, GitHub | None built in; you wire your own over the HTTP API |
 | Observability | OpenTelemetry tracing | LangSmith tracing (automatic via LangGraph) |
 | Evals | Built in | `dawn eval`, replay and live modes, co-located per route |
@@ -62,11 +62,11 @@ A table flattens nuance, so let me expand the rows that actually matter.
 
 **File conventions.** Nearly the same philosophy, with small shape differences. eve uses `agent.ts` plus `instructions.md` at the root of an agent directory. Dawn uses a route folder under `src/app/` with an `index.ts` descriptor, route-local `tools/`, `state.ts`, and markdown for memory, planning, and skills. If you are comfortable in one, you will be comfortable in the other. The one Dawn detail I would point to is that a tool's input type comes from the TypeScript function signature, not a hand-written schema, so the type is the contract the model sees.
 
-**Sandboxed compute.** This is where eve leads today, and I am not going to pretend otherwise. eve ships sandboxed compute as a first-class capability, with an adapter that runs on Vercel Sandbox when deployed and on Docker, microsandbox, or just-bash locally. Dawn does not have that yet. What Dawn gives a tool today is a permission-gated, path-jailed, timeout-capped `ctx.fs` handle, and I am careful to call that what it is: a guardrail, not a security sandbox. That is true today. Real isolation is on the Dawn roadmap as a pluggable execution backend, so you can bring Docker, a microVM, or a hosted sandbox without coupling your agent to one of them. For now, if sandboxed compute is load-bearing for you, eve ships it and Dawn does not yet.
+**Sandboxed compute.** eve ships sandboxed compute as a first-class capability, with an adapter that runs on Vercel Sandbox when deployed and on Docker, microsandbox, or just-bash locally. Dawn now ships the isolation layer too: add `sandbox` to `dawn.config.ts` and thread workspace file and shell operations route through a provider-agnostic `SandboxProvider`; `@dawn-ai/sandbox` includes a Docker reference implementation. The honest limitation is scope, not existence: Docker `network: { mode: "deny" }` is exact, while allow-mode host denylists are best-effort, and hostile-grade multi-tenant isolation should use a stronger custom provider such as a microVM or hosted sandbox. If sandboxing is load-bearing, compare the concrete provider you plan to run, not just the framework checkbox.
 
 **Channels.** eve ships Slack, Discord, and GitHub as built-in surfaces. Dawn does not. Dawn is a headless runtime that exposes the Agent Protocol over HTTP, and you bring the surface: a chat UI, a Slack bot, a cron job, whatever points at the API. That is more wiring up front and more freedom after. If you want a Slack agent this afternoon, eve is the shorter path.
 
-**Durable execution and evals.** Both ship these, and I think they are close. Dawn persists threads through a SQLite checkpointer, so a conversation survives a process restart, and `dawn eval` runs co-located evals in a deterministic replay mode that is safe to run in CI, with a live mode when you want the real model. eve ships durable execution and a built-in evals system in the same spirit. This is convergence again, not a gap.
+**Durable execution and evals.** Both ship these, and I think they are close. Dawn persists threads through a SQLite checkpointer, so a conversation survives a process restart, and `dawn eval` runs co-located evals in deterministic replay mode that is safe to run in CI, with `--live` and `--record` for local real-model measurement and fixture capture. eve ships durable execution and a built-in evals system in the same spirit. This is convergence again, not a gap.
 
 **Runtime and deploy.** eve is a Vercel project. Its best trick is that `vercel deploy` ships the agent to production unchanged, exactly as it ran on your machine. Dawn is built on the open [Agent Protocol](/docs/dev-server), the runtime contract LangGraph.js implements. `dawn dev` serves the Agent Protocol locally, and `dawn build` emits a `langgraph.json` you deploy to LangSmith.
 
@@ -79,7 +79,7 @@ I would rather give you a decision than a sales pitch. Here is how I would choos
 **Reach for eve when:**
 
 - You are already deploying on Vercel and want `vercel deploy` to carry the agent too.
-- You need sandboxed compute as a shipped feature, not a roadmap item.
+- You want eve's hosted/channel-integrated sandbox adapters out of the box.
 - You want Slack, Discord, or GitHub as a built-in channel with little wiring.
 - You value a single vendor owning the whole path from dev to production.
 
@@ -87,7 +87,7 @@ I would rather give you a decision than a sales pitch. Here is how I would choos
 
 - You are already working with LangChain and LangGraph.js, or you deploy to LangSmith.
 - You want the runtime contract to be an open protocol you can host yourself.
-- You want your agent code to outlive any one vendor's roadmap.
+- You want your agent code to outlive any one vendor's product plan.
 - You want tool input types inferred from TypeScript rather than written twice.
 
 Neither list is a knock on the other tool. They are honestly different bets, and the right answer depends on where your stack already lives.
@@ -98,7 +98,7 @@ eve's superpower is that an agent is an ordinary Vercel project. That is genuine
 
 Dawn makes a different bet. The runtime contract is the Agent Protocol, an open HTTP shape you can host yourself, point any Agent Protocol client at, and deploy to LangSmith. There is no single cloud you have to be native to.
 
-That bet is not free. It means Dawn leans on the LangGraph.js runtime and the LangSmith deployment target instead of owning the whole path end to end. From my experience, that is the right trade for teams who want their agent code to outlive any one vendor's roadmap. Your mileage may vary, and if you are already all-in on Vercel, eve removes friction Dawn cannot.
+That bet is not free. It means Dawn leans on the LangGraph.js runtime and the LangSmith deployment target instead of owning the whole path end to end. From my experience, that is the right trade for teams who want their agent code to outlive any one vendor's product plan. Your mileage may vary, and if you are already all-in on Vercel, eve removes friction Dawn cannot.
 
 ## Try the shape that fits you
 

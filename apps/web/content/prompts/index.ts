@@ -29,6 +29,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app. Dawn is a TypeScript-first me
    - \`subagents/\` — child agents exposed through \`task({ subagent, input })\`.
    - \`skills/<name>/SKILL.md\` — on-demand route-local skills.
    - \`workspace/\` — corpus, reports, scripts, and \`AGENTS.md\` workspace guidance.
+   - Optional \`sandbox\` config — routes workspace filesystem and shell calls through a provider such as the Docker reference implementation.
    - Route groups like \`(public)\` — excluded from pathname when a template uses them.
    - Dynamic segments like \`[tenant]\` — preserved in the route id; provide values in JSON input when invoking the route. The optional \`--template basic\` scaffold uses \`/hello/[tenant]\`.
    - \`.dawn/dawn.generated.d.ts\` — auto-generated ambient types from the TypeScript compiler API.
@@ -45,13 +46,14 @@ const SCAFFOLD = `Help me scaffold a new Dawn app. Dawn is a TypeScript-first me
 
 5. Show the Agent Protocol shape for the same route:
    \`\`\`
-   curl -s -X POST http://127.0.0.1:2024/threads -H 'content-type: application/json' -d '{}'
-   curl -s -X POST http://127.0.0.1:2024/threads/<thread_id>/runs/wait \\
+   THREAD_ID=$(curl -s -X POST http://127.0.0.1:2024/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
+   curl -s -X POST http://127.0.0.1:2024/threads/$THREAD_ID/runs/wait \\
      -H 'content-type: application/json' \\
      -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}'
    \`\`\`
+   For streaming, use the same body with \`POST /threads/$THREAD_ID/runs/stream\` and consume the SSE events.
 
-6. Summarize what I can build next: add a tool, add a new route, write a scenario test.
+6. Summarize what I can build next: add a tool, add a new route, write an agent harness test, add a replay/live eval, or opt into sandboxed execution.
 
 Key packages: \`@dawn-ai/sdk\` (authoring contract), \`@dawn-ai/langgraph\` (graphs/workflows), \`@dawn-ai/langchain\` (LCEL and provider-aware agent materialization), \`@dawn-ai/cli\` (CLI).
 
@@ -231,7 +233,7 @@ const DEPLOY = `Help me deploy a Dawn app. Dawn itself is not a production runti
    dawn dev --port 3001 &
    dawn test
    \`\`\`
-   This exercises the Agent Protocol \`/threads/:thread_id/runs/wait\` envelope locally. It is useful before deploy, but production still uses the \`dawn build\` artifacts.
+   This exercises the current Agent Protocol thread lifecycle locally: \`POST /threads\`, then \`POST /threads/:thread_id/runs/wait\` for blocking runs or \`POST /threads/:thread_id/runs/stream\` for SSE. It is useful before deploy, but production still uses the \`dawn build\` artifacts.
 
 3. Generate deployment artifacts:
    \`\`\`

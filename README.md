@@ -19,9 +19,11 @@ Build LangGraph agents like Next.js apps. Dawn is the TypeScript meta-framework 
 
 - **Kill the LangGraph boilerplate.** Export one `agent({ model, systemPrompt })` descriptor. Dawn discovers it, wires route-local tools into the generated graph, and emits a `langgraph.json` package ready for LangSmith.
 - **Filesystem-routed agents.** Filesystem routes under `src/app/` — colocate state schemas, tools, middleware, and tests next to the route they belong to. No more ad-hoc folders.
-- **A real local dev loop.** `dawn dev` runs your routes locally with Agent Protocol thread endpoints. Iterate in seconds, then verify the generated deployment artifact before shipping.
+- **A real local dev loop.** `dawn dev` runs your routes locally with Agent Protocol thread endpoints: create a thread, then call `/threads/:thread_id/runs/wait` or `/threads/:thread_id/runs/stream`. Iterate in seconds, then verify the generated deployment artifact before shipping.
 - **Typed end to end (TypeScript).** Route params, state, and tool I/O are generated as TypeScript types. `dawn verify` is your pre-deploy gate.
 - **Durable by default.** Every Dawn app ships a working SQLite checkpointer and thread store — no setup. Threads survive a `dawn dev` restart, and an agent that pauses for human input resumes exactly where it left off. LangGraph defines the checkpoint interface; Dawn ships the default implementation.
+- **Test and evaluate before shipping.** `@dawn-ai/testing` provides CI-safe agent harnesses and fixture replay. `dawn eval` runs co-located evals in replay mode by default, with `--live` and `--record` for local real-model checks.
+- **Sandbox when execution needs isolation.** Add `sandbox` to `dawn.config.ts` to route workspace filesystem and shell calls through a provider; `@dawn-ai/sandbox` includes a Docker reference implementation.
 - **Two ways to drive the model.** A route exports one of `agent` (LLM picks tools at runtime, can pause for a human), `workflow` (deterministic typed async function when you own the order), `graph`, or `chain`. Same routing, same types, same dev loop — you choose who's in charge.
 
 ## Without Dawn / With Dawn
@@ -117,7 +119,7 @@ pnpm exec dawn verify
 
 3. Run the scaffolded research route with JSON stdin.
 
-Live agent runs require model credentials, such as `OPENAI_API_KEY`. For an offline path with recorded fixtures, run `pnpm test` and `pnpm dawn eval` in the scaffolded app.
+Live agent runs require model credentials, such as `OPENAI_API_KEY`. For an offline path with recorded fixtures, run `pnpm test` and `pnpm exec dawn eval` in the scaffolded app.
 
 ```bash
 echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | pnpm exec dawn run /research
@@ -132,6 +134,8 @@ curl -s -X POST http://127.0.0.1:3001/threads/<thread_id>/runs/wait \
   -H 'content-type: application/json' \
   -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}' | jq .
 ```
+
+Use `/threads/<thread_id>/runs/stream` with the same body when you want SSE events instead of a blocking JSON response.
 
 The default scaffold is the deep-research app at `/research`. For the smaller greeter scaffold, run `pnpm create dawn-ai-app my-dawn-app -- --template basic`; that optional template uses `/hello/[tenant]`.
 
