@@ -4,7 +4,7 @@ Scenario tests and `@dawn-ai/testing` pin down behaviour: given this input and t
 
 Use evals when you want a quality bar that survives prompt edits, model swaps, and refactors: a number that goes up or down across a dataset, with an optional threshold that fails CI when quality regresses.
 
-Evals are deterministic and CI-safe by default. Like `@dawn-ai/testing`, each case replays pre-written **aimock** fixtures, so only the LLM is replaced while your tools, prompts, capabilities, and state run normally. A separate `dawn eval --live` mode runs the real model locally when you want to measure against actual model output.
+Evals make the agent run deterministic by default. Like `@dawn-ai/testing`, each case replays pre-written **aimock** fixtures, so the agent's model call is replaced while your tools, prompts, capabilities, and state run normally. Scorers still execute after the replayed run; deterministic scorers are CI-safe, and model-graded scorers such as `llmJudge` are CI-safe when their chat-completions requests are fixture-backed or mocked. A separate `dawn eval --live` mode runs the real model locally when you want to measure against actual model output.
 
 ## Install
 
@@ -106,7 +106,7 @@ llmJudge({
 })
 ```
 
-`custom((run, testCase) => Score | Promise<Score>)` gives you the full run result and case. `llmJudge` asks a model to grade the output against `criteria` (which interpolates `{{input}}`, `{{expected}}`, `{{output}}`) and returns `{ score, reason }`. The judge calls a real model, so it needs `OPENAI_API_KEY` — reserve it for `--live` runs.
+`custom((run, testCase) => Score | Promise<Score>)` gives you the full run result and case. `llmJudge` asks a model to grade the output against `criteria` (which interpolates `{{input}}`, `{{expected}}`, `{{output}}`) and returns `{ score, reason }`. The scorer sends a chat-completions request whenever it runs. In Dawn CLI replay, that request goes through aimock and can be satisfied by fixtures; in live, record, or unmocked programmatic runs, it needs model credentials unless you inject a mocked `fetchImpl`.
 
 ## Gating
 
@@ -136,7 +136,7 @@ If you set neither `gate` nor `threshold`, the eval is **informational**: it alw
 
 Evals use the same aimock fixture system as agent tests — see [Testing Agents](/docs/testing-agents) for how fixtures, `script()`, and replay-vs-live mode work, and why live runs must never touch CI.
 
-By default `dawn eval` runs in **replay** mode: each case replays its `fixtures` (a `script()` builder inline on the case, or a committed fixture file) through aimock, so no real model is called. This is the only mode that should run in CI.
+By default `dawn eval` runs in **replay** mode: each case replays its `fixtures` (a `script()` builder inline on the case, or a committed fixture file) through aimock, so the agent's model call is replaced. This is the mode to run in CI. If the eval includes `llmJudge`, the scorer still runs during replay, so include a fixture for its judge request or inject a mocked `fetchImpl`.
 
 ```bash
 dawn eval
@@ -152,7 +152,7 @@ Live mode ignores per-case fixtures and calls the actual provider. It requires `
 
 ### Recording fixtures with `--record`
 
-`dawn eval --record` runs the suite against the real model (requires `OPENAI_API_KEY`; never run in CI) and writes the responses as committed fixture files you can replay later. For each case that has no inline `script()` fixtures, it writes a sibling file `<evalBasename>.<caseSlug>.fixtures.json` next to the `.eval.ts`. A plain `dawn eval` then auto-loads those files, so the suite stays deterministic in CI without any code changes.
+`dawn eval --record` runs the suite against the real model (requires `OPENAI_API_KEY`; never run in CI) and writes the responses as committed fixture files you can replay later. For each case that has no inline `script()` fixtures, it writes a sibling file `<evalBasename>.<caseSlug>.fixtures.json` next to the `.eval.ts`. A plain `dawn eval` then auto-loads those files, so the agent run stays deterministic in CI without any code changes.
 
 Cases that already have inline `script()` fixtures are left alone — `--record` skips them (logging `skipped record (inline fixtures)`) and never overwrites them. Inline fixtures stay authoritative. The gate still applies during `--record`: scores are aggregated and checked against the threshold after all cases run, but fixture files are written per-case before the verdict, so a gate failure never discards captured responses.
 
@@ -162,7 +162,7 @@ Cases that already have inline `script()` fixtures are left alone — `--record`
 # Record real-model responses into sibling fixture files
 dawn eval --record
 
-# Replay those committed fixtures (no key needed, CI-safe)
+# Replay those committed fixtures, including scorer model calls
 dawn eval
 ```
 
@@ -221,7 +221,7 @@ PASS chat quality › filters open items mean=1.00 [contains(help)=1.00 toolCall
 PASS chat quality mean=1.00
 ```
 
-Commit the eval and any fixture files alongside your route. In CI, run `dawn eval` (replay only); locally, run `dawn eval --live` when you want to measure against the real model before updating fixtures.
+Commit the eval and any fixture files alongside your route. In CI, run `dawn eval` in replay mode with fixtures for every model call, including any `llmJudge` scorer calls. Locally, run `dawn eval --live` when you want to measure the agent against the real model before updating fixtures.
 
 ## Your scaffolded app already has an eval
 
@@ -231,14 +231,16 @@ Commit the eval and any fixture files alongside your route. In CI, run `dawn eva
 npm run eval
 ```
 
-This wraps `dawn eval` and runs in **offline replay mode by default** — no API key needed. The generated eval (`src/app/research/evals/research-quality.eval.ts`) has two dataset cases and four scorers:
+This wraps `dawn eval` and runs the agent cases in **replay mode** by default. The generated eval (`src/app/research/evals/research-quality.eval.ts`) has two dataset cases and four scorers:
 
 - `toolCalled("searchCorpus", { threshold: 1 })` — asserts the agent called `searchCorpus`.
 - `contains("[corpus/", { threshold: 1 })` — asserts the reply cites a corpus source.
 - A custom `cites-source` scorer: `custom((run) => run.finalMessage.includes("corpus/") ? 1 : 0, { name: "cites-source", threshold: 1 })`.
 - `llmJudge({ criteria: "The report answers the question and cites at least one source document.", model: "gpt-5-mini", threshold: 0.7 })`.
 
-The gate is `gate.all(gate.passRate(1), gate.perScorer())` — every case must pass and every scorer must meet its threshold. To run against the real model locally:
+The gate is `gate.all(gate.passRate(1), gate.perScorer())` — every case must pass and every scorer must meet its threshold. The generated fixtures include the extra judge turns used by `llmJudge`, so the default `npm run eval` stays offline and no-key.
+
+To run the agent cases against the real model locally:
 
 ```bash
 npm run eval -- --live

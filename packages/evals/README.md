@@ -60,9 +60,10 @@ import {
 - `custom(fn, options?)`
 - `llmJudge(options)`
 
-`llmJudge()` calls a real model in live or record mode. In normal replay mode,
-committed fixtures keep evals CI-safe even when the definition includes an
-`llmJudge()` scorer.
+`llmJudge()` sends a chat-completions request whenever that scorer runs. In Dawn
+CLI or harness replay, that request can be served by aimock fixtures just like an
+agent model call; in live, record, or unmocked programmatic runs, it needs model
+credentials. You can also pass `fetchImpl` for custom mocking.
 
 ### Memory scorers
 
@@ -146,13 +147,13 @@ export default defineEval({
 
 ## Testing Notes
 
-- Evals replay aimock fixtures by default and are CI-safe when fixtures are
-  committed.
+- Evals replay aimock fixtures by default, so the agent run is deterministic
+  when fixtures are committed.
 - `dawn eval --live` ignores fixtures and calls the real model locally.
 - `dawn eval --record` records live model responses into sibling fixture files.
-- `llmJudge()` calls a judge model in live or record mode, so those modes need a
-  model key. Plain `dawn eval` replays committed fixtures and remains CI-safe,
-  including scaffold evals that include an `llmJudge()` scorer.
+- Scorer code still executes in every mode. If an eval includes `llmJudge()`,
+  replay fixtures must cover that judge request too; live, record, and unmocked
+  programmatic runs need a model key unless you inject a mocked `fetchImpl`.
 
 ## License
 

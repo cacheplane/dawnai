@@ -16,8 +16,9 @@ npm run memory:list
 ```
 
 To run against a real model, set `OPENAI_API_KEY` and add `--live`
-(e.g. `npm run eval -- --live`). The offline path uses recorded fixtures, so
-tests and evals are deterministic and need no API key.
+(e.g. `npm run eval -- --live`). The offline path uses recorded fixtures for the
+agent run and the generated `llmJudge` scorer, so tests and evals are
+deterministic and need no API key.
 
 To dogfood the Docker sandbox, start Docker and run:
 
