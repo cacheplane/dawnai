@@ -104,6 +104,37 @@ describe("dockerExec", () => {
     expect(r).toEqual({ stdout: "out", stderr: "", exitCode: 0 })
   })
 
+  test("runCommand defaults cwd to ctx.workspaceRoot when args.cwd is absent", async () => {
+    let seen: readonly string[] = []
+    const exec = dockerExec(
+      fakeDocker({
+        exec: async (_c, cmd) => {
+          seen = cmd
+          return { stdout: "", stderr: "", exitCode: 0 }
+        },
+      }),
+      "c1",
+    )
+    await exec.runCommand({ command: "echo hi" }, ctx)
+    expect(seen[2]).toContain("cd '/workspace' &&")
+  })
+
+  test("runCommand uses args.cwd over ctx.workspaceRoot when provided", async () => {
+    let seen: readonly string[] = []
+    const exec = dockerExec(
+      fakeDocker({
+        exec: async (_c, cmd) => {
+          seen = cmd
+          return { stdout: "", stderr: "", exitCode: 0 }
+        },
+      }),
+      "c1",
+    )
+    await exec.runCommand({ command: "echo hi", cwd: "/workspace/sub" }, ctx)
+    expect(seen[2]).toContain("cd '/workspace/sub' &&")
+    expect(seen[2]).not.toContain("cd '/workspace' &&")
+  })
+
   test("runCommand rejects invalid env keys with a clear error", async () => {
     const exec = dockerExec(fakeDocker({}), "c1")
     await expect(

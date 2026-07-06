@@ -25,7 +25,8 @@ export function dockerExec(
             })
             .join("")
         : ""
-      const cdPrefix = args.cwd ? `cd ${shellQuote(args.cwd)} && ` : ""
+      const cwd = args.cwd ?? ctx.workspaceRoot
+      const cdPrefix = cwd ? `cd ${shellQuote(cwd)} && ` : ""
       const full = `${envPrefix}${cdPrefix}${args.command}`
       const shArgs = ["sh", "-c", full]
       const argv =

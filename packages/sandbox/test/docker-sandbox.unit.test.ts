@@ -156,6 +156,15 @@ describe("dockerSandbox hardening flags", () => {
     expect(j).toContain("--pids-limit 128")
   })
 
+  test("keeper `run -d` does NOT set -w (so Docker can't stomp the chown'd /workspace ownership)", async () => {
+    const { docker, runs } = recordingDocker()
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({ threadId: "abc", policy: { network: { mode: "deny" } }, signal: signal() })
+    const keeper = runs.find((r) => r[0] === "run" && r.includes("-d")) ?? []
+    expect(keeper).not.toContain("-w")
+    expect(acquireArgs(runs)).not.toContain(" -w ")
+  })
+
   test("custom runAsNonRoot uid/gid", async () => {
     const { docker, runs } = recordingDocker()
     const p = dockerSandbox({ image: "node:22-slim", docker })

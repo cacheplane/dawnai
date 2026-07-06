@@ -115,8 +115,6 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
         `dawn.sandbox=${sanitize(threadId)}`,
         "-v",
         `${volumeName(threadId)}:${ROOT}`,
-        "-w",
-        ROOT,
         ...net,
         ...envArgs,
         ...limits,
