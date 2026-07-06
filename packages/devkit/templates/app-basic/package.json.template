@@ -14,7 +14,7 @@
     "@dawn-ai/cli": "{{dawnCliSpecifier}}",
     "@dawn-ai/langchain": "{{dawnLangchainSpecifier}}",
     "@dawn-ai/sdk": "{{dawnSdkSpecifier}}",
-    "zod": "^3.24.0"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "{{dawnConfigTypescriptSpecifier}}",
