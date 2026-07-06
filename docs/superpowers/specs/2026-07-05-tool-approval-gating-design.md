@@ -110,6 +110,7 @@ The interrupt rides the proven path unchanged: `interrupt()` → `GraphInterrupt
 - `approve` name not present in the route's **post-scope** tool surface → **error** (same throw/report shape as unknown `allow`/`deny` names; typos fail loud).
 - `approve` naming an internally-gated workspace tool (`runBash`, `readFile`, `writeFile`, `listDir`) → **warning**: redundant — already gated pattern-aware; double prompts would result.
 - `approve` ∩ `deny` → **warning**: deny wins at scoping; the approve entry is dead.
+- `approve` naming `task` → **warning**: has no effect when subagent dispatch is wired — the langchain subagent bridge unconditionally replaces the `task` tool's `run` (agent-adapter.ts `bridgeSubagentTool` mapping) *after* the approval wrap, silently discarding the gate. Gating subagent dispatch itself is a future slice (it would require compose-aware bridging or policy plumbed into the adapter — rejected approach B territory).
 
 ## Error handling / edge cases
 
