@@ -47,6 +47,8 @@ The parent receives the child's final text as the tool result.
   A child route does not inherit the parent's capability tools. By default it sees only its own `tools/*.ts`; ambient tools like `writeFile`, `runBash`, and `task` are withheld unless granted via `tools: { allow: [...] }`. See [Scoping a route's tools](/docs/tools#scoping-a-routes-tools).
 </Callout>
 
+A subagent can also declare its own `tools: { approve: [...] }` to require human approval per call on any of its tools. The resulting `kind: "tool"` interrupt surfaces on the **parent's** stream, alongside the other `subagent.*` events, not on a separate child stream. See [Per-tool approval](/docs/permissions#per-tool-approval).
+
 ## Convention discovery
 
 Dawn discovers immediate child routes at:

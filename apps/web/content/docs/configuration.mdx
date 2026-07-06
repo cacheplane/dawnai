@@ -135,6 +135,18 @@ permissions?: {
 
 Pattern maps keyed by tool name (e.g. `bash`, `readFile`). Values are glob-style pattern strings matched against the candidate command or path. `allow` entries are seeded into `.dawn/permissions.json` at startup; `deny` entries are checked first and cannot be overridden by a human approval. Both lists are merged with any patterns the user approves interactively during a session.
 
+#### `permissions.allow.tool`
+
+Pre-approves tools gated by a route's `tools: { approve }` (see [Tools](/docs/tools#requiring-approval-per-call) and [Permissions](/docs/permissions#per-tool-approval)). Unlike `bash` and path patterns, entries under the reserved `tool` key match the tool name **exactly** — no prefix matching.
+
+```ts title="dawn.config.ts"
+export default {
+  permissions: {
+    allow: { tool: ["deployProd"] },
+  },
+}
+```
+
 ---
 
 ### `checkpointer`
