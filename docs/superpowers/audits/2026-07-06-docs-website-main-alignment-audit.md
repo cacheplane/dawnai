@@ -108,7 +108,7 @@ npm-facing metadata, and generated docs/LLM surfaces.
 - **Affected surface:** `examples/chat/README.md`
 - **Problem:** The example README tells readers that HITL permissions, tool-output offload, and context summarization are deferred, even though main now ships all three. This blocks adoption by steering example users away from supported patterns.
 - **Recommended fix:** Replace the deferred-capability language with current links or short examples for permissions/resume, offload configuration, and opt-in summarization; call out any limitations as scoped limitations rather than roadmap gaps.
-- **Subagent batch:** Batch 2: examples and generated-surface correctness
+- **Subagent batch:** Batch 2: examples correctness
 - **Verification:** `rg -n "deferred|not yet|permission|offload|summar" examples/chat/README.md`
 
 ### P2: Missing depth or reference coverage

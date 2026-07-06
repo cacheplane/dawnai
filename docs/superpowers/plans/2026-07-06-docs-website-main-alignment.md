@@ -508,13 +508,13 @@ Expected: P1 findings explain how stale guidance blocks correct usage.
 
 - [ ] **Step 4: Write P2 findings**
 
-Use the same template for missing depth/reference coverage. Assign these primarily to Batch 3 or Batch 5.
+Use the same template for missing depth/reference coverage. Assign these primarily to Batch 3.
 
 Expected: P2 findings identify the missing page, section, example, README coverage, or API reference.
 
 - [ ] **Step 5: Write P3 findings**
 
-Use the same template for launch narrative, IA, search, generated-surface, or polish opportunities. Assign these primarily to Batch 4 or Batch 6.
+Use the same template for launch narrative, IA, search, generated-surface, or polish opportunities. Assign these primarily to Batch 4.
 
 Expected: P3 findings are concrete and tied to specific surfaces, not broad copy opinions.
 
@@ -662,10 +662,12 @@ Expected: commit succeeds.
 Run:
 
 ```bash
-rg -n "T[B]D|TO[D]O|\\[finding|P[0-3]-00X" docs/superpowers/audits/2026-07-06-docs-website-main-alignment-audit.md docs/superpowers/plans/2026-07-06-docs-website-main-alignment.md
+rg -n "T[B]D|TO[D]O" docs/superpowers/audits/2026-07-06-docs-website-main-alignment-audit.md docs/superpowers/plans/2026-07-06-docs-website-main-alignment.md
+rg -n "\\[findin[g]" docs/superpowers/audits/2026-07-06-docs-website-main-alignment-audit.md docs/superpowers/plans/2026-07-06-docs-website-main-alignment.md
+rg -n "P[0-3]-00[X]" docs/superpowers/audits/2026-07-06-docs-website-main-alignment-audit.md docs/superpowers/plans/2026-07-06-docs-website-main-alignment.md
 ```
 
-Expected: no unresolved-marker hits remain after Task 6. If hits remain, replace them with concrete content or remove them.
+Expected: each command prints no unresolved-marker hits after Task 6. If hits remain, replace them with concrete content or remove them.
 
 - [ ] **Step 2: Check finding coverage**
 
@@ -810,6 +812,7 @@ Use these batches to execute the audit findings without re-reading the whole aud
 **Verification commands:**
 - `node scripts/check-docs.mjs`
 - `pnpm --filter @dawn-ai/web build`
+- `pnpm --filter @dawn-ai/web exec next start -p 4300 > /tmp/dawn-web.log 2>&1 & WEB_PID=$!; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4300/llms.txt >/tmp/dawn-llms.txt && break; sleep 1; done; test -s /tmp/dawn-llms.txt; rg -n "/research#agent|dawn verify|toolOutput|summarization|sandbox" /tmp/dawn-llms.txt; curl -fsS http://127.0.0.1:4300/api/markdown/getting-started | rg -n "pnpm create dawn-ai-app|/research"; kill "$WEB_PID"`
 - `git diff --check`
 
 **Commit message:** `docs: fix scaffold and compact docs accuracy`
@@ -913,6 +916,7 @@ Use these batches to execute the audit findings without re-reading the whole aud
 **Verification commands:**
 - `node scripts/check-docs.mjs`
 - `pnpm --filter @dawn-ai/web build`
+- `pnpm --filter @dawn-ai/web exec next start -p 4300 > /tmp/dawn-web.log 2>&1 & WEB_PID=$!; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4300/llms.txt >/tmp/dawn-llms.txt && break; sleep 1; done; test -s /tmp/dawn-llms.txt; curl -fsS http://127.0.0.1:4300/api/markdown/api | rg -n "@dawn-ai/core|@dawn-ai/testing|@dawn-ai/evals"; kill "$WEB_PID"`
 - `git diff --check`
 
 **Commit message:** `docs: expand package api references`
@@ -976,10 +980,10 @@ Use these batches to execute the audit findings without re-reading the whole aud
 
 - [ ] `node scripts/check-docs.mjs`
 - [ ] `pnpm --filter @dawn-ai/web build`
-- [ ] targeted docs route/helper tests when app code changes
+- [ ] targeted route/helper tests when app route/helper code changes: `pnpm --filter @dawn-ai/web exec vitest run app/blueprints/routes.test.ts app/blueprints/blueprints-lib.test.ts app/components/blog/post-index.test.ts app/components/blog/rss-feed.test.ts`
 - [ ] stale-term sweep across README, apps, docs, packages, examples
 - [ ] scaffold smoke check if create-app or onboarding examples changed
-- [ ] generated `llms`/markdown route check when generated docs surfaces changed
+- [ ] generated `llms`/markdown route check when generated docs surfaces changed: `pnpm --filter @dawn-ai/web exec next start -p 4300 > /tmp/dawn-web.log 2>&1 & WEB_PID=$!; for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4300/llms.txt >/tmp/dawn-llms.txt && break; sleep 1; done; test -s /tmp/dawn-llms.txt; curl -fsS http://127.0.0.1:4300/api/markdown/getting-started >/tmp/dawn-getting-started.md; test -s /tmp/dawn-getting-started.md; kill "$WEB_PID"`
 - [ ] commit all intended changes
 - [ ] push branch
 - [ ] open PR
