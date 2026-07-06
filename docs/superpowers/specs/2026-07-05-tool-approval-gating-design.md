@@ -97,7 +97,7 @@ export function wrapToolWithApproval(
 ): DawnToolDefinition
 ```
 
-The wrapped `run` gates first; a blocked call returns the denial reason **as the tool result** (the model sees it and can adapt — same contract as the bash gate today). The wrapper preserves `name`, `description`, `schema`, and the original `run`'s context.
+The wrapped `run` gates first; a blocked call returns the denial reason **as the tool result** (the model sees it and can adapt — deliberately return-not-throw, unlike the workspace gates, which throw from inside their own `run`: the denial flows as a normal tool result through `on_tool_end`). The wrapper preserves `name`, `description`, `schema`, and the original `run`'s context.
 
 ### 4. Wiring (`@dawn-ai/cli`, `packages/cli/src/lib/runtime/execute-route.ts`)
 
@@ -113,7 +113,7 @@ The interrupt rides the proven path unchanged: `interrupt()` → `GraphInterrupt
 
 ## Error handling / edge cases
 
-- **Denied call** → tool returns the denial reason string as its result; the run continues (no crash), matching the bash-gate contract.
+- **Denied call** → tool returns the denial reason string as its result; the run continues (no crash). Deliberately return-not-throw, unlike the workspace gates (which throw from inside their own `run`): the denial flows as a normal tool result through `on_tool_end`.
 - **`approve` on a tool the route doesn't have** → build-time error (above) AND a runtime throw: `resolveToolScope` validates `approve` names alongside `allow`/`deny`, so typos fail loud even when `dawn check` was skipped.
 - **Resume across restart** → state-based resume (Phase-3 design) already handles it; the `tool` kind adds no new state.
 - **Non-serializable args** → `argsPreview` falls back to `String(input)` inside a try/catch; preview is best-effort display only.

@@ -137,10 +137,15 @@ function buildArgsPreview(input: unknown): string {
 
 /**
  * Wrap a tool so each call passes gateToolOp first (tools.approve). A blocked
- * call returns the denial reason AS THE TOOL RESULT — the model sees it and
- * can adapt, matching the bash-gate contract. Generic over the tool shape so
+ * call returns the denial reason AS THE TOOL RESULT — deliberately a different
+ * contract from the workspace gates (which throw from inside their own run):
+ * a returned denial flows through the normal on_tool_end path, so stream
+ * consumers and streamTransformers see a regular tool result and the model can
+ * adapt, without touching error-retry handling. Generic over the tool shape so
  * DiscoveredToolDefinition (cli) and DawnToolDefinition (core) both survive
  * wrapping with their extra fields (filePath, schema, scope, …) intact.
+ * The generic constraint means run's return type must accept a string (both
+ * planned call sites declare `Promise<unknown> | unknown`).
  */
 export function wrapToolWithApproval<
   C,
@@ -156,7 +161,7 @@ export function wrapToolWithApproval<
       if (!gate.allowed) return gate.reason
       return tool.run(input, context)
     },
-  } as T
+  }
 }
 
 interface InterruptArgs {
