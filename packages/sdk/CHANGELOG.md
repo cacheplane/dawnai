@@ -1,5 +1,11 @@
 # @dawn-ai/sdk
 
+## 0.8.6
+
+### Patch Changes
+
+- 1d51b75: Per-tool approval gating: `agent({ tools: { approve: ["deployProd"] } })` makes any named tool require a HITL permission prompt per call (`kind: "tool"` interrupt). Decisions persist name-level under the reserved `tool` key in `.dawn/permissions.json` (exact-name matching); pre-approve via `permissions.allow.tool`. `dawn check` validates `approve` names and warns on overlap with the internally-gated workspace tools, `deny`, and the unsupported `task` case.
+
 ## 0.8.5
 
 ## 0.8.4

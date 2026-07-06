@@ -1,5 +1,11 @@
 # @dawn-ai/memory
 
+## 0.8.6
+
+### Patch Changes
+
+- @dawn-ai/sqlite-storage@0.8.6
+
 ## 0.8.5
 
 ### Patch Changes
