@@ -60,8 +60,9 @@ import {
 - `custom(fn, options?)`
 - `llmJudge(options)`
 
-`llmJudge()` calls a real model and should be reserved for local live runs or
-explicitly provisioned evaluation jobs.
+`llmJudge()` calls a real model in live or record mode. In normal replay mode,
+committed fixtures keep evals CI-safe even when the definition includes an
+`llmJudge()` scorer.
 
 ### Memory scorers
 
@@ -149,8 +150,9 @@ export default defineEval({
   committed.
 - `dawn eval --live` ignores fixtures and calls the real model locally.
 - `dawn eval --record` records live model responses into sibling fixture files.
-- `llmJudge()` requires a live model key; keep it out of offline CI unless your
-  CI job is intentionally provisioned for model calls.
+- `llmJudge()` calls a judge model in live or record mode, so those modes need a
+  model key. Plain `dawn eval` replays committed fixtures and remains CI-safe,
+  including scaffold evals that include an `llmJudge()` scorer.
 
 ## License
 

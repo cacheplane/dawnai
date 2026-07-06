@@ -37,11 +37,12 @@ export interface AgentConfig {
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
   readonly subagents?: readonly DawnAgent[]
+  readonly tools?: ToolScope
   readonly systemPrompt: string
 }
 ```
 
-Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `provider` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `subagents` lists child agent descriptors exposed through Dawn's subagent capability. `systemPrompt` is sent as the system message on every invocation.
+Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `provider` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `subagents` lists child agent descriptors exposed through Dawn's subagent capability. `tools` scopes route-level tool exposure and approval policy with `allow`, `deny`, or `approve`. `systemPrompt` is sent as the system message on every invocation.
 
 The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Raw `graph` and `chain` routes can still instantiate any provider directly.
 
@@ -82,11 +83,12 @@ export interface DawnAgent {
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
   readonly subagents?: readonly DawnAgent[]
+  readonly tools?: ToolScope
   readonly systemPrompt: string
 }
 ```
 
-Opaque branded type returned by `agent()`. Carry it as a route export; do not construct it manually. It preserves the public agent config fields plus Dawn's internal brand. Use `isDawnAgent()` to check values at runtime.
+Opaque branded type returned by `agent()`. Carry it as a route export; do not construct it manually. It preserves the public agent config fields plus Dawn's internal brand, including route-level tool policy. Use `isDawnAgent()` to check values at runtime.
 
 See [Agents](/docs/agents) and [Subagents](/docs/subagents).
 
@@ -343,10 +345,11 @@ Types available inside a running route handler. See [Tools](/docs/tools).
 export interface RuntimeContext<TTools extends ToolRegistry = ToolRegistry> {
   readonly signal: AbortSignal
   readonly tools: TTools
+  readonly fs: WorkspaceFs
 }
 ```
 
-Injected into every tool invocation. `signal` is aborted when the client disconnects. `tools` is the registry of all tools bound to the current route, typed as `TTools`.
+Injected into every tool invocation. `signal` is aborted when the client disconnects. `tools` is the registry of all tools bound to the current route, typed as `TTools`. `fs` is the workspace filesystem handle, available when the workspace capability is active.
 
 See [Tools](/docs/tools).
 
