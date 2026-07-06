@@ -112,9 +112,7 @@ export default {
 
 The `plan.md` file opts the route into Dawn's planning capability — its checklist items seed each thread's todos. `workspace/AGENTS.md` is injected into the agent's system prompt every turn as durable memory. Skills under `skills/` are loaded on demand by name.
 
-## 3. Verify and test (offline, no API key)
-
-All three commands run without any API key — fixtures replace live model calls.
+## 3. Verify and test
 
 ```bash
 npm run check
@@ -132,13 +130,13 @@ Dawn app is valid: 2 routes discovered.
 npm test
 ```
 
-Runs the harness tests in `test/research.test.ts`. The test script drives the agent using recorded fixture responses, covering corpus search, subagent dispatch, tool-output offloading, and the human-in-the-loop permission gate.
+Runs the harness tests in `test/research.test.ts`. The test script drives the agent using recorded fixture responses, covering corpus search, subagent dispatch, tool-output offloading, and the human-in-the-loop permission gate. No API key is needed.
 
 ```bash
 npm run eval
 ```
 
-Runs the quality eval in `src/app/research/evals/research-quality.eval.ts`. Two dataset cases are scored across four scorers (`toolCalled`, `contains`, `cites-source`, `llmJudge`). Both must pass for the gate to clear.
+Runs the quality eval in `src/app/research/evals/research-quality.eval.ts`. The agent run replays fixtures, then two dataset cases are scored across four scorers (`toolCalled`, `contains`, `cites-source`, `llmJudge`). The generated fixtures also cover the judge requests from `llmJudge`, so the scaffolded eval runs without an API key.
 
 ## 4. Run it live
 
@@ -149,16 +147,15 @@ export OPENAI_API_KEY=sk-...
 npx dawn dev --port 2024
 ```
 
-The dev server exposes the Agent Protocol. Create a thread, then run it:
+The dev server exposes the Agent Protocol. In another terminal, create a thread,
+capture its id, then run the research agent on that thread:
 
 ```bash
-# 1. Create a thread
-curl -s -X POST http://127.0.0.1:2024/threads \
+THREAD_ID=$(curl -s -X POST http://127.0.0.1:2024/threads \
   -H "Content-Type: application/json" \
-  -d '{}' | jq .
+  -d '{}' | jq -r .thread_id)
 
-# 2. Run the agent on that thread (replace <thread_id> with the id from step 1)
-curl -s -X POST http://127.0.0.1:2024/threads/<thread_id>/runs/wait \
+curl -s -X POST http://127.0.0.1:2024/threads/$THREAD_ID/runs/wait \
   -H "Content-Type: application/json" \
   -d '{
     "route": "/research#agent",

@@ -9,6 +9,11 @@ author: brian
 draft: true
 ---
 
+**Update note (July 2026):** This June 2, 2026 post describes the 0.4 release as
+it was written. For current Agent Protocol guidance, use the thread-scoped local
+dev-server routes: `POST /threads`, then `POST /threads/:thread_id/runs/wait` or
+`POST /threads/:thread_id/runs/stream`.
+
 Sub-agents are becoming one of the more important boundaries in agentic software.
 
 Not because chaining LLM calls is new.
@@ -23,7 +28,7 @@ That is what Dawn 0.4 ships.
 - deep agents preview: composable sub-agents declared with the same `agent({...})` ergonomics
 - a sub-agent is a folder under the parent, with its own tools, state, and middleware
 - token-level streaming now flows through sub-agent boundaries, tagged by route id
-- `/runs/stream` is byte-identical to the langsmith production protocol
+- the local Agent Protocol stream is served at `/threads/:thread_id/runs/stream`
 - middleware api is stable; the experimental flag is gone
 - backward-compatible upgrade from 0.3.x
 
@@ -84,7 +89,7 @@ Three concrete changes.
 
 **Token-level streaming through sub-agent boundaries.** In 0.3, a delegated call buffered until the sub-agent finished. In 0.4, the parent's stream interleaves the sub-agent's tokens, tagged with the sub-agent's route id.
 
-**`/runs/stream` matches LangSmith verbatim.** The event names, ordering, and payload shapes are byte-identical to the production protocol. Dev-server output and deployed output line up in any tooling that consumes both.
+**Agent Protocol streaming is thread-scoped.** The dev server serves streaming runs at `POST /threads/:thread_id/runs/stream`, alongside blocking runs at `POST /threads/:thread_id/runs/wait`. The stream uses Dawn's local Agent Protocol event contract so dev-server tooling and deployed-runtime tooling can share the same route id and input shape.
 
 **`dawn dev` shows streamed events in the terminal.** The local dev server prints tool calls, state mutations, and token deltas as they happen. No more attaching a curl to watch progress.
 

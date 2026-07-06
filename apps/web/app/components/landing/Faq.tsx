@@ -8,9 +8,10 @@ const ITEMS = [
     answer: (
       <p>
         Dawn is pre-1.0. The framework's surface API is stabilizing, and the types and dev-loop
-        layers are in active use on internal projects. We recommend running an evaluation against a
-        representative graph before adopting Dawn for production work. The runtime — LangGraph.js —
-        is production-grade today, and Dawn does not change its execution model.
+        layers are in active use on internal projects. Run replay evals and harness tests against a
+        representative route before adopting Dawn for production work, and use live evals locally
+        when you need real-model signal. The runtime — LangGraph.js — is production-grade today, and
+        Dawn does not change its execution model.
       </p>
     ),
   },
@@ -27,13 +28,15 @@ const ITEMS = [
     ),
   },
   {
-    id: "deep-agents-roadmap",
-    question: "What about Deep Agents and other planned features?",
+    id: "shipped-capabilities",
+    question: "What agent capabilities ship today?",
     answer: (
       <p>
-        Routing, tools, types, the dev loop, planning, skills, memory, and subagents are shipped.
-        Durable evaluation harness work is still on the roadmap. Expect concrete proposals before
-        implementation; everything ships incrementally on main with semver-honest releases.
+        Routing, tools, generated types, the dev loop, planning, skills, memory, subagents, opt-in
+        sandboxing, replay/live evals, and testing helpers are shipped. The current testing harness
+        runs agent routes in-process; the standalone Agent Protocol injector and subprocess helpers
+        are available for custom orchestration, but those are not harness modes. Everything ships
+        incrementally on main with semver-honest releases.
       </p>
     ),
   },
