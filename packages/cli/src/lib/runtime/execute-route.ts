@@ -154,6 +154,12 @@ export async function executeResolvedRoute(options: {
   readonly routeId: string
   readonly routePath: string
   readonly sandboxManager?: SandboxManager
+  /**
+   * Sandbox scoping key, decoupled from the checkpoint `threadId`. Subagent
+   * dispatch sets this to the PARENT thread id so the child resolves the same
+   * SandboxHandle without inheriting the parent's LangGraph checkpoint thread.
+   */
+  readonly sandboxThreadId?: string
   readonly signal?: AbortSignal
   readonly threadId?: string
 }): Promise<RuntimeExecutionResult> {
@@ -219,6 +225,8 @@ export async function invokeResolvedRoute(options: {
   readonly routeId: string
   readonly routePath: string
   readonly sandboxManager?: SandboxManager
+  /** Sandbox scoping key override — see `executeResolvedRoute`. */
+  readonly sandboxThreadId?: string
   readonly signal?: AbortSignal
   readonly threadId?: string
 }): Promise<RuntimeExecutionResult> {
@@ -243,6 +251,8 @@ export async function* streamResolvedRoute(options: {
   readonly routeId: string
   readonly routePath: string
   readonly sandboxManager?: SandboxManager
+  /** Sandbox scoping key override — see `executeResolvedRoute`. */
+  readonly sandboxThreadId?: string
   readonly signal?: AbortSignal
   /**
    * Stable per-conversation identifier forwarded to the agent-adapter as
@@ -391,6 +401,12 @@ async function prepareRouteExecution(options: {
   readonly signal?: AbortSignal
   readonly threadId?: string
   readonly sandboxManager?: SandboxManager
+  /**
+   * Sandbox scoping key, decoupled from `threadId` (the checkpoint identity).
+   * When absent, the sandbox handle falls back to `threadId` — the top-route
+   * case, where the two identities coincide.
+   */
+  readonly sandboxThreadId?: string
 }): Promise<PreparedRoute | PreparedRouteError> {
   const { isSubagent = false } = options
   const routeDir = resolve(options.routeFile, "..")
@@ -471,9 +487,10 @@ async function prepareRouteExecution(options: {
   // into the isolated env with no capability-logic change.
   let sandboxBackends: { filesystem: FilesystemBackend; exec: ExecBackend } | undefined
   let sandboxWorkspaceRoot: string | undefined
-  if (options.sandboxManager && options.threadId) {
+  const sandboxKey = options.sandboxThreadId ?? options.threadId
+  if (options.sandboxManager && sandboxKey) {
     const handle = await options.sandboxManager.getForThread(
-      options.threadId,
+      sandboxKey,
       options.signal ?? new AbortController().signal,
     )
     sandboxBackends = { filesystem: handle.filesystem, exec: handle.exec }
@@ -686,7 +703,7 @@ async function prepareRouteExecution(options: {
         descriptor,
         descriptorRouteMap,
         ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
-        ...(options.threadId ? { threadId: options.threadId } : {}),
+        ...(sandboxKey ? { sandboxThreadId: sandboxKey } : {}),
       })
     }
   }
@@ -730,6 +747,8 @@ async function executeRouteAtResolvedPath(options: {
   readonly routeId: string
   readonly routePath: string
   readonly sandboxManager?: SandboxManager
+  /** Sandbox scoping key override — see `executeResolvedRoute`. */
+  readonly sandboxThreadId?: string
   readonly signal?: AbortSignal
   readonly startedAt: number
   readonly threadId?: string
@@ -1049,10 +1068,17 @@ function buildSubagentResolver(args: {
   readonly descriptor: DawnAgent | undefined
   readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
   readonly sandboxManager?: SandboxManager
-  readonly threadId?: string
+  /**
+   * The dispatching thread's sandbox key (top routes: its checkpoint
+   * threadId; nested subagents: the inherited key). Forwarded to children as
+   * `sandboxThreadId` ONLY — children never receive a checkpoint `threadId`,
+   * so each child turn runs as an independent uncheckpointed invocation while
+   * still resolving the same per-thread SandboxHandle as its parent.
+   */
+  readonly sandboxThreadId?: string
 }): SubagentResolver {
   const { appRoot, routeDir, routeManifest, descriptor, descriptorRouteMap } = args
-  const { sandboxManager, threadId } = args
+  const { sandboxManager, sandboxThreadId } = args
 
   const findConventionRoute = (leaf: string): RouteDefinition | undefined => {
     const conventionDir = `${routeDir}/subagents/${leaf}`
@@ -1093,7 +1119,12 @@ function buildSubagentResolver(args: {
           routeId: route.id,
           routePath: route.pathname,
           ...(sandboxManager ? { sandboxManager } : {}),
-          ...(threadId ? { threadId } : {}),
+          // Deliberately NOT `threadId`: the child must run as an independent
+          // uncheckpointed invocation (forwarding the parent's threadId would
+          // share its in-flight LangGraph checkpoint and short-circuit the
+          // child turn). `sandboxThreadId` scopes only the sandbox handle, so
+          // the child still shares the parent thread's sandbox.
+          ...(sandboxThreadId ? { sandboxThreadId } : {}),
         })
         if (result.status === "failed") {
           // Surface the failure to the dispatcher in a shape that
@@ -1115,7 +1146,8 @@ function buildSubagentResolver(args: {
           routeId: route.id,
           routePath: route.pathname,
           ...(sandboxManager ? { sandboxManager } : {}),
-          ...(threadId ? { threadId } : {}),
+          // Same as invoke() above: sandbox key only, never the checkpoint id.
+          ...(sandboxThreadId ? { sandboxThreadId } : {}),
         })) {
           yield chunk
         }
