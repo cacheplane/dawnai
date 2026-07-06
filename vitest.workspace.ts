@@ -17,6 +17,7 @@ export default defineConfig({
       "./packages/testing/vitest.config.ts",
       "./packages/vite-plugin/vitest.config.ts",
       "./examples/chat/server/vitest.config.ts",
+      "./examples/research/server/vitest.config.ts",
     ],
   },
 })
