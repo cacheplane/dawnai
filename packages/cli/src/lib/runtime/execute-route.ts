@@ -24,6 +24,7 @@ import {
   resolveStateFields,
   resolveToolScope,
   toolOrigin,
+  wrapToolWithApproval,
 } from "@dawn-ai/core"
 import {
   Command,
@@ -638,6 +639,23 @@ async function prepareRouteExecution(options: {
       return { message: formatErrorMessage(error), ok: false }
     }
     tools = tools.filter((t) => keptToolNames.has(t.name))
+
+    // Per-tool approval gating (tools.approve): wrap surviving tools so each
+    // call consults the permissions store; on "unknown" in interactive mode
+    // the wrapper interrupts for a human decision (kind: "tool"). Bash/path
+    // gates inside the workspace tools are separate (pattern-aware) and
+    // unaffected; `dawn check` warns on redundant overlap.
+    const approveSet = new Set(descriptor?.tools?.approve ?? [])
+    if (approveSet.size > 0) {
+      tools = tools.map((t) =>
+        approveSet.has(t.name)
+          ? wrapToolWithApproval<
+              Parameters<DiscoveredToolDefinition["run"]>[1],
+              DiscoveredToolDefinition
+            >(t, permissionsStore)
+          : t,
+      )
+    }
     stateFields = stateFields ? [...stateFields, ...capStateFields] : capStateFields
     promptFragments = capPromptFragments
     streamTransformers = capStreamTransformers
