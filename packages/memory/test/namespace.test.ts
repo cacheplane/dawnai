@@ -17,7 +17,7 @@ describe("serializeNamespace", () => {
   })
 
   describe("delimiter escaping in values", () => {
-    it("leaves ordinary values byte-identical (backward compatibility)", () => {
+    it("leaves ordinary values unchanged (backward compatibility)", () => {
       // The common case — no reserved chars — must not change, or existing
       // stored rows and persisted permission patterns would stop matching.
       expect(serializeNamespace({ workspace: "acme", route: "/support", user: "u-1" })).toBe(
