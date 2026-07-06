@@ -160,7 +160,7 @@ export async function createRuntimeRequestListener(
 export async function startRuntimeServer(
   options: StartRuntimeServerOptions,
 ): Promise<RuntimeServer> {
-  const { listener, state, shutdownController } = await createRuntimeRequestListener(options)
+  const { close: listenerClose, listener, state } = await createRuntimeRequestListener(options)
 
   const server = createServer(listener)
 
@@ -177,28 +177,15 @@ export async function startRuntimeServer(
       if (state.closed) {
         return
       }
-      state.acceptingRequests = false
-      state.closed = true
-      shutdownController.abort(new Error("Runtime server shutting down"))
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error)
-            return
-          }
-          if (state.activeRequests === 0) {
-            resolve()
-            return
-          }
-          const interval = setInterval(() => {
-            if (state.activeRequests > 0) {
-              return
-            }
-            clearInterval(interval)
-            resolve()
-          }, 10)
-        })
+      // Stop accepting new TCP connections; existing sockets finish below.
+      const serverClosed = new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()))
       })
+      // Abort + drain in-flight requests + clear the sandbox reaper + release
+      // sandboxes — the single shutdown path shared with the in-process
+      // listener. This is the only place that flips state.closed.
+      await listenerClose()
+      await serverClosed
     },
     url: `http://127.0.0.1:${(address as AddressInfo).port}`,
   }
