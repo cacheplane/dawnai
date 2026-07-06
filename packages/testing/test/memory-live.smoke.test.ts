@@ -272,11 +272,16 @@ it.skipIf(!live)(
     // Seed the backdated relevant fact (remember stamps request time; age must be seeded).
     const store = sqliteMemoryStore({ path: dbPath(probeRoot) })
     const sixWeeksAgo = new Date(Date.now() - 42 * 24 * 60 * 60 * 1000).toISOString()
+    const seedContent =
+      "acme billing escalation threshold policy: escalate any single acme invoice or billing dispute above the amount of 500 dollars"
+    // Guard: the value must sit past the 80-char index-hint slice, else the model
+    // can answer from the injected hint without calling recall (observed live).
+    expect(seedContent.slice(0, 80)).not.toContain("500")
     await store.put({
       id: "memory_live_ranktarget",
       kind: "semantic",
       namespace: "route=/memory-chat",
-      content: "acme billing escalation threshold is 500 dollars",
+      content: seedContent,
       data: { subject: "acme", predicate: "billing-escalation-threshold", value: "500 dollars" },
       source: { type: "tool", id: "remember" },
       confidence: 1,
