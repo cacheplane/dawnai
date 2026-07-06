@@ -58,6 +58,7 @@ const defaultDeps: Deps = {
 export async function collectToolScopeIssues(
   manifest: RouteManifest,
   deps: Deps = defaultDeps,
+  opts?: { readonly memoryWrites?: "off" | "candidate" | "auto" | "ask" },
 ): Promise<ToolScopeIssues> {
   const errors: string[] = []
   const warnings: string[] = []
@@ -100,6 +101,12 @@ export async function collectToolScopeIssues(
       if (deny.has(name)) {
         warnings.push(
           `⚠ ${route.pathname}: approve lists "${name}" but deny revokes it — deny wins; the approve entry is dead.`,
+        )
+      }
+      if (opts?.memoryWrites === "ask" && name === "remember") {
+        warnings.push(
+          `⚠ ${route.pathname}: approve lists "remember" but memory writes mode is "ask" — ` +
+            `the supersede-level memory gate already prompts; combining both double-prompts.`,
         )
       }
       // Skip names another warning already fully covers — advising "add it to
