@@ -65,6 +65,7 @@ import {
   type RuntimeExecutionResult,
 } from "./result.js"
 import { deriveRouteIdentity } from "./route-identity.js"
+import type { SandboxManager } from "./sandbox-manager.js"
 import { discoverStateDefinition } from "./state-discovery.js"
 import type { StreamChunk } from "./stream-types.js"
 import {
@@ -152,7 +153,15 @@ export async function executeResolvedRoute(options: {
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
+  readonly sandboxManager?: SandboxManager
+  /**
+   * Sandbox scoping key, decoupled from the checkpoint `threadId`. Subagent
+   * dispatch sets this to the PARENT thread id so the child resolves the same
+   * SandboxHandle without inheriting the parent's LangGraph checkpoint thread.
+   */
+  readonly sandboxThreadId?: string
   readonly signal?: AbortSignal
+  readonly threadId?: string
 }): Promise<RuntimeExecutionResult> {
   return await executeRouteAtResolvedPath({
     ...options,
@@ -215,6 +224,9 @@ export async function invokeResolvedRoute(options: {
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
+  readonly sandboxManager?: SandboxManager
+  /** Sandbox scoping key override — see `executeResolvedRoute`. */
+  readonly sandboxThreadId?: string
   readonly signal?: AbortSignal
   readonly threadId?: string
 }): Promise<RuntimeExecutionResult> {
@@ -238,6 +250,9 @@ export async function* streamResolvedRoute(options: {
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
+  readonly sandboxManager?: SandboxManager
+  /** Sandbox scoping key override — see `executeResolvedRoute`. */
+  readonly sandboxThreadId?: string
   readonly signal?: AbortSignal
   /**
    * Stable per-conversation identifier forwarded to the agent-adapter as
@@ -268,6 +283,7 @@ export async function* streamResolvedRoute(options: {
     offload,
     summarization,
     workspaceFs,
+    sandboxed,
   } = prepared
 
   if (normalized.kind !== "agent") {
@@ -306,6 +322,7 @@ export async function* streamResolvedRoute(options: {
     ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
     ...(subagentResolver ? { subagentResolver } : {}),
     ...(options.threadId ? { threadId: options.threadId } : {}),
+    ...(sandboxed ? { sandboxed: true } : {}),
   })) {
     switch (chunk.type) {
       case "token":
@@ -361,6 +378,13 @@ interface PreparedRoute {
   >
   readonly subagentResolver?: SubagentResolver
   readonly workspaceFs: WorkspaceFs
+  /**
+   * True when a per-thread sandbox is active for this turn (sandboxManager +
+   * threadId resolved a handle). The agent-adapter uses this to bypass its
+   * materialized-agent cache so tools bound to this thread's sandbox backends
+   * are never reused for another thread.
+   */
+  readonly sandboxed?: boolean
 }
 
 interface PreparedRouteError {
@@ -375,6 +399,14 @@ async function prepareRouteExecution(options: {
   readonly routeId: string
   readonly routePath: string
   readonly signal?: AbortSignal
+  readonly threadId?: string
+  readonly sandboxManager?: SandboxManager
+  /**
+   * Sandbox scoping key, decoupled from `threadId` (the checkpoint identity).
+   * When absent, the sandbox handle falls back to `threadId` — the top-route
+   * case, where the two identities coincide.
+   */
+  readonly sandboxThreadId?: string
 }): Promise<PreparedRoute | PreparedRouteError> {
   const { isSubagent = false } = options
   const routeDir = resolve(options.routeFile, "..")
@@ -449,9 +481,25 @@ async function prepareRouteExecution(options: {
     // No dawn.config.ts (or unreadable). Fall back to defaults for all fields.
   }
 
+  // When a SandboxManager is configured and we have a stable thread id, resolve
+  // the thread's sandbox handle and route the workspace filesystem/exec (and the
+  // workspace root) into it. All of readFile/writeFile/listDir/runBash redirect
+  // into the isolated env with no capability-logic change.
+  let sandboxBackends: { filesystem: FilesystemBackend; exec: ExecBackend } | undefined
+  let sandboxWorkspaceRoot: string | undefined
+  const sandboxKey = options.sandboxThreadId ?? options.threadId
+  if (options.sandboxManager && sandboxKey) {
+    const handle = await options.sandboxManager.getForThread(
+      sandboxKey,
+      options.signal ?? new AbortController().signal,
+    )
+    sandboxBackends = { filesystem: handle.filesystem, exec: handle.exec }
+    sandboxWorkspaceRoot = handle.workspaceRoot
+  }
+
   const offload = buildOffload(
     loadedDawnConfig,
-    configBackends?.filesystem,
+    sandboxBackends?.filesystem ?? configBackends?.filesystem,
     options.signal ?? new AbortController().signal,
     options.appRoot,
   )
@@ -489,8 +537,8 @@ async function prepareRouteExecution(options: {
   await permissionsStore.load()
 
   const workspaceFs = createWorkspaceFs({
-    workspaceRoot: join(options.appRoot, "workspace"),
-    backend: configBackends?.filesystem ?? localFilesystem(),
+    workspaceRoot: sandboxWorkspaceRoot ?? join(options.appRoot, "workspace"),
+    backend: sandboxBackends?.filesystem ?? configBackends?.filesystem ?? localFilesystem(),
     permissions: permissionsStore,
     signal: options.signal ?? new AbortController().signal,
     interruptCapable: normalized.kind === "agent",
@@ -545,13 +593,15 @@ async function prepareRouteExecution(options: {
       })
     }
 
+    const capabilityBackends = sandboxBackends ?? configBackends
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
       descriptorRouteMap,
-      ...(configBackends ? { backends: configBackends } : {}),
+      ...(capabilityBackends ? { backends: capabilityBackends } : {}),
       permissions: permissionsStore,
       appRoot: options.appRoot,
+      ...(sandboxWorkspaceRoot ? { workspaceRoot: sandboxWorkspaceRoot } : {}),
       ...(memoryContext ? { memory: memoryContext } : {}),
     })
 
@@ -652,6 +702,8 @@ async function prepareRouteExecution(options: {
         routeManifest,
         descriptor,
         descriptorRouteMap,
+        ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
+        ...(sandboxKey ? { sandboxThreadId: sandboxKey } : {}),
       })
     }
   }
@@ -682,6 +734,7 @@ async function prepareRouteExecution(options: {
     ...(subagentResolver ? { subagentResolver } : {}),
     tools,
     workspaceFs,
+    ...(sandboxBackends !== undefined ? { sandboxed: true } : {}),
   }
 }
 
@@ -693,6 +746,9 @@ async function executeRouteAtResolvedPath(options: {
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
+  readonly sandboxManager?: SandboxManager
+  /** Sandbox scoping key override — see `executeResolvedRoute`. */
+  readonly sandboxThreadId?: string
   readonly signal?: AbortSignal
   readonly startedAt: number
   readonly threadId?: string
@@ -729,6 +785,7 @@ async function executeRouteAtResolvedPath(options: {
       offload,
       summarization,
       workspaceFs,
+      sandboxed,
     } = prepared
     mode = normalized.kind
 
@@ -752,6 +809,7 @@ async function executeRouteAtResolvedPath(options: {
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
       ...(subagentResolver ? { subagentResolver } : {}),
       ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(sandboxed ? { sandboxed: true } : {}),
     })
 
     return createRuntimeSuccessResult({
@@ -811,6 +869,7 @@ async function invokeEntry(
     >
     readonly subagentResolver?: SubagentResolver
     readonly threadId?: string
+    readonly sandboxed?: boolean
   },
 ): Promise<unknown> {
   if (kind === "agent") {
@@ -843,6 +902,7 @@ async function invokeEntry(
         ? { subagentResolver: agentContext.subagentResolver }
         : {}),
       ...(agentContext?.threadId ? { threadId: agentContext.threadId } : {}),
+      ...(agentContext?.sandboxed ? { sandboxed: true } : {}),
     })
   }
 
@@ -1007,8 +1067,18 @@ function buildSubagentResolver(args: {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
   readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
+  readonly sandboxManager?: SandboxManager
+  /**
+   * The dispatching thread's sandbox key (top routes: its checkpoint
+   * threadId; nested subagents: the inherited key). Forwarded to children as
+   * `sandboxThreadId` ONLY — children never receive a checkpoint `threadId`,
+   * so each child turn runs as an independent uncheckpointed invocation while
+   * still resolving the same per-thread SandboxHandle as its parent.
+   */
+  readonly sandboxThreadId?: string
 }): SubagentResolver {
   const { appRoot, routeDir, routeManifest, descriptor, descriptorRouteMap } = args
+  const { sandboxManager, sandboxThreadId } = args
 
   const findConventionRoute = (leaf: string): RouteDefinition | undefined => {
     const conventionDir = `${routeDir}/subagents/${leaf}`
@@ -1048,6 +1118,13 @@ function buildSubagentResolver(args: {
           routeFile: route.entryFile,
           routeId: route.id,
           routePath: route.pathname,
+          ...(sandboxManager ? { sandboxManager } : {}),
+          // Deliberately NOT `threadId`: the child must run as an independent
+          // uncheckpointed invocation (forwarding the parent's threadId would
+          // share its in-flight LangGraph checkpoint and short-circuit the
+          // child turn). `sandboxThreadId` scopes only the sandbox handle, so
+          // the child still shares the parent thread's sandbox.
+          ...(sandboxThreadId ? { sandboxThreadId } : {}),
         })
         if (result.status === "failed") {
           // Surface the failure to the dispatcher in a shape that
@@ -1068,6 +1145,9 @@ function buildSubagentResolver(args: {
           routeFile: route.entryFile,
           routeId: route.id,
           routePath: route.pathname,
+          ...(sandboxManager ? { sandboxManager } : {}),
+          // Same as invoke() above: sandbox key only, never the checkpoint id.
+          ...(sandboxThreadId ? { sandboxThreadId } : {}),
         })) {
           yield chunk
         }

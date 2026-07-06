@@ -176,11 +176,18 @@ export async function materializeAgentGraph(options: {
   readonly stateFields?: readonly ResolvedStateField[]
   readonly promptFragments?: readonly PromptFragment[]
   readonly summarization?: ResolvedSummarizationConfig
+  /**
+   * Set when the caller's tools are bound to a per-thread sandbox (workspace
+   * fs/exec backends). Bypasses the per-descriptor cache so one thread's
+   * sandbox closures never leak into another thread's agent.
+   */
+  readonly sandboxed?: boolean
 }): Promise<unknown> {
   return materializeAgent(options.descriptor, options.tools ?? [], options.checkpointer, {
     ...(options.stateFields ? { stateFields: options.stateFields } : {}),
     ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
     ...(options.summarization ? { summarization: options.summarization } : {}),
+    ...(options.sandboxed === true ? { bypassCache: true } : {}),
   })
 }
 
@@ -345,6 +352,14 @@ export interface AgentOptions {
    */
   readonly threadId?: string
   readonly summarization?: ResolvedSummarizationConfig
+  /**
+   * Set by the CLI runtime when a per-thread sandbox is active for this turn
+   * (the workspace tools close over the thread's sandbox filesystem/exec
+   * backend). Forces `bypassCache` in materializeAgent so a cached agent
+   * compiled with one thread's sandbox tools is never reused for another
+   * thread — the one leak a sandbox must never allow.
+   */
+  readonly sandboxed?: boolean
 }
 
 export async function executeAgent(options: AgentOptions): Promise<unknown> {
@@ -413,7 +428,9 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
   if (isDawnAgent(options.entry)) {
     // Bypass the per-descriptor cache when a resolver is wired: the bridged
     // tool closes over the per-call queue + parent config, so caching would
-    // bind those to a single call.
+    // bind those to a single call. Same hazard when sandboxed: workspace tools
+    // close over a per-thread sandbox filesystem/exec backend, so caching
+    // would leak one thread's sandbox to another.
     const materializedAgent = await materializeAgent(
       options.entry,
       effectiveTools,
@@ -422,7 +439,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
         ...(options.stateFields ? { stateFields: options.stateFields } : {}),
         ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
         ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
-        ...(resolver && hasTaskTool ? { bypassCache: true } : {}),
+        ...((resolver && hasTaskTool) || options.sandboxed ? { bypassCache: true } : {}),
         ...(options.offload ? { offload: options.offload } : {}),
         ...(options.summarization ? { summarization: options.summarization } : {}),
       },
