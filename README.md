@@ -19,7 +19,7 @@ Build LangGraph agents like Next.js apps. Dawn is the TypeScript meta-framework 
 
 - **Kill the LangGraph boilerplate.** Export one `agent({ model, systemPrompt })` descriptor. Dawn discovers it, wires route-local tools into the generated graph, and emits a `langgraph.json` package ready for LangSmith.
 - **Filesystem-routed agents.** Filesystem routes under `src/app/` — colocate state schemas, tools, middleware, and tests next to the route they belong to. No more ad-hoc folders.
-- **A real local dev loop.** `dawn dev` runs your routes locally with LangSmith-style endpoints. Iterate in seconds, then verify the generated deployment artifact before shipping.
+- **A real local dev loop.** `dawn dev` runs your routes locally with Agent Protocol thread endpoints. Iterate in seconds, then verify the generated deployment artifact before shipping.
 - **Typed end to end (TypeScript).** Route params, state, and tool I/O are generated as TypeScript types. `dawn verify` is your pre-deploy gate.
 - **Durable by default.** Every Dawn app ships a working SQLite checkpointer and thread store — no setup. Threads survive a `dawn dev` restart, and an agent that pauses for human input resumes exactly where it left off. LangGraph defines the checkpoint interface; Dawn ships the default implementation.
 - **Two ways to drive the model.** A route exports one of `agent` (LLM picks tools at runtime, can pause for a human), `workflow` (deterministic typed async function when you own the order), `graph`, or `chain`. Same routing, same types, same dev loop — you choose who's in charge.
@@ -78,18 +78,23 @@ export const graph = new StateGraph(MessagesAnnotation)
 ### With Dawn
 
 ```ts
-// src/app/(public)/hello/[tenant]/index.ts
+// src/app/research/index.ts
 import { agent } from "@dawn-ai/sdk"
 
 export default agent({
   model: "gpt-5-mini",
-  systemPrompt: "You are a helpful assistant for the {tenant} organization.",
+  description:
+    "A deep-research assistant: plans sub-questions, dispatches researchers, and writes a cited report.",
+  systemPrompt:
+    "You are a deep-research coordinator. Search the corpus, cite every claim, and write reports to the workspace.",
 })
 ```
 
 ```ts
-// src/app/(public)/hello/[tenant]/tools/greet.ts
-export default async ({ name }: { name: string }) => `Hello, ${name}!`
+// src/app/research/tools/searchCorpus.ts
+export default async ({ query }: { readonly query: string }) => {
+  return [{ path: "corpus/agent-architectures.md", title: "Agent architectures" }]
+}
 ```
 
 `dawn build` emits the `langgraph.json` for you.
@@ -110,18 +115,23 @@ pnpm install
 pnpm exec dawn verify
 ```
 
-3. Run the scaffolded route. The route path must be quoted because it contains `(`, `)`, and `[]`.
+3. Run the scaffolded research route with JSON stdin.
 
 ```bash
-echo '{"tenant":"acme"}' | pnpm exec dawn run '/hello/[tenant]'
+echo '"What are common agent architectures?"' | pnpm exec dawn run /research
 ```
 
-4. Optionally start the local runtime in one terminal and send the same route through `--url` from another terminal.
+4. Optionally start the local runtime in one terminal and send the same route through the Agent Protocol from another terminal.
 
 ```bash
 pnpm exec dawn dev --port 3001
-echo '{"tenant":"acme"}' | pnpm exec dawn run '/hello/[tenant]' --url http://127.0.0.1:3001
+curl -s -X POST http://127.0.0.1:3001/threads -H 'content-type: application/json' -d '{}' | jq .
+curl -s -X POST http://127.0.0.1:3001/threads/<thread_id>/runs/wait \
+  -H 'content-type: application/json' \
+  -d '{"route":"/research#agent","input":"What are common agent architectures?"}' | jq .
 ```
+
+The default scaffold is the deep-research app at `/research`. For the smaller greeter scaffold, run `pnpm create dawn-ai-app my-dawn-app -- --template basic`; that optional template uses `/hello/[tenant]`.
 
 ## 30-Second Route
 
@@ -132,7 +142,8 @@ import { agent } from "@dawn-ai/sdk"
 
 export default agent({
   model: "gpt-5-mini",
-  systemPrompt: "You are a helpful assistant for the {tenant} organization.",
+  systemPrompt:
+    "You are a research coordinator. Search the local corpus, dispatch specialists when useful, and cite every claim.",
   retry: { maxAttempts: 3, baseDelay: 250 },
 })
 ```
