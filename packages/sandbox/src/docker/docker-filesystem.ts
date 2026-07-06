@@ -23,7 +23,7 @@ export function dockerFilesystem(docker: Docker, container: string): FilesystemB
       return r.stdout
     },
     async writeFile(path, content, ctx) {
-      const r = await run(`cat > ${q(path)}`, ctx, content)
+      const r = await run(`mkdir -p "$(dirname ${q(path)})" && cat > ${q(path)}`, ctx, content)
       if (r.exitCode !== 0) throw new Error(`writeFile failed: ${r.stderr.trim()}`)
       return { bytesWritten: Buffer.byteLength(content) }
     },

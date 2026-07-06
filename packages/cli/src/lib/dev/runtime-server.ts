@@ -126,7 +126,6 @@ export async function createRuntimeRequestListener(
     shutdownController.abort(new Error("Runtime server shutting down"))
 
     if (sandboxReaper) clearInterval(sandboxReaper)
-    if (sandboxManager) await sandboxManager.releaseAll()
 
     // Drain in-flight requests
     await new Promise<void>((resolve) => {
@@ -145,6 +144,10 @@ export async function createRuntimeRequestListener(
       }
       check()
     })
+
+    // Release sandboxes only after in-flight requests have drained, so tools
+    // executing against a sandbox are never yanked mid-request.
+    if (sandboxManager) await sandboxManager.releaseAll()
   }
 
   return { close, listener, shutdownController, state }

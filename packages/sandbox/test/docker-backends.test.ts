@@ -48,6 +48,24 @@ describe("dockerFilesystem", () => {
     expect(r.bytesWritten).toBe(5)
   })
 
+  test("writeFile creates parent directories before writing", async () => {
+    let seen: readonly string[] = []
+    const fs = dockerFilesystem(
+      fakeDocker({
+        exec: async (_c, cmd) => {
+          seen = cmd
+          return { stdout: "", stderr: "", exitCode: 0 }
+        },
+      }),
+      "c1",
+    )
+    await fs.writeFile("/workspace/new dir/deep/a.txt", "hello", ctx)
+    const shCmd = seen[2] ?? ""
+    expect(shCmd).toContain("mkdir -p")
+    expect(shCmd).toContain("cat >")
+    expect(shCmd).toContain(`"$(dirname '/workspace/new dir/deep/a.txt')"`)
+  })
+
   test("listDir parses ls -1 output", async () => {
     const fs = dockerFilesystem(
       fakeDocker({ exec: async () => ({ stdout: "a\nb\n", stderr: "", exitCode: 0 }) }),
@@ -84,5 +102,12 @@ describe("dockerExec", () => {
     expect(seen[2]).toContain("cd '/workspace/sub'")
     expect(seen[2]).toContain("A='1'")
     expect(r).toEqual({ stdout: "out", stderr: "", exitCode: 0 })
+  })
+
+  test("runCommand rejects invalid env keys with a clear error", async () => {
+    const exec = dockerExec(fakeDocker({}), "c1")
+    await expect(
+      exec.runCommand({ command: "echo hi", env: { "BAD KEY;x": "1" } }, ctx),
+    ).rejects.toThrow(/Invalid environment variable name "BAD KEY;x"/)
   })
 })

@@ -11,7 +11,14 @@ export function dockerExec(docker: Docker, container: string): ExecBackend {
     async runCommand(args, ctx: BackendContext) {
       const envPrefix = args.env
         ? Object.entries(args.env)
-            .map(([k, v]) => `${k}=${shellQuote(v)} `)
+            .map(([k, v]) => {
+              if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) {
+                throw new Error(
+                  `Invalid environment variable name ${JSON.stringify(k)}: keys must match /^[A-Za-z_][A-Za-z0-9_]*$/`,
+                )
+              }
+              return `${k}=${shellQuote(v)} `
+            })
             .join("")
         : ""
       const cdPrefix = args.cwd ? `cd ${shellQuote(args.cwd)} && ` : ""
