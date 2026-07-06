@@ -1,7 +1,8 @@
-import { discoverRoutes } from "@dawn-ai/core"
+import { type DawnConfig, discoverRoutes, loadDawnConfig } from "@dawn-ai/core"
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { collectSandboxErrors } from "../lib/runtime/collect-sandbox-errors.js"
 import { collectToolScopeErrors } from "../lib/runtime/collect-tool-scope-errors.js"
 import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
 import { collectUnknownModelIdWarnings } from "../lib/runtime/warn-unknown-model-ids.js"
@@ -45,6 +46,19 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
     const scopeErrors = await collectToolScopeErrors(manifest)
     if (scopeErrors.length > 0) {
       throw new CliError(`Invalid tool scope:\n${scopeErrors.join("\n")}`)
+    }
+
+    let loadedConfig: Pick<DawnConfig, "sandbox"> = {}
+    try {
+      const loaded = await loadDawnConfig({ appRoot: manifest.appRoot })
+      loadedConfig = loaded.config
+    } catch {
+      loadedConfig = {}
+    }
+
+    const sandboxErrors = await collectSandboxErrors(loadedConfig)
+    if (sandboxErrors.length > 0) {
+      throw new CliError(`Invalid sandbox config:\n${sandboxErrors.join("\n")}`)
     }
   } catch (error) {
     if (error instanceof CliError) throw error
