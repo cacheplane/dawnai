@@ -6,6 +6,7 @@ export type {
   SandboxHandle,
   SandboxPolicy,
   SandboxProvider,
+  SandboxSecurityPolicy,
 } from "./sandbox-types.js"
 export type {
   BackendContext,
