@@ -83,7 +83,13 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
       return {
         threadId,
         filesystem: dockerFilesystem(docker, container),
-        exec: dockerExec(docker, container),
+        exec: dockerExec(
+          docker,
+          container,
+          policy.resources?.timeoutMs !== undefined
+            ? { timeoutMs: policy.resources.timeoutMs }
+            : {},
+        ),
         workspaceRoot: ROOT,
       }
     },

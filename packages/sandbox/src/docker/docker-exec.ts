@@ -6,7 +6,11 @@ function shellQuote(s: string): string {
 }
 
 /** ExecBackend that runs commands inside a docker container via `docker exec sh -c`. */
-export function dockerExec(docker: Docker, container: string): ExecBackend {
+export function dockerExec(
+  docker: Docker,
+  container: string,
+  opts: { readonly timeoutMs?: number } = {},
+): ExecBackend {
   return {
     async runCommand(args, ctx: BackendContext) {
       const envPrefix = args.env
@@ -22,13 +26,20 @@ export function dockerExec(docker: Docker, container: string): ExecBackend {
             .join("")
         : ""
       const cdPrefix = args.cwd ? `cd ${shellQuote(args.cwd)} && ` : ""
-      const r = await docker.exec(
-        container,
-        ["sh", "-c", `${envPrefix}${cdPrefix}${args.command}`],
-        {
-          signal: ctx.signal,
-        },
-      )
+      const full = `${envPrefix}${cdPrefix}${args.command}`
+      const shArgs = ["sh", "-c", full]
+      const argv =
+        opts.timeoutMs !== undefined
+          ? ["timeout", `${Math.ceil(opts.timeoutMs / 1000)}s`, ...shArgs]
+          : shArgs
+      const r = await docker.exec(container, argv, { signal: ctx.signal })
+      if (opts.timeoutMs !== undefined && r.exitCode === 124) {
+        return {
+          stdout: r.stdout,
+          stderr: `${r.stderr}${r.stderr ? "\n" : ""}Command timed out after ${opts.timeoutMs}ms (resources.timeoutMs).`,
+          exitCode: 124,
+        }
+      }
       return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode }
     },
   }

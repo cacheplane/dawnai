@@ -111,3 +111,48 @@ describe("dockerExec", () => {
     ).rejects.toThrow(/Invalid environment variable name "BAD KEY;x"/)
   })
 })
+
+describe("dockerExec timeout", () => {
+  test("wraps the command in `timeout Ns` when timeoutMs is set", async () => {
+    let seen: readonly string[] = []
+    const exec = dockerExec(
+      fakeDocker({ exec: async (_c, cmd) => { seen = cmd; return { stdout: "", stderr: "", exitCode: 0 } } }),
+      "c1",
+      { timeoutMs: 1500 },
+    )
+    await exec.runCommand({ command: "echo hi" }, ctx)
+    expect(seen[0]).toBe("timeout")
+    expect(seen[1]).toBe("2s") // ceil(1500/1000)
+    expect(seen[2]).toBe("sh")
+    expect(seen.join(" ")).toContain("echo hi")
+  })
+
+  test("no timeout wrapping when timeoutMs is unset", async () => {
+    let seen: readonly string[] = []
+    const exec = dockerExec(
+      fakeDocker({ exec: async (_c, cmd) => { seen = cmd; return { stdout: "", stderr: "", exitCode: 0 } } }),
+      "c1",
+    )
+    await exec.runCommand({ command: "echo hi" }, ctx)
+    expect(seen[0]).toBe("sh")
+  })
+
+  test("exit 124 → annotated stderr pointing at the config", async () => {
+    const exec = dockerExec(
+      fakeDocker({ exec: async () => ({ stdout: "", stderr: "", exitCode: 124 }) }),
+      "c1",
+      { timeoutMs: 500 },
+    )
+    const r = await exec.runCommand({ command: "sleep 999" }, ctx)
+    expect(r.exitCode).toBe(124)
+    expect(r.stderr).toMatch(/timed out after 500ms/i)
+    expect(r.stderr).toMatch(/resources\.timeoutMs/)
+  })
+
+  test("still validates env keys (regression: keep existing behavior)", async () => {
+    const exec = dockerExec(fakeDocker({}), "c1", { timeoutMs: 500 })
+    await expect(
+      exec.runCommand({ command: "echo", env: { "BAD KEY;x": "1" } }, ctx),
+    ).rejects.toThrow(/Invalid environment variable name/i)
+  })
+})
