@@ -234,4 +234,93 @@ describe("sqliteMemoryStore", () => {
     const out = await s.search({ namespace: "ns" })
     expect(out.map((r) => r.id)).toEqual(["new", "old"])
   })
+  it("kind filter scopes corpus stats and candidates", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    await s.put(
+      rec({
+        id: "sem_full",
+        namespace: "ns",
+        kind: "semantic",
+        content: "billing threshold is 500",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+    )
+    await s.put(
+      rec({
+        id: "sem_partial",
+        namespace: "ns",
+        kind: "semantic",
+        content: "billing contact note",
+        updatedAt: "2026-07-02T00:00:00.000Z",
+      }),
+    )
+    await s.put(
+      rec({
+        id: "epi",
+        namespace: "ns",
+        kind: "episodic",
+        content: "billing threshold discussed in standup",
+        updatedAt: "2026-07-04T00:00:00.000Z",
+      }),
+    )
+    const out = await s.search({
+      namespace: "ns",
+      kind: "semantic",
+      query: "billing threshold",
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    // Episodic record matches every query token but must be excluded by kind.
+    expect(out.map((r) => r.kind)).toEqual(["semantic", "semantic"])
+    expect(out.map((r) => r.id)).not.toContain("epi")
+    expect(out[0]?.id).toBe("sem_full") // full match outranks partial within the kind
+  })
+  it("id tiebreak: identical score and updatedAt orders by id ascending", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    await s.put(
+      rec({
+        id: "b",
+        namespace: "ns",
+        content: "billing threshold fact",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+    )
+    await s.put(
+      rec({
+        id: "a",
+        namespace: "ns",
+        content: "billing threshold fact",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+    )
+    const out = await s.search({
+      namespace: "ns",
+      query: "billing threshold",
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    expect(out.map((r) => r.id)).toEqual(["a", "b"])
+  })
+  it("all-tokens-dropped query takes the recency path", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    await s.put(
+      rec({
+        id: "older_match",
+        namespace: "ns",
+        content: "a real billing threshold fact",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+    )
+    await s.put(
+      rec({
+        id: "newer_unrelated",
+        namespace: "ns",
+        content: "unrelated note",
+        updatedAt: "2026-07-04T00:00:00.000Z",
+      }),
+    )
+    // "a" is a 1-char token — tokenize() drops it, leaving zero query tokens.
+    const out = await s.search({ namespace: "ns", query: "a" })
+    // Zero-token queries must behave exactly like no query: pure recency,
+    // no token filter — both records come back, newest first.
+    expect(out.map((r) => r.id)).toEqual(["newer_unrelated", "older_match"])
+  })
 })
