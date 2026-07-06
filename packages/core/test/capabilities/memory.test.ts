@@ -113,11 +113,42 @@ describe("memory capability", () => {
     })
     const c = await createMemoryMarker().load("/r", baseCtx(store))
     const recall = c.tools!.find((t) => t.name === "recall")!
-    const out = (await recall.run(
-      { query: "x" },
+    const out = (await recall.run({ query: "x" }, { signal: new AbortController().signal })) as {
+      result: string
+    }
+    expect(out.result).toContain("m1")
+  })
+  it("wraps tool returns in {result} so the bridge doesn't JSON-quote/escape them", async () => {
+    // Bare-string returns hit unwrapToolResult's JSON.stringify path — the model
+    // then sees a quoted string with literal \n. The {result} wrapper makes the
+    // string the ToolMessage content verbatim.
+    const store = fakeStore()
+    for (const id of ["m1", "m2"]) {
+      store.rows.push({
+        id,
+        namespace: "ws=a|route=/r",
+        status: "active",
+        content: `note ${id}`,
+        data: {},
+        kind: "semantic",
+        tags: [],
+      })
+    }
+    const c = await createMemoryMarker().load("/r", baseCtx(store))
+    const recall = c.tools!.find((t) => t.name === "recall")!
+    const out = (await recall.run({ query: "note" }, { signal: new AbortController().signal })) as {
+      result: string
+    }
+    expect(typeof out.result).toBe("string")
+    expect(out.result).toContain("\n") // real newline between rows, not "\\n"
+    expect(out.result.startsWith('"')).toBe(false) // not a JSON-quoted string
+
+    const remember = c.tools!.find((t) => t.name === "remember")!
+    const stored = (await remember.run(
+      { data: { subject: "s", predicate: "p", value: "v" }, content: "c" },
       { signal: new AbortController().signal },
-    )) as string
-    expect(out).toContain("m1")
+    )) as { result: string }
+    expect(stored.result).toMatch(/Stored memory candidate/)
   })
 
   it("falls back to a permissive data schema when context.memory.schema is not a Zod type", async () => {
@@ -194,8 +225,8 @@ describe("memory capability", () => {
 describe("ask mode", () => {
   const first = { subject: "billing", predicate: "escalate", value: "500" }
   const second = { subject: "billing", predicate: "escalate", value: "750" }
-  const run = (tool: any, data: any, content: string) =>
-    tool.run({ data, content }, { signal: new AbortController().signal })
+  const run = async (tool: any, data: any, content: string) =>
+    (await tool.run({ data, content }, { signal: new AbortController().signal })).result
 
   it("ADD lands active with no gate consulted", async () => {
     const store = fakeStore()
