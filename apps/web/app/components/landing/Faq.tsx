@@ -32,11 +32,11 @@ const ITEMS = [
     question: "What agent capabilities ship today?",
     answer: (
       <p>
-        Routing, tools, generated types, the dev loop, planning, skills, memory, subagents,
-        opt-in sandboxing, replay/live evals, and testing helpers are shipped. The current testing
-        harness runs agent routes in-process; the standalone Agent Protocol injector and subprocess
-        helpers are available for custom orchestration, but those are not harness modes. Everything
-        ships incrementally on main with semver-honest releases.
+        Routing, tools, generated types, the dev loop, planning, skills, memory, subagents, opt-in
+        sandboxing, replay/live evals, and testing helpers are shipped. The current testing harness
+        runs agent routes in-process; the standalone Agent Protocol injector and subprocess helpers
+        are available for custom orchestration, but those are not harness modes. Everything ships
+        incrementally on main with semver-honest releases.
       </p>
     ),
   },
