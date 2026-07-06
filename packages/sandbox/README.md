@@ -11,7 +11,7 @@ shell tools into a per-thread isolated environment.
 This is part of [Dawn - the TypeScript meta-framework for LangGraph](https://github.com/cacheplane/dawnai).
 Conceptual docs: [Execution Sandbox](https://dawnai.org/docs/sandbox),
 [Workspace Filesystem](https://dawnai.org/docs/workspace), and
-[Configuration](https://dawnai.org/docs/configuration#sandbox).
+[Configuration](https://dawnai.org/docs/configuration).
 
 ## Install
 

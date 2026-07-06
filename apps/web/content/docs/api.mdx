@@ -603,7 +603,7 @@ export {
 }
 ```
 
-Built-in capability markers detect route/app files and contribute prompt fragments, tools, or stream transformers. `createWorkspaceMarker()` activates when a `workspace/` directory exists or a runtime `workspaceRoot` is supplied; `createMemoryMarker()` contributes `recall` and `remember` when route memory context exists.
+Built-in capability markers detect route/app files and contribute prompt fragments, tools, or stream transformers. `createWorkspaceMarker()` activates when a `workspace/` directory exists or a runtime `workspaceRoot` is supplied; `createMemoryMarker()` contributes `recall`, and contributes `remember` unless memory writes are configured as `"off"`.
 
 Types in this group include `CapabilityMarker`, `CapabilityMarkerContext`, `CapabilityContribution`, `DawnToolDefinition`, `PromptFragment`, `StreamTransformer`, `MemoryContext`, `MemoryStoreLike`, `MemoryRecordLike`, `CapabilityRegistry`, `AppliedContribution`, `ApplyResult`, and `CapabilityError`.
 
