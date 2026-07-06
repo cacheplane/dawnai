@@ -47,6 +47,32 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
       ...(res?.memoryMb ? ["--memory", `${res.memoryMb}m`] : []),
       ...(res?.cpus ? ["--cpus", String(res.cpus)] : []),
     ]
+
+    // Hardened-by-default posture: an unset field means SECURE default, not
+    // "off". Authors relax explicitly via policy.security. `user` is resolved
+    // here (rather than inline in the argv) so a later create-path addition
+    // (volume chown-init) can reuse the same resolved uid/gid.
+    const sec = policy.security ?? {}
+    const dropCaps = sec.dropAllCapabilities ?? true
+    const noNewPriv = sec.noNewPrivileges ?? true
+    const readOnly = sec.readOnlyRootFilesystem ?? true
+    const pids = sec.pidsLimit ?? 512
+    const user: { uid: number; gid: number } | undefined =
+      sec.runAsNonRoot === false
+        ? undefined
+        : typeof sec.runAsNonRoot === "object"
+          ? sec.runAsNonRoot
+          : { uid: 1000, gid: 1000 }
+
+    const hardening: string[] = [
+      ...(dropCaps ? ["--cap-drop", "ALL"] : []),
+      ...(noNewPriv ? ["--security-opt", "no-new-privileges"] : []),
+      "--pids-limit",
+      String(pids),
+      ...(readOnly ? ["--read-only", "--tmpfs", "/tmp", "--tmpfs", "/run"] : []),
+      ...(user ? ["--user", `${user.uid}:${user.gid}`, "-e", "HOME=/workspace"] : []),
+    ]
+
     const created = await docker.run(
       [
         "run",
@@ -62,6 +88,7 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
         ...net,
         ...envArgs,
         ...limits,
+        ...hardening,
         opts.image,
         "sleep",
         "infinity",

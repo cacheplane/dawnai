@@ -110,3 +110,60 @@ describe("dockerSandbox (unit, no daemon)", () => {
     expect(joined).not.toContain("t/1:x")
   })
 })
+
+describe("dockerSandbox hardening flags", () => {
+  const acquireArgs = (runs: string[][]) => (runs.find((r) => r[0] === "run") ?? []).join(" ")
+
+  test("hardened by default: cap-drop ALL, no-new-privileges, pids-limit 512, read-only + tmpfs, non-root user + HOME", async () => {
+    const { docker, runs } = recordingDocker()
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({ threadId: "abc", policy: { network: { mode: "deny" } }, signal: signal() })
+    const j = acquireArgs(runs)
+    expect(j).toContain("--cap-drop ALL")
+    expect(j).toContain("--security-opt no-new-privileges")
+    expect(j).toContain("--pids-limit 512")
+    expect(j).toContain("--read-only")
+    expect(j).toContain("--tmpfs /tmp")
+    expect(j).toContain("--tmpfs /run")
+    expect(j).toContain("--user 1000:1000")
+    expect(j).toContain("HOME=/workspace")
+  })
+
+  test("per-flag opt-outs remove exactly their flags", async () => {
+    const { docker, runs } = recordingDocker()
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({
+      threadId: "abc",
+      policy: {
+        network: { mode: "deny" },
+        security: {
+          dropAllCapabilities: false,
+          noNewPrivileges: false,
+          readOnlyRootFilesystem: false,
+          runAsNonRoot: false,
+          pidsLimit: 128,
+        },
+      },
+      signal: signal(),
+    })
+    const j = acquireArgs(runs)
+    expect(j).not.toContain("--cap-drop")
+    expect(j).not.toContain("no-new-privileges")
+    expect(j).not.toContain("--read-only")
+    expect(j).not.toContain("--tmpfs")
+    expect(j).not.toContain("--user")
+    expect(j).not.toContain("HOME=/workspace")
+    expect(j).toContain("--pids-limit 128")
+  })
+
+  test("custom runAsNonRoot uid/gid", async () => {
+    const { docker, runs } = recordingDocker()
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "deny" }, security: { runAsNonRoot: { uid: 2000, gid: 3000 } } },
+      signal: signal(),
+    })
+    expect(acquireArgs(runs)).toContain("--user 2000:3000")
+  })
+})
