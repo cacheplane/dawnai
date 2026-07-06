@@ -71,6 +71,18 @@ export interface DawnConfig {
     readonly writes?: "off" | "candidate" | "auto"
     /** Maximum number of entries returned by the index. */
     readonly indexMaxEntries?: number
+    /** Recall ranking tuning for the default SQLite store. All fields
+     *  defaulted; omit for standard behavior. Ignored when a custom `store`
+     *  is supplied (custom stores own their own ranking). */
+    readonly recall?: {
+      readonly weights?: {
+        readonly relevance?: number
+        readonly recency?: number
+        readonly confidence?: number
+      }
+      readonly recencyHalfLifeMs?: number
+      readonly candidatePool?: number
+    }
     /** Derive the memory namespace scope for a given route. */
     readonly resolveScope?: (ctx: {
       readonly routePath: string
