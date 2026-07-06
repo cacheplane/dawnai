@@ -35,6 +35,6 @@
     "@types/react-dom": "19.2.3",
     "@vitest/ui": "^3.2.6",
     "typescript": "6.0.2",
-    "vitest": "^3.2.6"
+    "vitest": "^4.1.9"
   }
 }
