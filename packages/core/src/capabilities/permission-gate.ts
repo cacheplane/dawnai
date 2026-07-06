@@ -146,6 +146,12 @@ function buildArgsPreview(input: unknown): string {
  * wrapping with their extra fields (filePath, schema, scope, …) intact.
  * The generic constraint means run's return type must accept a string (both
  * planned call sites declare `Promise<unknown> | unknown`).
+ *
+ * Interrupt-capable contexts only: on an "unknown" decision in interactive
+ * mode the gate calls LangGraph's `interrupt()`, which throws a raw error
+ * outside a running graph. All Dawn call sites wrap agent-route tools (always
+ * in-graph); if you call this from outside a graph, pre-approve via
+ * `permissions.allow.tool` or use non-interactive mode instead.
  */
 export function wrapToolWithApproval<
   C,
@@ -164,48 +170,41 @@ export function wrapToolWithApproval<
   }
 }
 
-interface InterruptArgs {
-  kind: "command" | "path" | "tool"
-  command?: string
-  operation?: PathOperation
-  path?: string
-  toolName?: string
-  argsPreview?: string
-  permissions: PermissionsStore
-}
+// Discriminated union: each kind's required fields are enforced at the call
+// site, so a `kind: "tool"` call without toolName is a compile error rather
+// than a silently blank interrupt payload.
+type InterruptArgs =
+  | { kind: "command"; command: string; permissions: PermissionsStore }
+  | { kind: "path"; operation: PathOperation; path: string; permissions: PermissionsStore }
+  | { kind: "tool"; toolName: string; argsPreview: string; permissions: PermissionsStore }
 
 async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "deny"> {
   const interruptId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const suggestedPattern =
     args.kind === "command"
-      ? suggestedCommandPattern(args.command ?? "")
+      ? suggestedCommandPattern(args.command)
       : args.kind === "tool"
-        ? (args.toolName ?? "")
-        : suggestedPathPattern(args.path ?? "")
+        ? args.toolName
+        : suggestedPathPattern(args.path)
   const payload = {
     interruptId,
     type: "permission-request" as const,
     kind: args.kind,
     detail:
       args.kind === "command"
-        ? { command: args.command ?? "", suggestedPattern }
+        ? { command: args.command, suggestedPattern }
         : args.kind === "tool"
-          ? { toolName: args.toolName ?? "", argsPreview: args.argsPreview ?? "", suggestedPattern }
+          ? { toolName: args.toolName, argsPreview: args.argsPreview, suggestedPattern }
           : {
-              operation: args.operation ?? "readFile",
-              path: args.path ?? "",
+              operation: args.operation,
+              path: args.path,
               suggestedPattern,
             },
   }
   const decision = interrupt(payload) as "once" | "always" | "deny"
   if (decision === "deny") return "deny"
   if (decision === "always") {
-    const tool =
-      args.kind === "command"
-        ? "bash"
-        : args.kind === "tool"
-          ? "tool"
-          : (args.operation ?? "readFile")
+    const tool = args.kind === "command" ? "bash" : args.kind === "tool" ? "tool" : args.operation
     await args.permissions.addAllow(tool, suggestedPattern)
   }
   return "allow"
