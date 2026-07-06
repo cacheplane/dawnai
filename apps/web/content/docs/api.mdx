@@ -607,14 +607,14 @@ Built-in capability markers detect route/app files and contribute prompt fragmen
 
 Types in this group include `CapabilityMarker`, `CapabilityMarkerContext`, `CapabilityContribution`, `DawnToolDefinition`, `PromptFragment`, `StreamTransformer`, `MemoryContext`, `MemoryStoreLike`, `MemoryRecordLike`, `CapabilityRegistry`, `AppliedContribution`, `ApplyResult`, and `CapabilityError`.
 
-### `createCapabilityRegistry()` and `applyCapabilities()`
+### `createCapabilityRegistry(markers)` and `applyCapabilities()`
 
 ```ts
-export function createCapabilityRegistry(): CapabilityRegistry
+export function createCapabilityRegistry(markers: readonly CapabilityMarker[]): CapabilityRegistry
 export function applyCapabilities(...): Promise<ApplyResult>
 ```
 
-Build and apply the marker registry for a route. Runtime integrations use these helpers to collect built-in and custom capability contributions before materializing an agent route.
+Build and apply a marker registry for a route. Runtime integrations pass the built-in and custom `CapabilityMarker` list, then collect contributions before materializing an agent route.
 
 ### `gateToolOp()` and `wrapToolWithApproval()`
 
@@ -639,7 +639,7 @@ See [Workspace Filesystem](/docs/workspace) and [Execution Sandbox](/docs/sandbo
 
 ```ts
 export function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig>
-export function config<T extends DawnConfig>(value: T): T
+export function config(c: DawnConfig): DawnConfig
 ```
 
 `loadDawnConfig()` loads `dawn.config.ts` for an app root. `config()` is a typed identity helper for authoring config files.
@@ -651,13 +651,13 @@ Types in this group include `DawnConfig`, `LoadDawnConfigOptions`, and `LoadedDa
 ```ts
 export function discoverRoutes(options?: DiscoverRoutesOptions): Promise<RouteManifest>
 export function findDawnApp(options?: FindDawnAppOptions): Promise<DiscoveredDawnApp>
-export function assertDawnRoutesDir(appRoot: string): Promise<string>
-export function toRouteSegments(pathname: string): readonly RouteSegment[]
+export function assertDawnRoutesDir(appRoot: string, routesDir?: string): Promise<void>
+export function toRouteSegments(routeSegments: readonly string[]): RouteSegment[]
 export function isPrivateSegment(segment: string): boolean
 export function isRouteGroupSegment(segment: string): boolean
 ```
 
-Discovery helpers find the Dawn app root, validate the routes directory, scan route files, and parse filesystem route segments.
+Discovery helpers find the Dawn app root, validate the routes directory, scan route files, and parse filesystem route segment names.
 
 Types in this group include `DiscoveredDawnApp`, `DiscoverRoutesOptions`, `FindDawnAppOptions`, `NormalizedRouteModule`, `RouteDefinition`, `RouteKind`, `RouteManifest`, and `RouteSegment`.
 
@@ -735,7 +735,7 @@ Types in this group include `AgentHarness`, `AgentHarnessOptions`, `ToolHarness`
 export function script(): ScriptBuilder
 export function loadFixtures(path: string): FixtureSet
 export function writeFixtures(path: string, fixtures: FixtureSet | ScriptBuilder): void
-export function record(options: RecordOptions): Promise<void>
+export function record(options: RecordOptions): void
 export function createAimock(...): Promise<Aimock>
 ```
 
@@ -779,8 +779,8 @@ Normalize runtime output into `AgentRunResult`, `ObservedToolCall`, and `Observe
 
 ```ts
 export function seedMemory(...): Promise<MemoryStore>
-export function createAgentProtocolInjector(...): AgentProtocolInjector
-export function createSubprocessApp(...): SubprocessApp
+export function createAgentProtocolInjector(...): Promise<AgentProtocolInjector>
+export function createSubprocessApp(...): Promise<SubprocessApp>
 ```
 
 `seedMemory()` populates a Dawn memory store for deterministic memory tests. The protocol injector and subprocess app helpers are lower-level orchestration surfaces for custom test runners.
@@ -830,11 +830,11 @@ See [Evaluating your Dawn agent](/docs/evals) and [Testing your Dawn agent](/doc
 
 ```ts
 export function defineEval(def: EvalDefinition): EvalDefinition
-export function resolveDataset(dataset: Dataset, baseDir?: string): Promise<readonly EvalCase[]>
+export function resolveDataset(dataset: Dataset, baseDir: string): Promise<EvalCase[]>
 export function runEval(def: EvalDefinition, options: RunEvalOptions): Promise<EvalReport>
 ```
 
-`defineEval()` types an eval module. `resolveDataset()` supports inline cases, `.json`, `.jsonl`, and function datasets. `runEval()` drives a definition with a caller-provided `runCase` function and returns an aggregate report.
+`defineEval()` types an eval module. `resolveDataset()` supports inline cases, `.json`, `.jsonl`, and function datasets relative to a required base directory. `runEval()` drives a definition with a caller-provided `runCase` function and returns an aggregate report.
 
 Types in this group include `Dataset`, `EvalCase`, `EvalDefinition`, `RunEvalOptions`, `EvalReport`, `CaseResult`, and `ScoredReport`.
 
@@ -850,7 +850,7 @@ export const gate: {
   all(...)
   any(...)
 }
-export function resolveGate(...): GateResult
+export function resolveGate(...): GatePolicy
 ```
 
 Scores can be numbers, booleans, or rich verdicts with a reason. Gates turn case and scorer aggregates into pass/fail decisions for CI.

@@ -53,7 +53,7 @@ directory exists or a runtime `workspaceRoot` is supplied.
 
 ### Capability registry and permission gating
 
-- `createCapabilityRegistry()` and `applyCapabilities()` collect marker
+- `createCapabilityRegistry(markers)` and `applyCapabilities()` collect marker
   contributions for a route.
 - `gateToolOp()` and `wrapToolWithApproval()` apply tool-level approval rules.
 - Types include `CapabilityMarker`, `CapabilityMarkerContext`,
