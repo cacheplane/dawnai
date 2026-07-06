@@ -23,7 +23,11 @@ const BUILT_IN_TOOL_NAME_SET = new Set(BUILT_IN_TOOL_NAMES)
 
 /** A route is a subagent when it lives under a `<parent>/subagents/<name>` directory (see
  * the `subagents` capability marker's `findConventionSubagents` in
- * packages/core/src/capabilities/built-in/subagents.ts, which uses the same convention). */
+ * packages/core/src/capabilities/built-in/subagents.ts, which uses the same convention).
+ * Path heuristic only: a top-level route whose own segment is literally named
+ * "subagents/<name>" would match too and draw a spurious (non-fatal) warning —
+ * accepted for a best-effort check; actual dispatch relationships are only
+ * known at composition time. */
 function isSubagentRoute(routeDir: string): boolean {
   return /\/subagents\/[^/]+$/.test(routeDir)
 }
