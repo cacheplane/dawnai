@@ -20,3 +20,16 @@ export function suggestedPathPattern(path: string): string {
   const parent = dirname(path)
   return parent === "/" ? "/" : `${parent}/`
 }
+
+/**
+ * Default suggested pattern for a memory-write approval: the namespace's
+ * workspace+route prefix, with a trailing "|" terminator so prefix matching
+ * cannot collide across sibling routes (route=/a vs route=/ab). Callers match
+ * candidates as `namespace + "|"` for the same reason.
+ */
+export function suggestedMemoryPattern(namespace: string): string {
+  const parts = namespace.split("|")
+  const routeIdx = parts.findIndex((p) => p.startsWith("route="))
+  const prefix = routeIdx >= 0 ? parts.slice(0, routeIdx + 1) : parts
+  return `${prefix.join("|")}|`
+}

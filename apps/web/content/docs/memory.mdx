@@ -159,6 +159,7 @@ The `memory.writes` mode in `dawn.config.ts` controls what `remember` does. It d
 | `off` | Not generated (recall-only) | — | — |
 | `candidate` *(default)* | Generated | `candidate` — hidden from `recall` until approved | None |
 | `auto` | Generated | `active` immediately | Inline (see below) |
+| `ask` | Generated | `active` immediately | Inline — supersedes prompt first |
 
 In **`auto`** mode each write reconciles inline against existing active records with the same identity key:
 
@@ -170,8 +171,16 @@ In **`auto`** mode each write reconciles inline against existing active records 
   In the default `candidate` mode there is **no** reconciliation or supersession. A `remember` call simply writes a hidden candidate; `dawn memory approve` only flips its status to `active`. Contradicting facts are *not* reconciled when approved — that logic runs only on `auto` writes. If you rely on contradiction-handling, you must opt into `auto`.
 </Callout>
 
-<Callout type="warn" title="auto writes are not gated by permissions">
-  The design specced a permissions HITL flow (Once / Always / Deny) to gate `auto` writes, but that was **not shipped**. `auto` writes land active immediately and do **not** pass through `@dawn-ai/permissions`. Treat `auto` as fully trusting the agent's writes; use `candidate` when a human should review first.
+### `ask` mode
+
+`ask` shares `auto`'s write semantics exactly — same reconciliation, same statuses — with one difference: a **SUPERSEDE** (same identity, different value) asks a human first. The prompt shows the old and new values with Once / Always / Deny; **Always** persists a rule for the whole route, so future overwrites in that route proceed silently. ADDs and idempotent updates never prompt.
+
+- **Deny** keeps the old record active; nothing is written; the agent is told which memory was kept.
+- **Headless** (non-interactive mode, CI, evals, deployed servers): `ask` behaves exactly as `auto` — the supersede proceeds. `ask` is a *supervision affordance for interactive development*, not a security boundary. Explicit `deny` rules in the permissions config are still honored headless.
+- Decisions persist under the `memory` key in `.dawn/permissions.json` as namespace prefixes, e.g. `{ "allow": { "memory": ["workspace=app|route=/support|"] } }` (keep the trailing `|` — it prevents sibling-route prefix collisions).
+
+<Callout type="info" title="Gating writes: ask mode vs tools.approve">
+  Two gates exist, at different granularities. `writes: "ask"` (see above) prompts **only when the agent contradicts an existing memory** — a supersede-level gate inside `remember`. `tools: { approve: ["remember"] }` (see [per-tool approval](/docs/permissions)) prompts on **every** `remember` call. Prefer `ask` for memory; combining both draws a `dawn check` warning (double prompt). `auto` remains fully trusting.
 </Callout>
 
 ## Reviewing candidates
@@ -213,7 +222,7 @@ The `memory` block in `dawn.config.ts` configures L3 across the app:
 export default {
   memory: {
     // store?       — defaults to a SQLite store at <appRoot>/.dawn/memory.sqlite
-    writes: "candidate", // "off" | "candidate" | "auto" (default "candidate")
+    writes: "candidate", // "off" | "candidate" | "auto" | "ask" (default "candidate")
     indexMaxEntries: 20, // index size cap (default 20)
     // Supply tenant/user/agent dimensions at runtime for namespacing.
     resolveScope: ({ routePath, appRoot }) => ({
@@ -263,7 +272,6 @@ Long-term memory ships with the `semantic` kind and deterministic ranked recall 
 - A dev-server Memory Inspector UI.
 - Postgres / pgvector store adapters.
 - Schema-typed `remember.data` (typed loosely as `Record<string, unknown>` today).
-- Permissions HITL gating for `auto` writes (see the warning above).
 
 For anything beyond the semantic collection, use `memory.md` for stable profile text and `memory.ts` for facts the agent should accumulate over time.
 

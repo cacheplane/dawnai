@@ -1,5 +1,5 @@
 import { basename, join } from "node:path"
-import type { MemoryContext, MemoryStoreLike } from "@dawn-ai/core"
+import type { MemoryContext, MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
 import { loadDawnConfig } from "@dawn-ai/core"
 import { type RecallRankingOptions, serializeNamespace, sqliteMemoryStore } from "@dawn-ai/memory"
 import type { LoadedRouteMemory } from "./load-memory.js"
@@ -58,7 +58,7 @@ export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLi
  *
  * Defaults to `"candidate"` when no config is present.
  */
-export async function resolveMemoryWrites(appRoot: string): Promise<"off" | "candidate" | "auto"> {
+export async function resolveMemoryWrites(appRoot: string): Promise<MemoryWritesMode> {
   try {
     const loaded = await loadDawnConfig({ appRoot })
     return loaded.config.memory?.writes ?? "candidate"
@@ -71,7 +71,7 @@ export async function resolveMemoryWrites(appRoot: string): Promise<"off" | "can
 export function buildMemoryContext(args: {
   defined: LoadedRouteMemory
   store: MemoryContext["store"]
-  writes: "off" | "candidate" | "auto"
+  writes: MemoryWritesMode
   appRoot: string
   routePath: string
   now: string

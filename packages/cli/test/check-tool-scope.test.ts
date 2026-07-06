@@ -138,3 +138,36 @@ test("subagent approving an internally-gated tool draws ONLY the already-gated w
   expect(result.warnings).toHaveLength(1)
   expect(result.warnings[0]).toMatch(/already gated/)
 })
+
+test("warns when approve lists remember while memory writes mode is ask", async () => {
+  const result = await collectToolScopeIssues(
+    manifest,
+    {
+      loadScope: async () => ({ approve: ["remember"] }),
+      routeLocalToolNames: async () => ["remember"],
+    },
+    { memoryWrites: "ask" },
+  )
+  expect(result.errors).toEqual([])
+  expect(result.warnings.some((w) => w.includes('approve lists "remember"'))).toBe(true)
+})
+
+test("does not warn about remember when writes mode is not ask", async () => {
+  const result = await collectToolScopeIssues(
+    manifest,
+    {
+      loadScope: async () => ({ approve: ["remember"] }),
+      routeLocalToolNames: async () => ["remember"],
+    },
+    { memoryWrites: "auto" },
+  )
+  expect(result.warnings.some((w) => w.includes('approve lists "remember"'))).toBe(false)
+})
+
+test("does not warn about remember when no memoryWrites opts are passed", async () => {
+  const result = await collectToolScopeIssues(manifest, {
+    loadScope: async () => ({ approve: ["remember"] }),
+    routeLocalToolNames: async () => ["remember"],
+  })
+  expect(result.warnings.some((w) => w.includes('approve lists "remember"'))).toBe(false)
+})

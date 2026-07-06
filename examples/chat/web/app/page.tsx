@@ -11,13 +11,16 @@ type RouteId = "chat" | "coordinator"
 type PendingInterrupt = {
   interruptId: string
   type: string
-  kind: "command" | "path" | "tool"
+  kind: "command" | "path" | "tool" | "memory"
   detail: {
     command?: string
     operation?: string
     path?: string
     toolName?: string
     argsPreview?: string
+    identity?: string
+    oldContent?: string
+    newContent?: string
     suggestedPattern: string
   }
 }
@@ -204,7 +207,9 @@ export default function Page() {
               ? "The agent wants to run command:"
               : pendingInterrupt.kind === "tool"
                 ? `The agent wants to call tool ${pendingInterrupt.detail.toolName ?? "(unknown)"}:`
-                : `The agent wants to ${pendingInterrupt.detail.operation}:`}
+                : pendingInterrupt.kind === "memory"
+                  ? `The agent wants to overwrite a memory (${pendingInterrupt.detail.identity ?? "(unknown)"}):`
+                  : `The agent wants to ${pendingInterrupt.detail.operation}:`}
           </p>
           <code
             style={{
@@ -214,13 +219,16 @@ export default function Page() {
               border: "1px solid #ddd",
               fontFamily: "monospace",
               fontSize: 13,
+              whiteSpace: "pre-wrap",
             }}
           >
             {pendingInterrupt.kind === "command"
               ? pendingInterrupt.detail.command
               : pendingInterrupt.kind === "tool"
                 ? (pendingInterrupt.detail.argsPreview ?? "")
-                : pendingInterrupt.detail.path}
+                : pendingInterrupt.kind === "memory"
+                  ? `was: ${pendingInterrupt.detail.oldContent ?? ""}\nnow: ${pendingInterrupt.detail.newContent ?? ""}`
+                  : pendingInterrupt.detail.path}
           </code>
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
             <button onClick={() => resolveInterrupt("once")} style={{ padding: "0.5rem 1rem" }}>

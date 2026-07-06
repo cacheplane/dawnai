@@ -45,9 +45,31 @@ const baseCtx = (store: any) => ({
   },
 })
 
-function ctxWith(store: any, writes: "auto" | "candidate" | "off") {
+function ctxWith(store: any, writes: "auto" | "candidate" | "off" | "ask") {
   const ctx = baseCtx(store)
   ctx.memory = { ...ctx.memory, writes: writes as any }
+  return ctx
+}
+
+function fakePermissions(
+  mode: "interactive" | "non-interactive" | "bypass",
+  matchResult: "allow" | "deny" | "unknown" = "unknown",
+) {
+  const added: Array<{ tool: string; pattern: string }> = []
+  return {
+    added,
+    async load() {},
+    match: () => matchResult,
+    async addAllow(tool: string, pattern: string) {
+      added.push({ tool, pattern })
+    },
+    mode,
+  }
+}
+
+function askCtx(store: any, permissions?: any) {
+  const ctx = ctxWith(store, "ask" as any) as any
+  if (permissions) ctx.permissions = permissions
   return ctx
 }
 
@@ -166,5 +188,68 @@ describe("memory capability", () => {
     expect(active[0].data.value).toBe("750")
     expect(superseded).toHaveLength(1)
     expect(superseded[0].data.value).toBe("500")
+  })
+})
+
+describe("ask mode", () => {
+  const first = { subject: "billing", predicate: "escalate", value: "500" }
+  const second = { subject: "billing", predicate: "escalate", value: "750" }
+  const run = (tool: any, data: any, content: string) =>
+    tool.run({ data, content }, { signal: new AbortController().signal })
+
+  it("ADD lands active with no gate consulted", async () => {
+    const store = fakeStore()
+    const permissions = fakePermissions("non-interactive", "deny") // would block if consulted
+    const c = await createMemoryMarker().load("/r", askCtx(store, permissions))
+    const remember = c.tools!.find((t) => t.name === "remember")!
+    const result = await run(remember, first, "v1")
+    expect(String(result)).toContain("Stored memory")
+    expect(store.rows.filter((r: any) => r.status === "active")).toHaveLength(1)
+  })
+
+  it("idempotent UPDATE refreshes with no gate consulted", async () => {
+    const store = fakeStore()
+    const permissions = fakePermissions("non-interactive", "deny")
+    const c = await createMemoryMarker().load("/r", askCtx(store, permissions))
+    const remember = c.tools!.find((t) => t.name === "remember")!
+    await run(remember, first, "v1")
+    const result = await run(remember, first, "v1 refreshed")
+    expect(String(result)).toContain("Updated memory")
+  })
+
+  it("SUPERSEDE with explicit deny keeps the old value active and reports it", async () => {
+    const store = fakeStore()
+    const permissions = fakePermissions("non-interactive", "deny")
+    const c = await createMemoryMarker().load("/r", askCtx(store, permissions))
+    const remember = c.tools!.find((t) => t.name === "remember")!
+    await run(remember, first, "v1")
+    const result = await run(remember, second, "v2")
+    expect(String(result)).toContain("Kept existing memory")
+    const active = store.rows.filter((r: any) => r.status === "active")
+    expect(active).toHaveLength(1)
+    expect(active[0].data.value).toBe("500")
+    expect(store.rows.filter((r: any) => r.status === "superseded")).toHaveLength(0)
+  })
+
+  it("SUPERSEDE proceeds headless on unknown (ask ≡ auto non-interactive)", async () => {
+    const store = fakeStore()
+    const permissions = fakePermissions("non-interactive", "unknown")
+    const c = await createMemoryMarker().load("/r", askCtx(store, permissions))
+    const remember = c.tools!.find((t) => t.name === "remember")!
+    await run(remember, first, "v1")
+    const result = await run(remember, second, "v2")
+    expect(String(result)).toContain("Superseded")
+    const active = store.rows.filter((r: any) => r.status === "active")
+    expect(active).toHaveLength(1)
+    expect(active[0].data.value).toBe("750")
+  })
+
+  it("SUPERSEDE proceeds when no permissions store is in context (ask ≡ auto)", async () => {
+    const store = fakeStore()
+    const c = await createMemoryMarker().load("/r", askCtx(store))
+    const remember = c.tools!.find((t) => t.name === "remember")!
+    await run(remember, first, "v1")
+    const result = await run(remember, second, "v2")
+    expect(String(result)).toContain("Superseded")
   })
 })

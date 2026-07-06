@@ -68,8 +68,8 @@ export interface DawnConfig {
     readonly enabled?: boolean
     /** Custom memory store. Defaults to an SQLite-backed store at <appRoot>/.dawn/memory.sqlite. */
     readonly store?: import("./capabilities/types.js").MemoryStoreLike
-    /** Write-governance mode. "off" — never write; "candidate" — write as candidate (default); "auto" — write and auto-promote. */
-    readonly writes?: "off" | "candidate" | "auto"
+    /** Write-governance mode. "off" — never write; "candidate" — write as candidate (default); "auto" — write and auto-promote; "ask" — auto, but supersedes require HITL approval when interactive. */
+    readonly writes?: "off" | "candidate" | "auto" | "ask"
     /** Maximum number of entries returned by the index. */
     readonly indexMaxEntries?: number
     /** Recall ranking tuning for the default SQLite store. All fields

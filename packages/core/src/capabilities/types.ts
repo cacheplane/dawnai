@@ -35,10 +35,17 @@ export interface MemoryStoreLike {
   supersede(id: string, bySupersedingId: string): Promise<void>
 }
 
+/**
+ * Memory write-governance mode. "ask" = auto's exact write semantics, except
+ * SUPERSEDEs (same identity, different value) pass a HITL gate first — a
+ * supervision affordance, not a security boundary (headless ≡ auto).
+ */
+export type MemoryWritesMode = "off" | "candidate" | "auto" | "ask"
+
 export interface MemoryContext {
   readonly store: MemoryStoreLike
   readonly namespace: string
-  readonly writes: "off" | "candidate" | "auto"
+  readonly writes: MemoryWritesMode
   readonly defined: {
     readonly kind: string
     readonly scope: readonly string[]

@@ -119,6 +119,18 @@ export default {
   Listing `"task"` in `approve` does not gate subagent dispatch: the subagent dispatch bridge replaces the `task` tool's run after the approval wrap, so the approval never takes effect. Gating subagent dispatch is not yet supported. `dawn check` warns if you list `task` in `approve`.
 </Callout>
 
+## Memory write approval (`writes: "ask"`)
+
+Routes with [long-term memory](/docs/memory) can gate belief *changes*: with `memory: { writes: "ask" }` in `dawn.config.ts`, a `remember` call that would **supersede** an existing active memory interrupts with the old and new values. New facts and idempotent refreshes never prompt.
+
+- **Once** — this supersede proceeds.
+- **Always** — persists the route's namespace prefix under the `memory` key; all future overwrites in the route proceed silently.
+- **Deny** — the old memory stays active; the agent is told which memory was kept.
+
+Unlike bash/path/tool gates, `ask` **allows through** when no human can answer (non-interactive mode): headless, `ask` ≡ `auto`. It is a supervision affordance, not a security boundary. Explicit `deny` entries are honored in every mode except `bypass`.
+
+Hand-authored patterns should keep the trailing `|` terminator: `"workspace=app|route=/a|"` cannot collide with `route=/ab`.
+
 ## The interrupt payload
 
 When a command or path is "unknown" in interactive mode, the agent run pauses and the runtime emits an SSE event. The `kind` field tells you which gate fired.

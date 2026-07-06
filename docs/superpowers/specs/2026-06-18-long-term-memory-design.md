@@ -115,7 +115,7 @@ export default defineMemory({
 
 - Generated **`remember({ ...typed })`** tool. Config `memory: { writes: "off" | "candidate" | "auto" }` (default **`candidate`**).
   - **candidate**: writes `status:"candidate"`; promoted via `dawn memory approve <id>` / `reject <id>`.
-  - **auto**: writes `status:"active"`, gated through `@dawn-ai/permissions` HITL (first write of a pattern interrupts with Once/Always/Deny, like `runBash`).
+  - **auto**: writes `status:"active"`, gated through `@dawn-ai/permissions` HITL (first write of a pattern interrupts with Once/Always/Deny, like `runBash`). (2026-07-06: the HITL gate shipped as the separate "ask" mode — see docs/superpowers/specs/2026-07-06-memory-ask-mode-design.md.)
   - **off**: the `remember` tool is not contributed.
 - **Reconciliation on write** (deterministic, no extra LLM call so it stays testable): against the top-N namespace+keyword matches, classify ADD (no equivalent), UPDATE (same identity key, same value → patch + bump `updatedAt`), or SUPERSEDE (same identity key, different value → write new + flip old to `superseded`). The **identity key is per-kind**; for the v1 `semantic` kind it is `(subject, predicate)`. Identity and equivalence are computed from the typed `data`, never embeddings. (A future `defineMemory({ identity })` hook can declare the key for other kinds.)
 - **`dawn memory` CLI** (v1 surface): `list`, `search <query>`, `inspect <id>`, `approve <id>`, `reject <id>`, `forget <id>` (hard delete). The dev-server **Memory Inspector UI is deferred**.

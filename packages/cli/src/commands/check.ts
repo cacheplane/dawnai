@@ -4,6 +4,7 @@ import type { Command } from "commander"
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
 import { collectSandboxErrors } from "../lib/runtime/collect-sandbox-errors.js"
 import { collectToolScopeIssues } from "../lib/runtime/collect-tool-scope-errors.js"
+import { resolveMemoryWrites } from "../lib/runtime/resolve-memory.js"
 import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
 import { collectUnknownModelIdWarnings } from "../lib/runtime/warn-unknown-model-ids.js"
 
@@ -43,7 +44,8 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
       writeLine(io.stdout, `\n${warning}`)
     }
 
-    const scopeIssues = await collectToolScopeIssues(manifest)
+    const memoryWrites = await resolveMemoryWrites(manifest.appRoot)
+    const scopeIssues = await collectToolScopeIssues(manifest, undefined, { memoryWrites })
     for (const warning of scopeIssues.warnings) {
       writeLine(io.stdout, `\n${warning}`)
     }
