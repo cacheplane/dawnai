@@ -109,7 +109,11 @@ export default {
 
 ### Coexistence with the bash and path gates
 
-`runBash`, `readFile`, `writeFile`, and `listDir` keep their own pattern-aware allow/deny gates — putting them in `approve` is redundant and would double-prompt. `dawn check` warns when a route's `approve` list overlaps with these internally-gated tools, with `deny` (a dead entry, since deny wins), or grants approval to a tool a subagent hasn't also added to its own `allow` list (no-op unless allow-listed).
+`runBash`, `readFile`, `writeFile`, and `listDir` keep their own pattern-aware allow/deny gates — putting them in `approve` is redundant and would double-prompt. `dawn check` warns when a route's `approve` list:
+
+- names one of these internally-gated tools (redundant — already gated),
+- overlaps with `deny` (a dead entry, since deny wins), or
+- approves a capability tool on a subagent that the subagent hasn't also granted itself via `allow` (a no-op until allow-listed).
 
 <Callout type="warn" title="approve on task has no effect">
   Listing `"task"` in `approve` does not gate subagent dispatch: the subagent dispatch bridge replaces the `task` tool's run after the approval wrap, so the approval never takes effect. Gating subagent dispatch is not yet supported. `dawn check` warns if you list `task` in `approve`.
