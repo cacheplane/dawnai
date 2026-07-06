@@ -64,6 +64,30 @@ export default agent({ model: "gpt-5-mini", systemPrompt: "…", tools: { allow:
   Tool scoping controls which tools the model can *call* — it does not constrain what an allowed tool may *do* once invoked. A granted `writeFile` can still write anywhere its implementation permits. This is a capability boundary on the tool surface, not a sandbox.
 </Callout>
 
+### Requiring approval per call
+
+`approve` is the third `tools` knob, alongside `allow` and `deny`. Any tool named in `approve` — an authored route tool or a capability tool — requires a human-in-the-loop prompt before each call:
+
+```ts title="src/app/ops/index.ts"
+export default agent({
+  model: "gpt-5",
+  systemPrompt: "…",
+  tools: { deny: ["runBash"], approve: ["deployProd", "sendEmail"] },
+})
+```
+
+The prompt shows the call's arguments (a display-only JSON preview), but the decision itself is name-level:
+
+- **Once** — this call runs; the next call to the same tool prompts again.
+- **Always** — persists the tool name to `.dawn/permissions.json`, so future calls to that exact tool name proceed without prompting.
+- **Deny** — the call is blocked; the model receives the denial reason as the tool result.
+
+See [Permissions](/docs/permissions#per-tool-approval) for the full interrupt payload and resume flow.
+
+<Callout type="info" title="Don't list workspace tools in approve">
+  `runBash`, `readFile`, `writeFile`, and `listDir` already have their own pattern-aware allow/deny gates (see [Permissions](/docs/permissions)). Adding them to `approve` is redundant and would double-prompt — `dawn check` warns if you do.
+</Callout>
+
 ## The runtime signature
 
 The full runtime signature accepted by tool discovery is `(input, ctx) => ...`, where `ctx` is `DawnToolContext` from `@dawn-ai/sdk` — carrying `signal`, `middleware?`, and `fs`:

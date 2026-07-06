@@ -31,10 +31,18 @@ export interface PathDetail {
   readonly suggestedPattern: string
 }
 
+export interface ToolDetail {
+  readonly toolName: string
+  /** JSON.stringify(input) truncated (~500 chars). Shown in the prompt; never matched or persisted. */
+  readonly argsPreview: string
+  /** The tool name — approval decisions persist name-level under the reserved "tool" key. */
+  readonly suggestedPattern: string
+}
+
 export interface PermissionRequest {
   readonly interruptId: string
-  readonly kind: "command" | "path"
-  readonly detail: CommandDetail | PathDetail
+  readonly kind: "command" | "path" | "tool"
+  readonly detail: CommandDetail | PathDetail | ToolDetail
   readonly threadId: string
   readonly callId?: string
 }

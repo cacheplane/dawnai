@@ -11,11 +11,13 @@ type RouteId = "chat" | "coordinator"
 type PendingInterrupt = {
   interruptId: string
   type: string
-  kind: "command" | "path"
+  kind: "command" | "path" | "tool"
   detail: {
     command?: string
     operation?: string
     path?: string
+    toolName?: string
+    argsPreview?: string
     suggestedPattern: string
   }
 }
@@ -200,7 +202,9 @@ export default function Page() {
           <p style={{ margin: "0.5rem 0" }}>
             {pendingInterrupt.kind === "command"
               ? "The agent wants to run command:"
-              : `The agent wants to ${pendingInterrupt.detail.operation}:`}
+              : pendingInterrupt.kind === "tool"
+                ? `The agent wants to call tool ${pendingInterrupt.detail.toolName ?? "(unknown)"}:`
+                : `The agent wants to ${pendingInterrupt.detail.operation}:`}
           </p>
           <code
             style={{
@@ -214,7 +218,9 @@ export default function Page() {
           >
             {pendingInterrupt.kind === "command"
               ? pendingInterrupt.detail.command
-              : pendingInterrupt.detail.path}
+              : pendingInterrupt.kind === "tool"
+                ? (pendingInterrupt.detail.argsPreview ?? "")
+                : pendingInterrupt.detail.path}
           </code>
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
             <button onClick={() => resolveInterrupt("once")} style={{ padding: "0.5rem 1rem" }}>

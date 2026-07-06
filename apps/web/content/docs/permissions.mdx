@@ -49,6 +49,76 @@ DAWN_PERMISSIONS_MODE=non-interactive dawn dev
 
 The env var takes precedence over `permissions.mode` in `dawn.config.ts`.
 
+## Per-tool approval
+
+Alongside the `runBash` and path gates, a route can require human approval before *any* named tool call — authored route tool or capability tool — via the third `tools` knob, `approve`:
+
+```ts title="src/app/ops/index.ts"
+export default agent({
+  model: "gpt-5",
+  systemPrompt: "…",
+  tools: { approve: ["deployProd"] },
+})
+```
+
+Every call to `deployProd` pauses the run and emits a `kind: "tool"` interrupt, unless the tool is pre-approved (see below) or a prior "Always" decision already covers it.
+
+### The tool interrupt payload
+
+```
+event: interrupt
+data: {
+  "interruptId": "perm-ghi789",
+  "type": "permission-request",
+  "kind": "tool",
+  "detail": {
+    "toolName": "deployProd",
+    "argsPreview": "{\"env\":\"prod\",\"version\":\"1.4.2\"}",
+    "suggestedPattern": "deployProd"
+  }
+}
+```
+
+`detail.argsPreview` is a display-only JSON preview of the call's arguments (truncated around 500 characters) — it is shown to the human but never matched against or persisted. `detail.suggestedPattern` is always the tool name itself.
+
+### Decisions are name-level
+
+Resuming a `kind: "tool"` interrupt uses the same `once` / `always` / `deny` decisions as the other gates, but the semantics are tool-name-level rather than pattern-level:
+
+| Decision | Effect |
+|---|---|
+| `once` | This call runs. The next call to the same tool prompts again. |
+| `always` | Persists the tool **name** under the reserved `tool` key in `.dawn/permissions.json` — `{ "allow": { "tool": ["deployProd"] } }`. Matching against this key is **exact-name**, not prefix — unlike `bash` and path patterns. |
+| `deny` | The call is blocked. Unlike the workspace gates (which surface a thrown error), the denial reason is **returned as the tool result** — the model sees it as a normal tool response and can adapt. |
+
+### Pre-approval in config
+
+Pre-approve a tool so it never prompts, by adding it to `permissions.allow.tool` in `dawn.config.ts`:
+
+```ts title="dawn.config.ts"
+export default {
+  permissions: {
+    allow: { tool: ["deployProd"] },
+  },
+}
+```
+
+### Mode behavior
+
+`approve` respects the same `permissions.mode` as the other gates: `non-interactive` denies an unapproved tool call immediately (fail-closed), and `bypass` skips the gate entirely (dev/test only).
+
+### Coexistence with the bash and path gates
+
+`runBash`, `readFile`, `writeFile`, and `listDir` keep their own pattern-aware allow/deny gates — putting them in `approve` is redundant and would double-prompt. `dawn check` warns when a route's `approve` list:
+
+- names one of these internally-gated tools (redundant — already gated),
+- overlaps with `deny` (a dead entry, since deny wins), or
+- approves a capability tool on a subagent that the subagent hasn't also granted itself via `allow` (a no-op until allow-listed).
+
+<Callout type="warn" title="approve on task has no effect">
+  Listing `"task"` in `approve` does not gate subagent dispatch: the subagent dispatch bridge replaces the `task` tool's run after the approval wrap, so the approval never takes effect. Gating subagent dispatch is not yet supported. `dawn check` warns if you list `task` in `approve`.
+</Callout>
+
 ## The interrupt payload
 
 When a command or path is "unknown" in interactive mode, the agent run pauses and the runtime emits an SSE event. The `kind` field tells you which gate fired.

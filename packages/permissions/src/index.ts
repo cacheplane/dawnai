@@ -9,4 +9,5 @@ export type {
   PermissionRequest,
   PermissionsFile,
   PermissionsStore,
+  ToolDetail,
 } from "./types.js"
