@@ -118,7 +118,12 @@ const def = defineEval({
 })
 
 const report = await runEval(def, {
-  runCase: (testCase) => h.run({ input: testCase.input, fixtures: testCase.fixtures }),
+  runCase: (testCase) => {
+    if (typeof testCase.input !== "string") {
+      throw new Error("This eval expects string inputs.")
+    }
+    return h.run({ input: testCase.input, fixtures: testCase.fixtures })
+  },
 })
 ```
 

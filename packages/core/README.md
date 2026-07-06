@@ -121,7 +121,13 @@ import {
 
 const manifest = await discoverRoutes({ appRoot: process.cwd() })
 const toolTypes = await Promise.all(
-  manifest.routes.map((route) => extractToolTypesForRoute(route)),
+  manifest.routes.map(async (route) => ({
+    pathname: route.pathname,
+    tools: await extractToolTypesForRoute({
+      routeDir: route.routeDir,
+      sharedToolsDir: `${process.cwd()}/src`,
+    }),
+  })),
 )
 
 const dts = renderDawnTypes(manifest, toolTypes)
