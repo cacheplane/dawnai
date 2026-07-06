@@ -304,6 +304,8 @@ it.skipIf(!live)(
       const r = await h.run({
         input: "What is acme's billing escalation threshold?",
       })
+      expectToolCalled(r, "recall")
+      expect(String(r.toolResults.find((t) => t.name === "recall")?.content ?? "")).toContain("500")
       expect(r.finalMessage).toContain("500")
     } finally {
       await h.close()
