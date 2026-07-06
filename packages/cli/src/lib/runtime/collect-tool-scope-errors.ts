@@ -1,4 +1,4 @@
-import type { RouteManifest } from "@dawn-ai/core"
+import type { MemoryWritesMode, RouteManifest } from "@dawn-ai/core"
 import { BUILT_IN_TOOL_NAMES } from "@dawn-ai/core"
 import { isDawnAgent } from "@dawn-ai/sdk"
 
@@ -58,7 +58,7 @@ const defaultDeps: Deps = {
 export async function collectToolScopeIssues(
   manifest: RouteManifest,
   deps: Deps = defaultDeps,
-  opts?: { readonly memoryWrites?: "off" | "candidate" | "auto" | "ask" },
+  opts?: { readonly memoryWrites?: MemoryWritesMode },
 ): Promise<ToolScopeIssues> {
   const errors: string[] = []
   const warnings: string[] = []

@@ -157,6 +157,9 @@ export function createMemoryMarker(): CapabilityMarker {
               if (mem.writes === "ask") {
                 const gate = await gateMemorySupersede(permissions, {
                   namespace: mem.namespace,
+                  // Human-readable display form for the prompt — deliberately NOT
+                  // the `identityKey` match key above (which JSON.stringifies to
+                  // stay unambiguous); do not merge the two.
                   identity: identityKeys.map((k) => String(data[k] ?? "")).join(" / "),
                   oldId: target.id,
                   oldContent: target.content,

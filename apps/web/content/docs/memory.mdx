@@ -146,7 +146,7 @@ In **`auto`** mode each write reconciles inline against existing active records 
 - Decisions persist under the `memory` key in `.dawn/permissions.json` as namespace prefixes, e.g. `{ "allow": { "memory": ["workspace=app|route=/support|"] } }` (keep the trailing `|` — it prevents sibling-route prefix collisions).
 
 <Callout type="info" title="Gating writes: ask mode vs tools.approve">
-  Two gates exist, at different granularities. `writes: "ask"` (below) prompts **only when the agent contradicts an existing memory** — a supersede-level gate inside `remember`. `tools: { approve: ["remember"] }` (see [per-tool approval](/docs/permissions)) prompts on **every** `remember` call. Prefer `ask` for memory; combining both draws a `dawn check` warning (double prompt). `auto` remains fully trusting.
+  Two gates exist, at different granularities. `writes: "ask"` (see above) prompts **only when the agent contradicts an existing memory** — a supersede-level gate inside `remember`. `tools: { approve: ["remember"] }` (see [per-tool approval](/docs/permissions)) prompts on **every** `remember` call. Prefer `ask` for memory; combining both draws a `dawn check` warning (double prompt). `auto` remains fully trusting.
 </Callout>
 
 ## Reviewing candidates
