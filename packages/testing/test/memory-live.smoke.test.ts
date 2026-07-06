@@ -265,3 +265,49 @@ it.skipIf(!live)(
   },
   180_000,
 )
+
+it.skipIf(!live)(
+  "ranked recall: real model finds the relevant old fact past a fresh distractor",
+  async () => {
+    // Seed the backdated relevant fact (remember stamps request time; age must be seeded).
+    const store = sqliteMemoryStore({ path: dbPath(probeRoot) })
+    const sixWeeksAgo = new Date(Date.now() - 42 * 24 * 60 * 60 * 1000).toISOString()
+    await store.put({
+      id: "memory_live_ranktarget",
+      kind: "semantic",
+      namespace: "route=/memory-chat",
+      content: "acme billing escalation threshold is 500 dollars",
+      data: { subject: "acme", predicate: "billing-escalation-threshold", value: "500 dollars" },
+      source: { type: "tool", id: "remember" },
+      confidence: 1,
+      tags: [],
+      status: "active",
+      createdAt: sixWeeksAgo,
+      updatedAt: sixWeeksAgo,
+    })
+
+    const h = await createAgentHarness({
+      appRoot: probeRoot,
+      route: "/memory-chat#agent",
+      live: true,
+    })
+    try {
+      h.reset()
+      // Real model stores a fresh marginal distractor its own way.
+      await h.run({
+        input:
+          "Use the remember tool now. data: subject 'acme-contact', predicate 'prefers', value 'slack'.",
+      })
+      h.reset()
+      // Natural question — covers what aimock cannot: whether the model's own
+      // query phrasing is good enough for the ranker.
+      const r = await h.run({
+        input: "What is acme's billing escalation threshold?",
+      })
+      expect(r.finalMessage).toContain("500")
+    } finally {
+      await h.close()
+    }
+  },
+  150_000,
+)
