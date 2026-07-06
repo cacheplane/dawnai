@@ -81,11 +81,57 @@ export async function gateBashOp(
   return { allowed: true }
 }
 
+/**
+ * Generic per-tool approval gate (tools.approve). Name-level: the decision
+ * covers the tool name; argsPreview is display-only. Persisted decisions live
+ * under the reserved "tool" key in .dawn/permissions.json (exact-name match —
+ * see @dawn-ai/permissions pattern-matching).
+ */
+export async function gateToolOp(
+  permissions: PermissionsStore | undefined,
+  toolName: string,
+  argsPreview: string,
+  opts?: { readonly interruptCapable?: boolean },
+): Promise<GateResult> {
+  if (!permissions) return { allowed: true }
+  if (permissions.mode === "bypass") return { allowed: true }
+
+  const decision = permissions.match("tool", toolName)
+  if (decision === "allow") return { allowed: true }
+  if (decision === "deny") {
+    return { allowed: false, reason: `Permission denied by user: tool ${toolName}` }
+  }
+  if (permissions.mode === "non-interactive") {
+    return { allowed: false, reason: `Permission denied (fail-closed): tool ${toolName}` }
+  }
+  if (opts?.interruptCapable === false) {
+    return {
+      allowed: false,
+      reason:
+        `Permission denied: tool "${toolName}" requires approval and interactive ` +
+        `permission prompts are not available in this execution context. ` +
+        `Add an allow rule for "tool" to the permissions config in dawn.config.ts.`,
+    }
+  }
+  const result = await emitPermissionInterrupt({
+    kind: "tool",
+    toolName,
+    argsPreview,
+    permissions,
+  })
+  if (result === "deny") {
+    return { allowed: false, reason: `Permission denied by user: tool ${toolName}` }
+  }
+  return { allowed: true }
+}
+
 interface InterruptArgs {
-  kind: "command" | "path"
+  kind: "command" | "path" | "tool"
   command?: string
   operation?: PathOperation
   path?: string
+  toolName?: string
+  argsPreview?: string
   permissions: PermissionsStore
 }
 
@@ -94,7 +140,9 @@ async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "
   const suggestedPattern =
     args.kind === "command"
       ? suggestedCommandPattern(args.command ?? "")
-      : suggestedPathPattern(args.path ?? "")
+      : args.kind === "tool"
+        ? (args.toolName ?? "")
+        : suggestedPathPattern(args.path ?? "")
   const payload = {
     interruptId,
     type: "permission-request" as const,
@@ -102,16 +150,23 @@ async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "
     detail:
       args.kind === "command"
         ? { command: args.command ?? "", suggestedPattern }
-        : {
-            operation: args.operation ?? "readFile",
-            path: args.path ?? "",
-            suggestedPattern,
-          },
+        : args.kind === "tool"
+          ? { toolName: args.toolName ?? "", argsPreview: args.argsPreview ?? "", suggestedPattern }
+          : {
+              operation: args.operation ?? "readFile",
+              path: args.path ?? "",
+              suggestedPattern,
+            },
   }
   const decision = interrupt(payload) as "once" | "always" | "deny"
   if (decision === "deny") return "deny"
   if (decision === "always") {
-    const tool = args.kind === "command" ? "bash" : (args.operation ?? "readFile")
+    const tool =
+      args.kind === "command"
+        ? "bash"
+        : args.kind === "tool"
+          ? "tool"
+          : (args.operation ?? "readFile")
     await args.permissions.addAllow(tool, suggestedPattern)
   }
   return "allow"
