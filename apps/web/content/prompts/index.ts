@@ -39,12 +39,12 @@ const SCAFFOLD = `Help me scaffold a new Dawn app. Dawn is a TypeScript-first me
    echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | pnpm exec dawn run /research
    \`\`\`
 
-4. Start the dev server:
+4. Start the dev server in one terminal:
    \`\`\`
    pnpm exec dawn dev --port 2024
    \`\`\`
 
-5. Show the Agent Protocol shape for the same route:
+5. In another terminal, show the Agent Protocol shape for the same route:
    \`\`\`
    THREAD_ID=$(curl -s -X POST http://127.0.0.1:2024/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
    curl -s -X POST http://127.0.0.1:2024/threads/$THREAD_ID/runs/wait \\
