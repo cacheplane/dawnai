@@ -57,7 +57,7 @@ export default {
   // keys below tune how those typed memories are stored, recalled, and written.
   // Defaults apply to every route with a memory.ts even when this key is absent.
   memory: {
-    writes: "candidate",   // default — writes land for review, hidden from recall
+    writes: "candidate",   // "off" | "candidate" | "auto" | "ask" — default "candidate"
     indexMaxEntries: 20,   // default — cap on memories injected into the prompt index
     // store: myMemoryStore,  // default: SQLite at .dawn/memory.sqlite
     // resolveScope: ({ routePath, appRoot }) => ({ tenant: "acme" }),
@@ -218,7 +218,7 @@ Configures long-term memory governance. A route opts into memory by adding a `me
 ```ts
 memory?: {
   store?: MemoryStore
-  writes?: "off" | "candidate" | "auto"
+  writes?: "off" | "candidate" | "auto" | "ask"
   indexMaxEntries?: number
   resolveScope?: (ctx: { routePath: string; appRoot: string }) => Record<string, string>
 }
@@ -227,11 +227,11 @@ memory?: {
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `store` | `MemoryStore` | SQLite at `.dawn/memory.sqlite` | The memory store backend. Defaults to an SQLite-backed store at `<appRoot>/.dawn/memory.sqlite`. Override to plug in a custom backend. |
-| `writes` | `"off" \| "candidate" \| "auto"` | `"candidate"` | Write governance for the `remember` tool. `off` — recall-only; the `remember` tool is not exposed. `candidate` — writes land as candidates for review, hidden from `recall` until promoted with `dawn memory approve`. `auto` — writes are active immediately, with inline identity reconciliation (idempotent updates and supersede-on-conflict). |
+| `writes` | `"off" \| "candidate" \| "auto" \| "ask"` | `"candidate"` | Write governance for the `remember` tool. `off` — recall-only; the `remember` tool is not exposed. `candidate` — writes land as candidates for review, hidden from `recall` until promoted with `dawn memory approve`. `auto` — writes are active immediately, with inline identity reconciliation (idempotent updates and supersede-on-conflict). `ask` — same as `auto`, except a supersede (belief contradiction) interrupts for human Once/Always/Deny approval when running interactively; headless behaves exactly like `auto`. |
 | `indexMaxEntries` | `number` | `20` | Cap on how many in-scope memories are injected into the prompt memory index. |
 | `resolveScope` | `(ctx: { routePath; appRoot }) => Record<string, string>` | — | Supplies runtime namespace dimensions (e.g. `tenant`, `user`, `agent`) for the memory namespace. Only the dimensions a route declares in its `memory.ts` scope are applied. |
 
-See [Memory](/docs/memory) for the full long-term-memory model and the [`dawn memory`](/docs/cli#dawn-memory) CLI for reviewing candidate writes.
+See [Memory](/docs/memory) for the full long-term-memory model and [Permissions](/docs/permissions#memory-write-approval-writes-ask) for the `ask`-mode HITL flow, plus the [`dawn memory`](/docs/cli#dawn-memory) CLI for reviewing candidate writes.
 
 ---
 
