@@ -149,16 +149,15 @@ export OPENAI_API_KEY=sk-...
 npx dawn dev --port 2024
 ```
 
-The dev server exposes the Agent Protocol. Create a thread, then run it:
+The dev server exposes the Agent Protocol. In another terminal, create a thread,
+capture its id, then run the research agent on that thread:
 
 ```bash
-# 1. Create a thread
-curl -s -X POST http://127.0.0.1:2024/threads \
+THREAD_ID=$(curl -s -X POST http://127.0.0.1:2024/threads \
   -H "Content-Type: application/json" \
-  -d '{}' | jq .
+  -d '{}' | jq -r .thread_id)
 
-# 2. Run the agent on that thread (replace <thread_id> with the id from step 1)
-curl -s -X POST http://127.0.0.1:2024/threads/<thread_id>/runs/wait \
+curl -s -X POST http://127.0.0.1:2024/threads/$THREAD_ID/runs/wait \
   -H "Content-Type: application/json" \
   -d '{
     "route": "/research#agent",
