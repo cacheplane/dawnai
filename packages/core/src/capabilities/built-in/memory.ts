@@ -79,8 +79,11 @@ export function createMemoryMarker(): CapabilityMarker {
             // NOT Date.now() (determinism rule; see module docblock).
             now: mem.now,
           })
-          if (rows.length === 0) return "(no memories found)"
-          return rows.map((r) => `${r.id}: ${r.content}`).join("\n")
+          // Wrap in {result} so the langchain bridge uses the string verbatim as
+          // the ToolMessage content; a bare string hits unwrapToolResult's
+          // JSON.stringify path, quoting it and escaping the newlines below.
+          if (rows.length === 0) return { result: "(no memories found)" }
+          return { result: rows.map((r) => `${r.id}: ${r.content}`).join("\n") }
         },
       }
 
@@ -96,7 +99,8 @@ export function createMemoryMarker(): CapabilityMarker {
             confidence?: number
           }
           const validated = mem.validate(inp.data)
-          if (!validated.ok) return `Rejected: ${validated.errors}`
+          // All returns below wrap in {result} — see the recall tool's note.
+          if (!validated.ok) return { result: `Rejected: ${validated.errors}` }
           const data = validated.value
           const identityKeys = mem.defined.identity ?? DEFAULT_SEMANTIC_IDENTITY
 
@@ -152,7 +156,7 @@ export function createMemoryMarker(): CapabilityMarker {
                   confidence,
                   tags,
                 })
-                return `Updated memory ${target.id}.`
+                return { result: `Updated memory ${target.id}.` }
               }
               // Same identity but different value — supersede. In "ask" mode this
               // is the one write that gates: the agent is contradicting a prior
@@ -169,26 +173,27 @@ export function createMemoryMarker(): CapabilityMarker {
                   newContent: content,
                 })
                 if (!gate.allowed) {
-                  return (
-                    `Kept existing memory ${target.id} ("${target.content}"); ` +
-                    `your contradicting value was not stored (${gate.reason}).`
-                  )
+                  return {
+                    result:
+                      `Kept existing memory ${target.id} ("${target.content}"); ` +
+                      `your contradicting value was not stored (${gate.reason}).`,
+                  }
                 }
               }
               await mem.store.put(record)
               await mem.store.supersede(target.id, id)
-              return `Superseded ${target.id} with ${id}.`
+              return { result: `Superseded ${target.id} with ${id}.` }
             }
 
             // No existing record with same identity — add new active row
             await mem.store.put(record)
-            return `Stored memory ${id}.`
+            return { result: `Stored memory ${id}.` }
           }
 
           // Candidate mode (and "off" never reaches here — remember tool absent):
           // write a candidate; reconciliation happens later at CLI approval.
           await mem.store.put(record)
-          return `Stored memory candidate ${id} (pending approval).`
+          return { result: `Stored memory candidate ${id} (pending approval).` }
         },
       }
 
