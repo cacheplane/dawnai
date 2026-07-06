@@ -19,6 +19,7 @@ export async function resolveSandboxManager(appRoot: string): Promise<SandboxMan
     network: sandbox.network ?? DEFAULT_NETWORK,
     ...(sandbox.env ? { env: sandbox.env } : {}),
     ...(sandbox.resources ? { resources: sandbox.resources } : {}),
+    ...(sandbox.security ? { security: sandbox.security } : {}),
   }
   return new SandboxManager({
     provider: sandbox.provider,
