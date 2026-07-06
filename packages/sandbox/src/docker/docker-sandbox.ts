@@ -60,7 +60,10 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
     const user: { uid: number; gid: number } | undefined =
       sec.runAsNonRoot === false
         ? undefined
-        : typeof sec.runAsNonRoot === "object"
+        : // `typeof null === "object"`, so guard against it explicitly — a raw-parsed
+          // config could carry null (the TS type excludes it); fail SAFE to the
+          // hardened non-root default rather than silently running as the image's root.
+          typeof sec.runAsNonRoot === "object" && sec.runAsNonRoot !== null
           ? sec.runAsNonRoot
           : { uid: 1000, gid: 1000 }
 
@@ -75,10 +78,12 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
 
     // Architecture B (no steady-state root): a fresh named volume mounts
     // root:root, so a non-root keeper cannot write /workspace. Fix it with a
-    // CREATE-ONLY, VOLUME-ABSENCE-GATED, ephemeral (`--rm`) root chown — the
+    // CREATE-ONLY, VOLUME-ABSENCE-CHECKED, ephemeral (`--rm`) root chown — the
     // only root that ever runs, and it takes no agent input. On reattach (the
     // volume already exists) this is skipped so a populated volume is never
     // re-chowned. Skipped entirely when runAsNonRoot:false (`user` undefined).
+    // The inspect→chown is not atomic, but chown is idempotent, so two racing
+    // acquires for the same fresh thread both converge on the same ownership.
     if (user) {
       const volExists = await docker.run(["volume", "inspect", volumeName(threadId)], { signal })
       if (volExists.exitCode !== 0) {

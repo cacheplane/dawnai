@@ -29,15 +29,17 @@ export function dockerExec(
       const cdPrefix = cwd ? `cd ${shellQuote(cwd)} && ` : ""
       const full = `${envPrefix}${cdPrefix}${args.command}`
       const shArgs = ["sh", "-c", full]
-      const argv =
-        opts.timeoutMs !== undefined
-          ? ["timeout", `${Math.ceil(opts.timeoutMs / 1000)}s`, ...shArgs]
-          : shArgs
+      // `timeout` has second granularity, so round up to the enforced ceiling and
+      // report THAT (not the raw ms) — otherwise `timeoutMs: 500` reports "500ms"
+      // while the process actually gets a full 1s.
+      const timeoutSecs =
+        opts.timeoutMs !== undefined ? Math.ceil(opts.timeoutMs / 1000) : undefined
+      const argv = timeoutSecs !== undefined ? ["timeout", `${timeoutSecs}s`, ...shArgs] : shArgs
       const r = await docker.exec(container, argv, { signal: ctx.signal })
-      if (opts.timeoutMs !== undefined && r.exitCode === 124) {
+      if (timeoutSecs !== undefined && r.exitCode === 124) {
         return {
           stdout: r.stdout,
-          stderr: `${r.stderr}${r.stderr ? "\n" : ""}Command timed out after ${opts.timeoutMs}ms (resources.timeoutMs).`,
+          stderr: `${r.stderr}${r.stderr ? "\n" : ""}Command timed out after ${timeoutSecs}s (resources.timeoutMs: ${opts.timeoutMs}ms).`,
           exitCode: 124,
         }
       }

@@ -175,6 +175,17 @@ describe("dockerSandbox hardening flags", () => {
     })
     expect(acquireArgs(runs)).toContain("--user 2000:3000")
   })
+
+  test("runAsNonRoot: null (raw-parsed config) still runs non-root — fails safe, not root", async () => {
+    const { docker, runs } = recordingDocker()
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "deny" }, security: { runAsNonRoot: null as never } },
+      signal: signal(),
+    })
+    expect(acquireArgs(runs)).toContain("--user 1000:1000")
+  })
 })
 
 describe("dockerSandbox chown-init (Architecture B)", () => {

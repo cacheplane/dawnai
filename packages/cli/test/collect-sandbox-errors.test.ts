@@ -72,6 +72,13 @@ describe("collectSandboxErrors: security shape", () => {
     expect(errors.join("\n")).toMatch(/uid|gid/)
   })
 
+  test("runAsNonRoot: null → error (must be boolean or object, not null)", async () => {
+    const errors = await collectSandboxErrors({
+      sandbox: { provider: ok, security: { runAsNonRoot: null as never } },
+    })
+    expect(errors.join("\n")).toMatch(/not null/)
+  })
+
   test("valid security → no errors", async () => {
     expect(
       await collectSandboxErrors({

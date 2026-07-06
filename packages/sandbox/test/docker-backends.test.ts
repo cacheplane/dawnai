@@ -176,8 +176,19 @@ describe("dockerExec timeout", () => {
     )
     const r = await exec.runCommand({ command: "sleep 999" }, ctx)
     expect(r.exitCode).toBe(124)
-    expect(r.stderr).toMatch(/timed out after 500ms/i)
-    expect(r.stderr).toMatch(/resources\.timeoutMs/)
+    expect(r.stderr).toMatch(/timed out after 1s/i) // ceil(500/1000)
+    expect(r.stderr).toMatch(/resources\.timeoutMs: 500ms/)
+  })
+
+  test("exit 124 stderr reports the rounded-up ceiling AND the raw configured ms", async () => {
+    const exec = dockerExec(
+      fakeDocker({ exec: async () => ({ stdout: "", stderr: "", exitCode: 124 }) }),
+      "c1",
+      { timeoutMs: 500 },
+    )
+    const r = await exec.runCommand({ command: "sleep 999" }, ctx)
+    expect(r.stderr).toContain("after 1s")
+    expect(r.stderr).toContain("resources.timeoutMs: 500ms")
   })
 
   test("still validates env keys (regression: keep existing behavior)", async () => {

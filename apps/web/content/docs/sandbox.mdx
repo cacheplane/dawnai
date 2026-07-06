@@ -96,7 +96,7 @@ sandbox: {
 },
 ```
 
-It's enforced only when set — omitting `resources.timeoutMs` leaves exec calls unbounded in duration (still subject to `memoryMb`/`cpus` caps, if configured).
+It's enforced only when set — omitting `resources.timeoutMs` leaves exec calls unbounded in duration (still subject to `memoryMb`/`cpus` caps, if configured). Enforcement shells out to the `timeout` binary (GNU coreutils) inside the container, so when you set `resources.timeoutMs` make sure your image ships it — most full base images (`node:22-slim`, `debian`, `ubuntu`) do, but minimal ones (`alpine` without the `coreutils` package, distroless) may not. The ceiling is rounded up to whole seconds (`timeoutMs: 500` enforces a 1-second limit).
 
 ## Network policy
 
