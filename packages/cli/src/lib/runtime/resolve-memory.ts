@@ -39,14 +39,17 @@ export function routeNamespaceKey(routePath: string): string {
  * `<appRoot>/.dawn/memory.sqlite`.
  */
 export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLike> {
+  let recall: Record<string, unknown> | undefined
   try {
     const loaded = await loadDawnConfig({ appRoot })
     if (loaded.config.memory?.store) return loaded.config.memory.store as MemoryStoreLike
+    recall = loaded.config.memory?.recall as Record<string, unknown> | undefined
   } catch {
     // no dawn.config.ts / unreadable — use default
   }
   return sqliteMemoryStore({
     path: join(appRoot, ".dawn", "memory.sqlite"),
+    ...(recall ? { recall } : {}),
   }) as unknown as MemoryStoreLike
 }
 
