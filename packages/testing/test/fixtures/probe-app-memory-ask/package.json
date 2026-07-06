@@ -1,0 +1,5 @@
+{
+  "name": "probe-app-memory-ask",
+  "private": true,
+  "type": "module"
+}
