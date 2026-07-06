@@ -27,6 +27,7 @@ export type {
   MemoryContext,
   MemoryRecordLike,
   MemoryStoreLike,
+  MemoryWritesMode,
   PromptFragment,
   StreamTransformer,
   StreamTransformerInput,
