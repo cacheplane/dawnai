@@ -64,7 +64,7 @@ export interface ToolDetail {
 }
 ```
 
-**Store and file format unchanged.** A reserved `"tool"` key in the existing `PermissionsFile` maps carries tool-name patterns:
+**Store and file format unchanged**, with one documented semantic carve-out: `matchPermission` is prefix-based (`candidate.startsWith(pattern)`), which is wrong for tool names (`deploy` would match `deployProd`). The reserved `"tool"` key therefore uses **exact equality** — a one-line, well-commented special case in `pattern-matching.ts`. A reserved `"tool"` key in the existing `PermissionsFile` maps carries tool names:
 
 ```jsonc
 // .dawn/permissions.json
@@ -114,7 +114,7 @@ The interrupt rides the proven path unchanged: `interrupt()` → `GraphInterrupt
 ## Error handling / edge cases
 
 - **Denied call** → tool returns the denial reason string as its result; the run continues (no crash), matching the bash-gate contract.
-- **`approve` on a tool the route doesn't have** → build-time error (above); the runtime wrapper never sees unknown names because wrapping happens after scope filtering.
+- **`approve` on a tool the route doesn't have** → build-time error (above) AND a runtime throw: `resolveToolScope` validates `approve` names alongside `allow`/`deny`, so typos fail loud even when `dawn check` was skipped.
 - **Resume across restart** → state-based resume (Phase-3 design) already handles it; the `tool` kind adds no new state.
 - **Non-serializable args** → `argsPreview` falls back to `String(input)` inside a try/catch; preview is best-effort display only.
 - **Multiple gated calls in one turn** → each tool call interrupts independently (LangGraph parks one interrupt per tool node execution; sequential resume — existing behavior, unchanged).
@@ -128,7 +128,7 @@ The interrupt rides the proven path unchanged: `interrupt()` → `GraphInterrupt
   1. run → assert `interrupt` envelope with `kind: "tool"`, `toolName: "deployProd"`, non-empty `argsPreview` → `resume("once")` → tool executes, final message reflects it.
   2. `resume("deny")` → tool result is the denial reason; run completes.
   3. `resume("always")` → `.dawn/permissions.json` gains `allow.tool: ["deployProd"]`; a **fresh run does not prompt**.
-  4. a subagent with its own `approve` gates its tool through the dispatch path.
+  4. a subagent with its own `approve` gates its tool through the dispatch path — asserts the `kind: "tool"` interrupt for the subagent's tool surfaces on the parent stream. (Resume *into* a child-graph prompt inherits the platform's existing nested-interrupt behavior — the same as bash gates inside subagents today — and is not asserted here.)
 
 ## Documentation & website (in scope, thorough)
 
