@@ -53,7 +53,7 @@ Where the two diverge is worth being precise about, including where eve is ahead
 | Sandboxed compute | First-class adapter (Vercel Sandbox / Docker / microsandbox / just-bash) | Opt-in `sandbox` config with a provider contract and Docker reference implementation |
 | Channels | Slack, Discord, GitHub | None built in; you wire your own over the HTTP API |
 | Observability | OpenTelemetry tracing | LangSmith tracing (automatic via LangGraph) |
-| Evals | Built in | `dawn eval`, replay and live modes, co-located per route |
+| Evals / testing | Built in | `dawn eval` replay/live modes plus `@dawn-ai/testing` harnesses and matchers |
 | Runtime | Vercel | LangGraph.js |
 | Deploy | `vercel deploy`, unchanged project | `dawn build` → `langgraph.json` → LangSmith |
 | License | Apache 2.0 | MIT |
@@ -66,7 +66,7 @@ A table flattens nuance, so let me expand the rows that actually matter.
 
 **Channels.** eve ships Slack, Discord, and GitHub as built-in surfaces. Dawn does not. Dawn is a headless runtime that exposes the Agent Protocol over HTTP, and you bring the surface: a chat UI, a Slack bot, a cron job, whatever points at the API. That is more wiring up front and more freedom after. If you want a Slack agent this afternoon, eve is the shorter path.
 
-**Durable execution and evals.** Both ship these, and I think they are close. Dawn persists threads through a SQLite checkpointer, so a conversation survives a process restart, and `dawn eval` runs co-located evals in deterministic replay mode that is safe to run in CI, with `--live` and `--record` for local real-model measurement and fixture capture. eve ships durable execution and a built-in evals system in the same spirit. This is convergence again, not a gap.
+**Durable execution, tests, and evals.** Both ship these, and I think they are close. Dawn persists threads through a SQLite checkpointer, so a conversation survives a process restart. For scenario-level testing, `@dawn-ai/testing` ships `createAgentHarness`, fixture replay, tool/final-message matchers, and route/tool/workspace harnesses for CI-safe checks. For quality gates, `dawn eval` runs co-located evals in deterministic replay mode, with `--live` and `--record` for local real-model measurement and fixture capture. eve ships durable execution and a built-in evals system in the same spirit. This is convergence again, not a gap.
 
 **Runtime and deploy.** eve is a Vercel project. Its best trick is that `vercel deploy` ships the agent to production unchanged, exactly as it ran on your machine. Dawn is built on the open [Agent Protocol](/docs/dev-server), the runtime contract LangGraph.js implements. `dawn dev` serves the Agent Protocol locally, and `dawn build` emits a `langgraph.json` you deploy to LangSmith.
 
