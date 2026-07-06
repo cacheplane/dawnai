@@ -39,10 +39,25 @@ export interface ToolDetail {
   readonly suggestedPattern: string
 }
 
+export interface MemoryDetail {
+  /** Full memory namespace of the write (e.g. "workspace=app|route=/support"). */
+  readonly namespace: string
+  /** Rendered identity key of the contradicted fact, e.g. "acme / payment-terms". */
+  readonly identity: string
+  /** Id of the active record that would be superseded. */
+  readonly oldId: string
+  /** Content of the record being overwritten. */
+  readonly oldContent: string
+  /** Content of the replacement. */
+  readonly newContent: string
+  /** Workspace+route namespace prefix (terminator included) — persisted on "always" under the reserved "memory" key. */
+  readonly suggestedPattern: string
+}
+
 export interface PermissionRequest {
   readonly interruptId: string
-  readonly kind: "command" | "path" | "tool"
-  readonly detail: CommandDetail | PathDetail | ToolDetail
+  readonly kind: "command" | "path" | "tool" | "memory"
+  readonly detail: CommandDetail | PathDetail | ToolDetail | MemoryDetail
   readonly threadId: string
   readonly callId?: string
 }

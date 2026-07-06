@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   suggestedCommandPattern,
+  suggestedMemoryPattern,
   suggestedPathPattern,
 } from "../src/suggested-pattern.js"
 
@@ -37,5 +38,23 @@ describe("suggestedPathPattern", () => {
   })
   it("handles relative paths", () => {
     expect(suggestedPathPattern("notes/agenda.md")).toBe("notes/")
+  })
+})
+
+describe("suggestedMemoryPattern", () => {
+  it("returns the workspace+route prefix with a trailing terminator", () => {
+    expect(suggestedMemoryPattern("workspace=app|route=/support|tenant=acme")).toBe(
+      "workspace=app|route=/support|",
+    )
+  })
+
+  it("handles a namespace with no dims after route", () => {
+    expect(suggestedMemoryPattern("workspace=app|route=/support")).toBe(
+      "workspace=app|route=/support|",
+    )
+  })
+
+  it("falls back to the whole namespace when route is absent", () => {
+    expect(suggestedMemoryPattern("workspace=app")).toBe("workspace=app|")
   })
 })

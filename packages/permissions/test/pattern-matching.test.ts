@@ -61,3 +61,28 @@ describe('reserved "tool" key uses exact matching', () => {
     expect(matchPermission("bash", "anything", { bash: [""] }, {})).toBe("allow")
   })
 })
+
+describe("memory key (prefix + terminator convention)", () => {
+  // Callers match memory candidates as `namespace + "|"` so a /a rule can
+  // never prefix-match a /ab namespace. matchPermission itself is unchanged.
+  const allow = { memory: ["workspace=app|route=/a|"] }
+
+  it("allows the exact route (terminated candidate)", () => {
+    expect(matchPermission("memory", "workspace=app|route=/a|", allow, {})).toBe("allow")
+  })
+
+  it("allows deeper namespaces under the route", () => {
+    expect(
+      matchPermission("memory", "workspace=app|route=/a|tenant=acme|", allow, {}),
+    ).toBe("allow")
+  })
+
+  it("does NOT match a sibling route sharing the prefix", () => {
+    expect(matchPermission("memory", "workspace=app|route=/ab|", allow, {})).toBe("unknown")
+  })
+
+  it("deny wins over allow for the memory key", () => {
+    const deny = { memory: ["workspace=app|route=/a|"] }
+    expect(matchPermission("memory", "workspace=app|route=/a|", allow, deny)).toBe("deny")
+  })
+})
