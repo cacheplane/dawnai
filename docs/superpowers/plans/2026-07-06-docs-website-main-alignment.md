@@ -758,4 +758,230 @@ Expected: no docs/site implementation starts without the correct execution skill
 
 ## Findings-Driven Backlog
 
-Reserved until Tasks 2-5 produce the audit findings. Replace this section during Task 6 with concrete subagent batches that include finding IDs, exact files, source references, edits, checks, and commit messages.
+Use these batches to execute the audit findings without re-reading the whole audit. Before editing, each worker should still reread the listed source-of-truth references and affected files for their batch.
+
+### Dependency Notes
+
+- Batch 1 must run before Batch 4 because current Agent Protocol, scaffold, and compact docs language should be corrected before broader website narrative polish.
+- Batch 2 can run independently, but should link to the final Batch 1 and Batch 3 docs wording when those updates are available.
+- Batch 3 can run after Batch 1 or in parallel if source files do not overlap. Coordinate manually if Batch 1 edits `apps/web/app/llms.txt/route.ts` and Batch 3 changes generated/API documentation surfaces that should be reflected there.
+- Batch 4 should run after Batch 1 and preferably after Batch 3 so FAQ/blog/current-route pointers reference the final onboarding and API-reference paths.
+
+### Batch 1: P0/P1 correctness sweep
+
+**Owner:** Docs accuracy subagent
+**Finding IDs:** P0-001, P0-002, P0-003, P1-001
+**Files:**
+- `README.md`
+- `packages/create-dawn-app/README.md`
+- `apps/web/content/prompts/index.ts`
+- `apps/web/content/templates/AGENTS.md`
+- `apps/web/app/llms.txt/route.ts`
+
+**Source-of-truth references to reread:**
+- `packages/create-dawn-app/src/index.ts:76`
+- `packages/create-dawn-app/src/index.ts:79`
+- `packages/create-dawn-app/src/index.ts:99`
+- `packages/create-dawn-app/src/index.ts:110`
+- `packages/create-dawn-app/src/index.ts:121`
+- `packages/core/src/types.ts:9`
+- `packages/core/src/types.ts:28`
+- `packages/cli/src/lib/dev/runtime-server.ts:216`
+- `packages/cli/src/lib/dev/runtime-server.ts:227`
+- `packages/cli/src/lib/dev/runtime-server.ts:295`
+- `packages/cli/src/lib/dev/runtime-server.ts:317`
+- `packages/devkit/templates/app-research/src/app/research/index.ts:3`
+- Scaffold generation evidence in the audit showing generated `/research` files and route id `/research#agent`
+- CLI registration scan evidence in the audit listing `add`, `build`, `docs`, `eval`, `memory`, and `verify`
+
+**Expected edits:**
+- Rewrite the root README quickstart around the default `research` scaffold and `/research#agent` route.
+- Update `packages/create-dawn-app/README.md` so `research` is the documented default, `basic` is optional via `--template basic`, and `--mode external|internal` plus `--dist-tag` are documented.
+- Rewrite scaffold prompt examples in `apps/web/content/prompts/index.ts` around `/research#agent`, with any `hello/[tenant]` mention clearly scoped to `--template basic`.
+- Update compact agent guidance in `apps/web/content/templates/AGENTS.md` to cover current `DawnConfig` keys, threaded Agent Protocol endpoints, resume payload shape, and current route examples.
+- Update `apps/web/app/llms.txt/route.ts` to summarize current config, Agent Protocol thread routes, resume behavior, and the full current CLI command set.
+
+**Stale-term checks:**
+- `rg -n "hello/\\[tenant\\]|/research#agent|pnpm create dawn-ai-app" README.md`
+- `rg -n "default.*basic|--mode|--dist-tag|research|hello/\\[tenant\\]" packages/create-dawn-app/README.md`
+- `rg -n "hello/\\[tenant\\]|/research#agent|--template basic" apps/web/content/prompts/index.ts`
+- `rg -n "only supported field|assistant_id|/runs/(wait|stream)|toolOutput|summarization|memory|sandbox|verify|eval|dawn add" apps/web/content/templates/AGENTS.md apps/web/app/llms.txt/route.ts`
+
+**Verification commands:**
+- `node scripts/check-docs.mjs`
+- `pnpm --filter @dawn-ai/web build`
+- `git diff --check`
+
+**Commit message:** `docs: fix scaffold and compact docs accuracy`
+
+- [ ] **Step 1:** Reread the source-of-truth references and affected files listed above.
+- [ ] **Step 2:** Edit only the listed README, prompt, AGENTS template, and compact LLM route files.
+- [ ] **Step 3:** Run the stale-term checks and resolve any misleading current-surface hits.
+- [ ] **Step 4:** Run the verification commands.
+- [ ] **Step 5:** Commit `docs: fix scaffold and compact docs accuracy`.
+
+### Batch 2: Examples correctness
+
+**Owner:** Docs accuracy subagent
+**Finding IDs:** P1-002
+**Files:**
+- `examples/chat/README.md`
+
+**Source-of-truth references to reread:**
+- `packages/core/src/types.ts:15`
+- `packages/core/src/types.ts:28`
+- `packages/core/src/types.ts:47`
+- `packages/core/src/capabilities/permission-gate.ts:156`
+- `packages/cli/src/lib/runtime/execute-route.ts:1184`
+- `packages/langchain/src/summarization/hook.ts:37`
+- `apps/web/content/docs/permissions.mdx`
+- `apps/web/content/docs/context-management.mdx`
+- `apps/web/content/docs/configuration.mdx`
+
+**Expected edits:**
+- Replace deferred-capability language for HITL permissions, tool-output offload, and context summarization with current supported behavior.
+- Link or point readers to permissions/resume, offload configuration, and opt-in summarization docs.
+- Keep any limitations scoped to current behavior rather than roadmap gaps.
+- Do not edit example runtime code unless verification exposes a README/code mismatch that cannot be fixed in prose.
+
+**Stale-term checks:**
+- `rg -n "deferred|not yet|permission|offload|summar" examples/chat/README.md`
+
+**Verification commands:**
+- `node scripts/check-docs.mjs`
+- `git diff --check`
+
+**Commit message:** `docs: refresh chat example capability notes`
+
+- [ ] **Step 1:** Reread the source-of-truth references and `examples/chat/README.md`.
+- [ ] **Step 2:** Replace stale deferred-language with current capability guidance.
+- [ ] **Step 3:** Run the stale-term check and confirm remaining hits are intentional current guidance.
+- [ ] **Step 4:** Run the verification commands.
+- [ ] **Step 5:** Commit `docs: refresh chat example capability notes`.
+
+### Batch 3: Package/API reference completion
+
+**Owner:** Reference completeness subagent
+**Finding IDs:** P2-001, P2-002, P2-003
+**Files:**
+- `packages/memory/README.md`
+- `packages/sandbox/README.md`
+- `packages/workspace/README.md`
+- `packages/core/README.md`
+- `packages/testing/README.md`
+- `packages/evals/README.md`
+- `apps/web/content/docs/api.mdx`
+
+**Source-of-truth references to reread:**
+- `find packages -maxdepth 2 -name package.json -print | sort`
+- `packages/core/src/index.ts:1`
+- `packages/core/src/index.ts:10`
+- `packages/core/src/index.ts:18`
+- `packages/core/src/index.ts:35`
+- `packages/core/src/index.ts:39`
+- `packages/core/src/index.ts:50`
+- `packages/core/src/index.ts:61`
+- `packages/core/src/capabilities/built-in/memory.ts:16`
+- `packages/core/src/capabilities/built-in/workspace.ts:80`
+- `packages/sandbox/src/docker/docker-sandbox.ts:18`
+- `packages/testing/src/index.ts:1`
+- `packages/testing/src/index.ts:17`
+- `packages/testing/src/index.ts:35`
+- `packages/testing/src/index.ts:54`
+- `packages/evals/src/index.ts:1`
+- `packages/evals/src/scorers.ts:112`
+- `packages/evals/src/scorers.ts:130`
+- `packages/evals/src/scorers.ts:145`
+- `apps/web/content/docs/memory.mdx`
+- `apps/web/content/docs/sandbox.mdx`
+- `apps/web/content/docs/workspace.mdx`
+- `apps/web/content/docs/testing-agents.mdx`
+- `apps/web/content/docs/evals.mdx`
+
+**Expected edits:**
+- Add package READMEs for memory and sandbox with install/import snippets, public API summaries, config links, testing notes, and limitations/security notes.
+- Expand the workspace README with activation behavior, backend contract, `WorkspaceFs`, `workspaceRoot`, and sandbox integration coverage.
+- Expand the core README with grouped public exports, import examples, and links to conceptual docs.
+- Expand testing and evals READMEs with exported groups, common examples, and links to testing/eval docs.
+- Add API reference sections in `apps/web/content/docs/api.mdx` for `@dawn-ai/core`, `@dawn-ai/testing`, and `@dawn-ai/evals`.
+
+**Stale-term checks:**
+- `test -f packages/memory/README.md && test -f packages/sandbox/README.md && rg -n "sqliteMemoryStore|Docker|WorkspaceFs|workspaceRoot" packages/memory/README.md packages/sandbox/README.md packages/workspace/README.md`
+- `rg -n "@dawn-ai/core|createWorkspaceFs|loadDawnConfig|discoverRoutes|renderTypeDefinitions" apps/web/content/docs/api.mdx packages/core/README.md`
+- `rg -n "@dawn-ai/testing|createAgentHarness|expectNoToolErrors|@dawn-ai/evals|runEval|memoryRecalled|memoryFresh|memoryIsolated" apps/web/content/docs/api.mdx packages/testing/README.md packages/evals/README.md`
+
+**Verification commands:**
+- `node scripts/check-docs.mjs`
+- `pnpm --filter @dawn-ai/web build`
+- `git diff --check`
+
+**Commit message:** `docs: expand package api references`
+
+- [ ] **Step 1:** Reread the source-of-truth references and affected package/API docs.
+- [ ] **Step 2:** Add or expand package README reference sections.
+- [ ] **Step 3:** Add website API reference coverage for the missing public packages.
+- [ ] **Step 4:** Run the stale-term checks and resolve missing-symbol coverage.
+- [ ] **Step 5:** Run the verification commands.
+- [ ] **Step 6:** Commit `docs: expand package api references`.
+
+### Batch 4: Website narrative and IA refresh
+
+**Owner:** Website narrative subagent
+**Finding IDs:** P3-001, P3-002
+**Files:**
+- `apps/web/content/blog/2026-06-18-eve-validates-the-shape.mdx`
+- `apps/web/app/components/landing/Faq.tsx`
+- `apps/web/content/blog/2026-06-02-dawn-0-4-release.mdx`
+- `README.md`
+- `apps/web/content/prompts/index.ts`
+
+**Source-of-truth references to reread:**
+- `packages/core/src/types.ts:66`
+- `packages/sandbox/src/docker/docker-sandbox.ts:18`
+- `packages/evals/src/index.ts:19`
+- `packages/testing/src/index.ts:54`
+- `packages/cli/src/lib/dev/runtime-server.ts:227`
+- `packages/cli/src/lib/dev/runtime-server.ts:295`
+- `packages/cli/src/lib/dev/runtime-server.ts:317`
+- `apps/web/content/docs/sandbox.mdx`
+- `apps/web/content/docs/evals.mdx`
+- `apps/web/content/docs/testing-agents.mdx`
+- `apps/web/content/docs/dev-server.mdx`
+
+**Expected edits:**
+- Refresh FAQ and launch narrative so sandbox, replay/live evals, and testing helpers are described as available where they are shipped.
+- Reserve roadmap language for concrete current limitations only.
+- Add dated-blog framing or update notes where older posts could be read as current Agent Protocol guidance.
+- Tighten current README/prompt wording from vague "LangSmith-style" language to current Agent Protocol thread routes, while preserving historical context in dated posts.
+
+**Stale-term checks:**
+- `rg -n "roadmap|planned|not yet|sandbox|evaluation harness|replay|live eval" apps/web/content/blog/2026-06-18-eve-validates-the-shape.mdx apps/web/app/components/landing/Faq.tsx`
+- `rg -n "byte-identical|LangSmith-style|Agent Protocol|/threads|runs/wait|runs/stream" apps/web/content/blog/2026-06-02-dawn-0-4-release.mdx README.md apps/web/content/prompts/index.ts`
+
+**Verification commands:**
+- `node scripts/check-docs.mjs`
+- `pnpm --filter @dawn-ai/web build`
+- `git diff --check`
+
+**Commit message:** `docs: refresh website narrative for shipped capabilities`
+
+- [ ] **Step 1:** Confirm Batch 1 is complete, then reread the source-of-truth references and affected website/current-copy files.
+- [ ] **Step 2:** Refresh FAQ and blog narrative for shipped sandbox/eval/testing capabilities.
+- [ ] **Step 3:** Add historical framing and current-route pointers for old Agent Protocol/LangSmith wording.
+- [ ] **Step 4:** Run the stale-term checks and confirm remaining historical hits are framed as historical.
+- [ ] **Step 5:** Run the verification commands.
+- [ ] **Step 6:** Commit `docs: refresh website narrative for shipped capabilities`.
+
+## PR Readiness Checklist
+
+- [ ] `node scripts/check-docs.mjs`
+- [ ] `pnpm --filter @dawn-ai/web build`
+- [ ] targeted docs route/helper tests when app code changes
+- [ ] stale-term sweep across README, apps, docs, packages, examples
+- [ ] scaffold smoke check if create-app or onboarding examples changed
+- [ ] generated `llms`/markdown route check when generated docs surfaces changed
+- [ ] commit all intended changes
+- [ ] push branch
+- [ ] open PR
+- [ ] monitor CI
+- [ ] merge only after CI is green
