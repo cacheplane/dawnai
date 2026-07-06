@@ -50,9 +50,10 @@ import {
 
 - `serializeNamespace(tuple)` converts a `MemoryScopeTuple` into the stable
   namespace string used by route memory.
-- `classifyWrite(existing, incoming, identityKeys)` returns a `WriteOp` for
-  idempotent writes, supersession, or insertion. Dawn's `auto` write mode uses
-  the same identity-key concept.
+- `classifyWrite(incoming, candidates, identityKeys)` returns a `WriteOp` for
+  idempotent writes, supersession, or insertion by comparing one incoming record
+  against a list of candidate records. Dawn's `auto` write mode uses the same
+  identity-key concept.
 
 ### Ranking
 

@@ -77,7 +77,9 @@ agent-facing workspace tools.
 - `config(value)` is the typed identity helper for config files.
 - `discoverRoutes(options)` scans the Dawn app directory and returns a route
   manifest.
-- `findDawnApp(options)` and `assertDawnRoutesDir(appRoot)` locate app roots.
+- `findDawnApp(options)` locates app roots, and
+  `assertDawnRoutesDir(appRoot, routesDir?)` validates that a routes directory
+  exists, returning `Promise<void>`.
 - `toRouteSegments()`, `isPrivateSegment()`, and `isRouteGroupSegment()` parse
   file-system route segments.
 - Types include `DawnConfig`, `LoadedDawnConfig`, `DiscoverRoutesOptions`,
