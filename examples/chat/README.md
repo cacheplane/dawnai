@@ -1,9 +1,10 @@
 # Chat — canonical Dawn harness example
 
 > **Status:** foundational harness primitives (filesystem + bash) plus the **planning**,
-> **skills**, **subagents**, and **workspace** capabilities. Pluggable backend
-> implementations (in-memory, remote sandbox) are available — see `dawn.config.ts`. HITL
-> permission gating and auto-summarization are still deferred — see "Deferred" below.
+> **skills**, **subagents**, **workspace**, and **HITL permissions** capabilities.
+> Pluggable backend implementations (in-memory, remote sandbox) are available — see
+> `dawn.config.ts`. Tool-output offloading is supported for workspace-backed routes,
+> and conversation summarization is available as an opt-in config.
 
 ## What this shows
 
@@ -25,6 +26,10 @@
   `summarizer`) via an auto-generated `task({ subagent, input })` tool. Subagent runs
   bubble `subagent.*` SSE events with `call_id` correlation. Pick the `/coordinator` route
   in the smoke client to drive it.
+- **HITL permissions** — `dawn.config.ts` seeds allow/deny lists for `runBash`. Unknown
+  commands in interactive mode emit an interrupt; resume the thread with `once`, `always`,
+  or `deny` to continue. See [Permissions](../../apps/web/content/docs/permissions.mdx)
+  for the interrupt/resume flow.
 - End-to-end streaming from a Next.js client over SSE
 
 ## Model choice
@@ -74,12 +79,28 @@ examples/chat/
 This is NOT a sandbox.** Network calls, package installs, file ops outside `workspace/` via
 shell expansion — all possible. Do not point untrusted users at this example.
 
-## Deferred (Dawn phase-3 preview)
+## Current capability notes
 
-These v1 deferrals are the explicit forcing function for Dawn's opinionated harness work:
+- **HITL permission gating** is active in this demo. The example config pre-approves a
+  few read-only shell commands and denies destructive patterns; any other `runBash`
+  command pauses the run for a human decision in interactive mode. Path escapes outside
+  `workspace/` are also permission-gated by the workspace capability. See
+  [Permissions](../../apps/web/content/docs/permissions.mdx) and the
+  [configuration reference](../../apps/web/content/docs/configuration.mdx#permissions).
+- **Tool-output offloading** is supported by the runtime and is active whenever the app
+  root has a `workspace/` directory. Large tool results are written under
+  `workspace/tool-outputs/` and replaced in context with a preview plus a `readFile`
+  handle. Tune thresholds and retention with the `toolOutput` config. See
+  [Context Management](../../apps/web/content/docs/context-management.mdx#tool-output-offloading)
+  and the [configuration reference](../../apps/web/content/docs/configuration.mdx#tooloutput).
+- **Conversation summarization** is supported but opt-in. This example leaves it disabled
+  by default; enable `summarization.enabled` in `dawn.config.ts` when you want older
+  message history compacted after a token threshold. See
+  [Context Management](../../apps/web/content/docs/context-management.mdx#conversation-summarization)
+  and the [configuration reference](../../apps/web/content/docs/configuration.mdx#summarization).
 
-- HITL permission gating — interrupt the run when a path is outside the workspace or a
-  command is high-risk, ask the user, persist the decision
-- Tool-output offloading and context summarization — needs lifecycle hooks
+The remaining limitations are scoped to this example's surface, not missing runtime
+capabilities:
+
 - Nested-object tool inputs (e.g., `edit_file({ edits: [{ old, new }] })`) — typegen extension
-- Polished web UI — wait for harness primitives to stabilize
+- Polished web UI — this smoke client intentionally favors raw SSE visibility over product UI
