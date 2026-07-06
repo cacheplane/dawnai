@@ -28,6 +28,8 @@ export interface MemoryStoreLike {
     tags?: readonly string[]
     status?: string
     limit?: number
+    /** ISO recency reference for ranked searches; stores may ignore it. */
+    now?: string
   }): Promise<readonly MemoryRecordLike[]>
   update(id: string, patch: Partial<MemoryRecordLike>): Promise<void>
   supersede(id: string, bySupersedingId: string): Promise<void>

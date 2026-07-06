@@ -73,6 +73,9 @@ export function createMemoryMarker(): CapabilityMarker {
             ...(q.kind ? { kind: q.kind } : {}),
             ...(q.tags ? { tags: q.tags } : {}),
             limit: q.limit ?? 8,
+            // Recency reference for ranked recall — the per-request timestamp,
+            // NOT Date.now() (determinism rule; see module docblock).
+            now: mem.now,
           })
           if (rows.length === 0) return "(no memories found)"
           return rows.map((r) => `${r.id}: ${r.content}`).join("\n")

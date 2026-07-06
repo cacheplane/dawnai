@@ -265,3 +265,56 @@ it.skipIf(!live)(
   },
   180_000,
 )
+
+it.skipIf(!live)(
+  "ranked recall: real model finds the relevant old fact past a fresh distractor",
+  async () => {
+    // Seed the backdated relevant fact (remember stamps request time; age must be seeded).
+    const store = sqliteMemoryStore({ path: dbPath(probeRoot) })
+    const sixWeeksAgo = new Date(Date.now() - 42 * 24 * 60 * 60 * 1000).toISOString()
+    const seedContent =
+      "acme billing escalation threshold policy: escalate any single acme invoice or billing dispute above the amount of 500 dollars"
+    // Guard: the value must sit past the 80-char index-hint slice, else the model
+    // can answer from the injected hint without calling recall (observed live).
+    expect(seedContent.slice(0, 80)).not.toContain("500")
+    await store.put({
+      id: "memory_live_ranktarget",
+      kind: "semantic",
+      namespace: "route=/memory-chat",
+      content: seedContent,
+      data: { subject: "acme", predicate: "billing-escalation-threshold", value: "500 dollars" },
+      source: { type: "tool", id: "remember" },
+      confidence: 1,
+      tags: [],
+      status: "active",
+      createdAt: sixWeeksAgo,
+      updatedAt: sixWeeksAgo,
+    })
+
+    const h = await createAgentHarness({
+      appRoot: probeRoot,
+      route: "/memory-chat#agent",
+      live: true,
+    })
+    try {
+      h.reset()
+      // Real model stores a fresh marginal distractor its own way.
+      await h.run({
+        input:
+          "Use the remember tool now. data: subject 'acme-contact', predicate 'prefers', value 'slack'.",
+      })
+      h.reset()
+      // Natural question — covers what aimock cannot: whether the model's own
+      // query phrasing is good enough for the ranker.
+      const r = await h.run({
+        input: "What is acme's billing escalation threshold?",
+      })
+      expectToolCalled(r, "recall")
+      expect(String(r.toolResults.find((t) => t.name === "recall")?.content ?? "")).toContain("500")
+      expect(r.finalMessage).toContain("500")
+    } finally {
+      await h.close()
+    }
+  },
+  150_000,
+)

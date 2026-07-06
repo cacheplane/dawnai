@@ -83,7 +83,7 @@ export default defineMemory({
 - **`identity?`** — the keys used for write reconciliation (in `auto` mode). Defaults to `["subject", "predicate"]`.
 
 <Callout type="info" title="Deterministic recall">
-  Recall is a tokenized keyword match ordered by recency over a SQLite store — there is no FTS5, embedding model, or network call in the path. The same query returns the same rows, which keeps evals and fixtures stable (and replayable under aimock).
+  Recall is deterministic: an IDF-weighted keyword match blended with recency and confidence, over a SQLite store — no FTS5, embedding model, or network call in the path. The same query against the same store returns the same rows in the same order, which keeps evals and fixtures stable (and replayable under aimock).
 </Callout>
 
 ### Generated tools
@@ -100,6 +100,40 @@ Typegen emits two typed tools for any route with a `memory.ts` into `.dawn/dawn.
 **`recall({ query?, kind?, tags?, limit? })`** searches the store. It defaults `status` to `"active"` and `limit` to `8`, and returns one `id: content` line per match, or `(no memories found)` when empty.
 
 **`remember({ data, content?, tags?, confidence? })`** validates `data` against the schema, then writes a record. The id is **data-derived** — `memory_` + the first 16 hex chars of `sha1(namespace | JSON(data))` — so a contradicting value (same identity, different data) gets a distinct id and can coexist with the old row. `content` defaults to `JSON.stringify(data)`, `confidence` to `1`, `tags` to `[]`.
+
+### How recall ranks
+
+Ranked recall (any call with a `query`) orders results by a weighted blend:
+
+| Signal | Default weight | Meaning |
+|---|---|---|
+| Relevance | 0.6 | IDF-weighted overlap — matching rare, specific words counts far more than ubiquitous ones |
+| Recency | 0.3 | Exponential decay; the boost halves every 14 days |
+| Confidence | 0.1 | The `confidence` stored with the memory |
+
+Ties break by `updatedAt` (newest first), then `id`. Query-less searches (like
+the injected index) keep pure recency order, and `dawn memory list` (which
+lists candidates, not active memories) is likewise unaffected.
+
+Tune it in `dawn.config.ts` (all fields optional and defaulted):
+
+```ts title="dawn.config.ts"
+export default {
+  memory: {
+    recall: {
+      weights: { relevance: 0.6, recency: 0.3, confidence: 0.1 },
+      recencyHalfLifeMs: 14 * 24 * 60 * 60 * 1000,
+      candidatePool: 256, // ranked searches score at most this many newest token-matches
+    },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+<Callout type="info" title="No stemming">
+  Matching is exact-token: "escalation" and "escalates" are different tokens.
+  Specific, consistent wording in remembered `content` gives the ranker better
+  signal — vague summaries rank vaguely.
+</Callout>
 
 ### The injected index
 
@@ -222,10 +256,10 @@ For deterministic coverage the aimock harness scripts exact tool arguments — w
 
 ## What's deferred
 
-Long-term memory ships with the `semantic` kind and deterministic keyword + recency recall. The following are typed or designed but **not** implemented:
+Long-term memory ships with the `semantic` kind and deterministic ranked recall (IDF-weighted relevance blended with recency and confidence). The following are typed or designed but **not** implemented:
 
 - The `episodic`, `procedural`, and `reflection` kinds.
-- Vector / embedding recall, FTS5 / BM25 ranking, and a memory graph.
+- Vector / embedding recall, full BM25 (term-frequency / length-normalized) ranking via FTS5, and a memory graph.
 - A dev-server Memory Inspector UI.
 - Postgres / pgvector store adapters.
 - Schema-typed `remember.data` (typed loosely as `Record<string, unknown>` today).

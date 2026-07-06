@@ -1,7 +1,7 @@
 import { basename, join } from "node:path"
 import type { MemoryContext, MemoryStoreLike } from "@dawn-ai/core"
 import { loadDawnConfig } from "@dawn-ai/core"
-import { serializeNamespace, sqliteMemoryStore } from "@dawn-ai/memory"
+import { type RecallRankingOptions, serializeNamespace, sqliteMemoryStore } from "@dawn-ai/memory"
 import type { LoadedRouteMemory } from "./load-memory.js"
 
 /**
@@ -39,14 +39,17 @@ export function routeNamespaceKey(routePath: string): string {
  * `<appRoot>/.dawn/memory.sqlite`.
  */
 export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLike> {
+  let recall: RecallRankingOptions | undefined
   try {
     const loaded = await loadDawnConfig({ appRoot })
     if (loaded.config.memory?.store) return loaded.config.memory.store as MemoryStoreLike
+    recall = loaded.config.memory?.recall
   } catch {
     // no dawn.config.ts / unreadable — use default
   }
   return sqliteMemoryStore({
     path: join(appRoot, ".dawn", "memory.sqlite"),
+    ...(recall ? { recall } : {}),
   }) as unknown as MemoryStoreLike
 }
 

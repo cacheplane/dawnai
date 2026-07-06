@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import type { SQLInputValue } from "node:sqlite"
 import { DatabaseSync } from "node:sqlite"
+import { DEFAULT_CANDIDATE_POOL, type RecallRankingOptions, scoreMemory } from "./score.js"
 import { tokenize } from "./tokenize.js"
 import type { MemoryQuery, MemoryRecord, MemoryStore } from "./types.js"
 
@@ -98,6 +99,11 @@ function rowToRecord(row: Record<string, unknown>): MemoryRecord {
   }
 }
 
+// Codepoint compare — matches SQLite BINARY collation, no ICU dependence.
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 function tokensFor(rec: MemoryRecord): string[] {
   const values = Object.values(rec.data).filter((v) => typeof v === "string") as string[]
   return tokenize([rec.content, rec.tags.join(" "), values.join(" ")].join(" "))
@@ -107,7 +113,11 @@ function tokensFor(rec: MemoryRecord): string[] {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function sqliteMemoryStore(opts: { path: string }): MemoryStore {
+export function sqliteMemoryStore(opts: {
+  path: string
+  /** Recall ranking tuning; all fields defaulted. See score.ts. */
+  recall?: RecallRankingOptions
+}): MemoryStore {
   const db = openDb(opts.path)
   runMigrations(db, MIGRATIONS)
 
@@ -159,21 +169,95 @@ export function sqliteMemoryStore(opts: { path: string }): MemoryStore {
       const status = q.status ?? "active"
       const limit = q.limit ?? 8
       const terms = q.query ? tokenize(q.query) : []
-      const params: SQLInputValue[] = [q.namespace, status]
-      let sql = `SELECT m.* FROM memories m WHERE m.namespace = ? AND m.status = ?`
+
+      // Shared base filter (namespace + status [+ kind]) — the "corpus".
+      let baseSql = `m.namespace = ? AND m.status = ?`
+      const baseParams: SQLInputValue[] = [q.namespace, status]
       if (q.kind) {
-        sql += ` AND m.kind = ?`
-        params.push(q.kind)
+        baseSql += ` AND m.kind = ?`
+        baseParams.push(q.kind)
       }
-      if (terms.length > 0) {
-        const placeholders = terms.map(() => "?").join(",")
-        sql += ` AND m.id IN (SELECT memory_id FROM memory_tokens WHERE token IN (${placeholders}))`
-        params.push(...terms)
+
+      if (terms.length === 0) {
+        // Query-less path: EXACTLY the pre-ranking behavior (index fragment,
+        // listCandidates-adjacent consumers depend on pure recency order).
+        const rows = db
+          .prepare(
+            `SELECT m.* FROM memories m WHERE ${baseSql} ORDER BY m.updated_at DESC, m.id ASC LIMIT ?`,
+          )
+          .all(...baseParams, limit) as Record<string, unknown>[]
+        let records = rows.map(rowToRecord)
+        if (q.tags && q.tags.length > 0) {
+          const want = new Set(q.tags)
+          records = records.filter((r) => r.tags.some((t) => want.has(t)))
+        }
+        return records
       }
-      sql += ` ORDER BY m.updated_at DESC, m.id ASC LIMIT ?`
-      params.push(limit)
-      const rows = db.prepare(sql).all(...params) as Record<string, unknown>[]
-      let records = rows.map(rowToRecord)
+
+      // Ranked path — see docs/superpowers/specs/2026-07-05-smarter-recall-design.md.
+      const rawPool = opts.recall?.candidatePool
+      const pool =
+        typeof rawPool === "number" && Number.isFinite(rawPool) && rawPool > 0
+          ? Math.floor(rawPool)
+          : DEFAULT_CANDIDATE_POOL
+      const placeholders = terms.map(() => "?").join(",")
+
+      // 1) Candidate pool: rows matching ≥1 query token, newest first (pool
+      //    truncation by recency is deterministic).
+      const candidateRows = db
+        .prepare(
+          `SELECT m.* FROM memories m WHERE ${baseSql}
+           AND m.id IN (SELECT memory_id FROM memory_tokens WHERE token IN (${placeholders}))
+           ORDER BY m.updated_at DESC, m.id ASC LIMIT ?`,
+        )
+        .all(...baseParams, ...terms, pool) as Record<string, unknown>[]
+      const candidates = candidateRows.map(rowToRecord)
+      if (candidates.length === 0) return []
+
+      // 2) Corpus stats, computed live (nothing cached → nothing to go stale).
+      const corpusSize = (
+        db.prepare(`SELECT COUNT(*) AS n FROM memories m WHERE ${baseSql}`).get(...baseParams) as {
+          n: number
+        }
+      ).n
+      const dfRows = db
+        .prepare(
+          `SELECT t.token AS token, COUNT(DISTINCT t.memory_id) AS df
+           FROM memory_tokens t JOIN memories m ON m.id = t.memory_id
+           WHERE ${baseSql} AND t.token IN (${placeholders}) GROUP BY t.token`,
+        )
+        .all(...baseParams, ...terms) as { token: string; df: number }[]
+      const dfByToken = new Map(dfRows.map((r) => [r.token, r.df]))
+
+      // 3) Score. Candidate token sets are recomputed via the same helper
+      //    reindex() uses, so they are guaranteed consistent with the table.
+      //    Pool is updated_at-DESC ordered, so candidates[0] is the newest —
+      //    the data-derived reference when the caller supplies no clock.
+      const referenceNow = q.now ?? candidates[0]?.updatedAt ?? ""
+      const scored = candidates.map((record) => ({
+        record,
+        score: scoreMemory({
+          memoryTokens: new Set(tokensFor(record)),
+          queryTokens: terms,
+          dfByToken,
+          corpusSize,
+          updatedAt: record.updatedAt,
+          confidence: record.confidence,
+          referenceNow,
+          ...(opts.recall ? { options: opts.recall } : {}),
+        }),
+      }))
+
+      // 4) Sort (score DESC, updated_at DESC, id ASC — stable) and page.
+      scored.sort(
+        (a, b) =>
+          b.score - a.score ||
+          cmp(b.record.updatedAt, a.record.updatedAt) ||
+          cmp(a.record.id, b.record.id),
+      )
+      let records = scored.slice(0, limit).map((s) => s.record)
+
+      // 5) Tag post-filter on the returned page — today's semantics, unchanged.
       if (q.tags && q.tags.length > 0) {
         const want = new Set(q.tags)
         records = records.filter((r) => r.tags.some((t) => want.has(t)))

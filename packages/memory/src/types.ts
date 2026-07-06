@@ -27,6 +27,10 @@ export interface MemoryQuery {
   readonly tags?: readonly string[]
   readonly status?: MemoryStatus
   readonly limit?: number
+  /** ISO timestamp used as the recency reference for ranked (query) searches.
+   *  Optional; when absent, recency is measured relative to the newest
+   *  candidate's updatedAt (data-derived — the library never reads a clock). */
+  readonly now?: string
 }
 export interface MemoryStore {
   put(rec: MemoryRecord): Promise<void>
