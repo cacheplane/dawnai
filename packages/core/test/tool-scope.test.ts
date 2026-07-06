@@ -83,4 +83,26 @@ describe("resolveToolScope", () => {
       resolveToolScope(tools, { allow: ["serch"] }, { isSubagent: true, routeId: "/research" }),
     ).toThrow(/unknown tool\(s\): serch/)
   })
+
+  test("throws on an unknown approve name (typos fail loud like allow/deny)", () => {
+    expect(() =>
+      resolveToolScope(
+        [{ name: "deployProd", origin: "authored" }],
+        { approve: ["deployPord"] },
+        { isSubagent: false, routeId: "/ops" },
+      ),
+    ).toThrow(/unknown tool.*deployPord/s)
+  })
+
+  test("a known approve name does not affect which tools survive scoping", () => {
+    const kept = resolveToolScope(
+      [
+        { name: "deployProd", origin: "authored" },
+        { name: "runBash", origin: "capability" },
+      ],
+      { approve: ["deployProd"] },
+      { isSubagent: false, routeId: "/ops" },
+    )
+    expect([...kept].sort()).toEqual(["deployProd", "runBash"])
+  })
 })

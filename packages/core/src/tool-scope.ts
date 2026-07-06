@@ -21,8 +21,9 @@ export interface ScopeInput {
  *
  * Base set: top route → all tools; subagent → authored only (capability
  * tools withheld). Then `allow` GRANTS named tools into the set, `deny`
- * REVOKES named tools, and deny wins. Unknown names (absent from the full
- * available set) throw so authoring typos fail loud at composition time.
+ * REVOKES named tools, and deny wins. Unknown names in allow/deny/approve
+ * (absent from the full available set) throw so authoring typos fail loud at
+ * composition time.
  */
 export function resolveToolScope(
   tools: readonly ScopeInput[],
@@ -30,7 +31,11 @@ export function resolveToolScope(
   context: { readonly isSubagent: boolean; readonly routeId: string },
 ): ReadonlySet<string> {
   const available = new Set(tools.map((t) => t.name))
-  const unknown = [...(scope?.allow ?? []), ...(scope?.deny ?? [])].filter((n) => !available.has(n))
+  const unknown = [
+    ...(scope?.allow ?? []),
+    ...(scope?.deny ?? []),
+    ...(scope?.approve ?? []),
+  ].filter((n) => !available.has(n))
   if (unknown.length > 0) {
     throw new Error(
       `Route "${context.routeId}" tool scope references unknown tool(s): ${unknown.join(", ")}. ` +
