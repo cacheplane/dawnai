@@ -226,7 +226,7 @@ export function defineMemory<S extends z.ZodTypeAny>(def: {
 }): DefinedMemory<S>
 ```
 
-Declares a route's typed long-term memory. Place the call as the default export of a `memory.ts` file next to the route's `index.ts` — that file's presence is what activates the `recall`/`remember` tools. `kind` selects the memory category. `scope` lists the namespace dimensions the memory is partitioned by. `schema` is a [zod](https://zod.dev) schema validating each stored record. `identity` names the fields used for write reconciliation; it defaults to `["subject", "predicate"]`.
+Declares a route's typed long-term memory. Place the call as the default export of a `memory.ts` file next to the route's `index.ts` — that file's presence activates the memory capability, contributes `recall`, and contributes `remember` unless memory writes are configured as `"off"`. `kind` selects the memory category. `scope` lists the namespace dimensions the memory is partitioned by. `schema` is a [zod](https://zod.dev) schema validating each stored record. `identity` names the fields used for write reconciliation; it defaults to `["subject", "predicate"]`.
 
 ```ts
 import { defineMemory } from "@dawn-ai/sdk"
@@ -769,7 +769,7 @@ Supporting types include `InterruptInfo`, `SubagentEvent`, `SubagentRun`, and `T
 ### Run-result utilities
 
 ```ts
-export function collectRunResult(...): AgentRunResult
+export function collectRunResult(...): Promise<AgentRunResult>
 export function deriveToolResults(...): readonly ObservedToolResult[]
 ```
 
