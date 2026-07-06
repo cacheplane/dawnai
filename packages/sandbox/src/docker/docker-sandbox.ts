@@ -73,6 +73,38 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
       ...(user ? ["--user", `${user.uid}:${user.gid}`, "-e", "HOME=/workspace"] : []),
     ]
 
+    // Architecture B (no steady-state root): a fresh named volume mounts
+    // root:root, so a non-root keeper cannot write /workspace. Fix it with a
+    // CREATE-ONLY, VOLUME-ABSENCE-GATED, ephemeral (`--rm`) root chown — the
+    // only root that ever runs, and it takes no agent input. On reattach (the
+    // volume already exists) this is skipped so a populated volume is never
+    // re-chowned. Skipped entirely when runAsNonRoot:false (`user` undefined).
+    if (user) {
+      const volExists = await docker.run(["volume", "inspect", volumeName(threadId)], { signal })
+      if (volExists.exitCode !== 0) {
+        const init = await docker.run(
+          [
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "-v",
+            `${volumeName(threadId)}:${ROOT}`,
+            opts.image,
+            "sh",
+            "-c",
+            `mkdir -p ${ROOT} && chown ${user.uid}:${user.gid} ${ROOT}`,
+          ],
+          { signal },
+        )
+        if (init.exitCode !== 0) {
+          throw new Error(
+            `Sandbox unavailable: could not initialize workspace ownership for thread "${threadId}": ${init.stderr.trim() || "unknown error"}. Run \`dawn check\`.`,
+          )
+        }
+      }
+    }
+
     const created = await docker.run(
       [
         "run",

@@ -167,3 +167,58 @@ describe("dockerSandbox hardening flags", () => {
     expect(acquireArgs(runs)).toContain("--user 2000:3000")
   })
 })
+
+describe("dockerSandbox chown-init (Architecture B)", () => {
+  // container absent; `volume inspect` exit encodes existence.
+  function chownRecorder(volumeExists: boolean) {
+    const runs: string[][] = []
+    const docker: Docker = {
+      run: async (args) => {
+        runs.push([...args])
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return { stdout: "", stderr: "", exitCode: volumeExists ? 0 : 1 }
+        }
+        if (args[0] === "ps") return { stdout: "", stderr: "", exitCode: 0 } // container absent
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    }
+    return { docker, runs }
+  }
+  const chownRun = (runs: string[][]) =>
+    runs.find((r) => r[0] === "run" && r.includes("--rm") && r.join(" ").includes("chown"))
+
+  test("volume absent + non-root → chown-init runs as root BEFORE the keeper", async () => {
+    const { docker, runs } = chownRecorder(false)
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({ threadId: "abc", policy: { network: { mode: "deny" } }, signal: signal() })
+    const init = chownRun(runs)
+    expect(init).toBeDefined()
+    const j = (init ?? []).join(" ")
+    expect(j).toContain("--user 0:0")
+    expect(j).toContain("dawn-sbx-vol-abc:/workspace")
+    expect(j).toContain("chown 1000:1000 /workspace")
+    const idxInit = runs.findIndex((r) => r === init)
+    const idxKeeper = runs.findIndex((r) => r[0] === "run" && r.includes("-d"))
+    expect(idxInit).toBeGreaterThanOrEqual(0)
+    expect(idxInit).toBeLessThan(idxKeeper)
+  })
+
+  test("volume present → NO chown-init (reattach)", async () => {
+    const { docker, runs } = chownRecorder(true)
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({ threadId: "abc", policy: { network: { mode: "deny" } }, signal: signal() })
+    expect(chownRun(runs)).toBeUndefined()
+  })
+
+  test("runAsNonRoot:false → NO chown-init", async () => {
+    const { docker, runs } = chownRecorder(false)
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "deny" }, security: { runAsNonRoot: false } },
+      signal: signal(),
+    })
+    expect(chownRun(runs)).toBeUndefined()
+  })
+})
