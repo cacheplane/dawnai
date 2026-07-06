@@ -132,6 +132,59 @@ describe("scoreMemory", () => {
     })
     expect(score).toBeCloseTo(0.6 + 0.3 + 0, 10)
   })
+  it("non-positive or non-finite recencyHalfLifeMs falls back to the default", () => {
+    const df = new Map([["x", 1]])
+    const args = {
+      memoryTokens: new Set(["x"]),
+      queryTokens: ["x"],
+      dfByToken: df,
+      corpusSize: 1,
+      confidence: 1,
+      referenceNow: NOW,
+      updatedAt: ago(DEFAULT_RECENCY_HALF_LIFE_MS),
+    }
+    const weights = { relevance: 0, recency: 1, confidence: 0 }
+    const withDefault = scoreMemory({ ...args, options: { weights } })
+    const zero = scoreMemory({ ...args, options: { weights, recencyHalfLifeMs: 0 } })
+    const negative = scoreMemory({ ...args, options: { weights, recencyHalfLifeMs: -5 } })
+    expect(Number.isFinite(zero)).toBe(true)
+    expect(Number.isFinite(negative)).toBe(true)
+    expect(zero).toBeCloseTo(withDefault, 10)
+    expect(negative).toBeCloseTo(withDefault, 10)
+    // age 0 with half-life 0 would be 0/0 → NaN without the fallback
+    const freshZero = scoreMemory({
+      ...args,
+      updatedAt: NOW,
+      options: { weights, recencyHalfLifeMs: 0 },
+    })
+    expect(freshZero).toBeCloseTo(1, 10)
+  })
+  it("NaN confidence is treated as 0", () => {
+    const df = new Map([["x", 1]])
+    const score = scoreMemory({
+      memoryTokens: new Set(["x"]),
+      queryTokens: ["x"],
+      dfByToken: df,
+      corpusSize: 1,
+      updatedAt: NOW,
+      confidence: Number.NaN,
+      referenceNow: NOW,
+      options: { weights: { relevance: 0, recency: 0, confidence: 1 } },
+    })
+    expect(score).toBeCloseTo(0, 10)
+  })
+  it("empty queryTokens yields relevance 0 (score = recency + confidence terms)", () => {
+    const score = scoreMemory({
+      memoryTokens: new Set(["x"]),
+      queryTokens: [],
+      dfByToken: new Map(),
+      corpusSize: 1,
+      updatedAt: NOW,
+      confidence: 1,
+      referenceNow: NOW,
+    })
+    expect(score).toBeCloseTo(0.3 * 1 + 0.1 * 1, 10) // default weights, age 0, conf 1
+  })
   it("exposes the documented defaults", () => {
     expect(DEFAULT_RECENCY_HALF_LIFE_MS).toBe(14 * DAY)
     expect(DEFAULT_CANDIDATE_POOL).toBe(256)

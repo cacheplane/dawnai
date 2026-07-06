@@ -35,7 +35,7 @@ export function idf(df: number, corpusSize: number): number {
 }
 
 function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v
+  return Number.isFinite(v) ? (v < 0 ? 0 : v > 1 ? 1 : v) : 0
 }
 
 /** Parse an ISO timestamp; NaN (invalid/missing) degrades to null, never throws. */
@@ -54,6 +54,8 @@ function parseMs(iso: string): number | null {
  *
  * recency = 2^(−age / halfLife), age measured from `referenceNow` back to
  * `updatedAt`, clamped ≥ 0. Invalid timestamps degrade to age 0.
+ *
+ * `queryTokens` are expected to be deduplicated, as produced by `tokenize()`.
  */
 export function scoreMemory(args: {
   readonly memoryTokens: ReadonlySet<string>
@@ -66,7 +68,11 @@ export function scoreMemory(args: {
   readonly options?: RecallRankingOptions
 }): number {
   const weights = { ...DEFAULT_RECALL_WEIGHTS, ...args.options?.weights }
-  const halfLife = args.options?.recencyHalfLifeMs ?? DEFAULT_RECENCY_HALF_LIFE_MS
+  const rawHalfLife = args.options?.recencyHalfLifeMs
+  const halfLife =
+    typeof rawHalfLife === "number" && Number.isFinite(rawHalfLife) && rawHalfLife > 0
+      ? rawHalfLife
+      : DEFAULT_RECENCY_HALF_LIFE_MS
 
   let matchedIdf = 0
   let totalIdf = 0
