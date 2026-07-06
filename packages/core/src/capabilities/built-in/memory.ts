@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { z } from "zod"
+import { gateMemorySupersede } from "../permission-gate.js"
 import type { CapabilityMarker, PromptFragment } from "../types.js"
 
 const DEFAULT_SEMANTIC_IDENTITY = ["subject", "predicate"] as const
@@ -27,6 +28,7 @@ export function createMemoryMarker(): CapabilityMarker {
     load: async (_routeDir, context) => {
       const mem = context.memory
       if (!mem) return {}
+      const permissions = context.permissions
       const indexEntries = await mem.store.search({
         namespace: mem.namespace,
         status: "active",
@@ -102,7 +104,9 @@ export function createMemoryMarker(): CapabilityMarker {
             .digest("hex")
             .slice(0, 16)}`
 
-          const status = mem.writes === "auto" ? "active" : "candidate"
+          // "ask" shares auto's write semantics; only its SUPERSEDE branch gates.
+          const autoLike = mem.writes === "auto" || mem.writes === "ask"
+          const status = autoLike ? "active" : "candidate"
           const content =
             typeof inp.content === "string" && inp.content.length > 0
               ? inp.content
@@ -124,7 +128,7 @@ export function createMemoryMarker(): CapabilityMarker {
             updatedAt: mem.now,
           }
 
-          if (mem.writes === "auto") {
+          if (autoLike) {
             // Inline identity key helper — avoids importing from @dawn-ai/memory
             const identityKey = (d: Record<string, unknown>) =>
               identityKeys.map((k) => JSON.stringify(d[k] ?? null)).join(" ")
@@ -147,7 +151,24 @@ export function createMemoryMarker(): CapabilityMarker {
                 })
                 return `Updated memory ${target.id}.`
               }
-              // Same identity but different value — write new active row then supersede old
+              // Same identity but different value — supersede. In "ask" mode this
+              // is the one write that gates: the agent is contradicting a prior
+              // belief. ADDs/idempotent UPDATEs above never reach the gate.
+              if (mem.writes === "ask") {
+                const gate = await gateMemorySupersede(permissions, {
+                  namespace: mem.namespace,
+                  identity: identityKeys.map((k) => String(data[k] ?? "")).join(" / "),
+                  oldId: target.id,
+                  oldContent: target.content,
+                  newContent: content,
+                })
+                if (!gate.allowed) {
+                  return (
+                    `Kept existing memory ${target.id} ("${target.content}"); ` +
+                    `your contradicting value was not stored (${gate.reason}).`
+                  )
+                }
+              }
               await mem.store.put(record)
               await mem.store.supersede(target.id, id)
               return `Superseded ${target.id} with ${id}.`
