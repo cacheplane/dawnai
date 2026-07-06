@@ -273,6 +273,7 @@ export async function* streamResolvedRoute(options: {
     offload,
     summarization,
     workspaceFs,
+    sandboxed,
   } = prepared
 
   if (normalized.kind !== "agent") {
@@ -311,6 +312,7 @@ export async function* streamResolvedRoute(options: {
     ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
     ...(subagentResolver ? { subagentResolver } : {}),
     ...(options.threadId ? { threadId: options.threadId } : {}),
+    ...(sandboxed ? { sandboxed: true } : {}),
   })) {
     switch (chunk.type) {
       case "token":
@@ -366,6 +368,13 @@ interface PreparedRoute {
   >
   readonly subagentResolver?: SubagentResolver
   readonly workspaceFs: WorkspaceFs
+  /**
+   * True when a per-thread sandbox is active for this turn (sandboxManager +
+   * threadId resolved a handle). The agent-adapter uses this to bypass its
+   * materialized-agent cache so tools bound to this thread's sandbox backends
+   * are never reused for another thread.
+   */
+  readonly sandboxed?: boolean
 }
 
 interface PreparedRouteError {
@@ -708,6 +717,7 @@ async function prepareRouteExecution(options: {
     ...(subagentResolver ? { subagentResolver } : {}),
     tools,
     workspaceFs,
+    ...(sandboxBackends !== undefined ? { sandboxed: true } : {}),
   }
 }
 
@@ -756,6 +766,7 @@ async function executeRouteAtResolvedPath(options: {
       offload,
       summarization,
       workspaceFs,
+      sandboxed,
     } = prepared
     mode = normalized.kind
 
@@ -779,6 +790,7 @@ async function executeRouteAtResolvedPath(options: {
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
       ...(subagentResolver ? { subagentResolver } : {}),
       ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(sandboxed ? { sandboxed: true } : {}),
     })
 
     return createRuntimeSuccessResult({
@@ -838,6 +850,7 @@ async function invokeEntry(
     >
     readonly subagentResolver?: SubagentResolver
     readonly threadId?: string
+    readonly sandboxed?: boolean
   },
 ): Promise<unknown> {
   if (kind === "agent") {
@@ -870,6 +883,7 @@ async function invokeEntry(
         ? { subagentResolver: agentContext.subagentResolver }
         : {}),
       ...(agentContext?.threadId ? { threadId: agentContext.threadId } : {}),
+      ...(agentContext?.sandboxed ? { sandboxed: true } : {}),
     })
   }
 

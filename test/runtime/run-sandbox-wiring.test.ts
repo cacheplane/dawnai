@@ -195,26 +195,13 @@ it("routes workspace tools into the per-thread sandbox, persists across turns, a
   expect(existsSync(join(appRoot, "workspace", "report.md"))).toBe(false)
 })
 
-// KNOWN DEFECT — per-thread sandbox isolation is currently BROKEN.
-//
-// Expected: thread B has its own empty sandbox volume, so reading report.md
-// (written only on thread A) must ENOENT. Observed: thread B reads back
-// "SANDBOXED" — it sees thread A's file.
-//
-// Root cause: @dawn-ai/langchain materializeAgent() caches the compiled agent
-// per descriptor in a module-level WeakMap. The workspace capability's
-// readFile/writeFile tools close over the sandbox filesystem backend captured at
-// capability load time, and that closure is baked into the cached agent on the
-// FIRST thread's run. Every later thread reuses the cached agent (no per-invoke
-// tool rebinding on the DawnAgent path — config.tools is honored only on the
-// legacy Runnable path), so its workspace tools still point at the first
-// thread's volume. This affects the real runtime server too: any agent served
-// for more than one thread in a single process loses sandbox isolation.
-//
-// `it.fails` asserts this case currently FAILS (defect present) → green in CI,
-// and will START FAILING the moment the bug is fixed, prompting whoever fixes it
-// to flip this to a normal `it` with the real assertion below.
-it.fails("isolates per-thread sandbox volumes (DEFECT: materialized-agent cache freezes thread A's fs)", async () => {
+// Per-thread isolation: thread B has its own empty sandbox volume, so reading
+// report.md (written only on thread A) must ENOENT. Guaranteed by the
+// agent-adapter bypassing its materialized-agent cache when sandboxed
+// (agent-adapter.ts, same precedent as the subagent `task` tool): workspace
+// tools close over the thread's sandbox backends, so the compiled agent is
+// never reused across threads.
+it("isolates per-thread sandbox volumes", async () => {
   const isoResult = await runTurn({
     threadId: threadB,
     userMessage: "bravo-read",
@@ -226,9 +213,9 @@ it.fails("isolates per-thread sandbox volumes (DEFECT: materialized-agent cache 
 
   const isoTool = isoResult.toolResults.find((r) => r.name === "readFile")
   expect(isoTool).toBeDefined()
-  // The CORRECT behavior: thread B's read must error (ENOENT) — it never wrote
-  // report.md. This assertion currently does NOT hold (isError === false,
-  // content === "SANDBOXED"), which is exactly why this is `it.fails`.
+  // Thread B's read must error (ENOENT from fakeSandbox) — it never wrote
+  // report.md, and thread A's file must not be visible here.
   expect(isoTool?.isError).toBe(true)
   expect(String(isoTool?.content)).toContain("report.md")
+  expect(String(isoTool?.content)).not.toContain("SANDBOXED")
 })
