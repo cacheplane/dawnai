@@ -155,69 +155,64 @@ Constraints:
 Reference: https://dawnai.org/llms.txt
 `;
 
-const WRITE_A_TEST = `Help me write a scenario test for a Dawn route. Dawn tests run with \`dawn test\`, are co-located with the route, and take the form of \`run.test.ts\` files that default-export scenario records.
+const WRITE_A_TEST = `Help me write tests for a Dawn route. Pick the right style for the route kind:
 
-1. In the route directory, create \`run.test.ts\`:
+1. For an agent route like the default \`/research#agent\`, write a Vitest test with \`createAgentHarness\`, \`script()\` fixtures, and agent matchers:
+
+   \`\`\`ts
+   import { fileURLToPath } from "node:url"
+   import { afterAll, it } from "vitest"
+   import { createAgentHarness, expectFinalMessage, expectToolCalled, script } from "@dawn-ai/testing"
+
+   const appRoot = fileURLToPath(new URL("..", import.meta.url))
+   const h = await createAgentHarness({ appRoot, route: "/research#agent" })
+   afterAll(() => h.close())
+
+   it("searches the corpus and writes a cited answer", async () => {
+     h.reset()
+     const run = await h.run({
+       input: "What are common agent architectures?",
+       fixtures: script()
+         .user("What are common agent architectures?")
+         .callsTool("searchCorpus", { query: "agent architectures" })
+         .callsTool("readDoc", { path: "corpus/agent-architectures.md" })
+         .replies("ReAct and plan-and-execute are common. [corpus/agent-architectures.md]"),
+     })
+
+     expectToolCalled(run, "searchCorpus")
+     expectToolCalled(run, "readDoc")
+     expectFinalMessage(run).toContain("[corpus/")
+   }, 60_000)
+   \`\`\`
+
+2. For deterministic \`workflow\`, \`graph\`, or \`chain\` routes, use a colocated \`run.test.ts\` scenario file:
 
    \`\`\`ts
    export default [
      {
-       name: "answers from the corpus",
-       input: {
-         messages: [{ role: "user", content: "What are common agent architectures?" }],
-       },
+       name: "returns a greeting",
+       input: { tenant: "acme" },
        expect: {
          status: "passed",
-         output: { messages: [{ role: "assistant", content: "ReAct and plan-and-execute are common. [corpus/agent-architectures.md]" }] },
-       },
-     },
-     {
-       name: "handles another research question",
-       input: {
-         messages: [{ role: "user", content: "What is retrieval augmented generation?" }],
-       },
-       expect: {
-         status: "passed",
-         output: { messages: [{ role: "assistant", content: "RAG retrieves source documents before generation. [corpus/retrieval-augmented-generation.md]" }] },
+         output: { tenant: "acme", greeting: "Hello, acme!" },
        },
      },
    ]
    \`\`\`
 
-2. \`input\` is the route's state — it must match the route's \`state.ts\` type.
+3. In scenario records, \`input\` is the route state and \`expect.output\` is the returned state. Keep these for deterministic route-output assertions, not LLM text exact matches.
 
-3. \`expect.output\` is what the route should return after the route runs.
-
-4. Run the scenarios:
+4. Run agent Vitest files with the package's test runner (for the scaffold, \`npm test\`). Run declarative scenario records with:
    \`\`\`
    dawn test
    \`\`\`
 
-5. Dawn runs each test against the in-process route runtime by default. To run a scenario against a live \`dawn dev\` server, set \`run: { url: "http://127.0.0.1:3001" }\` on that scenario. There is no command-level \`--url\` flag on \`dawn test\`.
-
-6. For custom checks, use \`assert(result)\` with helpers from \`@dawn-ai/sdk/testing\`:
-   \`\`\`ts
-   import { expectOutput } from "@dawn-ai/sdk/testing"
-
-   export default [
-     {
-       name: "custom assertion",
-       input: {
-         messages: [{ role: "user", content: "What are common agent architectures?" }],
-       },
-       expect: { status: "passed" },
-       assert: (result) => {
-         expectOutput(result, { /* expected state fields */ })
-       },
-     },
-   ]
-   \`\`\`
+5. To run a scenario record against a live \`dawn dev\` server, set \`run: { url: "http://127.0.0.1:3001" }\` on that scenario. There is no command-level \`--url\` flag on \`dawn test\`.
 
 Constraints:
-- \`run.test.ts\` must live in the route's directory, not a sibling.
-- The file default-exports an array. There is no \`describe()\` or \`test()\` wrapper.
-- \`expect.output\` is compared deep-equal to the route's output by default.
-- Per-scenario tool mocking is not supported today; stub external dependencies inside the tool implementation or behind an environment flag.
+- Agent tests should use fixtures or live mode; do not exact-match raw assistant message arrays with \`expect.output\`.
+- \`run.test.ts\` must live in the deterministic route's directory, default-export an array, and avoid \`describe()\` / \`test()\` wrappers.
+- Per-scenario tool mocking is not supported today; stub external dependencies inside the tool implementation or use the agent harness fixture tools.
 
 Reference: https://dawnai.org/llms.txt
 `;
@@ -287,8 +282,8 @@ export const PROMPTS: readonly PromptEntry[] = [
 	},
 	{
 		slug: "write-a-test",
-		title: "Write a scenario test",
-		description: "Write a colocated run.test.ts for a route.",
+		title: "Write a test",
+		description: "Choose agent harness tests or deterministic route scenarios.",
 		body: WRITE_A_TEST,
 	},
 	{
