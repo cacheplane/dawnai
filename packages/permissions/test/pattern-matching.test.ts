@@ -6,24 +6,51 @@ describe("matchPermission", () => {
     expect(matchPermission("bash", "npm install", {}, {})).toBe("unknown")
   })
   it("returns allow when candidate matches an allow prefix", () => {
-    expect(matchPermission("bash", "npm install react", { bash: ["npm install"] }, {})).toBe("allow")
+    expect(matchPermission("bash", "npm install react", { bash: ["npm install"] }, {})).toBe(
+      "allow",
+    )
   })
   it("returns deny when candidate matches a deny prefix", () => {
     expect(matchPermission("bash", "rm -rf /tmp", {}, { bash: ["rm -rf"] })).toBe("deny")
   })
   it("deny wins over allow when both match", () => {
-    expect(matchPermission("bash", "rm -rf /tmp", { bash: ["rm -rf"] }, { bash: ["rm -rf"] })).toBe("deny")
+    expect(matchPermission("bash", "rm -rf /tmp", { bash: ["rm -rf"] }, { bash: ["rm -rf"] })).toBe(
+      "deny",
+    )
   })
   it("does NOT match an allow entry that is not a prefix", () => {
     expect(matchPermission("bash", "npm test", { bash: ["npm install"] }, {})).toBe("unknown")
   })
   it("treats path candidates with absolute prefixes", () => {
-    expect(matchPermission("readFile", "/Users/blove/.zshrc", { readFile: ["/Users/blove/"] }, {})).toBe("allow")
+    expect(
+      matchPermission("readFile", "/Users/blove/.zshrc", { readFile: ["/Users/blove/"] }, {}),
+    ).toBe("allow")
   })
   it("does not cross directory boundary when pattern ends with slash", () => {
-    expect(matchPermission("readFile", "/var/logger/app.log", { readFile: ["/var/log/"] }, {})).toBe("unknown")
+    expect(
+      matchPermission("readFile", "/var/logger/app.log", { readFile: ["/var/log/"] }, {}),
+    ).toBe("unknown")
   })
   it("returns unknown for a tool with no entries in either list", () => {
-    expect(matchPermission("runUnknownTool", "anything", { bash: ["ls"] }, { writeFile: ["/tmp/"] })).toBe("unknown")
+    expect(
+      matchPermission("runUnknownTool", "anything", { bash: ["ls"] }, { writeFile: ["/tmp/"] }),
+    ).toBe("unknown")
+  })
+})
+
+describe('reserved "tool" key uses exact matching', () => {
+  it("does not prefix-match tool names", () => {
+    expect(matchPermission("tool", "deployProd", { tool: ["deploy"] }, {})).toBe("unknown")
+  })
+  it("matches an exact tool name", () => {
+    expect(matchPermission("tool", "deployProd", { tool: ["deployProd"] }, {})).toBe("allow")
+  })
+  it("deny wins for an exact tool name", () => {
+    expect(
+      matchPermission("tool", "deployProd", { tool: ["deployProd"] }, { tool: ["deployProd"] }),
+    ).toBe("deny")
+  })
+  it("commands keep prefix matching", () => {
+    expect(matchPermission("bash", "ls -la", { bash: ["ls"] }, {})).toBe("allow")
   })
 })
