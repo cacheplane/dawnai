@@ -102,7 +102,15 @@ export async function collectToolScopeIssues(
           `⚠ ${route.pathname}: approve lists "${name}" but deny revokes it — deny wins; the approve entry is dead.`,
         )
       }
-      if (routeIsSubagent && BUILT_IN_TOOL_NAME_SET.has(name) && !allow.has(name)) {
+      // Skip internally-gated names here: warning 1 already covers them, and
+      // advising "add it to allow" would conflict with that warning's point
+      // (approving an internally-gated tool is redundant either way).
+      if (
+        routeIsSubagent &&
+        BUILT_IN_TOOL_NAME_SET.has(name) &&
+        !INTERNALLY_GATED.has(name) &&
+        !allow.has(name)
+      ) {
         warnings.push(
           `⚠ ${route.pathname}: approve lists "${name}", but subagents withhold capability tools ` +
             `by default — add it to allow or the approve entry has no effect.`,

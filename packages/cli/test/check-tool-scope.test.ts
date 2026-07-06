@@ -113,3 +113,16 @@ test("does not warn when a subagent route both allows and approves a capability 
   expect(result.errors).toEqual([])
   expect(result.warnings).toEqual([])
 })
+
+test("subagent approving an internally-gated tool draws ONLY the already-gated warning", async () => {
+  // Warning 1 (redundant, already gated) and the subagent-withheld warning must
+  // not co-fire with contradictory advice: "add it to allow" is wrong for a
+  // tool whose approve entry is redundant either way.
+  const result = await collectToolScopeIssues(subagentManifest, {
+    loadScope: async () => ({ approve: ["runBash"] }),
+    routeLocalToolNames: async () => [],
+  })
+  expect(result.errors).toEqual([])
+  expect(result.warnings).toHaveLength(1)
+  expect(result.warnings[0]).toMatch(/already gated/)
+})
