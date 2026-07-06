@@ -111,8 +111,9 @@ Ranked recall (any call with a `query`) orders results by a weighted blend:
 | Recency | 0.3 | Exponential decay; the boost halves every 14 days |
 | Confidence | 0.1 | The `confidence` stored with the memory |
 
-Ties break by `updatedAt` (newest first), then `id`. Query-less searches (the
-injected index, `dawn memory list`) keep pure recency order.
+Ties break by `updatedAt` (newest first), then `id`. Query-less searches (like
+the injected index) keep pure recency order, and `dawn memory list` (which
+lists candidates, not active memories) is likewise unaffected.
 
 Tune it in `dawn.config.ts` (all fields optional and defaulted):
 
@@ -258,7 +259,7 @@ For deterministic coverage the aimock harness scripts exact tool arguments — w
 Long-term memory ships with the `semantic` kind and deterministic ranked recall (IDF-weighted relevance blended with recency and confidence). The following are typed or designed but **not** implemented:
 
 - The `episodic`, `procedural`, and `reflection` kinds.
-- Vector / embedding recall, FTS5 / BM25 ranking, and a memory graph.
+- Vector / embedding recall, full BM25 (term-frequency / length-normalized) ranking via FTS5, and a memory graph.
 - A dev-server Memory Inspector UI.
 - Postgres / pgvector store adapters.
 - Schema-typed `remember.data` (typed loosely as `Record<string, unknown>` today).
