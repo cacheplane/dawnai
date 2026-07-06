@@ -1,7 +1,14 @@
 name: Claude Review
 
-# Genuine, advisory AI code review on every PR. Posts findings as PR
-# comments. NOT a required status check — it never blocks a merge.
+# Genuine, advisory AI code review on every PR. Posts findings as ONE
+# top-level PR comment. NOT a required status check — it never blocks a
+# merge. Top-level only (no inline review comments) BY DESIGN: inline
+# comments create review threads, and the "Require conversation resolution
+# before merging" branch-protection rule blocks auto-merge on any unresolved
+# thread regardless of whether the check that posted it is required. The
+# previous auto-resolve step could not fix this — the workflow GITHUB_TOKEN
+# gets FORBIDDEN on the resolveReviewThread mutation — so every commented PR
+# deadlocked until a maintainer hand-resolved threads (see PR #289).
 # Uses `pull_request` (not pull_request_target) so ANTHROPIC_API_KEY is
 # never exposed to fork PRs.
 
@@ -43,7 +50,10 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
 
-            Review this pull request and post your findings as GitHub PR comments.
+            Review this pull request and post your findings as ONE top-level
+            GitHub PR comment via `gh pr comment`. Do NOT post inline review
+            comments (they create review threads that block auto-merge under
+            this repo's branch protection).
             Read the diff with `gh pr diff` and the description with `gh pr view`.
             Focus on:
             - Correctness bugs
@@ -51,46 +61,14 @@ jobs:
             - TypeScript type-safety problems
             - Missing or weak test coverage for the change
 
-            Post a concise top-level summary via `gh pr comment`. Post specific
-            issues as inline comments. Be brief; skip nitpicks and style unless
-            they affect correctness. If the PR looks good, say so briefly.
+            In the comment, reference specific locations as `path/to/file.ts:123`
+            code-formatted paths with a short quoted snippet, so findings are easy
+            to locate without inline threads. Order findings most-severe first.
+            Be brief; skip nitpicks and style unless they affect correctness. If
+            the PR looks good, say so briefly. If a prior review comment of yours
+            exists on this PR, post a fresh comment covering only what changed
+            since (do not repeat findings that were addressed).
           claude_args: |
             --model claude-sonnet-4-6
             --max-turns 40
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
-
-      - name: Resolve advisory review threads
-        # This review is advisory and must NEVER block a merge (see header).
-        # Its inline comments create review threads that would otherwise trip
-        # the "Require conversation resolution before merging" branch-protection
-        # rule and deadlock auto-merge. Resolve the bot's own unresolved threads
-        # so the findings stay visible (collapsed, re-openable) but don't gate
-        # the merge. Runs even if the review step errored, so a half-posted
-        # review can't leave a PR stuck. Only touches github-actions threads —
-        # human review threads are left alone.
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OWNER: ${{ github.repository_owner }}
-          REPO: ${{ github.event.repository.name }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          ids=$(gh api graphql -F owner="$OWNER" -F repo="$REPO" -F pr="$PR" -f query='
-            query($owner:String!, $repo:String!, $pr:Int!) {
-              repository(owner:$owner, name:$repo) {
-                pullRequest(number:$pr) {
-                  reviewThreads(first:100) {
-                    nodes { id isResolved comments(first:1) { nodes { author { login } } } }
-                  }
-                }
-              }
-            }' --jq '.data.repository.pullRequest.reviewThreads.nodes[]
-                     | select(.isResolved == false and .comments.nodes[0].author.login == "github-actions")
-                     | .id')
-          for id in $ids; do
-            echo "Resolving advisory review thread $id"
-            gh api graphql -f id="$id" -f query='
-              mutation($id:ID!) {
-                resolveReviewThread(input:{threadId:$id}) { thread { isResolved } }
-              }'
-          done
+            --allowedTools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
