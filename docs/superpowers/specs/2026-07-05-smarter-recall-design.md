@@ -254,12 +254,17 @@ A custom `config.memory.store` bypasses all of this (it owns its own ranking).
 - **Gated live smoke** (`memory-live.smoke.test.ts`) re-run locally
   (OPENAI_API_KEY, never CI) as final verification, PLUS one new ranking
   scenario: seed the backdated relevant fact, let the REAL model store a
-  distractor and then ask the question naturally; assert the final message
-  carries the relevant value. Covers what aimock cannot — whether the model's
+  distractor and then ask the question naturally; assert the recall tool was
+  called AND its result carries the value (finalMessage alone can false-pass:
+  the index hint can leak the answer into the system prompt — observed live),
+  with the seeded value placed past the 80-char index-hint slice so recall is
+  the only source. Covers what aimock cannot — whether the model's
   own query phrasing is good enough for the ranker.
-- **Eval dogfood:** add one recall-ranking case to the research template's
-  memory eval using the existing `memoryRecalled` scorer (seed two memories,
-  query for the specific one, expect the relevant id first).
+- **Eval dogfood: DEFERRED.** The research template ships no evals today, and
+  adding `@dawn-ai/evals` to a scaffold template destabilizes the generated-app
+  verify lanes (known SCAFFOLD_PACKAGES hazard). The aimock before/after e2e is
+  the deterministic quality gate; a template eval can follow when the template
+  grows an evals directory for other reasons.
 
 ## Documentation
 
