@@ -263,7 +263,7 @@ class InternalDevSession {
 
     try {
       await child.waitForReady()
-      await waitForDevServerReady(this.url)
+      await waitForDevServerReady(this.url, { timeoutMs: readReadyTimeoutMs() })
     } catch (error) {
       await child.stop(readShutdownTimeoutMs())
 
@@ -398,4 +398,15 @@ function readShutdownTimeoutMs(): number {
 
   const parsedValue = Number(rawValue)
   return Number.isFinite(parsedValue) ? parsedValue : 1_000
+}
+
+function readReadyTimeoutMs(): number {
+  const rawValue = process.env.DAWN_DEV_READY_TIMEOUT_MS
+
+  if (!rawValue) {
+    return 5_000
+  }
+
+  const parsedValue = Number(rawValue)
+  return Number.isFinite(parsedValue) ? parsedValue : 5_000
 }
