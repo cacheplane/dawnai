@@ -53,4 +53,11 @@ describe('reserved "tool" key uses exact matching', () => {
   it("commands keep prefix matching", () => {
     expect(matchPermission("bash", "ls -la", { bash: ["ls"] }, {})).toBe("allow")
   })
+
+  it("an empty pattern does not wildcard the tool key (unlike prefix keys)", () => {
+    // For prefix-matched keys an empty pattern matches everything; the exact-match
+    // carve-out means it can only match an (impossible) empty tool name.
+    expect(matchPermission("tool", "deployProd", { tool: [""] }, {})).toBe("unknown")
+    expect(matchPermission("bash", "anything", { bash: [""] }, {})).toBe("allow")
+  })
 })
