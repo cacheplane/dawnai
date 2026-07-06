@@ -14,6 +14,10 @@ permissions:
 
 jobs:
   review:
+    # Dependabot-triggered runs cannot read repo secrets, so the Claude review
+    # action always fails with a red X on dependabot PRs. Skip them (same
+    # convention as scripts/check-changesets.mjs).
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -26,7 +30,7 @@ jobs:
           fetch-depth: 1
 
       - name: Claude review
-        uses: anthropics/claude-code-action@2fee15510437d71399d9139ed60433470484a8fb # v1
+        uses: anthropics/claude-code-action@a92e7c70a4da9793dc164451d829089dc057a464 # v1
         with:
           # Pass GITHUB_TOKEN explicitly (maps to OVERRIDE_GITHUB_TOKEN) so the
           # action skips OIDC token exchange — that path needs `id-token: write`

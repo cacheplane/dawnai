@@ -1,7 +1,7 @@
 {
   "name": "@dawn-example/chat-server",
   "private": true,
-  "version": "0.0.10",
+  "version": "0.0.11",
   "type": "module",
   "scripts": {
     "dev": "node node_modules/@dawn-ai/cli/dist/index.js dev --port 3001",
@@ -21,8 +21,8 @@
     "@dawn-ai/config-typescript": "workspace:*",
     "@dawn-ai/evals": "workspace:*",
     "@dawn-ai/testing": "workspace:*",
-    "@types/node": "25.6.0",
+    "@types/node": "26.1.0",
     "typescript": "6.0.2",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.9"
   }
 }

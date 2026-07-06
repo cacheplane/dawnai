@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/langgraph",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -48,6 +48,6 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
-    "@types/node": "25.6.0"
+    "@types/node": "26.1.0"
   }
 }

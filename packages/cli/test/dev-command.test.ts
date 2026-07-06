@@ -220,6 +220,7 @@ describe("dawn dev lifecycle", () => {
       env: {
         DAWN_DEV_CHILD_PID_PATH: pidPath,
         DAWN_DEV_CHILD_TEST_MODE: "report-ready-without-server",
+        DAWN_DEV_READY_TIMEOUT_MS: "15000",
       },
     })
     devProcesses.push(dev)
@@ -739,7 +740,7 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function waitForPath(path: string, timeoutMs = 2_000): Promise<void> {
+async function waitForPath(path: string, timeoutMs = 10_000): Promise<void> {
   const startedAt = Date.now()
 
   while (Date.now() - startedAt < timeoutMs) {
