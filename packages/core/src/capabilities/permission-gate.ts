@@ -1,6 +1,10 @@
 import { sep } from "node:path"
 import type { PermissionsStore } from "@dawn-ai/permissions"
-import { suggestedCommandPattern, suggestedPathPattern } from "@dawn-ai/permissions"
+import {
+  suggestedCommandPattern,
+  suggestedMemoryPattern,
+  suggestedPathPattern,
+} from "@dawn-ai/permissions"
 import { interrupt } from "@langchain/langgraph"
 
 export type PathOperation = "readFile" | "writeFile" | "listDir"
@@ -125,6 +129,54 @@ export async function gateToolOp(
   return { allowed: true }
 }
 
+export interface MemorySupersedeDetail {
+  readonly namespace: string
+  readonly identity: string
+  readonly oldId: string
+  readonly oldContent: string
+  readonly newContent: string
+}
+
+/**
+ * Memory supersede gate (memory.writes: "ask"). Prompts ONLY when the agent
+ * contradicts an existing active memory — ADDs and idempotent UPDATEs never
+ * reach this gate. Persisted decisions live under the reserved "memory" key
+ * as workspace+route namespace prefixes; candidates are matched with a "|"
+ * terminator so sibling routes cannot prefix-collide.
+ *
+ * DELIBERATE DIVERGENCE from gateToolOp: on "unknown" with no interactive
+ * human (non-interactive mode), this gate ALLOWS the supersede — ask is a
+ * supervision affordance, not a security boundary; headless it behaves
+ * exactly as writes:"auto". Explicit deny rules are still honored headless.
+ * Only called from inside the memory capability's remember tool, which only
+ * exists on agent routes (in-graph), so interrupt() is safe here.
+ */
+export async function gateMemorySupersede(
+  permissions: PermissionsStore | undefined,
+  detail: MemorySupersedeDetail,
+): Promise<GateResult> {
+  if (!permissions) return { allowed: true }
+  if (permissions.mode === "bypass") return { allowed: true }
+
+  const decision = permissions.match("memory", `${detail.namespace}|`)
+  if (decision === "allow") return { allowed: true }
+  if (decision === "deny") {
+    return { allowed: false, reason: `approval denied for this route's memory overwrites` }
+  }
+  // unknown + headless → allow through (ask ≡ auto without a human).
+  if (permissions.mode === "non-interactive") return { allowed: true }
+
+  const result = await emitPermissionInterrupt({
+    kind: "memory",
+    ...detail,
+    permissions,
+  })
+  if (result === "deny") {
+    return { allowed: false, reason: `approval denied` }
+  }
+  return { allowed: true }
+}
+
 /** Best-effort display preview of a tool call's args. Never matched or persisted. */
 function buildArgsPreview(input: unknown): string {
   try {
@@ -177,6 +229,15 @@ type InterruptArgs =
   | { kind: "command"; command: string; permissions: PermissionsStore }
   | { kind: "path"; operation: PathOperation; path: string; permissions: PermissionsStore }
   | { kind: "tool"; toolName: string; argsPreview: string; permissions: PermissionsStore }
+  | {
+      kind: "memory"
+      namespace: string
+      identity: string
+      oldId: string
+      oldContent: string
+      newContent: string
+      permissions: PermissionsStore
+    }
 
 async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "deny"> {
   const interruptId = `perm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -185,7 +246,9 @@ async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "
       ? suggestedCommandPattern(args.command)
       : args.kind === "tool"
         ? args.toolName
-        : suggestedPathPattern(args.path)
+        : args.kind === "memory"
+          ? suggestedMemoryPattern(args.namespace)
+          : suggestedPathPattern(args.path)
   const payload = {
     interruptId,
     type: "permission-request" as const,
@@ -195,16 +258,28 @@ async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "
         ? { command: args.command, suggestedPattern }
         : args.kind === "tool"
           ? { toolName: args.toolName, argsPreview: args.argsPreview, suggestedPattern }
-          : {
-              operation: args.operation,
-              path: args.path,
-              suggestedPattern,
-            },
+          : args.kind === "memory"
+            ? {
+                namespace: args.namespace,
+                identity: args.identity,
+                oldId: args.oldId,
+                oldContent: args.oldContent,
+                newContent: args.newContent,
+                suggestedPattern,
+              }
+            : { operation: args.operation, path: args.path, suggestedPattern },
   }
   const decision = interrupt(payload) as "once" | "always" | "deny"
   if (decision === "deny") return "deny"
   if (decision === "always") {
-    const tool = args.kind === "command" ? "bash" : args.kind === "tool" ? "tool" : args.operation
+    const tool =
+      args.kind === "command"
+        ? "bash"
+        : args.kind === "tool"
+          ? "tool"
+          : args.kind === "memory"
+            ? "memory"
+            : args.operation
     await args.permissions.addAllow(tool, suggestedPattern)
   }
   return "allow"

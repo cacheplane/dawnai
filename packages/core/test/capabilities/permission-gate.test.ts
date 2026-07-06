@@ -5,6 +5,7 @@ import { createPermissionsStore } from "@dawn-ai/permissions"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import {
+  gateMemorySupersede,
   gatePathOp,
   gateToolOp,
   wrapToolWithApproval,
@@ -185,5 +186,81 @@ describe("wrapToolWithApproval", () => {
     await permissions.load()
     const wrapped = wrapToolWithApproval({ name: "x", run: async () => "ran" }, permissions)
     expect(String(await wrapped.run({}, { signal }))).toMatch(/fail-closed/)
+  })
+})
+
+describe("gateMemorySupersede", () => {
+  let appRoot: string
+  beforeEach(() => {
+    appRoot = mkdtempSync(join(tmpdir(), "dawn-gate-memory-test-"))
+  })
+  afterEach(() => {
+    rmSync(appRoot, { recursive: true, force: true })
+  })
+
+  async function store(
+    mode: "interactive" | "non-interactive" | "bypass",
+    config?: {
+      allow?: Record<string, readonly string[]>
+      deny?: Record<string, readonly string[]>
+    },
+  ) {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: config
+        ? { version: 1, allow: config.allow ?? {}, deny: config.deny ?? {} }
+        : undefined,
+      mode,
+    })
+    await permissions.load()
+    return permissions
+  }
+
+  const detail = {
+    namespace: "workspace=app|route=/support",
+    identity: "acme / payment-terms",
+    oldId: "memory_abc123",
+    oldContent: "acme prefers net-30",
+    newContent: "acme prefers net-45",
+  }
+
+  it("allows when no permissions store is present (legacy context ≡ auto)", async () => {
+    expect((await gateMemorySupersede(undefined, detail)).allowed).toBe(true)
+  })
+
+  it("allows in bypass mode", async () => {
+    const permissions = await store("bypass")
+    expect((await gateMemorySupersede(permissions, detail)).allowed).toBe(true)
+  })
+
+  it("allows a config-pre-approved route prefix (terminated)", async () => {
+    const permissions = await store("interactive", {
+      allow: { memory: ["workspace=app|route=/support|"] },
+    })
+    expect((await gateMemorySupersede(permissions, detail)).allowed).toBe(true)
+  })
+
+  it("does not let a sibling-route rule leak (route=/s vs route=/support)", async () => {
+    // /s is a string prefix of /support; the terminator must prevent the match.
+    // "unknown" in non-interactive mode → allow-through, so use the deny list
+    // to make leakage observable.
+    const permissions = await store("non-interactive", {
+      deny: { memory: ["workspace=app|route=/s|"] },
+    })
+    expect((await gateMemorySupersede(permissions, detail)).allowed).toBe(true)
+  })
+
+  it("blocks an explicitly denied route prefix with a reason (honored headless)", async () => {
+    const permissions = await store("non-interactive", {
+      deny: { memory: ["workspace=app|route=/support|"] },
+    })
+    const result = await gateMemorySupersede(permissions, detail)
+    expect(result.allowed).toBe(false)
+    if (!result.allowed) expect(result.reason).toMatch(/denied/i)
+  })
+
+  it("allows through on unknown in non-interactive mode (ask ≡ auto headless)", async () => {
+    const permissions = await store("non-interactive")
+    expect((await gateMemorySupersede(permissions, detail)).allowed).toBe(true)
   })
 })
