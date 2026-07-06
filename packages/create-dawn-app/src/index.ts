@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
@@ -58,6 +58,7 @@ async function assertInternalModeWorkspace(mode: CliOptions["mode"]): Promise<vo
     resolve(repoRoot, "packages/cli/package.json"),
     resolve(repoRoot, "packages/langchain/package.json"),
     resolve(repoRoot, "packages/langgraph/package.json"),
+    resolve(repoRoot, "packages/sandbox/package.json"),
     resolve(repoRoot, "packages/sdk/package.json"),
     resolve(repoRoot, "packages/config-typescript/package.json"),
   ]
@@ -181,6 +182,7 @@ function createTemplateReplacements(
   readonly dawnLanggraphSpecifier: string
   readonly dawnMemorySpecifier: string
   readonly dawnPermissionsSpecifier: string
+  readonly dawnSandboxSpecifier: string
   readonly dawnSdkSpecifier: string
   readonly dawnSqliteStorageSpecifier: string
   readonly dawnTestingSpecifier: string
@@ -201,6 +203,7 @@ function createTemplateReplacements(
       dawnPermissionsSpecifier: createAbsoluteFileSpecifier(
         resolve(repoRoot, "packages/permissions"),
       ),
+      dawnSandboxSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/sandbox")),
       dawnSdkSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/sdk")),
       dawnSqliteStorageSpecifier: createAbsoluteFileSpecifier(
         resolve(repoRoot, "packages/sqlite-storage"),
@@ -220,6 +223,7 @@ function createTemplateReplacements(
     dawnLanggraphSpecifier: options.distTag,
     dawnMemorySpecifier: options.distTag,
     dawnPermissionsSpecifier: options.distTag,
+    dawnSandboxSpecifier: options.distTag,
     dawnSdkSpecifier: options.distTag,
     dawnSqliteStorageSpecifier: options.distTag,
     dawnTestingSpecifier: options.distTag,
@@ -231,35 +235,39 @@ async function applyInternalModePackageOverrides(
   appRoot: string,
   replacements: ReturnType<typeof createTemplateReplacements>,
 ): Promise<void> {
-  const packageJsonPath = resolve(appRoot, "package.json")
-  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-    dependencies?: Record<string, string>
-    devDependencies?: Record<string, string>
-    pnpm?: {
-      overrides?: Record<string, string>
-    }
+  const overrides = {
+    "@dawn-ai/cli": replacements.dawnCliSpecifier,
+    "@dawn-ai/config-typescript": replacements.dawnConfigTypescriptSpecifier,
+    "@dawn-ai/core": replacements.dawnCoreSpecifier,
+    "@dawn-ai/evals": replacements.dawnEvalsSpecifier,
+    "@dawn-ai/langchain": replacements.dawnLangchainSpecifier,
+    "@dawn-ai/langgraph": replacements.dawnLanggraphSpecifier,
+    "@dawn-ai/memory": replacements.dawnMemorySpecifier,
+    "@dawn-ai/permissions": replacements.dawnPermissionsSpecifier,
+    "@dawn-ai/sandbox": replacements.dawnSandboxSpecifier,
+    "@dawn-ai/sdk": replacements.dawnSdkSpecifier,
+    "@dawn-ai/sqlite-storage": replacements.dawnSqliteStorageSpecifier,
+    "@dawn-ai/testing": replacements.dawnTestingSpecifier,
+    "@dawn-ai/workspace": replacements.dawnWorkspaceSpecifier,
   }
+  const lines = [
+    "packages:",
+    "  - .",
+    "",
+    "onlyBuiltDependencies:",
+    "  - esbuild",
+    "",
+    "allowBuilds:",
+    "  esbuild: true",
+    "",
+    "overrides:",
+    ...Object.entries(overrides).map(([name, specifier]) => {
+      return `  ${JSON.stringify(name)}: ${JSON.stringify(specifier)}`
+    }),
+    "",
+  ]
 
-  packageJson.pnpm = {
-    ...(packageJson.pnpm ?? {}),
-    overrides: {
-      ...(packageJson.pnpm?.overrides ?? {}),
-      "@dawn-ai/cli": replacements.dawnCliSpecifier,
-      "@dawn-ai/config-typescript": replacements.dawnConfigTypescriptSpecifier,
-      "@dawn-ai/core": replacements.dawnCoreSpecifier,
-      "@dawn-ai/evals": replacements.dawnEvalsSpecifier,
-      "@dawn-ai/langchain": replacements.dawnLangchainSpecifier,
-      "@dawn-ai/langgraph": replacements.dawnLanggraphSpecifier,
-      "@dawn-ai/memory": replacements.dawnMemorySpecifier,
-      "@dawn-ai/permissions": replacements.dawnPermissionsSpecifier,
-      "@dawn-ai/sdk": replacements.dawnSdkSpecifier,
-      "@dawn-ai/sqlite-storage": replacements.dawnSqliteStorageSpecifier,
-      "@dawn-ai/testing": replacements.dawnTestingSpecifier,
-      "@dawn-ai/workspace": replacements.dawnWorkspaceSpecifier,
-    },
-  }
-
-  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8")
+  await writeFile(resolve(appRoot, "pnpm-workspace.yaml"), lines.join("\n"), "utf8")
 }
 
 async function pathExists(path: string): Promise<boolean> {

@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest"
 
 import { type LocalRegistry, publishWorkspace, startLocalRegistry } from "./local-registry.ts"
 import { runPackagedCommand } from "./packaged-app.ts"
+import { writePnpmWorkspaceBuildPolicy } from "./scaffold-packaging.ts"
 
 describe("local-registry", () => {
   let registry: LocalRegistry
@@ -28,6 +29,7 @@ describe("local-registry", () => {
         "utf8",
       )
       await writeFile(join(dir, ".npmrc"), `registry=${registry.url}\n`, "utf8")
+      await writePnpmWorkspaceBuildPolicy(dir)
 
       await runPackagedCommand({
         args: ["install", "--no-frozen-lockfile"],

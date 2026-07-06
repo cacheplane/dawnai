@@ -207,22 +207,34 @@ describe("dawn typegen", () => {
             "@dawn-ai/langgraph": `file:${langgraphTarball}`,
             "@dawn-ai/sqlite-storage": `file:${sqliteStorageTarball}`,
           },
-          pnpm: {
-            overrides: {
-              "@dawn-ai/core": `file:${coreTarball}`,
-              "@dawn-ai/langchain": `file:${langchainTarball}`,
-              "@dawn-ai/langgraph": `file:${langgraphTarball}`,
-              "@dawn-ai/memory": `file:${memoryTarball}`,
-              "@dawn-ai/permissions": `file:${permissionsTarball}`,
-              "@dawn-ai/sdk": `file:${sdkTarball}`,
-              "@dawn-ai/sqlite-storage": `file:${sqliteStorageTarball}`,
-              "@dawn-ai/workspace": `file:${workspaceTarball}`,
-            },
-          },
         },
         null,
         2,
       ),
+    )
+    await writeFile(
+      join(installerRoot, "pnpm-workspace.yaml"),
+      [
+        "packages:",
+        "  - .",
+        "",
+        "onlyBuiltDependencies:",
+        "  - esbuild",
+        "",
+        "allowBuilds:",
+        "  esbuild: true",
+        "",
+        "overrides:",
+        `  "@dawn-ai/core": ${JSON.stringify(`file:${coreTarball}`)}`,
+        `  "@dawn-ai/langchain": ${JSON.stringify(`file:${langchainTarball}`)}`,
+        `  "@dawn-ai/langgraph": ${JSON.stringify(`file:${langgraphTarball}`)}`,
+        `  "@dawn-ai/memory": ${JSON.stringify(`file:${memoryTarball}`)}`,
+        `  "@dawn-ai/permissions": ${JSON.stringify(`file:${permissionsTarball}`)}`,
+        `  "@dawn-ai/sdk": ${JSON.stringify(`file:${sdkTarball}`)}`,
+        `  "@dawn-ai/sqlite-storage": ${JSON.stringify(`file:${sqliteStorageTarball}`)}`,
+        `  "@dawn-ai/workspace": ${JSON.stringify(`file:${workspaceTarball}`)}`,
+        "",
+      ].join("\n"),
     )
 
     const installResult = await runCommand("pnpm", ["install"], installerRoot)

@@ -7,12 +7,16 @@
     "eval": "dawn eval",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:sandbox:docker": "DAWN_DEMO_DOCKER_SANDBOX=1 vitest run test/sandbox-docker.test.ts",
+    "memory:list": "dawn memory list",
+    "memory:approve": "dawn memory approve",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@dawn-ai/core": "{{dawnCoreSpecifier}}",
     "@dawn-ai/cli": "{{dawnCliSpecifier}}",
     "@dawn-ai/langchain": "{{dawnLangchainSpecifier}}",
+    "@dawn-ai/sandbox": "{{dawnSandboxSpecifier}}",
     "@dawn-ai/sdk": "{{dawnSdkSpecifier}}",
     "zod": "^4.0.0"
   },
@@ -23,8 +27,5 @@
     "@types/node": "25.6.0",
     "typescript": "6.0.2",
     "vitest": "4.1.4"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
   }
 }

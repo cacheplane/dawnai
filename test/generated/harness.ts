@@ -7,8 +7,7 @@ import { expect } from "vitest"
 import { createArtifactRoot } from "../../packages/devkit/src/testing/index.ts"
 import { getTestRegistryUrl } from "../harness/local-registry.ts"
 import {
-  cleanupTrackedTempDirs,
-  createTrackedTempDir,
+  installPackagedScaffolder,
   markTrackedTempDirForPreserve,
   runPackagedCommand,
   type TrackedTempDir,
@@ -368,15 +367,14 @@ async function scaffoldApp(options: {
       transcriptPath: options.transcriptPath,
     })
   } else {
-    // external mode: scaffold using the published create-dawn-ai-app, resolved
-    // from the test registry — exactly what a real user runs. pnpm dlx does not
-    // accept --registry, so the registry is passed via npm_config_registry; the
-    // unique per-run URL busts dlx's cache.
+    // external mode: scaffold through an installed package tarball while forcing
+    // the current checkout's devkit templates. This keeps the packaged-bin signal
+    // deterministic even when a long-lived test registry has older templates.
+    const { installerDir } = await installPackagedScaffolder(dirname(options.appRoot))
     await runPackagedCommand({
-      args: ["dlx", "create-dawn-ai-app", options.appRoot, "--template", "basic"],
+      args: ["exec", "create-dawn-ai-app", options.appRoot, "--template", "basic"],
       command: "pnpm",
-      cwd: REPO_ROOT,
-      env: { npm_config_registry: getTestRegistryUrl() },
+      cwd: installerDir,
       transcriptPath: options.transcriptPath,
     })
   }

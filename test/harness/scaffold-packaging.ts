@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 /**
@@ -13,6 +13,7 @@ export function registryLatestSpecifiers() {
     dawnCore: "latest",
     dawnEvals: "latest",
     dawnLangchain: "latest",
+    dawnSandbox: "latest",
     dawnSdk: "latest",
     dawnTesting: "latest",
   }
@@ -33,4 +34,34 @@ export async function writeRegistryNpmrc(appRoot: string, registryUrl: string): 
     "",
   ].join("\n")
   await writeFile(join(appRoot, ".npmrc"), npmrc, "utf8")
+  await writePnpmWorkspaceBuildPolicy(appRoot)
+}
+
+export async function writePnpmWorkspaceBuildPolicy(appRoot: string): Promise<void> {
+  const workspacePath = join(appRoot, "pnpm-workspace.yaml")
+  const existing = await readFile(workspacePath, "utf8").catch(() => "")
+
+  if (
+    existing.includes("onlyBuiltDependencies:") &&
+    existing.includes("allowBuilds:") &&
+    existing.includes("esbuild: true")
+  ) {
+    return
+  }
+
+  const base = existing.trimEnd() || ["packages:", "  - ."].join("\n")
+  await writeFile(
+    workspacePath,
+    [
+      base,
+      "",
+      "onlyBuiltDependencies:",
+      "  - esbuild",
+      "",
+      "allowBuilds:",
+      "  esbuild: true",
+      "",
+    ].join("\n"),
+    "utf8",
+  )
 }
