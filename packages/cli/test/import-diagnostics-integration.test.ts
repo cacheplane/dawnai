@@ -59,7 +59,12 @@ async function buildCliExecutable() {
   const distEntry = join(packageRoot, "dist", "index.js")
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    const child = spawn("pnpm", ["exec", "tsc", "-b", "tsconfig.build.json", "--force"], {
+    // No `--force`: it rebuilds every referenced project (incl. @dawn-ai/core)
+    // unconditionally, rewriting the SHARED packages/core/dist mid-suite. Under
+    // vitest's parallel files that races other tests spawning processes which
+    // import @dawn-ai/core from that dist (a half-written dist → "does not
+    // provide an export" crash). Plain `tsc -b` is a no-op when already built.
+    const child = spawn("pnpm", ["exec", "tsc", "-b", "tsconfig.build.json"], {
       cwd: packageRoot,
       stdio: "inherit",
     })
