@@ -8,6 +8,24 @@ import { discoverToolDefinitions } from "./tool-discovery.js"
 interface ToolScopeShape {
   readonly allow?: readonly string[]
   readonly deny?: readonly string[]
+  readonly approve?: readonly string[]
+}
+
+export interface ToolScopeIssues {
+  readonly errors: readonly string[]
+  readonly warnings: readonly string[]
+}
+
+/** Workspace tools with their own pattern-aware internal gates (bash/path). */
+const INTERNALLY_GATED = new Set(["runBash", "readFile", "writeFile", "listDir"])
+
+const BUILT_IN_TOOL_NAME_SET = new Set(BUILT_IN_TOOL_NAMES)
+
+/** A route is a subagent when it lives under a `<parent>/subagents/<name>` directory (see
+ * the `subagents` capability marker's `findConventionSubagents` in
+ * packages/core/src/capabilities/built-in/subagents.ts, which uses the same convention). */
+function isSubagentRoute(routeDir: string): boolean {
+  return /\/subagents\/[^/]+$/.test(routeDir)
 }
 
 interface Deps {
@@ -33,26 +51,60 @@ const defaultDeps: Deps = {
   },
 }
 
-export async function collectToolScopeErrors(
+export async function collectToolScopeIssues(
   manifest: RouteManifest,
   deps: Deps = defaultDeps,
-): Promise<readonly string[]> {
+): Promise<ToolScopeIssues> {
   const errors: string[] = []
+  const warnings: string[] = []
   for (const route of manifest.routes) {
     if (route.kind !== "agent") continue
     const scope = await deps.loadScope(route.entryFile, manifest.appRoot)
-    if (!scope || (!scope.allow && !scope.deny)) continue
+    if (!scope || (!scope.allow && !scope.deny && !scope.approve)) continue
     const available = new Set([
       ...(await deps.routeLocalToolNames(manifest.appRoot, route.routeDir)),
       ...BUILT_IN_TOOL_NAMES,
     ])
-    const unknown = [...(scope.allow ?? []), ...(scope.deny ?? [])].filter((n) => !available.has(n))
+    const unknown = [
+      ...(scope.allow ?? []),
+      ...(scope.deny ?? []),
+      ...(scope.approve ?? []),
+    ].filter((n) => !available.has(n))
     if (unknown.length > 0) {
       errors.push(
         `✗ ${route.pathname}: unknown tool name(s) in scope: ${unknown.join(", ")}.\n` +
           `    available: ${[...available].sort().join(", ")}`,
       )
     }
+    const deny = new Set(scope.deny ?? [])
+    const allow = new Set(scope.allow ?? [])
+    const routeIsSubagent = isSubagentRoute(route.routeDir)
+    for (const name of scope.approve ?? []) {
+      if (INTERNALLY_GATED.has(name)) {
+        warnings.push(
+          `⚠ ${route.pathname}: approve lists "${name}", which is already gated ` +
+            `(pattern-aware bash/path permissions). The approve entry is redundant and would double-prompt.`,
+        )
+      }
+      if (name === "task") {
+        warnings.push(
+          `⚠ ${route.pathname}: approve lists "task", which has no effect — the subagent ` +
+            `dispatch bridge replaces the task tool's run after the approval wrap. ` +
+            `Gating subagent dispatch is not yet supported.`,
+        )
+      }
+      if (deny.has(name)) {
+        warnings.push(
+          `⚠ ${route.pathname}: approve lists "${name}" but deny revokes it — deny wins; the approve entry is dead.`,
+        )
+      }
+      if (routeIsSubagent && BUILT_IN_TOOL_NAME_SET.has(name) && !allow.has(name)) {
+        warnings.push(
+          `⚠ ${route.pathname}: approve lists "${name}", but subagents withhold capability tools ` +
+            `by default — add it to allow or the approve entry has no effect.`,
+        )
+      }
+    }
   }
-  return errors
+  return { errors, warnings }
 }

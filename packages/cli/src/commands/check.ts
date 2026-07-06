@@ -2,7 +2,7 @@ import { discoverRoutes } from "@dawn-ai/core"
 import type { Command } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
-import { collectToolScopeErrors } from "../lib/runtime/collect-tool-scope-errors.js"
+import { collectToolScopeIssues } from "../lib/runtime/collect-tool-scope-errors.js"
 import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
 import { collectUnknownModelIdWarnings } from "../lib/runtime/warn-unknown-model-ids.js"
 
@@ -42,9 +42,12 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
       writeLine(io.stdout, `\n${warning}`)
     }
 
-    const scopeErrors = await collectToolScopeErrors(manifest)
-    if (scopeErrors.length > 0) {
-      throw new CliError(`Invalid tool scope:\n${scopeErrors.join("\n")}`)
+    const scopeIssues = await collectToolScopeIssues(manifest)
+    for (const warning of scopeIssues.warnings) {
+      writeLine(io.stdout, `\n${warning}`)
+    }
+    if (scopeIssues.errors.length > 0) {
+      throw new CliError(`Invalid tool scope:\n${scopeIssues.errors.join("\n")}`)
     }
   } catch (error) {
     if (error instanceof CliError) throw error
