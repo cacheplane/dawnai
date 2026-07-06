@@ -67,7 +67,13 @@ export default async (
   input: { readonly query: string },
   ctx: { signal: AbortSignal; middleware?: Readonly<Record<string, unknown>> },
 ) => {
-  return [{ path: "corpus/agent-architectures.md", title: input.query }]
+  return [
+    {
+      path: "corpus/agent-architectures.md",
+      score: 2,
+      snippet: "ReAct and plan-and-execute are common agent architectures.",
+    },
+  ]
 }
 ```
 
@@ -138,7 +144,7 @@ The `RouteTools<"/research">` lookup uses the route's pathname as the key — th
 - `dawn test [path]` — run colocated scenario tests.
 - `dawn typegen` — regenerate `.dawn/dawn.generated.d.ts` and per-route `tools.json` / `state.json`.
 - `dawn verify` — full integrity check across app, routes, typegen, deps. Preferred CI gate.
-- `echo '"What are common agent architectures?"' | dawn run /research` — execute the default scaffold route.
+- `echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | dawn run /research` — execute the default scaffold route.
 
 ## Agent Protocol
 

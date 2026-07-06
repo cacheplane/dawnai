@@ -35,7 +35,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app. Dawn is a TypeScript-first me
 
 3. Run the scaffolded route end-to-end:
    \`\`\`
-   echo '"What are common agent architectures?"' | dawn run /research
+   echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | dawn run /research
    \`\`\`
 
 4. Start the dev server:
@@ -48,7 +48,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app. Dawn is a TypeScript-first me
    curl -s -X POST http://127.0.0.1:2024/threads -H 'content-type: application/json' -d '{}'
    curl -s -X POST http://127.0.0.1:2024/threads/<thread_id>/runs/wait \\
      -H 'content-type: application/json' \\
-     -d '{"route":"/research#agent","input":"What are common agent architectures?"}'
+     -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}'
    \`\`\`
 
 6. Summarize what I can build next: add a tool, add a new route, write a scenario test.
@@ -163,7 +163,9 @@ const WRITE_A_TEST = `Help me write a scenario test for a Dawn route. Dawn tests
    export default [
      {
        name: "answers from the corpus",
-       input: "What are common agent architectures?",
+       input: {
+         messages: [{ role: "user", content: "What are common agent architectures?" }],
+       },
        expect: {
          status: "passed",
          output: { messages: [{ role: "assistant", content: "ReAct and plan-and-execute are common. [corpus/agent-architectures.md]" }] },
@@ -171,7 +173,9 @@ const WRITE_A_TEST = `Help me write a scenario test for a Dawn route. Dawn tests
      },
      {
        name: "handles another research question",
-       input: "What is retrieval augmented generation?",
+       input: {
+         messages: [{ role: "user", content: "What is retrieval augmented generation?" }],
+       },
        expect: {
          status: "passed",
          output: { messages: [{ role: "assistant", content: "RAG retrieves source documents before generation. [corpus/retrieval-augmented-generation.md]" }] },
@@ -198,7 +202,9 @@ const WRITE_A_TEST = `Help me write a scenario test for a Dawn route. Dawn tests
    export default [
      {
        name: "custom assertion",
-       input: "What are common agent architectures?",
+       input: {
+         messages: [{ role: "user", content: "What are common agent architectures?" }],
+       },
        expect: { status: "passed" },
        assert: (result) => {
          expectOutput(result, { /* expected state fields */ })

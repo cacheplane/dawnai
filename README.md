@@ -118,7 +118,7 @@ pnpm exec dawn verify
 3. Run the scaffolded research route with JSON stdin.
 
 ```bash
-echo '"What are common agent architectures?"' | pnpm exec dawn run /research
+echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | pnpm exec dawn run /research
 ```
 
 4. Optionally start the local runtime in one terminal and send the same route through the Agent Protocol from another terminal.
@@ -128,7 +128,7 @@ pnpm exec dawn dev --port 3001
 curl -s -X POST http://127.0.0.1:3001/threads -H 'content-type: application/json' -d '{}' | jq .
 curl -s -X POST http://127.0.0.1:3001/threads/<thread_id>/runs/wait \
   -H 'content-type: application/json' \
-  -d '{"route":"/research#agent","input":"What are common agent architectures?"}' | jq .
+  -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}' | jq .
 ```
 
 The default scaffold is the deep-research app at `/research`. For the smaller greeter scaffold, run `pnpm create dawn-ai-app my-dawn-app -- --template basic`; that optional template uses `/hello/[tenant]`.
