@@ -1,0 +1,33 @@
+{
+  "name": "@dawn-example/research-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node node_modules/@dawn-ai/cli/dist/index.js dev --port 3002",
+    "build": "node node_modules/@dawn-ai/cli/dist/index.js build",
+    "typecheck": "tsc -p . --noEmit",
+    "check": "node node_modules/@dawn-ai/cli/dist/index.js check",
+    "test": "vitest run",
+    "test:sandbox:docker": "DAWN_DEMO_DOCKER_SANDBOX=1 vitest run test/sandbox-docker.test.ts",
+    "eval": "node node_modules/@dawn-ai/cli/dist/index.js eval",
+    "memory:list": "node node_modules/@dawn-ai/cli/dist/index.js memory list",
+    "memory:approve": "node node_modules/@dawn-ai/cli/dist/index.js memory approve"
+  },
+  "dependencies": {
+    "@dawn-ai/cli": "workspace:*",
+    "@dawn-ai/core": "workspace:*",
+    "@dawn-ai/langchain": "workspace:*",
+    "@dawn-ai/sandbox": "workspace:*",
+    "@dawn-ai/sdk": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@dawn-ai/config-typescript": "workspace:*",
+    "@dawn-ai/evals": "workspace:*",
+    "@dawn-ai/testing": "workspace:*",
+    "@types/node": "26.1.0",
+    "typescript": "6.0.2",
+    "vitest": "^4.1.9"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@dawn-example/research",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "pnpm --filter ./server dev",
+    "build": "pnpm --filter ./server build",
+    "typecheck": "pnpm --filter ./server typecheck",
+    "test": "pnpm --filter ./server test"
+  }
+}

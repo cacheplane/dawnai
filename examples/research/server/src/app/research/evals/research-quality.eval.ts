@@ -1,0 +1,45 @@
+import { contains, custom, defineEval, gate, llmJudge, toolCalled } from "@dawn-ai/evals"
+import { script } from "@dawn-ai/testing"
+
+const JUDGE_CRITERIA =
+  "The report answers the question and cites at least one source document."
+
+export default defineEval({
+  name: "research quality",
+  dataset: [
+    {
+      name: "agent architectures",
+      input: "What are common agent architectures?",
+      fixtures: script()
+        .user("What are common agent architectures?")
+        .callsTool("searchCorpus", { query: "agent architectures" })
+        .replies(
+          "Common architectures include ReAct and plan-and-execute. [corpus/agent-architectures.md]",
+        )
+        .user("cites at least one source")
+        .replies('{"score":1,"reason":"answers and cites a source"}'),
+    },
+    {
+      name: "evaluating llm apps",
+      input: "How should I evaluate an LLM app?",
+      fixtures: script()
+        .user("How should I evaluate an LLM app?")
+        .callsTool("searchCorpus", { query: "evaluate llm app" })
+        .replies(
+          "Use scorers and a gate over a dataset of cases. [corpus/evaluating-llm-apps.md]",
+        )
+        .user("cites at least one source")
+        .replies('{"score":1,"reason":"answers and cites a source"}'),
+    },
+  ],
+  scorers: [
+    toolCalled("searchCorpus", { threshold: 1 }),
+    contains("[corpus/", { threshold: 1 }),
+    custom((run) => (run.finalMessage.includes("corpus/") ? 1 : 0), {
+      name: "cites-source",
+      threshold: 1,
+    }),
+    llmJudge({ criteria: JUDGE_CRITERIA, model: "gpt-5-mini", threshold: 0.7 }),
+  ],
+  gate: gate.all(gate.passRate(1), gate.perScorer()),
+})
