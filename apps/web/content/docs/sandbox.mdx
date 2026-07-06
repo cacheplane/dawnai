@@ -45,6 +45,59 @@ One sandbox is created per conversation thread, on that thread's first turn. It 
 
 Turn trace: turn 1 on a new thread → no live sandbox → `acquire()` creates the container and volume. Turns 2..N on the same thread → the same live sandbox is reused. Thread idle past `idleTimeoutMs` → container released, volume kept. Next turn after that → `acquire()` reattaches the existing volume into a fresh container. Thread deleted → `destroy()` removes the container and the volume.
 
+## Security hardening
+
+The Docker provider is hardened by default — a fresh `dockerSandbox()` config with no `security` key applies all of the following:
+
+| Control | Default | Effect |
+| --- | --- | --- |
+| Linux capabilities | `--cap-drop ALL` | The container gets none of the default Docker capability set (no `CAP_NET_RAW`, `CAP_SYS_ADMIN`, etc.) |
+| Privilege escalation | `--security-opt no-new-privileges` | setuid/setgid binaries can't escalate to root inside the container |
+| Process count | `--pids-limit 512` | Caps forked processes as a fork-bomb defense |
+| Root filesystem | `--read-only` + `--tmpfs /tmp` + `--tmpfs /run` | The image's root filesystem is immutable; only the workspace volume and the two tmpfs mounts are writable |
+| User | `--user 1000:1000` with `HOME=/workspace` | The process runs as a non-root uid/gid instead of the image's default (often root) |
+
+This is expressed as a provider-agnostic `SandboxPolicy.security` intent, not a Docker-only flag set — a future microVM- or gVisor-backed provider implements the same fields against its own mechanism.
+
+Every control has a per-flag opt-out for images that need it:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+import { dockerSandbox } from "@dawn-ai/sandbox"
+
+export default config({
+  sandbox: {
+    provider: dockerSandbox({ image: "node:22-slim" }),
+    security: { runAsNonRoot: false, readOnlyRootFilesystem: false }, // opt out if your image needs it
+  },
+})
+```
+
+`security` accepts:
+
+- `dropAllCapabilities?: boolean` — default `true`
+- `noNewPrivileges?: boolean` — default `true`
+- `readOnlyRootFilesystem?: boolean` — default `true`
+- `runAsNonRoot?: boolean | { uid: number; gid: number }` — default `true` (uid/gid `1000:1000`); pass an object for a different fixed uid/gid, or `false` to run as the image's default user
+- `pidsLimit?: number` — default `512`
+
+<Callout type="warn" title="Bake system deps into your image">
+  The read-only root filesystem and non-root user mean runtime `apt`/`apk` installs, `npm install -g`, and writes outside the workspace all fail by default — there's nowhere writable for them to land. Install system packages and global tooling at image-build time, and let the agent mutate only its workspace at runtime. If a workload genuinely needs to write elsewhere or run as root, opt out with `readOnlyRootFilesystem: false` / `runAsNonRoot: false`.
+</Callout>
+
+### Per-command timeout
+
+`resources.timeoutMs` bounds how long a single `runBash` call may run, enforced inside the container (the command is wrapped in `timeout`; an overrun exits with code `124`):
+
+```ts
+sandbox: {
+  provider: dockerSandbox({ image: "node:22-slim" }),
+  resources: { timeoutMs: 120_000 },
+},
+```
+
+It's enforced only when set — omitting `resources.timeoutMs` leaves exec calls unbounded in duration (still subject to `memoryMb`/`cpus` caps, if configured).
+
 ## Network policy
 
 `sandbox.network` takes one of two shapes:
@@ -117,9 +170,9 @@ Use it in harness-driven tests the same way you'd test any other agent route —
 
 ## What it is — and isn't
 
-**Is:** per-thread kernel-level filesystem and process isolation; the host filesystem is never touched; the host environment is never leaked into the sandbox; CPU and memory caps via `resources`; multi-tenant separation by thread; `network: { mode: "deny" }` is zero egress; the workspace survives turns, server restarts, and container crashes.
+**Is:** per-thread kernel-level filesystem and process isolation; the host filesystem is never touched; the host environment is never leaked into the sandbox; CPU and memory caps via `resources`; multi-tenant separation by thread; `network: { mode: "deny" }` is zero egress; the workspace survives turns, server restarts, and container crashes; hardened by default — all Linux capabilities dropped, no privilege escalation, a read-only root filesystem, a non-root user, and a process-count limit, each with an explicit opt-out.
 
-**Is not:** a guarantee against container-escape zero-days. This is Docker's isolation boundary, not a microVM — which is why the contract is provider-agnostic: a gVisor-, Kata-, or cloud-microVM-backed provider is a stronger drop-in replacement with no change to your app code. The `allow`-mode denylist is best-effort in the Docker reference; it does not stop an agent exfiltrating its own sandbox's data under `allow` mode. And the sandbox does not govern tool *surface* — that's [tool scoping](/docs/tools)'s job (`agent({ tools })`); the sandbox and tool scoping are complementary layers, not substitutes for each other.
+**Is not:** a guarantee against container-escape zero-days. Dropped capabilities, a non-root user, a read-only root filesystem, and deny-mode networking materially raise the bar an attacker has to clear, but this remains Docker's isolation boundary, not a microVM. That's why the hardening is expressed as a provider-agnostic `SandboxPolicy.security` intent rather than a Docker-specific flag set: a gVisor-, Kata-, or cloud-microVM-backed provider satisfies the same seam with a stronger underlying substrate, as a drop-in replacement with no change to your app code. The `allow`-mode denylist is best-effort in the Docker reference; it does not stop an agent exfiltrating its own sandbox's data under `allow` mode. And the sandbox does not govern tool *surface* — that's [tool scoping](/docs/tools)'s job (`agent({ tools })`); the sandbox and tool scoping are complementary layers, not substitutes for each other.
 
 Dawn ships the isolation seam plus a Docker reference. For hostile-grade multi-tenant isolation, plug in a microVM-backed provider.
 
