@@ -87,7 +87,7 @@ function buildLlmsTxt(): string {
       "- `GET /threads/:thread_id/state`",
       "- `POST /threads/:thread_id/resume`",
       "- Run body: `{ \"route\": \"/research#agent\", \"input\": { \"messages\": [{ \"role\": \"user\", \"content\": \"What are common agent architectures?\" }] } }`",
-      "- Resume body: `{ \"interrupt_id\": \"<id>\", \"decision\": \"once\" | \"always\" | \"deny\", \"route\": \"/research#agent\" }`; `route` is optional unless the server lost its thread-to-route map.",
+      "- Resume body: `{ \"interrupt_id\": \"<id>\", \"decision\": \"once\" | \"always\" | \"deny\", \"route\": \"/research#agent\" }`; `route` is optional unless the server cannot recover the route from its in-memory thread map or durable thread metadata.",
       "",
       "## Runtime Capabilities",
       "- `toolOutput` offloads large tool results into `workspace/tool-outputs/` and keeps an in-context preview.",

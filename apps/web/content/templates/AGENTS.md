@@ -114,8 +114,11 @@ export async function workflow(
 ) {
   // ctx.signal is the request-scoped AbortSignal.
   // ctx.tools.searchCorpus is fully typed from the route's tools/ directory.
-  const matches = await ctx.tools.searchCorpus({ query: state.question })
-  return { ...state, matches }
+  const matches = await ctx.tools.searchCorpus({ query: state.context })
+  return {
+    ...state,
+    context: matches.map((match) => `${match.path}: ${match.snippet}`).join("\n"),
+  }
 }
 ```
 
@@ -171,7 +174,7 @@ Resume resolves a parked human-in-the-loop interrupt and streams the continuatio
 }
 ```
 
-`decision` must be `once`, `always`, or `deny`. `route` is optional unless the server restarted and lost the in-memory thread-to-route map.
+`decision` must be `once`, `always`, or `deny`. `route` is optional unless the server cannot recover the route from its in-memory thread map or durable thread metadata.
 
 ## Packages
 

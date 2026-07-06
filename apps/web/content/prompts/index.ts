@@ -40,7 +40,7 @@ const SCAFFOLD = `Help me scaffold a new Dawn app. Dawn is a TypeScript-first me
 
 4. Start the dev server:
    \`\`\`
-   dawn dev
+   dawn dev --port 2024
    \`\`\`
 
 5. Show the Agent Protocol shape for the same route:
