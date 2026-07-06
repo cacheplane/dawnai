@@ -1,6 +1,6 @@
 # API Reference
 
-This page lists every public symbol exported from `@dawn-ai/sdk` and the generated `dawn:routes` module. It is reference documentation — for concepts and examples, see the individual concept pages. Symbols are grouped by category and linked back to the page that explains them in depth.
+This page lists public symbols exported from `@dawn-ai/sdk`, selected runtime packages, and the generated `dawn:routes` module. It is reference documentation — for concepts and examples, see the individual concept pages. Symbols are grouped by category and linked back to the page that explains them in depth.
 
 ## @dawn-ai/sdk
 
@@ -569,6 +569,343 @@ export type Prettify<T> = { [K in keyof T]: T[K] } & {}
 ```
 
 Resolves intersection and mapped types into a flat object shape. Makes IDE hover tooltips show the actual resolved type instead of unexpanded type algebra. Used internally by codegen; also available for project code.
+
+---
+
+## @dawn-ai/core
+
+Low-level config, discovery, capability, workspace, and typegen primitives used by the Dawn CLI and runtime integrations. Route code usually imports author-facing helpers from `@dawn-ai/sdk`; use `@dawn-ai/core` when building tooling, tests, or adapters.
+
+```ts
+import {
+  createWorkspaceFs,
+  discoverRoutes,
+  loadDawnConfig,
+  renderDawnTypes,
+  type DawnConfig,
+} from "@dawn-ai/core"
+```
+
+See [Configuration](/docs/configuration), [Routes](/docs/routes), [Workspace Filesystem](/docs/workspace), [Memory](/docs/memory), and [Tools](/docs/tools).
+
+### Capability exports
+
+```ts
+export {
+  createAgentsMdMarker,
+  createMemoryMarker,
+  createMemoryMdMarker,
+  createPlanningMarker,
+  createSkillsMarker,
+  createSubagentsMarker,
+  createWorkspaceMarker,
+  BUILT_IN_TOOL_NAMES,
+}
+```
+
+Built-in capability markers detect route/app files and contribute prompt fragments, tools, or stream transformers. `createWorkspaceMarker()` activates when a `workspace/` directory exists or a runtime `workspaceRoot` is supplied; `createMemoryMarker()` contributes `recall` and `remember` when route memory context exists.
+
+Types in this group include `CapabilityMarker`, `CapabilityMarkerContext`, `CapabilityContribution`, `DawnToolDefinition`, `PromptFragment`, `StreamTransformer`, `MemoryContext`, `MemoryStoreLike`, `MemoryRecordLike`, `CapabilityRegistry`, `AppliedContribution`, `ApplyResult`, and `CapabilityError`.
+
+### `createCapabilityRegistry()` and `applyCapabilities()`
+
+```ts
+export function createCapabilityRegistry(): CapabilityRegistry
+export function applyCapabilities(...): Promise<ApplyResult>
+```
+
+Build and apply the marker registry for a route. Runtime integrations use these helpers to collect built-in and custom capability contributions before materializing an agent route.
+
+### `gateToolOp()` and `wrapToolWithApproval()`
+
+```ts
+export function gateToolOp(...)
+export function wrapToolWithApproval(...)
+```
+
+Apply tool-level permission checks before a tool executes. See [Permissions](/docs/permissions).
+
+### `createWorkspaceFs(options)`
+
+```ts
+export function createWorkspaceFs(options: CreateWorkspaceFsOptions): WorkspaceFs
+```
+
+Builds the `WorkspaceFs` handle used as `ctx.fs`. `CreateWorkspaceFsOptions` includes a `workspaceRoot`, a `FilesystemBackend`, optional permissions, an `AbortSignal`, and `interruptCapable`. The handle resolves paths relative to `workspaceRoot`, canonicalizes them with the backend's `realPath`, and uses the same permission gate as the agent-facing workspace tools.
+
+See [Workspace Filesystem](/docs/workspace) and [Execution Sandbox](/docs/sandbox).
+
+### `loadDawnConfig(options)` and `config(value)`
+
+```ts
+export function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig>
+export function config<T extends DawnConfig>(value: T): T
+```
+
+`loadDawnConfig()` loads `dawn.config.ts` for an app root. `config()` is a typed identity helper for authoring config files.
+
+Types in this group include `DawnConfig`, `LoadDawnConfigOptions`, and `LoadedDawnConfig`.
+
+### `discoverRoutes(options)`, `findDawnApp(options)`, and route segments
+
+```ts
+export function discoverRoutes(options?: DiscoverRoutesOptions): Promise<RouteManifest>
+export function findDawnApp(options?: FindDawnAppOptions): Promise<DiscoveredDawnApp>
+export function assertDawnRoutesDir(appRoot: string): Promise<string>
+export function toRouteSegments(pathname: string): readonly RouteSegment[]
+export function isPrivateSegment(segment: string): boolean
+export function isRouteGroupSegment(segment: string): boolean
+```
+
+Discovery helpers find the Dawn app root, validate the routes directory, scan route files, and parse filesystem route segments.
+
+Types in this group include `DiscoveredDawnApp`, `DiscoverRoutesOptions`, `FindDawnAppOptions`, `NormalizedRouteModule`, `RouteDefinition`, `RouteKind`, `RouteManifest`, and `RouteSegment`.
+
+### State and typegen helpers
+
+```ts
+export function resolveStateFields(...)
+export function extractToolSchemasForRoute(...)
+export function extractToolTypesForRoute(...)
+export function renderDawnTypes(...)
+export function renderRouteTypes(...)
+export function renderStateTypes(...)
+export function renderToolTypes(...)
+```
+
+`resolveStateFields()` resolves route state field reducers and defaults. The extraction helpers inspect route tools for JSON schemas and TypeScript signatures. The render helpers produce the generated `dawn:routes` declaration. Some audits call this group `renderTypeDefinitions`; the public exports are the four render functions above, not a single `renderTypeDefinitions` symbol.
+
+Types in this group include `ResolveStateFieldsOptions`, `RouteStateFields`, `ExtractToolSchemasOptions`, `ExtractToolTypesOptions`, `RouteToolSchemas`, `RouteToolTypes`, `ExtractedToolSchema`, `ExtractedToolType`, `JsonSchemaProperty`, `ResolvedStateField`, and `StateFieldReducer`.
+
+### Tool scope
+
+```ts
+export function resolveToolScope(
+  tools: readonly ScopeInput[],
+  scope: ToolScope | undefined,
+  context: { readonly isSubagent: boolean; readonly routeId: string },
+): ReadonlySet<string>
+export function toolOrigin(...): ToolOrigin
+```
+
+Resolve which discovered tools are visible to a route and where each tool came from. Types in this group include `ScopeInput` and `ToolOrigin`.
+
+### Storage type re-export
+
+```ts
+export type { ThreadsStore } from "@dawn-ai/sqlite-storage"
+```
+
+`ThreadsStore` is re-exported for config typing.
+
+---
+
+## @dawn-ai/testing
+
+Deterministic testing utilities for Dawn apps. The package replaces live model calls with aimock fixtures while running tools, prompts, capabilities, state, and workspace behavior normally.
+
+```ts
+import {
+  createAgentHarness,
+  expectFinalMessage,
+  expectNoToolErrors,
+  expectToolCalled,
+  script,
+} from "@dawn-ai/testing"
+```
+
+See [Testing your Dawn agent](/docs/testing-agents), [Memory](/docs/memory#testing), and [Evals](/docs/evals).
+
+### Harnesses
+
+```ts
+export function createAgentHarness(options: AgentHarnessOptions): Promise<AgentHarness>
+export function createToolHarness(...): Promise<ToolHarness>
+export function createWorkspaceHarness(options?: WorkspaceHarnessOptions): Promise<WorkspaceHarness>
+export function createMiddlewareHarness(...): Promise<MiddlewareHarness>
+```
+
+`createAgentHarness()` is the primary route-level test harness. It starts aimock, runs typegen, resolves a route, and returns a harness whose `run()` method produces an `AgentRunResult`. Tool, workspace, and middleware harnesses provide narrower unit-test surfaces.
+
+Types in this group include `AgentHarness`, `AgentHarnessOptions`, `ToolHarness`, `ToolHarnessOptions`, `WorkspaceHarness`, `WorkspaceHarnessOptions`, and `MiddlewareHarness`.
+
+### Aimock fixtures and recording
+
+```ts
+export function script(): ScriptBuilder
+export function loadFixtures(path: string): FixtureSet
+export function writeFixtures(path: string, fixtures: FixtureSet | ScriptBuilder): void
+export function record(options: RecordOptions): Promise<void>
+export function createAimock(...): Promise<Aimock>
+```
+
+`script()` builds deterministic fixture conversations. `loadFixtures()` and `writeFixtures()` manage committed fixture files. `record()` is a local authoring helper for capturing live model traffic into fixtures.
+
+Types in this group include `Aimock`, `AimockFixture`, `AimockResponse`, `AimockToolCall`, `FixtureSet`, `ScriptBuilder`, and `RecordOptions`.
+
+### Matchers
+
+```ts
+export {
+  expectFinalMessage,
+  expectInterrupt,
+  expectNoInterrupt,
+  expectNoToolErrors,
+  expectOffloaded,
+  expectPlan,
+  expectState,
+  expectStreamedTokens,
+  expectSubagent,
+  expectSystemPrompt,
+  expectToolCalled,
+  expectToolSequence,
+}
+```
+
+Matchers assert final messages, tool calls, tool order, streamed tokens, offloaded outputs, state, subagent runs, plans, system prompts, and permission interrupts. `expectNoToolErrors(run)` verifies that tool results did not fail; permission interrupts are not counted as tool errors.
+
+Supporting types include `InterruptInfo`, `SubagentEvent`, `SubagentRun`, and `Todo`.
+
+### Run-result utilities
+
+```ts
+export function collectRunResult(...): AgentRunResult
+export function deriveToolResults(...): readonly ObservedToolResult[]
+```
+
+Normalize runtime output into `AgentRunResult`, `ObservedToolCall`, and `ObservedToolResult` structures for assertions and eval scoring.
+
+### Memory, protocol, and subprocess helpers
+
+```ts
+export function seedMemory(...): Promise<MemoryStore>
+export function createAgentProtocolInjector(...): AgentProtocolInjector
+export function createSubprocessApp(...): SubprocessApp
+```
+
+`seedMemory()` populates a Dawn memory store for deterministic memory tests. The protocol injector and subprocess app helpers are lower-level orchestration surfaces for custom test runners.
+
+Types in this group include `AgentProtocolInjector`, `InjectResult`, and `SubprocessApp`.
+
+### Example
+
+```ts
+const h = await createAgentHarness({ appRoot, route: "/chat#agent" })
+
+const run = await h.run({
+  input: "Filter open items",
+  fixtures: script()
+    .user("Filter open items")
+    .callsTool("applyFilter", { status: "open" })
+    .replies("Found 2 open items."),
+})
+
+expectToolCalled(run, "applyFilter").withArgs({ status: "open" })
+expectNoToolErrors(run)
+expectFinalMessage(run).toContain("Found 2")
+```
+
+---
+
+## @dawn-ai/evals
+
+Programmatic evaluation primitives for running Dawn agents over datasets, scoring each case, and gating aggregate quality.
+
+```ts
+import {
+  contains,
+  defineEval,
+  gate,
+  memoryFresh,
+  memoryIsolated,
+  memoryRecalled,
+  runEval,
+  toolCalled,
+} from "@dawn-ai/evals"
+```
+
+See [Evaluating your Dawn agent](/docs/evals) and [Testing your Dawn agent](/docs/testing-agents).
+
+### Eval definition and execution
+
+```ts
+export function defineEval(def: EvalDefinition): EvalDefinition
+export function resolveDataset(dataset: Dataset, baseDir?: string): Promise<readonly EvalCase[]>
+export function runEval(def: EvalDefinition, options: RunEvalOptions): Promise<EvalReport>
+```
+
+`defineEval()` types an eval module. `resolveDataset()` supports inline cases, `.json`, `.jsonl`, and function datasets. `runEval()` drives a definition with a caller-provided `runCase` function and returns an aggregate report.
+
+Types in this group include `Dataset`, `EvalCase`, `EvalDefinition`, `RunEvalOptions`, `EvalReport`, `CaseResult`, and `ScoredReport`.
+
+### Scores and gates
+
+```ts
+export function normalizeScore(score: Score): NormalizedScore
+export const gate: {
+  mean(...)
+  passRate(...)
+  everyCase(...)
+  perScorer(...)
+  all(...)
+  any(...)
+}
+export function resolveGate(...): GateResult
+```
+
+Scores can be numbers, booleans, or rich verdicts with a reason. Gates turn case and scorer aggregates into pass/fail decisions for CI.
+
+Types in this group include `Score`, `NormalizedScore`, `CaseScore`, `Scorer`, `ScorerAggregate`, `GatePolicy`, and `GateResult`.
+
+### Built-in scorers
+
+```ts
+export function exactMatch(options?): Scorer
+export function contains(substring: string, options?): Scorer
+export function regex(re: RegExp, options?): Scorer
+export function jsonEquals(options?): Scorer
+export function toolCalled(name: string, options?): Scorer
+export function tokensUnder(budget: number, options?): Scorer
+export function custom(fn, options?): Scorer
+export function llmJudge(options: LlmJudgeOptions): Scorer
+```
+
+General scorers inspect the final message, parsed JSON, tool calls, token count, or arbitrary custom logic. `llmJudge()` asks a real model to grade quality and requires model credentials when it runs.
+
+### Memory scorers
+
+```ts
+export function memoryRecalled(expectedIds: string[], options?): Scorer
+export function memoryFresh(expectedValue: string, options?): Scorer
+export function memoryIsolated(forbidden: string, options?): Scorer
+```
+
+`memoryRecalled()` checks recall tool output for expected memory ids. `memoryFresh()` checks that a newer value appears in the final response. `memoryIsolated()` checks that forbidden content did not leak through recall output or the final message.
+
+### Example
+
+```ts
+import { contains, defineEval, gate, toolCalled } from "@dawn-ai/evals"
+import { script } from "@dawn-ai/testing"
+
+export default defineEval({
+  name: "chat quality",
+  dataset: [
+    {
+      input: "Filter open items",
+      fixtures: script()
+        .user("Filter open items")
+        .callsTool("applyFilter", { status: "open" })
+        .replies("Found 2 open items."),
+    },
+  ],
+  scorers: [
+    contains("Found", { threshold: 1 }),
+    toolCalled("applyFilter", { threshold: 1 }),
+  ],
+  gate: gate.perScorer(),
+})
+```
 
 ---
 
