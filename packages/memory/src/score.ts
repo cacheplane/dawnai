@@ -53,7 +53,8 @@ function parseMs(iso: string): number | null {
  * ordering is unaffected.
  *
  * recency = 2^(−age / halfLife), age measured from `referenceNow` back to
- * `updatedAt`, clamped ≥ 0. Invalid timestamps degrade to age 0.
+ * `updatedAt`, clamped ≥ 0. Invalid timestamps degrade to age 0. A
+ * non-positive or non-finite halfLifeMs falls back to the default.
  *
  * `queryTokens` are expected to be deduplicated, as produced by `tokenize()`.
  */
