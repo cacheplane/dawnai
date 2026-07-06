@@ -239,12 +239,24 @@ A custom `config.memory.store` bypasses all of this (it owns its own ranking).
   kind/status filters interact correctly with corpus stats.
 - **Capability:** recall tool passes `context.memory.now` (assert via a fake
   store capturing the query).
+- **Agent e2e (aimock, CI-safe) — the headline scenario:** seed a backdated
+  (~6 weeks) relevant fact directly via the store (writes through the
+  `remember` tool always stamp `now`, so age must be seeded), write a fresh
+  marginal distractor through the real agent loop, then drive `recall` with a
+  scripted tool call and assert the relevant memory is the FIRST line of the
+  real tool result. This test FAILS against today's pure-recency code — it is
+  the before/after proof for the feature. aimock scripts only the model; the
+  runtime, capability, SQLite, tokenization, and ranking are all real.
 - **Existing suites stay green:** `@dawn-ai/memory` units, capability tests,
   `memory-e2e.test.ts` (cross-thread), `memory-index-refresh.test.ts`,
   research-template eval. Any assertion that is accidentally order-sensitive
   with a single result is unaffected by construction.
 - **Gated live smoke** (`memory-live.smoke.test.ts`) re-run locally
-  (OPENAI_API_KEY, never CI) as final verification.
+  (OPENAI_API_KEY, never CI) as final verification, PLUS one new ranking
+  scenario: seed the backdated relevant fact, let the REAL model store a
+  distractor and then ask the question naturally; assert the final message
+  carries the relevant value. Covers what aimock cannot — whether the model's
+  own query phrasing is good enough for the ranker.
 - **Eval dogfood:** add one recall-ranking case to the research template's
   memory eval using the existing `memoryRecalled` scorer (seed two memories,
   query for the specific one, expect the relevant id first).
