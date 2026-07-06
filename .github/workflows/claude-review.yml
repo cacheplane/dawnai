@@ -14,6 +14,10 @@ permissions:
 
 jobs:
   review:
+    # Dependabot-triggered runs cannot read repo secrets, so the Claude review
+    # action always fails with a red X on dependabot PRs. Skip them (same
+    # convention as scripts/check-changesets.mjs).
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
