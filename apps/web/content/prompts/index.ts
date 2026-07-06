@@ -36,12 +36,12 @@ const SCAFFOLD = `Help me scaffold a new Dawn app. Dawn is a TypeScript-first me
 
 3. Run the scaffolded route end-to-end:
    \`\`\`
-   echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | dawn run /research
+   echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | pnpm exec dawn run /research
    \`\`\`
 
 4. Start the dev server:
    \`\`\`
-   dawn dev --port 2024
+   pnpm exec dawn dev --port 2024
    \`\`\`
 
 5. Show the Agent Protocol shape for the same route:
