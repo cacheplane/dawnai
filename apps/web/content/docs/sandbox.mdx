@@ -1,0 +1,134 @@
+# Execution Sandbox
+
+The execution sandbox gives each Agent-Protocol conversation thread a hard-isolated workspace — filesystem, shell, and network — instead of the local `<appRoot>/workspace/` directory the agent otherwise reads and writes on the host. It's opt-in: add a `sandbox` key to `dawn.config.ts` and every `readFile`, `writeFile`, `listDir`, and `runBash` call for that thread routes into the isolated environment through a provider-agnostic `SandboxProvider` contract. Dawn ships a Docker reference implementation.
+
+This is a distinct layer from the other two access controls in Dawn: [tool scoping](/docs/tools) decides *which* tools the model may call; [permissions](/docs/permissions) decide *whether a given call should run* (human-in-the-loop approval); the sandbox decides *what an allowed, approved call can actually touch*. The three compose — none of them substitutes for the others.
+
+## Quickstart
+
+Docker must be installed and the daemon running. Configure a provider in `dawn.config.ts` using the typed `config()` helper (a bare object still works — `config()` is pure identity for IntelliSense):
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+import { dockerSandbox } from "@dawn-ai/sandbox"
+
+export default config({
+  sandbox: {
+    provider: dockerSandbox({ image: "node:22-slim" }),
+    network: { mode: "allow", denylist: ["169.254.169.254"] },
+    env: { NODE_ENV: "production" },
+    resources: { memoryMb: 512, cpus: 1, timeoutMs: 120_000 },
+    idleTimeoutMs: 600_000,
+  },
+})
+```
+
+No `sandbox` key means no behavior change — the app keeps using the local `workspace/` directory exactly as before.
+
+`dawn check` validates the `sandbox` config shape and runs the provider's `preflight()` — for `dockerSandbox`, that means confirming the Docker daemon is reachable — so a misconfiguration or a stopped daemon fails at check time instead of mid-run.
+
+## What's isolated
+
+- **Filesystem** — `readFile`, `writeFile`, and `listDir` operate inside the sandbox's workspace volume. The host filesystem is never touched.
+- **Shell** — `runBash` executes inside the sandbox, still gated by the [permissions](/docs/permissions) allow/deny lists.
+- **Network** — governed by the configured [network policy](#network-policy); `deny` mode is zero egress.
+- **Environment** — the host's environment variables are never inherited. Only the key/value pairs in `sandbox.env` are injected into the sandbox.
+- **Resources** — `resources.memoryMb` and `resources.cpus` cap the sandbox's memory and CPU; `resources.timeoutMs` caps how long a single exec call may run.
+
+## Lifecycle
+
+One sandbox is created per conversation thread, on that thread's first turn. It stays warm and is reused across every subsequent turn on the same thread — the agent isn't paying container start-up cost on every message.
+
+- **Persistence** — the workspace (a named volume) survives across turns, across a container being idle-reaped, and across a full server restart. On the next turn, the provider reattaches the existing volume by its deterministic name rather than starting from an empty workspace.
+- **Idle reap** — a thread with no activity for `idleTimeoutMs` (default 10 minutes) has its warm container released. The volume is kept, so the next turn on that thread reattaches it with all files intact.
+- **Thread delete** — an Agent-Protocol `DELETE` on the thread destroys the sandbox *and* its volume. This is the only operation that discards the workspace permanently.
+
+Turn trace: turn 1 on a new thread → no live sandbox → `acquire()` creates the container and volume. Turns 2..N on the same thread → the same live sandbox is reused. Thread idle past `idleTimeoutMs` → container released, volume kept. Next turn after that → `acquire()` reattaches the existing volume into a fresh container. Thread deleted → `destroy()` removes the container and the volume.
+
+## Network policy
+
+`sandbox.network` takes one of two shapes:
+
+- **`{ mode: "deny" }`** — zero egress. This is an exact guarantee in the Docker reference (`--network none`); the sandbox cannot reach the network at all. An optional `allowlist` may be added for providers that support scoped egress.
+- **`{ mode: "allow", denylist?: [...] }`** — egress is on by default, with an optional denylist of hosts to block.
+
+The default, when `network` is omitted, is `{ mode: "allow", denylist: ["169.254.169.254"] }` — the cloud-metadata endpoint is blocked out of the box since it's a common SSRF target.
+
+<Callout type="warn" title="allow-mode denylist is best-effort">
+  In the Docker reference provider, the `allow`-mode denylist is **best-effort**, not enforced with the same rigor as `deny` mode. Blocking arbitrary outbound hosts from inside a container needs an in-container firewall rule or an egress proxy; the reference does not guarantee every denylisted host is unreachable. `deny` mode's `--network none` remains exact. A provider backed by a microVM or a cloud sandbox can enforce the denylist more strongly.
+</Callout>
+
+## Subagents
+
+A subagent dispatch runs under the same conversation thread as its parent, so it resolves to and shares the parent's sandbox — the coordinator and its subagents operate in one isolated environment, not one each.
+
+## Custom providers
+
+`SandboxProvider` is the contract any isolation backend implements — Docker, a microVM, or a cloud sandbox service:
+
+```ts
+import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/workspace"
+
+export interface SandboxProvider {
+  readonly name: string
+  acquire(input: {
+    readonly threadId: string
+    readonly policy: SandboxPolicy
+    readonly signal: AbortSignal
+  }): Promise<SandboxHandle>
+  release(threadId: string): Promise<void>
+  destroy(threadId: string): Promise<void>
+  preflight?(): Promise<{ readonly ok: boolean; readonly detail?: string }>
+}
+```
+
+`acquire` is create-or-reattach and idempotent per `threadId`: called at the start of every turn, it returns the same live sandbox until `release` or `destroy` is called. `release` drops warm compute but keeps the workspace volume (idle reap, server shutdown); `destroy` removes the volume too (thread delete). The returned `SandboxHandle`'s `filesystem` and `exec` are the same `FilesystemBackend`/`ExecBackend` interfaces the [workspace](/docs/workspace) capability already consumes, so wiring a new provider in requires no change to the capability itself.
+
+Validate a custom provider against the same conformance suite `dockerSandbox` and `fakeSandbox` are held to:
+
+```ts
+import { runProviderConformance } from "@dawn-ai/sandbox/testing"
+import { describe } from "vitest"
+import { myCloudSandbox } from "./my-cloud-sandbox.js"
+
+runProviderConformance({
+  name: "my-cloud-sandbox",
+  makeProvider: () => myCloudSandbox({ apiKey: process.env.MY_SANDBOX_KEY! }),
+  describe,
+})
+```
+
+The conformance kit checks `acquire` idempotency and reattachment, per-thread isolation, `release`-keeps/`destroy`-clears volume semantics, and that `exec` returns a numeric exit code.
+
+## Testing your agent
+
+`fakeSandbox()` from `@dawn-ai/sandbox/testing` is an in-memory `SandboxProvider` — deterministic, CI-safe, and requires no Docker daemon:
+
+```ts title="dawn.config.ts (test)"
+import { config } from "@dawn-ai/cli"
+import { fakeSandbox } from "@dawn-ai/sandbox/testing"
+
+export default config({
+  sandbox: { provider: fakeSandbox() },
+})
+```
+
+Use it in harness-driven tests the same way you'd test any other agent route — it satisfies the same `SandboxProvider` contract as `dockerSandbox`, so wiring behavior (per-thread isolation, warm reuse, subagents sharing a thread's sandbox) is exercised without spinning up containers.
+
+## What it is — and isn't
+
+**Is:** per-thread kernel-level filesystem and process isolation; the host filesystem is never touched; the host environment is never leaked into the sandbox; CPU and memory caps via `resources`; multi-tenant separation by thread; `network: { mode: "deny" }` is zero egress; the workspace survives turns, server restarts, and container crashes.
+
+**Is not:** a guarantee against container-escape zero-days. This is Docker's isolation boundary, not a microVM — which is why the contract is provider-agnostic: a gVisor-, Kata-, or cloud-microVM-backed provider is a stronger drop-in replacement with no change to your app code. The `allow`-mode denylist is best-effort in the Docker reference; it does not stop an agent exfiltrating its own sandbox's data under `allow` mode. And the sandbox does not govern tool *surface* — that's [tool scoping](/docs/tools)'s job (`agent({ tools })`); the sandbox and tool scoping are complementary layers, not substitutes for each other.
+
+Dawn ships the isolation seam plus a Docker reference. For hostile-grade multi-tenant isolation, plug in a microVM-backed provider.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/workspace", title: "Workspace Filesystem", subtitle: "the pluggable backend the sandbox's handle satisfies" },
+  { href: "/docs/permissions", title: "Permissions", subtitle: "human-in-the-loop approval for paths and runBash commands" },
+  { href: "/docs/tools", title: "Tools", subtitle: "tool scoping — which tools a route's agent may call" },
+  { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including the sandbox key" },
+  { href: "/docs/subagents", title: "Subagents", subtitle: "how subagents share their parent thread's sandbox" },
+]} />
