@@ -102,13 +102,15 @@ export async function collectToolScopeIssues(
           `⚠ ${route.pathname}: approve lists "${name}" but deny revokes it — deny wins; the approve entry is dead.`,
         )
       }
-      // Skip internally-gated names here: warning 1 already covers them, and
-      // advising "add it to allow" would conflict with that warning's point
-      // (approving an internally-gated tool is redundant either way).
+      // Skip names another warning already fully covers — advising "add it to
+      // allow" would conflict with those warnings' point: internally-gated
+      // tools are redundant to approve either way, and task has no effect
+      // regardless (the dispatch bridge replaces its run).
       if (
         routeIsSubagent &&
         BUILT_IN_TOOL_NAME_SET.has(name) &&
         !INTERNALLY_GATED.has(name) &&
+        name !== "task" &&
         !allow.has(name)
       ) {
         warnings.push(

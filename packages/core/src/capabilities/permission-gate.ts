@@ -147,11 +147,11 @@ function buildArgsPreview(input: unknown): string {
  * The generic constraint means run's return type must accept a string (both
  * planned call sites declare `Promise<unknown> | unknown`).
  *
- * Interrupt-capable contexts only: on an "unknown" decision in interactive
- * mode the gate calls LangGraph's `interrupt()`, which throws a raw error
- * outside a running graph. All Dawn call sites wrap agent-route tools (always
- * in-graph); if you call this from outside a graph, pre-approve via
- * `permissions.allow.tool` or use non-interactive mode instead.
+ * On an "unknown" decision in interactive mode the gate calls LangGraph's
+ * `interrupt()`, which throws a raw error outside a running graph. Dawn's own
+ * call sites wrap agent-route tools (always in-graph); out-of-graph callers
+ * should pass `interruptCapable: false` to fail closed with actionable
+ * guidance instead (mirrors gatePathOp's option).
  */
 export function wrapToolWithApproval<
   C,
@@ -159,11 +159,11 @@ export function wrapToolWithApproval<
     readonly name: string
     readonly run: (input: unknown, context: C) => Promise<unknown> | unknown
   },
->(tool: T, permissions: PermissionsStore): T {
+>(tool: T, permissions: PermissionsStore, opts?: { readonly interruptCapable?: boolean }): T {
   return {
     ...tool,
     run: async (input: unknown, context: C) => {
-      const gate = await gateToolOp(permissions, tool.name, buildArgsPreview(input))
+      const gate = await gateToolOp(permissions, tool.name, buildArgsPreview(input), opts)
       if (!gate.allowed) return gate.reason
       return tool.run(input, context)
     },
