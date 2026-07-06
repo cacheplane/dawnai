@@ -4,4 +4,4 @@ export type {
   SandboxPolicy,
   SandboxProvider,
 } from "@dawn-ai/workspace"
-// dockerSandbox is added in a later task.
+export { type DockerSandboxOptions, dockerSandbox } from "./docker/docker-sandbox.js"
