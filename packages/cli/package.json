@@ -55,7 +55,7 @@
     "@dawn-ai/memory": "workspace:*",
     "@dawn-ai/permissions": "workspace:*",
     "@dawn-ai/sqlite-storage": "workspace:*",
-    "commander": "14.0.3",
+    "commander": "15.0.0",
     "tsx": "^4.22.4"
   },
   "devDependencies": {
