@@ -55,4 +55,75 @@ describe("generated app helper", () => {
       await rm(baseDir, { force: true, recursive: true })
     }
   })
+
+  it("materializes the research template with sandbox-ready shared tools and memory scripts", async () => {
+    const baseDir = await mkdtemp(resolve(tmpdir(), "dawn-devkit-generated-research-app-"))
+
+    try {
+      const artifactRoot = await createArtifactRoot({
+        baseDir,
+        lane: "generated",
+        runId: "run-generated-research-app-test",
+      })
+
+      const generatedApp = await createGeneratedApp({
+        appName: "sample-research-app",
+        artifactRoot,
+        template: "research",
+      })
+
+      const packageJson = await readFile(resolve(generatedApp.appRoot, "package.json"), "utf8")
+      const pnpmWorkspace = await readFile(
+        resolve(generatedApp.appRoot, "pnpm-workspace.yaml"),
+        "utf8",
+      )
+      const readDoc = await readFile(resolve(generatedApp.appRoot, "src/tools/readDoc.ts"), "utf8")
+      const searchCorpus = await readFile(
+        resolve(generatedApp.appRoot, "src/tools/searchCorpus.ts"),
+        "utf8",
+      )
+      const prompt = await readFile(
+        resolve(generatedApp.appRoot, "src/app/research/index.ts"),
+        "utf8",
+      )
+      const generatedTypes = await readFile(
+        resolve(generatedApp.appRoot, ".dawn/dawn.generated.d.ts"),
+        "utf8",
+      )
+      const readme = await readFile(resolve(generatedApp.appRoot, "README.md"), "utf8")
+      const researchTest = await readFile(
+        resolve(generatedApp.appRoot, "test/research.test.ts"),
+        "utf8",
+      )
+      const sandboxTest = await readFile(
+        resolve(generatedApp.appRoot, "test/sandbox-docker.test.ts"),
+        "utf8",
+      )
+
+      expect(packageJson).toContain('"@dawn-ai/sandbox": "workspace:*"')
+      expect(packageJson).toContain('"memory:list": "dawn memory list"')
+      expect(packageJson).toContain('"memory:approve": "dawn memory approve"')
+      expect(packageJson).toContain('"test:sandbox:docker": "DAWN_DEMO_DOCKER_SANDBOX=1')
+      expect(packageJson).not.toContain('"pnpm"')
+      expect(pnpmWorkspace).toContain("allowBuilds:")
+      expect(pnpmWorkspace).toContain("esbuild: true")
+      expect(readDoc).toContain("ctx.fs.readFile")
+      expect(searchCorpus).toContain("ctx.fs.listDir")
+      expect(prompt).toContain("recall({ query:")
+      expect(prompt).toContain("remember({")
+      expect(generatedTypes).toContain("readonly task:")
+      expect(generatedTypes).toContain("readonly recall:")
+      expect(generatedTypes).toContain("readonly remember:")
+      expect(readme).toContain("Docker sandbox")
+      expect(readme).toContain("dawn memory approve")
+      expect(researchTest).toContain("seedMemory")
+      expect(sandboxTest).toContain("DAWN_DEMO_DOCKER_SANDBOX")
+      expect(sandboxTest).toContain("dockerSandbox")
+      await expect(
+        access(resolve(generatedApp.appRoot, "src/app/research/tools/readDoc.ts"), constants.F_OK),
+      ).rejects.toThrow()
+    } finally {
+      await rm(baseDir, { force: true, recursive: true })
+    }
+  })
 })

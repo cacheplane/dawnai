@@ -17,6 +17,19 @@ export function classifyChange(relativePath: string): ChangeClassification {
     return "ignore"
   }
 
+  if (
+    relativePath === "node_modules" ||
+    relativePath.startsWith("node_modules/") ||
+    relativePath === "pnpm-workspace.yaml" ||
+    relativePath === "pnpm-lock.yaml" ||
+    relativePath === "package-lock.json" ||
+    relativePath === "yarn.lock" ||
+    relativePath === ".pnpm-store" ||
+    relativePath.startsWith(".pnpm-store/")
+  ) {
+    return "ignore"
+  }
+
   // Tool files: any path containing /tools/<name>.ts (not .d.ts)
   if (/\/tools\/[^/]+\.ts$/.test(relativePath) && !relativePath.endsWith(".d.ts")) {
     return "typegen"

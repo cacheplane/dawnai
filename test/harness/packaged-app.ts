@@ -59,12 +59,11 @@ export async function cleanupTrackedTempDirs(registry: TrackedTempDir[]): Promis
  * dir, returning that dir. Lets a standalone test run `pnpm exec create-dawn-ai-app`
  * with the local build (not the published npmjs version).
  *
- * The scaffolder declares `@dawn-ai/devkit` as a runtime dep at the candidate
- * version, which is NOT on npmjs until AFTER the release publishes — so the
- * install resolves `@dawn-ai/*` from the ephemeral Verdaccio test registry
- * (where the lane's globalSetup published the whole workspace), exactly like the
- * generated lane's external scaffolds. Requires the registry globalSetup to have
- * run (DAWN_TEST_REGISTRY_URL set); getTestRegistryUrl() throws otherwise.
+ * The scaffolder declares `@dawn-ai/devkit` as a runtime dep. Pack and override
+ * the current local devkit too so tests exercise the templates in this checkout
+ * instead of whatever candidate package the ephemeral registry last published.
+ * Requires the registry globalSetup to have run (DAWN_TEST_REGISTRY_URL set);
+ * getTestRegistryUrl() throws otherwise.
  */
 export async function installPackagedScaffolder(
   tempRoot: string,
@@ -75,16 +74,52 @@ export async function installPackagedScaffolder(
   await mkdir(packsDir, { recursive: true })
   await mkdir(installerDir, { recursive: true })
 
-  // 1. Build create-dawn-ai-app
+  const devkitTarballPath = await packCurrentPackage("@dawn-ai/devkit", packsDir)
+  const scaffolderTarballPath = await packCurrentPackage("create-dawn-ai-app", packsDir)
+
+  await writeFile(
+    join(installerDir, "package.json"),
+    `${JSON.stringify({ name: "installer", private: true }, null, 2)}\n`,
+    "utf8",
+  )
+  await writeFile(
+    join(installerDir, "pnpm-workspace.yaml"),
+    [
+      "packages:",
+      "  - .",
+      "",
+      "onlyBuiltDependencies:",
+      "  - esbuild",
+      "",
+      "allowBuilds:",
+      "  esbuild: true",
+      "",
+      "overrides:",
+      `  "@dawn-ai/devkit": ${JSON.stringify(`file:${devkitTarballPath}`)}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  )
+
   await runPackagedCommand({
-    args: ["--filter", "create-dawn-ai-app", "build"],
+    args: ["add", devkitTarballPath, scaffolderTarballPath],
+    command: "pnpm",
+    cwd: installerDir,
+    env: { npm_config_registry: getTestRegistryUrl() },
+  })
+
+  return { installerDir }
+}
+
+async function packCurrentPackage(packageName: string, packsDir: string): Promise<string> {
+  await runPackagedCommand({
+    args: ["--filter", packageName, "build"],
     command: "pnpm",
     cwd: REPO_ROOT,
   })
 
-  // 2. Pack create-dawn-ai-app into packsDir
   const packResult = await runPackagedCommand({
-    args: ["--filter", "create-dawn-ai-app", "pack", "--pack-destination", packsDir],
+    args: ["--filter", packageName, "pack", "--pack-destination", packsDir],
     command: "pnpm",
     cwd: REPO_ROOT,
   })
@@ -97,30 +132,11 @@ export async function installPackagedScaffolder(
 
   if (!tarballName) {
     throw new Error(
-      `Could not determine tarball name for create-dawn-ai-app from pnpm pack stdout:\n${packResult.stdout}`,
+      `Could not determine tarball name for ${packageName} from pnpm pack stdout:\n${packResult.stdout}`,
     )
   }
 
-  const tarballPath = join(packsDir, basename(tarballName))
-
-  // 3. Write a minimal package.json in installerDir
-  await writeFile(
-    join(installerDir, "package.json"),
-    `${JSON.stringify({ name: "installer", private: true }, null, 2)}\n`,
-    "utf8",
-  )
-
-  // 4. Install the tarball into installerDir, resolving the scaffolder's
-  //    @dawn-ai/* deps from the ephemeral test registry (the candidate version
-  //    isn't on npmjs until this release publishes).
-  await runPackagedCommand({
-    args: ["add", tarballPath],
-    command: "pnpm",
-    cwd: installerDir,
-    env: { npm_config_registry: getTestRegistryUrl() },
-  })
-
-  return { installerDir }
+  return join(packsDir, basename(tarballName))
 }
 
 export async function runPackagedCommand(options: {

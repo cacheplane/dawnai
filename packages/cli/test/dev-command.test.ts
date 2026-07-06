@@ -251,7 +251,7 @@ describe("dawn dev lifecycle", () => {
     devProcesses.push(dev)
 
     const url = await dev.waitForReady()
-    const response = await invokeRunsWait(url, {
+    const response = await invokeRunsWaitUntilOk(url, {
       assistantId: "/support/[tenant]#graph",
       input: { tenant: "cwd" },
       mode: "graph",
@@ -651,6 +651,23 @@ async function invokeRunsWait(
     },
     method: "POST",
   })
+}
+
+async function invokeRunsWaitUntilOk(
+  baseUrl: string,
+  options: Parameters<typeof invokeRunsWait>[1],
+  timeoutMs = 3_000,
+) {
+  const deadline = Date.now() + timeoutMs
+  let response = await invokeRunsWait(baseUrl, options)
+
+  while (response.status === 503 && Date.now() < deadline) {
+    await response.body?.cancel()
+    await delay(25)
+    response = await invokeRunsWait(baseUrl, options)
+  }
+
+  return response
 }
 
 async function allocatePort(): Promise<number> {

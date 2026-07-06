@@ -100,6 +100,13 @@ export function isExecutedAsMain(importMetaUrl: string, argv1 = process.argv[1])
 }
 
 if (isExecutedAsMain(import.meta.url)) {
-  const exitCode = await run(process.argv.slice(2))
-  process.exit(exitCode)
+  run(process.argv.slice(2)).then(
+    (exitCode) => {
+      process.exit(exitCode)
+    },
+    (error) => {
+      process.stderr.write(`${renderError(error)}\n`)
+      process.exit(1)
+    },
+  )
 }

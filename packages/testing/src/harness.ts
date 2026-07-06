@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto"
 import {
   __resetMaterializedAgentsForTests,
   createRuntimeRegistry,
+  resolveSandboxManager,
   runTypegen,
+  type SandboxManager,
   streamResolvedRoute,
 } from "@dawn-ai/cli/runtime"
 import { discoverRoutes } from "@dawn-ai/core"
@@ -104,6 +106,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
 
   // All construction steps after aimock starts are wrapped so we can clean up on failure.
   let resolved: Awaited<ReturnType<Awaited<ReturnType<typeof createRuntimeRegistry>>["lookup"]>>
+  let sandboxManager: SandboxManager | undefined
   try {
     // typegen once → generated tool schemas exist (dev-boot fidelity)
     const manifest = await discoverRoutes({ appRoot: options.appRoot })
@@ -114,8 +117,10 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     if (!resolved) {
       throw new Error(`createAgentHarness: unknown route "${options.route}"`)
     }
+    sandboxManager = await resolveSandboxManager(options.appRoot)
   } catch (err) {
     // Unified cleanup: stop aimock and restore env vars before re-throwing.
+    if (sandboxManager) await sandboxManager.releaseAll()
     await aimock.close()
     if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
     else process.env.OPENAI_BASE_URL = prevBaseUrl
@@ -146,9 +151,10 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     const snapshotLen = aimock.getRequests().length
     lastRunJournalStart = snapshotLen
     lastRunFixtureStart = aimock.getFixtureCount()
-    // resolved is guaranteed non-null at this point: the catch block re-throws
-    // before returning, so if we reach drive() the null check already passed.
-    const r = resolved!
+    const r = resolved
+    if (!r) {
+      throw new Error(`createAgentHarness: unknown route "${options.route}"`)
+    }
     const streamArgs: Parameters<typeof streamResolvedRoute>[0] = {
       appRoot: options.appRoot,
       input:
@@ -159,6 +165,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       routeId: r.routeId,
       routePath: r.routePath,
       threadId,
+      ...(sandboxManager ? { sandboxManager } : {}),
       ...(driveOpts.resumeDecision !== undefined
         ? { resumeDecision: driveOpts.resumeDecision }
         : {}),
@@ -207,6 +214,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     async close() {
       if (closed) return
       closed = true
+      if (sandboxManager) await sandboxManager.releaseAll()
       await aimock.close()
       // restore env to avoid cross-test bleed
       if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL

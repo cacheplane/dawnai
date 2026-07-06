@@ -10,6 +10,7 @@ import { getTestRegistryUrl } from "../harness/local-registry.ts"
 import {
   cleanupTrackedTempDirs,
   createTrackedTempDir,
+  installPackagedScaffolder,
   markTrackedTempDirForPreserve,
   runPackagedCommand,
   type TrackedTempDir,
@@ -254,15 +255,14 @@ async function scaffoldApp(options: {
       transcriptPath: options.transcriptPath,
     })
   } else {
-    // external mode: scaffold using the published create-dawn-ai-app, resolved
-    // from the test registry — exactly what a real user runs. pnpm dlx does not
-    // accept --registry, so the registry is passed via npm_config_registry; the
-    // unique per-run URL busts dlx's cache.
+    // external mode: scaffold through an installed package tarball while forcing
+    // the current checkout's devkit templates. This keeps the packaged-bin signal
+    // deterministic even when a long-lived test registry has older templates.
+    const { installerDir } = await installPackagedScaffolder(dirname(options.appRoot))
     await runPackagedCommand({
-      args: ["dlx", "create-dawn-ai-app", options.appRoot, "--template", "basic"],
+      args: ["exec", "create-dawn-ai-app", options.appRoot, "--template", "basic"],
       command: "pnpm",
-      cwd: REPO_ROOT,
-      env: { npm_config_registry: getTestRegistryUrl() },
+      cwd: installerDir,
       transcriptPath: options.transcriptPath,
     })
   }
@@ -451,14 +451,9 @@ async function createExpectedInternalFixture(
     }
   }
 
-  // Internal mode rewrites every dawn specifier from "latest" to a repo file: URL (normalized
-  // to <repo:...>) and adds a pnpm.overrides block covering all SCAFFOLD_PACKAGES.
-  // We build the overrides block directly from SCAFFOLD_PACKAGES rather than reading
-  // it from the external fixture (which has no pnpm key in the Verdaccio-install shape).
-  const repoOverrides = Object.fromEntries(
-    SCAFFOLD_PACKAGES.map((name) => [name, `<repo:${name}>`]),
-  )
-
+  // Internal mode rewrites every Dawn specifier from "latest" to a repo file: URL
+  // (normalized to <repo:...>). Package-manager overrides live in
+  // pnpm-workspace.yaml, not package.json.
   return {
     ...expected,
     packageJson: {
@@ -476,10 +471,6 @@ async function createExpectedInternalFixture(
         "@dawn-ai/config-typescript": "<repo:@dawn-ai/config-typescript>",
         "@dawn-ai/evals": "<repo:@dawn-ai/evals>",
         "@dawn-ai/testing": "<repo:@dawn-ai/testing>",
-      },
-      pnpm: {
-        onlyBuiltDependencies: ["esbuild"],
-        overrides: repoOverrides,
       },
     },
   }

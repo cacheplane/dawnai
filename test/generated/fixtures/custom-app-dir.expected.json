@@ -24,11 +24,6 @@
       "@types/node": "<version:@types/node>",
       "typescript": "<version:typescript>",
       "vitest": "<version:vitest>"
-    },
-    "pnpm": {
-      "onlyBuiltDependencies": [
-        "esbuild"
-      ]
     }
   },
   "verifyJson": {
@@ -53,14 +48,8 @@
         "status": "passed"
       },
       {
-        "missingEnvVars": [
-          "OPENAI_API_KEY"
-        ],
-        "missingPackages": [
-          "@langchain/core",
-          "@langchain/openai",
-          "@langchain/langgraph"
-        ],
+        "missingEnvVars": ["OPENAI_API_KEY"],
+        "missingPackages": ["@langchain/core", "@langchain/openai", "@langchain/langgraph"],
         "name": "deps",
         "status": "warning"
       }

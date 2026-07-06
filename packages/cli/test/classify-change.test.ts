@@ -39,6 +39,15 @@ describe("classifyChange", () => {
     expect(classifyChange("workspace/notes/output.md")).toBe("ignore")
   })
 
+  test("package-manager and dependency artifacts are ignored", () => {
+    expect(classifyChange("node_modules/.modules.yaml")).toBe("ignore")
+    expect(classifyChange("node_modules/.pnpm/lock.yaml")).toBe("ignore")
+    expect(classifyChange("pnpm-workspace.yaml")).toBe("ignore")
+    expect(classifyChange("pnpm-lock.yaml")).toBe("ignore")
+    expect(classifyChange("package-lock.json")).toBe("ignore")
+    expect(classifyChange("yarn.lock")).toBe("ignore")
+  })
+
   test("empty path (unattributable watcher event) is ignored, never restart", () => {
     // Node's recursive fs.watch can fire with a null fileName under
     // high-frequency writes; we must not restart the dev server on it.
