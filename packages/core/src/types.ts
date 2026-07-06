@@ -1,7 +1,7 @@
 import type { PermissionMode } from "@dawn-ai/permissions"
 import type { RouteKind } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
-import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
+import type { ExecBackend, FilesystemBackend, SandboxConfig } from "@dawn-ai/workspace"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 
 export type { RouteKind }
@@ -63,6 +63,7 @@ export interface DawnConfig {
       readonly signal: AbortSignal
     }) => Promise<string>
   }
+  readonly sandbox?: SandboxConfig
   readonly memory?: {
     readonly enabled?: boolean
     /** Custom memory store. Defaults to an SQLite-backed store at <appRoot>/.dawn/memory.sqlite. */

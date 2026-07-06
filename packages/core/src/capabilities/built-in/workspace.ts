@@ -118,10 +118,11 @@ function buildWorkspaceTools(
 export function createWorkspaceMarker(): CapabilityMarker {
   return {
     name: "workspace",
-    detect: async (_routeDir, context) => existsSync(workspaceRoot(context.appRoot)),
+    detect: async (_routeDir, context) =>
+      context.workspaceRoot !== undefined || existsSync(workspaceRoot(context.appRoot)),
     load: async (_routeDir, context) => {
-      const root = workspaceRoot(context.appRoot)
-      if (!existsSync(root)) return {}
+      const root = context.workspaceRoot ?? workspaceRoot(context.appRoot)
+      if (context.workspaceRoot === undefined && !existsSync(root)) return {}
       const fs = context.backends?.filesystem ?? localFilesystem()
       const exec = context.backends?.exec ?? localExec()
       const permissions = context.permissions

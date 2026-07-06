@@ -93,3 +93,37 @@ jobs:
           name: harness-artifacts
           path: artifacts/testing/
           retention-days: 7
+
+  sandbox-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
+          # available without the --experimental-sqlite flag from 22.13+.
+          # Matches release.yml and the engines floor.
+          node-version: 22.14.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build sandbox package
+        run: pnpm --filter @dawn-ai/workspace build && pnpm --filter @dawn-ai/sandbox build
+
+      - name: Pull sandbox image
+        run: docker pull node:22-slim
+
+      - name: Real-Docker sandbox conformance + e2e
+        run: DAWN_TEST_DOCKER=1 pnpm --filter @dawn-ai/sandbox test docker-sandbox.integration

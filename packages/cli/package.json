@@ -60,6 +60,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
+    "@dawn-ai/sandbox": "workspace:*",
     "@dawn-ai/sdk": "workspace:*",
     "@dawn-ai/workspace": "workspace:*",
     "@langchain/core": "1.2.1",

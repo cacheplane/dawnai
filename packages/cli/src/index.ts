@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+export { config } from "@dawn-ai/core"
+
 import { realpathSync } from "node:fs"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"

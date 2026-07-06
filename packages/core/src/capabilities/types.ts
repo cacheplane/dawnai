@@ -64,6 +64,12 @@ export interface CapabilityMarkerContext {
   readonly permissions?: PermissionsStore
   /** Absolute path to the Dawn app root. Capabilities should resolve app-relative paths (e.g. workspace/) against this, NOT process.cwd(). */
   readonly appRoot: string
+  /**
+   * When set, the workspace root path INSIDE a sandbox (e.g. "/workspace").
+   * Capabilities use this in place of `<appRoot>/workspace` and skip the host
+   * `existsSync` gate, since the directory lives in the sandbox, not on the host.
+   */
+  readonly workspaceRoot?: string
   readonly memory?: MemoryContext
 }
 

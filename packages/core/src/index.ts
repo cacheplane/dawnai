@@ -15,7 +15,10 @@ export type {
   CapabilityError,
   CapabilityRegistry,
 } from "./capabilities/registry.js"
-export { applyCapabilities, createCapabilityRegistry } from "./capabilities/registry.js"
+export {
+  applyCapabilities,
+  createCapabilityRegistry,
+} from "./capabilities/registry.js"
 export type {
   CapabilityContribution,
   CapabilityMarker,
@@ -32,6 +35,7 @@ export type {
 export type { CreateWorkspaceFsOptions } from "./capabilities/workspace-fs.js"
 export { createWorkspaceFs } from "./capabilities/workspace-fs.js"
 export { loadDawnConfig } from "./config.js"
+export { config } from "./config-helper.js"
 export { discoverRoutes } from "./discovery/discover-routes.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"
 export {
@@ -47,7 +51,10 @@ export type { ExtractToolSchemasOptions } from "./typegen/extract-tool-schema.js
 export { extractToolSchemasForRoute } from "./typegen/extract-tool-schema.js"
 export type { ExtractToolTypesOptions } from "./typegen/extract-tool-types.js"
 export { extractToolTypesForRoute } from "./typegen/extract-tool-types.js"
-export { renderDawnTypes, renderRouteTypes } from "./typegen/render-route-types.js"
+export {
+  renderDawnTypes,
+  renderRouteTypes,
+} from "./typegen/render-route-types.js"
 export type { RouteStateFields } from "./typegen/render-state-types.js"
 export { renderStateTypes } from "./typegen/render-state-types.js"
 export { renderToolTypes } from "./typegen/render-tool-types.js"
