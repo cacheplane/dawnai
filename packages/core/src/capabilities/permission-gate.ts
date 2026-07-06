@@ -125,6 +125,40 @@ export async function gateToolOp(
   return { allowed: true }
 }
 
+/** Best-effort display preview of a tool call's args. Never matched or persisted. */
+function buildArgsPreview(input: unknown): string {
+  try {
+    const s = JSON.stringify(input)
+    return s === undefined ? String(input) : s.length > 500 ? `${s.slice(0, 500)}…` : s
+  } catch {
+    return String(input)
+  }
+}
+
+/**
+ * Wrap a tool so each call passes gateToolOp first (tools.approve). A blocked
+ * call returns the denial reason AS THE TOOL RESULT — the model sees it and
+ * can adapt, matching the bash-gate contract. Generic over the tool shape so
+ * DiscoveredToolDefinition (cli) and DawnToolDefinition (core) both survive
+ * wrapping with their extra fields (filePath, schema, scope, …) intact.
+ */
+export function wrapToolWithApproval<
+  C,
+  T extends {
+    readonly name: string
+    readonly run: (input: unknown, context: C) => Promise<unknown> | unknown
+  },
+>(tool: T, permissions: PermissionsStore): T {
+  return {
+    ...tool,
+    run: async (input: unknown, context: C) => {
+      const gate = await gateToolOp(permissions, tool.name, buildArgsPreview(input))
+      if (!gate.allowed) return gate.reason
+      return tool.run(input, context)
+    },
+  } as T
+}
+
 interface InterruptArgs {
   kind: "command" | "path" | "tool"
   command?: string

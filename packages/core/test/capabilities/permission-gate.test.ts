@@ -4,7 +4,11 @@ import { join } from "node:path"
 import { createPermissionsStore } from "@dawn-ai/permissions"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
-import { gatePathOp, gateToolOp } from "../../src/capabilities/permission-gate.js"
+import {
+  gatePathOp,
+  gateToolOp,
+  wrapToolWithApproval,
+} from "../../src/capabilities/permission-gate.js"
 
 describe("gatePathOp interrupt suppression", () => {
   let appRoot: string
@@ -115,5 +119,71 @@ describe("gateToolOp", () => {
       expect(result.reason).toMatch(/allow rule/)
       expect(result.reason).toMatch(/dawn\.config/)
     }
+  })
+})
+
+describe("wrapToolWithApproval", () => {
+  let appRoot: string
+  beforeEach(() => {
+    appRoot = mkdtempSync(join(tmpdir(), "dawn-wrap-tool-test-"))
+  })
+  afterEach(() => {
+    rmSync(appRoot, { recursive: true, force: true })
+  })
+
+  const signal = new AbortController().signal
+
+  it("delegates untouched when the tool is pre-approved", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: { version: 1, allow: { tool: ["deployProd"] }, deny: {} },
+      mode: "interactive",
+    })
+    await permissions.load()
+    const tool = {
+      name: "deployProd",
+      description: "deploys",
+      filePath: "/app/src/app/ops/tools/deployProd.ts",
+      run: async (input: unknown) => `deployed:${JSON.stringify(input)}`,
+    }
+    const wrapped = wrapToolWithApproval(tool, permissions)
+    expect(wrapped.name).toBe("deployProd")
+    expect(wrapped.description).toBe("deploys")
+    expect(wrapped.filePath).toBe(tool.filePath)
+    expect(await wrapped.run({ env: "prod" }, { signal })).toBe('deployed:{"env":"prod"}')
+  })
+
+  it("blocks with the denial reason as the tool result when denied", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: { version: 1, allow: {}, deny: { tool: ["deployProd"] } },
+      mode: "interactive",
+    })
+    await permissions.load()
+    let ran = false
+    const wrapped = wrapToolWithApproval(
+      {
+        name: "deployProd",
+        run: async () => {
+          ran = true
+          return "deployed"
+        },
+      },
+      permissions,
+    )
+    const result = await wrapped.run({}, { signal })
+    expect(ran).toBe(false)
+    expect(String(result)).toMatch(/denied.*deployProd/i)
+  })
+
+  it("fails closed (as a result string) in non-interactive mode", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: undefined,
+      mode: "non-interactive",
+    })
+    await permissions.load()
+    const wrapped = wrapToolWithApproval({ name: "x", run: async () => "ran" }, permissions)
+    expect(String(await wrapped.run({}, { signal }))).toMatch(/fail-closed/)
   })
 })
