@@ -1,0 +1,37 @@
+name: Publish Chart
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "charts/dawn-sandbox-infra/**"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+
+      - name: Login to GHCR
+        run: helm registry login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish chart if version is new
+        run: |
+          VERSION=$(helm show chart charts/dawn-sandbox-infra | awk '/^version:/{print $2}')
+          if helm show chart "oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra" --version "$VERSION" >/dev/null 2>&1; then
+            echo "dawn-sandbox-infra $VERSION already published, skipping"
+            exit 0
+          fi
+          helm package charts/dawn-sandbox-infra -d /tmp
+          helm push "/tmp/dawn-sandbox-infra-$VERSION.tgz" oci://ghcr.io/cacheplane/charts
