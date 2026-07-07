@@ -1,5 +1,18 @@
 # @dawn-ai/core
 
+## 0.8.8
+
+### Patch Changes
+
+- dd02f56: New memory write-governance mode `writes: "ask"`: memory supersedes (belief contradictions) prompt a HITL Once/Always/Deny interrupt with old-vs-new detail; ADDs and idempotent updates flow silently; headless behaves as `auto`. New `kind: "memory"` permission interrupt, `gateMemorySupersede`, `suggestedMemoryPattern`, and a `dawn check` warning for the `ask` + `approve: ["remember"]` double-gate overlap.
+- 5ccae68: Memory `remember`/`recall` tools now return the `{ result }` wrapper shape (like other capability tools) instead of a bare string. Previously the langchain bridge JSON-stringified their returns, so the agent saw quoted, backslash-escaped content — most visibly `recall`'s multi-line list arriving as one quoted string with literal `\n`. The wrapper makes the string the ToolMessage content verbatim.
+- Updated dependencies [dd02f56]
+- Updated dependencies [57e8cd9]
+  - @dawn-ai/permissions@0.8.8
+  - @dawn-ai/workspace@0.8.8
+  - @dawn-ai/sdk@0.8.8
+  - @dawn-ai/sqlite-storage@0.8.8
+
 ## 0.8.7
 
 ### Patch Changes

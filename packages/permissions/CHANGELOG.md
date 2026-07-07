@@ -1,5 +1,11 @@
 # @dawn-ai/permissions
 
+## 0.8.8
+
+### Patch Changes
+
+- dd02f56: New memory write-governance mode `writes: "ask"`: memory supersedes (belief contradictions) prompt a HITL Once/Always/Deny interrupt with old-vs-new detail; ADDs and idempotent updates flow silently; headless behaves as `auto`. New `kind: "memory"` permission interrupt, `gateMemorySupersede`, `suggestedMemoryPattern`, and a `dawn check` warning for the `ask` + `approve: ["remember"]` double-gate overlap.
+
 ## 0.8.7
 
 ## 0.8.6
