@@ -6,20 +6,25 @@ import { kubeExec } from "./kube-exec.js"
 import { kubeFilesystem } from "./kube-filesystem.js"
 
 const ROOT = "/workspace"
+// Linear leading/trailing '-' trim. Avoids anchored `-+`/`^-+` regexes, which are a
+// polynomial-ReDoS pattern (O(n^2) backtracking on adversarial dash runs) when run on
+// an uncontrolled thread id.
+const trimDashes = (s: string): string => {
+  let start = 0
+  let end = s.length
+  while (start < end && s[start] === "-") start++
+  while (end > start && s[end - 1] === "-") end--
+  return s.slice(start, end)
+}
 // DNS-1123 label: lowercase alphanumeric + '-', <=63 chars. Bare truncation to 40
 // chars would collide two thread IDs sharing a 40-char prefix onto one sandbox, so
 // append a stable content hash when (and only when) the cleaned id exceeds the limit
 // — short ids are returned verbatim, keeping existing names churn-free.
 const sanitize = (s: string) => {
-  const clean =
-    s
-      .toLowerCase()
-      .replaceAll(/[^a-z0-9-]/g, "-")
-      .replace(/^-+/, "")
-      .replace(/-+$/, "") || "x"
+  const clean = trimDashes(s.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-")) || "x"
   if (clean.length <= 40) return clean
   const hash = createHash("sha256").update(s).digest("hex").slice(0, 8)
-  return `${clean.slice(0, 31).replace(/-+$/, "")}-${hash}`
+  return `${trimDashes(clean.slice(0, 31))}-${hash}`
 }
 const podName = (t: string) => `dawn-sbx-${sanitize(t)}`
 const pvcName = (t: string) => `dawn-sbx-vol-${sanitize(t)}`
