@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest"
+import { describe, expect, expectTypeOf, test } from "vitest"
 import type {
   SandboxConfig,
   SandboxHandle,
@@ -7,6 +7,26 @@ import type {
   SandboxSecurityPolicy,
 } from "../src/sandbox-types.ts"
 import type { ExecBackend, FilesystemBackend } from "../src/types.ts"
+
+test("resources carries an optional diskGb (PVC size)", () => {
+  const p: SandboxPolicy = { network: { mode: "deny" }, resources: { diskGb: 2 } }
+  expectTypeOf(p.resources?.diskGb).toEqualTypeOf<number | undefined>()
+})
+
+test("preflight may return warnings", async () => {
+  const provider = {
+    name: "x",
+    acquire: async () => ({}) as never,
+    release: async () => {},
+    destroy: async () => {},
+    preflight: async (): ReturnType<NonNullable<SandboxProvider["preflight"]>> => ({
+      ok: true,
+      warnings: ["cni not enforced"],
+    }),
+  } satisfies Partial<SandboxProvider> & Pick<SandboxProvider, "preflight">
+  const r = await provider.preflight()
+  expectTypeOf(r.warnings).toEqualTypeOf<readonly string[] | undefined>()
+})
 
 describe("sandbox contract types", () => {
   test("a handle exposes workspace backends + an in-sandbox root", () => {
