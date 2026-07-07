@@ -721,9 +721,8 @@ async function prepareRouteExecution(options: {
     // call consults the permissions store; on "unknown" in interactive mode
     // the wrapper interrupts for a human decision (kind: "tool"). Bash/path
     // gates inside the workspace tools are separate (pattern-aware) and
-    // unaffected; `dawn check` warns on redundant overlap.
-    // Per-tool approval gating (tools.approve). A tool that ALSO has a
-    // constraint predicate is excluded here — `constrain` is authoritative and
+    // unaffected; `dawn check` warns on redundant overlap. A tool that ALSO has
+    // a constraint predicate is excluded here — `constrain` is authoritative and
     // can itself escalate via `{ approve }`, so wrapping both would double-gate.
     const constrain = descriptor?.tools?.constrain
     const approveSet = new Set((descriptor?.tools?.approve ?? []).filter((n) => !constrain?.[n]))
