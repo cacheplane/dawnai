@@ -24,6 +24,9 @@ export function fakeKubeClient(
     readonly cniEnforced?: boolean | "unknown"
     readonly startPhase?: PodPhase // phase newly-created pods report (default "Running")
     readonly pendingReads?: number // reads a fresh pod reports "Pending" before startPhase
+    /** After deleteNamespacedPvc, pvcExists still reports true for this many calls
+     * (models real-cluster async PVC deletion), then reports gone. Default 0. */
+    readonly pvcLingerReads?: number
   } = {},
 ): KubeClient & {
   readonly pods: Map<string, FakePod>
@@ -33,6 +36,9 @@ export function fakeKubeClient(
   const pods = new Map<string, FakePod>()
   const pvcs = new Map<string, { spec: KubePvcSpec; files: Map<string, string> }>()
   const netpols = new Map<string, KubeNetworkPolicySpec>()
+  // Separate from `pvcs` so pvcExists can report lingering-true even though the
+  // entry is removed from `pvcs` immediately (tests assert on `.pvcs.has(...)`).
+  const lingering = new Map<string, number>()
 
   const runSh = (pod: FakePod, rawScript: string, stdin?: string) => {
     const files = pod.files
@@ -105,14 +111,23 @@ export function fakeKubeClient(
         pendingReads: opts.pendingReads ?? 0,
       })
     },
-    async deleteNamespacedPod(_ns, name) {
+    async deleteNamespacedPod(_ns, name, _opts?) {
       pods.delete(name)
     },
     async createNamespacedPvcIfAbsent(_ns, spec) {
       if (!pvcs.has(spec.name)) pvcs.set(spec.name, { spec, files: new Map() })
     },
     async deleteNamespacedPvc(_ns, name) {
+      lingering.set(name, opts.pvcLingerReads ?? 0)
       pvcs.delete(name)
+    },
+    async pvcExists(_ns, name) {
+      const remaining = lingering.get(name) ?? 0
+      if (remaining > 0) {
+        lingering.set(name, remaining - 1)
+        return true
+      }
+      return pvcs.has(name)
     },
     async upsertNamespacedNetworkPolicy(_ns, spec) {
       netpols.set(spec.name, spec)

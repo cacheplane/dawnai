@@ -155,9 +155,15 @@ export function createDefaultKubeClient(): KubeClient {
       await core.createNamespacedPod({ namespace: ns, body: toPodManifest(ns, spec) })
     },
 
-    async deleteNamespacedPod(ns, name): Promise<void> {
+    async deleteNamespacedPod(ns, name, opts): Promise<void> {
       try {
-        await core.deleteNamespacedPod({ name, namespace: ns })
+        await core.deleteNamespacedPod({
+          name,
+          namespace: ns,
+          ...(opts?.gracePeriodSeconds !== undefined
+            ? { gracePeriodSeconds: opts.gracePeriodSeconds }
+            : {}),
+        })
       } catch (error) {
         if (statusCode(error) === 404) return
         throw error
@@ -181,6 +187,16 @@ export function createDefaultKubeClient(): KubeClient {
         await core.deleteNamespacedPersistentVolumeClaim({ name, namespace: ns })
       } catch (error) {
         if (statusCode(error) === 404) return
+        throw error
+      }
+    },
+
+    async pvcExists(ns, name): Promise<boolean> {
+      try {
+        await core.readNamespacedPersistentVolumeClaim({ name, namespace: ns })
+        return true
+      } catch (error) {
+        if (statusCode(error) === 404) return false
         throw error
       }
     },

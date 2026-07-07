@@ -35,9 +35,15 @@ export type PodPhase = "Pending" | "Running" | "Succeeded" | "Failed" | "Unknown
 export interface KubeClient {
   readNamespacedPodPhase(ns: string, name: string): Promise<PodPhase | null> // null = 404
   createNamespacedPod(ns: string, spec: KubePodSpec): Promise<void>
-  deleteNamespacedPod(ns: string, name: string): Promise<void>
+  deleteNamespacedPod(
+    ns: string,
+    name: string,
+    opts?: { readonly gracePeriodSeconds?: number },
+  ): Promise<void>
   createNamespacedPvcIfAbsent(ns: string, spec: KubePvcSpec): Promise<void>
   deleteNamespacedPvc(ns: string, name: string): Promise<void>
+  /** Existence probe: true if the PVC is still present (including Terminating). */
+  pvcExists(ns: string, name: string): Promise<boolean>
   upsertNamespacedNetworkPolicy(ns: string, spec: KubeNetworkPolicySpec): Promise<void>
   deleteNamespacedNetworkPolicy(ns: string, name: string): Promise<void>
   exec(

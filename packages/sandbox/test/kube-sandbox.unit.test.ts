@@ -77,6 +77,15 @@ test("release deletes the pod but keeps the PVC; destroy removes both", async ()
   expect(k.pvcs.has("dawn-sbx-vol-t")).toBe(false)
 })
 
+test("destroy waits until the PVC is actually gone (async deletion)", async () => {
+  const k = fakeKubeClient({ pvcLingerReads: 2 })
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  await p.acquire({ threadId: "t", policy, signal: signal() })
+  await p.destroy("t")
+  // after destroy returns, the PVC probe must report gone (the poll drained the linger)
+  expect(await k.pvcExists("ns", "dawn-sbx-vol-t")).toBe(false)
+})
+
 test("diskGb sets the PVC storage size", async () => {
   const k = fakeKubeClient()
   const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })

@@ -172,12 +172,17 @@ export function kubernetesSandbox(opts: KubernetesSandboxOptions): SandboxProvid
     },
     async release(threadId) {
       await client.deleteNamespacedNetworkPolicy(ns, netpolName(threadId)).catch(() => {})
-      await client.deleteNamespacedPod(ns, podName(threadId)).catch(() => {})
+      await client
+        .deleteNamespacedPod(ns, podName(threadId), { gracePeriodSeconds: 0 })
+        .catch(() => {})
     },
     async destroy(threadId) {
       await client.deleteNamespacedNetworkPolicy(ns, netpolName(threadId)).catch(() => {})
-      await client.deleteNamespacedPod(ns, podName(threadId)).catch(() => {})
+      await client
+        .deleteNamespacedPod(ns, podName(threadId), { gracePeriodSeconds: 0 })
+        .catch(() => {})
       await client.deleteNamespacedPvc(ns, pvcName(threadId)).catch(() => {})
+      await waitForPvcGone(client, ns, pvcName(threadId), 30_000)
     },
     async preflight() {
       const warnings: string[] = []
@@ -255,6 +260,26 @@ async function waitForGone(
         `Sandbox unavailable: pod "${name}" still terminating after ${timeoutMs}ms. Run \`dawn check\`.`,
       )
     }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+}
+
+/** PVC deletion on a real cluster is async (pvc-protection finalizer + storage
+ * backend teardown), so destroy() polls until the PVC is actually gone before
+ * returning — otherwise an immediate re-acquire's createNamespacedPvcIfAbsent
+ * sees the still-existing (Terminating) PVC and rebinds the old data. Best-effort:
+ * destroy has no AbortSignal, so this is bounded by a plain time budget rather than
+ * a cancellation signal; giving up rather than throwing keeps cleanup non-fatal. */
+async function waitForPvcGone(
+  client: KubeClient,
+  ns: string,
+  name: string,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (!(await client.pvcExists(ns, name).catch(() => false))) return
+    if (Date.now() > deadline) return // best-effort cleanup: give up rather than throw
     await new Promise((r) => setTimeout(r, 250))
   }
 }
