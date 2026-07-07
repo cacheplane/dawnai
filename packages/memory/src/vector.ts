@@ -6,13 +6,16 @@ export const DEFAULT_RRF_K = 60
 export const DEFAULT_VECTOR_K = 64
 
 export interface RankedList {
-  /** Ids ordered best → worst. Rank is the 1-based index. */
+  /**
+   * Ids ordered best → worst. Rank is the 1-based index. Ids within a single
+   * list are expected to be unique; duplicates accumulate score.
+   */
   readonly ids: readonly string[]
   /** Per-list weight in the fusion; default 1 (co-equal). */
   readonly weight?: number
 }
 
-/** Raw cosine similarity in [-1, 1]. Zero-norm or length-mismatch → 0 (never NaN/throw). */
+/** Raw cosine similarity in [-1, 1]. Zero-norm, length-mismatch, or non-finite result → 0 (never NaN/throw). */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   if (a.length !== b.length || a.length === 0) return 0
   let dot = 0
@@ -26,7 +29,8 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
     nb += y * y
   }
   if (na === 0 || nb === 0) return 0
-  return dot / (Math.sqrt(na) * Math.sqrt(nb))
+  const r = dot / (Math.sqrt(na) * Math.sqrt(nb))
+  return Number.isFinite(r) ? r : 0
 }
 
 /**

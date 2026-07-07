@@ -16,6 +16,9 @@ describe("cosineSimilarity", () => {
   it("returns 0 on length mismatch rather than throwing", () => {
     expect(cosineSimilarity(new Float32Array([1, 2, 3]), new Float32Array([1, 2]))).toBe(0)
   })
+  it("returns 0 (not NaN) when an input has a non-finite component", () => {
+    expect(cosineSimilarity(new Float32Array([NaN, 1]), new Float32Array([1, 0]))).toBe(0)
+  })
 })
 
 describe("fuseRRF", () => {
@@ -50,5 +53,16 @@ describe("fuseRRF", () => {
   it("non-positive/non-finite k falls back to the default", () => {
     expect(fuseRRF([{ ids: ["a"] }], { k: 0 }).get("a")).toBeCloseTo(1 / (DEFAULT_RRF_K + 1), 12)
     expect(fuseRRF([{ ids: ["a"] }], { k: -5 }).get("a")).toBeCloseTo(1 / (DEFAULT_RRF_K + 1), 12)
+  })
+})
+
+describe("determinism", () => {
+  it("same inputs → identical results (pure, no clock/randomness)", () => {
+    expect([...fuseRRF([{ ids: ["a", "b"] }, { ids: ["b", "a"] }])]).toEqual([
+      ...fuseRRF([{ ids: ["a", "b"] }, { ids: ["b", "a"] }]),
+    ])
+    expect(cosineSimilarity(new Float32Array([1, 2, 3]), new Float32Array([3, 2, 1]))).toBe(
+      cosineSimilarity(new Float32Array([1, 2, 3]), new Float32Array([3, 2, 1])),
+    )
   })
 })
