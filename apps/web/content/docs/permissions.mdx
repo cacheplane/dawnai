@@ -1,9 +1,11 @@
 # Permissions
 
-Permissions are Dawn's human-in-the-loop gate for workspace operations. The runtime checks two kinds of operations before they proceed:
+Permissions are Dawn's human-in-the-loop gate. The runtime gates two workspace operations by default:
 
 - **`runBash` commands** (`kind: "command"`) — shell commands are matched against allow and deny lists before executing.
 - **Filesystem paths outside `workspace/`** (`kind: "path"`) — file reads, writes, and directory listings that would escape the workspace root are permission-gated.
+
+Two further gates build on the same interrupt machinery and are covered below: opt-in **per-tool approval** (`kind: "tool"`) and **memory-write approval** (`kind: "memory"`).
 
 Unknown operations pause the run and ask the human rather than failing or silently proceeding.
 

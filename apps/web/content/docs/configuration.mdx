@@ -61,6 +61,7 @@ export default {
     indexMaxEntries: 20,   // default — cap on memories injected into the prompt index
     // store: myMemoryStore,  // default: SQLite at .dawn/memory.sqlite
     // resolveScope: ({ routePath, appRoot }) => ({ tenant: "acme" }),
+    // recall: { weights: { relevance: 0.6, recency: 0.3, confidence: 0.1 } },  // ranked-recall tuning (see Memory)
   },
 
   // SQLite persistence is on by default — no config needed.
@@ -220,6 +221,11 @@ memory?: {
   store?: MemoryStore
   writes?: "off" | "candidate" | "auto" | "ask"
   indexMaxEntries?: number
+  recall?: {
+    weights?: { relevance?: number; recency?: number; confidence?: number }
+    recencyHalfLifeMs?: number
+    candidatePool?: number
+  }
   resolveScope?: (ctx: { routePath: string; appRoot: string }) => Record<string, string>
 }
 ```
@@ -229,6 +235,7 @@ memory?: {
 | `store` | `MemoryStore` | SQLite at `.dawn/memory.sqlite` | The memory store backend. Defaults to an SQLite-backed store at `<appRoot>/.dawn/memory.sqlite`. Override to plug in a custom backend. |
 | `writes` | `"off" \| "candidate" \| "auto" \| "ask"` | `"candidate"` | Write governance for the `remember` tool. `off` — recall-only; the `remember` tool is not exposed. `candidate` — writes land as candidates for review, hidden from `recall` until promoted with `dawn memory approve`. `auto` — writes are active immediately, with inline identity reconciliation (idempotent updates and supersede-on-conflict). `ask` — same as `auto`, except a supersede (belief contradiction) interrupts for human Once/Always/Deny approval when running interactively; headless behaves exactly like `auto`. |
 | `indexMaxEntries` | `number` | `20` | Cap on how many in-scope memories are injected into the prompt memory index. |
+| `recall` | `{ weights?, recencyHalfLifeMs?, candidatePool? }` | relevance/recency/confidence `0.6`/`0.3`/`0.1`, 14-day half-life, pool `256` | Ranked-recall tuning for `recall({ query })`. `weights` blends IDF relevance, recency decay, and stored confidence; `recencyHalfLifeMs` sets the recency half-life; `candidatePool` caps how many newest token-matches a ranked search scores. Query-less recall (the injected index) is unaffected. |
 | `resolveScope` | `(ctx: { routePath; appRoot }) => Record<string, string>` | — | Supplies runtime namespace dimensions (e.g. `tenant`, `user`, `agent`) for the memory namespace. Only the dimensions a route declares in its `memory.ts` scope are applied. |
 
 See [Memory](/docs/memory) for the full long-term-memory model and [Permissions](/docs/permissions#memory-write-approval-writes-ask) for the `ask`-mode HITL flow, plus the [`dawn memory`](/docs/cli#dawn-memory) CLI for reviewing candidate writes.
