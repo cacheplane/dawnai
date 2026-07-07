@@ -153,8 +153,11 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Build pgvector packages
-        run: pnpm --filter @dawn-ai/memory --filter @dawn-ai/testing --filter @dawn-ai/memory-pgvector build
+      - name: Build packages
+        # Full topological build — @dawn-ai/memory-pgvector (and @dawn-ai/testing)
+        # compile from source against @dawn-ai/cli/@dawn-ai/workspace etc., so a
+        # narrow per-package filter fails to build those deps first (TS2307).
+        run: pnpm build
 
       - name: Real-Postgres pgvector tests
         run: DAWN_TEST_PGVECTOR=1 pnpm --filter @dawn-ai/memory-pgvector test
