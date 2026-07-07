@@ -188,6 +188,43 @@ importers:
         specifier: 6.0.2
         version: 6.0.2
 
+  examples/memory/server:
+    dependencies:
+      '@dawn-ai/cli':
+        specifier: workspace:*
+        version: link:../../../packages/cli
+      '@dawn-ai/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@dawn-ai/langchain':
+        specifier: workspace:*
+        version: link:../../../packages/langchain
+      '@dawn-ai/memory-pgvector':
+        specifier: workspace:*
+        version: link:../../../packages/memory-pgvector
+      '@dawn-ai/sdk':
+        specifier: workspace:*
+        version: link:../../../packages/sdk
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@dawn-ai/config-typescript':
+        specifier: workspace:*
+        version: link:../../../packages/config-typescript
+      '@dawn-ai/testing':
+        specifier: workspace:*
+        version: link:../../../packages/testing
+      '@types/node':
+        specifier: 26.1.0
+        version: 26.1.0
+      typescript:
+        specifier: 6.0.2
+        version: 6.0.2
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@types/node@26.1.0)(@vitest/ui@4.1.9)(vite@6.4.3(@types/node@26.1.0)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))
+
   packages/cli:
     dependencies:
       '@dawn-ai/core':
@@ -519,6 +556,9 @@ importers:
       '@langchain/langgraph-checkpoint':
         specifier: ^1.1.3
         version: 1.1.3(@langchain/core@1.2.1(openai@6.45.0(ws@8.21.0)(zod@4.4.3))(ws@8.21.0))
+      '@testcontainers/postgresql':
+        specifier: ^12.0.4
+        version: 12.0.4
       '@types/node':
         specifier: 26.1.0
         version: 26.1.0
