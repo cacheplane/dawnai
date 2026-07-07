@@ -158,3 +158,48 @@ jobs:
 
       - name: Real-Postgres pgvector tests
         run: DAWN_TEST_PGVECTOR=1 pnpm --filter @dawn-ai/memory-pgvector test
+
+  sandbox-k8s:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
+          # available without the --experimental-sqlite flag from 22.13+.
+          # Matches release.yml and the engines floor.
+          node-version: 22.14.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build sandbox package
+        run: pnpm --filter @dawn-ai/workspace build && pnpm --filter @dawn-ai/sandbox build
+
+      - name: Create kind cluster (no default CNI)
+        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          config: .github/kind/kind-calico.yaml
+
+      - name: Install Calico (enforces NetworkPolicy)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
+
+      - name: Create sandbox namespace
+        run: kubectl create namespace dawn-sandboxes
+
+      - name: Real-cluster sandbox conformance + e2e
+        run: DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration

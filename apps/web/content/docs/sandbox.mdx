@@ -111,6 +111,60 @@ The default, when `network` is omitted, is `{ mode: "allow", denylist: ["169.254
   In the Docker reference provider, the `allow`-mode denylist is **best-effort**, not enforced with the same rigor as `deny` mode. Blocking arbitrary outbound hosts from inside a container needs an in-container firewall rule or an egress proxy; the reference does not guarantee every denylisted host is unreachable. `deny` mode's `--network none` remains exact. A provider backed by a microVM or a cloud sandbox can enforce the denylist more strongly.
 </Callout>
 
+## Kubernetes provider
+
+`kubernetesSandbox` runs each thread's sandbox as a Kubernetes Pod instead of a local Docker container, for deployments where the Dawn server itself runs in a cluster:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+import { kubernetesSandbox } from "@dawn-ai/sandbox"
+
+export default config({
+  sandbox: {
+    provider: kubernetesSandbox({ image: "node:22-slim", namespace: "dawn-sandboxes" }),
+    network: { mode: "deny" },
+    resources: { memoryMb: 512, cpus: 1, diskGb: 2 },
+  },
+})
+```
+
+`kubernetesSandbox({ image, namespace?, storageClass?, startupTimeoutMs? })` implements the same `SandboxProvider` contract as `dockerSandbox` — every `security`, `network`, and `resources` field on `SandboxConfig` means the same thing regardless of which provider is configured.
+
+**Per thread:** a Pod plus a per-thread `ReadWriteOnce` PersistentVolumeClaim mounted at `/workspace`, mirroring the Docker provider's named-volume persistence. `release()` deletes the Pod but keeps the PVC, so the next turn's `acquire()` schedules a fresh Pod against the existing claim with the workspace intact. `destroy()` deletes both the Pod and the PVC, discarding the workspace permanently — the same lifecycle semantics as the Docker provider's container/volume split, just on Kubernetes' own objects.
+
+**Auth:** the provider talks to the Kubernetes API using `@kubernetes/client-node`'s `loadFromDefault()`, which auto-detects an in-cluster ServiceAccount token when the Dawn server itself runs as a Pod, or a local kubeconfig otherwise. The in-cluster token path is the documented production setup.
+
+**Sizing:** `resources.diskGb` sets the PVC's storage request. It's new to this provider — `dockerSandbox` ignores it, since Docker volumes aren't quota-bound the same way.
+
+### Security hardening on Kubernetes
+
+The `security` intent maps onto the Pod and container `SecurityContext` fields instead of `docker run` flags, but the defaults and opt-outs are identical to the table in [Security hardening](#security-hardening):
+
+| Control | Kubernetes mechanism |
+| --- | --- |
+| Non-root user | `securityContext.fsGroup` — kubelet recursively `chown`s the PVC to the given gid on mount, so there's no chown-init container and no root step at all |
+| Read-only root filesystem | `readOnlyRootFilesystem: true` on the container `SecurityContext`, plus `emptyDir` volumes mounted at `/tmp` and `/run` for scratch space |
+| Dropped capabilities | `capabilities.drop: ["ALL"]` |
+| Privilege escalation | `allowPrivilegeEscalation: false` |
+| Seccomp | `seccompProfile: { type: "RuntimeDefault" }` by default |
+
+Sandbox Pods also set `automountServiceAccountToken: false`, so a compromised sandbox process has no Kubernetes API credentials to steal — it can't call the cluster API even if it escapes the container boundary.
+
+`pidsLimit` is **not** enforced by this provider — Kubernetes has no per-Pod process-count field equivalent to Docker's `--pids-limit`. Fork-bomb defense on Kubernetes is delegated to a cluster-side `LimitRange`, shipped in a follow-up Helm chart rather than set by the provider itself.
+
+### Network policy on Kubernetes
+
+The same `network` config (`{ mode: "deny", allowlist? }` or `{ mode: "allow", denylist? }`) is honored, but enforcement is a Kubernetes `NetworkPolicy` object rather than a container network mode:
+
+- **`{ mode: "deny" }`** — the provider creates a per-thread `NetworkPolicy` that denies all egress from the sandbox Pod except to cluster DNS and any CIDRs listed in `allowlist`.
+- **`{ mode: "allow" }`** — no `NetworkPolicy` is created, so egress is open by default; a `denylist`, if given, is best-effort only and not enforced — the same honest-scope caveat as the Docker provider's `allow`-mode denylist.
+
+<Callout type="warn" title="NetworkPolicy needs a policy-capable CNI">
+  A Kubernetes `NetworkPolicy` object is inert unless the cluster's CNI plugin enforces it — Calico and Cilium do; some CNIs silently ignore `NetworkPolicy` entirely. `dawn check` runs this provider's `preflight()`, which warns when it can't confirm the cluster's CNI enforces `NetworkPolicy`, but it can't guarantee enforcement the way `--network none` does for Docker's `deny` mode. Confirm your cluster's CNI supports `NetworkPolicy` before relying on `deny` mode as a hard boundary.
+</Callout>
+
+Kubernetes Pod isolation is the same boundary class as Docker's container isolation, not a microVM — the same caveats in [What it is — and isn't](#what-it-is--and-isnt) apply. The namespace, RBAC, default-deny `NetworkPolicy`, `LimitRange`, and PVC-reaper Helm charts that harden a cluster for running sandbox Pods are a separate, follow-up piece of work, not part of the provider itself.
+
 ## Subagents
 
 A subagent dispatch runs under the same conversation thread as its parent, so it resolves to and shares the parent's sandbox — the coordinator and its subagents operate in one isolated environment, not one each.
@@ -175,6 +229,8 @@ Use it in harness-driven tests the same way you'd test any other agent route —
 **Is not:** a guarantee against container-escape zero-days. Dropped capabilities, a non-root user, a read-only root filesystem, and deny-mode networking materially raise the bar an attacker has to clear, but this remains Docker's isolation boundary, not a microVM. That's why the hardening is expressed as a provider-agnostic `SandboxPolicy.security` intent rather than a Docker-specific flag set: a gVisor-, Kata-, or cloud-microVM-backed provider satisfies the same seam with a stronger underlying substrate, as a drop-in replacement with no change to your app code. The `allow`-mode denylist is best-effort in the Docker reference; it does not stop an agent exfiltrating its own sandbox's data under `allow` mode. And the sandbox does not govern tool *surface* — that's [tool scoping](/docs/tools)'s job (`agent({ tools })`); the sandbox and tool scoping are complementary layers, not substitutes for each other.
 
 Dawn ships the isolation seam plus a Docker reference. For hostile-grade multi-tenant isolation, plug in a microVM-backed provider.
+
+The Kubernetes provider carries two of its own scope notes: its `deny`-mode `NetworkPolicy` only enforces egress control on a policy-capable CNI (Calico, Cilium) — a CNI that ignores `NetworkPolicy` leaves the Pod's network open regardless of config, which is why `dawn check` warns rather than guarantees; and its `pidsLimit` is not enforced at all by the provider, left to a cluster-side `LimitRange` in the follow-up Helm charts instead.
 
 ## Related
 

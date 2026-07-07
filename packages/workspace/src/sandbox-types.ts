@@ -17,6 +17,8 @@ export interface SandboxPolicy {
     readonly memoryMb?: number
     readonly cpus?: number
     readonly timeoutMs?: number
+    /** Per-thread workspace volume size in GiB (PVC providers, e.g. Kubernetes). Docker ignores it. */
+    readonly diskGb?: number
   }
   readonly security?: SandboxSecurityPolicy
 }
@@ -65,8 +67,12 @@ export interface SandboxProvider {
   release(threadId: string): Promise<void>
   /** Destroy the sandbox AND its workspace volume (thread delete). */
   destroy(threadId: string): Promise<void>
-  /** Optional availability probe surfaced by `dawn check`. */
-  preflight?(): Promise<{ readonly ok: boolean; readonly detail?: string }>
+  /** Optional availability probe surfaced by `dawn check`. `warnings` are non-fatal notes (e.g. best-effort enforcement). */
+  preflight?(): Promise<{
+    readonly ok: boolean
+    readonly detail?: string
+    readonly warnings?: readonly string[]
+  }>
 }
 
 export interface SandboxConfig {

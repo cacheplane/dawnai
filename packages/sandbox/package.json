@@ -40,7 +40,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn-ai/workspace": "workspace:*"
+    "@dawn-ai/workspace": "workspace:*",
+    "@kubernetes/client-node": "^1.4.0"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
