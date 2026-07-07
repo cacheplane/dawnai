@@ -421,6 +421,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
+      '@dawn-ai/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@testcontainers/postgresql':
         specifier: ^12.0.4
         version: 12.0.4
