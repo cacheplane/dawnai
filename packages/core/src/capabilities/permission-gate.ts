@@ -231,8 +231,9 @@ const CONSTRAINT_FAILED_REASON =
  * (tools.constrain). The predicate returns `true` (allow), a string (deny — the
  * string is returned as the tool result, matching wrapToolWithApproval's
  * return-not-throw contract), or `{ approve: true }` (escalate to the HITL gate
- * via gateToolOp). A predicate that THROWS fails closed (deny) — a broken policy
- * never silently allows. Per-call identity (signal/threadId/params) is read from
+ * via gateToolOp). A predicate that throws OR returns any off-contract value
+ * (false, undefined, `{ approve: false }`, …) fails closed (deny) — a broken
+ * policy never silently allows. Per-call identity (signal/threadId/params) is read from
  * the LIVE run context, never closed over, so the wrapper is safe inside the
  * per-descriptor-cached agent. `routeId` and `predicate` are stable per descriptor
  * and closed over.
