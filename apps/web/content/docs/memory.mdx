@@ -80,7 +80,7 @@ export default defineMemory({
 - **`kind`** — `"semantic" | "episodic" | "procedural" | "reflection"`. Only `"semantic"` is wired end-to-end today; the other three are typed but deferred.
 - **`scope`** — a subset of `["workspace", "route", "tenant", "user", "agent"]`. The dimensions a memory is partitioned by; `["workspace", "route"]` namespaces records to the app *and* the specific route, so two routes never read each other's memories.
 - **`schema`** — a Zod schema describing your fact shape.
-- **`identity?`** — the keys used for write reconciliation (in `auto` mode). Defaults to `["subject", "predicate"]`.
+- **`identity?`** — the keys used for write reconciliation (in `auto` and `ask` modes). Defaults to `["subject", "predicate"]`.
 
 <Callout type="info" title="Deterministic recall">
   Recall is deterministic: an IDF-weighted keyword match blended with recency and confidence, over a SQLite store — no FTS5, embedding model, or network call in the path. The same query against the same store returns the same rows in the same order, which keeps evals and fixtures stable (and replayable under aimock).
