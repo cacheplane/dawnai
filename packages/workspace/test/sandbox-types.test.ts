@@ -4,6 +4,7 @@ import type {
   SandboxHandle,
   SandboxPolicy,
   SandboxProvider,
+  SandboxSecurityPolicy,
 } from "../src/sandbox-types.ts"
 import type { ExecBackend, FilesystemBackend } from "../src/types.ts"
 
@@ -38,5 +39,23 @@ describe("sandbox contract types", () => {
     expect(h.threadId).toBe("t1")
     const cfg: SandboxConfig = { provider }
     expect(cfg.provider.name).toBe("noop")
+  })
+})
+
+describe("sandbox security intent", () => {
+  test("security is optional on the policy and config, with all-optional fields", () => {
+    const sec: SandboxSecurityPolicy = {
+      dropAllCapabilities: true,
+      noNewPrivileges: true,
+      readOnlyRootFilesystem: false,
+      runAsNonRoot: { uid: 1000, gid: 1000 },
+      pidsLimit: 256,
+    }
+    const policy: SandboxPolicy = { network: { mode: "deny" }, security: sec }
+    expect(policy.security?.pidsLimit).toBe(256)
+    const off: SandboxPolicy = { network: { mode: "deny" }, security: { runAsNonRoot: false } }
+    expect(off.security?.runAsNonRoot).toBe(false)
+    const cfg: SandboxConfig = { provider: {} as never, security: sec }
+    expect(cfg.security).toBe(sec)
   })
 })

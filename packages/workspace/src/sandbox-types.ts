@@ -18,6 +18,26 @@ export interface SandboxPolicy {
     readonly cpus?: number
     readonly timeoutMs?: number
   }
+  readonly security?: SandboxSecurityPolicy
+}
+
+/**
+ * Provider-agnostic hardening intent. Each provider translates these to its own
+ * mechanism; a field left unset means the provider applies its SECURE default
+ * (all of these default ON/hardened at the Docker provider). Authors relax
+ * explicitly. See the sandbox-hardening spec.
+ */
+export interface SandboxSecurityPolicy {
+  /** Drop all Linux capabilities. Secure default: true. */
+  readonly dropAllCapabilities?: boolean
+  /** Block setuid/setgid privilege escalation. Secure default: true. */
+  readonly noNewPrivileges?: boolean
+  /** Immutable root filesystem (workspace + scratch stay writable). Secure default: true. */
+  readonly readOnlyRootFilesystem?: boolean
+  /** Run as non-root. Secure default: true → uid/gid 1000:1000. `false` = image default (often root). */
+  readonly runAsNonRoot?: boolean | { readonly uid: number; readonly gid: number }
+  /** Max process count (fork-bomb defense). Secure default: 512. */
+  readonly pidsLimit?: number
 }
 
 export interface SandboxHandle {
@@ -54,6 +74,7 @@ export interface SandboxConfig {
   readonly network?: SandboxPolicy["network"]
   readonly env?: SandboxPolicy["env"]
   readonly resources?: SandboxPolicy["resources"]
+  readonly security?: SandboxSecurityPolicy
   /** Manager-level idle reap window. Default 600_000 (10 min). */
   readonly idleTimeoutMs?: number
 }
