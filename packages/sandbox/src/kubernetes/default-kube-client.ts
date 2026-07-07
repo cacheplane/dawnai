@@ -2,7 +2,7 @@
  * KubeConfig.loadFromDefault() auto-detects in-cluster ServiceAccount token vs
  * ~/.kube/config. Unit tests never construct this — they inject a fake KubeClient. */
 
-import { Writable } from "node:stream"
+import { Readable, Writable } from "node:stream"
 import {
   ApiException,
   AuthorizationV1Api,
@@ -97,8 +97,12 @@ function toPvcManifest(s: KubePvcSpec): V1PersistentVolumeClaim {
 }
 
 /** `mode` is always "deny" in this provider (allow-mode emits no policy). Deny =
- * block all egress except a DNS carve-out plus any allowlisted CIDRs. */
+ * block all egress except a DNS carve-out plus any allowlisted CIDRs. The manifest
+ * below encodes ONLY deny semantics — guard against a future allow-mode caller. */
 function toNetworkPolicyManifest(s: KubeNetworkPolicySpec): V1NetworkPolicy {
+  if (s.mode !== "deny") {
+    throw new Error(`toNetworkPolicyManifest only builds deny-mode policies; got mode "${s.mode}".`)
+  }
   const dnsEgress = {
     ports: [
       { protocol: "UDP", port: 53 },
@@ -207,8 +211,34 @@ export function createDefaultKubeClient(): KubeClient {
       const stdout = collect()
       const stderr = collect()
       let settledStatus: V1Status | undefined
+      // The library sends a close-stdin frame when the readable ends, giving the
+      // in-pod process (e.g. `cat > file`) a clean EOF. null = no stdin.
+      const stdin = opts.stdin !== undefined ? Readable.from(Buffer.from(opts.stdin, "utf8")) : null
 
-      const execPromise = new Promise<void>((resolve, reject) => {
+      const signal = opts.signal
+      // `ws` is untyped (the resolved WebSocket has no shipped types); track it so
+      // an abort can close the socket and tear down the orphaned in-pod process.
+      let socket: { close(): void } | undefined
+      let settled = false
+
+      await new Promise<void>((resolve, reject) => {
+        const finish = (fn: () => void): void => {
+          if (settled) return
+          settled = true
+          signal?.removeEventListener("abort", onAbort)
+          fn()
+        }
+        const onAbort = (): void => {
+          socket?.close()
+          finish(() => reject(new Error("Kubernetes exec aborted.")))
+        }
+
+        if (signal?.aborted) {
+          onAbort()
+          return
+        }
+        signal?.addEventListener("abort", onAbort, { once: true })
+
         execClient
           .exec(
             ns,
@@ -217,34 +247,29 @@ export function createDefaultKubeClient(): KubeClient {
             [...argv],
             stdout.stream,
             stderr.stream,
-            null,
+            stdin,
             false,
             (status) => {
               settledStatus = status
             },
           )
           .then((ws) => {
-            ws.on("close", () => resolve())
+            socket = ws
+            // Aborted between scheduling and connecting: close the fresh socket.
+            if (signal?.aborted) {
+              ws.close()
+              return
+            }
+            ws.on("close", () => finish(() => resolve()))
             ws.on("error", (event: unknown) => {
-              reject(event instanceof Error ? event : new Error("Kubernetes exec socket error."))
+              finish(() =>
+                reject(event instanceof Error ? event : new Error("Kubernetes exec socket error.")),
+              )
             })
           })
-          .catch(reject)
-
-        if (opts.signal) {
-          if (opts.signal.aborted) {
-            reject(new Error("Kubernetes exec aborted."))
-            return
-          }
-          opts.signal.addEventListener(
-            "abort",
-            () => reject(new Error("Kubernetes exec aborted.")),
-            { once: true },
-          )
-        }
+          .catch((error: unknown) => finish(() => reject(error)))
       })
 
-      await execPromise
       return {
         stdout: stdout.text(),
         stderr: stderr.text(),
