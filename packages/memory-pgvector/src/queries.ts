@@ -64,7 +64,7 @@ export function rowToRecord(row: Record<string, unknown>): MemoryRecord {
 
 // Codepoint compare — matches the sqlite backend's BINARY-collation ordering,
 // independent of Postgres's locale-sensitive collation (id ASC tiebreaks are
-// applied in JS, so ordering is byte-identical across backends).
+// applied in JS, so ordering is the same across backends).
 export function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
 }

@@ -27,10 +27,16 @@ unless stated. "Smarter recall" touches exactly one function inside L3.
 - `sqlite-store.ts` — `sqliteMemoryStore()`: schema/migrations (v1 tokens, v2 embedding cols), tokenized index, hybrid `search()`.
 - `score.ts` — pure recall scoring: `idf()`, `scoreMemory()`, exported `recencyDecay()` (reused by the hybrid second stage), `RecallRankingOptions` + defaults.
 - `vector.ts` — pure vector primitives: `cosineSimilarity()`, `fuseRRF()` (Reciprocal Rank Fusion), `RankedList`, `DEFAULT_RRF_K` / `DEFAULT_VECTOR_K`. No I/O, no clock — deterministic for aimock/replay.
+- `hybrid.ts` — the **shared, backend-agnostic ranking core**: `rankKeywordCandidates()` (IDF relevance over a store-supplied candidate pool + df/N stats) and `fuseHybrid()` (co-equal RRF over a keyword list and a vector list + the bounded recency/confidence second stage). Pure — no I/O, no clock. Both stores call it after doing their own retrieval, so recall ordering is the same across backends.
 - `tokenize.ts` — lowercase / split / drop-1-char / **dedupe** → tokens.
 - `namespace.ts` — `serializeNamespace()` + `MemoryScopeTuple`.
 - `reconcile.ts` — `classifyWrite()` (deterministic add/update/supersede).
-- `index.ts` — barrel.
+- `index.ts` — barrel (also re-exports `rankKeywordCandidates` / `fuseHybrid`).
+
+**`@dawn-ai/memory-pgvector`** — the Tier-2 Postgres + pgvector `MemoryStore` backend (production / multi-instance):
+- `schema.ts` — `vectorColumnDef()` (the pure `vector` ≤2000 / `halfvec` ≤4000 dimension branch + cosine ops) and idempotent `initSchema()` (extension, tables, token indexes, HNSW index).
+- `pgvector-store.ts` — `pgvectorMemoryStore()`: a full `MemoryStore` over a `pg` pool. Retrieves in SQL (HNSW `<=>` cosine top-K vector list + a token-matched keyword pool with live df/N), then ranks through the shared `rankKeywordCandidates` / `fuseHybrid` core — same ordering as sqlite. Lazy idempotent schema init; `close()` ends the pool.
+- `queries.ts` — SQL strings + `rowToRecord` / `pageAndTagFilter` (mirrors the sqlite bodies).
 
 **`@dawn-ai/sdk`**
 - `memory.ts` — `defineMemory({ kind, scope, schema, identity? })` (author API).
@@ -50,7 +56,7 @@ unless stated. "Smarter recall" touches exactly one function inside L3.
 **`@dawn-ai/langchain`**
 - `agent-adapter.ts` — materializes the agent; folds the fragment `cacheKey` into the materialize cache.
 
-**`@dawn-ai/testing`** — `seedMemory()`. **`@dawn-ai/evals`** — `memoryRecalled`/`memoryFresh`/`memoryIsolated` scorers.
+**`@dawn-ai/testing`** — `seedMemory()` + `runMemoryStoreConformance()` (the shared `MemoryStore` contract kit; see §4). **`@dawn-ai/evals`** — `memoryRecalled`/`memoryFresh`/`memoryIsolated` scorers.
 
 ## 3. The data model
 
@@ -150,6 +156,19 @@ embedding, with the same stable `updated_at, id` tiebreak. The store never embed
 capability supplies `queryEmbedding`; the store persists `{embedding, embeddingModel}` passed
 to `put`. Store-side default tuning comes from `sqliteMemoryStore({ vector })`, overridable
 per-query via `q.vector`.
+
+**The ranking core is shared, not per-store (`hybrid.ts`).** The two reusable pure pieces of
+the ranked path above — IDF relevance over a candidate pool, and RRF fusion + the recency/
+confidence second stage — live in `hybrid.ts` as `rankKeywordCandidates()` and `fuseHybrid()`.
+`sqlite-store.ts` does its retrieval (SQL over `node:sqlite`) and then calls them; the
+`@dawn-ai/memory-pgvector` store does *its* retrieval (HNSW `<=>` cosine top-K + a token-matched
+keyword pool over `pg`) and calls the **same** functions. So a backend can only change *where
+data lives and how it is retrieved*, never *how results are ranked* — recall ordering is the
+same across sqlite and pgvector. This parity is enforced, not just asserted: the shared
+`runMemoryStoreConformance()` kit (`@dawn-ai/testing`) runs one `MemoryStore` contract (put/get,
+namespace isolation, query-less recency, supersede, candidate listing, the hybrid/vector-recall
+cases) against **sqlite** in-process on every run, and against **real pgvector** in a gated
+Testcontainers lane (`DAWN_TEST_PGVECTOR=1`, `pgvector/pgvector:pg16`; skipped otherwise).
 
 **`classifyWrite()` (`reconcile.ts`)** decides add/update/supersede deterministically by
 comparing the incoming record's identity key (default `["subject","predicate"]`) against
@@ -273,15 +292,18 @@ Shipped: the `semantic` kind with ranked keyword recall — IDF-weighted relevan
 recency decay and stored confidence — **plus opt-in hybrid vector recall** (keyword ∪ vector,
 RRF-fused, bounded recency/confidence second stage; see §4). Vector recall is enabled by
 supplying `DawnConfig.memory.vector.embedder`; absent, recall is the unchanged keyword path.
-Explicitly deferred (spec §"Out of scope"):
+The **Tier-2 Postgres / pgvector store backend** (`@dawn-ai/memory-pgvector`) also ships now:
+HNSW + cosine retrieval in SQL, the same shared ranking core, dimension branch (`vector` ≤2000 /
+`halfvec` ≤4000), enabled via `config.memory.store` (see §4). Explicitly still deferred (spec
+§"Out of scope"):
 
 - `episodic` / `procedural` / `reflection` kinds; episodic-from-traces; background consolidation.
 - BM25/FTS5 (term frequency is not stored).
-- Faster ANN over the local store — a `sqlite-vec` middle tier — before reaching for Postgres.
-  Vector recall today is brute-force cosine in JS over Float32 BLOBs (fine for typical
-  per-namespace corpora; linear in matching rows).
-- Postgres / **pgvector** store adapter (Tier-2 backend for large corpora; the `MemoryStore` +
-  pluggable `Embedder` interfaces leave room).
+- Faster ANN over the *local* store — a `sqlite-vec` middle tier. Vector recall on the sqlite
+  backend is brute-force cosine in JS over Float32 BLOBs (fine for typical per-namespace corpora;
+  linear in matching rows); the pgvector backend already uses an HNSW index for larger corpora.
+- pgvector follow-ups: `pgvectorscale` / DiskANN indexing, and pushing the RRF fusion down into
+  SQL (today pgvector retrieves both lists and fuses in the shared JS core).
 - Memory graph (edges/relations).
 - Dev-server Memory Inspector UI (no dev UI host exists today).
 - Schema-typed `remember.data` in typegen.
