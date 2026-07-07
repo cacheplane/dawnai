@@ -61,7 +61,9 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
       loadedConfig = {}
     }
 
-    const sandboxErrors = await collectSandboxErrors(loadedConfig)
+    const { errors: sandboxErrors, warnings: sandboxWarnings } =
+      await collectSandboxErrors(loadedConfig)
+    for (const w of sandboxWarnings) console.warn(`⚠ sandbox: ${w}`)
     if (sandboxErrors.length > 0) {
       throw new CliError(`Invalid sandbox config:\n${sandboxErrors.join("\n")}`)
     }

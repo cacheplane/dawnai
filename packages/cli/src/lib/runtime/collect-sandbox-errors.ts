@@ -4,10 +4,11 @@ import type { SandboxProvider } from "@dawn-ai/workspace"
 /** Validate the dawn.config.ts sandbox block + run the provider preflight. */
 export async function collectSandboxErrors(
   config: Pick<DawnConfig, "sandbox">,
-): Promise<readonly string[]> {
+): Promise<{ readonly errors: readonly string[]; readonly warnings: readonly string[] }> {
   const sandbox = config.sandbox
-  if (!sandbox) return []
+  if (!sandbox) return { errors: [], warnings: [] }
   const errors: string[] = []
+  const warnings: string[] = []
   const p = sandbox.provider as Partial<SandboxProvider> | undefined
   if (
     !p ||
@@ -18,7 +19,7 @@ export async function collectSandboxErrors(
     errors.push(
       `dawn.config sandbox.provider must implement acquire/release/destroy (got: ${p?.name ?? "undefined"}).`,
     )
-    return errors
+    return { errors, warnings }
   }
   if (typeof p.preflight === "function") {
     try {
@@ -27,6 +28,8 @@ export async function collectSandboxErrors(
         errors.push(
           `Sandbox provider "${p.name}" preflight failed: ${result.detail ?? "unavailable"}.`,
         )
+      } else if (result.warnings) {
+        warnings.push(...result.warnings)
       }
     } catch (error) {
       errors.push(
@@ -54,5 +57,5 @@ export async function collectSandboxErrors(
       }
     }
   }
-  return errors
+  return { errors, warnings }
 }
