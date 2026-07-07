@@ -224,7 +224,7 @@ export function wrapToolWithApproval<
 }
 
 const CONSTRAINT_FAILED_REASON =
-  "Blocked: the tool's argument constraint check failed (the policy predicate threw). Not run."
+  "Blocked: the tool's argument constraint check failed (the policy predicate threw or returned an invalid verdict). Not run."
 
 /**
  * Wrap a tool so each call is first evaluated by an argument-constraint predicate
@@ -271,10 +271,19 @@ export function wrapToolWithConstraint<
       }
       if (verdict === true) return tool.run(input, context)
       if (typeof verdict === "string") return verdict
-      // verdict is { approve: true, reason? } — escalate to the HITL gate.
-      const gate = await gateToolOp(permissions, tool.name, buildArgsPreview(input))
-      if (!gate.allowed) return gate.reason
-      return tool.run(input, context)
+      // Escalate to HITL ONLY on a genuine { approve: true } verdict.
+      if (
+        typeof verdict === "object" &&
+        verdict !== null &&
+        (verdict as { approve?: unknown }).approve === true
+      ) {
+        const gate = await gateToolOp(permissions, tool.name, buildArgsPreview(input))
+        if (!gate.allowed) return gate.reason
+        return tool.run(input, context)
+      }
+      // Any other value (false, undefined, { approve: false }, a number, …) is
+      // off-contract — fail closed rather than silently escalate or allow.
+      return CONSTRAINT_FAILED_REASON
     },
   }
 }

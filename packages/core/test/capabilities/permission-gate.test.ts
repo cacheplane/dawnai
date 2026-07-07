@@ -328,6 +328,25 @@ describe("wrapToolWithConstraint", () => {
     expect(ran).toBe(false)
     expect(String(result)).toMatch(/denied.*deployProd/i)
   })
+
+  it("fails closed on an off-contract verdict (false / undefined / {approve:false})", async () => {
+    for (const bad of [() => false, () => undefined, () => ({ approve: false })]) {
+      let ran = false
+      const tool = {
+        name: "deployProd",
+        run: async () => {
+          ran = true
+          return "ran"
+        },
+      }
+      // permissions omitted (undefined) — if this WRONGLY escalated it would still
+      // not throw, but the result would not be the constraint-failed string.
+      const wrapped = wrapToolWithConstraint(tool, bad as never, undefined, "/ops#agent")
+      const result = await wrapped.run({}, { signal: new AbortController().signal })
+      expect(ran).toBe(false)
+      expect(String(result)).toMatch(/constraint check failed/i)
+    }
+  })
 })
 
 describe("gateMemorySupersede", () => {
