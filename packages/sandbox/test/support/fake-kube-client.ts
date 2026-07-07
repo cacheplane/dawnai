@@ -45,7 +45,10 @@ export function fakeKubeClient(
         ? { stdout: "", stderr: "cat: no such file", exitCode: 1 }
         : { stdout: f, stderr: "", exitCode: 0 }
     }
-    const writeMatch = script.match(/^cat > '(.+)'$/)
+    // kubeFilesystem/dockerFilesystem's writeFile emits either the bare
+    // `cat > 'path'` or the compound `mkdir -p "$(dirname 'path')" && cat > 'path'`
+    // (to ensure parent dirs exist); match both forms.
+    const writeMatch = script.match(/^(?:mkdir -p "\$\(dirname '.+'\)" && )?cat > '(.+)'$/)
     const writePath = writeMatch?.[1]
     if (writePath !== undefined) {
       files.set(writePath, stdin ?? "")
