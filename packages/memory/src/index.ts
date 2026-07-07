@@ -19,3 +19,10 @@ export type {
   MemoryStatus,
   MemoryStore,
 } from "./types.js"
+export {
+  cosineSimilarity,
+  DEFAULT_RRF_K,
+  DEFAULT_VECTOR_K,
+  fuseRRF,
+  type RankedList,
+} from "./vector.js"
