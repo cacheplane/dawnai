@@ -522,4 +522,48 @@ describe("sqliteMemoryStore", () => {
     expect(out.map((r) => r.id)).toContain("sub")
     expect(out[0]?.id).toBe("sub")
   })
+
+  it("hybrid: a NaN tuning weight degrades to the default (no NaN-poisoned ordering)", async () => {
+    const seed = async (store: ReturnType<typeof sqliteMemoryStore>) => {
+      await store.put(
+        rec({
+          id: "sem",
+          namespace: "ns",
+          content: "faster shipping preferred",
+          updatedAt: "2026-07-01T00:00:00.000Z",
+        }),
+        { embedding: vec(1, 0, 0), embeddingModel: EM },
+      )
+      await store.put(
+        rec({
+          id: "kw",
+          namespace: "ns",
+          content: "acme billing threshold",
+          updatedAt: "2026-07-01T00:00:00.000Z",
+        }),
+        { embedding: vec(0, 1, 0), embeddingModel: EM },
+      )
+    }
+    const query = {
+      namespace: "ns",
+      query: "expedite delivery",
+      queryEmbedding: vec(0.95, 0.05, 0),
+      embedderId: EM,
+      now: "2026-07-05T00:00:00.000Z",
+    } as const
+
+    const baseline = sqliteMemoryStore({ path: ":memory:" })
+    await seed(baseline)
+    const expected = (await baseline.search(query)).map((r) => r.id)
+
+    const nan = sqliteMemoryStore({ path: ":memory:" })
+    await seed(nan)
+    const withNaN = (await nan.search({ ...query, vector: { recencyWeight: Number.NaN } })).map(
+      (r) => r.id,
+    )
+
+    // A NaN weight must not poison the score → same finite ordering as the default.
+    expect(withNaN).toEqual(expected)
+    expect(withNaN[0]).toBe("sem")
+  })
 })

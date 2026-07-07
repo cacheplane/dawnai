@@ -347,8 +347,14 @@ export function sqliteMemoryStore(opts: {
           typeof v.vectorK === "number" && Number.isFinite(v.vectorK) && v.vectorK > 0
             ? Math.floor(v.vectorK)
             : DEFAULT_VECTOR_K
-        const wKeyword = typeof v.weights?.keyword === "number" ? v.weights.keyword : 1
-        const wVector = typeof v.weights?.vector === "number" ? v.weights.vector : 1
+        const wKeyword =
+          typeof v.weights?.keyword === "number" && Number.isFinite(v.weights.keyword)
+            ? v.weights.keyword
+            : 1
+        const wVector =
+          typeof v.weights?.vector === "number" && Number.isFinite(v.weights.vector)
+            ? v.weights.vector
+            : 1
 
         // Keyword-ranked ids: reuse the ranked pool, ordered by relevance ONLY.
         const kwRecords = rankKeyword(q, baseSql, baseParams, terms, {
@@ -400,9 +406,18 @@ export function sqliteMemoryStore(opts: {
           typeof v.rrfK === "number" ? { k: v.rrfK } : undefined,
         )
 
-        const wRec = typeof v.recencyWeight === "number" ? v.recencyWeight : 0.3
-        const wConf = typeof v.confidenceWeight === "number" ? v.confidenceWeight : 0.1
-        const referenceNow = q.now ?? [...byId.values()][0]?.updatedAt ?? ""
+        const wRec =
+          typeof v.recencyWeight === "number" && Number.isFinite(v.recencyWeight)
+            ? v.recencyWeight
+            : 0.3
+        const wConf =
+          typeof v.confidenceWeight === "number" && Number.isFinite(v.confidenceWeight)
+            ? v.confidenceWeight
+            : 0.1
+        // Match the non-hybrid path: the data-derived recency reference is the
+        // NEWEST record's updatedAt (ISO strings compare chronologically).
+        const referenceNow =
+          q.now ?? [...byId.values()].reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), "")
         const fused = [...byId.values()].map((record) => {
           const base = rrf.get(record.id) ?? 0
           const rec2 = recencyDecay(record.updatedAt, referenceNow, v.recencyHalfLifeMs)
