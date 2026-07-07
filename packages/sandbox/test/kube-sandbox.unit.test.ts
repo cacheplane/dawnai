@@ -1,10 +1,24 @@
 import type { SandboxPolicy } from "@dawn-ai/workspace"
 import { expect, test } from "vitest"
+import type { KubePodSpec } from "../src/kubernetes/kube-client.ts"
 import { kubernetesSandbox } from "../src/kubernetes/kube-sandbox.ts"
 import { fakeKubeClient } from "./support/fake-kube-client.ts"
 
 const signal = () => new AbortController().signal
 const policy: SandboxPolicy = { network: { mode: "allow" } }
+
+const seedSpec = (name: string): KubePodSpec => ({
+  name,
+  image: "i",
+  labels: {},
+  pvcName: "dawn-sbx-vol-t",
+  env: [],
+  limits: {},
+  podSecurityContext: {},
+  containerSecurityContext: {},
+  readOnlyRootFilesystem: true,
+  automountServiceAccountToken: false,
+})
 
 test("acquire creates PVC + Pod with hardened SecurityContext and fsGroup", async () => {
   const k = fakeKubeClient()
@@ -14,11 +28,16 @@ test("acquire creates PVC + Pod with hardened SecurityContext and fsGroup", asyn
   expect(pod).toBeTruthy()
   expect(k.pvcs.has("dawn-sbx-vol-t1")).toBe(true)
   expect(pod?.spec.podSecurityContext).toMatchObject({
-    runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000,
-    fsGroupChangePolicy: "OnRootMismatch", seccompProfile: { type: "RuntimeDefault" },
+    runAsNonRoot: true,
+    runAsUser: 1000,
+    runAsGroup: 1000,
+    fsGroup: 1000,
+    fsGroupChangePolicy: "OnRootMismatch",
+    seccompProfile: { type: "RuntimeDefault" },
   })
   expect(pod?.spec.containerSecurityContext).toMatchObject({
-    allowPrivilegeEscalation: false, readOnlyRootFilesystem: true,
+    allowPrivilegeEscalation: false,
+    readOnlyRootFilesystem: true,
     capabilities: { drop: ["ALL"] },
   })
   expect(pod?.spec.labels["dawn.sh/thread"]).toBe("t1")
@@ -29,7 +48,9 @@ test("runAsNonRoot:false omits user/fsGroup (image default)", async () => {
   const k = fakeKubeClient()
   const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
   await p.acquire({
-    threadId: "t", policy: { ...policy, security: { runAsNonRoot: false } }, signal: signal(),
+    threadId: "t",
+    policy: { ...policy, security: { runAsNonRoot: false } },
+    signal: signal(),
   })
   const sc = k.pods.get("dawn-sbx-t")?.spec.podSecurityContext
   expect(sc?.runAsUser).toBeUndefined()
@@ -59,6 +80,45 @@ test("release deletes the pod but keeps the PVC; destroy removes both", async ()
 test("diskGb sets the PVC storage size", async () => {
   const k = fakeKubeClient()
   const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
-  await p.acquire({ threadId: "t", policy: { ...policy, resources: { diskGb: 5 } }, signal: signal() })
+  await p.acquire({
+    threadId: "t",
+    policy: { ...policy, resources: { diskGb: 5 } },
+    signal: signal(),
+  })
   expect(k.pvcs.get("dawn-sbx-vol-t")?.spec.storageGi).toBe(5)
+})
+
+test("sanitize strips trailing dash from the thread label", async () => {
+  const k = fakeKubeClient()
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  await p.acquire({ threadId: "abc/", policy, signal: signal() })
+  const pod = k.pods.get("dawn-sbx-abc")
+  expect(pod?.spec.labels["dawn.sh/thread"]).toBe("abc")
+  expect(pod?.spec.labels["dawn.sh/thread"]?.endsWith("-")).toBe(false)
+})
+
+test("existing Pending pod is waited on, not recreated (no 409)", async () => {
+  // pendingReads:1 → the pre-seeded pod reports Pending on its first phase-read
+  // (which acquire's initial check sees), then Running on the next. The fake now
+  // throws 409 on any duplicate create, so the old fall-through code would fail.
+  const k = fakeKubeClient({ pendingReads: 1 })
+  await k.createNamespacedPvcIfAbsent("ns", { name: "dawn-sbx-vol-t", labels: {}, storageGi: 1 })
+  await k.createNamespacedPod("ns", seedSpec("dawn-sbx-t"))
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  await expect(p.acquire({ threadId: "t", policy, signal: signal() })).resolves.toBeTruthy()
+  expect(await k.readNamespacedPodPhase("ns", "dawn-sbx-t")).toBe("Running")
+})
+
+test("crashed (Failed) pod is deleted and replaced with a Running pod", async () => {
+  const k = fakeKubeClient()
+  await k.createNamespacedPvcIfAbsent("ns", { name: "dawn-sbx-vol-t", labels: {}, storageGi: 1 })
+  await k.createNamespacedPod("ns", seedSpec("dawn-sbx-t"))
+  const seeded = k.pods.get("dawn-sbx-t")
+  if (seeded) seeded.phase = "Failed"
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  await expect(p.acquire({ threadId: "t", policy, signal: signal() })).resolves.toBeTruthy()
+  const pod = k.pods.get("dawn-sbx-t")
+  expect(pod).toBeTruthy()
+  expect(pod).not.toBe(seeded) // a freshly recreated pod, not the crashed one
+  expect(await k.readNamespacedPodPhase("ns", "dawn-sbx-t")).toBe("Running")
 })

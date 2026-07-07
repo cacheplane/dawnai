@@ -10,7 +10,8 @@ const sanitize = (s: string) =>
     .toLowerCase()
     .replaceAll(/[^a-z0-9-]/g, "-")
     .replace(/^-+/, "")
-    .slice(0, 40) || "x"
+    .slice(0, 40)
+    .replace(/-+$/, "") || "x"
 const podName = (t: string) => `dawn-sbx-${sanitize(t)}`
 const pvcName = (t: string) => `dawn-sbx-vol-${sanitize(t)}`
 const netpolName = (t: string) => `dawn-sbx-net-${sanitize(t)}`
@@ -90,8 +91,19 @@ export function kubernetesSandbox(opts: KubernetesSandboxOptions): SandboxProvid
 
     const phase = await client.readNamespacedPodPhase(ns, name)
     if (phase === "Running") return name
+    if (phase === "Pending") {
+      // The keeper pod already exists but hasn't scheduled yet (slow scheduling,
+      // image pull, PVC binding, or a reattach mid-startup). Recreating it 409s on
+      // a real cluster, so wait it out rather than issue a duplicate create.
+      await waitForRunning(client, ns, name, startupTimeoutMs, signal)
+      return name
+    }
     if (phase === "Failed" || phase === "Succeeded" || phase === "Unknown") {
+      // A crashed/completed keeper: delete and wait for the name to free up. Real
+      // K8s deletion is async (the pod lingers Terminating holding its name), so
+      // recreating the same name immediately would 409.
       await client.deleteNamespacedPod(ns, name)
+      await waitForGone(client, ns, name, startupTimeoutMs, signal)
     }
 
     const { podSecurityContext, containerSecurityContext, readOnly, user } = resolveSecurity(policy)
@@ -163,12 +175,39 @@ async function waitForRunning(
     if (signal.aborted) throw new Error(`Sandbox acquire aborted for pod "${name}".`)
     const phase = await client.readNamespacedPodPhase(ns, name)
     if (phase === "Running") return
+    if (phase === null) {
+      throw new Error(
+        `Sandbox unavailable: pod "${name}" disappeared while starting. Run \`dawn check\`.`,
+      )
+    }
     if (phase === "Failed") {
       throw new Error(`Sandbox unavailable: pod "${name}" entered Failed. Run \`dawn check\`.`)
     }
     if (Date.now() > deadline) {
       throw new Error(
         `Sandbox unavailable: pod "${name}" not Running within ${timeoutMs}ms. Run \`dawn check\`.`,
+      )
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+}
+
+async function waitForGone(
+  client: KubeClient,
+  ns: string,
+  name: string,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (signal.aborted) {
+      throw new Error(`Sandbox acquire aborted while awaiting pod "${name}" deletion.`)
+    }
+    if ((await client.readNamespacedPodPhase(ns, name)) === null) return
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Sandbox unavailable: pod "${name}" still terminating after ${timeoutMs}ms. Run \`dawn check\`.`,
       )
     }
     await new Promise((r) => setTimeout(r, 250))

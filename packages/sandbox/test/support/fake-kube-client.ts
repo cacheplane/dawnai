@@ -10,6 +10,9 @@ interface FakePod {
   spec: KubePodSpec
   phase: PodPhase
   files: Map<string, string>
+  /** Remaining phase-reads that report "Pending" before the stored phase (models
+   * slow scheduling / image pull). Decremented on each readNamespacedPodPhase. */
+  pendingReads: number
 }
 
 /** In-memory KubeClient. Models pods, PVCs (as a filestore that survives pod
@@ -20,6 +23,7 @@ export function fakeKubeClient(
     readonly canICreate?: boolean
     readonly cniEnforced?: boolean | "unknown"
     readonly startPhase?: PodPhase // phase newly-created pods report (default "Running")
+    readonly pendingReads?: number // reads a fresh pod reports "Pending" before startPhase
   } = {},
 ): KubeClient & {
   readonly pods: Map<string, FakePod>
@@ -81,14 +85,24 @@ export function fakeKubeClient(
     pvcs,
     netpols,
     async readNamespacedPodPhase(_ns, name) {
-      return pods.get(name)?.phase ?? null
+      const pod = pods.get(name)
+      if (!pod) return null
+      if (pod.pendingReads > 0) {
+        pod.pendingReads -= 1
+        return "Pending"
+      }
+      return pod.phase
     },
     async createNamespacedPod(_ns, spec) {
+      if (pods.has(spec.name)) {
+        throw Object.assign(new Error(`pods "${spec.name}" already exists`), { code: 409 })
+      }
       const pvc = pvcs.get(spec.pvcName)
       pods.set(spec.name, {
         spec,
         phase: opts.startPhase ?? "Running",
         files: pvc?.files ?? new Map(),
+        pendingReads: opts.pendingReads ?? 0,
       })
     },
     async deleteNamespacedPod(_ns, name) {
