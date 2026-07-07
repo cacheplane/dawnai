@@ -458,6 +458,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../config-typescript
+      '@dawn-ai/langchain':
+        specifier: workspace:*
+        version: link:../langchain
       '@dawn-ai/testing':
         specifier: workspace:*
         version: link:../testing
