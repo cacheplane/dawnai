@@ -591,6 +591,32 @@ async function prepareRouteExecution(options: {
           ? { indexMaxEntries: loadedDawnConfig.memory.indexMaxEntries }
           : {}),
         ...(extraScope ? { extraScope } : {}),
+        // Vector recall: hand the capability the embedder (it embeds writes +
+        // queries) plus the hybrid tuning it threads into the store's search.
+        ...(loadedDawnConfig?.memory?.vector?.embedder
+          ? { embedder: loadedDawnConfig.memory.vector.embedder }
+          : {}),
+        ...(loadedDawnConfig?.memory?.vector
+          ? {
+              vector: {
+                ...(loadedDawnConfig.memory.vector.weights
+                  ? { weights: loadedDawnConfig.memory.vector.weights }
+                  : {}),
+                ...(loadedDawnConfig.memory.vector.rrfK !== undefined
+                  ? { rrfK: loadedDawnConfig.memory.vector.rrfK }
+                  : {}),
+                ...(loadedDawnConfig.memory.vector.vectorK !== undefined
+                  ? { vectorK: loadedDawnConfig.memory.vector.vectorK }
+                  : {}),
+                ...(loadedDawnConfig.memory.vector.recencyWeight !== undefined
+                  ? { recencyWeight: loadedDawnConfig.memory.vector.recencyWeight }
+                  : {}),
+                ...(loadedDawnConfig.memory.vector.confidenceWeight !== undefined
+                  ? { confidenceWeight: loadedDawnConfig.memory.vector.confidenceWeight }
+                  : {}),
+              },
+            }
+          : {}),
       })
     }
 

@@ -31,9 +31,26 @@ export interface MemoryQuery {
    *  Optional; when absent, recency is measured relative to the newest
    *  candidate's updatedAt (data-derived — the library never reads a clock). */
   readonly now?: string
+  /** When present, the store runs the hybrid path: keyword ∪ vector-nearest, RRF-fused. */
+  readonly queryEmbedding?: Float32Array
+  /** Only rows whose stored embedding_model equals this are vector-compared. */
+  readonly embedderId?: string
+  /** Hybrid tuning; all fields defaulted. */
+  readonly vector?: VectorRankingOptions
+}
+export interface VectorRankingOptions {
+  readonly weights?: { readonly keyword?: number; readonly vector?: number }
+  readonly rrfK?: number
+  readonly vectorK?: number
+  readonly recencyWeight?: number
+  readonly confidenceWeight?: number
+  readonly recencyHalfLifeMs?: number
 }
 export interface MemoryStore {
-  put(rec: MemoryRecord): Promise<void>
+  put(
+    rec: MemoryRecord,
+    opts?: { readonly embedding?: Float32Array; readonly embeddingModel?: string },
+  ): Promise<void>
   get(id: string): Promise<MemoryRecord | null>
   search(q: MemoryQuery): Promise<readonly MemoryRecord[]>
   update(id: string, patch: Partial<MemoryRecord>): Promise<void>

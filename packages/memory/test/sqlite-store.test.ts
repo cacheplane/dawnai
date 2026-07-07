@@ -350,4 +350,270 @@ describe("sqliteMemoryStore", () => {
     // no token filter — both records come back, newest first.
     expect(out.map((r) => r.id)).toEqual(["newer_unrelated", "older_match"])
   })
+
+  // --- vector / hybrid recall ---
+  const EM = "fake:test" // embedder id tag used by these tests
+  function vec(...xs: number[]) {
+    return new Float32Array(xs)
+  }
+
+  it("hybrid: a semantic-only match (0 shared words) is recalled via the vector list", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    // "delivery" query will share NO tokens with this content, but its vector is near.
+    await s.put(
+      rec({
+        id: "sem",
+        namespace: "ns",
+        content: "faster shipping preferred",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: vec(1, 0, 0), embeddingModel: EM },
+    )
+    await s.put(
+      rec({
+        id: "kw",
+        namespace: "ns",
+        content: "acme billing threshold",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: vec(0, 1, 0), embeddingModel: EM },
+    )
+    const out = await s.search({
+      namespace: "ns",
+      query: "expedite delivery", // shares no tokens with "sem"
+      queryEmbedding: vec(0.95, 0.05, 0),
+      embedderId: EM,
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    // "sem" enters ONLY via the vector list (no keyword overlap) and must be recalled.
+    expect(out.map((r) => r.id)).toContain("sem")
+    expect(out[0]?.id).toBe("sem")
+  })
+
+  it("hybrid: an exact keyword hit still ranks even with a poor vector", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    await s.put(
+      rec({
+        id: "exact",
+        namespace: "ns",
+        content: "order ALPHA-111 status shipped",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: vec(0, 0, 1), embeddingModel: EM },
+    )
+    await s.put(
+      rec({
+        id: "near",
+        namespace: "ns",
+        content: "delivery timing note",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: vec(1, 0, 0), embeddingModel: EM },
+    )
+    const out = await s.search({
+      namespace: "ns",
+      query: "ALPHA-111", // exact token only "exact" has
+      queryEmbedding: vec(0.9, 0.1, 0), // vector-near "near", far from "exact"
+      embedderId: EM,
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    // Co-equal RRF: the exact keyword match is present and must be recalled (not buried).
+    expect(out.map((r) => r.id)).toContain("exact")
+  })
+
+  it("hybrid: rows with a mismatched embedder tag are ignored by the vector list", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    await s.put(
+      rec({
+        id: "stale",
+        namespace: "ns",
+        content: "faster shipping",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: vec(1, 0, 0), embeddingModel: "old:model" }, // different embedder
+    )
+    const out = await s.search({
+      namespace: "ns",
+      query: "expedite delivery",
+      queryEmbedding: vec(1, 0, 0),
+      embedderId: EM, // does not match "old:model"
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    // No keyword overlap AND embedder mismatch → "stale" is not vector-eligible → not recalled.
+    expect(out.map((r) => r.id)).not.toContain("stale")
+  })
+
+  it("no queryEmbedding → keyword path unchanged (vector columns ignored)", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    await s.put(rec({ id: "a", namespace: "ns", content: "billing threshold" }), {
+      embedding: vec(1, 0, 0),
+      embeddingModel: EM,
+    })
+    const out = await s.search({
+      namespace: "ns",
+      query: "billing threshold",
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    expect(out.map((r) => r.id)).toEqual(["a"]) // pure keyword path still works with embeddings present
+  })
+
+  it("put without embedding opts persists a keyword-only row (back-compat)", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    await s.put(rec({ id: "a", namespace: "ns", content: "billing threshold" })) // no opts
+    expect((await s.search({ namespace: "ns", query: "billing" })).map((r) => r.id)).toEqual(["a"])
+  })
+
+  it("update() preserves the stored embedding (vector recall still finds it)", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    await s.put(
+      rec({
+        id: "sem",
+        namespace: "ns",
+        content: "faster shipping preferred",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: vec(1, 0, 0), embeddingModel: EM },
+    )
+    // Unrelated field update — must NOT drop the embedding.
+    await s.update("sem", { confidence: 0.5 })
+    const out = await s.search({
+      namespace: "ns",
+      query: "expedite delivery", // no keyword overlap → only vector list can surface "sem"
+      queryEmbedding: vec(0.95, 0.05, 0),
+      embedderId: EM,
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    expect(out.map((r) => r.id)).toContain("sem")
+  })
+
+  it("hybrid: stores a sub-view Float32Array embedding without corruption", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    const backing = new Float32Array([9, 9, 1, 0, 0, 7, 7]) // the [1,0,0] embedding is a sub-view at offset 2
+    const view = backing.subarray(2, 5) // Float32Array view: byteOffset 8, length 3, values [1,0,0]
+    await s.put(
+      rec({
+        id: "sub",
+        namespace: "ns",
+        content: "faster shipping preferred",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: view, embeddingModel: EM },
+    )
+    // A decoy that is a poor (orthogonal) vector match. If the sub-view write
+    // corrupts "sub" (stores all 7 floats → length-mismatch → cosine 0), the
+    // decoy wins and "sub" no longer ranks first — that's the regression guard.
+    await s.put(
+      rec({
+        id: "decoy",
+        namespace: "ns",
+        content: "acme billing threshold",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: vec(0.5, 0.5, 0), embeddingModel: EM }, // cosine ≈0.71 with query — beats a corrupt "sub" (cosine 0), loses to a correct one (1.0)
+    )
+    const out = await s.search({
+      namespace: "ns",
+      query: "expedite delivery",
+      queryEmbedding: vec(1, 0, 0),
+      embedderId: EM,
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    // If the write corrupted the view (stored all 7 floats), the stored vector wouldn't be [1,0,0] and cosine≈1 wouldn't hold → "sub" wouldn't rank first / be recalled.
+    expect(out.map((r) => r.id)).toContain("sub")
+    expect(out[0]?.id).toBe("sub")
+  })
+
+  it("hybrid: a NaN tuning weight degrades to the default (no NaN-poisoned ordering)", async () => {
+    const seed = async (store: ReturnType<typeof sqliteMemoryStore>) => {
+      await store.put(
+        rec({
+          id: "sem",
+          namespace: "ns",
+          content: "faster shipping preferred",
+          updatedAt: "2026-07-01T00:00:00.000Z",
+        }),
+        { embedding: vec(1, 0, 0), embeddingModel: EM },
+      )
+      await store.put(
+        rec({
+          id: "kw",
+          namespace: "ns",
+          content: "acme billing threshold",
+          updatedAt: "2026-07-01T00:00:00.000Z",
+        }),
+        { embedding: vec(0, 1, 0), embeddingModel: EM },
+      )
+    }
+    const query = {
+      namespace: "ns",
+      query: "expedite delivery",
+      queryEmbedding: vec(0.95, 0.05, 0),
+      embedderId: EM,
+      now: "2026-07-05T00:00:00.000Z",
+    } as const
+
+    const baseline = sqliteMemoryStore({ path: ":memory:" })
+    await seed(baseline)
+    const expected = (await baseline.search(query)).map((r) => r.id)
+
+    const nan = sqliteMemoryStore({ path: ":memory:" })
+    await seed(nan)
+    const withNaN = (await nan.search({ ...query, vector: { recencyWeight: Number.NaN } })).map(
+      (r) => r.id,
+    )
+
+    // A NaN weight must not poison the score → same finite ordering as the default.
+    expect(withNaN).toEqual(expected)
+    expect(withNaN[0]).toBe("sem")
+  })
+
+  it("hybrid: recall.recencyHalfLifeMs reaches the hybrid second stage (flips ordering)", async () => {
+    // "old" wins the RRF base race (keyword rank1 + vector rank1); "new" only
+    // enters via the vector list (rank2) but is the newest. With a heavy recency
+    // weight, a TINY half-life collapses old's recency multiplier so new wins —
+    // but ONLY if recall.recencyHalfLifeMs is actually threaded into the hybrid
+    // recencyDecay. Under the default 14d half-life old's small age barely
+    // penalizes it, so old stays first.
+    const seed = async (store: ReturnType<typeof sqliteMemoryStore>) => {
+      await store.put(
+        rec({
+          id: "old",
+          namespace: "ns",
+          content: "expedite delivery route", // matches the query → keyword rank1
+          updatedAt: "2026-07-04T00:00:00.000Z", // 1 day old
+        }),
+        { embedding: vec(1, 0, 0), embeddingModel: EM }, // cosine 1 → vector rank1
+      )
+      await store.put(
+        rec({
+          id: "new",
+          namespace: "ns",
+          content: "warehouse note", // no query token → absent from keyword list
+          updatedAt: "2026-07-05T00:00:00.000Z", // newest (age 0 at `now`)
+        }),
+        { embedding: vec(0.6, 0.8, 0), embeddingModel: EM }, // cosine 0.6 → vector rank2
+      )
+    }
+    const query = {
+      namespace: "ns",
+      query: "expedite delivery",
+      queryEmbedding: vec(1, 0, 0),
+      embedderId: EM,
+      now: "2026-07-05T00:00:00.000Z",
+      vector: { recencyWeight: 3 }, // heavy recency so half-life meaningfully moves ranking
+    } as const
+
+    const dfl = sqliteMemoryStore({ path: ":memory:" }) // default 14d half-life
+    await seed(dfl)
+    const defaultOrder = (await dfl.search(query)).map((r) => r.id)
+
+    const tiny = sqliteMemoryStore({ path: ":memory:", recall: { recencyHalfLifeMs: 1000 } })
+    await seed(tiny)
+    const tinyOrder = (await tiny.search(query)).map((r) => r.id)
+
+    // Knob honored: the tiny recall half-life must change the hybrid ordering.
+    expect(defaultOrder[0]).toBe("old")
+    expect(tinyOrder[0]).toBe("new")
+    expect(tinyOrder).not.toEqual(defaultOrder)
+  })
 })

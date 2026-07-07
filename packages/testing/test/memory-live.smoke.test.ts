@@ -14,6 +14,8 @@ const probeRoot = fileURLToPath(new URL("./fixtures/probe-app", import.meta.url)
 const candidateRoot = fileURLToPath(
   new URL("./fixtures/probe-app-memory-candidate", import.meta.url),
 )
+// Vector-recall probe wired to the REAL openaiEmbedder (via @dawn-ai/langchain).
+const vectorRoot = fileURLToPath(new URL("./fixtures/probe-app-vector-openai", import.meta.url))
 
 function dbPath(root: string): string {
   return join(root, ".dawn", "memory.sqlite")
@@ -26,10 +28,12 @@ const io = { stdout: () => {}, stderr: () => {} }
 beforeEach(() => {
   cleanDb(probeRoot)
   cleanDb(candidateRoot)
+  cleanDb(vectorRoot)
 })
 afterEach(() => {
   cleanDb(probeRoot)
   cleanDb(candidateRoot)
+  cleanDb(vectorRoot)
 })
 
 it.skipIf(!live)(
@@ -312,6 +316,45 @@ it.skipIf(!live)(
       expectToolCalled(r, "recall")
       expect(String(r.toolResults.find((t) => t.name === "recall")?.content ?? "")).toContain("500")
       expect(r.finalMessage).toContain("500")
+    } finally {
+      await h.close()
+    }
+  },
+  150_000,
+)
+
+it.skipIf(!live)(
+  "vector recall: real embeddings surface a cross-vocabulary paraphrase (zero shared tokens)",
+  async () => {
+    // This is the thing the fake token-hash embedder cannot do: match a stored
+    // fact to a query that shares NO tokens with it. The fixture wires the REAL
+    // openaiEmbedder, and in live mode the harness proxies OPENAI_BASE_URL to
+    // real OpenAI, so the embedder gets true semantic vectors.
+    const h = await createAgentHarness({
+      appRoot: vectorRoot,
+      route: "/memory-chat#agent",
+      live: true,
+    })
+    try {
+      h.reset()
+      const r1 = await h.run({
+        input:
+          "Remember this durable fact for later: the customer wants faster shipping on their orders.",
+      })
+      expectToolCalled(r1, "remember")
+
+      h.reset()
+      // TRUE paraphrase — shares zero/near-zero tokens with "faster shipping":
+      // "expedite delivery options". Only a real embedding places this near the
+      // stored fact; keyword recall (and the fake embedder) would miss it.
+      const r2 = await h.run({
+        input:
+          "Using your long-term memory, what did the customer say about expedite delivery options?",
+      })
+      expectToolCalled(r2, "recall")
+      const recall = String(r2.toolResults.find((t) => t.name === "recall")?.content ?? "")
+      // The recalled tool result must surface the stored fact across the vocab gap.
+      expect(recall).toContain("shipping")
     } finally {
       await h.close()
     }

@@ -50,6 +50,7 @@
     "@dawn-ai/cli": "workspace:*",
     "@dawn-ai/config-typescript": "workspace:*",
     "@dawn-ai/core": "workspace:*",
+    "@dawn-ai/langchain": "workspace:*",
     "@dawn-ai/permissions": "workspace:*",
     "@dawn-ai/sdk": "workspace:*",
     "@dawn-ai/workspace": "workspace:*",

@@ -1,4 +1,5 @@
 export { type Aimock, createAimock } from "./aimock-runner.js"
+export { fakeEmbedder } from "./fake-embedder.js"
 export {
   type AimockFixture,
   type AimockResponse,

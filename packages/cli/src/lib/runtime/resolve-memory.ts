@@ -1,7 +1,12 @@
 import { basename, join } from "node:path"
 import type { MemoryContext, MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
 import { loadDawnConfig } from "@dawn-ai/core"
-import { type RecallRankingOptions, serializeNamespace, sqliteMemoryStore } from "@dawn-ai/memory"
+import {
+  type RecallRankingOptions,
+  serializeNamespace,
+  sqliteMemoryStore,
+  type VectorRankingOptions,
+} from "@dawn-ai/memory"
 import type { LoadedRouteMemory } from "./load-memory.js"
 
 /**
@@ -40,16 +45,35 @@ export function routeNamespaceKey(routePath: string): string {
  */
 export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLike> {
   let recall: RecallRankingOptions | undefined
+  let storeVector: VectorRankingOptions | undefined
   try {
     const loaded = await loadDawnConfig({ appRoot })
     if (loaded.config.memory?.store) return loaded.config.memory.store as MemoryStoreLike
     recall = loaded.config.memory?.recall
+    // The store gets only the hybrid TUNING (weights/rrfK/vectorK/recency/
+    // confidence) — NOT the embedder. The store never embeds; the capability
+    // does, then passes vectors + this tuning into search.
+    const vectorCfg = loaded.config.memory?.vector
+    if (vectorCfg) {
+      storeVector = {
+        ...(vectorCfg.weights ? { weights: vectorCfg.weights } : {}),
+        ...(vectorCfg.rrfK !== undefined ? { rrfK: vectorCfg.rrfK } : {}),
+        ...(vectorCfg.vectorK !== undefined ? { vectorK: vectorCfg.vectorK } : {}),
+        ...(vectorCfg.recencyWeight !== undefined
+          ? { recencyWeight: vectorCfg.recencyWeight }
+          : {}),
+        ...(vectorCfg.confidenceWeight !== undefined
+          ? { confidenceWeight: vectorCfg.confidenceWeight }
+          : {}),
+      }
+    }
   } catch {
     // no dawn.config.ts / unreadable — use default
   }
   return sqliteMemoryStore({
     path: join(appRoot, ".dawn", "memory.sqlite"),
     ...(recall ? { recall } : {}),
+    ...(storeVector ? { vector: storeVector } : {}),
   }) as unknown as MemoryStoreLike
 }
 
@@ -77,6 +101,11 @@ export function buildMemoryContext(args: {
   now: string
   indexMaxEntries?: number
   extraScope?: Record<string, string>
+  /** Resolved embedder when vector recall is enabled — the capability embeds
+   *  writes + queries through it. Absent → keyword-only. */
+  embedder?: MemoryContext["embedder"]
+  /** Hybrid recall tuning threaded to the store's search (no embedder). */
+  vector?: MemoryContext["vector"]
 }): MemoryContext {
   const { defined } = args
   // Build all available dimensions from known sources.
@@ -126,5 +155,7 @@ export function buildMemoryContext(args: {
     },
     now: args.now,
     ...(args.indexMaxEntries !== undefined ? { indexMaxEntries: args.indexMaxEntries } : {}),
+    ...(args.embedder ? { embedder: args.embedder } : {}),
+    ...(args.vector ? { vector: args.vector } : {}),
   }
 }

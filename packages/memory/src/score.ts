@@ -38,10 +38,20 @@ function clamp01(v: number): number {
   return Number.isFinite(v) ? (v < 0 ? 0 : v > 1 ? 1 : v) : 0
 }
 
-/** Parse an ISO timestamp; NaN (invalid/missing) degrades to null, never throws. */
-function parseMs(iso: string): number | null {
-  const ms = Date.parse(iso)
-  return Number.isNaN(ms) ? null : ms
+/**
+ * Exponential recency decay in (0, 1]. age = referenceMs − updatedMs, clamped ≥ 0;
+ * invalid/absent timestamps degrade to age 0 (decay 1). Non-positive/non-finite
+ * halfLife falls back to the default.
+ */
+export function recencyDecay(updatedAt: string, referenceNow: string, halfLifeMs?: number): number {
+  const hl =
+    typeof halfLifeMs === "number" && Number.isFinite(halfLifeMs) && halfLifeMs > 0
+      ? halfLifeMs
+      : DEFAULT_RECENCY_HALF_LIFE_MS
+  const ref = Date.parse(referenceNow)
+  const upd = Date.parse(updatedAt)
+  const ageMs = Number.isNaN(ref) || Number.isNaN(upd) ? 0 : Math.max(0, ref - upd)
+  return 2 ** (-ageMs / hl)
 }
 
 /**
@@ -69,11 +79,6 @@ export function scoreMemory(args: {
   readonly options?: RecallRankingOptions
 }): number {
   const weights = { ...DEFAULT_RECALL_WEIGHTS, ...args.options?.weights }
-  const rawHalfLife = args.options?.recencyHalfLifeMs
-  const halfLife =
-    typeof rawHalfLife === "number" && Number.isFinite(rawHalfLife) && rawHalfLife > 0
-      ? rawHalfLife
-      : DEFAULT_RECENCY_HALF_LIFE_MS
 
   let matchedIdf = 0
   let totalIdf = 0
@@ -84,10 +89,7 @@ export function scoreMemory(args: {
   }
   const relevance = totalIdf > 0 ? matchedIdf / totalIdf : 0
 
-  const ref = parseMs(args.referenceNow)
-  const upd = parseMs(args.updatedAt)
-  const ageMs = ref !== null && upd !== null ? Math.max(0, ref - upd) : 0
-  const recency = 2 ** (-ageMs / halfLife)
+  const recency = recencyDecay(args.updatedAt, args.referenceNow, args.options?.recencyHalfLifeMs)
 
   const confidence = clamp01(args.confidence)
 

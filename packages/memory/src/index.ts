@@ -7,6 +7,7 @@ export {
   idf,
   type RecallRankingOptions,
   type RecallWeights,
+  recencyDecay,
   scoreMemory,
 } from "./score.js"
 export { sqliteMemoryStore } from "./sqlite-store.js"
@@ -18,4 +19,12 @@ export type {
   MemorySource,
   MemoryStatus,
   MemoryStore,
+  VectorRankingOptions,
 } from "./types.js"
+export {
+  cosineSimilarity,
+  DEFAULT_RRF_K,
+  DEFAULT_VECTOR_K,
+  fuseRRF,
+  type RankedList,
+} from "./vector.js"

@@ -2,9 +2,16 @@ import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import type { SQLInputValue } from "node:sqlite"
 import { DatabaseSync } from "node:sqlite"
-import { DEFAULT_CANDIDATE_POOL, type RecallRankingOptions, scoreMemory } from "./score.js"
+import {
+  DEFAULT_CANDIDATE_POOL,
+  type RecallRankingOptions,
+  type RecallWeights,
+  recencyDecay,
+  scoreMemory,
+} from "./score.js"
 import { tokenize } from "./tokenize.js"
-import type { MemoryQuery, MemoryRecord, MemoryStore } from "./types.js"
+import type { MemoryQuery, MemoryRecord, MemoryStore, VectorRankingOptions } from "./types.js"
+import { cosineSimilarity, DEFAULT_VECTOR_K, fuseRRF } from "./vector.js"
 
 // ---------------------------------------------------------------------------
 // Inline DB helpers (mirrors packages/sqlite-storage/src/internal — not
@@ -74,6 +81,13 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_memtok_mem ON memory_tokens(memory_id);
     `,
   },
+  {
+    version: 2,
+    up: `
+      ALTER TABLE memories ADD COLUMN embedding BLOB;
+      ALTER TABLE memories ADD COLUMN embedding_model TEXT;
+    `,
+  },
 ]
 
 // ---------------------------------------------------------------------------
@@ -117,6 +131,8 @@ export function sqliteMemoryStore(opts: {
   path: string
   /** Recall ranking tuning; all fields defaulted. See score.ts. */
   recall?: RecallRankingOptions
+  /** Store-level hybrid tuning; used when a query omits `vector`. All fields defaulted. */
+  vector?: VectorRankingOptions
 }): MemoryStore {
   const db = openDb(opts.path)
   runMigrations(db, MIGRATIONS)
@@ -134,11 +150,24 @@ export function sqliteMemoryStore(opts: {
     return row ? rowToRecord(row) : null
   }
 
-  function putRecord(rec: MemoryRecord): void {
+  function putRecord(
+    rec: MemoryRecord,
+    embed?: { embedding?: Float32Array; embeddingModel?: string },
+  ): void {
+    const blob =
+      embed?.embedding && embed.embeddingModel
+        ? Buffer.from(
+            embed.embedding.buffer.slice(
+              embed.embedding.byteOffset,
+              embed.embedding.byteOffset + embed.embedding.byteLength,
+            ),
+          )
+        : null
+    const model = embed?.embedding && embed.embeddingModel ? embed.embeddingModel : null
     db.prepare(
       `INSERT OR REPLACE INTO memories
-       (id,kind,namespace,content,data,source,confidence,tags,status,supersedes,created_at,updated_at,effective_at,expires_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       (id,kind,namespace,content,data,source,confidence,tags,status,supersedes,created_at,updated_at,effective_at,expires_at,embedding,embedding_model)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       rec.id,
       rec.kind,
@@ -154,13 +183,128 @@ export function sqliteMemoryStore(opts: {
       rec.updatedAt,
       rec.effectiveAt ?? null,
       rec.expiresAt ?? null,
+      blob,
+      model,
     )
     reindex(rec)
   }
 
+  // Re-read a row's persisted embedding so update() does not drop it (putRecord
+  // rewrites the full row; without this the embedding columns would go null).
+  function getEmbeddingRow(id: string): { embedding?: Float32Array; embeddingModel?: string } {
+    const row = db
+      .prepare("SELECT embedding, embedding_model FROM memories WHERE id = ?")
+      .get(id) as { embedding?: Uint8Array; embedding_model?: string } | undefined
+    if (row?.embedding && row.embedding_model) {
+      return {
+        embedding: new Float32Array(
+          row.embedding.buffer.slice(
+            row.embedding.byteOffset,
+            row.embedding.byteOffset + row.embedding.byteLength,
+          ),
+        ),
+        embeddingModel: row.embedding_model,
+      }
+    }
+    return {}
+  }
+
+  // Keyword-ranked list: candidate pool → live corpus stats → scoreMemory →
+  // stable sort (score DESC, updated_at DESC, id ASC). Returns the FULL sorted
+  // list (caller pages + tag-filters). `weightsOverride` lets the hybrid path
+  // rank by relevance ONLY; when absent the default recall weights apply — this
+  // is the exact behavior the shipped smarter-recall path exercises.
+  function rankKeyword(
+    q: MemoryQuery,
+    baseSql: string,
+    baseParams: SQLInputValue[],
+    terms: string[],
+    weightsOverride?: RecallWeights,
+  ): MemoryRecord[] {
+    const rawPool = opts.recall?.candidatePool
+    const pool =
+      typeof rawPool === "number" && Number.isFinite(rawPool) && rawPool > 0
+        ? Math.floor(rawPool)
+        : DEFAULT_CANDIDATE_POOL
+    const placeholders = terms.map(() => "?").join(",")
+
+    // 1) Candidate pool: rows matching ≥1 query token, newest first (pool
+    //    truncation by recency is deterministic).
+    const candidateRows = db
+      .prepare(
+        `SELECT m.* FROM memories m WHERE ${baseSql}
+         AND m.id IN (SELECT memory_id FROM memory_tokens WHERE token IN (${placeholders}))
+         ORDER BY m.updated_at DESC, m.id ASC LIMIT ?`,
+      )
+      .all(...baseParams, ...terms, pool) as Record<string, unknown>[]
+    const candidates = candidateRows.map(rowToRecord)
+    if (candidates.length === 0) return []
+
+    // 2) Corpus stats, computed live (nothing cached → nothing to go stale).
+    const corpusSize = (
+      db.prepare(`SELECT COUNT(*) AS n FROM memories m WHERE ${baseSql}`).get(...baseParams) as {
+        n: number
+      }
+    ).n
+    const dfRows = db
+      .prepare(
+        `SELECT t.token AS token, COUNT(DISTINCT t.memory_id) AS df
+         FROM memory_tokens t JOIN memories m ON m.id = t.memory_id
+         WHERE ${baseSql} AND t.token IN (${placeholders}) GROUP BY t.token`,
+      )
+      .all(...baseParams, ...terms) as { token: string; df: number }[]
+    const dfByToken = new Map(dfRows.map((r) => [r.token, r.df]))
+
+    // 3) Score. Candidate token sets are recomputed via the same helper
+    //    reindex() uses, so they are guaranteed consistent with the table.
+    //    Pool is updated_at-DESC ordered, so candidates[0] is the newest —
+    //    the data-derived reference when the caller supplies no clock.
+    const referenceNow = q.now ?? candidates[0]?.updatedAt ?? ""
+    const options: RecallRankingOptions | undefined =
+      weightsOverride || opts.recall
+        ? { ...opts.recall, ...(weightsOverride ? { weights: weightsOverride } : {}) }
+        : undefined
+    const scored = candidates.map((record) => ({
+      record,
+      score: scoreMemory({
+        memoryTokens: new Set(tokensFor(record)),
+        queryTokens: terms,
+        dfByToken,
+        corpusSize,
+        updatedAt: record.updatedAt,
+        confidence: record.confidence,
+        referenceNow,
+        ...(options ? { options } : {}),
+      }),
+    }))
+
+    // 4) Sort (score DESC, updated_at DESC, id ASC — stable).
+    scored.sort(
+      (a, b) =>
+        b.score - a.score ||
+        cmp(b.record.updatedAt, a.record.updatedAt) ||
+        cmp(a.record.id, b.record.id),
+    )
+    return scored.map((s) => s.record)
+  }
+
+  // Page (limit) then tag post-filter — today's ranked-path semantics, unchanged.
+  function pageAndTagFilter(
+    records: MemoryRecord[],
+    limit: number,
+    q: MemoryQuery,
+  ): MemoryRecord[] {
+    let out = records.slice(0, limit)
+    if (q.tags && q.tags.length > 0) {
+      const want = new Set(q.tags)
+      out = out.filter((r) => r.tags.some((t) => want.has(t)))
+    }
+    return out
+  }
+
   return {
-    async put(rec) {
-      putRecord(rec)
+    async put(rec, opts) {
+      putRecord(rec, opts)
     },
     async get(id) {
       return getById(id)
@@ -194,80 +338,118 @@ export function sqliteMemoryStore(opts: {
         return records
       }
 
-      // Ranked path — see docs/superpowers/specs/2026-07-05-smarter-recall-design.md.
-      const rawPool = opts.recall?.candidatePool
-      const pool =
-        typeof rawPool === "number" && Number.isFinite(rawPool) && rawPool > 0
-          ? Math.floor(rawPool)
-          : DEFAULT_CANDIDATE_POOL
-      const placeholders = terms.map(() => "?").join(",")
+      // Hybrid path — active only when the caller supplies a query embedding.
+      // Keyword ∪ vector-nearest, RRF-fused, then a bounded recency/confidence
+      // multiplier. See docs/superpowers/specs/2026-07-06-vector-recall-design.md.
+      if (q.queryEmbedding && q.embedderId) {
+        const v = q.vector ?? opts.vector ?? {}
+        const vectorK =
+          typeof v.vectorK === "number" && Number.isFinite(v.vectorK) && v.vectorK > 0
+            ? Math.floor(v.vectorK)
+            : DEFAULT_VECTOR_K
+        const wKeyword =
+          typeof v.weights?.keyword === "number" && Number.isFinite(v.weights.keyword)
+            ? v.weights.keyword
+            : 1
+        const wVector =
+          typeof v.weights?.vector === "number" && Number.isFinite(v.weights.vector)
+            ? v.weights.vector
+            : 1
 
-      // 1) Candidate pool: rows matching ≥1 query token, newest first (pool
-      //    truncation by recency is deterministic).
-      const candidateRows = db
-        .prepare(
-          `SELECT m.* FROM memories m WHERE ${baseSql}
-           AND m.id IN (SELECT memory_id FROM memory_tokens WHERE token IN (${placeholders}))
-           ORDER BY m.updated_at DESC, m.id ASC LIMIT ?`,
-        )
-        .all(...baseParams, ...terms, pool) as Record<string, unknown>[]
-      const candidates = candidateRows.map(rowToRecord)
-      if (candidates.length === 0) return []
+        // Keyword-ranked ids: reuse the ranked pool, ordered by relevance ONLY.
+        const kwRecords = rankKeyword(q, baseSql, baseParams, terms, {
+          relevance: 1,
+          recency: 0,
+          confidence: 0,
+        })
+        const keywordIds = kwRecords.map((r) => r.id)
 
-      // 2) Corpus stats, computed live (nothing cached → nothing to go stale).
-      const corpusSize = (
-        db.prepare(`SELECT COUNT(*) AS n FROM memories m WHERE ${baseSql}`).get(...baseParams) as {
-          n: number
+        // Vector-ranked ids: brute-force cosine over rows with a matching
+        // embedder tag and a non-null embedding.
+        const vecRows = db
+          .prepare(
+            `SELECT m.id AS id, m.embedding AS embedding FROM memories m
+             WHERE ${baseSql} AND m.embedding_model = ? AND m.embedding IS NOT NULL`,
+          )
+          .all(...baseParams, q.embedderId) as { id: string; embedding: Uint8Array }[]
+        const queryEmbedding = q.queryEmbedding
+        const scoredVec = vecRows
+          .map((r) => {
+            const emb = new Float32Array(
+              r.embedding.buffer.slice(
+                r.embedding.byteOffset,
+                r.embedding.byteOffset + r.embedding.byteLength,
+              ),
+            )
+            return { id: r.id, sim: cosineSimilarity(queryEmbedding, emb) }
+          })
+          .sort((a, b) => b.sim - a.sim || cmp(a.id, b.id))
+          .slice(0, vectorK)
+        const vectorIds = scoredVec.map((r) => r.id)
+
+        // Union pool of records (dedup by id) for the second stage.
+        const byId = new Map<string, MemoryRecord>()
+        for (const r of kwRecords) byId.set(r.id, r)
+        for (const id of vectorIds) {
+          if (!byId.has(id)) {
+            const rec2 = getById(id)
+            if (rec2) byId.set(id, rec2)
+          }
         }
-      ).n
-      const dfRows = db
-        .prepare(
-          `SELECT t.token AS token, COUNT(DISTINCT t.memory_id) AS df
-           FROM memory_tokens t JOIN memories m ON m.id = t.memory_id
-           WHERE ${baseSql} AND t.token IN (${placeholders}) GROUP BY t.token`,
+        if (byId.size === 0) return []
+
+        const rrf = fuseRRF(
+          [
+            { ids: keywordIds, weight: wKeyword },
+            { ids: vectorIds, weight: wVector },
+          ],
+          typeof v.rrfK === "number" ? { k: v.rrfK } : undefined,
         )
-        .all(...baseParams, ...terms) as { token: string; df: number }[]
-      const dfByToken = new Map(dfRows.map((r) => [r.token, r.df]))
 
-      // 3) Score. Candidate token sets are recomputed via the same helper
-      //    reindex() uses, so they are guaranteed consistent with the table.
-      //    Pool is updated_at-DESC ordered, so candidates[0] is the newest —
-      //    the data-derived reference when the caller supplies no clock.
-      const referenceNow = q.now ?? candidates[0]?.updatedAt ?? ""
-      const scored = candidates.map((record) => ({
-        record,
-        score: scoreMemory({
-          memoryTokens: new Set(tokensFor(record)),
-          queryTokens: terms,
-          dfByToken,
-          corpusSize,
-          updatedAt: record.updatedAt,
-          confidence: record.confidence,
-          referenceNow,
-          ...(opts.recall ? { options: opts.recall } : {}),
-        }),
-      }))
-
-      // 4) Sort (score DESC, updated_at DESC, id ASC — stable) and page.
-      scored.sort(
-        (a, b) =>
-          b.score - a.score ||
-          cmp(b.record.updatedAt, a.record.updatedAt) ||
-          cmp(a.record.id, b.record.id),
-      )
-      let records = scored.slice(0, limit).map((s) => s.record)
-
-      // 5) Tag post-filter on the returned page — today's semantics, unchanged.
-      if (q.tags && q.tags.length > 0) {
-        const want = new Set(q.tags)
-        records = records.filter((r) => r.tags.some((t) => want.has(t)))
+        const wRec =
+          typeof v.recencyWeight === "number" && Number.isFinite(v.recencyWeight)
+            ? v.recencyWeight
+            : 0.3
+        const wConf =
+          typeof v.confidenceWeight === "number" && Number.isFinite(v.confidenceWeight)
+            ? v.confidenceWeight
+            : 0.1
+        // Match the non-hybrid path: the data-derived recency reference is the
+        // NEWEST record's updatedAt (ISO strings compare chronologically).
+        const referenceNow =
+          q.now ?? [...byId.values()].reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), "")
+        const fused = [...byId.values()].map((record) => {
+          const base = rrf.get(record.id) ?? 0
+          // One half-life knob: fall back to the shared recall tuning so a
+          // configured recall.recencyHalfLifeMs governs hybrid recency too.
+          const rec2 = recencyDecay(
+            record.updatedAt,
+            referenceNow,
+            v.recencyHalfLifeMs ?? opts.recall?.recencyHalfLifeMs,
+          )
+          const conf = record.confidence < 0 ? 0 : record.confidence > 1 ? 1 : record.confidence
+          return { record, score: base * (1 + wRec * rec2 + wConf * conf) }
+        })
+        fused.sort(
+          (a, b) =>
+            b.score - a.score ||
+            cmp(b.record.updatedAt, a.record.updatedAt) ||
+            cmp(a.record.id, b.record.id),
+        )
+        return pageAndTagFilter(
+          fused.map((s) => s.record),
+          limit,
+          q,
+        )
       }
-      return records
+
+      // Ranked path — see docs/superpowers/specs/2026-07-05-smarter-recall-design.md.
+      return pageAndTagFilter(rankKeyword(q, baseSql, baseParams, terms), limit, q)
     },
     async update(id, patch) {
       const current = getById(id)
       if (!current) throw new Error(`memory not found: ${id}`)
-      putRecord({ ...current, ...patch, id })
+      putRecord({ ...current, ...patch, id }, getEmbeddingRow(id))
     },
     async supersede(id, bySupersedingId) {
       if (!getById(id)) throw new Error(`memory not found: ${id}`)

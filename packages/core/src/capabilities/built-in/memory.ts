@@ -69,6 +69,25 @@ export function createMemoryMarker(): CapabilityMarker {
             tags?: string[]
             limit?: number
           }
+          // Embed the query for the hybrid keyword+vector path when an embedder
+          // is configured. Embed FAILURE degrades to keyword-only — never throw,
+          // so a flaky/offline embedder can't break recall.
+          let queryVec: Float32Array | undefined
+          if (mem.embedder && q.query) {
+            try {
+              ;[queryVec] = await mem.embedder.embed([q.query])
+            } catch (err) {
+              // Gated: silent embed failures are an ops footgun (user thinks
+              // vector recall works while every embed errors). Mirrors the
+              // summarization hook's DAWN_DEBUG_SUMMARIZATION convention.
+              if (process.env.DAWN_DEBUG_MEMORY === "1") {
+                console.warn(
+                  `[dawn:memory] recall embed failed, falling back to keyword-only: ${String(err)}`,
+                )
+              }
+              queryVec = undefined
+            }
+          }
           const rows = await mem.store.search({
             namespace: mem.namespace,
             ...(q.query ? { query: q.query } : {}),
@@ -78,6 +97,9 @@ export function createMemoryMarker(): CapabilityMarker {
             // Recency reference for ranked recall — the per-request timestamp,
             // NOT Date.now() (determinism rule; see module docblock).
             now: mem.now,
+            ...(queryVec && mem.embedder
+              ? { queryEmbedding: queryVec, embedderId: mem.embedder.id, vector: mem.vector }
+              : {}),
           })
           // Wrap in {result} so the langchain bridge uses the string verbatim as
           // the ToolMessage content; a bare string hits unwrapToolResult's
@@ -135,6 +157,26 @@ export function createMemoryMarker(): CapabilityMarker {
             updatedAt: mem.now,
           }
 
+          // Embed the content for vector recall when an embedder is configured.
+          // Embed FAILURE degrades to keyword-only (putOpts stays undefined) —
+          // NEVER lose the write. Forwarded to EVERY put site below.
+          let putOpts: { embedding?: Float32Array; embeddingModel?: string } | undefined
+          if (mem.embedder) {
+            try {
+              const [ev] = await mem.embedder.embed([content])
+              if (ev) putOpts = { embedding: ev, embeddingModel: mem.embedder.id }
+            } catch (err) {
+              // Gated warn — see the recall catch above. The write still lands
+              // keyword-only (putOpts undefined); we never lose the memory.
+              if (process.env.DAWN_DEBUG_MEMORY === "1") {
+                console.warn(
+                  `[dawn:memory] remember embed failed, storing keyword-only: ${String(err)}`,
+                )
+              }
+              putOpts = undefined
+            }
+          }
+
           if (autoLike) {
             // Inline identity key helper — avoids importing from @dawn-ai/memory
             const identityKey = (d: Record<string, unknown>) =>
@@ -180,19 +222,19 @@ export function createMemoryMarker(): CapabilityMarker {
                   }
                 }
               }
-              await mem.store.put(record)
+              await mem.store.put(record, putOpts)
               await mem.store.supersede(target.id, id)
               return { result: `Superseded ${target.id} with ${id}.` }
             }
 
             // No existing record with same identity — add new active row
-            await mem.store.put(record)
+            await mem.store.put(record, putOpts)
             return { result: `Stored memory ${id}.` }
           }
 
           // Candidate mode (and "off" never reaches here — remember tool absent):
           // write a candidate; reconciliation happens later at CLI approval.
-          await mem.store.put(record)
+          await mem.store.put(record, putOpts)
           return { result: `Stored memory candidate ${id} (pending approval).` }
         },
       }

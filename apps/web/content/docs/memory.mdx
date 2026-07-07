@@ -83,7 +83,7 @@ export default defineMemory({
 - **`identity?`** — the keys used for write reconciliation (in `auto` and `ask` modes). Defaults to `["subject", "predicate"]`.
 
 <Callout type="info" title="Deterministic recall">
-  Recall is deterministic: an IDF-weighted keyword match blended with recency and confidence, over a SQLite store — no FTS5, embedding model, or network call in the path. The same query against the same store returns the same rows in the same order, which keeps evals and fixtures stable (and replayable under aimock).
+  By default recall is deterministic: an IDF-weighted keyword match blended with recency and confidence, over a SQLite store — no FTS5, embedding model, or network call in the path. The same query against the same store returns the same rows in the same order, which keeps evals and fixtures stable (and replayable under aimock). Opting into [semantic recall](#semantic-recall-opt-in) adds one network embed at recall time; it stays deterministic under a fixed embedder (and under aimock replay).
 </Callout>
 
 ### Generated tools
@@ -133,6 +133,57 @@ export default {
   Matching is exact-token: "escalation" and "escalates" are different tokens.
   Specific, consistent wording in remembered `content` gives the ranker better
   signal — vague summaries rank vaguely.
+</Callout>
+
+### Semantic recall (opt-in)
+
+Keyword recall can't match a paraphrase — "expedite delivery" shares no tokens with a memory that says "faster shipping preferred", so it never surfaces. Opt into **semantic recall** to add a vector signal that catches meaning across different wording. Enable it by supplying an embedder in `dawn.config.ts`:
+
+```ts title="dawn.config.ts"
+import { openaiEmbedder } from "@dawn-ai/langchain"
+
+export default {
+  memory: {
+    vector: { embedder: openaiEmbedder() }, // presence of embedder = enabled
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+With an embedder configured, ranked recall becomes **hybrid**: a keyword (IDF) candidate list and a vector (cosine) candidate list, fused **co-equally** by [Reciprocal Rank Fusion](https://plg.uwaterloo.ca/~gvcormack/cormacksigir09-rrf.pdf) (RRF), followed by the same bounded recency/confidence second stage as keyword recall. Keyword recall is **never dropped**. Dense retrieval is weak on exact IDs, codes, and proper names — a query for order `ALPHA-111` needs the literal token match — so both signals are kept side by side rather than replaced.
+
+**The `Embedder` interface is pluggable.** `openaiEmbedder()` (from `@dawn-ai/langchain`) ships in the box and calls OpenAI's embeddings endpoint over the shared `OPENAI_BASE_URL` seam (so aimock can intercept it). Any object matching the `Embedder` shape works, so you can bring a custom embedder:
+
+```ts
+interface Embedder {
+  readonly id: string // model tag stored with each vector
+  readonly dims: number
+  embed(texts: readonly string[]): Promise<Float32Array[]>
+}
+```
+
+For tests, `@dawn-ai/testing` exports `fakeEmbedder()` — a deterministic, network-free bag-of-token-hash embedder — so vector recall stays offline and reproducible in your suite.
+
+**Embeddings are model-tagged, so switching embedders is safe.** Each stored vector records the embedder `id` that produced it; recall only vector-compares rows whose tag matches the active embedder. Change the embedder or model and the old vectors simply stop participating — recall degrades gracefully to keyword-only for those rows until they're re-embedded, rather than comparing across incompatible vector spaces.
+
+Vector recall is a second stage on top of keyword recall; leaving `vector` unset keeps the default keyword-only path exactly as before. When enabled, the only change is one opt-in network embed of the query at recall time (and of the content at write time). Under a fixed embedder — or aimock replay — recall stays deterministic.
+
+Tuning lives alongside the embedder in `memory.vector` (all optional and defaulted):
+
+```ts title="dawn.config.ts"
+memory: {
+  vector: {
+    embedder: openaiEmbedder(),
+    weights: { keyword: 1, vector: 1 }, // per-list weight in the RRF (co-equal by default)
+    rrfK: 60,            // RRF rank constant — smaller separates top ranks more
+    vectorK: 64,         // how many nearest vectors to fuse in
+    recencyWeight: 0.3,  // second-stage recency boost
+    confidenceWeight: 0.1, // second-stage confidence boost
+  },
+}
+```
+
+<Callout type="info" title="Zero native dependencies">
+  Embeddings are stored as Float32 BLOBs in the same `node:sqlite` store, with brute-force cosine in JavaScript — no native modules, no FTS5, no extra service. A `pgvector` store backend is a planned follow-up for larger corpora.
 </Callout>
 
 ### The injected index
@@ -265,12 +316,12 @@ For deterministic coverage the aimock harness scripts exact tool arguments — w
 
 ## What's deferred
 
-Long-term memory ships with the `semantic` kind and deterministic ranked recall (IDF-weighted relevance blended with recency and confidence). The following are typed or designed but **not** implemented:
+Long-term memory ships with the `semantic` kind, deterministic ranked keyword recall (IDF-weighted relevance blended with recency and confidence), and [opt-in hybrid vector recall](#semantic-recall-opt-in). The following are typed or designed but **not** implemented:
 
 - The `episodic`, `procedural`, and `reflection` kinds.
-- Vector / embedding recall, full BM25 (term-frequency / length-normalized) ranking via FTS5, and a memory graph.
+- Full BM25 (term-frequency / length-normalized) ranking via FTS5, and a memory graph.
 - A dev-server Memory Inspector UI.
-- Postgres / pgvector store adapters.
+- Postgres / pgvector store adapters (vector recall today runs brute-force over the `node:sqlite` store).
 - Schema-typed `remember.data` (typed loosely as `Record<string, unknown>` today).
 
 For anything beyond the semantic collection, use `memory.md` for stable profile text and `memory.ts` for facts the agent should accumulate over time.

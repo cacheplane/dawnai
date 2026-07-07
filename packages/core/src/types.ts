@@ -84,6 +84,16 @@ export interface DawnConfig {
       readonly recencyHalfLifeMs?: number
       readonly candidatePool?: number
     }
+    /** Opt-in vector/semantic recall. Presence of `embedder` enables it; absent
+     *  → keyword-only (unchanged). Ignored when a custom `store` is supplied. */
+    readonly vector?: {
+      readonly embedder: import("./capabilities/types.js").Embedder
+      readonly weights?: { readonly keyword?: number; readonly vector?: number }
+      readonly rrfK?: number
+      readonly vectorK?: number
+      readonly recencyWeight?: number
+      readonly confidenceWeight?: number
+    }
     /** Derive the memory namespace scope for a given route. */
     readonly resolveScope?: (ctx: {
       readonly routePath: string
