@@ -125,6 +125,11 @@ export interface DawnToolDefinition {
       // omit it; the cli's prepareRouteExecution wrapper guarantees it at
       // runtime, which is why the author-facing DawnToolContext requires it.
       readonly fs?: WorkspaceFs
+      // Live per-call runtime identity, forwarded by the langchain tool-converter
+      // from config.configurable. Optional because pre-wrap/legacy invokers omit
+      // it. Read by the argument-constraint wrapper to build ConstraintContext.
+      readonly threadId?: string
+      readonly params?: Readonly<Record<string, string>>
     },
   ) => Promise<unknown> | unknown
   readonly schema?: unknown
