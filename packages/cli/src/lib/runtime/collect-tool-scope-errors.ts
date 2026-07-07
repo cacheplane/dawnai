@@ -9,6 +9,7 @@ interface ToolScopeShape {
   readonly allow?: readonly string[]
   readonly deny?: readonly string[]
   readonly approve?: readonly string[]
+  readonly constrain?: Readonly<Record<string, unknown>>
 }
 
 export interface ToolScopeIssues {
@@ -65,15 +66,17 @@ export async function collectToolScopeIssues(
   for (const route of manifest.routes) {
     if (route.kind !== "agent") continue
     const scope = await deps.loadScope(route.entryFile, manifest.appRoot)
-    if (!scope || (!scope.allow && !scope.deny && !scope.approve)) continue
+    if (!scope || (!scope.allow && !scope.deny && !scope.approve && !scope.constrain)) continue
     const available = new Set([
       ...(await deps.routeLocalToolNames(manifest.appRoot, route.routeDir)),
       ...BUILT_IN_TOOL_NAMES,
     ])
+    const constrainNames = Object.keys(scope.constrain ?? {})
     const unknown = [
       ...(scope.allow ?? []),
       ...(scope.deny ?? []),
       ...(scope.approve ?? []),
+      ...constrainNames,
     ].filter((n) => !available.has(n))
     if (unknown.length > 0) {
       errors.push(
@@ -123,6 +126,14 @@ export async function collectToolScopeIssues(
         warnings.push(
           `⚠ ${route.pathname}: approve lists "${name}", but subagents withhold capability tools ` +
             `by default — add it to allow or the approve entry has no effect.`,
+        )
+      }
+    }
+    const approveSetForConstrain = new Set(scope.approve ?? [])
+    for (const name of constrainNames) {
+      if (approveSetForConstrain.has(name)) {
+        warnings.push(
+          `⚠ ${route.pathname}: "${name}" is in both approve and constrain — constrain wins (it can escalate via { approve }); the approve entry is redundant.`,
         )
       }
     }
