@@ -24,8 +24,9 @@ unless stated. "Smarter recall" touches exactly one function inside L3.
 
 **`@dawn-ai/memory`** — storage engine, no deps but `node:sqlite`:
 - `types.ts` — `MemoryRecord`, `MemoryStore`, `MemoryQuery`, `MemoryKind`, `MemoryStatus`.
-- `sqlite-store.ts` — `sqliteMemoryStore()`: schema/migrations, tokenized index, `search()`.
-- `score.ts` — pure recall scoring: `idf()`, `scoreMemory()`, `RecallRankingOptions` + defaults.
+- `sqlite-store.ts` — `sqliteMemoryStore()`: schema/migrations (v1 tokens, v2 embedding cols), tokenized index, hybrid `search()`.
+- `score.ts` — pure recall scoring: `idf()`, `scoreMemory()`, exported `recencyDecay()` (reused by the hybrid second stage), `RecallRankingOptions` + defaults.
+- `vector.ts` — pure vector primitives: `cosineSimilarity()`, `fuseRRF()` (Reciprocal Rank Fusion), `RankedList`, `DEFAULT_RRF_K` / `DEFAULT_VECTOR_K`. No I/O, no clock — deterministic for aimock/replay.
 - `tokenize.ts` — lowercase / split / drop-1-char / **dedupe** → tokens.
 - `namespace.ts` — `serializeNamespace()` + `MemoryScopeTuple`.
 - `reconcile.ts` — `classifyWrite()` (deterministic add/update/supersede).
@@ -125,6 +126,30 @@ the query's rare tokens outranks yesterday's marginal one-token match. Tuning li
 `DawnConfig.memory.recall` (`weights` / `recencyHalfLifeMs` / `candidatePool`; non-positive
 or non-finite half-life/pool values fall back to defaults); a custom `config.memory.store`
 bypasses it entirely. Matching is still exact-token — no stemming.
+
+**Hybrid path (opt-in vector recall).** Migration **v2** adds two nullable columns —
+`embedding BLOB` (a Float32 vector) and `embedding_model TEXT` (the embedder id that produced
+it). The keyword-only ranked path above is unchanged; the hybrid path is **gated on
+`q.queryEmbedding`** (plus `q.embedderId`) and never runs otherwise:
+
+1. **Keyword list** — the same candidate pool as above, but ranked by *relevance only*
+   (recency/confidence weights zeroed) to produce a rank-ordered id list.
+2. **Vector list** — brute-force cosine (`cosineSimilarity`, `vector.ts`) over rows whose
+   `embedding_model = q.embedderId` and `embedding IS NOT NULL`; sorted, capped at `vectorK`
+   (default 64). Rows with a mismatched embedder tag are ignored → graceful keyword-only
+   fallback across a model change.
+3. **Fusion** — the keyword and vector id lists are fused co-equally by `fuseRRF` (RRF: an id
+   absent from a list contributes 0, so the fused set is the **union**). Per-list `weights`
+   and `rrfK` are tunable.
+4. **Second stage** — the union of records is re-scored `rrf * (1 + recencyWeight·recencyDecay
+   + confidenceWeight·confidence)` (bounded boosts reusing the exported `recencyDecay`), then
+   sorted `score DESC, updated_at DESC, id ASC`, limited, and tag-filtered.
+
+Determinism holds under a fixed embedder: all steps are pure arithmetic over the supplied
+embedding, with the same stable `updated_at, id` tiebreak. The store never embeds — the
+capability supplies `queryEmbedding`; the store persists `{embedding, embeddingModel}` passed
+to `put`. Store-side default tuning comes from `sqliteMemoryStore({ vector })`, overridable
+per-query via `q.vector`.
 
 **`classifyWrite()` (`reconcile.ts`)** decides add/update/supersede deterministically by
 comparing the incoming record's identity key (default `["subject","predicate"]`) against
@@ -244,15 +269,21 @@ memory?: {
 
 ## 13. Current limitations & deferred roadmap
 
-Shipped: the `semantic` kind with ranked recall — IDF-weighted relevance blended with
-recency decay and stored confidence (shipped in this branch; was pure recency through #275).
+Shipped: the `semantic` kind with ranked keyword recall — IDF-weighted relevance blended with
+recency decay and stored confidence — **plus opt-in hybrid vector recall** (keyword ∪ vector,
+RRF-fused, bounded recency/confidence second stage; see §4). Vector recall is enabled by
+supplying `DawnConfig.memory.vector.embedder`; absent, recall is the unchanged keyword path.
 Explicitly deferred (spec §"Out of scope"):
 
 - `episodic` / `procedural` / `reflection` kinds; episodic-from-traces; background consolidation.
-- Vector / embedding recall; BM25/FTS5 (term frequency is not stored).
+- BM25/FTS5 (term frequency is not stored).
+- Faster ANN over the local store — a `sqlite-vec` middle tier — before reaching for Postgres.
+  Vector recall today is brute-force cosine in JS over Float32 BLOBs (fine for typical
+  per-namespace corpora; linear in matching rows).
+- Postgres / **pgvector** store adapter (Tier-2 backend for large corpora; the `MemoryStore` +
+  pluggable `Embedder` interfaces leave room).
 - Memory graph (edges/relations).
 - Dev-server Memory Inspector UI (no dev UI host exists today).
-- Postgres / pgvector adapters (the `MemoryStore` interface leaves room).
 - Schema-typed `remember.data` in typegen.
 
 ## 14. Where "smarter recall" plugged in (DONE — this branch)
@@ -262,9 +293,10 @@ runs pool → live df/N stats → pure `scoreMemory()` (`score.ts`) → sort →
 queries. Everything upstream (capability, tools, context-building, prompt index) was left
 untouched, and no-query searches (the index, `listCandidates`) kept pure-recency behavior.
 Determinism held: all-arithmetic scoring + the stable `updated_at, id` tiebreak kept aimock
-fixtures and eval scorers green. The next natural step, vector / embedding recall, plugs
-into the same `score.ts` seam — another signal blended into the composite score rather than
-a new code path.
+fixtures and eval scorers green. The next natural step, vector / embedding recall, has since
+shipped as an opt-in hybrid path (see §4): rather than a fourth blended signal, it adds a
+second candidate list (vector-nearest) fused co-equally with keyword by RRF, keeping the
+exported `recencyDecay` from `score.ts` for its bounded second stage.
 
 ## 15. Glossary
 
