@@ -177,11 +177,28 @@ Three tiers:
    idempotency (run init twice, no error), the dimension branch (1536→vector,
    3072→halfvec, >4000→throw), HNSW index existence + `ef_search` application,
    concurrency (parallel puts/searches over a pool), and the exact retrieval SQL.
-3. **Dogfood smoke** (doubly-gated, local): a full Dawn agent + `pgvectorMemoryStore`
-   (real Postgres via Testcontainers or a local container) + real `openaiEmbedder`
-   (real key) — the "expedite delivery → faster shipping" zero-shared-token
-   paraphrase recall, end to end. Ships a `docker run` / compose one-liner + a
-   `pnpm dogfood:pgvector` script so it's runnable by hand.
+3. **Continuous dogfood via a visible, dedicated example app.** A new small
+   memory-centric example `examples/memory` is the dogfood vehicle and a copyable
+   reference (there is no standing memory example on main today — chat has no
+   memory route, and `app-research` is a scaffold *template*, not a running app;
+   the `examples/research` promotion is a separate in-flight effort we don't
+   depend on). The example is one agent route with a `memory.ts`, and a
+   `dawn.config.ts` that is **backend-switchable**: `pgvectorMemoryStore` when
+   `DATABASE_URL` is set, else the default sqlite store. So:
+   - **Default / offline:** sqlite, zero-config — the example runs with no
+     Postgres and no key. This is what a reader copies first.
+   - **Continuous CI dogfood** (gated pgvector lane): boot the *actual example
+     app* against a Testcontainers Postgres (`DATABASE_URL` set) + the
+     deterministic `fakeEmbedder` (no key) and drive a real agent run through the
+     harness — remember a fact → it lands in pgvector → recall returns it via the
+     hybrid path. Any regression in the real Postgres integration surfaces on the
+     example itself, every gated run. This IS the dogfood.
+   - **Local hands-on** (doubly-gated): the same example + a local/Testcontainers
+     Postgres + real `openaiEmbedder` (real key) → the "expedite delivery →
+     faster shipping" zero-shared-token paraphrase recall. A `pnpm dogfood:pgvector`
+     script + a `docker run`/compose one-liner make it a one-command hand-run.
+   - Follow-up (noted, not in scope): when `examples/research` (#311) lands, the
+     same `DATABASE_URL` toggle can be added there too.
 
 Local ergonomics: `DAWN_TEST_PGVECTOR=1 pnpm --filter @dawn-ai/memory-pgvector test`
 spins the container programmatically (Testcontainers needs a Docker daemon).
@@ -210,8 +227,9 @@ concrete type call it).
 ## Scope / non-goals
 
 In: the backend package, the shared ranking-core extraction (+ sqlite refactor
-under its test guard), the conformance kit, the Testcontainers gated lane + the
-dogfood smoke, docs, changeset. **Out (deferred, noted):** DiskANN via
+under its test guard), the conformance kit, the Testcontainers gated lane, the
+new `examples/memory` app (env-toggled sqlite/pgvector) + its continuous-dogfood
+lane, docs, changeset. **Out (deferred, noted):** DiskANN via
 `pgvectorscale` (very-large-scale path mem0 offers); in-SQL RRF as a future
 single-round-trip perf option; IVFFlat; binary quantization / subvector indexing
 for >4000 dims; connection-secret management; multi-tenant pool strategies;
