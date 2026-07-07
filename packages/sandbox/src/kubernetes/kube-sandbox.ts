@@ -1,4 +1,5 @@
 import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/workspace"
+import { createDefaultKubeClient } from "./default-kube-client.js"
 import type { KubeClient, KubePodSpec } from "./kube-client.js"
 import { kubeExec } from "./kube-exec.js"
 import { kubeFilesystem } from "./kube-filesystem.js"
@@ -72,7 +73,7 @@ export function resolveSecurity(policy: SandboxPolicy): {
 export function kubernetesSandbox(opts: KubernetesSandboxOptions): SandboxProvider {
   const ns = opts.namespace ?? "dawn-sandboxes"
   const startupTimeoutMs = opts.startupTimeoutMs ?? 60_000
-  const client = opts.client as KubeClient
+  const client = opts.client ?? createDefaultKubeClient()
 
   const ensurePod = async (
     threadId: string,
