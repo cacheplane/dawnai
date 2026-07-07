@@ -30,8 +30,13 @@ export function fakeKubeClient(
   const pvcs = new Map<string, { spec: KubePvcSpec; files: Map<string, string> }>()
   const netpols = new Map<string, KubeNetworkPolicySpec>()
 
-  const runSh = (pod: FakePod, script: string, stdin?: string) => {
+  const runSh = (pod: FakePod, rawScript: string, stdin?: string) => {
     const files = pod.files
+    // kubeExec prefixes commands with `cd '<cwd>' && `; strip it so the
+    // matchers below (which model the un-prefixed commands kube-filesystem
+    // and other callers emit) still recognize the underlying command.
+    const cdMatch = rawScript.match(/^cd '.*?' && (.*)$/s)
+    const script = cdMatch?.[1] ?? rawScript
     const catMatch = script.match(/^cat '(.+)'$/)
     const catPath = catMatch?.[1]
     if (catPath !== undefined) {
