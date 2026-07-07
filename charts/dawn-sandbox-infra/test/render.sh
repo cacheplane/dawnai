@@ -13,4 +13,16 @@ tmpl --show-only templates/namespace.yaml | assert "pss warn restricted" 'pod-se
 # Override: enforce restricted
 tmpl --show-only templates/namespace.yaml --set podSecurityStandard.enforce=restricted | assert "pss enforce override" 'pod-security.kubernetes.io/enforce: restricted'
 
+# Orchestrator RBAC: ServiceAccount, Role (exact rule surface), RoleBinding
+RBAC="$(tmpl --show-only templates/rbac-orchestrator.yaml)"
+printf '%s\n' "$RBAC" | assert "orchestrator SA" 'kind: ServiceAccount'
+printf '%s\n' "$RBAC" | assert "orchestrator SA name" 'name: dawn-orchestrator'
+printf '%s\n' "$RBAC" | assert "orchestrator Role" 'kind: Role'
+printf '%s\n' "$RBAC" | assert "orchestrator RoleBinding" 'kind: RoleBinding'
+printf '%s\n' "$RBAC" | assert "pods+pvc resources" '\["pods", "persistentvolumeclaims"\]'
+printf '%s\n' "$RBAC" | assert "pods/pvc verbs" '\["create", "get", "delete"\]'
+printf '%s\n' "$RBAC" | assert "pods/exec resource" '\["pods/exec"\]'
+printf '%s\n' "$RBAC" | assert "networkpolicies resource" '\["networkpolicies"\]'
+printf '%s\n' "$RBAC" | assert "networkpolicies verbs" '\["create", "get", "list", "update", "delete"\]'
+
 echo "render checks passed"
