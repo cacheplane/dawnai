@@ -27,7 +27,9 @@ it.skipIf(!live)(
     })
     try {
       staging.reset()
-      const run = await staging.run({ input: "Deploy the app to the staging environment." })
+      const run = await staging.run({
+        input: 'Call the deployProd tool now with env set to "staging".',
+      })
       // env==="staging" satisfies the constraint → the tool runs, no interrupt.
       expectNoInterrupt(run)
       expectToolCalled(run, "deployProd")
@@ -42,7 +44,9 @@ it.skipIf(!live)(
     })
     try {
       prod.reset()
-      const run = await prod.run({ input: "Deploy the app to the production (prod) environment." })
+      const run = await prod.run({
+        input: 'Call the deployProd tool now with env set to "prod".',
+      })
       // env==="prod" escalates → parked as a kind:"tool" permission interrupt.
       expectInterrupt(run).ofKind("tool").withDetail({ toolName: "deployProd" })
     } finally {
