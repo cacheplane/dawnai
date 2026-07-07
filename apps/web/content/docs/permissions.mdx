@@ -65,6 +65,8 @@ export default agent({
 
 Every call to `deployProd` pauses the run and emits a `kind: "tool"` interrupt, unless the tool is pre-approved (see below) or a prior "Always" decision already covers it.
 
+An argument [constraint](/docs/tools#constraining-arguments) can escalate a specific call to this same prompt by returning `{ approve: true }` — e.g. allow staging deploys silently but require approval for prod. The "Always" decision is still **name-level** (it persists the tool name), so it auto-approves future escalations of that tool; use an outright `deny` in the predicate if a case should never run.
+
 ### The tool interrupt payload
 
 ```

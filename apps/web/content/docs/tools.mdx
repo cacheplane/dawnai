@@ -88,6 +88,28 @@ See [Permissions](/docs/permissions#per-tool-approval) for the full interrupt pa
   `runBash`, `readFile`, `writeFile`, and `listDir` already have their own pattern-aware allow/deny gates (see [Permissions](/docs/permissions)). Adding them to `approve` is redundant and would double-prompt — `dawn check` warns if you do.
 </Callout>
 
+### Constraining arguments
+
+`constrain` is the fourth scoping knob: a predicate per tool, run at call time against the model's arguments. It returns `true` (allow), a string (deny — returned to the model as the tool result), or `{ approve: true }` (escalate to the [approval prompt](/docs/permissions#per-tool-approval)).
+
+```ts title="src/app/ops/index.ts"
+export default agent({
+  model: "gpt-5",
+  systemPrompt: "…",
+  tools: {
+    constrain: {
+      deployProd: (args, ctx) => {
+        if (args.env === "prod") return { approve: true }   // human-in-the-loop
+        if (args.env === "staging") return true             // allow
+        return `Unknown environment "${args.env}".`         // deny, model sees this
+      },
+    },
+  },
+})
+```
+
+The predicate receives the parsed `args` and a read-only `ctx` (`{ toolName, routeId, threadId?, signal, params? }`); it may be async. A predicate that throws — or returns anything other than the three shapes above — **fails closed** (the call is denied). Predicate bodies are not statically validated; `dawn check` validates only the tool names. Don't list a tool in both `approve` and `constrain`: `constrain` wins (it can escalate via `{ approve }`) and `dawn check` warns.
+
 ## The runtime signature
 
 The full runtime signature accepted by tool discovery is `(input, ctx) => ...`, where `ctx` is `DawnToolContext` from `@dawn-ai/sdk` — carrying `signal`, `middleware?`, and `fs`:
