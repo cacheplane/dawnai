@@ -29,6 +29,23 @@ Before opening a larger PR, run the full validation lane:
 pnpm ci:validate
 ```
 
+### Build before running anything against `dist/`
+
+Packages compile `src/*.ts` into a **gitignored** `dist/`, and consumers (the CLI runtime, the test harness, one-off scripts) import the built `dist/` — not `src/`. Two facts make `dist/` easy to leave inconsistent with `src/`:
+
+- `git checkout <branch>` swaps `src/` but leaves `dist/` exactly as the last build left it.
+- Building one package at a time (`pnpm --filter <pkg> build`) updates only that package's `dist/`, leaving siblings from an earlier build.
+
+So it's possible to have correct, consistent `src/` on a branch while `dist/` on disk is **stale or skewed** — one package built from this branch, another from a different one. A dev driver or smoke script that imports `dist/` then runs against mismatched output (this produced a false negative during memory verification).
+
+Before running any dev driver, smoke script, or one-off that imports built packages, do a full build so `dist/` matches `src/`:
+
+```bash
+pnpm build   # Turbo, whole dependency graph — a fast cache-restore when already built
+```
+
+Prefer `pnpm build` over a per-package `--filter` build whenever you're about to *run* against the output. (`pnpm test` and `pnpm ci:validate` already build first, so tests are unaffected — this applies to ad-hoc scripts.)
+
 ## Issues
 
 Use GitHub Issues for reproducible bugs and concrete feature requests. Include:
