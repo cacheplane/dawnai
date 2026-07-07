@@ -25,4 +25,17 @@ printf '%s\n' "$RBAC" | assert "pods/exec resource" '\["pods/exec"\]'
 printf '%s\n' "$RBAC" | assert "networkpolicies resource" '\["networkpolicies"\]'
 printf '%s\n' "$RBAC" | assert "networkpolicies verbs" '\["create", "get", "list", "update", "delete"\]'
 
+# Default-deny egress NetworkPolicy backstop
+NETPOL="$(tmpl --show-only templates/networkpolicy-default-deny.yaml)"
+printf '%s\n' "$NETPOL" | assert "netpol kind" 'kind: NetworkPolicy'
+printf '%s\n' "$NETPOL" | assert "netpol podSelector all" 'podSelector: \{\}'
+printf '%s\n' "$NETPOL" | assert "netpol policyTypes egress" 'policyTypes: \[Egress\]'
+printf '%s\n' "$NETPOL" | assert "netpol dns to kube-system" 'kubernetes.io/metadata.name: kube-system'
+printf '%s\n' "$NETPOL" | assert "netpol dns port 53" 'port: 53'
+# Override: disable the backstop entirely
+if tmpl --show-only templates/networkpolicy-default-deny.yaml --set networkPolicy.defaultDenyEgress=false 2>/dev/null | grep -q 'kind: NetworkPolicy'; then
+  echo "FAIL: netpol should be absent when defaultDenyEgress=false"; exit 1
+fi
+echo "ok: netpol absent when disabled"
+
 echo "render checks passed"
