@@ -167,8 +167,8 @@ In **`auto`** mode each write reconciles inline against existing active records 
 - **Same identity, different value** → **supersede**: a new active row is written and the old row flips to `superseded` (history preserved, not deleted).
 - **No matching identity** → add a new active row.
 
-<Callout type="warn" title="Supersession only fires in auto mode">
-  In the default `candidate` mode there is **no** reconciliation or supersession. A `remember` call simply writes a hidden candidate; `dawn memory approve` only flips its status to `active`. Contradicting facts are *not* reconciled when approved — that logic runs only on `auto` writes. If you rely on contradiction-handling, you must opt into `auto`.
+<Callout type="warn" title="Supersession runs in auto and ask modes, not candidate">
+  In the default `candidate` mode there is **no** reconciliation or supersession. A `remember` call simply writes a hidden candidate; `dawn memory approve` only flips its status to `active` — contradicting facts are *not* reconciled at approval time. Inline reconciliation and supersession run on `auto` and `ask` writes. If you rely on contradiction-handling, opt into `auto` (trusting) or `ask` (gated on supersede — see below).
 </Callout>
 
 ### `ask` mode
@@ -233,7 +233,7 @@ export default {
 } satisfies import("@dawn-ai/core").DawnConfig
 ```
 
-`resolveScope` runs per request and fills in the `tenant` / `user` / `agent` dimensions a route declared in its `scope`. The `workspace` and `route` dimensions are derived automatically (from the app-root basename and the route path); only dimensions a route lists in `scope` end up in its namespace.
+`resolveScope` runs per request and fills in the `tenant` / `user` / `agent` dimensions a route declared in its `scope`. The `workspace` and `route` dimensions are derived automatically (from the app-root basename and the route path); only dimensions a route lists in `scope` end up in its namespace. Any string is a safe scope value — the delimiters `|` and `=` are percent-encoded when the namespace is serialized, so a free-text `tenant`/`user` id can't corrupt or collide across namespaces.
 
 <Callout type="info" title="enabled is not read for memory">
   `DawnConfig.memory` carries an `enabled` field for historical reasons, but the runtime never reads it. L3 activation is purely the presence of a `memory.ts` next to a route's `index.ts` — setting `enabled: false` does **not** disable it.
