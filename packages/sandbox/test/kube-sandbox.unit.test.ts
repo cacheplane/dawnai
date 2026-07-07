@@ -86,6 +86,23 @@ test("destroy waits until the PVC is actually gone (async deletion)", async () =
   expect(await k.pvcExists("ns", "dawn-sbx-vol-t")).toBe(false)
 })
 
+test("long thread IDs sharing a 40-char prefix get distinct pod names (no collision)", async () => {
+  const k = fakeKubeClient()
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  const idA = `thread-${"a".repeat(40)}ALPHA`
+  const idB = `thread-${"a".repeat(40)}BETA`
+  await p.acquire({ threadId: idA, policy, signal: signal() })
+  await p.acquire({ threadId: idB, policy, signal: signal() })
+  const names = [...k.pods.keys()]
+  expect(names).toHaveLength(2)
+  expect(names[0]).not.toBe(names[1])
+  // names stay DNS-1123-valid and within the 63-char pod-name budget
+  for (const n of names) {
+    expect(n.length).toBeLessThanOrEqual(63)
+    expect(n).toMatch(/^[a-z0-9-]+$/)
+  }
+})
+
 test("diskGb sets the PVC storage size", async () => {
   const k = fakeKubeClient()
   const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })

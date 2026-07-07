@@ -103,7 +103,11 @@ function toNetworkPolicyManifest(s: KubeNetworkPolicySpec): V1NetworkPolicy {
   if (s.mode !== "deny") {
     throw new Error(`toNetworkPolicyManifest only builds deny-mode policies; got mode "${s.mode}".`)
   }
+  // Scope DNS egress to the cluster-DNS namespace (CoreDNS lives in kube-system).
+  // Without a `to:` selector the rule would allow port-53 traffic to ANY host,
+  // opening a DNS-tunneling exfiltration path out of the deny-mode sandbox.
   const dnsEgress = {
+    to: [{ namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "kube-system" } } }],
     ports: [
       { protocol: "UDP", port: 53 },
       { protocol: "TCP", port: 53 },
@@ -289,7 +293,10 @@ export function createDefaultKubeClient(): KubeClient {
       return {
         stdout: stdout.text(),
         stderr: stderr.text(),
-        exitCode: exitCodeFromStatus(settledStatus),
+        // The library fires the status callback before `close` on a normal exit,
+        // so an undefined status at close means the socket died abnormally (pod
+        // OOMKill mid-exec, network drop). Report that as a failure, not success.
+        exitCode: settledStatus === undefined ? 1 : exitCodeFromStatus(settledStatus),
       }
     },
 

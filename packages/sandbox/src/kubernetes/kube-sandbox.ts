@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/workspace"
 import { createDefaultKubeClient } from "./default-kube-client.js"
 import type { KubeClient, KubePodSpec } from "./kube-client.js"
@@ -5,14 +6,21 @@ import { kubeExec } from "./kube-exec.js"
 import { kubeFilesystem } from "./kube-filesystem.js"
 
 const ROOT = "/workspace"
-// DNS-1123 label: lowercase alphanumeric + '-', <=63 chars.
-const sanitize = (s: string) =>
-  s
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9-]/g, "-")
-    .replace(/^-+/, "")
-    .slice(0, 40)
-    .replace(/-+$/, "") || "x"
+// DNS-1123 label: lowercase alphanumeric + '-', <=63 chars. Bare truncation to 40
+// chars would collide two thread IDs sharing a 40-char prefix onto one sandbox, so
+// append a stable content hash when (and only when) the cleaned id exceeds the limit
+// — short ids are returned verbatim, keeping existing names churn-free.
+const sanitize = (s: string) => {
+  const clean =
+    s
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9-]/g, "-")
+      .replace(/^-+/, "")
+      .replace(/-+$/, "") || "x"
+  if (clean.length <= 40) return clean
+  const hash = createHash("sha256").update(s).digest("hex").slice(0, 8)
+  return `${clean.slice(0, 31).replace(/-+$/, "")}-${hash}`
+}
 const podName = (t: string) => `dawn-sbx-${sanitize(t)}`
 const pvcName = (t: string) => `dawn-sbx-vol-${sanitize(t)}`
 const netpolName = (t: string) => `dawn-sbx-net-${sanitize(t)}`
@@ -230,8 +238,10 @@ async function waitForRunning(
         `Sandbox unavailable: pod "${name}" disappeared while starting. Run \`dawn check\`.`,
       )
     }
-    if (phase === "Failed") {
-      throw new Error(`Sandbox unavailable: pod "${name}" entered Failed. Run \`dawn check\`.`)
+    if (phase === "Failed" || phase === "Succeeded") {
+      // A SIGTERM'd `sleep infinity` exits 0 → Succeeded; treat it as a dead keeper
+      // rather than polling out the full timeout waiting for a Running it'll never reach.
+      throw new Error(`Sandbox unavailable: pod "${name}" entered ${phase}. Run \`dawn check\`.`)
     }
     if (Date.now() > deadline) {
       throw new Error(
