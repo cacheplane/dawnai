@@ -60,4 +60,34 @@ printf '%s\n' "$LR" | assert "limitrange default cpu" 'cpu: "1"'
 printf '%s\n' "$LR" | assert "limitrange default memory" 'memory: "512Mi"'
 printf '%s\n' "$LR" | assert "limitrange defaultRequest cpu" 'cpu: "100m"'
 
+# Reaper RBAC
+RRBAC="$(tmpl --show-only templates/reaper-rbac.yaml)"
+printf '%s\n' "$RRBAC" | assert "reaper SA" 'name: dawn-reaper'
+printf '%s\n' "$RRBAC" | assert "reaper Role pvc verbs" '\["get", "list", "patch", "delete"\]'
+printf '%s\n' "$RRBAC" | assert "reaper Role pods verbs" '\["list"\]'
+
+# Reaper CronJob: hardened securityContext + correct SA + TTL env
+CJ="$(tmpl --show-only templates/reaper-cronjob.yaml)"
+printf '%s\n' "$CJ" | assert "cronjob kind" 'kind: CronJob'
+printf '%s\n' "$CJ" | assert "cronjob schedule" 'schedule: "17 \* \* \* \*"'
+printf '%s\n' "$CJ" | assert "cronjob SA" 'serviceAccountName: dawn-reaper'
+printf '%s\n' "$CJ" | assert "cronjob ttl env (168h -> 604800s)" 'value: "604800"'
+printf '%s\n' "$CJ" | assert "cronjob ns env" 'value: "dawn-sandboxes"'
+printf '%s\n' "$CJ" | assert "cronjob runAsNonRoot" 'runAsNonRoot: true'
+printf '%s\n' "$CJ" | assert "cronjob runAsUser 65532" 'runAsUser: 65532'
+printf '%s\n' "$CJ" | assert "cronjob readOnlyRootFilesystem" 'readOnlyRootFilesystem: true'
+printf '%s\n' "$CJ" | assert "cronjob allowPrivilegeEscalation false" 'allowPrivilegeEscalation: false'
+printf '%s\n' "$CJ" | assert "cronjob drop ALL caps" 'drop: \["ALL"\]'
+printf '%s\n' "$CJ" | assert "cronjob seccomp RuntimeDefault" 'type: RuntimeDefault'
+printf '%s\n' "$CJ" | assert "cronjob configmap script" 'name: dawn-reaper-script'
+# Override: disable the reaper entirely (CronJob + RBAC + ConfigMap gone)
+if tmpl --show-only templates/reaper-cronjob.yaml --set reaper.enabled=false 2>/dev/null | grep -q 'kind: CronJob'; then
+  echo "FAIL: cronjob should be absent when reaper.enabled=false"; exit 1
+fi
+echo "ok: cronjob absent when disabled"
+if tmpl --show-only templates/reaper-rbac.yaml --set reaper.enabled=false 2>/dev/null | grep -q 'kind: Role'; then
+  echo "FAIL: reaper RBAC should be absent when reaper.enabled=false"; exit 1
+fi
+echo "ok: reaper RBAC absent when disabled"
+
 echo "render checks passed"

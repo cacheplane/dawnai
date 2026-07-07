@@ -1,0 +1,69 @@
+{{- if .Values.reaper.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dawn-reaper-script
+  namespace: {{ include "dawn-sandbox-infra.namespace" . }}
+  labels:
+    {{- include "dawn-sandbox-infra.labels" . | nindent 4 }}
+data:
+  reaper.sh: |
+{{ .Files.Get "files/reaper.sh" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dawn-reaper
+  namespace: {{ include "dawn-sandbox-infra.namespace" . }}
+  labels:
+    {{- include "dawn-sandbox-infra.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.reaper.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "dawn-sandbox-infra.labels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "dawn-sandbox-infra.reaperSAName" . }}
+          automountServiceAccountToken: true
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: reaper
+              image: {{ .Values.reaper.image | quote }}
+              command: ["/bin/sh", "/scripts/reaper.sh"]
+              env:
+                - name: DAWN_SANDBOX_NS
+                  value: {{ include "dawn-sandbox-infra.namespace" . | quote }}
+                - name: DAWN_REAPER_TTL_SECONDS
+                  value: {{ mul .Values.reaper.ttlHours 3600 | quote }}
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65532
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+              volumeMounts:
+                - name: reaper-script
+                  mountPath: /scripts
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: reaper-script
+              configMap:
+                name: dawn-reaper-script
+                defaultMode: 0555
+            - name: tmp
+              emptyDir: {}
+{{- end }}
