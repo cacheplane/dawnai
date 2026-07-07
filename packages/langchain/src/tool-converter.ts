@@ -26,8 +26,10 @@ export function convertToolToLangChain(
   tool: DawnToolDefinition,
   middlewareContext?: Readonly<Record<string, unknown>>,
   offload?: OffloadFn,
+  routeParamNames: readonly string[] = [],
 ): DynamicStructuredTool {
   const schema = toZodSchema(tool.schema)
+  const paramNameSet = new Set(routeParamNames)
 
   return new DynamicStructuredTool({
     name: tool.name,
@@ -41,9 +43,12 @@ export function convertToolToLangChain(
       const configurable = (config?.configurable ?? {}) as Record<string, unknown>
       const threadId =
         typeof configurable.thread_id === "string" ? configurable.thread_id : undefined
+      // Allowlist against the route's declared param names. A denylist would
+      // also capture LangGraph internals injected into configurable (e.g.
+      // checkpoint_ns, __pregel_task_id), which must never surface as route params.
       const params: Record<string, string> = {}
       for (const [key, value] of Object.entries(configurable)) {
-        if (key !== "thread_id" && typeof value === "string") params[key] = value
+        if (paramNameSet.has(key) && typeof value === "string") params[key] = value
       }
       const rawResult = await tool.run(input, {
         ...(middlewareContext ? { middleware: middlewareContext } : {}),

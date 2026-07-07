@@ -161,9 +161,21 @@ describe("convertToolToLangChain — config.configurable forwarding", () => {
         return "ok"
       },
     }
-    const lc = convertToolToLangChain(tool)
-    await lc.invoke({}, { configurable: { thread_id: "t-123", tenant: "acme" } })
+    const lc = convertToolToLangChain(tool, undefined, undefined, ["tenant"])
+    await lc.invoke(
+      {},
+      {
+        configurable: {
+          thread_id: "t-123",
+          tenant: "acme",
+          checkpoint_ns: "tools:xyz",
+          __pregel_task_id: "abc",
+        },
+      },
+    )
     expect(seen?.threadId).toBe("t-123")
+    // ONLY the allowlisted route param — LangGraph internals like checkpoint_ns
+    // and __pregel_task_id must NOT leak into ctx.params.
     expect(seen?.params).toEqual({ tenant: "acme" })
   })
 })

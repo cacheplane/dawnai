@@ -100,6 +100,7 @@ async function materializeAgent(
     readonly bypassCache?: boolean
     readonly offload?: OffloadFn
     readonly summarization?: ResolvedSummarizationConfig
+    readonly routeParamNames?: readonly string[]
   } = {},
 ): Promise<AgentLike> {
   const fingerprint = fragmentFingerprint(opts.promptFragments ?? [])
@@ -114,7 +115,7 @@ async function materializeAgent(
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
 
   const langchainTools = tools.map((tool) =>
-    convertToolToLangChain(tool, opts.middlewareContext, opts.offload),
+    convertToolToLangChain(tool, opts.middlewareContext, opts.offload, opts.routeParamNames ?? []),
   )
 
   const provider = resolveProvider({
@@ -442,6 +443,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
         ...((resolver && hasTaskTool) || options.sandboxed ? { bypassCache: true } : {}),
         ...(options.offload ? { offload: options.offload } : {}),
         ...(options.summarization ? { summarization: options.summarization } : {}),
+        routeParamNames: options.routeParamNames,
       },
     )
     const retryConfig = options.entry.retry
@@ -462,7 +464,12 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
   assertAgentLike(options.entry)
 
   const langchainTools = effectiveTools.map((tool) =>
-    convertToolToLangChain(tool, options.middlewareContext, options.offload),
+    convertToolToLangChain(
+      tool,
+      options.middlewareContext,
+      options.offload,
+      options.routeParamNames,
+    ),
   )
   if (langchainTools.length > 0) {
     config.tools = langchainTools
