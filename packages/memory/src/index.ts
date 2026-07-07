@@ -7,6 +7,7 @@ export {
   idf,
   type RecallRankingOptions,
   type RecallWeights,
+  recencyDecay,
   scoreMemory,
 } from "./score.js"
 export { sqliteMemoryStore } from "./sqlite-store.js"
