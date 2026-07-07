@@ -1,3 +1,4 @@
+export { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
 export { type MemoryScopeTuple, serializeNamespace } from "./namespace.js"
 export { classifyWrite, type WriteOp } from "./reconcile.js"
 export {
