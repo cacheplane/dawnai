@@ -1,5 +1,26 @@
 # @dawn-ai/core
 
+## 0.8.9
+
+### Patch Changes
+
+- d3d94af: Argument-level tool constraints: `agent({ tools: { constrain: { deployProd: (args, ctx) => … } } })` runs a per-tool predicate against the model's arguments at call time, returning allow / deny-with-reason / `{ approve: true }` (escalate to the HITL prompt). Predicates may be async and receive a read-only policy context; a throwing or off-contract predicate fails closed. The tool run context now also carries the live `threadId` + route params. `dawn check` validates `constrain` tool names and warns on `approve`/`constrain` overlap.
+- 1dd2147: Opt-in vector/semantic recall for long-term memory. Enable with
+  `memory: { vector: { embedder: openaiEmbedder() } }`: recall becomes hybrid —
+  keyword (IDF) and vector (cosine) candidate lists fused co-equally by Reciprocal
+  Rank Fusion, with a bounded recency/confidence second stage. Keyword recall is
+  never dropped (dense retrieval is weak on exact IDs/codes/names), and default
+  keyword-only recall is unchanged. Pluggable `Embedder` (`openaiEmbedder`,
+  `fakeEmbedder`); embeddings stored as Float32 BLOBs in the existing node:sqlite
+  store (zero new native deps), tagged by embedder id with graceful keyword-only
+  fallback on model change. pgvector is a planned follow-up backend.
+- Updated dependencies [d3d94af]
+- Updated dependencies [628f0c1]
+  - @dawn-ai/sdk@0.8.9
+  - @dawn-ai/workspace@0.8.9
+  - @dawn-ai/permissions@0.8.9
+  - @dawn-ai/sqlite-storage@0.8.9
+
 ## 0.8.8
 
 ### Patch Changes

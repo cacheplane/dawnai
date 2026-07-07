@@ -1,5 +1,39 @@
 # @dawn-ai/testing
 
+## 0.8.9
+
+### Patch Changes
+
+- ca9bc13: Add `@dawn-ai/memory-pgvector` — a Postgres + pgvector MemoryStore backend for
+  production/multi-instance vector memory. Enable with
+  `memory: { store: pgvectorMemoryStore({ connectionString, dimensions }) }`. HNSW
+  (cosine) vector retrieval; reuses the exact same pure hybrid ranking (RRF +
+  recency/confidence) as the default sqlite backend, so recall ordering is
+  identical across backends. Adds a shared `runMemoryStoreConformance` kit
+  (@dawn-ai/testing) run against both backends. Dimensions ≤2000 use `vector`,
+  ≤4000 use `halfvec` (text-embedding-3-large); pgvectorscale/DiskANN and in-SQL
+  RRF are deferred. Also pins `openaiEmbedder` to float embedding encoding
+  (`encodingFormat: "float"`) — avoids a base64 decode interop quirk that could
+  yield wrong embedding dimensionality against some proxies/mocks.
+- 1dd2147: Opt-in vector/semantic recall for long-term memory. Enable with
+  `memory: { vector: { embedder: openaiEmbedder() } }`: recall becomes hybrid —
+  keyword (IDF) and vector (cosine) candidate lists fused co-equally by Reciprocal
+  Rank Fusion, with a bounded recency/confidence second stage. Keyword recall is
+  never dropped (dense retrieval is weak on exact IDs/codes/names), and default
+  keyword-only recall is unchanged. Pluggable `Embedder` (`openaiEmbedder`,
+  `fakeEmbedder`); embeddings stored as Float32 BLOBs in the existing node:sqlite
+  store (zero new native deps), tagged by embedder id with graceful keyword-only
+  fallback on model change. pgvector is a planned follow-up backend.
+- Updated dependencies [d3d94af]
+- Updated dependencies [628f0c1]
+- Updated dependencies [ca9bc13]
+- Updated dependencies [1dd2147]
+  - @dawn-ai/sdk@0.8.9
+  - @dawn-ai/core@0.8.9
+  - @dawn-ai/cli@0.8.9
+  - @dawn-ai/workspace@0.8.9
+  - @dawn-ai/memory@0.8.9
+
 ## 0.8.8
 
 ### Patch Changes
