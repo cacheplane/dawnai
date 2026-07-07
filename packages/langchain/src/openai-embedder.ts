@@ -24,6 +24,11 @@ export function openaiEmbedder(opts?: {
         const baseURL = process.env.OPENAI_BASE_URL
         return new Ctor({
           model,
+          // Request float arrays explicitly. The OpenAI SDK defaults to base64
+          // encoding for embeddings; pinning "float" avoids base64 decode
+          // interop quirks (some mocks/proxies return a byte length that decodes
+          // to the wrong dimension) and yields the model's true dimensionality.
+          encodingFormat: "float",
           ...(baseURL ? { configuration: { baseURL } } : {}),
         })
       })

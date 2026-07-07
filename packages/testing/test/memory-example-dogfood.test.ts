@@ -6,7 +6,10 @@
 //
 //   GATED (DAWN_TEST_PGVECTOR=1, needs Docker): a Testcontainers Postgres set as
 //     DATABASE_URL, so the example switches to its pgvector store. Drives the
-//     SAME flow and asserts recall works through pgvector.
+//     SAME flow and asserts recall works through pgvector. This proves the real
+//     example app boots on the pgvector store, writes to Postgres, and recalls
+//     end-to-end; the hybrid/vector RANKING quality is proven separately by the
+//     pgvector conformance kit + the live smoke.
 //
 // Each block copies the example app into its OWN throwaway dir under
 // `examples/memory/` (so `@dawn-ai/*` still resolves up to the example's
@@ -36,6 +39,14 @@ function copyExampleApp(): string {
   }
   return dir
 }
+
+// Note: under the aimock harness the example's config wires openaiEmbedder (the
+// harness injects a dummy OPENAI_API_KEY, and the config gates its embedder on
+// that var — exactly as a real keyed user runs it). openaiEmbedder returns
+// 1536-dim vectors through aimock, matching the pgvector `vector(1536)` column,
+// so the write embeds + persists. This dogfood asserts only that the fact is
+// remembered and recalled end to end; hybrid/vector RANKING quality is proven
+// separately by the pgvector conformance kit + the live smoke, not here.
 
 /** Scripted remember → recall flow against the notes route. Returns the decoded
  *  recall tool output. */
@@ -110,17 +121,15 @@ describe.skipIf(!pgvectorEnabled)("examples/memory dogfood — pgvector backend"
   let container: StartedPostgreSqlContainer
   let appRoot: string
   let prevUrl: string | undefined
-  let prevFake: string | undefined
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer("pgvector/pgvector:pg16").start()
-    // Set the backend env BEFORE copying/loading the example config so it picks
-    // the pgvector store + the network-free fake embedder (exercises the hybrid
-    // vector path without a real OpenAI key or network).
+    // Set DATABASE_URL BEFORE copying/loading the example config so it picks the
+    // pgvector store. (The config also wires openaiEmbedder because the harness
+    // injects a dummy key — see driveRememberRecall for how the embedding
+    // fixture keeps that write dimension-compatible with vector(1536).)
     prevUrl = process.env.DATABASE_URL
-    prevFake = process.env.DAWN_MEMORY_FAKE_EMBEDDER
     process.env.DATABASE_URL = container.getConnectionUri()
-    process.env.DAWN_MEMORY_FAKE_EMBEDDER = "1"
     appRoot = copyExampleApp()
   }, 120_000)
 
@@ -141,8 +150,6 @@ describe.skipIf(!pgvectorEnabled)("examples/memory dogfood — pgvector backend"
     }
     if (prevUrl === undefined) delete process.env.DATABASE_URL
     else process.env.DATABASE_URL = prevUrl
-    if (prevFake === undefined) delete process.env.DAWN_MEMORY_FAKE_EMBEDDER
-    else process.env.DAWN_MEMORY_FAKE_EMBEDDER = prevFake
     await container?.stop()
   })
 
