@@ -18,8 +18,21 @@ export interface MemoryRecordLike {
   readonly supersedes?: readonly string[]
 }
 
+/**
+ * Pluggable text embedder for opt-in vector/semantic recall. Structural — the
+ * concrete implementations (`openaiEmbedder`, `fakeEmbedder`) live outside core.
+ */
+export interface Embedder {
+  readonly id: string
+  readonly dims: number
+  embed(texts: readonly string[]): Promise<Float32Array[]>
+}
+
 export interface MemoryStoreLike {
-  put(rec: MemoryRecordLike): Promise<void>
+  put(
+    rec: MemoryRecordLike,
+    opts?: { embedding?: Float32Array; embeddingModel?: string },
+  ): Promise<void>
   get(id: string): Promise<MemoryRecordLike | null>
   search(q: {
     namespace: string
@@ -30,6 +43,12 @@ export interface MemoryStoreLike {
     limit?: number
     /** ISO recency reference for ranked searches; stores may ignore it. */
     now?: string
+    /** When present, the store runs the hybrid keyword+vector path. */
+    queryEmbedding?: Float32Array
+    /** Only rows whose stored embedding model equals this are vector-compared. */
+    embedderId?: string
+    /** Hybrid ranking tuning; structural — the store validates. */
+    vector?: unknown
   }): Promise<readonly MemoryRecordLike[]>
   update(id: string, patch: Partial<MemoryRecordLike>): Promise<void>
   supersede(id: string, bySupersedingId: string): Promise<void>
@@ -60,6 +79,18 @@ export interface MemoryContext {
     | { readonly ok: false; readonly errors: string }
   readonly now: string
   readonly indexMaxEntries?: number
+  /** The resolved embedder when vector recall is enabled; the capability embeds
+   *  writes + queries through it. Absent → keyword-only. */
+  readonly embedder?: Embedder
+  /** Hybrid recall tuning threaded through to the store's search. All fields
+   *  optional/defaulted; absent → store defaults. */
+  readonly vector?: {
+    readonly weights?: { readonly keyword?: number; readonly vector?: number }
+    readonly rrfK?: number
+    readonly vectorK?: number
+    readonly recencyWeight?: number
+    readonly confidenceWeight?: number
+  }
 }
 
 export interface CapabilityMarkerContext {

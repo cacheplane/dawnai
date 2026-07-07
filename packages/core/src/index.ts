@@ -29,6 +29,7 @@ export type {
   CapabilityMarker,
   CapabilityMarkerContext,
   DawnToolDefinition,
+  Embedder,
   MemoryContext,
   MemoryRecordLike,
   MemoryStoreLike,
