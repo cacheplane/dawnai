@@ -162,6 +162,46 @@ jobs:
       - name: Real-Postgres pgvector tests
         run: DAWN_TEST_PGVECTOR=1 pnpm --filter @dawn-ai/memory-pgvector test
 
+  chart-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install /tmp/kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: Helm lint (strict)
+        run: helm lint --strict charts/dawn-sandbox-infra
+
+      - name: Reaper unit test
+        run: sh charts/dawn-sandbox-infra/test/reaper.test.sh
+
+      - name: Render assertions
+        run: sh charts/dawn-sandbox-infra/test/render.sh
+
+      - name: kubeconform (default values)
+        run: |
+          helm template test charts/dawn-sandbox-infra \
+            | kubeconform -strict -summary -ignore-missing-schemas
+
+      - name: kubeconform (restricted PSS, reaper disabled)
+        run: |
+          helm template test charts/dawn-sandbox-infra \
+            --set podSecurityStandard.enforce=restricted \
+            --set reaper.enabled=false \
+            | kubeconform -strict -summary -ignore-missing-schemas
+
   sandbox-k8s:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -190,6 +230,9 @@ jobs:
       - name: Build sandbox package
         run: pnpm --filter @dawn-ai/workspace build && pnpm --filter @dawn-ai/sandbox build
 
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+
       - name: Create kind cluster (no default CNI)
         uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
         with:
@@ -201,8 +244,19 @@ jobs:
           kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
           kubectl wait --for=condition=Ready nodes --all --timeout=180s
 
-      - name: Create sandbox namespace
-        run: kubectl create namespace dawn-sandboxes
+      - name: Install sandbox-infra chart
+        run: |
+          helm install dawn-sandbox-infra charts/dawn-sandbox-infra --wait
+          kubectl -n dawn-sandboxes get role,rolebinding,networkpolicy,resourcequota,limitrange,cronjob,serviceaccount
+
+      - name: Assert orchestrator RBAC (least privilege)
+        run: |
+          SA=system:serviceaccount:dawn-sandboxes:dawn-orchestrator
+          kubectl auth can-i create pods --as=$SA -n dawn-sandboxes | grep -qx yes
+          kubectl auth can-i create pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes
+          kubectl auth can-i create persistentvolumeclaims --as=$SA -n dawn-sandboxes | grep -qx yes
+          kubectl auth can-i create networkpolicies.networking.k8s.io --as=$SA -n dawn-sandboxes | grep -qx yes
+          kubectl auth can-i create secrets --as=$SA -n dawn-sandboxes | grep -qx no
 
       - name: Real-cluster sandbox conformance + e2e
         run: DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration
