@@ -476,6 +476,9 @@ importers:
       '@dawn-ai/core':
         specifier: workspace:*
         version: link:../core
+      '@dawn-ai/langchain':
+        specifier: workspace:*
+        version: link:../langchain
       '@dawn-ai/permissions':
         specifier: workspace:*
         version: link:../permissions

@@ -1,0 +1,5 @@
+{
+  "name": "probe-app-vector-openai",
+  "private": true,
+  "type": "module"
+}
