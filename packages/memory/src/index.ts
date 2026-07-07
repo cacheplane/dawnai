@@ -19,6 +19,7 @@ export type {
   MemorySource,
   MemoryStatus,
   MemoryStore,
+  VectorRankingOptions,
 } from "./types.js"
 export {
   cosineSimilarity,
