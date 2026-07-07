@@ -1,5 +1,17 @@
 # @dawn-ai/devkit
 
+## 0.8.8
+
+### Patch Changes
+
+- 6fb2b10: Improve the default scaffold and packaged external verification.
+
+  The research scaffold now dogfoods reviewable memory and the Docker sandbox,
+  shared scaffold tools can run through sandbox-aware workspace APIs, generated
+  apps use pnpm 11 build policy in `pnpm-workspace.yaml`, and packaged scaffold
+  tests install the current packed devkit templates instead of stale registry
+  contents.
+
 ## 0.8.7
 
 ### Patch Changes

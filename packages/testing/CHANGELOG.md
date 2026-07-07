@@ -1,5 +1,28 @@
 # @dawn-ai/testing
 
+## 0.8.8
+
+### Patch Changes
+
+- 6fb2b10: Improve the default scaffold and packaged external verification.
+
+  The research scaffold now dogfoods reviewable memory and the Docker sandbox,
+  shared scaffold tools can run through sandbox-aware workspace APIs, generated
+  apps use pnpm 11 build policy in `pnpm-workspace.yaml`, and packaged scaffold
+  tests install the current packed devkit templates instead of stale registry
+  contents.
+
+- Updated dependencies [6fb2b10]
+- Updated dependencies [dd02f56]
+- Updated dependencies [26780ab]
+- Updated dependencies [5ccae68]
+- Updated dependencies [57e8cd9]
+  - @dawn-ai/cli@0.8.8
+  - @dawn-ai/core@0.8.8
+  - @dawn-ai/memory@0.8.8
+  - @dawn-ai/workspace@0.8.8
+  - @dawn-ai/sdk@0.8.8
+
 ## 0.8.7
 
 ### Patch Changes

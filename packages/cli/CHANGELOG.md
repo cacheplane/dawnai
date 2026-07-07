@@ -1,5 +1,36 @@
 # @dawn-ai/cli
 
+## 0.8.8
+
+### Patch Changes
+
+- 6fb2b10: Improve the default scaffold and packaged external verification.
+
+  The research scaffold now dogfoods reviewable memory and the Docker sandbox,
+  shared scaffold tools can run through sandbox-aware workspace APIs, generated
+  apps use pnpm 11 build policy in `pnpm-workspace.yaml`, and packaged scaffold
+  tests install the current packed devkit templates instead of stale registry
+  contents.
+
+- dd02f56: New memory write-governance mode `writes: "ask"`: memory supersedes (belief contradictions) prompt a HITL Once/Always/Deny interrupt with old-vs-new detail; ADDs and idempotent updates flow silently; headless behaves as `auto`. New `kind: "memory"` permission interrupt, `gateMemorySupersede`, `suggestedMemoryPattern`, and a `dawn check` warning for the `ask` + `approve: ["remember"]` double-gate overlap.
+- 57e8cd9: Harden the Docker sandbox by default: drop all Linux capabilities, no-new-privileges,
+  a PID limit (512), a read-only root filesystem (workspace + /tmp stay writable), and
+  run-as-non-root (uid/gid 1000:1000 via a create-time root chown-init) — expressed as a
+  provider-agnostic `SandboxPolicy.security` intent. `resources.timeoutMs` is now enforced
+  per command (in-container `timeout`, exit 124). All hardening is on by default with
+  per-flag opt-outs (`readOnlyRootFilesystem`, `runAsNonRoot`, etc.). Behavior changes only
+  for apps already using `sandbox`; runtime system-directory writes / global installs now
+  fail under the defaults — bake system deps into your image or opt out.
+- Updated dependencies [dd02f56]
+- Updated dependencies [26780ab]
+- Updated dependencies [5ccae68]
+  - @dawn-ai/core@0.8.8
+  - @dawn-ai/permissions@0.8.8
+  - @dawn-ai/memory@0.8.8
+  - @dawn-ai/langchain@0.8.8
+  - @dawn-ai/langgraph@0.8.8
+  - @dawn-ai/sqlite-storage@0.8.8
+
 ## 0.8.7
 
 ### Patch Changes

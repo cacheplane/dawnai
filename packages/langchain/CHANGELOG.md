@@ -1,5 +1,16 @@
 # @dawn-ai/langchain
 
+## 0.8.8
+
+### Patch Changes
+
+- Updated dependencies [dd02f56]
+- Updated dependencies [5ccae68]
+- Updated dependencies [57e8cd9]
+  - @dawn-ai/core@0.8.8
+  - @dawn-ai/workspace@0.8.8
+  - @dawn-ai/sdk@0.8.8
+
 ## 0.8.7
 
 ### Patch Changes
