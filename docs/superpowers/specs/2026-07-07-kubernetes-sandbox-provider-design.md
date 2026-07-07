@@ -98,8 +98,9 @@ The `SandboxPolicy.security` intent maps onto Pod/container SecurityContext (sec
 
 ### Networking
 
-- `network.mode: "deny"` → per-thread NetworkPolicy selecting the pod label, empty egress **except** a DNS carve-out (UDP/TCP 53 to kube-dns) so name resolution still works; everything else denied.
-- `network.mode: "allow"` with `allowlist` → egress rules to the listed CIDRs/ports (deny the rest); bare `allow` (no list) → no policy (open), matching Docker's allow-mode baseline.
+- **NOTE on the real `SandboxPolicy.network` union** (from PR #289): it is `{ mode: "allow"; denylist? }` | `{ mode: "deny"; allowlist? }` — i.e. `allow` carries a *denylist*, `deny` carries an *allowlist*. The provider honors it exactly like the Docker reference:
+- `network.mode: "deny"` → per-thread NetworkPolicy selecting the pod label; egress denied **except** a DNS carve-out (UDP/TCP 53 to kube-dns) **plus** any `allowlist` CIDRs. Everything else denied.
+- `network.mode: "allow"` → no NetworkPolicy (open egress), matching Docker's allow-mode baseline; the `denylist` is best-effort/not enforced by this provider (same honest-scope caveat as Docker's allow-mode denylist).
 - Enforcement depends on a policy-capable CNI (Calico/Cilium). `preflight()` reports `networkPolicyEnforced` and `dawn check` **warns** when it can't be confirmed — the same honest-scope posture as Docker's best-effort allow-mode denylist.
 - RBAC: needs `networkpolicies: create/delete` (granted by the sub-project-2 chart's ServiceAccount).
 
