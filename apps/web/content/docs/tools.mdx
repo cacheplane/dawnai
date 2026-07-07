@@ -99,9 +99,10 @@ export default agent({
   tools: {
     constrain: {
       deployProd: (args, ctx) => {
-        if (args.env === "prod") return { approve: true }   // human-in-the-loop
-        if (args.env === "staging") return true             // allow
-        return `Unknown environment "${args.env}".`         // deny, model sees this
+        const { env } = args as { env?: string }             // args is typed `unknown`
+        if (env === "prod") return { approve: true }         // human-in-the-loop
+        if (env === "staging") return true                   // allow
+        return `Unknown environment "${env}".`               // deny, model sees this
       },
     },
   },
