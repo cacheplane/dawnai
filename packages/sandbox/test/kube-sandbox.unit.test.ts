@@ -122,3 +122,55 @@ test("crashed (Failed) pod is deleted and replaced with a Running pod", async ()
   expect(pod).not.toBe(seeded) // a freshly recreated pod, not the crashed one
   expect(await k.readNamespacedPodPhase("ns", "dawn-sbx-t")).toBe("Running")
 })
+
+test("network:deny emits a deny NetworkPolicy selecting the thread", async () => {
+  const k = fakeKubeClient()
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  await p.acquire({ threadId: "t", policy: { network: { mode: "deny" } }, signal: signal() })
+  const np = k.netpols.get("dawn-sbx-net-t")
+  expect(np?.mode).toBe("deny")
+  expect(np?.threadLabelValue).toBe("t")
+})
+
+test("network:allow with no allowlist emits no NetworkPolicy", async () => {
+  const k = fakeKubeClient()
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  await p.acquire({ threadId: "t", policy: { network: { mode: "allow" } }, signal: signal() })
+  expect(k.netpols.has("dawn-sbx-net-t")).toBe(false)
+})
+
+test("network:deny with an allowlist emits a deny NetworkPolicy carrying the allowlist", async () => {
+  const k = fakeKubeClient()
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  await p.acquire({
+    threadId: "t",
+    policy: { network: { mode: "deny", allowlist: ["10.0.0.0/8"] } },
+    signal: signal(),
+  })
+  const np = k.netpols.get("dawn-sbx-net-t")
+  expect(np?.mode).toBe("deny")
+  expect(np?.allowlist).toEqual(["10.0.0.0/8"])
+})
+
+test("preflight fails when create is denied", async () => {
+  const k = fakeKubeClient({ canICreate: false })
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  const r = await p.preflight?.()
+  expect(r?.ok).toBe(false)
+})
+
+test("preflight warns when the CNI won't enforce NetworkPolicy", async () => {
+  const k = fakeKubeClient({ cniEnforced: false })
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  const r = await p.preflight?.()
+  expect(r?.ok).toBe(true)
+  expect(r?.warnings?.join(" ")).toMatch(/NetworkPolicy/i)
+})
+
+test("preflight passes clean when create allowed and CNI enforces", async () => {
+  const k = fakeKubeClient({ canICreate: true, cniEnforced: true })
+  const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
+  const r = await p.preflight?.()
+  expect(r?.ok).toBe(true)
+  expect(r?.warnings ?? []).toHaveLength(0)
+})
