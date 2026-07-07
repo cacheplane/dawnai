@@ -2,6 +2,41 @@ import type { MemoryRecord } from "@dawn-ai/memory"
 import { tokenize } from "@dawn-ai/memory"
 
 // ---------------------------------------------------------------------------
+// Column selection
+// ---------------------------------------------------------------------------
+
+// The exact 14 columns rowToRecord reads — deliberately EXCLUDES `embedding`
+// (1536/3072-dim) and `embedding_model`. rowToRecord never touches those, so a
+// bare `SELECT *`/`SELECT m.*` would transfer + deserialize the full vector on
+// every record read (candidate pools of 256, query-less lists, hybrid lookups)
+// for nothing. Callers that need the embedding read it separately via
+// getEmbeddingRow's `SELECT embedding::text`.
+const RECORD_COLUMN_NAMES = [
+  "id",
+  "kind",
+  "namespace",
+  "content",
+  "data",
+  "source",
+  "confidence",
+  "tags",
+  "status",
+  "supersedes",
+  "created_at",
+  "updated_at",
+  "effective_at",
+  "expires_at",
+] as const
+
+/** Comma-separated record columns (unqualified), e.g. `SELECT ${RECORD_COLUMNS} FROM ...`. */
+export const RECORD_COLUMNS = RECORD_COLUMN_NAMES.join(", ")
+
+/** Record columns qualified with a table alias, e.g. `SELECT ${recordColumns("m")} FROM ... m`. */
+export function recordColumns(alias: string): string {
+  return RECORD_COLUMN_NAMES.map((c) => `${alias}.${c}`).join(", ")
+}
+
+// ---------------------------------------------------------------------------
 // Row ↔ record conversion
 // ---------------------------------------------------------------------------
 

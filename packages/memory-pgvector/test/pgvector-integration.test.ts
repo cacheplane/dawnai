@@ -98,6 +98,37 @@ describe.skipIf(!enabled)("pgvector integration", () => {
     }
   })
 
+  test("halfvec update round-trip: an embedding survives update() on a 3072-dim store", async () => {
+    const store = pgvectorMemoryStore({
+      connectionString: url,
+      dimensions: 3072,
+      tablePrefix: "halfvec_update",
+    })
+    try {
+      // A 3072-dim halfvec embedding; only the first axis is 1 so a matching
+      // query vector recalls it via the vector path.
+      const embedding = Float32Array.from({ length: 3072 }, (_, i) => (i === 0 ? 1 : 0))
+      await store.put(rec("h", "ns", "faster shipping"), {
+        embedding,
+        embeddingModel: "fake:halfvec",
+      })
+      // Update an unrelated field — putRecord rewrites the full row, so this
+      // exercises getEmbeddingRow's `embedding::text` parse for halfvec.
+      await store.update("h", { confidence: 0.5 })
+      const out = await store.search({
+        namespace: "ns",
+        query: "expedite delivery",
+        queryEmbedding: embedding,
+        embedderId: "fake:halfvec",
+        now: "2026-07-05T00:00:00.000Z",
+      })
+      expect(out.map((r) => r.id)).toContain("h")
+      expect((await store.get("h"))?.confidence).toBe(0.5)
+    } finally {
+      await store.close()
+    }
+  })
+
   test("concurrency: 10 parallel puts + a search all resolve", async () => {
     const store = pgvectorMemoryStore({
       connectionString: url,

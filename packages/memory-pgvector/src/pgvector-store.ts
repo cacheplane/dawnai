@@ -12,7 +12,13 @@ import {
 } from "@dawn-ai/memory"
 import { Pool, type PoolClient } from "pg"
 import pgvector from "pgvector/pg"
-import { pageAndTagFilter, rowToRecord, tokensFor } from "./queries.js"
+import {
+  pageAndTagFilter,
+  RECORD_COLUMNS,
+  recordColumns,
+  rowToRecord,
+  tokensFor,
+} from "./queries.js"
 import { assertIdentifier, initSchema } from "./schema.js"
 
 // Default HNSW build/search parameters (pgvector defaults; overridable per store).
@@ -81,21 +87,34 @@ export function pgvectorMemoryStore(opts: {
 
   // Register vector type parsers on every future pooled connection. Safe once the
   // extension exists; the very first connection is registered inside ready().
-  pool.on("connect", (c) => {
-    pgvector.registerTypes(c).catch(() => {
-      // Extension not yet present on a brand-new database — ready() registers the
-      // first connection explicitly, so ignore the race here.
+  // Only attach to a pool WE built — an injected pool is the caller's to manage;
+  // we must not mutate its listeners.
+  if (ownsPool) {
+    pool.on("connect", (c) => {
+      pgvector.registerTypes(c).catch(() => {
+        // Extension not yet present on a brand-new database — ready() registers the
+        // first connection explicitly, so ignore the race here.
+      })
     })
-  })
+  }
 
   // -------------------------------------------------------------------------
   // Row-level helpers
   // -------------------------------------------------------------------------
 
   async function getById(id: string): Promise<MemoryRecord | null> {
-    const res = await pool.query(`SELECT * FROM ${T} WHERE id = $1`, [id])
+    const res = await pool.query(`SELECT ${RECORD_COLUMNS} FROM ${T} WHERE id = $1`, [id])
     const row = res.rows[0] as Record<string, unknown> | undefined
     return row ? rowToRecord(row) : null
+  }
+
+  // Roll back best-effort — a failing ROLLBACK must not mask the original error.
+  async function rollbackQuietly(client: PoolClient): Promise<void> {
+    try {
+      await client.query("ROLLBACK")
+    } catch {
+      // Swallow: propagate the root-cause error from the caller's catch instead.
+    }
   }
 
   async function reindex(client: PoolClient, rec: MemoryRecord): Promise<void> {
@@ -148,7 +167,7 @@ export function pgvectorMemoryStore(opts: {
       await reindex(client, rec)
       await client.query("COMMIT")
     } catch (err) {
-      await client.query("ROLLBACK")
+      await rollbackQuietly(client)
       throw err
     } finally {
       client.release()
@@ -201,7 +220,7 @@ export function pgvectorMemoryStore(opts: {
 
     // 1) Candidate pool: rows matching ≥1 query token, newest first.
     const candidateRes = await pool.query(
-      `SELECT m.* FROM ${T} m WHERE ${baseSql}
+      `SELECT ${recordColumns("m")} FROM ${T} m WHERE ${baseSql}
          AND m.id IN (SELECT memory_id FROM ${TK} WHERE token IN (${termPlaceholders}))
          ORDER BY m.updated_at DESC, m.id ASC LIMIT $${n + 1 + terms.length}`,
       [...baseParams, ...terms, pool_],
@@ -266,7 +285,7 @@ export function pgvectorMemoryStore(opts: {
       if (terms.length === 0) {
         // Query-less path: pure recency order (index-fragment behavior).
         const res = await pool.query(
-          `SELECT m.* FROM ${T} m WHERE ${baseSql} ORDER BY m.updated_at DESC, m.id ASC LIMIT $${baseParams.length + 1}`,
+          `SELECT ${recordColumns("m")} FROM ${T} m WHERE ${baseSql} ORDER BY m.updated_at DESC, m.id ASC LIMIT $${baseParams.length + 1}`,
           [...baseParams, limit],
         )
         let records = (res.rows as Record<string, unknown>[]).map(rowToRecord)
@@ -305,7 +324,7 @@ export function pgvectorMemoryStore(opts: {
           const vecIdx = baseParams.length + 2
           const kIdx = baseParams.length + 3
           const vecRes = await client.query(
-            `SELECT m.* FROM ${T} m
+            `SELECT ${recordColumns("m")} FROM ${T} m
                WHERE ${baseSql} AND m.embedding_model = $${modelIdx} AND m.embedding IS NOT NULL
                ORDER BY m.embedding <=> $${vecIdx} LIMIT $${kIdx}`,
             [...baseParams, q.embedderId, queryVec, vectorK],
@@ -313,7 +332,7 @@ export function pgvectorMemoryStore(opts: {
           await client.query("COMMIT")
           vectorRanked = (vecRes.rows as Record<string, unknown>[]).map(rowToRecord)
         } catch (err) {
-          await client.query("ROLLBACK")
+          await rollbackQuietly(client)
           throw err
         } finally {
           client.release()
@@ -371,7 +390,7 @@ export function pgvectorMemoryStore(opts: {
     async listCandidates(namespacePrefix) {
       await ready()
       const res = await pool.query(
-        `SELECT * FROM ${T} WHERE status = 'candidate' AND namespace LIKE $1 ORDER BY created_at DESC`,
+        `SELECT ${RECORD_COLUMNS} FROM ${T} WHERE status = 'candidate' AND namespace LIKE $1 ORDER BY created_at DESC`,
         [`${namespacePrefix}%`],
       )
       return (res.rows as Record<string, unknown>[]).map(rowToRecord)
