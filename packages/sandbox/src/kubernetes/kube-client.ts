@@ -12,6 +12,7 @@ export interface KubePodSpec {
   readonly podSecurityContext: Readonly<Record<string, unknown>>
   readonly containerSecurityContext: Readonly<Record<string, unknown>>
   readonly readOnlyRootFilesystem: boolean // gates the /tmp,/run emptyDir mounts
+  readonly automountServiceAccountToken: boolean
 }
 
 export interface KubePvcSpec {

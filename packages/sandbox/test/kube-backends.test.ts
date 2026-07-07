@@ -11,6 +11,7 @@ async function withPod() {
   await k.createNamespacedPod("ns", {
     name: "p", image: "i", labels: {}, pvcName: "vol", env: [], limits: {},
     podSecurityContext: {}, containerSecurityContext: {}, readOnlyRootFilesystem: true,
+    automountServiceAccountToken: false,
   })
   return k
 }

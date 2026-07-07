@@ -31,5 +31,6 @@ function podSpec(name: string) {
     podSecurityContext: {},
     containerSecurityContext: {},
     readOnlyRootFilesystem: true,
+    automountServiceAccountToken: false,
   }
 }
