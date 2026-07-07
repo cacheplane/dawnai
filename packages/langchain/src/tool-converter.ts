@@ -13,6 +13,8 @@ interface DawnToolDefinition {
     context: {
       readonly middleware?: Readonly<Record<string, unknown>>
       readonly signal: AbortSignal
+      readonly threadId?: string
+      readonly params?: Readonly<Record<string, string>>
     },
   ) => Promise<unknown> | unknown
   readonly schema?: unknown
@@ -24,8 +26,10 @@ export function convertToolToLangChain(
   tool: DawnToolDefinition,
   middlewareContext?: Readonly<Record<string, unknown>>,
   offload?: OffloadFn,
+  routeParamNames: readonly string[] = [],
 ): DynamicStructuredTool {
   const schema = toZodSchema(tool.schema)
+  const paramNameSet = new Set(routeParamNames)
 
   return new DynamicStructuredTool({
     name: tool.name,
@@ -33,9 +37,24 @@ export function convertToolToLangChain(
     schema,
     func: async (input, _runManager, config) => {
       const signal = config?.signal ?? new AbortController().signal
+      // config.configurable carries thread_id + the route params (set by the
+      // agent-adapter's prepareAgentCall). Forward them so tools — and the
+      // argument-constraint wrapper — can read live per-call identity.
+      const configurable = (config?.configurable ?? {}) as Record<string, unknown>
+      const threadId =
+        typeof configurable.thread_id === "string" ? configurable.thread_id : undefined
+      // Allowlist against the route's declared param names. A denylist would
+      // also capture LangGraph internals injected into configurable (e.g.
+      // checkpoint_ns, __pregel_task_id), which must never surface as route params.
+      const params: Record<string, string> = {}
+      for (const [key, value] of Object.entries(configurable)) {
+        if (paramNameSet.has(key) && typeof value === "string") params[key] = value
+      }
       const rawResult = await tool.run(input, {
         ...(middlewareContext ? { middleware: middlewareContext } : {}),
         signal,
+        ...(threadId ? { threadId } : {}),
+        ...(Object.keys(params).length > 0 ? { params } : {}),
       })
       const { content, stateUpdates } = unwrapToolResult(rawResult)
       const toolCallId = extractToolCallId(config)

@@ -151,6 +151,35 @@ describe("convertToolToLangChain — {result, state} wrapped returns", () => {
   })
 })
 
+describe("convertToolToLangChain — config.configurable forwarding", () => {
+  it("forwards thread_id and route params from config.configurable into the tool run context", async () => {
+    let seen: { threadId?: string; params?: Record<string, string> } | undefined
+    const tool = {
+      name: "probe",
+      run: (_input: unknown, ctx: { threadId?: string; params?: Record<string, string> }) => {
+        seen = { threadId: ctx.threadId, params: ctx.params }
+        return "ok"
+      },
+    }
+    const lc = convertToolToLangChain(tool, undefined, undefined, ["tenant"])
+    await lc.invoke(
+      {},
+      {
+        configurable: {
+          thread_id: "t-123",
+          tenant: "acme",
+          checkpoint_ns: "tools:xyz",
+          __pregel_task_id: "abc",
+        },
+      },
+    )
+    expect(seen?.threadId).toBe("t-123")
+    // ONLY the allowlisted route param — LangGraph internals like checkpoint_ns
+    // and __pregel_task_id must NOT leak into ctx.params.
+    expect(seen?.params).toEqual({ tenant: "acme" })
+  })
+})
+
 describe("jsonSchemaToZod nesting", () => {
   it("builds a nested object schema that validates", () => {
     const zodSchema = jsonSchemaToZod({

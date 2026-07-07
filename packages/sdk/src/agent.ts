@@ -10,6 +10,22 @@ export interface RetryConfig {
   readonly baseDelay?: number
 }
 
+export interface ConstraintContext {
+  readonly toolName: string
+  readonly routeId: string
+  readonly threadId?: string
+  readonly signal: AbortSignal
+  /** Route params in scope (e.g. tenant) when the route is parameterized. */
+  readonly params?: Readonly<Record<string, string>>
+}
+
+export type ConstraintVerdict = true | string | { readonly approve: true; readonly reason?: string }
+
+export type ConstraintPredicate = (
+  args: unknown,
+  ctx: ConstraintContext,
+) => ConstraintVerdict | Promise<ConstraintVerdict>
+
 export interface ToolScope {
   readonly allow?: readonly string[]
   readonly deny?: readonly string[]
@@ -20,6 +36,14 @@ export interface ToolScope {
    * tool name. See docs/permissions.
    */
   readonly approve?: readonly string[]
+  /**
+   * Per-call argument constraints: a predicate per tool name, run at call time
+   * against the model's arguments. Return `true` to allow, a string to deny
+   * (returned as the tool result), or `{ approve: true }` to escalate to a HITL
+   * approval prompt. Predicate bodies are not statically validated — only the
+   * tool names are. See docs/permissions.
+   */
+  readonly constrain?: Readonly<Record<string, ConstraintPredicate>>
 }
 
 /**

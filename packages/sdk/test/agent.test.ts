@@ -107,4 +107,15 @@ describe("agent() tool scope", () => {
     expect(a.tools?.approve).toEqual(["deployProd"])
     expect(a.tools?.deny).toEqual(["runBash"])
   })
+
+  test("passes tools.constrain predicates through to the descriptor", () => {
+    const predicate = (args: unknown) =>
+      (args as { env?: string }).env === "prod" ? ({ approve: true } as const) : true
+    const a = agent({
+      model: "gpt-5-mini",
+      systemPrompt: "x",
+      tools: { constrain: { deployProd: predicate } },
+    })
+    expect(a.tools?.constrain?.deployProd).toBe(predicate)
+  })
 })

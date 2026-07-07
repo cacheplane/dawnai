@@ -13,6 +13,7 @@ export {
   gateMemorySupersede,
   gateToolOp,
   wrapToolWithApproval,
+  wrapToolWithConstraint,
 } from "./capabilities/permission-gate.js"
 export type {
   AppliedContribution,

@@ -5,6 +5,7 @@ import {
   suggestedMemoryPattern,
   suggestedPathPattern,
 } from "@dawn-ai/permissions"
+import type { ConstraintContext, ConstraintPredicate } from "@dawn-ai/sdk"
 import { interrupt } from "@langchain/langgraph"
 
 export type PathOperation = "readFile" | "writeFile" | "listDir"
@@ -218,6 +219,72 @@ export function wrapToolWithApproval<
       const gate = await gateToolOp(permissions, tool.name, buildArgsPreview(input), opts)
       if (!gate.allowed) return gate.reason
       return tool.run(input, context)
+    },
+  }
+}
+
+const CONSTRAINT_FAILED_REASON =
+  "Blocked: the tool's argument constraint check failed (the policy predicate threw or returned an invalid verdict). Not run."
+
+/**
+ * Wrap a tool so each call is first evaluated by an argument-constraint predicate
+ * (tools.constrain). The predicate returns `true` (allow), a string (deny — the
+ * string is returned as the tool result, matching wrapToolWithApproval's
+ * return-not-throw contract), or `{ approve: true }` (escalate to the HITL gate
+ * via gateToolOp). A predicate that throws OR returns any off-contract value
+ * (false, undefined, `{ approve: false }`, …) fails closed (deny) — a broken
+ * policy never silently allows. Per-call identity (signal/threadId/params) is read from
+ * the LIVE run context, never closed over, so the wrapper is safe inside the
+ * per-descriptor-cached agent. `routeId` and `predicate` are stable per descriptor
+ * and closed over.
+ */
+export function wrapToolWithConstraint<
+  C extends {
+    readonly signal: AbortSignal
+    readonly threadId?: string
+    readonly params?: Readonly<Record<string, string>>
+  },
+  T extends {
+    readonly name: string
+    readonly run: (input: unknown, context: C) => Promise<unknown> | unknown
+  },
+>(
+  tool: T,
+  predicate: ConstraintPredicate,
+  permissions: PermissionsStore | undefined,
+  routeId: string,
+): T {
+  return {
+    ...tool,
+    run: async (input: unknown, context: C) => {
+      const ctx: ConstraintContext = {
+        toolName: tool.name,
+        routeId,
+        signal: context.signal,
+        ...(context.threadId ? { threadId: context.threadId } : {}),
+        ...(context.params ? { params: context.params } : {}),
+      }
+      let verdict: Awaited<ReturnType<ConstraintPredicate>>
+      try {
+        verdict = await predicate(input, ctx)
+      } catch {
+        return CONSTRAINT_FAILED_REASON
+      }
+      if (verdict === true) return tool.run(input, context)
+      if (typeof verdict === "string") return verdict
+      // Escalate to HITL ONLY on a genuine { approve: true } verdict.
+      if (
+        typeof verdict === "object" &&
+        verdict !== null &&
+        (verdict as { approve?: unknown }).approve === true
+      ) {
+        const gate = await gateToolOp(permissions, tool.name, buildArgsPreview(input))
+        if (!gate.allowed) return gate.reason
+        return tool.run(input, context)
+      }
+      // Any other value (false, undefined, { approve: false }, a number, …) is
+      // off-contract — fail closed rather than silently escalate or allow.
+      return CONSTRAINT_FAILED_REASON
     },
   }
 }

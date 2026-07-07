@@ -1,5 +1,8 @@
 export type {
   AgentConfig,
+  ConstraintContext,
+  ConstraintPredicate,
+  ConstraintVerdict,
   DawnAgent,
   ReasoningConfig,
   RetryConfig,

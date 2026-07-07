@@ -171,3 +171,29 @@ test("does not warn about remember when no memoryWrites opts are passed", async 
   })
   expect(result.warnings.some((w) => w.includes('approve lists "remember"'))).toBe(false)
 })
+
+test("flags an unknown tool name in constrain", async () => {
+  const result = await collectToolScopeIssues(manifest, {
+    loadScope: async () => ({ constrain: { deployPord: () => true } }),
+    routeLocalToolNames: async () => ["deployProd"],
+  })
+  expect(result.errors.join("\n")).toMatch(/\/research.*unknown tool.*deployPord/s)
+})
+
+test("warns when a tool is in both approve and constrain (constrain wins)", async () => {
+  const result = await collectToolScopeIssues(manifest, {
+    loadScope: async () => ({ approve: ["deployProd"], constrain: { deployProd: () => true } }),
+    routeLocalToolNames: async () => ["deployProd"],
+  })
+  expect(result.errors).toEqual([])
+  expect(result.warnings.join("\n")).toMatch(/\/research.*deployProd.*constrain/s)
+})
+
+test("clean constrain produces no issues", async () => {
+  const result = await collectToolScopeIssues(manifest, {
+    loadScope: async () => ({ constrain: { deployProd: () => true } }),
+    routeLocalToolNames: async () => ["deployProd"],
+  })
+  expect(result.errors).toEqual([])
+  expect(result.warnings).toEqual([])
+})

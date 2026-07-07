@@ -9,6 +9,7 @@ import {
   gatePathOp,
   gateToolOp,
   wrapToolWithApproval,
+  wrapToolWithConstraint,
 } from "../../src/capabilities/permission-gate.js"
 
 describe("gatePathOp interrupt suppression", () => {
@@ -186,6 +187,165 @@ describe("wrapToolWithApproval", () => {
     await permissions.load()
     const wrapped = wrapToolWithApproval({ name: "x", run: async () => "ran" }, permissions)
     expect(String(await wrapped.run({}, { signal }))).toMatch(/fail-closed/)
+  })
+})
+
+describe("wrapToolWithConstraint", () => {
+  let appRoot: string
+  beforeEach(() => {
+    appRoot = mkdtempSync(join(tmpdir(), "dawn-constrain-test-"))
+  })
+  afterEach(() => {
+    rmSync(appRoot, { recursive: true, force: true })
+  })
+  const signal = new AbortController().signal
+  const runCtx = { signal }
+
+  it("allows (runs the real tool) when the predicate returns true", async () => {
+    const tool = { name: "deployProd", run: async (i: unknown) => `ran:${JSON.stringify(i)}` }
+    const wrapped = wrapToolWithConstraint(tool, () => true, undefined, "/ops#agent")
+    expect(await wrapped.run({ env: "staging" }, runCtx)).toBe('ran:{"env":"staging"}')
+  })
+
+  it("denies with the reason string as the tool result", async () => {
+    let ran = false
+    const tool = {
+      name: "deployProd",
+      run: async () => {
+        ran = true
+        return "ran"
+      },
+    }
+    const wrapped = wrapToolWithConstraint(
+      tool,
+      () => "prod not allowed here",
+      undefined,
+      "/ops#agent",
+    )
+    const result = await wrapped.run({ env: "prod" }, runCtx)
+    expect(ran).toBe(false)
+    expect(String(result)).toBe("prod not allowed here")
+  })
+
+  it("passes toolName/routeId and live threadId/params to the predicate", async () => {
+    let seen: { toolName?: string; routeId?: string; threadId?: string; params?: unknown } = {}
+    const tool = { name: "deployProd", run: async () => "ran" }
+    const wrapped = wrapToolWithConstraint(
+      tool,
+      (_args, ctx) => {
+        seen = {
+          toolName: ctx.toolName,
+          routeId: ctx.routeId,
+          threadId: ctx.threadId,
+          params: ctx.params,
+        }
+        return true
+      },
+      undefined,
+      "/ops#agent",
+    )
+    await wrapped.run({}, { signal, threadId: "t-9", params: { tenant: "acme" } })
+    expect(seen).toEqual({
+      toolName: "deployProd",
+      routeId: "/ops#agent",
+      threadId: "t-9",
+      params: { tenant: "acme" },
+    })
+  })
+
+  it("fails closed (deny result) when the predicate throws", async () => {
+    let ran = false
+    const tool = {
+      name: "deployProd",
+      run: async () => {
+        ran = true
+        return "ran"
+      },
+    }
+    const wrapped = wrapToolWithConstraint(
+      tool,
+      () => {
+        throw new Error("boom")
+      },
+      undefined,
+      "/ops#agent",
+    )
+    const result = await wrapped.run({}, runCtx)
+    expect(ran).toBe(false)
+    expect(String(result)).toMatch(/constraint check failed/i)
+  })
+
+  it("awaits an async predicate", async () => {
+    const tool = { name: "deployProd", run: async () => "ran" }
+    const wrapped = wrapToolWithConstraint(
+      tool,
+      async () => await Promise.resolve("async denied"),
+      undefined,
+      "/ops#agent",
+    )
+    expect(String(await wrapped.run({}, runCtx))).toBe("async denied")
+  })
+
+  it("{approve} escalates through gateToolOp — pre-approved tool runs", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: { version: 1, allow: { tool: ["deployProd"] }, deny: {} },
+      mode: "interactive",
+    })
+    await permissions.load()
+    const tool = { name: "deployProd", run: async () => "deployed" }
+    const wrapped = wrapToolWithConstraint(
+      tool,
+      () => ({ approve: true }),
+      permissions,
+      "/ops#agent",
+    )
+    expect(await wrapped.run({ env: "prod" }, runCtx)).toBe("deployed")
+  })
+
+  it("{approve} escalates through gateToolOp — denied tool returns the gate reason", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: { version: 1, allow: {}, deny: { tool: ["deployProd"] } },
+      mode: "interactive",
+    })
+    await permissions.load()
+    let ran = false
+    const tool = {
+      name: "deployProd",
+      run: async () => {
+        ran = true
+        return "deployed"
+      },
+    }
+    const wrapped = wrapToolWithConstraint(
+      tool,
+      () => ({ approve: true }),
+      permissions,
+      "/ops#agent",
+    )
+    const result = await wrapped.run({ env: "prod" }, runCtx)
+    expect(ran).toBe(false)
+    expect(String(result)).toMatch(/denied.*deployProd/i)
+  })
+
+  it("fails closed on an off-contract verdict (false / undefined / {approve:false})", async () => {
+    for (const bad of [() => false, () => undefined, () => ({ approve: false })]) {
+      let ran = false
+      const tool = {
+        name: "deployProd",
+        run: async () => {
+          ran = true
+          return "ran"
+        },
+      }
+      // permissions omitted (undefined) — if this WRONGLY escalated it would still
+      // not throw, but the result would not be the constraint-failed string.
+      const wrapped = wrapToolWithConstraint(tool, bad as never, undefined, "/ops#agent")
+      const result = await wrapped.run({}, { signal: new AbortController().signal })
+      expect(ran).toBe(false)
+      expect(String(result)).toMatch(/constraint check failed/i)
+    }
   })
 })
 

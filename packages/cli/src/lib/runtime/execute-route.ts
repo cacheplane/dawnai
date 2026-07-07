@@ -25,6 +25,7 @@ import {
   resolveToolScope,
   toolOrigin,
   wrapToolWithApproval,
+  wrapToolWithConstraint,
 } from "@dawn-ai/core"
 import {
   Command,
@@ -720,8 +721,11 @@ async function prepareRouteExecution(options: {
     // call consults the permissions store; on "unknown" in interactive mode
     // the wrapper interrupts for a human decision (kind: "tool"). Bash/path
     // gates inside the workspace tools are separate (pattern-aware) and
-    // unaffected; `dawn check` warns on redundant overlap.
-    const approveSet = new Set(descriptor?.tools?.approve ?? [])
+    // unaffected; `dawn check` warns on redundant overlap. A tool that ALSO has
+    // a constraint predicate is excluded here — `constrain` is authoritative and
+    // can itself escalate via `{ approve }`, so wrapping both would double-gate.
+    const constrain = descriptor?.tools?.constrain
+    const approveSet = new Set((descriptor?.tools?.approve ?? []).filter((n) => !constrain?.[n]))
     if (approveSet.size > 0) {
       tools = tools.map((t) =>
         approveSet.has(t.name)
@@ -731,6 +735,25 @@ async function prepareRouteExecution(options: {
             >(t, permissionsStore)
           : t,
       )
+    }
+
+    // Per-tool argument constraints (tools.constrain): wrap surviving tools so
+    // each call is evaluated by the author's predicate against the model's args
+    // before the tool runs. Runs at call time; reads live identity (signal/
+    // threadId/params) from the run context. `{ approve }` verdicts reuse the
+    // same HITL gate as tools.approve.
+    if (constrain) {
+      tools = tools.map((t) => {
+        // Local const: TS does not narrow a repeated indexed access across the
+        // ternary, so bind once.
+        const predicate = constrain[t.name]
+        return predicate
+          ? wrapToolWithConstraint<
+              Parameters<DiscoveredToolDefinition["run"]>[1],
+              DiscoveredToolDefinition
+            >(t, predicate, permissionsStore, options.routeId)
+          : t
+      })
     }
     stateFields = stateFields ? [...stateFields, ...capStateFields] : capStateFields
     promptFragments = capPromptFragments
