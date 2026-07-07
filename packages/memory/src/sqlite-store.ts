@@ -155,7 +155,14 @@ export function sqliteMemoryStore(opts: {
     embed?: { embedding?: Float32Array; embeddingModel?: string },
   ): void {
     const blob =
-      embed?.embedding && embed.embeddingModel ? Buffer.from(embed.embedding.buffer.slice(0)) : null
+      embed?.embedding && embed.embeddingModel
+        ? Buffer.from(
+            embed.embedding.buffer.slice(
+              embed.embedding.byteOffset,
+              embed.embedding.byteOffset + embed.embedding.byteLength,
+            ),
+          )
+        : null
     const model = embed?.embedding && embed.embeddingModel ? embed.embeddingModel : null
     db.prepare(
       `INSERT OR REPLACE INTO memories

@@ -485,4 +485,41 @@ describe("sqliteMemoryStore", () => {
     })
     expect(out.map((r) => r.id)).toContain("sem")
   })
+
+  it("hybrid: stores a sub-view Float32Array embedding without corruption", async () => {
+    const s = sqliteMemoryStore({ path: ":memory:" })
+    const backing = new Float32Array([9, 9, 1, 0, 0, 7, 7]) // the [1,0,0] embedding is a sub-view at offset 2
+    const view = backing.subarray(2, 5) // Float32Array view: byteOffset 8, length 3, values [1,0,0]
+    await s.put(
+      rec({
+        id: "sub",
+        namespace: "ns",
+        content: "faster shipping preferred",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: view, embeddingModel: EM },
+    )
+    // A decoy that is a poor (orthogonal) vector match. If the sub-view write
+    // corrupts "sub" (stores all 7 floats → length-mismatch → cosine 0), the
+    // decoy wins and "sub" no longer ranks first — that's the regression guard.
+    await s.put(
+      rec({
+        id: "decoy",
+        namespace: "ns",
+        content: "acme billing threshold",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      { embedding: vec(0.5, 0.5, 0), embeddingModel: EM }, // cosine ≈0.71 with query — beats a corrupt "sub" (cosine 0), loses to a correct one (1.0)
+    )
+    const out = await s.search({
+      namespace: "ns",
+      query: "expedite delivery",
+      queryEmbedding: vec(1, 0, 0),
+      embedderId: EM,
+      now: "2026-07-05T00:00:00.000Z",
+    })
+    // If the write corrupted the view (stored all 7 floats), the stored vector wouldn't be [1,0,0] and cosine≈1 wouldn't hold → "sub" wouldn't rank first / be recalled.
+    expect(out.map((r) => r.id)).toContain("sub")
+    expect(out[0]?.id).toBe("sub")
+  })
 })
