@@ -76,7 +76,15 @@ export function createMemoryMarker(): CapabilityMarker {
           if (mem.embedder && q.query) {
             try {
               ;[queryVec] = await mem.embedder.embed([q.query])
-            } catch {
+            } catch (err) {
+              // Gated: silent embed failures are an ops footgun (user thinks
+              // vector recall works while every embed errors). Mirrors the
+              // summarization hook's DAWN_DEBUG_SUMMARIZATION convention.
+              if (process.env.DAWN_DEBUG_MEMORY === "1") {
+                console.warn(
+                  `[dawn:memory] recall embed failed, falling back to keyword-only: ${String(err)}`,
+                )
+              }
               queryVec = undefined
             }
           }
@@ -157,7 +165,14 @@ export function createMemoryMarker(): CapabilityMarker {
             try {
               const [ev] = await mem.embedder.embed([content])
               if (ev) putOpts = { embedding: ev, embeddingModel: mem.embedder.id }
-            } catch {
+            } catch (err) {
+              // Gated warn — see the recall catch above. The write still lands
+              // keyword-only (putOpts undefined); we never lose the memory.
+              if (process.env.DAWN_DEBUG_MEMORY === "1") {
+                console.warn(
+                  `[dawn:memory] remember embed failed, storing keyword-only: ${String(err)}`,
+                )
+              }
               putOpts = undefined
             }
           }
