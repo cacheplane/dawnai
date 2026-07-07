@@ -566,4 +566,54 @@ describe("sqliteMemoryStore", () => {
     expect(withNaN).toEqual(expected)
     expect(withNaN[0]).toBe("sem")
   })
+
+  it("hybrid: recall.recencyHalfLifeMs reaches the hybrid second stage (flips ordering)", async () => {
+    // "old" wins the RRF base race (keyword rank1 + vector rank1); "new" only
+    // enters via the vector list (rank2) but is the newest. With a heavy recency
+    // weight, a TINY half-life collapses old's recency multiplier so new wins —
+    // but ONLY if recall.recencyHalfLifeMs is actually threaded into the hybrid
+    // recencyDecay. Under the default 14d half-life old's small age barely
+    // penalizes it, so old stays first.
+    const seed = async (store: ReturnType<typeof sqliteMemoryStore>) => {
+      await store.put(
+        rec({
+          id: "old",
+          namespace: "ns",
+          content: "expedite delivery route", // matches the query → keyword rank1
+          updatedAt: "2026-07-04T00:00:00.000Z", // 1 day old
+        }),
+        { embedding: vec(1, 0, 0), embeddingModel: EM }, // cosine 1 → vector rank1
+      )
+      await store.put(
+        rec({
+          id: "new",
+          namespace: "ns",
+          content: "warehouse note", // no query token → absent from keyword list
+          updatedAt: "2026-07-05T00:00:00.000Z", // newest (age 0 at `now`)
+        }),
+        { embedding: vec(0.6, 0.8, 0), embeddingModel: EM }, // cosine 0.6 → vector rank2
+      )
+    }
+    const query = {
+      namespace: "ns",
+      query: "expedite delivery",
+      queryEmbedding: vec(1, 0, 0),
+      embedderId: EM,
+      now: "2026-07-05T00:00:00.000Z",
+      vector: { recencyWeight: 3 }, // heavy recency so half-life meaningfully moves ranking
+    } as const
+
+    const dfl = sqliteMemoryStore({ path: ":memory:" }) // default 14d half-life
+    await seed(dfl)
+    const defaultOrder = (await dfl.search(query)).map((r) => r.id)
+
+    const tiny = sqliteMemoryStore({ path: ":memory:", recall: { recencyHalfLifeMs: 1000 } })
+    await seed(tiny)
+    const tinyOrder = (await tiny.search(query)).map((r) => r.id)
+
+    // Knob honored: the tiny recall half-life must change the hybrid ordering.
+    expect(defaultOrder[0]).toBe("old")
+    expect(tinyOrder[0]).toBe("new")
+    expect(tinyOrder).not.toEqual(defaultOrder)
+  })
 })

@@ -420,7 +420,13 @@ export function sqliteMemoryStore(opts: {
           q.now ?? [...byId.values()].reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), "")
         const fused = [...byId.values()].map((record) => {
           const base = rrf.get(record.id) ?? 0
-          const rec2 = recencyDecay(record.updatedAt, referenceNow, v.recencyHalfLifeMs)
+          // One half-life knob: fall back to the shared recall tuning so a
+          // configured recall.recencyHalfLifeMs governs hybrid recency too.
+          const rec2 = recencyDecay(
+            record.updatedAt,
+            referenceNow,
+            v.recencyHalfLifeMs ?? opts.recall?.recencyHalfLifeMs,
+          )
           const conf = record.confidence < 0 ? 0 : record.confidence > 1 ? 1 : record.confidence
           return { record, score: base * (1 + wRec * rec2 + wConf * conf) }
         })
