@@ -1,0 +1,20 @@
+{{- if .Values.limitRange.enabled }}
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: dawn-sandbox-limits
+  namespace: {{ include "dawn-sandbox-infra.namespace" . }}
+  labels:
+    {{- include "dawn-sandbox-infra.labels" . | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: {{ .Values.limitRange.default.cpu | quote }}
+        memory: {{ .Values.limitRange.default.memory | quote }}
+        ephemeral-storage: {{ .Values.limitRange.maxEphemeralStorage | quote }}
+        pids: {{ .Values.limitRange.defaultPids | quote }}
+      defaultRequest:
+        cpu: {{ .Values.limitRange.defaultRequest.cpu | quote }}
+        memory: {{ .Values.limitRange.defaultRequest.memory | quote }}
+{{- end }}

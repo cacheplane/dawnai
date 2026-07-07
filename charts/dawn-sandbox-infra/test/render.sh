@@ -38,4 +38,26 @@ if tmpl --show-only templates/networkpolicy-default-deny.yaml --set networkPolic
 fi
 echo "ok: netpol absent when disabled"
 
+# ResourceQuota
+RQ="$(tmpl --show-only templates/resourcequota.yaml)"
+printf '%s\n' "$RQ" | assert "resourcequota kind" 'kind: ResourceQuota'
+printf '%s\n' "$RQ" | assert "resourcequota requests.cpu" 'requests.cpu: "8"'
+printf '%s\n' "$RQ" | assert "resourcequota requests.memory" 'requests.memory: "16Gi"'
+printf '%s\n' "$RQ" | assert "resourcequota limits.cpu" 'limits.cpu: "16"'
+printf '%s\n' "$RQ" | assert "resourcequota pvc count" 'persistentvolumeclaims: "50"'
+# Override: disable the quota entirely
+if tmpl --show-only templates/resourcequota.yaml --set resourceQuota.enabled=false 2>/dev/null | grep -q 'kind: ResourceQuota'; then
+  echo "FAIL: resourcequota should be absent when resourceQuota.enabled=false"; exit 1
+fi
+echo "ok: resourcequota absent when disabled"
+
+# LimitRange (carries the delegated pids cap)
+LR="$(tmpl --show-only templates/limitrange.yaml)"
+printf '%s\n' "$LR" | assert "limitrange kind" 'kind: LimitRange'
+printf '%s\n' "$LR" | assert "limitrange type Container" 'type: Container'
+printf '%s\n' "$LR" | assert "limitrange default pids" 'pids: "512"'
+printf '%s\n' "$LR" | assert "limitrange default cpu" 'cpu: "1"'
+printf '%s\n' "$LR" | assert "limitrange default memory" 'memory: "512Mi"'
+printf '%s\n' "$LR" | assert "limitrange defaultRequest cpu" 'cpu: "100m"'
+
 echo "render checks passed"
