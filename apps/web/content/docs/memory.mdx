@@ -183,8 +183,41 @@ memory: {
 ```
 
 <Callout type="info" title="Zero native dependencies">
-  Embeddings are stored as Float32 BLOBs in the same `node:sqlite` store, with brute-force cosine in JavaScript — no native modules, no FTS5, no extra service. A `pgvector` store backend is a planned follow-up for larger corpora.
+  Embeddings are stored as Float32 BLOBs in the same `node:sqlite` store, with brute-force cosine in JavaScript — no native modules, no FTS5, no extra service. For larger corpora and multi-instance deployments, swap in the [Postgres backend](#postgres-backend-pgvector).
 </Callout>
+
+### Postgres backend (pgvector)
+
+The default SQLite store is local-first: one file, no service, brute-force cosine in JS. For a **production or multi-instance** deployment — many app instances sharing one memory store, or a corpus too large for linear cosine — Dawn ships a Postgres + [pgvector](https://github.com/pgvector/pgvector) backend as `@dawn-ai/memory-pgvector`. Point `memory.store` at it in `dawn.config.ts`:
+
+```ts title="dawn.config.ts"
+import { openaiEmbedder } from "@dawn-ai/langchain"
+import { pgvectorMemoryStore } from "@dawn-ai/memory-pgvector"
+
+export default {
+  memory: {
+    store: pgvectorMemoryStore({
+      connectionString: process.env.DATABASE_URL,
+      dimensions: 1536, // must match your embedder's output dims
+    }),
+    vector: { embedder: openaiEmbedder() },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+It requires a running Postgres with the [`vector` extension](https://github.com/pgvector/pgvector) available (the store runs `CREATE EXTENSION IF NOT EXISTS vector` on first use). For local development, the official image ships the extension pre-installed:
+
+```bash
+docker run --rm -e POSTGRES_PASSWORD=postgres -p 5432:5432 pgvector/pgvector:pg16
+```
+
+Retrieval runs **in Postgres**: an [HNSW](https://github.com/pgvector/pgvector#hnsw) index over the embedding column with **cosine** distance (`vector_cosine_ops`) for the vector list, plus a token index for the keyword list. The `dimensions` you pass selects the column type — dimensions ≤ 2000 use pgvector's `vector` type, and larger dimensions (e.g. `text-embedding-3-large`'s 3072) use `halfvec`, up to a 4000 ceiling.
+
+<Callout type="info" title="Recall ranking is identical to SQLite">
+  Both backends retrieve their own candidates (SQL here, in-process there) and then rank through the **same pure hybrid core** — the RRF fusion plus the recency/confidence second stage from [semantic recall](#semantic-recall-opt-in). Recall ordering is the same across backends; switching stores changes where the data lives and how it is retrieved, not how results are ranked. A [shared conformance kit](/docs/testing-agents) runs the same contract against both.
+</Callout>
+
+SQLite stays the local-first default — reach for pgvector when you outgrow a single-file store, not before. See the runnable `examples/memory` app, which switches to pgvector automatically when `DATABASE_URL` is set and falls back to SQLite otherwise.
 
 ### The injected index
 
@@ -321,8 +354,9 @@ Long-term memory ships with the `semantic` kind, deterministic ranked keyword re
 - The `episodic`, `procedural`, and `reflection` kinds.
 - Full BM25 (term-frequency / length-normalized) ranking via FTS5, and a memory graph.
 - A dev-server Memory Inspector UI.
-- Postgres / pgvector store adapters (vector recall today runs brute-force over the `node:sqlite` store).
 - Schema-typed `remember.data` (typed loosely as `Record<string, unknown>` today).
+
+The SQLite (local-first, default) and [Postgres/pgvector](#postgres-backend-pgvector) (production/multi-instance) store backends both ship today.
 
 For anything beyond the semantic collection, use `memory.md` for stable profile text and `memory.ts` for facts the agent should accumulate over time.
 

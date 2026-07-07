@@ -34,6 +34,7 @@ export {
   type Todo,
 } from "./matchers.js"
 export { seedMemory } from "./memory.js"
+export { runMemoryStoreConformance } from "./memory-conformance.js"
 export {
   createMiddlewareHarness,
   type MiddlewareHarness,

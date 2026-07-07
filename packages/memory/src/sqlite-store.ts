@@ -2,16 +2,11 @@ import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import type { SQLInputValue } from "node:sqlite"
 import { DatabaseSync } from "node:sqlite"
-import {
-  DEFAULT_CANDIDATE_POOL,
-  type RecallRankingOptions,
-  type RecallWeights,
-  recencyDecay,
-  scoreMemory,
-} from "./score.js"
+import { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
+import { DEFAULT_CANDIDATE_POOL, type RecallRankingOptions, type RecallWeights } from "./score.js"
 import { tokenize } from "./tokenize.js"
 import type { MemoryQuery, MemoryRecord, MemoryStore, VectorRankingOptions } from "./types.js"
-import { cosineSimilarity, DEFAULT_VECTOR_K, fuseRRF } from "./vector.js"
+import { cosineSimilarity, DEFAULT_VECTOR_K } from "./vector.js"
 
 // ---------------------------------------------------------------------------
 // Inline DB helpers (mirrors packages/sqlite-storage/src/internal — not
@@ -255,37 +250,14 @@ export function sqliteMemoryStore(opts: {
       .all(...baseParams, ...terms) as { token: string; df: number }[]
     const dfByToken = new Map(dfRows.map((r) => [r.token, r.df]))
 
-    // 3) Score. Candidate token sets are recomputed via the same helper
-    //    reindex() uses, so they are guaranteed consistent with the table.
-    //    Pool is updated_at-DESC ordered, so candidates[0] is the newest —
-    //    the data-derived reference when the caller supplies no clock.
-    const referenceNow = q.now ?? candidates[0]?.updatedAt ?? ""
+    // 3) Score + sort via the shared pure ranking core. Candidate token sets are
+    //    recomputed via the same `tokenize` reindex() uses, so they are
+    //    guaranteed consistent with the table.
     const options: RecallRankingOptions | undefined =
       weightsOverride || opts.recall
         ? { ...opts.recall, ...(weightsOverride ? { weights: weightsOverride } : {}) }
         : undefined
-    const scored = candidates.map((record) => ({
-      record,
-      score: scoreMemory({
-        memoryTokens: new Set(tokensFor(record)),
-        queryTokens: terms,
-        dfByToken,
-        corpusSize,
-        updatedAt: record.updatedAt,
-        confidence: record.confidence,
-        referenceNow,
-        ...(options ? { options } : {}),
-      }),
-    }))
-
-    // 4) Sort (score DESC, updated_at DESC, id ASC — stable).
-    scored.sort(
-      (a, b) =>
-        b.score - a.score ||
-        cmp(b.record.updatedAt, a.record.updatedAt) ||
-        cmp(a.record.id, b.record.id),
-    )
-    return scored.map((s) => s.record)
+    return rankKeywordCandidates(candidates, dfByToken, corpusSize, terms, q.now, options, tokenize)
   }
 
   // Page (limit) then tag post-filter — today's ranked-path semantics, unchanged.
@@ -347,25 +319,16 @@ export function sqliteMemoryStore(opts: {
           typeof v.vectorK === "number" && Number.isFinite(v.vectorK) && v.vectorK > 0
             ? Math.floor(v.vectorK)
             : DEFAULT_VECTOR_K
-        const wKeyword =
-          typeof v.weights?.keyword === "number" && Number.isFinite(v.weights.keyword)
-            ? v.weights.keyword
-            : 1
-        const wVector =
-          typeof v.weights?.vector === "number" && Number.isFinite(v.weights.vector)
-            ? v.weights.vector
-            : 1
 
-        // Keyword-ranked ids: reuse the ranked pool, ordered by relevance ONLY.
+        // Keyword-ranked records: reuse the ranked pool, ordered by relevance ONLY.
         const kwRecords = rankKeyword(q, baseSql, baseParams, terms, {
           relevance: 1,
           recency: 0,
           confidence: 0,
         })
-        const keywordIds = kwRecords.map((r) => r.id)
 
-        // Vector-ranked ids: brute-force cosine over rows with a matching
-        // embedder tag and a non-null embedding.
+        // Vector-ranked records: brute-force cosine over rows with a matching
+        // embedder tag and a non-null embedding, cosine-sorted then sliced to K.
         const vecRows = db
           .prepare(
             `SELECT m.id AS id, m.embedding AS embedding FROM memories m
@@ -373,7 +336,7 @@ export function sqliteMemoryStore(opts: {
           )
           .all(...baseParams, q.embedderId) as { id: string; embedding: Uint8Array }[]
         const queryEmbedding = q.queryEmbedding
-        const scoredVec = vecRows
+        const vectorRanked = vecRows
           .map((r) => {
             const emb = new Float32Array(
               r.embedding.buffer.slice(
@@ -385,59 +348,22 @@ export function sqliteMemoryStore(opts: {
           })
           .sort((a, b) => b.sim - a.sim || cmp(a.id, b.id))
           .slice(0, vectorK)
-        const vectorIds = scoredVec.map((r) => r.id)
+          .map((r) => getById(r.id))
+          .filter((r): r is MemoryRecord => r !== null)
 
-        // Union pool of records (dedup by id) for the second stage.
-        const byId = new Map<string, MemoryRecord>()
-        for (const r of kwRecords) byId.set(r.id, r)
-        for (const id of vectorIds) {
-          if (!byId.has(id)) {
-            const rec2 = getById(id)
-            if (rec2) byId.set(id, rec2)
-          }
-        }
-        if (byId.size === 0) return []
-
-        const rrf = fuseRRF(
-          [
-            { ids: keywordIds, weight: wKeyword },
-            { ids: vectorIds, weight: wVector },
-          ],
-          typeof v.rrfK === "number" ? { k: v.rrfK } : undefined,
-        )
-
-        const wRec =
-          typeof v.recencyWeight === "number" && Number.isFinite(v.recencyWeight)
-            ? v.recencyWeight
-            : 0.3
-        const wConf =
-          typeof v.confidenceWeight === "number" && Number.isFinite(v.confidenceWeight)
-            ? v.confidenceWeight
-            : 0.1
-        // Match the non-hybrid path: the data-derived recency reference is the
-        // NEWEST record's updatedAt (ISO strings compare chronologically).
-        const referenceNow =
-          q.now ?? [...byId.values()].reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), "")
-        const fused = [...byId.values()].map((record) => {
-          const base = rrf.get(record.id) ?? 0
-          // One half-life knob: fall back to the shared recall tuning so a
-          // configured recall.recencyHalfLifeMs governs hybrid recency too.
-          const rec2 = recencyDecay(
-            record.updatedAt,
-            referenceNow,
-            v.recencyHalfLifeMs ?? opts.recall?.recencyHalfLifeMs,
-          )
-          const conf = record.confidence < 0 ? 0 : record.confidence > 1 ? 1 : record.confidence
-          return { record, score: base * (1 + wRec * rec2 + wConf * conf) }
-        })
-        fused.sort(
-          (a, b) =>
-            b.score - a.score ||
-            cmp(b.record.updatedAt, a.record.updatedAt) ||
-            cmp(a.record.id, b.record.id),
-        )
+        // One half-life knob: fall back to the shared recall tuning so a
+        // configured recall.recencyHalfLifeMs governs hybrid recency too.
+        const recencyHalfLifeMs = v.recencyHalfLifeMs ?? opts.recall?.recencyHalfLifeMs
         return pageAndTagFilter(
-          fused.map((s) => s.record),
+          fuseHybrid({
+            keywordRanked: kwRecords,
+            vectorRanked,
+            now: q.now,
+            options: {
+              ...v,
+              ...(recencyHalfLifeMs !== undefined ? { recencyHalfLifeMs } : {}),
+            },
+          }),
           limit,
           q,
         )
