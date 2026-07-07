@@ -1,0 +1,61 @@
+# Default values for dawn-sandbox-infra.
+# This chart provisions the cluster-side infrastructure the Dawn
+# kubernetesSandbox provider (@dawn-ai/sandbox) assumes: a namespace,
+# least-privilege RBAC for the orchestrator, a default-deny egress
+# NetworkPolicy backstop, a ResourceQuota + LimitRange (carrying the
+# `pids` limit the provider delegates), configurable Pod Security
+# Standards, and a self-bookkeeping PVC reaper.
+
+namespace:
+  # create: whether the chart creates the namespace. Set to false to
+  # install into a namespace that already exists (e.g. managed elsewhere).
+  create: true
+  # name: the namespace the provider's `opts.namespace` must match.
+  name: dawn-sandboxes
+
+podSecurityStandard:
+  # enforce: baseline | restricted | privileged
+  enforce: baseline
+  warn: restricted
+  audit: restricted
+
+orchestrator:
+  serviceAccount:
+    # create: whether the chart creates the orchestrator ServiceAccount.
+    create: true
+    # name: the ServiceAccount name; also used when create=false to bind
+    # an existing SA.
+    name: dawn-orchestrator
+  # subjects: extra RoleBinding subjects (e.g. a cross-namespace SA).
+  subjects: []
+
+networkPolicy:
+  # defaultDenyEgress: namespace-wide egress backstop (+ DNS carve-out).
+  defaultDenyEgress: true
+
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    persistentvolumeclaims: "50"
+    requests.storage: 100Gi
+
+limitRange:
+  enabled: true
+  defaultPids: 512
+  default:
+    cpu: "1"
+    memory: 512Mi
+  defaultRequest:
+    cpu: 100m
+    memory: 128Mi
+  maxEphemeralStorage: 1Gi
+
+reaper:
+  enabled: true
+  schedule: "17 * * * *"
+  ttlHours: 168
+  image: docker.io/alpine/k8s:1.31.1 # sh + date + kubectl
