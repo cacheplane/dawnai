@@ -12,8 +12,13 @@ export const dynamic = "force-dynamic"
 const dawnUrl = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3001"
 const agUiUrl = `${dawnUrl}/agui/${encodeURIComponent("/chat#agent")}`
 
+// Register the Dawn /chat agent under CopilotKit's default agent id ("default").
+// CopilotKit components/hooks that don't specify an agentId resolve "default", so
+// registering it there means the sidebar, useAgent, and useInterrupt all bind to
+// this agent with no per-component wiring. (When a second agent is added — e.g.
+// /coordinator — switch to named ids + explicit agentId on each consumer.)
 const copilotRuntime = new CopilotRuntime({
-  agents: { chat: new HttpAgent({ url: agUiUrl }) },
+  agents: { default: new HttpAgent({ url: agUiUrl }) },
 })
 
 export const POST = async (req: NextRequest): Promise<Response> => {

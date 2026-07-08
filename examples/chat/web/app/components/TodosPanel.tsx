@@ -6,12 +6,11 @@ type ChatState = { todos?: Todo[] }
 
 // NOTE: v2 has no `useCoAgent` (that's a v1-only hook). The v2 equivalent is
 // `useAgent`, which returns the live `AbstractAgent` instance; shared/coagent
-// state lives on `agent.state`. `agentId` must match the key the runtime
-// route registers the agent under ("chat") — there is no ambient default
-// (CopilotKitProvider has no `agent` prop; the client-side default agent id
-// is the literal string "default", which we are not using).
+// state lives on `agent.state`. With no agentId, it binds to CopilotKit's
+// default agent id ("default") — which the runtime route registers as our
+// Dawn /chat agent.
 export function TodosPanel() {
-  const { agent } = useAgent({ agentId: "chat", updates: [UseAgentUpdate.OnStateChanged] })
+  const { agent } = useAgent({ updates: [UseAgentUpdate.OnStateChanged] })
   const state = (agent.state ?? {}) as ChatState
   const todos = state.todos ?? []
   if (todos.length === 0) return null

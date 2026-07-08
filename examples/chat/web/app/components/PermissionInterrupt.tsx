@@ -13,11 +13,10 @@ type InterruptValue = { interruptId?: string; kind?: string; detail?: unknown }
 // `{ decision, interruptId? }` — the exact shape @dawn-ai/ag-ui's
 // `mapRunInput` decodes — reaches Dawn unmodified.
 //
-// `agentId` must match the runtime's registered agent name ("chat");
-// useInterrupt has no ambient default tied to the provider.
+// With no agentId, useInterrupt binds to CopilotKit's default agent id
+// ("default"), which the runtime route registers as our Dawn /chat agent.
 export function PermissionInterrupt() {
   useInterrupt({
-    agentId: "chat",
     render: ({ event, resolve }: { event: { value?: InterruptValue }; resolve: (r: unknown) => void }) => {
       const value = event?.value ?? {}
       const interruptId = value.interruptId
