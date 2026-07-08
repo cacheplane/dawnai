@@ -40,9 +40,8 @@ L3 specifics:
     `semantic` is wired end-to-end; the other three are typed-but-deferred.
   - `scope`: subset of `["workspace","route","tenant","user","agent"]`.
   - `schema`: a zod schema; `identity?` defaults to `["subject","predicate"]`.
-- Typegen emits typed `remember`/`recall` into `.dawn/dawn.generated.d.ts`.
-  Caveat: `remember`'s `data` is typed loosely as `Record<string, unknown>` in
-  v1 (not the zod schema).
+- Typegen emits typed `remember`/`recall` into `.dawn/dawn.generated.d.ts`;
+  `remember.data` is derived from the route's `defineMemory()` zod schema.
 - `recall({ query?, kind?, tags?, limit? })` → `store.search`; defaults
   `status="active"`, `limit=8`.
 - `remember({ data, content?, tags?, confidence? })` → validates `data` against

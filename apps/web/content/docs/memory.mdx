@@ -93,8 +93,8 @@ Typegen emits two typed tools for any route with a `memory.ts` into `.dawn/dawn.
 - **`recall`** — fetch in-scope memories by keyword, kind, or tags.
 - **`remember`** — store a typed fact (omitted entirely when `writes` is `"off"`).
 
-<Callout type="warn" title="remember.data is loosely typed in v1">
-  Typegen types `remember`'s `data` as `Record<string, unknown>`, not your Zod schema. The schema is still enforced at *runtime* — `remember` validates `data` against it and rejects on failure — but you do not yet get compile-time field types on the write path. Schema-typed `remember.data` is deferred.
+<Callout type="info" title="remember.data follows your schema">
+  Typegen derives `remember`'s `data` type from your route's `defineMemory()` Zod schema, so TypeScript catches missing or misspelled fields in route code. The same schema is still enforced at *runtime* when the model calls `remember`.
 </Callout>
 
 **`recall({ query?, kind?, tags?, limit? })`** searches the store. It defaults `status` to `"active"` and `limit` to `8`, and returns one `id: content` line per match, or `(no memories found)` when empty.
@@ -354,7 +354,6 @@ Long-term memory ships with the `semantic` kind, deterministic ranked keyword re
 - The `episodic`, `procedural`, and `reflection` kinds.
 - Full BM25 (term-frequency / length-normalized) ranking via FTS5, and a memory graph.
 - A dev-server Memory Inspector UI.
-- Schema-typed `remember.data` (typed loosely as `Record<string, unknown>` today).
 
 The SQLite (local-first, default) and [Postgres/pgvector](#postgres-backend-pgvector) (production/multi-instance) store backends both ship today.
 
