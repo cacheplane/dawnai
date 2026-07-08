@@ -120,4 +120,15 @@ printf '%s\n' "$PDB" | assert "pdb apiVersion policy/v1" 'apiVersion: policy/v1'
 printf '%s\n' "$PDB" | assert "pdb minAvailable" 'minAvailable: 2'
 printf '%s\n' "$PDB" | assert "pdb selector matches app labels" 'app.kubernetes.io/name: dawn-app'
 
+# ServiceAccount: absent by default (serviceAccount.create=false)
+if tmpl --show-only templates/serviceaccount.yaml 2>/dev/null | grep -q 'kind: ServiceAccount'; then
+  echo "FAIL: ServiceAccount should be absent when serviceAccount.create=false (default)"; exit 1
+fi
+echo "ok: ServiceAccount absent by default"
+
+# ServiceAccount: present + named correctly when created
+SA="$(tmpl --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke --show-only templates/serviceaccount.yaml)"
+printf '%s\n' "$SA" | assert "serviceaccount kind" 'kind: ServiceAccount'
+printf '%s\n' "$SA" | assert "serviceaccount name" 'name: dawn-app-smoke'
+
 echo "render checks passed"
