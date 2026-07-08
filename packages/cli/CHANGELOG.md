@@ -1,5 +1,21 @@
 # @dawn-ai/cli
 
+## 0.8.11
+
+### Patch Changes
+
+- f0261f1: Add `@dawn-ai/ag-ui`: translate Dawn's runtime stream to the AG-UI protocol and
+  serve it at `POST /agui/{routeId}`, so CopilotKit and other AG-UI clients can
+  drive Dawn agents. Additive — the existing Agent-Protocol endpoints are unchanged.
+- Updated dependencies [f0261f1]
+  - @dawn-ai/ag-ui@0.8.11
+  - @dawn-ai/core@0.8.11
+  - @dawn-ai/langchain@0.8.11
+  - @dawn-ai/langgraph@0.8.11
+  - @dawn-ai/memory@0.8.11
+  - @dawn-ai/permissions@0.8.11
+  - @dawn-ai/sqlite-storage@0.8.11
+
 ## 0.8.10
 
 ### Patch Changes
