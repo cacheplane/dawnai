@@ -24,13 +24,15 @@
   skills ship with the demo: `workspace-conventions` and `recover-from-failure`.
 - **Subagents** — `/coordinator` dispatches to specialist subagents (`research`,
   `summarizer`) via an auto-generated `task({ subagent, input })` tool. Subagent runs
-  bubble `subagent.*` SSE events with `call_id` correlation. Pick the `/coordinator` route
-  in the smoke client to drive it.
+  bubble `subagent.*` SSE events with `call_id` correlation. Not wired into the web
+  client yet (see below) — drive it directly against the server's SSE/AG-UI endpoints.
 - **HITL permissions** — `dawn.config.ts` seeds allow/deny lists for `runBash`. Unknown
   commands in interactive mode emit an interrupt; resume the thread with `once`, `always`,
   or `deny` to continue. See [Permissions](../../apps/web/content/docs/permissions.mdx)
   for the interrupt/resume flow.
-- End-to-end streaming from a Next.js client over SSE
+- End-to-end streaming to a [CopilotKit](https://docs.copilotkit.ai) web client over Dawn's
+  AG-UI endpoint (`POST /agui/{routeId}`, see `@dawn-ai/ag-ui`) — the `/chat` route only;
+  `/coordinator` is a fast-follow for the web client.
 
 ## Model choice
 
@@ -67,10 +69,14 @@ examples/chat/
 │           └── subagents/
 │               ├── research/index.ts
 │               └── summarizer/index.ts
-└── web/                    # @dawn-example/chat-web (Next.js smoke client)
+└── web/                    # @dawn-example/chat-web (CopilotKit v2 web client)
     └── app/
-        ├── page.tsx        # route picker + textarea + Send + raw event log
-        └── api/chat/route.ts   # SSE proxy
+        ├── layout.tsx                 # imports @copilotkit/react-ui styles
+        ├── page.tsx                   # CopilotKitProvider + CopilotSidebar + TodosPanel
+        ├── api/copilotkit/route.ts    # CopilotRuntime + HttpAgent → Dawn /agui/<chat>
+        └── components/
+            ├── PermissionInterrupt.tsx  # useInterrupt → approve/deny card
+            └── TodosPanel.tsx            # useAgent({agentId:"chat"}) → live plan/todos
 ```
 
 ## Security caveats
@@ -103,4 +109,4 @@ The remaining limitations are scoped to this example's surface, not missing runt
 capabilities:
 
 - Nested-object tool inputs (e.g., `edit_file({ edits: [{ old, new }] })`) — typegen extension
-- Polished web UI — this smoke client intentionally favors raw SSE visibility over product UI
+- The web client only drives `/chat`; `/coordinator` (subagents) has no web UI yet (fast-follow)
