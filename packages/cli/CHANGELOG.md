@@ -1,5 +1,21 @@
 # @dawn-ai/cli
 
+## 0.8.10
+
+### Patch Changes
+
+- e3c253b: Type generated `remember.data` from each route's `defineMemory()` Zod schema
+  instead of `Record<string, unknown>`, so route code gets compile-time memory fact
+  shape checks that match runtime validation. `pgvectorMemoryStore()` now validates
+  the dimension ceiling during construction, failing invalid configs before opening
+  a pool or initializing schema.
+  - @dawn-ai/core@0.8.10
+  - @dawn-ai/langchain@0.8.10
+  - @dawn-ai/langgraph@0.8.10
+  - @dawn-ai/memory@0.8.10
+  - @dawn-ai/permissions@0.8.10
+  - @dawn-ai/sqlite-storage@0.8.10
+
 ## 0.8.9
 
 ### Patch Changes
