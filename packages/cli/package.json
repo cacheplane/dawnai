@@ -49,6 +49,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@ag-ui/core": "0.0.57",
+    "@dawn-ai/ag-ui": "workspace:*",
     "@dawn-ai/core": "workspace:*",
     "@dawn-ai/langchain": "workspace:*",
     "@dawn-ai/langgraph": "workspace:*",

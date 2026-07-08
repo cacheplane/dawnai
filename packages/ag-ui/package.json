@@ -1,0 +1,48 @@
+{
+  "name": "@dawn-ai/ag-ui",
+  "version": "0.8.9",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/ag-ui#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cacheplane/dawnai.git",
+    "directory": "packages/ag-ui"
+  },
+  "bugs": {
+    "url": "https://github.com/cacheplane/dawnai/issues"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json vitest.config.ts",
+    "test": "vitest --run --config vitest.config.ts --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ag-ui/core": "0.0.57",
+    "@ag-ui/encoder": "0.0.57"
+  },
+  "devDependencies": {
+    "@ag-ui/client": "0.0.57",
+    "@dawn-ai/config-typescript": "workspace:*",
+    "@types/node": "26.1.0",
+    "rxjs": "7.8.1"
+  }
+}

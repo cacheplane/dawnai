@@ -174,6 +174,7 @@ function createTemplateReplacements(
   options: CliOptions,
 ): {
   readonly appName: string
+  readonly dawnAgUiSpecifier: string
   readonly dawnCliSpecifier: string
   readonly dawnConfigTypescriptSpecifier: string
   readonly dawnCoreSpecifier: string
@@ -191,6 +192,7 @@ function createTemplateReplacements(
   if (options.mode === "internal") {
     return {
       appName: basename(appRoot),
+      dawnAgUiSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/ag-ui")),
       dawnCliSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/cli")),
       dawnConfigTypescriptSpecifier: createAbsoluteFileSpecifier(
         resolve(repoRoot, "packages/config-typescript"),
@@ -215,6 +217,7 @@ function createTemplateReplacements(
 
   return {
     appName: basename(appRoot),
+    dawnAgUiSpecifier: options.distTag,
     dawnCliSpecifier: options.distTag,
     dawnConfigTypescriptSpecifier: options.distTag,
     dawnCoreSpecifier: options.distTag,
@@ -236,6 +239,7 @@ async function applyInternalModePackageOverrides(
   replacements: ReturnType<typeof createTemplateReplacements>,
 ): Promise<void> {
   const overrides = {
+    "@dawn-ai/ag-ui": replacements.dawnAgUiSpecifier,
     "@dawn-ai/cli": replacements.dawnCliSpecifier,
     "@dawn-ai/config-typescript": replacements.dawnConfigTypescriptSpecifier,
     "@dawn-ai/core": replacements.dawnCoreSpecifier,
