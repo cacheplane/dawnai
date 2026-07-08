@@ -17,14 +17,19 @@ kubectl -n "$NS" get pvc -l app.kubernetes.io/managed-by=dawn \
       [ -n "${SINCE:-}" ] && kubectl -n "$NS" annotate pvc "$NAME" dawn.sh/unbound-since- >/dev/null 2>&1 || true
       continue
     fi
-    if [ -z "${SINCE:-}" ]; then
-      kubectl -n "$NS" annotate --overwrite pvc "$NAME" "dawn.sh/unbound-since=$NOW" >/dev/null
-      echo "marked $NAME"
-    else
-      AGE=$(( NOW - SINCE ))
-      if [ "$AGE" -gt "$TTL_SECONDS" ]; then
-        kubectl -n "$NS" delete pvc "$NAME" >/dev/null
-        echo "reaped $NAME (unbound ${AGE}s)"
-      fi
-    fi
+    # Re-mark (reset the clock) when the marker is missing OR not a positive
+    # integer — a corrupted/tampered annotation must never drive a delete.
+    case "${SINCE:-}" in
+      "" | *[!0-9]*)
+        kubectl -n "$NS" annotate --overwrite pvc "$NAME" "dawn.sh/unbound-since=$NOW" >/dev/null
+        echo "marked $NAME"
+        ;;
+      *)
+        AGE=$(( NOW - SINCE ))
+        if [ "$AGE" -gt "$TTL_SECONDS" ]; then
+          kubectl -n "$NS" delete pvc "$NAME" >/dev/null
+          echo "reaped $NAME (unbound ${AGE}s)"
+        fi
+        ;;
+    esac
   done

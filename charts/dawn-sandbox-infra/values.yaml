@@ -18,6 +18,10 @@ podSecurityStandard:
   enforce: baseline
   warn: restricted
   audit: restricted
+  # version: the PSS policy version to pin the enforce/warn/audit labels to.
+  # "latest" always applies the newest rules (may tighten on a cluster upgrade);
+  # pin to e.g. "v1.31" for stability against silent drift across upgrades.
+  version: latest
 
 orchestrator:
   serviceAccount:
@@ -59,4 +63,5 @@ reaper:
   enabled: true
   schedule: "17 * * * *"
   ttlHours: 168
-  image: docker.io/alpine/k8s:1.31.1 # sh + date + kubectl
+  # Pinned by digest (tags are mutable; the reaper SA can patch/delete PVCs).
+  image: docker.io/alpine/k8s:1.31.1@sha256:dfe8c7a06c41d0b6e8757da99531f8f302e9a2687fa0155af4c4087df585c9c8 # sh + date + kubectl

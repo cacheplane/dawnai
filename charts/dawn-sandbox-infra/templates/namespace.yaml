@@ -6,9 +6,9 @@ metadata:
   labels:
     {{- include "dawn-sandbox-infra.labels" . | nindent 4 }}
     pod-security.kubernetes.io/enforce: {{ .Values.podSecurityStandard.enforce }}
-    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/enforce-version: {{ .Values.podSecurityStandard.version | quote }}
     pod-security.kubernetes.io/warn: {{ .Values.podSecurityStandard.warn }}
-    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/warn-version: {{ .Values.podSecurityStandard.version | quote }}
     pod-security.kubernetes.io/audit: {{ .Values.podSecurityStandard.audit }}
-    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/audit-version: {{ .Values.podSecurityStandard.version | quote }}
 {{- end }}

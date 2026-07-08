@@ -29,11 +29,12 @@
     "podSecurityStandard": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enforce", "warn", "audit"],
+      "required": ["enforce", "warn", "audit", "version"],
       "properties": {
         "enforce": { "type": "string", "enum": ["privileged", "baseline", "restricted"] },
         "warn": { "type": "string", "enum": ["privileged", "baseline", "restricted"] },
-        "audit": { "type": "string", "enum": ["privileged", "baseline", "restricted"] }
+        "audit": { "type": "string", "enum": ["privileged", "baseline", "restricted"] },
+        "version": { "type": "string" }
       }
     },
     "orchestrator": {
