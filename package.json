@@ -42,14 +42,14 @@
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.1",
+    "@biomejs/biome": "2.5.3",
     "@changesets/cli": "2.31.0",
-    "@copilotkit/aimock": "^1.35.0",
+    "@copilotkit/aimock": "^1.35.1",
     "@dawn-ai/sdk": "workspace:*",
     "publint": "0.3.21",
-    "turbo": "2.10.0",
+    "turbo": "2.10.4",
     "typescript": "6.0.2",
     "verdaccio": "^6.7.4",
-    "vitest": "4.1.9"
+    "vitest": "4.1.10"
   }
 }
