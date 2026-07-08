@@ -69,4 +69,20 @@ printf '%s\n' "$SVC" | assert "service port name http" 'name: http'
 SVC_LB="$(tmpl --set service.type=LoadBalancer --show-only templates/service.yaml)"
 printf '%s\n' "$SVC_LB" | assert "service type override" 'type: LoadBalancer'
 
+# Ingress: absent by default
+if tmpl --show-only templates/ingress.yaml 2>/dev/null | grep -q 'kind: Ingress'; then
+  echo "FAIL: ingress should be absent when ingress.enabled=false (default)"; exit 1
+fi
+echo "ok: ingress absent by default"
+
+# Ingress: present + shaped correctly when enabled
+ING="$(tmpl --set ingress.enabled=true --set ingress.className=nginx --set ingress.host=app.example.com --set ingress.tls.enabled=true --set ingress.tls.secretName=app-tls --show-only templates/ingress.yaml)"
+printf '%s\n' "$ING" | assert "ingress kind" 'kind: Ingress'
+printf '%s\n' "$ING" | assert "ingress apiVersion networking.k8s.io/v1" 'apiVersion: networking.k8s.io/v1'
+printf '%s\n' "$ING" | assert "ingress className" 'ingressClassName: nginx'
+printf '%s\n' "$ING" | assert "ingress host" 'host: "app.example.com"'
+printf '%s\n' "$ING" | assert "ingress tls secretName" 'secretName: "app-tls"'
+printf '%s\n' "$ING" | assert "ingress pathType default Prefix" 'pathType: Prefix'
+printf '%s\n' "$ING" | assert "ingress backend service port name http" 'name: http'
+
 echo "render checks passed"
