@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "dawn-sandbox-infra values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "namespace",
+    "podSecurityStandard",
+    "orchestrator",
+    "networkPolicy",
+    "resourceQuota",
+    "limitRange",
+    "reaper"
+  ],
+  "properties": {
+    "namespace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["create", "name"],
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        }
+      }
+    },
+    "podSecurityStandard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enforce", "warn", "audit", "version"],
+      "properties": {
+        "enforce": { "type": "string", "enum": ["privileged", "baseline", "restricted"] },
+        "warn": { "type": "string", "enum": ["privileged", "baseline", "restricted"] },
+        "audit": { "type": "string", "enum": ["privileged", "baseline", "restricted"] },
+        "version": { "type": "string" }
+      }
+    },
+    "orchestrator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serviceAccount", "subjects"],
+      "properties": {
+        "serviceAccount": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["create", "name"],
+          "properties": {
+            "create": { "type": "boolean" },
+            "name": { "type": "string", "minLength": 1 }
+          }
+        },
+        "subjects": {
+          "type": "array",
+          "items": { "type": "object" }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultDenyEgress"],
+      "properties": {
+        "defaultDenyEgress": { "type": "boolean" }
+      }
+    },
+    "resourceQuota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "hard"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "hard": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "limitRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "default", "defaultRequest", "maxEphemeralStorage"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "default": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu", "memory"],
+          "properties": {
+            "cpu": { "type": "string" },
+            "memory": { "type": "string" }
+          }
+        },
+        "defaultRequest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu", "memory"],
+          "properties": {
+            "cpu": { "type": "string" },
+            "memory": { "type": "string" }
+          }
+        },
+        "maxEphemeralStorage": { "type": "string" }
+      }
+    },
+    "reaper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "schedule", "ttlHours", "image"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "schedule": { "type": "string", "minLength": 1 },
+        "ttlHours": { "type": "integer", "minimum": 1 },
+        "image": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

@@ -150,7 +150,7 @@ The `security` intent maps onto the Pod and container `SecurityContext` fields i
 
 Sandbox Pods also set `automountServiceAccountToken: false`, so a compromised sandbox process has no Kubernetes API credentials to steal — it can't call the cluster API even if it escapes the container boundary.
 
-`pidsLimit` is **not** enforced by this provider — Kubernetes has no per-Pod process-count field equivalent to Docker's `--pids-limit`. Fork-bomb defense on Kubernetes is delegated to a cluster-side `LimitRange`, shipped in a follow-up Helm chart rather than set by the provider itself.
+`pidsLimit` is **not** enforced by this provider — Kubernetes has no per-Pod or per-namespace process-count field equivalent to Docker's `--pids-limit` (`pids` is not a valid `LimitRange`/`ResourceQuota` resource). Fork-bomb defense on Kubernetes is a **node-level** kubelet setting (`podPidsLimit` / `--pod-max-pids`) that a cluster operator configures on the nodes running sandbox Pods; it cannot be set by the provider or a namespaced chart.
 
 ### Network policy on Kubernetes
 
@@ -163,7 +163,67 @@ The same `network` config (`{ mode: "deny", allowlist? }` or `{ mode: "allow", d
   A Kubernetes `NetworkPolicy` object is inert unless the cluster's CNI plugin enforces it — Calico and Cilium do; some CNIs silently ignore `NetworkPolicy` entirely. `dawn check` runs this provider's `preflight()`, which warns when it can't confirm the cluster's CNI enforces `NetworkPolicy`, but it can't guarantee enforcement the way `--network none` does for Docker's `deny` mode. Confirm your cluster's CNI supports `NetworkPolicy` before relying on `deny` mode as a hard boundary.
 </Callout>
 
-Kubernetes Pod isolation is the same boundary class as Docker's container isolation, not a microVM — the same caveats in [What it is — and isn't](#what-it-is--and-isnt) apply. The namespace, RBAC, default-deny `NetworkPolicy`, `LimitRange`, and PVC-reaper Helm charts that harden a cluster for running sandbox Pods are a separate, follow-up piece of work, not part of the provider itself.
+Kubernetes Pod isolation is the same boundary class as Docker's container isolation, not a microVM — the same caveats in [What it is — and isn't](#what-it-is--and-isnt) apply. The namespace, RBAC, default-deny `NetworkPolicy`, `LimitRange`, and PVC-reaper are provisioned separately by the Helm chart below, not by the provider itself.
+
+## Deploying the sandbox infrastructure (Helm)
+
+`kubernetesSandbox` assumes a namespace already exists with the RBAC, quotas, and network policy the provider's Pods need. The `dawn-sandbox-infra` Helm chart provisions that cluster-side infrastructure — install it once per cluster (or per environment) before pointing `kubernetesSandbox` at it:
+
+```bash
+helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra
+```
+
+Or from a local checkout of the chart:
+
+```bash
+helm install dawn-sandbox-infra ./charts/dawn-sandbox-infra
+```
+
+What it provisions:
+
+- **Namespace** (`dawn-sandboxes` by default) with configurable Pod Security Standard labels.
+- **Least-privilege RBAC** — a `dawn-orchestrator` ServiceAccount, Role, and RoleBinding scoped to exactly what the provider needs: creating/getting/deleting Pods and PersistentVolumeClaims, `pods/exec`, and managing NetworkPolicies. No access to Secrets or any other resource.
+- **A default-deny egress `NetworkPolicy` backstop** — applies to every Pod in the namespace, with a carve-out for cluster DNS.
+- **`ResourceQuota` and `LimitRange`** — namespace-wide aggregate caps plus container-level cpu/memory/ephemeral-storage defaults. (PID limiting is node-level on Kubernetes and cannot be set by a namespaced chart — see [Security hardening on Kubernetes](#security-hardening-on-kubernetes).)
+- **Pod Security Standards** — namespace labels controlling what the cluster's built-in admission controller allows.
+- **A PVC reaper** — a CronJob that marks and eventually deletes sandbox PVCs that are no longer referenced by any Pod, so abandoned per-thread volumes don't accumulate.
+
+### Key caveats
+
+<Callout type="warn" title="The namespace must match the provider config">
+  The chart's `namespace.name` (default `dawn-sandboxes`) **must match** the `namespace` passed to `kubernetesSandbox({ namespace })` in `dawn.config.ts`. If they diverge, the provider's Pods are created in a namespace with none of the RBAC, quota, or network policy the chart set up.
+</Callout>
+
+Pod Security Standards default to `enforce: baseline` with `warn`/`audit: restricted` — permissive enough that most images pass, while still surfacing restricted-profile warnings. Tighten enforcement with:
+
+```bash
+helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --set podSecurityStandard.enforce=restricted
+```
+
+<Callout type="warn" title="Restricted enforcement rejects the provider's opt-outs">
+  Setting `podSecurityStandard.enforce=restricted` means the namespace's admission controller rejects any sandbox Pod that opts out of the provider's default hardening (`runAsNonRoot: false`, `readOnlyRootFilesystem: false`, and similar `security` overrides in `dawn.config.ts`). Only tighten to `restricted` if every image running in the namespace can pass that profile.
+</Callout>
+
+<Callout type="warn" title="The default-deny egress backstop overrides allow-mode">
+  The chart's default-deny egress `NetworkPolicy` applies to every Pod in the namespace, including sandbox Pods configured with `network: { mode: "allow" }`. That combination still has no egress unless you disable the backstop:
+
+  ```bash
+  helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+    --set networkPolicy.defaultDenyEgress=false
+  ```
+
+  With the backstop disabled, per-thread `deny`-mode NetworkPolicies created by the provider still work as documented — only the namespace-wide backstop is removed.
+</Callout>
+
+The PVC reaper's time-to-live is configurable via `reaper.ttlHours` (default `168`, one week) — a PVC with no Pod referencing it for longer than the TTL is deleted:
+
+```bash
+helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
+  --set reaper.ttlHours=24
+```
+
+`dawn-sandbox-infra` is the second of three sub-projects in Dawn's Kubernetes arc: this chart hardens the cluster for the sandbox provider; an app-deploy chart for running the Dawn server itself on Kubernetes follows.
 
 ## Subagents
 
@@ -230,7 +290,7 @@ Use it in harness-driven tests the same way you'd test any other agent route —
 
 Dawn ships the isolation seam plus a Docker reference. For hostile-grade multi-tenant isolation, plug in a microVM-backed provider.
 
-The Kubernetes provider carries two of its own scope notes: its `deny`-mode `NetworkPolicy` only enforces egress control on a policy-capable CNI (Calico, Cilium) — a CNI that ignores `NetworkPolicy` leaves the Pod's network open regardless of config, which is why `dawn check` warns rather than guarantees; and its `pidsLimit` is not enforced at all by the provider, left to a cluster-side `LimitRange` in the follow-up Helm charts instead.
+The Kubernetes provider carries two of its own scope notes: its `deny`-mode `NetworkPolicy` only enforces egress control on a policy-capable CNI (Calico, Cilium) — a CNI that ignores `NetworkPolicy` leaves the Pod's network open regardless of config, which is why `dawn check` warns rather than guarantees; and its `pidsLimit` is not enforced at all — Kubernetes has no namespaced PID cap, so fork-bomb defense is a node-level kubelet setting (`podPidsLimit`) the cluster operator configures, not something the provider or the Helm chart can set.
 
 ## Related
 

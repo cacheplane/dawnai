@@ -1,0 +1,46 @@
+{{- if .Values.orchestrator.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "dawn-sandbox-infra.orchestratorSAName" . }}
+  namespace: {{ include "dawn-sandbox-infra.namespace" . }}
+  labels:
+    {{- include "dawn-sandbox-infra.labels" . | nindent 4 }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dawn-orchestrator
+  namespace: {{ include "dawn-sandbox-infra.namespace" . }}
+  labels:
+    {{- include "dawn-sandbox-infra.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "persistentvolumeclaims"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "get", "list", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dawn-orchestrator
+  namespace: {{ include "dawn-sandbox-infra.namespace" . }}
+  labels:
+    {{- include "dawn-sandbox-infra.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dawn-orchestrator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dawn-sandbox-infra.orchestratorSAName" . }}
+    namespace: {{ include "dawn-sandbox-infra.namespace" . }}
+  {{- range .Values.orchestrator.subjects }}
+  - {{- toYaml . | nindent 4 }}
+  {{- end }}

@@ -1,0 +1,44 @@
+dawn-sandbox-infra installed.
+
+Namespace:
+  {{ include "dawn-sandbox-infra.namespace" . }}
+{{- if .Values.namespace.create }} (created by this chart){{- else }} (must already exist — namespace.create=false){{- end }}
+
+Point your Dawn app's `dawn.config.ts` at this namespace so the
+kubernetesSandbox provider agrees with the chart:
+
+  sandbox: {
+    provider: kubernetesSandbox({ namespace: "{{ include "dawn-sandbox-infra.namespace" . }}" })
+  }
+
+Orchestrator ServiceAccount:
+{{- if .Values.orchestrator.serviceAccount.create }}
+  {{ include "dawn-sandbox-infra.orchestratorSAName" . }} (created by this chart, namespace-scoped)
+
+  Bind an in-cluster Dawn app to this ServiceAccount (e.g.
+  `serviceAccountName: {{ include "dawn-sandbox-infra.orchestratorSAName" . }}` on the app's Pod spec)
+  so it can create/get/delete pods + pods/exec + persistentvolumeclaims,
+  and create/get/list/update/delete networkpolicies in this namespace.
+{{- else }}
+  orchestrator.serviceAccount.create=false — binding to the existing
+  ServiceAccount/subjects supplied in values.
+{{- end }}
+
+Pod Security Standards on this namespace:
+  enforce={{ .Values.podSecurityStandard.enforce }}  warn={{ .Values.podSecurityStandard.warn }}  audit={{ .Values.podSecurityStandard.audit }}
+
+{{- if .Values.networkPolicy.defaultDenyEgress }}
+
+A namespace-wide default-deny-egress NetworkPolicy is active (+ DNS to
+kube-system). This is a fail-closed backstop: even the provider's
+`network: "allow"` per-thread mode will NOT have open egress unless you
+set `networkPolicy.defaultDenyEgress=false`. Requires a policy-capable CNI
+(e.g. Calico, Cilium) to actually be enforced.
+{{- end }}
+
+{{- if .Values.reaper.enabled }}
+
+A PVC reaper CronJob runs on schedule "{{ .Values.reaper.schedule }}",
+deleting managed PVCs that have been continuously unbound for more than
+{{ .Values.reaper.ttlHours }}h.
+{{- end }}
