@@ -1,0 +1,133 @@
+# Default values for dawn-app.
+# This chart runs a user-built Dawn app image (produced by
+# `langgraphjs dockerfile` against a root-level langgraph.json — see
+# docs/deployment.mdx) as a Deployment + Service, with optional Ingress,
+# HorizontalPodAutoscaler, and PodDisruptionBudget. It does NOT build the
+# image or bake dawn.config.ts — the image is the runtime contract.
+
+image:
+  # repository: REQUIRED at install time. Defaults to "" so `helm lint`
+  # and `helm template` pass without --set; the Deployment template
+  # enforces this with a `required` guard so a real install fails fast
+  # without an image.
+  repository: ""
+  # tag: image tag. Leave "" to fall back to .Chart.AppVersion.
+  tag: ""
+  # digest: if set, pins by digest instead of tag (repository@sha256:...).
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+# containerPort: the port the langgraph API server listens on inside the
+# image. Verify against your built image's Dockerfile EXPOSE/CMD — this is
+# a value specifically so a mismatch is a one-line fix.
+containerPort: 8000
+
+# healthPath: the HTTP path the langgraph API server serves health checks
+# on. Used for liveness/readiness/startup probes.
+healthPath: /healthz
+
+probes:
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  startup:
+    # Generous startup allowance for slow cold starts (model/tool init).
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 60
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: false
+    secretName: ""
+  annotations: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: ""
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# serviceAccount: the sandbox wiring. The app process calls the Kubernetes
+# API to create sandbox pods, so its Pod must run under a ServiceAccount
+# bound to the dawn-sandbox-infra chart's orchestrator Role.
+serviceAccount:
+  # create: whether this chart creates a ServiceAccount in the app's
+  # namespace. If true, the operator must bind it to the sandbox-infra
+  # Role via that chart's `orchestrator.subjects` — NOTES.txt prints the
+  # exact subject to add.
+  create: false
+  # name: the ServiceAccount name. When create=false (default), this must
+  # name an existing ServiceAccount — typically the sandbox-infra chart's
+  # orchestrator SA (dawn-orchestrator), which requires this app to run in
+  # the sandbox namespace (see sandboxNamespace) or be added as a
+  # cross-namespace subject.
+  name: dawn-orchestrator
+  annotations: {}
+
+# automountServiceAccountToken: the app needs the token to call the
+# Kubernetes API (unlike sandbox pods, which do not need it).
+automountServiceAccountToken: true
+
+# sandboxNamespace: informational only — must match the app's
+# `kubernetesSandbox({ namespace })` config and the dawn-sandbox-infra
+# chart's `namespace.name`.
+sandboxNamespace: dawn-sandboxes
+
+env: []
+envFrom: []
+# secretName: convenience envFrom secretRef (e.g. for OPENAI_API_KEY,
+# DATABASE_URL). The chart does NOT template Secrets — supply them
+# out-of-band.
+secretName: ""
+
+resources: {}
+
+# securityContext: hardened but app-appropriate. The langgraph API server
+# is not a sandbox pod but should still be least-privilege.
+securityContext:
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+  # readOnlyRootFilesystem: defaults false — the langgraph runtime likely
+  # writes temp state. A writable /tmp emptyDir is always mounted
+  # regardless of this setting. Set true if your image tolerates it.
+  readOnlyRootFilesystem: false
+
+podSecurityContext: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -162,6 +162,67 @@ jobs:
       - name: Real-Postgres pgvector tests
         run: DAWN_TEST_PGVECTOR=1 pnpm --filter @dawn-ai/memory-pgvector test
 
+  chart-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install /tmp/kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: Helm lint (strict) — dawn-sandbox-infra
+        run: helm lint --strict charts/dawn-sandbox-infra
+
+      - name: Reaper unit test
+        run: sh charts/dawn-sandbox-infra/test/reaper.test.sh
+
+      - name: Render assertions — dawn-sandbox-infra
+        run: sh charts/dawn-sandbox-infra/test/render.sh
+
+      - name: kubeconform (default values) — dawn-sandbox-infra
+        run: |
+          helm template test charts/dawn-sandbox-infra \
+            | kubeconform -strict -summary -ignore-missing-schemas
+
+      - name: kubeconform (restricted PSS, reaper disabled) — dawn-sandbox-infra
+        run: |
+          helm template test charts/dawn-sandbox-infra \
+            --set podSecurityStandard.enforce=restricted \
+            --set reaper.enabled=false \
+            | kubeconform -strict -summary -ignore-missing-schemas
+
+      - name: Helm lint (strict) — dawn-app
+        run: helm lint --strict charts/dawn-app
+
+      - name: Render assertions — dawn-app
+        run: sh charts/dawn-app/test/render.sh
+
+      - name: kubeconform (default values) — dawn-app
+        run: |
+          helm template test charts/dawn-app --set image.repository=example/app \
+            | kubeconform -strict -summary -ignore-missing-schemas
+
+      - name: kubeconform (full override) — dawn-app
+        run: |
+          helm template test charts/dawn-app \
+            --set image.repository=example/app \
+            --set ingress.enabled=true \
+            --set ingress.host=app.example.com \
+            --set autoscaling.enabled=true \
+            --set podDisruptionBudget.enabled=true \
+            | kubeconform -strict -summary -ignore-missing-schemas
+
   sandbox-k8s:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -190,6 +251,9 @@ jobs:
       - name: Build sandbox package
         run: pnpm --filter @dawn-ai/workspace build && pnpm --filter @dawn-ai/sandbox build
 
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+
       - name: Create kind cluster (no default CNI)
         uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
         with:
@@ -201,8 +265,48 @@ jobs:
           kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
           kubectl wait --for=condition=Ready nodes --all --timeout=180s
 
-      - name: Create sandbox namespace
-        run: kubectl create namespace dawn-sandboxes
+      - name: Install sandbox-infra chart
+        run: |
+          helm install dawn-sandbox-infra charts/dawn-sandbox-infra --wait
+          kubectl -n dawn-sandboxes get role,rolebinding,networkpolicy,resourcequota,limitrange,cronjob,serviceaccount
+
+      - name: Assert orchestrator RBAC (least privilege)
+        run: |
+          SA=system:serviceaccount:dawn-sandboxes:dawn-orchestrator
+          kubectl auth can-i create pods --as=$SA -n dawn-sandboxes | grep -qx yes
+          kubectl auth can-i create pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes
+          kubectl auth can-i create persistentvolumeclaims --as=$SA -n dawn-sandboxes | grep -qx yes
+          kubectl auth can-i create networkpolicies.networking.k8s.io --as=$SA -n dawn-sandboxes | grep -qx yes
+          kubectl auth can-i create secrets --as=$SA -n dawn-sandboxes | grep -qx no
 
       - name: Real-cluster sandbox conformance + e2e
         run: DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration
+
+  chart-apply-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+
+      - name: Create kind cluster
+        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+
+      - name: Install dawn-app (placeholder image) and verify it serves
+        # nginx-unprivileged runs as non-root (UID 101, port 8080), so it satisfies
+        # the chart's hardened runAsNonRoot default — which is exactly what a real
+        # langgraph app image must also do. A root image (e.g. traefik/whoami) would
+        # be rejected by the kubelet, so this doubles as a proof of the non-root default.
+        run: |
+          helm install dawn-app charts/dawn-app \
+            --set image.repository=nginxinc/nginx-unprivileged --set image.tag=stable-alpine \
+            --set containerPort=8080 --set healthPath=/ \
+            --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \
+            --wait --timeout 3m
+          kubectl rollout status deploy/dawn-app --timeout=120s
+          kubectl run curl --image=curlimages/curl:8.10.1 --restart=Never --rm -i --quiet -- \
+            curl -sf http://dawn-app.default.svc.cluster.local/ >/dev/null && echo "app served OK"

@@ -19,7 +19,7 @@ import {
   rowToRecord,
   tokensFor,
 } from "./queries.js"
-import { assertIdentifier, initSchema } from "./schema.js"
+import { assertIdentifier, initSchema, vectorColumnDef } from "./schema.js"
 
 // Default HNSW build/search parameters (pgvector defaults; overridable per store).
 const DEFAULT_M = 16
@@ -53,6 +53,7 @@ export function pgvectorMemoryStore(opts: {
   const prefix = opts.tablePrefix ?? "dawn_memory"
   assertIdentifier("schema", schema)
   assertIdentifier("tablePrefix", prefix)
+  vectorColumnDef(opts.dimensions)
   const m = opts.index?.m ?? DEFAULT_M
   const efConstruction = opts.index?.efConstruction ?? DEFAULT_EF_CONSTRUCTION
   const efSearch = opts.index?.efSearch ?? DEFAULT_EF_SEARCH

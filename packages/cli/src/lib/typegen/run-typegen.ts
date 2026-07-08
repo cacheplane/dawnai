@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { join, relative, sep } from "node:path"
 import type {
   ExtractedToolSchema,
   ExtractedToolType,
@@ -113,24 +113,34 @@ function hasSubagents(routeDir: string): boolean {
   })
 }
 
-const MEMORY_EXTRA_TOOLS: readonly ExtractedToolType[] = [
-  {
-    name: "remember",
-    description: "Store a typed long-term memory for later recall.",
-    // NOTE: `data` is typed loosely for v1; the runtime validates it against the route's defineMemory() zod schema. Typing `data` to the route schema is a deferred refinement.
-    inputType: `{ data: Record<string, unknown>; content: string; tags?: string[]; confidence?: number }`,
-    outputType: `string`,
-  },
-  {
-    name: "recall",
-    description: "Recall typed long-term memories by keyword/kind/tags.",
-    inputType: `{ query?: string; kind?: string; tags?: string[]; limit?: number }`,
-    outputType: `string`,
-  },
-]
-
 function hasMemory(routeDir: string): boolean {
   return existsSync(join(routeDir, "memory.ts"))
+}
+
+function memoryExtraTools(routeDir: string, dawnDir: string): readonly ExtractedToolType[] {
+  const memoryModule = moduleSpecifierFromDts(dawnDir, join(routeDir, "memory.ts"))
+  const dataType = `import("zod").infer<(typeof import(${JSON.stringify(memoryModule)}).default)["schema"]>`
+  return [
+    {
+      name: "remember",
+      description: "Store a typed long-term memory for later recall.",
+      inputType: `{ data: ${dataType}; content: string; tags?: string[]; confidence?: number }`,
+      outputType: `string`,
+    },
+    {
+      name: "recall",
+      description: "Recall typed long-term memories by keyword/kind/tags.",
+      inputType: `{ query?: string; kind?: string; tags?: string[]; limit?: number }`,
+      outputType: `string`,
+    },
+  ]
+}
+
+function moduleSpecifierFromDts(dtsDir: string, targetFile: string): string {
+  let specifier = relative(dtsDir, targetFile).split(sep).join("/")
+  specifier = specifier.replace(/\.[cm]?[tj]sx?$/, "")
+  if (!specifier.startsWith(".")) specifier = `./${specifier}`
+  return specifier
 }
 
 export interface TypegenResult {
@@ -176,7 +186,7 @@ export async function runTypegen(options: {
       extraTools.push(...WORKSPACE_EXTRA_TOOLS)
     }
     if (hasMemory(route.routeDir)) {
-      extraTools.push(...MEMORY_EXTRA_TOOLS)
+      extraTools.push(...memoryExtraTools(route.routeDir, dawnDir))
     }
 
     routeToolTypes.push({

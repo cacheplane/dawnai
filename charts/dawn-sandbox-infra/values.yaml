@@ -1,0 +1,67 @@
+# Default values for dawn-sandbox-infra.
+# This chart provisions the cluster-side infrastructure the Dawn
+# kubernetesSandbox provider (@dawn-ai/sandbox) assumes: a namespace,
+# least-privilege RBAC for the orchestrator, a default-deny egress
+# NetworkPolicy backstop, a ResourceQuota + LimitRange (cpu/memory/
+# ephemeral-storage), configurable Pod Security Standards, and a
+# self-bookkeeping PVC reaper. (PID limits are node-level on K8s — see README.)
+
+namespace:
+  # create: whether the chart creates the namespace. Set to false to
+  # install into a namespace that already exists (e.g. managed elsewhere).
+  create: true
+  # name: the namespace the provider's `opts.namespace` must match.
+  name: dawn-sandboxes
+
+podSecurityStandard:
+  # enforce: baseline | restricted | privileged
+  enforce: baseline
+  warn: restricted
+  audit: restricted
+  # version: the PSS policy version to pin the enforce/warn/audit labels to.
+  # "latest" always applies the newest rules (may tighten on a cluster upgrade);
+  # pin to e.g. "v1.31" for stability against silent drift across upgrades.
+  version: latest
+
+orchestrator:
+  serviceAccount:
+    # create: whether the chart creates the orchestrator ServiceAccount.
+    create: true
+    # name: the ServiceAccount name; also used when create=false to bind
+    # an existing SA.
+    name: dawn-orchestrator
+  # subjects: extra RoleBinding subjects (e.g. a cross-namespace SA).
+  subjects: []
+
+networkPolicy:
+  # defaultDenyEgress: namespace-wide egress backstop (+ DNS carve-out).
+  defaultDenyEgress: true
+
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    persistentvolumeclaims: "50"
+    requests.storage: 100Gi
+
+limitRange:
+  enabled: true
+  # NOTE: no `pids` limit here — Kubernetes has no per-pod/namespace PID cap
+  # (it's a node-level kubelet setting, `podPidsLimit`). See README.
+  default:
+    cpu: "1"
+    memory: 512Mi
+  defaultRequest:
+    cpu: 100m
+    memory: 128Mi
+  maxEphemeralStorage: 1Gi
+
+reaper:
+  enabled: true
+  schedule: "17 * * * *"
+  ttlHours: 168
+  # Pinned by digest (tags are mutable; the reaper SA can patch/delete PVCs).
+  image: docker.io/alpine/k8s:1.31.1@sha256:dfe8c7a06c41d0b6e8757da99531f8f302e9a2687fa0155af4c4087df585c9c8 # sh + date + kubectl

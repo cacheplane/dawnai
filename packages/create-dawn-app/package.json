@@ -1,6 +1,6 @@
 {
   "name": "create-dawn-ai-app",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -26,7 +26,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -b ../devkit/tsconfig.json ../core/tsconfig.json ../langgraph/tsconfig.json ../cli/tsconfig.build.json tsconfig.json",
+    "build": "tsc -b tsconfig.json",
     "lint": "biome check --config-path ../config-biome/biome.json package.json src test tsconfig.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts",
     "typecheck": "tsc --noEmit -p ../devkit/tsconfig.json && tsc --noEmit -p tsconfig.json"

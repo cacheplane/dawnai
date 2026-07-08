@@ -1,7 +1,7 @@
 # pgvector Memory Backend Design (Phase 4 — memory follow-up)
 
 Date: 2026-07-07
-Status: approved design, pending implementation plan
+Status: implemented and published in `@dawn-ai/memory-pgvector@0.8.9`; published-tarball smoke passed
 Branch: `feat/memory-pgvector`
 Prior art: vector recall (`docs/superpowers/specs/2026-07-06-vector-recall-design.md`, PR #313)
 
@@ -122,8 +122,9 @@ CREATE INDEX ... ON <prefix>_memories USING hnsw (embedding <OPS>) WITH (m=?, ef
 **Dimension branch:** `dimensions ≤ 2000` → `VECTOR_TYPE = vector`, `OPS =
 vector_cosine_ops`. `dimensions ≤ 4000` (i.e. > 2000) → `VECTOR_TYPE = halfvec`,
 `OPS = halfvec_cosine_ops` (enables `text-embedding-3-large` at 3072).
-`dimensions > 4000` → throw a clear config error at construction. Document 1536
-(`-small`) as the smooth default.
+`dimensions > 4000` → throw a clear config error naming the halfvec ceiling.
+Document 1536 (`-small`) as the smooth default. The implementation validates
+this in the store factory so bad config fails before any pool or schema work.
 
 ## Retrieval flow
 
