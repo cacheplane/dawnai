@@ -1,0 +1,63 @@
+dawn-app installed.
+
+Service URL:
+{{- if .Values.ingress.enabled }}
+{{- range $host := list .Values.ingress.host }}
+{{- if $host }}
+  http{{ if $.Values.ingress.tls.enabled }}s{{ end }}://{{ $host }}{{ $.Values.ingress.path }}
+{{- else }}
+  (ingress.enabled=true but ingress.host is unset — set it to get a URL)
+{{- end }}
+{{- end }}
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  Run:
+    kubectl get svc {{ include "dawn-app.fullname" . }} -n {{ .Release.Namespace }} -w
+  to watch for an EXTERNAL-IP, then browse to http://<EXTERNAL-IP>:{{ .Values.service.port }}
+{{- else if contains "NodePort" .Values.service.type }}
+  Run:
+    kubectl get svc {{ include "dawn-app.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.ports[0].nodePort}'
+  to get the NodePort, then browse to http://<NODE-IP>:<NODE-PORT>
+{{- else }}
+  Cluster-internal only (service.type=ClusterIP). Port-forward to reach it:
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "dawn-app.fullname" . }} 8080:{{ .Values.service.port }}
+  then browse to http://localhost:8080
+{{- end }}
+
+ServiceAccount / namespace wiring (the sandbox crux):
+
+This app's Pod runs under ServiceAccount "{{ include "dawn-app.serviceAccountName" . }}"
+in namespace "{{ .Release.Namespace }}". For the in-cluster kubernetesSandbox
+provider (baked into your image's dawn.config.ts) to work, that ServiceAccount
+must be bound to the dawn-sandbox-infra chart's orchestrator Role.
+
+{{- if .Values.serviceAccount.create }}
+
+serviceAccount.create=true — this chart created the ServiceAccount above in
+THIS namespace ("{{ .Release.Namespace }}"). You must now bind it to the
+sandbox-infra orchestrator Role by adding it as a cross-namespace subject on
+the dawn-sandbox-infra release:
+
+  helm upgrade dawn-sandbox-infra charts/dawn-sandbox-infra \
+    --reuse-values \
+    --set-json 'orchestrator.subjects[0]={"kind":"ServiceAccount","name":"{{ include "dawn-app.serviceAccountName" . }}","namespace":"{{ .Release.Namespace }}"}'
+{{- else }}
+
+serviceAccount.create=false (default) — this chart is reusing an EXISTING
+ServiceAccount named "{{ include "dawn-app.serviceAccountName" . }}". This
+works out of the box only if one of the following is true:
+
+  1. This app is installed in the sandbox namespace itself
+     (currently: "{{ .Release.Namespace }}"; expected: "{{ .Values.sandboxNamespace }}"),
+     where the dawn-sandbox-infra chart already created that SA; OR
+  2. The operator has added
+       {kind: ServiceAccount, name: {{ include "dawn-app.serviceAccountName" . }}, namespace: {{ .Release.Namespace }}}
+     as a cross-namespace subject on the dawn-sandbox-infra chart's
+     `orchestrator.subjects` (same command shown above).
+{{- end }}
+
+Make sure your app's `dawn.config.ts` points the kubernetesSandbox provider at
+the same namespace as the dawn-sandbox-infra chart:
+
+  sandbox: {
+    provider: kubernetesSandbox({ namespace: "{{ .Values.sandboxNamespace }}" })
+  }

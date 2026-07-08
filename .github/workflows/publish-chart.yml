@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "charts/dawn-sandbox-infra/**"
+      - "charts/dawn-app/**"
 
 permissions:
   contents: read
@@ -15,6 +16,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    strategy:
+      matrix:
+        chart: [dawn-sandbox-infra, dawn-app]
 
     steps:
       - name: Checkout
@@ -28,10 +33,11 @@ jobs:
 
       - name: Publish chart if version is new
         run: |
-          VERSION=$(helm show chart charts/dawn-sandbox-infra | awk '/^version:/{print $2}')
-          if helm show chart "oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra" --version "$VERSION" >/dev/null 2>&1; then
-            echo "dawn-sandbox-infra $VERSION already published, skipping"
+          CHART="${{ matrix.chart }}"
+          VERSION=$(helm show chart "charts/$CHART" | awk '/^version:/{print $2}')
+          if helm show chart "oci://ghcr.io/cacheplane/charts/$CHART" --version "$VERSION" >/dev/null 2>&1; then
+            echo "$CHART $VERSION already published, skipping"
             exit 0
           fi
-          helm package charts/dawn-sandbox-infra -d /tmp
-          helm push "/tmp/dawn-sandbox-infra-$VERSION.tgz" oci://ghcr.io/cacheplane/charts
+          helm package "charts/$CHART" -d /tmp
+          helm push "/tmp/$CHART-$VERSION.tgz" oci://ghcr.io/cacheplane/charts
