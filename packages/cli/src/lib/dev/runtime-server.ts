@@ -12,6 +12,7 @@ import {
 import { resolveSandboxManager } from "../runtime/resolve-sandbox.js"
 import type { SandboxManager } from "../runtime/sandbox-manager.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
+import { handleAgUiRequest } from "./agui-handler.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
@@ -311,6 +312,26 @@ function buildRouteTable(ctx: {
       },
       method: "POST",
       pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/stream(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // POST /agui/:routeId — AG-UI protocol endpoint (SSE)
+    // ------------------------------------------------------------------
+    {
+      handle: async (req, res, params) => {
+        await handleAgUiRequest({
+          appRoot,
+          registry,
+          threadsStore,
+          ...(sandboxManager ? { sandboxManager } : {}),
+          signal,
+          request: req,
+          response: res,
+          routeKey: params.routeId ?? "",
+        })
+      },
+      method: "POST",
+      pattern: /^\/agui\/(?<routeId>[^/?#]+)(?:\?.*)?$/,
     },
 
     // ------------------------------------------------------------------

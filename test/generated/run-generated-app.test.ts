@@ -21,6 +21,7 @@ import { expectBasicAuthoringLane } from "./harness.ts"
 // @dawn-ai workspace packages a generated app may depend on. Used only to build
 // the internal-mode <repo:...> fixture (external mode installs from the registry).
 const SCAFFOLD_PACKAGES: readonly string[] = [
+  "@dawn-ai/ag-ui",
   "@dawn-ai/cli",
   "@dawn-ai/config-typescript",
   "@dawn-ai/core",

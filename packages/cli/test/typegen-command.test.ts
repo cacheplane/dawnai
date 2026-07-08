@@ -183,6 +183,7 @@ describe("dawn typegen", () => {
     await mkdir(packsRoot, { recursive: true })
     await mkdir(join(appRoot, "src", "custom-app", "[tenant]"), { recursive: true })
 
+    const agUiTarball = await packPackage("@dawn-ai/ag-ui", packsRoot)
     const cliTarball = await packPackage("@dawn-ai/cli", packsRoot)
     const coreTarball = await packPackage("@dawn-ai/core", packsRoot)
     const langchainTarball = await packPackage("@dawn-ai/langchain", packsRoot)
@@ -225,6 +226,7 @@ describe("dawn typegen", () => {
         "  esbuild: true",
         "",
         "overrides:",
+        `  "@dawn-ai/ag-ui": ${JSON.stringify(`file:${agUiTarball}`)}`,
         `  "@dawn-ai/core": ${JSON.stringify(`file:${coreTarball}`)}`,
         `  "@dawn-ai/langchain": ${JSON.stringify(`file:${langchainTarball}`)}`,
         `  "@dawn-ai/langgraph": ${JSON.stringify(`file:${langgraphTarball}`)}`,
