@@ -43,6 +43,6 @@
     "@ag-ui/client": "0.0.57",
     "@dawn-ai/config-typescript": "workspace:*",
     "@types/node": "26.1.0",
-    "rxjs": "7.8.1"
+    "rxjs": "7.8.2"
   }
 }
