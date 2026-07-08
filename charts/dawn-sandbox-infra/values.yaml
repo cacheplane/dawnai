@@ -2,9 +2,9 @@
 # This chart provisions the cluster-side infrastructure the Dawn
 # kubernetesSandbox provider (@dawn-ai/sandbox) assumes: a namespace,
 # least-privilege RBAC for the orchestrator, a default-deny egress
-# NetworkPolicy backstop, a ResourceQuota + LimitRange (carrying the
-# `pids` limit the provider delegates), configurable Pod Security
-# Standards, and a self-bookkeeping PVC reaper.
+# NetworkPolicy backstop, a ResourceQuota + LimitRange (cpu/memory/
+# ephemeral-storage), configurable Pod Security Standards, and a
+# self-bookkeeping PVC reaper. (PID limits are node-level on K8s — see README.)
 
 namespace:
   # create: whether the chart creates the namespace. Set to false to
@@ -45,7 +45,8 @@ resourceQuota:
 
 limitRange:
   enabled: true
-  defaultPids: 512
+  # NOTE: no `pids` limit here — Kubernetes has no per-pod/namespace PID cap
+  # (it's a node-level kubelet setting, `podPidsLimit`). See README.
   default:
     cpu: "1"
     memory: 512Mi

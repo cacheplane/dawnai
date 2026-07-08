@@ -150,7 +150,7 @@ The `security` intent maps onto the Pod and container `SecurityContext` fields i
 
 Sandbox Pods also set `automountServiceAccountToken: false`, so a compromised sandbox process has no Kubernetes API credentials to steal — it can't call the cluster API even if it escapes the container boundary.
 
-`pidsLimit` is **not** enforced by this provider — Kubernetes has no per-Pod process-count field equivalent to Docker's `--pids-limit`. Fork-bomb defense on Kubernetes is delegated to a cluster-side `LimitRange`, shipped in a follow-up Helm chart rather than set by the provider itself.
+`pidsLimit` is **not** enforced by this provider — Kubernetes has no per-Pod or per-namespace process-count field equivalent to Docker's `--pids-limit` (`pids` is not a valid `LimitRange`/`ResourceQuota` resource). Fork-bomb defense on Kubernetes is a **node-level** kubelet setting (`podPidsLimit` / `--pod-max-pids`) that a cluster operator configures on the nodes running sandbox Pods; it cannot be set by the provider or a namespaced chart.
 
 ### Network policy on Kubernetes
 
@@ -184,7 +184,7 @@ What it provisions:
 - **Namespace** (`dawn-sandboxes` by default) with configurable Pod Security Standard labels.
 - **Least-privilege RBAC** — a `dawn-orchestrator` ServiceAccount, Role, and RoleBinding scoped to exactly what the provider needs: creating/getting/deleting Pods and PersistentVolumeClaims, `pods/exec`, and managing NetworkPolicies. No access to Secrets or any other resource.
 - **A default-deny egress `NetworkPolicy` backstop** — applies to every Pod in the namespace, with a carve-out for cluster DNS.
-- **`ResourceQuota` and `LimitRange`** — namespace-wide caps plus a container-level default `pids` limit, standing in for the `pidsLimit` the provider itself cannot enforce on Kubernetes (see [Security hardening on Kubernetes](#security-hardening-on-kubernetes)).
+- **`ResourceQuota` and `LimitRange`** — namespace-wide aggregate caps plus container-level cpu/memory/ephemeral-storage defaults. (PID limiting is node-level on Kubernetes and cannot be set by a namespaced chart — see [Security hardening on Kubernetes](#security-hardening-on-kubernetes).)
 - **Pod Security Standards** — namespace labels controlling what the cluster's built-in admission controller allows.
 - **A PVC reaper** — a CronJob that marks and eventually deletes sandbox PVCs that are no longer referenced by any Pod, so abandoned per-thread volumes don't accumulate.
 
@@ -290,7 +290,7 @@ Use it in harness-driven tests the same way you'd test any other agent route —
 
 Dawn ships the isolation seam plus a Docker reference. For hostile-grade multi-tenant isolation, plug in a microVM-backed provider.
 
-The Kubernetes provider carries two of its own scope notes: its `deny`-mode `NetworkPolicy` only enforces egress control on a policy-capable CNI (Calico, Cilium) — a CNI that ignores `NetworkPolicy` leaves the Pod's network open regardless of config, which is why `dawn check` warns rather than guarantees; and its `pidsLimit` is not enforced at all by the provider, left to a cluster-side `LimitRange` in the follow-up Helm charts instead.
+The Kubernetes provider carries two of its own scope notes: its `deny`-mode `NetworkPolicy` only enforces egress control on a policy-capable CNI (Calico, Cilium) — a CNI that ignores `NetworkPolicy` leaves the Pod's network open regardless of config, which is why `dawn check` warns rather than guarantees; and its `pidsLimit` is not enforced at all — Kubernetes has no namespaced PID cap, so fork-bomb defense is a node-level kubelet setting (`podPidsLimit`) the cluster operator configures, not something the provider or the Helm chart can set.
 
 ## Related
 

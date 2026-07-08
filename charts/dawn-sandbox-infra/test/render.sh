@@ -51,11 +51,12 @@ if tmpl --show-only templates/resourcequota.yaml --set resourceQuota.enabled=fal
 fi
 echo "ok: resourcequota absent when disabled"
 
-# LimitRange (carries the delegated pids cap)
+# LimitRange (cpu/memory/ephemeral-storage defaults; NO pids — see limitrange.yaml)
 LR="$(tmpl --show-only templates/limitrange.yaml)"
 printf '%s\n' "$LR" | assert "limitrange kind" 'kind: LimitRange'
 printf '%s\n' "$LR" | assert "limitrange type Container" 'type: Container'
-printf '%s\n' "$LR" | assert "limitrange default pids" 'pids: "512"'
+if printf '%s\n' "$LR" | grep -q 'pids:'; then echo "FAIL: limitrange must NOT set pids (invalid k8s resource)"; exit 1; fi
+echo "ok: limitrange has no invalid pids resource"
 printf '%s\n' "$LR" | assert "limitrange default cpu" 'cpu: "1"'
 printf '%s\n' "$LR" | assert "limitrange default memory" 'memory: "512Mi"'
 printf '%s\n' "$LR" | assert "limitrange defaultRequest cpu" 'cpu: "100m"'

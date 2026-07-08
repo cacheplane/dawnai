@@ -79,10 +79,9 @@
     "limitRange": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "defaultPids", "default", "defaultRequest", "maxEphemeralStorage"],
+      "required": ["enabled", "default", "defaultRequest", "maxEphemeralStorage"],
       "properties": {
         "enabled": { "type": "boolean" },
-        "defaultPids": { "type": "integer", "minimum": 1 },
         "default": {
           "type": "object",
           "additionalProperties": false,

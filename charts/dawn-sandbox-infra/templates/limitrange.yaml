@@ -9,11 +9,15 @@ metadata:
 spec:
   limits:
     - type: Container
+      # NOTE: Kubernetes has no per-pod/per-namespace PID limit — `pids` is NOT a
+      # valid LimitRange resource (the API rejects it). PID limiting is a NODE-level
+      # kubelet setting (`podPidsLimit` / `--pod-max-pids`); see the chart README /
+      # docs. The provider's `security.pidsLimit` therefore has no per-pod K8s
+      # equivalent, unlike Docker's `--pids-limit`.
       default:
         cpu: {{ .Values.limitRange.default.cpu | quote }}
         memory: {{ .Values.limitRange.default.memory | quote }}
         ephemeral-storage: {{ .Values.limitRange.maxEphemeralStorage | quote }}
-        pids: {{ .Values.limitRange.defaultPids | quote }}
       defaultRequest:
         cpu: {{ .Values.limitRange.defaultRequest.cpu | quote }}
         memory: {{ .Values.limitRange.defaultRequest.memory | quote }}

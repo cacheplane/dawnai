@@ -80,7 +80,7 @@ A namespace-wide NetworkPolicy selecting **all** pods (`podSelector: {}`), `poli
 ### ResourceQuota + LimitRange
 
 - **ResourceQuota** (gated, `values.resourceQuota.enabled`, default `true`): caps namespace aggregate `requests.cpu/memory`, `limits.cpu/memory`, `persistentvolumeclaims` count, and `requests.storage`. Defaults sized for a modest multi-tenant footprint, all overridable.
-- **LimitRange** (`values.limitRange.enabled`, default `true`): sets container `default`/`defaultRequest` cpu/memory + `max` ephemeral-storage, **and the default `pids` limit** (`values.limitRange.defaultPids`, default `512` — matching the Docker provider's `--pids-limit 512`). This is where the provider's delegated `pidsLimit` lands. A `type: Container` LimitRange with `default: { "pids": "512" }` applies the fork-bomb cap the provider can't set at the pod level.
+- **LimitRange** (`values.limitRange.enabled`, default `true`): sets container `default`/`defaultRequest` cpu/memory + ephemeral-storage. **CORRECTION (caught by the real-cluster lane):** `pids` is NOT a valid LimitRange resource — the API rejects `spec.limits[].default[pids]` ("must be a standard resource for containers"), and Kubernetes has no namespaced PID cap at all. PID limiting is a **node-level kubelet setting** (`podPidsLimit` / `--pod-max-pids`); the provider's `pidsLimit` has no per-pod K8s equivalent. The chart documents this (README "PID limits") but cannot template it. kubeconform passed it locally (LimitRange resources are a free map in the OpenAPI schema) — only server-side admission on the kind lane rejected it.
 
 ### Pod Security Standards
 
