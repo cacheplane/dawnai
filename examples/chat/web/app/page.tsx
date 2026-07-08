@@ -1,23 +1,23 @@
 "use client"
-import { CopilotKitProvider, CopilotSidebar } from "@copilotkit/react-core/v2"
+import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
 import { PermissionInterrupt } from "./components/PermissionInterrupt"
 import { TodosPanel } from "./components/TodosPanel"
 
-// Deviations from the plan (verified against installed @copilotkit/react-core@1.62.2 types):
+// Notes (verified against installed @copilotkit/react-core@1.62.2 types):
+// - Use the `CopilotKit` wrapper (not bare `CopilotKitProvider`) per CopilotKit's own v2
+//   guidance: it adds the error boundary, toasts, and threads provider around the context.
+//   Its props are a superset of CopilotKitProviderProps (so `runtimeUrl` applies).
 // - `CopilotSidebar` ships from `@copilotkit/react-core/v2`, not `@copilotkit/react-ui`
-//   (react-ui's root export is the v1 CopilotSidebar, which is not compatible with the
-//   v2 CopilotKitProvider context; react-ui's package.json exposes no `/v2` JS export,
-//   only `/v2/styles.css`).
-// - `CopilotKitProvider` has no `agent` prop (see CopilotKitProviderProps) — there is no
-//   ambient "default agent" mechanism. Every hook/component resolves its own agent id,
-//   defaulting to the literal string "default" (@copilotkit/shared's DEFAULT_AGENT_ID) if
-//   not passed explicitly. So `agentId="chat"` is set directly on `CopilotSidebar`, and
-//   in `TodosPanel`/`PermissionInterrupt` on their respective hooks.
-// - `labels` is `Partial<CopilotChatLabels>`, whose sidebar/header title field is
-//   `modalHeaderTitle`, not `title`.
+//   (react-ui's root export is the v1 CopilotSidebar, incompatible with the v2 context;
+//   react-ui exposes no `/v2` JS export, only `/v2/styles.css`).
+// - There is no ambient "default agent": every hook/component resolves its own agent id,
+//   falling back to the literal "default" (@copilotkit/shared's DEFAULT_AGENT_ID) if
+//   omitted. Our runtime registers `agents: { chat }`, so `agentId="chat"` is set
+//   explicitly on `CopilotSidebar` and in `TodosPanel`/`PermissionInterrupt`'s hooks.
+// - `labels` is `Partial<CopilotChatLabels>`, whose header title field is `modalHeaderTitle`.
 export default function Home() {
   return (
-    <CopilotKitProvider runtimeUrl="/api/copilotkit">
+    <CopilotKit runtimeUrl="/api/copilotkit">
       <PermissionInterrupt />
       <div style={{ display: "flex", height: "100vh" }}>
         <TodosPanel />
@@ -25,6 +25,6 @@ export default function Home() {
           <CopilotSidebar agentId="chat" defaultOpen labels={{ modalHeaderTitle: "Dawn chat" }} />
         </main>
       </div>
-    </CopilotKitProvider>
+    </CopilotKit>
   )
 }

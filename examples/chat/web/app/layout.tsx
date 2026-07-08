@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import "@copilotkit/react-ui/styles.css"
+import "@copilotkit/react-core/v2/styles.css"
 
 export const metadata = { title: "Dawn chat — CopilotKit + AG-UI" }
 
