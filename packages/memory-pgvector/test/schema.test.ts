@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { pgvectorMemoryStore } from "../src/index.js"
 import { assertIdentifier, vectorColumnDef } from "../src/schema.js"
 
 describe("vectorColumnDef", () => {
@@ -29,5 +30,11 @@ describe("assertIdentifier", () => {
     expect(() => assertIdentifier("schema", "public; DROP TABLE x")).toThrow(/schema/)
     expect(() => assertIdentifier("prefix", "1leading")).toThrow(/prefix/)
     expect(() => assertIdentifier("schema", "")).toThrow(/schema/)
+  })
+})
+
+describe("pgvectorMemoryStore", () => {
+  it("validates dimensions at construction time", () => {
+    expect(() => pgvectorMemoryStore({ dimensions: 4001 })).toThrow(/4000 halfvec index ceiling/)
   })
 })

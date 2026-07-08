@@ -188,7 +188,19 @@ describe("runTypegen", () => {
 
   test("includes remember and recall tools in generated types when memory.ts exists", async () => {
     const { appRoot, routeDir } = await setupApp()
-    await createFile(join(routeDir, "memory.ts"), "export default {};\n")
+    await createFile(
+      join(routeDir, "memory.ts"),
+      [
+        'import { defineMemory } from "@dawn-ai/sdk"',
+        'import { z } from "zod"',
+        "export default defineMemory({",
+        '  kind: "semantic",',
+        '  scope: ["route"],',
+        "  schema: z.object({ subject: z.string(), predicate: z.string(), value: z.string() }),",
+        "})",
+        "",
+      ].join("\n"),
+    )
 
     const manifest = await discoverRoutes({ appRoot })
     await runTypegen({ appRoot, manifest })
@@ -198,6 +210,10 @@ describe("runTypegen", () => {
 
     expect(content).toContain("remember")
     expect(content).toContain("recall")
+    expect(content).toContain(
+      'data: import("zod").infer<(typeof import("../src/app/hello/[tenant]/memory").default)["schema"]>',
+    )
+    expect(content).not.toContain("data: Record<string, unknown>")
     // Existing user tool still present alongside the capability-contributed ones
     expect(content).toContain("greet")
   })

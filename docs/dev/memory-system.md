@@ -306,7 +306,9 @@ HNSW + cosine retrieval in SQL, the same shared ranking core, dimension branch (
   SQL (today pgvector retrieves both lists and fuses in the shared JS core).
 - Memory graph (edges/relations).
 - Dev-server Memory Inspector UI (no dev UI host exists today).
-- Schema-typed `remember.data` in typegen.
+
+Typegen now derives `remember.data` from the route's `defineMemory().schema`, so
+route code sees the same fact shape the runtime validates.
 
 ## 14. Where "smarter recall" plugged in (DONE — this branch)
 
