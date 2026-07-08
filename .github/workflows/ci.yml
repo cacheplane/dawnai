@@ -296,10 +296,14 @@ jobs:
         uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
 
       - name: Install dawn-app (placeholder image) and verify it serves
+        # nginx-unprivileged runs as non-root (UID 101, port 8080), so it satisfies
+        # the chart's hardened runAsNonRoot default — which is exactly what a real
+        # langgraph app image must also do. A root image (e.g. traefik/whoami) would
+        # be rejected by the kubelet, so this doubles as a proof of the non-root default.
         run: |
           helm install dawn-app charts/dawn-app \
-            --set image.repository=traefik/whoami --set image.tag=latest \
-            --set containerPort=80 --set healthPath=/ \
+            --set image.repository=nginxinc/nginx-unprivileged --set image.tag=stable-alpine \
+            --set containerPort=8080 --set healthPath=/ \
             --set serviceAccount.create=true --set serviceAccount.name=dawn-app-smoke \
             --wait --timeout 3m
           kubectl rollout status deploy/dawn-app --timeout=120s
