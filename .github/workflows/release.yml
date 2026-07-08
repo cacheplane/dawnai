@@ -62,6 +62,7 @@ jobs:
       # The OIDC token from id-token: write authenticates this workflow as a
       # trusted publisher for each package.
       - name: Create Release Pull Request or Publish
+        id: changesets
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
           version: pnpm exec changeset version
@@ -90,3 +91,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: node scripts/upload-release-assets.mjs
+
+      # Backfill tag + GitHub Release for any published package the run skipped —
+      # i.e. a brand-new package that had to be bootstrap-published manually before
+      # this run (OIDC cannot create a new package name), so changesets/action found
+      # it already on npm and left it untagged. Idempotent: a no-op on normal
+      # releases. Runs last so it can never affect the actual publish.
+      - name: Backfill tags/releases for bootstrapped packages
+        if: ${{ steps.changesets.outputs.published == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/backfill-release-tags.mjs
