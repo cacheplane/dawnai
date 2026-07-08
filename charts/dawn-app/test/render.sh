@@ -45,6 +45,11 @@ printf '%s\n' "$CUSTOM" | assert "custom healthPath" 'path: /healthz/live'
 # secretName convenience envFrom
 SECRET_ENV="$(tmpl --set secretName=my-app-secrets --show-only templates/deployment.yaml)"
 printf '%s\n' "$SECRET_ENV" | assert "secretName envFrom" 'name: "my-app-secrets"'
+# ...and it must NOT emit a bare `env:` (YAML null) when env is unset
+if printf '%s\n' "$SECRET_ENV" | grep -qE '^ +env:'; then
+  echo "FAIL: bare env: rendered when only secretName is set (YAML null)"; exit 1
+fi
+echo "ok: no bare env: when only secretName is set"
 
 # Custom serviceAccount name
 CUSTOM_SA="$(tmpl --set serviceAccount.name=my-custom-sa --show-only templates/deployment.yaml)"

@@ -218,6 +218,7 @@ jobs:
           helm template test charts/dawn-app \
             --set image.repository=example/app \
             --set ingress.enabled=true \
+            --set ingress.host=app.example.com \
             --set autoscaling.enabled=true \
             --set podDisruptionBudget.enabled=true \
             | kubeconform -strict -summary -ignore-missing-schemas

@@ -34,11 +34,9 @@ spec:
             - name: http
               containerPort: {{ .Values.containerPort }}
               protocol: TCP
-          {{- if or .Values.env .Values.secretName }}
+          {{- with .Values.env }}
           env:
-            {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
-            {{- end }}
           {{- end }}
           {{- if or .Values.envFrom .Values.secretName }}
           envFrom:

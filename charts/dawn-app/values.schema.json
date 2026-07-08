@@ -99,8 +99,8 @@
         "enabled": { "type": "boolean" },
         "minReplicas": { "type": "integer", "minimum": 1 },
         "maxReplicas": { "type": "integer", "minimum": 1 },
-        "targetCPUUtilizationPercentage": { "type": ["integer", "string"] },
-        "targetMemoryUtilizationPercentage": { "type": ["integer", "string"] }
+        "targetCPUUtilizationPercentage": { "type": ["integer", "string"], "minimum": 1 },
+        "targetMemoryUtilizationPercentage": { "type": ["integer", "string"], "minimum": 1 }
       }
     },
     "podDisruptionBudget": {
