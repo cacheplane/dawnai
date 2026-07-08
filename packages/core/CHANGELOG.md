@@ -1,5 +1,14 @@
 # @dawn-ai/core
 
+## 0.8.11
+
+### Patch Changes
+
+- @dawn-ai/permissions@0.8.11
+- @dawn-ai/sdk@0.8.11
+- @dawn-ai/sqlite-storage@0.8.11
+- @dawn-ai/workspace@0.8.11
+
 ## 0.8.10
 
 ### Patch Changes
