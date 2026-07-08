@@ -57,4 +57,16 @@ if printf '%s\n' "$AUTOSCALE_DEPLOY" | grep -qE '^\s*replicas:'; then
 fi
 echo "ok: replicas absent from Deployment when autoscaling on"
 
+# Service: ClusterIP default, port -> http
+SVC="$(tmpl --show-only templates/service.yaml)"
+printf '%s\n' "$SVC" | assert "service kind" 'kind: Service'
+printf '%s\n' "$SVC" | assert "service type default ClusterIP" 'type: ClusterIP'
+printf '%s\n' "$SVC" | assert "service port default 80" 'port: 80'
+printf '%s\n' "$SVC" | assert "service targetPort http" 'targetPort: http'
+printf '%s\n' "$SVC" | assert "service port name http" 'name: http'
+
+# Service type override
+SVC_LB="$(tmpl --set service.type=LoadBalancer --show-only templates/service.yaml)"
+printf '%s\n' "$SVC_LB" | assert "service type override" 'type: LoadBalancer'
+
 echo "render checks passed"
