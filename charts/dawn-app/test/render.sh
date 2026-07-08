@@ -85,4 +85,39 @@ printf '%s\n' "$ING" | assert "ingress tls secretName" 'secretName: "app-tls"'
 printf '%s\n' "$ING" | assert "ingress pathType default Prefix" 'pathType: Prefix'
 printf '%s\n' "$ING" | assert "ingress backend service port name http" 'name: http'
 
+# HPA: absent by default
+if tmpl --show-only templates/hpa.yaml 2>/dev/null | grep -q 'kind: HorizontalPodAutoscaler'; then
+  echo "FAIL: HPA should be absent when autoscaling.enabled=false (default)"; exit 1
+fi
+echo "ok: HPA absent by default"
+
+# HPA: present + shaped correctly when enabled; Deployment omits replicas
+HPA_OUT="$(tmpl --set autoscaling.enabled=true --set autoscaling.minReplicas=2 --set autoscaling.maxReplicas=10 --set autoscaling.targetCPUUtilizationPercentage=70 --set autoscaling.targetMemoryUtilizationPercentage=80)"
+HPA="$(printf '%s\n' "$HPA_OUT" | awk '/^# Source: dawn-app\/templates\/hpa.yaml/,/^---$/')"
+printf '%s\n' "$HPA" | assert "hpa kind" 'kind: HorizontalPodAutoscaler'
+printf '%s\n' "$HPA" | assert "hpa apiVersion autoscaling/v2" 'apiVersion: autoscaling/v2'
+printf '%s\n' "$HPA" | assert "hpa scaleTargetRef Deployment" 'kind: Deployment'
+printf '%s\n' "$HPA" | assert "hpa minReplicas" 'minReplicas: 2'
+printf '%s\n' "$HPA" | assert "hpa maxReplicas" 'maxReplicas: 10'
+printf '%s\n' "$HPA" | assert "hpa target cpu" 'averageUtilization: 70'
+printf '%s\n' "$HPA" | assert "hpa target memory" 'averageUtilization: 80'
+HPA_DEPLOY="$(printf '%s\n' "$HPA_OUT" | awk '/^# Source: dawn-app\/templates\/deployment.yaml/,/^---$/')"
+if printf '%s\n' "$HPA_DEPLOY" | grep -qE '^\s*replicas:'; then
+  echo "FAIL: Deployment must omit replicas when HPA (autoscaling.enabled) is on"; exit 1
+fi
+echo "ok: Deployment omits replicas when HPA is on"
+
+# PDB: absent by default
+if tmpl --show-only templates/pdb.yaml 2>/dev/null | grep -q 'kind: PodDisruptionBudget'; then
+  echo "FAIL: PDB should be absent when podDisruptionBudget.enabled=false (default)"; exit 1
+fi
+echo "ok: PDB absent by default"
+
+# PDB: present + shaped correctly when enabled
+PDB="$(tmpl --set podDisruptionBudget.enabled=true --set podDisruptionBudget.minAvailable=2 --show-only templates/pdb.yaml)"
+printf '%s\n' "$PDB" | assert "pdb kind" 'kind: PodDisruptionBudget'
+printf '%s\n' "$PDB" | assert "pdb apiVersion policy/v1" 'apiVersion: policy/v1'
+printf '%s\n' "$PDB" | assert "pdb minAvailable" 'minAvailable: 2'
+printf '%s\n' "$PDB" | assert "pdb selector matches app labels" 'app.kubernetes.io/name: dawn-app'
+
 echo "render checks passed"
