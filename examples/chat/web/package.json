@@ -10,6 +10,9 @@
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
+    "@ag-ui/client": "0.0.57",
+    "@copilotkit/react-core": "^1.62.2",
+    "@copilotkit/runtime": "^1.62.2",
     "next": "16.2.9",
     "react": "19.2.7",
     "react-dom": "19.2.7"
