@@ -68,4 +68,23 @@ describe("validatePackageMetadata", () => {
 
     assert.deepEqual(failures, [])
   })
+
+  it("accepts config packages with JSON exports and no top-level types", () => {
+    const failures = validatePackageMetadata("@dawn-ai/config-biome", {
+      name: "@dawn-ai/config-biome",
+      version: "1.0.0",
+      license: "MIT",
+      repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+      homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/config-biome#readme",
+      bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
+      engines: { node: ">=22.13.0" },
+      publishConfig: { access: "public" },
+      exports: {
+        ".": "./biome.json",
+        "./biome": "./biome.json",
+      },
+    })
+
+    assert.deepEqual(failures, [])
+  })
 })

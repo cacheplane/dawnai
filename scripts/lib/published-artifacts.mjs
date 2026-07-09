@@ -95,11 +95,31 @@ export function validatePackageMetadata(packageName, packageJson) {
     failures.push(`${packageName}: package.json must expose exports or bin`)
   }
 
-  if (packageJson.exports && !packageJson.types) {
+  if (packageJson.exports && exportsRequireTypes(packageJson.exports) && !packageJson.types) {
     failures.push(`${packageName}: package.json has exports but no top-level types`)
   }
 
   return failures
+}
+
+function exportsRequireTypes(exportsField) {
+  return exportedTargets(exportsField).some((target) => !target.endsWith(".json"))
+}
+
+function exportedTargets(value) {
+  if (typeof value === "string") {
+    return [value]
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => exportedTargets(entry))
+  }
+
+  if (value && typeof value === "object") {
+    return Object.values(value).flatMap((entry) => exportedTargets(entry))
+  }
+
+  return []
 }
 
 export function readField(value, path) {
