@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
@@ -12,6 +12,10 @@ const checks = [
   {
     file: "apps/web/content/docs/cli.mdx",
     patterns: ["dawn.config.ts", "appDir"],
+  },
+  {
+    file: "apps/web/content/docs/dev-server.mdx",
+    patterns: ["/agui/{routeId}", "@dawn-ai/ag-ui"],
   },
 ]
 
@@ -42,6 +46,14 @@ function isDraftBlogPost(filePath, source) {
 function frontmatterDate(source) {
   const match = source.match(/^date:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})$/m)
   return match?.[1] ?? null
+}
+
+function packageManifests() {
+  const packagesDir = resolve(repoRoot, "packages")
+  return readdirSync(packagesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(packagesDir, entry.name, "package.json"))
+    .filter((filePath) => existsSync(filePath))
 }
 
 function docHrefToContentPath(href) {
@@ -139,6 +151,75 @@ if (cliEntry?.createProgram) {
   }
 }
 
+// Public package docs check — every package manifest under packages/ must have
+// a sibling README, and packages with source exports must be findable from
+// either the API reference or their own README.
+const apiMdx = readFileSync(resolve(repoRoot, "apps/web/content/docs/api.mdx"), "utf8")
+for (const manifestPath of packageManifests()) {
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
+  const packageDir = manifestPath.replace(/\/package\.json$/, "")
+  const relPackageDir = relativeToRoot(packageDir)
+  const readmePath = join(packageDir, "README.md")
+  if (!existsSync(readmePath)) {
+    failures.push(`${relPackageDir} is missing README.md`)
+    continue
+  }
+
+  const readme = readFileSync(readmePath, "utf8")
+  if (typeof manifest.name === "string" && manifest.name.startsWith("@dawn-ai/")) {
+    const sourceIndex = join(packageDir, "src", "index.ts")
+    if (existsSync(sourceIndex)) {
+      const source = readFileSync(sourceIndex, "utf8")
+      const hasPublicExports = /^export\s/m.test(source)
+      const mentionedInApi = apiMdx.includes(manifest.name)
+      const mentionedInReadme = readme.includes(manifest.name)
+      if (hasPublicExports && !mentionedInApi && !mentionedInReadme) {
+        failures.push(
+          `${relPackageDir} has public exports but is not mentioned in API docs or its README`,
+        )
+      }
+    }
+  }
+}
+
+// Dev-server endpoint coverage check. Keep explicit endpoint docs in step with
+// runtime-server route additions that expose new client-facing protocols.
+const runtimeServerSource = readFileSync(
+  resolve(repoRoot, "packages/cli/src/lib/dev/runtime-server.ts"),
+  "utf8",
+)
+const devServerDocs = readFileSync(
+  resolve(repoRoot, "apps/web/content/docs/dev-server.mdx"),
+  "utf8",
+)
+if (runtimeServerSource.includes("/agui/:routeId")) {
+  for (const required of [
+    "POST /agui/{routeId}",
+    "%2Fchat%23agent",
+    "@dawn-ai/ag-ui",
+    "forwardedProps.command.resume",
+  ]) {
+    if (!devServerDocs.includes(required)) {
+      failures.push(
+        `apps/web/content/docs/dev-server.mdx is missing AG-UI endpoint text: ${required}`,
+      )
+    }
+  }
+}
+
+// Chart docs drift check — chart appVersion should track the current Dawn
+// package train unless a chart intentionally documents otherwise.
+const cliPackage = JSON.parse(readFileSync(resolve(repoRoot, "packages/cli/package.json"), "utf8"))
+for (const chartYaml of ["charts/dawn-app/Chart.yaml", "charts/dawn-sandbox-infra/Chart.yaml"]) {
+  const source = readFileSync(resolve(repoRoot, chartYaml), "utf8")
+  const match = source.match(/^appVersion:\s*["']?([^"'\n]+)["']?$/m)
+  if (match?.[1] !== cliPackage.version) {
+    failures.push(
+      `${chartYaml} appVersion (${match?.[1] ?? "missing"}) does not match @dawn-ai/cli ${cliPackage.version}`,
+    )
+  }
+}
+
 const userFacingRoots = [
   "README.md",
   "CONTRIBUTING.md",
@@ -198,6 +279,11 @@ const forbiddenContent = [
   {
     pattern: /auto-bound|auto-registered/,
     message: "uses old tool auto-binding wording",
+  },
+  {
+    pattern: /pgvector is a planned follow-up backend/,
+    message: "describes pgvector as planned even though @dawn-ai/memory-pgvector ships",
+    shouldCheck: (filePath) => !/CHANGELOG\.md$/.test(filePath),
   },
 ]
 

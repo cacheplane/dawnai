@@ -17,7 +17,7 @@ Yes. The built-in `agent()` route materializes to a LangChain chat model. Dawn i
 They solve different problems.
 
 - **Vercel AI SDK** is a client-and-server toolkit for chat UIs and provider-agnostic LLM calls. Dawn does not compete with it — it sits one layer up, organizing whole agent projects, and you can use the AI SDK inside a Dawn route.
-- **CopilotKit** is a frontend-first framework for embedding copilots in existing apps. Dawn is backend-first; the deliverable is a deployable agent runtime, not in-app UI.
+- **CopilotKit** is a frontend-first framework for embedding copilots in existing apps. Dawn is backend-first; the deliverable is a deployable agent runtime, not in-app UI. They compose through Dawn's AG-UI endpoint: `dawn dev` serves `POST /agui/{routeId}`, and the chat example wires a CopilotKit `HttpAgent` to it.
 - **Mastra** is a general-purpose agent framework with its own runtime and abstractions. Dawn is narrower: it does not replace LangGraph, it deletes the boilerplate around it.
 
 If you are already on LangGraph, Dawn fits. If you are not, pick the framework whose runtime you want to live in.
@@ -49,6 +49,10 @@ A library is something you call. A meta-framework is something you write inside.
 ### Can I deploy outside LangSmith?
 
 Yes, with caveats. `dawn build` emits a standard `langgraph.json` plus entry files; feed `.dawn/build/` to any container that runs the LangGraph runtime. Dawn's in-process dev server is a reference implementation of the same `runs/wait` and `runs/stream` protocol but is not intended as a production runtime itself. See [Deployment](/docs/deployment).
+
+### Can Dawn use Postgres for long-term memory?
+
+Yes. SQLite is the default local store, but `@dawn-ai/memory-pgvector` provides a Postgres + pgvector backend for production and multi-instance deployments. Add `pgvectorMemoryStore({ connectionString, dimensions })` to `memory.store`, and add `openaiEmbedder()` when you want hybrid keyword + vector recall. See [Memory](/docs/memory#postgres-backend-pgvector).
 
 ### How do I gradually migrate an existing LangGraph project?
 

@@ -11,7 +11,7 @@ refute() { if grep -qE "$2"; then echo "FAIL (expected absent): $1"; exit 1; fi;
 # Deployment: image, probes on /healthz, SA, hardened securityContext
 DEPLOY="$(tmpl --show-only templates/deployment.yaml)"
 printf '%s\n' "$DEPLOY" | assert "deployment kind" 'kind: Deployment'
-printf '%s\n' "$DEPLOY" | assert "image repository+tag" 'image: example/app:0.8.9'
+printf '%s\n' "$DEPLOY" | assert "image repository+tag" 'image: example/app:0.8.11'
 printf '%s\n' "$DEPLOY" | assert "named http port" 'containerPort: 8000'
 printf '%s\n' "$DEPLOY" | assert "liveness probe path" 'path: /healthz'
 printf '%s\n' "$DEPLOY" | assert "serviceAccountName default" 'serviceAccountName: dawn-orchestrator'

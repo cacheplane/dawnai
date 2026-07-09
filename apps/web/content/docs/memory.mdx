@@ -217,7 +217,9 @@ Retrieval runs **in Postgres**: an [HNSW](https://github.com/pgvector/pgvector#h
   Both backends retrieve their own candidates (SQL here, in-process there) and then rank through the **same pure hybrid core** — the RRF fusion plus the recency/confidence second stage from [semantic recall](#semantic-recall-opt-in). Recall ordering is the same across backends; switching stores changes where the data lives and how it is retrieved, not how results are ranked. A [shared conformance kit](/docs/testing-agents) runs the same contract against both.
 </Callout>
 
-SQLite stays the local-first default — reach for pgvector when you outgrow a single-file store, not before. See the runnable `examples/memory` app, which switches to pgvector automatically when `DATABASE_URL` is set and falls back to SQLite otherwise.
+SQLite stays the local-first default — reach for pgvector when you need a shared production store, multiple app instances, or indexed vector retrieval over a larger corpus. If you only need single-process local persistence, SQLite is simpler and keeps the no-service path. See the runnable `examples/memory` app, which switches to pgvector automatically when `DATABASE_URL` is set and falls back to SQLite otherwise.
+
+The pgvector package is also smoke-tested as a published tarball outside the Dawn monorepo against real Postgres + pgvector and real OpenAI embeddings. That check asserts `openaiEmbedder()` returns a 1536-dimension `Float32Array` for the default model and that a zero-shared-token paraphrase is recalled through the hybrid vector path, guarding the `encodingFormat: "float"` embedder contract.
 
 ### The injected index
 

@@ -703,6 +703,184 @@ export type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 
 ---
 
+## @dawn-ai/ag-ui
+
+AG-UI translation utilities used by `dawn dev` to serve `POST /agui/{routeId}` for CopilotKit and other AG-UI clients. The `{routeId}` URL segment is the URL-encoded Dawn assistant id, such as `%2Fchat%23agent` for `/chat#agent`. Most apps use the endpoint through the CLI, not by importing this package directly.
+
+```ts
+import {
+  createAgUiTranslator,
+  encodeAgUiSse,
+  mapRunInput,
+  type AgUiEvent,
+  type DawnStreamChunk,
+  type MappedRunInput,
+  type ResumeDecision,
+  type TranslatorOptions,
+} from "@dawn-ai/ag-ui"
+```
+
+See [Dev Server](/docs/dev-server#ag-ui-endpoint).
+
+### `mapRunInput(input)`
+
+```ts
+export function mapRunInput(input: RunAgentInput): MappedRunInput
+```
+
+Maps an AG-UI `RunAgentInput` to Dawn route input. The newest user message becomes Dawn's `{ messages: [...] }` input because Dawn stores conversation history in the checkpoint keyed by `threadId`. Human-in-the-loop resume decisions are read from `forwardedProps.command.resume`.
+
+```ts
+export type ResumeDecision = "once" | "always" | "deny"
+
+export interface MappedRunInput {
+  readonly dawnInput: { readonly messages: ReadonlyArray<{ role: string; content: string }> }
+  readonly resumeDecision?: ResumeDecision
+  readonly interruptId?: string
+}
+```
+
+### `createAgUiTranslator(options)`
+
+```ts
+export function createAgUiTranslator(options: TranslatorOptions): AgUiTranslator
+```
+
+Creates a per-run translator. Call `begin()` once, pass each Dawn stream chunk to `translate(chunk)`, and call `end()` if the stream completes without a Dawn `done` chunk.
+
+```ts
+export interface TranslatorOptions {
+  readonly threadId: string
+  readonly runId: string
+}
+
+export interface AgUiTranslator {
+  begin(): AgUiEvent[]
+  translate(chunk: DawnStreamChunk): AgUiEvent[]
+  end(): AgUiEvent[]
+}
+```
+
+The translator maps Dawn token/chunk events to AG-UI text events, tool calls/results to AG-UI tool events, `plan_update` chunks to `STATE_SNAPSHOT`, interrupts to `CUSTOM{name:"on_interrupt"}`, and `subagent.*` chunks to `CUSTOM{name:"dawn.<event>"}`.
+
+### `encodeAgUiSse(event, accept?)`
+
+```ts
+export function encodeAgUiSse(event: AgUiEvent, accept?: string): string
+```
+
+Encodes one AG-UI event as an SSE frame using `@ag-ui/encoder`.
+
+### Types
+
+```ts
+export type AgUiEvent = BaseEvent
+
+export interface DawnStreamChunk {
+  readonly type: string
+  readonly data?: unknown
+  readonly name?: string
+  readonly input?: unknown
+  readonly output?: unknown
+}
+```
+
+`DawnStreamChunk` is structural so `@dawn-ai/ag-ui` does not depend on `@dawn-ai/cli`.
+
+---
+
+## @dawn-ai/memory-pgvector
+
+Postgres + pgvector backend for Dawn's typed long-term memory store. Use it through `DawnConfig.memory.store` when an app needs a shared production store, multiple app instances, or indexed vector retrieval.
+
+```ts
+import {
+  assertIdentifier,
+  initSchema,
+  pgvectorMemoryStore,
+  vectorColumnDef,
+  type PgvectorMemoryStore,
+} from "@dawn-ai/memory-pgvector"
+```
+
+See [Memory](/docs/memory#postgres-backend-pgvector).
+
+### `pgvectorMemoryStore(options)`
+
+```ts
+export function pgvectorMemoryStore(opts: {
+  connectionString?: string
+  pool?: Pool
+  dimensions: number
+  index?: { m?: number; efConstruction?: number; efSearch?: number }
+  schema?: string
+  tablePrefix?: string
+  recall?: RecallRankingOptions
+  vector?: VectorRankingOptions
+}): PgvectorMemoryStore
+```
+
+Creates a `MemoryStore` backed by Postgres tables and pgvector indexes. Schema initialization is lazy and idempotent: the first store operation creates the extension, schema, tables, token indexes, and HNSW index if needed.
+
+`dimensions` is validated during construction. Dimensions up to 2000 use `vector(n)`; dimensions from 2001 through 4000 use `halfvec(n)`; larger values throw a config error naming the 4000 halfvec index ceiling.
+
+```ts
+import { config } from "@dawn-ai/core"
+import { openaiEmbedder } from "@dawn-ai/langchain"
+import { pgvectorMemoryStore } from "@dawn-ai/memory-pgvector"
+
+export default config({
+  memory: {
+    store: pgvectorMemoryStore({
+      connectionString: process.env.DATABASE_URL,
+      dimensions: 1536,
+    }),
+    vector: { embedder: openaiEmbedder() },
+  },
+})
+```
+
+### `PgvectorMemoryStore`
+
+```ts
+export interface PgvectorMemoryStore extends MemoryStore {
+  close(): Promise<void>
+}
+```
+
+Implements `put`, `get`, `search`, `update`, `supersede`, `delete`, and `listCandidates` from `@dawn-ai/memory`. `close()` ends the owned `pg.Pool`; it is a no-op when the store was constructed with an injected pool.
+
+Hybrid search runs when the query includes both `queryEmbedding` and `embedderId`. The store retrieves a keyword list and a pgvector nearest-neighbor list, then fuses them with the same shared hybrid ranking core used by SQLite.
+
+### `vectorColumnDef(dimensions)`
+
+```ts
+export function vectorColumnDef(dimensions: number): { type: string; ops: string }
+```
+
+Returns the pgvector column definition and cosine operator class for a dimension count. Throws for non-positive, non-integer, or greater-than-4000 dimensions.
+
+### `initSchema(client, options)`
+
+```ts
+export async function initSchema(
+  client: PoolClient,
+  opts: { prefix: string; schema: string; dimensions: number; m: number; efConstruction: number },
+): Promise<void>
+```
+
+Low-level DDL helper used by the store. Most apps should not call it directly.
+
+### `assertIdentifier(name, value)`
+
+```ts
+export function assertIdentifier(name: string, value: string): void
+```
+
+Rejects malformed schema and table-prefix identifiers before they are interpolated into DDL.
+
+---
+
 ## @dawn-ai/testing
 
 Deterministic testing utilities for Dawn apps. The package replaces live model calls with aimock fixtures while running tools, prompts, capabilities, state, and workspace behavior normally.

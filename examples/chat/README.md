@@ -73,7 +73,7 @@ examples/chat/
     └── app/
         ├── layout.tsx                 # imports @copilotkit/react-ui styles
         ├── page.tsx                   # CopilotKitProvider + CopilotSidebar + TodosPanel
-        ├── api/copilotkit/route.ts    # CopilotRuntime + HttpAgent → Dawn /agui/<chat>
+        ├── api/copilotkit/route.ts    # CopilotRuntime + HttpAgent → Dawn /agui/%2Fchat%23agent
         └── components/
             ├── PermissionInterrupt.tsx  # useInterrupt → approve/deny card
             └── TodosPanel.tsx            # useAgent({agentId:"chat"}) → live plan/todos
