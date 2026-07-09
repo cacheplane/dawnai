@@ -11,6 +11,12 @@ export const packageSets = {
   public: null,
 }
 
+const packageFileExpectations = {
+  "@dawn-ai/memory-pgvector": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
+  "@dawn-ai/memory": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
+  "@dawn-ai/langchain": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
+}
+
 export function resolvePackageSet(name, publicPackages = []) {
   if (name === "public") {
     return publicPackages.map((pkg) => pkg.packageJson.name)
@@ -22,6 +28,10 @@ export function resolvePackageSet(name, publicPackages = []) {
   }
 
   return packages
+}
+
+export function expectedFilesForPackage(packageName) {
+  return packageFileExpectations[packageName] ?? ["README.md", "package.json"]
 }
 
 export function resolveRequestedVersion({ requested, tags }) {

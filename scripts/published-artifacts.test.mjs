@@ -3,6 +3,7 @@ import { describe, it } from "node:test"
 
 import {
   assertCleanDependencySpecs,
+  expectedFilesForPackage,
   packageSets,
   resolvePackageSet,
   resolveRequestedVersion,
@@ -26,6 +27,36 @@ describe("resolvePackageSet", () => {
 describe("packageSets", () => {
   it("includes the public package set placeholder", () => {
     assert.equal(packageSets.public, null)
+  })
+})
+
+describe("expectedFilesForPackage", () => {
+  it("returns memory-pgvector tarball expectations", () => {
+    assert.deepEqual(expectedFilesForPackage("@dawn-ai/memory-pgvector"), [
+      "dist/index.js",
+      "dist/index.d.ts",
+      "README.md",
+      "package.json",
+    ])
+  })
+
+  it("returns package-specific runtime expectations", () => {
+    assert.deepEqual(expectedFilesForPackage("@dawn-ai/memory"), [
+      "dist/index.js",
+      "dist/index.d.ts",
+      "README.md",
+      "package.json",
+    ])
+    assert.deepEqual(expectedFilesForPackage("@dawn-ai/langchain"), [
+      "dist/index.js",
+      "dist/index.d.ts",
+      "README.md",
+      "package.json",
+    ])
+  })
+
+  it("defaults to metadata and README expectations", () => {
+    assert.deepEqual(expectedFilesForPackage("@dawn-ai/unknown"), ["README.md", "package.json"])
   })
 })
 
