@@ -30,6 +30,10 @@ export function resolvePackageSet(name, publicPackages = []) {
   return packages
 }
 
+export function normalizeCliArgs(args) {
+  return args[0] === "--" ? args.slice(1) : args
+}
+
 export function expectedFilesForPackage(packageName) {
   return packageFileExpectations[packageName] ?? ["README.md", "package.json"]
 }

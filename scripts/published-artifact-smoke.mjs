@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url"
 
 import {
   makeTempDir,
+  normalizeCliArgs,
   npmView,
   readPublicPackages,
   removeDir,
@@ -37,7 +38,7 @@ export function shouldRunOpenAiSmoke({ enabled, env = process.env }) {
 }
 
 async function main() {
-  const options = parseArgs(process.argv.slice(2))
+  const options = parseArgs(normalizeCliArgs(process.argv.slice(2)))
   if (options.openai && !options.pgvector) {
     throw new Error("--openai requires --pgvector")
   }

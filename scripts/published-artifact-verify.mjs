@@ -7,6 +7,7 @@ import {
   assertCleanDependencySpecs,
   expectedFilesForPackage,
   makeTempDir,
+  normalizeCliArgs,
   npmView,
   readPublicPackages,
   removeDir,
@@ -17,7 +18,7 @@ import {
 } from "./lib/published-artifacts.mjs"
 
 try {
-  const { packageSet, version } = parseArgs(process.argv.slice(2))
+  const { packageSet, version } = parseArgs(normalizeCliArgs(process.argv.slice(2)))
   const publicPackages = await readPublicPackages()
   const packageNames = resolvePackageSet(packageSet, publicPackages)
   const failures = []

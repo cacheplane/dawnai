@@ -7,6 +7,7 @@ import { describe, it } from "node:test"
 import {
   assertCleanDependencySpecs,
   expectedFilesForPackage,
+  normalizeCliArgs,
   packageSets,
   run,
   resolvePackageSet,
@@ -87,6 +88,16 @@ describe("resolveRequestedVersion", () => {
 
   it("passes explicit versions through", () => {
     assert.equal(resolveRequestedVersion({ requested: "0.8.11", tags: { latest: "0.8.12" } }), "0.8.11")
+  })
+})
+
+describe("normalizeCliArgs", () => {
+  it("removes the npm script argument separator", () => {
+    assert.deepEqual(normalizeCliArgs(["--", "--version", "latest"]), ["--version", "latest"])
+  })
+
+  it("leaves direct node invocation arguments unchanged", () => {
+    assert.deepEqual(normalizeCliArgs(["--version", "latest"]), ["--version", "latest"])
   })
 })
 
