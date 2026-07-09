@@ -173,7 +173,10 @@ export async function run(command, args, options = {}) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: childProcessEnv(
+        { ...process.env, ...options.env },
+        { includeOpenAi: options.includeOpenAi },
+      ),
       shell: process.platform === "win32",
       stdio: options.stdio === "pipe" ? ["ignore", "pipe", "pipe"] : "inherit",
     })
@@ -197,4 +200,13 @@ export async function run(command, args, options = {}) {
       reject(new Error(`${command} ${args.join(" ")} failed with exit code ${code}\n${stderr}`))
     })
   })
+}
+
+function childProcessEnv(env, options = {}) {
+  const { OPENAI_API_KEY: openAiApiKey, ...sanitized } = env
+  if (options.includeOpenAi && openAiApiKey !== undefined) {
+    return { ...sanitized, OPENAI_API_KEY: openAiApiKey }
+  }
+
+  return sanitized
 }

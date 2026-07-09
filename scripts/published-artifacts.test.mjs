@@ -8,6 +8,7 @@ import {
   assertCleanDependencySpecs,
   expectedFilesForPackage,
   packageSets,
+  run,
   resolvePackageSet,
   resolveRequestedVersion,
   validatePackageMetadata,
@@ -233,6 +234,29 @@ describe("runCommand", () => {
     )
 
     assert.equal(result.stdout, "sk-test-secret")
+  })
+})
+
+describe("run", () => {
+  it("removes OPENAI_API_KEY from child process environments by default", async () => {
+    const previousOpenAiApiKey = process.env.OPENAI_API_KEY
+    process.env.OPENAI_API_KEY = "sk-test-secret"
+
+    try {
+      const output = await run(
+        process.execPath,
+        ["-e", "process.stdout.write(process.env.OPENAI_API_KEY ?? '')"],
+        { stdio: "pipe" },
+      )
+
+      assert.equal(output, "")
+    } finally {
+      if (previousOpenAiApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiApiKey
+      }
+    }
   })
 })
 
