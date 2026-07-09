@@ -33,6 +33,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      DAWN_PACKAGE_SET: ${{ inputs.packageSet }}
+      DAWN_PUBLISHED_VERSION: ${{ inputs.version }}
+      DAWN_RUN_PGVECTOR: ${{ inputs.runPgvector }}
 
     steps:
       - name: Checkout
@@ -53,14 +57,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Registry and tarball verification
-        run: pnpm published:verify -- --version "${{ inputs.version }}" --package-set "${{ inputs.packageSet }}"
+        run: pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set "$DAWN_PACKAGE_SET"
 
       - name: Published install/runtime smoke
         if: ${{ !inputs.runOpenAI }}
         shell: bash
         run: |
-          args=(--version "${{ inputs.version }}" --package-set "${{ inputs.packageSet }}")
-          if [ "${{ inputs.runPgvector }}" = "true" ]; then args+=(--pgvector); fi
+          args=(--version "$DAWN_PUBLISHED_VERSION" --package-set "$DAWN_PACKAGE_SET")
+          if [ "$DAWN_RUN_PGVECTOR" = "true" ]; then args+=(--pgvector); fi
           pnpm published:smoke -- "${args[@]}"
 
       - name: Published install/runtime smoke with OpenAI
@@ -69,7 +73,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
-          if [ "${{ inputs.runPgvector }}" != "true" ]; then
+          if [ "$DAWN_RUN_PGVECTOR" != "true" ]; then
             echo "runOpenAI=true requires runPgvector=true" >&2
             exit 1
           fi
@@ -79,5 +83,5 @@ jobs:
             exit 1
           fi
 
-          args=(--version "${{ inputs.version }}" --package-set "${{ inputs.packageSet }}" --pgvector --openai)
+          args=(--version "$DAWN_PUBLISHED_VERSION" --package-set "$DAWN_PACKAGE_SET" --pgvector --openai)
           pnpm published:smoke -- "${args[@]}"
