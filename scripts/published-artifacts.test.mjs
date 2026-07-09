@@ -9,6 +9,7 @@ import {
   resolveRequestedVersion,
   validatePackageMetadata,
 } from "./lib/published-artifacts.mjs"
+import { shouldRunOpenAiSmoke } from "./published-artifact-smoke.mjs"
 
 describe("resolvePackageSet", () => {
   it("resolves the memory-pgvector-core package set", () => {
@@ -148,5 +149,15 @@ describe("validatePackageMetadata", () => {
     })
 
     assert.deepEqual(failures, [])
+  })
+})
+
+describe("shouldRunOpenAiSmoke", () => {
+  it("skips when disabled", () => {
+    assert.equal(shouldRunOpenAiSmoke({ enabled: false, env: {} }).status, "skip")
+  })
+
+  it("fails when enabled without OPENAI_API_KEY", () => {
+    assert.throws(() => shouldRunOpenAiSmoke({ enabled: true, env: {} }), /OPENAI_API_KEY/)
   })
 })
