@@ -423,7 +423,7 @@ Expected after the next README-bearing publish: `META PASS` for the three select
 - Create: `scripts/published-artifact-smoke.mjs`
 - Test: `scripts/published-artifacts.test.mjs`
 
-- [ ] **Step 1: Add OpenAI gating test**
+- [x] **Step 1: Add OpenAI gating test**
 
 Extend `scripts/published-artifacts.test.mjs` with:
 
@@ -441,7 +441,7 @@ describe("shouldRunOpenAiSmoke", () => {
 })
 ```
 
-- [ ] **Step 2: Create smoke script skeleton**
+- [x] **Step 2: Create smoke script skeleton**
 
 Create `scripts/published-artifact-smoke.mjs` exporting `shouldRunOpenAiSmoke()` and running only when invoked directly:
 
@@ -458,7 +458,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 ```
 
-- [ ] **Step 3: Implement npm install smoke**
+- [x] **Step 3: Implement npm install smoke**
 
 In `main()`:
 
@@ -476,7 +476,7 @@ npm install @dawn-ai/memory-pgvector@<version> @dawn-ai/memory@<version> @dawn-a
 - Read installed package manifests and assert versions.
 - Log `T0 PASS`.
 
-- [ ] **Step 4: Implement Docker pgvector lifecycle**
+- [x] **Step 4: Implement Docker pgvector lifecycle**
 
 Add helpers:
 
@@ -485,7 +485,7 @@ Add helpers:
 - `waitForPg(containerName)` polls `docker exec <name> pg_isready -U postgres` with a loop, no macOS `timeout`.
 - `removeContainer(containerName)` runs `docker rm -f <name>` in `finally`.
 
-- [ ] **Step 5: Implement T1/T3 smoke script generated into temp dir**
+- [x] **Step 5: Implement T1/T3 smoke script generated into temp dir**
 
 Write `smoke-runtime.mjs` inside the temp project and run it with `DATABASE_URL`.
 
@@ -532,7 +532,7 @@ try {
 
 Expected logs: `T1 PASS`, `T3 PASS`.
 
-- [ ] **Step 6: Implement optional T2 OpenAI smoke**
+- [x] **Step 6: Implement optional T2 OpenAI smoke**
 
 When `--openai` is set, write a runtime script that:
 
@@ -545,7 +545,7 @@ When `--openai` is set, write a runtime script that:
 
 Expected logs: `T2 PASS`.
 
-- [ ] **Step 7: Verify no-key smoke locally**
+- [x] **Step 7: Verify no-key smoke locally**
 
 Run:
 
