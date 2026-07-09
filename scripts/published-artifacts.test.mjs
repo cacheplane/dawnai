@@ -14,8 +14,10 @@ import {
 } from "./lib/published-artifacts.mjs"
 import {
   assertNoNativeLifecycleScripts,
+  pgvectorDatabaseUrl,
   parseDockerMappedHostPort,
   readInstalledPackageManifests,
+  runCommand,
   shouldRunOpenAiSmoke,
 } from "./published-artifact-smoke.mjs"
 
@@ -171,8 +173,66 @@ describe("shouldRunOpenAiSmoke", () => {
 })
 
 describe("parseDockerMappedHostPort", () => {
-  it("extracts the dynamic localhost port from docker port output", () => {
-    assert.equal(parseDockerMappedHostPort("127.0.0.1:49157\n"), 49157)
+  it("extracts the dynamic localhost host and port from docker port output", () => {
+    assert.deepEqual(parseDockerMappedHostPort("127.0.0.1:49157\n"), {
+      host: "127.0.0.1",
+      port: 49157,
+    })
+  })
+
+  it("normalizes wildcard Docker hosts for client connections", () => {
+    assert.deepEqual(parseDockerMappedHostPort("0.0.0.0:49157\n"), {
+      host: "127.0.0.1",
+      port: 49157,
+    })
+    assert.deepEqual(parseDockerMappedHostPort("[::]:49158\n"), {
+      host: "127.0.0.1",
+      port: 49158,
+    })
+  })
+})
+
+describe("pgvectorDatabaseUrl", () => {
+  it("uses the mapped host and port", () => {
+    assert.equal(
+      pgvectorDatabaseUrl({ host: "127.0.0.1", port: 49157 }),
+      "postgres://postgres:postgres@127.0.0.1:49157/postgres",
+    )
+  })
+})
+
+describe("runCommand", () => {
+  it("removes OPENAI_API_KEY from child process environments by default", async () => {
+    const previousOpenAiApiKey = process.env.OPENAI_API_KEY
+    process.env.OPENAI_API_KEY = "sk-test-secret"
+
+    try {
+      const result = await runCommand(process.execPath, [
+        "-e",
+        "process.stdout.write(process.env.OPENAI_API_KEY ?? '')",
+      ])
+
+      assert.equal(result.stdout, "")
+    } finally {
+      if (previousOpenAiApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiApiKey
+      }
+    }
+  })
+
+  it("passes OPENAI_API_KEY only when explicitly allowed", async () => {
+    const result = await runCommand(
+      process.execPath,
+      ["-e", "process.stdout.write(process.env.OPENAI_API_KEY ?? '')"],
+      {
+        env: { OPENAI_API_KEY: "sk-test-secret" },
+        includeOpenAi: true,
+      },
+    )
+
+    assert.equal(result.stdout, "sk-test-secret")
   })
 })
 

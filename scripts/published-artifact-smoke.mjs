@@ -302,25 +302,46 @@ async function startPgvector(containerName) {
 }
 
 async function databaseUrlForPgvector(containerName) {
-  const port = await mappedPgvectorPort(containerName)
-  console.log(`PGVECTOR PORT ${port}`)
-  return `postgres://postgres:postgres@localhost:${port}/postgres`
+  const mapped = await mappedPgvectorHostPort(containerName)
+  console.log(`PGVECTOR HOST ${mapped.host}`)
+  console.log(`PGVECTOR PORT ${mapped.port}`)
+  return pgvectorDatabaseUrl(mapped)
 }
 
-async function mappedPgvectorPort(containerName) {
+async function mappedPgvectorHostPort(containerName) {
   const result = await runCommand("docker", ["port", containerName, "5432/tcp"])
   return parseDockerMappedHostPort(result.stdout)
 }
 
 export function parseDockerMappedHostPort(output) {
   for (const line of output.split(/\r?\n/)) {
-    const match = line.trim().match(/(?:^|:)(\d+)$/)
+    const trimmed = line.trim()
+    const match = trimmed.match(/^\[([^\]]+)\]:(\d+)$/) ?? trimmed.match(/^(.*):(\d+)$/)
     if (match) {
-      return Number(match[1])
+      return {
+        host: normalizeDockerMappedHost(match[1]),
+        port: Number(match[2]),
+      }
     }
   }
 
-  throw new Error(`Could not parse mapped host port from docker port output: ${output.trim()}`)
+  throw new Error(`Could not parse mapped host and port from docker port output: ${output.trim()}`)
+}
+
+function normalizeDockerMappedHost(host) {
+  if (host === "0.0.0.0" || host === "::") {
+    return "127.0.0.1"
+  }
+
+  return host
+}
+
+export function pgvectorDatabaseUrl({ host, port }) {
+  return `postgres://postgres:postgres@${formatDatabaseUrlHost(host)}:${port}/postgres`
+}
+
+function formatDatabaseUrlHost(host) {
+  return host.includes(":") ? `[${host}]` : host
 }
 
 async function waitForPgvector(containerName) {
@@ -360,6 +381,7 @@ async function runRuntimeSmoke(tempDir, options) {
       },
       { includeOpenAi: options.openai },
     ),
+    includeOpenAi: options.openai,
   })
   process.stdout.write(runtime.stdout)
   process.stderr.write(runtime.stderr)
@@ -490,11 +512,11 @@ runDimensionSmoke()
 `
 }
 
-async function runCommand(command, args, options = {}) {
+export async function runCommand(command, args, options = {}) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: options.env ?? process.env,
+      env: childProcessEnv(options.env ?? process.env, { includeOpenAi: options.includeOpenAi }),
       shell: process.platform === "win32",
       stdio: ["ignore", "pipe", "pipe"],
     })
@@ -522,6 +544,15 @@ async function runCommand(command, args, options = {}) {
       )
     })
   })
+}
+
+function childProcessEnv(env, options = {}) {
+  const { OPENAI_API_KEY: openAiApiKey, ...sanitized } = env
+  if (options.includeOpenAi && openAiApiKey !== undefined) {
+    return { ...sanitized, OPENAI_API_KEY: openAiApiKey }
+  }
+
+  return sanitized
 }
 
 function sleep(ms) {
