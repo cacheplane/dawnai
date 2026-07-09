@@ -542,6 +542,7 @@ async function* streamFromRunnable(
       options: Record<string, unknown>,
     ) => AsyncIterable<{
       event: string
+      run_id: string
       data: { chunk?: unknown; input?: unknown; output?: unknown; error?: unknown }
       name: string
     }>
@@ -614,6 +615,10 @@ async function* streamFromRunnable(
               yield {
                 type: "tool_call" as const,
                 data: {
+                  // LangGraph assigns the same run_id to on_tool_start and
+                  // on_tool_end of one invocation — a stable correlator that
+                  // survives repeated calls to the same tool.
+                  id: event.run_id,
                   name: event.name,
                   input: event.data.input ?? event.data.chunk ?? event.data.output,
                 },
@@ -624,7 +629,7 @@ async function* streamFromRunnable(
               hasYielded = true
               yield {
                 type: "tool_result" as const,
-                data: { name: event.name, output: event.data.output },
+                data: { id: event.run_id, name: event.name, output: event.data.output },
               }
               for (const transformer of streamTransformers ?? []) {
                 if (transformer.observes !== "tool_result") continue
