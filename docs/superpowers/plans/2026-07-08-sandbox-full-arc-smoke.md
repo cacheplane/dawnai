@@ -68,6 +68,42 @@ git add docs/superpowers/plans/2026-07-08-sandbox-full-arc-smoke.md
 git commit -m "docs(plan): record full-arc smoke image-build spike findings"
 ```
 
+## Task 1 findings (spike)
+
+**Verified locally on macOS (Docker Desktop, `desktop-linux` driver).** Started the harness Verdaccio standalone via `startLocalRegistry()` + `publishWorkspace(url)` from `test/harness/local-registry.ts` (same code path `registry-global-setup.ts` uses) — this publishes every non-private `packages/*` package, so `@dawn-ai/sandbox` and its workspace dep `@dawn-ai/workspace` both land on the registry in one call; no extra wiring needed. Registry bound to `http://127.0.0.1:<port>/`.
+
+**`--network host` FAILED on macOS**, exactly as expected — Docker Desktop's build runs in a Linux VM where `--network host` does not expose the Mac host's loopback:
+
+```bash
+docker build --network host --build-arg NPM_REGISTRY=http://localhost:<port> -f Dockerfile .
+# → npm error code ECONNREFUSED ... request to http://localhost:<port>/@dawn-ai%2fsandbox failed
+```
+
+**`host.docker.internal` form WORKED — this is the invocation to use on macOS:**
+
+```bash
+docker build --add-host=host.docker.internal:host-gateway \
+  --build-arg NPM_REGISTRY=http://host.docker.internal:<port> \
+  -t dawn-spike -f Dockerfile .
+```
+
+Result: `npm install` resolved `@dawn-ai/sandbox` and its transitive deps (`@dawn-ai/workspace` from the local registry, `@kubernetes/client-node` proxied through to npmjs by the same Verdaccio config) — 70 packages added, no errors. The `RUN` check layer printed `resolved @dawn-ai/sandbox OK`.
+
+**Registry-URL form to use:** `http://host.docker.internal:<port>` as the `NPM_REGISTRY` build-arg on macOS, with `--add-host=host.docker.internal:host-gateway` on the `docker build` command (Docker Desktop for Mac typically resolves `host.docker.internal` without the flag, but passing it is harmless and is what makes the same invocation portable to Docker Engine on Linux, where it is NOT resolved by default).
+
+**Mac vs CI (ubuntu-latest) — call this out explicitly for the lane implementer:** GitHub-hosted `ubuntu-latest` runners use the real Docker Engine (no VM layer), where **`--network host` DOES expose the host's ports** to the build, unlike Docker Desktop's macOS VM. So the two environments likely want *different* invocations:
+- **macOS dev machine:** `--add-host=host.docker.internal:host-gateway` + `NPM_REGISTRY=http://host.docker.internal:<port>` (proven above).
+- **CI (ubuntu-latest, Docker Engine):** `--network host` + `NPM_REGISTRY=http://localhost:<port>` is expected to work and is simpler (no `--add-host` needed) — but this was NOT empirically verified in this spike (no CI run was executed). The `host.docker.internal` form should also work on CI if `--add-host=host.docker.internal:host-gateway` is always included, so **the safest single invocation for both lanes is the `host.docker.internal` form** (works on both, per Docker's own docs for Engine ≥20.10) — recommend Tasks 3–5 standardize on that everywhere rather than branching by OS, unless a real CI run shows a reason not to.
+
+**Gotchas:**
+- `@dawn-ai/sandbox` is ESM-only (`"type": "module"`, `exports` has no `require` condition). `node --input-type=module -e "import('@dawn-ai/sandbox')..."` resolved cleanly. Also tested plain `require('@dawn-ai/sandbox')` out of curiosity: it succeeded too (exit 0, no output) — Node 22.12+ (the `node:22-slim` tag pulled here) supports synchronous `require(esm)` for fully-ESM packages by default, so either check form works on this base image. Prefer the `import()` form in the smoke Dockerfile regardless, since it's guaranteed correct independent of Node's require-esm interop version.
+- `publishWorkspace` requires every public package to share one version (`assertUniformPublishableVersion`) — true today (all `0.8.9`), so no extra step needed, but Tasks 3–5 should not assume this holds forever if a package's version ever drifts mid-release.
+- Registry publish reused `pnpm pack` against already-built `dist/` — the workspace here had a stale build present already (`packages/sandbox/dist`, `packages/workspace/dist`); a from-scratch spike run should `pnpm build` first (the real lane's CI job already does a build step before this point).
+
+**Tarball fallback: NOT needed.** The `host.docker.internal` registry form worked outright; no fallback to `file:`-tarball deps was required or tested.
+
+**Decision for Tasks 3–5:** use the Verdaccio + `host.docker.internal` install path (not the tarball fallback) for the `build-image.sh` scripts, with `--add-host=host.docker.internal:host-gateway` unconditionally included on every `docker build` invocation (harmless when unneeded, load-bearing on macOS, expected-safe on CI).
+
 ---
 
 ## Task 2: The smoke Dawn app
