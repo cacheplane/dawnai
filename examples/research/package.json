@@ -3,9 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "dev": "pnpm --filter ./server dev",
-    "build": "pnpm --filter ./server build",
-    "typecheck": "pnpm --filter ./server typecheck",
+    "dev": "pnpm -r --parallel --filter ./server --filter ./web dev",
+    "dev:server": "pnpm --filter ./server dev",
+    "dev:web": "pnpm --filter ./web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter ./server test"
   }
 }
