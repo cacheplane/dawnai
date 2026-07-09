@@ -14,6 +14,7 @@ import {
   validatePackageMetadata,
 } from "./lib/published-artifacts.mjs"
 import {
+  assertNoNativeInstallOutput,
   assertNoNativeLifecycleScripts,
   pgvectorDatabaseUrl,
   parseDockerMappedHostPort,
@@ -277,6 +278,22 @@ describe("assertNoNativeLifecycleScripts", () => {
     )
   })
 
+  it("rejects bare prebuild lifecycle scripts", () => {
+    assert.throws(
+      () =>
+        assertNoNativeLifecycleScripts([
+          {
+            manifest: {
+              name: "native-addon",
+              version: "1.0.0",
+              scripts: { install: "prebuild --install" },
+            },
+          },
+        ]),
+      /native-addon@1\.0\.0.*install.*prebuild --install/,
+    )
+  })
+
   it("accepts ordinary JavaScript package scripts", () => {
     assert.doesNotThrow(() =>
       assertNoNativeLifecycleScripts([
@@ -315,5 +332,22 @@ describe("assertNoNativeLifecycleScripts", () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("assertNoNativeInstallOutput", () => {
+  it("rejects native install output markers beyond node-gyp", () => {
+    for (const marker of ["prebuild", "node-pre-gyp", "cmake-js", "node-gyp-build", "prebuildify"]) {
+      assert.throws(
+        () => assertNoNativeInstallOutput(`> native-addon install\n${marker} install\n`),
+        /native build indicators/,
+      )
+    }
+  })
+
+  it("accepts ordinary npm install output", () => {
+    assert.doesNotThrow(() =>
+      assertNoNativeInstallOutput("added 42 packages, and audited 42 packages in 1s\nfound 0 vulnerabilities\n"),
+    )
   })
 })

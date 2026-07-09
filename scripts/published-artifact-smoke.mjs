@@ -14,9 +14,10 @@ import {
   resolveRequestedVersion,
 } from "./lib/published-artifacts.mjs"
 
-const NATIVE_BUILD_INDICATORS = /\bnode-gyp\b|\bprebuild-install\b|gyp ERR!/i
+const NATIVE_BUILD_INDICATORS =
+  /\b(?:node-gyp|prebuild|prebuild-install|node-pre-gyp|cmake-js|node-gyp-build|prebuildify)\b|gyp ERR!/i
 const NATIVE_LIFECYCLE_INDICATORS =
-  /\b(?:node-gyp|prebuild-install|node-pre-gyp|cmake-js|node-gyp-build|prebuildify)\b|binding\.gyp/i
+  /\b(?:node-gyp|prebuild|prebuild-install|node-pre-gyp|cmake-js|node-gyp-build|prebuildify)\b|binding\.gyp/i
 const NATIVE_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall"]
 const REQUIRED_PGVECTOR_PACKAGES = new Set([
   "@dawn-ai/memory-pgvector",
@@ -156,10 +157,7 @@ async function runInstallSmoke(tempDir, packages) {
   const specs = packages.map((pkg) => `${pkg.name}@${pkg.version}`)
   const install = await runCommand("npm", ["install", ...specs], { cwd: tempDir })
   const installOutput = `${install.stdout}\n${install.stderr}`
-
-  if (NATIVE_BUILD_INDICATORS.test(installOutput)) {
-    throw new Error("npm install output contained native build indicators")
-  }
+  assertNoNativeInstallOutput(installOutput)
 
   assertNoNativeLifecycleScripts(await readInstalledPackageManifests(resolve(tempDir, "node_modules")))
 
@@ -173,6 +171,12 @@ async function runInstallSmoke(tempDir, packages) {
   }
 
   console.log(`T0 PASS installed ${specs.join(" ")}`)
+}
+
+export function assertNoNativeInstallOutput(output) {
+  if (NATIVE_BUILD_INDICATORS.test(output)) {
+    throw new Error("npm install output contained native build indicators")
+  }
 }
 
 export function assertNoNativeLifecycleScripts(manifests) {
