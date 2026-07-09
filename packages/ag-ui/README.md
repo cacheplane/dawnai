@@ -4,7 +4,7 @@
 
 # @dawn-ai/ag-ui
 
-AG-UI protocol translation for Dawn's local runtime. This package maps Dawn's
+AG-UI protocol translation for Dawn's local runtime. This package maps Dawn
 runtime stream chunks to AG-UI events and maps AG-UI run input back to Dawn route
 input, so CopilotKit and other AG-UI clients can drive Dawn agents.
 
@@ -38,18 +38,78 @@ POST http://127.0.0.1:3001/agui/%2Fchat%23agent
 import {
   createAgUiTranslator,
   encodeAgUiSse,
+  fromRunAgentInput,
   mapRunInput,
+  toAguiEvents,
   type AgUiEvent,
+  type DawnRunInput,
   type DawnStreamChunk,
   type MappedRunInput,
   type ResumeDecision,
+  type RunContext,
   type TranslatorOptions,
 } from "@dawn-ai/ag-ui"
 ```
 
+## Transport Helpers
+
+Use `toAguiEvents` and `fromRunAgentInput` when you own the transport and only
+need pure mapping helpers. These helpers do not depend on the CLI, HTTP, or
+LangGraph.
+
+### `toAguiEvents(chunks, ctx)`
+
+Maps a Dawn agent stream to AG-UI events:
+
+```ts
+import { toAguiEvents } from "@dawn-ai/ag-ui"
+
+for await (const event of toAguiEvents(dawnChunks, { threadId, runId })) {
+  // Serialize the AG-UI event to your transport.
+}
+```
+
+Supported chunks are:
+
+```ts
+type DawnChunk =
+  | { type: "token"; data: string }
+  | { type: "tool_call"; data: { id?: string; name: string; input: unknown } }
+  | { type: "tool_result"; data: { id?: string; name: string; output: unknown } }
+  | { type: "interrupt"; data: { interruptId: string; kind?: string; [key: string]: unknown } }
+  | { type: "done"; data?: unknown }
+```
+
+`dawnChunks` can be any `AsyncIterable<DawnChunk>`, including the langchain
+adapter's `AgentStreamChunk` stream. Tool call ids from Dawn chunks are preserved
+as AG-UI `toolCallId`.
+
+### `fromRunAgentInput(input)`
+
+Maps AG-UI `RunAgentInput` to a Dawn-shaped run input:
+
+```ts
+import { fromRunAgentInput } from "@dawn-ai/ag-ui"
+
+const { messages, resume, raw } = fromRunAgentInput(runAgentInput)
+```
+
+`resume` is omitted when empty. When present, it is an array of answers addressed
+by `interruptId`, for example:
+
+```ts
+[{ interruptId: "perm-1", status: "resolved", payload: "once" }]
+```
+
+Translate those answers to your runtime's resume call. `raw` exposes the
+untouched AG-UI input for `tools`/`state`/`context`.
+
+## Dev Server Helpers
+
 ### `mapRunInput(input)`
 
-Maps an AG-UI `RunAgentInput` to Dawn's route input:
+Maps an AG-UI `RunAgentInput` to Dawn's route input for the built-in local dev
+endpoint:
 
 - The newest user message becomes `{ messages: [{ role: "user", content }] }`.
 - Dawn keeps conversation history in the checkpoint keyed by AG-UI `threadId`,
