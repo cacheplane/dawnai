@@ -33,7 +33,7 @@
 - Create: `scripts/lib/published-artifacts.mjs`
 - Test: `scripts/published-artifacts.test.mjs`
 
-- [ ] **Step 1: Add failing helper tests**
+- [x] **Step 1: Add failing helper tests**
 
 Create `scripts/published-artifacts.test.mjs` with `node:test` coverage for:
 
@@ -105,7 +105,7 @@ describe("validatePackageMetadata", () => {
 })
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 Run:
 
@@ -115,7 +115,7 @@ node --test scripts/published-artifacts.test.mjs
 
 Expected: fail because `scripts/lib/published-artifacts.mjs` does not exist.
 
-- [ ] **Step 3: Implement helper module**
+- [x] **Step 3: Implement helper module**
 
 Create `scripts/lib/published-artifacts.mjs` with:
 
@@ -261,7 +261,7 @@ export async function run(command, args, options = {}) {
 }
 ```
 
-- [ ] **Step 4: Run helper tests**
+- [x] **Step 4: Run helper tests**
 
 Run:
 
