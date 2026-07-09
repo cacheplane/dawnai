@@ -49,7 +49,7 @@ export function createAgUiTranslator(options: TranslatorOptions): AgUiTranslator
 
   function toToolCall(chunk: DawnStreamChunk): AgUiEvent[] {
     const name = chunk.name ?? "tool"
-    const toolCallId = nextId("call")
+    const toolCallId = chunk.id ?? nextId("call")
     const queue = pendingToolCalls.get(name) ?? []
     queue.push(toolCallId)
     pendingToolCalls.set(name, queue)
@@ -64,7 +64,8 @@ export function createAgUiTranslator(options: TranslatorOptions): AgUiTranslator
   function toToolResult(chunk: DawnStreamChunk): AgUiEvent[] {
     const name = chunk.name ?? "tool"
     const queue = pendingToolCalls.get(name) ?? []
-    const toolCallId = queue.shift() ?? nextId("call")
+    const queuedToolCallId = queue.shift()
+    const toolCallId = chunk.id ?? queuedToolCallId ?? nextId("call")
     pendingToolCalls.set(name, queue)
     const content =
       typeof chunk.output === "string" ? chunk.output : JSON.stringify(chunk.output ?? null)

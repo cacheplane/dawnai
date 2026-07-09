@@ -77,6 +77,18 @@ describe("translator: lifecycle + text + tools", () => {
     expect((evs[1] as { delta: string }).delta).toBe(JSON.stringify({ query: "x" }))
   })
 
+  it("preserves upstream tool invocation ids when present", () => {
+    const t = createAgUiTranslator(opts)
+    const evs = [
+      ...t.translate({ type: "tool_call", id: "run-abc", name: "searchCorpus", input: { query: "x" } }),
+      ...t.translate({ type: "tool_result", id: "run-abc", name: "searchCorpus", output: "ok" }),
+    ]
+
+    expect((evs[0] as { toolCallId: string }).toolCallId).toBe("run-abc")
+    expect((evs[1] as { toolCallId: string }).toolCallId).toBe("run-abc")
+    expect((evs[3] as { toolCallId: string }).toolCallId).toBe("run-abc")
+  })
+
   it("flushes an open text message before a tool_call", () => {
     const t = createAgUiTranslator(opts)
     const evs = [
