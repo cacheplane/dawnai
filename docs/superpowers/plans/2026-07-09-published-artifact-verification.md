@@ -699,7 +699,7 @@ Expected: pass.
 **Files:**
 - All files touched in previous tasks.
 
-- [ ] **Step 1: Run unit tests**
+- [x] **Step 1: Run unit tests**
 
 Run:
 
@@ -709,7 +709,7 @@ pnpm test:published-artifacts
 
 Expected: pass.
 
-- [ ] **Step 2: Run metadata verifier against real npm**
+- [x] **Step 2: Run metadata verifier against real npm**
 
 Run:
 
@@ -717,9 +717,12 @@ Run:
 pnpm published:verify -- --version latest --package-set memory-pgvector-core
 ```
 
-Expected: `META PASS`.
+Expected after the next README-bearing publish: `META PASS`. Current real npm
+state still fails `@dawn-ai/memory-pgvector@0.8.11` because that tarball is
+missing `README.md`; the verifier correctly continues and passes
+`@dawn-ai/memory@0.8.11` and `@dawn-ai/langchain@0.8.11`.
 
-- [ ] **Step 3: Run no-key published smoke against real Docker**
+- [x] **Step 3: Run no-key published smoke against real Docker**
 
 Run:
 
@@ -729,7 +732,7 @@ pnpm published:smoke -- --version latest --package-set memory-pgvector-core --pg
 
 Expected: `T0 PASS`, `T1 PASS`, `T2 SKIP`, `T3 PASS`.
 
-- [ ] **Step 4: Run standard repo checks for touched surfaces**
+- [x] **Step 4: Run standard repo checks for touched surfaces**
 
 Run:
 
@@ -741,7 +744,7 @@ git diff --check
 
 Expected: all pass. If `pnpm lint` emits existing warnings but exits 0, record that in the final report.
 
-- [ ] **Step 5: Optional live OpenAI verification**
+- [x] **Step 5: Optional live OpenAI verification**
 
 Only if explicitly authorized and `OPENAI_API_KEY` is already present in the shell:
 
@@ -750,6 +753,8 @@ pnpm published:smoke -- --version latest --package-set memory-pgvector-core --pg
 ```
 
 Expected: `T2 PASS` with 1536-dimension `Float32Array` evidence. Do not print the key.
+Skipped in this implementation pass because live OpenAI verification was not
+explicitly authorized.
 
 ## Task 7: Commit And PR
 
