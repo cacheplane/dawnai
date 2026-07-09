@@ -758,7 +758,7 @@ explicitly authorized.
 
 ## Task 7: Commit And PR
 
-- [ ] **Step 1: Review diff**
+- [x] **Step 1: Review diff**
 
 Run:
 
