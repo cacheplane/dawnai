@@ -1,6 +1,6 @@
 # Dev Server
 
-`dawn dev` starts a local runtime with Agent Protocol (AP) HTTP endpoints. It watches route and tool files, regenerates types when signatures change, and restarts the child route runtime for structural changes.
+`dawn dev` starts a local runtime with Agent Protocol (AP) HTTP endpoints. It also exposes an AG-UI SSE endpoint for web clients such as CopilotKit. It watches route and tool files, regenerates types when signatures change, and restarts the child route runtime for structural changes.
 
 ## Starting the server
 
@@ -26,7 +26,7 @@ echo '{"messages":[{"role":"user","content":"Hello"}]}' | dawn run '/research' -
 
 `dawn run` resolves the route id to a `route` key of the form `<routeId>#<kind>` (e.g. `/research#agent`), POSTs to `/threads/<t-cli-uuid>/runs/wait` with `{route, input}`, and prints the result.
 
-## Protocol endpoints
+## Agent Protocol endpoints
 
 The dev server exposes eight endpoints organized around a thread lifecycle: create thread → run (wait or stream) → read state → resume. Anything else returns 404. Thread state persists in SQLite under `.dawn/` and survives server restarts — see [Configuration](/docs/configuration) for the `checkpointer` and `threadsStore` defaults and override options.
 
@@ -180,13 +180,48 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
 
 The `route` format `<routeId>#<kind>` is the same format `dawn build` writes into the `graphs` map of `.dawn/build/langgraph.json`, so the same client request body works against `dawn dev` and against a deployed runtime.
 
+## AG-UI endpoint
+
+For UI clients that speak [AG-UI](https://github.com/ag-ui-protocol/ag-ui), `dawn dev` also serves:
+
+```http
+POST /agui/{routeId}
+content-type: application/json
+accept: text/event-stream
+```
+
+The body must be an AG-UI `RunAgentInput`. Dawn creates the thread when the incoming `threadId` is new, maps the newest user message to the route input, streams the route, and translates Dawn chunks into AG-UI events with `@dawn-ai/ag-ui`.
+
+The URL segment after `/agui/` is the URL-encoded Dawn assistant id (`<routeId>#<kind>`):
+
+```text
+Dawn route key: /chat#agent
+AG-UI URL:      /agui/%2Fchat%23agent
+```
+
+The endpoint emits `RUN_STARTED`, assistant text events, tool call/result events, `STATE_SNAPSHOT` updates for planning state, `CUSTOM{name:"on_interrupt"}` for HITL permission or memory interrupts, and `RUN_FINISHED` or `RUN_ERROR`.
+
+Human-in-the-loop resume decisions ride on AG-UI `forwardedProps.command.resume`:
+
+```json
+{
+  "forwardedProps": {
+    "command": {
+      "resume": { "decision": "once", "interruptId": "perm-abc123" }
+    }
+  }
+}
+```
+
+The chat example includes a CopilotKit v2 client wired through this endpoint; see `examples/chat/web` and the `@dawn-ai/ag-ui` package README.
+
 ## Tracing
 
 If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically sets `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to name the LangSmith project used for traces. See [Observability](/docs/observability) for a full walkthrough, including how to read traces and the HITL interrupt gotcha.
 
 ## Middleware
 
-`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every local `/threads/:thread_id/runs/wait` and `/threads/:thread_id/runs/stream` request handled by `dawn dev`. It can short-circuit a request with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
+`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every local `/threads/:thread_id/runs/wait` and `/threads/:thread_id/runs/stream` request handled by `dawn dev`. It can short-circuit a request with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`). The AG-UI endpoint is a client-protocol bridge over the same route runtime, but middleware is documented for the Agent Protocol thread endpoints.
 
 `MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Middleware](/docs/middleware) for the full reference.
 
@@ -222,6 +257,7 @@ The parent process keeps the HTTP server alive while child route runtimes restar
   { href: "/docs/middleware", title: "Middleware", subtitle: "how src/middleware.ts gates local runtime requests" },
   { href: "/docs/planning", title: "Planning", subtitle: "plan_update events over /runs/stream" },
   { href: "/docs/subagents", title: "Subagents", subtitle: "child events stream as subagent.*" },
+  { href: "/docs/faq", title: "FAQ", subtitle: "where AG-UI and CopilotKit fit" },
   { href: "/docs/cli", title: "CLI", subtitle: "dawn dev flags and all other commands" },
   { href: "/docs/recipes/stream-output", title: "Stream output", subtitle: "recipe consuming /runs/stream SSE frames" },
 ]} />
