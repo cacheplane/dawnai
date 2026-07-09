@@ -45,7 +45,7 @@
     "@dawn-ai/langchain": "workspace:*",
     "@dawn-ai/testing": "workspace:*",
     "@testcontainers/postgresql": "^12.0.4",
-    "@types/node": "26.1.0",
+    "@types/node": "26.1.1",
     "@types/pg": "^8.20.0"
   }
 }
