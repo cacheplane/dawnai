@@ -65,6 +65,13 @@ describe("resolveRequestedVersion", () => {
     assert.equal(resolveRequestedVersion({ requested: "latest", tags: { latest: "1.2.3" } }), "1.2.3")
   })
 
+  it("resolves arbitrary dist-tags through dist-tags", () => {
+    assert.equal(
+      resolveRequestedVersion({ requested: "next", tags: { latest: "1.0.0", next: "1.1.0-beta.1" } }),
+      "1.1.0-beta.1",
+    )
+  })
+
   it("passes explicit versions through", () => {
     assert.equal(resolveRequestedVersion({ requested: "0.8.11", tags: { latest: "0.8.12" } }), "0.8.11")
   })
@@ -98,6 +105,30 @@ describe("validatePackageMetadata", () => {
     })
 
     assert.deepEqual(failures, [])
+  })
+
+  it("rejects package metadata with mismatched name or version", () => {
+    const failures = validatePackageMetadata(
+      "@dawn-ai/demo",
+      {
+        name: "@dawn-ai/other",
+        version: "1.0.1",
+        license: "MIT",
+        repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+        homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/demo#readme",
+        bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
+        engines: { node: ">=22.13.0" },
+        publishConfig: { access: "public" },
+        exports: { ".": "./dist/index.js" },
+        types: "./dist/index.d.ts",
+      },
+      "1.0.0",
+    )
+
+    assert.deepEqual(failures, [
+      "@dawn-ai/demo: package.json name is @dawn-ai/other",
+      "@dawn-ai/demo: package.json version is 1.0.1, expected 1.0.0",
+    ])
   })
 
   it("accepts config packages with JSON exports and no top-level types", () => {

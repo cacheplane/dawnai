@@ -35,12 +35,8 @@ export function expectedFilesForPackage(packageName) {
 }
 
 export function resolveRequestedVersion({ requested, tags }) {
-  if (requested === "latest") {
-    if (!tags?.latest) {
-      throw new Error("Could not resolve npm dist-tag latest")
-    }
-
-    return tags.latest
+  if (tags && Object.hasOwn(tags, requested)) {
+    return tags[requested]
   }
 
   return requested
@@ -83,7 +79,7 @@ export function assertCleanDependencySpecs(packageName, packageJson) {
   }
 }
 
-export function validatePackageMetadata(packageName, packageJson) {
+export function validatePackageMetadata(packageName, packageJson, expectedVersion) {
   const failures = []
 
   for (const field of [
@@ -99,6 +95,18 @@ export function validatePackageMetadata(packageName, packageJson) {
     if (readField(packageJson, field) === undefined) {
       failures.push(`${packageName}: missing package.json ${field}`)
     }
+  }
+
+  if (packageJson.name !== undefined && packageJson.name !== packageName) {
+    failures.push(`${packageName}: package.json name is ${packageJson.name}`)
+  }
+
+  if (
+    expectedVersion !== undefined &&
+    packageJson.version !== undefined &&
+    packageJson.version !== expectedVersion
+  ) {
+    failures.push(`${packageName}: package.json version is ${packageJson.version}, expected ${expectedVersion}`)
   }
 
   if (!packageJson.exports && !packageJson.bin) {

@@ -20,12 +20,25 @@ try {
   const { packageSet, version } = parseArgs(process.argv.slice(2))
   const publicPackages = await readPublicPackages()
   const packageNames = resolvePackageSet(packageSet, publicPackages)
+  const failures = []
 
   for (const packageName of packageNames) {
-    await verifyPackage(packageName, version)
+    try {
+      await verifyPackage(packageName, version)
+    } catch (error) {
+      failures.push(error)
+      console.error(`META FAIL ${error.message}`)
+    }
   }
 
-  console.log(`META PASS verified ${packageNames.length} package(s) for ${version} in package set ${packageSet}`)
+  if (failures.length > 0) {
+    console.error(
+      `META FAIL ${failures.length} of ${packageNames.length} package(s) failed for ${version} in package set ${packageSet}`,
+    )
+    process.exitCode = 1
+  } else {
+    console.log(`META PASS verified ${packageNames.length} package(s) for ${version} in package set ${packageSet}`)
+  }
 } catch (error) {
   console.error(`META FAIL ${error.message}`)
   process.exitCode = 1
@@ -97,7 +110,7 @@ async function verifyPackage(packageName, requestedVersion) {
     const extractedPackageDir = resolve(extractDir, "package")
     const packageJson = JSON.parse(await readFile(resolve(extractedPackageDir, "package.json"), "utf8"))
 
-    const metadataFailures = validatePackageMetadata(packageName, packageJson)
+    const metadataFailures = validatePackageMetadata(packageName, packageJson, resolvedVersion)
     if (metadataFailures.length > 0) {
       throw new Error(`${packageName}@${resolvedVersion} package metadata failed: ${metadataFailures.join("; ")}`)
     }
