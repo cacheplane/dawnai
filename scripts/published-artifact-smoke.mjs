@@ -14,7 +14,6 @@ import {
   resolveRequestedVersion,
 } from "./lib/published-artifacts.mjs"
 
-const DATABASE_URL = "postgres://postgres:postgres@localhost:5433/postgres"
 const NATIVE_BUILD_INDICATORS = /\bnode-gyp\b|\bprebuild-install\b|gyp ERR!/i
 const REQUIRED_PGVECTOR_PACKAGES = new Set([
   "@dawn-ai/memory-pgvector",
@@ -60,8 +59,9 @@ async function main() {
     await assertDockerAvailable()
     containerCleanupNeeded = true
     await startPgvector(containerName)
+    const databaseUrl = await databaseUrlForPgvector(containerName)
     await waitForPgvector(containerName)
-    await runRuntimeSmoke(tempDir, { openai: options.openai })
+    await runRuntimeSmoke(tempDir, { databaseUrl, openai: options.openai })
   } finally {
     if (containerCleanupNeeded) {
       await removeContainer(containerName)
@@ -195,9 +195,31 @@ async function startPgvector(containerName) {
     "-e",
     "POSTGRES_PASSWORD=postgres",
     "-p",
-    "5433:5432",
+    "127.0.0.1::5432",
     "pgvector/pgvector:pg16",
   ])
+}
+
+async function databaseUrlForPgvector(containerName) {
+  const port = await mappedPgvectorPort(containerName)
+  console.log(`PGVECTOR PORT ${port}`)
+  return `postgres://postgres:postgres@localhost:${port}/postgres`
+}
+
+async function mappedPgvectorPort(containerName) {
+  const result = await runCommand("docker", ["port", containerName, "5432/tcp"])
+  return parseDockerMappedHostPort(result.stdout)
+}
+
+export function parseDockerMappedHostPort(output) {
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.trim().match(/(?:^|:)(\d+)$/)
+    if (match) {
+      return Number(match[1])
+    }
+  }
+
+  throw new Error(`Could not parse mapped host port from docker port output: ${output.trim()}`)
 }
 
 async function waitForPgvector(containerName) {
@@ -231,7 +253,7 @@ async function runRuntimeSmoke(tempDir, options) {
     cwd: tempDir,
     env: runtimeEnv(
       {
-        DATABASE_URL,
+        DATABASE_URL: options.databaseUrl,
         RUN_OPENAI: options.openai ? "1" : "0",
         SMOKE_TABLE_PREFIX: `dawn_published_smoke_${process.pid}_${Date.now()}`,
       },

@@ -9,7 +9,7 @@ import {
   resolveRequestedVersion,
   validatePackageMetadata,
 } from "./lib/published-artifacts.mjs"
-import { shouldRunOpenAiSmoke } from "./published-artifact-smoke.mjs"
+import { parseDockerMappedHostPort, shouldRunOpenAiSmoke } from "./published-artifact-smoke.mjs"
 
 describe("resolvePackageSet", () => {
   it("resolves the memory-pgvector-core package set", () => {
@@ -159,5 +159,11 @@ describe("shouldRunOpenAiSmoke", () => {
 
   it("fails when enabled without OPENAI_API_KEY", () => {
     assert.throws(() => shouldRunOpenAiSmoke({ enabled: true, env: {} }), /OPENAI_API_KEY/)
+  })
+})
+
+describe("parseDockerMappedHostPort", () => {
+  it("extracts the dynamic localhost port from docker port output", () => {
+    assert.equal(parseDockerMappedHostPort("127.0.0.1:49157\n"), 49157)
   })
 })
