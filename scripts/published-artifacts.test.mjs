@@ -1,4 +1,7 @@
 import assert from "node:assert/strict"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, it } from "node:test"
 
 import {
@@ -12,6 +15,7 @@ import {
 import {
   assertNoNativeLifecycleScripts,
   parseDockerMappedHostPort,
+  readInstalledPackageManifests,
   shouldRunOpenAiSmoke,
 } from "./published-artifact-smoke.mjs"
 
@@ -205,5 +209,27 @@ describe("assertNoNativeLifecycleScripts", () => {
         },
       ]),
     )
+  })
+
+  it("rejects packages with binding.gyp even without lifecycle scripts", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "dawn-native-indicator-test-"))
+    try {
+      const packageDir = join(tempDir, "node_modules", "native-addon")
+      await mkdir(packageDir, { recursive: true })
+      await writeFile(
+        join(packageDir, "package.json"),
+        JSON.stringify({ name: "native-addon", version: "1.0.0" }),
+        "utf8",
+      )
+      await writeFile(join(packageDir, "binding.gyp"), "{}", "utf8")
+
+      const manifests = await readInstalledPackageManifests(join(tempDir, "node_modules"))
+      assert.throws(
+        () => assertNoNativeLifecycleScripts(manifests),
+        /native-addon@1\.0\.0.*binding\.gyp/,
+      )
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
   })
 })

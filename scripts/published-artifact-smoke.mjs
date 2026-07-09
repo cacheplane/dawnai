@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process"
-import { readdir, readFile, writeFile } from "node:fs/promises"
+import { readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
@@ -187,14 +187,18 @@ export function assertNoNativeLifecycleScripts(manifests) {
         failures.push(`${packageLabel(manifest)} ${scriptName}: ${script}${entry.path ? ` (${entry.path})` : ""}`)
       }
     }
+
+    if (entry.hasBindingGyp) {
+      failures.push(`${packageLabel(manifest)} binding.gyp: ${entry.bindingGypPath ?? "binding.gyp"}`)
+    }
   }
 
   if (failures.length > 0) {
-    throw new Error(`Native lifecycle scripts detected: ${failures.join("; ")}`)
+    throw new Error(`Native build indicators detected: ${failures.join("; ")}`)
   }
 }
 
-async function readInstalledPackageManifests(nodeModulesDir) {
+export async function readInstalledPackageManifests(nodeModulesDir) {
   const manifests = []
   await collectNodeModulesPackageManifests(nodeModulesDir, manifests)
   return manifests
@@ -238,10 +242,29 @@ async function collectPackageManifest(packageRoot, manifests) {
   }
 
   if (manifest) {
-    manifests.push({ manifest, path: packageJsonPath })
+    const bindingGypPath = resolve(packageRoot, "binding.gyp")
+    manifests.push({
+      bindingGypPath,
+      hasBindingGyp: await fileExists(bindingGypPath),
+      manifest,
+      packageRoot,
+      path: packageJsonPath,
+    })
   }
 
   await collectNodeModulesPackageManifests(resolve(packageRoot, "node_modules"), manifests)
+}
+
+async function fileExists(path) {
+  try {
+    await stat(path)
+    return true
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return false
+    }
+    throw error
+  }
 }
 
 function packageLabel(manifest) {
