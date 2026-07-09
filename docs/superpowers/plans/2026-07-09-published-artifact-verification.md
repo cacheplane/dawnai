@@ -768,7 +768,7 @@ git diff --stat
 git diff --check
 ```
 
-- [ ] **Step 2: Commit implementation**
+- [x] **Step 2: Commit implementation**
 
 Run:
 
@@ -777,7 +777,7 @@ git add .github/workflows/published-artifact-verify.yml package.json scripts/lib
 git commit -m "ci: add published artifact verification"
 ```
 
-- [ ] **Step 3: Push and open PR**
+- [x] **Step 3: Push and open PR**
 
 Run:
 
