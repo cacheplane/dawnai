@@ -9,7 +9,11 @@ import {
   resolveRequestedVersion,
   validatePackageMetadata,
 } from "./lib/published-artifacts.mjs"
-import { parseDockerMappedHostPort, shouldRunOpenAiSmoke } from "./published-artifact-smoke.mjs"
+import {
+  assertNoNativeLifecycleScripts,
+  parseDockerMappedHostPort,
+  shouldRunOpenAiSmoke,
+} from "./published-artifact-smoke.mjs"
 
 describe("resolvePackageSet", () => {
   it("resolves the memory-pgvector-core package set", () => {
@@ -165,5 +169,41 @@ describe("shouldRunOpenAiSmoke", () => {
 describe("parseDockerMappedHostPort", () => {
   it("extracts the dynamic localhost port from docker port output", () => {
     assert.equal(parseDockerMappedHostPort("127.0.0.1:49157\n"), 49157)
+  })
+})
+
+describe("assertNoNativeLifecycleScripts", () => {
+  it("rejects native lifecycle scripts", () => {
+    assert.throws(
+      () =>
+        assertNoNativeLifecycleScripts([
+          {
+            manifest: {
+              name: "native-addon",
+              version: "1.0.0",
+              scripts: { install: "node-gyp rebuild" },
+            },
+          },
+        ]),
+      /native-addon@1\.0\.0.*install.*node-gyp rebuild/,
+    )
+  })
+
+  it("accepts ordinary JavaScript package scripts", () => {
+    assert.doesNotThrow(() =>
+      assertNoNativeLifecycleScripts([
+        {
+          manifest: {
+            name: "plain-js",
+            version: "1.0.0",
+            scripts: {
+              build: "tsc -p tsconfig.json",
+              test: "node --test",
+              postinstall: "node ./scripts/setup.js",
+            },
+          },
+        },
+      ]),
+    )
   })
 })

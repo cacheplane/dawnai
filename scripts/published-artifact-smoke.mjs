@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process"
-import { readFile, writeFile } from "node:fs/promises"
+import { readdir, readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
@@ -15,6 +15,9 @@ import {
 } from "./lib/published-artifacts.mjs"
 
 const NATIVE_BUILD_INDICATORS = /\bnode-gyp\b|\bprebuild-install\b|gyp ERR!/i
+const NATIVE_LIFECYCLE_INDICATORS =
+  /\b(?:node-gyp|prebuild-install|node-pre-gyp|cmake-js|node-gyp-build|prebuildify)\b|binding\.gyp/i
+const NATIVE_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall"]
 const REQUIRED_PGVECTOR_PACKAGES = new Set([
   "@dawn-ai/memory-pgvector",
   "@dawn-ai/langchain",
@@ -158,6 +161,8 @@ async function runInstallSmoke(tempDir, packages) {
     throw new Error("npm install output contained native build indicators")
   }
 
+  assertNoNativeLifecycleScripts(await readInstalledPackageManifests(resolve(tempDir, "node_modules")))
+
   for (const pkg of packages) {
     const manifest = JSON.parse(
       await readFile(resolve(tempDir, "node_modules", ...pkg.name.split("/"), "package.json"), "utf8"),
@@ -168,6 +173,79 @@ async function runInstallSmoke(tempDir, packages) {
   }
 
   console.log(`T0 PASS installed ${specs.join(" ")}`)
+}
+
+export function assertNoNativeLifecycleScripts(manifests) {
+  const failures = []
+
+  for (const entry of manifests) {
+    const manifest = entry.manifest ?? entry.packageJson ?? entry
+
+    for (const scriptName of NATIVE_LIFECYCLE_SCRIPTS) {
+      const script = manifest.scripts?.[scriptName]
+      if (typeof script === "string" && NATIVE_LIFECYCLE_INDICATORS.test(script)) {
+        failures.push(`${packageLabel(manifest)} ${scriptName}: ${script}${entry.path ? ` (${entry.path})` : ""}`)
+      }
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`Native lifecycle scripts detected: ${failures.join("; ")}`)
+  }
+}
+
+async function readInstalledPackageManifests(nodeModulesDir) {
+  const manifests = []
+  await collectNodeModulesPackageManifests(nodeModulesDir, manifests)
+  return manifests
+}
+
+async function collectNodeModulesPackageManifests(nodeModulesDir, manifests) {
+  let entries
+  try {
+    entries = await readdir(nodeModulesDir, { withFileTypes: true })
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return
+    }
+    throw error
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === ".bin") {
+      continue
+    }
+
+    const packageRoot = resolve(nodeModulesDir, entry.name)
+    if (entry.name.startsWith("@")) {
+      await collectNodeModulesPackageManifests(packageRoot, manifests)
+      continue
+    }
+
+    await collectPackageManifest(packageRoot, manifests)
+  }
+}
+
+async function collectPackageManifest(packageRoot, manifests) {
+  const packageJsonPath = resolve(packageRoot, "package.json")
+  let manifest
+  try {
+    manifest = JSON.parse(await readFile(packageJsonPath, "utf8"))
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error
+    }
+  }
+
+  if (manifest) {
+    manifests.push({ manifest, path: packageJsonPath })
+  }
+
+  await collectNodeModulesPackageManifests(resolve(packageRoot, "node_modules"), manifests)
+}
+
+function packageLabel(manifest) {
+  return `${manifest.name ?? "<unknown>"}${manifest.version ? `@${manifest.version}` : ""}`
 }
 
 function assertRuntimePackages(packageNames) {
