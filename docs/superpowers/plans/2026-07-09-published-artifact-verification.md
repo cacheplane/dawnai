@@ -561,7 +561,7 @@ Expected: `T0 PASS`, `T1 PASS`, `T2 SKIP`, `T3 PASS`, and cleanup of the Docker 
 - Modify: `package.json`
 - Create: `.github/workflows/published-artifact-verify.yml`
 
-- [ ] **Step 1: Add package scripts**
+- [x] **Step 1: Add package scripts**
 
 Modify root `package.json` scripts:
 
@@ -573,7 +573,7 @@ Modify root `package.json` scripts:
 }
 ```
 
-- [ ] **Step 2: Add manual workflow**
+- [x] **Step 2: Add manual workflow**
 
 Create `.github/workflows/published-artifact-verify.yml`:
 
@@ -645,7 +645,7 @@ jobs:
           pnpm published:smoke -- "${args[@]}"
 ```
 
-- [ ] **Step 3: Validate workflow syntax locally by inspection**
+- [x] **Step 3: Validate workflow syntax locally by inspection**
 
 Run:
 
