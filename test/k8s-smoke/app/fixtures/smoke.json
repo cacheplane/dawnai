@@ -1,0 +1,32 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "userMessage": "identify the sandbox",
+        "turnIndex": 0,
+        "hasToolResult": false
+      },
+      "response": {
+        "toolCalls": [
+          {
+            "id": "call_runBash_0_0",
+            "name": "runBash",
+            "arguments": {
+              "command": "id -u && hostname"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "match": {
+        "userMessage": "identify the sandbox",
+        "turnIndex": 1,
+        "hasToolResult": true
+      },
+      "response": {
+        "content": "Sandbox identified. runBash reported the command output above (uid and hostname)."
+      }
+    }
+  ]
+}
