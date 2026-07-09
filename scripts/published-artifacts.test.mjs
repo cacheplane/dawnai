@@ -9,16 +9,16 @@ import {
   expectedFilesForPackage,
   normalizeCliArgs,
   packageSets,
-  run,
   resolvePackageSet,
   resolveRequestedVersion,
+  run,
   validatePackageMetadata,
 } from "./lib/published-artifacts.mjs"
 import {
   assertNoNativeInstallOutput,
   assertNoNativeLifecycleScripts,
-  pgvectorDatabaseUrl,
   parseDockerMappedHostPort,
+  pgvectorDatabaseUrl,
   readInstalledPackageManifests,
   runCommand,
   shouldRunOpenAiSmoke,
@@ -76,18 +76,27 @@ describe("expectedFilesForPackage", () => {
 
 describe("resolveRequestedVersion", () => {
   it("resolves latest through dist-tags", () => {
-    assert.equal(resolveRequestedVersion({ requested: "latest", tags: { latest: "1.2.3" } }), "1.2.3")
+    assert.equal(
+      resolveRequestedVersion({ requested: "latest", tags: { latest: "1.2.3" } }),
+      "1.2.3",
+    )
   })
 
   it("resolves arbitrary dist-tags through dist-tags", () => {
     assert.equal(
-      resolveRequestedVersion({ requested: "next", tags: { latest: "1.0.0", next: "1.1.0-beta.1" } }),
+      resolveRequestedVersion({
+        requested: "next",
+        tags: { latest: "1.0.0", next: "1.1.0-beta.1" },
+      }),
       "1.1.0-beta.1",
     )
   })
 
   it("passes explicit versions through", () => {
-    assert.equal(resolveRequestedVersion({ requested: "0.8.11", tags: { latest: "0.8.12" } }), "0.8.11")
+    assert.equal(
+      resolveRequestedVersion({ requested: "0.8.11", tags: { latest: "0.8.12" } }),
+      "0.8.11",
+    )
   })
 })
 
@@ -348,7 +357,13 @@ describe("assertNoNativeLifecycleScripts", () => {
 
 describe("assertNoNativeInstallOutput", () => {
   it("rejects native install output markers beyond node-gyp", () => {
-    for (const marker of ["prebuild", "node-pre-gyp", "cmake-js", "node-gyp-build", "prebuildify"]) {
+    for (const marker of [
+      "prebuild",
+      "node-pre-gyp",
+      "cmake-js",
+      "node-gyp-build",
+      "prebuildify",
+    ]) {
       assert.throws(
         () => assertNoNativeInstallOutput(`> native-addon install\n${marker} install\n`),
         /native build indicators/,
@@ -358,7 +373,9 @@ describe("assertNoNativeInstallOutput", () => {
 
   it("accepts ordinary npm install output", () => {
     assert.doesNotThrow(() =>
-      assertNoNativeInstallOutput("added 42 packages, and audited 42 packages in 1s\nfound 0 vulnerabilities\n"),
+      assertNoNativeInstallOutput(
+        "added 42 packages, and audited 42 packages in 1s\nfound 0 vulnerabilities\n",
+      ),
     )
   })
 })

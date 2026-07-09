@@ -38,7 +38,9 @@ try {
     )
     process.exitCode = 1
   } else {
-    console.log(`META PASS verified ${packageNames.length} package(s) for ${version} in package set ${packageSet}`)
+    console.log(
+      `META PASS verified ${packageNames.length} package(s) for ${version} in package set ${packageSet}`,
+    )
   }
 } catch (error) {
   console.error(`META FAIL ${error.message}`)
@@ -109,15 +111,23 @@ async function verifyPackage(packageName, requestedVersion) {
     await run("tar", ["-xzf", tarballPath, "-C", extractDir])
 
     const extractedPackageDir = resolve(extractDir, "package")
-    const packageJson = JSON.parse(await readFile(resolve(extractedPackageDir, "package.json"), "utf8"))
+    const packageJson = JSON.parse(
+      await readFile(resolve(extractedPackageDir, "package.json"), "utf8"),
+    )
 
     const metadataFailures = validatePackageMetadata(packageName, packageJson, resolvedVersion)
     if (metadataFailures.length > 0) {
-      throw new Error(`${packageName}@${resolvedVersion} package metadata failed: ${metadataFailures.join("; ")}`)
+      throw new Error(
+        `${packageName}@${resolvedVersion} package metadata failed: ${metadataFailures.join("; ")}`,
+      )
     }
 
     assertCleanDependencySpecs(`${packageName}@${resolvedVersion}`, packageJson)
-    await assertExpectedFiles({ packageName, packageDir: extractedPackageDir, version: resolvedVersion })
+    await assertExpectedFiles({
+      packageName,
+      packageDir: extractedPackageDir,
+      version: resolvedVersion,
+    })
 
     console.log(`META PASS ${packageName}@${resolvedVersion} package metadata clean`)
     console.log(`META PASS ${packageName}@${resolvedVersion} tarball contents present`)
@@ -129,14 +139,14 @@ async function verifyPackage(packageName, requestedVersion) {
 async function packPackage({ packageName, tempDir, version }) {
   const packDir = resolve(tempDir, "pack")
   await mkdir(packDir)
-  const output = await run("npm", ["pack", `${packageName}@${version}`, "--pack-destination", packDir], {
-    stdio: "pipe",
-  })
-  const tarballName = output
-    .trim()
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .at(-1)
+  const output = await run(
+    "npm",
+    ["pack", `${packageName}@${version}`, "--pack-destination", packDir],
+    {
+      stdio: "pipe",
+    },
+  )
+  const tarballName = output.trim().split(/\r?\n/).filter(Boolean).at(-1)
 
   if (!tarballName) {
     throw new Error(`${packageName}@${version} npm pack did not report a tarball`)
@@ -161,6 +171,8 @@ async function assertExpectedFiles({ packageName, packageDir, version }) {
   }
 
   if (missing.length > 0) {
-    throw new Error(`${packageName}@${version} tarball is missing expected file(s): ${missing.join(", ")}`)
+    throw new Error(
+      `${packageName}@${version} tarball is missing expected file(s): ${missing.join(", ")}`,
+    )
   }
 }

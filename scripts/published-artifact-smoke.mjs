@@ -20,10 +20,7 @@ const NATIVE_BUILD_INDICATORS =
 const NATIVE_LIFECYCLE_INDICATORS =
   /\b(?:node-gyp|prebuild|prebuild-install|node-pre-gyp|cmake-js|node-gyp-build|prebuildify)\b|binding\.gyp/i
 const NATIVE_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall"]
-const REQUIRED_PGVECTOR_PACKAGES = new Set([
-  "@dawn-ai/memory-pgvector",
-  "@dawn-ai/langchain",
-])
+const REQUIRED_PGVECTOR_PACKAGES = new Set(["@dawn-ai/memory-pgvector", "@dawn-ai/langchain"])
 
 export function shouldRunOpenAiSmoke({ enabled, env = process.env }) {
   if (!enabled) {
@@ -160,11 +157,16 @@ async function runInstallSmoke(tempDir, packages) {
   const installOutput = `${install.stdout}\n${install.stderr}`
   assertNoNativeInstallOutput(installOutput)
 
-  assertNoNativeLifecycleScripts(await readInstalledPackageManifests(resolve(tempDir, "node_modules")))
+  assertNoNativeLifecycleScripts(
+    await readInstalledPackageManifests(resolve(tempDir, "node_modules")),
+  )
 
   for (const pkg of packages) {
     const manifest = JSON.parse(
-      await readFile(resolve(tempDir, "node_modules", ...pkg.name.split("/"), "package.json"), "utf8"),
+      await readFile(
+        resolve(tempDir, "node_modules", ...pkg.name.split("/"), "package.json"),
+        "utf8",
+      ),
     )
     if (manifest.version !== pkg.version) {
       throw new Error(`${pkg.name} installed version ${manifest.version}, expected ${pkg.version}`)
@@ -189,12 +191,16 @@ export function assertNoNativeLifecycleScripts(manifests) {
     for (const scriptName of NATIVE_LIFECYCLE_SCRIPTS) {
       const script = manifest.scripts?.[scriptName]
       if (typeof script === "string" && NATIVE_LIFECYCLE_INDICATORS.test(script)) {
-        failures.push(`${packageLabel(manifest)} ${scriptName}: ${script}${entry.path ? ` (${entry.path})` : ""}`)
+        failures.push(
+          `${packageLabel(manifest)} ${scriptName}: ${script}${entry.path ? ` (${entry.path})` : ""}`,
+        )
       }
     }
 
     if (entry.hasBindingGyp) {
-      failures.push(`${packageLabel(manifest)} binding.gyp: ${entry.bindingGypPath ?? "binding.gyp"}`)
+      failures.push(
+        `${packageLabel(manifest)} binding.gyp: ${entry.bindingGypPath ?? "binding.gyp"}`,
+      )
     }
   }
 
@@ -363,7 +369,9 @@ async function waitForPgvector(containerName) {
     }
   }
 
-  throw new Error(`pgvector container did not become ready:\n${lastError?.message ?? "no readiness output"}`)
+  throw new Error(
+    `pgvector container did not become ready:\n${lastError?.message ?? "no readiness output"}`,
+  )
 }
 
 async function removeContainer(containerName) {
@@ -402,7 +410,7 @@ function runtimeEnv(extra, options = {}) {
 }
 
 function runtimeSmokeSource() {
-  return String.raw`import assert from "node:assert/strict"
+  return `import assert from "node:assert/strict"
 
 import { openaiEmbedder } from "@dawn-ai/langchain"
 import { pgvectorMemoryStore } from "@dawn-ai/memory-pgvector"

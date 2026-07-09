@@ -24,7 +24,9 @@ export function resolvePackageSet(name, publicPackages = []) {
 
   const packages = packageSets[name]
   if (!packages) {
-    throw new Error(`Unknown package set "${name}". Known sets: ${Object.keys(packageSets).join(", ")}`)
+    throw new Error(
+      `Unknown package set "${name}". Known sets: ${Object.keys(packageSets).join(", ")}`,
+    )
   }
 
   return packages
@@ -70,7 +72,12 @@ export async function readPublicPackages(rootDir = repoRoot) {
 export function assertCleanDependencySpecs(packageName, packageJson) {
   const bad = []
 
-  for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+  for (const field of [
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+  ]) {
     for (const [name, version] of Object.entries(packageJson[field] ?? {})) {
       if (String(version).startsWith("workspace:") || String(version).startsWith("file:")) {
         bad.push(`${field}.${name}@${version}`)
@@ -110,7 +117,9 @@ export function validatePackageMetadata(packageName, packageJson, expectedVersio
     packageJson.version !== undefined &&
     packageJson.version !== expectedVersion
   ) {
-    failures.push(`${packageName}: package.json version is ${packageJson.version}, expected ${expectedVersion}`)
+    failures.push(
+      `${packageName}: package.json version is ${packageJson.version}, expected ${expectedVersion}`,
+    )
   }
 
   if (!packageJson.exports && !packageJson.bin) {
