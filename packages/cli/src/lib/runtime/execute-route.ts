@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -331,13 +332,23 @@ export async function* streamResolvedRoute(options: {
         yield { type: "chunk", data: chunk.data }
         break
       case "tool_call": {
-        const tc = chunk.data as { name: string; input: unknown }
-        yield { type: "tool_call", name: tc.name, input: tc.input }
+        const tc = chunk.data as { id?: string; name: string; input: unknown }
+        yield {
+          type: "tool_call",
+          ...(tc.id ? { id: tc.id } : {}),
+          name: tc.name,
+          input: tc.input,
+        }
         break
       }
       case "tool_result": {
-        const tr = chunk.data as { name: string; output: unknown }
-        yield { type: "tool_result", name: tr.name, output: tr.output }
+        const tr = chunk.data as { id?: string; name: string; output: unknown }
+        yield {
+          type: "tool_result",
+          ...(tr.id ? { id: tr.id } : {}),
+          name: tr.name,
+          output: tr.output,
+        }
         break
       }
       case "done":
@@ -855,6 +866,9 @@ async function executeRouteAtResolvedPath(options: {
       sandboxed,
     } = prepared
     mode = normalized.kind
+    const threadId =
+      options.threadId ??
+      (normalized.kind === "agent" ? `t-run-${randomUUID().slice(0, 8)}` : undefined)
 
     const context = createDawnContext({
       ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
@@ -875,7 +889,7 @@ async function executeRouteAtResolvedPath(options: {
       ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
       ...(subagentResolver ? { subagentResolver } : {}),
-      ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(threadId ? { threadId } : {}),
       ...(sandboxed ? { sandboxed: true } : {}),
     })
 

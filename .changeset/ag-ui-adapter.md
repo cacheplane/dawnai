@@ -1,5 +1,6 @@
 ---
 "@dawn-ai/ag-ui": patch
+"@dawn-ai/cli": patch
 "@dawn-ai/langchain": patch
 ---
 
@@ -13,6 +14,11 @@ The langchain adapter now surfaces each tool invocation's `run_id` as `id` on it
 `tool_call`/`tool_result` stream chunks, so AG-UI `toolCallId` correlation is
 faithful even when a tool is called more than once.
 
-Release note: this uses `patch` for both packages to preserve the 0.8.x release
+The CLI runtime now preserves those optional tool invocation ids in Dawn SSE
+`tool_call`/`tool_result` payloads. Local in-process `dawn run` also generates a
+one-shot thread id for agent routes so the default SQLite checkpointer can run
+the same agent route shape that `dawn dev` already supports.
+
+Release note: this uses `patch` for all packages to preserve the 0.8.x release
 line and avoid fixed-group surprises; confirm the intended bump with the
 maintainer at release time.
