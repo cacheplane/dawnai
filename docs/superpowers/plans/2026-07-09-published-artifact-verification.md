@@ -660,7 +660,7 @@ Expected: command succeeds. If `actionlint` is available, also run `actionlint .
 **Files:**
 - Modify: `docs/thread-handoff.md`
 
-- [ ] **Step 1: Add release hardening note**
+- [x] **Step 1: Add release hardening note**
 
 Add a short section near existing release/smoke notes:
 
@@ -684,7 +684,7 @@ Never write API keys to files; pass `OPENAI_API_KEY` only through the one shell
 or workflow step that runs the live OpenAI smoke.
 ````
 
-- [ ] **Step 2: Run docs check**
+- [x] **Step 2: Run docs check**
 
 Run:
 
