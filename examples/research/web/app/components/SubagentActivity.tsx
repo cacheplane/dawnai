@@ -17,10 +17,14 @@ export function SubagentActivity() {
   useEffect(() => {
     const sub = agent.subscribe({
       onCustomEvent: ({ event }: { event: { name?: string; value?: unknown } }) => {
-        if (typeof event.name === "string" && event.name.startsWith("dawn.subagent.")) {
-          const v = (event.value ?? {}) as { call_id?: string; subagent?: string; depth?: number }
-          setEvents((prev) => [...prev, { name: event.name as string, ...v }])
-        }
+        if (typeof event.name !== "string" || !event.name.startsWith("dawn.subagent.")) return
+        // Skip the per-token stream of the child agent's message — those arrive
+        // one event per token and would flood the panel. Show only the meaningful
+        // lifecycle: dispatch (start), tool calls/results, and completion (end).
+        const suffix = event.name.replace("dawn.subagent.", "")
+        if (suffix === "message" || suffix === "token" || suffix === "chunk") return
+        const v = (event.value ?? {}) as { call_id?: string; subagent?: string; depth?: number }
+        setEvents((prev) => [...prev, { name: event.name as string, ...v }])
       },
     })
     return () => sub.unsubscribe()

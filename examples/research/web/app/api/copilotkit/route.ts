@@ -9,7 +9,7 @@ import type { NextRequest } from "next/server"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const dawnUrl = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3001"
+const dawnUrl = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3002"
 const agUiUrl = `${dawnUrl}/agui/${encodeURIComponent("/research#agent")}`
 
 // Register the Dawn /research agent under CopilotKit's default agent id ("default").
