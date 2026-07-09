@@ -278,7 +278,7 @@ Expected: pass.
 - Create: `scripts/published-artifact-verify.mjs`
 - Test: `scripts/published-artifacts.test.mjs`
 
-- [ ] **Step 1: Add tests for tarball expectations**
+- [x] **Step 1: Add tests for tarball expectations**
 
 Extend `scripts/published-artifacts.test.mjs` with tests for expected file matching:
 
@@ -297,7 +297,7 @@ describe("expectedFilesForPackage", () => {
 })
 ```
 
-- [ ] **Step 2: Implement tarball expectation helpers**
+- [x] **Step 2: Implement tarball expectation helpers**
 
 Add to `scripts/lib/published-artifacts.mjs`:
 
@@ -313,7 +313,7 @@ export function expectedFilesForPackage(packageName) {
 }
 ```
 
-- [ ] **Step 3: Create verifier script**
+- [x] **Step 3: Create verifier script**
 
 Create `scripts/published-artifact-verify.mjs`:
 
@@ -407,7 +407,7 @@ function parseArgs(args) {
 }
 ```
 
-- [ ] **Step 4: Run verifier against npm**
+- [x] **Step 4: Run verifier against npm**
 
 Run:
 
@@ -415,7 +415,7 @@ Run:
 node scripts/published-artifact-verify.mjs --version latest --package-set memory-pgvector-core
 ```
 
-Expected: `META PASS` for the three selected packages.
+Expected after the next README-bearing publish: `META PASS` for the three selected packages. Current real npm state correctly fails `@dawn-ai/memory-pgvector@0.8.11` because that already-published tarball is missing `README.md`; the verifier continues and checks the remaining selected packages.
 
 ## Task 3: Published Install And Pgvector Smoke
 
