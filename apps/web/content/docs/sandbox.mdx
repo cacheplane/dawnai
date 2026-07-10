@@ -227,11 +227,12 @@ helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-inf
 
 ## Deploying a Dawn app (Helm)
 
-Dawn has no bespoke production server — `dawn build` emits `.dawn/build/langgraph.json` plus per-route entry files, and the documented way to containerize them is `@langchain/langgraph-cli`'s `langgraphjs dockerfile` command, run against a root-level `langgraph.json`. The `dawn-app` Helm chart takes that **user-built image** and runs it on Kubernetes as a Deployment + Service, with optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget. It owns only the Kubernetes deploy concerns — it does not build your image, run a Dawn-authored server, or bake `dawn.config.ts`; the image is the runtime contract.
+`dawn build`'s `node` target (see [Deploying to production (Node/Docker)](/docs/deployment#deploying-to-production-nodedocker)) emits a `server.mjs` plus a hardened `Dockerfile` that boot the real Dawn runtime. **Build that image when your app configures `kubernetesSandbox`** — the sandbox provider only runs inside the Dawn runtime process, so an image built from the `langsmith` target's `langgraph.json` (containerized separately with `@langchain/langgraph-cli`'s `langgraphjs dockerfile`) never calls the Kubernetes API and will not create sandbox Pods, even with `kubernetesSandbox` configured in `dawn.config.ts`. The `dawn-app` Helm chart takes that **user-built image** and runs it on Kubernetes as a Deployment + Service, with optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget. It owns only the Kubernetes deploy concerns — it does not build your image or bake `dawn.config.ts`; the image is the runtime contract.
 
 ```bash
-# Build the image from your generated langgraph.json
-npx @langchain/langgraph-cli dockerfile . -c langgraph.json
+# Build the image via dawn build's node target (on by default)
+dawn build
+docker build -t ghcr.io/you/your-app:latest .
 
 # Install the chart against that image
 helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
@@ -245,7 +246,7 @@ Or from a local checkout of the chart:
 helm install dawn-app ./charts/dawn-app --set image.repository=ghcr.io/you/your-app
 ```
 
-`image.repository` is required — install/upgrade fails fast with a clear error if it's unset. `containerPort` (default `8000`) and `healthPath` (default `/healthz`) are also values — verify both against your built image before relying on the defaults, since they drive the liveness/readiness/startup probes.
+`image.repository` is required — install/upgrade fails fast with a clear error if it's unset. `containerPort` (default `8000`) and `healthPath` (default `/healthz`) are also values, matching the `node` target's Dockerfile (`EXPOSE 8000`, `/healthz`) out of the box — verify both against your built image before relying on the defaults if you're deploying a differently-shaped image, since they drive the liveness/readiness/startup probes.
 
 ### ServiceAccount and namespace wiring
 
@@ -361,4 +362,5 @@ The Kubernetes provider carries two of its own scope notes: its `deny`-mode `Net
   { href: "/docs/tools", title: "Tools", subtitle: "tool scoping — which tools a route's agent may call" },
   { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including the sandbox key" },
   { href: "/docs/subagents", title: "Subagents", subtitle: "how subagents share their parent thread's sandbox" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "the node build target and dawn start, which engage the sandbox in production" },
 ]} />

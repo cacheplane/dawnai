@@ -1,9 +1,18 @@
 # Default values for dawn-app.
-# This chart runs a user-built Dawn app image (produced by
-# `langgraphjs dockerfile` against a root-level langgraph.json — see
-# docs/deployment.mdx) as a Deployment + Service, with optional Ingress,
-# HorizontalPodAutoscaler, and PodDisruptionBudget. It does NOT build the
-# image or bake dawn.config.ts — the image is the runtime contract.
+# This chart runs a user-built Dawn app image as a Deployment + Service, with
+# optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget. It does
+# NOT build the image or bake dawn.config.ts — the image is the runtime
+# contract.
+#
+# Recommended image source: `dawn build`'s node target (the default) emits a
+# server.mjs + hardened Dockerfile that boot the real Dawn runtime — build
+# that image with `docker build .` at the app root (see
+# docs/deployment.mdx#deploying-to-production-nodedocker). Use this target
+# whenever dawn.config.ts configures kubernetesSandbox: only the Dawn runtime
+# process creates sandbox Pods, so an image built the alternate way (the
+# langsmith target's langgraph.json, containerized with
+# `langgraphjs dockerfile`) never calls the sandbox provider even if the
+# config is present. See docs/sandbox.mdx#deploying-a-dawn-app-helm.
 
 image:
   # repository: REQUIRED at install time. Defaults to "" so `helm lint`
@@ -24,13 +33,16 @@ fullnameOverride: ""
 
 replicaCount: 1
 
-# containerPort: the port the langgraph API server listens on inside the
-# image. Verify against your built image's Dockerfile EXPOSE/CMD — this is
-# a value specifically so a mismatch is a one-line fix.
+# containerPort: the port your image's HTTP server listens on inside the
+# container. Defaults to 8000, matching dawn build's node-target Dockerfile
+# (EXPOSE 8000). Verify against your built image's Dockerfile EXPOSE/CMD if
+# you're deploying a different image — this is a value specifically so a
+# mismatch is a one-line fix.
 containerPort: 8000
 
-# healthPath: the HTTP path the langgraph API server serves health checks
-# on. Used for liveness/readiness/startup probes.
+# healthPath: the HTTP path your image serves health checks on. Defaults to
+# /healthz, matching both dawn build's node-target server (serveRuntime) and
+# its Dockerfile HEALTHCHECK. Used for liveness/readiness/startup probes.
 healthPath: /healthz
 
 probes:
@@ -112,8 +124,9 @@ secretName: ""
 
 resources: {}
 
-# securityContext: hardened but app-appropriate. The langgraph API server
-# is not a sandbox pod but should still be least-privilege.
+# securityContext: hardened but app-appropriate. The app's own Pod (running
+# the node-target server.mjs, or a langgraphjs-built image) is not a sandbox
+# pod but should still be least-privilege.
 securityContext:
   runAsNonRoot: true
   allowPrivilegeEscalation: false
@@ -121,9 +134,9 @@ securityContext:
     drop: ["ALL"]
   seccompProfile:
     type: RuntimeDefault
-  # readOnlyRootFilesystem: defaults false — the langgraph runtime likely
-  # writes temp state. A writable /tmp emptyDir is always mounted
-  # regardless of this setting. Set true if your image tolerates it.
+  # readOnlyRootFilesystem: defaults false — the app runtime likely writes
+  # temp state. A writable /tmp emptyDir is always mounted regardless of
+  # this setting. Set true if your image tolerates it.
   readOnlyRootFilesystem: false
 
 podSecurityContext: {}
