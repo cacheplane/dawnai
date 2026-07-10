@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
 const standardRequiredFields = [
@@ -197,6 +197,7 @@ export const packages = [
 
 export function validatePackManifest(repoRoot, manifest) {
   const publicPackageDirs = discoverPublicPackageDirs(repoRoot)
+  const publicPackageDirSet = new Set(publicPackageDirs)
   const manifestDirs = new Set()
 
   for (const entry of manifest) {
@@ -204,6 +205,10 @@ export function validatePackManifest(repoRoot, manifest) {
       throw new Error(`Pack manifest contains duplicate directory: ${entry.dir}`)
     }
     manifestDirs.add(entry.dir)
+
+    if (!publicPackageDirSet.has(entry.dir)) {
+      throw new Error(`Pack manifest includes non-public package: ${entry.dir}`)
+    }
 
     for (const requiredFile of ["README.md", "package.json"]) {
       if (!entry.expectedFiles.includes(requiredFile)) {
@@ -223,7 +228,9 @@ function discoverPublicPackageDirs(repoRoot) {
   const packagesDir = join(repoRoot, "packages")
 
   return readdirSync(packagesDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter(
+      (entry) => entry.isDirectory() && existsSync(join(packagesDir, entry.name, "package.json")),
+    )
     .map((entry) => ({
       dir: `packages/${entry.name}`,
       packageJson: readJson(join(packagesDir, entry.name, "package.json")),

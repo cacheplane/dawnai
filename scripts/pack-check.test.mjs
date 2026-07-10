@@ -29,6 +29,32 @@ describe("pack manifest validation", () => {
     )
   })
 
+  it("rejects entries that are not public packages", async () => {
+    const root = await createRepo(["one"])
+    const privatePackageDir = join(root, "packages", "private")
+    await mkdir(privatePackageDir, { recursive: true })
+    await writeFile(
+      join(privatePackageDir, "package.json"),
+      JSON.stringify({ name: "private", private: true }),
+    )
+
+    assert.throws(
+      () => validatePackManifest(root, [packageEntry("one"), packageEntry("private")]),
+      /Pack manifest includes non-public package: packages\/private/,
+    )
+    assert.throws(
+      () => validatePackManifest(root, [packageEntry("one"), packageEntry("missing")]),
+      /Pack manifest includes non-public package: packages\/missing/,
+    )
+  })
+
+  it("ignores directories without a package.json", async () => {
+    const root = await createRepo(["one"])
+    await mkdir(join(root, "packages", "notes"), { recursive: true })
+
+    assert.doesNotThrow(() => validatePackManifest(root, [packageEntry("one")]))
+  })
+
   it("rejects duplicate package directories", async () => {
     const root = await createRepo(["one"])
     const manifest = [packageEntry("one"), packageEntry("one")]
