@@ -15,7 +15,23 @@ export interface LocalRegistry {
   readonly stop: () => Promise<void>
 }
 
-export async function startLocalRegistry(): Promise<LocalRegistry> {
+export interface StartLocalRegistryOptions {
+  /**
+   * Interface to bind the registry socket to. Defaults to `127.0.0.1`
+   * (loopback-only) — correct for in-process test workers on the same host.
+   * The sandbox e2e smoke lane passes `0.0.0.0` so an in-`docker build`
+   * `npm install` can reach the host registry via `host.docker.internal`
+   * (which resolves to the docker bridge gateway on Linux, not loopback).
+   * The returned `url` is always the loopback form, which is connectable by
+   * host-side clients regardless of bind interface.
+   */
+  readonly host?: string
+}
+
+export async function startLocalRegistry(
+  options: StartLocalRegistryOptions = {},
+): Promise<LocalRegistry> {
+  const bindHost = options.host ?? "127.0.0.1"
   const storage = await mkdtemp(join(tmpdir(), "dawn-verdaccio-"))
   const config = {
     configPath: join(storage, "config.yaml"),
@@ -35,7 +51,7 @@ export async function startLocalRegistry(): Promise<LocalRegistry> {
   try {
     const app = (await runServer(config as never)) as Server
     const server: Server = await new Promise((resolve) => {
-      const s = app.listen(0, "127.0.0.1", () => resolve(s))
+      const s = app.listen(0, bindHost, () => resolve(s))
     })
 
     const address = server.address()

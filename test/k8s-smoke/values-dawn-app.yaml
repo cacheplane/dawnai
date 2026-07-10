@@ -1,0 +1,42 @@
+# dawn-app overrides for the sandbox-k8s-e2e smoke lane.
+#
+# Runs the locally-built `dawn-smoke-app:k8s` image (built the user-facing way
+# via `dawn build`'s node target, loaded into kind with `kind load`). The app
+# boots serveRuntime, serves the Agent Protocol on :8000, and — because
+# dawn.config.ts selects kubernetesSandbox when DAWN_SMOKE_SANDBOX!=docker —
+# spawns a real sandbox Pod in `dawn-sandboxes` when the /smoke route runs
+# runBash.
+image:
+  repository: dawn-smoke-app
+  tag: k8s
+  # Never: the image only exists in kind's local containerd (kind load), never
+  # on a registry.
+  pullPolicy: Never
+
+# create + name: the app runs under its own SA, added as a cross-namespace
+# orchestrator subject by values-sandbox-infra.yaml so it can create sandbox
+# Pods in dawn-sandboxes. automountServiceAccountToken defaults true (the app
+# needs the token to call the Kubernetes API).
+serviceAccount:
+  create: true
+  name: dawn-app
+
+# The node-target server listens on :8000 and serves health at /healthz
+# (chart defaults, restated here for clarity).
+containerPort: 8000
+healthPath: /healthz
+
+# Expose the Service on 8000 too so `kubectl port-forward svc/dawn-app 8000:8000`
+# maps cleanly (targetPort is the named `http` port = containerPort).
+service:
+  port: 8000
+
+# Deterministic, no-key model source: the baked aimock Deployment/Service
+# (aimock.k8s.yaml) in this same namespace, reached over cluster DNS.
+env:
+  - name: DAWN_SMOKE_SANDBOX
+    value: k8s
+  - name: OPENAI_BASE_URL
+    value: http://aimock.dawn-app.svc.cluster.local:4010/v1
+  - name: OPENAI_API_KEY
+    value: dummy

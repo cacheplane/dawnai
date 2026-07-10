@@ -282,6 +282,132 @@ jobs:
       - name: Real-cluster sandbox conformance + e2e
         run: DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration
 
+  sandbox-k8s-e2e:
+    # Full-arc smoke: a deployed Dawn app (built the user-facing way via
+    # `dawn build`'s node target, run as `node .dawn/build/server.mjs`) drives
+    # kubernetesSandbox to spawn a REAL sandbox Pod, then tears it down. Mirrors
+    # sandbox-k8s's kind+Calico setup; adds a Verdaccio-published image build and
+    # both Helm charts (cross-namespace: app in dawn-app, sandboxes in
+    # dawn-sandboxes). Determinism comes from a baked aimock (no model key).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Marks this as the gated full-arc e2e lane (distinct from sandbox-k8s).
+      DAWN_TEST_SMOKE_E2E: "1"
+      KIND_CLUSTER: dawn-smoke
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
+          # available without the --experimental-sqlite flag from 22.13+.
+          # Matches release.yml and the engines floor.
+          node-version: 22.14.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        # Full build so every published-to-Verdaccio @dawn-ai/* package has a
+        # dist/ (publishWorkspace packs dist as-is).
+        run: pnpm build
+
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+
+      - name: Create kind cluster (no default CNI)
+        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          config: .github/kind/kind-calico.yaml
+          cluster_name: dawn-smoke
+
+      - name: Install Calico (enforces NetworkPolicy)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
+
+      - name: Preload sandbox workload image into kind
+        # The kubernetesSandbox Pod runs node:22-slim; load it so the Pod starts
+        # without an external pull (imagePullPolicy IfNotPresent for a tag).
+        run: |
+          docker pull node:22-slim
+          kind load docker-image node:22-slim --name "$KIND_CLUSTER"
+
+      - name: Build and load smoke app image (Verdaccio)
+        # Start the local registry (bound 0.0.0.0 so the in-image npm install can
+        # reach it via host.docker.internal), publish the workspace, build the app
+        # image the user-facing way (build-image.sh → node-target Dockerfile), then
+        # load it into kind. The registry only needs to live for this step.
+        run: |
+          set -eu
+          URLFILE="$(mktemp)"
+          pnpm exec tsx test/k8s-smoke/serve-registry.ts "$URLFILE" &
+          REG_PID=$!
+          for _ in $(seq 1 180); do
+            [ -s "$URLFILE" ] && break
+            kill -0 "$REG_PID" 2>/dev/null || { echo "serve-registry exited before publishing"; exit 1; }
+            sleep 1
+          done
+          [ -s "$URLFILE" ] || { echo "registry URL never became ready"; kill "$REG_PID" 2>/dev/null || true; exit 1; }
+          REG_URL="$(cat "$URLFILE")"
+          echo "registry ready at $REG_URL"
+          sh test/k8s-smoke/build-image.sh k8s "$REG_URL"
+          kill "$REG_PID" 2>/dev/null || true
+          kind load docker-image dawn-smoke-app:k8s --name "$KIND_CLUSTER"
+
+      - name: Build and load aimock image
+        run: |
+          docker build -t dawn-smoke-aimock:latest -f test/k8s-smoke/aimock/Dockerfile test/k8s-smoke
+          kind load docker-image dawn-smoke-aimock:latest --name "$KIND_CLUSTER"
+
+      - name: Create app namespace
+        run: kubectl create namespace dawn-app
+
+      - name: Install sandbox-infra chart
+        run: |
+          helm install dawn-sandbox-infra charts/dawn-sandbox-infra \
+            -n dawn-sandboxes --create-namespace \
+            -f test/k8s-smoke/values-sandbox-infra.yaml --wait
+
+      - name: Deploy aimock
+        run: |
+          kubectl apply -f test/k8s-smoke/aimock.k8s.yaml
+          kubectl -n dawn-app rollout status deploy/aimock --timeout=120s
+
+      - name: Install dawn-app chart
+        run: |
+          helm install dawn-app charts/dawn-app \
+            -n dawn-app \
+            -f test/k8s-smoke/values-dawn-app.yaml --wait
+
+      - name: Run full-arc assertions
+        run: sh test/k8s-smoke/assert-k8s.sh
+
+      - name: Diagnostics + cleanup
+        if: always()
+        run: |
+          echo "----- app -----"
+          kubectl -n dawn-app get pods,svc -o wide || true
+          kubectl -n dawn-app logs deploy/dawn-app --tail=120 || true
+          echo "----- sandboxes -----"
+          kubectl -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true
+          echo "----- teardown -----"
+          helm uninstall dawn-app -n dawn-app || true
+          helm uninstall dawn-sandbox-infra -n dawn-sandboxes || true
+          kubectl delete namespace dawn-app --ignore-not-found --wait=false || true
+          kubectl delete namespace dawn-sandboxes --ignore-not-found --wait=false || true
+
   chart-apply-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
