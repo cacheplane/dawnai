@@ -1,8 +1,55 @@
 # Deployment
 
-Dawn does not host or run production traffic itself. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). Production runs on **LangSmith** or another runtime that consumes the generated LangGraph entry files. Use live-server scenario tests to catch protocol-shape issues before deployment.
+Dawn is not a managed hosting platform — there's no Dawn-operated cloud you push to. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). `dawn build` emits up to two targets, selected via `build.targets` (default: both):
 
-## The deployment path
+- **`node`** — a `server.mjs` entry that boots the real Dawn runtime, plus a hardened `Dockerfile`. This is the only target that runs Agent Protocol *and* AG-UI *and* engages the [execution sandbox](/docs/sandbox) in production. See [Deploying to production (Node/Docker)](#deploying-to-production-nodedocker) below.
+- **`langsmith`** — `langgraph.json` plus per-route entry files, for **LangSmith** or another runtime that consumes the generated LangGraph entry files directly. This target does not run the Dawn runtime and does not engage the sandbox. See [The LangSmith / LangGraph Platform path](#the-langsmith--langgraph-platform-path) below.
+
+Use live-server scenario tests to catch protocol-shape issues before deploying either target.
+
+## Deploying to production (Node/Docker)
+
+`dawn build`'s `node` target emits a runnable production server, not just a platform artifact:
+
+- **`.dawn/build/server.mjs`** — imports `serveRuntime` from `@dawn-ai/cli` and boots the full Dawn runtime on one HTTP listener: Agent Protocol (`/threads`), AG-UI (`/agui/:routeId`), and `/healthz`.
+- **`Dockerfile`** — a hardened multi-stage `node:22-slim` image: runs as non-root `1000:1000`, `EXPOSE 8000`, a `HEALTHCHECK` against `/healthz`, `CMD ["node", ".dawn/build/server.mjs"]`. Written to the app root unless a `Dockerfile` already exists there, in which case it's written to `.dawn/build/Dockerfile` instead so an existing Dockerfile is never overwritten.
+
+```
+dawn build
+docker build -t my-app .
+docker run -p 8000:8000 --env-file .env my-app
+```
+
+For local production-like serving without Docker, use `dawn start`, which boots the same runtime directly:
+
+```
+dawn start
+dawn start --host 127.0.0.1 --port 3000
+```
+
+`--host`/`--port` flags, or `HOST`/`PORT` environment variables, override the `0.0.0.0:8000` default — the same bind-everywhere default the generated Dockerfile's `HEALTHCHECK` assumes.
+
+<Callout type="warn" title="@dawn-ai/cli must be a regular dependency">
+  `server.mjs` imports `@dawn-ai/cli` at runtime. If it's listed under `devDependencies`, `npm ci --omit=dev` — which the generated Dockerfile runs — strips it from the production image, and the container fails to boot. Move `@dawn-ai/cli` to `dependencies` before building a deployable image.
+</Callout>
+
+Because it runs the actual Dawn runtime, this is the only deployment path that engages the [execution sandbox](/docs/sandbox), [tool scoping](/docs/tools), and [permissions](/docs/permissions) exactly as configured in `dawn.config.ts`. The `langsmith` target does not run the Dawn runtime and does not engage any of the three.
+
+Select targets explicitly in `dawn.config.ts` if you only want one:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+
+export default config({
+  build: { targets: ["node"] }, // omit "langsmith" if you don't deploy there
+})
+```
+
+To run the built image on Kubernetes — as a Deployment + Service with optional Ingress, autoscaling, and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm).
+
+## The LangSmith / LangGraph Platform path
+
+This path targets LangSmith or another runtime that consumes `langgraph.json` and the generated per-route entry files directly, instead of running the Dawn runtime. It does not serve AG-UI and does not engage the execution sandbox.
 
 <Steps>
   <Step title="Verify locally">
@@ -64,14 +111,14 @@ Dawn does not host or run production traffic itself. It owns local development (
 ## What Dawn does not do
 
 <Callout type="warn" title="Not a hosted platform">
-  Dawn does not provision infrastructure or manage secrets. If you want a hosted runtime, use LangSmith. LangSmith also provides the observability layer (tracing, evaluations).
+  Dawn does not provision infrastructure or manage secrets, on either deployment path. If you want a managed hosted runtime, use LangSmith, which also provides the observability layer (tracing, evaluations). If you'd rather self-host, the `node` target above gives you a runnable server and Dockerfile to run wherever you run containers.
 </Callout>
 
 ## Self-hosting
 
-If you can't or won't use LangSmith, build with `dawn build` and feed `.dawn/build/` to your own container. The generated entry files and `langgraph.json` are the canonical interface — the in-process `dawn dev` runtime is a reference for the same protocol surface (`/threads/:id/runs/wait`, `/threads/:id/runs/stream`, `/healthz`), but is not intended as a production runtime itself.
+If you can't or won't use LangSmith, use the `node` target: [Deploying to production (Node/Docker)](#deploying-to-production-nodedocker) above builds a `server.mjs` and `Dockerfile` that run the real Dawn runtime — Agent Protocol, AG-UI, `/healthz`, and the execution sandbox if configured. That's the self-hosting path.
 
-Containerize with `@langchain/langgraph-cli`'s `langgraphjs dockerfile` command against a root-level `langgraph.json`. To run that image on Kubernetes — as a Deployment + Service with optional Ingress, autoscaling, and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm).
+The `langsmith` target's `langgraph.json` and per-route entry files can also be containerized independently with `@langchain/langgraph-cli`'s `langgraphjs dockerfile` command, if you specifically want a LangGraph-Platform-compatible container rather than the Dawn runtime — but that image does not run Dawn's runtime and will not engage the sandbox, tool scoping, or permissions even if `dawn.config.ts` configures them.
 
 ## Troubleshooting
 
@@ -83,7 +130,8 @@ Containerize with `@langchain/langgraph-cli`'s `langgraphjs dockerfile` command 
 
 <RelatedCards items={[
   { href: "/docs/dev-server", title: "Dev Server", subtitle: "local protocol endpoints and live-server scenarios" },
+  { href: "/docs/sandbox", title: "Execution Sandbox", subtitle: "opt-in isolation the node target engages in production" },
   { href: "/docs/middleware", title: "Middleware", subtitle: "request gating in the local Dawn runtime" },
   { href: "/docs/testing", title: "Testing", subtitle: "confirming parity before deploy via live-server scenarios" },
-  { href: "/docs/cli", title: "CLI", subtitle: "dawn build, dawn verify, and all other commands" },
+  { href: "/docs/cli", title: "CLI", subtitle: "dawn build, dawn start, dawn verify, and all other commands" },
 ]} />

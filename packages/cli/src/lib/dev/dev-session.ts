@@ -1,10 +1,10 @@
 import { createServer } from "node:net"
 import { isAbsolute, relative, resolve } from "node:path"
 
-import { discoverRoutes, findDawnApp, loadDawnConfig } from "@dawn-ai/core"
+import { findDawnApp, loadDawnConfig } from "@dawn-ai/core"
 
 import { type CommandIo, formatErrorMessage, writeLine } from "../output.js"
-import { runTypegen } from "../typegen/run-typegen.js"
+import { buildRuntimeServerOptions } from "./boot-runtime.js"
 import { classifyChange } from "./classify-change.js"
 import { DevChildStartupError, type SpawnedDevChild, spawnDevChild } from "./dev-child.js"
 import { waitForDevServerReady } from "./health.js"
@@ -236,8 +236,7 @@ class InternalDevSession {
 
   private async runTypegenSafe(): Promise<void> {
     try {
-      const manifest = await discoverRoutes({ appRoot: this.appRoot })
-      await runTypegen({ appRoot: this.appRoot, manifest })
+      await buildRuntimeServerOptions({ appRoot: this.appRoot })
     } catch (error) {
       writeLine(this.io.stderr, `Typegen failed: ${formatErrorMessage(error)}`)
     }
@@ -321,7 +320,13 @@ function isFatalDevSessionError(error: unknown): error is FatalDevSessionError {
   return error instanceof FatalDevSessionError
 }
 
-async function discoverInitialApp(cwd: string): Promise<{ readonly appRoot: string }> {
+/**
+ * Discover the Dawn app root from a starting directory, validating that the
+ * configured routes directory stays within it. Shared with `dawn start`
+ * (see ../../commands/start.ts) so both commands resolve the app root the
+ * same way.
+ */
+export async function discoverInitialApp(cwd: string): Promise<{ readonly appRoot: string }> {
   const app = await findDawnApp({ cwd })
   assertRoutesDirWithinAppRoot(app.appRoot, app.routesDir)
 

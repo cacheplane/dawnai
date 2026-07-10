@@ -63,6 +63,21 @@ export interface DawnConfig {
       readonly signal: AbortSignal
     }) => Promise<string>
   }
+  /**
+   * Deployment build configuration for `dawn build`.
+   */
+  readonly build?: {
+    /**
+     * Which deployment artifacts `dawn build` emits. Known targets:
+     * - `"node"` — a runnable Node server entry (`.dawn/build/server.mjs`,
+     *   which boots {@link serveRuntime}) plus a hardened `Dockerfile`.
+     * - `"langsmith"` — the LangSmith deploy config (`.dawn/build/langgraph.json`
+     *   and the per-route materialized graph entry files).
+     *
+     * Defaults to both (`["node", "langsmith"]`) when omitted.
+     */
+    readonly targets?: readonly string[]
+  }
   readonly sandbox?: SandboxConfig
   readonly memory?: {
     readonly enabled?: boolean

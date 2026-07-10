@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
 export { config } from "@dawn-ai/core"
+export {
+  type ServeRuntimeHandle,
+  type ServeRuntimeOptions,
+  serveRuntime,
+} from "./lib/dev/serve-runtime.js"
 
 import { realpathSync } from "node:fs"
 import { resolve } from "node:path"
@@ -17,6 +22,7 @@ import { registerEvalCommand } from "./commands/eval.js"
 import { registerMemoryCommand } from "./commands/memory.js"
 import { registerRoutesCommand } from "./commands/routes.js"
 import { registerRunCommand } from "./commands/run.js"
+import { registerStartCommand } from "./commands/start.js"
 import { registerTestCommand } from "./commands/test.js"
 import { registerTypegenCommand } from "./commands/typegen.js"
 import { registerVerifyCommand } from "./commands/verify.js"
@@ -55,6 +61,7 @@ export function createProgram(io: CommandIo): Command {
   registerMemoryCommand(program, io)
   registerRunCommand(program, io)
   registerRoutesCommand(program, io)
+  registerStartCommand(program, io)
   registerTestCommand(program, io)
   registerTypegenCommand(program, io)
   registerVerifyCommand(program, io)

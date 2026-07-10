@@ -24,6 +24,7 @@ export interface RuntimeServer {
 
 export interface StartRuntimeServerOptions {
   readonly appRoot: string
+  readonly host?: string
   readonly port?: number
 }
 
@@ -165,13 +166,18 @@ export async function startRuntimeServer(
 
   const server = createServer(listener)
 
-  await listen(server, options.port)
+  await listen(server, options.host, options.port)
 
   const address = server.address()
 
   if (!address || typeof address === "string") {
     throw new Error("Runtime server did not bind to a TCP address")
   }
+
+  // The bind host (e.g. "0.0.0.0") is not always dialable directly — report a
+  // dialable loopback host in the returned url while still binding the
+  // requested interface.
+  const urlHost = toUrlHost(options.host)
 
   return {
     close: async () => {
@@ -188,8 +194,30 @@ export async function startRuntimeServer(
       await listenerClose()
       await serverClosed
     },
-    url: `http://127.0.0.1:${(address as AddressInfo).port}`,
+    url: `http://${urlHost}:${(address as AddressInfo).port}`,
   }
+}
+
+/**
+ * Map a bind host to a dialable URL host.
+ *
+ * Wildcard bind hosts are not dialable, so they map to their loopback:
+ * `0.0.0.0` → `127.0.0.1`, `::` → `::1`. Any IPv6 literal (contains `:` and is
+ * not already bracketed) is wrapped in `[...]` so it forms a valid URL
+ * authority, e.g. `::1` → `[::1]`.
+ */
+function toUrlHost(host: string | undefined): string {
+  const resolved = host ?? "127.0.0.1"
+  if (resolved === "0.0.0.0") {
+    return "127.0.0.1"
+  }
+  if (resolved === "::") {
+    return "[::1]"
+  }
+  if (resolved.includes(":") && !resolved.startsWith("[")) {
+    return `[${resolved}]`
+  }
+  return resolved
 }
 
 // ---------------------------------------------------------------------------
@@ -956,10 +984,14 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8")
 }
 
-async function listen(server: ReturnType<typeof createServer>, port?: number): Promise<void> {
+async function listen(
+  server: ReturnType<typeof createServer>,
+  host?: string,
+  port?: number,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject)
-    server.listen(port ?? 0, "127.0.0.1", () => {
+    server.listen(port ?? 0, host ?? "127.0.0.1", () => {
       server.off("error", reject)
       resolve()
     })

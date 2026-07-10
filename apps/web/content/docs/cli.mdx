@@ -91,7 +91,7 @@ The success log reports route, tool-schema, and stateful-route counts. The `tool
 
 ## `dawn build`
 
-Writes `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts` — the artifacts you hand to LangSmith.
+Writes deployment artifacts for the configured `build.targets` (default: both).
 
 ```
 dawn build
@@ -102,9 +102,28 @@ Flags:
 - `--cwd <path>` — operate on a different app root.
 - `--clean` — wipe `.dawn/build/` before writing.
 
-The generated `langgraph.json` includes `graphs` (keyed by `<routeId>#<kind>`), `dependencies: ["."]`, `env` (`.env.example` if present, else `.env`), and `node_version: "22"`. For `agent` routes, the generated entry imports the default `agent()` descriptor, materializes it as a LangGraph graph, and wires in every discovered route tool.
+Emits, per target:
+- **`node`** — `.dawn/build/server.mjs` (boots `serveRuntime` — the real Dawn runtime) and a hardened `Dockerfile` (written to the app root unless one already exists there, else to `.dawn/build/Dockerfile`). Run it with `dawn start` or `docker build`/`docker run`.
+- **`langsmith`** — `.dawn/build/langgraph.json` plus per-route entry files under `.dawn/build/<routeSlug>.ts` — the artifacts you hand to LangSmith. Includes `graphs` (keyed by `<routeId>#<kind>`), `dependencies: ["."]`, `env` (`.env.example` if present, else `.env`), and `node_version: "22"`. For `agent` routes, the generated entry imports the default `agent()` descriptor, materializes it as a LangGraph graph, and wires in every discovered route tool.
+
+Restrict which targets are emitted via `build.targets` in `dawn.config.ts` (e.g. `{ build: { targets: ["node"] } }`).
 
 See [Deployment](/docs/deployment) for the full bridge.
+
+## `dawn start`
+
+Serves the app in production using the real Dawn runtime — Agent Protocol, AG-UI, and `/healthz` — binding `0.0.0.0:8000` by default.
+
+```
+dawn start
+dawn start --host 127.0.0.1 --port 3000
+```
+
+Flags:
+- `--host <host>` — host to bind. Default: `0.0.0.0` (or the `HOST` env var).
+- `--port <number>` — port to bind. Default: `8000` (or the `PORT` env var).
+
+This is what the `node` build target's generated `Dockerfile` runs (`CMD ["node", ".dawn/build/server.mjs"]`), and it's the only server that engages the [execution sandbox](/docs/sandbox) in production. See [Deployment](/docs/deployment#deploying-to-production-nodedocker).
 
 ## `dawn run`
 
