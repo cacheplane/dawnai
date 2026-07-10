@@ -3,8 +3,8 @@
 A [CopilotKit](https://docs.copilotkit.ai) v2 app (`@copilotkit/react-core/v2` +
 `@copilotkit/runtime`) whose runtime route (`app/api/copilotkit/route.ts`) registers an
 `HttpAgent` pointed at Dawn's `POST /agui/research` endpoint (see `@dawn-ai/ag-ui`). It
-mirrors `examples/chat/web` (the canonical AG-UI wiring reference) and adds one
-research-specific panel: live subagent activity.
+mirrors `examples/chat/web` (the canonical AG-UI wiring reference) and adds
+research-specific panels: live subagent activity and memory-candidate approval.
 
 This app runs **live** against a real model — there is no aimock/demo mode here. The
 deterministic, no-key proof that the research route and its AG-UI wire protocol work is
@@ -35,12 +35,16 @@ browser
   `agent.subscribe({ onCustomEvent })` and lists `dawn.subagent.*` custom events (start,
   tool_call, tool_result, message, end) as the researcher subagent runs. This is the one
   panel with no chat/web analog.
+- `app/components/MemoryCandidates.tsx` — after a research run proposes durable memory
+  via `remember()`, the candidate (`status:"candidate"`) shows up in this panel with
+  **Approve**/**Reject** buttons, backed by the dev server's
+  `GET /memory/candidates` and `POST /memory/candidates/:id/approve|reject` endpoints
+  (proxied same-origin through `app/api/memory/[...path]/route.ts`). This replaces the
+  CLI `dawn memory approve` flow for the demo.
 
 Components/hooks that omit `agentId` resolve CopilotKit's default agent id
 (`"default"`), which the runtime route registers as the Dawn `/research` agent — same
 pattern as `examples/chat/web`, no per-component wiring needed.
-
-Not yet covered by this client (later slice): memory-candidate approval UI.
 
 ## Running
 
@@ -71,6 +75,9 @@ because this client intentionally has no demo/mock mode.
    resume and the fetch to execute. This confirms `useInterrupt` carries our
    `{decision, interruptId}` payload through `forwardedProps.command.resume` into
    `@dawn-ai/ag-ui`'s `mapRunInput`, same as the chat client.
+7. If the run calls `remember()`, expect the **Memory candidates** panel to populate
+   once the run finishes. Click **Approve** on one — expect it to disappear from the
+   panel (now `status:"active"` in `.dawn/memory.sqlite`); **Reject** deletes it.
 
 ## Security caveat
 

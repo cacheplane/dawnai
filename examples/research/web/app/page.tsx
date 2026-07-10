@@ -1,5 +1,6 @@
 "use client"
 import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
+import { MemoryCandidates } from "./components/MemoryCandidates"
 import { PermissionInterrupt } from "./components/PermissionInterrupt"
 import { PlanPanel } from "./components/PlanPanel"
 import { SubagentActivity } from "./components/SubagentActivity"
@@ -25,6 +26,7 @@ export default function Home() {
         <div style={{ display: "flex", flexDirection: "column" }}>
           <PlanPanel />
           <SubagentActivity />
+          <MemoryCandidates />
         </div>
         <main style={{ flex: 1 }}>
           <CopilotSidebar defaultOpen labels={{ modalHeaderTitle: "Dawn research" }} />
