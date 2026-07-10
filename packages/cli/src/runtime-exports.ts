@@ -16,6 +16,11 @@ export {
   startRuntimeServer,
 } from "./lib/dev/runtime-server.js"
 export {
+  type ServeRuntimeHandle,
+  type ServeRuntimeOptions,
+  serveRuntime,
+} from "./lib/dev/serve-runtime.js"
+export {
   executeResolvedRoute,
   invokeResolvedRoute,
   resolveCheckpointer,

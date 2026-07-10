@@ -1,10 +1,10 @@
 import { createServer } from "node:net"
 import { isAbsolute, relative, resolve } from "node:path"
 
-import { discoverRoutes, findDawnApp, loadDawnConfig } from "@dawn-ai/core"
+import { findDawnApp, loadDawnConfig } from "@dawn-ai/core"
 
 import { type CommandIo, formatErrorMessage, writeLine } from "../output.js"
-import { runTypegen } from "../typegen/run-typegen.js"
+import { buildRuntimeServerOptions } from "./boot-runtime.js"
 import { classifyChange } from "./classify-change.js"
 import { DevChildStartupError, type SpawnedDevChild, spawnDevChild } from "./dev-child.js"
 import { waitForDevServerReady } from "./health.js"
@@ -236,8 +236,7 @@ class InternalDevSession {
 
   private async runTypegenSafe(): Promise<void> {
     try {
-      const manifest = await discoverRoutes({ appRoot: this.appRoot })
-      await runTypegen({ appRoot: this.appRoot, manifest })
+      await buildRuntimeServerOptions({ appRoot: this.appRoot })
     } catch (error) {
       writeLine(this.io.stderr, `Typegen failed: ${formatErrorMessage(error)}`)
     }

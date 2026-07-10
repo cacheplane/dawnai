@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
 export { config } from "@dawn-ai/core"
+export {
+  type ServeRuntimeHandle,
+  type ServeRuntimeOptions,
+  serveRuntime,
+} from "./lib/dev/serve-runtime.js"
 
 import { realpathSync } from "node:fs"
 import { resolve } from "node:path"
