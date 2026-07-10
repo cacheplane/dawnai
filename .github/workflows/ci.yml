@@ -408,6 +408,90 @@ jobs:
           kubectl delete namespace dawn-app --ignore-not-found --wait=false || true
           kubectl delete namespace dawn-sandboxes --ignore-not-found --wait=false || true
 
+  sandbox-docker-e2e:
+    # Full-arc smoke (docker-out-of-docker): a CONTAINERIZED Dawn app — built the
+    # user-facing way (`dawn build`'s node target, run as `node
+    # .dawn/build/server.mjs`) with the host Docker socket bind-mounted — drives
+    # dockerSandbox to spawn a REAL, isolated SIBLING sandbox container on the
+    # host daemon, then tears it down. Mirrors sandbox-docker's host-Docker setup;
+    # adds a Verdaccio-published image build (same mechanism as sandbox-k8s-e2e).
+    # Determinism comes from a baked aimock (no model key).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Marks this as the gated full-arc e2e lane (distinct from sandbox-docker).
+      DAWN_TEST_SMOKE_E2E: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
+          # available without the --experimental-sqlite flag from 22.13+.
+          # Matches release.yml and the engines floor.
+          node-version: 22.14.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        # Full build so every published-to-Verdaccio @dawn-ai/* package has a
+        # dist/ (publishWorkspace packs dist as-is).
+        run: pnpm build
+
+      - name: Preload sandbox workload image
+        # The dockerSandbox sibling runs node:22-slim on the host daemon; pull it
+        # up front so the spawn doesn't wait on (or get rate-limited by) a pull.
+        run: docker pull node:22-slim
+
+      - name: Build app + aimock images (Verdaccio)
+        # Start the local registry (bound 0.0.0.0 so the in-image npm install can
+        # reach it via host.docker.internal), publish the workspace, then build
+        # the app image the user-facing way (build-image.sh docker → node-target
+        # Dockerfile + static docker CLI layer) and the baked aimock image. The
+        # registry only needs to live for the app build.
+        run: |
+          set -eu
+          URLFILE="$(mktemp)"
+          pnpm exec tsx test/k8s-smoke/serve-registry.ts "$URLFILE" &
+          REG_PID=$!
+          for _ in $(seq 1 180); do
+            [ -s "$URLFILE" ] && break
+            kill -0 "$REG_PID" 2>/dev/null || { echo "serve-registry exited before publishing"; exit 1; }
+            sleep 1
+          done
+          [ -s "$URLFILE" ] || { echo "registry URL never became ready"; kill "$REG_PID" 2>/dev/null || true; exit 1; }
+          REG_URL="$(cat "$URLFILE")"
+          echo "registry ready at $REG_URL"
+          sh test/k8s-smoke/build-image.sh docker "$REG_URL"
+          docker build -t dawn-smoke-aimock:latest -f test/k8s-smoke/aimock/Dockerfile test/k8s-smoke
+          kill "$REG_PID" 2>/dev/null || true
+
+      - name: Run full-arc assertions (DooD)
+        run: sh test/k8s-smoke/assert-docker.sh
+
+      - name: Diagnostics + cleanup
+        if: always()
+        run: |
+          echo "----- containers -----"
+          docker ps -a || true
+          echo "----- app logs -----"
+          docker logs dawn-smoke-app --tail=120 || true
+          echo "----- teardown -----"
+          docker rm -f dawn-smoke-app dawn-smoke-aimock || true
+          for c in $(docker ps -aq --filter name=dawn-sbx-); do docker rm -f "$c" || true; done
+          for v in $(docker volume ls -q --filter name=dawn-sbx-); do docker volume rm "$v" || true; done
+          docker network rm dawn-smoke-net || true
+
   chart-apply-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15

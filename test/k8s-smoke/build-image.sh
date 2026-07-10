@@ -125,20 +125,43 @@ docker build \
 
 # --- Step 4: docker variant — add the docker CLI client ----------------------
 # dockerSandbox shells out to `docker`, so the docker variant needs the client
-# binary in the image. Layer it on as root, then drop back to the non-root user.
+# binary in the image. We install the OFFICIAL STATIC docker CLI binary from
+# download.docker.com, fetched ON THE HOST (curl) and COPY'd in — deliberately
+# NOT `apt-get install docker.io` (in-image apt against deb.debian.org) nor
+# `COPY --from=docker:cli` (an extra Docker Hub pull). Both of those add a
+# container-side external-network dependency at build time that is fragile in
+# restricted/offline environments; the static binary needs no in-container
+# network at all and no `apt`. The client is statically linked, so it drops
+# straight into the (glibc) node:22-slim image and runs as the non-root user.
 if [ "$VARIANT" = "docker" ]; then
-  echo "==> adding docker CLI client to $TAG"
-  CLI_DOCKERFILE=$(mktemp)
-  cat > "$CLI_DOCKERFILE" <<EOF
+  DOCKER_CLI_VERSION="${DOCKER_CLI_VERSION:-27.5.1}"
+  # Map the daemon's arch to download.docker.com's static-binary arch dir so the
+  # client matches the built image (arm64 locally, amd64 on CI runners).
+  SRV_ARCH=$(docker version --format '{{.Server.Arch}}')
+  case "$SRV_ARCH" in
+    amd64) DL_ARCH=x86_64 ;;
+    arm64) DL_ARCH=aarch64 ;;
+    *) echo "FATAL: unsupported docker daemon arch '$SRV_ARCH' for static CLI download" >&2; exit 1 ;;
+  esac
+  echo "==> adding static docker CLI ${DOCKER_CLI_VERSION} (${DL_ARCH}) to $TAG"
+  CLI_CTX=$(mktemp -d)
+  CLI_TGZ=$(mktemp)
+  cleanup_cli() { rm -rf "$CLI_CTX" "$CLI_TGZ"; }
+  # Fold CLI cleanup into the existing EXIT trap without clobbering it.
+  trap 'cleanup; cleanup_cli' EXIT INT TERM
+  curl -fsSL \
+    "https://download.docker.com/linux/static/stable/${DL_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" \
+    -o "$CLI_TGZ" \
+    || { echo "FATAL: failed to download static docker CLI" >&2; exit 1; }
+  # Tarball layout: docker/docker, docker/dockerd, … — extract just the client.
+  tar -xzf "$CLI_TGZ" -C "$CLI_CTX" docker/docker \
+    || { echo "FATAL: failed to extract docker/docker from the static tarball" >&2; exit 1; }
+  [ -x "$CLI_CTX/docker/docker" ] || { echo "FATAL: extracted docker CLI is not present/executable" >&2; exit 1; }
+  cat > "$CLI_CTX/Dockerfile" <<EOF
 FROM $TAG
-USER root
-RUN apt-get update \\
- && apt-get install -y --no-install-recommends docker.io \\
- && rm -rf /var/lib/apt/lists/*
-USER 1000:1000
+COPY docker/docker /usr/local/bin/docker
 EOF
-  docker build -f "$CLI_DOCKERFILE" -t "$TAG" "$APP_DIR"
-  rm -f "$CLI_DOCKERFILE"
+  docker build -f "$CLI_CTX/Dockerfile" -t "$TAG" "$CLI_CTX"
 fi
 
 echo "==> built $TAG"

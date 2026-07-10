@@ -1,0 +1,7 @@
+{
+  "name": "@dawn-smoke/k8s-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Full-arc sandbox smoke harness (serve-registry runner). type:module so `tsx serve-registry.ts` runs as ESM (top-level await). Not part of the pnpm workspace globs."
+}
