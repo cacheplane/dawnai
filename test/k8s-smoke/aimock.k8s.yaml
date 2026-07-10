@@ -31,16 +31,15 @@ spec:
           ports:
             - name: http
               containerPort: 4010
+          # Readiness only (gates the rollout) — no livenessProbe: a killed
+          # liveness check restarts a perfectly healthy mock into CrashLoop.
+          # Generous grace so a slow first bind on a loaded kind node never trips it.
           readinessProbe:
             tcpSocket:
               port: 4010
-            initialDelaySeconds: 2
+            initialDelaySeconds: 3
             periodSeconds: 3
-          livenessProbe:
-            tcpSocket:
-              port: 4010
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            failureThreshold: 20
 ---
 apiVersion: v1
 kind: Service

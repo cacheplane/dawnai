@@ -400,6 +400,9 @@ jobs:
           echo "----- app -----"
           kubectl -n dawn-app get pods,svc -o wide || true
           kubectl -n dawn-app logs deploy/dawn-app --tail=120 || true
+          echo "----- aimock -----"
+          kubectl -n dawn-app logs -l app.kubernetes.io/name=aimock --tail=120 --all-containers || true
+          kubectl -n dawn-app describe pods -l app.kubernetes.io/name=aimock || true
           echo "----- sandboxes -----"
           kubectl -n dawn-sandboxes get pods,pvc,networkpolicy -o wide || true
           echo "----- teardown -----"
