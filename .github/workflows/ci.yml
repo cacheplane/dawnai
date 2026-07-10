@@ -275,6 +275,8 @@ jobs:
           SA=system:serviceaccount:dawn-sandboxes:dawn-orchestrator
           kubectl auth can-i create pods --as=$SA -n dawn-sandboxes | grep -qx yes
           kubectl auth can-i create pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes
+          # WebSocket exec (@kubernetes/client-node) authorizes as `get pods/exec`
+          kubectl auth can-i get pods/exec --as=$SA -n dawn-sandboxes | grep -qx yes
           kubectl auth can-i create persistentvolumeclaims --as=$SA -n dawn-sandboxes | grep -qx yes
           kubectl auth can-i create networkpolicies.networking.k8s.io --as=$SA -n dawn-sandboxes | grep -qx yes
           kubectl auth can-i create secrets --as=$SA -n dawn-sandboxes | grep -qx no

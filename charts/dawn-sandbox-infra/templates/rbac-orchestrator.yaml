@@ -19,9 +19,14 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "persistentvolumeclaims"]
     verbs: ["create", "get", "delete"]
+  # `get` AND `create`: @kubernetes/client-node execs over a WebSocket, which the
+  # API server authorizes as `get pods/exec` (the WS handshake is an HTTP GET
+  # upgrade), while SPDY/kubectl exec uses `create`. Granting only `create` makes
+  # the WebSocket exec fail with a 403. (Caught by the full-arc smoke, which runs
+  # as this least-privilege SA rather than cluster-admin.)
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    verbs: ["get", "create"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["create", "get", "list", "update", "delete"]
