@@ -141,6 +141,24 @@ node scripts/publish-smoke.mjs
 
 That command should remain part of any serious integration or release-oriented verification.
 
+### Published Artifact Verification
+
+For manual post-publish hardening, run the `Published Artifact Verification`
+workflow from GitHub Actions. Start with `version=latest`,
+`packageSet=memory-pgvector-core`, `runPgvector=true`, and `runOpenAI=false`.
+Enable `runOpenAI=true` only when the repository `OPENAI_API_KEY` secret is
+configured for this smoke purpose.
+
+Local no-key check:
+
+```bash
+pnpm published:verify -- --version latest --package-set memory-pgvector-core
+pnpm published:smoke -- --version latest --package-set memory-pgvector-core --pgvector
+```
+
+Never write API keys to files; pass `OPENAI_API_KEY` only through the one shell
+or workflow step that runs the live OpenAI smoke.
+
 ## Decisions That Should Hold Unless There Is A Strong Reason To Reopen Them
 
 ### Dawn Owns Local Lifecycle Only
