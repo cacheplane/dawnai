@@ -44,6 +44,35 @@ describe("startRuntimeServer host binding", () => {
     const response = await fetch(new URL("/healthz", server.url))
     expect(response.status).toBe(200)
   })
+
+  test("brackets an IPv6 loopback host in the reported url", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ ok: true });\n`,
+    })
+
+    const server = await startRuntimeServer({ appRoot, host: "::1", port: 0 })
+    servers.push(server)
+
+    expect(server.url).toMatch(/^http:\/\/\[::1\]:\d+$/)
+
+    const response = await fetch(new URL("/healthz", server.url))
+    expect(response.status).toBe(200)
+  })
+
+  test("maps the IPv6 wildcard :: to a dialable [::1] url", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ ok: true });\n`,
+    })
+
+    const server = await startRuntimeServer({ appRoot, host: "::", port: 0 })
+    servers.push(server)
+
+    expect(server.url).toMatch(/^http:\/\/\[::1\]:\d+$/)
+  })
 })
 
 async function createFixtureApp(files: Readonly<Record<string, string>>) {

@@ -177,8 +177,7 @@ export async function startRuntimeServer(
   // The bind host (e.g. "0.0.0.0") is not always dialable directly — report a
   // dialable loopback host in the returned url while still binding the
   // requested interface.
-  const urlHost =
-    (options.host ?? "127.0.0.1") === "0.0.0.0" ? "127.0.0.1" : (options.host ?? "127.0.0.1")
+  const urlHost = toUrlHost(options.host)
 
   return {
     close: async () => {
@@ -197,6 +196,28 @@ export async function startRuntimeServer(
     },
     url: `http://${urlHost}:${(address as AddressInfo).port}`,
   }
+}
+
+/**
+ * Map a bind host to a dialable URL host.
+ *
+ * Wildcard bind hosts are not dialable, so they map to their loopback:
+ * `0.0.0.0` → `127.0.0.1`, `::` → `::1`. Any IPv6 literal (contains `:` and is
+ * not already bracketed) is wrapped in `[...]` so it forms a valid URL
+ * authority, e.g. `::1` → `[::1]`.
+ */
+function toUrlHost(host: string | undefined): string {
+  const resolved = host ?? "127.0.0.1"
+  if (resolved === "0.0.0.0") {
+    return "127.0.0.1"
+  }
+  if (resolved === "::") {
+    return "[::1]"
+  }
+  if (resolved.includes(":") && !resolved.startsWith("[")) {
+    return `[${resolved}]`
+  }
+  return resolved
 }
 
 // ---------------------------------------------------------------------------

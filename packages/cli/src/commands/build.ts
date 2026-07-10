@@ -54,20 +54,33 @@ export async function runBuildCommand(options: BuildOptions, io: CommandIo): Pro
     // No / invalid config — fall back to default targets.
   }
 
+  // Validate the ENTIRE target list up front, before emitting anything — an
+  // unknown target must fail fast, not after earlier targets already wrote
+  // files to disk.
+  for (const name of targetNames) {
+    if (!buildTargets[name]) {
+      throw new CliError(
+        `Unknown build target "${name}". Known targets: ${knownTargetNames().join(", ")}.`,
+      )
+    }
+  }
+
+  if (targetNames.length === 0) {
+    writeLine(io.stderr, "no build targets configured; nothing emitted")
+    return
+  }
+
   const ctx: BuildEmitContext = {
     appRoot: manifest.appRoot,
     buildDir,
+    io,
     manifest,
   }
 
   const emitted: string[] = []
   for (const name of targetNames) {
-    const target = buildTargets[name]
-    if (!target) {
-      throw new CliError(
-        `Unknown build target "${name}". Known targets: ${knownTargetNames().join(", ")}.`,
-      )
-    }
+    // Presence guaranteed by the up-front validation above.
+    const target = buildTargets[name] as (typeof buildTargets)[string]
     const { artifacts } = await target.emit(ctx)
     emitted.push(...artifacts)
   }

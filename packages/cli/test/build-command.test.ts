@@ -16,7 +16,8 @@ async function createFixtureApp(files: Readonly<Record<string, string>>) {
   tempDirs.push(appRoot)
 
   const appFiles = {
-    "package.json": "{}\n",
+    // @dawn-ai/cli in dependencies → node target emits no runtime-dep warning.
+    "package.json": '{ "dependencies": { "@dawn-ai/cli": "workspace:*" } }\n',
     "dawn.config.ts": "export default {};\n",
     ...files,
   }

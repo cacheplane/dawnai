@@ -1,10 +1,11 @@
+import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { afterEach, describe, expect, test } from "vitest"
 
-import { serveRuntime } from "../src/lib/dev/serve-runtime.js"
+import { resolveServePort, serveRuntime } from "../src/lib/dev/serve-runtime.js"
 
 const tempDirs: string[] = []
 const handles: Array<{ close: () => Promise<void> }> = []
@@ -35,6 +36,32 @@ describe("serveRuntime", () => {
     const response = await fetch(new URL("/healthz", handle.url))
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ status: "ready" })
+  })
+
+  test("boots without running typegen (never writes .dawn artifacts)", async () => {
+    // Fixture app with NO prior .dawn/ — a read-only-rootfs production container
+    // must boot without writing anything under .dawn (typegen would EROFS).
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/support/[tenant]/index.ts": `export const graph = async () => ({ ok: true });\n`,
+    })
+
+    expect(existsSync(join(appRoot, ".dawn"))).toBe(false)
+
+    const handle = await serveRuntime({
+      appRoot,
+      host: "127.0.0.1",
+      installSignalHandlers: false,
+      port: 0,
+    })
+    handles.push(handle)
+
+    const response = await fetch(new URL("/healthz", handle.url))
+    expect(response.status).toBe(200)
+
+    // The serve boot must NOT have generated route types.
+    expect(existsSync(join(appRoot, ".dawn/dawn.generated.d.ts"))).toBe(false)
   })
 
   test("does not register process signal handlers when installSignalHandlers is omitted", async () => {
@@ -81,6 +108,29 @@ describe("serveRuntime", () => {
 
     // close() must be safe to call again (idempotent).
     await handle.close()
+  })
+})
+
+describe("resolveServePort", () => {
+  test("empty PORT env resolves to the 8000 default (not a random port)", () => {
+    expect(resolveServePort(undefined, "")).toBe(8000)
+  })
+
+  test("unset PORT env resolves to the 8000 default", () => {
+    expect(resolveServePort(undefined, undefined)).toBe(8000)
+  })
+
+  test("non-numeric PORT env resolves to the 8000 default", () => {
+    expect(resolveServePort(undefined, "not-a-number")).toBe(8000)
+  })
+
+  test("numeric PORT env is honored", () => {
+    expect(resolveServePort(undefined, "3000")).toBe(3000)
+  })
+
+  test("explicit port always wins, including 0 for a random port", () => {
+    expect(resolveServePort(0, "8000")).toBe(0)
+    expect(resolveServePort(5555, "")).toBe(5555)
   })
 })
 

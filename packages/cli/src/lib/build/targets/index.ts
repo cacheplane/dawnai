@@ -1,4 +1,5 @@
 import type { RouteManifest } from "@dawn-ai/core"
+import type { CommandIo } from "../../output.js"
 import { langsmithTarget } from "./langsmith.js"
 import { nodeTarget } from "./node.js"
 
@@ -15,6 +16,8 @@ export interface BuildEmitContext {
   readonly buildDir: string
   /** The discovered route manifest (routes + appRoot). */
   readonly manifest: RouteManifest
+  /** Command IO for emitting warnings/notices during emit (optional). */
+  readonly io?: CommandIo
 }
 
 /**

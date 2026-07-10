@@ -1,4 +1,3 @@
-import { buildRuntimeServerOptions } from "./boot-runtime.js"
 import { startRuntimeServer } from "./runtime-server.js"
 
 export interface ServeRuntimeOptions {
@@ -13,23 +12,57 @@ export interface ServeRuntimeHandle {
   readonly close: () => Promise<void>
 }
 
+/** Default production listen port, matching the emitted Dockerfile healthcheck. */
+const DEFAULT_SERVE_PORT = 8000
+
+/**
+ * Resolve the production listen port.
+ *
+ * An explicit `opts.port` always wins (including `0` for a random port). An
+ * empty or non-numeric `PORT` env var is treated as "unset" and falls back to
+ * {@link DEFAULT_SERVE_PORT} — this keeps `serveRuntime` in lockstep with the
+ * Dockerfile healthcheck's `PORT||8000`, instead of `Number("")` silently
+ * binding a random port.
+ */
+export function resolveServePort(
+  explicitPort: number | undefined,
+  envPort: string | undefined,
+): number {
+  if (explicitPort !== undefined) {
+    return explicitPort
+  }
+  if (envPort === undefined) {
+    return DEFAULT_SERVE_PORT
+  }
+  const trimmed = envPort.trim()
+  if (trimmed === "") {
+    return DEFAULT_SERVE_PORT
+  }
+  const parsed = Number(trimmed)
+  return Number.isFinite(parsed) ? parsed : DEFAULT_SERVE_PORT
+}
+
 /**
  * Boot the Dawn runtime HTTP server for production use (`dawn serve`).
  *
- * Shares the once-at-boot assembly (`buildRuntimeServerOptions`) with
- * `dawn dev`'s initial boot — see boot-runtime.ts — then hands off to
- * `startRuntimeServer`, the same single assembly point (runtime registry +
- * threads store + checkpointer + sandbox manager + HTTP listener) `dawn dev`
- * uses in its child process. Unlike `dawn dev`, serveRuntime never watches
- * the filesystem or restarts — it starts once and stays up.
+ * Hands off directly to `startRuntimeServer`, the single assembly point
+ * (runtime registry + threads store + checkpointer + sandbox manager + HTTP
+ * listener) that `dawn dev` also uses in its child process. Unlike `dawn dev`,
+ * serveRuntime never watches the filesystem or restarts — it starts once and
+ * stays up.
+ *
+ * Deliberately does NOT run typegen at boot. The host `dawn build` already
+ * generated `.dawn/*` (COPY'd into the image), and the runtime's schema
+ * injection is best-effort with a fallback to discovered tools when those
+ * artifacts are absent. Running typegen here would WRITE `.dawn/*`, crashing a
+ * read-only-rootfs production container with EROFS — see PR #339 review.
  */
 export async function serveRuntime(opts: ServeRuntimeOptions): Promise<ServeRuntimeHandle> {
   const host = opts.host ?? process.env.HOST ?? "0.0.0.0"
-  const port = opts.port ?? (process.env.PORT !== undefined ? Number(process.env.PORT) : 8000)
+  const port = resolveServePort(opts.port, process.env.PORT)
   const installSignalHandlers = opts.installSignalHandlers ?? false
 
-  const assembled = await buildRuntimeServerOptions({ appRoot: opts.appRoot })
-  const server = await startRuntimeServer({ ...assembled, host, port })
+  const server = await startRuntimeServer({ appRoot: opts.appRoot, host, port })
 
   if (!installSignalHandlers) {
     return server
