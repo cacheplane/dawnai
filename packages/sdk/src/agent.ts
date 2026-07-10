@@ -69,6 +69,7 @@ export interface DawnAgent {
   readonly provider?: ModelProviderId
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
+  readonly recursionLimit?: number
   readonly subagents?: readonly DawnAgent[]
   readonly tools?: ToolScope
   readonly systemPrompt: string
@@ -80,6 +81,13 @@ export interface AgentConfig {
   readonly provider?: ModelProviderId
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
+  /**
+   * Maximum number of LangGraph super-steps for one run before it aborts with a
+   * recursion error. Defaults to LangGraph's own limit (25). Raise it for deep
+   * agents — e.g. a coordinator that dispatches subagents and makes many tool
+   * calls — that legitimately need more steps to reach a stop condition.
+   */
+  readonly recursionLimit?: number
   readonly subagents?: readonly DawnAgent[]
   readonly tools?: ToolScope
   readonly systemPrompt: string
@@ -92,6 +100,7 @@ export function agent(config: AgentConfig): DawnAgent {
     ...(config.provider !== undefined ? { provider: config.provider } : {}),
     ...(config.reasoning ? { reasoning: config.reasoning } : {}),
     ...(config.retry ? { retry: config.retry } : {}),
+    ...(config.recursionLimit !== undefined ? { recursionLimit: config.recursionLimit } : {}),
     ...(config.description !== undefined ? { description: config.description } : {}),
     ...(config.subagents !== undefined ? { subagents: config.subagents } : {}),
     ...(config.tools !== undefined ? { tools: config.tools } : {}),

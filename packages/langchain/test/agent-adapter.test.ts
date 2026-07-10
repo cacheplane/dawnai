@@ -225,4 +225,66 @@ describe("executeAgent with DawnAgent descriptors", () => {
     expect(invokeInput?.messages[0]?.content).toBe("hello")
     expect(invokeConfig?.configurable).toEqual({ tenant: "acme" })
   })
+
+  test("recursionLimit from the descriptor is passed into the graph config", async () => {
+    const invoke = vi.fn().mockResolvedValue(new AIMessage({ content: "ok" }))
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({
+      createReactAgent: vi.fn(() => ({ invoke })),
+    }))
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {
+        constructor(public options: Record<string, unknown>) {}
+      },
+    }))
+
+    const descriptor = agent({
+      model: "gpt-4o-mini",
+      systemPrompt: "You are helpful.",
+      recursionLimit: 123,
+    })
+
+    await executeAgent({
+      checkpointer: new MemorySaver(),
+      entry: descriptor,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    }).finally(() => {
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+    })
+
+    const invokeConfig = invoke.mock.calls[0]?.[1] as { recursionLimit?: number }
+    expect(invokeConfig?.recursionLimit).toBe(123)
+  })
+
+  test("no recursionLimit leaves the graph config default (unset)", async () => {
+    const invoke = vi.fn().mockResolvedValue(new AIMessage({ content: "ok" }))
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({
+      createReactAgent: vi.fn(() => ({ invoke })),
+    }))
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {
+        constructor(public options: Record<string, unknown>) {}
+      },
+    }))
+
+    const descriptor = agent({ model: "gpt-4o-mini", systemPrompt: "You are helpful." })
+
+    await executeAgent({
+      checkpointer: new MemorySaver(),
+      entry: descriptor,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    }).finally(() => {
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+    })
+
+    const invokeConfig = invoke.mock.calls[0]?.[1] as { recursionLimit?: number }
+    expect(invokeConfig?.recursionLimit).toBeUndefined()
+  })
 })
