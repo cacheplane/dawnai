@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
+import type { MemoryStore } from "@dawn-ai/memory"
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
@@ -9,10 +10,16 @@ import {
   resolveThreadsStore,
   streamResolvedRoute,
 } from "../runtime/execute-route.js"
+import { resolveMemoryStore } from "../runtime/resolve-memory.js"
 import { resolveSandboxManager } from "../runtime/resolve-sandbox.js"
 import type { SandboxManager } from "../runtime/sandbox-manager.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { handleAgUiRequest } from "./agui-handler.js"
+import {
+  handleMemoryApproveRequest,
+  handleMemoryListRequest,
+  handleMemoryRejectRequest,
+} from "./memory-handler.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
@@ -62,6 +69,12 @@ export async function createRuntimeRequestListener(
   const threadsStore = await resolveThreadsStore(options.appRoot)
   const checkpointer = await resolveCheckpointer(options.appRoot)
   const sandboxManager = await resolveSandboxManager(options.appRoot)
+  // Cast: resolveMemoryStore's declared return type (MemoryStoreLike, in
+  // @dawn-ai/core) is the narrower capability-facing surface. The concrete
+  // store (sqlite-backed, or user-supplied via dawn.config.ts) also exposes
+  // listCandidates/delete, which the memory-candidate HTTP routes need — the
+  // same cast `commands/memory.ts` uses for the CLI's `dawn memory` commands.
+  const memoryStore = (await resolveMemoryStore(options.appRoot)) as unknown as MemoryStore
 
   let sandboxReaper: ReturnType<typeof setInterval> | undefined
   if (sandboxManager) {
@@ -81,6 +94,7 @@ export async function createRuntimeRequestListener(
   const routes = buildRouteTable({
     appRoot: options.appRoot,
     checkpointer,
+    memoryStore,
     middleware,
     registry,
     ...(sandboxManager ? { sandboxManager } : {}),
@@ -199,13 +213,23 @@ export async function startRuntimeServer(
 function buildRouteTable(ctx: {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
+  readonly memoryStore: MemoryStore
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly threadsStore: ThreadsStore
 }): RouteMatcher[] {
-  const { appRoot, checkpointer, middleware, registry, sandboxManager, signal, threadsStore } = ctx
+  const {
+    appRoot,
+    checkpointer,
+    memoryStore,
+    middleware,
+    registry,
+    sandboxManager,
+    signal,
+    threadsStore,
+  } = ctx
 
   // Server-scoped map: thread_id → last routeKey used for that thread.
   // Populated by runs/stream and runs/wait; read by the resume endpoint so it
@@ -332,6 +356,39 @@ function buildRouteTable(ctx: {
       },
       method: "POST",
       pattern: /^\/agui\/(?<routeId>[^/?#]+)(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // GET /memory/candidates — list memory candidates (all namespaces)
+    // ------------------------------------------------------------------
+    {
+      handle: async (_req, res) => {
+        await handleMemoryListRequest({ memoryStore, response: res })
+      },
+      method: "GET",
+      pattern: /^\/memory\/candidates(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // POST /memory/candidates/:id/approve — flip a candidate to active
+    // ------------------------------------------------------------------
+    {
+      handle: async (_req, res, params) => {
+        await handleMemoryApproveRequest({ id: params.id ?? "", memoryStore, response: res })
+      },
+      method: "POST",
+      pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/approve(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
+    // POST /memory/candidates/:id/reject — delete the record
+    // ------------------------------------------------------------------
+    {
+      handle: async (_req, res, params) => {
+        await handleMemoryRejectRequest({ id: params.id ?? "", memoryStore, response: res })
+      },
+      method: "POST",
+      pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/reject(?:\?.*)?$/,
     },
 
     // ------------------------------------------------------------------
