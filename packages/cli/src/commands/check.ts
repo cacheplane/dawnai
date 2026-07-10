@@ -1,6 +1,7 @@
 import { type DawnConfig, discoverRoutes, loadDawnConfig } from "@dawn-ai/core"
 import type { Command } from "commander"
 
+import { knownTargetNames } from "../lib/build/targets/index.js"
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
 import { collectSandboxErrors } from "../lib/runtime/collect-sandbox-errors.js"
 import { collectToolScopeIssues } from "../lib/runtime/collect-tool-scope-errors.js"
@@ -53,12 +54,23 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
       throw new CliError(`Invalid tool scope:\n${scopeIssues.errors.join("\n")}`)
     }
 
-    let loadedConfig: Pick<DawnConfig, "sandbox"> = {}
+    let loadedConfig: Pick<DawnConfig, "sandbox" | "build"> = {}
     try {
       const loaded = await loadDawnConfig({ appRoot: manifest.appRoot })
       loadedConfig = loaded.config
     } catch {
       loadedConfig = {}
+    }
+
+    const buildTargets = loadedConfig.build?.targets
+    if (buildTargets) {
+      const known = knownTargetNames()
+      const unknown = buildTargets.filter((name) => !known.includes(name))
+      if (unknown.length > 0) {
+        throw new CliError(
+          `Invalid build config:\nUnknown build target(s): ${unknown.join(", ")}. Known targets: ${known.join(", ")}.`,
+        )
+      }
     }
 
     const { errors: sandboxErrors, warnings: sandboxWarnings } =

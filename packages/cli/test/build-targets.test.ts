@@ -1,0 +1,155 @@
+import { existsSync } from "node:fs"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join } from "node:path"
+import { afterEach, describe, expect, test } from "vitest"
+
+import { runBuildCommand } from "../src/commands/build.js"
+import { runCheckCommand } from "../src/commands/check.js"
+
+const tempDirs: string[] = []
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
+})
+
+async function createFixtureApp(files: Readonly<Record<string, string>>) {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-build-targets-"))
+  tempDirs.push(appRoot)
+
+  const appFiles = {
+    "package.json": "{}\n",
+    "dawn.config.ts": "export default {};\n",
+    "src/app/(public)/hello/[tenant]/index.ts": `import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "gpt-5-mini",
+  systemPrompt: "Answer tenant support questions.",
+})
+`,
+    ...files,
+  }
+
+  await Promise.all(
+    Object.entries(appFiles).map(async ([relativePath, source]) => {
+      const filePath = join(appRoot, relativePath)
+      await mkdir(dirname(filePath), { recursive: true })
+      await writeFile(filePath, source)
+    }),
+  )
+
+  return appRoot
+}
+
+function runBuild(appRoot: string) {
+  const stdout: string[] = []
+  const stderr: string[] = []
+  return runBuildCommand(
+    { clean: true, cwd: appRoot },
+    {
+      stderr: (message) => stderr.push(message),
+      stdout: (message) => stdout.push(message),
+    },
+  ).then(() => ({ stdout, stderr }))
+}
+
+describe("dawn build — targets", () => {
+  test("default targets emit both the node bundle and the langsmith config", async () => {
+    const appRoot = await createFixtureApp({})
+
+    const { stderr } = await runBuild(appRoot)
+    expect(stderr.join("")).toBe("")
+
+    // node target: server.mjs
+    const serverPath = join(appRoot, ".dawn/build/server.mjs")
+    expect(existsSync(serverPath)).toBe(true)
+    const server = await readFile(serverPath, "utf8")
+    expect(server).toContain("serveRuntime")
+    expect(server).toContain('from "@dawn-ai/cli"')
+
+    // node target: Dockerfile (no user Dockerfile → emitted at app root)
+    const dockerfilePath = join(appRoot, "Dockerfile")
+    expect(existsSync(dockerfilePath)).toBe(true)
+    const dockerfile = await readFile(dockerfilePath, "utf8")
+    expect(dockerfile).toContain("EXPOSE 8000")
+    expect(dockerfile).toContain("USER 1000:1000")
+    expect(dockerfile).toContain("HEALTHCHECK")
+    expect(dockerfile).toContain('CMD ["node", ".dawn/build/server.mjs"]')
+
+    // langsmith target: langgraph.json still emitted and parseable
+    const langgraphPath = join(appRoot, ".dawn/build/langgraph.json")
+    expect(existsSync(langgraphPath)).toBe(true)
+    const langgraph = JSON.parse(await readFile(langgraphPath, "utf8")) as {
+      readonly graphs: Record<string, string>
+    }
+    expect(langgraph.graphs["/hello/[tenant]#agent"]).toBe("./.dawn/build/hello-tenant.ts:graph")
+  })
+
+  test("langsmith-only target emits no node artifacts", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["langsmith"] } };\n',
+    })
+
+    const { stderr } = await runBuild(appRoot)
+    expect(stderr.join("")).toBe("")
+
+    expect(existsSync(join(appRoot, ".dawn/build/server.mjs"))).toBe(false)
+    expect(existsSync(join(appRoot, "Dockerfile"))).toBe(false)
+    expect(existsSync(join(appRoot, ".dawn/build/Dockerfile"))).toBe(false)
+
+    expect(existsSync(join(appRoot, ".dawn/build/langgraph.json"))).toBe(true)
+  })
+
+  test("does not clobber a user Dockerfile — emits to build dir instead", async () => {
+    const userDockerfile = "FROM scratch\n# user's own Dockerfile\n"
+    const appRoot = await createFixtureApp({ Dockerfile: userDockerfile })
+
+    await runBuild(appRoot)
+
+    // User's Dockerfile at app root is untouched.
+    expect(await readFile(join(appRoot, "Dockerfile"), "utf8")).toBe(userDockerfile)
+
+    // Ours went to the build dir.
+    const emittedPath = join(appRoot, ".dawn/build/Dockerfile")
+    expect(existsSync(emittedPath)).toBe(true)
+    expect(await readFile(emittedPath, "utf8")).toContain("EXPOSE 8000")
+  })
+
+  test("unknown target at build time throws a clear error", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["bogus"] } };\n',
+    })
+
+    await expect(runBuild(appRoot)).rejects.toThrow(/Unknown build target "bogus"/)
+  })
+})
+
+describe("dawn check — build targets", () => {
+  test("unknown build target surfaces a validation error", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["bogus"] } };\n',
+    })
+
+    const stdout: string[] = []
+    await expect(
+      runCheckCommand(
+        { cwd: appRoot },
+        { stderr: () => {}, stdout: (message) => stdout.push(message) },
+      ),
+    ).rejects.toThrow(/bogus/)
+  })
+
+  test("known build targets pass validation", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["node", "langsmith"] } };\n',
+    })
+
+    const stdout: string[] = []
+    await expect(
+      runCheckCommand(
+        { cwd: appRoot },
+        { stderr: () => {}, stdout: (message) => stdout.push(message) },
+      ),
+    ).resolves.toBeUndefined()
+  })
+})
