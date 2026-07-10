@@ -6,7 +6,7 @@
 
 **Architecture:** Extract the declarative package manifest from the executable pack runner into `scripts/lib/pack-check.mjs`. Test the manifest against public package discovery, then have the existing runner import it without changing pack execution behavior.
 
-**Tech Stack:** Node.js ESM, Vitest, pnpm pack, tar.
+**Tech Stack:** Node.js ESM and `node:test`, pnpm pack, tar.
 
 ---
 
