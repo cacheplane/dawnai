@@ -98,6 +98,10 @@ export const packages = [
     expectedFiles: [
       "dist/index.js",
       "dist/commands/docs.js",
+      "dist/runtime-exports.js",
+      "dist/runtime-exports.d.ts",
+      "dist/testing/index.js",
+      "dist/testing/index.d.ts",
       "README.md",
       "package.json",
       "SKILL.md",
@@ -105,7 +109,7 @@ export const packages = [
       "docs/getting-started.md",
       "docs/tools.md",
     ],
-    requiredFields: [...standardRequiredFields, "bin"],
+    requiredFields: [...libraryRequiredFields, "bin"],
   },
   {
     dir: "packages/devkit",
@@ -121,7 +125,7 @@ export const packages = [
   },
   {
     dir: "packages/create-dawn-app",
-    expectedFiles: ["dist/index.js", "README.md", "package.json"],
+    expectedFiles: ["dist/bin.js", "dist/index.js", "README.md", "package.json"],
     requiredFields: [...standardRequiredFields, "bin"],
   },
   {

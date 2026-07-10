@@ -16,6 +16,7 @@
 - Create: `scripts/pack-check.test.mjs`
 - Create: `scripts/lib/pack-check.mjs`
 - Modify: `scripts/pack-check.mjs`
+- Modify: `package.json`
 
 - [ ] Write a test that discovers non-private `packages/*/package.json` files and compares their directories with the pack manifest.
 - [ ] Assert that public package directories are unique and every entry expects `README.md` and `package.json`.
@@ -23,6 +24,7 @@
 - [ ] Extract the existing manifest into the side-effect-free module.
 - [ ] Invoke manifest validation from the runner before any package build or pack command.
 - [ ] Import the manifest in the runner and confirm existing behavior remains intact.
+- [ ] Add a root `test:pack-check` script and make `pack:check` invoke it before the artifact runner.
 
 ### Task 2: Cover every public package
 

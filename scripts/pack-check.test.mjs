@@ -19,6 +19,36 @@ describe("pack manifest validation", () => {
     assert.doesNotThrow(() => validatePackManifest(repoRoot, packages))
   })
 
+  it("checks the CLI public subpath exports and metadata", () => {
+    const cliPackage = packages.find(({ dir }) => dir === "packages/cli")
+
+    assert.ok(cliPackage, "Pack manifest is missing packages/cli")
+    for (const expectedFile of [
+      "dist/runtime-exports.js",
+      "dist/runtime-exports.d.ts",
+      "dist/testing/index.js",
+      "dist/testing/index.d.ts",
+    ]) {
+      assert.ok(cliPackage.expectedFiles.includes(expectedFile), `CLI must expect ${expectedFile}`)
+    }
+    for (const requiredField of ["bin", "exports", "types"]) {
+      assert.ok(
+        cliPackage.requiredFields.includes(requiredField),
+        `CLI must require ${requiredField}`,
+      )
+    }
+  })
+
+  it("checks the create app executable", () => {
+    const createAppPackage = packages.find(({ dir }) => dir === "packages/create-dawn-app")
+
+    assert.ok(createAppPackage, "Pack manifest is missing packages/create-dawn-app")
+    assert.ok(
+      createAppPackage.expectedFiles.includes("dist/bin.js"),
+      "create-dawn-ai-app must expect dist/bin.js",
+    )
+  })
+
   it("rejects a missing public package entry", async () => {
     const root = await createRepo(["one", "two"])
     const manifest = [packageEntry("one")]
