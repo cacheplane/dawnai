@@ -24,6 +24,7 @@ export interface RuntimeServer {
 
 export interface StartRuntimeServerOptions {
   readonly appRoot: string
+  readonly host?: string
   readonly port?: number
 }
 
@@ -165,13 +166,19 @@ export async function startRuntimeServer(
 
   const server = createServer(listener)
 
-  await listen(server, options.port)
+  await listen(server, options.host, options.port)
 
   const address = server.address()
 
   if (!address || typeof address === "string") {
     throw new Error("Runtime server did not bind to a TCP address")
   }
+
+  // The bind host (e.g. "0.0.0.0") is not always dialable directly — report a
+  // dialable loopback host in the returned url while still binding the
+  // requested interface.
+  const urlHost =
+    (options.host ?? "127.0.0.1") === "0.0.0.0" ? "127.0.0.1" : (options.host ?? "127.0.0.1")
 
   return {
     close: async () => {
@@ -188,7 +195,7 @@ export async function startRuntimeServer(
       await listenerClose()
       await serverClosed
     },
-    url: `http://127.0.0.1:${(address as AddressInfo).port}`,
+    url: `http://${urlHost}:${(address as AddressInfo).port}`,
   }
 }
 
@@ -956,10 +963,14 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8")
 }
 
-async function listen(server: ReturnType<typeof createServer>, port?: number): Promise<void> {
+async function listen(
+  server: ReturnType<typeof createServer>,
+  host?: string,
+  port?: number,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject)
-    server.listen(port ?? 0, "127.0.0.1", () => {
+    server.listen(port ?? 0, host ?? "127.0.0.1", () => {
       server.off("error", reject)
       resolve()
     })
