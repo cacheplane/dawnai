@@ -55,6 +55,10 @@ extract_tool_content() {
     | map(select(((.kwargs.name? // .name?) == "runBash")))
     | (.[0] // {})
     | (.kwargs.content? // .content? // "")
+    # runBash returns a JSON envelope {"stdout","stderr","exitCode"}, not raw
+    # stdout — unwrap to .stdout (leave plain-string content untouched).
+    | (try fromjson catch .)
+    | (if type == "object" then (.stdout // "") else . end)
   '
 }
 

@@ -36,6 +36,11 @@ service:
 env:
   - name: DAWN_SMOKE_SANDBOX
     value: k8s
+  # runBash is gated by the interactive bash-permission HITL by default; a
+  # headless server would park the run at __interrupt__ and never execute the
+  # tool. Bypass it for the deterministic smoke (the docker lane does the same).
+  - name: DAWN_PERMISSIONS_MODE
+    value: bypass
   - name: OPENAI_BASE_URL
     value: http://aimock.dawn-app.svc.cluster.local:4010/v1
   - name: OPENAI_API_KEY
