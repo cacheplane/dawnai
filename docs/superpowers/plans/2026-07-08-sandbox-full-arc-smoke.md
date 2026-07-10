@@ -201,19 +201,22 @@ git commit -m "test(smoke): minimal Dawn app (workspace + runBash, env-selected 
 
 `test/k8s-smoke/aimock/Dockerfile` — a small image that runs `@copilotkit/aimock` serving the app's committed fixture on a fixed port. Read how the test harness starts aimock (`test/**/aimock*.ts`) to get the invocation and fixture-loading flag. Bake `test/k8s-smoke/app/fixtures/smoke.json` into the image (COPY it in) and start aimock pointed at it. Expose the port aimock listens on.
 
+> **REASSESSED for SP-A (production build & serve, merged #339).** `dawn build` now has a **`node` target** that emits `.dawn/build/server.mjs` (boots `serveRuntime` → runs the Dawn runtime → **engages the sandbox**) + a hardened non-root **Dockerfile** (`CMD ["node",".dawn/build/server.mjs"]`, EXPOSE 8000, HEALTHCHECK `/healthz`). This IS the deployment path the smoke exists to prove, so the smoke builds the app image via the node target's emitted Dockerfile — NOT `langgraphjs dockerfile` (that path never runs the Dawn runtime and never touches the sandbox). The smoke app already declares `@dawn-ai/cli` as a runtime `dependency` (SP-A requires it, since `server.mjs` imports it).
+
 - [ ] **Step 2: shared build script**
 
 `test/k8s-smoke/build-image.sh` takes `$1 = k8s|docker` and `$2 = registry URL`. It:
-1. `dawn build` the app (in `test/k8s-smoke/app`), then `langgraphjs dockerfile` to generate the app Dockerfile (per the "Dawn self-host / docker" guidance — build against the ROOT `langgraph.json`).
-2. `docker build` the app image installing `@dawn-ai/*` from the Verdaccio registry using the **exact invocation Task 1 recorded**. For `docker`, additionally install the `docker` CLI client in the image (append a layer / `--build-arg`), since `dockerSandbox` shells out to `docker`.
-3. Tag: `dawn-smoke-app:$1`.
+1. `pnpm dawn build` the app (in `test/k8s-smoke/app`) → the `node` target emits `.dawn/build/server.mjs` + `<appRoot>/Dockerfile` (the hardened one). Confirm both exist.
+2. Make `@dawn-ai/*` resolve from the Verdaccio registry during the emitted Dockerfile's `npm ci --omit=dev` step (which runs BEFORE `COPY . .`). Do this WITHOUT hand-editing the emitted Dockerfile's logic: write a smoke `.npmrc` into the app dir (`registry=<verdaccio>` or `@dawn-ai:registry=<verdaccio>` + `//host:port/:_authToken=` if Verdaccio needs it) and inject a single `COPY .npmrc ./` line immediately before the `RUN npm ci` line in the emitted Dockerfile via `sed` (a smoke-only augmentation; real users install `@dawn-ai/*` from npmjs with no `.npmrc`). Then `docker build` using the **exact host-registry networking Task 1 recorded** (`--add-host=host.docker.internal:host-gateway` + `registry=http://host.docker.internal:<port>`). Alternatively, if `.npmrc` injection proves fiddly, set the whole registry via `npm_config_registry` baked as a build ARG the injected line honors — but prefer the `.npmrc` form. The image's CMD stays the emitted `node .dawn/build/server.mjs`.
+3. For `docker`, additionally install the `docker` CLI client into the image (append a layer after the emitted Dockerfile, or a second-stage COPY), since `dockerSandbox` shells out to `docker`. For `k8s`, no extra binary (`@kubernetes/client-node` is pure JS).
+4. Tag: `dawn-smoke-app:$1`. Clean up the injected `.npmrc` + any Dockerfile mutation afterward so the tree stays clean.
 
 Keep the two variants as close as possible — only the docker-CLI layer and the default `DAWN_SMOKE_SANDBOX` differ.
 
 - [ ] **Step 3: smoke the build locally**
 
-Run `sh test/k8s-smoke/build-image.sh k8s <verdaccio-url>` with the Task-1 Verdaccio up.
-Expected: `dawn-smoke-app:k8s` builds; `docker run --rm dawn-smoke-app:k8s node -e "require('@dawn-ai/sandbox')"` resolves OK.
+Run `sh test/k8s-smoke/build-image.sh k8s <verdaccio-url>` with the Task-1 Verdaccio up (Docker daemon works on this machine — actually run it).
+Expected: `dawn-smoke-app:k8s` builds via the emitted node-target Dockerfile; `docker run --rm -e OPENAI_BASE_URL=... -e OPENAI_API_KEY=dummy -p 8000:8000 dawn-smoke-app:k8s` boots and `GET /healthz` → 200 (proving server.mjs/serveRuntime runs). Then stop it.
 
 - [ ] **Step 4: Commit**
 
