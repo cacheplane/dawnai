@@ -250,10 +250,12 @@ orchestrator:
 `assert-k8s.sh` (run after the app is Ready; takes the app Service URL, reachable via `kubectl port-forward` or an in-cluster curl Job):
 1. `POST /threads` → capture `thread_id`.
 2. `POST /threads/$id/runs/wait` with `{ "route": "/smoke", "input": { "messages": [{ "role": "user", "content": "identify the sandbox" }] } }`.
-3. Assert the final message stdout contains `1000` (uid) on its first line.
-4. `kubectl get pods -n dawn-sandboxes -o json` → assert exactly one `dawn-sbx-*` Pod exists; assert its `spec.securityContext.runAsNonRoot==true`, `runAsUser!=0`, and a `NetworkPolicy` matching the thread exists.
-5. Assert the run's reported hostname equals the sandbox Pod name (not the app pod).
+3. **Assert on the TOOL-RESULT message, not the final assistant message.** The aimock fixture's final assistant reply is a canned string; the REAL `runBash` stdout (`id -u && hostname`) lives in the ToolMessage in the run's returned message history. Parse the response's messages for the `runBash` tool result and assert its content's first line is `1000` (the hardened non-root uid) and its second line is a `dawn-sbx-*` hostname.
+4. `kubectl get pods -n dawn-sandboxes -o json` → assert exactly one `dawn-sbx-*` Pod exists; assert its effective SecurityContext is non-root (`runAsNonRoot==true` and `runAsUser==1000` — check pod- and container-level), and a per-thread `NetworkPolicy` exists in `dawn-sandboxes`.
+5. Cross-check: the `dawn-sbx-*` hostname from the tool result (step 3) equals the sandbox Pod's name from step 4 — proving the command ran **in the sandbox Pod**, not the app pod.
 6. `DELETE /threads/$id` → poll until the `dawn-sbx-*` Pod **and** its PVC are gone (bounded, e.g. 60s).
+
+If the AP `runs/wait` response does not include the full message history (only the final message), fetch it via `GET /threads/$id/state` (the Agent-Protocol state endpoint returns the persisted `messages` channel, which includes the ToolMessage). Confirm which endpoint carries the tool result before writing the assert, by inspecting one real response.
 
 Every failed assertion `echo`s context (`kubectl get`/`describe`) and exits non-zero.
 
@@ -288,7 +290,7 @@ git commit -m "test(smoke): sandbox-k8s-e2e lane — app-in-pod drives kubernete
 3. Run the app: `docker run -d --name dawn-smoke-app --network dawn-smoke-net -v /var/run/docker.sock:/var/run/docker.sock -e DAWN_SMOKE_SANDBOX=docker -e OPENAI_BASE_URL=http://aimock:<port>/v1 -e OPENAI_API_KEY=dummy -p 8000:<port> dawn-smoke-app:docker`.
 4. Wait for the app health endpoint.
 5. Drive the same AP conversation (`POST /threads`, `runs/wait`).
-6. Assert stdout contains `1000`; `docker ps --filter name=dawn-sbx-` shows exactly one sibling container; `docker inspect` it for non-root user + `ReadonlyRootfs==true`; reported hostname == the sibling container id/hostname.
+6. **Assert on the tool-result message** (same as the K8s lane — the fixture's final reply is canned; the real `runBash` stdout is in the ToolMessage; use `GET /threads/$id/state` if `runs/wait` omits it). Assert its first line is `1000`. `docker ps --filter name=dawn-sbx-` shows exactly one sibling container; `docker inspect` it for a non-root `Config.User` + `HostConfig.ReadonlyRootfs==true`; the `dawn-sbx-*` hostname in the tool result == the sibling container's name/hostname (proving it ran in the sandbox container).
 7. `DELETE` thread → assert the `dawn-sbx-*` container **and** volume are gone.
 8. Trailing cleanup (always): remove app, aimock, network, and any `dawn-sbx-*` containers/volumes.
 
