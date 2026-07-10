@@ -320,7 +320,13 @@ function isFatalDevSessionError(error: unknown): error is FatalDevSessionError {
   return error instanceof FatalDevSessionError
 }
 
-async function discoverInitialApp(cwd: string): Promise<{ readonly appRoot: string }> {
+/**
+ * Discover the Dawn app root from a starting directory, validating that the
+ * configured routes directory stays within it. Shared with `dawn start`
+ * (see ../../commands/start.ts) so both commands resolve the app root the
+ * same way.
+ */
+export async function discoverInitialApp(cwd: string): Promise<{ readonly appRoot: string }> {
   const app = await findDawnApp({ cwd })
   assertRoutesDirWithinAppRoot(app.appRoot, app.routesDir)
 
