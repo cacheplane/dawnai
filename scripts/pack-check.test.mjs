@@ -1,0 +1,78 @@
+import assert from "node:assert/strict"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join, resolve } from "node:path"
+import { afterEach, describe, it } from "node:test"
+import { fileURLToPath } from "node:url"
+
+import { packages, validatePackManifest } from "./lib/pack-check.mjs"
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const tempRoots = []
+
+afterEach(async () => {
+  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })))
+})
+
+describe("pack manifest validation", () => {
+  it("covers every public package exactly once with required package files", () => {
+    assert.doesNotThrow(() => validatePackManifest(repoRoot, packages))
+  })
+
+  it("rejects a missing public package entry", async () => {
+    const root = await createRepo(["one", "two"])
+    const manifest = [packageEntry("one")]
+
+    assert.throws(
+      () => validatePackManifest(root, manifest),
+      /Pack manifest is missing public package: packages\/two/,
+    )
+  })
+
+  it("rejects duplicate package directories", async () => {
+    const root = await createRepo(["one"])
+    const manifest = [packageEntry("one"), packageEntry("one")]
+
+    assert.throws(
+      () => validatePackManifest(root, manifest),
+      /Pack manifest contains duplicate directory: packages\/one/,
+    )
+  })
+
+  it("rejects entries without README.md or package.json expectations", async () => {
+    const root = await createRepo(["one"])
+
+    assert.throws(
+      () => validatePackManifest(root, [{ ...packageEntry("one"), expectedFiles: ["README.md"] }]),
+      /packages\/one must expect package\.json/,
+    )
+    assert.throws(
+      () =>
+        validatePackManifest(root, [{ ...packageEntry("one"), expectedFiles: ["package.json"] }]),
+      /packages\/one must expect README\.md/,
+    )
+  })
+})
+
+function packageEntry(name) {
+  return {
+    dir: `packages/${name}`,
+    expectedFiles: ["README.md", "package.json"],
+    requiredFields: [],
+  }
+}
+
+async function createRepo(publicPackages) {
+  const root = await mkdtemp(join(tmpdir(), "dawn-pack-manifest-test-"))
+  tempRoots.push(root)
+
+  await Promise.all(
+    publicPackages.map(async (name) => {
+      const packageDir = join(root, "packages", name)
+      await mkdir(packageDir, { recursive: true })
+      await writeFile(join(packageDir, "package.json"), JSON.stringify({ name }))
+    }),
+  )
+
+  return root
+}
