@@ -1,6 +1,6 @@
 # `@dawn-ai/ag-ui` Canonical Adapter API Design
 
-**Status:** Independent review issues addressed, maintainer review pending
+**Status:** Approved
 **Date:** 2026-07-10
 **Supersedes:** `2026-07-07-ag-ui-adapter-design.md` where this document conflicts
 
