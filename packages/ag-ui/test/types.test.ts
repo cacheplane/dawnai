@@ -1,5 +1,27 @@
 import { describe, expect, test } from "vitest"
-import { asToolCallData, asToolResultData } from "../src/types.js"
+import { asToolCallData, asToolResultData, type DawnAgentStreamChunk } from "../src/types.js"
+
+describe("DawnAgentStreamChunk", () => {
+  test("accepts canonical chunks and open extension chunks", () => {
+    const chunks = [
+      { type: "token", data: "hello" },
+      { type: "tool_call", data: { name: "greet", input: { name: "Dawn" } } },
+      { type: "tool_result", data: { name: "greet", output: "hello" } },
+      { type: "interrupt", data: { interruptId: "perm-1" } },
+      { type: "done" },
+      { type: "plan_update", data: { steps: [] } },
+    ] satisfies DawnAgentStreamChunk[]
+
+    expect(chunks.map((chunk) => chunk.type)).toEqual([
+      "token",
+      "tool_call",
+      "tool_result",
+      "interrupt",
+      "done",
+      "plan_update",
+    ])
+  })
+})
 
 describe("asToolCallData", () => {
   test("extracts id/name/input when shape is valid", () => {

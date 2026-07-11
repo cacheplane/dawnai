@@ -33,9 +33,13 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
  * preserved under `metadata` so no capability-specific information is lost on
  * the way to the client.
  */
-export function toAguiInterrupt(data: unknown): Interrupt {
-  const env = isPlainRecord(data) && typeof data.interruptId === "string" ? data : {}
-  const interruptId = typeof env.interruptId === "string" ? env.interruptId : ""
+export function toAguiInterrupt(data: unknown): Interrupt | null {
+  if (!isPlainRecord(data)) return null
+  const interruptId = data.interruptId
+  if (typeof interruptId !== "string" || interruptId.length === 0) {
+    return null
+  }
+  const env = data
   const reason = typeof env.kind === "string" ? env.kind : "interrupt"
   return {
     id: interruptId,

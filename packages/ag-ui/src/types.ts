@@ -29,6 +29,19 @@ export interface RunContext {
 }
 
 /**
+ * Structural Dawn agent stream shape consumed by the canonical AG-UI mapper.
+ * The final member permits capability-contributed chunks without coupling this
+ * package to Dawn core.
+ */
+export type DawnAgentStreamChunk =
+  | { readonly type: "token"; readonly data: string }
+  | { readonly type: "tool_call"; readonly data: DawnToolCallData }
+  | { readonly type: "tool_result"; readonly data: DawnToolResultData }
+  | { readonly type: "interrupt"; readonly data: unknown }
+  | { readonly type: "done"; readonly data?: unknown }
+  | { readonly type: string; readonly data?: unknown }
+
+/**
  * The minimal Dawn stream-chunk shape the mapper consumes. Structurally
  * compatible with `AgentStreamChunk` from `@dawn-ai/langchain` (which is
  * `{ type: string; data: unknown }`), declared here so this package takes no

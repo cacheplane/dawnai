@@ -27,25 +27,22 @@ describe("toAguiInterrupt", () => {
     })
   })
 
-  test("falls back to empty id and 'interrupt' reason for a malformed envelope", () => {
-    expect(toAguiInterrupt(null)).toEqual({ id: "", reason: "interrupt", metadata: {} })
+  test("rejects a malformed envelope instead of synthesizing an interrupt id", () => {
+    expect(toAguiInterrupt(null)).toBeNull()
   })
 
   test("treats arrays as malformed envelopes", () => {
-    expect(toAguiInterrupt([])).toEqual({ id: "", reason: "interrupt", metadata: {} })
+    expect(toAguiInterrupt([])).toBeNull()
   })
 
   test("treats non-plain objects as malformed envelopes", () => {
-    expect(toAguiInterrupt(new Date(0))).toEqual({ id: "", reason: "interrupt", metadata: {} })
+    expect(toAguiInterrupt(new Date(0))).toBeNull()
   })
 
-  test("treats plain objects without a string interruptId as malformed envelopes", () => {
-    expect(toAguiInterrupt({ foo: "bar" })).toEqual({ id: "", reason: "interrupt", metadata: {} })
-    expect(toAguiInterrupt({ interruptId: 123, kind: "command" })).toEqual({
-      id: "",
-      reason: "interrupt",
-      metadata: {},
-    })
+  test("treats plain objects without a non-empty string interruptId as malformed envelopes", () => {
+    expect(toAguiInterrupt({ foo: "bar" })).toBeNull()
+    expect(toAguiInterrupt({ interruptId: 123, kind: "command" })).toBeNull()
+    expect(toAguiInterrupt({ interruptId: "", kind: "command" })).toBeNull()
   })
 })
 

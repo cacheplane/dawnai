@@ -1,12 +1,12 @@
 import { EventType } from "@ag-ui/core"
 import { describe, expect, test } from "vitest"
 import { createCounterIdFactory } from "../src/ids.js"
-import type { RawChunk } from "../src/types.js"
 import { toAguiEvents } from "../src/outbound.js"
+import type { DawnAgentStreamChunk } from "../src/types.js"
 
 const CTX = { threadId: "th-1", runId: "rn-1" }
 
-async function collect(chunks: RawChunk[]) {
+async function collect(chunks: DawnAgentStreamChunk[]) {
   const out = []
   for await (const ev of toAguiEvents(toAsync(chunks), CTX, {
     idFactory: createCounterIdFactory(),
@@ -16,7 +16,7 @@ async function collect(chunks: RawChunk[]) {
   return out
 }
 
-async function* toAsync(items: RawChunk[]) {
+async function* toAsync(items: DawnAgentStreamChunk[]) {
   for (const item of items) yield item
 }
 
@@ -33,7 +33,13 @@ describe("toAguiEvents", () => {
       { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "msg-1", delta: "Hel" },
       { type: EventType.TEXT_MESSAGE_CONTENT, messageId: "msg-1", delta: "lo" },
       { type: EventType.TEXT_MESSAGE_END, messageId: "msg-1" },
-      { type: EventType.RUN_FINISHED, threadId: "th-1", runId: "rn-1", outcome: { type: "success" } },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: "th-1",
+        runId: "rn-1",
+        result: {},
+        outcome: { type: "success" },
+      },
     ])
   })
 
@@ -54,7 +60,13 @@ describe("toAguiEvents", () => {
         toolCallId: "run-abc",
         content: '{"greeting":"hi"}',
       },
-      { type: EventType.RUN_FINISHED, threadId: "th-1", runId: "rn-1", outcome: { type: "success" } },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: "th-1",
+        runId: "rn-1",
+        result: {},
+        outcome: { type: "success" },
+      },
     ])
   })
 
@@ -168,8 +180,99 @@ describe("toAguiEvents", () => {
     expect(events.filter((e) => e.type === EventType.RUN_FINISHED)).toHaveLength(1)
   })
 
-  test("empty stream (done only): run start then success", async () => {
-    const events = await collect([{ type: "done", data: {} }])
+  test("consecutive interrupts are accumulated in order before done", async () => {
+    const events = await collect([
+      { type: "interrupt", data: { interruptId: "perm-1", kind: "command" } },
+      { type: "interrupt", data: { interruptId: "perm-2", kind: "tool" } },
+      { type: "done", data: { ignored: true } },
+    ])
+
+    expect(events.filter((event) => event.type === EventType.RUN_FINISHED)).toEqual([
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: "th-1",
+        runId: "rn-1",
+        outcome: {
+          type: "interrupt",
+          interrupts: [
+            {
+              id: "perm-1",
+              reason: "command",
+              metadata: { interruptId: "perm-1", kind: "command" },
+            },
+            {
+              id: "perm-2",
+              reason: "tool",
+              metadata: { interruptId: "perm-2", kind: "tool" },
+            },
+          ],
+        },
+      },
+    ])
+  })
+
+  test("natural completion emits accumulated interrupts", async () => {
+    const events = await collect([
+      { type: "interrupt", data: { interruptId: "perm-1" } },
+      { type: "interrupt", data: { interruptId: "perm-2" } },
+    ])
+
+    expect(events.at(-1)).toMatchObject({
+      type: EventType.RUN_FINISHED,
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "perm-1" }, { id: "perm-2" }],
+      },
+    })
+  })
+
+  test("a nonterminal chunk after interrupts emits the interrupt outcome and stops", async () => {
+    const events = await collect([
+      { type: "interrupt", data: { interruptId: "perm-1" } },
+      { type: "token", data: "must not be emitted" },
+      { type: "done" },
+    ])
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.RUN_FINISHED,
+    ])
+    expect(events.at(-1)).toMatchObject({
+      outcome: { type: "interrupt", interrupts: [{ id: "perm-1" }] },
+    })
+  })
+
+  test("an interrupt without a non-empty interruptId terminates with RUN_ERROR", async () => {
+    const events = await collect([
+      { type: "token", data: "waiting" },
+      { type: "interrupt", data: { interruptId: "", kind: "command" } },
+      { type: "done" },
+    ])
+
+    expect(events.at(-2)).toEqual({ type: EventType.TEXT_MESSAGE_END, messageId: "msg-1" })
+    expect(events.at(-1)).toEqual({
+      type: EventType.RUN_ERROR,
+      message: "Malformed Dawn interrupt: missing interruptId",
+    })
+    expect(events.filter((event) => event.type === EventType.RUN_ERROR)).toHaveLength(1)
+    expect(events.filter((event) => event.type === EventType.RUN_FINISHED)).toHaveLength(0)
+  })
+
+  test("done data is preserved as the successful RUN_FINISHED result", async () => {
+    const result = { error: "application value", answer: 42 }
+    const events = await collect([{ type: "done", data: result }])
+
+    expect(events.at(-1)).toEqual({
+      type: EventType.RUN_FINISHED,
+      threadId: "th-1",
+      runId: "rn-1",
+      result,
+      outcome: { type: "success" },
+    })
+  })
+
+  test("done without defined data omits the successful result", async () => {
+    const events = await collect([{ type: "done" }])
     expect(events).toEqual([
       { type: EventType.RUN_STARTED, threadId: "th-1", runId: "rn-1" },
       { type: EventType.RUN_FINISHED, threadId: "th-1", runId: "rn-1", outcome: { type: "success" } },
@@ -203,7 +306,7 @@ describe("toAguiEvents", () => {
   })
 
   test("upstream throw is emitted as RUN_ERROR, not thrown to the consumer", async () => {
-    async function* boom(): AsyncGenerator<RawChunk> {
+    async function* boom(): AsyncGenerator<DawnAgentStreamChunk> {
       yield { type: "token", data: "hi" }
       throw new Error("kaboom")
     }

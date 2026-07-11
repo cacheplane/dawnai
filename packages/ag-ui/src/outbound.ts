@@ -1,4 +1,5 @@
 import type {
+  Interrupt,
   RunErrorEvent,
   RunFinishedEvent,
   RunStartedEvent,
@@ -13,7 +14,12 @@ import type {
 import { EventType } from "@ag-ui/core"
 import { createDefaultIdFactory, type IdFactory } from "./ids.js"
 import { toAguiInterrupt } from "./interrupts.js"
-import { asToolCallData, asToolResultData, type RawChunk, type RunContext } from "./types.js"
+import {
+  asToolCallData,
+  asToolResultData,
+  type DawnAgentStreamChunk,
+  type RunContext,
+} from "./types.js"
 
 /** The AG-UI events this mapper can emit. */
 export type AguiOutboundEvent =
@@ -57,13 +63,14 @@ function stringifyContent(output: unknown): string {
  * upstream error becomes a `RUN_ERROR` event and a clean return.
  */
 export async function* toAguiEvents(
-  chunks: AsyncIterable<RawChunk>,
+  chunks: AsyncIterable<DawnAgentStreamChunk>,
   ctx: RunContext,
   options: ToAguiOptions = {},
 ): AsyncGenerator<AguiOutboundEvent> {
   const nextId = options.idFactory ?? createDefaultIdFactory()
   let openMessageId: string | null = null
   const pendingFallbackToolCallIds = new Map<string, string[]>()
+  const pendingInterrupts: Interrupt[] = []
 
   function* flushText(): Generator<TextMessageEndEvent> {
     if (openMessageId !== null) {
@@ -76,6 +83,16 @@ export async function* toAguiEvents(
 
   try {
     for await (const chunk of chunks) {
+      if (chunk.type !== "interrupt" && pendingInterrupts.length > 0) {
+        yield {
+          type: EventType.RUN_FINISHED,
+          threadId: ctx.threadId,
+          runId: ctx.runId,
+          outcome: { type: "interrupt", interrupts: pendingInterrupts },
+        }
+        return
+      }
+
       switch (chunk.type) {
         case "token": {
           const delta = typeof chunk.data === "string" ? chunk.data : ""
@@ -127,13 +144,16 @@ export async function* toAguiEvents(
         }
         case "interrupt": {
           yield* flushText()
-          yield {
-            type: EventType.RUN_FINISHED,
-            threadId: ctx.threadId,
-            runId: ctx.runId,
-            outcome: { type: "interrupt", interrupts: [toAguiInterrupt(chunk.data)] },
+          const interrupt = toAguiInterrupt(chunk.data)
+          if (interrupt === null) {
+            yield {
+              type: EventType.RUN_ERROR,
+              message: "Malformed Dawn interrupt: missing interruptId",
+            }
+            return
           }
-          return
+          pendingInterrupts.push(interrupt)
+          break
         }
         case "done": {
           yield* flushText()
@@ -141,6 +161,9 @@ export async function* toAguiEvents(
             type: EventType.RUN_FINISHED,
             threadId: ctx.threadId,
             runId: ctx.runId,
+            ...(Object.hasOwn(chunk, "data") && chunk.data !== undefined
+              ? { result: chunk.data }
+              : {}),
             outcome: { type: "success" },
           }
           return
@@ -154,6 +177,15 @@ export async function* toAguiEvents(
     }
     // Stream ended without an explicit done/interrupt: flush and finish.
     yield* flushText()
+    if (pendingInterrupts.length > 0) {
+      yield {
+        type: EventType.RUN_FINISHED,
+        threadId: ctx.threadId,
+        runId: ctx.runId,
+        outcome: { type: "interrupt", interrupts: pendingInterrupts },
+      }
+      return
+    }
     yield {
       type: EventType.RUN_FINISHED,
       threadId: ctx.threadId,
