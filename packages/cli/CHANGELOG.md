@@ -1,5 +1,25 @@
 # @dawn-ai/cli
 
+## 0.8.12
+
+### Patch Changes
+
+- e413b05: Add a production serve path. `dawn build` now emits a Node/Docker target (a
+  `server.mjs` over the Dawn runtime plus a hardened Dockerfile) alongside the existing
+  LangSmith `langgraph.json`, selectable via `build.targets`. The new `dawn start`
+  command serves the runtime on 0.0.0.0 (HOST/PORT configurable). This is the first
+  server that runs the Dawn runtime in production, so a deployed app engages the
+  execution sandbox and serves both Agent Protocol and AG-UI. The langgraphjs/LangSmith
+  path does not run the runtime and does not engage the sandbox.
+- Updated dependencies [e413b05]
+  - @dawn-ai/core@0.8.12
+  - @dawn-ai/langchain@0.8.12
+  - @dawn-ai/ag-ui@0.8.12
+  - @dawn-ai/langgraph@0.8.12
+  - @dawn-ai/memory@0.8.12
+  - @dawn-ai/permissions@0.8.12
+  - @dawn-ai/sqlite-storage@0.8.12
+
 ## 0.8.11
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @dawn-ai/langgraph
 
+## 0.8.12
+
+### Patch Changes
+
+- @dawn-ai/sdk@0.8.12
+
 ## 0.8.11
 
 ### Patch Changes
