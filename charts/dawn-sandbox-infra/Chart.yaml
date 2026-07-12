@@ -3,7 +3,7 @@ name: dawn-sandbox-infra
 description: Cluster-side infrastructure for the Dawn kubernetesSandbox provider — namespace, least-privilege RBAC, default-deny egress, quotas/limits, Pod Security Standards, and a PVC reaper.
 type: application
 version: 0.1.0
-appVersion: "0.8.11"
+appVersion: "0.8.12"
 keywords: [dawn, sandbox, kubernetes, security]
 home: https://dawnai.org
 sources: [https://github.com/cacheplane/dawnai]
