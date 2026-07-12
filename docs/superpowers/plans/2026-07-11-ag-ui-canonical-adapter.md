@@ -19,7 +19,7 @@
 - No backward compatibility. Delete `createAgUiTranslator`, `mapRunInput`, their types, the root SSE export, legacy tests, `CUSTOM on_interrupt`, capability `STATE_SNAPSHOT`, and `forwardedProps.command.resume`. Add no aliases, warnings, flags, or dual modes.
 - Root `@dawn-ai/ag-ui` is transport-agnostic. SSE is only `@dawn-ai/ag-ui/sse`.
 - Standard `RunAgentInput.resume` is the only AG-UI resume path.
-- All open checkpoint interrupts must be addressed together through LangGraph's task-ID keyed resume map. New turns are rejected while interrupts remain pending.
+- All open checkpoint interrupts must be addressed together through LangGraph's interrupt-namespace-keyed resume map. New turns are rejected while interrupts remain pending.
 - `done.data` is a successful `RUN_FINISHED.result`; only thrown failures become `RUN_ERROR`.
 - Unknown capability chunks are ignored and only act as text framing boundaries.
 - Middleware runs before thread/checkpoint mutation under both `dawn dev` and `dawn start`.
@@ -190,16 +190,27 @@ git commit -m "feat(ag-ui): add focused SSE encoder subpath"
 
 - [ ] **Step 1: Write failing table-driven tests**
 
-Cover no pending/no resume -> turn; pending/no resume -> 409; no pending/resume -> 409; resolved -> decision; cancelled -> deny; two entries -> two task keys; missing/unknown/duplicate IDs -> 409; invalid resolved payload -> 400.
+Cover no pending/no resume -> turn; pending/no resume -> 409; no pending/resume -> 409; resolved -> decision; cancelled -> deny; two entries -> two outer resume keys; missing/unknown/duplicate IDs -> 409; invalid resolved payload -> 400; and malformed or duplicate checkpoint addresses -> 409.
 
 ```ts
 expect(resolveAgUiResume([
   { interruptId: "perm-1", status: "resolved", payload: "once" },
   { interruptId: "perm-2", status: "cancelled" },
-], [
-  { interruptId: "perm-1", taskId: "11111111111111111111111111111111" },
-  { interruptId: "perm-2", taskId: "22222222222222222222222222222222" },
-])).toEqual({
+], {
+  interrupts: [
+    {
+      interruptId: "perm-1",
+      resumeKey: "11111111111111111111111111111111",
+      aliases: ["perm-1", "11111111111111111111111111111111"],
+    },
+    {
+      interruptId: "perm-2",
+      resumeKey: "22222222222222222222222222222222",
+      aliases: ["perm-2", "22222222222222222222222222222222"],
+    },
+  ],
+  malformed: false,
+})).toEqual({
   ok: true,
   mode: "resume",
   resume: {
@@ -219,18 +230,26 @@ corepack pnpm --filter @dawn-ai/cli test -- pending-interrupts.test.ts
 
 ```ts
 export type PermissionDecision = "once" | "always" | "deny"
-export interface PendingInterrupt { readonly interruptId: string; readonly taskId: string }
+export interface PendingInterrupt {
+  readonly interruptId: string
+  readonly resumeKey: string | null
+  readonly aliases: readonly string[]
+}
+export interface PendingInterruptSnapshot {
+  readonly interrupts: readonly PendingInterrupt[]
+  readonly malformed: boolean
+}
 export async function readPendingInterrupts(
   checkpointer: BaseCheckpointSaver,
   threadId: string,
-): Promise<PendingInterrupt[] | null>
+): Promise<PendingInterruptSnapshot | null>
 export function resolveAgUiResume(
   resume: readonly DawnResumeRequest[] | undefined,
-  pending: readonly PendingInterrupt[],
+  pending: PendingInterruptSnapshot,
 ): ResumeResolution
 ```
 
-Read `__interrupt__` pending writes, use tuple element 0 as task ID, and use `value.value.interruptId` with `value.id` as fallback. Never accept task IDs from HTTP input. Return exact 400/409 result objects rather than throwing protocol errors.
+Read every `__interrupt__` pending write. Use inner `value.value.interruptId` as the client-facing ID with outer `value.id` as fallback, retain both as AP aliases, and use outer `value.id` as the AG-UI resume key only when it is 32 lowercase hexadecimal characters. Tuple element 0 is a hyphenated task UUID, not the resume-map key. Mark malformed or duplicate checkpoint addresses and reject them with a structured 409; never accept resume keys from HTTP input. Return exact 400/409 result objects rather than throwing protocol errors.
 
 - [ ] **Step 4: Reuse it in AP resume**
 
@@ -469,9 +488,9 @@ Fixture middleware rejects without `x-api-key` and allows with context `{ tenant
 
 - [ ] **Step 2: Add failing resume tests**
 
-Make `AgUiRequestOptions` accept an optional CLI-internal `streamRoute` dependency whose type is `typeof streamResolvedRoute`, defaulting to the real function. The runtime route table never overrides it. In tests, run `handleAgUiRequest` behind a small Node server with: (a) a synthetic checkpointer returning explicit `__interrupt__` pending-write tuples and (b) an injected stream function that records its `resume` option and yields `{ type: "done", output: { resumed: true } }`.
+Make `AgUiRequestOptions` accept an optional CLI-internal `streamRoute` dependency whose type is `typeof streamResolvedRoute`, defaulting to the real function. The runtime route table never overrides it. In tests, run `handleAgUiRequest` behind a small Node server with: (a) a synthetic checkpointer returning captured-shape `__interrupt__` pending-write tuples whose first elements are hyphenated task UUIDs and whose outer `value.id` fields are 32-hex interrupt namespace/resume keys, and (b) an injected stream function that records its `resume` option and yields `{ type: "done", output: { resumed: true } }`.
 
-Assert no resume while pending -> 409; incomplete/unknown/duplicate set -> 409; invalid resolved payload -> 400; resume with no pending interrupts -> 409. For one and two valid entries, assert HTTP success **and** that the captured `resume` is the exact task-ID keyed map. Task 4 separately proves that `streamResolvedRoute` turns this option into `Command.resume`, so the two tests cover the complete boundary without a model call. Do not add a `forwardedProps` test.
+Assert no resume while pending -> 409; incomplete/unknown/duplicate set -> 409; malformed checkpoint addresses -> 409; invalid resolved payload -> 400; resume with no pending interrupts -> 409. For one and two valid entries, assert HTTP success **and** that the captured `resume` is the exact outer interrupt-namespace-keyed map, never a tuple task-UUID-keyed map. Task 4 separately proves that `streamResolvedRoute` turns this option into `Command.resume`, so the two tests cover the complete boundary without a model call. Do not add a `forwardedProps` test.
 
 - [ ] **Step 3: Add a failing disconnect test**
 

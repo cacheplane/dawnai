@@ -14,6 +14,7 @@ import type { SandboxManager } from "../runtime/sandbox-manager.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { handleAgUiRequest } from "./agui-handler.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
+import { readPendingInterrupts } from "./pending-interrupts.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
 
@@ -775,13 +776,8 @@ async function handleResumeRequest(options: {
     return
   }
 
-  // Load the checkpoint tuple to verify the interrupt_id exists in
-  // pendingWrites. Each entry is [task_id, channel, value] where channel is
-  // "__interrupt__" and value is {id, value: {interruptId, ...}}.
-  const tuple = await checkpointer.getTuple({
-    configurable: { thread_id: threadId, checkpoint_ns: "" },
-  })
-  if (!tuple) {
+  const pendingInterrupts = await readPendingInterrupts(checkpointer, threadId)
+  if (!pendingInterrupts) {
     sendJson(
       response,
       404,
@@ -790,23 +786,18 @@ async function handleResumeRequest(options: {
     return
   }
 
-  const interruptWrites = (tuple.pendingWrites ?? []).filter(
-    ([, channel]) => channel === "__interrupt__",
-  )
-  const matchedWrite = interruptWrites.find(([, , value]) => {
-    if (!value || typeof value !== "object") return false
-    const v = value as { id?: unknown; value?: unknown }
-    // Match on the capability-level interruptId (inside entry.value)
-    if (v.value && typeof v.value === "object") {
-      const inner = v.value as { interruptId?: unknown }
-      if (inner.interruptId === interruptId) return true
-    }
-    // Defensive fallback: match on the outer LangGraph entry id
-    if (v.id === interruptId) return true
-    return false
-  })
+  if (pendingInterrupts.malformed) {
+    sendJson(
+      response,
+      409,
+      createRequestErrorBody("Malformed checkpoint interrupts", {
+        code: "malformed_checkpoint",
+      }),
+    )
+    return
+  }
 
-  if (!matchedWrite) {
+  if (!pendingInterrupts.interrupts.some((pending) => pending.aliases.includes(interruptId))) {
     sendJson(
       response,
       409,

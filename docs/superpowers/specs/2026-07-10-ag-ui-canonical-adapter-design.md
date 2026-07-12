@@ -341,7 +341,8 @@ CLI checkpoint policy, not adapter behavior.
 
 Before choosing a normal or resume turn, the CLI reads the checkpoint's pending
 `__interrupt__` writes and derives an address map from each capability-level
-`interruptId` to its LangGraph task ID.
+`interruptId` to the LangGraph interrupt namespace/resume key in the write's
+outer `value.id`.
 
 For a resume turn, the CLI requires the AG-UI resume array to address the exact
 set of open checkpoint interrupts:
@@ -355,11 +356,14 @@ set of open checkpoint interrupts:
   before execution, using the same state-based validation as the existing Dawn
   resume endpoint.
 
-The bridge converts the validated answers to LangGraph's supported task-keyed
-resume map and invokes `Command({ resume: { [taskId]: decision } })`. Task IDs
-come from the first element of each pending-write tuple and are never accepted
-from the client. This supports one or many parallel open interrupts without
-weakening stale-interrupt protection.
+The bridge converts the validated answers to LangGraph's supported
+interrupt-namespace-keyed resume map and invokes
+`Command({ resume: { [resumeKey]: decision } })`. The resume key is the outer
+interrupt `value.id` and must be 32 lowercase hexadecimal characters. The first
+element of each pending-write tuple is a hyphenated task UUID used for write
+association; it is not the keyed-resume address. Resume keys are read only from
+the checkpoint and are never accepted from the client. This supports one or
+many parallel open interrupts without weakening stale-interrupt protection.
 
 If `RunAgentInput.resume` is absent or empty while the checkpoint has pending
 interrupts, the request returns HTTP 409 instead of starting a new message turn.
@@ -369,7 +373,7 @@ turn. Resume entries supplied when no interrupts are pending also return 409.
 The runtime's `streamResolvedRoute` resume option is broadened from a single
 permission decision to the internal resume payload accepted by LangGraph. The
 existing Agent Protocol resume endpoint may continue passing its scalar
-decision; the AG-UI handler passes the validated task-keyed map.
+decision; the AG-UI handler passes the validated interrupt-namespace-keyed map.
 
 The shared checkpoint lookup/validation should be extracted into a CLI-internal
 helper rather than duplicated between the two handlers.
@@ -577,8 +581,9 @@ turn.
 
 **Resume semantic mismatch.** AG-UI requires all open interrupts to be addressed
 together. The CLI validates the exact checkpoint interrupt set, translates each
-supported permission decision, and uses LangGraph's task-keyed resume map. It
-rejects new turns while interrupts remain unresolved.
+supported permission decision, and uses LangGraph's
+interrupt-namespace-keyed resume map. It rejects new turns while interrupts
+remain unresolved.
 
 **Transport purity ambiguity.** SSE encoding is isolated behind a subpath whose
 dependency graph is separate from the root adapter entrypoint.
@@ -599,8 +604,9 @@ execution side effect.
   end to end.
 - AG-UI requests pass through Dawn middleware before side effects or streaming.
 - Standard AG-UI interrupts and resumes work through the shared endpoint.
-- Parallel open interrupts are resumed together through a task-keyed LangGraph
-  resume map, and unresolved interrupts block new turns.
+- Parallel open interrupts are resumed together through an
+  interrupt-namespace-keyed LangGraph resume map, and unresolved interrupts
+  block new turns.
 - Unsupported resume shapes fail explicitly and stale interrupt IDs remain
   protected.
 - Removed custom/state behaviors are absent from tests, examples, and current
