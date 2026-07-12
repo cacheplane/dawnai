@@ -86,6 +86,16 @@ export interface ExecuteRouteOptions {
   readonly signal?: AbortSignal
 }
 
+export type RouteResumePayload =
+  | "once"
+  | "always"
+  | "deny"
+  | Readonly<Record<string, "once" | "always" | "deny">>
+
+export function toAgentInput(input: unknown, resume?: RouteResumePayload): unknown {
+  return resume === undefined ? input : new Command({ resume })
+}
+
 export async function executeRoute(options: ExecuteRouteOptions): Promise<RuntimeExecutionResult> {
   const startedAt = Date.now()
   const discoveredApp = await discoverApp(options)
@@ -249,7 +259,7 @@ export async function* streamResolvedRoute(options: {
    * as its input instead of the normal `input` field. Used by the resume
    * endpoint to replay a parked graph state after a permission interrupt.
    */
-  readonly resumeDecision?: "once" | "always" | "deny"
+  readonly resumeDecision?: RouteResumePayload
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
@@ -271,8 +281,7 @@ export async function* streamResolvedRoute(options: {
   })
 
   if (!prepared.ok) {
-    yield { type: "done", output: { error: prepared.message } }
-    return
+    throw new Error(prepared.message)
   }
 
   const {
@@ -304,11 +313,7 @@ export async function* streamResolvedRoute(options: {
 
   const routeParamNames = extractRouteParamNames(options.routeId)
 
-  // For resume runs, pass Command({resume}) directly to the agent-adapter so
-  // LangGraph replays from the parked checkpoint state.
-  const agentInput = options.resumeDecision
-    ? new Command({ resume: options.resumeDecision })
-    : options.input
+  const agentInput = toAgentInput(options.input, options.resumeDecision)
 
   for await (const chunk of streamAgent({
     checkpointer,

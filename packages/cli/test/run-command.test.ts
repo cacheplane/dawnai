@@ -3,11 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-
+import { Command } from "@dawn-ai/langchain"
 import { afterEach, describe, expect, test } from "vitest"
 import { createAimock, script } from "../../testing/dist/index.js"
 import { run } from "../src/index.js"
-import { streamResolvedRoute } from "../src/lib/runtime/execute-route.js"
+import { streamResolvedRoute, toAgentInput } from "../src/lib/runtime/execute-route.js"
 import { executeRouteServer } from "../src/lib/runtime/execute-route-server.js"
 
 const tempDirs: string[] = []
@@ -19,6 +19,50 @@ afterEach(async () => {
 })
 
 describe("dawn run", () => {
+  test("streamResolvedRoute rejects when route preparation fails", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/invalid/index.ts": `import { agent } from "@dawn-ai/sdk"
+export default agent({
+  model: "gpt-5-mini",
+  tools: { allow: ["missing-tool"] },
+})
+`,
+    })
+
+    await expect(async () => {
+      for await (const _chunk of streamResolvedRoute({
+        appRoot,
+        input: {},
+        routeFile: join(appRoot, "src/app/invalid/index.ts"),
+        routeId: "/invalid#agent",
+        routePath: "src/app/invalid/index.ts",
+      })) {
+        // Consume the stream so preparation errors surface to the caller.
+      }
+    }).rejects.toThrow(/route|load|resolve/i)
+  })
+
+  test("toAgentInput preserves an addressed resume map", () => {
+    const input = { messages: [] }
+    const resume = {
+      "interrupt-a": "once",
+      "interrupt-b": "deny",
+    } as const
+
+    const result = toAgentInput(input, resume)
+
+    expect(result).toBeInstanceOf(Command)
+    expect((result as Command).resume).toBe(resume)
+    expect(toAgentInput(input)).toBe(input)
+
+    const emptyResume = {}
+    const emptyResult = toAgentInput(input, emptyResume)
+    expect(emptyResult).toBeInstanceOf(Command)
+    expect((emptyResult as Command).resume).toBe(emptyResume)
+  })
+
   test("executes local agent routes with a generated one-shot thread id", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",

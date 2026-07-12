@@ -863,7 +863,7 @@ async function handleResumeRequest(options: {
     for await (const chunk of streamResolvedRoute({
       appRoot,
       input: {},
-      resumeDecision: decision as "once" | "always" | "deny",
+      resumeDecision: decision,
       ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
       routeFile: route.routeFile,
       routeId: route.routeId,
