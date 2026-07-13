@@ -2,6 +2,8 @@
 
 Thanks for helping improve Dawn. This guide covers the public contribution path for issues, pull requests, and package changes. For detailed monorepo layout, package ownership, and verification lanes, see [CONTRIBUTORS.md](./CONTRIBUTORS.md).
 
+Standards, the workspace map, and the Definition of Done for any change live in [AGENTS.md](./AGENTS.md) — read that first.
+
 ## Development Setup
 
 Use Node.js `>=22.12.0` and pnpm `10.33.0`.
