@@ -4,6 +4,8 @@
 
 This guide is for engineers working inside the Dawn monorepo. It covers the current repo layout, package boundaries, local setup, verification commands, and where the living documentation lives.
 
+Canonical standards (workspace map, Definition of Done, and conventions) live in [AGENTS.md](./AGENTS.md); see that first.
+
 ## Repository Layout
 
 - `apps/web` contains the documentation website and user-facing docs pages.
@@ -14,14 +16,11 @@ This guide is for engineers working inside the Dawn monorepo. It covers the curr
 
 ## Package Responsibilities
 
-- `@dawn-ai/core` owns app discovery, config loading, validation, and route type generation.
-- `@dawn-ai/sdk` owns the author-facing contract: types, helpers, runtime context, middleware, and tool authoring.
-- `@dawn-ai/langgraph` owns LangGraph-specific route module contracts and adapter code.
-- `@dawn-ai/langchain` owns LCEL chain support and provider-aware `agent()` materialization.
-- `@dawn-ai/cli` owns the user-facing commands and the local runtime behavior.
-- `create-dawn-ai-app` owns app scaffolding.
-- `@dawn-ai/devkit` owns shared template and file-generation helpers.
-- `@dawn-ai/config-typescript` and `@dawn-ai/config-biome` own the shared workspace configuration packages.
+See the [workspace map in AGENTS.md](./AGENTS.md#workspace-map) for the full,
+current list of all 19 `packages/*` plus apps, examples, and charts — this
+section used to duplicate a partial list and drifted out of date. Keep the
+map in `AGENTS.md` current when a package is added or its scope changes;
+don't re-list packages here.
 
 ## Local Setup
 
