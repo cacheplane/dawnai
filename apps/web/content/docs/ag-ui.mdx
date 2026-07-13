@@ -1,0 +1,83 @@
+# AG-UI & Web Clients
+
+`dawn dev` (and the `node` build target in production) serves a second protocol alongside Agent Protocol: [AG-UI](https://github.com/ag-ui-protocol/ag-ui), a wire format built for streaming a run to a browser. `@dawn-ai/ag-ui` is the translation layer between the two — it maps Dawn's internal stream chunks to AG-UI events, and maps an AG-UI `RunAgentInput` back to a Dawn route input. This page covers what that translation guarantees; for the endpoint's request/response shape, see [Dev Server](/docs/dev-server#ag-ui-endpoint).
+
+## Why a second protocol
+
+Agent Protocol (`/threads/:id/runs/wait`, `/runs/stream`) is the durable, thread-oriented interface Dawn harnesses and the CLI use. AG-UI is what UI component libraries — CopilotKit chief among them — expect: a single `POST` that opens an SSE stream of typed UI events (message deltas, tool call lifecycle, state snapshots). Both sit on top of the same route runtime and the same thread; a request through either protocol reads and writes the same checkpointed state in `.dawn/threads.sqlite` and `.dawn/checkpoints.sqlite`. AG-UI is not a separate agent runtime — it's a client-facing view onto the one Dawn already runs.
+
+## The endpoint
+
+```http
+POST /agui/{routeId}
+content-type: application/json
+accept: text/event-stream
+```
+
+The URL segment is the URL-encoded `<routeId>#<kind>` assistant id (`/chat#agent` → `/agui/%2Fchat%23agent`). The request body is an AG-UI `RunAgentInput`; Dawn creates the thread when the incoming `threadId` is new, maps the newest user message to the route's input, and streams the translated event sequence back. Full request/response details, including how HITL resume rides on `forwardedProps.command.resume`, live on [Dev Server](/docs/dev-server#ag-ui-endpoint) — this page does not repeat that reference.
+
+## Consuming it from a web UI
+
+`examples/chat/web` is the canonical reference client: a CopilotKit v2 app (`@copilotkit/react-core/v2` + `@copilotkit/runtime`) whose runtime route registers an `HttpAgent` pointed at Dawn's `/agui/{routeId}` endpoint. The browser never talks to Dawn directly — CopilotKit's Next.js runtime route proxies to it, and only the Dawn server holds model credentials.
+
+```text
+browser
+  -> CopilotKit runtime (Next.js route, no API key)
+    -> HttpAgent -> POST /agui/%2Fchat%23agent   (Dawn dev server, holds the model API key)
+      -> the live route (workspace tools, planning, HITL permissions)
+        -> AG-UI event stream back to the browser
+```
+
+CopilotKit's hooks (`useAgent`, `useInterrupt`, `CopilotSidebar`) fall back to the literal agent id `"default"` when none is given — the example registers the Dawn route under that key so the components bind without per-component wiring. See `examples/chat/web/README.md` for the full architecture and a live smoke checklist.
+
+## Event contract
+
+`createAgUiTranslator({ threadId, runId })` from `@dawn-ai/ag-ui` (verified against `packages/ag-ui/src/translate.ts`) emits these AG-UI event types, one Dawn stream chunk at a time:
+
+| Dawn chunk | AG-UI event(s) |
+|---|---|
+| (stream start) | `RUN_STARTED` |
+| `token` / `chunk` | `TEXT_MESSAGE_START` (once) → `TEXT_MESSAGE_CONTENT` per delta |
+| `tool_call` | `TEXT_MESSAGE_END` (if a message was open) → `TOOL_CALL_START` → `TOOL_CALL_ARGS` → `TOOL_CALL_END` |
+| `tool_result` | `TEXT_MESSAGE_END` (if open) → `TOOL_CALL_RESULT` |
+| `plan_update` | `STATE_SNAPSHOT` (merges into a running state object the translator accumulates for the run) |
+| `interrupt` | `CUSTOM` with `name: "on_interrupt"` |
+| `subagent.*` | `CUSTOM` with `name: "dawn.<chunk.type>"` |
+| any other object-shaped chunk | `STATE_SNAPSHOT` (merged into the same running state) |
+| `done` (success) | `RUN_FINISHED` with `{ threadId, runId, result }` |
+| `done` (chunk output has an `error` field) | `RUN_ERROR` |
+| stream ends without a `done` chunk | `RUN_FINISHED` (no result) |
+| stream throws | `RUN_ERROR` |
+
+A text message is always closed (`TEXT_MESSAGE_END`) before a tool call, tool result, state snapshot, or the terminal event is emitted — the translator never interleaves an open text message with another event type.
+
+### Threading
+
+AG-UI's `threadId` on `RunAgentInput` **is** the Dawn thread id — there's no separate mapping table. `mapRunInput` (in `packages/ag-ui/src/run-input.ts`) takes the newest `user`-role message from `RunAgentInput.messages` as the turn's input; Dawn keeps the rest of the conversation in its own checkpoint keyed by that thread id, so only the newest turn is forwarded on the wire.
+
+### Human-in-the-loop resume
+
+A `kind: "on_interrupt"` `CUSTOM` event carries Dawn's permission or memory interrupt payload (the same shapes documented in [Permissions](/docs/permissions)). The client resumes by sending `forwardedProps.command.resume` on the next `RunAgentInput` — either a bare decision string or `{ decision, interruptId }`:
+
+```json
+{ "forwardedProps": { "command": { "resume": { "decision": "once", "interruptId": "perm-abc123" } } } }
+```
+
+### Disconnect and reconnect
+
+<Callout type="warn" title="No reconnect or replay support">
+  The AG-UI handler (`packages/cli/src/lib/dev/agui-handler.ts`) opens one SSE response per `POST` and writes translated events to it as the route streams. There is no server-side buffer, no last-event-id tracking, and no replay mechanism — if the connection drops mid-run, the events already written are gone and the handler has no way to resume that specific stream. This is not a documented guarantee Dawn makes; do not build reconnect-and-catch-up logic that assumes one exists. The route's underlying execution and checkpoint are unaffected by a dropped SSE connection (the run keeps going and the thread state still lands in `.dawn/checkpoints.sqlite`), but the *client* has no protocol-level way to reattach to that in-flight stream — a fresh request starts a new run against the same thread, picking up from the last checkpoint rather than the interrupted stream.
+</Callout>
+
+## Relation to Agent Protocol
+
+AG-UI and Agent Protocol are two protocols in front of the same runtime, not two runtimes. A route invoked via `/agui/{routeId}` and one invoked via `/threads/:id/runs/stream` execute the same route code, share the same thread store and checkpointer, and can be mixed against the same `threadId` — an operator could inspect a thread's state with `GET /threads/:id/state` (Agent Protocol) while a web client drives it over AG-UI. Choose Agent Protocol for harnesses, CLIs, and server-to-server calls; choose AG-UI when the caller is a UI component library that already speaks it.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "the /agui endpoint's request/response reference and Agent Protocol thread endpoints" },
+  { href: "/docs/permissions", title: "Permissions", subtitle: "the interrupt payloads carried over CUSTOM{on_interrupt}" },
+  { href: "/docs/planning", title: "Planning", subtitle: "the plan_update chunks translated into STATE_SNAPSHOT" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "the node build target, the only one that serves AG-UI in production" },
+]} />

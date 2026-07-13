@@ -45,7 +45,22 @@ export default config({
 })
 ```
 
-To run the built image on Kubernetes — as a Deployment + Service with optional Ingress, autoscaling, and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm).
+To run the built image on Kubernetes — as a Deployment + Service with optional Ingress, autoscaling, and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm), or the orientation section below.
+
+## Deploying on Kubernetes
+
+Running the `node` target's image on a Kubernetes cluster is a two-chart arc, published as OCI artifacts alongside the `@dawn-ai/*` npm packages:
+
+- **`dawn-sandbox-infra`** — cluster-side infrastructure a [`kubernetesSandbox`](/docs/sandbox#kubernetes-provider) deployment needs: namespace, least-privilege RBAC, a default-deny egress `NetworkPolicy` backstop, `ResourceQuota`/`LimitRange`, Pod Security Standard labels, and a PVC reaper. Install this once per cluster or environment, before pointing `kubernetesSandbox` at it. Full reference: [Deploying the sandbox infrastructure](/docs/sandbox#deploying-the-sandbox-infrastructure-helm).
+- **`dawn-app`** — your built `node`-target image, run as a Deployment + Service with optional Ingress, `HorizontalPodAutoscaler`, and `PodDisruptionBudget`, wired to the sandbox infra chart's orchestrator ServiceAccount when your app configures `kubernetesSandbox`. Full reference: [Deploying a Dawn app](/docs/sandbox#deploying-a-dawn-app-helm).
+
+<Callout type="info" title="Two audiences">
+  **App authors** installing `dawn-app` need only their built image and, if they use `kubernetesSandbox`, a `dawn-sandbox-infra` release already running in the target cluster — see the chart's [ServiceAccount and namespace wiring](/docs/sandbox#serviceaccount-and-namespace-wiring) for how the two connect. **Cluster operators** installing `dawn-sandbox-infra` own the namespace, RBAC, and network-policy posture the whole cluster's sandbox Pods run under, independent of any one app.
+</Callout>
+
+Minimum: a Kubernetes cluster the charts can install into. Recommended: a policy-capable CNI (Calico or Cilium) if you rely on `kubernetesSandbox`'s `deny`-mode `NetworkPolicy` as a hard egress boundary — a CNI that ignores `NetworkPolicy` leaves the Pod's network open regardless of config, which is why `dawn check`'s `preflight()` warns rather than guarantees enforcement. See [Network policy on Kubernetes](/docs/sandbox#network-policy-on-kubernetes).
+
+Neither chart builds your image — build it with `dawn build`'s `node` target first, same as the plain Docker path above, then point `dawn-app` at the resulting `image.repository`/`image.tag`.
 
 ## The LangSmith / LangGraph Platform path
 

@@ -167,6 +167,8 @@ Kubernetes Pod isolation is the same boundary class as Docker's container isolat
 
 ## Deploying the sandbox infrastructure (Helm)
 
+For the orientation-level view of both charts before diving into the reference below, see [Deploying on Kubernetes](/docs/deployment#deploying-on-kubernetes).
+
 `kubernetesSandbox` assumes a namespace already exists with the RBAC, quotas, and network policy the provider's Pods need. The `dawn-sandbox-infra` Helm chart provisions that cluster-side infrastructure — install it once per cluster (or per environment) before pointing `kubernetesSandbox` at it:
 
 ```bash
