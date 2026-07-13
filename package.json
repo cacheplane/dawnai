@@ -53,7 +53,7 @@
     "publint": "0.3.21",
     "tsx": "^4.23.0",
     "turbo": "2.10.4",
-    "typescript": "6.0.2",
+    "typescript": "7.0.2",
     "verdaccio": "^6.7.4",
     "vitest": "4.1.10"
   }
