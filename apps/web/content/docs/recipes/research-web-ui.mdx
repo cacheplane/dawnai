@@ -1,0 +1,240 @@
+# Research assistant web UI
+
+Wire a [CopilotKit](https://docs.copilotkit.ai) web client to Dawn's flagship
+research demo over [AG-UI](/docs/ag-ui). You get streaming chat and a cited
+report, a live plan, subagent activity, human-in-the-loop approvals, and a
+memory-candidate review panel — all driven by the `/research` agent.
+
+This recipe is the concrete, task-oriented walkthrough. For the protocol itself —
+the `/agui` endpoint, the event contract, threading, and HITL resume — see
+[AG-UI & Web Clients](/docs/ag-ui).
+
+## What you'll build
+
+The demo lives in `examples/research`: a Dawn server (`server/`) and a Next.js
+CopilotKit client (`web/`). The client surfaces the coordinator's work as it runs:
+
+- **Chat + report** — the streamed answer, cited with `[corpus/…]`, in a `CopilotSidebar`.
+- **Plan** — the coordinator's todos, checked off as steps complete.
+- **Subagents** — each `researcher` dispatch and its corpus tool calls.
+- **Permissions** — an approve/deny card when the agent runs a non-allowlisted command.
+- **Memory candidates** — durable facts the agent proposes, approved from the UI.
+
+## Run it
+
+<Steps>
+
+<Step title="Start the server (holds the API key)">
+
+```bash
+cd examples/research/server
+cp .env.example .env   # set OPENAI_API_KEY here — on the server, not the web app
+```
+
+</Step>
+
+<Step title="Start both apps">
+
+```bash
+cd examples/research
+pnpm install
+pnpm dev          # Dawn server on :3002, web client on :3010
+```
+
+Open [http://localhost:3010](http://localhost:3010) and ask a research question.
+
+</Step>
+
+</Steps>
+
+## Connect the client to `/agui/research`
+
+The Next.js runtime route registers an AG-UI `HttpAgent` pointed at the research
+route. Register it under CopilotKit's **`default`** agent id so every hook and
+component binds to it with no per-component wiring:
+
+<CodeGroup>
+
+```ts title="examples/research/web/app/api/copilotkit/route.ts"
+import { CopilotRuntime, ExperimentalEmptyAdapter, copilotRuntimeNextJSAppRouterEndpoint } from "@copilotkit/runtime"
+import { HttpAgent } from "@ag-ui/client"
+import type { NextRequest } from "next/server"
+
+const dawnUrl = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3002"
+const agUiUrl = `${dawnUrl}/agui/${encodeURIComponent("/research#agent")}`
+
+const copilotRuntime = new CopilotRuntime({
+  agents: { default: new HttpAgent({ url: agUiUrl }) },
+})
+
+export const POST = async (req: NextRequest): Promise<Response> => {
+  const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
+    runtime: copilotRuntime,
+    serviceAdapter: new ExperimentalEmptyAdapter(),
+    endpoint: "/api/copilotkit",
+  })
+  return handleRequest(req)
+}
+```
+
+```tsx title="examples/research/web/app/page.tsx"
+"use client"
+import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
+import { PermissionInterrupt } from "./components/PermissionInterrupt"
+import { PlanPanel } from "./components/PlanPanel"
+import { SubagentActivity } from "./components/SubagentActivity"
+import { MemoryCandidates } from "./components/MemoryCandidates"
+
+export default function Home() {
+  return (
+    <CopilotKit runtimeUrl="/api/copilotkit">
+      <PermissionInterrupt />
+      <div style={{ display: "flex", height: "100vh" }}>
+        <div>
+          <PlanPanel />
+          <SubagentActivity />
+          <MemoryCandidates />
+        </div>
+        <main style={{ flex: 1 }}>
+          <CopilotSidebar defaultOpen labels={{ modalHeaderTitle: "Dawn research" }} />
+        </main>
+      </div>
+    </CopilotKit>
+  )
+}
+```
+
+</CodeGroup>
+
+<Callout type="warn" title="Register the agent as `default`">
+Setting `agentId` on the sidebar prop alone does **not** reach the chat
+component's internal `useAgent`, which falls back to the id `default`. Register
+your agent under `default` (or set `agentId` on *every* consumer) — otherwise you
+get `Agent 'default' not found`.
+</Callout>
+
+## Surface the plan and subagents from agent state
+
+Dawn's planning updates arrive as AG-UI `STATE_SNAPSHOT`s (read them off
+`agent.state`), and subagent activity arrives as `CUSTOM` events named
+`dawn.subagent.*`. Subscribe to the raw event stream for those — and skip the
+per-token `message` events, which arrive one-per-token and would flood the panel:
+
+<CodeGroup>
+
+```tsx title="examples/research/web/app/components/PlanPanel.tsx"
+import { UseAgentUpdate, useAgent } from "@copilotkit/react-core/v2"
+
+export function PlanPanel() {
+  const { agent } = useAgent({ updates: [UseAgentUpdate.OnStateChanged] })
+  const todos = (agent.state?.todos ?? []) as { content?: string; status?: string }[]
+  if (todos.length === 0) return null
+  return (
+    <ul>
+      {todos.map((t, i) => (
+        <li key={i}>{t.status === "completed" ? "☑" : "☐"} {t.content}</li>
+      ))}
+    </ul>
+  )
+}
+```
+
+```tsx title="examples/research/web/app/components/SubagentActivity.tsx"
+import { useAgent } from "@copilotkit/react-core/v2"
+import { useEffect, useState } from "react"
+
+export function SubagentActivity() {
+  const { agent } = useAgent()
+  const [events, setEvents] = useState<{ name: string; subagent?: string }[]>([])
+  useEffect(() => {
+    const sub = agent.subscribe({
+      onCustomEvent: ({ event }: { event: { name?: string; value?: unknown } }) => {
+        if (typeof event.name !== "string" || !event.name.startsWith("dawn.subagent.")) return
+        // Skip the per-token message stream — show only start/tool/end lifecycle.
+        const suffix = event.name.replace("dawn.subagent.", "")
+        if (suffix === "message" || suffix === "token" || suffix === "chunk") return
+        const v = (event.value ?? {}) as { subagent?: string }
+        setEvents((prev) => [...prev, { name: event.name as string, ...v }])
+      },
+    })
+    return () => sub.unsubscribe()
+  }, [agent])
+  // …render events…
+}
+```
+
+</CodeGroup>
+
+## Human-in-the-loop approvals
+
+The research agent gates its external fetch behind a permission prompt. Dawn
+emits it as a `CUSTOM{on_interrupt}` event; CopilotKit's `useInterrupt` renders
+it and `resolve(...)` resumes the run. Resolve with a Dawn decision shape:
+
+```tsx title="examples/research/web/app/components/PermissionInterrupt.tsx"
+useInterrupt({
+  render: ({ event, resolve }) => {
+    const { interruptId } = event.value ?? {}
+    const decide = (decision: "once" | "always" | "deny") =>
+      resolve(interruptId ? { decision, interruptId } : { decision })
+    return (
+      <div>
+        <button onClick={() => decide("once")}>Allow once</button>
+        <button onClick={() => decide("deny")}>Deny</button>
+      </div>
+    )
+  },
+})
+```
+
+See [AG-UI § Human-in-the-loop resume](/docs/ag-ui) for how `resolve` maps onto
+`forwardedProps.command.resume`.
+
+## Approve memory candidates
+
+When the coordinator calls `remember()`, Dawn stores a durable-memory *candidate*.
+The dev server exposes them over HTTP — `GET /memory/candidates`,
+`POST /memory/candidates/:id/approve`, `POST /memory/candidates/:id/reject` — so
+the UI can review them instead of the `dawn memory approve` CLI. The panel
+refetches after each run (`onRunFinishedEvent`), since that's when new candidates
+land:
+
+```tsx title="examples/research/web/app/components/MemoryCandidates.tsx"
+const refetch = useCallback(() => {
+  fetch("/api/memory/candidates")
+    .then((r) => r.json())
+    .then((d) => setCandidates(d.candidates ?? []))
+    .catch(() => setCandidates([]))
+}, [])
+
+useEffect(() => {
+  const sub = agent.subscribe({ onRunFinishedEvent: () => refetch() })
+  refetch()
+  return () => sub.unsubscribe()
+}, [agent, refetch])
+
+const approve = async (id: string) => {
+  await fetch(`/api/memory/candidates/${id}/approve`, { method: "POST" })
+  refetch()
+}
+```
+
+A same-origin Next proxy (`app/api/memory/[...path]/route.ts`) forwards to the
+Dawn server so the browser avoids CORS.
+
+<Callout title="Deep runs need a higher recursion limit">
+The coordinator plans, dispatches a subagent per sub-question, and makes many
+tool calls — enough to exceed LangGraph's default 25-step ceiling. The research
+route sets `recursionLimit: 100` in `agent({ … })` so a full run completes.
+</Callout>
+
+## Related
+
+<RelatedCards
+  items={[
+    { href: "/docs/ag-ui", title: "AG-UI & Web Clients", subtitle: "The protocol, endpoint, and event contract" },
+    { href: "/docs/getting-started", title: "Getting started", subtitle: "Scaffold the /research agent locally" },
+    { href: "/docs/subagents", title: "Subagents", subtitle: "How the coordinator dispatches the researcher" },
+    { href: "/docs/memory", title: "Memory", subtitle: "Candidates, approval, and recall" },
+  ]}
+/>

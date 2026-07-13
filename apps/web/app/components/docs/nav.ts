@@ -60,6 +60,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
       { label: "Stream output", href: "/docs/recipes/stream-output" },
       { label: "Retry flaky tools", href: "/docs/recipes/retry-flaky-tools" },
       { label: "Dispatch from a route", href: "/docs/recipes/dispatch-from-route" },
+      { label: "Research web UI", href: "/docs/recipes/research-web-ui" },
     ],
   },
   {
