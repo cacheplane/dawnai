@@ -1,4 +1,5 @@
 import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/workspace"
+import { sandboxUnavailable } from "../errors.js"
 import { createDocker, type Docker } from "./docker-cli.js"
 import { dockerExec } from "./docker-exec.js"
 import { dockerFilesystem } from "./docker-filesystem.js"
@@ -103,7 +104,7 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
           { signal },
         )
         if (init.exitCode !== 0) {
-          throw new Error(
+          throw sandboxUnavailable(
             `Sandbox unavailable: could not initialize workspace ownership for thread "${threadId}": ${init.stderr.trim() || "unknown error"}. Run \`dawn check\`.`,
           )
         }
@@ -131,7 +132,7 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
       { signal },
     )
     if (created.exitCode !== 0) {
-      throw new Error(
+      throw sandboxUnavailable(
         `Sandbox unavailable: docker run failed for thread "${threadId}": ${created.stderr.trim() || "unknown error"}. Run \`dawn check\`.`,
       )
     }

@@ -22,7 +22,11 @@ import {
 } from "./memory-handler.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
-import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
+import {
+  createExecutionErrorBody,
+  createRequestErrorBody,
+  dawnErrorCodeOf,
+} from "./server-errors.js"
 
 export interface RuntimeServer {
   readonly close: () => Promise<void>
@@ -125,7 +129,16 @@ export async function createRuntimeRequestListener(
           return
         }
 
-        sendJson(response, 500, createExecutionErrorBody("Unexpected runtime server failure"))
+        const code = dawnErrorCodeOf(error)
+        sendJson(
+          response,
+          500,
+          createExecutionErrorBody(
+            "Unexpected runtime server failure",
+            undefined,
+            code ? { code } : undefined,
+          ),
+        )
       } finally {
         state.activeRequests--
       }

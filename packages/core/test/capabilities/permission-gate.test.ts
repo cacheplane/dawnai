@@ -188,6 +188,23 @@ describe("wrapToolWithApproval", () => {
     const wrapped = wrapToolWithApproval({ name: "x", run: async () => "ran" }, permissions)
     expect(String(await wrapped.run({}, { signal }))).toMatch(/fail-closed/)
   })
+
+  it("prefixes the denial tool result with the [DAWN_E3001] code", async () => {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: { version: 1, allow: {}, deny: { tool: ["deployProd"] } },
+      mode: "interactive",
+    })
+    await permissions.load()
+    const wrapped = wrapToolWithApproval(
+      { name: "deployProd", run: async () => "ran" },
+      permissions,
+    )
+    const result = String(await wrapped.run({}, { signal }))
+    expect(result.startsWith("[DAWN_E3001] ")).toBe(true)
+    // The original reason is preserved after the code prefix.
+    expect(result).toMatch(/denied.*deployProd/i)
+  })
 })
 
 describe("wrapToolWithConstraint", () => {

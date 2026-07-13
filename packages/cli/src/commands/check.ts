@@ -51,7 +51,9 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
       writeLine(io.stdout, `\n${warning}`)
     }
     if (scopeIssues.errors.length > 0) {
-      throw new CliError(`Invalid tool scope:\n${scopeIssues.errors.join("\n")}`)
+      throw new CliError(`Invalid tool scope:\n${scopeIssues.errors.join("\n")}`, 1, {
+        code: "DAWN_E1001",
+      })
     }
 
     let loadedConfig: Pick<DawnConfig, "sandbox" | "build"> = {}
@@ -69,6 +71,8 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
       if (unknown.length > 0) {
         throw new CliError(
           `Invalid build config:\nUnknown build target(s): ${unknown.join(", ")}. Known targets: ${known.join(", ")}.`,
+          1,
+          { code: "DAWN_E1003" },
         )
       }
     }
@@ -77,7 +81,9 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
       await collectSandboxErrors(loadedConfig)
     for (const w of sandboxWarnings) console.warn(`⚠ sandbox: ${w}`)
     if (sandboxErrors.length > 0) {
-      throw new CliError(`Invalid sandbox config:\n${sandboxErrors.join("\n")}`)
+      throw new CliError(`Invalid sandbox config:\n${sandboxErrors.join("\n")}`, 1, {
+        code: "DAWN_E1002",
+      })
     }
   } catch (error) {
     if (error instanceof CliError) throw error
