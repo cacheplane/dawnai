@@ -120,7 +120,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build sandbox package
-        run: pnpm --filter @dawn-ai/workspace build && pnpm --filter @dawn-ai/sandbox build
+        run: pnpm --filter @dawn-ai/sandbox... build
 
       - name: Pull sandbox image
         run: docker pull node:22-slim
@@ -249,7 +249,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build sandbox package
-        run: pnpm --filter @dawn-ai/workspace build && pnpm --filter @dawn-ai/sandbox build
+        run: pnpm --filter @dawn-ai/sandbox... build
 
       - name: Setup Helm
         uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/workspace"
+import { sandboxUnavailable } from "../errors.js"
 import { createDefaultKubeClient } from "./default-kube-client.js"
 import type { KubeClient, KubePodSpec } from "./kube-client.js"
 import { kubeExec } from "./kube-exec.js"
@@ -239,17 +240,19 @@ async function waitForRunning(
     const phase = await client.readNamespacedPodPhase(ns, name)
     if (phase === "Running") return
     if (phase === null) {
-      throw new Error(
+      throw sandboxUnavailable(
         `Sandbox unavailable: pod "${name}" disappeared while starting. Run \`dawn check\`.`,
       )
     }
     if (phase === "Failed" || phase === "Succeeded") {
       // A SIGTERM'd `sleep infinity` exits 0 → Succeeded; treat it as a dead keeper
       // rather than polling out the full timeout waiting for a Running it'll never reach.
-      throw new Error(`Sandbox unavailable: pod "${name}" entered ${phase}. Run \`dawn check\`.`)
+      throw sandboxUnavailable(
+        `Sandbox unavailable: pod "${name}" entered ${phase}. Run \`dawn check\`.`,
+      )
     }
     if (Date.now() > deadline) {
-      throw new Error(
+      throw sandboxUnavailable(
         `Sandbox unavailable: pod "${name}" not Running within ${timeoutMs}ms. Run \`dawn check\`.`,
       )
     }
@@ -271,7 +274,7 @@ async function waitForGone(
     }
     if ((await client.readNamespacedPodPhase(ns, name)) === null) return
     if (Date.now() > deadline) {
-      throw new Error(
+      throw sandboxUnavailable(
         `Sandbox unavailable: pod "${name}" still terminating after ${timeoutMs}ms. Run \`dawn check\`.`,
       )
     }

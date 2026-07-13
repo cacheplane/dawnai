@@ -602,6 +602,9 @@ importers:
 
   packages/sandbox:
     dependencies:
+      '@dawn-ai/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       '@dawn-ai/workspace':
         specifier: workspace:*
         version: link:../workspace

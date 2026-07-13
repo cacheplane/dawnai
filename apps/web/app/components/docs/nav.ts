@@ -69,6 +69,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
       { label: "API", href: "/docs/api" },
       { label: "CLI", href: "/docs/cli" },
       { label: "Configuration", href: "/docs/configuration" },
+      { label: "Error Codes", href: "/docs/errors" },
       { label: "Observability", href: "/docs/observability" },
       { label: "Upgrading", href: "/docs/upgrading" },
       { label: "FAQ", href: "/docs/faq" },
