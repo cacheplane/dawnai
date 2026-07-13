@@ -19,11 +19,34 @@ export async function run(argv: readonly string[] = process.argv.slice(2)): Prom
   try {
     const options = parseArgs(argv)
     await scaffoldApp(options)
+    printNextSteps(options)
     return 0
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     return 1
   }
+}
+
+function printNextSteps(options: CliOptions): void {
+  const appName = basename(resolve(options.targetDir))
+  const lines = [
+    "",
+    `✔ Created ${appName} (${options.template} template)`,
+    "",
+    "Next steps:",
+    `  cd ${options.targetDir}`,
+    "  npm install",
+    "  npm run check     # generate route + tool types",
+    "  npm test          # offline tests — no API key needed",
+    "",
+    "Run it live (needs an OpenAI key):",
+    "  export OPENAI_API_KEY=sk-...",
+    "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+    "",
+    "See README.md for the full tour, or https://github.com/cacheplane/dawn",
+    "",
+  ]
+  process.stdout.write(`${lines.join("\n")}\n`)
 }
 
 async function scaffoldApp(options: CliOptions): Promise<void> {
