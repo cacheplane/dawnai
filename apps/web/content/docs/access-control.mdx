@@ -1,0 +1,63 @@
+# Access Control
+
+Dawn has three independent layers that each answer a different question about a tool call. They compose — none of them substitutes for another, and most production apps that touch anything sensitive (shell, network, prod data) end up using all three together.
+
+| Layer | Question it answers | Docs |
+|---|---|---|
+| Tool scoping | *Which* tools can the model call? | [Tools](/docs/tools#scoping-a-routes-tools) |
+| Permissions / HITL | *Whether* a given call runs | [Permissions](/docs/permissions) |
+| Execution sandbox | *What* an allowed, approved call can actually touch | [Sandbox](/docs/sandbox) |
+
+## Tool scoping — which tools
+
+`agent({ tools: { allow, deny, approve, constrain } })` controls the surface offered to the model. `deny` revokes a tool so it's never wired into the generated entry; `allow` grants back a withheld capability tool (subagents start least-privilege, so this is how you hand one `readFile` or `runBash`); `deny` wins when a name appears in both. This is enforced at composition time — a denied tool is never wired in, so the model has no way to call it, valid or not.
+
+```ts title="src/app/ops/index.ts"
+export default agent({ model: "gpt-5", systemPrompt: "…", tools: { deny: ["runBash"] } })
+```
+
+Scoping controls the *surface*, not what a granted tool does once invoked — a granted `writeFile` can still write anywhere its implementation permits. See [Tools](/docs/tools#scoping-a-routes-tools).
+
+## Permissions — whether a call runs
+
+Two gates are on by default for the built-in workspace tools: `runBash` commands are matched against allow/deny patterns, and filesystem paths outside `workspace/` are permission-gated. An unmatched ("unknown") call pauses the run and asks a human, unless `permissions.mode` is set to `non-interactive` (fail-closed) or `bypass` (dev/test only).
+
+Two more gates ride the same interrupt machinery: `tools: { approve: [...] }` requires human approval before *any* named tool call, and `memory: { writes: "ask" }` gates belief-contradiction memory writes. See [Permissions](/docs/permissions) for the interrupt payloads and resume flow.
+
+## Execution sandbox — what a call can touch
+
+Even a tool that's allowed and approved still runs somewhere. By default that's the local `workspace/` directory on the host. Adding a `sandbox` key to `dawn.config.ts` routes every `readFile`, `writeFile`, `listDir`, and `runBash` call for a thread into an isolated environment instead — filesystem, shell, and (optionally) network. Dawn ships a Docker reference provider and a Kubernetes provider behind the same `SandboxProvider` contract. See [Sandbox](/docs/sandbox).
+
+## How they compose
+
+A route that lets the model run shell commands, gated by approval, inside an isolated environment stacks all three — `sandbox` in `dawn.config.ts` decides what `runBash` can touch, and the route's `tools` block decides which tools are offered and which need approval:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+import { dockerSandbox } from "@dawn-ai/sandbox"
+
+export default config({
+  sandbox: { provider: dockerSandbox({ image: "node:22-slim" }) }, // what runBash can touch
+})
+```
+
+```ts title="src/app/ops/index.ts"
+export default agent({
+  model: "gpt-5",
+  systemPrompt: "…",
+  tools: { allow: ["runBash"], approve: ["runBash"] }, // which tools + whether each call runs
+})
+```
+
+<Callout type="info" title="None of the three is optional coverage for another">
+  Tool scoping without a sandbox still lets an allowed `runBash` touch the whole host filesystem. A sandbox without scoping still exposes every tool to the model, just from inside an isolated box. Permissions without a sandbox still pause for approval, but an approved call runs on the host. Layer the ones your app needs — most agents that call `runBash` or write outside `workspace/` want all three.
+</Callout>
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/tools", title: "Tools", subtitle: "tool scoping — allow, deny, approve, constrain" },
+  { href: "/docs/permissions", title: "Permissions", subtitle: "human-in-the-loop approval for paths, commands, tools, and memory writes" },
+  { href: "/docs/sandbox", title: "Execution Sandbox", subtitle: "per-thread filesystem, shell, and network isolation" },
+  { href: "/docs/configuration", title: "Configuration", subtitle: "dawn.config.ts reference including permissions and sandbox" },
+]} />

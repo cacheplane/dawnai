@@ -35,6 +35,10 @@ Agent route features are discovered from files and descriptors. `workspace/AGENT
 
 *Middleware* runs before route execution in the local Dawn runtime. It lives at `src/middleware.ts` (or root `middleware.ts`) and can reject a request or attach request-scoped context for tools.
 
+### Access control: three layers
+
+Three independent layers govern what a route can do once it's running: [tool scoping](/docs/tools) decides *which* tools the model may call, [permissions](/docs/permissions) decide *whether* a given call runs (human-in-the-loop approval), and the [execution sandbox](/docs/sandbox) decides *what* an allowed, approved call can actually touch. They compose — none substitutes for another. See [Access Control](/docs/access-control) for the combined picture.
+
 ## The runtime
 
 A typical request through Dawn looks like this:

@@ -242,6 +242,66 @@ See [Memory](/docs/memory) for the full long-term-memory model and [Permissions]
 
 ---
 
+### `build`
+
+| Type | Default |
+|---|---|
+| `{ targets?: string[] }` | `{ targets: ["node", "langsmith"] }` |
+
+Deployment build configuration for `dawn build`.
+
+```ts
+build?: {
+  targets?: string[]
+}
+```
+
+`targets` selects which deployment artifacts `dawn build` emits. Known targets:
+- `"node"` — a runnable Node server entry (`.dawn/build/server.mjs`, which boots `serveRuntime`) plus a hardened `Dockerfile`. This is the only target that engages the sandbox in production. Run it with `dawn start` or `docker build`/`docker run`.
+- `"langsmith"` — the LangSmith deploy config (`.dawn/build/langgraph.json` and the per-route materialized graph entry files).
+
+Both are emitted by default. Restrict to one target — e.g. `{ build: { targets: ["node"] } }` — if you only deploy that way. See [Deployment](/docs/deployment) for the full bridge.
+
+---
+
+### `sandbox`
+
+| Type | Default |
+|---|---|
+| `SandboxConfig` | none — filesystem/exec run on the host by default |
+
+Routes workspace filesystem and exec calls through an isolated `SandboxProvider` (e.g. `dockerSandbox` or `kubernetesSandbox` from `@dawn-ai/sandbox`) instead of the host process. Opt in per app; omit entirely for the default host-backed behavior.
+
+```ts
+sandbox?: {
+  provider: SandboxProvider
+  network?: { mode: "allow"; denylist?: string[] } | { mode: "deny"; allowlist?: string[] }
+  env?: Record<string, string>
+  resources?: { memoryMb?: number; cpus?: number; timeoutMs?: number; diskGb?: number }
+  security?: {
+    dropAllCapabilities?: boolean
+    noNewPrivileges?: boolean
+    readOnlyRootFilesystem?: boolean
+    runAsNonRoot?: boolean | { uid: number; gid: number }
+    pidsLimit?: number
+  }
+  idleTimeoutMs?: number
+}
+```
+
+| Sub-key | Type | Default | Description |
+|---|---|---|---|
+| `provider` | `SandboxProvider` | — (required) | The sandbox implementation, e.g. `dockerSandbox({ image })` or `kubernetesSandbox({ image, namespace? })`. |
+| `network` | `{ mode: "allow" \| "deny"; denylist?/allowlist? }` | provider-defined | Network egress policy applied inside the sandbox. |
+| `env` | `Record<string, string>` | `{}` | Explicit env injected into the sandbox. The host env is never inherited. |
+| `resources` | `{ memoryMb?; cpus?; timeoutMs?; diskGb? }` | provider-defined | Resource limits and per-command timeout. `diskGb` sizes the per-thread volume on PVC-backed providers (Kubernetes); Docker ignores it. |
+| `security` | `SandboxSecurityPolicy` | hardened (Docker) | Provider-agnostic hardening intent — capability drop, no-new-privileges, read-only rootfs, non-root uid/gid, pids limit. Fields left unset take the provider's secure default. |
+| `idleTimeoutMs` | `number` | `600000` (10 min) | Manager-level idle reap window before a warm sandbox is released. |
+
+See [Execution Sandbox](/docs/sandbox) for provider setup, the security-hardening defaults, and the Kubernetes provider.
+
+---
+
 ## Related
 
 <RelatedCards items={[

@@ -1,6 +1,6 @@
 # CLI Reference
 
-Dawn ships a single `dawn` binary with twelve commands: `add`, `build`, `check`, `dev`, `docs`, `eval`, `memory`, `routes`, `run`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
+Dawn ships a single `dawn` binary with thirteen commands: `add`, `build`, `check`, `dev`, `docs`, `eval`, `memory`, `routes`, `run`, `start`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
 
 ## Running the CLI
 
@@ -189,6 +189,8 @@ dawn dev --port 3001
 Flags:
 - `--port <n>` — HTTP port. Default: dynamically allocated. Pass `--port` for a stable address.
 - `--env-file <path>` — path to a `.env` file (overrides `dawn.config.ts` `env` and the default `./.env`).
+
+Because the default port is chosen dynamically, copy-paste `curl` examples should pass an explicit `--port` (or read the port `dawn dev` prints on startup) rather than assuming a fixed value.
 
 If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically enables LangSmith tracing by setting `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to control which project receives the traces. See [Observability](/docs/observability) for the full tracing guide.
 

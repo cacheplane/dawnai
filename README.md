@@ -106,45 +106,53 @@ export default async ({ query }: { readonly query: string }) => {
 1. Create a new app.
 
 ```bash
-pnpm create dawn-ai-app my-dawn-app
+npm create dawn-ai-app@latest my-dawn-app
 cd my-dawn-app
-pnpm install
+npm install
 ```
 
-2. Validate the app and generate types in one call.
+Requires Node.js 22.12 or later.
+
+2. Validate the app and generate types.
 
 ```bash
-pnpm exec dawn verify
+npm run check
 ```
 
-3. Run the scaffolded research route with JSON stdin.
-
-Live agent runs require model credentials, such as `OPENAI_API_KEY`. For an offline path with recorded fixtures, run `pnpm test` and `pnpm exec dawn eval` in the scaffolded app.
+Offline path — no API key needed — via recorded fixtures:
 
 ```bash
-echo '{"messages":[{"role":"user","content":"What are common agent architectures?"}]}' | pnpm exec dawn run /research
+npm test
 ```
 
-4. Optionally start the local runtime in one terminal and send the same route through the Agent Protocol from another terminal.
-
-In one terminal:
+3. Run it live. Set your API key and start the dev server:
 
 ```bash
-pnpm exec dawn dev --port 3001
+export OPENAI_API_KEY=sk-...
+npx dawn dev --port 2024
 ```
 
-In another terminal:
+In another terminal, create a thread and run the research route through the Agent Protocol:
 
 ```bash
-THREAD_ID=$(curl -s -X POST http://127.0.0.1:3001/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
-curl -s -X POST http://127.0.0.1:3001/threads/$THREAD_ID/runs/wait \
+THREAD_ID=$(curl -s -X POST http://127.0.0.1:2024/threads -H 'content-type: application/json' -d '{}' | jq -r .thread_id)
+curl -s -X POST http://127.0.0.1:2024/threads/$THREAD_ID/runs/wait \
   -H 'content-type: application/json' \
   -d '{"route":"/research#agent","input":{"messages":[{"role":"user","content":"What are common agent architectures?"}]}}' | jq .
 ```
 
 Use `/threads/$THREAD_ID/runs/stream` with the same body when you want SSE events instead of a blocking JSON response.
 
-The default scaffold is the deep-research app at `/research`. For the smaller greeter scaffold, run `pnpm create dawn-ai-app my-dawn-app -- --template basic`; that optional template uses `/hello/[tenant]`.
+4. Ship it. `dawn build` emits a runnable production server (`server.mjs` plus a hardened `Dockerfile`) alongside the LangSmith `langgraph.json` target; serve it locally with `dawn start`, or build and run the Docker image:
+
+```bash
+dawn build
+npx dawn start
+```
+
+The default scaffold is the deep-research app at `/research`. For the smaller greeter scaffold, run `npm create dawn-ai-app@latest my-dawn-app -- --template basic`; that optional template uses `/hello/[tenant]`.
+
+Prefer pnpm or yarn? Swap `npm create dawn-ai-app@latest` for `pnpm create dawn-ai-app` / `yarn create dawn-ai-app`, and `npm install`/`npm run`/`npx` for your package manager's equivalents.
 
 ## 30-Second Route
 
