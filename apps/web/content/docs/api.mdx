@@ -705,87 +705,70 @@ export type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 
 ## @dawn-ai/ag-ui
 
-AG-UI translation utilities used by `dawn dev` to serve `POST /agui/{routeId}` for CopilotKit and other AG-UI clients. The `{routeId}` URL segment is the URL-encoded Dawn assistant id, such as `%2Fchat%23agent` for `/chat#agent`. Most apps use the endpoint through the CLI, not by importing this package directly.
+Pure, transport-agnostic AG-UI translation utilities. The CLI uses the same adapter when `dawn dev` or `dawn start` serves `POST /agui/{routeId}`; generated production entrypoints invoke the exported `serveRuntime()` function directly. The `{routeId}` URL segment is the URL-encoded Dawn assistant id, such as `%2Fchat%23agent` for `/chat#agent`.
 
 ```ts
 import {
-  createAgUiTranslator,
-  encodeAgUiSse,
-  mapRunInput,
-  type AgUiEvent,
-  type DawnStreamChunk,
-  type MappedRunInput,
-  type ResumeDecision,
-  type TranslatorOptions,
+  fromRunAgentInput,
+  toAguiEvents,
+  type AguiOutboundEvent,
+  type DawnAgentStreamChunk,
+  type DawnMessage,
+  type DawnRunInput,
+  type RunContext,
+  type ToAguiOptions,
 } from "@dawn-ai/ag-ui"
 ```
 
 See [Dev Server](/docs/dev-server#ag-ui-endpoint).
 
-### `mapRunInput(input)`
+### `toAguiEvents(chunks, context)`
 
 ```ts
-export function mapRunInput(input: RunAgentInput): MappedRunInput
+export function toAguiEvents(
+  chunks: AsyncIterable<DawnAgentStreamChunk>,
+  context: RunContext,
+  options?: ToAguiOptions,
+): AsyncGenerator<AguiOutboundEvent>
 ```
 
-Maps an AG-UI `RunAgentInput` to Dawn route input. The newest user message becomes Dawn's `{ messages: [...] }` input because Dawn stores conversation history in the checkpoint keyed by `threadId`. Human-in-the-loop resume decisions are read from `forwardedProps.command.resume`.
+Maps Dawn `token`, `tool_call`, `tool_result`, `interrupt`, and `done` chunks to canonical AG-UI lifecycle, text, and tool events. Upstream tool invocation ids are preserved. Interrupts produce a standard `RUN_FINISHED` interrupt outcome, successful runs produce a success outcome, and upstream failures produce one `RUN_ERROR`.
+
+Planning updates, subagent capability events, and other unknown chunk types have no v1 mapping and are ignored.
+
+### `fromRunAgentInput(input)`
 
 ```ts
-export type ResumeDecision = "once" | "always" | "deny"
+export function fromRunAgentInput(input: RunAgentInput): DawnRunInput
+```
 
-export interface MappedRunInput {
-  readonly dawnInput: { readonly messages: ReadonlyArray<{ role: string; content: string }> }
-  readonly resumeDecision?: ResumeDecision
-  readonly interruptId?: string
+Maps every AG-UI message structurally and preserves the original input as `raw`. A non-empty top-level `RunAgentInput.resume` array becomes `DawnRunInput.resume` with the same `interruptId`, `status`, and optional `payload` fields:
+
+```ts
+export interface DawnRunInput {
+  readonly messages: DawnMessage[]
+  readonly resume?: Array<{
+    readonly interruptId: string
+    readonly status: "resolved" | "cancelled"
+    readonly payload?: unknown
+  }>
+  readonly raw: RunAgentInput
 }
 ```
 
-### `createAgUiTranslator(options)`
+The adapter leaves AG-UI `tools`, `state`, and `context` uninterpreted in v1; consumers can read them from `raw`.
+
+### SSE subpath: `encodeAgUiSse(event, accept?)`
 
 ```ts
-export function createAgUiTranslator(options: TranslatorOptions): AgUiTranslator
+import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
 ```
-
-Creates a per-run translator. Call `begin()` once, pass each Dawn stream chunk to `translate(chunk)`, and call `end()` if the stream completes without a Dawn `done` chunk.
 
 ```ts
-export interface TranslatorOptions {
-  readonly threadId: string
-  readonly runId: string
-}
-
-export interface AgUiTranslator {
-  begin(): AgUiEvent[]
-  translate(chunk: DawnStreamChunk): AgUiEvent[]
-  end(): AgUiEvent[]
-}
+export function encodeAgUiSse(event: BaseEvent, accept?: string): string
 ```
 
-The translator maps Dawn token/chunk events to AG-UI text events, tool calls/results to AG-UI tool events, `plan_update` chunks to `STATE_SNAPSHOT`, interrupts to `CUSTOM{name:"on_interrupt"}`, and `subagent.*` chunks to `CUSTOM{name:"dawn.<event>"}`.
-
-### `encodeAgUiSse(event, accept?)`
-
-```ts
-export function encodeAgUiSse(event: AgUiEvent, accept?: string): string
-```
-
-Encodes one AG-UI event as an SSE frame using `@ag-ui/encoder`.
-
-### Types
-
-```ts
-export type AgUiEvent = BaseEvent
-
-export interface DawnStreamChunk {
-  readonly type: string
-  readonly data?: unknown
-  readonly name?: string
-  readonly input?: unknown
-  readonly output?: unknown
-}
-```
-
-`DawnStreamChunk` is structural so `@dawn-ai/ag-ui` does not depend on `@dawn-ai/cli`.
+Encodes one AG-UI event as an SSE frame using `@ag-ui/encoder`. This transport helper is available only from `@dawn-ai/ag-ui/sse`; the root package remains transport-agnostic.
 
 ---
 

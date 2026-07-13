@@ -1,9 +1,9 @@
+import { HttpAgent } from "@ag-ui/client"
 import {
   CopilotRuntime,
-  ExperimentalEmptyAdapter,
   copilotRuntimeNextJSAppRouterEndpoint,
+  ExperimentalEmptyAdapter,
 } from "@copilotkit/runtime"
-import { HttpAgent } from "@ag-ui/client"
 import type { NextRequest } from "next/server"
 
 export const runtime = "nodejs"
@@ -13,10 +13,7 @@ const dawnUrl = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3001"
 const agUiUrl = `${dawnUrl}/agui/${encodeURIComponent("/chat#agent")}`
 
 // Register the Dawn /chat agent under CopilotKit's default agent id ("default").
-// CopilotKit components/hooks that don't specify an agentId resolve "default", so
-// registering it there means the sidebar, useAgent, and useInterrupt all bind to
-// this agent with no per-component wiring. (When a second agent is added — e.g.
-// /coordinator — switch to named ids + explicit agentId on each consumer.)
+// CopilotKit's sidebar resolves "default" when no agentId is specified.
 const copilotRuntime = new CopilotRuntime({
   agents: { default: new HttpAgent({ url: agUiUrl }) },
 })
