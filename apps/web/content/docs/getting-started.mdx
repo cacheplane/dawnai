@@ -138,6 +138,8 @@ npm run eval
 
 Runs the quality eval in `src/app/research/evals/research-quality.eval.ts`. The agent run replays fixtures, then two dataset cases are scored across four scorers (`toolCalled`, `contains`, `cites-source`, `llmJudge`). The generated fixtures also cover the judge requests from `llmJudge`, so the scaffolded eval runs without an API key.
 
+Before running the app live, run `dawn verify` as your preflight — it checks app integrity plus environment readiness (Node version, the provider API key your routes need, and the Docker daemon when a sandbox is configured) so `dawn dev` and `dawn start` boot cleanly. See [`dawn verify`](/docs/cli).
+
 ## 4. Run it live
 
 Set your API key and start the dev server:

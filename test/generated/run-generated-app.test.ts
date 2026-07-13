@@ -488,6 +488,9 @@ function normalizeForFixture(
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
     ["4.1.4", "<version:vitest>"],
+    // Runtime check emits the live Node version (process.versions.node). Normalize
+    // it so the fixture stays stable across Node patch releases.
+    [process.versions.node, "<version:node>"],
   ]) as GeneratedAppScenarioResult
 }
 
@@ -518,6 +521,9 @@ function normalizeForInternalFixture(
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
     ["4.1.4", "<version:vitest>"],
+    // Runtime check emits the live Node version (process.versions.node). Normalize
+    // it so the fixture stays stable across Node patch releases.
+    [process.versions.node, "<version:node>"],
   ]) as GeneratedAppScenarioResult
 }
 

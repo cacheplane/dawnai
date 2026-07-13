@@ -79,15 +79,60 @@ describe("checkDependencies", () => {
     expect(result.missingPackages).toEqual([])
   })
 
-  test("reports missing env var when not in process.env or .env file", async () => {
+  test("reports the OpenAI key for an OpenAI app when not in process.env or .env file", async () => {
     saveEnv("OPENAI_API_KEY")
     delete process.env.OPENAI_API_KEY
 
     writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
 
-    const result = await checkDependencies({ appRoot: tempDir })
+    const result = await checkDependencies({ appRoot: tempDir, providers: ["openai"] })
 
     expect(result.missingEnvVars).toContain("OPENAI_API_KEY")
+  })
+
+  test("reports the Anthropic key (not OPENAI_API_KEY) for an Anthropic-only app", async () => {
+    saveEnv("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+    delete process.env.ANTHROPIC_API_KEY
+    delete process.env.OPENAI_API_KEY
+
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
+
+    const result = await checkDependencies({ appRoot: tempDir, providers: ["anthropic"] })
+
+    expect(result.missingEnvVars).toContain("ANTHROPIC_API_KEY")
+    expect(result.missingEnvVars).not.toContain("OPENAI_API_KEY")
+  })
+
+  test("reports the union of keys for a multi-provider app", async () => {
+    saveEnv("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+    delete process.env.ANTHROPIC_API_KEY
+    delete process.env.OPENAI_API_KEY
+
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
+
+    const result = await checkDependencies({
+      appRoot: tempDir,
+      providers: ["openai", "anthropic"],
+    })
+
+    expect(result.missingEnvVars).toContain("OPENAI_API_KEY")
+    expect(result.missingEnvVars).toContain("ANTHROPIC_API_KEY")
+  })
+
+  test("requires no key for an ollama-only app", async () => {
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
+
+    const result = await checkDependencies({ appRoot: tempDir, providers: ["ollama"] })
+
+    expect(result.missingEnvVars).toEqual([])
+  })
+
+  test("requires no key when the app uses no providers", async () => {
+    writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
+
+    const result = await checkDependencies({ appRoot: tempDir, providers: [] })
+
+    expect(result.missingEnvVars).toEqual([])
   })
 
   test("passes env check when var is in process.env", async () => {
@@ -96,7 +141,7 @@ describe("checkDependencies", () => {
 
     writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
 
-    const result = await checkDependencies({ appRoot: tempDir })
+    const result = await checkDependencies({ appRoot: tempDir, providers: ["openai"] })
 
     expect(result.missingEnvVars).not.toContain("OPENAI_API_KEY")
   })
@@ -108,13 +153,13 @@ describe("checkDependencies", () => {
     writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
     writeFileSync(join(tempDir, ".env"), "OPENAI_API_KEY=sk-test-key\n")
 
-    const result = await checkDependencies({ appRoot: tempDir })
+    const result = await checkDependencies({ appRoot: tempDir, providers: ["openai"] })
 
     expect(result.missingEnvVars).not.toContain("OPENAI_API_KEY")
   })
 
   test("returns empty results when package.json is missing", async () => {
-    const result = await checkDependencies({ appRoot: tempDir })
+    const result = await checkDependencies({ appRoot: tempDir, providers: ["openai"] })
 
     expect(result.missingPackages).toEqual([])
     expect(result.missingEnvVars).toEqual([])
@@ -125,11 +170,15 @@ describe("checkDependencies", () => {
     delete process.env.OPENAI_API_KEY
 
     writeFileSync(join(tempDir, "package.json"), JSON.stringify({ dependencies: {} }))
-    // Recommended var is absent from <appRoot>/.env but present in custom.env.
+    // Required var is absent from <appRoot>/.env but present in custom.env.
     writeFileSync(join(tempDir, ".env"), "SOMETHING_ELSE=1\n")
     writeFileSync(join(tempDir, "custom.env"), "OPENAI_API_KEY=sk-from-custom\n")
 
-    const result = await checkDependencies({ appRoot: tempDir, envFile: "custom.env" })
+    const result = await checkDependencies({
+      appRoot: tempDir,
+      providers: ["openai"],
+      envFile: "custom.env",
+    })
 
     expect(result.missingEnvVars).not.toContain("OPENAI_API_KEY")
   })

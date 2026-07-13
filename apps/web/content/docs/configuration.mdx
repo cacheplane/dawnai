@@ -2,6 +2,8 @@
 
 `dawn.config.ts` is a TypeScript file at your app root that exports a single default object conforming to the `DawnConfig` interface. Dawn loads it (via `tsx`) before every CLI command and at runtime startup. If the file is absent, all keys take their documented defaults — no file is required for a working app.
 
+Run [`dawn verify`](/docs/cli) as your preflight before `dawn dev` or `dawn start`: it validates this config and app integrity plus environment readiness (Node version, the provider API key your routes need, and — when `sandbox` is configured — the Docker daemon).
+
 ```ts
 // dawn.config.ts
 export default {

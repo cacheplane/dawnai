@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { loadDawnConfig } from "@dawn-ai/core"
+import type { BuiltInModelProviderId } from "@dawn-ai/sdk"
 import { resolveEnvPath } from "../dev/resolve-env-path.js"
 
 export interface DependencyCheckResult {
@@ -10,6 +11,13 @@ export interface DependencyCheckResult {
 
 export interface CheckDependenciesOptions {
   readonly appRoot: string
+  /**
+   * Provider ids the app's routes actually use (derived from each route's model
+   * id). The required API-key env vars are derived from these — an Anthropic-only
+   * app checks for ANTHROPIC_API_KEY, not OPENAI_API_KEY. An empty/omitted list
+   * means no API key is required.
+   */
+  readonly providers?: readonly string[]
   /** From the --env-file CLI flag. Highest precedence. */
   readonly envFile?: string | undefined
 }
@@ -21,10 +29,31 @@ export interface CheckDependenciesOptions {
 const REQUIRED_PACKAGES = ["@langchain/core", "@langchain/openai", "@langchain/langgraph"] as const
 
 /**
- * Environment variables that are strongly recommended for production use.
- * Missing vars emit warnings, not hard failures.
+ * Provider → the API-key env var it authenticates with. `null` means the
+ * provider needs no key (e.g. a local Ollama server). Keyed exhaustively by the
+ * SDK's provider union so it stays in lockstep with the provider list backing
+ * `providerSpecs` in @dawn-ai/langchain's chat-model-factory.ts (source of truth).
  */
-const RECOMMENDED_ENV_VARS = ["OPENAI_API_KEY"] as const
+const PROVIDER_ENV_VAR: Record<BuiltInModelProviderId, string | null> = {
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  google: "GOOGLE_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  groq: "GROQ_API_KEY",
+  xai: "XAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  ollama: null,
+}
+
+/** Derive the deduped set of required API-key env vars from the app's providers. */
+function requiredEnvVars(providers: readonly string[]): readonly string[] {
+  const vars = new Set<string>()
+  for (const provider of providers) {
+    const envVar = PROVIDER_ENV_VAR[provider as BuiltInModelProviderId]
+    if (envVar) vars.add(envVar)
+  }
+  return [...vars]
+}
 
 export async function checkDependencies(
   options: CheckDependenciesOptions,
@@ -72,8 +101,10 @@ export async function checkDependencies(
 
   const resolved = resolveEnvPath({ appRoot, flag: options.envFile, configEnv })
 
-  // Check environment variables (from process.env or the resolved env file)
-  for (const envVar of RECOMMENDED_ENV_VARS) {
+  // Check the API-key env vars the app's providers actually need (from
+  // process.env or the resolved env file). A missing key is a warning, not a
+  // hard failure — a key may legitimately come from the runtime environment.
+  for (const envVar of requiredEnvVars(options.providers ?? [])) {
     if (!process.env[envVar]) {
       // Check if it's in the resolved env file
       if (existsSync(resolved.absPath)) {
