@@ -10,6 +10,8 @@ export type {
 } from "./agent.js"
 export { agent, isDawnAgent } from "./agent.js"
 export type { BackendAdapter } from "./backend-adapter.js"
+export type { DawnErrorCode, DawnErrorDescriptor } from "./errors.js"
+export { DAWN_ERRORS, describeError, errorDocsUrl } from "./errors.js"
 export type {
   AnthropicModelId,
   GoogleModelId,
