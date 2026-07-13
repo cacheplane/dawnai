@@ -88,6 +88,27 @@ describe("dawn verify", () => {
       expect(result.exitCode).toBe(1)
       expect(result.stderr).toMatch(/^Verify failed:/)
       expect(result.stderr).toContain("22.13.0")
+      expect(result.stderr).toContain("[DAWN_E5101]")
+    } finally {
+      if (descriptor) Object.defineProperty(process.versions, "node", descriptor)
+    }
+  })
+
+  test("exposes DAWN_E5101 on the runtime check in json mode when the Node runtime is below the floor", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": "export async function workflow() { return {} }\n",
+    })
+
+    const descriptor = Object.getOwnPropertyDescriptor(process.versions, "node")
+    Object.defineProperty(process.versions, "node", { value: "20.11.0", configurable: true })
+    try {
+      const result = await invoke(["verify", "--cwd", appRoot, "--json"])
+      expect(result.exitCode).toBe(1)
+      const parsed = JSON.parse(result.stdout)
+      expect(parsed.status).toBe("failed")
+      const runtimeCheck = parsed.checks.find((check: { name: string }) => check.name === "runtime")
+      expect(runtimeCheck.node.code).toBe("DAWN_E5101")
+      expect(runtimeCheck.status).toBe("failed")
     } finally {
       if (descriptor) Object.defineProperty(process.versions, "node", descriptor)
     }

@@ -25,12 +25,14 @@ describe("checkRuntime", () => {
     expect(result.node.ok).toBe(false)
     expect(result.node.floor).toBe("22.13.0")
     expect(result.node.version).toBe("22.12.5")
+    expect(result.node.code).toBe("DAWN_E5101")
     expect(result.status).toBe("failed")
   })
 
   test("Node at/above floor → passed", async () => {
     const result = await checkRuntime({ nodeVersion: "22.14.0" })
     expect(result.node.ok).toBe(true)
+    expect(result.node.code).toBeUndefined()
     expect(result.status).toBe("passed")
   })
 
@@ -47,7 +49,11 @@ describe("checkRuntime", () => {
         preflight: async () => ({ ok: false, detail: "daemon unreachable" }),
       },
     })
-    expect(result.docker).toEqual({ ok: false, detail: "daemon unreachable" })
+    expect(result.docker).toEqual({
+      ok: false,
+      detail: "daemon unreachable",
+      code: "DAWN_E2002",
+    })
     expect(result.status).toBe("failed")
   })
 
