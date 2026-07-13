@@ -255,11 +255,11 @@ export async function* streamResolvedRoute(options: {
   readonly isSubagent?: boolean
   readonly middlewareContext?: Readonly<Record<string, unknown>>
   /**
-   * When set, the agent-adapter receives `Command({resume: resumeDecision})`
+   * When set, the agent-adapter receives `Command({resume})`
    * as its input instead of the normal `input` field. Used by the resume
    * endpoint to replay a parked graph state after a permission interrupt.
    */
-  readonly resumeDecision?: RouteResumePayload
+  readonly resume?: RouteResumePayload
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
@@ -313,7 +313,7 @@ export async function* streamResolvedRoute(options: {
 
   const routeParamNames = extractRouteParamNames(options.routeId)
 
-  const agentInput = toAgentInput(options.input, options.resumeDecision)
+  const agentInput = toAgentInput(options.input, options.resume)
 
   for await (const chunk of streamAgent({
     checkpointer,

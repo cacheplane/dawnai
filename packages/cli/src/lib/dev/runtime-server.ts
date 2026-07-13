@@ -351,6 +351,8 @@ function buildRouteTable(ctx: {
       handle: async (req, res, params) => {
         await handleAgUiRequest({
           appRoot,
+          checkpointer,
+          middleware,
           registry,
           threadsStore,
           ...(sandboxManager ? { sandboxManager } : {}),
@@ -864,7 +866,7 @@ async function handleResumeRequest(options: {
     for await (const chunk of streamResolvedRoute({
       appRoot,
       input: {},
-      resumeDecision: decision,
+      resume: decision,
       ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
       routeFile: route.routeFile,
       routeId: route.routeId,

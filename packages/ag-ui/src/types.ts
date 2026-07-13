@@ -1,27 +1,3 @@
-import type { BaseEvent } from "@ag-ui/core"
-
-/** An AG-UI protocol event. Alias kept local so consumers import one name. */
-export type AgUiEvent = BaseEvent
-
-/**
- * Structural mirror of `@dawn-ai/cli`'s `StreamChunk`. Kept loose (all fields
- * optional beyond `type`) so this package has ZERO dependency on the CLI. The
- * translator inspects fields at runtime by `type`.
- */
-export interface DawnStreamChunk {
-  readonly type: string
-  readonly data?: unknown
-  readonly id?: string
-  readonly name?: string
-  readonly input?: unknown
-  readonly output?: unknown
-}
-
-export interface TranslatorOptions {
-  readonly threadId: string
-  readonly runId: string
-}
-
 /** Run identity the consumer supplies; never synthesized by the mapper. */
 export interface RunContext {
   readonly threadId: string
@@ -40,17 +16,6 @@ export type DawnAgentStreamChunk =
   | { readonly type: "interrupt"; readonly data: unknown }
   | { readonly type: "done"; readonly data?: unknown }
   | { readonly type: string; readonly data?: unknown }
-
-/**
- * The minimal Dawn stream-chunk shape the mapper consumes. Structurally
- * compatible with `AgentStreamChunk` from `@dawn-ai/langchain` (which is
- * `{ type: string; data: unknown }`), declared here so this package takes no
- * dependency on the langchain package.
- */
-export interface RawChunk {
-  readonly type: string
-  readonly data?: unknown
-}
 
 export interface DawnToolCallData {
   readonly id?: string | undefined
