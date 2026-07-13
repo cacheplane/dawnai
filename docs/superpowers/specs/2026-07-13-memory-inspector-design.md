@@ -54,6 +54,15 @@ and approve/supersede candidate writes visually — the dogfood loop the headles
   **Tree-shaking is the wrong lever** — `dependencies` install regardless of
   imports, Dawn's server runtime isn't bundled (tsx loader), and Next isn't a
   tree-shakeable library. Package separation is the mechanism.
+- **Not `@dawn-ai/devkit`, not `@dawn-ai/memory` (investigated).** `devkit` is a
+  zero-dependency, scaffold-side toolkit whose *only* consumer is
+  `create-dawn-ai-app` — it is **never installed into a user app**, so hosting the
+  inspector there would ship it to no one (`dawn inspect` runs inside the user app
+  and needs the package in *that* `node_modules`) and would bloat the lean
+  scaffolder with Next/React. `memory` is hot-path/pure. The established precedent:
+  `@dawn-ai/testing` and `@dawn-ai/evals` — app-facing dev tools — are their own
+  packages in the scaffold's devDependencies, **not** folded into devkit;
+  `@dawn-ai/inspector` follows that exact pattern.
 - **Distribution = scaffold devDep + optional-with-hint.** Auto-added to
   `create-dawn-ai-app` devDependencies (ships with scaffolded apps, zero manual
   step); `dawn inspect` prints a one-line `npm i -D @dawn-ai/inspector` hint if
