@@ -5,13 +5,17 @@ import {
   discoverRoutes,
   extractToolTypesForRoute,
   findDawnApp,
+  loadDawnConfig,
   renderDawnTypes,
 } from "@dawn-ai/core"
+import type { SandboxProvider } from "@dawn-ai/workspace"
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { collectRouteProviders } from "../lib/runtime/collect-route-providers.js"
 import { collectUnknownModelIdWarnings } from "../lib/runtime/warn-unknown-model-ids.js"
 import { checkDependencies } from "../lib/verify/check-dependencies.js"
+import { checkRuntime, type RuntimeCheckResult } from "../lib/verify/check-runtime.js"
 
 interface VerifyOptions {
   readonly cwd?: string
@@ -62,6 +66,7 @@ interface VerifyFailedCheckResult {
 }
 
 type VerifyCheckResult =
+  | RuntimeCheckResult
   | VerifyAppCheckResult
   | VerifyDepsCheckResult
   | VerifyFailedCheckResult
@@ -148,6 +153,19 @@ export async function runVerifyCommand(options: VerifyOptions, io: CommandIo): P
       )
     }
 
+    const runtimeCheck = result.checks.find(
+      (check): check is RuntimeCheckResult => check.name === "runtime",
+    )
+    if (runtimeCheck) {
+      writeLine(
+        io.stdout,
+        `Runtime: Node ${runtimeCheck.node.version} OK (floor ${runtimeCheck.node.floor}).`,
+      )
+      if (runtimeCheck.docker) {
+        writeLine(io.stdout, `Sandbox: Docker ${runtimeCheck.docker.detail}.`)
+      }
+    }
+
     if (manifest) {
       // Advisory model-id pass shared with `dawn check`; never affects the result.
       const modelIdWarnings = await collectUnknownModelIdWarnings(manifest)
@@ -226,9 +244,14 @@ async function verifyApp(options: VerifyOptions): Promise<VerifyAppOutcome> {
     status: PASSED_STATUS,
   })
 
+  // Derive the providers the app's routes actually use, so the deps check flags
+  // the API key the app needs (e.g. ANTHROPIC_API_KEY) rather than a hardcoded one.
+  const providers = await collectRouteProviders(manifest)
+
   // Check dependencies and environment variables (advisory, not blocking)
   const depsResult = await checkDependencies({
     appRoot: app.appRoot,
+    providers,
     ...(options.envFile !== undefined ? { envFile: options.envFile } : {}),
   })
   const hasWarnings = depsResult.missingPackages.length > 0 || depsResult.missingEnvVars.length > 0
@@ -239,18 +262,42 @@ async function verifyApp(options: VerifyOptions): Promise<VerifyAppOutcome> {
     status: hasWarnings ? "warning" : PASSED_STATUS,
   } as VerifyDepsCheckResult)
 
+  // Environment-readiness gate: Node floor + (when a sandbox is configured) the
+  // provider's Docker/daemon preflight — resolved the same way collect-sandbox-errors
+  // does, from dawn.config.ts's sandbox.provider. A failed runtime check fails verify.
+  const sandboxProvider = await resolveSandboxProvider(app.appRoot)
+  const runtime = await checkRuntime(sandboxProvider ? { sandboxProvider } : {})
+  checks.push(runtime)
+
+  const failed = checks.filter((check) => check.status === FAILED_STATUS).length
+  const counts: VerifyCheckCounts = {
+    failed,
+    passed: checks.length - failed,
+    total: checks.length,
+  }
+
+  if (failed > 0) {
+    return {
+      manifest,
+      result: { appRoot: app.appRoot, checks, counts, status: FAILED_STATUS },
+    }
+  }
+
   return {
     manifest,
-    result: {
-      appRoot: app.appRoot,
-      checks,
-      counts: {
-        failed: 0,
-        passed: checks.length,
-        total: checks.length,
-      },
-      status: PASSED_STATUS,
-    },
+    result: { appRoot: app.appRoot, checks, counts, status: PASSED_STATUS },
+  }
+}
+
+/** Resolve dawn.config.ts's sandbox provider (name + preflight), if configured. */
+async function resolveSandboxProvider(
+  appRoot: string,
+): Promise<Pick<SandboxProvider, "preflight" | "name"> | undefined> {
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    return loaded.config.sandbox?.provider
+  } catch {
+    return undefined
   }
 }
 
@@ -288,7 +335,27 @@ function createVerifyFailureResult(
 function getFailureMessage(result: VerifyFailureResult): string {
   const failedCheck = [...result.checks].reverse().find((check) => check.status === FAILED_STATUS)
 
-  return failedCheck?.error.message ?? "Verification failed."
+  if (failedCheck?.name === "runtime") {
+    return runtimeFailureMessage(failedCheck)
+  }
+  // Only VerifyFailedCheckResult carries an `error` field.
+  if (failedCheck && "error" in failedCheck) {
+    return failedCheck.error.message
+  }
+  return "Verification failed."
+}
+
+function runtimeFailureMessage(runtime: RuntimeCheckResult): string {
+  const reasons: string[] = []
+  if (!runtime.node.ok) {
+    // TODO(error-codes): tag with DAWN_E5101 once the registry lands (#357).
+    reasons.push(`Node ${runtime.node.version} is below the required floor ${runtime.node.floor}.`)
+  }
+  if (runtime.docker && !runtime.docker.ok) {
+    // TODO(error-codes): tag with DAWN_E2002 once the registry lands (#357).
+    reasons.push(`Docker sandbox unavailable: ${runtime.docker.detail}.`)
+  }
+  return reasons.join(" ") || "Runtime check failed."
 }
 
 function inferFailureAppRoot(options: VerifyOptions, message: string): string {
