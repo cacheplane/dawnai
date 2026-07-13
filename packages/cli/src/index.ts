@@ -11,6 +11,7 @@ import { realpathSync } from "node:fs"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
+import { errorDocsUrl } from "@dawn-ai/sdk"
 import { Command, CommanderError } from "commander"
 
 import { registerAddCommand } from "./commands/add.js"
@@ -82,6 +83,10 @@ export async function run(
   } catch (error) {
     if (error instanceof CliError) {
       writeLine(io.stderr, error.message)
+      if (error.code !== undefined) {
+        const url = errorDocsUrl(error.code)
+        writeLine(io.stderr, url ? `  [${error.code}] See ${url}` : `  [${error.code}]`)
+      }
       return error.exitCode
     }
 
