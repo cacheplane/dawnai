@@ -506,6 +506,12 @@ function prepareAgentCall(options: AgentOptions): {
   const config: Record<string, unknown> = {
     signal: options.signal,
   }
+  // Per-agent super-step ceiling. LangGraph's Pregel reads config.recursionLimit
+  // (default 25); deep agents (coordinator + subagents + many tool calls) can
+  // legitimately need more. Sourced from the DawnAgent descriptor, mirroring retry.
+  if (isDawnAgent(options.entry) && typeof options.entry.recursionLimit === "number") {
+    config.recursionLimit = options.entry.recursionLimit
+  }
 
   const configurable: Record<string, unknown> = { ...params }
   if (options.threadId !== undefined && options.threadId.length > 0) {
