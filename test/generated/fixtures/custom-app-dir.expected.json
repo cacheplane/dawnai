@@ -48,16 +48,25 @@
         "status": "passed"
       },
       {
-        "missingEnvVars": ["OPENAI_API_KEY"],
+        "missingEnvVars": [],
         "missingPackages": ["@langchain/core", "@langchain/openai", "@langchain/langgraph"],
         "name": "deps",
         "status": "warning"
+      },
+      {
+        "name": "runtime",
+        "node": {
+          "version": "<version:node>",
+          "ok": true,
+          "floor": "22.13.0"
+        },
+        "status": "passed"
       }
     ],
     "counts": {
       "failed": 0,
-      "passed": 4,
-      "total": 4
+      "passed": 5,
+      "total": 5
     },
     "status": "passed"
   },
