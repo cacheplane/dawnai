@@ -50,6 +50,10 @@ async function main() {
     const selectedPackages = await selectedPackageVersions(options)
     await runInstallSmoke(tempDir, selectedPackages)
 
+    if (shouldRunAgUiProbe(selectedPackages)) {
+      await runAgUiInstalledProbe(tempDir)
+    }
+
     if (!options.pgvector) {
       console.log("T1 SKIP pgvector disabled")
       console.log(options.openai ? "T2 SKIP pgvector disabled" : "T2 SKIP")
@@ -174,6 +178,168 @@ async function runInstallSmoke(tempDir, packages) {
   }
 
   console.log(`T0 PASS installed ${specs.join(" ")}`)
+}
+
+async function runAgUiInstalledProbe(tempDir) {
+  await Promise.all([
+    writeFile(resolve(tempDir, "smoke-ag-ui.mjs"), agUiEsmProbeSource(), "utf8"),
+    writeFile(resolve(tempDir, "smoke-ag-ui.ts"), agUiTypeProbeSource(), "utf8"),
+    writeFile(
+      resolve(tempDir, "tsconfig.ag-ui.json"),
+      `${JSON.stringify(agUiTypeScriptConfig(), null, 2)}\n`,
+      "utf8",
+    ),
+  ])
+
+  for (const { command, args } of agUiProbeCommands()) {
+    await runCommand(command, args, { cwd: tempDir })
+  }
+
+  console.log("T-AG-UI PASS")
+}
+
+export function agUiProbeCommands() {
+  return [
+    { command: "node", args: ["smoke-ag-ui.mjs"] },
+    { command: "npm", args: ["install", "--save-dev", "typescript@6.0.2"] },
+    {
+      command: "npm",
+      args: ["exec", "--", "tsc", "--project", "tsconfig.ag-ui.json"],
+    },
+  ]
+}
+
+export function shouldRunAgUiProbe(packages) {
+  return packages.some(({ name }) => name === "@dawn-ai/ag-ui")
+}
+
+export function agUiEsmProbeSource() {
+  return `import assert from "node:assert/strict"
+
+import * as root from "@dawn-ai/ag-ui"
+import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
+
+assert.deepEqual(Object.keys(root).sort(), [
+  "createCounterIdFactory",
+  "createDefaultIdFactory",
+  "fromRunAgentInput",
+  "toAguiEvents",
+])
+
+for (const exportName of [
+  "createCounterIdFactory",
+  "createDefaultIdFactory",
+  "fromRunAgentInput",
+  "toAguiEvents",
+]) {
+  assert.equal(typeof root[exportName], "function", \`canonical export \${exportName} must be a function\`)
+}
+
+const event = { type: "RUN_STARTED", threadId: "published-smoke", runId: "published-smoke" }
+const encoded = encodeAgUiSse(event)
+assert.equal(encoded, \`data: \${JSON.stringify(event)}\\n\\n\`)
+
+const payload = JSON.parse(encoded.slice("data: ".length, -2))
+assert.equal(payload.type, "RUN_STARTED")
+assert.equal(payload.threadId, "published-smoke")
+assert.equal(payload.runId, "published-smoke")
+`
+}
+
+export function agUiTypeProbeSource() {
+  return `import {
+  createCounterIdFactory,
+  createDefaultIdFactory,
+  fromRunAgentInput,
+  toAguiEvents,
+  type AguiOutboundEvent,
+  type DawnAgentStreamChunk,
+  type DawnInterruptEnvelope,
+  type DawnMessage,
+  type DawnResumeRequest,
+  type DawnRunInput,
+  type IdFactory,
+  type RunContext,
+  type ToAguiOptions,
+} from "@dawn-ai/ag-ui"
+import { encodeAgUiSse as encodeAgUiSseFromSubpath } from "@dawn-ai/ag-ui/sse"
+
+// @ts-expect-error MappedRunInput was removed from the canonical root
+import type { MappedRunInput } from "@dawn-ai/ag-ui"
+// @ts-expect-error ResumeDecision was removed from the canonical root
+import type { ResumeDecision } from "@dawn-ai/ag-ui"
+// @ts-expect-error AgUiTranslator was removed from the canonical root
+import type { AgUiTranslator } from "@dawn-ai/ag-ui"
+// @ts-expect-error AgUiEvent was removed from the canonical root
+import type { AgUiEvent } from "@dawn-ai/ag-ui"
+// @ts-expect-error DawnStreamChunk was removed from the canonical root
+import type { DawnStreamChunk } from "@dawn-ai/ag-ui"
+// @ts-expect-error DawnToolCallData was removed from the canonical root
+import type { DawnToolCallData } from "@dawn-ai/ag-ui"
+// @ts-expect-error DawnToolResultData was removed from the canonical root
+import type { DawnToolResultData } from "@dawn-ai/ag-ui"
+// @ts-expect-error RawChunk was removed from the canonical root
+import type { RawChunk } from "@dawn-ai/ag-ui"
+// @ts-expect-error TranslatorOptions was removed from the canonical root
+import type { TranslatorOptions } from "@dawn-ai/ag-ui"
+
+// @ts-expect-error createAgUiTranslator was removed from the canonical root
+import { createAgUiTranslator } from "@dawn-ai/ag-ui"
+// @ts-expect-error mapRunInput was removed from the canonical root
+import { mapRunInput } from "@dawn-ai/ag-ui"
+// @ts-expect-error encodeAgUiSse was removed from the canonical root
+import { encodeAgUiSse } from "@dawn-ai/ag-ui"
+// @ts-expect-error fromAguiResume was removed from the canonical root
+import { fromAguiResume } from "@dawn-ai/ag-ui"
+// @ts-expect-error toAguiInterrupt was removed from the canonical root
+import { toAguiInterrupt } from "@dawn-ai/ag-ui"
+// @ts-expect-error asToolCallData was removed from the canonical root
+import { asToolCallData } from "@dawn-ai/ag-ui"
+// @ts-expect-error asToolResultData was removed from the canonical root
+import { asToolResultData } from "@dawn-ai/ag-ui"
+
+type RootValueSurface = readonly [
+  typeof createCounterIdFactory,
+  typeof createDefaultIdFactory,
+  typeof fromRunAgentInput,
+  typeof toAguiEvents,
+]
+
+type RootTypeSurface = readonly [
+  IdFactory,
+  DawnMessage,
+  DawnRunInput,
+  DawnInterruptEnvelope,
+  DawnResumeRequest,
+  AguiOutboundEvent,
+  ToAguiOptions,
+  DawnAgentStreamChunk,
+  RunContext,
+]
+
+declare const rootTypeSurface: RootTypeSurface
+declare const rootValueSurface: RootValueSurface
+const idFactory: IdFactory = createCounterIdFactory()
+const chunk: DawnAgentStreamChunk = { type: "token", data: "hello" }
+const context: RunContext = { threadId: "published-smoke", runId: "published-smoke" }
+const options: ToAguiOptions = { idFactory }
+const encoder: typeof encodeAgUiSseFromSubpath = encodeAgUiSseFromSubpath
+
+void [rootValueSurface, rootTypeSurface, chunk, context, options, encoder]
+`
+}
+
+export function agUiTypeScriptConfig() {
+  return {
+    compilerOptions: {
+      module: "NodeNext",
+      moduleResolution: "NodeNext",
+      noEmit: true,
+      strict: true,
+      target: "ES2022",
+    },
+    files: ["smoke-ag-ui.ts"],
+  }
 }
 
 export function assertNoNativeInstallOutput(output) {

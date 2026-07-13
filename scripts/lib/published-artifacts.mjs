@@ -7,11 +7,20 @@ import { fileURLToPath } from "node:url"
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 
 export const packageSets = {
+  "ag-ui": ["@dawn-ai/ag-ui"],
   "memory-pgvector-core": ["@dawn-ai/memory-pgvector", "@dawn-ai/memory", "@dawn-ai/langchain"],
   public: null,
 }
 
 const packageFileExpectations = {
+  "@dawn-ai/ag-ui": [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/sse.js",
+    "dist/sse.d.ts",
+    "README.md",
+    "package.json",
+  ],
   "@dawn-ai/memory-pgvector": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
   "@dawn-ai/memory": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
   "@dawn-ai/langchain": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
