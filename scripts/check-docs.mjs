@@ -155,6 +155,31 @@ if (sdkEntry?.DAWN_ERRORS && docsBundle?.parseNav) {
   }
 }
 
+// gpt-5-family example check — Dawn's docs convention is that OpenAI examples
+// use only the gpt-5 family (canonical default gpt-5-mini); legacy OpenAI ids
+// (gpt-4*, gpt-3*, o1*) must not appear as an example `model:` value. This is
+// intentionally narrow: it only matches an OpenAI legacy id used as a
+// `model:` value, so non-OpenAI provider ids (llama, claude, gemini, ...) are
+// never flagged. `api.mdx` is the model-id REFERENCE page and intentionally
+// lists legacy ids across every provider (for readers picking a provider), so
+// it is excluded entirely.
+const OPENAI_LEGACY_MODEL_RE = /model:\s*["'](gpt-4|gpt-3|o1)[^"']*["']/g
+const docsContentDir = resolve(repoRoot, "apps/web/content/docs")
+const apiMdxPath = resolve(docsContentDir, "api.mdx")
+const docsMdxFiles = walkFiles(docsContentDir, (file) => file.endsWith(".mdx"))
+
+for (const filePath of docsMdxFiles) {
+  if (filePath === apiMdxPath) {
+    continue
+  }
+  const source = readFileSync(filePath, "utf8")
+  for (const match of source.matchAll(OPENAI_LEGACY_MODEL_RE)) {
+    failures.push(
+      `${relativeToRoot(filePath)} uses an OpenAI legacy model id as an example (\`${match[0]}\`) — docs examples must use the gpt-5 family (canonical default gpt-5-mini)`,
+    )
+  }
+}
+
 // CLI surface check — drive from the commander registry to catch docs drift.
 // Every user-facing command name and every long option must be referenced in
 // cli.mdx. The internal `dev-child` command is excluded (not user-facing).
