@@ -4,21 +4,19 @@
 "@dawn-ai/langchain": patch
 ---
 
-Add `@dawn-ai/ag-ui`, a transport-agnostic adapter that maps Dawn agent stream
-events to and from the AG-UI protocol. `toAguiEvents` turns a Dawn stream
-(`token`/`tool_call`/`tool_result`/`interrupt`/`done`) into AG-UI events;
-`fromRunAgentInput` maps AG-UI input (messages + interrupt resume) back to a Dawn
-run input. No server or transport is bundled — consumers own the transport.
+Consolidate the existing `@dawn-ai/ag-ui` package as Dawn's pure canonical AG-UI
+adapter. Its root API now maps standard `RunAgentInput` requests and Dawn stream
+chunks, including standard interrupt outcomes and addressed resume decisions,
+while the focused `@dawn-ai/ag-ui/sse` subpath provides event-stream encoding
+without taking ownership of a server or runtime transport.
 
-The langchain adapter now surfaces each tool invocation's `run_id` as `id` on its
-`tool_call`/`tool_result` stream chunks, so AG-UI `toolCallId` correlation is
-faithful even when a tool is called more than once.
+The CLI AG-UI endpoint now uses the canonical adapter, applies the same request
+projection as other runtime middleware, and emits canonical events without the
+former custom state event shapes. Pending checkpoint interrupts are resolved
+through the standard resume contract.
 
-The CLI runtime now preserves those optional tool invocation ids in Dawn SSE
-`tool_call`/`tool_result` payloads. Local in-process `dawn run` also generates a
-one-shot thread id for agent routes so the default SQLite checkpointer can run
-the same agent route shape that `dawn dev` already supports.
-
-Release note: this uses `patch` for all packages to preserve the 0.8.x release
-line and avoid fixed-group surprises; confirm the intended bump with the
-maintainer at release time.
+The langchain adapter surfaces each tool invocation's `run_id` on its
+`tool_call` and `tool_result` chunks, and the CLI preserves those IDs through
+Dawn and AG-UI streams for reliable `toolCallId` correlation. Local in-process
+`dawn run` also assigns agent routes a one-shot thread ID so the default SQLite
+checkpointer can execute the same route shape supported by `dawn dev`.
