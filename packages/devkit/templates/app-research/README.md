@@ -15,10 +15,34 @@ npm run eval      # quality evals, offline (replay fixtures)
 npm run memory:list
 ```
 
-To run against a real model, set `OPENAI_API_KEY` and add `--live`
-(e.g. `npm run eval -- --live`). The offline path uses recorded fixtures for the
-agent run and the generated `llmJudge` scorer, so tests and evals are
-deterministic and need no API key.
+## Run it live
+
+Set a key and start the dev server:
+
+```bash
+export OPENAI_API_KEY=sk-...
+npm run dev            # Dawn dev server on http://127.0.0.1:3000
+```
+
+Ask the research agent a question — it plans, dispatches a researcher subagent,
+and streams back a cited report:
+
+```bash
+curl -N "http://127.0.0.1:3000/agui/%2Fresearch%23agent" \
+  -H 'content-type: application/json' \
+  -d '{"threadId":"t1","runId":"r1","state":{},"tools":[],"context":[],"forwardedProps":{},
+       "messages":[{"id":"1","role":"user","content":"What are common agent architectures?"}]}'
+```
+
+That's the [AG-UI](https://github.com/cacheplane/dawn) endpoint (`/agui/<route>`).
+For a full **web UI** — streaming chat, a live plan, subagent activity,
+human-in-the-loop approvals, and memory-candidate review — follow the
+*Research assistant web UI* recipe in the Dawn docs; it wires a CopilotKit client
+to this app's `/agui` endpoint.
+
+For evals against a real model, add `--live` (e.g. `npm run eval -- --live`). The
+offline path uses recorded fixtures for the agent run and the generated
+`llmJudge` scorer, so tests and evals are deterministic and need no API key.
 
 To dogfood the Docker sandbox, start Docker and run:
 

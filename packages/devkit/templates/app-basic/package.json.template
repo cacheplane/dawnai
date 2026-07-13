@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "dawn dev --port 3000",
     "check": "dawn check",
     "eval": "dawn eval",
     "build": "tsc -p tsconfig.json",
