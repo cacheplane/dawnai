@@ -20,7 +20,7 @@ import {
   handleMemoryListRequest,
   handleMemoryRejectRequest,
 } from "./memory-handler.js"
-import { loadMiddleware, runMiddleware } from "./middleware.js"
+import { extractRouteParams, loadMiddleware, parseHeaders, runMiddleware } from "./middleware.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
 
@@ -373,6 +373,7 @@ function buildRouteTable(ctx: {
       handle: async (req, res, params) => {
         await handleAgUiRequest({
           appRoot,
+          middleware,
           registry,
           threadsStore,
           ...(sandboxManager ? { sandboxManager } : {}),
@@ -1053,36 +1054,6 @@ async function listen(
       resolve()
     })
   })
-}
-
-function parseHeaders(request: IncomingMessage): Record<string, string> {
-  const headers: Record<string, string> = {}
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (typeof value === "string") {
-      headers[key] = value
-    } else if (Array.isArray(value)) {
-      headers[key] = value.join(", ")
-    }
-  }
-  return headers
-}
-
-function extractRouteParams(routeId: string, input: unknown): Record<string, string> {
-  const params: Record<string, string> = {}
-  const matches = routeId.matchAll(/\[(\w+)\]/g)
-  const inputRecord = (typeof input === "object" && input !== null ? input : {}) as Record<
-    string,
-    unknown
-  >
-
-  for (const match of matches) {
-    const name = match[1]
-    if (name && name in inputRecord) {
-      params[name] = String(inputRecord[name])
-    }
-  }
-
-  return params
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

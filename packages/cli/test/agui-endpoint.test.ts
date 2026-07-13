@@ -14,7 +14,7 @@ afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn()
 })
 
-async function fixtureApp(): Promise<string> {
+async function fixtureApp(extraFiles: Record<string, string> = {}): Promise<string> {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-agui-"))
   cleanup.push(() => rm(appRoot, { force: true, recursive: true }))
   const files: Record<string, string> = {
@@ -22,6 +22,7 @@ async function fixtureApp(): Promise<string> {
     "package.json": '{ "name": "agui-fixture", "type": "module" }\n',
     "src/app/chat/index.ts":
       'import { agent } from "@dawn-ai/sdk"\nexport default agent({ model: "gpt-5-mini", systemPrompt: "You are helpful." })\n',
+    ...extraFiles,
   }
   for (const [rel, body] of Object.entries(files)) {
     const p = join(appRoot, rel)
@@ -75,4 +76,40 @@ it("streams AG-UI events from POST /agui/<route>", async () => {
   expect(text).toContain('"type":"TEXT_MESSAGE_CONTENT"')
   expect(text).toContain("Hi there!")
   expect(text).toContain('"type":"RUN_FINISHED"')
+}, 60_000)
+
+it("applies app middleware to /agui — a rejecting middleware blocks the run", async () => {
+  // Parity with runs/stream / runs/wait: /agui must run app middleware. A
+  // middleware that rejects should return its status/body and NOT start a run.
+  const appRoot = await fixtureApp({
+    "src/middleware.ts":
+      "export default async () => ({ action: 'reject', status: 403, body: { error: 'blocked by middleware' } })\n",
+  })
+  const { listener, close } = await createRuntimeRequestListener({ appRoot })
+  cleanup.push(() => close())
+
+  const server: Server = createServer(listener)
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  cleanup.push(() => new Promise<void>((resolve) => server.close(() => resolve())))
+  const { port } = server.address() as AddressInfo
+
+  const routeKey = encodeURIComponent("/chat#agent")
+  const res = await fetch(`http://127.0.0.1:${port}/agui/${routeKey}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      threadId: "t-mw",
+      runId: "r-mw",
+      state: {},
+      messages: [{ id: "1", role: "user", content: "hello" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    }),
+  })
+  const text = await res.text()
+  expect(res.status).toBe(403)
+  expect(JSON.parse(text)).toEqual({ error: "blocked by middleware" })
+  // The run never started — no AG-UI stream was written.
+  expect(text).not.toContain("RUN_STARTED")
 }, 60_000)

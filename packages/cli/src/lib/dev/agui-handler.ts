@@ -1,13 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { EventType, RunAgentInputSchema } from "@ag-ui/core"
 import { createAgUiTranslator, encodeAgUiSse, mapRunInput } from "@dawn-ai/ag-ui"
+import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import { streamResolvedRoute } from "../runtime/execute-route.js"
 import type { SandboxManager } from "../runtime/sandbox-manager.js"
+import { extractRouteParams, parseHeaders, runMiddleware } from "./middleware.js"
 import type { RuntimeRegistry } from "./runtime-registry.js"
 
 interface AgUiRequestOptions {
   readonly appRoot: string
+  readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly threadsStore: ThreadsStore
   readonly sandboxManager?: SandboxManager
@@ -25,8 +28,17 @@ async function readBody(request: IncomingMessage): Promise<string> {
 }
 
 export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<void> {
-  const { appRoot, registry, threadsStore, sandboxManager, signal, request, response, routeKey } =
-    options
+  const {
+    appRoot,
+    middleware,
+    registry,
+    threadsStore,
+    sandboxManager,
+    signal,
+    request,
+    response,
+    routeKey,
+  } = options
 
   const raw = await readBody(request)
   let parsedJson: unknown
@@ -59,6 +71,24 @@ export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<vo
     return
   }
 
+  // Run app middleware before starting the run — parity with runs/stream and
+  // runs/wait so auth/rate-limit/context middleware applies to /agui too.
+  const mwRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: parseHeaders(request),
+    method: request.method ?? "POST",
+    params: extractRouteParams(route.routeId, input),
+    routeId: route.routeId,
+    url: request.url ?? `/agui/${routeKey}`,
+  }
+  const mwResult = await runMiddleware(middleware, mwRequest)
+  if (mwResult.action === "reject") {
+    response.statusCode = mwResult.status
+    response.setHeader("content-type", "application/json")
+    response.end(JSON.stringify(mwResult.body))
+    return
+  }
+
   const threadId = input.threadId
   const existing = await threadsStore.getThread(threadId)
   if (!existing) await threadsStore.createThread({ thread_id: threadId })
@@ -78,6 +108,7 @@ export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<vo
     for await (const chunk of streamResolvedRoute({
       appRoot,
       input: dawnInput,
+      ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
       ...(resumeDecision ? { resumeDecision } : {}),
       routeFile: route.routeFile,
       routeId: route.routeId,
