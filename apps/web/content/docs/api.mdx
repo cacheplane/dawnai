@@ -709,18 +709,41 @@ Pure, transport-agnostic AG-UI translation utilities. The CLI uses the same adap
 
 ```ts
 import {
+  createCounterIdFactory,
+  createDefaultIdFactory,
   fromRunAgentInput,
   toAguiEvents,
   type AguiOutboundEvent,
   type DawnAgentStreamChunk,
+  type DawnInterruptEnvelope,
   type DawnMessage,
+  type DawnResumeRequest,
   type DawnRunInput,
+  type IdFactory,
   type RunContext,
   type ToAguiOptions,
 } from "@dawn-ai/ag-ui"
 ```
 
 See [Dev Server](/docs/dev-server#ag-ui-endpoint).
+
+### ID factories
+
+`toAguiEvents` uses `createDefaultIdFactory()` to generate prefixed UUID-based message, tool-call, and tool-result ids when it must synthesize them. `createCounterIdFactory()` produces deterministic counters for tests. Inject either factory, or a custom `IdFactory`, through `options.idFactory`:
+
+```ts
+const events = toAguiEvents(chunks, context, {
+  idFactory: createCounterIdFactory(),
+})
+```
+
+```ts
+export type IdFactory = (kind: "message" | "toolCall" | "toolResult") => string
+
+export interface ToAguiOptions {
+  readonly idFactory?: IdFactory
+}
+```
 
 ### `toAguiEvents(chunks, context)`
 

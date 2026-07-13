@@ -7,7 +7,13 @@ import { fileURLToPath } from "node:url"
 
 import * as packCheck from "./lib/pack-check.mjs"
 
-const { expectedExportFailures, missingExportTargets, packages, validatePackManifest } = packCheck
+const {
+  expectedExportFailures,
+  forbiddenPackedFiles,
+  missingExportTargets,
+  packages,
+  validatePackManifest,
+} = packCheck
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const tempRoots = []
@@ -68,6 +74,11 @@ describe("pack manifest validation", () => {
       )
     }
     assert.deepEqual(agUiPackage.expectedExports, agUiExpectedExports)
+    assert.deepEqual(agUiPackage.forbiddenFiles, [
+      "dist/encode.*",
+      "dist/run-input.*",
+      "dist/translate.*",
+    ])
   })
 
   it("checks the create app executable", () => {
@@ -138,6 +149,30 @@ describe("pack manifest validation", () => {
         validatePackManifest(root, [{ ...packageEntry("one"), expectedFiles: ["package.json"] }]),
       /packages\/one must expect README\.md/,
     )
+  })
+})
+
+describe("forbiddenPackedFiles", () => {
+  it("reports packed files matching configured forbidden path patterns", async () => {
+    const packedRoot = await createPackedRoot([
+      "dist/encode.d.ts",
+      "dist/encode.js",
+      "dist/index.js",
+      "dist/nested/encode.js",
+      "dist/run-input.js",
+    ])
+
+    assert.deepEqual(forbiddenPackedFiles(packedRoot, ["dist/encode.*", "dist/run-input.*"]), [
+      "dist/encode.d.ts",
+      "dist/encode.js",
+      "dist/run-input.js",
+    ])
+  })
+
+  it("allows manifests to omit forbidden file patterns", async () => {
+    const packedRoot = await createPackedRoot(["dist/encode.js"])
+
+    assert.deepEqual(forbiddenPackedFiles(packedRoot), [])
   })
 })
 

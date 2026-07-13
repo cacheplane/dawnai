@@ -50,7 +50,8 @@ function stringifyContent(output: unknown): string {
   if (typeof output === "string") return output
   if (output === undefined || output === null) return ""
   try {
-    return JSON.stringify(output)
+    const serialized = JSON.stringify(output)
+    return typeof serialized === "string" ? serialized : String(output)
   } catch {
     return String(output)
   }

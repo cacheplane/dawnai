@@ -150,13 +150,24 @@ export const packages = [
   {
     dir: "packages/ag-ui",
     expectedFiles: [
+      "dist/ids.js",
+      "dist/ids.d.ts",
+      "dist/inbound.js",
+      "dist/inbound.d.ts",
       "dist/index.js",
       "dist/index.d.ts",
+      "dist/interrupts.js",
+      "dist/interrupts.d.ts",
+      "dist/outbound.js",
+      "dist/outbound.d.ts",
       "dist/sse.js",
       "dist/sse.d.ts",
+      "dist/types.js",
+      "dist/types.d.ts",
       "README.md",
       "package.json",
     ],
+    forbiddenFiles: ["dist/encode.*", "dist/run-input.*", "dist/translate.*"],
     expectedExports: {
       ".": {
         types: "./dist/index.d.ts",
@@ -274,6 +285,16 @@ export function expectedExportFailures(exportsField, expectedExports = {}) {
   }
 
   return failures
+}
+
+export function forbiddenPackedFiles(packedRoot, forbiddenFiles = []) {
+  const patterns = forbiddenFiles.map(
+    (pattern) => new RegExp(`^${pattern.split("*").map(escapeRegExp).join("[^/]*")}$`),
+  )
+
+  return packedRegularFiles(packedRoot)
+    .filter((relativePath) => patterns.some((pattern) => pattern.test(relativePath)))
+    .sort()
 }
 
 function relativeExportTargets(value) {

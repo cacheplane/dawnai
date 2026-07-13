@@ -1,7 +1,8 @@
-import { EventType } from "@ag-ui/core"
+import { EventType, ToolCallResultEventSchema } from "@ag-ui/core"
 import { describe, expect, test } from "vitest"
 import { createCounterIdFactory } from "../src/ids.js"
 import { toAguiEvents } from "../src/outbound.js"
+import { encodeAgUiSse } from "../src/sse.js"
 import type { DawnAgentStreamChunk } from "../src/types.js"
 
 const CTX = { threadId: "th-1", runId: "rn-1" }
@@ -68,6 +69,29 @@ describe("toAguiEvents", () => {
         outcome: { type: "success" },
       },
     ])
+  })
+
+  test.each([
+    ["function", () => undefined],
+    ["symbol", Symbol("result")],
+  ])("tool result %s output remains string content through AG-UI SSE", async (_, output) => {
+    const expected = String(output)
+    const events = await collect([
+      { type: "tool_result", data: { id: "run-special", name: "special", output } },
+      { type: "done" },
+    ])
+    const result = ToolCallResultEventSchema.parse(
+      events.find((event) => event.type === EventType.TOOL_CALL_RESULT),
+    )
+
+    expect(typeof result.content).toBe("string")
+    expect(result.content).toBe(expected)
+
+    const dataLine = encodeAgUiSse(result)
+      .split("\n")
+      .find((line) => line.startsWith("data: "))
+    if (dataLine === undefined) throw new Error("SSE frame is missing a data line")
+    expect(JSON.parse(dataLine.slice("data: ".length))).toMatchObject({ content: expected })
   })
 
   test("tool call args JSON-serialize string input", async () => {

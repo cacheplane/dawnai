@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 
 import {
   expectedExportFailures,
+  forbiddenPackedFiles,
   missingExportTargets,
   packages,
   validatePackManifest,
@@ -43,6 +44,12 @@ try {
       if (!existsSync(join(packedRoot, relativePath))) {
         failures.push(`${sourcePackageJson.name}: packed tarball is missing ${relativePath}`)
       }
+    }
+
+    for (const relativePath of forbiddenPackedFiles(packedRoot, packageConfig.forbiddenFiles)) {
+      failures.push(
+        `${sourcePackageJson.name}: packed tarball contains forbidden file ${relativePath}`,
+      )
     }
 
     for (const fieldName of packageConfig.requiredFields) {

@@ -36,6 +36,8 @@ POST http://127.0.0.1:3001/agui/%2Fchat%23agent
 
 ```ts
 import {
+  createCounterIdFactory,
+  createDefaultIdFactory,
   fromRunAgentInput,
   toAguiEvents,
   type AguiOutboundEvent,
@@ -44,12 +46,35 @@ import {
   type DawnMessage,
   type DawnResumeRequest,
   type DawnRunInput,
+  type IdFactory,
   type RunContext,
+  type ToAguiOptions,
 } from "@dawn-ai/ag-ui"
 ```
 
 The root package is a pure, transport-agnostic adapter. It has no CLI, HTTP, or
 LangGraph dependency.
+
+### ID factories
+
+`toAguiEvents` uses `createDefaultIdFactory()` to generate prefixed UUID-based
+message, tool-call, and tool-result ids when it must synthesize them.
+`createCounterIdFactory()` produces deterministic counters for tests. Inject
+either factory, or a custom `IdFactory`, through `options.idFactory`:
+
+```ts
+const events = toAguiEvents(chunks, context, {
+  idFactory: createCounterIdFactory(),
+})
+```
+
+```ts
+export type IdFactory = (kind: "message" | "toolCall" | "toolResult") => string
+
+export interface ToAguiOptions {
+  readonly idFactory?: IdFactory
+}
+```
 
 ### `toAguiEvents(chunks, ctx)`
 
@@ -116,7 +141,7 @@ When present, the adapter preserves those fields in `DawnRunInput.resume`:
 }
 ```
 
-The adapter does not interpret AG-UI `tools`, `state`, or `context` in v1; they
+The adapter does not interpret AG-UI `tools`, `state`, or `context`; they
 remain available through `raw`.
 
 Interrupt chunks are accumulated and emitted as a standard AG-UI
