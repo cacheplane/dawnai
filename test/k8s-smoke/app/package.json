@@ -1,0 +1,17 @@
+{
+  "name": "dawn-smoke-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "dawn build",
+    "dev": "dawn dev"
+  },
+  "dependencies": {
+    "@dawn-ai/cli": "*",
+    "@dawn-ai/core": "*",
+    "@dawn-ai/langchain": "*",
+    "@dawn-ai/sandbox": "*",
+    "@dawn-ai/sdk": "*",
+    "zod": "^4.0.0"
+  }
+}

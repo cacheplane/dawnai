@@ -34,6 +34,9 @@ importers:
       publint:
         specifier: 0.3.21
         version: 0.3.21
+      tsx:
+        specifier: ^4.23.0
+        version: 4.23.0
       turbo:
         specifier: 2.10.4
         version: 2.10.4
