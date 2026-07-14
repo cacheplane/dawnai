@@ -37,9 +37,12 @@ describe("streamAgent — tool-call id correlation", () => {
 
     const call = chunks.find((c) => c.type === "tool_call")
     const result = chunks.find((c) => c.type === "tool_result")
-    expect((call?.data as { id?: string }).id).toBe("run-xyz")
-    expect((result?.data as { id?: string }).id).toBe("run-xyz")
+    if (!call || !result) throw new Error("Expected correlated tool call and result chunks")
+    const callId = (call.data as { id?: string }).id
+    const resultId = (result.data as { id?: string }).id
+    expect(callId).toBe("run-xyz")
+    expect(resultId).toBe("run-xyz")
     // start and end of the same invocation share the id
-    expect((call?.data as { id?: string }).id).toBe((result?.data as { id?: string }).id)
+    expect(callId).toBe(resultId)
   })
 })
