@@ -368,7 +368,9 @@ function exportPatternHasPackedFile(packedRoot, exportKey, patternParts) {
     const match = pattern.exec(relativePath)
     const subpath = match?.groups?.subpath
     return (
-      subpath && validPackageSubpath(subpath) && validPackagePath(exportKey.replace("*", subpath))
+      subpath &&
+      validPackageSubpath(subpath) &&
+      validPackagePath(exportKey.replaceAll("*", () => subpath))
     )
   })
 }
