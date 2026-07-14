@@ -26,7 +26,7 @@
     "@dawn-ai/config-typescript": "workspace:*",
     "@dawn-ai/evals": "workspace:*",
     "@dawn-ai/testing": "workspace:*",
-    "@types/node": "26.1.0",
+    "@types/node": "26.1.1",
     "typescript": "6.0.2",
     "vitest": "^4.1.9"
   }
