@@ -166,9 +166,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       routePath: r.routePath,
       threadId,
       ...(sandboxManager ? { sandboxManager } : {}),
-      ...(driveOpts.resumeDecision !== undefined
-        ? { resumeDecision: driveOpts.resumeDecision }
-        : {}),
+      ...(driveOpts.resumeDecision !== undefined ? { resume: driveOpts.resumeDecision } : {}),
     }
     const stream = streamResolvedRoute(streamArgs)
     const result = await collectRunResult(stream, threadId)
