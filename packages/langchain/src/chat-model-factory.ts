@@ -1,5 +1,5 @@
 import type { BuiltInModelProviderId, ReasoningConfig } from "@dawn-ai/sdk"
-import { validateModelId } from "@dawn-ai/sdk"
+import { errorDocsUrl, validateModelId } from "@dawn-ai/sdk"
 
 type Importer = (specifier: string) => Promise<Record<string, unknown>>
 type ChatModelConstructor = new (options: Record<string, unknown>) => unknown
@@ -35,7 +35,7 @@ export function warnOnUnknownModelId(opts: {
   warnedModelIds.add(key)
   const suggestions = verdict.suggestions.map((s) => `"${s}"`).join(", ")
   console.warn(
-    `[dawn:models] model "${opts.model}" is not a known ${verdict.provider} model id.` +
+    `[dawn:models] [DAWN_E4002] model "${opts.model}" is not a known ${verdict.provider} model id.` +
       (suggestions ? ` Did you mean ${suggestions}?` : "") +
       " Proceeding anyway.",
   )
@@ -45,7 +45,9 @@ export function missingProviderPackageMessage(
   provider: BuiltInModelProviderId,
   packageName: string,
 ): string {
-  return `Provider "${provider}" requires ${packageName}. Install it with: pnpm add ${packageName}`
+  const url = errorDocsUrl("DAWN_E4001")
+  const docs = url ? ` See ${url}` : ""
+  return `Provider "${provider}" requires ${packageName}. Install it with: pnpm add ${packageName} [DAWN_E4001]${docs}`
 }
 
 export async function createChatModel(options: {

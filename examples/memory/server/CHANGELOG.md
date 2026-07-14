@@ -1,5 +1,16 @@
 # @dawn-example/memory
 
+## 0.0.4
+
+### Patch Changes
+
+- Updated dependencies [e413b05]
+  - @dawn-ai/cli@0.8.12
+  - @dawn-ai/core@0.8.12
+  - @dawn-ai/langchain@0.8.12
+  - @dawn-ai/memory-pgvector@0.8.12
+  - @dawn-ai/sdk@0.8.12
+
 ## 0.0.3
 
 ### Patch Changes

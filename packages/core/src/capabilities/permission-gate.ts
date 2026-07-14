@@ -5,12 +5,19 @@ import {
   suggestedMemoryPattern,
   suggestedPathPattern,
 } from "@dawn-ai/permissions"
-import type { ConstraintContext, ConstraintPredicate } from "@dawn-ai/sdk"
+import type { ConstraintContext, ConstraintPredicate, DawnErrorCode } from "@dawn-ai/sdk"
 import { interrupt } from "@langchain/langgraph"
 
 export type PathOperation = "readFile" | "writeFile" | "listDir"
 
-export type GateResult = { allowed: true } | { allowed: false; reason: string }
+export type GateResult =
+  | { allowed: true }
+  | { allowed: false; reason: string; code?: DawnErrorCode }
+
+/** Prefix a denial reason with its error code when the tool result is returned to the model. */
+function codedReason(gate: { reason: string; code?: DawnErrorCode }): string {
+  return gate.code ? `[${gate.code}] ${gate.reason}` : gate.reason
+}
 
 export async function gatePathOp(
   permissions: PermissionsStore | undefined,
@@ -104,10 +111,18 @@ export async function gateToolOp(
   const decision = permissions.match("tool", toolName)
   if (decision === "allow") return { allowed: true }
   if (decision === "deny") {
-    return { allowed: false, reason: `Permission denied by user: tool ${toolName}` }
+    return {
+      allowed: false,
+      reason: `Permission denied by user: tool ${toolName}`,
+      code: "DAWN_E3001",
+    }
   }
   if (permissions.mode === "non-interactive") {
-    return { allowed: false, reason: `Permission denied (fail-closed): tool ${toolName}` }
+    return {
+      allowed: false,
+      reason: `Permission denied (fail-closed): tool ${toolName}`,
+      code: "DAWN_E3001",
+    }
   }
   if (opts?.interruptCapable === false) {
     return {
@@ -116,6 +131,7 @@ export async function gateToolOp(
         `Permission denied: tool "${toolName}" requires approval and interactive ` +
         `permission prompts are not available in this execution context. ` +
         `Add an allow rule for "tool" to the permissions config in dawn.config.ts.`,
+      code: "DAWN_E3001",
     }
   }
   const result = await emitPermissionInterrupt({
@@ -125,7 +141,11 @@ export async function gateToolOp(
     permissions,
   })
   if (result === "deny") {
-    return { allowed: false, reason: `Permission denied by user: tool ${toolName}` }
+    return {
+      allowed: false,
+      reason: `Permission denied by user: tool ${toolName}`,
+      code: "DAWN_E3001",
+    }
   }
   return { allowed: true }
 }
@@ -217,7 +237,7 @@ export function wrapToolWithApproval<
     ...tool,
     run: async (input: unknown, context: C) => {
       const gate = await gateToolOp(permissions, tool.name, buildArgsPreview(input), opts)
-      if (!gate.allowed) return gate.reason
+      if (!gate.allowed) return codedReason(gate)
       return tool.run(input, context)
     },
   }
@@ -279,7 +299,7 @@ export function wrapToolWithConstraint<
         (verdict as { approve?: unknown }).approve === true
       ) {
         const gate = await gateToolOp(permissions, tool.name, buildArgsPreview(input))
-        if (!gate.allowed) return gate.reason
+        if (!gate.allowed) return codedReason(gate)
         return tool.run(input, context)
       }
       // Any other value (false, undefined, { approve: false }, a number, …) is

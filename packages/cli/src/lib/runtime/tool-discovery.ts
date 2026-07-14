@@ -3,6 +3,7 @@ import { basename, join } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import type { WorkspaceFs } from "@dawn-ai/sdk"
+import { describeError, errorDocsUrl } from "@dawn-ai/sdk"
 
 import { importModule } from "./import-module.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
@@ -128,6 +129,13 @@ export function injectGeneratedSchemas(
   })
 }
 
+/** `[DAWN_E5002] See <docs>` footer, with the docs URL centralized in the registry. */
+function toolShapeDocsFooter(): string {
+  const code = describeError("DAWN_E5002").code
+  const url = errorDocsUrl("DAWN_E5002")
+  return url ? `[${code}] See ${url}` : `[${code}]`
+}
+
 async function loadToolDefinition(
   filePath: string,
   scope: ToolScope,
@@ -179,13 +187,13 @@ async function loadToolDefinition(
         `  /** Describe what the tool does. */\n` +
         `  export default async (input: { readonly query: string }) =>\n` +
         `    search.invoke({ query: input.query })\n\n` +
-        `Docs: https://dawnai.org/docs/tools`,
+        toolShapeDocsFooter(),
     )
   }
 
   throw new Error(
     `Tool file ${filePath} must default export a function (got ${describeExport(definition)}).\n` +
-      `Docs: https://dawnai.org/docs/tools`,
+      toolShapeDocsFooter(),
   )
 }
 

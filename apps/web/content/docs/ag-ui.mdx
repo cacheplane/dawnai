@@ -1,0 +1,131 @@
+# AG-UI & Web Clients
+
+Dawn exposes [AG-UI](https://github.com/ag-ui-protocol/ag-ui) for browser clients
+alongside Agent Protocol. `@dawn-ai/ag-ui` is the pure translation library: it
+maps Dawn stream chunks to AG-UI events and maps `RunAgentInput` back to a
+Dawn-shaped run input. The package owns no server, transport, or agent runtime.
+
+`dawn dev` and the production runtime started by `dawn start` use that adapter to
+serve an SSE endpoint. For its complete request and middleware behavior, see
+[Dev Server](/docs/dev-server#ag-ui-endpoint).
+
+## The endpoint
+
+```http
+POST /agui/{routeId}
+content-type: application/json
+accept: text/event-stream
+```
+
+The URL segment is the URL-encoded `<routeId>#<kind>` assistant id. For example,
+`/chat#agent` becomes `/agui/%2Fchat%23agent`. The request body is an AG-UI
+`RunAgentInput`. Dawn creates an unknown thread, invokes the same route runtime
+used by Agent Protocol, and streams translated events back as SSE.
+
+## Consuming it from a web UI
+
+`examples/chat/web` is the canonical reference client. Its CopilotKit runtime
+registers an `HttpAgent` pointed at Dawn's encoded route URL. The browser talks
+to the Next.js runtime route, while only the Dawn server holds model credentials.
+
+```text
+browser
+  -> CopilotKit runtime
+    -> HttpAgent -> POST /agui/%2Fchat%23agent
+      -> Dawn route runtime
+        -> AG-UI event stream
+```
+
+CopilotKit's sidebar uses the literal agent id `default` when none is supplied,
+so the example registers the Dawn route under that key. See
+`examples/chat/web/README.md` for the complete setup and smoke checklist.
+
+## Adapter API
+
+The root package exports the transport-independent mapping surface:
+
+```ts
+import { fromRunAgentInput, toAguiEvents } from "@dawn-ai/ag-ui"
+
+const dawnInput = fromRunAgentInput(runAgentInput)
+
+for await (const event of toAguiEvents(dawnChunks, { threadId, runId })) {
+  // Send `event` through the transport chosen by the application.
+}
+```
+
+Transport helpers are isolated behind subpaths. An SSE server can encode an
+event without expanding the root API:
+
+```ts
+import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
+
+response.write(encodeAgUiSse(event, request.headers.accept))
+```
+
+### Outbound events
+
+`toAguiEvents(chunks, context)` is a stateful async generator. It frames Dawn's
+implicit assistant text and preserves upstream tool-call ids for result
+correlation.
+
+| Dawn chunk | AG-UI event(s) |
+|---|---|
+| stream start | `RUN_STARTED` |
+| `token` | `TEXT_MESSAGE_START` once, then `TEXT_MESSAGE_CONTENT` per delta |
+| `tool_call` | close open text, then `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END` |
+| `tool_result` | close open text, then `TOOL_CALL_RESULT` |
+| `interrupt` | terminal `RUN_FINISHED` with `outcome.type: "interrupt"` |
+| `done` | terminal `RUN_FINISHED` with `outcome.type: "success"` |
+| upstream error | terminal `RUN_ERROR` |
+
+Planning updates, subagent capability events, and unknown chunk types have no v1
+mapping and are ignored. The adapter does not invent application state or
+protocol-specific custom events.
+
+### Inbound input
+
+`fromRunAgentInput(input)` translates every AG-UI message and preserves the
+original request as `raw`, where consumers can inspect tools, state, and context.
+The CLI endpoint forwards only the newest user message because Dawn owns the
+checkpointed conversation for the thread.
+
+The standard top-level `RunAgentInput.resume` array is preserved as
+vocabulary-neutral Dawn resume requests:
+
+```ts
+resume?: Array<{
+  interruptId: string
+  status: "resolved" | "cancelled"
+  payload?: unknown
+}>
+```
+
+For a permission prompt, a resolved payload can carry a Dawn decision such as
+`"once"` or `"always"`; cancelling the interrupt maps to denial at the runtime
+boundary. Every answer must address one currently pending interrupt.
+
+## Threading
+
+AG-UI's `threadId` is the Dawn thread id; there is no separate mapping table.
+AG-UI and Agent Protocol requests execute the same route code and use the same
+thread store and checkpointer. A caller can inspect state through Agent Protocol
+while a UI drives later turns through AG-UI.
+
+## Disconnect and reconnect
+
+<Callout type="warn" title="No reconnect or replay support">
+  Each POST owns one SSE response. Dawn does not buffer emitted AG-UI events or
+  support last-event-id replay. If the connection drops, the route can finish
+  and checkpoint its state, but the client cannot reattach to that in-flight
+  event stream. A later request against the same thread starts a new run from
+  the latest checkpoint.
+</Callout>
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/dev-server", title: "Dev Server", subtitle: "the AG-UI endpoint, resume validation, and middleware behavior" },
+  { href: "/docs/permissions", title: "Permissions", subtitle: "the Dawn decisions carried by resolved interrupt payloads" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "building and starting the production runtime" },
+]} />

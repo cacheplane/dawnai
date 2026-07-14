@@ -1,6 +1,6 @@
 # CLI Reference
 
-Dawn ships a single `dawn` binary with twelve commands: `add`, `build`, `check`, `dev`, `docs`, `eval`, `memory`, `routes`, `run`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
+Dawn ships a single `dawn` binary with thirteen commands: `add`, `build`, `check`, `dev`, `docs`, `eval`, `memory`, `routes`, `run`, `start`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
 
 ## Running the CLI
 
@@ -42,7 +42,7 @@ When a route, tool, or config module fails to load with the opaque ESM error `do
 
 ## `dawn verify`
 
-Runs four checks in one call (`app`, `routes`, `typegen`, `deps`) — the canonical pre-deploy integrity gate.
+Runs five checks in one call (`app`, `routes`, `typegen`, `deps`, `runtime`) — the canonical preflight before `dawn dev`, `dawn start`, or a deploy. A green `dawn verify` means "this app will boot in this environment."
 
 ```
 dawn verify
@@ -54,7 +54,13 @@ Flags:
 - `--json` — emit a structured report (`{ status, appRoot, checks, counts }`) instead of human-readable text.
 - `--env-file <path>` — path to a `.env` file (overrides `dawn.config.ts` `env` and the default `./.env`).
 
-The `deps` check covers missing packages and missing env vars (advisory) — uniquely useful before a deploy. See [Deployment](/docs/deployment) for the recommended workflow.
+The `deps` check covers missing packages and missing env vars (advisory). It is **provider-aware**: it derives the API-key env var from the providers your routes actually use — an Anthropic-only app is checked for `ANTHROPIC_API_KEY`, an OpenAI app for `OPENAI_API_KEY`, a multi-provider app for the union, and a local Ollama app for none. A missing key is a warning, not a failure (the key may come from the runtime environment).
+
+The `runtime` check gates **environment readiness**:
+- **Node** — asserts the running Node version is at least `22.13.0` (Dawn's floor; below it `node:sqlite` breaks). Below the floor **fails** `verify` with a non-zero exit.
+- **Docker** — present only when `dawn.config.ts` configures a sandbox provider; it runs the provider's daemon preflight and **fails** if the daemon is unreachable. Apps with no sandbox skip this sub-check entirely.
+
+See [Deployment](/docs/deployment) for the recommended workflow.
 
 ## `dawn routes`
 
@@ -189,6 +195,8 @@ dawn dev --port 3001
 Flags:
 - `--port <n>` — HTTP port. Default: dynamically allocated. Pass `--port` for a stable address.
 - `--env-file <path>` — path to a `.env` file (overrides `dawn.config.ts` `env` and the default `./.env`).
+
+Because the default port is chosen dynamically, copy-paste `curl` examples should pass an explicit `--port` (or read the port `dawn dev` prints on startup) rather than assuming a fixed value.
 
 If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACING_V2` is not already set, `dawn dev` automatically enables LangSmith tracing by setting `LANGCHAIN_TRACING_V2=true`. Set `LANGCHAIN_PROJECT` to control which project receives the traces. See [Observability](/docs/observability) for the full tracing guide.
 

@@ -4,13 +4,23 @@ export interface CommandIo {
   readonly stderr: (message: string) => void
 }
 
+import type { DawnErrorCode } from "@dawn-ai/sdk"
+
 export class CliError extends Error {
   readonly exitCode: number
+  readonly code?: DawnErrorCode
 
-  constructor(message: string, exitCode = 1, options?: { readonly cause?: unknown }) {
+  constructor(
+    message: string,
+    exitCode = 1,
+    options?: { readonly cause?: unknown; readonly code?: DawnErrorCode },
+  ) {
     super(message, options)
     this.name = "CliError"
     this.exitCode = exitCode
+    if (options?.code !== undefined) {
+      this.code = options.code
+    }
   }
 }
 

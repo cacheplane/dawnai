@@ -71,8 +71,26 @@ describe("dawn verify", () => {
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("Dawn app integrity OK")
-    expect(result.stdout).toContain("4 checks passed")
+    expect(result.stdout).toContain("5 checks passed")
     expect(result.stdout).toContain("2 routes discovered")
+    expect(result.stdout).toMatch(/Runtime: Node .+ OK/)
+  })
+
+  test("fails verify with a nonzero exit when the Node runtime is below the floor", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": "export async function workflow() { return {} }\n",
+    })
+
+    const descriptor = Object.getOwnPropertyDescriptor(process.versions, "node")
+    Object.defineProperty(process.versions, "node", { value: "20.11.0", configurable: true })
+    try {
+      const result = await invoke(["verify", "--cwd", appRoot])
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toMatch(/^Verify failed:/)
+      expect(result.stderr).toContain("22.13.0")
+    } finally {
+      if (descriptor) Object.defineProperty(process.versions, "node", descriptor)
+    }
   })
 
   test("resolves the Dawn app root from a child directory via --cwd", async () => {
@@ -236,11 +254,20 @@ describe("dawn verify", () => {
           name: "deps",
           status: expect.stringMatching(/^(passed|warning)$/),
         },
+        {
+          name: "runtime",
+          node: {
+            version: expect.any(String),
+            ok: true,
+            floor: "22.13.0",
+          },
+          status: "passed",
+        },
       ],
       counts: {
         failed: 0,
-        passed: 4,
-        total: 4,
+        passed: 5,
+        total: 5,
       },
       status: "passed",
     })

@@ -28,7 +28,7 @@ No. Dawn is TypeScript-only and the type inference is the whole point — tool p
 
 ### Is Dawn production-ready?
 
-Dawn produces deployment artifacts; the framework itself is pre-1.0 and the API surface is still moving. `dawn build` writes a `.dawn/build/langgraph.json` plus per-route entry files for LangGraph/LangSmith deployment. Lock to a pinned version and read release notes between upgrades. See [Deployment](/docs/deployment).
+Dawn produces deployment artifacts; the framework itself is pre-1.0 and the API surface is still moving. `dawn build` emits a runnable `node` target (`server.mjs` plus a hardened `Dockerfile`) and a `langsmith` target (`langgraph.json`) by default; `dawn start` serves the `node` target in production on `0.0.0.0`. Lock to a pinned version and read release notes between upgrades. See [Deployment](/docs/deployment).
 
 ## Working in Dawn
 
@@ -38,7 +38,7 @@ Yes — that is the point. A route's `index.ts` can default-export an `agent()` 
 
 ### What does `dawn build` actually do?
 
-It walks your routes, runs typegen, and writes `.dawn/build/langgraph.json` plus a per-route entry file under `.dawn/build/<routeSlug>.ts`. Each agent route's entry imports your default `agent()` descriptor, materializes it as a LangGraph graph, and wires in discovered tools. Each `assistant_id` is `<routeId>#<kind>` — for example `/research#agent`. See [Deployment](/docs/deployment).
+It walks your routes, runs typegen, then writes deployment artifacts for each configured `build.targets` (both by default). The `node` target emits `.dawn/build/server.mjs` — which boots the real Dawn runtime (Agent Protocol, AG-UI, and the sandbox if configured) — plus a hardened `Dockerfile`; run it with `dawn start` or `docker build`/`docker run`. The `langsmith` target emits `.dawn/build/langgraph.json` plus a per-route entry file under `.dawn/build/<routeSlug>.ts`; each agent route's entry imports your default `agent()` descriptor, materializes it as a LangGraph graph, and wires in discovered tools. Each `assistant_id` is `<routeId>#<kind>` — for example `/research#agent`. See [Deployment](/docs/deployment).
 
 ### Why a meta-framework instead of a library?
 

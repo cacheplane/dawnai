@@ -3,7 +3,7 @@ name: dawn-app
 description: Runs a built Dawn app image (from `langgraphjs dockerfile`) on Kubernetes as a Deployment + Service, with optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget, wired to the in-cluster kubernetesSandbox orchestrator ServiceAccount.
 type: application
 version: 0.1.0
-appVersion: "0.8.11"
+appVersion: "0.8.12"
 keywords: [dawn, langgraph, kubernetes, deployment]
 home: https://dawnai.org
 sources: [https://github.com/cacheplane/dawnai]

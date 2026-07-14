@@ -167,6 +167,8 @@ Kubernetes Pod isolation is the same boundary class as Docker's container isolat
 
 ## Deploying the sandbox infrastructure (Helm)
 
+For the orientation-level view of both charts before diving into the reference below, see [Deploying on Kubernetes](/docs/deployment#deploying-on-kubernetes).
+
 `kubernetesSandbox` assumes a namespace already exists with the RBAC, quotas, and network policy the provider's Pods need. The `dawn-sandbox-infra` Helm chart provisions that cluster-side infrastructure — install it once per cluster (or per environment) before pointing `kubernetesSandbox` at it:
 
 ```bash
@@ -343,6 +345,17 @@ export default config({
 ```
 
 Use it in harness-driven tests the same way you'd test any other agent route — it satisfies the same `SandboxProvider` contract as `dockerSandbox`, so wiring behavior (per-thread isolation, warm reuse, subagents sharing a thread's sandbox) is exercised without spinning up containers.
+
+## Verifying the full arc (end-to-end)
+
+Two gated CI lanes prove the whole deployment path composes — a real Dawn app, built the user-facing way (`dawn build`'s [node target](/docs/deployment)) and deployed, drives the provider **from inside its own running workload** to spawn a real, isolated sandbox on an Agent-Protocol request, then tears it down:
+
+- **`sandbox-docker-e2e`** — the app runs as a container with the host Docker socket mounted and drives `dockerSandbox` (docker-out-of-docker) to spawn a **sibling** sandbox container.
+- **`sandbox-k8s-e2e`** — the app runs as a Pod (deployed by the [`dawn-app` chart](#deploying-a-dawn-app-helm), using the orchestrator ServiceAccount from the [`dawn-sandbox-infra` chart](#deploying-the-sandbox-infrastructure-helm)) and drives `kubernetesSandbox` to spawn a sandbox **Pod** in the sandbox namespace.
+
+Both are deterministic (the agent turn is driven by a mocked model, no API key) and assert on the **real in-sandbox command output** — that `runBash` ran as the hardened non-root user (`id -u` = `1000`) inside the sandbox workload (not the app), and that the sandbox Pod/container and its volume are removed on thread delete. They're gated behind `DAWN_TEST_SMOKE_E2E=1` and run on demand, the same way the provider conformance lanes do.
+
+The distinction they lock in: only the **Dawn runtime** server (`dawn dev`, `dawn start`, or the node target's `server.mjs`) engages the sandbox. An image built via the LangSmith/`langgraphjs` platform path never runs the Dawn runtime and never touches the sandbox — see [Deploying to production](/docs/deployment).
 
 ## What it is — and isn't
 

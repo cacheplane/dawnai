@@ -32,6 +32,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
       { label: "Middleware", href: "/docs/middleware" },
       { label: "Workspace Filesystem", href: "/docs/workspace" },
       { label: "Context Management", href: "/docs/context-management" },
+      { label: "Access Control", href: "/docs/access-control" },
       { label: "Permissions", href: "/docs/permissions" },
       { label: "Sandbox", href: "/docs/sandbox" },
       { label: "Retry", href: "/docs/retry" },
@@ -41,6 +42,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
     label: "Tooling",
     items: [
       { label: "Dev Server", href: "/docs/dev-server" },
+      { label: "AG-UI & Web Clients", href: "/docs/ag-ui" },
       { label: "Blueprints", href: "/docs/blueprints" },
       { label: "Testing", href: "/docs/testing" },
       { label: "Testing Agents", href: "/docs/testing-agents" },
@@ -58,6 +60,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
       { label: "Stream output", href: "/docs/recipes/stream-output" },
       { label: "Retry flaky tools", href: "/docs/recipes/retry-flaky-tools" },
       { label: "Dispatch from a route", href: "/docs/recipes/dispatch-from-route" },
+      { label: "Research web UI", href: "/docs/recipes/research-web-ui" },
     ],
   },
   {
@@ -66,7 +69,9 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
       { label: "API", href: "/docs/api" },
       { label: "CLI", href: "/docs/cli" },
       { label: "Configuration", href: "/docs/configuration" },
+      { label: "Error Codes", href: "/docs/errors" },
       { label: "Observability", href: "/docs/observability" },
+      { label: "Upgrading", href: "/docs/upgrading" },
       { label: "FAQ", href: "/docs/faq" },
     ],
   },

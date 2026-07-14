@@ -102,6 +102,59 @@ for (const href of uniqueNavDocHrefs) {
   }
 }
 
+// Error-code registry ↔ docs drift guard. Every registry `docsPath` must
+// resolve to a real /docs/<slug> nav page, and /docs/errors must list exactly
+// the registry's codes. Reuses docs-bundle nav parsing for page existence.
+const sdkEntryUrl = pathToFileURL(resolve(repoRoot, "packages/sdk/dist/index.js")).href
+const sdkEntry = await import(sdkEntryUrl).catch((error) => {
+  failures.push(
+    `Error-docs guard could not import packages/sdk/dist/index.js — did you run pnpm build? (${error.message})`,
+  )
+  return null
+})
+const docsBundleUrl = pathToFileURL(resolve(repoRoot, "packages/cli/dist/lib/docs-bundle.js")).href
+const docsBundle = await import(docsBundleUrl).catch((error) => {
+  failures.push(
+    `Error-docs guard could not import packages/cli/dist/lib/docs-bundle.js — did you run pnpm build? (${error.message})`,
+  )
+  return null
+})
+
+if (sdkEntry?.DAWN_ERRORS && docsBundle?.parseNav) {
+  const registry = sdkEntry.DAWN_ERRORS
+  const codes = Object.keys(registry)
+  const navSlugs = new Set(docsBundle.parseNav(docsNav).map((entry) => entry.slug))
+
+  for (const code of codes) {
+    const docsPath = registry[code].docsPath
+    if (!docsPath) {
+      continue
+    }
+    const slug = docsPath.replace(/^\/docs\//, "").replace(/#.*$/, "")
+    if (!navSlugs.has(slug)) {
+      failures.push(
+        `DAWN_ERRORS.${code} docsPath ${docsPath} points at /docs/${slug}, which is not a known docs page`,
+      )
+    }
+  }
+
+  const errorsMdxPath = resolve(repoRoot, "apps/web/content/docs/errors.mdx")
+  const errorsMdx = readFileSync(errorsMdxPath, "utf8")
+  const listed = new Set([...errorsMdx.matchAll(/DAWN_E\d{4}/g)].map((m) => m[0]))
+  const missing = codes.filter((code) => !listed.has(code))
+  const extra = [...listed].filter((code) => !codes.includes(code))
+  if (missing.length > 0) {
+    failures.push(
+      `apps/web/content/docs/errors.mdx is missing registry codes: ${missing.join(", ")} — run node scripts/generate-error-docs.mjs`,
+    )
+  }
+  if (extra.length > 0) {
+    failures.push(
+      `apps/web/content/docs/errors.mdx lists codes not in the registry: ${extra.join(", ")} — run node scripts/generate-error-docs.mjs`,
+    )
+  }
+}
+
 // CLI surface check — drive from the commander registry to catch docs drift.
 // Every user-facing command name and every long option must be referenced in
 // cli.mdx. The internal `dev-child` command is excluded (not user-facing).

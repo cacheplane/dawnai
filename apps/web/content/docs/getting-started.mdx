@@ -138,6 +138,8 @@ npm run eval
 
 Runs the quality eval in `src/app/research/evals/research-quality.eval.ts`. The agent run replays fixtures, then two dataset cases are scored across four scorers (`toolCalled`, `contains`, `cites-source`, `llmJudge`). The generated fixtures also cover the judge requests from `llmJudge`, so the scaffolded eval runs without an API key.
 
+Before running the app live, run `dawn verify` as your preflight — it checks app integrity plus environment readiness (Node version, the provider API key your routes need, and the Docker daemon when a sandbox is configured) so `dawn dev` and `dawn start` boot cleanly. See [`dawn verify`](/docs/cli).
+
 ## 4. Run it live
 
 Set your API key and start the dev server:
@@ -173,7 +175,24 @@ The `#agent` suffix is required — it selects the agent entry on the route. The
 dawn build
 ```
 
-Discovers routes from the app directory (`appDir`, defaulting to `src/app`), runs typegen, and writes `.dawn/build/langgraph.json` plus per-route entry files. The generated `assistant_id`s match the local ids, such as `/research#agent`.
+Discovers routes from the app directory (`appDir`, defaulting to `src/app`), runs typegen, and writes deployment artifacts for both default `build.targets`: a `node` target (`.dawn/build/server.mjs` plus a hardened `Dockerfile`) and a `langsmith` target (`.dawn/build/langgraph.json` plus per-route entry files). The generated `assistant_id`s match the local ids, such as `/research#agent`.
+
+### Serve it in production
+
+The `node` target is a runnable server, not just a platform artifact. Serve it locally with `dawn start`:
+
+```bash
+npx dawn start
+```
+
+You should now see the agent listening on `0.0.0.0:8000`, serving Agent Protocol and AG-UI and engaging the [execution sandbox](/docs/sandbox) if configured. To ship it as a container instead:
+
+```bash
+docker build -t my-agent .
+docker run -p 8000:8000 --env-file .env my-agent
+```
+
+See [Deploying to production](/docs/deployment) for the full Node/Docker path and the LangSmith alternative.
 
 ## Where to go next
 

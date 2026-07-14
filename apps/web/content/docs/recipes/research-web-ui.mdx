@@ -1,0 +1,165 @@
+# Research assistant web UI
+
+Wire a [CopilotKit](https://docs.copilotkit.ai) web client to Dawn's research
+demo over [AG-UI](/docs/ag-ui). The example streams chat and a cited report from
+the `/research` agent and provides a separate review panel for durable-memory
+candidates.
+
+This recipe focuses on application wiring. For the endpoint, event contract,
+threading, and standard interrupt outcome, see [AG-UI & Web Clients](/docs/ag-ui).
+
+## What you'll build
+
+The demo lives in `examples/research`: a Dawn server (`server/`) and a Next.js
+CopilotKit client (`web/`). The client provides:
+
+- **Chat + report** - streamed output and citations in a `CopilotSidebar`.
+- **Memory candidates** - durable facts proposed by the agent and reviewed from
+  the web UI.
+
+The AG-UI v1 adapter does not map planning or subagent capability events, so the
+web client does not present live plan or subagent panels. It also does not add a
+client-specific interrupt compatibility layer; interrupt outcomes and answers
+use the standard AG-UI fields documented on the protocol page.
+
+## Run it
+
+<Steps>
+
+<Step title="Configure the server">
+
+```bash
+cd examples/research/server
+cp .env.example .env   # set OPENAI_API_KEY here, not in the web app
+```
+
+</Step>
+
+<Step title="Start both apps">
+
+```bash
+cd examples/research
+pnpm install
+pnpm dev          # Dawn server on :3002, web client on :3010
+```
+
+Open [http://localhost:3010](http://localhost:3010) and ask a research question.
+
+</Step>
+
+</Steps>
+
+## Connect the client to Dawn
+
+The Next.js runtime route registers an AG-UI `HttpAgent` pointed at the encoded
+Dawn assistant id. Register it under CopilotKit's `default` agent id so the
+sidebar and other consumers bind without per-component wiring:
+
+<CodeGroup>
+
+```ts title="examples/research/web/app/api/copilotkit/route.ts"
+import { HttpAgent } from "@ag-ui/client"
+import {
+  CopilotRuntime,
+  ExperimentalEmptyAdapter,
+  copilotRuntimeNextJSAppRouterEndpoint,
+} from "@copilotkit/runtime"
+import type { NextRequest } from "next/server"
+
+const dawnUrl = process.env.DAWN_SERVER_URL ?? "http://127.0.0.1:3002"
+const agUiUrl = `${dawnUrl}/agui/${encodeURIComponent("/research#agent")}`
+
+const copilotRuntime = new CopilotRuntime({
+  agents: { default: new HttpAgent({ url: agUiUrl }) },
+})
+
+export const POST = async (req: NextRequest): Promise<Response> => {
+  const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
+    runtime: copilotRuntime,
+    serviceAdapter: new ExperimentalEmptyAdapter(),
+    endpoint: "/api/copilotkit",
+  })
+  return handleRequest(req)
+}
+```
+
+```tsx title="examples/research/web/app/page.tsx"
+"use client"
+import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
+import { MemoryCandidates } from "./components/MemoryCandidates"
+
+export default function Home() {
+  return (
+    <CopilotKit runtimeUrl="/api/copilotkit">
+      <div style={{ display: "flex", height: "100vh" }}>
+        <MemoryCandidates />
+        <main style={{ flex: 1 }}>
+          <CopilotSidebar
+            defaultOpen
+            labels={{ modalHeaderTitle: "Dawn research" }}
+          />
+        </main>
+      </div>
+    </CopilotKit>
+  )
+}
+```
+
+</CodeGroup>
+
+<Callout type="warn" title="Register the agent as default">
+  CopilotKit's sidebar falls back to the id `default`. Register the Dawn agent
+  under that id, or set the same explicit id on every consumer.
+</Callout>
+
+## Approve memory candidates
+
+When the coordinator calls `remember()`, Dawn stores a durable-memory candidate.
+The runtime exposes candidates over HTTP:
+
+```text
+GET  /memory/candidates
+POST /memory/candidates/:id/approve
+POST /memory/candidates/:id/reject
+```
+
+The example's same-origin Next.js proxy forwards these requests to Dawn, which
+avoids browser CORS configuration. The panel refetches after each completed run,
+when any newly proposed candidates are available:
+
+```tsx title="examples/research/web/app/components/MemoryCandidates.tsx"
+const refetch = useCallback(() => {
+  fetch("/api/memory/candidates")
+    .then((response) => response.json())
+    .then((data) => setCandidates(data.candidates ?? []))
+    .catch(() => setCandidates([]))
+}, [])
+
+useEffect(() => {
+  const subscription = agent.subscribe({ onRunFinishedEvent: refetch })
+  refetch()
+  return () => subscription.unsubscribe()
+}, [agent, refetch])
+
+const approve = async (id: string) => {
+  await fetch(`/api/memory/candidates/${id}/approve`, { method: "POST" })
+  refetch()
+}
+```
+
+<Callout title="Deep runs need a higher recursion limit">
+  The coordinator plans, dispatches subagents, and makes many tool calls. The
+  research route sets `recursionLimit: 100` so a full run can exceed LangGraph's
+  default step ceiling.
+</Callout>
+
+## Related
+
+<RelatedCards
+  items={[
+    { href: "/docs/ag-ui", title: "AG-UI & Web Clients", subtitle: "The adapter, endpoint, and event contract" },
+    { href: "/docs/getting-started", title: "Getting started", subtitle: "Scaffold the /research agent locally" },
+    { href: "/docs/subagents", title: "Subagents", subtitle: "How the coordinator dispatches researchers internally" },
+    { href: "/docs/memory", title: "Memory", subtitle: "Candidates, approval, and recall" },
+  ]}
+/>

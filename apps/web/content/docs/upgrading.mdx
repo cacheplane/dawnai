@@ -1,0 +1,60 @@
+# Upgrading
+
+Dawn is pre-1.0. The API surface is still moving, and the safest posture is to pin a version, read what changed, and upgrade deliberately rather than floating on a range. This page is the workflow, not a changelog — the actual list of what changed between any two versions lives on GitHub, not here.
+
+## Fixed-group versioning
+
+Every `@dawn-ai/*` package — `cli`, `core`, `sdk`, `ag-ui`, `sandbox`, `memory`, `memory-pgvector`, `permissions`, `workspace`, `sqlite-storage`, `langchain`, `langgraph`, `testing`, `evals`, `devkit`, `vite-plugin`, `create-dawn-app`, and the rest — is released together under one version number via [Changesets](https://github.com/changesets/changesets)' fixed-group mode. If `@dawn-ai/cli` is at `0.8.12`, so is every other `@dawn-ai/*` package in that release. There's no independent versioning between packages to reason about, and no compatibility matrix to check — install matching versions and you're done.
+
+The two Helm charts (`dawn-sandbox-infra`, `dawn-app`) track the same package train through their `appVersion` field, but they're published separately as OCI artifacts, not npm packages — see [Deploying on Kubernetes](/docs/deployment#deploying-on-kubernetes) for how to pull a specific chart version.
+
+## How to read what changed
+
+Each release is built from the changeset entries merged since the previous one — short, per-change Markdown files that describe what changed and why, written by whoever made the change. Two places to read them:
+
+- **GitHub Releases** — [github.com/cacheplane/dawnai/releases](https://github.com/cacheplane/dawnai/releases) lists every published version with its changeset entries rolled up into release notes. This is the fastest way to scan what changed between two versions.
+- **Per-package `CHANGELOG.md`** — each package under `packages/*/CHANGELOG.md` in the repository carries its own changelog, generated from the same changeset entries but scoped to that package.
+
+<Callout type="info" title="Read the entries between your current and target version">
+  Before bumping `@dawn-ai/cli` (and its siblings) to a new version, skim the GitHub release notes for every version between the one you're on and the one you're moving to — not just the latest. A changeset entry that looks unrelated to your app (a sandbox hardening default, a memory recall tuning change) can still change runtime behavior you depend on.
+</Callout>
+
+## Upgrade workflow
+
+<Steps>
+  <Step title="Check the current version">
+    ```
+    pnpm why @dawn-ai/cli
+    ```
+
+    or check the `@dawn-ai/*` entries in your `package.json`.
+  </Step>
+  <Step title="Read the release notes">
+    Open [GitHub Releases](https://github.com/cacheplane/dawnai/releases) and read every entry between your current version and the target version.
+  </Step>
+  <Step title="Bump and reinstall">
+    Bump every `@dawn-ai/*` dependency in `package.json` to the same target version, then reinstall.
+  </Step>
+  <Step title="Regenerate and verify">
+    ```
+    dawn typegen
+    dawn verify
+    dawn test
+    ```
+
+    `dawn verify` catches app-contract, route-discovery, typegen, and missing-dependency drift in one call; `dawn test` re-runs your scenario coverage against the new version. See [CLI](/docs/cli) and [Testing](/docs/testing).
+  </Step>
+</Steps>
+
+## Pinning
+
+Pin exact versions (no `^` or `~` ranges) for `@dawn-ai/*` packages until the project reaches 1.0 — a floating range means an unreviewed minor bump can land in CI or production without the deliberate read-the-notes step above.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/cli", title: "CLI", subtitle: "dawn verify and dawn typegen for post-upgrade checks" },
+  { href: "/docs/testing", title: "Testing", subtitle: "scenario coverage to re-run after an upgrade" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "the node and langsmith build targets, and the Helm charts' own versioning" },
+  { href: "/docs/faq", title: "FAQ", subtitle: "the pre-1.0 stability note this page backs" },
+]} />
