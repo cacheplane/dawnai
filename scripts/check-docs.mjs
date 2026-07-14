@@ -250,7 +250,7 @@ if (runtimeServerSource.includes("/agui/:routeId")) {
     "POST /agui/{routeId}",
     "%2Fchat%23agent",
     "@dawn-ai/ag-ui",
-    "forwardedProps.command.resume",
+    "RunAgentInput.resume",
   ]) {
     if (!devServerDocs.includes(required)) {
       failures.push(

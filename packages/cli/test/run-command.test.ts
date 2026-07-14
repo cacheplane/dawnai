@@ -3,10 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-
+import { Command } from "@dawn-ai/langchain"
 import { afterEach, describe, expect, test } from "vitest"
-
+import { createAimock, script } from "../../testing/dist/index.js"
 import { run } from "../src/index.js"
+import { streamResolvedRoute, toAgentInput } from "../src/lib/runtime/execute-route.js"
 import { executeRouteServer } from "../src/lib/runtime/execute-route-server.js"
 
 const tempDirs: string[] = []
@@ -18,6 +19,171 @@ afterEach(async () => {
 })
 
 describe("dawn run", () => {
+  test("streamResolvedRoute rejects when route preparation fails", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/invalid/index.ts": `import { agent } from "@dawn-ai/sdk"
+export default agent({
+  model: "gpt-5-mini",
+  tools: { allow: ["missing-tool"] },
+})
+`,
+    })
+
+    await expect(async () => {
+      for await (const _chunk of streamResolvedRoute({
+        appRoot,
+        input: {},
+        routeFile: join(appRoot, "src/app/invalid/index.ts"),
+        routeId: "/invalid#agent",
+        routePath: "src/app/invalid/index.ts",
+      })) {
+        // Consume the stream so preparation errors surface to the caller.
+      }
+    }).rejects.toThrow(/route|load|resolve/i)
+  })
+
+  test("toAgentInput preserves an addressed resume map", () => {
+    const input = { messages: [] }
+    const resume = {
+      "interrupt-a": "once",
+      "interrupt-b": "deny",
+    } as const
+
+    const result = toAgentInput(input, resume)
+
+    expect(result).toBeInstanceOf(Command)
+    expect((result as Command).resume).toBe(resume)
+    expect(toAgentInput(input)).toBe(input)
+
+    const emptyResume = {}
+    const emptyResult = toAgentInput(input, emptyResume)
+    expect(emptyResult).toBeInstanceOf(Command)
+    expect((emptyResult as Command).resume).toBe(emptyResume)
+  })
+
+  test("executes local agent routes with a generated one-shot thread id", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/hello/[tenant]/index.ts": `import { agent } from "@dawn-ai/sdk"
+export default agent({
+  model: "gpt-5-mini",
+  systemPrompt: "You are a helpful assistant for {tenant}.",
+})
+`,
+    })
+    const mock = await createAimock({
+      fixtures: script().user("Say hello").replies("Hello from Acme.").build(),
+    })
+    const prevBaseUrl = process.env.OPENAI_BASE_URL
+    const prevApiKey = process.env.OPENAI_API_KEY
+    process.env.OPENAI_BASE_URL = mock.baseUrl
+    process.env.OPENAI_API_KEY = "test-not-used"
+
+    try {
+      const result = await invoke(["run", "/hello/[tenant]", "--cwd", appRoot], {
+        stdin: JSON.stringify({
+          messages: [{ role: "user", content: "Say hello" }],
+          tenant: "acme",
+        }),
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stderr).toBe("")
+      const payload = JSON.parse(result.stdout) as Record<string, unknown>
+
+      expectTiming(payload)
+      expect(payload).toMatchObject({
+        appRoot,
+        executionSource: "in-process",
+        mode: "agent",
+        routeId: "/hello/[tenant]",
+        routePath: "src/app/hello/[tenant]/index.ts",
+        status: "passed",
+      })
+      expect(JSON.stringify(payload.output)).toContain("Hello from Acme.")
+    } finally {
+      await mock.close()
+      if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+      else process.env.OPENAI_BASE_URL = prevBaseUrl
+      if (prevApiKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = prevApiKey
+    }
+  })
+
+  test("streamResolvedRoute preserves upstream tool invocation ids", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/hello/[tenant]/index.ts": `import { agent } from "@dawn-ai/sdk"
+export default agent({
+  model: "gpt-5-mini",
+  systemPrompt: "You are a helpful assistant for {tenant}.",
+})
+`,
+      "src/app/hello/[tenant]/tools/lookup.ts": `export default {
+  name: "lookup",
+  description: "Look up a tenant fact",
+  run: async (input: { query?: string }) => ({ answer: \`found:\${input.query ?? ""}\` }),
+}
+`,
+    })
+    const mock = await createAimock({
+      fixtures: script()
+        .user("Lookup docs")
+        .callsTool("lookup", { query: "pricing" })
+        .replies("Pricing found.")
+        .build(),
+    })
+    const prevBaseUrl = process.env.OPENAI_BASE_URL
+    const prevApiKey = process.env.OPENAI_API_KEY
+    process.env.OPENAI_BASE_URL = mock.baseUrl
+    process.env.OPENAI_API_KEY = "test-not-used"
+
+    try {
+      const chunks = []
+      for await (const chunk of streamResolvedRoute({
+        appRoot,
+        input: {
+          messages: [{ role: "user", content: "Lookup docs" }],
+          tenant: "acme",
+        },
+        routeFile: join(appRoot, "src/app/hello/[tenant]/index.ts"),
+        routeId: "/hello/[tenant]#agent",
+        routePath: "src/app/hello/[tenant]/index.ts",
+        threadId: "t-tool-id",
+      })) {
+        chunks.push(chunk)
+      }
+
+      const toolCall = chunks.find((chunk) => chunk.type === "tool_call") as
+        | { readonly id?: string; readonly name: string; readonly type: "tool_call" }
+        | undefined
+      const toolResult = chunks.find((chunk) => chunk.type === "tool_result") as
+        | { readonly id?: string; readonly name: string; readonly type: "tool_result" }
+        | undefined
+
+      expect(toolCall).toMatchObject({
+        id: expect.any(String),
+        name: "lookup",
+        type: "tool_call",
+      })
+      expect(toolResult).toMatchObject({
+        id: toolCall?.id,
+        name: "lookup",
+        type: "tool_result",
+      })
+    } finally {
+      await mock.close()
+      if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+      else process.env.OPENAI_BASE_URL = prevBaseUrl
+      if (prevApiKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = prevApiKey
+    }
+  })
+
   test("executes the route directory's index.ts and exposes shared and route-local tools through ctx.tools", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",

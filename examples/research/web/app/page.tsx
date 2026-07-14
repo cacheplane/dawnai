@@ -1,9 +1,6 @@
 "use client"
 import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
 import { MemoryCandidates } from "./components/MemoryCandidates"
-import { PermissionInterrupt } from "./components/PermissionInterrupt"
-import { PlanPanel } from "./components/PlanPanel"
-import { SubagentActivity } from "./components/SubagentActivity"
 
 // Notes (verified against installed @copilotkit/react-core@1.62.3 types — see
 // examples/chat/web/app/page.tsx for the original investigation):
@@ -15,17 +12,14 @@ import { SubagentActivity } from "./components/SubagentActivity"
 //   react-ui exposes no `/v2` JS export, only `/v2/styles.css`).
 // - Components/hooks that omit agentId resolve CopilotKit's default id ("default").
 //   The runtime route (api/copilotkit/route.ts) registers the Dawn /research route
-//   under "default", so the sidebar, useAgent, and useInterrupt all bind to it with
-//   no per-component agentId.
+//   under "default", so the sidebar and memory panel bind without per-component
+//   agentId wiring.
 // - `labels` is `Partial<CopilotChatLabels>`, whose header title field is `modalHeaderTitle`.
 export default function Home() {
   return (
     <CopilotKit runtimeUrl="/api/copilotkit">
-      <PermissionInterrupt />
       <div style={{ display: "flex", height: "100vh" }}>
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          <PlanPanel />
-          <SubagentActivity />
+        <div style={{ display: "flex", flexDirection: "column", minWidth: 240 }}>
           <MemoryCandidates />
         </div>
         <main style={{ flex: 1 }}>

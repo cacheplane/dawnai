@@ -24,6 +24,28 @@ describe("toSseEvent", () => {
     )
   })
 
+  it("preserves optional tool invocation ids in tool payloads", () => {
+    const call: StreamChunk = {
+      type: "tool_call",
+      id: "run-abc",
+      name: "listDir",
+      input: { path: "." },
+    }
+    const result: StreamChunk = {
+      type: "tool_result",
+      id: "run-abc",
+      name: "listDir",
+      output: ["README.md"],
+    }
+
+    expect(toSseEvent(call)).toBe(
+      `event: tool_call\ndata: ${JSON.stringify({ id: "run-abc", name: "listDir", input: { path: "." } })}\n\n`,
+    )
+    expect(toSseEvent(result)).toBe(
+      `event: tool_result\ndata: ${JSON.stringify({ id: "run-abc", name: "listDir", output: ["README.md"] })}\n\n`,
+    )
+  })
+
   it("emits a done event with output as the payload", () => {
     const chunk: StreamChunk = { type: "done", output: { final: true } }
     expect(toSseEvent(chunk)).toBe(

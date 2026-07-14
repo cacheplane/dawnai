@@ -24,13 +24,17 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./sse": {
+      "types": "./dist/sse.d.ts",
+      "default": "./dist/sse.js"
     }
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json",
+    "build": "node -e \"const fs = require('node:fs'); const path = require('node:path'); if (fs.existsSync('dist')) for (const entry of fs.readdirSync('dist', { withFileTypes: true })) if (entry.isFile() && /^(?:encode|run-input|translate)\\./.test(entry.name)) fs.rmSync(path.join('dist', entry.name))\" && tsc -b tsconfig.json",
     "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "typecheck": "tsc --noEmit"

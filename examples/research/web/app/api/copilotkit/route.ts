@@ -14,9 +14,9 @@ const agUiUrl = `${dawnUrl}/agui/${encodeURIComponent("/research#agent")}`
 
 // Register the Dawn /research agent under CopilotKit's default agent id ("default").
 // CopilotKit components/hooks that don't specify an agentId resolve "default", so
-// registering it there means the sidebar, useAgent, and useInterrupt all bind to
-// this agent with no per-component wiring. (When a second agent is added, switch
-// to named ids + explicit agentId on each consumer.)
+// registering it there means the sidebar and memory panel bind to this agent with
+// no per-component wiring. (When a second agent is added, switch to named ids and
+// explicit agentId on each consumer.)
 const copilotRuntime = new CopilotRuntime({
   agents: { default: new HttpAgent({ url: agUiUrl }) },
 })

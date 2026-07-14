@@ -4,7 +4,13 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { packages, validatePackManifest } from "./lib/pack-check.mjs"
+import {
+  expectedExportFailures,
+  forbiddenPackedFiles,
+  missingExportTargets,
+  packages,
+  validatePackManifest,
+} from "./lib/pack-check.mjs"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 validatePackManifest(repoRoot, packages)
@@ -40,10 +46,29 @@ try {
       }
     }
 
+    for (const relativePath of forbiddenPackedFiles(packedRoot, packageConfig.forbiddenFiles)) {
+      failures.push(
+        `${sourcePackageJson.name}: packed tarball contains forbidden file ${relativePath}`,
+      )
+    }
+
     for (const fieldName of packageConfig.requiredFields) {
       if (readField(packedPackageJson, fieldName) === undefined) {
         failures.push(`${sourcePackageJson.name}: packed package.json is missing ${fieldName}`)
       }
+    }
+
+    for (const exportTarget of missingExportTargets(packedRoot, packedPackageJson.exports)) {
+      failures.push(
+        `${sourcePackageJson.name}: packed package.json exports missing file ${exportTarget}`,
+      )
+    }
+
+    for (const exportFailure of expectedExportFailures(
+      packedPackageJson.exports,
+      packageConfig.expectedExports,
+    )) {
+      failures.push(`${sourcePackageJson.name}: packed package.json ${exportFailure}`)
     }
 
     for (const [dependencyField, dependencies] of Object.entries({

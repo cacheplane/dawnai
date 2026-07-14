@@ -1,7 +1,17 @@
 export type StreamChunk =
   | { readonly type: "chunk"; readonly data: unknown }
-  | { readonly type: "tool_call"; readonly name: string; readonly input: unknown }
-  | { readonly type: "tool_result"; readonly name: string; readonly output: unknown }
+  | {
+      readonly type: "tool_call"
+      readonly id?: string
+      readonly name: string
+      readonly input: unknown
+    }
+  | {
+      readonly type: "tool_result"
+      readonly id?: string
+      readonly name: string
+      readonly output: unknown
+    }
   | { readonly type: "done"; readonly output: unknown }
   // Capability-contributed event types (e.g. plan_update from the planning capability).
   // The langchain layer widened AgentStreamChunk["type"] to allow arbitrary strings;
