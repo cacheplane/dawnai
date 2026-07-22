@@ -35,6 +35,8 @@ dawn start --host 127.0.0.1 --port 3000
 
 Because it runs the actual Dawn runtime, this is the only deployment path that engages the [execution sandbox](/docs/sandbox), [tool scoping](/docs/tools), and [permissions](/docs/permissions) exactly as configured in `dawn.config.ts`. The `langsmith` target does not run the Dawn runtime and does not engage any of the three.
 
+The built runtime and `dawn start` serve the same Agent Protocol and AG-UI routes as `dawn dev`; generated server entrypoints call the exported `serveRuntime()` function directly. In both modes, `src/middleware.ts` gates Agent Protocol run, wait, and resume execution plus AG-UI route execution, but not thread create, read, delete, or state endpoints. Allowed middleware context reaches tools as `ctx.middleware`.
+
 Select targets explicitly in `dawn.config.ts` if you only want one:
 
 ```ts title="dawn.config.ts"

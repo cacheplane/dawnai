@@ -199,17 +199,21 @@ Dawn route key: /chat#agent
 AG-UI URL:      /agui/%2Fchat%23agent
 ```
 
-The endpoint emits `RUN_STARTED`, assistant text events, tool call/result events, `STATE_SNAPSHOT` updates for planning state, `CUSTOM{name:"on_interrupt"}` for HITL permission or memory interrupts, and `RUN_FINISHED` or `RUN_ERROR`.
+The endpoint emits `RUN_STARTED`, assistant text events, tool call/result events, and one terminal `RUN_FINISHED` or `RUN_ERROR`. A parked run uses the standard AG-UI interrupt outcome on `RUN_FINISHED`; successful runs use the success outcome. Planning and subagent capability events have no v1 AG-UI mapping and are ignored.
 
-Human-in-the-loop resume decisions ride on AG-UI `forwardedProps.command.resume`:
+Human-in-the-loop answers use the top-level AG-UI `RunAgentInput.resume` array. Every answer is addressed to one pending interrupt:
 
 ```json
 {
-  "forwardedProps": {
-    "command": {
-      "resume": { "decision": "once", "interruptId": "perm-abc123" }
-    }
-  }
+  "threadId": "thread-1",
+  "runId": "run-2",
+  "messages": [],
+  "tools": [],
+  "context": [],
+  "state": {},
+  "resume": [
+    { "interruptId": "perm-abc123", "status": "resolved", "payload": "once" }
+  ]
 }
 ```
 
@@ -221,7 +225,7 @@ If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACI
 
 ## Middleware
 
-`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) runs before every local `/threads/:thread_id/runs/wait` and `/threads/:thread_id/runs/stream` request handled by `dawn dev`. It can short-circuit a request with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`). The AG-UI endpoint is a client-protocol bridge over the same route runtime, but middleware is documented for the Agent Protocol thread endpoints.
+`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) gates Agent Protocol `/runs/stream`, `/runs/wait`, and `/resume` execution plus AG-UI route execution under both `dawn dev` and the built runtime served by `dawn start`. Thread create, read, delete, and state endpoints do not invoke middleware. It can short-circuit execution with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
 
 `MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Middleware](/docs/middleware) for the full reference.
 

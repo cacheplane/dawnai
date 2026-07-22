@@ -8,6 +8,7 @@ import {
   loadDawnConfig,
   renderDawnTypes,
 } from "@dawn-ai/core"
+import type { DawnErrorCode } from "@dawn-ai/sdk"
 import type { SandboxProvider } from "@dawn-ai/workspace"
 import { type Command, CommanderError } from "commander"
 
@@ -177,7 +178,8 @@ export async function runVerifyCommand(options: VerifyOptions, io: CommandIo): P
     return
   }
 
-  throw new CliError(`Verify failed: ${getFailureMessage(result)}`)
+  const code = getFailureCode(result)
+  throw new CliError(`Verify failed: ${getFailureMessage(result)}`, 1, code ? { code } : {})
 }
 
 async function verifyApp(options: VerifyOptions): Promise<VerifyAppOutcome> {
@@ -348,14 +350,27 @@ function getFailureMessage(result: VerifyFailureResult): string {
 function runtimeFailureMessage(runtime: RuntimeCheckResult): string {
   const reasons: string[] = []
   if (!runtime.node.ok) {
-    // TODO(error-codes): tag with DAWN_E5101 once the registry lands (#357).
     reasons.push(`Node ${runtime.node.version} is below the required floor ${runtime.node.floor}.`)
   }
   if (runtime.docker && !runtime.docker.ok) {
-    // TODO(error-codes): tag with DAWN_E2002 once the registry lands (#357).
     reasons.push(`Docker sandbox unavailable: ${runtime.docker.detail}.`)
   }
   return reasons.join(" ") || "Runtime check failed."
+}
+
+/**
+ * The DAWN_E code for a failed verify result, when the failure is
+ * attributable to a registered code. Only the runtime check currently
+ * carries codes; a stale Node takes priority over an unreachable sandbox
+ * daemon since it is reported first in `runtimeFailureMessage`.
+ */
+function getFailureCode(result: VerifyFailureResult): DawnErrorCode | undefined {
+  const failedCheck = [...result.checks].reverse().find((check) => check.status === FAILED_STATUS)
+
+  if (failedCheck?.name === "runtime") {
+    return failedCheck.node.code ?? failedCheck.docker?.code
+  }
+  return undefined
 }
 
 function inferFailureAppRoot(options: VerifyOptions, message: string): string {

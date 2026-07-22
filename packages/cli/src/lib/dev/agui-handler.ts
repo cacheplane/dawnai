@@ -1,15 +1,23 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { EventType, RunAgentInputSchema } from "@ag-ui/core"
-import { createAgUiTranslator, encodeAgUiSse, mapRunInput } from "@dawn-ai/ag-ui"
+import { RunAgentInputSchema } from "@ag-ui/core"
+import { type DawnAgentStreamChunk, fromRunAgentInput, toAguiEvents } from "@dawn-ai/ag-ui"
+import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { streamResolvedRoute } from "../runtime/execute-route.js"
 import type { SandboxManager } from "../runtime/sandbox-manager.js"
-import { extractRouteParams, parseHeaders, runMiddleware } from "./middleware.js"
+import type { StreamChunk } from "../runtime/stream-types.js"
+import { abortableAsyncIterable } from "./abortable-iterable.js"
+import { runMiddleware } from "./middleware.js"
+import { readPendingInterrupts, resolveAgUiResume } from "./pending-interrupts.js"
+import { extractRouteParams, parseHeaders } from "./request-context.js"
 import type { RuntimeRegistry } from "./runtime-registry.js"
+import { createRequestErrorBody } from "./server-errors.js"
 
 interface AgUiRequestOptions {
   readonly appRoot: string
+  readonly checkpointer: BaseCheckpointSaver
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly threadsStore: ThreadsStore
@@ -18,6 +26,7 @@ interface AgUiRequestOptions {
   readonly request: IncomingMessage
   readonly response: ServerResponse
   readonly routeKey: string
+  readonly streamRoute?: typeof streamResolvedRoute
 }
 
 async function readBody(request: IncomingMessage): Promise<string> {
@@ -27,108 +36,185 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8")
 }
 
+function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
+  response.statusCode = statusCode
+  response.setHeader("content-type", "application/json")
+  response.end(JSON.stringify(body))
+}
+
+async function* normalizeDawnStream(
+  chunks: AsyncIterable<StreamChunk>,
+): AsyncGenerator<DawnAgentStreamChunk> {
+  for await (const chunk of chunks) {
+    switch (chunk.type) {
+      case "chunk":
+        yield {
+          type: "token",
+          data: typeof chunk.data === "string" ? chunk.data : String(chunk.data ?? ""),
+        }
+        break
+      case "tool_call": {
+        const toolCall = chunk as Extract<StreamChunk, { readonly type: "tool_call" }>
+        yield {
+          type: "tool_call",
+          data: {
+            ...(toolCall.id ? { id: toolCall.id } : {}),
+            name: toolCall.name,
+            input: toolCall.input,
+          },
+        }
+        break
+      }
+      case "tool_result": {
+        const toolResult = chunk as Extract<StreamChunk, { readonly type: "tool_result" }>
+        yield {
+          type: "tool_result",
+          data: {
+            ...(toolResult.id ? { id: toolResult.id } : {}),
+            name: toolResult.name,
+            output: toolResult.output,
+          },
+        }
+        break
+      }
+      case "done":
+        yield {
+          type: "done",
+          data: (chunk as Extract<StreamChunk, { readonly type: "done" }>).output,
+        }
+        break
+      default:
+        yield {
+          type: chunk.type,
+          data: (chunk as { readonly type: string; readonly data: unknown }).data,
+        }
+    }
+  }
+}
+
 export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<void> {
   const {
     appRoot,
+    checkpointer,
     middleware,
     registry,
     threadsStore,
     sandboxManager,
-    signal,
+    signal: shutdownSignal,
     request,
     response,
     routeKey,
+    streamRoute = streamResolvedRoute,
   } = options
 
-  const raw = await readBody(request)
-  let parsedJson: unknown
-  try {
-    parsedJson = JSON.parse(raw)
-  } catch {
-    response.statusCode = 400
-    response.setHeader("content-type", "application/json")
-    response.end(JSON.stringify({ error: { kind: "request_error", message: "Malformed body" } }))
-    return
+  const requestController = new AbortController()
+  const abortRequest = (message: string) => {
+    if (!requestController.signal.aborted) requestController.abort(new Error(message))
   }
-  const parsed = RunAgentInputSchema.safeParse(parsedJson)
-  if (!parsed.success) {
-    response.statusCode = 400
-    response.setHeader("content-type", "application/json")
-    response.end(
-      JSON.stringify({ error: { kind: "request_error", message: "Invalid RunAgentInput" } }),
-    )
-    return
+  const onRequestAborted = () => abortRequest("AG-UI request aborted")
+  const onResponseClose = () => {
+    if (!response.writableEnded) abortRequest("AG-UI response closed")
   }
-  const input = parsed.data
-
-  const route = registry.lookup(routeKey)
-  if (!route) {
-    response.statusCode = 404
-    response.setHeader("content-type", "application/json")
-    response.end(
-      JSON.stringify({ error: { kind: "request_error", message: `Unknown route: ${routeKey}` } }),
-    )
-    return
-  }
-
-  // Run app middleware before starting the run — parity with runs/stream and
-  // runs/wait so auth/rate-limit/context middleware applies to /agui too.
-  const mwRequest: MiddlewareRequest = {
-    assistantId: route.assistantId,
-    headers: parseHeaders(request),
-    method: request.method ?? "POST",
-    params: extractRouteParams(route.routeId, input),
-    routeId: route.routeId,
-    url: request.url ?? `/agui/${routeKey}`,
-  }
-  const mwResult = await runMiddleware(middleware, mwRequest)
-  if (mwResult.action === "reject") {
-    response.statusCode = mwResult.status
-    response.setHeader("content-type", "application/json")
-    response.end(JSON.stringify(mwResult.body))
-    return
-  }
-
-  const threadId = input.threadId
-  const existing = await threadsStore.getThread(threadId)
-  if (!existing) await threadsStore.createThread({ thread_id: threadId })
-  await threadsStore.updateStatus(threadId, "busy")
-
-  const { dawnInput, resumeDecision } = mapRunInput(input)
-  const translator = createAgUiTranslator({ threadId, runId: input.runId })
-
-  response.writeHead(200, {
-    "cache-control": "no-cache",
-    connection: "keep-alive",
-    "content-type": "text/event-stream",
-  })
-  for (const e of translator.begin()) response.write(encodeAgUiSse(e))
+  request.on("aborted", onRequestAborted)
+  response.on("close", onResponseClose)
+  const signal = AbortSignal.any([shutdownSignal, requestController.signal])
 
   try {
-    for await (const chunk of streamResolvedRoute({
-      appRoot,
-      input: dawnInput,
-      ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
-      ...(resumeDecision ? { resumeDecision } : {}),
-      routeFile: route.routeFile,
-      routeId: route.routeId,
-      routePath: route.routePath,
-      ...(sandboxManager ? { sandboxManager } : {}),
-      signal,
-      threadId,
-    })) {
-      for (const e of translator.translate(chunk)) response.write(encodeAgUiSse(e))
+    const raw = await readBody(request)
+    let parsedJson: unknown
+    try {
+      parsedJson = JSON.parse(raw)
+    } catch {
+      sendJson(response, 400, createRequestErrorBody("Malformed body"))
+      return
     }
-    for (const e of translator.end()) response.write(encodeAgUiSse(e))
-    await threadsStore.updateStatus(threadId, "idle")
-  } catch (error) {
-    response.write(
-      encodeAgUiSse({
-        type: EventType.RUN_ERROR,
-        message: error instanceof Error ? error.message : String(error),
-      }),
-    )
-    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+
+    const parsed = RunAgentInputSchema.safeParse(parsedJson)
+    if (!parsed.success) {
+      sendJson(response, 400, createRequestErrorBody("Invalid RunAgentInput"))
+      return
+    }
+    const input = parsed.data
+
+    const route = registry.lookup(routeKey)
+    if (!route) {
+      sendJson(response, 404, createRequestErrorBody(`Unknown route: ${routeKey}`))
+      return
+    }
+
+    const dawnInput = fromRunAgentInput(input)
+    const middlewareRequest: MiddlewareRequest = {
+      assistantId: route.assistantId,
+      headers: parseHeaders(request),
+      method: request.method ?? "POST",
+      params: extractRouteParams(route.routeId, dawnInput.raw),
+      routeId: route.routeId,
+      url: request.url ?? `/agui/${routeKey}`,
+    }
+    const middlewareResult = await runMiddleware(middleware, middlewareRequest)
+    if (middlewareResult.action === "reject") {
+      sendJson(response, middlewareResult.status, middlewareResult.body)
+      return
+    }
+
+    const newestUserMessage = [...dawnInput.messages]
+      .reverse()
+      .find((message) => message.role === "user")
+    const pending = (await readPendingInterrupts(checkpointer, input.threadId)) ?? {
+      interrupts: [],
+      malformed: false,
+    }
+    const resumeResolution = resolveAgUiResume(dawnInput.resume, pending)
+    if (!resumeResolution.ok) {
+      sendJson(
+        response,
+        resumeResolution.status,
+        createRequestErrorBody(resumeResolution.message, { code: resumeResolution.code }),
+      )
+      return
+    }
+
+    const threadId = input.threadId
+    if (!(await threadsStore.getThread(threadId))) {
+      await threadsStore.createThread({ thread_id: threadId })
+    }
+    await threadsStore.updateMetadata(threadId, { route: routeKey })
+    await threadsStore.updateStatus(threadId, "busy")
+
+    response.writeHead(200, {
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      "content-type": "text/event-stream",
+    })
+
+    try {
+      const routeStream = streamRoute({
+        appRoot,
+        input: {
+          messages: newestUserMessage ? [{ role: "user", content: newestUserMessage.content }] : [],
+        },
+        ...(resumeResolution.mode === "resume" ? { resume: resumeResolution.resume } : {}),
+        ...(middlewareResult.context ? { middlewareContext: middlewareResult.context } : {}),
+        routeFile: route.routeFile,
+        routeId: route.routeId,
+        routePath: route.routePath,
+        ...(sandboxManager ? { sandboxManager } : {}),
+        signal,
+        threadId,
+      })
+      const abortableRouteStream = abortableAsyncIterable(routeStream, signal)
+      for await (const event of toAguiEvents(normalizeDawnStream(abortableRouteStream), {
+        threadId,
+        runId: input.runId,
+      })) {
+        response.write(encodeAgUiSse(event, request.headers.accept))
+      }
+    } finally {
+      await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+    }
+    response.end()
+  } finally {
+    request.removeListener("aborted", onRequestAborted)
+    response.removeListener("close", onResponseClose)
   }
-  response.end()
 }

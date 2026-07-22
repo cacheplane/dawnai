@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, it } from "node:test"
+import { afterEach, describe, it } from "node:test"
+import { fileURLToPath } from "node:url"
 
 import {
   assertCleanDependencySpecs,
@@ -14,15 +15,29 @@ import {
   run,
   validatePackageMetadata,
 } from "./lib/published-artifacts.mjs"
-import {
+import * as publishedSmoke from "./published-artifact-smoke.mjs"
+
+const {
+  agUiEsmProbeSource,
+  agUiProbeCommands,
+  agUiTypeProbeSource,
+  agUiTypeScriptConfig,
   assertNoNativeInstallOutput,
   assertNoNativeLifecycleScripts,
   parseDockerMappedHostPort,
   pgvectorDatabaseUrl,
   readInstalledPackageManifests,
   runCommand,
+  shouldRunAgUiProbe,
   shouldRunOpenAiSmoke,
-} from "./published-artifact-smoke.mjs"
+} = publishedSmoke
+
+const tempRoots = []
+const typescriptCompilerPath = fileURLToPath(import.meta.resolve("typescript/bin/tsc"))
+
+afterEach(async () => {
+  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })))
+})
 
 describe("resolvePackageSet", () => {
   it("resolves the memory-pgvector-core package set", () => {
@@ -39,12 +54,27 @@ describe("resolvePackageSet", () => {
 })
 
 describe("packageSets", () => {
+  it("includes the AG-UI package set", () => {
+    assert.deepEqual(packageSets["ag-ui"], ["@dawn-ai/ag-ui"])
+  })
+
   it("includes the public package set placeholder", () => {
     assert.equal(packageSets.public, null)
   })
 })
 
 describe("expectedFilesForPackage", () => {
+  it("returns AG-UI entrypoint expectations", () => {
+    assert.deepEqual(expectedFilesForPackage("@dawn-ai/ag-ui"), [
+      "dist/index.js",
+      "dist/index.d.ts",
+      "dist/sse.js",
+      "dist/sse.d.ts",
+      "README.md",
+      "package.json",
+    ])
+  })
+
   it("returns memory-pgvector tarball expectations", () => {
     assert.deepEqual(expectedFilesForPackage("@dawn-ai/memory-pgvector"), [
       "dist/index.js",
@@ -71,6 +101,197 @@ describe("expectedFilesForPackage", () => {
 
   it("defaults to metadata and README expectations", () => {
     assert.deepEqual(expectedFilesForPackage("@dawn-ai/unknown"), ["README.md", "package.json"])
+  })
+})
+
+describe("AG-UI installed probes", () => {
+  it("generates an ESM probe for the exact canonical root surface", () => {
+    const source = agUiEsmProbeSource()
+
+    assert.match(source, /import \* as root from "@dawn-ai\/ag-ui"/)
+    assert.match(source, /import \{ encodeAgUiSse \} from "@dawn-ai\/ag-ui\/sse"/)
+    assert.ok(
+      source.includes(`assert.deepEqual(Object.keys(root).sort(), [
+  "createCounterIdFactory",
+  "createDefaultIdFactory",
+  "fromRunAgentInput",
+  "toAguiEvents",
+])`),
+      "ESM probe must compare the complete sorted root export surface",
+    )
+    assert.ok(
+      source.includes(`for (const exportName of [
+  "createCounterIdFactory",
+  "createDefaultIdFactory",
+  "fromRunAgentInput",
+  "toAguiEvents",
+]) {
+  assert.equal(typeof root[exportName], "function", \`canonical export \${exportName} must be a function\`)
+}`),
+      "ESM probe must verify every canonical root export is a function",
+    )
+    assert.match(source, /type: "RUN_STARTED"/)
+    const exactSseAssertion = "assert.equal(encoded, `data: $" + "{JSON.stringify(event)}\\n\\n`)"
+    assert.ok(source.includes(exactSseAssertion), "ESM probe must assert the exact SSE frame")
+    assert.match(source, /JSON\.parse\(encoded\.slice\("data: "\.length, -2\)\)/)
+    for (const field of ["type", "threadId", "runId"]) {
+      assert.match(source, new RegExp(`payload\\.${field}`))
+    }
+  })
+
+  it("generates a NodeNext consumer for root types and the SSE subpath", () => {
+    const source = agUiTypeProbeSource()
+
+    assert.match(source, /from "@dawn-ai\/ag-ui"/)
+    for (const functionName of [
+      "createCounterIdFactory",
+      "createDefaultIdFactory",
+      "fromRunAgentInput",
+      "toAguiEvents",
+    ]) {
+      assert.match(source, new RegExp(`  ${functionName},`))
+    }
+    assert.ok(
+      source.includes(`type RootValueSurface = readonly [
+  typeof createCounterIdFactory,
+  typeof createDefaultIdFactory,
+  typeof fromRunAgentInput,
+  typeof toAguiEvents,
+]`),
+      "type probe must type-use every canonical root function declaration",
+    )
+    for (const typeName of [
+      "IdFactory",
+      "DawnMessage",
+      "DawnRunInput",
+      "DawnInterruptEnvelope",
+      "DawnResumeRequest",
+      "AguiOutboundEvent",
+      "ToAguiOptions",
+      "DawnAgentStreamChunk",
+      "RunContext",
+    ]) {
+      assert.match(source, new RegExp(`type ${typeName}`))
+    }
+    assert.ok(
+      source.includes(`type RootTypeSurface = readonly [
+  IdFactory,
+  DawnMessage,
+  DawnRunInput,
+  DawnInterruptEnvelope,
+  DawnResumeRequest,
+  AguiOutboundEvent,
+  ToAguiOptions,
+  DawnAgentStreamChunk,
+  RunContext,
+]`),
+      "type probe must exercise every canonical root type",
+    )
+    for (const removedTypeName of [
+      "MappedRunInput",
+      "ResumeDecision",
+      "AgUiTranslator",
+      "AgUiEvent",
+      "DawnStreamChunk",
+      "DawnToolCallData",
+      "DawnToolResultData",
+      "RawChunk",
+      "TranslatorOptions",
+    ]) {
+      assert.ok(
+        source.includes(`// @ts-expect-error ${removedTypeName} was removed from the canonical root
+import type { ${removedTypeName} } from "@dawn-ai/ag-ui"`),
+        `type probe must reject restored ${removedTypeName}`,
+      )
+    }
+    for (const removedFunctionName of [
+      "createAgUiTranslator",
+      "mapRunInput",
+      "encodeAgUiSse",
+      "fromAguiResume",
+      "toAguiInterrupt",
+      "asToolCallData",
+      "asToolResultData",
+    ]) {
+      assert.ok(
+        source.includes(`// @ts-expect-error ${removedFunctionName} was removed from the canonical root
+import { ${removedFunctionName} } from "@dawn-ai/ag-ui"`),
+        `type probe must reject restored ${removedFunctionName}`,
+      )
+    }
+    assert.match(source, /from "@dawn-ai\/ag-ui\/sse"/)
+    assert.match(source, /typeof encodeAgUiSse/)
+    assert.deepEqual(agUiTypeScriptConfig(), {
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        noEmit: true,
+        strict: true,
+        target: "ES2022",
+      },
+      files: ["smoke-ag-ui.ts"],
+    })
+  })
+
+  it("installs TypeScript and runs both probes", () => {
+    assert.deepEqual(agUiProbeCommands(), [
+      { command: "node", args: ["smoke-ag-ui.mjs"] },
+      { command: "npm", args: ["install", "--save-dev", "typescript@6.0.2"] },
+      {
+        command: "npm",
+        args: ["exec", "--", "tsc", "--project", "tsconfig.ag-ui.json"],
+      },
+    ])
+  })
+
+  it("selects the AG-UI probe only when the package is installed", () => {
+    assert.equal(shouldRunAgUiProbe([{ name: "@dawn-ai/ag-ui", version: "1.0.0" }]), true)
+    assert.equal(shouldRunAgUiProbe([{ name: "@dawn-ai/core", version: "1.0.0" }]), false)
+  })
+
+  it("executes generated ESM and type probes against a local package fixture", async () => {
+    const root = await createAgUiProbeFixture()
+
+    await runCommand(process.execPath, ["smoke-ag-ui.mjs"], { cwd: root })
+    await compileAgUiTypeProbe(root)
+  })
+
+  it("rejects an installed SSE encoder with incorrect event data", async () => {
+    const root = await createAgUiProbeFixture({
+      sseSource: `export function encodeAgUiSse(event) {
+  return "data: " + JSON.stringify({ ...event, threadId: "wrong-thread" }) + "\\n\\n"
+}
+`,
+    })
+
+    await assert.rejects(
+      runCommand(process.execPath, ["smoke-ag-ui.mjs"], { cwd: root }),
+      /deepStrictEqual|strictEqual/,
+    )
+  })
+
+  it("fails type compilation if a removed root type reappears", async () => {
+    const root = await createAgUiProbeFixture({
+      extraRootDeclarations: "export type MappedRunInput = unknown\n",
+    })
+
+    await assert.rejects(compileAgUiTypeProbe(root), /Unused '@ts-expect-error' directive/)
+  })
+
+  it("fails type compilation if a canonical function declaration is missing", async () => {
+    const root = await createAgUiProbeFixture({
+      omitCanonicalDeclaration: "createDefaultIdFactory",
+    })
+
+    await assert.rejects(compileAgUiTypeProbe(root), /createDefaultIdFactory/)
+  })
+
+  it("fails type compilation if a removed root function declaration reappears", async () => {
+    const root = await createAgUiProbeFixture({
+      extraRootDeclarations: "export declare function mapRunInput(input: unknown): unknown\n",
+    })
+
+    await assert.rejects(compileAgUiTypeProbe(root), /Unused '@ts-expect-error' directive/)
   })
 })
 
@@ -379,3 +600,85 @@ describe("assertNoNativeInstallOutput", () => {
     )
   })
 })
+
+async function createAgUiProbeFixture(options = {}) {
+  const root = await mkdtemp(join(tmpdir(), "dawn-ag-ui-probe-test-"))
+  const packageRoot = join(root, "node_modules", "@dawn-ai", "ag-ui")
+  const distRoot = join(packageRoot, "dist")
+  tempRoots.push(root)
+  await mkdir(distRoot, { recursive: true })
+
+  const packageJson = {
+    name: "@dawn-ai/ag-ui",
+    type: "module",
+    types: "./dist/index.d.ts",
+    exports: {
+      ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+      "./sse": { types: "./dist/sse.d.ts", default: "./dist/sse.js" },
+    },
+  }
+  const rootJavaScript = `export function createCounterIdFactory() {}
+export function createDefaultIdFactory() {}
+export function fromRunAgentInput(input) { return input }
+export function toAguiEvents(events) { return events }
+`
+  const canonicalFunctionDeclarations = {
+    createCounterIdFactory: "export declare function createCounterIdFactory(): IdFactory",
+    createDefaultIdFactory: "export declare function createDefaultIdFactory(): IdFactory",
+    fromRunAgentInput: "export declare function fromRunAgentInput(input: unknown): DawnRunInput",
+    toAguiEvents: `export declare function toAguiEvents(
+  events: AsyncIterable<DawnAgentStreamChunk>,
+  context: RunContext,
+  options?: ToAguiOptions,
+): AsyncIterable<AguiOutboundEvent>`,
+  }
+  const includedFunctionDeclarations = Object.entries(canonicalFunctionDeclarations)
+    .filter(([name]) => name !== options.omitCanonicalDeclaration)
+    .map(([, declaration]) => declaration)
+    .join("\n")
+  const rootDeclarations = `export type IdFactory = (kind: string) => string
+export interface DawnMessage { readonly role: string; readonly content: string }
+export interface DawnRunInput { readonly messages: readonly DawnMessage[] }
+export interface DawnInterruptEnvelope { readonly interruptId: string }
+export interface DawnResumeRequest { readonly interruptId: string; readonly value: unknown }
+export interface AguiOutboundEvent { readonly type: string }
+export interface ToAguiOptions { readonly idFactory?: IdFactory }
+export type DawnAgentStreamChunk = { readonly type: string; readonly data?: unknown }
+export interface RunContext { readonly threadId: string; readonly runId: string }
+${includedFunctionDeclarations}
+${options.extraRootDeclarations ?? ""}`
+  const sseJavaScript =
+    options.sseSource ??
+    `export function encodeAgUiSse(event) {
+  return "data: " + JSON.stringify(event) + "\\n\\n"
+}
+`
+  const sseDeclarations = `export declare function encodeAgUiSse(event: {
+  readonly type: string
+  readonly threadId: string
+  readonly runId: string
+}): string
+`
+
+  await Promise.all([
+    writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }), "utf8"),
+    writeFile(join(root, "smoke-ag-ui.mjs"), agUiEsmProbeSource(), "utf8"),
+    writeFile(join(root, "smoke-ag-ui.ts"), agUiTypeProbeSource(), "utf8"),
+    writeFile(join(root, "tsconfig.ag-ui.json"), JSON.stringify(agUiTypeScriptConfig()), "utf8"),
+    writeFile(join(packageRoot, "package.json"), JSON.stringify(packageJson), "utf8"),
+    writeFile(join(distRoot, "index.js"), rootJavaScript, "utf8"),
+    writeFile(join(distRoot, "index.d.ts"), rootDeclarations, "utf8"),
+    writeFile(join(distRoot, "sse.js"), sseJavaScript, "utf8"),
+    writeFile(join(distRoot, "sse.d.ts"), sseDeclarations, "utf8"),
+  ])
+
+  return root
+}
+
+async function compileAgUiTypeProbe(root) {
+  return runCommand(
+    process.execPath,
+    [typescriptCompilerPath, "--project", "tsconfig.ag-ui.json"],
+    { cwd: root },
+  )
+}

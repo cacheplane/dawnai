@@ -77,6 +77,10 @@ export const DAWN_ERRORS = {
     title: "Tool file has the wrong shape",
     docsPath: "/docs/tools",
   },
+  DAWN_E5101: {
+    code: "DAWN_E5101",
+    title: "Node version below the supported floor",
+  },
 } as const satisfies Record<string, DawnErrorDescriptor>
 
 /** The union of all registered error codes. Producers cannot invent codes. */

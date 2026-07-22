@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { afterEach, describe, expect, test } from "vitest"
+import { createAimock, script } from "../../testing/dist/index.js"
 
 import { resolveServePort, serveRuntime } from "../src/lib/dev/serve-runtime.js"
 
@@ -109,6 +110,59 @@ describe("serveRuntime", () => {
     // close() must be safe to call again (idempotent).
     await handle.close()
   })
+
+  test("serves canonical AG-UI events through production assembly", async () => {
+    const aimock = await createAimock({ fixtures: [] })
+    aimock.addFixtures(script().user("hello production").replies("Hello from serveRuntime").build())
+    const previousBaseUrl = process.env.OPENAI_BASE_URL
+    const previousKey = process.env.OPENAI_API_KEY
+    process.env.OPENAI_BASE_URL = aimock.baseUrl
+    process.env.OPENAI_API_KEY = "test-not-used"
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": '{ "type": "module" }\n',
+      "src/app/chat/index.ts":
+        'import { agent } from "@dawn-ai/sdk";\nexport default agent({ model: "gpt-5-mini", systemPrompt: "You are helpful." });\n',
+    })
+
+    try {
+      const handle = await serveRuntime({
+        appRoot,
+        host: "127.0.0.1",
+        installSignalHandlers: false,
+        port: 0,
+      })
+      handles.push(handle)
+      const response = await fetch(new URL("/agui/%2Fchat%23agent", handle.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+        body: JSON.stringify({
+          context: [],
+          forwardedProps: {},
+          messages: [{ id: "1", role: "user", content: "hello production" }],
+          runId: "production-run",
+          state: {},
+          threadId: "production-thread",
+          tools: [],
+        }),
+      })
+      const text = await response.text()
+
+      expect(response.status).toBe(200)
+      expect(text).toContain('"type":"RUN_STARTED"')
+      expect(text).toContain('"type":"TEXT_MESSAGE_CONTENT"')
+      expect(text).toContain('"delta":"Hello from serveRuntime"')
+      expect(text).toContain('"type":"RUN_FINISHED"')
+      expect(text).not.toContain('"type":"CUSTOM"')
+      expect(text).not.toContain('"type":"STATE_SNAPSHOT"')
+    } finally {
+      await aimock.close()
+      if (previousBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+      else process.env.OPENAI_BASE_URL = previousBaseUrl
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = previousKey
+    }
+  }, 60_000)
 })
 
 describe("resolveServePort", () => {

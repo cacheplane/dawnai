@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -83,6 +84,16 @@ export interface ExecuteRouteOptions {
   readonly input: unknown
   readonly routeFile: string
   readonly signal?: AbortSignal
+}
+
+export type RouteResumePayload =
+  | "once"
+  | "always"
+  | "deny"
+  | Readonly<Record<string, "once" | "always" | "deny">>
+
+export function toAgentInput(input: unknown, resume?: RouteResumePayload): unknown {
+  return resume === undefined ? input : new Command({ resume })
 }
 
 export async function executeRoute(options: ExecuteRouteOptions): Promise<RuntimeExecutionResult> {
@@ -244,11 +255,11 @@ export async function* streamResolvedRoute(options: {
   readonly isSubagent?: boolean
   readonly middlewareContext?: Readonly<Record<string, unknown>>
   /**
-   * When set, the agent-adapter receives `Command({resume: resumeDecision})`
+   * When set, the agent-adapter receives `Command({resume})`
    * as its input instead of the normal `input` field. Used by the resume
    * endpoint to replay a parked graph state after a permission interrupt.
    */
-  readonly resumeDecision?: "once" | "always" | "deny"
+  readonly resume?: RouteResumePayload
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
@@ -270,8 +281,7 @@ export async function* streamResolvedRoute(options: {
   })
 
   if (!prepared.ok) {
-    yield { type: "done", output: { error: prepared.message } }
-    return
+    throw new Error(prepared.message)
   }
 
   const {
@@ -303,11 +313,7 @@ export async function* streamResolvedRoute(options: {
 
   const routeParamNames = extractRouteParamNames(options.routeId)
 
-  // For resume runs, pass Command({resume}) directly to the agent-adapter so
-  // LangGraph replays from the parked checkpoint state.
-  const agentInput = options.resumeDecision
-    ? new Command({ resume: options.resumeDecision })
-    : options.input
+  const agentInput = toAgentInput(options.input, options.resume)
 
   for await (const chunk of streamAgent({
     checkpointer,
@@ -331,13 +337,23 @@ export async function* streamResolvedRoute(options: {
         yield { type: "chunk", data: chunk.data }
         break
       case "tool_call": {
-        const tc = chunk.data as { name: string; input: unknown }
-        yield { type: "tool_call", name: tc.name, input: tc.input }
+        const tc = chunk.data as { id?: string; name: string; input: unknown }
+        yield {
+          type: "tool_call",
+          ...(tc.id ? { id: tc.id } : {}),
+          name: tc.name,
+          input: tc.input,
+        }
         break
       }
       case "tool_result": {
-        const tr = chunk.data as { name: string; output: unknown }
-        yield { type: "tool_result", name: tr.name, output: tr.output }
+        const tr = chunk.data as { id?: string; name: string; output: unknown }
+        yield {
+          type: "tool_result",
+          ...(tr.id ? { id: tr.id } : {}),
+          name: tr.name,
+          output: tr.output,
+        }
         break
       }
       case "done":
@@ -855,6 +871,9 @@ async function executeRouteAtResolvedPath(options: {
       sandboxed,
     } = prepared
     mode = normalized.kind
+    const threadId =
+      options.threadId ??
+      (normalized.kind === "agent" ? `t-run-${randomUUID().slice(0, 8)}` : undefined)
 
     const context = createDawnContext({
       ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
@@ -875,7 +894,7 @@ async function executeRouteAtResolvedPath(options: {
       ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
       ...(subagentResolver ? { subagentResolver } : {}),
-      ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(threadId ? { threadId } : {}),
       ...(sandboxed ? { sandboxed: true } : {}),
     })
 

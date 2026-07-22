@@ -15,24 +15,23 @@
   them in `dawn.config.ts` for in-memory storage, remote sandboxes, etc.
 - `AGENTS.md` memory autoload — Dawn auto-injects `workspace/AGENTS.md` into the system prompt on every turn; the agent updates it via `writeFile`
 - **Planning** — `plan.md` in the route directory opts the agent into the built-in
-  `writeTodos` tool, a `todos` state channel, and a `plan_update` SSE event. Open the
-  smoke client's event log; you'll see `event: plan_update` lines whenever the agent
-  updates its plan.
+  `writeTodos` tool, a `todos` state channel, and a `plan_update` Agent Protocol stream
+  event. AG-UI v1 intentionally ignores planning capability events.
 - **Skills** — `src/app/chat/skills/<name>/SKILL.md` files are auto-listed in
   the agent's system prompt (name + description). The agent calls
   `readSkill({ name })` to load a skill's full body on demand. Two example
   skills ship with the demo: `workspace-conventions` and `recover-from-failure`.
 - **Subagents** — `/coordinator` dispatches to specialist subagents (`research`,
   `summarizer`) via an auto-generated `task({ subagent, input })` tool. Subagent runs
-  bubble `subagent.*` SSE events with `call_id` correlation. Not wired into the web
-  client yet (see below) — drive it directly against the server's SSE/AG-UI endpoints.
+  bubble `subagent.*` Agent Protocol stream events with `call_id` correlation. The basic
+  web client does not expose `/coordinator`; drive it through Agent Protocol instead.
 - **HITL permissions** — `dawn.config.ts` seeds allow/deny lists for `runBash`. Unknown
   commands in interactive mode emit an interrupt; resume the thread with `once`, `always`,
   or `deny` to continue. See [Permissions](../../apps/web/content/docs/permissions.mdx)
   for the interrupt/resume flow.
 - End-to-end streaming to a [CopilotKit](https://docs.copilotkit.ai) web client over Dawn's
-  AG-UI endpoint (`POST /agui/{routeId}`, see `@dawn-ai/ag-ui`) — the `/chat` route only;
-  `/coordinator` is a fast-follow for the web client.
+  AG-UI endpoint (`POST /agui/{routeId}`, see `@dawn-ai/ag-ui`) for basic `/chat` messages.
+  The web example deliberately has no planning, subagent, or permission compatibility UI.
 
 ## Model choice
 
@@ -42,7 +41,10 @@ If you swap to a smaller model, expect to do more prompt-engineering work to get
 
 ## Quickstart
 
+Run these commands from the repository root:
+
 ```bash
+cd examples/chat
 cp server/.env.example server/.env   # add OPENAI_API_KEY
 cp web/.env.example web/.env.local
 pnpm install
@@ -71,12 +73,9 @@ examples/chat/
 │               └── summarizer/index.ts
 └── web/                    # @dawn-example/chat-web (CopilotKit v2 web client)
     └── app/
-        ├── layout.tsx                 # imports @copilotkit/react-ui styles
-        ├── page.tsx                   # CopilotKitProvider + CopilotSidebar + TodosPanel
-        ├── api/copilotkit/route.ts    # CopilotRuntime + HttpAgent → Dawn /agui/%2Fchat%23agent
-        └── components/
-            ├── PermissionInterrupt.tsx  # useInterrupt → approve/deny card
-            └── TodosPanel.tsx            # useAgent({agentId:"chat"}) → live plan/todos
+        ├── layout.tsx                 # imports @copilotkit/react-core/v2/styles.css
+        ├── page.tsx                   # CopilotKit + CopilotSidebar
+        └── api/copilotkit/route.ts    # CopilotRuntime + HttpAgent → Dawn /agui/%2Fchat%23agent
 ```
 
 ## Security caveats
@@ -93,6 +92,7 @@ shell expansion — all possible. Do not point untrusted users at this example.
   `workspace/` are also permission-gated by the workspace capability. See
   [Permissions](../../apps/web/content/docs/permissions.mdx) and the
   [configuration reference](../../apps/web/content/docs/configuration.mdx#permissions).
+  The basic web client does not render a decision control.
 - **Tool-output offloading** is supported by the runtime and is active whenever the app
   root has a `workspace/` directory. Large tool results are written under
   `workspace/tool-outputs/` and replaced in context with a preview plus a `readFile`

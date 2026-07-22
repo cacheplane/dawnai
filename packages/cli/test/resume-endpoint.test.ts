@@ -19,6 +19,115 @@ afterEach(async () => {
 })
 
 describe("POST /threads/:thread_id/resume", () => {
+  test.each([
+    {
+      name: "a malformed interrupt write",
+      pendingWrites: [
+        [
+          "33a12321-3ec2-56a7-b4d7-0337886c4386",
+          "__interrupt__",
+          {
+            id: "3336d0e0a2d4f198ef9aecd09cd7ac27",
+            value: { interruptId: "perm-1" },
+          },
+        ],
+        ["44b23432-4fd3-67b8-c5e8-1448997d5497", "__interrupt__", null],
+      ],
+    },
+    {
+      name: "duplicate checkpoint resume keys",
+      pendingWrites: [
+        [
+          "33a12321-3ec2-56a7-b4d7-0337886c4386",
+          "__interrupt__",
+          {
+            id: "3336d0e0a2d4f198ef9aecd09cd7ac27",
+            value: { interruptId: "perm-1" },
+          },
+        ],
+        [
+          "44b23432-4fd3-67b8-c5e8-1448997d5497",
+          "__interrupt__",
+          {
+            id: "3336d0e0a2d4f198ef9aecd09cd7ac27",
+            value: { interruptId: "perm-2" },
+          },
+        ],
+      ],
+    },
+  ])("returns structured 409 for $name even when an alias matches", async ({ pendingWrites }) => {
+    const appRoot = await createCheckpointFixtureApp(pendingWrites)
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+    const threadId = `thread-malformed-${tempDirs.length}`
+
+    const seedResponse = await fetch(new URL(`/threads/${threadId}/runs/wait`, server.url), {
+      body: JSON.stringify({ input: {}, route: "/noop#graph" }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    })
+    expect(seedResponse.status).toBe(200)
+
+    const response = await fetch(new URL(`/threads/${threadId}/resume`, server.url), {
+      body: JSON.stringify({ decision: "once", interrupt_id: "perm-1" }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    })
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({
+      error: {
+        details: { code: "malformed_checkpoint" },
+        kind: "request_error",
+      },
+    })
+  })
+
+  test.each([
+    ["inner capability ID", "perm-1", 200],
+    ["outer interrupt ID", "3336d0e0a2d4f198ef9aecd09cd7ac27", 200],
+    ["unmatched ID", "perm-stale", 409],
+  ])("handles the %s as an AP interrupt_id when both IDs exist", async (_label, interruptId, status) => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `
+        export default {
+          checkpointer: {
+            getTuple: async () => ({
+              pendingWrites: [[
+                "33a12321-3ec2-56a7-b4d7-0337886c4386",
+                "__interrupt__",
+                {
+                  id: "3336d0e0a2d4f198ef9aecd09cd7ac27",
+                  value: { interruptId: "perm-1" },
+                },
+              ]],
+            }),
+          },
+        };
+      `,
+      "package.json": "{}\n",
+      "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
+    })
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+    const threadId = `thread-${interruptId}`
+
+    const seedResponse = await fetch(new URL(`/threads/${threadId}/runs/wait`, server.url), {
+      body: JSON.stringify({ input: {}, route: "/noop#graph" }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    })
+    expect(seedResponse.status).toBe(200)
+
+    const response = await fetch(new URL(`/threads/${threadId}/resume`, server.url), {
+      body: JSON.stringify({ decision: "once", interrupt_id: interruptId }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    })
+
+    expect(response.status).toBe(status)
+  })
+
   test("returns 400 when interrupt_id is missing from body", async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": "export default {};\n",
@@ -138,4 +247,18 @@ async function createFixtureApp(files: Readonly<Record<string, string>>) {
   )
 
   return appRoot
+}
+
+async function createCheckpointFixtureApp(pendingWrites: readonly unknown[]) {
+  return createFixtureApp({
+    "dawn.config.ts": `
+      export default {
+        checkpointer: {
+          getTuple: async () => ({ pendingWrites: ${JSON.stringify(pendingWrites)} }),
+        },
+      };
+    `,
+    "package.json": "{}\n",
+    "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
+  })
 }

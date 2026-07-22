@@ -17,7 +17,7 @@ Yes. The built-in `agent()` route materializes to a LangChain chat model. Dawn i
 They solve different problems.
 
 - **Vercel AI SDK** is a client-and-server toolkit for chat UIs and provider-agnostic LLM calls. Dawn does not compete with it — it sits one layer up, organizing whole agent projects, and you can use the AI SDK inside a Dawn route.
-- **CopilotKit** is a frontend-first framework for embedding copilots in existing apps. Dawn is backend-first; the deliverable is a deployable agent runtime, not in-app UI. They compose through Dawn's AG-UI endpoint: `dawn dev` serves `POST /agui/{routeId}`, and the chat example wires a CopilotKit `HttpAgent` to it.
+- **CopilotKit** is a frontend-first framework for embedding copilots in existing apps. Dawn is backend-first; the deliverable is a deployable agent runtime, not in-app UI. They compose through Dawn's AG-UI endpoint: both `dawn dev` and `dawn start` serve `POST /agui/{routeId}` with the same route-execution middleware behavior, and the chat example wires a CopilotKit `HttpAgent` to it.
 - **Mastra** is a general-purpose agent framework with its own runtime and abstractions. Dawn is narrower: it does not replace LangGraph, it deletes the boilerplate around it.
 
 If you are already on LangGraph, Dawn fits. If you are not, pick the framework whose runtime you want to live in.
