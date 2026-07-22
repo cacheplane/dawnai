@@ -7,8 +7,7 @@ import { useRenderTool } from "@copilotkit/react-core/v2"
 // - The registration hook is `useRenderTool` (NOT `useRenderToolCall` — that
 //   one takes no args and returns a `({toolCall, toolMessage}) => ReactElement`
 //   render *function* used internally by CopilotKit's own message view; it is
-//   not a registration API). `useRenderTool` is called under `<CopilotKit>`,
-//   the same way `useInterrupt` is used in PermissionInterrupt.tsx.
+//   not a registration API). `useRenderTool` is called under `<CopilotKit>`.
 // - Wildcard registration: pass `{ name: "*", render, agentId? }` — the "*"
 //   overload is documented as "used as a fallback when no exact name-matched
 //   renderer is registered for a tool call" (src/v2/hooks/use-render-tool.d.ts).
@@ -28,7 +27,7 @@ import { useRenderTool } from "@copilotkit/react-core/v2"
 //
 // With no agentId, this binds to CopilotKit's default agent id ("default"),
 // which the runtime route registers as our Dawn /research agent — same as
-// PermissionInterrupt.tsx and the other panels.
+// MemoryCandidates.tsx.
 /**
  * Dawn delivers tool args as a JSON *string* under `input` (that's how the
  * agent-adapter serializes them), so `parameters` arrives as
