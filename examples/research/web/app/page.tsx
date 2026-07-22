@@ -1,6 +1,7 @@
 "use client"
 import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
 import { MemoryCandidates } from "./components/MemoryCandidates"
+import { ToolCallCard } from "./components/ToolCallCard"
 
 // Notes (verified against installed @copilotkit/react-core@1.62.3 types — see
 // examples/chat/web/app/page.tsx for the original investigation):
@@ -15,9 +16,14 @@ import { MemoryCandidates } from "./components/MemoryCandidates"
 //   under "default", so the sidebar and memory panel bind without per-component
 //   agentId wiring.
 // - `labels` is `Partial<CopilotChatLabels>`, whose header title field is `modalHeaderTitle`.
+// - `defaultThrottleMs` coalesces the useAgent re-renders that the sidebar transcript
+//   and panels get from OnMessagesChanged/OnStateChanged. It defaults to UNTHROTTLED,
+//   and a full research run streams hundreds of events, which pegs the renderer
+//   (the UI froze outright). 100ms keeps it live-feeling while capping re-renders.
 export default function Home() {
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit">
+    <CopilotKit runtimeUrl="/api/copilotkit" defaultThrottleMs={100}>
+      <ToolCallCard />
       <div style={{ display: "flex", height: "100vh" }}>
         <div style={{ display: "flex", flexDirection: "column", minWidth: 240 }}>
           <MemoryCandidates />

@@ -12,7 +12,7 @@ import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
 // - `labels` is `Partial<CopilotChatLabels>`, whose header title field is `modalHeaderTitle`.
 export default function Home() {
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit">
+    <CopilotKit runtimeUrl="/api/copilotkit" defaultThrottleMs={100}>
       <main style={{ height: "100vh" }}>
         <CopilotSidebar defaultOpen labels={{ modalHeaderTitle: "Dawn chat" }} />
       </main>
