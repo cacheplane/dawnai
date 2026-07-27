@@ -40,8 +40,8 @@
     "@dawn-ai/sdk": "workspace:*",
     "@dawn-ai/sqlite-storage": "workspace:*",
     "@dawn-ai/workspace": "workspace:*",
-    "@langchain/langgraph": "^1.4.7",
-    "tsx": "^4.23.0",
+    "@langchain/langgraph": "^1.4.8",
+    "tsx": "^4.23.1",
     "typescript": "5.8.3",
     "zod": "^4.4.3"
   },
