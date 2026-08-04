@@ -397,6 +397,79 @@ export function pgvectorMemoryStore(opts: {
       return (res.rows as Record<string, unknown>[]).map(rowToRecord)
     },
 
+    async browse(q = {}) {
+      await ready()
+      const where: string[] = []
+      const params: unknown[] = []
+      if (q.namespacePrefix) {
+        // Byte-exact, case-sensitive prefix match — deliberately NOT LIKE, so
+        // %/_/\ in the prefix are literal and both backends agree byte-for-byte.
+        params.push(q.namespacePrefix, q.namespacePrefix)
+        where.push(`left(namespace, length($${params.length - 1})) = $${params.length}`)
+      }
+      if (q.status) {
+        params.push(q.status)
+        where.push(`status = $${params.length}`)
+      }
+      if (q.kind) {
+        params.push(q.kind)
+        where.push(`kind = $${params.length}`)
+      }
+      if (q.sourceType) {
+        params.push(q.sourceType)
+        where.push(`source->>'type' = $${params.length}`)
+      }
+      const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
+      // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
+      // negatives — clamping to ≥0 integers unifies backend behavior.
+      const limit = Math.max(0, Math.trunc(q.limit ?? 50))
+      const offset = Math.max(0, Math.trunc(q.offset ?? 0))
+      // Rows and total are two separate round-trips; a concurrent write between
+      // them can momentarily skew total vs records — acceptable for a dev
+      // inspection tool (no transaction needed). COLLATE "C" pins the id ASC
+      // tiebreak to codepoint order, matching sqlite's BINARY collation.
+      const rowsRes = await pool.query(
+        `SELECT ${RECORD_COLUMNS} FROM ${T} ${clause}
+         ORDER BY updated_at DESC, id COLLATE "C" ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset],
+      )
+      const totalRes = await pool.query(`SELECT COUNT(*)::int AS n FROM ${T} ${clause}`, params)
+      return {
+        records: (rowsRes.rows as Record<string, unknown>[]).map(rowToRecord),
+        total: (totalRes.rows[0] as { n: number }).n,
+      }
+    },
+
+    async stats(statsOpts = {}) {
+      await ready()
+      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      const clause = statsOpts.namespacePrefix ? "WHERE left(namespace, length($1)) = $2" : ""
+      const params: unknown[] = statsOpts.namespacePrefix
+        ? [statsOpts.namespacePrefix, statsOpts.namespacePrefix]
+        : []
+      const group = async (expr: string): Promise<Record<string, number>> => {
+        const res = await pool.query(
+          `SELECT ${expr} AS k, COUNT(*)::int AS n FROM ${T} ${clause} GROUP BY k`,
+          params,
+        )
+        return Object.fromEntries((res.rows as { k: string; n: number }[]).map((r) => [r.k, r.n]))
+      }
+      const [totalRes, byStatus, byKind, byNamespace, bySourceType] = await Promise.all([
+        pool.query(`SELECT COUNT(*)::int AS n FROM ${T} ${clause}`, params),
+        group("status"),
+        group("kind"),
+        group("namespace"),
+        group("source->>'type'"),
+      ])
+      return {
+        total: (totalRes.rows[0] as { n: number }).n,
+        byStatus,
+        byKind,
+        byNamespace,
+        bySourceType,
+      }
+    },
+
     async close() {
       if (ownsPool) await pool.end()
     },

@@ -404,8 +404,10 @@ export function sqliteMemoryStore(opts: {
       const where: string[] = []
       const params: SQLInputValue[] = []
       if (q.namespacePrefix) {
-        where.push("namespace LIKE ?")
-        params.push(`${q.namespacePrefix}%`)
+        // Byte-exact, case-sensitive prefix match — deliberately NOT LIKE, so
+        // %/_/\ in the prefix are literal and both backends agree byte-for-byte.
+        where.push("substr(namespace, 1, length(?)) = ?")
+        params.push(q.namespacePrefix, q.namespacePrefix)
       }
       if (q.status) {
         where.push("status = ?")
@@ -420,8 +422,10 @@ export function sqliteMemoryStore(opts: {
         params.push(q.sourceType)
       }
       const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
-      const limit = q.limit ?? 50
-      const offset = q.offset ?? 0
+      // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
+      // negatives — clamping to ≥0 integers unifies backend behavior.
+      const limit = Math.max(0, Math.trunc(q.limit ?? 50))
+      const offset = Math.max(0, Math.trunc(q.offset ?? 0))
       // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
       // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.
       const rows = db
@@ -437,8 +441,11 @@ export function sqliteMemoryStore(opts: {
       return { records: rows.map(rowToRecord), total }
     },
     async stats(opts = {}) {
-      const clause = opts.namespacePrefix ? "WHERE namespace LIKE ?" : ""
-      const params: SQLInputValue[] = opts.namespacePrefix ? [`${opts.namespacePrefix}%`] : []
+      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      const clause = opts.namespacePrefix ? "WHERE substr(namespace, 1, length(?)) = ?" : ""
+      const params: SQLInputValue[] = opts.namespacePrefix
+        ? [opts.namespacePrefix, opts.namespacePrefix]
+        : []
       const group = (expr: string): Record<string, number> =>
         Object.fromEntries(
           (
