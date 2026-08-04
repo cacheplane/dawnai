@@ -9,13 +9,15 @@ import { streamResolvedRoute } from "../runtime/execute-route.js"
 import type { SandboxManager } from "../runtime/sandbox-manager.js"
 import type { StreamChunk } from "../runtime/stream-types.js"
 import { abortableAsyncIterable } from "./abortable-iterable.js"
-import { runMiddleware } from "./middleware.js"
+import { headersToRecord, runMiddleware } from "./middleware.js"
+import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
 import { readPendingInterrupts, resolveAgUiResume } from "./pending-interrupts.js"
-import { extractRouteParams, parseHeaders } from "./request-context.js"
+import { extractRouteParams } from "./request-context.js"
 import type { RuntimeRegistry } from "./runtime-registry.js"
 import { createRequestErrorBody } from "./server-errors.js"
+import { statusResponse } from "./status-response.js"
 
-interface AgUiRequestOptions {
+export interface AgUiFetchRequestOptions {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
   readonly middleware: DawnMiddleware | undefined
@@ -23,23 +25,14 @@ interface AgUiRequestOptions {
   readonly threadsStore: ThreadsStore
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
-  readonly request: IncomingMessage
-  readonly response: ServerResponse
+  readonly request: Request
   readonly routeKey: string
   readonly streamRoute?: typeof streamResolvedRoute
 }
 
-async function readBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = []
-  for await (const chunk of request)
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk)
-  return Buffer.concat(chunks).toString("utf8")
-}
-
-function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.statusCode = statusCode
-  response.setHeader("content-type", "application/json")
-  response.end(JSON.stringify(body))
+interface AgUiRequestOptions extends Omit<AgUiFetchRequestOptions, "request"> {
+  readonly request: IncomingMessage
+  readonly response: ServerResponse
 }
 
 async function* normalizeDawnStream(
@@ -92,7 +85,7 @@ async function* normalizeDawnStream(
   }
 }
 
-export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<void> {
+export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): Promise<Response> {
   const {
     appRoot,
     checkpointer,
@@ -102,7 +95,6 @@ export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<vo
     sandboxManager,
     signal: shutdownSignal,
     request,
-    response,
     routeKey,
     streamRoute = streamResolvedRoute,
   } = options
@@ -112,109 +104,149 @@ export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<vo
     if (!requestController.signal.aborted) requestController.abort(new Error(message))
   }
   const onRequestAborted = () => abortRequest("AG-UI request aborted")
-  const onResponseClose = () => {
-    if (!response.writableEnded) abortRequest("AG-UI response closed")
-  }
-  request.on("aborted", onRequestAborted)
-  response.on("close", onResponseClose)
+  if (request.signal.aborted) onRequestAborted()
+  else request.signal.addEventListener("abort", onRequestAborted, { once: true })
   const signal = AbortSignal.any([shutdownSignal, requestController.signal])
 
+  const raw = await request.text()
+  let parsedJson: unknown
   try {
-    const raw = await readBody(request)
-    let parsedJson: unknown
-    try {
-      parsedJson = JSON.parse(raw)
-    } catch {
-      sendJson(response, 400, createRequestErrorBody("Malformed body"))
-      return
-    }
+    parsedJson = JSON.parse(raw)
+  } catch {
+    return Response.json(createRequestErrorBody("Malformed body"), { status: 400 })
+  }
 
-    const parsed = RunAgentInputSchema.safeParse(parsedJson)
-    if (!parsed.success) {
-      sendJson(response, 400, createRequestErrorBody("Invalid RunAgentInput"))
-      return
-    }
-    const input = parsed.data
+  const parsed = RunAgentInputSchema.safeParse(parsedJson)
+  if (!parsed.success) {
+    return Response.json(createRequestErrorBody("Invalid RunAgentInput"), { status: 400 })
+  }
+  const input = parsed.data
 
-    const route = registry.lookup(routeKey)
-    if (!route) {
-      sendJson(response, 404, createRequestErrorBody(`Unknown route: ${routeKey}`))
-      return
-    }
+  const route = registry.lookup(routeKey)
+  if (!route) {
+    return Response.json(createRequestErrorBody(`Unknown route: ${routeKey}`), { status: 404 })
+  }
 
-    const dawnInput = fromRunAgentInput(input)
-    const middlewareRequest: MiddlewareRequest = {
-      assistantId: route.assistantId,
-      headers: parseHeaders(request),
-      method: request.method ?? "POST",
-      params: extractRouteParams(route.routeId, dawnInput.raw),
-      routeId: route.routeId,
-      url: request.url ?? `/agui/${routeKey}`,
-    }
-    const middlewareResult = await runMiddleware(middleware, middlewareRequest)
-    if (middlewareResult.action === "reject") {
-      sendJson(response, middlewareResult.status, middlewareResult.body)
-      return
-    }
+  const requestUrl = new URL(request.url)
+  const dawnInput = fromRunAgentInput(input)
+  const middlewareRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: headersToRecord(request.headers),
+    method: request.method,
+    params: extractRouteParams(route.routeId, dawnInput.raw),
+    routeId: route.routeId,
+    url: `${requestUrl.pathname}${requestUrl.search}`,
+  }
+  const middlewareResult = await runMiddleware(middleware, middlewareRequest)
+  if (middlewareResult.action === "reject") {
+    return statusResponse(middlewareResult.status, middlewareResult.body)
+  }
 
-    const newestUserMessage = [...dawnInput.messages]
-      .reverse()
-      .find((message) => message.role === "user")
-    const pending = (await readPendingInterrupts(checkpointer, input.threadId)) ?? {
-      interrupts: [],
-      malformed: false,
-    }
-    const resumeResolution = resolveAgUiResume(dawnInput.resume, pending)
-    if (!resumeResolution.ok) {
-      sendJson(
-        response,
-        resumeResolution.status,
-        createRequestErrorBody(resumeResolution.message, { code: resumeResolution.code }),
-      )
-      return
-    }
+  const newestUserMessage = [...dawnInput.messages]
+    .reverse()
+    .find((message) => message.role === "user")
+  const pending = (await readPendingInterrupts(checkpointer, input.threadId)) ?? {
+    interrupts: [],
+    malformed: false,
+  }
+  const resumeResolution = resolveAgUiResume(dawnInput.resume, pending)
+  if (!resumeResolution.ok) {
+    return Response.json(
+      createRequestErrorBody(resumeResolution.message, { code: resumeResolution.code }),
+      { status: resumeResolution.status },
+    )
+  }
 
-    const threadId = input.threadId
-    if (!(await threadsStore.getThread(threadId))) {
-      await threadsStore.createThread({ thread_id: threadId })
-    }
-    await threadsStore.updateMetadata(threadId, { route: routeKey })
-    await threadsStore.updateStatus(threadId, "busy")
+  const threadId = input.threadId
+  if (!(await threadsStore.getThread(threadId))) {
+    await threadsStore.createThread({ thread_id: threadId })
+  }
+  await threadsStore.updateMetadata(threadId, { route: routeKey })
+  await threadsStore.updateStatus(threadId, "busy")
 
-    response.writeHead(200, {
+  const accept = request.headers.get("accept") ?? undefined
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        try {
+          const routeStream = streamRoute({
+            appRoot,
+            input: {
+              messages: newestUserMessage
+                ? [{ role: "user", content: newestUserMessage.content }]
+                : [],
+            },
+            ...(resumeResolution.mode === "resume" ? { resume: resumeResolution.resume } : {}),
+            ...(middlewareResult.context ? { middlewareContext: middlewareResult.context } : {}),
+            routeFile: route.routeFile,
+            routeId: route.routeId,
+            routePath: route.routePath,
+            ...(sandboxManager ? { sandboxManager } : {}),
+            signal,
+            threadId,
+          })
+          const abortableRouteStream = abortableAsyncIterable(routeStream, signal)
+          for await (const event of toAguiEvents(normalizeDawnStream(abortableRouteStream), {
+            threadId,
+            runId: input.runId,
+          })) {
+            safeEnqueue(controller, encoder.encode(encodeAgUiSse(event, accept)))
+          }
+        } finally {
+          await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+        }
+        safeClose(controller)
+      } catch (error) {
+        // Mirrors the pre-refactor behavior: a mid-stream failure propagated
+        // out of the handler after headers were sent, tearing the stream down
+        // rather than framing an error event.
+        controller.error(error)
+      }
+    },
+    cancel() {
+      // Client disconnected — stop the run exactly as the old response-close
+      // handler did.
+      abortRequest("AG-UI response closed")
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
       "cache-control": "no-cache",
       connection: "keep-alive",
       "content-type": "text/event-stream",
-    })
+    },
+    status: 200,
+  })
+}
 
-    try {
-      const routeStream = streamRoute({
-        appRoot,
-        input: {
-          messages: newestUserMessage ? [{ role: "user", content: newestUserMessage.content }] : [],
-        },
-        ...(resumeResolution.mode === "resume" ? { resume: resumeResolution.resume } : {}),
-        ...(middlewareResult.context ? { middlewareContext: middlewareResult.context } : {}),
-        routeFile: route.routeFile,
-        routeId: route.routeId,
-        routePath: route.routePath,
-        ...(sandboxManager ? { sandboxManager } : {}),
-        signal,
-        threadId,
-      })
-      const abortableRouteStream = abortableAsyncIterable(routeStream, signal)
-      for await (const event of toAguiEvents(normalizeDawnStream(abortableRouteStream), {
-        threadId,
-        runId: input.runId,
-      })) {
-        response.write(encodeAgUiSse(event, request.headers.accept))
-      }
-    } finally {
-      await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
-    }
-    response.end()
-  } finally {
-    request.removeListener("aborted", onRequestAborted)
-    response.removeListener("close", onResponseClose)
+/**
+ * Node-transport adapter over {@link handleAgUiFetchRequest}. Kept with its
+ * original `(IncomingMessage, ServerResponse)` signature for direct callers.
+ */
+export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<void> {
+  const { request, response, ...rest } = options
+  const webResponse = await handleAgUiFetchRequest({
+    ...rest,
+    request: toWebRequest(request, response),
+  })
+  await writeNodeResponse(response, webResponse)
+}
+
+function safeEnqueue(controller: ReadableStreamDefaultController<Uint8Array>, chunk: Uint8Array) {
+  try {
+    controller.enqueue(chunk)
+  } catch {
+    // The consumer already canceled the stream — writes become no-ops, exactly
+    // like `response.write` on a disconnected socket did.
+  }
+}
+
+function safeClose(controller: ReadableStreamDefaultController<Uint8Array>) {
+  try {
+    controller.close()
+  } catch {
+    // Already canceled/errored.
   }
 }
