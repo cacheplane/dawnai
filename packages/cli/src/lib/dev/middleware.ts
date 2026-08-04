@@ -45,7 +45,18 @@ export async function runMiddleware(
 
 /** Flatten a web `Headers` object into a string map for MiddlewareRequest. */
 export function headersToRecord(headers: Headers): Record<string, string> {
-  return Object.fromEntries(headers)
+  const record: Record<string, string> = {}
+  headers.forEach((value, key) => {
+    record[key] = value
+  })
+  // `Headers` iteration yields each `set-cookie` value as a separate entry, so
+  // the loop above would keep only the last one. The pre-refactor Node path
+  // (`parseHeaders`) joined repeated headers with ", " — preserve that shape.
+  const setCookie = headers.getSetCookie?.() ?? []
+  if (setCookie.length > 1) {
+    record["set-cookie"] = setCookie.join(", ")
+  }
+  return record
 }
 
 /** Flatten an IncomingMessage's headers into a string map for MiddlewareRequest. */

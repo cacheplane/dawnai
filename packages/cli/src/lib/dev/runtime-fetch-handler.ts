@@ -28,6 +28,7 @@ import {
   createRequestErrorBody,
   dawnErrorCodeOf,
 } from "./server-errors.js"
+import { statusResponse } from "./status-response.js"
 
 // ---------------------------------------------------------------------------
 // Route-table types
@@ -52,8 +53,14 @@ export interface RuntimeFetchHandler {
   readonly shutdownController: AbortController
 }
 
+/** How long close() waits for in-flight requests before proceeding anyway. */
+const CLOSE_DRAIN_DEADLINE_MS = 30_000
+
 export async function createRuntimeFetchHandler(
-  options: StartRuntimeServerOptions,
+  options: StartRuntimeServerOptions & {
+    /** Internal/test hook: override the close() drain deadline (default 30s). */
+    readonly drainDeadlineMs?: number
+  },
 ): Promise<RuntimeFetchHandler> {
   const registry = await createRuntimeRegistry(options.appRoot)
   const middleware = await loadMiddleware(options.appRoot)
@@ -106,15 +113,18 @@ export async function createRuntimeFetchHandler(
       if (body && response.headers.get("content-type") === "text/event-stream") {
         // The Response exists but its SSE body is still streaming. Hold the
         // in-flight slot until the stream settles (fully read, canceled, or
-        // errored) so close() cannot release sandboxes mid-stream.
-        transferredToStream = true
-        return new Response(
+        // errored) so close() cannot release sandboxes mid-stream. The flag
+        // flips only after the tracked Response has been constructed — if
+        // construction throws, the finally below must still decrement.
+        const tracked = new Response(
           trackStreamSettled(body, () => state.activeRequests--),
           {
             headers: response.headers,
             status: response.status,
           },
         )
+        transferredToStream = true
+        return tracked
       }
       return response
     } catch (error) {
@@ -152,20 +162,25 @@ export async function createRuntimeFetchHandler(
 
     if (sandboxReaper) clearInterval(sandboxReaper)
 
-    // Drain in-flight requests
+    // Drain in-flight requests — bounded: an SSE body nobody ever reads (or a
+    // leaked in-flight slot) must not wedge shutdown forever.
+    const drainDeadlineMs = options.drainDeadlineMs ?? CLOSE_DRAIN_DEADLINE_MS
     await new Promise<void>((resolve) => {
+      const startedAt = Date.now()
       const check = () => {
         if (state.activeRequests === 0) {
           resolve()
-        } else {
-          const interval = setInterval(() => {
-            if (state.activeRequests > 0) {
-              return
-            }
-            clearInterval(interval)
-            resolve()
-          }, 10)
+          return
         }
+        if (Date.now() - startedAt >= drainDeadlineMs) {
+          console.warn(
+            `close(): ${state.activeRequests} request(s) still active after ` +
+              `${Math.round(drainDeadlineMs / 1000)}s — proceeding with shutdown`,
+          )
+          resolve()
+          return
+        }
+        setTimeout(check, 10)
       }
       check()
     })
@@ -561,7 +576,7 @@ async function handleApStreamRequest(options: {
   }
   const mwResult = await runMiddleware(middleware, mwRequest)
   if (mwResult.action === "reject") {
-    return Response.json(mwResult.body, { status: mwResult.status })
+    return statusResponse(mwResult.status, mwResult.body)
   }
 
   // Idempotently ensure the thread exists
@@ -580,14 +595,11 @@ async function handleApStreamRequest(options: {
   // Mark thread busy
   await threadsStore.updateStatus(threadId, "busy")
 
-  // Client disconnect (request.signal) or stream cancellation stops the run;
-  // the shutdown signal continues to abort it exactly as before.
-  const streamAbort = new AbortController()
-  const abortStream = () => streamAbort.abort()
-  if (request.signal.aborted) abortStream()
-  else request.signal.addEventListener("abort", abortStream, { once: true })
-  const runSignal = AbortSignal.any([signal, streamAbort.signal])
-
+  // Deliberate old-behavior parity: the pre-refactor server wired NO
+  // response-close abort for this endpoint (only AG-UI aborted on client
+  // disconnect). A disconnect leaves the run going to completion — writes
+  // simply become no-ops — and only server shutdown (`signal`) aborts it.
+  // Whether AP streams *should* abort on disconnect is a follow-up question.
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -601,7 +613,7 @@ async function handleApStreamRequest(options: {
             routeId: route.routeId,
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
-            signal: runSignal,
+            signal,
             threadId,
           })) {
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
@@ -620,7 +632,10 @@ async function handleApStreamRequest(options: {
       }
     },
     cancel() {
-      abortStream()
+      // Deliberate old-behavior parity: do NOT abort the run on client
+      // disconnect (see the comment above the stream). Further enqueues
+      // no-op via safeEnqueue, and the fetch wrapper's stream tracking
+      // settles the in-flight slot on cancellation.
     },
   })
 
@@ -692,7 +707,7 @@ async function handleApWaitRequest(options: {
   }
   const mwResult = await runMiddleware(middleware, mwRequest)
   if (mwResult.action === "reject") {
-    return Response.json(mwResult.body, { status: mwResult.status })
+    return statusResponse(mwResult.status, mwResult.body)
   }
 
   // Idempotently ensure the thread exists
@@ -874,21 +889,18 @@ async function handleResumeRequest(options: {
   }
   const mwResult = await runMiddleware(middleware, mwRequest)
   if (mwResult.action === "reject") {
-    return Response.json(mwResult.body, { status: mwResult.status })
+    return statusResponse(mwResult.status, mwResult.body)
   }
 
   // Mark thread busy
   await threadsStore.updateStatus(threadId, "busy")
 
   // Open a new SSE stream, passing Command({resume: decision}) as input.
-  // Client disconnect (request.signal) or stream cancellation stops the run;
-  // the shutdown signal continues to abort it exactly as before.
-  const streamAbort = new AbortController()
-  const abortStream = () => streamAbort.abort()
-  if (request.signal.aborted) abortStream()
-  else request.signal.addEventListener("abort", abortStream, { once: true })
-  const runSignal = AbortSignal.any([signal, streamAbort.signal])
-
+  // Deliberate old-behavior parity: the pre-refactor server wired NO
+  // response-close abort for the resume endpoint (only AG-UI aborted on
+  // client disconnect). A disconnect leaves the resumed run going to
+  // completion, and only server shutdown (`signal`) aborts it. Whether
+  // resume streams *should* abort on disconnect is a follow-up question.
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -903,7 +915,7 @@ async function handleResumeRequest(options: {
             routeId: route.routeId,
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
-            signal: runSignal,
+            signal,
             threadId,
           })) {
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
@@ -922,7 +934,10 @@ async function handleResumeRequest(options: {
       }
     },
     cancel() {
-      abortStream()
+      // Deliberate old-behavior parity: do NOT abort the run on client
+      // disconnect (see the comment above the stream). Further enqueues
+      // no-op via safeEnqueue, and the fetch wrapper's stream tracking
+      // settles the in-flight slot on cancellation.
     },
   })
 

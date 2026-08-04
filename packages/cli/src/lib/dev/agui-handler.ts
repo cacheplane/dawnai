@@ -15,6 +15,7 @@ import { readPendingInterrupts, resolveAgUiResume } from "./pending-interrupts.j
 import { extractRouteParams } from "./request-context.js"
 import type { RuntimeRegistry } from "./runtime-registry.js"
 import { createRequestErrorBody } from "./server-errors.js"
+import { statusResponse } from "./status-response.js"
 
 export interface AgUiFetchRequestOptions {
   readonly appRoot: string
@@ -138,7 +139,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
   }
   const middlewareResult = await runMiddleware(middleware, middlewareRequest)
   if (middlewareResult.action === "reject") {
-    return Response.json(middlewareResult.body, { status: middlewareResult.status })
+    return statusResponse(middlewareResult.status, middlewareResult.body)
   }
 
   const newestUserMessage = [...dawnInput.messages]

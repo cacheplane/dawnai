@@ -34,12 +34,21 @@ export async function createRuntimeRequestListener(
     void (async () => {
       // `toWebRequest` aborts the request signal when the client disconnects
       // (the response closes before it ended), which is what stops an
-      // in-flight run on client disconnect.
+      // in-flight run on client disconnect (AG-UI only).
       const response = await core.fetch(toWebRequest(req, res))
-      await writeNodeResponse(res, response)
+      try {
+        await writeNodeResponse(res, response)
+      } catch {
+        // Writing the response failed (e.g. writeHead threw) — the socket is
+        // unusable for a JSON error at this point. Cancel the unread body
+        // first so a tracked SSE stream releases its in-flight slot instead
+        // of leaking it (which would wedge close()'s drain).
+        void response.body?.cancel().catch(() => undefined)
+        res.destroy()
+      }
     })().catch(() => {
-      // The response failed mid-flight (e.g. a stream errored after headers
-      // were sent) — the socket is unusable for a JSON error at this point.
+      // core.fetch itself rejected before a Response existed — nothing to
+      // cancel; just tear the socket down.
       res.destroy()
     })
   }
