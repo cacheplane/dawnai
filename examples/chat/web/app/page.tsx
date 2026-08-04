@@ -1,5 +1,6 @@
 "use client"
 import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
+import { DemoSuggestions } from "./components/DemoSuggestions"
 import { PermissionInterrupt } from "./components/PermissionInterrupt"
 
 // Notes (verified against installed @copilotkit/react-core@1.62.3 types):
@@ -14,6 +15,7 @@ import { PermissionInterrupt } from "./components/PermissionInterrupt"
 export default function Home() {
   return (
     <CopilotKit runtimeUrl="/api/copilotkit" defaultThrottleMs={100}>
+      <DemoSuggestions />
       <PermissionInterrupt />
       <main style={{ height: "100vh" }}>
         <CopilotSidebar defaultOpen labels={{ modalHeaderTitle: "Dawn chat" }} />
