@@ -149,6 +149,7 @@ async function runApprove(
  * and use its declared `identity`. Falls back to [subject, predicate] when the
  * route (or its memory.ts) cannot be resolved.
  */
+// mirrored in packages/inspector/src/store/identity.ts — keep in sync
 async function resolveIdentityKeys(
   appRoot: string,
   namespace: string,

@@ -3,18 +3,7 @@ import { join } from "node:path"
 import type { Embedder } from "@dawn-ai/core"
 import type { MemoryStore, RecallRankingOptions, VectorRankingOptions } from "@dawn-ai/memory"
 
-// RUNTIME-ONLY imports. These packages load the user's dawn.config.ts (arbitrary
-// TS through the tsx loader) and open sqlite databases — they must execute from
-// real node_modules at runtime, NEVER be bundled by Next. pnpm workspace links
-// resolve outside node_modules, which defeats serverExternalPackages, so the
-// ignore comments leave these import()s for Node itself to resolve.
-function importCore(): Promise<typeof import("@dawn-ai/core")> {
-  return import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "@dawn-ai/core")
-}
-
-function importMemory(): Promise<typeof import("@dawn-ai/memory")> {
-  return import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "@dawn-ai/memory")
-}
+import { importCore, importMemory } from "./runtime-imports"
 
 export interface ResolvedStore {
   readonly store: MemoryStore
@@ -37,6 +26,20 @@ export function resolveStore(): Promise<ResolvedStore> {
     cached = attempt
   }
   return cached
+}
+
+/**
+ * resolveStore(), with rejections mapped onto the routes' {error} JSON
+ * contract: a missing/typo'd DAWN_APP_ROOT or broken dawn.config.ts must reach
+ * the UI as JSON {error}, not Next's generic non-JSON 500 page.
+ */
+export async function storeOr500(): Promise<ResolvedStore | Response> {
+  try {
+    return await resolveStore()
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause)
+    return Response.json({ error: message }, { status: 500 })
+  }
 }
 
 async function doResolve(): Promise<ResolvedStore> {

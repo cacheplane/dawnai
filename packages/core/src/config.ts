@@ -9,7 +9,13 @@ export const DAWN_CONFIG_FILE = "dawn.config.ts"
 
 let loaderPromise: Promise<void> | undefined
 
-async function registerTsxLoader(): Promise<void> {
+/**
+ * Register the tsx ESM loader (idempotent). Exported so callers that import
+ * user-authored TS modules directly (e.g. the inspector loading a route's
+ * memory.ts) get deterministic TS loading even when no dawn.config.ts exists —
+ * loadDawnConfig only registers the loader when a config file is present.
+ */
+export async function registerTsxLoader(): Promise<void> {
   loaderPromise ??= (async () => {
     const { register } = (await import("tsx/esm/api")) as {
       readonly register: () => unknown
