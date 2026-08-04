@@ -46,6 +46,25 @@ export interface VectorRankingOptions {
   readonly confidenceWeight?: number
   readonly recencyHalfLifeMs?: number
 }
+export interface BrowseQuery {
+  readonly namespacePrefix?: string
+  readonly status?: MemoryStatus
+  readonly kind?: MemoryKind
+  readonly sourceType?: MemorySource["type"]
+  readonly limit?: number
+  readonly offset?: number
+}
+export interface BrowsePage {
+  readonly records: readonly MemoryRecord[]
+  readonly total: number
+}
+export interface MemoryStats {
+  readonly total: number
+  readonly byStatus: Readonly<Record<string, number>>
+  readonly byKind: Readonly<Record<string, number>>
+  readonly byNamespace: Readonly<Record<string, number>>
+  readonly bySourceType: Readonly<Record<string, number>>
+}
 export interface MemoryStore {
   put(
     rec: MemoryRecord,
@@ -57,4 +76,8 @@ export interface MemoryStore {
   supersede(id: string, bySupersedingId: string): Promise<void>
   delete(id: string): Promise<void>
   listCandidates(namespacePrefix: string): Promise<readonly MemoryRecord[]>
+  /** Cross-namespace/status listing for inspection UIs. Ordered updated_at DESC, id ASC. */
+  browse(q?: BrowseQuery): Promise<BrowsePage>
+  /** Aggregate counts for facet UIs. */
+  stats(opts?: { readonly namespacePrefix?: string }): Promise<MemoryStats>
 }

@@ -400,5 +400,63 @@ export function sqliteMemoryStore(opts: {
         .all(`${namespacePrefix}%`) as Record<string, unknown>[]
       return rows.map(rowToRecord)
     },
+    async browse(q = {}) {
+      const where: string[] = []
+      const params: SQLInputValue[] = []
+      if (q.namespacePrefix) {
+        where.push("namespace LIKE ?")
+        params.push(`${q.namespacePrefix}%`)
+      }
+      if (q.status) {
+        where.push("status = ?")
+        params.push(q.status)
+      }
+      if (q.kind) {
+        where.push("kind = ?")
+        params.push(q.kind)
+      }
+      if (q.sourceType) {
+        where.push("json_extract(source, '$.type') = ?")
+        params.push(q.sourceType)
+      }
+      const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
+      const limit = q.limit ?? 50
+      const offset = q.offset ?? 0
+      // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
+      // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.
+      const rows = db
+        .prepare(
+          `SELECT id, kind, namespace, content, data, source, confidence, tags, status,
+                  supersedes, created_at, updated_at, effective_at, expires_at
+           FROM memories ${clause} ORDER BY updated_at DESC, id ASC LIMIT ? OFFSET ?`,
+        )
+        .all(...params, limit, offset) as Record<string, unknown>[]
+      const total = (
+        db.prepare(`SELECT COUNT(*) AS n FROM memories ${clause}`).get(...params) as { n: number }
+      ).n
+      return { records: rows.map(rowToRecord), total }
+    },
+    async stats(opts = {}) {
+      const clause = opts.namespacePrefix ? "WHERE namespace LIKE ?" : ""
+      const params: SQLInputValue[] = opts.namespacePrefix ? [`${opts.namespacePrefix}%`] : []
+      const group = (expr: string): Record<string, number> =>
+        Object.fromEntries(
+          (
+            db
+              .prepare(`SELECT ${expr} AS k, COUNT(*) AS n FROM memories ${clause} GROUP BY k`)
+              .all(...params) as { k: string; n: number }[]
+          ).map((r) => [r.k, r.n]),
+        )
+      const total = (
+        db.prepare(`SELECT COUNT(*) AS n FROM memories ${clause}`).get(...params) as { n: number }
+      ).n
+      return {
+        total,
+        byStatus: group("status"),
+        byKind: group("kind"),
+        byNamespace: group("namespace"),
+        bySourceType: group("json_extract(source, '$.type')"),
+      }
+    },
   }
 }

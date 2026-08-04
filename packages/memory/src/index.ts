@@ -14,10 +14,13 @@ export {
 export { sqliteMemoryStore } from "./sqlite-store.js"
 export { tokenize } from "./tokenize.js"
 export type {
+  BrowsePage,
+  BrowseQuery,
   MemoryKind,
   MemoryQuery,
   MemoryRecord,
   MemorySource,
+  MemoryStats,
   MemoryStatus,
   MemoryStore,
   VectorRankingOptions,
