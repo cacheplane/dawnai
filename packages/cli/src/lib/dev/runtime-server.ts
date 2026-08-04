@@ -76,12 +76,7 @@ export async function createRuntimeRequestListener(
   const threadsStore = await resolveThreadsStore(options.appRoot)
   const checkpointer = await resolveCheckpointer(options.appRoot)
   const sandboxManager = await resolveSandboxManager(options.appRoot)
-  // Cast: resolveMemoryStore's declared return type (MemoryStoreLike, in
-  // @dawn-ai/core) is the narrower capability-facing surface. The concrete
-  // store (sqlite-backed, or user-supplied via dawn.config.ts) also exposes
-  // listCandidates/delete, which the memory-candidate HTTP routes need — the
-  // same cast `commands/memory.ts` uses for the CLI's `dawn memory` commands.
-  const memoryStore = (await resolveMemoryStore(options.appRoot)) as unknown as MemoryStore
+  const memoryStore = await resolveMemoryStore(options.appRoot)
 
   let sandboxReaper: ReturnType<typeof setInterval> | undefined
   if (sandboxManager) {

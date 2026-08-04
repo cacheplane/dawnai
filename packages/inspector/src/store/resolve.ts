@@ -59,9 +59,9 @@ async function doResolve(): Promise<ResolvedStore> {
   const embedder = memory?.vector?.embedder
   let store: MemoryStore
   if (memory?.store) {
-    // TODO(task-4): MemoryStoreLike is missing delete/listCandidates (and, until
-    // later tasks, browse/stats) — unify the config store type and drop this cast.
-    store = memory.store as unknown as MemoryStore
+    // MemoryStoreLike (config-facing) carries the full MemoryStore contract —
+    // structurally assignable, no cast needed.
+    store = memory.store
   } else {
     // Mirrors packages/cli/src/lib/runtime/resolve-memory.ts: thread the recall
     // + hybrid vector TUNING (never the embedder) into the default sqlite store.

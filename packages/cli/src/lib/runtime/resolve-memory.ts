@@ -48,7 +48,7 @@ export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLi
   let storeVector: VectorRankingOptions | undefined
   try {
     const loaded = await loadDawnConfig({ appRoot })
-    if (loaded.config.memory?.store) return loaded.config.memory.store as MemoryStoreLike
+    if (loaded.config.memory?.store) return loaded.config.memory.store
     recall = loaded.config.memory?.recall
     // The store gets only the hybrid TUNING (weights/rrfK/vectorK/recency/
     // confidence) — NOT the embedder. The store never embeds; the capability
@@ -74,7 +74,7 @@ export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLi
     path: join(appRoot, ".dawn", "memory.sqlite"),
     ...(recall ? { recall } : {}),
     ...(storeVector ? { vector: storeVector } : {}),
-  }) as unknown as MemoryStoreLike
+  })
 }
 
 /**

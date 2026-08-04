@@ -34,7 +34,7 @@ export async function runMemoryCommand(
   }
 
   const appRoot = options.cwd ? resolve(options.cwd) : process.cwd()
-  const store = (await resolveMemoryStore(appRoot)) as unknown as MemoryStore
+  const store = await resolveMemoryStore(appRoot)
 
   switch (subcommand) {
     case "list": {

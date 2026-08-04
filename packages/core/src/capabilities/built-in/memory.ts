@@ -1,9 +1,32 @@
 import { createHash } from "node:crypto"
 import { z } from "zod"
 import { gateMemorySupersede } from "../permission-gate.js"
-import type { CapabilityMarker, PromptFragment } from "../types.js"
+import type {
+  CapabilityMarker,
+  MemoryKindLike,
+  MemoryRecordLike,
+  PromptFragment,
+} from "../types.js"
 
 const DEFAULT_SEMANTIC_IDENTITY = ["subject", "predicate"] as const
+
+// The valid memory kinds, surfaced to the MODEL via the recall schema's enum.
+// `satisfies` proves every listed member IS a MemoryKindLike (a typo won't
+// compile); the `_AllKindsListed` line proves the reverse — every MemoryKindLike
+// is listed — so the pair keeps this in lockstep with the union in ../types.js.
+const MEMORY_KINDS = [
+  "semantic",
+  "episodic",
+  "procedural",
+  "reflection",
+] as const satisfies readonly MemoryKindLike[]
+type _AllKindsListed = MemoryKindLike extends (typeof MEMORY_KINDS)[number] ? true : never
+const _allKindsListed: _AllKindsListed = true
+void _allKindsListed
+// Belt to the schema's suspenders: run() casts its input without trusting
+// upstream validation, so re-check membership before touching the store.
+const isMemoryKind = (k: string): k is MemoryKindLike =>
+  (MEMORY_KINDS as readonly string[]).includes(k)
 
 // A route's defineMemory() schema arrives as `unknown` (loaded via dynamic
 // import, validated structurally). Module-scoped (no closure deps) so it isn't
@@ -53,7 +76,7 @@ export function createMemoryMarker(): CapabilityMarker {
       })
       const recallSchema = z.object({
         query: z.string().optional().describe("Keywords to match against stored memories."),
-        kind: z.string().optional(),
+        kind: z.enum(MEMORY_KINDS).optional().describe("Filter by memory kind."),
         tags: z.array(z.string()).optional(),
         limit: z.number().int().positive().optional(),
       })
@@ -68,6 +91,13 @@ export function createMemoryMarker(): CapabilityMarker {
             kind?: string
             tags?: string[]
             limit?: number
+          }
+          // An unknown kind can never match a stored row — answer directly
+          // instead of passing an out-of-contract string to the store.
+          let kind: MemoryKindLike | undefined
+          if (q.kind) {
+            if (!isMemoryKind(q.kind)) return { result: "(no memories found)" }
+            kind = q.kind
           }
           // Embed the query for the hybrid keyword+vector path when an embedder
           // is configured. Embed FAILURE degrades to keyword-only — never throw,
@@ -91,7 +121,7 @@ export function createMemoryMarker(): CapabilityMarker {
           const rows = await mem.store.search({
             namespace: mem.namespace,
             ...(q.query ? { query: q.query } : {}),
-            ...(q.kind ? { kind: q.kind } : {}),
+            ...(kind ? { kind } : {}),
             ...(q.tags ? { tags: q.tags } : {}),
             limit: q.limit ?? 8,
             // Recency reference for ranked recall — the per-request timestamp,
@@ -143,7 +173,7 @@ export function createMemoryMarker(): CapabilityMarker {
           const confidence = typeof inp.confidence === "number" ? inp.confidence : 1
           const tags = inp.tags ?? []
 
-          const record = {
+          const record: MemoryRecordLike = {
             id,
             kind: mem.defined.kind,
             namespace: mem.namespace,
