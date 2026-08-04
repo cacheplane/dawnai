@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { routeNamespaceKey } from "@dawn-ai/memory"
+
 import {
   applyCapabilities,
   type CapabilityContribution,
@@ -54,12 +56,7 @@ import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { loadRouteMemory } from "./load-memory.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
-import {
-  buildMemoryContext,
-  resolveMemoryStore,
-  resolveMemoryWrites,
-  routeNamespaceKey,
-} from "./resolve-memory.js"
+import { buildMemoryContext, resolveMemoryStore, resolveMemoryWrites } from "./resolve-memory.js"
 import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,
