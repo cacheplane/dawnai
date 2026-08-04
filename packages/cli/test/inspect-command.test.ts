@@ -33,6 +33,34 @@ describe("resolveInspectorServer", () => {
     )
   })
 
+  it("returns null when the package's package.json is malformed", () => {
+    const appRoot = mkdtempSync(join(tmpdir(), "dawn-inspect-"))
+    dirs.push(appRoot)
+    const pkgDir = join(appRoot, "node_modules", "@dawn-ai", "inspector")
+    mkdirSync(pkgDir, { recursive: true })
+    writeFileSync(join(pkgDir, "package.json"), "{ not json !!!")
+    expect(resolveInspectorServer(appRoot)).toBeNull()
+  })
+
+  it("resolves through a hoisted parent node_modules when appRoot is a subdirectory", () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), "dawn-inspect-"))
+    dirs.push(workspaceRoot)
+    const appRoot = join(workspaceRoot, "apps", "web")
+    mkdirSync(appRoot, { recursive: true })
+    const pkgDir = join(workspaceRoot, "node_modules", "@dawn-ai", "inspector")
+    mkdirSync(pkgDir, { recursive: true })
+    writeFileSync(
+      join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@dawn-ai/inspector",
+        dawnInspector: { server: ".next/standalone/packages/inspector/server.js" },
+      }),
+    )
+    expect(resolveInspectorServer(appRoot)).toBe(
+      join(pkgDir, ".next/standalone/packages/inspector/server.js"),
+    )
+  })
+
   it("returns null when the package lacks the dawnInspector field", () => {
     const appRoot = mkdtempSync(join(tmpdir(), "dawn-inspect-"))
     dirs.push(appRoot)

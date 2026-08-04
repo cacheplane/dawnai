@@ -1,12 +1,11 @@
 import { spawn } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
-import { createServer } from "node:net"
-import { dirname, join, relative, resolve } from "node:path"
-import { loadDawnConfig } from "@dawn-ai/core"
+import { dirname, join, resolve } from "node:path"
 import type { Command } from "commander"
-import { loadEnvFiles } from "../lib/dev/load-env.js"
-import { resolveEnvPath } from "../lib/dev/resolve-env-path.js"
-import { CliError, type CommandIo, writeLine } from "../lib/output.js"
+import { allocateFreePort } from "../lib/dev/allocate-port.js"
+import { loadAppEnv } from "../lib/dev/load-app-env.js"
+import { parsePort } from "../lib/dev/parse-port.js"
+import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
 
 interface InspectOptions {
   readonly cwd?: string
@@ -67,6 +66,12 @@ export function registerInspectCommand(program: Command, io: CommandIo): void {
     })
 }
 
+interface ChildOutcome {
+  readonly code: number | null
+  readonly signal: NodeJS.Signals | null
+  readonly spawnError?: Error
+}
+
 export async function runInspectCommand(options: InspectOptions, io: CommandIo): Promise<void> {
   const appRoot = resolve(options.cwd ?? process.cwd())
 
@@ -75,25 +80,16 @@ export async function runInspectCommand(options: InspectOptions, io: CommandIo):
     writeLine(io.stdout, INSTALL_HINT)
     return
   }
+  if (!existsSync(serverJs)) {
+    throw new CliError(
+      `@dawn-ai/inspector is installed but its standalone server is missing at ${serverJs} — the package may be corrupted or built incorrectly; try reinstalling.`,
+      1,
+    )
+  }
 
   // Mirror dawn dev's env precedence: --env-file flag > dawn.config.ts env >
   // "<appRoot>/.env"; relative paths resolve against the app root.
-  let configEnv: string | undefined
-  try {
-    const loaded = await loadDawnConfig({ appRoot })
-    configEnv = loaded.config.env
-  } catch {
-    // No dawn.config.ts (or it failed to load) — fall through to default.
-    configEnv = undefined
-  }
-  const resolvedEnv = resolveEnvPath({ appRoot, flag: options.envFile, configEnv })
-  const envLoaded = loadEnvFiles([resolvedEnv.absPath])
-  if (envLoaded > 0) {
-    writeLine(
-      io.stdout,
-      `Loaded ${envLoaded} variable(s) from ${relative(appRoot, resolvedEnv.absPath) || ".env"}`,
-    )
-  }
+  await loadAppEnv({ appRoot, flag: options.envFile, io })
 
   const port = parsePort(options.port) ?? (await allocateFreePort())
   const url = `http://127.0.0.1:${port}`
@@ -111,25 +107,34 @@ export async function runInspectCommand(options: InspectOptions, io: CommandIo):
   process.on("SIGINT", onSignal)
   process.on("SIGTERM", onSignal)
 
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolvePromise) => {
-      child.once("exit", (code, signal) => {
-        resolvePromise({ code, signal })
-      })
-    },
-  )
+  // A spawn failure (EPERM/EAGAIN class) fires `error` and may never fire
+  // `exit` — fold both events into one settled outcome so the command neither
+  // hangs waiting on `exit` nor crashes via an unlistened `error` event.
+  const exited = new Promise<ChildOutcome>((resolvePromise) => {
+    child.once("exit", (code, signal) => {
+      resolvePromise({ code, signal })
+    })
+    child.once("error", (spawnError) => {
+      resolvePromise({ code: null, signal: null, spawnError })
+    })
+  })
 
   try {
-    // Fail fast if the server dies at startup instead of polling out the
-    // clock. Once ready, the same promise resolves harmlessly.
+    // Fail fast if the server dies (or fails to spawn) at startup instead of
+    // polling out the clock. Once ready, the same promise resolves harmlessly.
     let ready = false
-    const earlyExit = exited.then(({ code, signal }) => {
-      if (!ready) {
+    const earlyExit = exited.then(({ code, signal, spawnError }) => {
+      if (ready) return
+      if (spawnError) {
         throw new CliError(
-          `Inspector server exited before becoming ready (code ${code}, signal ${signal})`,
+          `Failed to start the inspector server: ${formatErrorMessage(spawnError)}`,
           1,
         )
       }
+      throw new CliError(
+        `Inspector server exited before becoming ready (code ${code}, signal ${signal})`,
+        1,
+      )
     })
     await Promise.race([waitForReady(`${url}/healthz`), earlyExit])
     ready = true
@@ -138,7 +143,10 @@ export async function runInspectCommand(options: InspectOptions, io: CommandIo):
     openBrowser(url)
 
     // Stay foreground until the server exits (Ctrl+C → SIGTERM → clean exit).
-    const { code } = await exited
+    const { code, spawnError } = await exited
+    if (spawnError) {
+      throw new CliError(`Inspector server failed: ${formatErrorMessage(spawnError)}`, 1)
+    }
     if (!shutdownRequested && code !== null && code !== 0) {
       throw new CliError(`Inspector server exited with code ${code}`, 1)
     }
@@ -149,38 +157,6 @@ export async function runInspectCommand(options: InspectOptions, io: CommandIo):
       child.kill("SIGTERM")
     }
   }
-}
-
-function parsePort(rawPort: string | undefined): number | undefined {
-  if (!rawPort) {
-    return undefined
-  }
-
-  const port = Number(rawPort)
-
-  if (!Number.isInteger(port) || port <= 0) {
-    throw new CliError(`Invalid port: ${rawPort}`, 2)
-  }
-
-  return port
-}
-
-async function allocateFreePort(): Promise<number> {
-  return await new Promise<number>((resolvePromise, rejectPromise) => {
-    const server = createServer()
-    server.once("error", rejectPromise)
-    server.unref()
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address()
-      if (!address || typeof address === "string") {
-        rejectPromise(new Error("Failed to allocate a TCP port for dawn inspect"))
-        return
-      }
-      server.close(() => {
-        resolvePromise(address.port)
-      })
-    })
-  })
 }
 
 async function waitForReady(healthUrl: string): Promise<void> {

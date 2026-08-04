@@ -1,6 +1,7 @@
 import type { Command } from "commander"
 import { startDevSession } from "../lib/dev/dev-session.js"
-import { CliError, type CommandIo } from "../lib/output.js"
+import { parsePort } from "../lib/dev/parse-port.js"
+import type { CommandIo } from "../lib/output.js"
 
 interface DevOptions {
   readonly port?: string
@@ -42,18 +43,4 @@ export async function runDevCommand(options: DevOptions, io: CommandIo): Promise
   })
 
   await session.waitUntilClosed()
-}
-
-function parsePort(rawPort: string | undefined): number | undefined {
-  if (!rawPort) {
-    return undefined
-  }
-
-  const port = Number(rawPort)
-
-  if (!Number.isInteger(port) || port <= 0) {
-    throw new CliError(`Invalid port: ${rawPort}`, 2)
-  }
-
-  return port
 }
