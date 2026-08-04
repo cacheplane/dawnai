@@ -143,6 +143,12 @@ describe("current AG-UI documentation", () => {
   })
 
   it("does not reference removed adapter APIs or example UI", () => {
+    // Retired Dawn/adapter vocabulary. `useInterrupt` and `PermissionInterrupt`
+    // are deliberately NOT listed: the canonicalized adapter still surfaces
+    // permission gates as AG-UI standard interrupts, and the example UIs render
+    // them with CopilotKit's current `useInterrupt` hook (see each example's
+    // PermissionInterrupt.tsx). What must stay gone is the *legacy* vocabulary
+    // below — the custom-event interrupt and the `forwardedProps` resume path.
     const removed = [
       "createAgUiTranslator",
       "mapRunInput",
@@ -150,8 +156,6 @@ describe("current AG-UI documentation", () => {
       "forwardedProps.command.resume",
       "STATE_SNAPSHOT",
       "dawn.subagent",
-      "useInterrupt",
-      "PermissionInterrupt",
       "TodosPanel",
     ]
     const roots = [
