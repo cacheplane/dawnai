@@ -186,6 +186,25 @@ export const packages = [
     requiredFields: libraryRequiredFields,
   },
   {
+    // Next.js standalone app — the published artifact is `.next/standalone`
+    // (created by `next build` + a post-build static-asset copy), not dist/.
+    // There is no exports/main/types: nothing imports this package — `dawn
+    // inspect` spawns the server via the `dawnInspector.server` manifest path.
+    // Build ordering: pack-check's own per-package build step runs `next build`
+    // here, which needs @dawn-ai/core + @dawn-ai/memory dist already built —
+    // CI's validate job runs the full `pnpm build` before `pnpm pack:check`,
+    // matching every other package's same assumption.
+    dir: "packages/inspector",
+    expectedFiles: [
+      ".next/standalone/packages/inspector/server.js",
+      ".next/standalone/packages/inspector/.next/static",
+      ".next/standalone/node_modules",
+      "README.md",
+      "package.json",
+    ],
+    requiredFields: [...standardRequiredFields, "dawnInspector.server", "files"],
+  },
+  {
     dir: "packages/memory-pgvector",
     expectedFiles: ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
     requiredFields: libraryRequiredFields,

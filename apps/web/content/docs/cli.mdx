@@ -229,6 +229,22 @@ Subcommands:
 Flags:
 - `--cwd <path>` — operate on a different app root.
 
+## `dawn inspect`
+
+Opens the Dawn Inspector — a localhost-only browser UI for browsing, searching,
+and approving the app's [long-term memory](/docs/memory) records.
+
+```
+dawn inspect
+```
+
+The inspector binds to `127.0.0.1` on a free port and prints the URL to open.
+
+Flags:
+- `--cwd <path>` — operate on a different app root.
+- `--port <number>` — bind the inspector to a stable localhost port.
+- `--env-file <path>` — path to a `.env` file (overrides `dawn.config.ts` `env` and the default `./.env`).
+
 ## `dawn add`
 
 Fetches a blueprint (an agent-facing integration guide) and prints it to stdout so you can hand it to your coding agent.

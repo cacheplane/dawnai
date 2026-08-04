@@ -110,8 +110,8 @@ describe("deriveToolResults", () => {
     const results = deriveToolResults(messages)
     expect(results.map((r) => r.name)).toEqual(["searchCorpus", "writeTodos", "readDoc"])
     expect(results.map((r) => r.isError)).toEqual([false, false, true])
-    expect(results[0].status).toBe("success")
-    expect(results[1].status).toBeUndefined()
+    expect(results[0]?.status).toBe("success")
+    expect(results[1]?.status).toBeUndefined()
   })
 })
 

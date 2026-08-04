@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest"
 
-const spawnSync = vi.fn(() => ({ status: 0 }))
+const spawnSync = vi.fn((_command: string, _args: readonly string[], _options?: unknown) => ({
+  status: 0,
+}))
 vi.mock("node:child_process", () => ({ spawnSync }))
 
 it("invokes the aimock recorder with the right argv", async () => {

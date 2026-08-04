@@ -30,10 +30,10 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json",
-    "lint": "biome check --config-path ../config-biome/biome.json --vcs-enabled=true --vcs-client-kind=git --vcs-use-ignore-file=true --vcs-root=../../ package.json src test tsconfig.json vitest.config.ts",
+    "build": "tsc -b tsconfig.build.json",
+    "lint": "biome check --config-path ../config-biome/biome.json --vcs-enabled=true --vcs-client-kind=git --vcs-use-ignore-file=true --vcs-root=../../ package.json src test tsconfig.json tsconfig.build.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@copilotkit/aimock": "^1.35.1",
