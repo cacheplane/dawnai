@@ -2,9 +2,6 @@ import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-
-import { routeNamespaceKey } from "@dawn-ai/memory"
-
 import {
   applyCapabilities,
   type CapabilityContribution,
@@ -42,6 +39,7 @@ import {
   type SubagentResolver,
   streamAgent,
 } from "@dawn-ai/langchain"
+import { routeNamespaceKey } from "@dawn-ai/memory"
 import {
   createPermissionsStore,
   type PermissionMode,
