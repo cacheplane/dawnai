@@ -13,7 +13,11 @@ afterEach(async () => {
 
 async function fixtureApp(overrides: Record<string, string> = {}): Promise<string> {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-fetch-handler-"))
-  cleanup.push(() => rm(appRoot, { force: true, recursive: true }))
+  // maxRetries handles the ENOTEMPTY race where an aborted run's SQLite WAL
+  // flush lands in .dawn/ between readdir and rmdir (same pattern as
+  // test/harness/packaged-app.ts) — the abort test kills a run mid-flight by
+  // design, so under full-suite load the flush can lose the race with cleanup.
+  cleanup.push(() => rm(appRoot, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }))
   const files: Record<string, string> = {
     "dawn.config.ts": "export default {}\n",
     "package.json": '{ "name": "fetch-handler-fixture", "type": "module" }\n',
