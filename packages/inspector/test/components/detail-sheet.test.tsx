@@ -136,6 +136,94 @@ describe("DetailSheet", () => {
     expect(screen.queryByRole("button", { name: "Reject" })).toBeNull()
   })
 
+  it("resets conflict state when the selected id changes (key remount, as list-page renders it)", async () => {
+    const other = record({
+      id: "active9",
+      status: "active",
+      content: "zed color is red",
+      data: { subject: "zed", predicate: "color", value: "red" },
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/list")) {
+          return jsonResponse({ records: [contradictingActive], total: 1 })
+        }
+        if (u.includes("/api/memory/active9")) return jsonResponse(other)
+        return jsonResponse(candidate)
+      }),
+    )
+    const { rerender } = render(
+      <DetailSheet key="cand1" id="cand1" onClose={noop} onMutated={noop} />,
+    )
+    expect(await screen.findByTestId("supersede-callout")).toBeDefined()
+    // list-page renders <DetailSheet key={selectedId}> — a new id remounts.
+    rerender(<DetailSheet key="active9" id="active9" onClose={noop} onMutated={noop} />)
+    expect(await screen.findByText("zed color is red")).toBeDefined()
+    expect(screen.queryByTestId("supersede-callout")).toBeNull()
+  })
+
+  it("renders the load-error aside when fetch rejects (network failure)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down")
+      }),
+    )
+    render(<DetailSheet id="cand1" onClose={noop} onMutated={noop} />)
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("network down")
+  })
+
+  it("renders the load-error aside on 404 with a working close control", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ error: "not found" }, 404)),
+    )
+    const onClose = vi.fn()
+    render(<DetailSheet id="gone" onClose={onClose} onMutated={noop} />)
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("load failed (404)")
+    fireEvent.click(screen.getByRole("button", { name: "Close detail" }))
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it("forget is gated on window.confirm", async () => {
+    const mock = stubApi({ rec: candidate })
+    const onMutated = vi.fn()
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal("confirm", confirm)
+    render(<DetailSheet id="cand1" onClose={noop} onMutated={onMutated} />)
+    const forget = await screen.findByRole("button", { name: "Forget" })
+    fireEvent.click(forget)
+    expect(postCalls(mock)).toEqual([])
+    expect(onMutated).not.toHaveBeenCalled()
+    confirm.mockReturnValue(true)
+    fireEvent.click(forget)
+    await vi.waitFor(() => expect(onMutated).toHaveBeenCalledOnce())
+    expect(postCalls(mock)).toEqual(["/api/memory/cand1/forget"])
+  })
+
+  it("shows an unverified note when the active probe is truncated", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/list")) {
+          // total exceeds returned records — actives beyond the limit were
+          // never compared, so no-conflict cannot be claimed.
+          return jsonResponse({ records: [unrelatedActive], total: 1001 })
+        }
+        return jsonResponse(candidate)
+      }),
+    )
+    render(<DetailSheet id="cand1" onClose={noop} onMutated={noop} />)
+    expect(await screen.findByTestId("probe-unverified")).toBeDefined()
+    expect(screen.queryByTestId("supersede-callout")).toBeNull()
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDefined()
+  })
+
   it("Escape closes the sheet", async () => {
     stubApi({ rec: candidate })
     const onClose = vi.fn()

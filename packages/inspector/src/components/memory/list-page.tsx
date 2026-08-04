@@ -120,6 +120,14 @@ export function ListPage() {
     }
   }, [query, namespace, fetchJson, setError])
 
+  // Stable identities: DetailSheet subscribes a window keydown listener keyed
+  // on onClose — inline closures would re-subscribe it every poll tick.
+  const closeSheet = useCallback(() => setSelectedId(undefined), [])
+  const handleMutated = useCallback(() => {
+    setSelectedId(undefined)
+    setRefreshKey((k) => k + 1)
+  }, [])
+
   const byStatus = stats?.byStatus ?? {}
   const searching = query.length > 0
   // Keyed by source, not message — two fetchers failing with the same message
@@ -218,13 +226,13 @@ export function ListPage() {
         </main>
       </div>
       {selectedId ? (
+        // key remounts the sheet when the selection changes — otherwise record
+        // A's conflict callout/error state would bleed into record B's sheet.
         <DetailSheet
+          key={selectedId}
           id={selectedId}
-          onClose={() => setSelectedId(undefined)}
-          onMutated={() => {
-            setSelectedId(undefined)
-            setRefreshKey((k) => k + 1)
-          }}
+          onClose={closeSheet}
+          onMutated={handleMutated}
         />
       ) : null}
     </div>
