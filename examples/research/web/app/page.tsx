@@ -1,5 +1,6 @@
 "use client"
 import { CopilotKit, CopilotSidebar } from "@copilotkit/react-core/v2"
+import { DemoSuggestions } from "./components/DemoSuggestions"
 import { MemoryCandidates } from "./components/MemoryCandidates"
 import { PermissionInterrupt } from "./components/PermissionInterrupt"
 import { ToolCallCard } from "./components/ToolCallCard"
@@ -24,6 +25,7 @@ import { ToolCallCard } from "./components/ToolCallCard"
 export default function Home() {
   return (
     <CopilotKit runtimeUrl="/api/copilotkit" defaultThrottleMs={100}>
+      <DemoSuggestions />
       <PermissionInterrupt />
       <ToolCallCard />
       <div style={{ display: "flex", height: "100vh" }}>
