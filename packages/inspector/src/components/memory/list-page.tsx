@@ -122,7 +122,11 @@ export function ListPage() {
 
   const byStatus = stats?.byStatus ?? {}
   const searching = query.length > 0
-  const errorMessages = Object.values(errors).filter((m): m is string => Boolean(m))
+  // Keyed by source, not message — two fetchers failing with the same message
+  // must not produce duplicate React keys (or stacked repeats).
+  const errorEntries = Object.entries(errors).filter((entry): entry is [ErrorSource, string] =>
+    Boolean(entry[1]),
+  )
 
   return (
     <div className="flex h-screen flex-col">
@@ -179,13 +183,13 @@ export function ListPage() {
       <div className="flex min-h-0 flex-1">
         <FacetRail stats={stats} selected={namespace} onSelect={setNamespace} />
         <main className="min-w-0 flex-1 overflow-y-auto p-4">
-          {errorMessages.length > 0 ? (
+          {errorEntries.length > 0 ? (
             <div
               role="alert"
               className="mb-3 space-y-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
             >
-              {errorMessages.map((message) => (
-                <div key={message}>{message}</div>
+              {errorEntries.map(([source, message]) => (
+                <div key={source}>{message}</div>
               ))}
             </div>
           ) : null}
