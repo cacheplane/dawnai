@@ -1,0 +1,55 @@
+{
+  "name": "@dawn-ai/inspector",
+  "version": "0.8.12",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "description": "Dawn runtime inspector — browser UI for inspecting a Dawn app (memory panel).",
+  "homepage": "https://github.com/cacheplane/dawnai/tree/main/packages/inspector#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cacheplane/dawnai.git",
+    "directory": "packages/inspector"
+  },
+  "bugs": {
+    "url": "https://github.com/cacheplane/dawnai/issues"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dawnInspector": {
+    "server": ".next/standalone/packages/inspector/server.js"
+  },
+  "files": [
+    ".next/standalone",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "next build && node scripts/post-build.mjs",
+    "dev": "next dev",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json next.config.ts postcss.config.mjs vitest.config.ts src app scripts test",
+    "test": "vitest --run --config vitest.config.ts --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dawn-ai/core": "workspace:*",
+    "@dawn-ai/memory": "workspace:*",
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@dawn-ai/config-typescript": "workspace:*",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "tailwindcss": "^4.1.0",
+    "typescript": "6.0.2",
+    "vitest": "4.1.10",
+    "zod": "^4.4.3"
+  }
+}
