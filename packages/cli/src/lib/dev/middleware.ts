@@ -43,6 +43,11 @@ export async function runMiddleware(
   return await middleware(request)
 }
 
+/** Flatten a web `Headers` object into a string map for MiddlewareRequest. */
+export function headersToRecord(headers: Headers): Record<string, string> {
+  return Object.fromEntries(headers)
+}
+
 /** Flatten an IncomingMessage's headers into a string map for MiddlewareRequest. */
 export function parseHeaders(request: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = {}

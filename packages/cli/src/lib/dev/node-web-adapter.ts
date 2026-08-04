@@ -1,9 +1,26 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 
-/** Wrap a Node request as a Web `Request`. The socket closing aborts `request.signal`. */
-export function toWebRequest(req: IncomingMessage): Request {
+/**
+ * Wrap a Node request as a Web `Request`. The socket closing aborts
+ * `request.signal`.
+ *
+ * When the paired `ServerResponse` is available, pass it: on a real server
+ * (Node >= 16) the IncomingMessage's own `close` event fires when the request
+ * *message* completes — i.e. as soon as the body has been received — not when
+ * the client disconnects. A premature client disconnect is instead observable
+ * as the response closing before it ended, so with `res` provided the abort
+ * signal keys off that. Without `res` (e.g. a bare injected request), the
+ * request's `close` event is the only disconnect signal available.
+ */
+export function toWebRequest(req: IncomingMessage, res?: ServerResponse): Request {
   const controller = new AbortController()
-  req.on("close", () => controller.abort())
+  if (res) {
+    res.on("close", () => {
+      if (!res.writableEnded) controller.abort()
+    })
+  } else {
+    req.on("close", () => controller.abort())
+  }
 
   const host = req.headers.host ?? "localhost"
   const url = new URL(req.url ?? "/", `http://${host}`)
