@@ -1,5 +1,17 @@
 # create-dawn-ai-app
 
+## 0.8.13
+
+### Patch Changes
+
+- a7e4ced: Improve the getting-started experience for scaffolded apps. `create-dawn-app`
+  now prints next-steps guidance after creating an app (cd / install / test / run
+  it live), the templates gain a `dev` script (`dawn dev --port 3000`) so you can
+  actually run the agent, and the research template README shows the live path
+  (ask a question via `/agui`) plus a pointer to the web-UI recipe.
+- Updated dependencies [a7e4ced]
+  - @dawn-ai/devkit@0.8.13
+
 ## 0.8.12
 
 ### Patch Changes

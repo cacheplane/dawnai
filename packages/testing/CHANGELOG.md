@@ -1,5 +1,33 @@
 # @dawn-ai/testing
 
+## 0.8.13
+
+### Patch Changes
+
+- df54695: Internal refactor: the runtime server now runs on a transport-agnostic
+  `(Request) => Promise<Response>` core (`createRuntimeFetchHandler`, exported from
+  `@dawn-ai/cli/runtime`), with the Node listener reimplemented as a thin adapter
+  over it. No behavior change — routes, status codes, headers, JSON error bodies,
+  SSE framing, streaming incrementality, and shutdown/drain semantics are
+  preserved (verified against the full suite unchanged plus new wire-parity
+  tests). The `@dawn-ai/testing` Agent-Protocol harness now drives the fetch core
+  directly (dropping `light-my-request`). This is the first step of the
+  deploy-anywhere epic: edge build targets (Cloudflare Workers / Vercel / Hono)
+  build on this core.
+- Updated dependencies [20f0407]
+- Updated dependencies [5bbd6e3]
+- Updated dependencies [2b6be86]
+- Updated dependencies [628d1c3]
+- Updated dependencies [18df470]
+- Updated dependencies [ee83a96]
+- Updated dependencies [361a9ac]
+- Updated dependencies [df54695]
+  - @dawn-ai/cli@0.8.13
+  - @dawn-ai/sdk@0.8.13
+  - @dawn-ai/core@0.8.13
+  - @dawn-ai/memory@0.8.13
+  - @dawn-ai/workspace@0.8.13
+
 ## 0.8.12
 
 ### Patch Changes

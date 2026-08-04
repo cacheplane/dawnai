@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/vite-plugin",
-  "version": "0.8.12",
+  "version": "0.8.13",
   "private": false,
   "type": "module",
   "license": "MIT",

@@ -1,5 +1,28 @@
 # @dawn-ai/sdk
 
+## 0.8.13
+
+### Patch Changes
+
+- 5bbd6e3: Add a `recursionLimit` option to `agent()`. It maps to LangGraph's per-run
+  super-step ceiling (default 25), so deep agents — a coordinator that dispatches
+  subagents and makes many tool calls — can raise the limit instead of aborting
+  with a recursion error.
+- 628d1c3: Wire `DAWN_E` error codes into `dawn verify`'s runtime preflight. Add
+  `DAWN_E5101` ("Node version below the supported floor") to the error-code
+  registry, and surface it (or `DAWN_E2002` for an unreachable sandbox daemon)
+  on a failed `dawn verify` runtime check — in both the CLI's `[CODE] See <docs>`
+  line and the `--json` output's `runtime.node.code` / `runtime.docker.code`
+  fields.
+- 18df470: Add a central `DAWN_Exxxx` error-code registry in `@dawn-ai/sdk` and surface
+  codes on the failure channels. `CliError` now carries an optional `code` and the
+  CLI prints `[CODE] See <docs>`; HTTP/SSE error bodies gain optional `code`/`docsUrl`;
+  permission denials returned as tool results are prefixed with `[DAWN_E3001]`.
+  The high-value families are wired (`dawn check` config errors, sandbox
+  unavailable, permission denied, missing model provider / unknown model id, and
+  tool-file shape errors), and a generated `/docs/errors` reference page is guarded
+  against drift. Additive and backward-compatible.
+
 ## 0.8.12
 
 ## 0.8.11
