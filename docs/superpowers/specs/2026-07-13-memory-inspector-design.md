@@ -78,17 +78,21 @@ and approve/supersede candidate writes visually — the dogfood loop the headles
 - **Command = `dawn inspect`** (defaults to the Memory panel while it's the only
   one).
 - **Store acquisition = resolve the LIVE store in-process; no descriptor API.**
-  `resolveMemoryStore(appRoot)` → `loadDawnConfig()` already returns the live
-  `config.memory.store` and registers tsx itself, so the inspector's Next server
-  can read *any* store — including bespoke custom implementations — with **zero new
-  public API**. The earlier "serializable descriptor + built-ins only" plan was
-  dropped once the seam was verified; the real work is Next bundler hygiene
-  (`serverExternalPackages` + a runtime dynamic import).
-- **`browse` is a REQUIRED `MemoryStore` method** (not optional). Dawn is pre-1.0
-  and we are explicitly not carrying backwards compatibility, so we take the single
-  clean code path: no degraded "limited view", no capability sniffing, one
-  implementation to test. Custom stores must implement it; enforced by
-  `runMemoryStoreConformance` and stated in the upgrade note.
+  `loadDawnConfig()` already returns the live `config.memory.store` and registers
+  tsx itself, so the inspector's Next server can read *any* store — including
+  bespoke custom implementations — with **zero new public API**. The earlier
+  "serializable descriptor + built-ins only" plan was dropped once the seam was
+  verified; the real work is Next bundler hygiene (`serverExternalPackages` + a
+  runtime dynamic import). The resolver lives **in the inspector** (the CLI's
+  `resolveMemoryStore` stays put; moving it into `@dawn-ai/memory` would force a
+  memory→core dependency and break memory's purity).
+- **`browse` and `stats` are REQUIRED `MemoryStore` methods** (not optional). Dawn
+  is pre-1.0 and we are explicitly not carrying backwards compatibility, so we take
+  the single clean code path: no degraded "limited view", no capability sniffing,
+  one implementation to test. Custom stores must implement both; enforced by
+  `runMemoryStoreConformance` and stated in the upgrade note. The config-facing
+  store type is unified to the full `MemoryStore` contract at the same time
+  (killing the CLI's `as unknown as MemoryStore` cast).
 
 ## Non-goals (deferred, noted)
 
@@ -118,20 +122,24 @@ node server, published in the package):
   (shadcn), theme CSS importing `@pretable/ui/themes/*` + `@pretable/ui/grid.css`.
 - Deps: `next`, `react@^19`, `react-dom@^19`, `@pretable/react`, `@pretable/ui`,
   shadcn's deps (radix, tailwind v4, lucide, cva), `@dawn-ai/memory`
-  (store + resolution seam), `@dawn-ai/core` (config types). It does **not** depend
-  on `@dawn-ai/memory-pgvector` — a pgvector app already has it, and we load that
-  app's live store rather than rebuilding one.
+  (`sqliteMemoryStore` default + `approveWithReconcile`), `@dawn-ai/core`
+  (`loadDawnConfig`). It does **not** depend on `@dawn-ai/memory-pgvector` — a
+  pgvector app already has it, and we load that app's live store rather than
+  rebuilding one.
 
 ### `dawn inspect` command (in `@dawn-ai/cli`)
 
-`packages/cli/src/commands/inspect.ts`:
+`packages/cli/src/commands/inspect.ts` (flags: `--port <n>`, `--env-file <path>` —
+the latter mirrors `dawn dev`, so the embedder's API key can reach the inspector
+process for hybrid search):
 1. Resolve `@dawn-ai/inspector` from the app's `node_modules`. Absent → print the
    install hint and exit 0.
 2. Spawn the inspector's standalone Next server (`node <inspector>/server.js`)
-   with env: `DAWN_APP_ROOT` and `DAWN_INSPECTOR_PORT` (flag `--port`, else an
-   allocated free port). The CLI does **not** resolve the store — the inspector
-   resolves it itself from `DAWN_APP_ROOT` (see "Store acquisition").
-4. Wait for readiness (`/healthz`), print `Dawn Inspector ready at http://…`, open
+   with env: `DAWN_APP_ROOT`, `PORT` (flag `--port`, else an allocated free port),
+   `HOSTNAME=127.0.0.1` (see "Security"), plus any `--env-file` vars. The CLI does
+   **not** resolve the store — the inspector resolves it itself from
+   `DAWN_APP_ROOT` (see "Store acquisition").
+3. Wait for readiness (`/healthz`), print `Dawn Inspector ready at http://…`, open
    the browser. SIGINT/SIGTERM → tear down the child.
 
 `cli → inspector` is a **dynamic import / spawn only** (optional dep), so there is
@@ -140,11 +148,22 @@ no build-time cycle even though `inspector → cli` is avoided entirely (see nex
 ### Store acquisition — resolve the live store in-process
 
 The Next server reads the app's `MemoryStore` by resolving the user's config **in
-its own process**: `resolveMemoryStore(appRoot)` → `loadDawnConfig()` returns the
-**live** `config.memory.store`, and `loadDawnConfig` registers the tsx loader
-itself (`packages/core/src/config.ts`). No descriptor, no serialization, and — the
-key consequence — **no new public API**: *every* store is inspectable, including
+its own process**: `loadDawnConfig()` returns the **live** `config.memory.store`,
+and `loadDawnConfig` registers the tsx loader itself
+(`packages/core/src/config.ts`). No descriptor, no serialization, and — the key
+consequence — **no new public API**: *every* store is inspectable, including
 bespoke custom implementations, because we hand back the same object the app uses.
+
+**Where the resolver lives: in the inspector** (`src/store/resolve.ts`). It
+imports `loadDawnConfig` from `@dawn-ai/core` and `sqliteMemoryStore` from
+`@dawn-ai/memory`, mirroring the CLI's `resolveMemoryStore` fallback semantics
+(config store if set, else default sqlite at `<appRoot>/.dawn/memory.sqlite` with
+the config's recall/vector tuning). The CLI's copy stays where it is. We do NOT
+move `resolveMemoryStore` into `@dawn-ai/memory` — it needs `loadDawnConfig`, and
+a memory→core dependency would break `@dawn-ai/memory`'s purity (zero-dep beside
+sqlite-storage), which this spec elsewhere relies on. The duplicated logic is
+~30 lines with identical, conformance-covered behavior; a future shared home (if
+ever needed) is `@dawn-ai/core`, not `@dawn-ai/memory`.
 
 The only real work is Next bundler hygiene:
 
@@ -168,10 +187,12 @@ app's store object rather than rebuilding one.
 ### Store changes (in `@dawn-ai/memory`; benefit `dawn memory` too)
 
 1. **Browse-list query — a REQUIRED `MemoryStore` method.** Add
-   `browse({ namespacePrefix?, status?, kind?, source?, query?, limit?, offset? })`
-   returning records across namespaces/statuses (ordered `updated_at DESC`), as an
-   explicit method rather than overloading `search`'s query-less path — clear
-   intent, and it keeps recall semantics untouched.
+   `browse({ namespacePrefix?, status?, kind?, source?, limit?, offset? })`
+   returning `{ records, total }` across namespaces/statuses (ordered
+   `updated_at DESC, id ASC`), as an explicit method rather than overloading
+   `search`'s query-less path — clear intent, and it keeps recall semantics
+   untouched. No `query` param — text search is `search`'s job; browse is pure
+   listing/filtering.
 
    It is **required, not optional** (`browse(...)`, not `browse?(...)`). Dawn is
    pre-1.0 and we are explicitly not carrying backwards compatibility here, so we
@@ -180,11 +201,38 @@ app's store object rather than rebuilding one.
    must implement `browse` — called out in the upgrade notes and enforced by
    `runMemoryStoreConformance`, which every store (sqlite always, pgvector gated)
    runs. Implement for sqlite and pgvector with identical ordering/paging.
-2. **Approve → supersede reconciliation.** Extract the auto-write reconciliation
-   (identity match → supersede) from the capability (`memory.ts`) into the shared
-   `reconcile.ts` seam, and call it from **both** the capability's approve path and
-   a new store-level/CLI `approveWithReconcile(id)` used by the inspector API and
-   `dawn memory approve`. Fixes the two-actives bug uniformly.
+2. **`stats()` — a second new REQUIRED method for facets.** The UI's summary
+   badges and facet rail need counts, and `browse` returns pages, not aggregates.
+   Add `stats({ namespacePrefix? })` → `{ byStatus, byKind, byNamespace, bySource }`
+   count maps, implemented as indexed `GROUP BY`s in both stores (cheap), covered
+   by the conformance kit. This avoids the handler scanning unbounded rows to
+   compute facets on a large pgvector store.
+3. **Unify the config-facing store type with `MemoryStore`.** Today
+   `config.memory.store` is typed as core's structural `MemoryStoreLike`, which
+   **omits `delete` and `listCandidates`** — the CLI already papers over this with
+   `as unknown as MemoryStore` (`packages/cli/src/commands/memory.ts:37`), and a
+   custom store could type-check yet crash `dawn memory reject`/the inspector at
+   runtime. Since back-compat is waived: make the config type the **full**
+   `MemoryStore` contract (including `browse` and `stats`) — one interface, one
+   source of truth, cast deleted. (Mechanically: core's `MemoryStoreLike` gains
+   `delete`/`listCandidates`/`browse`/`stats` so it stays structurally identical;
+   core still avoids importing `@dawn-ai/memory`.)
+4. **Approve → supersede reconciliation — in `@dawn-ai/memory`, NOT the
+   capability.** The capability's auto-write reconciliation already works and is
+   deliberately self-contained — `packages/core/src/capabilities/built-in/memory.ts:181`
+   comments *"avoids importing from @dawn-ai/memory"*, and importing memory's
+   barrel would drag `node:sqlite` into every core consumer. So: build
+   `approveWithReconcile(store, record, identityKeys, now)` on the existing pure
+   `reconcile.ts` seam in `@dawn-ai/memory`, used by **`dawn memory approve` and
+   the inspector API only**. The capability keeps its inline copy. Fixes the
+   two-actives bug where it actually lives (the approve path).
+
+   **Identity-key resolution** (required input, previously unspecced): the
+   route's `defineMemory().identity` is route-level config. Resolve it by parsing
+   the record's namespace `route=` dim → load `<appDir><route>/memory.ts` (the
+   CLI's `loadRouteMemory` seam) → `identity ?? ["subject","predicate"]`. When
+   the route can't be resolved (namespace has no route dim, or the file is gone),
+   fall back to the semantic default and say so in the approve response.
 
 ### Data flow
 
@@ -195,9 +243,18 @@ so memories appear as the agent writes them.
 
 ## UI specification (layout B — two-pane + slide-in sheet)
 
-- **Top bar:** summary badges (active / candidate / superseded counts) · search
-  input (runs real `store.search` — keyword + vector RRF, so it mirrors the
-  agent's `recall`) · Status filter · Kind filter.
+- **Top bar:** summary badges (active / candidate / superseded counts, from
+  `stats()`) · search input · Status filter · Kind filter.
+- **Search semantics:** the search box runs real `store.search` — and because the
+  inspector loads the live config, it threads `config.memory.vector.embedder`
+  exactly like the capability does (embed the query → `queryEmbedding` +
+  `embedderId`; degrade to keyword-only on embed failure). With a key present
+  (`--env-file`), inspector search is true hybrid recall — it mirrors the agent's
+  `recall`. **`search` requires a namespace**, so: with a namespace facet
+  selected, search runs in that namespace; with "all" selected, the handler runs
+  `search` per namespace and the UI groups results by namespace — scores are NOT
+  comparable across namespaces (per-namespace IDF pools), so grouped display, no
+  interleaved global ranking.
 - **Left rail:** namespace facets (with counts) + source facets.
 - **Records grid (`@pretable/react`):** columns `status` (shadcn badge) ·
   `content` (wrapped, variable height — pretable's strength) · `namespace` · `kind`
@@ -216,14 +273,30 @@ so memories appear as the agent writes them.
 
 ## JSON API (Next route handlers)
 
-- `GET /api/memory/list` — browse (query params: namespacePrefix, status, kind,
-  source, limit, offset) → records + facet counts + summary badges.
-- `GET /api/memory/search?q=` — `store.search` hybrid recall.
+- `GET /api/memory/list` — `store.browse` (query params: namespacePrefix, status,
+  kind, source, limit, offset) → `{ records, total }`.
+- `GET /api/memory/stats` — `store.stats` → count maps for summary badges + the
+  facet rail.
+- `GET /api/memory/search?q=&namespace=` — `store.search`; embeds `q` via the
+  config's embedder when present (hybrid), else keyword-only. `namespace`
+  optional: absent → per-namespace fan-out, results grouped by namespace.
 - `GET /api/memory/:id` — full record (`store.get`).
 - `POST /api/memory/:id/approve` — `approveWithReconcile` (returns what was
-  superseded, for the UI to reflect).
+  superseded + which identity keys were used, for the UI to reflect).
 - `POST /api/memory/:id/reject`, `POST /api/memory/:id/forget` — `store.delete`.
 - `GET /healthz` — readiness.
+
+## Security (localhost dev tool, but with destructive endpoints)
+
+- **Bind 127.0.0.1 explicitly** — the CLI sets `HOSTNAME=127.0.0.1` for the
+  standalone server (Node's default listen binds all interfaces; "localhost tool"
+  must be enforced, not assumed).
+- **Cross-origin mutation protection.** `forget`/`reject` are destructive and any
+  website the developer has open can fire `POST http://127.0.0.1:<port>/…`
+  (CSRF/DNS-rebinding against localhost tools is a real attack class). Route
+  handlers verify the `Host` header is `127.0.0.1:<port>`/`localhost:<port>` and
+  reject POSTs whose `Origin` is present and not the inspector's own origin.
+  Cheap middleware, applied to all `/api/*` routes.
 
 ## Error handling
 
@@ -240,14 +313,19 @@ so memories appear as the agent writes them.
 
 ## Testing strategy
 
-1. **Store unit tests (`@dawn-ai/memory`):** the new `browse` query (cross-namespace,
-   status/kind/source filters, ordering, paging); `approveWithReconcile` demotes a
-   contradicting active row and links supersession. Add both to
-   `runMemoryStoreConformance` → sqlite always, pgvector gated (parity).
-2. **Descriptor round-trip:** `storeDescriptor(config)` → `storeFromDescriptor` for
-   sqlite + pgvector; custom store → the documented refusal.
+1. **Store unit tests (`@dawn-ai/memory`):** the new `browse` (cross-namespace,
+   status/kind/source filters, ordering, paging, `total`) and `stats` (count-map
+   correctness); `approveWithReconcile` demotes a contradicting active row, links
+   supersession, and reports the identity keys used (incl. the route-unresolvable
+   fallback). Add all to `runMemoryStoreConformance` → sqlite always, pgvector
+   gated (parity).
+2. **Config-load spike test (the top integration risk, FIRST task):** a fixture
+   app with a custom `dawn.config.ts` store; boot the built inspector server
+   against it and assert the live store object is served through `/api/memory/*` —
+   proving `serverExternalPackages` + the runtime dynamic import survive
+   `next build`. Also: config-absent → default sqlite fallback.
 3. **CLI (`dawn inspect`):** package-absent hint; child spawn wiring incl. the
-   `DAWN_APP_ROOT`/`DAWN_INSPECTOR_PORT` env contract (mock the spawn) — no real
+   `DAWN_APP_ROOT`/`PORT`/`HOSTNAME`/`--env-file` env contract (mock the spawn) — no real
    browser.
 4. **Inspector component tests:** the Memory panel list + detail render against a
    seeded store fixture (React Testing Library); the Approve→supersede callout
@@ -273,12 +351,15 @@ server + HTTP. pretable/Next add no key/network requirement.
   with the group; **patch** changeset — GOTCHA 6, never minor).
 - Add to the scaffold: `SCAFFOLD_PACKAGES` + `create-dawn-app` devDep threading +
   the generated-app fixtures (per the npm-release GOTCHA-4 scaffold-dep checklist).
-- Changeset: **patch** for `@dawn-ai/memory` (browse + reconcile extraction),
-  `@dawn-ai/testing` (conformance additions), `@dawn-ai/cli` (`dawn inspect`), and
-  the new `@dawn-ai/inspector`. Patch even though `browse` is a **breaking**
-  `MemoryStore` change — GOTCHA 6 (a `minor` in the fixed 0.x group inflates the
-  whole group to 1.0.0). The changeset body must state the break plainly: *"`MemoryStore`
-  now requires `browse`; custom stores must implement it."*
+- Changeset: **patch** for `@dawn-ai/memory` (browse + stats +
+  approveWithReconcile), `@dawn-ai/core` (config store type unified to the full
+  contract), `@dawn-ai/testing` (conformance additions), `@dawn-ai/cli`
+  (`dawn inspect` + approve fix), `@dawn-ai/memory-pgvector` (browse + stats), and
+  the new `@dawn-ai/inspector`. Patch even though `browse`/`stats` are **breaking**
+  `MemoryStore` changes — GOTCHA 6 (a `minor` in the fixed 0.x group inflates the
+  whole group to 1.0.0). The changeset body must state the break plainly:
+  *"`MemoryStore` now requires `browse` and `stats`; custom stores must implement
+  them."*
 - Docs: a "Memory Inspector" page under the memory docs (enable via `dawn inspect`,
   the scaffold ships it, the browse/approve semantics), the two store-acquisition
   caveats (own process → own store instance; config-constructible only), and an
@@ -305,11 +386,17 @@ server + HTTP. pretable/Next add no key/network requirement.
   error. Enforced by `runMemoryStoreConformance` and called out in upgrade notes.
 - **Next standalone spawn ergonomics** (port handoff, readiness, clean shutdown) —
   modeled on the existing `dawn dev` child-process supervision.
+- **CI + tarball weight.** `next build` joins the workspace build graph, and adding
+  the inspector to `SCAFFOLD_PACKAGES` means the Verdaccio harness lanes pack a
+  Next-standalone tarball (likely tens of MB) on every run. Measure both in the
+  spike task; if harness time regresses meaningfully, scope which lanes pack the
+  inspector (it's a devDep — the runtime/smoke lanes don't need it) before
+  accepting the cost.
 
 ## Open questions (validate during build, not blockers)
 
-- `browse` default ordering/paging defaults (reuse recall's `candidatePool`? or a
-  plain `updated_at DESC` + offset — lean to the latter for a browse surface).
+- `browse` default page size (ordering is settled: `updated_at DESC, id ASC` +
+  offset paging with `total`).
 - Auto-refresh interval (2s default) + whether to pause when the tab is hidden.
 - Whether `dawn inspect --panel <id>` is worth adding now (only one panel exists) —
   probably defer; default to Memory.
