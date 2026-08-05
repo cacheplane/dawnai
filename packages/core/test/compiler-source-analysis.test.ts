@@ -105,6 +105,47 @@ export default async function literals(input: { mode: "fast"; count: 2; enabled:
     })
   })
 
+  test.each([
+    {
+      typeName: "Array",
+      source: `
+interface Array<T> { arrayValue: T }
+export default async (input: Array<string>) => input
+`,
+      property: { name: "arrayValue", type: { kind: "string" }, optional: false },
+    },
+    {
+      typeName: "Map",
+      source: `
+interface Map<K, V> { mapKey: K; mapValue: V }
+export default async (input: Map<string, number>) => input
+`,
+      property: {
+        name: "mapKey",
+        type: { kind: "string" },
+        optional: false,
+      },
+      secondProperty: {
+        name: "mapValue",
+        type: { kind: "number" },
+        optional: false,
+      },
+    },
+    {
+      typeName: "Set",
+      source: `
+interface Set<T> { setValue: T }
+export default async (input: Set<boolean>) => input
+`,
+      property: { name: "setValue", type: { kind: "boolean" }, optional: false },
+    },
+  ])("keeps a user-defined $typeName as an object", ({ source, property, secondProperty }) => {
+    expect(analyze(source).parameter).toEqual({
+      kind: "object",
+      properties: secondProperty ? [property, secondProperty] : [property],
+    })
+  })
+
   test("represents union parameter types", () => {
     expect(analyze("export default async (input: string | number) => input").parameter).toEqual({
       kind: "union",
@@ -142,6 +183,52 @@ export default async function literals(input: { mode: "fast"; count: 2; enabled:
     expect(analyze("export default async (input: string | null) => input").parameter).toEqual({
       kind: "union",
       members: [{ kind: "null" }, { kind: "string" }],
+    })
+  })
+
+  test("represents undefined unions as optional values", () => {
+    expect(analyze("export default async (input: string | undefined) => input").parameter).toEqual({
+      kind: "optional",
+      inner: { kind: "string" },
+    })
+  })
+
+  test("represents optional parameters as optional values", () => {
+    expect(analyze("export default async (input?: { id: string }) => input").parameter).toEqual({
+      kind: "optional",
+      inner: {
+        kind: "object",
+        properties: [{ name: "id", type: { kind: "string" }, optional: false }],
+      },
+    })
+  })
+
+  test("preserves unions between object types on optional properties", () => {
+    const result = analyze(`
+export default async (input: { choice?: { a: string } | { b: number } }) => input
+`)
+
+    expect(result.parameter).toEqual({
+      kind: "object",
+      properties: [
+        {
+          name: "choice",
+          optional: true,
+          type: {
+            kind: "union",
+            members: [
+              {
+                kind: "object",
+                properties: [{ name: "a", type: { kind: "string" }, optional: false }],
+              },
+              {
+                kind: "object",
+                properties: [{ name: "b", type: { kind: "number" }, optional: false }],
+              },
+            ],
+          },
+        },
+      ],
     })
   })
 
@@ -258,6 +345,24 @@ export default async function search(input: {
     })
   })
 
+  test("cuts off self-referential types without throwing", () => {
+    const result = analyze(`
+interface Branch {
+  label: string
+  child?: Branch
+}
+export default async (input: Branch) => input
+`)
+
+    expect(result.parameter).toEqual({
+      kind: "object",
+      properties: [
+        { name: "label", type: { kind: "string" }, optional: false },
+        { name: "child", type: { kind: "unknown" }, optional: true },
+      ],
+    })
+  })
+
   test("extracts multiline JSDoc attached to a default export expression", () => {
     const result = analyze(`
 /**
@@ -272,5 +377,15 @@ export default async (
 
     expect(result.description).toBe("Search across all indexed customer records.")
     expect(result.parameterDescriptions).toEqual(new Map([["query", "Search terms"]]))
+  })
+
+  test("parses a one-line JSDoc param as a tag", () => {
+    const result = analyze(`
+/** @param id Identifier */
+export default async (input: { id: string }) => input
+`)
+
+    expect(result.description).toBe("")
+    expect(result.parameterDescriptions).toEqual(new Map([["id", "Identifier"]]))
   })
 })

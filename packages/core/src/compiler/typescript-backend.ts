@@ -123,28 +123,11 @@ function resolveTypeInner(
 
   if (type.isUnion()) {
     const members = type.types
-    if (
-      members.length === 2 &&
-      members.every((member) => member.flags & ts.TypeFlags.BooleanLiteral)
-    ) {
-      return { kind: "boolean" }
-    }
-
     const definedMembers = members.filter((member) => !(member.flags & ts.TypeFlags.Undefined))
-    if (definedMembers.length > 0 && definedMembers.every((member) => member.isStringLiteral())) {
-      const enumType: TypeInfo = {
-        kind: "enum",
-        values: definedMembers.map((member) => (member as ts.StringLiteralType).value),
-      }
-      return definedMembers.length === members.length
-        ? enumType
-        : { kind: "optional", inner: enumType }
-    }
-
-    return {
-      kind: "union",
-      members: members.map((member) => resolveType(member, checker, state)),
-    }
+    const resolved = resolveUnionMembers(definedMembers, checker, state)
+    return definedMembers.length === members.length
+      ? resolved
+      : { kind: "optional", inner: resolved }
   }
 
   if (type.isIntersection()) {
@@ -172,10 +155,9 @@ function resolveTypeInner(
       }
     }
 
-    const symbolName = type.getSymbol()?.getName()
     const typeArguments = checker.getTypeArguments(objectType as ts.TypeReference)
 
-    if (symbolName === "Array" || symbolName === "ReadonlyArray") {
+    if (checker.isArrayType(type) || isStandardLibraryType(type, ["ReadonlyArray"])) {
       return {
         kind: "array",
         element: typeArguments[0]
@@ -184,7 +166,7 @@ function resolveTypeInner(
       }
     }
 
-    if (symbolName === "Map" || symbolName === "ReadonlyMap") {
+    if (isStandardLibraryType(type, ["Map", "ReadonlyMap"])) {
       return {
         kind: "map",
         key: typeArguments[0] ? resolveType(typeArguments[0], checker, state) : { kind: "unknown" },
@@ -194,7 +176,7 @@ function resolveTypeInner(
       }
     }
 
-    if (symbolName === "Set" || symbolName === "ReadonlySet") {
+    if (isStandardLibraryType(type, ["Set", "ReadonlySet"])) {
       return {
         kind: "set",
         element: typeArguments[0]
@@ -242,15 +224,7 @@ function resolveProperty(
     if (definedMembers.length === 1 && definedMembers[0]) {
       resolvedType = resolveType(definedMembers[0], checker, state)
     } else {
-      const members = definedMembers.map((member) => resolveType(member, checker, state))
-      resolvedType = members.every((member) => member.kind === "object")
-        ? {
-            kind: "object",
-            properties: members.flatMap((member) =>
-              member.kind === "object" ? member.properties : [],
-            ),
-          }
-        : { kind: "union", members }
+      resolvedType = resolveUnionMembers(definedMembers, checker, state)
     }
   } else {
     resolvedType = resolveType(propertyType, checker, state)
@@ -262,6 +236,39 @@ function resolveProperty(
     optional,
     ...(description ? { description } : {}),
   }
+}
+
+function resolveUnionMembers(
+  members: readonly ts.Type[],
+  checker: ts.TypeChecker,
+  state: ResolutionState,
+): TypeInfo {
+  if (members.length === 1 && members[0]) return resolveType(members[0], checker, state)
+  if (
+    members.length === 2 &&
+    members.every((member) => member.flags & ts.TypeFlags.BooleanLiteral)
+  ) {
+    return { kind: "boolean" }
+  }
+  if (members.length > 0 && members.every((member) => member.isStringLiteral())) {
+    return {
+      kind: "enum",
+      values: members.map((member) => (member as ts.StringLiteralType).value),
+    }
+  }
+  return {
+    kind: "union",
+    members: members.map((member) => resolveType(member, checker, state)),
+  }
+}
+
+function isStandardLibraryType(type: ts.Type, names: readonly string[]): boolean {
+  const symbol = type.getSymbol()
+  return (
+    !!symbol &&
+    names.includes(symbol.getName()) &&
+    !!symbol.declarations?.some((declaration) => declaration.getSourceFile().hasNoDefaultLib)
+  )
 }
 
 function unwrapPromise(type: ts.Type): ts.Type {
@@ -285,7 +292,7 @@ function extractJsDoc(sourceFile: ts.SourceFile): JsDocInfo {
     .replace(/^\/\*\*/, "")
     .replace(/\*\/$/, "")
     .split("\n")
-    .map((line) => line.replace(/^\s*\*\s?/, "").trimEnd())
+    .map((line) => line.replace(/^\s*\*\s?/, "").trim())
   const descriptionLines: string[] = []
   const params = new Map<string, string>()
 
