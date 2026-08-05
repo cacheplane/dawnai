@@ -30,13 +30,14 @@ Next.js 16.2 is a second, independent blocker. It loads `typescript/lib/typescri
 5. **TypeScript 7.0 compiles the workspace.** Core's runtime import is separately resolved to Microsoft's TypeScript 6 compatibility package.
 6. **Next applications move together.** The docs site, Inspector, chat web, and research web all upgrade to Next 16.3 and enable the CLI checker before receiving TypeScript 7.
 7. **Verification is a deliverable.** Clean packed-artifact and post-publication compiler smokes are permanent CI/release lanes, not manual release notes.
+8. **Compiler-neutral projection takes precedence over legacy edge-case output.** Supported schema shapes remain deterministic, but Dawn does not preserve accidental compiler-dependent output for mapped optional properties or collection intersections. `Partial<T>` follows semantic optionality, and specialized intersections project from neutral `TypeInfo` rather than compiler-internal method symbols.
 
 ## Non-goals
 
 - Do not port to `typescript/unstable/sync` or `typescript/unstable/async` in this change.
 - Do not add `@dawn-ai/compiler` or another publishable package.
 - Do not redesign Dawn's author-facing tool contract or require explicit schemas.
-- Do not intentionally change generated TypeScript, JSON Schema, Zod, or JSDoc behavior.
+- Do not intentionally change generated TypeScript, Zod, or JSDoc behavior. JSON Schema remains stable for supported primitives, objects, arrays, records, enums, unions, descriptions, and depth fallbacks; compiler-dependent mapped/intersection edge cases may adopt the clean neutral projection described above.
 - Do not remove Core's existing public route extraction functions; CLI and external consumers may continue to call them.
 - Do not automate rollback of an npm release. Post-publish verification can detect and report failure after publication, but npm publication is not transactional.
 
@@ -78,10 +79,12 @@ interface AnalyzedTool {
 
 `TypeInfo` covers the shapes already recognized by the Vite generator: primitives, literals, arrays, tuples, objects, records, maps, sets, unions, intersections, enums, optional values, null, and unknown. Object properties carry optionality and symbol/JSDoc descriptions.
 
-The backend must terminate recursive/self-referential analysis deterministically. It tracks recursion and applies the existing JSON Schema depth policy without allowing infinite compiler walks. Projection behavior remains compatible:
+The backend must terminate recursive/self-referential analysis deterministically. It tracks recursion without allowing infinite compiler walks; `json-schema.ts` independently applies the JSON Schema depth policy. Projection behavior is stable except for the explicitly accepted compiler-dependent JSON edge cases:
 
 - exact input/output strings still come from `checker.typeToString(...NoTruncation)`;
 - JSON Schema keeps its current `MAX_SCHEMA_DEPTH` fallback and current unsupported-type fallbacks;
+- mapped optional properties use semantic optionality, so `Partial<T>` fields are no longer incorrectly required merely because their originating declaration lacked `?`;
+- collection intersections do not expose compiler-library method symbols as tool parameters and instead use the neutral unsupported/root fallback;
 - Zod generation keeps the existing `z.unknown()` behavior for unknown shapes;
 - missing/default-export/non-callable sources retain current skip or `null` behavior;
 - route-local tools continue to shadow shared tools;

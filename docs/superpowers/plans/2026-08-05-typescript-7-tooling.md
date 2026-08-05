@@ -206,7 +206,7 @@ git commit -m "refactor(core): add unified tool source analysis"
 - Reference: `packages/core/src/typegen/extract-tool-schema.ts`
 - Reference: `packages/core/src/typegen/extract-tool-types.ts`
 
-- [ ] **Step 1: Write a failing one-program route-analysis test**
+- [x] **Step 1: Write a failing one-program route-analysis test**
 
 Create temporary shared and route tool directories. Import `analyzeRouteTools` and assert:
 
@@ -217,7 +217,7 @@ Create temporary shared and route tool directories. Import `analyzeRouteTools` a
 
 Use an injectable backend factory or a test-only counter seam to assert one program is created for multiple tools without exposing compiler objects in the public result.
 
-- [ ] **Step 2: Run the route-analysis test and verify RED**
+- [x] **Step 2: Run the route-analysis test and verify RED**
 
 ```bash
 pnpm --filter @dawn-ai/core test -- compiler-route-analysis.test.ts
@@ -225,7 +225,7 @@ pnpm --filter @dawn-ai/core test -- compiler-route-analysis.test.ts
 
 Expected: FAIL because `analyzeRouteTools` is absent.
 
-- [ ] **Step 3: Implement route discovery and batch analysis**
+- [x] **Step 3: Implement route discovery and batch analysis**
 
 Move the duplicated `discoverToolFiles` and merge logic into `analyze-route-tools.ts`. Add a backend function that accepts the effective file map, creates one `Program`, and analyzes every source file through the same default-export/signature/type walker used by `analyzeToolSource`.
 
@@ -244,11 +244,11 @@ export function analyzeRouteTools(
 
 Keep the outer function synchronous unless actual asynchronous work is introduced; existing async projection APIs can await a non-Promise result without behavior changes.
 
-- [ ] **Step 4: Write failing neutral JSON Schema renderer tests**
+- [x] **Step 4: Write failing neutral JSON Schema renderer tests**
 
-Create `compiler-json-schema.test.ts` against a missing `typeInfoToToolParameters` function. Construct `TypeInfo` values directly and assert current output for primitives, optional fields, enum, nested object, array, record `additionalProperties`, object union `anyOf`, literal discriminants, descriptions, and depth fallback.
+Create `compiler-json-schema.test.ts` against a missing `typeInfoToToolParameters` function. Construct `TypeInfo` values directly and assert deterministic output for primitives, semantic optional fields, enum, nested object, array, record `additionalProperties`, object union `anyOf`, literal discriminants, descriptions, and depth fallback. Characterize the intentional clean behavior for mapped optional properties and specialized collection intersections instead of preserving compiler-internal legacy output.
 
-- [ ] **Step 5: Run the renderer tests and verify RED**
+- [x] **Step 5: Run the renderer tests and verify RED**
 
 ```bash
 pnpm --filter @dawn-ai/core test -- compiler-json-schema.test.ts
@@ -256,7 +256,7 @@ pnpm --filter @dawn-ai/core test -- compiler-json-schema.test.ts
 
 Expected: FAIL because the renderer is absent.
 
-- [ ] **Step 6: Implement the renderer without compiler imports**
+- [x] **Step 6: Implement the renderer without compiler imports**
 
 Move JSON Schema projection behavior into `json-schema.ts`:
 
@@ -266,9 +266,9 @@ export function typeInfoToToolParameters(
 ): ExtractedToolSchema["parameters"]
 ```
 
-Preserve `MAX_SCHEMA_DEPTH = 8`, `{ type: "string" }` fallback for shapes the existing JSON renderer did not support, required-property ordering, `additionalProperties: false` for concrete objects, and record value schemas.
+Preserve `MAX_SCHEMA_DEPTH = 8`, `{ type: "string" }` fallback for unsupported neutral shapes, required-property ordering, `additionalProperties: false` for concrete objects, and record value schemas. Keep all JSON projection logic out of the compiler backend. Mapped properties use semantic optionality; collection intersections must not expand compiler-library method symbols.
 
-- [ ] **Step 7: Export and verify route analysis plus schema rendering**
+- [x] **Step 7: Export and verify route analysis plus schema rendering**
 
 Update `compiler/index.ts`, then run:
 
@@ -278,7 +278,7 @@ pnpm --filter @dawn-ai/core test -- compiler-route-analysis.test.ts compiler-jso
 
 Expected: both suites PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add packages/core/src/compiler packages/core/test/compiler-route-analysis.test.ts packages/core/test/compiler-json-schema.test.ts
@@ -353,7 +353,7 @@ pnpm --filter @dawn-ai/core test -- extract-tool-types.test.ts extract-tool-sche
 pnpm --filter @dawn-ai/cli test -- run-typegen.test.ts typegen-command.test.ts verify-command.test.ts
 ```
 
-Expected: all existing and new tests PASS with byte/structure-compatible outputs.
+Expected: all existing and new tests PASS. Supported schema outputs remain structure-compatible; assertions for mapped optional types and specialized collection intersections use the user-approved neutral behavior rather than compiler-dependent legacy output.
 
 - [ ] **Step 6: Build Core before CLI and verify declarations resolve**
 
