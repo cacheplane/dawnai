@@ -9,12 +9,8 @@ import type {
   RouteStateFields,
   RouteToolTypes,
 } from "@dawn-ai/core"
-import {
-  extractToolSchemasForRoute,
-  extractToolTypesForRoute,
-  renderDawnTypes,
-  resolveStateFields,
-} from "@dawn-ai/core"
+import { renderDawnTypes, resolveStateFields } from "@dawn-ai/core"
+import { extractToolArtifactsForRoute } from "@dawn-ai/core/internal/compiler"
 
 import { discoverStateDefinition } from "../runtime/state-discovery.js"
 
@@ -163,8 +159,7 @@ export async function runTypegen(options: {
   let toolSchemaCount = 0
 
   for (const route of manifest.routes) {
-    // Extract tool types for .d.ts
-    const tools = await extractToolTypesForRoute({
+    const { types: tools, schemas } = extractToolArtifactsForRoute({
       routeDir: route.routeDir,
       sharedToolsDir,
     })
@@ -193,12 +188,6 @@ export async function runTypegen(options: {
     routeToolTypes.push({
       pathname: route.pathname,
       tools: [...tools, ...extraTools],
-    })
-
-    // Extract tool schemas for JSON
-    const schemas = await extractToolSchemasForRoute({
-      routeDir: route.routeDir,
-      sharedToolsDir,
     })
 
     if (schemas.length > 0) {

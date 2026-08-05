@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { discoverRoutes } from "@dawn-ai/core"
-import { afterEach, describe, expect, test } from "vitest"
+import * as compiler from "@dawn-ai/core/internal/compiler"
+import { afterEach, describe, expect, test, vi } from "vitest"
 
 import { runTypegen } from "../src/lib/typegen/run-typegen.js"
 
@@ -11,6 +12,7 @@ const tempDirs: string[] = []
 const originalCwd = process.cwd()
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   process.chdir(originalCwd)
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
 })
@@ -48,14 +50,16 @@ async function setupApp(options?: { withState?: boolean }) {
 }
 
 describe("runTypegen", () => {
-  test("writes dawn.generated.d.ts with tool types", async () => {
+  test("writes types and schemas from one combined route analysis", async () => {
     const { appRoot } = await setupApp()
     const manifest = await discoverRoutes({ appRoot })
+    const extractArtifacts = vi.spyOn(compiler, "extractToolArtifactsForRoute")
 
     const result = await runTypegen({ appRoot, manifest })
 
     expect(result.routeCount).toBe(1)
     expect(result.toolSchemaCount).toBe(1)
+    expect(extractArtifacts).toHaveBeenCalledTimes(1)
 
     const dtsPath = join(appRoot, ".dawn", "dawn.generated.d.ts")
     expect(existsSync(dtsPath)).toBe(true)
@@ -63,6 +67,11 @@ describe("runTypegen", () => {
     const content = await readFile(dtsPath, "utf8")
     expect(content).toContain("DawnRoutePath")
     expect(content).toContain("greet")
+
+    const toolsJsonPath = join(appRoot, ".dawn", "routes", "hello-tenant", "tools.json")
+    const toolsJson = JSON.parse(await readFile(toolsJsonPath, "utf8"))
+    expect(toolsJson.greet.description).toBe("Greets the tenant.")
+    expect(toolsJson.greet.parameters.properties.name.type).toBe("string")
   })
 
   test("writes tools.json for each route", async () => {

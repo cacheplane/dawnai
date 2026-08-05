@@ -27,14 +27,6 @@ async function compareParameters(
   expect(projected).toEqual(existing)
 }
 
-async function expectProjectedParameters(
-  source: string,
-  expected: ExtractedToolSchema["parameters"],
-): Promise<void> {
-  const { projected } = await parametersFromSource(source)
-  expect(projected).toEqual([expected])
-}
-
 async function parametersFromSource(source: string): Promise<{
   readonly existing: readonly ExtractedToolSchema["parameters"][]
   readonly projected: readonly ExtractedToolSchema["parameters"][]
@@ -127,7 +119,7 @@ export default async function tool(input: { a: string } & { b: number }) {
   })
 
   test("uses effective semantic requiredness across root intersection declarations", async () => {
-    await expectProjectedParameters(
+    await compareParameters(
       "export default async function tool(input: { a?: string } & { a: string }) { return input }",
       {
         type: "object",
@@ -155,7 +147,7 @@ export default async function tool(
   })
 
   test("uses semantic optionality for root Partial properties", async () => {
-    await expectProjectedParameters(
+    await compareParameters(
       "export default async function tool(input: Partial<{ a: string }>) { return input }",
       {
         type: "object",
@@ -167,7 +159,7 @@ export default async function tool(
   })
 
   test("uses semantic optionality for nested Partial properties", async () => {
-    await expectProjectedParameters(
+    await compareParameters(
       "export default async function tool(input: { nested: Partial<{ a: string }> }) { return input }",
       {
         type: "object",
@@ -186,7 +178,7 @@ export default async function tool(
   })
 
   test("uses semantic optionality for root Readonly Partial properties", async () => {
-    await expectProjectedParameters(
+    await compareParameters(
       "export default async function tool(input: Readonly<Partial<{ a: string }>>) { return input }",
       {
         type: "object",
@@ -198,7 +190,7 @@ export default async function tool(
   })
 
   test("uses semantic optionality for nested Readonly Partial properties", async () => {
-    await expectProjectedParameters(
+    await compareParameters(
       "export default async function tool(input: { nested: Readonly<Partial<{ a: string }>> }) { return input }",
       {
         type: "object",
@@ -217,7 +209,7 @@ export default async function tool(
   })
 
   test("uses semantic optionality for mapped optional properties", async () => {
-    await expectProjectedParameters(
+    await compareParameters(
       `
 type MappedOptional<T> = { [K in keyof T]?: T[K] }
 export default async function tool(input: MappedOptional<{ a: string }>) { return input }
@@ -237,7 +229,7 @@ export default async function tool(input: MappedOptional<{ a: string }>) { retur
     ["tuple", "[string, number] & { fixed: string }"],
     ["set", "Set<boolean> & { fixed: string }"],
   ])("uses a neutral fallback for a root %s intersection", async (_name, inputType) => {
-    await expectProjectedParameters(
+    await compareParameters(
       `export default async function tool(input: ${inputType}) { return input }`,
       {
         type: "object",

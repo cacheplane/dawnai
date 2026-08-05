@@ -24,6 +24,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./internal/compiler": {
+      "types": "./dist/compiler/index.d.ts",
+      "default": "./dist/compiler/index.js"
     }
   },
   "publishConfig": {
