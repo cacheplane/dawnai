@@ -464,7 +464,6 @@ async function createExpectedInternalFixture(
       dependencies: {
         ...expected.packageJson.dependencies,
         "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
-        "@dawn-ai/core": "<repo:@dawn-ai/core>",
         "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
         "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
       },

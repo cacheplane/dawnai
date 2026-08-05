@@ -34,7 +34,6 @@ describe("generated app helper", () => {
       )
       expect(packageJson).toContain('"name": "sample-generated-app"')
       expect(packageJson).toContain('"@dawn-ai/cli": "workspace:*"')
-      expect(packageJson).toContain('"@dawn-ai/core": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/langchain": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/sdk": "workspace:*"')
       expect(packageJson).toContain('"@dawn-ai/config-typescript": "workspace:*"')

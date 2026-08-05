@@ -58,7 +58,7 @@ Flags:
 The `deps` check covers missing packages and missing env vars (advisory). It is **provider-aware**: it derives the API-key env var from the providers your routes actually use — an Anthropic-only app is checked for `ANTHROPIC_API_KEY`, an OpenAI app for `OPENAI_API_KEY`, a multi-provider app for the union, and a local Ollama app for none. A missing key is a warning, not a failure (the key may come from the runtime environment).
 
 The `runtime` check gates **environment readiness**:
-- **Node** — asserts the running Node version is at least `22.13.0` (Dawn's floor; below it `node:sqlite` breaks). Below the floor **fails** `verify` with a non-zero exit.
+- **Node** — asserts the running Node version is at least `24.0.0` (Dawn's floor: the active LTS line, which bundles npm ≥ 11 and ships `node:sqlite` unflagged). Below the floor **fails** `verify` with a non-zero exit.
 - **Docker** — present only when `dawn.config.ts` configures a sandbox provider; it runs the provider's daemon preflight and **fails** if the daemon is unreachable. Apps with no sandbox skip this sub-check entirely.
 
 See [Deployment](/docs/deployment) for the recommended workflow.
