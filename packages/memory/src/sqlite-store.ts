@@ -84,6 +84,8 @@ const MIGRATIONS: Migration[] = [
     `,
   },
   {
+    // Equality filter for kind-scoped windows; COALESCE(effective_at, created_at)
+    // ordering is intentionally unindexed at this scale.
     version: 3,
     up: `
       CREATE INDEX IF NOT EXISTS idx_mem_ns_kind_effective ON memories (namespace, kind, effective_at DESC);
