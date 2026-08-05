@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { RunAgentInputSchema } from "@ag-ui/core"
 import { type DawnAgentStreamChunk, fromRunAgentInput, toAguiEvents } from "@dawn-ai/ag-ui"
 import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
+import type { MemoryStoreLike } from "@dawn-ai/core"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
@@ -21,6 +22,13 @@ import { statusResponse } from "./status-response.js"
 export interface AgUiFetchRequestOptions {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
+  /**
+   * Lazy, memoized, boot-built thunk for the shared memory store — forwarded
+   * into route execution so the memory capability reuses the same store the
+   * `/memory/candidates*` HTTP routes use, instead of opening its own.
+   * Optional so direct callers (tests) keep their existing behavior.
+   */
+  readonly getMemoryStore?: () => Promise<MemoryStoreLike>
   readonly middleware: DawnMiddleware | undefined
   /**
    * Boot-resolved permissions store (or a per-request factory in dev),
@@ -96,6 +104,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
   const {
     appRoot,
     checkpointer,
+    getMemoryStore,
     middleware,
     permissionsStore,
     registry,
@@ -188,6 +197,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
             },
             ...(resumeResolution.mode === "resume" ? { resume: resumeResolution.resume } : {}),
             ...(middlewareResult.context ? { middlewareContext: middlewareResult.context } : {}),
+            ...(getMemoryStore ? { memoryStore: getMemoryStore } : {}),
             ...(permissionsStore ? { permissionsStore } : {}),
             routeFile: route.routeFile,
             routeId: route.routeId,

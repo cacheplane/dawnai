@@ -69,12 +69,22 @@ export async function createRuntimeFetchHandler(
   const threadsStore = await resolveThreadsStore(options.appRoot)
   const checkpointer = await resolveCheckpointer(options.appRoot)
   const sandboxManager = await resolveSandboxManager(options.appRoot)
+  // Lazy, memoized, shared: resolveMemoryStore (and the sqlite it opens) runs
+  // at most once per process, on the FIRST request that actually needs
+  // memory — not unconditionally at boot for apps with no memory routes, and
+  // not once per request for the capability path (execute-route.ts threads
+  // this same thunk down instead of calling resolveMemoryStore itself).
+  //
   // Cast: resolveMemoryStore's declared return type (MemoryStoreLike, in
   // @dawn-ai/core) is the narrower capability-facing surface. The concrete
   // store (sqlite-backed, or user-supplied via dawn.config.ts) also exposes
   // listCandidates/delete, which the memory-candidate HTTP routes need — the
   // same cast `commands/memory.ts` uses for the CLI's `dawn memory` commands.
-  const memoryStore = (await resolveMemoryStore(options.appRoot)) as unknown as MemoryStore
+  let memoryStorePromise: Promise<MemoryStore> | undefined
+  const getMemoryStore = (): Promise<MemoryStore> => {
+    memoryStorePromise ??= resolveMemoryStore(options.appRoot) as unknown as Promise<MemoryStore>
+    return memoryStorePromise
+  }
 
   // Permissions store, per StartRuntimeServerOptions.permissionsMode:
   // "boot" (production) loads once here and reuses the instance; the default
@@ -104,7 +114,7 @@ export async function createRuntimeFetchHandler(
   const routes = buildRouteTable({
     appRoot: options.appRoot,
     checkpointer,
-    memoryStore,
+    getMemoryStore,
     middleware,
     permissionsStore,
     registry,
@@ -259,7 +269,7 @@ function trackStreamSettled(
 function buildRouteTable(ctx: {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
-  readonly memoryStore: MemoryStore
+  readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
@@ -270,7 +280,7 @@ function buildRouteTable(ctx: {
   const {
     appRoot,
     checkpointer,
-    memoryStore,
+    getMemoryStore,
     middleware,
     permissionsStore,
     registry,
@@ -368,6 +378,7 @@ function buildRouteTable(ctx: {
         handleApStreamRequest({
           appRoot,
           checkpointer,
+          getMemoryStore,
           middleware,
           permissionsStore,
           registry,
@@ -390,6 +401,7 @@ function buildRouteTable(ctx: {
         handleAgUiFetchRequest({
           appRoot,
           checkpointer,
+          getMemoryStore,
           middleware,
           permissionsStore,
           registry,
@@ -407,7 +419,7 @@ function buildRouteTable(ctx: {
     // GET /memory/candidates — list memory candidates (all namespaces)
     // ------------------------------------------------------------------
     {
-      handle: async () => handleMemoryListRequest({ memoryStore }),
+      handle: async () => handleMemoryListRequest({ memoryStore: await getMemoryStore() }),
       method: "GET",
       pattern: /^\/memory\/candidates(?:\?.*)?$/,
     },
@@ -417,7 +429,7 @@ function buildRouteTable(ctx: {
     // ------------------------------------------------------------------
     {
       handle: async (_request, params) =>
-        handleMemoryApproveRequest({ id: params.id ?? "", memoryStore }),
+        handleMemoryApproveRequest({ id: params.id ?? "", memoryStore: await getMemoryStore() }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/approve(?:\?.*)?$/,
     },
@@ -427,7 +439,7 @@ function buildRouteTable(ctx: {
     // ------------------------------------------------------------------
     {
       handle: async (_request, params) =>
-        handleMemoryRejectRequest({ id: params.id ?? "", memoryStore }),
+        handleMemoryRejectRequest({ id: params.id ?? "", memoryStore: await getMemoryStore() }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/reject(?:\?.*)?$/,
     },
@@ -440,6 +452,7 @@ function buildRouteTable(ctx: {
         handleApWaitRequest({
           appRoot,
           checkpointer,
+          getMemoryStore,
           middleware,
           permissionsStore,
           registry,
@@ -490,6 +503,7 @@ function buildRouteTable(ctx: {
         handleResumeRequest({
           appRoot,
           checkpointer,
+          getMemoryStore,
           middleware,
           permissionsStore,
           registry,
@@ -546,6 +560,7 @@ async function dispatch(
 async function handleApStreamRequest(options: {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
+  readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
@@ -559,6 +574,7 @@ async function handleApStreamRequest(options: {
   const {
     appRoot,
     checkpointer,
+    getMemoryStore,
     middleware,
     permissionsStore,
     registry,
@@ -634,6 +650,7 @@ async function handleApStreamRequest(options: {
             appRoot,
             checkpointer,
             input,
+            memoryStore: getMemoryStore,
             ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
             permissionsStore,
             routeFile: route.routeFile,
@@ -684,6 +701,7 @@ async function handleApStreamRequest(options: {
 async function handleApWaitRequest(options: {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
+  readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
@@ -697,6 +715,7 @@ async function handleApWaitRequest(options: {
   const {
     appRoot,
     checkpointer,
+    getMemoryStore,
     middleware,
     permissionsStore,
     registry,
@@ -758,6 +777,7 @@ async function handleApWaitRequest(options: {
     appRoot,
     checkpointer,
     input,
+    memoryStore: getMemoryStore,
     ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
     permissionsStore,
     routeFile: route.routeFile,
@@ -814,6 +834,7 @@ async function handleApWaitRequest(options: {
 async function handleResumeRequest(options: {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
+  readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
@@ -827,6 +848,7 @@ async function handleResumeRequest(options: {
   const {
     appRoot,
     checkpointer,
+    getMemoryStore,
     middleware,
     permissionsStore,
     registry,
@@ -947,6 +969,7 @@ async function handleResumeRequest(options: {
             appRoot,
             checkpointer,
             input: {},
+            memoryStore: getMemoryStore,
             resume: decision,
             ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
             permissionsStore,

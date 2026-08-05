@@ -19,6 +19,7 @@ import {
   discoverRoutes,
   findDawnApp,
   loadDawnConfig,
+  type MemoryStoreLike,
   type ResolvedStateField,
   type RouteDefinition,
   type RouteManifest,
@@ -169,11 +170,18 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
  * read) or an async factory (dev: re-load `.dawn/permissions.json` on every
  * request so HITL "Always" grants written mid-process still apply — the one
  * deliberate per-request read kept).
+ *
+ * `memoryStore` is a lazy, memoized thunk (not an instance): the fetch
+ * handler builds one `getMemoryStore()` at boot, shared by the
+ * `/memory/candidates*` HTTP routes and, when threaded down here, by the
+ * memory capability — so the store opens at most once per process, on first
+ * use, instead of once at boot (unconditionally) plus once per request.
  */
 interface BootResolvedInstances {
   readonly checkpointer?: BaseCheckpointSaver
   readonly threadsStore?: ThreadsStore
   readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
+  readonly memoryStore?: () => Promise<MemoryStoreLike>
 }
 
 export async function executeResolvedRoute(
@@ -658,7 +666,12 @@ export async function prepareRouteExecution(
     const memoryFile = join(routeDir, "memory.ts")
     if (existsSync(memoryFile)) {
       const defined = await loadRouteMemory(memoryFile)
-      const store = await resolveMemoryStore(options.appRoot)
+      // Boot-resolved thunk wins when provided (shared, lazily-opened store —
+      // no per-request sqlite open); otherwise fall back to the pre-existing
+      // per-request resolution (the testing harness path, unchanged).
+      const store = options.memoryStore
+        ? await options.memoryStore()
+        : await resolveMemoryStore(options.appRoot)
       const writes = await resolveMemoryWrites(options.appRoot)
       const cleanRoutePath = routeNamespaceKey(options.routePath)
       const extraScope = loadedDawnConfig?.memory?.resolveScope?.({
