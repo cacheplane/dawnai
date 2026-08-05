@@ -100,6 +100,10 @@ describe("episodic remember (append-only)", () => {
     expect(log.searches.length).toBe(1)
     expect(r1.result).toMatch(/Stored memory/)
     expect(r2.result).toMatch(/Stored memory/)
+    // Accepted same-request id collapse: same data + same mem.now → same id, so
+    // a real store's id-keyed upsert keeps ONE row for this degenerate case.
+    // Distinct real-world episodes always differ in data or request time.
+    expect(log.puts[0]?.id).toBe(log.puts[1]?.id)
     const rec = log.puts[0]
     expect(rec?.kind).toBe("episodic")
     expect(rec?.status).toBe("active")

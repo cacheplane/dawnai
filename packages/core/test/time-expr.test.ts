@@ -15,4 +15,7 @@ describe("resolveTimeExpr", () => {
     expect(() => resolveTimeExpr("yesterday", NOW)).toThrow(/ISO timestamp or relative/)
     expect(() => resolveTimeExpr("-3y", NOW)).toThrow(/ISO timestamp or relative/)
   })
+  it("rejects Date-range overflow with the same actionable error (not a raw RangeError)", () => {
+    expect(() => resolveTimeExpr("-999999999999d", NOW)).toThrow(/ISO timestamp or relative/)
+  })
 })

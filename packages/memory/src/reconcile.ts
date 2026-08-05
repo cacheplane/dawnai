@@ -5,7 +5,9 @@ export type WritePolicy = { readonly mode: "reconcile" } | { readonly mode: "app
 /** Per-kind write discipline. Semantic facts reconcile (identity match →
  *  update/supersede); episodic events append (a later episode never
  *  contradicts an earlier one). Procedural/reflection are typed but not yet
- *  wired — throwing beats baking in accidental semantics. */
+ *  wired — throwing beats baking in accidental semantics.
+ *  Mirrored inline in packages/core/src/capabilities/built-in/memory.ts
+ *  remember (core can't import this package) — keep in sync. */
 export function writePolicyFor(kind: MemoryKind): WritePolicy {
   switch (kind) {
     case "semantic":
