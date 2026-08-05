@@ -55,7 +55,12 @@ import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { type LoadedRouteMemory, loadRouteMemory } from "./load-memory.js"
 import { type NormalizedRouteModule, normalizeRouteModule } from "./load-route-kind.js"
-import { extractToolNames, extractUserInputText, recordEpisode } from "./record-episode.js"
+import {
+  extractToolNames,
+  extractUserInputText,
+  hasPendingInterrupt,
+  recordEpisode,
+} from "./record-episode.js"
 import {
   buildMemoryContext,
   type ResolvedEpisodesConfig,
@@ -402,11 +407,19 @@ export async function* streamResolvedRoute(
 
   const agentInput = toAgentInput(options.input, options.resume)
 
-  // Episode recorder (streaming path): a turn that reaches "done" records an
-  // "ok" episode; a thrown execution error records an "error" episode before
-  // propagating. Interrupted (parked) turns record nothing — the resuming
-  // turn records when it completes.
+  // Episode recorder (streaming path): a COMPLETED turn records an "ok"
+  // episode; a thrown execution error records an "error" episode before
+  // propagating. Parked (HITL-interrupted) turns record NOTHING: the
+  // agent-adapter yields {type:"done"} unconditionally after its event stream
+  // — including parked turns — so "done" alone is not completion. On this
+  // path pending interrupts surface only as "interrupt" chunks (the adapter's
+  // streamEvents output does not carry `__interrupt__`), so we track them
+  // here; once an interrupt is seen the turn is parked and no further model
+  // work happens in it. The resuming turn records when it completes, with the
+  // RESUME turn's own startedAt (honest: the completing invocation's start —
+  // the original turn's start is not reconstructed).
   let sawDone = false
+  let sawInterrupt = false
   let finalOutput: unknown
 
   try {
@@ -461,6 +474,7 @@ export async function* streamResolvedRoute(
           // pending-interrupts so the /threads/:thread_id/resume endpoint
           // can correlate the POST. We just forward the chunk to the SSE
           // consumer.
+          sawInterrupt = true
           yield { type: "interrupt", data: chunk.data }
           break
         }
@@ -485,7 +499,7 @@ export async function* streamResolvedRoute(
     throw error
   }
 
-  if (sawDone) {
+  if (sawDone && !sawInterrupt) {
     await recordRunEpisode({
       memoryContext: prepared.memoryContext,
       episodes: prepared.episodes,
@@ -1098,12 +1112,21 @@ async function recordRunEpisode(args: {
   if (!episodes?.enabled || !memoryContext) return
   if (memoryContext.writes === "off") return
   if (args.outcome === "error" && !episodes.includeFailedRuns) return
+  // A parked (HITL-interrupted) turn is not a completed run: the invoke()
+  // path surfaces pending interrupts as `__interrupt__` on the final state.
+  // Record nothing — the completing resume turn records instead. (The stream
+  // path tracks interrupt chunks separately; see streamResolvedRoute.)
+  if (args.outcome === "ok" && hasPendingInterrupt(args.output)) return
   try {
     await recordEpisode(
       memoryContext.store,
       {
         namespace: memoryContext.namespace,
-        input: extractUserInputText(args.input),
+        // Prefer the final state's message history: on a resume turn the run
+        // input is a Command({resume}) with no human message, while the last
+        // human message in the full state IS the original question. Fall back
+        // to the run input (error path — no final state).
+        input: extractUserInputText(args.output) || extractUserInputText(args.input),
         outcome: args.outcome,
         // On the failure path the final state is unavailable — record no tools.
         toolsUsed: args.outcome === "ok" ? extractToolNames(args.output) : [],

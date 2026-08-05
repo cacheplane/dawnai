@@ -132,6 +132,19 @@ export function extractToolNames(output: unknown): string[] {
 }
 
 /**
+ * True when a final LangGraph output represents a PARKED (interrupted) turn
+ * rather than a completed run: LangGraph's invoke() path surfaces pending
+ * HITL interrupts as a non-empty `__interrupt__` array on the final state.
+ * (The streamEvents path does NOT include the key — interrupts surface as
+ * stream chunks there, which the stream-path recorder tracks separately.)
+ */
+export function hasPendingInterrupt(output: unknown): boolean {
+  if (output === null || typeof output !== "object") return false
+  const interrupts = (output as { __interrupt__?: unknown }).__interrupt__
+  return Array.isArray(interrupts) && interrupts.length > 0
+}
+
+/**
  * Extract the user's message text for a run from the raw route input.
  * Accepts a bare string, or a `{ messages: [...] }` envelope in which the
  * LAST human message wins ("user" role, "human" type, or a serialized

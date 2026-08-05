@@ -3,6 +3,7 @@ import {
   buildEpisode,
   extractToolNames,
   extractUserInputText,
+  hasPendingInterrupt,
 } from "../src/lib/runtime/record-episode.js"
 
 const START_ISO = "2026-08-08T04:40:00.000Z"
@@ -97,6 +98,20 @@ describe("extractToolNames", () => {
     expect(extractToolNames({})).toEqual([])
     expect(extractToolNames({ messages: "nope" })).toEqual([])
     expect(extractToolNames({ messages: [null, 42, "str"] })).toEqual([])
+  })
+})
+
+describe("hasPendingInterrupt", () => {
+  it("detects a parked invoke() output via a non-empty __interrupt__ array", () => {
+    expect(hasPendingInterrupt({ messages: [], __interrupt__: [{ id: "i1", value: {} }] })).toBe(
+      true,
+    )
+  })
+  it("is false for completed outputs and non-objects", () => {
+    expect(hasPendingInterrupt({ messages: [] })).toBe(false)
+    expect(hasPendingInterrupt({ __interrupt__: [] })).toBe(false)
+    expect(hasPendingInterrupt(undefined)).toBe(false)
+    expect(hasPendingInterrupt("done")).toBe(false)
   })
 })
 

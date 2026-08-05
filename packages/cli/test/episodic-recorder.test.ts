@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { type MemoryRecord, sqliteMemoryStore } from "@dawn-ai/memory"
 import { afterEach, describe, expect, it } from "vitest"
 
+import { executeRoute } from "../src/lib/runtime/execute-route.js"
 import { type EpisodeInput, recordEpisode } from "../src/lib/runtime/record-episode.js"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
@@ -38,16 +39,25 @@ interface ScriptBuilderLike {
   user(text: string): ScriptBuilderLike
   callsTool(name: string, args: Record<string, unknown>): ScriptBuilderLike
   replies(content: string): ScriptBuilderLike
+  build(): ReadonlyArray<unknown>
 }
 
 interface HarnessLike {
   run(opts: { input: string; fixtures?: ScriptBuilderLike }): Promise<HarnessRunResult>
+  resume(opts: {
+    decision: "once" | "always" | "deny"
+    fixtures?: ScriptBuilderLike
+  }): Promise<HarnessRunResult>
   reset(): void
   close(): Promise<void>
 }
 
 interface TestingModule {
-  createAgentHarness(opts: { appRoot: string; route: string }): Promise<HarnessLike>
+  createAgentHarness(opts: {
+    appRoot: string
+    route: string
+    fixtures?: ReadonlyArray<unknown>
+  }): Promise<HarnessLike>
   script(): ScriptBuilderLike
 }
 
@@ -60,7 +70,10 @@ async function loadTesting(): Promise<TestingModule> {
 // Fixture app factory
 // ---------------------------------------------------------------------------
 
-async function makeApp(dawnConfig: string): Promise<string> {
+async function makeApp(
+  dawnConfig: string,
+  opts?: { readonly approveDeploy?: boolean },
+): Promise<string> {
   await mkdir(scratchRoot, { recursive: true })
   const root = await mkdtemp(join(scratchRoot, "app-"))
   tempDirs.push(root)
@@ -77,6 +90,8 @@ async function makeApp(dawnConfig: string): Promise<string> {
       "export default agent({",
       '  model: "gpt-4o-mini",',
       '  systemPrompt: "You are a test agent. Use the provided tools when asked.",',
+      // approve-listed tool → calling it interrupts for a HITL decision.
+      ...(opts?.approveDeploy ? ['  tools: { approve: ["deployProd"] },'] : []),
       "})",
       "",
     ].join("\n"),
@@ -93,6 +108,18 @@ async function makeApp(dawnConfig: string): Promise<string> {
       "",
     ].join("\n"),
   )
+  if (opts?.approveDeploy) {
+    await writeFile(
+      join(routeDir, "tools", "deployProd.ts"),
+      [
+        "/** Deploy to an environment. */",
+        "export default async function deployProd(input: { env: string }): Promise<string> {",
+        "  return `deployed to ${input.env}`",
+        "}",
+        "",
+      ].join("\n"),
+    )
+  }
   // zod is not hoisted to the workspace root; symlink the copy the probe-app
   // fixtures use so the memory.ts schema is a real ZodType (the remember tool
   // schema goes through langchain's zod → JSON-schema conversion).
@@ -268,6 +295,81 @@ describe("episodic auto-recorder (aimock harness)", () => {
       await h.close()
     }
   }, 240_000)
+
+  it("HITL: an interrupted (parked) turn records nothing; the completing resume records exactly one episode with the ORIGINAL input", async () => {
+    const { createAgentHarness, script } = await loadTesting()
+    const appRoot = await makeApp("export default { memory: { episodes: { enabled: true } } }\n", {
+      approveDeploy: true,
+    })
+    const h = await createAgentHarness({ appRoot, route: "/chat#agent" })
+    try {
+      // Turn 1: the model calls the approve-listed tool → the run parks on a
+      // HITL interrupt. The tool did NOT execute — no episode may exist.
+      await h.run({
+        input: "deploy to staging",
+        fixtures: script()
+          .user("deploy to staging")
+          .callsTool("deployProd", { env: "staging" })
+          .replies("Deployed."),
+      })
+      expect(await episodicRecords(appRoot)).toHaveLength(0)
+
+      // Turn 2: approve → the tool executes and the turn completes. Exactly
+      // one episode, whose input is the ORIGINAL question (a resume turn has
+      // no new human message — it comes from the final state's history) and
+      // whose toolsUsed reflects the actually-executed tool.
+      const resumed = await h.resume({ decision: "once" })
+      expect(resumed.finalMessage).toContain("Deployed")
+
+      const episodes = await episodicRecords(appRoot)
+      expect(episodes).toHaveLength(1)
+      const ep = episodes[0] as MemoryRecord
+      expect(ep.data.outcome).toBe("ok")
+      expect(ep.data.input).toBe("deploy to staging")
+      expect(ep.content).toMatch(/^run ok: deploy to staging/)
+      expect(ep.data.toolsUsed).toContain("deployProd")
+    } finally {
+      await h.close()
+    }
+  }, 120_000)
+
+  it("invoke path: a direct executeRoute run records one episode whose source.id is the minted t-run-* threadId", async () => {
+    const { createAgentHarness, script } = await loadTesting()
+    const appRoot = await makeApp("export default { memory: { episodes: { enabled: true } } }\n")
+    // The harness supplies the aimock model server + env plumbing (and its
+    // close() resets the materialized-agent/config caches); the run itself
+    // goes through executeRoute — the non-streaming invoke path.
+    const h = await createAgentHarness({
+      appRoot,
+      route: "/chat#agent",
+      fixtures: script()
+        .user("Filter open items please")
+        .callsTool("applyFilter", { status: "open" })
+        .replies("Found 2 open items.")
+        .build(),
+    })
+    try {
+      const result = await executeRoute({
+        appRoot,
+        routeFile: join(appRoot, "src", "app", "chat", "index.ts"),
+        input: { messages: [{ role: "user", content: "Filter open items please" }] },
+      })
+      expect(result.status).toBe("passed")
+
+      const episodes = await episodicRecords(appRoot)
+      expect(episodes).toHaveLength(1)
+      const ep = episodes[0] as MemoryRecord
+      expect(ep.source.type).toBe("run")
+      // No caller-supplied threadId → the invoke path mints `t-run-<uuid8>`.
+      expect(ep.source.id).toMatch(/^t-run-[0-9a-f]{8}$/)
+      expect(ep.data.runId).toBe(ep.source.id)
+      expect(ep.data.outcome).toBe("ok")
+      expect(ep.content).toMatch(/^run ok: Filter open items please/)
+      expect(ep.data.toolsUsed).toContain("applyFilter")
+    } finally {
+      await h.close()
+    }
+  }, 120_000)
 })
 
 // ---------------------------------------------------------------------------
