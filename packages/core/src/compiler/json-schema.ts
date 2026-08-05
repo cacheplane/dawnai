@@ -7,6 +7,9 @@ export function typeInfoToToolParameters(
   parameter: TypeInfo | null,
 ): ExtractedToolSchema["parameters"] {
   if (parameter?.kind === "object") return objectSchema(parameter.properties, -1)
+  if (parameter?.kind === "intersection" && parameter.effectiveProperties !== undefined) {
+    return objectSchema(parameter.effectiveProperties, -1)
+  }
   return emptyParameters()
 }
 

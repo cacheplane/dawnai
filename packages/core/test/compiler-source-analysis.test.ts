@@ -20,6 +20,15 @@ function analyze(source: string, fileName = "lookup.ts") {
   return result
 }
 
+function analyzeRootIntersection(source: string) {
+  const parameter = analyze(`export default async (input: ${source}) => input`).parameter
+  expect(parameter?.kind).toBe("intersection")
+  if (parameter?.kind !== "intersection") {
+    throw new Error("Expected an intersection parameter")
+  }
+  return parameter
+}
+
 describe("analyzeToolSource", () => {
   test("analyzes a typed default-exported tool from one callable signature", () => {
     const source = `
@@ -198,6 +207,68 @@ export default async (input: Set<boolean>) => input
     })
   })
 
+  test.each([
+    {
+      name: "record",
+      source: "Record<string, number> & { fixed: string }",
+      specialized: {
+        kind: "record",
+        key: { kind: "string" },
+        value: { kind: "number" },
+      },
+    },
+    {
+      name: "map",
+      source: "Map<string, number> & { fixed: string }",
+      specialized: {
+        kind: "map",
+        key: { kind: "string" },
+        value: { kind: "number" },
+      },
+    },
+    {
+      name: "array",
+      source: "string[] & { fixed: string }",
+      specialized: { kind: "array", element: { kind: "string" } },
+    },
+    {
+      name: "set",
+      source: "Set<boolean> & { fixed: string }",
+      specialized: { kind: "set", element: { kind: "boolean" } },
+    },
+    {
+      name: "tuple",
+      source: "[string, number] & { fixed: string }",
+      specialized: {
+        kind: "tuple",
+        elements: [{ kind: "string" }, { kind: "number" }],
+      },
+    },
+  ])("preserves specialized $name members on root intersections", ({ source, specialized }) => {
+    const parameter = analyzeRootIntersection(source)
+
+    expect(parameter.members).toEqual([
+      specialized,
+      {
+        kind: "object",
+        properties: [{ name: "fixed", type: { kind: "string" }, optional: false }],
+      },
+    ])
+    expect(parameter.effectiveProperties).toContainEqual({
+      name: "fixed",
+      type: { kind: "string" },
+      optional: false,
+    })
+  })
+
+  test("allows semantic consumers to project members without effective root metadata", () => {
+    const parameter = analyzeRootIntersection("Map<string, number> & { fixed: string }")
+
+    const semanticKinds = parameter.members.map((member) => member.kind)
+
+    expect(semanticKinds).toEqual(["map", "object"])
+  })
+
   test("represents string literal unions as enums", () => {
     expect(
       analyze('export default async (input: "pending" | "complete") => input').parameter,
@@ -279,8 +350,18 @@ export default async (input: WithId<{ name: string }>) => input
 `)
 
     expect(result.parameter).toEqual({
-      kind: "object",
-      properties: [
+      kind: "intersection",
+      members: [
+        {
+          kind: "object",
+          properties: [{ name: "id", type: { kind: "string" }, optional: false }],
+        },
+        {
+          kind: "object",
+          properties: [{ name: "name", type: { kind: "string" }, optional: false }],
+        },
+      ],
+      effectiveProperties: [
         { name: "id", type: { kind: "string" }, optional: false },
         { name: "name", type: { kind: "string" }, optional: false },
       ],

@@ -21,21 +21,43 @@ async function compareParameters(
   source: string,
   expected: ExtractedToolSchema["parameters"],
 ): Promise<void> {
+  const { existing, projected } = await parametersFromSource(source)
+
+  expect(existing[0]).toEqual(expected)
+  expect(projected).toEqual(existing)
+}
+
+async function parametersFromSource(source: string): Promise<{
+  readonly existing: readonly ExtractedToolSchema["parameters"][]
+  readonly projected: readonly ExtractedToolSchema["parameters"][]
+}> {
   const routeDir = join(tempDir, "route")
   const toolsDir = join(routeDir, "tools")
   mkdirSync(toolsDir, { recursive: true })
   writeFileSync(join(toolsDir, "tool.ts"), source)
 
-  const existing = await extractToolSchemasForRoute({
+  const extracted = await extractToolSchemasForRoute({
     routeDir,
     sharedToolsDir: undefined,
   })
   const projected = analyzeRouteTools({ routeDir, sharedToolsDir: undefined }).map((tool) =>
     typeInfoToToolParameters(tool.parameter),
   )
+  return { existing: extracted.map((tool) => tool.parameters), projected }
+}
 
-  expect(existing[0]?.parameters).toEqual(expected)
-  expect(projected).toEqual(existing.map((tool) => tool.parameters))
+function normalizeCompilerSymbolIds(value: unknown): unknown {
+  if (typeof value === "string") return value.replace(/__@([^@]+)@\d+/g, "__@$1")
+  if (Array.isArray(value)) return value.map(normalizeCompilerSymbolIds)
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key.replace(/__@([^@]+)@\d+/g, "__@$1"),
+        normalizeCompilerSymbolIds(entry),
+      ]),
+    )
+  }
+  return value
 }
 
 describe("compiler-neutral JSON Schema parity", () => {
@@ -136,5 +158,14 @@ export default async function tool(
         additionalProperties: false,
       },
     )
+  })
+
+  test("preserves legacy parameters for a root map intersection", async () => {
+    const { existing, projected } = await parametersFromSource(
+      "export default async function tool(input: Map<string, number> & { fixed: string }) { return input }",
+    )
+
+    expect(existing[0]?.properties.fixed).toEqual({ type: "string" })
+    expect(normalizeCompilerSymbolIds(projected)).toEqual(normalizeCompilerSymbolIds(existing))
   })
 })

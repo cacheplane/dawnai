@@ -12,7 +12,11 @@ export type TypeInfo =
   | { readonly kind: "map"; readonly key: TypeInfo; readonly value: TypeInfo }
   | { readonly kind: "set"; readonly element: TypeInfo }
   | { readonly kind: "union"; readonly members: readonly TypeInfo[] }
-  | { readonly kind: "intersection"; readonly members: readonly TypeInfo[] }
+  | {
+      readonly kind: "intersection"
+      readonly members: readonly TypeInfo[]
+      readonly effectiveProperties?: readonly PropertyInfo[]
+    }
   | { readonly kind: "enum"; readonly values: readonly string[] }
   | { readonly kind: "optional"; readonly inner: TypeInfo }
 

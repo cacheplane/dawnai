@@ -118,23 +118,24 @@ function resolveParameterType(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
 ): TypeInfo {
-  if (
-    type.isIntersection() &&
-    type.types.every((member) => (member.flags & ts.TypeFlags.Object) !== 0)
-  ) {
-    const state: ResolutionState = {
-      activeTypes: new Set([type]),
-      depth: 1,
-    }
-    return {
-      kind: "object",
-      properties: type
-        .getProperties()
-        .map((property) => resolveRootParameterProperty(property, checker, sourceFile, state)),
-    }
-  }
+  const resolved = resolveType(type, checker, { activeTypes: new Set(), depth: 0 })
+  if (!type.isIntersection() || resolved.kind !== "intersection") return resolved
 
-  return resolveType(type, checker, { activeTypes: new Set(), depth: 0 })
+  const effectiveProperties = type.types.every(
+    (member) => (member.flags & ts.TypeFlags.Object) !== 0,
+  )
+    ? type.getProperties().map((property) =>
+        resolveRootParameterProperty(property, checker, sourceFile, {
+          activeTypes: new Set([type]),
+          depth: 1,
+        }),
+      )
+    : undefined
+
+  return {
+    ...resolved,
+    ...(effectiveProperties !== undefined ? { effectiveProperties } : {}),
+  }
 }
 
 function compilerOptions(): ts.CompilerOptions {
