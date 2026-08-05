@@ -106,8 +106,14 @@ export default async function ping(): Promise<{ pong: boolean }> {
               type: { kind: "string" },
               optional: false,
               description: "Customer identifier.",
+              schemaProjection: { schema: { type: "string" }, optional: false },
             },
-            { name: "limit", type: { kind: "number" }, optional: true },
+            {
+              name: "limit",
+              type: { kind: "number" },
+              optional: true,
+              schemaProjection: { schema: { type: "number" }, optional: true },
+            },
           ],
         },
         parameterDescriptions: new Map([["id", "Customer identifier"]]),
@@ -119,7 +125,14 @@ export default async function ping(): Promise<{ pong: boolean }> {
         outputType: "{ local: true; }",
         parameter: {
           kind: "object",
-          properties: [{ name: "id", type: { kind: "number" }, optional: false }],
+          properties: [
+            {
+              name: "id",
+              type: { kind: "number" },
+              optional: false,
+              schemaProjection: { schema: { type: "number" }, optional: false },
+            },
+          ],
         },
         parameterDescriptions: new Map(),
       },

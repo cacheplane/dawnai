@@ -168,4 +168,93 @@ export default async function tool(
     expect(existing[0]?.properties.fixed).toEqual({ type: "string" })
     expect(normalizeCompilerSymbolIds(projected)).toEqual(normalizeCompilerSymbolIds(existing))
   })
+
+  test("preserves legacy requiredness for root Partial properties", async () => {
+    await compareParameters(
+      "export default async function tool(input: Partial<{ a: string }>) { return input }",
+      {
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        additionalProperties: false,
+      },
+    )
+  })
+
+  test("preserves legacy requiredness for nested Partial properties", async () => {
+    await compareParameters(
+      "export default async function tool(input: { nested: Partial<{ a: string }> }) { return input }",
+      {
+        type: "object",
+        properties: {
+          nested: {
+            type: "object",
+            properties: { a: { type: "string" } },
+            required: ["a"],
+            additionalProperties: false,
+          },
+        },
+        required: ["nested"],
+        additionalProperties: false,
+      },
+    )
+  })
+
+  test("preserves legacy requiredness for root Readonly Partial properties", async () => {
+    await compareParameters(
+      "export default async function tool(input: Readonly<Partial<{ a: string }>>) { return input }",
+      {
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        additionalProperties: false,
+      },
+    )
+  })
+
+  test("preserves legacy requiredness for nested Readonly Partial properties", async () => {
+    await compareParameters(
+      "export default async function tool(input: { nested: Readonly<Partial<{ a: string }>> }) { return input }",
+      {
+        type: "object",
+        properties: {
+          nested: {
+            type: "object",
+            properties: { a: { type: "string" } },
+            required: ["a"],
+            additionalProperties: false,
+          },
+        },
+        required: ["nested"],
+        additionalProperties: false,
+      },
+    )
+  })
+
+  test("preserves legacy requiredness for mapped optional properties", async () => {
+    await compareParameters(
+      `
+type MappedOptional<T> = { [K in keyof T]?: T[K] }
+export default async function tool(input: MappedOptional<{ a: string }>) { return input }
+`,
+      {
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        additionalProperties: false,
+      },
+    )
+  })
+
+  test.each([
+    ["array", "string[] & { fixed: string }"],
+    ["tuple", "[string, number] & { fixed: string }"],
+  ])("preserves legacy parameters for a root %s intersection", async (_name, inputType) => {
+    const { existing, projected } = await parametersFromSource(
+      `export default async function tool(input: ${inputType}) { return input }`,
+    )
+
+    expect(existing[0]?.properties.fixed).toEqual({ type: "string" })
+    expect(normalizeCompilerSymbolIds(projected)).toEqual(normalizeCompilerSymbolIds(existing))
+  })
 })

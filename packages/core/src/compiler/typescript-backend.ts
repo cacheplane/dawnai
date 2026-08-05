@@ -4,9 +4,11 @@ import { basename, extname } from "node:path"
 // Tracking issue: https://github.com/microsoft/typescript-go/issues/4830
 import ts from "typescript"
 
+import type { JsonSchemaProperty } from "../types.js"
 import type { AnalyzedTool, PropertyInfo, TypeInfo } from "./model.js"
 
 const MAX_TYPE_DEPTH = 32
+const MAX_SCHEMA_DEPTH = 8
 
 interface JsDocInfo {
   readonly description: string
@@ -269,6 +271,7 @@ function resolveProperty(
   const declaration = property.valueDeclaration ?? property.declarations?.[0]
   const propertyType = checker.getTypeOfSymbolAtLocation(property, declaration ?? ({} as ts.Node))
   const optional = !!(property.flags & ts.SymbolFlags.Optional)
+  const schemaProjection = resolveSchemaProjection(property, propertyType, checker)
   const description = ts.displayPartsToString(property.getDocumentationComment(checker)).trim()
 
   return {
@@ -276,6 +279,7 @@ function resolveProperty(
     type: resolvePropertyType(propertyType, optional, checker, state),
     optional,
     ...(description ? { description } : {}),
+    ...(schemaProjection !== undefined ? { schemaProjection } : {}),
   }
 }
 
@@ -286,13 +290,7 @@ function resolveRootParameterProperty(
   state: ResolutionState,
 ): PropertyInfo {
   const propertyType = checker.getTypeOfSymbolAtLocation(property, sourceFile)
-  const optional =
-    property
-      .getDeclarations()
-      ?.some(
-        (declaration) =>
-          ts.isPropertySignature(declaration) && declaration.questionToken !== undefined,
-      ) ?? false
+  const optional = !!(property.flags & ts.SymbolFlags.Optional)
   const description = ts.displayPartsToString(property.getDocumentationComment(checker)).trim()
 
   return {
@@ -300,7 +298,33 @@ function resolveRootParameterProperty(
     type: resolvePropertyType(propertyType, optional, checker, state),
     optional,
     ...(description ? { description } : {}),
+    schemaProjection: {
+      schema: compilerTypeToJsonSchema(propertyType, checker),
+      optional: isLegacyOptionalProperty(property),
+    },
   }
+}
+
+function resolveSchemaProjection(
+  property: ts.Symbol,
+  propertyType: ts.Type,
+  checker: ts.TypeChecker,
+): PropertyInfo["schemaProjection"] {
+  return {
+    schema: compilerTypeToJsonSchema(propertyType, checker),
+    optional: isLegacyOptionalProperty(property),
+  }
+}
+
+function isLegacyOptionalProperty(property: ts.Symbol): boolean {
+  return (
+    property
+      .getDeclarations()
+      ?.some(
+        (declaration) =>
+          ts.isPropertySignature(declaration) && declaration.questionToken !== undefined,
+      ) ?? false
+  )
 }
 
 function resolvePropertyType(
@@ -343,6 +367,101 @@ function resolveUnionMembers(
   return {
     kind: "union",
     members: members.map((member) => resolveType(member, checker, state)),
+  }
+}
+
+function compilerTypeToJsonSchema(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  depth = 0,
+): JsonSchemaProperty {
+  if (depth > MAX_SCHEMA_DEPTH) return { type: "string" }
+
+  if (type.isUnion()) {
+    const definedMembers = type.types.filter((member) => !(member.flags & ts.TypeFlags.Undefined))
+    if (definedMembers.length === 1 && definedMembers[0]) {
+      return compilerTypeToJsonSchema(definedMembers[0], checker, depth)
+    }
+
+    if (definedMembers.length > 0 && definedMembers.every((member) => member.isStringLiteral())) {
+      return {
+        type: "string",
+        enum: definedMembers.map((member) => (member as ts.StringLiteralType).value),
+      }
+    }
+
+    if (
+      definedMembers.length > 1 &&
+      definedMembers.every(
+        (member) =>
+          (member.flags & ts.TypeFlags.Object) !== 0 &&
+          (member.getProperties().length > 0 ||
+            checker.getIndexTypeOfType(member, ts.IndexKind.String)),
+      )
+    ) {
+      return {
+        anyOf: definedMembers.map((member) => compilerTypeToJsonSchema(member, checker, depth + 1)),
+      }
+    }
+  }
+
+  if (checker.isArrayType(type)) {
+    const element = checker.getTypeArguments(type as ts.TypeReference)[0]
+    return {
+      type: "array",
+      items: element ? compilerTypeToJsonSchema(element, checker, depth + 1) : { type: "string" },
+    }
+  }
+
+  const typeString = checker.typeToString(type)
+  if (typeString === "string") return { type: "string" }
+  if (typeString === "number") return { type: "number" }
+  if (typeString === "boolean") return { type: "boolean" }
+
+  if (type.isStringLiteral()) return { type: "string", enum: [type.value] }
+  if (type.isNumberLiteral()) return { type: "number" }
+  if (type.flags & ts.TypeFlags.BooleanLiteral) return { type: "boolean" }
+
+  return tryCompilerObjectSchema(type, checker, depth) ?? { type: "string" }
+}
+
+function tryCompilerObjectSchema(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  depth: number,
+): JsonSchemaProperty | undefined {
+  if ((type.flags & ts.TypeFlags.Object) === 0) return undefined
+
+  const properties = type.getProperties()
+  const indexType = checker.getIndexTypeOfType(type, ts.IndexKind.String)
+  if (properties.length === 0 && indexType) {
+    return {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: compilerTypeToJsonSchema(indexType, checker, depth + 1),
+    }
+  }
+  if (properties.length === 0) return undefined
+
+  const schemas: Record<string, JsonSchemaProperty> = {}
+  const required: string[] = []
+  for (const property of properties) {
+    const propertyType = checker.getTypeOfSymbolAtLocation(
+      property,
+      property.valueDeclaration ?? property.declarations?.[0] ?? ({} as ts.Node),
+    )
+    const schema = compilerTypeToJsonSchema(propertyType, checker, depth + 1)
+    const description = ts.displayPartsToString(property.getDocumentationComment(checker))
+    schemas[property.getName()] = description ? { ...schema, description } : schema
+    if (!isLegacyOptionalProperty(property)) required.push(property.getName())
+  }
+
+  return {
+    type: "object",
+    properties: schemas,
+    required,
+    additionalProperties: false,
   }
 }
 

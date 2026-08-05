@@ -66,11 +66,12 @@ function objectSchema(
   const required: string[] = []
 
   for (const property of propertyInfo) {
-    const schema = typeInfoToJsonSchema(property.type, depth + 1)
+    const schema =
+      property.schemaProjection?.schema ?? typeInfoToJsonSchema(property.type, depth + 1)
     properties[property.name] = property.description
       ? { ...schema, description: property.description }
       : schema
-    if (!property.optional) required.push(property.name)
+    if (!(property.schemaProjection?.optional ?? property.optional)) required.push(property.name)
   }
 
   return {

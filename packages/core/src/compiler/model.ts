@@ -1,3 +1,5 @@
+import type { JsonSchemaProperty } from "../types.js"
+
 export type TypeInfo =
   | { readonly kind: "string" }
   | { readonly kind: "number" }
@@ -25,6 +27,10 @@ export interface PropertyInfo {
   readonly type: TypeInfo
   readonly optional: boolean
   readonly description?: string
+  readonly schemaProjection?: {
+    readonly schema: JsonSchemaProperty
+    readonly optional: boolean
+  }
 }
 
 export interface AnalyzedTool {
