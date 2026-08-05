@@ -33,7 +33,7 @@
     "build": "tsc -b tsconfig.json",
     "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.contracts.json"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",

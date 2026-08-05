@@ -1,5 +1,9 @@
 import { dirname } from "node:path"
 
+export function subagentPermissionPattern(parentRouteId: string, subagentName: string): string {
+  return JSON.stringify([parentRouteId, subagentName])
+}
+
 /**
  * Default suggested pattern for a shell command.
  * Returns the first two whitespace-separated tokens.
