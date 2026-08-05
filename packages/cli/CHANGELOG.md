@@ -1,5 +1,40 @@
 # @dawn-ai/cli
 
+## 0.8.14
+
+### Patch Changes
+
+- 937be0f: New `@dawn-ai/inspector`: a browser-based runtime inspector (`dawn inspect`) with a
+  Memory panel — browse, search (recall-equivalent hybrid), inspect, and govern
+  memories with supersede-aware approval. Ships as a scaffold devDependency.
+
+  BREAKING: `MemoryStore` now requires `browse(q?)` and `stats(opts?)`; custom stores
+  must implement them (the built-in sqlite/pgvector stores already do, and
+  `runMemoryStoreConformance` enforces the contract). The config-facing store type is
+  now the full `MemoryStore` contract. `dawn memory approve` now supersedes a
+  contradicting active row instead of leaving two actives.
+
+- 83e5153: Load the app once per process. `dawn.config.ts` is memoized per app root; the
+  runtime passes its boot-resolved checkpointer, threads store, and permissions
+  store into route execution instead of reconstructing them per request (three
+  SQLite opens per turn eliminated); the memory store opens lazily on first use
+  and is shared between the memory HTTP routes and the memory capability; route
+  modules, tools, state, and route memory load once per route and are cached for
+  the process lifetime, and the per-request route rediscovery is gone. In
+  `dawn dev`, tool/state/reducer edits now restart the child runtime — fixing a
+  stale-module bug where such edits silently did not apply (the previous
+  re-import mechanism was a no-op under tsx) — and the restart log names the
+  reason. Groundwork for build-time static wiring and the edge deploy targets.
+- Updated dependencies [937be0f]
+- Updated dependencies [83e5153]
+  - @dawn-ai/memory@0.8.14
+  - @dawn-ai/core@0.8.14
+  - @dawn-ai/langchain@0.8.14
+  - @dawn-ai/ag-ui@0.8.14
+  - @dawn-ai/langgraph@0.8.14
+  - @dawn-ai/permissions@0.8.14
+  - @dawn-ai/sqlite-storage@0.8.14
+
 ## 0.8.13
 
 ### Patch Changes
