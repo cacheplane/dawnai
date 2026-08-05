@@ -1,175 +1,101 @@
-import type { DawnAgent } from "@dawn-ai/sdk"
-import { agent } from "@dawn-ai/sdk"
 import { describe, expect, it } from "vitest"
 import { createSubagentsMarker } from "../../src/capabilities/built-in/subagents.js"
 import type { CapabilityMarkerContext } from "../../src/capabilities/types.js"
-import type { RouteManifest } from "../../src/types.js"
+import type { ResolvedSubagent } from "../../src/subagents/types.js"
 
-function manifest(routes: Array<{ id: string; routeDir: string }>): RouteManifest {
+const predicate = () => true as const
+
+const registry: readonly ResolvedSubagent[] = [
+  {
+    name: "zulu",
+    routeId: "/zulu",
+    source: "explicit",
+    description: "Requires approval.",
+    rule: { action: "approve", reason: "Review first." },
+  },
+  {
+    name: "denied",
+    routeId: "/denied",
+    source: "convention",
+    description: "Never exposed.",
+    rule: { action: "deny", reason: "Disabled." },
+  },
+  {
+    name: "alpha",
+    routeId: "/alpha",
+    source: "explicit",
+    description: "Checks constraints.",
+    rule: { action: "constrain", predicate },
+  },
+  {
+    name: "middle",
+    routeId: "/middle",
+    source: "convention",
+    description: "Always available.",
+    rule: { action: "allow" },
+  },
+]
+
+function context(subagentRegistry?: readonly ResolvedSubagent[]): CapabilityMarkerContext {
   return {
+    routeManifest: { appRoot: "/app", routes: [] },
+    descriptor: undefined,
     appRoot: "/app",
-    routes: routes.map((r) => ({
-      id: r.id,
-      pathname: r.id,
-      kind: "agent" as const,
-      entryFile: `${r.routeDir}/index.ts`,
-      routeDir: r.routeDir,
-      segments: r.id.split("/").filter(Boolean),
-    })),
+    ...(subagentRegistry !== undefined ? { subagentRegistry } : {}),
   }
 }
 
-function ctx(routes: Array<{ id: string; routeDir: string }>): CapabilityMarkerContext {
-  return { routeManifest: manifest(routes), descriptor: undefined, appRoot: "/app" }
-}
-
-describe("createSubagentsMarker — convention discovery", () => {
-  it("detect returns false when there are no nested subagents", async () => {
+describe("createSubagentsMarker", () => {
+  it("detects only a supplied non-empty canonical registry", async () => {
     const marker = createSubagentsMarker()
-    const context = ctx([{ id: "/leaf", routeDir: "/app/src/app/leaf" }])
-    const detected = await marker.detect("/app/src/app/leaf", context)
-    expect(detected).toBe(false)
+
+    await expect(marker.detect("/unused", context())).resolves.toBe(false)
+    await expect(marker.detect("/unused", context([]))).resolves.toBe(false)
+    await expect(marker.detect("/unused", context(registry))).resolves.toBe(true)
   })
 
-  it("detect returns true when /subagents/* entries exist for this route", async () => {
+  it("exposes allow, approve, and constrain entries in sorted enum and prompt order", async () => {
     const marker = createSubagentsMarker()
-    const context = ctx([
-      { id: "/coordinator", routeDir: "/app/src/app/coordinator" },
-      {
-        id: "/coordinator/subagents/research",
-        routeDir: "/app/src/app/coordinator/subagents/research",
-      },
-    ])
-    const detected = await marker.detect("/app/src/app/coordinator", context)
-    expect(detected).toBe(true)
+    const contribution = await marker.load("/unused", context(registry))
+    const task = contribution.tools?.[0]
+    const schema = task?.schema as {
+      readonly shape: { readonly subagent: { readonly options: readonly string[] } }
+      safeParse(value: unknown): { readonly success: boolean }
+    }
+
+    expect(contribution.subagentRegistry).toBe(registry)
+    expect(task?.name).toBe("task")
+    expect(schema.shape.subagent.options).toEqual(["alpha", "middle", "zulu"])
+    expect(schema.safeParse({ subagent: "denied", input: "x" }).success).toBe(false)
+    expect(schema.safeParse({ subagent: "alpha", input: "x" }).success).toBe(true)
+
+    const prompt = contribution.promptFragment?.render({}) ?? ""
+    expect(prompt).toContain("# Subagents")
+    expect(prompt).toContain("**alpha** — Checks constraints.")
+    expect(prompt).toContain("**middle** — Always available.")
+    expect(prompt).toContain("**zulu** — Requires approval.")
+    expect(prompt).not.toContain("denied")
+    expect(prompt.indexOf("**alpha**")).toBeLessThan(prompt.indexOf("**middle**"))
+    expect(prompt.indexOf("**middle**")).toBeLessThan(prompt.indexOf("**zulu**"))
   })
 
-  it("load contributes a task tool with a zod enum and a # Subagents prompt fragment", async () => {
+  it("preserves an all-deny registry without contributing a tool or prompt", async () => {
     const marker = createSubagentsMarker()
-    const context = ctx([
-      { id: "/coordinator", routeDir: "/app/src/app/coordinator" },
-      {
-        id: "/coordinator/subagents/research",
-        routeDir: "/app/src/app/coordinator/subagents/research",
-      },
-    ])
-    const contribution = await marker.load("/app/src/app/coordinator", context)
-    expect(contribution.tools).toBeDefined()
-    expect(contribution.tools![0]!.name).toBe("task")
-    expect(contribution.promptFragment).toBeDefined()
-    const rendered = contribution.promptFragment!.render({})
-    expect(rendered).toMatch(/# Subagents/)
-    expect(rendered).toMatch(/\bresearch\b/)
-  })
+    const denied = registry.filter(({ rule }) => rule.action === "deny")
+    const contribution = await marker.load("/unused", context(denied))
 
-  it("load contributes nothing when no subagents are discovered", async () => {
-    const marker = createSubagentsMarker()
-    const context = ctx([{ id: "/leaf", routeDir: "/app/src/app/leaf" }])
-    const contribution = await marker.load("/app/src/app/leaf", context)
+    expect(contribution.subagentRegistry).toBe(denied)
     expect(contribution.tools).toBeUndefined()
     expect(contribution.promptFragment).toBeUndefined()
   })
 
-  it("task tool's run throws (dispatcher not wired yet)", async () => {
+  it("keeps the placeholder task failure until a runtime bridge is wired", async () => {
     const marker = createSubagentsMarker()
-    const context = ctx([
-      { id: "/coordinator", routeDir: "/app/src/app/coordinator" },
-      {
-        id: "/coordinator/subagents/research",
-        routeDir: "/app/src/app/coordinator/subagents/research",
-      },
-    ])
-    const contribution = await marker.load("/app/src/app/coordinator", context)
-    const taskTool = contribution.tools![0]!
+    const contribution = await marker.load("/unused", context(registry))
+    const task = contribution.tools?.[0]
+
     await expect(
-      taskTool.run({ subagent: "research", input: "x" }, { signal: new AbortController().signal }),
+      task?.run({ subagent: "alpha", input: "x" }, { signal: new AbortController().signal }),
     ).rejects.toThrow(/dispatcher not wired/i)
-  })
-})
-
-describe("createSubagentsMarker — descriptor override", () => {
-  it("detects subagents from agent({subagents:[...]}) even without a /subagents folder", async () => {
-    const shared = agent({
-      model: "gpt-5",
-      systemPrompt: "shared",
-      description: "Shared specialist",
-    })
-    const parent = agent({
-      model: "gpt-5",
-      systemPrompt: "parent",
-      subagents: [shared],
-    })
-
-    const marker = createSubagentsMarker()
-    const context: CapabilityMarkerContext = {
-      routeManifest: manifest([
-        { id: "/parent", routeDir: "/app/src/app/parent" },
-        { id: "/shared", routeDir: "/app/src/app/shared" },
-      ]),
-      descriptor: parent,
-      descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/shared"]]),
-      appRoot: "/app",
-    }
-    const detected = await marker.detect("/app/src/app/parent", context)
-    expect(detected).toBe(true)
-  })
-
-  it("includes override routes in the task enum and prompt fragment", async () => {
-    const shared = agent({
-      model: "gpt-5",
-      systemPrompt: "shared",
-      description: "Shared specialist",
-    })
-    const parent = agent({
-      model: "gpt-5",
-      systemPrompt: "parent",
-      subagents: [shared],
-    })
-
-    const marker = createSubagentsMarker()
-    const context: CapabilityMarkerContext = {
-      routeManifest: manifest([
-        { id: "/parent", routeDir: "/app/src/app/parent" },
-        { id: "/shared", routeDir: "/app/src/app/shared" },
-      ]),
-      descriptor: parent,
-      descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/shared"]]),
-      appRoot: "/app",
-    }
-    const contribution = await marker.load("/app/src/app/parent", context)
-    expect(contribution.tools).toBeDefined()
-    const rendered = contribution.promptFragment!.render({})
-    expect(rendered).toMatch(/shared/)
-  })
-
-  it("throws on leaf-name collision between convention and override", async () => {
-    const shared = agent({
-      model: "gpt-5",
-      systemPrompt: "shared",
-      description: "Shared",
-    })
-    const parent = agent({
-      model: "gpt-5",
-      systemPrompt: "parent",
-      subagents: [shared],
-    })
-
-    const marker = createSubagentsMarker()
-    const context: CapabilityMarkerContext = {
-      routeManifest: manifest([
-        { id: "/parent", routeDir: "/app/src/app/parent" },
-        {
-          id: "/parent/subagents/research",
-          routeDir: "/app/src/app/parent/subagents/research",
-        },
-        { id: "/research", routeDir: "/app/src/app/research" }, // same leaf name!
-      ]),
-      descriptor: parent,
-      descriptorRouteMap: new Map<DawnAgent, string>([[shared, "/research"]]),
-      appRoot: "/app",
-    }
-    await expect(marker.load("/app/src/app/parent", context)).rejects.toThrow(
-      /duplicate.*leaf.*research/i,
-    )
   })
 })

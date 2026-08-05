@@ -53,6 +53,16 @@ export {
 } from "./discovery/route-segments.js"
 export type { ResolveStateFieldsOptions } from "./state/resolve-state-fields.js"
 export { resolveStateFields } from "./state/resolve-state-fields.js"
+export type { ResolveSubagentRegistryArgs } from "./subagents/registry.js"
+export {
+  dispatchableSubagents,
+  resolveSubagentRegistry,
+} from "./subagents/registry.js"
+export type {
+  DescriptorRouteIndex,
+  ResolvedDelegationRule,
+  ResolvedSubagent,
+} from "./subagents/types.js"
 export type { ScopeInput, ToolOrigin } from "./tool-scope.js"
 export { resolveToolScope, toolOrigin } from "./tool-scope.js"
 export type { ExtractToolSchemasOptions } from "./typegen/extract-tool-schema.js"
