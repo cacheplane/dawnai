@@ -163,7 +163,7 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
  * Boot-resolved instances (optional, additive). When the HTTP layer passes
  * them, `prepareRouteExecution` skips its per-request fallback constructions
  * (sqlite opens) and its per-request permissions `load()`. When absent,
- * behavior is byte-identical to before — the testing harness drives
+ * behavior is exactly as before — the testing harness drives
  * `streamResolvedRoute` directly with no stores and must stay unchanged.
  *
  * `permissionsStore` accepts either a loaded store (production: one boot-time

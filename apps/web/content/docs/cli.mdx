@@ -92,7 +92,7 @@ dawn typegen
 The success log reports route, tool-schema, and stateful-route counts. The `tools.json` artifacts are consumed by `dawn build` to emit LangGraph entries.
 
 <Callout type="info" title="Run automatically by dawn dev">
-  `dawn dev` runs `typegen` (debounced) on saves that touch tool signatures or state schemas. You only need to invoke it manually after a fresh clone, before CI, or after a tool signature change while the dev server isn't running.
+  `dawn dev` runs `typegen` before every child (re)start, so saves that touch tool signatures or state schemas are picked up on the automatic restart. You only need to invoke it manually after a fresh clone, before CI, or after a tool signature change while the dev server isn't running.
 </Callout>
 
 ## `dawn build`
