@@ -43,6 +43,11 @@ export const DAWN_ERRORS = {
     title: "Unknown build target",
     docsPath: "/docs/deployment",
   },
+  DAWN_E1004: {
+    code: "DAWN_E1004",
+    title: "Invalid delegation policy",
+    docsPath: "/docs/subagents#delegation-policy",
+  },
   DAWN_E2001: {
     code: "DAWN_E2001",
     title: "Sandbox unavailable",
@@ -57,6 +62,11 @@ export const DAWN_ERRORS = {
     code: "DAWN_E3001",
     title: "Permission denied",
     docsPath: "/docs/permissions",
+  },
+  DAWN_E3002: {
+    code: "DAWN_E3002",
+    title: "Subagent dispatch denied",
+    docsPath: "/docs/subagents#delegation-policy",
   },
   DAWN_E4001: {
     code: "DAWN_E4001",
@@ -76,6 +86,11 @@ export const DAWN_ERRORS = {
     code: "DAWN_E5002",
     title: "Tool file has the wrong shape",
     docsPath: "/docs/tools",
+  },
+  DAWN_E5003: {
+    code: "DAWN_E5003",
+    title: "Subagent unavailable or dispatch failed",
+    docsPath: "/docs/subagents#dispatch-failures",
   },
   DAWN_E5101: {
     code: "DAWN_E5101",

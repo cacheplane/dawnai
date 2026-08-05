@@ -46,6 +46,43 @@ export interface ToolScope {
   readonly constrain?: Readonly<Record<string, ConstraintPredicate>>
 }
 
+export type SubagentMap = Readonly<Record<string, DawnAgent>>
+
+export interface DelegationRequest {
+  readonly input: string
+}
+
+export interface DelegationContext {
+  readonly parentRouteId: string
+  readonly subagentName: string
+  readonly subagentRouteId: string
+  readonly threadId?: string
+  readonly params?: Readonly<Record<string, string>>
+  readonly signal: AbortSignal
+}
+
+export type DelegationVerdict = true | string | { readonly approve: true; readonly reason?: string }
+
+export type DelegationConstraintPredicate = (
+  request: DelegationRequest,
+  context: DelegationContext,
+) => DelegationVerdict | Promise<DelegationVerdict>
+
+export type DelegationRule =
+  | { readonly action: "allow" }
+  | { readonly action: "deny"; readonly reason?: string }
+  | { readonly action: "approve"; readonly reason?: string }
+  | { readonly action: "constrain"; readonly predicate: DelegationConstraintPredicate }
+
+export type DelegationRules<Name extends string> = [Name] extends [never]
+  ? Readonly<Record<string, never>>
+  : Partial<Record<Name, DelegationRule>>
+
+export interface DelegationConfig<Name extends string> {
+  readonly default?: "allow" | "deny" | "approve"
+  readonly rules?: DelegationRules<Name>
+}
+
 /**
  * Reasoning model tuning. Currently maps to OpenAI's `reasoningEffort`
  * parameter; non-reasoning models silently ignore it.
@@ -62,20 +99,23 @@ export interface ReasoningConfig {
   readonly effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
 }
 
-export interface DawnAgent {
+export interface DawnAgent<Subagents extends SubagentMap = SubagentMap> {
   readonly [brand]: "DawnAgent"
+  readonly delegation?: DelegationConfig<Extract<keyof Subagents, string>>
   readonly description?: string
   readonly model: string
   readonly provider?: ModelProviderId
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
   readonly recursionLimit?: number
-  readonly subagents?: readonly DawnAgent[]
+  readonly subagents?: Subagents
   readonly tools?: ToolScope
   readonly systemPrompt: string
 }
 
-export interface AgentConfig {
+// biome-ignore lint/complexity/noBannedTypes: {} preserves the no-registry key set as never.
+export interface AgentConfig<Subagents extends SubagentMap = {}> {
+  readonly delegation?: DelegationConfig<NoInfer<Extract<keyof Subagents, string>>>
   readonly description?: string
   readonly model: KnownModelId
   readonly provider?: ModelProviderId
@@ -88,15 +128,19 @@ export interface AgentConfig {
    * calls — that legitimately need more steps to reach a stop condition.
    */
   readonly recursionLimit?: number
-  readonly subagents?: readonly DawnAgent[]
+  readonly subagents?: Subagents
   readonly tools?: ToolScope
   readonly systemPrompt: string
 }
 
-export function agent(config: AgentConfig): DawnAgent {
+// biome-ignore lint/complexity/noBannedTypes: {} preserves the no-registry key set as never.
+export function agent<const Subagents extends SubagentMap = {}>(
+  config: AgentConfig<Subagents>,
+): DawnAgent<Subagents> {
   return {
     [DAWN_AGENT]: true,
     model: config.model,
+    ...(config.delegation !== undefined ? { delegation: config.delegation } : {}),
     ...(config.provider !== undefined ? { provider: config.provider } : {}),
     ...(config.reasoning ? { reasoning: config.reasoning } : {}),
     ...(config.retry ? { retry: config.retry } : {}),
@@ -105,7 +149,7 @@ export function agent(config: AgentConfig): DawnAgent {
     ...(config.subagents !== undefined ? { subagents: config.subagents } : {}),
     ...(config.tools !== undefined ? { tools: config.tools } : {}),
     systemPrompt: config.systemPrompt,
-  } as unknown as DawnAgent
+  } as unknown as DawnAgent<Subagents>
 }
 
 export function isDawnAgent(value: unknown): value is DawnAgent {
