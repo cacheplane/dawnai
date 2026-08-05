@@ -55,6 +55,7 @@ import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { type LoadedRouteMemory, loadRouteMemory } from "./load-memory.js"
 import { type NormalizedRouteModule, normalizeRouteModule } from "./load-route-kind.js"
+import { nodeMarkerFs } from "./node-marker-fs.js"
 import { buildMemoryContext, resolveMemoryStore, resolveMemoryWrites } from "./resolve-memory.js"
 import {
   createRuntimeFailureResult,
@@ -836,6 +837,7 @@ export async function prepareRouteExecution(
       descriptor,
       descriptorRouteMap,
       ...(capabilityBackends ? { backends: capabilityBackends } : {}),
+      markerFs: nodeMarkerFs,
       permissions: permissionsStore,
       appRoot: options.appRoot,
       ...(sandboxWorkspaceRoot ? { workspaceRoot: sandboxWorkspaceRoot } : {}),

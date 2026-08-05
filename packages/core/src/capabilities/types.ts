@@ -120,6 +120,25 @@ export interface MemoryContext {
   }
 }
 
+/**
+ * Minimal SYNC filesystem facade for capability markers. Sync because
+ * `promptFragment.render()` is synchronous (called per model turn) — the
+ * async `FilesystemBackend` cannot serve it. The node implementation lives in
+ * the cli layer (keeping `node:fs` OUT of @dawn-ai/core's capability graph so
+ * edge bundles stay clean); edge entries simply omit it, and markers must
+ * detect-false / render-empty when it is absent.
+ */
+export interface MarkerFs {
+  /** false on any error — never throws. */
+  existsSync(path: string): boolean
+  /** Byte size, or undefined on any error — never throws. */
+  statSizeSync(path: string): number | undefined
+  /** UTF-8 content; MAY throw (callers already try/catch reads). */
+  readFileSync(path: string): string
+  /** Entry names (files+dirs), [] on any error — never throws. */
+  readDirSync(path: string): readonly string[]
+}
+
 export interface CapabilityMarkerContext {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
@@ -128,6 +147,12 @@ export interface CapabilityMarkerContext {
     readonly filesystem?: FilesystemBackend
     readonly exec?: ExecBackend
   }
+  /**
+   * Sync fs facade for marker detect/load/render file access. Absent on
+   * runtimes with no filesystem (edge) — markers MUST treat absence as
+   * "no marker files exist".
+   */
+  readonly markerFs?: MarkerFs
   readonly permissions?: PermissionsStore
   /** Absolute path to the Dawn app root. Capabilities should resolve app-relative paths (e.g. workspace/) against this, NOT process.cwd(). */
   readonly appRoot: string
