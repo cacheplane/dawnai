@@ -1,6 +1,14 @@
-import { discoverRoutes, type RouteManifest } from "@dawn-ai/core"
+import { dirname } from "node:path"
+
+import {
+  discoverRoutes,
+  type RouteDefinition,
+  type RouteManifest,
+  toRouteSegments,
+} from "@dawn-ai/core"
 
 import { createRouteAssistantId } from "../runtime/route-identity.js"
+import type { DawnStaticModules } from "../runtime/static-modules.js"
 
 export interface RuntimeRegistryEntry {
   readonly assistantId: string
@@ -24,7 +32,14 @@ export interface RuntimeRegistry {
   readonly manifest?: RouteManifest
 }
 
-export async function createRuntimeRegistry(appRoot: string): Promise<RuntimeRegistry> {
+export async function createRuntimeRegistry(
+  appRoot: string,
+  modules?: DawnStaticModules,
+): Promise<RuntimeRegistry> {
+  if (modules) {
+    return createStaticRuntimeRegistry(appRoot, modules)
+  }
+
   const manifest = await discoverRoutes({ appRoot })
   const entries: RuntimeRegistryEntry[] = []
 
@@ -45,6 +60,56 @@ export async function createRuntimeRegistry(appRoot: string): Promise<RuntimeReg
 
   return {
     appRoot: manifest.appRoot,
+    entries,
+    lookup: (assistantId: string) =>
+      entries.find((entry) => entry.assistantId === assistantId) ?? null,
+    manifest,
+  }
+}
+
+/**
+ * Build a registry from a prebuilt `DawnStaticModules` manifest — zero
+ * filesystem access, no route-file imports. Used when the runtime boots from
+ * a build-time-generated module manifest (PR 2's static-wiring seam).
+ *
+ * The `RouteManifest` field is synthesized from the static entries (rather
+ * than left absent) so every downstream consumer that threads `manifest`
+ * through `routeManifest` (capability resolution, the subagent
+ * descriptor-route map, `dawn check`) keeps working unmodified — it only
+ * ever reads route identity/shape fields, never re-imports `entryFile`.
+ */
+function createStaticRuntimeRegistry(appRoot: string, modules: DawnStaticModules): RuntimeRegistry {
+  const entries: RuntimeRegistryEntry[] = modules.routes.map(
+    (route) =>
+      ({
+        assistantId: route.assistantId,
+        mode: route.kind,
+        routeFile: route.routeFile,
+        routeId: route.routeId,
+        routePath: route.routePath,
+      }) satisfies RuntimeRegistryEntry,
+  )
+
+  const routes: RouteDefinition[] = modules.routes.map((route) => {
+    const segments = route.routeId
+      .replace(/^\//, "")
+      .split("/")
+      .filter((segment) => segment.length > 0)
+
+    return {
+      entryFile: route.routeFile,
+      id: route.routeId,
+      kind: route.kind,
+      pathname: route.routeId,
+      routeDir: dirname(route.routeFile),
+      segments: toRouteSegments(segments),
+    } satisfies RouteDefinition
+  })
+
+  const manifest: RouteManifest = { appRoot, routes }
+
+  return {
+    appRoot,
     entries,
     lookup: (assistantId: string) =>
       entries.find((entry) => entry.assistantId === assistantId) ?? null,

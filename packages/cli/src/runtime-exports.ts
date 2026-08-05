@@ -41,5 +41,6 @@ export {
 // does internally.
 export { resolveSandboxManager } from "./lib/runtime/resolve-sandbox.js"
 export type { SandboxManager } from "./lib/runtime/sandbox-manager.js"
+export type { DawnStaticModules, StaticRouteModule } from "./lib/runtime/static-modules.js"
 export type { StreamChunk } from "./lib/runtime/stream-types.js"
 export { runTypegen } from "./lib/typegen/run-typegen.js"
