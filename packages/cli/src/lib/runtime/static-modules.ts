@@ -198,5 +198,39 @@ export async function loadStaticModules(manifestUrl: URL | string): Promise<Dawn
       `Static module manifest at ${href} must default-export { routes: [...] } — re-run \`dawn build\`.`,
     )
   }
+  const routes = (manifest as { readonly routes: readonly unknown[] }).routes
+  for (const entry of routes) {
+    if (!isStaticRouteModuleLike(entry)) {
+      throw new Error(
+        `Static module manifest at ${href} contains a malformed route entry — ` +
+          `each entry needs assistantId/routeId/routeFile/module/tools. Re-run \`dawn build\`.`,
+      )
+    }
+  }
   return manifest as DawnStaticModules
+}
+
+/**
+ * Per-entry structural check: the manifest file is generated, but this loader
+ * is a public export — a near-miss object (or an entry-level corruption the
+ * `{ routes: [] }` shape check can't see) should fail here with the re-run
+ * message, not degrade into 404s and undefined cache keys at serve time.
+ */
+function isStaticRouteModuleLike(entry: unknown): entry is StaticRouteModule {
+  if (!entry || typeof entry !== "object") return false
+  const candidate = entry as {
+    readonly assistantId?: unknown
+    readonly module?: unknown
+    readonly routeFile?: unknown
+    readonly routeId?: unknown
+    readonly tools?: unknown
+  }
+  return (
+    typeof candidate.assistantId === "string" &&
+    typeof candidate.routeId === "string" &&
+    typeof candidate.routeFile === "string" &&
+    typeof candidate.module === "object" &&
+    candidate.module !== null &&
+    Array.isArray(candidate.tools)
+  )
 }

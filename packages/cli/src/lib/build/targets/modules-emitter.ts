@@ -143,14 +143,17 @@ export function emitModulesFile(options: {
 
   sorted.forEach((discovery, routeIndex) => {
     const routeVar = `route${routeIndex}`
+    // Specifiers go through JSON.stringify like every other interpolated
+    // value: a quote, backslash, or newline in a path component must not be
+    // able to break out of the generated string literal.
     moduleImports.push(
-      `import * as ${routeVar} from "${importSpecifier(buildDir, discovery.entryFile)}"`,
+      `import * as ${routeVar} from ${JSON.stringify(importSpecifier(buildDir, discovery.entryFile))}`,
     )
 
     const toolEntries = discovery.tools.map((tool, toolIndex) => {
       const toolVar = `${routeVar}_tool${toolIndex}`
       moduleImports.push(
-        `import * as ${toolVar} from "${importSpecifier(buildDir, tool.filePath)}"`,
+        `import * as ${toolVar} from ${JSON.stringify(importSpecifier(buildDir, tool.filePath))}`,
       )
       return `        { filePath: resolve(appRoot, ${JSON.stringify(appRootRelative(appRoot, tool.filePath))}), module: ${toolVar}, name: ${JSON.stringify(tool.name)}, scope: ${JSON.stringify(tool.scope)} },`
     })
@@ -159,7 +162,7 @@ export function emitModulesFile(options: {
       const reducerVar = `${routeVar}_reducer${reducerIndex}`
       // Default import: the dynamic path binds `mod.default` as the override.
       moduleImports.push(
-        `import ${reducerVar} from "${importSpecifier(buildDir, reducer.filePath)}"`,
+        `import ${reducerVar} from ${JSON.stringify(importSpecifier(buildDir, reducer.filePath))}`,
       )
       return `[${JSON.stringify(reducer.field)}, ${reducerVar}]`
     })
@@ -168,7 +171,7 @@ export function emitModulesFile(options: {
     if (discovery.memoryFile) {
       memoryVar = `${routeVar}_memory`
       moduleImports.push(
-        `import * as ${memoryVar} from "${importSpecifier(buildDir, discovery.memoryFile)}"`,
+        `import * as ${memoryVar} from ${JSON.stringify(importSpecifier(buildDir, discovery.memoryFile))}`,
       )
     }
 
@@ -185,21 +188,37 @@ export function emitModulesFile(options: {
     lines.push(`      routeModule: ${routeVar},`)
     lines.push(`      routePath: ${JSON.stringify(appRootRelative(appRoot, discovery.entryFile))},`)
     if (discovery.stateDefaults) {
-      if (discovery.stateDefaults.length === 0) {
-        lines.push(`      stateDefaults: [],`)
-      } else {
-        lines.push(`      stateDefaults: [`)
-        for (const [name, value] of discovery.stateDefaults) {
-          lines.push(`        ${JSON.stringify([name, value])},`)
+      // Defaults come from arbitrary user schema code; the dynamic path hands
+      // the live values to resolveStateFields while this path inlines them.
+      // Fail the build on anything that would not survive JSON serialization
+      // intact (Date, Map/Set, NaN, undefined, BigInt, class instances, …) —
+      // silently shipping a mutated default would fork prod behavior from dev.
+      for (const [name, value] of discovery.stateDefaults) {
+        const badPath = findNonJsonPath(value, name)
+        if (badPath !== null) {
+          throw new Error(
+            `Route "${discovery.routeId}" state field "${name}" has a default that cannot be ` +
+              `inlined as JSON (at ${badPath}). Static builds serialize state defaults into ` +
+              `.dawn/build/modules.mjs — use JSON-compatible defaults (plain objects, arrays, ` +
+              `strings, finite numbers, booleans, null).`,
+          )
         }
-        lines.push(`      ],`)
       }
+      // JSON.parse of a string literal, not a bare object/array literal: in a
+      // JS literal a quoted "__proto__" key performs prototype assignment,
+      // silently diverging from the dynamic path's JSON.parse semantics.
+      lines.push(
+        `      stateDefaults: JSON.parse(${JSON.stringify(JSON.stringify(discovery.stateDefaults))}),`,
+      )
     }
     if (reducerEntries.length > 0) {
       lines.push(`      stateReducers: [${reducerEntries.join(", ")}],`)
     }
     if (discovery.toolSchemas) {
-      lines.push(`      toolSchemas: ${indentJson(discovery.toolSchemas, "      ")},`)
+      // Same JSON.parse encoding as stateDefaults (see comment above).
+      lines.push(
+        `      toolSchemas: JSON.parse(${JSON.stringify(JSON.stringify(discovery.toolSchemas))}),`,
+      )
     }
     if (toolEntries.length === 0) {
       lines.push(`      tools: [],`)
@@ -238,9 +257,15 @@ export function emitModulesFile(options: {
   ].join("\n")
 }
 
-/** Relative import specifier from the build dir, forward-slashed, `.ts` → `.js`. */
+/**
+ * Relative import specifier from the build dir, forward-slashed. Kept `.ts`:
+ * the manifest is only ever linked through the tsx loader (loadStaticModules
+ * registers it first), which resolves `.ts` specifiers directly — whereas a
+ * rewritten `.js` specifier would bind a stale in-place-compiled `foo.js`
+ * sibling first when one exists, a file the dynamic path never imports.
+ */
 function importSpecifier(buildDir: string, absoluteFile: string): string {
-  const rel = relative(buildDir, absoluteFile).split(sep).join("/").replace(/\.ts$/, ".js")
+  const rel = relative(buildDir, absoluteFile).split(sep).join("/")
   return rel.startsWith(".") ? rel : `./${rel}`
 }
 
@@ -249,8 +274,42 @@ function appRootRelative(appRoot: string, absoluteFile: string): string {
   return relative(appRoot, absoluteFile).split(sep).join("/")
 }
 
-/** Pretty-print a JSON literal with continuation lines indented for embedding. */
-function indentJson(value: unknown, indent: string): string {
-  const json = JSON.stringify(value, null, 2)
-  return json.split("\n").join(`\n${indent}`)
+/**
+ * Locate the first value under `value` that would not survive
+ * `JSON.parse(JSON.stringify(...))` structurally intact, returning its path
+ * (for the build error) or null when the whole value is JSON-representable.
+ * Rejects non-finite numbers, undefined/functions/symbols/bigints, any object
+ * with a non-plain prototype (Date, Map, Set, class instances — stringify
+ * mutates or drops them all), and cycles (stringify throws on those).
+ */
+function findNonJsonPath(value: unknown, path: string, seen = new Set<object>()): string | null {
+  if (value === null) return null
+  const kind = typeof value
+  if (kind === "string" || kind === "boolean") return null
+  if (kind === "number") return Number.isFinite(value as number) ? null : path
+  if (kind !== "object") return path
+  const obj = value as object
+  // `seen` tracks only the CURRENT ancestor chain (delete on unwind): a value
+  // referenced from two sibling positions is legal JSON, only a true cycle
+  // along one path is not.
+  if (seen.has(obj)) return `${path} (circular reference)`
+  seen.add(obj)
+  try {
+    if (Array.isArray(obj)) {
+      for (let index = 0; index < obj.length; index++) {
+        const hit = findNonJsonPath(obj[index], `${path}[${index}]`, seen)
+        if (hit !== null) return hit
+      }
+      return null
+    }
+    const proto = Object.getPrototypeOf(obj)
+    if (proto !== Object.prototype && proto !== null) return path
+    for (const [key, entry] of Object.entries(obj)) {
+      const hit = findNonJsonPath(entry, `${path}.${key}`, seen)
+      if (hit !== null) return hit
+    }
+    return null
+  } finally {
+    seen.delete(obj)
+  }
 }

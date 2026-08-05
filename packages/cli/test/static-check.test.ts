@@ -135,7 +135,14 @@ describe("dawn check — static module manifest staleness", () => {
     // (A rename that deletes the old sources instead makes the manifest's
     // static imports fail to resolve — that path is covered by the corrupt-
     // manifest test below.)
-    await writeManifest(appRoot, 'export default { routes: [{ assistantId: "/old#workflow" }] }\n')
+    await writeManifest(
+      appRoot,
+      "export default { routes: [{ " +
+        'assistantId: "/old#workflow", routeId: "/old", routePath: "src/app/old/index.ts", ' +
+        'routeFile: "/app/src/app/old/index.ts", kind: "workflow", module: { kind: "workflow" }, ' +
+        "tools: [], stateFields: undefined, memory: null " +
+        "}] }\n",
+    )
 
     const result = await invoke(["check", "--cwd", appRoot])
 

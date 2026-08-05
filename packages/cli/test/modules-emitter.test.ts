@@ -34,7 +34,14 @@ async function fixtureApp(): Promise<string> {
   // the loader resolves module URLs to their real paths — keep every path in
   // the test on the resolved side so absolute-path assertions line up.
   const appRoot = await realpath(await mkdtemp(join(tmpdir(), "dawn-modules-emitter-")))
-  cleanup.push(() => rm(appRoot, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }))
+  cleanup.push(() =>
+    rm(appRoot, {
+      force: true,
+      maxRetries: 5,
+      recursive: true,
+      retryDelay: 100,
+    }),
+  )
   const files: Record<string, string> = {
     ".dawn/routes/chat/tools.json": `${JSON.stringify(
       {
@@ -119,13 +126,15 @@ describe("emitModulesFile — golden", () => {
     // Runtime helper import — normalization happens at runtime, not codegen.
     expect(text).toContain('import { buildStaticRouteModule } from "@dawn-ai/cli/runtime"')
 
-    // Static imports with correct relative specifiers (from .dawn/build/).
-    expect(text).toContain('import * as route0 from "../../src/app/chat/index.js"')
-    expect(text).toContain('import * as route0_tool0 from "../../src/tools/echo.js"')
-    expect(text).toContain('import * as route0_tool1 from "../../src/app/chat/tools/local.js"')
-    expect(text).toContain('import route0_reducer0 from "../../src/app/chat/reducers/count.js"')
-    expect(text).toContain('import * as route0_memory from "../../src/app/chat/memory.js"')
-    expect(text).toContain('import * as route1 from "../../src/app/zeta/index.js"')
+    // Static imports with correct relative specifiers (from .dawn/build/),
+    // kept `.ts` — the tsx loader resolves them directly, and a `.js` rewrite
+    // could bind a stale in-place-compiled sibling instead.
+    expect(text).toContain('import * as route0 from "../../src/app/chat/index.ts"')
+    expect(text).toContain('import * as route0_tool0 from "../../src/tools/echo.ts"')
+    expect(text).toContain('import * as route0_tool1 from "../../src/app/chat/tools/local.ts"')
+    expect(text).toContain('import route0_reducer0 from "../../src/app/chat/reducers/count.ts"')
+    expect(text).toContain('import * as route0_memory from "../../src/app/chat/memory.ts"')
+    expect(text).toContain('import * as route1 from "../../src/app/zeta/index.ts"')
 
     // routeFile is computed from import.meta.url at RUNTIME — never a baked
     // absolute build-machine path.
@@ -140,10 +149,14 @@ describe("emitModulesFile — golden", () => {
     expect(text.indexOf('routeId: "/chat"')).toBeGreaterThan(0)
     expect(text.indexOf('routeId: "/chat"')).toBeLessThan(text.indexOf('routeId: "/zeta"'))
 
-    // Inlined tools.json + state literals.
-    expect(text).toContain('"description": "Echoes the input back"')
-    expect(text).toContain('["count",0]')
-    expect(text).toContain('["notes",[]]')
+    // Inlined tools.json + state literals — emitted as JSON.parse of a string
+    // (never bare object literals, whose quoted "__proto__" keys would perform
+    // prototype assignment instead of creating an own property).
+    expect(text).toContain("stateDefaults: JSON.parse(")
+    expect(text).toContain('[\\"count\\",0]')
+    expect(text).toContain('[\\"notes\\",[]]')
+    expect(text).toContain("toolSchemas: JSON.parse(")
+    expect(text).toContain('\\"description\\":\\"Echoes the input back\\"')
     expect(text).toContain('stateReducers: [["count", route0_reducer0]]')
 
     expect(text).toContain("export default {")
@@ -158,13 +171,13 @@ describe("emitModulesFile — golden", () => {
 
       import { buildStaticRouteModule } from "@dawn-ai/cli/runtime"
 
-      import * as route0 from "../../src/app/chat/index.js"
-      import * as route0_tool0 from "../../src/tools/echo.js"
-      import * as route0_tool1 from "../../src/app/chat/tools/local.js"
-      import route0_reducer0 from "../../src/app/chat/reducers/count.js"
-      import * as route0_memory from "../../src/app/chat/memory.js"
-      import * as route1 from "../../src/app/zeta/index.js"
-      import * as route1_tool0 from "../../src/tools/echo.js"
+      import * as route0 from "../../src/app/chat/index.ts"
+      import * as route0_tool0 from "../../src/tools/echo.ts"
+      import * as route0_tool1 from "../../src/app/chat/tools/local.ts"
+      import route0_reducer0 from "../../src/app/chat/reducers/count.ts"
+      import * as route0_memory from "../../src/app/chat/memory.ts"
+      import * as route1 from "../../src/app/zeta/index.ts"
+      import * as route1_tool0 from "../../src/tools/echo.ts"
 
       // modules.mjs lives at <appRoot>/.dawn/build/modules.mjs → appRoot is two dirs
       // up. Absolute paths are computed here at RUNTIME so a manifest built at one
@@ -180,27 +193,9 @@ describe("emitModulesFile — golden", () => {
             routeId: "/chat",
             routeModule: route0,
             routePath: "src/app/chat/index.ts",
-            stateDefaults: [
-              ["count",0],
-              ["notes",[]],
-            ],
+            stateDefaults: JSON.parse("[[\\"count\\",0],[\\"notes\\",[]]]"),
             stateReducers: [["count", route0_reducer0]],
-            toolSchemas: {
-              "echo": {
-                "description": "Echoes the input back",
-                "parameters": {
-                  "properties": {
-                    "text": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "text"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
+            toolSchemas: JSON.parse("{\\"echo\\":{\\"description\\":\\"Echoes the input back\\",\\"parameters\\":{\\"properties\\":{\\"text\\":{\\"type\\":\\"string\\"}},\\"required\\":[\\"text\\"],\\"type\\":\\"object\\"}}}"),
             tools: [
               { filePath: resolve(appRoot, "src/tools/echo.ts"), module: route0_tool0, name: "echo", scope: "shared" },
               { filePath: resolve(appRoot, "src/app/chat/tools/local.ts"), module: route0_tool1, name: "local", scope: "route-local" },
@@ -220,6 +215,87 @@ describe("emitModulesFile — golden", () => {
       }
       "
     `)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Hostile inputs: values that must not corrupt the generated file — a quote
+// in a path component (POSIX-legal) must stay inside its string literal, and
+// a state default that JSON serialization would mutate must fail the BUILD
+// (loudly, naming the route and field) instead of forking prod from dev.
+// ---------------------------------------------------------------------------
+
+describe("emitModulesFile — hostile inputs", () => {
+  const bareDiscovery = (overrides: Partial<RouteStaticDiscovery>): RouteStaticDiscovery => ({
+    entryFile: "/app/src/app/plain/index.ts",
+    kind: "agent",
+    memoryFile: undefined,
+    reducers: undefined,
+    routeId: "/plain",
+    stateDefaults: undefined,
+    toolSchemas: undefined,
+    tools: [],
+    ...overrides,
+  })
+
+  it("JSON-escapes quotes and backslashes in import specifiers", () => {
+    const text = emitModulesFile({
+      appRoot: "/app",
+      buildDir: "/app/.dawn/build",
+      discoveries: [
+        bareDiscovery({
+          entryFile: '/app/src/app/we"ird/index.ts',
+          routeId: "/weird",
+          tools: [
+            {
+              filePath: "/app/src/tools/back\\slash.ts",
+              name: "back\\slash",
+              scope: "shared",
+            },
+          ],
+        }),
+      ],
+    })
+    // The specifier's quote arrives escaped inside the generated string
+    // literal — never as a raw `"` that would terminate it early.
+    expect(text).toContain(String.raw`import * as route0 from "../../src/app/we\"ird/index.ts"`)
+    expect(text).toContain(
+      String.raw`import * as route0_tool0 from "../../src/tools/back\\slash.ts"`,
+    )
+    expect(text).not.toContain('from "../../src/app/we"ird/index.ts"')
+  })
+
+  it("fails the build when a state default would not survive JSON inlining", () => {
+    expect(() =>
+      emitModulesFile({
+        appRoot: "/app",
+        buildDir: "/app/.dawn/build",
+        discoveries: [
+          bareDiscovery({
+            routeId: "/dated",
+            stateDefaults: [["startedAt", { nested: new Date(0) }]],
+          }),
+        ],
+      }),
+    ).toThrow(/Route "\/dated" state field "startedAt".*at startedAt\.nested/s)
+  })
+
+  it("accepts plain JSON defaults including shared (non-circular) references", () => {
+    const shared = { tag: "ok" }
+    const text = emitModulesFile({
+      appRoot: "/app",
+      buildDir: "/app/.dawn/build",
+      discoveries: [
+        bareDiscovery({
+          routeId: "/shared",
+          stateDefaults: [
+            ["a", shared],
+            ["b", { left: shared, right: shared }],
+          ],
+        }),
+      ],
+    })
+    expect(text).toContain("stateDefaults: JSON.parse(")
   })
 })
 
@@ -334,7 +410,10 @@ describe("emitModulesFile — functional round-trip", () => {
           threadId: "th-roundtrip",
           tools: [],
         }),
-        headers: { accept: "text/event-stream", "content-type": "application/json" },
+        headers: {
+          accept: "text/event-stream",
+          "content-type": "application/json",
+        },
         method: "POST",
       }),
     )
@@ -367,7 +446,11 @@ describe("node target — modules.mjs artifact", () => {
     const buildDir = join(appRoot, ".dawn", "build")
     await mkdir(buildDir, { recursive: true })
 
-    const { artifacts } = await nodeTarget.emit({ appRoot, buildDir, manifest })
+    const { artifacts } = await nodeTarget.emit({
+      appRoot,
+      buildDir,
+      manifest,
+    })
 
     const modulesPath = join(buildDir, "modules.mjs")
     expect(artifacts).toContain(modulesPath)
