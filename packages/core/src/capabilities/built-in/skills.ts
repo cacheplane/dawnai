@@ -30,8 +30,8 @@ export function createSkillsMarker(): CapabilityMarker {
     detect: async (routeDir, context) =>
       context.markerFs ? discoverSkillDirs(routeDir, context.markerFs).length > 0 : false,
     load: async (routeDir, context) => {
-      // Captured at load() time: readSkill bodies are read through the same
-      // facade the detect phase used; no markerFs (edge) means no skills.
+      // Skill bodies are read EAGERLY here in loadSkills — readSkill.run does
+      // no I/O at tool-call time. No markerFs (edge) means no skills.
       const markerFs = context.markerFs
       const skills = markerFs ? loadSkills(routeDir, markerFs) : []
 

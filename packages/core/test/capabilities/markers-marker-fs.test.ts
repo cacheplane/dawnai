@@ -170,6 +170,20 @@ describe("markers read through MarkerFs", () => {
       const marker = createPlanningMarker()
       expect(await marker.detect(routeDir, makeCtx(workDir))).toBe(false)
     })
+
+    it("load seeds empty todos when statSizeSync returns undefined (fail-closed TOCTOU stat)", async () => {
+      const marker = createPlanningMarker()
+      const fs = stubMarkerFs({ statSizeSync: () => undefined })
+      const contribution = await marker.load(routeDir, makeCtx(workDir, fs))
+      expect(contribution.stateFields?.[0]?.default).toEqual([])
+    })
+
+    it("load seeds empty todos when readFileSync returns undefined (fail-closed read)", async () => {
+      const marker = createPlanningMarker()
+      const fs = stubMarkerFs({ readFileSync: () => undefined })
+      const contribution = await marker.load(routeDir, makeCtx(workDir, fs))
+      expect(contribution.stateFields?.[0]?.default).toEqual([])
+    })
   })
 
   describe("skills", () => {
@@ -205,6 +219,31 @@ describe("markers read through MarkerFs", () => {
       const marker = createSkillsMarker()
       expect(await marker.detect(routeDir, makeCtx(workDir))).toBe(false)
     })
+
+    it("load rejects with 'Failed to read' when readFileSync fails for a discovered skill", async () => {
+      const marker = createSkillsMarker()
+      const fs = stubMarkerFs({
+        existsSync: () => true,
+        isDirectorySync: () => true,
+        readdirSync: () => ["x"],
+        readFileSync: () => undefined,
+      })
+      await expect(marker.load(routeDir, makeCtx(workDir, fs))).rejects.toThrow(/Failed to read/)
+    })
+
+    it("discovery filters non-directories via isDirectorySync", async () => {
+      const marker = createSkillsMarker()
+      const fs = stubMarkerFs({
+        existsSync: () => true,
+        isDirectorySync: (path) => path.endsWith("realdir"),
+        readdirSync: () => ["realdir", "filelike"],
+        readFileSync: () => "---\ndescription: Real.\n---\n\nbody",
+      })
+      const contribution = await marker.load(routeDir, makeCtx(workDir, fs))
+      const rendered = contribution.promptFragment?.render({}) ?? ""
+      expect(rendered).toContain("**realdir** — Real.")
+      expect(rendered).not.toContain("filelike")
+    })
   })
 
   describe("workspace", () => {
@@ -224,6 +263,14 @@ describe("markers read through MarkerFs", () => {
       const marker = createWorkspaceMarker()
       const ctx = { ...makeCtx(workDir), workspaceRoot: "/workspace" }
       expect(await marker.detect(routeDir, ctx)).toBe(true)
+    })
+
+    it("load contributes the workspace tools via workspaceRoot with no markerFs (edge/sandbox)", async () => {
+      const marker = createWorkspaceMarker()
+      const ctx = { ...makeCtx(workDir), workspaceRoot: "/workspace" }
+      const contribution = await marker.load(routeDir, ctx)
+      const names = (contribution.tools ?? []).map((t) => t.name).sort()
+      expect(names).toEqual(["listDir", "readFile", "runBash", "writeFile"])
     })
   })
 })
