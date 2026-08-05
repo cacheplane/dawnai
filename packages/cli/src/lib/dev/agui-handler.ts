@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { RunAgentInputSchema } from "@ag-ui/core"
 import { type DawnAgentStreamChunk, fromRunAgentInput, toAguiEvents } from "@dawn-ai/ag-ui"
 import { encodeAgUiSse } from "@dawn-ai/ag-ui/sse"
+import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
@@ -21,6 +22,12 @@ export interface AgUiFetchRequestOptions {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
   readonly middleware: DawnMiddleware | undefined
+  /**
+   * Boot-resolved permissions store (or a per-request factory in dev),
+   * forwarded into route execution so no per-request store construction is
+   * needed. Optional so direct callers (tests) keep their existing behavior.
+   */
+  readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly threadsStore: ThreadsStore
   readonly sandboxManager?: SandboxManager
@@ -90,6 +97,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     appRoot,
     checkpointer,
     middleware,
+    permissionsStore,
     registry,
     threadsStore,
     sandboxManager,
@@ -172,6 +180,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
         try {
           const routeStream = streamRoute({
             appRoot,
+            checkpointer,
             input: {
               messages: newestUserMessage
                 ? [{ role: "user", content: newestUserMessage.content }]
@@ -179,12 +188,14 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
             },
             ...(resumeResolution.mode === "resume" ? { resume: resumeResolution.resume } : {}),
             ...(middlewareResult.context ? { middlewareContext: middlewareResult.context } : {}),
+            ...(permissionsStore ? { permissionsStore } : {}),
             routeFile: route.routeFile,
             routeId: route.routeId,
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
             signal,
             threadId,
+            threadsStore,
           })
           const abortableRouteStream = abortableAsyncIterable(routeStream, signal)
           for await (const event of toAguiEvents(normalizeDawnStream(abortableRouteStream), {

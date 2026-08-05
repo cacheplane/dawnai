@@ -12,6 +12,17 @@ export interface StartRuntimeServerOptions {
   readonly appRoot: string
   readonly host?: string
   readonly port?: number
+  /**
+   * How the runtime resolves the HITL permissions store.
+   *
+   * - `"per-request"` (default — `dawn dev` and unset callers): re-load
+   *   `.dawn/permissions.json` on every request, so "Always" grants written
+   *   mid-process by the HITL resume path apply on the very next request. The
+   *   dev loop does not watch `.dawn/`, so a boot snapshot would go stale.
+   * - `"boot"` (production `serveRuntime`): load once at boot and reuse the
+   *   instance — no per-request read.
+   */
+  readonly permissionsMode?: "per-request" | "boot"
 }
 
 // ---------------------------------------------------------------------------

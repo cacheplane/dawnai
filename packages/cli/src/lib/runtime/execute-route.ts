@@ -158,24 +158,44 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
   })
 }
 
-export async function executeResolvedRoute(options: {
-  readonly appRoot: string
-  readonly input: unknown
-  readonly isSubagent?: boolean
-  readonly middlewareContext?: Readonly<Record<string, unknown>>
-  readonly routeFile: string
-  readonly routeId: string
-  readonly routePath: string
-  readonly sandboxManager?: SandboxManager
-  /**
-   * Sandbox scoping key, decoupled from the checkpoint `threadId`. Subagent
-   * dispatch sets this to the PARENT thread id so the child resolves the same
-   * SandboxHandle without inheriting the parent's LangGraph checkpoint thread.
-   */
-  readonly sandboxThreadId?: string
-  readonly signal?: AbortSignal
-  readonly threadId?: string
-}): Promise<RuntimeExecutionResult> {
+/**
+ * Boot-resolved instances (optional, additive). When the HTTP layer passes
+ * them, `prepareRouteExecution` skips its per-request fallback constructions
+ * (sqlite opens) and its per-request permissions `load()`. When absent,
+ * behavior is byte-identical to before — the testing harness drives
+ * `streamResolvedRoute` directly with no stores and must stay unchanged.
+ *
+ * `permissionsStore` accepts either a loaded store (production: one boot-time
+ * read) or an async factory (dev: re-load `.dawn/permissions.json` on every
+ * request so HITL "Always" grants written mid-process still apply — the one
+ * deliberate per-request read kept).
+ */
+interface BootResolvedInstances {
+  readonly checkpointer?: BaseCheckpointSaver
+  readonly threadsStore?: ThreadsStore
+  readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
+}
+
+export async function executeResolvedRoute(
+  options: BootResolvedInstances & {
+    readonly appRoot: string
+    readonly input: unknown
+    readonly isSubagent?: boolean
+    readonly middlewareContext?: Readonly<Record<string, unknown>>
+    readonly routeFile: string
+    readonly routeId: string
+    readonly routePath: string
+    readonly sandboxManager?: SandboxManager
+    /**
+     * Sandbox scoping key, decoupled from the checkpoint `threadId`. Subagent
+     * dispatch sets this to the PARENT thread id so the child resolves the same
+     * SandboxHandle without inheriting the parent's LangGraph checkpoint thread.
+     */
+    readonly sandboxThreadId?: string
+    readonly signal?: AbortSignal
+    readonly threadId?: string
+  },
+): Promise<RuntimeExecutionResult> {
   return await executeRouteAtResolvedPath({
     ...options,
     isSubagent: options.isSubagent ?? false,
@@ -225,56 +245,105 @@ export async function resolveCheckpointer(appRoot: string): Promise<BaseCheckpoi
 }
 
 /**
+ * Resolves a loaded PermissionsStore for the given appRoot: config-seeded
+ * allow/deny + mode (env override wins), with `.dawn/permissions.json` read
+ * once via `load()`. Exported so the HTTP server layer can build the store at
+ * boot (production) or per request via a factory (dev — keeps HITL "Always"
+ * grants written mid-process fresh). Construction is identical to what
+ * `prepareRouteExecution` does when no store is provided.
+ */
+export async function resolvePermissionsStore(appRoot: string): Promise<PermissionsStore> {
+  let permissionsConfig: DawnConfig["permissions"] | undefined
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    permissionsConfig = loaded.config.permissions
+  } catch {
+    // No dawn.config.ts or unreadable — fall through to defaults.
+  }
+  return await buildPermissionsStore(appRoot, permissionsConfig)
+}
+
+/** Shared permissions-store construction: config + env-mode resolution + one `load()`. */
+async function buildPermissionsStore(
+  appRoot: string,
+  permissionsConfig: DawnConfig["permissions"] | undefined,
+): Promise<PermissionsStore> {
+  const envMode = process.env.DAWN_PERMISSIONS_MODE
+  const mode: PermissionMode =
+    envMode === "interactive" || envMode === "non-interactive" || envMode === "bypass"
+      ? envMode
+      : (permissionsConfig?.mode ?? "interactive")
+
+  const store = createPermissionsStore({
+    appRoot,
+    config: permissionsConfig
+      ? {
+          version: 1,
+          allow: permissionsConfig.allow ?? {},
+          deny: permissionsConfig.deny ?? {},
+        }
+      : undefined,
+    mode,
+  })
+  await store.load()
+  return store
+}
+
+/**
  * Invoke a resolved route with a stable thread ID, returning the final
  * execution result. Used by the AP `POST /threads/:id/runs/wait` endpoint.
  * Behaves identically to `executeResolvedRoute` but forwards `threadId` to
  * the agent-adapter so LangGraph parks state in the checkpointer.
  */
-export async function invokeResolvedRoute(options: {
-  readonly appRoot: string
-  readonly input: unknown
-  readonly middlewareContext?: Readonly<Record<string, unknown>>
-  readonly routeFile: string
-  readonly routeId: string
-  readonly routePath: string
-  readonly sandboxManager?: SandboxManager
-  /** Sandbox scoping key override — see `executeResolvedRoute`. */
-  readonly sandboxThreadId?: string
-  readonly signal?: AbortSignal
-  readonly threadId?: string
-}): Promise<RuntimeExecutionResult> {
+export async function invokeResolvedRoute(
+  options: BootResolvedInstances & {
+    readonly appRoot: string
+    readonly input: unknown
+    readonly middlewareContext?: Readonly<Record<string, unknown>>
+    readonly routeFile: string
+    readonly routeId: string
+    readonly routePath: string
+    readonly sandboxManager?: SandboxManager
+    /** Sandbox scoping key override — see `executeResolvedRoute`. */
+    readonly sandboxThreadId?: string
+    readonly signal?: AbortSignal
+    readonly threadId?: string
+  },
+): Promise<RuntimeExecutionResult> {
   return await executeRouteAtResolvedPath({
     ...options,
     startedAt: Date.now(),
   })
 }
 
-export async function* streamResolvedRoute(options: {
-  readonly appRoot: string
-  readonly input: unknown
-  readonly isSubagent?: boolean
-  readonly middlewareContext?: Readonly<Record<string, unknown>>
-  /**
-   * When set, the agent-adapter receives `Command({resume})`
-   * as its input instead of the normal `input` field. Used by the resume
-   * endpoint to replay a parked graph state after a permission interrupt.
-   */
-  readonly resume?: RouteResumePayload
-  readonly routeFile: string
-  readonly routeId: string
-  readonly routePath: string
-  readonly sandboxManager?: SandboxManager
-  /** Sandbox scoping key override — see `executeResolvedRoute`. */
-  readonly sandboxThreadId?: string
-  readonly signal?: AbortSignal
-  /**
-   * Stable per-conversation identifier forwarded to the agent-adapter as
-   * LangGraph's `thread_id`. When set, `interrupt()` calls park graph
-   * state in the checkpointer and the `/threads/:thread_id/resume`
-   * endpoint can replay them.
-   */
-  readonly threadId?: string
-}): AsyncGenerator<StreamChunk> {
+export async function* streamResolvedRoute(
+  options: BootResolvedInstances & {
+    readonly appRoot: string
+    readonly input: unknown
+    readonly isSubagent?: boolean
+    readonly middlewareContext?: Readonly<Record<string, unknown>>
+    /**
+     * When set, the agent-adapter receives `Command({resume})`
+     * as its input instead of the normal `input` field. Used by the resume
+     * endpoint to replay a parked graph state after a permission interrupt.
+     */
+    readonly resume?: RouteResumePayload
+    readonly routeFile: string
+    readonly routeId: string
+    readonly routePath: string
+    readonly sandboxManager?: SandboxManager
+    /** Sandbox scoping key override — see `executeResolvedRoute`. */
+    readonly sandboxThreadId?: string
+    readonly signal?: AbortSignal
+    /**
+     * Stable per-conversation identifier forwarded to the agent-adapter as
+     * LangGraph's `thread_id`. When set, `interrupt()` calls park graph
+     * state in the checkpointer and the `/threads/:thread_id/resume`
+     * endpoint can replay them.
+     */
+    readonly threadId?: string
+  },
+): AsyncGenerator<StreamChunk> {
   const prepared = await prepareRouteExecution({
     ...options,
     isSubagent: options.isSubagent ?? false,
@@ -396,6 +465,8 @@ interface PreparedRoute {
   >
   readonly subagentResolver?: SubagentResolver
   readonly workspaceFs: WorkspaceFs
+  /** The store the route's permission gates consult this request (provided, factory-produced, or freshly constructed). */
+  readonly permissionsStore: PermissionsStore
   /**
    * True when a per-thread sandbox is active for this turn (sandboxManager +
    * threadId resolved a handle). The agent-adapter uses this to bypass its
@@ -410,22 +481,24 @@ interface PreparedRouteError {
   readonly ok: false
 }
 
-async function prepareRouteExecution(options: {
-  readonly appRoot: string
-  readonly isSubagent?: boolean
-  readonly routeFile: string
-  readonly routeId: string
-  readonly routePath: string
-  readonly signal?: AbortSignal
-  readonly threadId?: string
-  readonly sandboxManager?: SandboxManager
-  /**
-   * Sandbox scoping key, decoupled from `threadId` (the checkpoint identity).
-   * When absent, the sandbox handle falls back to `threadId` — the top-route
-   * case, where the two identities coincide.
-   */
-  readonly sandboxThreadId?: string
-}): Promise<PreparedRoute | PreparedRouteError> {
+export async function prepareRouteExecution(
+  options: BootResolvedInstances & {
+    readonly appRoot: string
+    readonly isSubagent?: boolean
+    readonly routeFile: string
+    readonly routeId: string
+    readonly routePath: string
+    readonly signal?: AbortSignal
+    readonly threadId?: string
+    readonly sandboxManager?: SandboxManager
+    /**
+     * Sandbox scoping key, decoupled from `threadId` (the checkpoint identity).
+     * When absent, the sandbox handle falls back to `threadId` — the top-route
+     * case, where the two identities coincide.
+     */
+    readonly sandboxThreadId?: string
+  },
+): Promise<PreparedRoute | PreparedRouteError> {
   const { isSubagent = false } = options
   const routeDir = resolve(options.routeFile, "..")
 
@@ -524,35 +597,30 @@ async function prepareRouteExecution(options: {
 
   let summarization: ResolvedSummarizationConfig | undefined
 
+  // Boot-resolved instances win when provided (no per-request sqlite open);
+  // otherwise fall back to config, then to the default sqlite stores.
   const checkpointer: BaseCheckpointSaver =
+    options.checkpointer ??
     configCheckpointer ??
     sqliteCheckpointer({ path: join(options.appRoot, ".dawn/checkpoints.sqlite") })
 
   const threadsStore: ThreadsStore =
+    options.threadsStore ??
     configThreadsStore ??
     createThreadsStore({ path: join(options.appRoot, ".dawn/threads.sqlite") })
 
   // Deliberately outside the agent-only branch below: every route kind needs
   // the loaded store for ctx.fs permission gating, and createWorkspaceFs
   // requires it loaded. The agent branch reuses this store in applyCapabilities.
-  const envMode = process.env.DAWN_PERMISSIONS_MODE
-  const mode: PermissionMode =
-    envMode === "interactive" || envMode === "non-interactive" || envMode === "bypass"
-      ? envMode
-      : (permissionsConfig?.mode ?? "interactive")
-
-  const permissionsStore: PermissionsStore = createPermissionsStore({
-    appRoot: options.appRoot,
-    config: permissionsConfig
-      ? {
-          version: 1,
-          allow: permissionsConfig.allow ?? {},
-          deny: permissionsConfig.deny ?? {},
-        }
-      : undefined,
-    mode,
-  })
-  await permissionsStore.load()
+  // A provided instance (production boot) is used as-is; a provided factory
+  // (dev) re-loads `.dawn/permissions.json` each request so HITL "Always"
+  // grants written mid-process still apply; absent both, construct+load fresh
+  // (the pre-existing per-request behavior).
+  const providedPermissions = options.permissionsStore
+  const permissionsStore: PermissionsStore =
+    typeof providedPermissions === "function"
+      ? await providedPermissions()
+      : (providedPermissions ?? (await buildPermissionsStore(options.appRoot, permissionsConfig)))
 
   const workspaceFs = createWorkspaceFs({
     workspaceRoot: sandboxWorkspaceRoot ?? join(options.appRoot, "workspace"),
@@ -808,6 +876,7 @@ async function prepareRouteExecution(options: {
     normalized,
     ok: true,
     checkpointer,
+    permissionsStore,
     threadsStore,
     ...(offload ? { offload } : {}),
     ...(summarization ? { summarization } : {}),
@@ -821,21 +890,23 @@ async function prepareRouteExecution(options: {
   }
 }
 
-async function executeRouteAtResolvedPath(options: {
-  readonly appRoot: string
-  readonly input: unknown
-  readonly isSubagent?: boolean
-  readonly middlewareContext?: Readonly<Record<string, unknown>>
-  readonly routeFile: string
-  readonly routeId: string
-  readonly routePath: string
-  readonly sandboxManager?: SandboxManager
-  /** Sandbox scoping key override — see `executeResolvedRoute`. */
-  readonly sandboxThreadId?: string
-  readonly signal?: AbortSignal
-  readonly startedAt: number
-  readonly threadId?: string
-}): Promise<RuntimeExecutionResult> {
+async function executeRouteAtResolvedPath(
+  options: BootResolvedInstances & {
+    readonly appRoot: string
+    readonly input: unknown
+    readonly isSubagent?: boolean
+    readonly middlewareContext?: Readonly<Record<string, unknown>>
+    readonly routeFile: string
+    readonly routeId: string
+    readonly routePath: string
+    readonly sandboxManager?: SandboxManager
+    /** Sandbox scoping key override — see `executeResolvedRoute`. */
+    readonly sandboxThreadId?: string
+    readonly signal?: AbortSignal
+    readonly startedAt: number
+    readonly threadId?: string
+  },
+): Promise<RuntimeExecutionResult> {
   let mode: RuntimeExecutionMode | null = null
 
   try {

@@ -62,7 +62,15 @@ export async function serveRuntime(opts: ServeRuntimeOptions): Promise<ServeRunt
   const port = resolveServePort(opts.port, process.env.PORT)
   const installSignalHandlers = opts.installSignalHandlers ?? false
 
-  const server = await startRuntimeServer({ appRoot: opts.appRoot, host, port })
+  // Production loads the permissions store once at boot ("boot" mode); dev
+  // keeps the default "per-request" re-load so mid-process HITL "Always"
+  // grants written to .dawn/permissions.json still apply without a restart.
+  const server = await startRuntimeServer({
+    appRoot: opts.appRoot,
+    host,
+    permissionsMode: "boot",
+    port,
+  })
 
   if (!installSignalHandlers) {
     return server
