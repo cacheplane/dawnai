@@ -1,4 +1,8 @@
-import { type DawnConfig, discoverRoutes, loadDawnConfig } from "@dawn-ai/core"
+import { existsSync } from "node:fs"
+import { join } from "node:path"
+import { pathToFileURL } from "node:url"
+
+import { type DawnConfig, discoverRoutes, loadDawnConfig, type RouteManifest } from "@dawn-ai/core"
 import type { Command } from "commander"
 
 import { knownTargetNames } from "../lib/build/targets/index.js"
@@ -6,6 +10,8 @@ import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/
 import { collectSandboxErrors } from "../lib/runtime/collect-sandbox-errors.js"
 import { collectToolScopeIssues } from "../lib/runtime/collect-tool-scope-errors.js"
 import { resolveMemoryWrites } from "../lib/runtime/resolve-memory.js"
+import { createRouteAssistantId } from "../lib/runtime/route-identity.js"
+import { loadStaticModules } from "../lib/runtime/static-modules.js"
 import { discoverToolDefinitions } from "../lib/runtime/tool-discovery.js"
 import { collectUnknownModelIdWarnings } from "../lib/runtime/warn-unknown-model-ids.js"
 
@@ -46,7 +52,9 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
     }
 
     const memoryWrites = await resolveMemoryWrites(manifest.appRoot)
-    const scopeIssues = await collectToolScopeIssues(manifest, undefined, { memoryWrites })
+    const scopeIssues = await collectToolScopeIssues(manifest, undefined, {
+      memoryWrites,
+    })
     for (const warning of scopeIssues.warnings) {
       writeLine(io.stdout, `\n${warning}`)
     }
@@ -85,8 +93,59 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
         code: "DAWN_E1002",
       })
     }
+
+    await checkStaticModuleManifest(manifest)
   } catch (error) {
     if (error instanceof CliError) throw error
     throw new CliError(`Validation failed: ${formatErrorMessage(error)}`)
   }
+}
+
+/**
+ * Stale-manifest pass: when a build-generated `.dawn/build/modules.mjs`
+ * exists, load it through the same `loadStaticModules` path server.mjs uses
+ * and compare its routes' assistantId set against the discovered set. A
+ * mismatch (route added/renamed/removed since the last `dawn build`) or a
+ * manifest that fails to load (corrupt file, stale static imports after a
+ * rename) is a check ERROR advising a rebuild. Absent file → no-op.
+ *
+ * No DAWN_E code: the error-code registry (@dawn-ai/sdk) has no entry for a
+ * stale build artifact — the E1xxx config/check family stops at E1003
+ * (unknown build target) and producers cannot invent codes. Follow-up: add a
+ * registry code (e.g. "Stale static module manifest") in an sdk change.
+ */
+async function checkStaticModuleManifest(manifest: RouteManifest): Promise<void> {
+  const modulesPath = join(manifest.appRoot, ".dawn", "build", "modules.mjs")
+  if (!existsSync(modulesPath)) return
+
+  let manifestIds: readonly string[]
+  try {
+    const modules = await loadStaticModules(pathToFileURL(modulesPath))
+    manifestIds = modules.routes.map((route) => route.assistantId)
+  } catch (error) {
+    throw new CliError(
+      `Static module manifest failed to load:\n${modulesPath}\n${formatErrorMessage(error)}\n` +
+        "The manifest is stale or corrupt — re-run `dawn build` to regenerate it.",
+    )
+  }
+
+  const discoveredIds = new Set(
+    manifest.routes.map((route) => createRouteAssistantId(route.id, route.kind)),
+  )
+  const staticIds = new Set(manifestIds)
+  const missing = [...discoveredIds].filter((id) => !staticIds.has(id)).sort()
+  const extra = [...staticIds].filter((id) => !discoveredIds.has(id)).sort()
+  if (missing.length === 0 && extra.length === 0) return
+
+  const lines: string[] = []
+  if (missing.length > 0) {
+    lines.push(`Routes missing from the manifest: ${missing.join(", ")}`)
+  }
+  if (extra.length > 0) {
+    lines.push(`Routes in the manifest but not the app: ${extra.join(", ")}`)
+  }
+  throw new CliError(
+    `Stale static module manifest (${modulesPath}):\n${lines.join("\n")}\n` +
+      "Re-run `dawn build` to regenerate it.",
+  )
 }
