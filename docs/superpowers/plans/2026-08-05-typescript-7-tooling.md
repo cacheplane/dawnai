@@ -299,7 +299,7 @@ git commit -m "refactor(core): analyze route tools once"
 - Modify: `packages/core/test/integration-dx-improvements.test.ts`
 - Modify: `packages/cli/test/run-typegen.test.ts`
 
-- [ ] **Step 1: Add a failing combined-artifact assertion**
+- [x] **Step 1: Add a failing combined-artifact assertion**
 
 Expose an internal projection:
 
@@ -316,7 +316,7 @@ export function extractToolArtifactsForRoute(
 
 Add a Core integration test asserting a single call returns mutually consistent type and schema records. Add a CLI test that expects `runTypegen` to write both `.d.ts` types and `tools.json` schemas for the same route from this combined result.
 
-- [ ] **Step 2: Run the focused Core and CLI tests and verify RED**
+- [x] **Step 2: Run the focused Core and CLI tests and verify RED**
 
 ```bash
 pnpm --filter @dawn-ai/core test -- integration-dx-improvements.test.ts
@@ -325,13 +325,13 @@ pnpm --filter @dawn-ai/cli test -- run-typegen.test.ts
 
 Expected: the new combined API assertion fails before implementation.
 
-- [ ] **Step 3: Replace Core's duplicate compiler walks with projections**
+- [x] **Step 3: Replace Core's duplicate compiler walks with projections**
 
 Make `extract-tool-types.ts` and `extract-tool-schema.ts` thin async-compatible wrappers around the combined internal analysis. Remove their TypeScript imports, duplicated discovery, compiler options, program construction, default-export lookup, and type walkers.
 
 Keep their public names, options interfaces, return types, sorting, and error/skip behavior.
 
-- [ ] **Step 4: Make CLI typegen consume the combined result**
+- [x] **Step 4: Make CLI typegen consume the combined result**
 
 Import `extractToolArtifactsForRoute` from `@dawn-ai/core/internal/compiler` in `run-typegen.ts`. In each route iteration, call it once, append capability-contributed types as before, and write schemas as before.
 
@@ -346,7 +346,7 @@ Add Core's internal compiler export to `packages/core/package.json`:
 
 Before the existing broad `@dawn-ai/core` source alias in `packages/cli/vitest.config.ts`, add an explicit `@dawn-ai/core/internal/compiler` alias to `../core/src/compiler/index.ts`. Vitest/Vite string aliases also match subpaths; without the more specific first entry, CLI source-mode tests would incorrectly resolve the internal import under `src/index.ts/internal/compiler`.
 
-- [ ] **Step 5: Run all Core typegen and CLI typegen/verify tests**
+- [x] **Step 5: Run all Core typegen and CLI typegen/verify tests**
 
 ```bash
 pnpm --filter @dawn-ai/core test -- extract-tool-types.test.ts extract-tool-schema.test.ts nested-tool-inputs-integration.test.ts integration-dx-improvements.test.ts
@@ -355,7 +355,7 @@ pnpm --filter @dawn-ai/cli test -- run-typegen.test.ts typegen-command.test.ts v
 
 Expected: all existing and new tests PASS. Supported schema outputs remain structure-compatible; assertions for mapped optional types and specialized collection intersections use the user-approved neutral behavior rather than compiler-dependent legacy output.
 
-- [ ] **Step 6: Build Core before CLI and verify declarations resolve**
+- [x] **Step 6: Build Core before CLI and verify declarations resolve**
 
 ```bash
 pnpm turbo run build --filter=@dawn-ai/cli...
@@ -364,7 +364,7 @@ pnpm --filter @dawn-ai/cli typecheck
 
 Expected: PASS; the internal subpath resolves from built Core declarations.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add packages/core packages/cli/src/lib/typegen/run-typegen.ts packages/cli/test/run-typegen.test.ts packages/cli/vitest.config.ts
