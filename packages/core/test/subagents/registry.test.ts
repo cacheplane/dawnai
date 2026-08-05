@@ -1,9 +1,9 @@
 import type { DawnAgent } from "@dawn-ai/sdk"
 import { agent } from "@dawn-ai/sdk"
 import { describe, expect, it } from "vitest"
-import { dispatchableSubagents, resolveSubagentRegistry } from "../../src/subagents/registry.js"
-import type { DescriptorRouteIndex } from "../../src/subagents/types.js"
-import type { RouteDefinition, RouteManifest } from "../../src/types.js"
+import { dispatchableSubagents, resolveSubagentRegistry } from "../../src/subagents/registry.ts"
+import type { DescriptorRouteIndex } from "../../src/subagents/types.ts"
+import type { RouteDefinition, RouteManifest } from "../../src/types.ts"
 
 const parentRouteDir = "/app/src/app/parent"
 const parentRouteId = "/parent"
@@ -34,6 +34,17 @@ function descriptions(route: RouteDefinition): Promise<string> {
   return Promise.resolve(`Description for ${route.id}`)
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T) => void
+} {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((complete) => {
+    resolve = complete
+  })
+  return { promise, resolve }
+}
+
 describe("resolveSubagentRegistry", () => {
   it("discovers only immediate convention children", async () => {
     const result = await resolveSubagentRegistry({
@@ -58,6 +69,30 @@ describe("resolveSubagentRegistry", () => {
         rule: { action: "allow" },
       },
     ])
+  })
+
+  it("discovers only immediate convention children from Windows-style paths", async () => {
+    const windowsParentRouteDir = String.raw`C:\app\src\app\parent`
+    const result = await resolveSubagentRegistry({
+      descriptor: parent(),
+      descriptorRouteIndex: new Map(),
+      parentRouteDir: windowsParentRouteDir,
+      parentRouteId,
+      routeManifest: manifest(
+        route(
+          "/parent/subagents/Research_1",
+          String.raw`C:\app\src\app\parent\subagents\Research_1`,
+        ),
+        route(
+          "/parent/subagents/team/research",
+          String.raw`C:\app\src\app\parent\subagents\team\research`,
+        ),
+        route("/other/subagents/writer", String.raw`C:\app\src\app\other\subagents\writer`),
+      ),
+      loadDescription: descriptions,
+    })
+
+    expect(result.map(({ name }) => name)).toEqual(["Research_1"])
   })
 
   it("defaults convention and explicit registrations to allow when delegation is omitted", async () => {
@@ -175,6 +210,45 @@ describe("resolveSubagentRegistry", () => {
     })
 
     expect(result.map(({ name }) => name)).toEqual(["alpha", "middle", "zulu"])
+  })
+
+  it("starts all description loads before waiting for any result", async () => {
+    const alphaDescription = deferred<string>()
+    const zuluDescription = deferred<string>()
+    const pendingDescriptions = new Map([
+      ["/parent/subagents/alpha", alphaDescription],
+      ["/parent/subagents/zulu", zuluDescription],
+    ])
+    const started: string[] = []
+    const resolving = resolveSubagentRegistry({
+      descriptor: parent(),
+      descriptorRouteIndex: new Map(),
+      parentRouteDir,
+      parentRouteId,
+      routeManifest: manifest(
+        route("/parent/subagents/zulu", `${parentRouteDir}/subagents/zulu`),
+        route("/parent/subagents/alpha", `${parentRouteDir}/subagents/alpha`),
+      ),
+      loadDescription: (descriptionRoute) => {
+        started.push(descriptionRoute.id)
+        const pending = pendingDescriptions.get(descriptionRoute.id)
+        if (pending === undefined) throw new Error(`Unexpected route ${descriptionRoute.id}`)
+        return pending.promise
+      },
+    })
+
+    try {
+      expect(started).toEqual(["/parent/subagents/alpha", "/parent/subagents/zulu"])
+    } finally {
+      alphaDescription.resolve("Alpha description.")
+      zuluDescription.resolve("Zulu description.")
+    }
+
+    const result = await resolving
+    expect(result.map(({ name, description }) => ({ name, description }))).toEqual([
+      { name: "alpha", description: "Alpha description." },
+      { name: "zulu", description: "Zulu description." },
+    ])
   })
 
   it.each([

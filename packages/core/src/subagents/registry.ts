@@ -1,3 +1,4 @@
+import { posix, win32 } from "node:path"
 import type { DawnAgent, DelegationConstraintPredicate } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import type { RouteDefinition, RouteManifest } from "../types.js"
@@ -200,13 +201,21 @@ function discoverConventionRoutes(
   parentRouteId: string,
   routeManifest: RouteManifest,
 ): readonly { readonly name: string; readonly route: RouteDefinition }[] {
-  const prefix = `${parentRouteDir}/subagents/`
+  const routePath = parentRouteDir.includes("\\") ? win32 : posix
+  const subagentsDir = routePath.join(parentRouteDir, "subagents")
   const result: Array<{ readonly name: string; readonly route: RouteDefinition }> = []
 
   for (const route of routeManifest.routes) {
-    if (!route.routeDir.startsWith(prefix)) continue
-    const name = route.routeDir.slice(prefix.length)
-    if (name.length === 0 || name.includes("/")) continue
+    const name = routePath.relative(subagentsDir, route.routeDir)
+    if (
+      name.length === 0 ||
+      routePath.isAbsolute(name) ||
+      name === ".." ||
+      name.startsWith(`..${routePath.sep}`) ||
+      routePath.dirname(name) !== "."
+    ) {
+      continue
+    }
     validateName(name, "convention", parentRouteId)
     result.push({ name, route })
   }
@@ -328,17 +337,17 @@ export async function resolveSubagentRegistry({
   }
 
   const sorted = pending.sort((a, b) => compareNames(a.name, b.name))
-  const resolved: ResolvedSubagent[] = []
-  for (const registration of sorted) {
-    resolved.push({
-      name: registration.name,
-      routeId: registration.route.id,
-      source: registration.source,
-      description: await descriptionFor(registration.route, loadDescription),
-      rule: registration.rule,
-    })
-  }
-  return resolved
+  return Promise.all(
+    sorted.map(
+      async (registration): Promise<ResolvedSubagent> => ({
+        name: registration.name,
+        routeId: registration.route.id,
+        source: registration.source,
+        description: await descriptionFor(registration.route, loadDescription),
+        rule: registration.rule,
+      }),
+    ),
+  )
 }
 
 export function dispatchableSubagents(
