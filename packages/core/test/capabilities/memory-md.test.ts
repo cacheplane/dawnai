@@ -3,13 +3,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createMemoryMdMarker } from "../../src/capabilities/built-in/memory-md.js"
-import { realMarkerFs } from "./real-marker-fs.js"
+import { nodeMarkerFs } from "../../src/node-marker-fs.js"
 
 const ctx = {
   routeManifest: {} as never,
   descriptor: undefined,
   appRoot: "/unused",
-  markerFs: realMarkerFs,
+  markerFs: nodeMarkerFs,
 }
 
 describe("memory-md capability", () => {

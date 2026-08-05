@@ -24,6 +24,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node-marker-fs.d.ts",
+      "default": "./dist/node-marker-fs.js"
     }
   },
   "publishConfig": {

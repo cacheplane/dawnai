@@ -22,6 +22,7 @@ import {
   createCapabilityRegistry,
   createPlanningMarker,
 } from "@dawn-ai/core"
+import { nodeMarkerFs } from "@dawn-ai/core/node"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 const ROUTE_DIR = dirname(fileURLToPath(import.meta.url))
@@ -78,7 +79,7 @@ describe("chat route — autowired capabilities", () => {
 
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
     // Pass workDir as appRoot so the marker resolves AGENTS.md from workDir/workspace/.
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: workDir, routes: [] }, descriptor: undefined, appRoot: workDir })
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: workDir, routes: [] }, descriptor: undefined, appRoot: workDir, markerFs: nodeMarkerFs })
     const fragment = result.contributions[0]?.contribution.promptFragment
     const rendered = fragment?.render({}) ?? ""
 
@@ -100,7 +101,7 @@ describe("chat route — autowired capabilities", () => {
     writeFileSync(path, "Iteration 1: tools should be camelCase")
     const registry = createCapabilityRegistry([createAgentsMdMarker()])
     // Pass workDir as appRoot so AGENTS.md is read from workDir/workspace/.
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: workDir, routes: [] }, descriptor: undefined, appRoot: workDir })
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: workDir, routes: [] }, descriptor: undefined, appRoot: workDir, markerFs: nodeMarkerFs })
     const fragment = result.contributions[0]?.contribution.promptFragment
 
     const first = fragment?.render({}) ?? ""

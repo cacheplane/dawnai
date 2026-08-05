@@ -4,14 +4,17 @@ import {
   readFileSync as nodeReadFileSync,
   statSync as nodeStatSync,
 } from "node:fs"
-import type { MarkerFs } from "../../src/capabilities/types.js"
+
+import type { MarkerFs } from "./capabilities/types.js"
 
 /**
- * Real-fs MarkerFs mirroring the cli's nodeMarkerFs (packages/cli/src/lib/
- * runtime/node-marker-fs.ts), so core marker tests exercise the same facade
- * the node execute path injects. Absent-markerFs contexts model edge runtimes.
+ * The Node implementation of the capability-marker fs facade. Lives in core
+ * behind the explicitly node-only "@dawn-ai/core/node" subpath (NOT the "."
+ * barrel) so every node-side consumer shares one implementation while
+ * `node:fs` stays out of the default import graph — edge entries never import
+ * this subpath.
  */
-export const realMarkerFs: MarkerFs = {
+export const nodeMarkerFs: MarkerFs = {
   existsSync: (path) => {
     try {
       return nodeExistsSync(path)
