@@ -9,7 +9,7 @@ import { importModule } from "./import-module.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import { isRecord } from "./utils.js"
 
-type ToolScope = "route-local" | "shared"
+export type ToolScope = "route-local" | "shared"
 
 export interface DiscoveredToolDefinition {
   readonly description?: string
@@ -141,17 +141,33 @@ async function loadToolDefinition(
   scope: ToolScope,
   appRoot: string,
 ): Promise<DiscoveredToolDefinition> {
-  const toolModule = (await importModule(pathToFileURL(filePath).href, {
+  const toolModule = await importModule(pathToFileURL(filePath).href, {
     kind: "tool",
     appRoot,
     sourcePath: filePath,
-  })) as {
+  })
+  return normalizeToolModule(toolModule, { filePath, name: basename(filePath, ".ts"), scope })
+}
+
+/**
+ * The object-normalizing core of {@link loadToolDefinition}: turn an
+ * already-imported tool module namespace into a `DiscoveredToolDefinition`.
+ * Exported so the static-modules runtime helper (`buildStaticRouteModule`)
+ * applies the exact same shape rules (function vs `{ run }` default export,
+ * named `description`/`schema` exports, LangChain-tool rejection) to
+ * statically-imported tool modules.
+ */
+export function normalizeToolModule(
+  toolModuleValue: unknown,
+  meta: { readonly filePath: string; readonly name: string; readonly scope: ToolScope },
+): DiscoveredToolDefinition {
+  const toolModule = (toolModuleValue ?? {}) as {
     readonly default?: unknown
     readonly description?: unknown
     readonly schema?: unknown
   }
+  const { filePath, name, scope } = meta
   const definition = toolModule.default
-  const name = basename(filePath, ".ts")
   const description =
     typeof toolModule.description === "string" ? toolModule.description : undefined
   const schema = toolModule.schema !== undefined ? toolModule.schema : undefined

@@ -18,11 +18,26 @@ export async function normalizeRouteModule(
   appRoot?: string,
 ): Promise<NormalizedRouteModule> {
   await registerTsxLoader()
-  const routeModule = (await importModule(pathToFileURL(routeFile).href, {
+  const routeModule = await importModule(pathToFileURL(routeFile).href, {
     kind: "route",
     ...(appRoot ? { appRoot } : {}),
     sourcePath: routeFile,
-  })) as {
+  })
+  return normalizeRouteModuleObject(routeModule, routeFile)
+}
+
+/**
+ * The object-normalizing core of {@link normalizeRouteModule}: classify an
+ * already-imported route module namespace. Exported so the static-modules
+ * runtime helper (`buildStaticRouteModule`) applies the exact same
+ * normalization rules to statically-imported route modules — codegen never
+ * re-implements them.
+ */
+export function normalizeRouteModuleObject(
+  routeModuleValue: unknown,
+  routeFile: string,
+): NormalizedRouteModule {
+  const routeModule = (routeModuleValue ?? {}) as {
     readonly agent?: unknown
     readonly chain?: unknown
     readonly config?: Record<string, unknown>

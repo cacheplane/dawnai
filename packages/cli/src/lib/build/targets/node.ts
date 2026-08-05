@@ -4,6 +4,11 @@ import { join, resolve } from "node:path"
 
 import { writeLine } from "../../output.js"
 import type { BuildEmitContext, BuildTarget } from "./index.js"
+import {
+  collectRouteStaticDiscovery,
+  emitModulesFile,
+  type RouteStaticDiscovery,
+} from "./modules-emitter.js"
 
 /**
  * Stable marker written as the first line of every Dawn-authored Dockerfile.
@@ -19,14 +24,19 @@ const DOCKERFILE_MARKER =
  * two directories up from the module's own location. Verified against
  * `buildDir = <appRoot>/.dawn/build`.
  */
-const SERVER_ENTRY = `import { serveRuntime } from "@dawn-ai/cli"
+const SERVER_ENTRY = `import { loadStaticModules, serveRuntime } from "@dawn-ai/cli"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 
 // server.mjs lives at <appRoot>/.dawn/build/server.mjs → appRoot is two dirs up
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
 
-await serveRuntime({ appRoot })
+// modules.mjs statically imports the app's TypeScript sources, so it can't be
+// a bare static import here — loadStaticModules registers the TS loader first,
+// then imports the manifest through it. Boot performs no route-tree walk.
+const modules = await loadStaticModules(new URL("./modules.mjs", import.meta.url))
+
+await serveRuntime({ appRoot, modules })
 `
 
 /**
@@ -68,8 +78,18 @@ CMD ["node", ".dawn/build/server.mjs"]
  */
 export const nodeTarget: BuildTarget = {
   name: "node",
-  async emit({ appRoot, buildDir, io }: BuildEmitContext) {
+  async emit({ appRoot, buildDir, io, manifest }: BuildEmitContext) {
     const artifacts: string[] = []
+
+    // Static module manifest: the runtime's own discovery functions run once
+    // here at build time; server.mjs then boots without any route-tree walk.
+    const discoveries: RouteStaticDiscovery[] = []
+    for (const route of manifest.routes) {
+      discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
+    }
+    const modulesPath = join(buildDir, "modules.mjs")
+    await writeFile(modulesPath, emitModulesFile({ appRoot, buildDir, discoveries }), "utf8")
+    artifacts.push(modulesPath)
 
     const serverPath = join(buildDir, "server.mjs")
     await writeFile(serverPath, SERVER_ENTRY, "utf8")

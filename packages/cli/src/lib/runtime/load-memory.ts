@@ -17,7 +17,16 @@ export interface LoadedRouteMemory {
 export async function loadRouteMemory(memoryFile: string): Promise<LoadedRouteMemory> {
   await registerTsxLoader()
   const mod = (await import(pathToFileURL(memoryFile).href)) as { default?: unknown }
-  const def = mod.default
+  return normalizeRouteMemoryExport(mod.default, memoryFile)
+}
+
+/**
+ * The validating core of {@link loadRouteMemory}: check an already-imported
+ * memory module's default export. Exported so the static-modules runtime
+ * helper (`buildStaticRouteModule`) applies the exact same descriptor rules to
+ * statically-imported `memory.ts` modules.
+ */
+export function normalizeRouteMemoryExport(def: unknown, memoryFile: string): LoadedRouteMemory {
   if (!def || typeof def !== "object") {
     throw new Error(`Memory file ${memoryFile} must default-export defineMemory(...)`)
   }
