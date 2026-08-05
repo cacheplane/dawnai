@@ -1,4 +1,5 @@
 import { createRuntimeFetchHandler } from "@dawn-ai/cli/runtime"
+import { __clearDawnConfigCacheForTests } from "@dawn-ai/core"
 
 export interface InjectResult {
   readonly statusCode: number
@@ -57,7 +58,14 @@ export async function createAgentProtocolInjector(options: {
         statusCode: response.status,
       }
     },
-    close: core.close,
+    async close() {
+      await core.close()
+      // See harness.ts's close() for why: loadDawnConfig is memoized per
+      // appRoot for the process lifetime, so a fixture app's dawn.config.ts
+      // mutated and re-served through a fresh injector in the same process
+      // needs the memo cleared to pick up the change.
+      __clearDawnConfigCacheForTests()
+    },
     [Symbol.asyncDispose](): Promise<void> {
       return this.close()
     },

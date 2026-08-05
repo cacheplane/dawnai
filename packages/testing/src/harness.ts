@@ -7,7 +7,7 @@ import {
   type SandboxManager,
   streamResolvedRoute,
 } from "@dawn-ai/cli/runtime"
-import { discoverRoutes } from "@dawn-ai/core"
+import { __clearDawnConfigCacheForTests, discoverRoutes } from "@dawn-ai/core"
 import { type Aimock, createAimock } from "./aimock-runner.js"
 import type { FixtureSet, ScriptBuilder } from "./fixture-builder.js"
 import { recordingsToFixtures } from "./record-fixtures.js"
@@ -225,6 +225,13 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       // (ESM module cache returns the same export) would reuse an LLM already
       // bound to the previous (stopped) aimock server.
       __resetMaterializedAgentsForTests()
+      // loadDawnConfig is now memoized per appRoot for the process lifetime
+      // (perf(core): memoize loadDawnConfig per appRoot). Test suites that
+      // rewrite a fixture app's dawn.config.ts and drive it again through a
+      // fresh harness in the same process (e.g. switching a memory backend
+      // via env + config) need that mutation to actually take effect — clear
+      // the memo here so the next createAgentHarness call reloads from disk.
+      __clearDawnConfigCacheForTests()
     },
     [Symbol.asyncDispose](): Promise<void> {
       return this.close()
