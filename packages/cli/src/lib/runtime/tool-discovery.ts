@@ -141,7 +141,7 @@ async function loadToolDefinition(
   scope: ToolScope,
   appRoot: string,
 ): Promise<DiscoveredToolDefinition> {
-  const toolModule = (await importModule(`${pathToFileURL(filePath).href}?t=${Date.now()}`, {
+  const toolModule = (await importModule(pathToFileURL(filePath).href, {
     kind: "tool",
     appRoot,
     sourcePath: filePath,

@@ -26,10 +26,13 @@ export {
   serveRuntime,
 } from "./lib/dev/serve-runtime.js"
 export {
+  __resetRouteLoadCachesForTests,
   executeResolvedRoute,
   invokeResolvedRoute,
+  type PreparedRouteModules,
   resolveCheckpointer,
   resolveThreadsStore,
+  seedPreparedRouteModules,
   streamResolvedRoute,
 } from "./lib/runtime/execute-route.js"
 // Exposed so wiring tests (and any out-of-band driver) can build the same

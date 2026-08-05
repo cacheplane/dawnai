@@ -2,16 +2,21 @@ import { describe, expect, test } from "vitest"
 import { classifyChange } from "../src/lib/dev/classify-change.js"
 
 describe("classifyChange", () => {
-  test("tool file change returns typegen", () => {
-    expect(classifyChange("src/app/hello/[tenant]/tools/greet.ts")).toBe("typegen")
+  test("tool file change returns restart", () => {
+    // Tool edits used to classify as "typegen" (no restart) on the theory
+    // that the dev child's tsx `?t=` cache-buster would re-import the
+    // changed module. It doesn't — tsx never re-evaluates on a query-string
+    // change — so the running child served the stale tool until an
+    // unrelated edit happened to restart it. This is a bug fix.
+    expect(classifyChange("src/app/hello/[tenant]/tools/greet.ts")).toBe("restart")
   })
 
-  test("state.ts change returns typegen", () => {
-    expect(classifyChange("src/app/hello/[tenant]/state.ts")).toBe("typegen")
+  test("state.ts change returns restart", () => {
+    expect(classifyChange("src/app/hello/[tenant]/state.ts")).toBe("restart")
   })
 
-  test("reducer file change returns typegen", () => {
-    expect(classifyChange("src/app/hello/[tenant]/reducers/results.ts")).toBe("typegen")
+  test("reducer file change returns restart", () => {
+    expect(classifyChange("src/app/hello/[tenant]/reducers/results.ts")).toBe("restart")
   })
 
   test("route index.ts change returns restart", () => {
@@ -26,8 +31,18 @@ describe("classifyChange", () => {
     expect(classifyChange("src/lib/utils.ts")).toBe("restart")
   })
 
-  test("nested tool file returns typegen", () => {
-    expect(classifyChange("src/app/(public)/hello/[tenant]/tools/search.ts")).toBe("typegen")
+  test("nested tool file returns restart", () => {
+    expect(classifyChange("src/app/(public)/hello/[tenant]/tools/search.ts")).toBe("restart")
+  })
+
+  test("unrelated docs/plan files still classify as restart (guard against over-flipping)", () => {
+    // Only the tools/*.ts, state.ts, and reducers/*.ts rules were flipped —
+    // everything that already fell through to the catch-all restart rule
+    // (or was ignored) must classify exactly as it did before.
+    expect(classifyChange("plan.md")).toBe("restart")
+    expect(classifyChange("docs/plan.md")).toBe("restart")
+    expect(classifyChange(".dawn/checkpoints.sqlite")).toBe("ignore")
+    expect(classifyChange("workspace/notes/output.md")).toBe("ignore")
   })
 
   test(".d.ts file in tools returns restart (not a real tool)", () => {
