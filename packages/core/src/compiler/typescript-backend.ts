@@ -8,11 +8,6 @@ import type { AnalyzedTool, PropertyInfo, TypeInfo } from "./model.js"
 
 const MAX_TYPE_DEPTH = 32
 
-interface JsDocInfo {
-  readonly description: string
-  readonly params: ReadonlyMap<string, string>
-}
-
 interface ResolutionState {
   readonly activeTypes: Set<ts.Type>
   readonly depth: number
@@ -99,17 +94,17 @@ function analyzeProgramSource(
       )
     : null
   const returnType = unwrapPromise(checker.getReturnTypeOfSignature(signature), checker)
-  const jsDoc = extractJsDoc(sourceFile)
+  const description = ts.displayPartsToString(defaultExport.getDocumentationComment(checker))
 
   return {
     name,
-    description: jsDoc.description,
+    description,
     inputType: parameterType
       ? checker.typeToString(parameterType, undefined, ts.TypeFormatFlags.NoTruncation)
       : "void",
     outputType: checker.typeToString(returnType, undefined, ts.TypeFormatFlags.NoTruncation),
     parameter: parameterType ? resolveParameterType(parameterType, checker, sourceFile) : null,
-    parameterDescriptions: jsDoc.params,
+    parameterDescriptions: extractParameterDescriptions(sourceFile),
   }
 }
 
@@ -354,16 +349,16 @@ function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
   return checker.getTypeArguments(type as ts.TypeReference)[0] ?? type
 }
 
-function extractJsDoc(sourceFile: ts.SourceFile): JsDocInfo {
+function extractParameterDescriptions(sourceFile: ts.SourceFile): ReadonlyMap<string, string> {
   const defaultExportNode = sourceFile.statements.find(isDefaultExport)
-  if (!defaultExportNode) return { description: "", params: new Map() }
+  if (!defaultExportNode) return new Map()
 
   const source = sourceFile.getFullText()
   const commentRanges = ts.getLeadingCommentRanges(source, defaultExportNode.getFullStart()) ?? []
   const jsDocRange = commentRanges
     .filter((range) => source.slice(range.pos, range.end).startsWith("/**"))
     .at(-1)
-  if (!jsDocRange) return { description: "", params: new Map() }
+  if (!jsDocRange) return new Map()
 
   const comment = source.slice(jsDocRange.pos, jsDocRange.end)
   const lines = comment
@@ -371,25 +366,16 @@ function extractJsDoc(sourceFile: ts.SourceFile): JsDocInfo {
     .replace(/\*\/$/, "")
     .split("\n")
     .map((line) => line.replace(/^\s*\*\s?/, "").trim())
-  const descriptionLines: string[] = []
   const params = new Map<string, string>()
 
   for (const line of lines) {
     if (line.startsWith("@param")) {
       const match = line.match(/^@param\s+(\S+)\s*(?:-\s*)?(.*)$/)
       if (match?.[1]) params.set(match[1], (match[2] ?? "").trim())
-    } else if (!line.startsWith("@")) {
-      descriptionLines.push(line)
     }
   }
 
-  return {
-    description: descriptionLines
-      .filter((line) => line.length > 0)
-      .join(" ")
-      .trim(),
-    params,
-  }
+  return params
 }
 
 function isDefaultExport(statement: ts.Statement): boolean {

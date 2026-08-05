@@ -575,7 +575,23 @@ export default async (
 ): Promise<{ matches: string[] }> => ({ matches: [input.query] })
 `)
 
-    expect(result.description).toBe("Search across all indexed customer records.")
+    expect(result.description).toBe("Search across all indexed\ncustomer records.")
+    expect(result.parameterDescriptions).toEqual(new Map([["query", "Search terms"]]))
+  })
+
+  test("keeps multiline param continuation out of the description while retaining fallback", () => {
+    const result = analyze(`
+/**
+ * Search across indexed customer records.
+ * @param query Search terms
+ *   including known aliases.
+ */
+export default async (
+  input: { query: string },
+): Promise<{ matches: string[] }> => ({ matches: [input.query] })
+`)
+
+    expect(result.description).toBe("Search across indexed customer records.")
     expect(result.parameterDescriptions).toEqual(new Map([["query", "Search terms"]]))
   })
 
