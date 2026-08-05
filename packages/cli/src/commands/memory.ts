@@ -10,7 +10,7 @@ interface MemoryOptions {
 }
 
 const USAGE =
-  "dawn memory <subcommand> [args]\n  subcommands: list, search <query>, inspect <id>, approve <id>, reject <id>, forget <id>"
+  "dawn memory <subcommand> [args]\n  subcommands: list, search <query>, inspect <id>, approve <id>, reject <id>, forget <id>, prune [--cap <n>] [--namespace <prefix>]"
 
 export function registerMemoryCommand(program: Command, io: CommandIo): void {
   program
@@ -70,6 +70,10 @@ export async function runMemoryCommand(
       const id = argv[1]
       if (!id) throw new CliError("Usage: dawn memory forget <id>", 1)
       await runForget(store, id, io)
+      break
+    }
+    case "prune": {
+      await runPrune(store, argv.slice(1), io)
       break
     }
     default: {
@@ -141,6 +145,36 @@ async function runReject(store: MemoryStore, id: string, io: CommandIo): Promise
   if (!rec) throw new CliError(`Record not found: ${id}`, 1)
   await store.delete(id)
   writeLine(io.stdout, `Rejected and deleted: ${id}`)
+}
+
+async function runPrune(store: MemoryStore, args: readonly string[], io: CommandIo): Promise<void> {
+  const usage = "Usage: dawn memory prune [--cap <n>] [--namespace <prefix>]"
+  let cap: number | undefined
+  let namespacePrefix: string | undefined
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === "--cap") {
+      const raw = args[++i]
+      if (raw === undefined) throw new CliError(`Missing value for --cap.\n${usage}`, 1)
+      const parsed = Number(raw)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new CliError(`Invalid --cap value: "${raw}" (expected a number >= 0).\n${usage}`, 1)
+      }
+      cap = parsed
+    } else if (arg === "--namespace") {
+      const raw = args[++i]
+      if (raw === undefined) throw new CliError(`Missing value for --namespace.\n${usage}`, 1)
+      namespacePrefix = raw
+    } else {
+      throw new CliError(`Unknown argument: "${arg}".\n${usage}`, 1)
+    }
+  }
+  const res = await store.prune({
+    now: new Date().toISOString(),
+    ...(cap !== undefined ? { cap } : {}),
+    ...(namespacePrefix !== undefined ? { namespacePrefix } : {}),
+  })
+  writeLine(io.stdout, `pruned: ${res.deletedExpired} expired, ${res.deletedOverCap} over-cap`)
 }
 
 async function runForget(store: MemoryStore, id: string, io: CommandIo): Promise<void> {

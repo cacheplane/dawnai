@@ -287,6 +287,65 @@ describe("dawn memory", () => {
     expect(await store.get("m1")).toBeNull()
   })
 
+  it("prune deletes expired rows and reports counts", async () => {
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    await store.put({
+      ...baseRecord,
+      id: "expired",
+      status: "active",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    })
+    await store.put({
+      ...baseRecord,
+      id: "live",
+      kind: "episodic",
+      status: "active",
+      effectiveAt: new Date().toISOString(),
+    })
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["prune"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    const output = lines.join("\n")
+    expect(output).toMatch(/1 expired/)
+    expect(output).toMatch(/0 over-cap/)
+    expect(await store.get("expired")).toBeNull()
+    expect(await store.get("live")).not.toBeNull()
+  })
+
+  it("prune --cap enforces the episodic cap", async () => {
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    for (let i = 1; i <= 4; i++) {
+      await store.put({
+        ...baseRecord,
+        id: `ep-${i}`,
+        kind: "episodic",
+        status: "active",
+        effectiveAt: `2026-08-0${i}T00:00:00.000Z`,
+      })
+    }
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["prune", "--cap", "2"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    // The two oldest (ep-1, ep-2) are pruned; the two newest survive.
+    expect(await store.get("ep-1")).toBeNull()
+    expect(await store.get("ep-2")).toBeNull()
+    expect(await store.get("ep-3")).not.toBeNull()
+    expect(await store.get("ep-4")).not.toBeNull()
+    expect(lines.join("\n")).toMatch(/2 over-cap/)
+  })
+
   it("unknown subcommand throws CliError", async () => {
     const appRoot = await makeApp()
     const io = { stdout: () => {}, stderr: () => {} }
