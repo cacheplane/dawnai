@@ -162,6 +162,23 @@ describe.skipIf(!gated)("memory JSON API", () => {
     expect(res.status).toBe(403)
     const body = (await res.json()) as { error: string }
     expect(body.error).toContain("forbidden origin")
+
+    // Same hostname on a DIFFERENT port is still a foreign origin — only the
+    // inspector's own origin (host including port) may change state.
+    const resOtherPort = await fetch(`${server.base}/api/memory/cand1/approve`, {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1:1" },
+    })
+    expect(resOtherPort.status).toBe(403)
+    expect(((await resOtherPort.json()) as { error: string }).error).toContain("forbidden origin")
+
+    // The inspector's own origin passes the guard (404 = past it, no mutation).
+    const resSameOrigin = await fetch(`${server.base}/api/memory/no-such-id/approve`, {
+      method: "POST",
+      headers: { origin: server.base },
+    })
+    expect(resSameOrigin.status).toBe(404)
+
     // The guard fired BEFORE any mutation: cand1 is still a candidate.
     const rec = (await (await fetch(`${server.base}/api/memory/cand1`)).json()) as MemoryRecord
     expect(rec.status).toBe("candidate")

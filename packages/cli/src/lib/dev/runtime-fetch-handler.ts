@@ -390,11 +390,11 @@ function buildRouteTable(ctx: {
     },
 
     // ------------------------------------------------------------------
-    // POST /memory/candidates/:id/approve — flip a candidate to active
+    // POST /memory/candidates/:id/approve — approve with reconciliation
     // ------------------------------------------------------------------
     {
       handle: async (_request, params) =>
-        handleMemoryApproveRequest({ id: params.id ?? "", memoryStore }),
+        handleMemoryApproveRequest({ appRoot, id: params.id ?? "", memoryStore }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/approve(?:\?.*)?$/,
     },

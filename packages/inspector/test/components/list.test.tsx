@@ -1,5 +1,5 @@
 import type { MemoryRecord, MemoryStats } from "@dawn-ai/memory"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ListPage } from "../../src/components/memory/list-page"
 
@@ -91,6 +91,48 @@ describe("ListPage", () => {
       )
       expect(scoped.length).toBeGreaterThan(0)
     })
+  })
+
+  it("a selected facet filters the page to the exact namespace, not the prefix", async () => {
+    const sibling: MemoryRecord = {
+      ...candidate,
+      id: "cand2",
+      namespace: "route=/notes2",
+      content: "sibling prefix record",
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        if (u.includes("/api/memory/stats")) {
+          return jsonResponse({
+            ...stats,
+            total: 2,
+            byNamespace: { "route=/notes": 1, "route=/notes2": 1 },
+          })
+        }
+        if (u.includes("/api/memory/list")) {
+          // The server narrows by PREFIX, so a route=/notes selection still
+          // returns the route=/notes2 sibling — the client must filter exactly.
+          return jsonResponse({ records: [candidate, sibling], total: 2 })
+        }
+        return jsonResponse({ groups: [] })
+      }),
+    )
+    render(<ListPage />)
+    expect(await screen.findByText("acme threshold is 750")).toBeDefined()
+    expect(await screen.findByText("sibling prefix record")).toBeDefined()
+
+    // Exact-text lookup scoped to the facet rail: "route=/notes" must not
+    // match the "route=/notes2" facet (or the grid's namespace cells).
+    const facetLabel = within(screen.getByRole("navigation")).getByText("route=/notes")
+    const facetButton = facetLabel.closest("button")
+    if (!facetButton) throw new Error("facet button not found")
+    fireEvent.click(facetButton)
+    await vi.waitFor(() => {
+      expect(screen.queryByText("sibling prefix record")).toBeNull()
+    })
+    expect(screen.getByText("acme threshold is 750")).toBeDefined()
   })
 
   it("typing a query fires a debounced search and renders grouped results", async () => {

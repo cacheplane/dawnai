@@ -129,6 +129,12 @@ export function ListPage() {
   }, [])
 
   const byStatus = stats?.byStatus ?? {}
+  // The list API narrows by namespace PREFIX (server-side); a selected facet is
+  // an exact namespace, so filter the fetched page exactly — otherwise picking
+  // route=/chat would also show route=/chat2.
+  const pageRecords = namespace
+    ? (page?.records ?? []).filter((rec) => rec.namespace === namespace)
+    : (page?.records ?? [])
   const searching = query.length > 0
   // Keyed by source, not message — two fetchers failing with the same message
   // must not produce duplicate React keys (or stacked repeats).
@@ -216,8 +222,8 @@ export function ListPage() {
             ) : (
               <p className="py-8 text-center text-sm text-zinc-400">No matches.</p>
             )
-          ) : page && page.records.length > 0 ? (
-            <MemoryGrid records={page.records} onSelect={setSelectedId} />
+          ) : pageRecords.length > 0 ? (
+            <MemoryGrid records={pageRecords} onSelect={setSelectedId} />
           ) : (
             <p className="py-8 text-center text-sm text-zinc-400">
               No memories yet — run your agent and watch them appear.

@@ -265,6 +265,10 @@ so memories appear as the agent writes them.
   (pretty JSON) · `tags` · `source` · `confidence` · `embedding` model + vector
   presence · `created`/`updated` timestamps · `supersedes` link(s) · **copy raw
   JSON** button.
+  - *Recorded deviation (as built):* the sheet omits the "embedding model +
+    vector presence" field — `MemoryRecord` does not expose embedding metadata
+    and `browse` deliberately excludes the embedding BLOB; deferred until the
+    record surfaces embedding metadata.
   - Actions: **Approve** (candidate) — if the candidate's identity matches an
     active memory with different data, the button becomes **Approve & supersede**
     and an amber callout shows the before/after diff and the target id; **Reject**

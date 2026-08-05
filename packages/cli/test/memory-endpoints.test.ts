@@ -50,14 +50,63 @@ describe("memory-candidate HTTP endpoints", () => {
       { method: "POST" },
     )
     expect(response.status).toBe(200)
-    const body = (await response.json()) as { record: MemoryRecord }
+    const body = (await response.json()) as {
+      record: MemoryRecord
+      action: string
+      superseded: MemoryRecord[]
+    }
     expect(body.record.id).toBe("memory_cand_approve")
     expect(body.record.status).toBe("active")
+    expect(body.action).toBe("activated")
+    expect(body.superseded).toEqual([])
 
     // No longer a candidate.
     const listResponse = await fetch(new URL("/memory/candidates", server.url))
     const listBody = (await listResponse.json()) as { candidates: MemoryRecord[] }
     expect(listBody.candidates.find((rec) => rec.id === "memory_cand_approve")).toBeUndefined()
+  })
+
+  test("POST /memory/candidates/:id/approve supersedes a contradicting active record", async () => {
+    const appRoot = await createFixtureApp()
+    // Same identity (default keys [subject, predicate]), different value —
+    // approval must supersede the active row, not leave two actives.
+    await seedRecord(appRoot, {
+      id: "memory_active_old",
+      content: "The user prefers long summaries.",
+      status: "active",
+      data: { subject: "user", predicate: "prefers", object: "long summaries" },
+    })
+    await seedRecord(appRoot, {
+      id: "memory_cand_contradiction",
+      content: "The user prefers short summaries.",
+      status: "candidate",
+      data: { subject: "user", predicate: "prefers", object: "short summaries" },
+    })
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+
+    const response = await fetch(
+      new URL("/memory/candidates/memory_cand_contradiction/approve", server.url),
+      { method: "POST" },
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      record: MemoryRecord
+      action: string
+      superseded: MemoryRecord[]
+    }
+    expect(body.record.id).toBe("memory_cand_contradiction")
+    expect(body.record.status).toBe("active")
+    expect(body.action).toBe("superseded")
+    expect(body.superseded.map((rec) => rec.id)).toEqual(["memory_active_old"])
+
+    // The old record is demoted in the store — no two-actives state.
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn", "memory.sqlite") })
+    const oldRecord = await store.get("memory_active_old")
+    expect(oldRecord?.status).toBe("superseded")
+    const approved = await store.get("memory_cand_contradiction")
+    expect(approved?.status).toBe("active")
+    expect(approved?.supersedes).toContain("memory_active_old")
   })
 
   test("POST /memory/candidates/:id/approve returns 404 for an unknown id", async () => {
@@ -123,7 +172,7 @@ describe("memory-candidate HTTP endpoints", () => {
 
 async function seedRecord(
   appRoot: string,
-  overrides: Pick<MemoryRecord, "id" | "content" | "status">,
+  overrides: Pick<MemoryRecord, "id" | "content" | "status"> & Partial<Pick<MemoryRecord, "data">>,
 ): Promise<void> {
   const store = sqliteMemoryStore({ path: join(appRoot, ".dawn", "memory.sqlite") })
   const record: MemoryRecord = {

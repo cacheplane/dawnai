@@ -1,15 +1,8 @@
-import { existsSync } from "node:fs"
-import { join, resolve } from "node:path"
-import { discoverRoutes } from "@dawn-ai/core"
-import {
-  approveWithReconcile,
-  type MemoryStore,
-  parseNamespace,
-  routeNamespaceKey,
-} from "@dawn-ai/memory"
+import { resolve } from "node:path"
+import { approveWithReconcile, type MemoryStore } from "@dawn-ai/memory"
 import type { Command } from "commander"
-import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
-import { loadRouteMemory } from "../lib/runtime/load-memory.js"
+import { CliError, type CommandIo, writeLine } from "../lib/output.js"
+import { resolveIdentityKeys } from "../lib/runtime/resolve-identity.js"
 import { resolveMemoryStore } from "../lib/runtime/resolve-memory.js"
 
 interface MemoryOptions {
@@ -141,44 +134,6 @@ async function runApprove(
       "note: route memory.ts not found for namespace; used default identity [subject, predicate]",
     )
   }
-}
-
-/**
- * Resolve the identity keys governing supersede reconciliation for a record's
- * namespace: find the route whose namespace key matches, load its memory.ts,
- * and use its declared `identity`. Falls back to [subject, predicate] when the
- * route (or its memory.ts) cannot be resolved.
- */
-// mirrored in packages/inspector/src/store/identity.ts — keep in sync
-async function resolveIdentityKeys(
-  appRoot: string,
-  namespace: string,
-): Promise<{ keys: readonly string[]; fallback: boolean }> {
-  const DEFAULT = ["subject", "predicate"] as const
-  const routeKey = parseNamespace(namespace).route
-  if (!routeKey) return { keys: DEFAULT, fallback: true }
-  let manifest: Awaited<ReturnType<typeof discoverRoutes>>
-  try {
-    manifest = await discoverRoutes({ appRoot })
-  } catch {
-    // No dawn.config.ts / unreadable app — fall back to the default.
-    return { keys: DEFAULT, fallback: true }
-  }
-  for (const route of manifest.routes) {
-    if (routeNamespaceKey(route.pathname) !== routeKey) continue
-    const memoryFile = join(route.routeDir, "memory.ts")
-    if (!existsSync(memoryFile)) break
-    // A memory.ts that EXISTS but fails to load must NOT silently fall back to
-    // the default identity keys — wrong keys could miss or mis-target a
-    // supersede. Surface the load failure instead.
-    try {
-      const def = await loadRouteMemory(memoryFile)
-      return { keys: def.identity ?? DEFAULT, fallback: false }
-    } catch (cause) {
-      throw new CliError(`Failed to load ${memoryFile}: ${formatErrorMessage(cause)}`, 1, { cause })
-    }
-  }
-  return { keys: DEFAULT, fallback: true }
 }
 
 async function runReject(store: MemoryStore, id: string, io: CommandIo): Promise<void> {

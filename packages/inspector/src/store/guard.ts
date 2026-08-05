@@ -13,11 +13,14 @@ export function assertLocalRequest(req: Request): Response | undefined {
   if (req.method !== "GET") {
     const origin = req.headers.get("origin")
     if (origin) {
+      // Must be the inspector's OWN origin — host INCLUDING port. A localhost
+      // origin on another port is still a foreign page (e.g. a malicious dev
+      // server) firing state-changing requests at the inspector.
       let originHost = ""
       try {
-        originHost = new URL(origin).hostname
+        originHost = new URL(origin).host
       } catch {}
-      if (originHost !== "127.0.0.1" && originHost !== "localhost") {
+      if (originHost !== host) {
         return Response.json({ error: `forbidden origin ${origin}` }, { status: 403 })
       }
     }
