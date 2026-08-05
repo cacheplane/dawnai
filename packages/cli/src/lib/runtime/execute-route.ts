@@ -67,6 +67,7 @@ import {
 import { deriveRouteIdentity } from "./route-identity.js"
 import type { SandboxManager } from "./sandbox-manager.js"
 import { discoverStateDefinition } from "./state-discovery.js"
+import type { DawnStaticModules } from "./static-modules.js"
 import type { StreamChunk } from "./stream-types.js"
 import {
   type DiscoveredToolDefinition,
@@ -178,6 +179,12 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
  * object identity keeps the descriptor-route-map WeakMap warm. When absent
  * (harness direct-call path), a per-appRoot process-lifetime memo performs
  * the walk once instead of once per request.
+ *
+ * `staticModules` is the build-time module manifest, when the server booted
+ * from one. When threaded, the subagents descriptor maps are derived from it
+ * with zero entry-file imports (`getCachedStaticDescriptorMaps`) — the
+ * static path's replacement for `buildDescriptorRouteMap`'s per-route
+ * dynamic imports.
  */
 interface BootResolvedInstances {
   readonly checkpointer?: BaseCheckpointSaver
@@ -185,6 +192,7 @@ interface BootResolvedInstances {
   readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly memoryStore?: () => Promise<MemoryStoreLike>
   readonly routeManifest?: RouteManifest
+  readonly staticModules?: DawnStaticModules
 }
 
 export async function executeResolvedRoute(
@@ -768,11 +776,17 @@ export async function prepareRouteExecution(
 
     // Build (or reuse) the descriptor->routeId identity map used by the
     // subagents marker to resolve `agent({ subagents: [imported] })` overrides.
-    // The cache is keyed on the manifest object identity, which is stable for
-    // the process lifetime: the boot registry's manifest is threaded down via
+    // Static manifest present → derive from it with zero entry-file imports;
+    // otherwise the dynamic best-effort import path. Both caches are keyed on
+    // their source object's identity, which is stable for the process
+    // lifetime: the boot registry's manifest is threaded down via
     // `routeManifest` (or memoized per appRoot on the fallback path), and the
     // dev child restarts on any edit that could change it.
-    const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
+    const staticMaps = options.staticModules
+      ? getCachedStaticDescriptorMaps(options.staticModules)
+      : undefined
+    const descriptorRouteMap =
+      staticMaps?.descriptorRouteMap ?? (await getCachedDescriptorRouteMap(routeManifest))
 
     // Build the memory context if this route has a memory.ts (probed and
     // loaded once per route — part of PreparedRouteModules).
@@ -836,6 +850,7 @@ export async function prepareRouteExecution(
       routeManifest,
       descriptor,
       descriptorRouteMap,
+      ...(staticMaps ? { routeDescriptors: staticMaps.routeDescriptors } : {}),
       ...(capabilityBackends ? { backends: capabilityBackends } : {}),
       markerFs: nodeMarkerFs,
       permissions: permissionsStore,
@@ -982,6 +997,7 @@ export async function prepareRouteExecution(
         descriptorRouteMap,
         ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
         ...(sandboxKey ? { sandboxThreadId: sandboxKey } : {}),
+        ...(options.staticModules ? { staticModules: options.staticModules } : {}),
       })
     }
   }
@@ -1304,11 +1320,50 @@ async function getCachedDescriptorRouteMap(
 export { getCachedDescriptorRouteMap }
 
 /**
- * Test-only: reset the WeakMap-backed cache. Not exported via the package
- * barrel — internal to this module's test suite.
+ * Test-only: reset the WeakMap-backed caches (dynamic descriptor-route map
+ * and static descriptor maps). Not exported via the package barrel — internal
+ * to this module's test suite.
  */
 export function __resetDescriptorRouteMapCacheForTests(): void {
   descriptorRouteMapCache = new WeakMap()
+  staticDescriptorMapsCache = new WeakMap()
+}
+
+export interface StaticDescriptorMaps {
+  readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
+  readonly routeDescriptors: ReadonlyMap<string, unknown>
+}
+
+/**
+ * Static-modules fast path: derive both descriptor maps from the manifest —
+ * each agent route's `module.entry` IS its normalized default-export
+ * descriptor, so no entry file is ever imported from disk (closes the last
+ * B2 dynamic-import hole; edge runtimes have no disk to import from).
+ */
+export function buildDescriptorMapsFromStaticModules(
+  modules: DawnStaticModules,
+): StaticDescriptorMaps {
+  const descriptorRouteMap = new Map<DawnAgent, string>()
+  const routeDescriptors = new Map<string, unknown>()
+  for (const route of modules.routes) {
+    if (route.kind === "agent" && isDawnAgent(route.module.entry)) {
+      descriptorRouteMap.set(route.module.entry, route.routeId)
+      routeDescriptors.set(route.routeId, route.module.entry)
+    }
+  }
+  return { descriptorRouteMap, routeDescriptors }
+}
+
+let staticDescriptorMapsCache = new WeakMap<DawnStaticModules, StaticDescriptorMaps>()
+
+/** Memoized per manifest object identity — stable for the process lifetime. */
+export function getCachedStaticDescriptorMaps(modules: DawnStaticModules): StaticDescriptorMaps {
+  let maps = staticDescriptorMapsCache.get(modules)
+  if (!maps) {
+    maps = buildDescriptorMapsFromStaticModules(modules)
+    staticDescriptorMapsCache.set(modules, maps)
+  }
+  return maps
 }
 
 async function buildDescriptorRouteMap(
@@ -1360,9 +1415,15 @@ function buildSubagentResolver(args: {
    * still resolving the same per-thread SandboxHandle as its parent.
    */
   readonly sandboxThreadId?: string
+  /**
+   * The boot-time static manifest, when present — forwarded into the child's
+   * re-entry so its own prep also derives descriptor maps without entry-file
+   * imports. (Store threading for subagent re-entry is a separate concern.)
+   */
+  readonly staticModules?: DawnStaticModules
 }): SubagentResolver {
   const { appRoot, routeDir, routeManifest, descriptor, descriptorRouteMap } = args
-  const { sandboxManager, sandboxThreadId } = args
+  const { sandboxManager, sandboxThreadId, staticModules } = args
 
   const findConventionRoute = (leaf: string): RouteDefinition | undefined => {
     const conventionDir = `${routeDir}/subagents/${leaf}`
@@ -1405,6 +1466,7 @@ function buildSubagentResolver(args: {
           // Reuse the parent's manifest so the child performs no walk and the
           // descriptor-route-map cache stays warm (same object identity).
           routeManifest,
+          ...(staticModules ? { staticModules } : {}),
           ...(sandboxManager ? { sandboxManager } : {}),
           // Deliberately NOT `threadId`: the child must run as an independent
           // uncheckpointed invocation (forwarding the parent's threadId would
@@ -1434,6 +1496,7 @@ function buildSubagentResolver(args: {
           routePath: route.pathname,
           // Same manifest reuse as invoke() above.
           routeManifest,
+          ...(staticModules ? { staticModules } : {}),
           ...(sandboxManager ? { sandboxManager } : {}),
           // Same as invoke() above: sandbox key only, never the checkpoint id.
           ...(sandboxThreadId ? { sandboxThreadId } : {}),

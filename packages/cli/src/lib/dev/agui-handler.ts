@@ -9,6 +9,7 @@ import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { streamResolvedRoute } from "../runtime/execute-route.js"
 import type { SandboxManager } from "../runtime/sandbox-manager.js"
+import type { DawnStaticModules } from "../runtime/static-modules.js"
 import type { StreamChunk } from "../runtime/stream-types.js"
 import { abortableAsyncIterable } from "./abortable-iterable.js"
 import { headersToRecord, runMiddleware } from "./middleware.js"
@@ -40,6 +41,13 @@ export interface AgUiFetchRequestOptions {
   readonly threadsStore: ThreadsStore
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
+  /**
+   * Boot-time static module manifest, when the server booted from one —
+   * forwarded into route execution so subagents descriptor maps are derived
+   * without entry-file imports. Optional so direct callers (tests) keep
+   * their existing behavior.
+   */
+  readonly staticModules?: DawnStaticModules
   readonly request: Request
   readonly routeKey: string
   readonly streamRoute?: typeof streamResolvedRoute
@@ -111,6 +119,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     threadsStore,
     sandboxManager,
     signal: shutdownSignal,
+    staticModules,
     request,
     routeKey,
     streamRoute = streamResolvedRoute,
@@ -205,6 +214,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
             signal,
+            ...(staticModules ? { staticModules } : {}),
             threadId,
             threadsStore,
           })

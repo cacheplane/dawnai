@@ -15,6 +15,7 @@ import {
 import { resolveMemoryStore } from "../runtime/resolve-memory.js"
 import { resolveSandboxManager } from "../runtime/resolve-sandbox.js"
 import type { SandboxManager } from "../runtime/sandbox-manager.js"
+import type { DawnStaticModules } from "../runtime/static-modules.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { handleAgUiFetchRequest } from "./agui-handler.js"
 import {
@@ -139,6 +140,9 @@ export async function createRuntimeFetchHandler(
     registry,
     ...(sandboxManager ? { sandboxManager } : {}),
     signal: shutdownController.signal,
+    // Boot manifest → route execution derives the subagents descriptor maps
+    // from it with zero entry-file imports.
+    ...(options.modules ? { staticModules: options.modules } : {}),
     threadsStore,
   })
 
@@ -294,6 +298,7 @@ function buildRouteTable(ctx: {
   readonly registry: RuntimeRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
+  readonly staticModules?: DawnStaticModules
   readonly threadsStore: ThreadsStore
 }): RouteMatcher[] {
   const {
@@ -305,6 +310,7 @@ function buildRouteTable(ctx: {
     registry,
     sandboxManager,
     signal,
+    staticModules,
     threadsStore,
   } = ctx
 
@@ -404,6 +410,7 @@ function buildRouteTable(ctx: {
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
+          ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore,
@@ -427,6 +434,7 @@ function buildRouteTable(ctx: {
           threadsStore,
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
+          ...(staticModules ? { staticModules } : {}),
           request,
           routeKey: params.routeId ?? "",
         }),
@@ -482,6 +490,7 @@ function buildRouteTable(ctx: {
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
+          ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore,
@@ -533,6 +542,7 @@ function buildRouteTable(ctx: {
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
+          ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
           threadsStore,
@@ -590,6 +600,7 @@ async function handleApStreamRequest(options: {
   readonly request: Request
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
+  readonly staticModules?: DawnStaticModules
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
@@ -604,6 +615,7 @@ async function handleApStreamRequest(options: {
     request,
     sandboxManager,
     signal,
+    staticModules,
     threadId,
     threadRouteMap,
     threadsStore,
@@ -682,6 +694,7 @@ async function handleApStreamRequest(options: {
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
             signal,
+            ...(staticModules ? { staticModules } : {}),
             threadId,
             threadsStore,
           })) {
@@ -732,6 +745,7 @@ async function handleApWaitRequest(options: {
   readonly request: Request
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
+  readonly staticModules?: DawnStaticModules
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
@@ -746,6 +760,7 @@ async function handleApWaitRequest(options: {
     request,
     sandboxManager,
     signal,
+    staticModules,
     threadId,
     threadRouteMap,
     threadsStore,
@@ -810,6 +825,7 @@ async function handleApWaitRequest(options: {
     routePath: route.routePath,
     ...(sandboxManager ? { sandboxManager } : {}),
     signal,
+    ...(staticModules ? { staticModules } : {}),
     threadId,
     threadsStore,
   })
@@ -866,6 +882,7 @@ async function handleResumeRequest(options: {
   readonly request: Request
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
+  readonly staticModules?: DawnStaticModules
   readonly threadId: string
   readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
@@ -880,6 +897,7 @@ async function handleResumeRequest(options: {
     request,
     sandboxManager,
     signal,
+    staticModules,
     threadId,
     threadRouteMap,
     threadsStore,
@@ -1004,6 +1022,7 @@ async function handleResumeRequest(options: {
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
             signal,
+            ...(staticModules ? { staticModules } : {}),
             threadId,
             threadsStore,
           })) {

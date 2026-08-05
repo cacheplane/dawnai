@@ -27,13 +27,30 @@ function findConventionSubagents(
   })
 }
 
-async function loadDescription(route: RouteDefinition): Promise<string> {
+function extractDescription(candidate: unknown): string | undefined {
+  return isDawnAgent(candidate) && typeof candidate.description === "string"
+    ? candidate.description
+    : undefined
+}
+
+async function loadDescription(
+  route: RouteDefinition,
+  routeDescriptors: ReadonlyMap<string, unknown> | undefined,
+): Promise<string> {
+  // Static-modules path: the route's default-export descriptor is already in
+  // hand — extracting from it is equivalent to importing the entry file, so
+  // no dynamic import happens (edge runtimes have no disk to import from).
+  const staticDescriptor = routeDescriptors?.get(route.id)
+  if (staticDescriptor !== undefined) {
+    return extractDescription(staticDescriptor) ?? "No description provided."
+  }
   try {
     const mod = (await import(pathToFileURL(route.entryFile).href)) as {
       default?: unknown
     }
-    if (isDawnAgent(mod.default) && typeof mod.default.description === "string") {
-      return mod.default.description
+    const described = extractDescription(mod.default)
+    if (described !== undefined) {
+      return described
     }
   } catch {
     // fall through to default — never fail capability composition over a description
@@ -86,7 +103,7 @@ export function createSubagentsMarker(): CapabilityMarker {
           )
         }
         seen.add(leafName)
-        const description = await loadDescription(r)
+        const description = await loadDescription(r, context.routeDescriptors)
         discovered.push({ leafName, routeId: r.id, description })
       }
 
