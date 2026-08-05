@@ -91,4 +91,12 @@ export interface MemoryStore {
   browse(q?: BrowseQuery): Promise<BrowsePage>
   /** Aggregate counts for facet UIs. */
   stats(opts?: { readonly namespacePrefix?: string }): Promise<MemoryStats>
+  /** Delete (a) rows of any kind with expiresAt <= now, and (b) when cap is
+   *  set, the oldest episodic rows beyond `cap` per namespace (ordered by
+   *  COALESCE(effectiveAt, createdAt), id tiebreak). */
+  prune(opts: {
+    readonly now: string
+    readonly namespacePrefix?: string
+    readonly cap?: number
+  }): Promise<{ readonly deletedExpired: number; readonly deletedOverCap: number }>
 }

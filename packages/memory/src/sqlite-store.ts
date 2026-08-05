@@ -502,5 +502,45 @@ export function sqliteMemoryStore(opts: {
         bySourceType: group("json_extract(source, '$.type')"),
       }
     },
+    async prune(opts) {
+      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      const prefixParams: SQLInputValue[] = opts.namespacePrefix
+        ? [opts.namespacePrefix, opts.namespacePrefix]
+        : []
+      const expiredSql = opts.namespacePrefix
+        ? `DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?
+           AND substr(namespace, 1, length(?)) = ?`
+        : "DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?"
+      const expired = db.prepare(expiredSql).run(opts.now, ...prefixParams)
+      let deletedOverCap = 0
+      if (opts.cap !== undefined) {
+        const cap = Math.max(0, Math.trunc(opts.cap))
+        // Rank episodic rows per namespace by event time (newest first, id ASC
+        // tiebreak — the established cross-backend ordering) and delete beyond cap.
+        const overSql = opts.namespacePrefix
+          ? `DELETE FROM memories WHERE id IN (
+               SELECT id FROM (
+                 SELECT id, ROW_NUMBER() OVER (
+                   PARTITION BY namespace
+                   ORDER BY COALESCE(effective_at, created_at) DESC, id ASC
+                 ) AS rn
+                 FROM memories
+                 WHERE kind = 'episodic' AND substr(namespace, 1, length(?)) = ?
+               ) WHERE rn > ?
+             )`
+          : `DELETE FROM memories WHERE id IN (
+               SELECT id FROM (
+                 SELECT id, ROW_NUMBER() OVER (
+                   PARTITION BY namespace
+                   ORDER BY COALESCE(effective_at, created_at) DESC, id ASC
+                 ) AS rn
+                 FROM memories WHERE kind = 'episodic'
+               ) WHERE rn > ?
+             )`
+        const over = db.prepare(overSql).run(...prefixParams, cap)
+        deletedOverCap = Number(over.changes)
+      }
+      return { deletedExpired: Number(expired.changes), deletedOverCap }
+    },
   }
 }
