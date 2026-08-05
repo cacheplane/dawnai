@@ -141,7 +141,16 @@ describe("typeInfoToToolParameters", () => {
     })
   })
 
-  test("falls back to string for unsupported and over-depth shapes", () => {
+  test("falls back to string for unsupported shapes", () => {
+    const parameter: TypeInfo = {
+      kind: "object",
+      properties: [{ name: "unknown", type: { kind: "unknown" }, optional: false }],
+    }
+
+    expect(typeInfoToToolParameters(parameter).properties.unknown).toEqual({ type: "string" })
+  })
+
+  test("falls back at the first object beyond the schema depth limit", () => {
     let deepType: TypeInfo = { kind: "string" }
     for (let index = 0; index < 10; index += 1) {
       deepType = {
@@ -152,14 +161,15 @@ describe("typeInfoToToolParameters", () => {
 
     const parameter: TypeInfo = {
       kind: "object",
-      properties: [
-        { name: "unknown", type: { kind: "unknown" }, optional: false },
-        { name: "deep", type: deepType, optional: false },
-      ],
+      properties: [{ name: "deep", type: deepType, optional: false }],
     }
-    const result = typeInfoToToolParameters(parameter)
+    let overDepthNode = typeInfoToToolParameters(parameter).properties.deep
 
-    expect(result.properties.unknown).toEqual({ type: "string" })
-    expect(JSON.stringify(result.properties.deep)).toContain('"type":"string"')
+    for (let index = 9; index >= 1; index -= 1) {
+      expect(overDepthNode).toMatchObject({ type: "object" })
+      overDepthNode = overDepthNode?.properties?.[`level${index}`]
+    }
+
+    expect(overDepthNode).toEqual({ type: "string" })
   })
 })
