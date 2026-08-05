@@ -1,7 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
-import type { CapabilityMarker, PromptFragment } from "../types.js"
+import type { CapabilityMarker, MarkerFs, PromptFragment } from "../types.js"
 import { parseFrontmatter } from "./frontmatter.js"
 
 const SKILLS_DIR = "skills"
@@ -28,9 +27,13 @@ interface LoadedSkill {
 export function createSkillsMarker(): CapabilityMarker {
   return {
     name: "skills",
-    detect: async (routeDir, _context) => discoverSkillDirs(routeDir).length > 0,
-    load: async (routeDir, _context) => {
-      const skills = loadSkills(routeDir)
+    detect: async (routeDir, context) =>
+      context.markerFs ? discoverSkillDirs(routeDir, context.markerFs).length > 0 : false,
+    load: async (routeDir, context) => {
+      // Captured at load() time: readSkill bodies are read through the same
+      // facade the detect phase used; no markerFs (edge) means no skills.
+      const markerFs = context.markerFs
+      const skills = markerFs ? loadSkills(routeDir, markerFs) : []
 
       const readSkill = {
         name: "readSkill",
@@ -70,41 +73,28 @@ export function createSkillsMarker(): CapabilityMarker {
   }
 }
 
-function discoverSkillDirs(routeDir: string): readonly string[] {
+function discoverSkillDirs(routeDir: string, markerFs: MarkerFs): readonly string[] {
   const skillsDir = join(routeDir, SKILLS_DIR)
-  if (!existsSync(skillsDir)) return []
-  let entries: string[]
-  try {
-    entries = readdirSync(skillsDir)
-  } catch {
-    return []
-  }
+  if (!markerFs.existsSync(skillsDir)) return []
+  const entries = markerFs.readdirSync(skillsDir)
   return entries.filter((name) => {
     if (!VALID_DIR_NAME.test(name)) return false
     const full = join(skillsDir, name)
-    let stat: ReturnType<typeof statSync>
-    try {
-      stat = statSync(full)
-    } catch {
-      return false
-    }
-    if (!stat.isDirectory()) return false
-    return existsSync(join(full, SKILL_FILE))
+    if (!markerFs.isDirectorySync(full)) return false
+    return markerFs.existsSync(join(full, SKILL_FILE))
   })
 }
 
-function loadSkills(routeDir: string): readonly LoadedSkill[] {
-  const dirNames = discoverSkillDirs(routeDir)
+function loadSkills(routeDir: string, markerFs: MarkerFs): readonly LoadedSkill[] {
+  const dirNames = discoverSkillDirs(routeDir, markerFs)
   const loaded: LoadedSkill[] = []
   const seenNames = new Set<string>()
 
   for (const dirName of dirNames) {
     const path = join(routeDir, SKILLS_DIR, dirName, SKILL_FILE)
-    let raw: string
-    try {
-      raw = readFileSync(path, "utf8")
-    } catch (error) {
-      throw new Error(`Failed to read ${path}: ${(error as Error).message}`)
+    const raw = markerFs.readFileSync(path)
+    if (raw === undefined) {
+      throw new Error(`Failed to read ${path}`)
     }
     const { frontmatter, body } = parseFrontmatter(raw)
     if (Object.keys(frontmatter).length === 0) {

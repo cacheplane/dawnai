@@ -4,6 +4,9 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createAgentsMdMarker } from "../../src/capabilities/built-in/agents-md.js"
 import { createMemoryMdMarker } from "../../src/capabilities/built-in/memory-md.js"
+import { createPlanningMarker } from "../../src/capabilities/built-in/planning.js"
+import { createSkillsMarker } from "../../src/capabilities/built-in/skills.js"
+import { createWorkspaceMarker } from "../../src/capabilities/built-in/workspace.js"
 import type { CapabilityMarkerContext, MarkerFs } from "../../src/capabilities/types.js"
 import { nodeMarkerFs } from "../../src/node-marker-fs.js"
 
@@ -140,6 +143,87 @@ describe("markers read through MarkerFs", () => {
       const out = contribution.promptFragment?.render({}) ?? ""
       expect(out).toContain("exceeds 32 KiB limit")
       expect(out).not.toContain("zzzzzzzzzz")
+    })
+  })
+
+  describe("planning", () => {
+    it("detects plan.md and seeds todos through the facade", async () => {
+      writeFileSync(join(routeDir, "plan.md"), "- [ ] one\n- [x] two\n")
+      const marker = createPlanningMarker()
+      const ctx = makeCtx(workDir, nodeMarkerFs)
+      expect(await marker.detect(routeDir, ctx)).toBe(true)
+      const contribution = await marker.load(routeDir, ctx)
+      expect(contribution.stateFields?.[0]?.default).toEqual([
+        { content: "one", status: "pending" },
+        { content: "two", status: "completed" },
+      ])
+      const rendered =
+        contribution.promptFragment?.render({
+          todos: [{ content: "one", status: "pending" }],
+        }) ?? ""
+      expect(rendered).toContain("# Planning")
+      expect(rendered).toContain("[pending] one")
+    })
+
+    it("detect is false when markerFs is absent, even though plan.md exists (edge)", async () => {
+      writeFileSync(join(routeDir, "plan.md"), "- [ ] one\n")
+      const marker = createPlanningMarker()
+      expect(await marker.detect(routeDir, makeCtx(workDir))).toBe(false)
+    })
+  })
+
+  describe("skills", () => {
+    function writeGreetingSkill(): void {
+      const dir = join(routeDir, "skills", "greeting")
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(dir, "SKILL.md"),
+        "---\ndescription: Greets warmly.\n---\n\nSay hello twice.",
+        "utf8",
+      )
+    }
+
+    it("discovers skills/greeting/SKILL.md and readSkill reads it through the facade", async () => {
+      writeGreetingSkill()
+      const marker = createSkillsMarker()
+      const ctx = makeCtx(workDir, nodeMarkerFs)
+      expect(await marker.detect(routeDir, ctx)).toBe(true)
+      const contribution = await marker.load(routeDir, ctx)
+      const rendered = contribution.promptFragment?.render({}) ?? ""
+      expect(rendered).toContain("**greeting** — Greets warmly.")
+      const readSkill = contribution.tools?.[0]
+      expect(readSkill?.name).toBe("readSkill")
+      const body = await readSkill?.run(
+        { name: "greeting" },
+        { signal: new AbortController().signal },
+      )
+      expect(body).toBe("Say hello twice.")
+    })
+
+    it("detect is false when markerFs is absent, even though skill files exist (edge)", async () => {
+      writeGreetingSkill()
+      const marker = createSkillsMarker()
+      expect(await marker.detect(routeDir, makeCtx(workDir))).toBe(false)
+    })
+  })
+
+  describe("workspace", () => {
+    it("detects the host workspace/ directory through the facade", async () => {
+      mkdirSync(join(workDir, "workspace"), { recursive: true })
+      const marker = createWorkspaceMarker()
+      expect(await marker.detect(routeDir, makeCtx(workDir, nodeMarkerFs))).toBe(true)
+    })
+
+    it("detect is false when markerFs is absent, even though workspace/ exists (edge)", async () => {
+      mkdirSync(join(workDir, "workspace"), { recursive: true })
+      const marker = createWorkspaceMarker()
+      expect(await marker.detect(routeDir, makeCtx(workDir))).toBe(false)
+    })
+
+    it("detect is true via workspaceRoot with no markerFs (sandbox workspace on edge)", async () => {
+      const marker = createWorkspaceMarker()
+      const ctx = { ...makeCtx(workDir), workspaceRoot: "/workspace" }
+      expect(await marker.detect(routeDir, ctx)).toBe(true)
     })
   })
 })

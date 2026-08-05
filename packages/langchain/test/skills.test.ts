@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { applyCapabilities, createCapabilityRegistry, createSkillsMarker } from "@dawn-ai/core"
+import { nodeMarkerFs } from "@dawn-ai/core/node"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 describe("skills capability — end-to-end shape", () => {
@@ -27,6 +28,7 @@ describe("skills capability — end-to-end shape", () => {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
       appRoot: routeDir,
+      markerFs: nodeMarkerFs,
     })
     expect(result.contributions).toEqual([])
   })
@@ -39,6 +41,7 @@ describe("skills capability — end-to-end shape", () => {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
       appRoot: routeDir,
+      markerFs: nodeMarkerFs,
     })
     expect(result.contributions).toHaveLength(1)
     const contrib = result.contributions[0]?.contribution
@@ -57,6 +60,7 @@ describe("skills capability — end-to-end shape", () => {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
       appRoot: routeDir,
+      markerFs: nodeMarkerFs,
     })
     const readSkill = result.contributions[0]?.contribution.tools?.[0]
     const output = await readSkill?.run(

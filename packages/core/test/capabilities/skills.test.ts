@@ -3,6 +3,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createSkillsMarker } from "../../src/capabilities/built-in/skills.js"
+import { nodeMarkerFs } from "../../src/node-marker-fs.js"
+
+const ctx = {
+  routeManifest: { appRoot: "/unused", routes: [] },
+  descriptor: undefined,
+  appRoot: "/unused",
+  markerFs: nodeMarkerFs,
+}
 
 describe("createSkillsMarker", () => {
   let routeDir: string
@@ -24,31 +32,31 @@ describe("createSkillsMarker", () => {
 
   it("does not detect when skills/ directory is absent", async () => {
     const marker = createSkillsMarker()
-    expect(await marker.detect(routeDir)).toBe(false)
+    expect(await marker.detect(routeDir, ctx)).toBe(false)
   })
 
   it("does not detect when skills/ exists but is empty", async () => {
     mkdirSync(join(routeDir, "skills"), { recursive: true })
     const marker = createSkillsMarker()
-    expect(await marker.detect(routeDir)).toBe(false)
+    expect(await marker.detect(routeDir, ctx)).toBe(false)
   })
 
   it("does not detect when skills/<name>/ has no SKILL.md", async () => {
     mkdirSync(join(routeDir, "skills", "stub"), { recursive: true })
     const marker = createSkillsMarker()
-    expect(await marker.detect(routeDir)).toBe(false)
+    expect(await marker.detect(routeDir, ctx)).toBe(false)
   })
 
   it("detects when at least one skills/<name>/SKILL.md exists", async () => {
     writeSkill("foo", "description: A foo skill.", "body")
     const marker = createSkillsMarker()
-    expect(await marker.detect(routeDir)).toBe(true)
+    expect(await marker.detect(routeDir, ctx)).toBe(true)
   })
 
   it("load contributes exactly one tool (readSkill) and one promptFragment, no state/transformers", async () => {
     writeSkill("foo", "description: A foo skill.", "body")
     const marker = createSkillsMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, ctx)
     expect(contribution.tools?.map((t) => t.name)).toEqual(["readSkill"])
     expect(contribution.promptFragment?.placement).toBe("after_user_prompt")
     expect(contribution.stateFields).toBeUndefined()
@@ -58,7 +66,7 @@ describe("createSkillsMarker", () => {
   it("uses directory name as the skill name when frontmatter omits it", async () => {
     writeSkill("debug-python", "description: Debug Python.", "# Body")
     const marker = createSkillsMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, ctx)
     const rendered = contribution.promptFragment?.render({}) ?? ""
     expect(rendered).toContain("**debug-python** — Debug Python.")
   })
@@ -66,7 +74,7 @@ describe("createSkillsMarker", () => {
   it("uses frontmatter.name when provided, overriding the directory name", async () => {
     writeSkill("dir-name", "name: override-name\ndescription: Overridden.", "body")
     const marker = createSkillsMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, ctx)
     const rendered = contribution.promptFragment?.render({}) ?? ""
     expect(rendered).toContain("**override-name** — Overridden.")
     expect(rendered).not.toContain("**dir-name**")
@@ -75,7 +83,7 @@ describe("createSkillsMarker", () => {
   it("fails fast when a SKILL.md has no frontmatter", async () => {
     writeSkill("bare", "", "# Just a body with no frontmatter")
     const marker = createSkillsMarker()
-    await expect(marker.load(routeDir)).rejects.toThrow(
+    await expect(marker.load(routeDir, ctx)).rejects.toThrow(
       /missing required frontmatter|missing required `description`/i,
     )
   })
@@ -83,14 +91,14 @@ describe("createSkillsMarker", () => {
   it("fails fast when frontmatter lacks description", async () => {
     writeSkill("no-desc", "name: no-desc", "body")
     const marker = createSkillsMarker()
-    await expect(marker.load(routeDir)).rejects.toThrow(/missing required `description`/i)
+    await expect(marker.load(routeDir, ctx)).rejects.toThrow(/missing required `description`/i)
   })
 
   it("fails fast when two skills resolve to the same name", async () => {
     writeSkill("foo", "description: First.", "body")
     writeSkill("bar", "name: foo\ndescription: Duplicate.", "body")
     const marker = createSkillsMarker()
-    await expect(marker.load(routeDir)).rejects.toThrow(/duplicate skill name/i)
+    await expect(marker.load(routeDir, ctx)).rejects.toThrow(/duplicate skill name/i)
   })
 
   it("skips invalid directory names silently (leading dot or spaces)", async () => {
@@ -108,7 +116,7 @@ describe("createSkillsMarker", () => {
       "utf8",
     )
     const marker = createSkillsMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, ctx)
     const rendered = contribution.promptFragment?.render({}) ?? ""
     expect(rendered).toContain("**good**")
     expect(rendered).not.toContain("**.hidden**")
@@ -118,7 +126,7 @@ describe("createSkillsMarker", () => {
   it("rendered prompt fragment includes a '# Skills' header and a readSkill instruction", async () => {
     writeSkill("foo", "description: A foo skill.", "body")
     const marker = createSkillsMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, ctx)
     const rendered = contribution.promptFragment?.render({}) ?? ""
     expect(rendered).toContain("# Skills")
     expect(rendered).toContain('readSkill({ name: "<name>" })')
@@ -127,7 +135,7 @@ describe("createSkillsMarker", () => {
   it("readSkill returns the body for a known skill", async () => {
     writeSkill("foo", "description: A foo skill.", "FOO BODY CONTENT")
     const marker = createSkillsMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, ctx)
     const readSkill = contribution.tools?.[0]
     const result = await readSkill?.run(
       { name: "foo" },
@@ -142,7 +150,7 @@ describe("createSkillsMarker", () => {
     writeSkill("foo", "description: A.", "body")
     writeSkill("bar", "description: B.", "body")
     const marker = createSkillsMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, ctx)
     const readSkill = contribution.tools?.[0]
     const result = await readSkill?.run(
       { name: "nope" },
@@ -158,7 +166,7 @@ describe("createSkillsMarker", () => {
   it("readSkill validates input shape (rejects non-string name)", async () => {
     writeSkill("foo", "description: A.", "body")
     const marker = createSkillsMarker()
-    const contribution = await marker.load(routeDir)
+    const contribution = await marker.load(routeDir, ctx)
     const readSkill = contribution.tools?.[0]
     await expect(async () => {
       await readSkill?.run({ name: 42 }, { signal: new AbortController().signal })

@@ -49,7 +49,7 @@ describe("chat route — autowired capabilities", () => {
       createPlanningMarker(),
       createAgentsMdMarker(),
     ])
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined, appRoot: ROUTE_DIR })
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined, appRoot: ROUTE_DIR, markerFs: nodeMarkerFs })
 
     expect(result.errors).toEqual([])
     expect(result.contributions.map((c) => c.markerName)).toEqual([
@@ -62,7 +62,7 @@ describe("chat route — autowired capabilities", () => {
     expect(existsSync(resolve(ROUTE_DIR, "plan.md"))).toBe(true)
 
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined, appRoot: ROUTE_DIR })
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined, appRoot: ROUTE_DIR, markerFs: nodeMarkerFs })
     const planning = result.contributions[0]?.contribution
 
     expect(planning?.tools?.map((t) => t.name)).toEqual(["writeTodos"])
@@ -117,7 +117,7 @@ describe("chat route — autowired capabilities", () => {
 
   it("planning prompt re-renders todos from live state on each call", async () => {
     const registry = createCapabilityRegistry([createPlanningMarker()])
-    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined, appRoot: ROUTE_DIR })
+    const result = await applyCapabilities(registry, ROUTE_DIR, { routeManifest: { appRoot: ROUTE_DIR, routes: [] }, descriptor: undefined, appRoot: ROUTE_DIR, markerFs: nodeMarkerFs })
     const fragment = result.contributions[0]?.contribution.promptFragment
 
     const empty = fragment?.render({ todos: [] }) ?? ""
