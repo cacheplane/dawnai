@@ -1,6 +1,6 @@
 # CLI Reference
 
-Dawn ships a single `dawn` binary with thirteen commands: `add`, `build`, `check`, `dev`, `docs`, `eval`, `memory`, `routes`, `run`, `start`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
+Dawn ships a single `dawn` binary with fourteen commands: `add`, `build`, `check`, `dev`, `docs`, `eval`, `inspect`, `memory`, `routes`, `run`, `start`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
 
 ## Running the CLI
 
@@ -231,8 +231,9 @@ Flags:
 
 ## `dawn inspect`
 
-Opens the Dawn Inspector — a localhost-only browser UI for browsing, searching,
-and approving the app's [long-term memory](/docs/memory) records.
+Opens the [Dawn Inspector](/docs/inspector) — a localhost-only browser UI for
+browsing, searching, and approving the app's [long-term memory](/docs/memory)
+records.
 
 ```
 dawn inspect

@@ -305,7 +305,16 @@ HNSW + cosine retrieval in SQL, the same shared ranking core, dimension branch (
 - pgvector follow-ups: `pgvectorscale` / DiskANN indexing, and pushing the RRF fusion down into
   SQL (today pgvector retrieves both lists and fuses in the shared JS core).
 - Memory graph (edges/relations).
-- Dev-server Memory Inspector UI (no dev UI host exists today).
+
+The Memory Inspector UI — previously deferred here for lack of a dev UI host — now ships
+as the standalone `@dawn-ai/inspector` package, launched via `dawn inspect`. Architecture:
+a Next.js standalone app (packed as `.next/standalone`, spawned by the CLI via the
+package's `dawnInspector.server` manifest path) that resolves the app's LIVE
+`config.memory.store` at runtime (`DAWN_APP_ROOT` + `loadDawnConfig`, custom stores
+included) and serves it over a localhost-guarded JSON API. It is powered by the
+`browse(q?)`/`stats(opts?)` methods added to the `MemoryStore` contract (both backends,
+conformance-kit covered) and approves candidates through `approveWithReconcile` — the
+same supersede-aware path as `dawn memory approve`.
 
 Typegen now derives `remember.data` from the route's `defineMemory().schema`, so
 route code sees the same fact shape the runtime validates.

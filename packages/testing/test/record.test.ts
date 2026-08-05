@@ -33,7 +33,7 @@ it("defaults provider to OpenAI", async () => {
 })
 
 it("throws on non-zero recorder exit", async () => {
-  spawnSync.mockReturnValueOnce({ status: 2 } as never)
+  spawnSync.mockReturnValueOnce({ status: 2 })
   const { record } = await import("../src/record.js")
   expect(() => record({ out: "/tmp/z.json" })).toThrow()
 })

@@ -84,6 +84,7 @@ export async function runInspectCommand(options: InspectOptions, io: CommandIo):
     throw new CliError(
       `@dawn-ai/inspector is installed but its standalone server is missing at ${serverJs} — the package may be corrupted or built incorrectly; try reinstalling.`,
       1,
+      { code: "DAWN_E5201" },
     )
   }
 
@@ -129,11 +130,13 @@ export async function runInspectCommand(options: InspectOptions, io: CommandIo):
         throw new CliError(
           `Failed to start the inspector server: ${formatErrorMessage(spawnError)}`,
           1,
+          { code: "DAWN_E5201" },
         )
       }
       throw new CliError(
         `Inspector server exited before becoming ready (code ${code}, signal ${signal})`,
         1,
+        { code: "DAWN_E5201" },
       )
     })
     await Promise.race([waitForReady(`${url}/healthz`), earlyExit])
@@ -145,10 +148,12 @@ export async function runInspectCommand(options: InspectOptions, io: CommandIo):
     // Stay foreground until the server exits (Ctrl+C → SIGTERM → clean exit).
     const { code, spawnError } = await exited
     if (spawnError) {
-      throw new CliError(`Inspector server failed: ${formatErrorMessage(spawnError)}`, 1)
+      throw new CliError(`Inspector server failed: ${formatErrorMessage(spawnError)}`, 1, {
+        code: "DAWN_E5201",
+      })
     }
     if (!shutdownRequested && code !== null && code !== 0) {
-      throw new CliError(`Inspector server exited with code ${code}`, 1)
+      throw new CliError(`Inspector server exited with code ${code}`, 1, { code: "DAWN_E5201" })
     }
   } finally {
     process.removeListener("SIGINT", onSignal)
@@ -169,7 +174,9 @@ async function waitForReady(healthUrl: string): Promise<void> {
     }
     await new Promise((r) => setTimeout(r, READY_INTERVAL_MS))
   }
-  throw new CliError(`Inspector server never became ready at ${healthUrl}`, 1)
+  throw new CliError(`Inspector server never became ready at ${healthUrl}`, 1, {
+    code: "DAWN_E5201",
+  })
 }
 
 /** Best-effort: open the user's browser at the inspector URL. Never throws. */

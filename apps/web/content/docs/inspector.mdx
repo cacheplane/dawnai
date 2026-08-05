@@ -1,0 +1,93 @@
+# Inspector
+
+The Dawn Inspector is a browser-based UI for inspecting a running Dawn app's
+runtime state. It ships as its own package, `@dawn-ai/inspector`, and opens with
+`dawn inspect`. The first panel is **Memory** — browse, search, and govern the
+app's [long-term memory](/docs/memory) records — and the shell is panel-based,
+so future panels (threads, runs, sandbox) slot in alongside it.
+
+## Launching
+
+```bash
+dawn inspect
+```
+
+The CLI starts the inspector's server on `127.0.0.1` at a free port, prints the
+URL, and opens your browser. Flags:
+
+- `--cwd <path>` — inspect a different app root (defaults to the current directory).
+- `--port <number>` — bind to a stable localhost port instead of a free one.
+- `--env-file <path>` — load a `.env` file before resolving the store (overrides
+  `dawn.config.ts` `env` and the default `./.env`) — the same precedence as `dawn dev`.
+
+Apps scaffolded with `create-dawn-ai-app` ship the inspector as a
+`devDependency`. In an existing app, install it once:
+
+```bash
+npm i -D @dawn-ai/inspector
+```
+
+`dawn inspect` resolves the package from the app's own `node_modules`; if it is
+missing, the command prints the install hint and exits.
+
+## Which store it inspects
+
+The inspector serves the app's **live** memory store — it loads your
+`dawn.config.ts` and uses `config.memory.store` exactly as the dev server does.
+The default SQLite store, the [pgvector backend](/docs/memory#postgres-backend-pgvector),
+and custom `MemoryStore` implementations all work unchanged.
+
+Two caveats follow from the inspector running as a separate process:
+
+- It constructs a **second store instance** from your config. For SQLite that is
+  a second connection to the same database file; for Postgres it is a second
+  connection pool. Both are safe, but count it against connection limits.
+- The store must be **constructible from config alone**. A store that closes
+  over live objects created elsewhere in your server process cannot be
+  re-created by the inspector.
+
+## The Memory panel
+
+- **Browse and filter** — every record across namespaces and statuses (not just
+  candidates), with facet counts by status, kind, namespace, and source type.
+- **Search** — recall-equivalent ranked search, not a substring filter. It runs
+  the same IDF-weighted keyword ranking the agent's `recall` tool uses, and when
+  your config declares a [vector embedder](/docs/memory#semantic-recall-opt-in)
+  (and the provider key is available, e.g. via `--env-file`), the same hybrid
+  keyword + vector fusion.
+- **Live refresh** — lists and facet counts poll every 2 seconds while the tab
+  is visible, so agent writes show up as they happen.
+- **Detail sheet** — the full record (data, tags, confidence, source,
+  supersession links) with the governance actions below.
+- **Approve** — promotes a candidate with the same supersede-aware
+  reconciliation as `dawn memory approve`: a contradicting active record with
+  the same identity is superseded (history preserved), an identical one dedupes
+  the candidate, and otherwise the candidate simply activates. When approving
+  would supersede an active memory, the sheet shows a callout and the button
+  reads **Approve & supersede**.
+- **Reject / Forget** — hard-delete a candidate or any record, each behind a
+  confirmation prompt.
+
+<Callout type="info" title="Headless equivalent">
+  The [`dawn memory`](/docs/cli) CLI covers the same governance flow —
+  list/search/inspect/approve/reject/forget — without a browser, for CI and
+  remote shells.
+</Callout>
+
+## Security posture
+
+The inspector is a local development tool:
+
+- The server binds to `127.0.0.1` only — it is never reachable from the network.
+- Every API route verifies the `Host` header, and state-changing requests with a
+  foreign `Origin` are rejected — protection against CSRF and DNS-rebinding from
+  other pages open in your browser.
+- Destructive actions (reject, forget) require an explicit confirmation in the UI.
+
+## Related
+
+<RelatedCards items={[
+  { href: "/docs/memory", title: "Memory", subtitle: "the store, recall ranking, and write governance" },
+  { href: "/docs/cli", title: "CLI", subtitle: "dawn inspect flags and the dawn memory workflow" },
+  { href: "/docs/configuration", title: "Configuration", subtitle: "the dawn.config.ts memory block" },
+]} />

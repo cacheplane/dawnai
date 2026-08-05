@@ -277,6 +277,19 @@ export function validatePackManifest(repoRoot, manifest) {
   }
 }
 
+/**
+ * The `dawnInspector.server` manifest path (when declared) must exist inside
+ * the packed tarball — `dawn inspect` spawns exactly that file at runtime, so
+ * a field that points at a missing file ships a broken package.
+ */
+export function missingInspectorServerPaths(packedRoot, packedPackageJson) {
+  const serverPath = packedPackageJson?.dawnInspector?.server
+  if (typeof serverPath !== "string" || serverPath.length === 0) {
+    return []
+  }
+  return existsSync(join(packedRoot, serverPath)) ? [] : [serverPath]
+}
+
 export function missingExportTargets(packedRoot, exportsField) {
   const missingTargets = relativeExportTargets(exportsField)
     .filter(({ exportKey, target }) => !exportTargetHasPackedFile(packedRoot, exportKey, target))
