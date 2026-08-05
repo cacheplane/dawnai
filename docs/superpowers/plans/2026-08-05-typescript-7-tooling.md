@@ -55,7 +55,7 @@ The published smoke reuses the probe library instead of duplicating test program
 - Reference: `packages/vite-plugin/src/type-extractor.ts`
 - Reference: `packages/vite-plugin/src/jsdoc-extractor.ts`
 
-- [ ] **Step 1: Write the failing source-analysis tests**
+- [x] **Step 1: Write the failing source-analysis tests**
 
 Create `packages/core/test/compiler-source-analysis.test.ts`. Import the not-yet-existing `analyzeToolSource` from `../src/compiler/index.ts`. Cover one behavior per test, including:
 
@@ -90,7 +90,7 @@ export default async (input: { id: string; includeHistory?: boolean }) => ({
 
 Add focused tests for literals, arrays, tuples, records, maps, sets, unions, intersections, enums, null, aliases, generics, imported input and output types, unknown inputs, no parameters, no default export, non-callable default export, inline property documentation, and multiline/default-export JSDoc. For the imported-type case, create a temporary sibling module and analyze a real source filename so the synthetic host's fallback filesystem and module resolution are exercised rather than mocked.
 
-- [ ] **Step 2: Run the new test and verify RED**
+- [x] **Step 2: Run the new test and verify RED**
 
 Run:
 
@@ -100,7 +100,7 @@ pnpm --filter @dawn-ai/core test -- compiler-source-analysis.test.ts
 
 Expected: FAIL because `../src/compiler/index.ts` or `analyzeToolSource` does not exist.
 
-- [ ] **Step 3: Define the neutral model**
+- [x] **Step 3: Define the neutral model**
 
 Move and extend the current Vite `TypeInfo` model into `packages/core/src/compiler/model.ts`:
 
@@ -142,7 +142,7 @@ export interface AnalyzedTool {
 
 Use conditional spreads for optional descriptions to satisfy `exactOptionalPropertyTypes`.
 
-- [ ] **Step 4: Implement the minimal TypeScript compatibility backend**
+- [x] **Step 4: Implement the minimal TypeScript compatibility backend**
 
 Create `typescript-backend.ts` as the only compiler-importing file. Move the current Vite type walker and JSDoc parser into it, then add exact input/output string generation and Promise unwrapping from Core's extractor.
 
@@ -156,7 +156,7 @@ Use one synthetic `CompilerHost`, resolve the callable default export once, and 
 
 At the import, add the maintenance comment linking `https://github.com/microsoft/typescript-go/issues/4830` and explaining the TypeScript 6 bridge and TypeScript 7.1 revisit.
 
-- [ ] **Step 5: Export the neutral source-analysis surface internally**
+- [x] **Step 5: Export the neutral source-analysis surface internally**
 
 Create `packages/core/src/compiler/index.ts`:
 
@@ -167,7 +167,7 @@ export type { AnalyzedTool, PropertyInfo, TypeInfo } from "./model.js"
 
 Do not add these exports to Core's root `src/index.ts`.
 
-- [ ] **Step 6: Run the source-analysis tests and verify GREEN**
+- [x] **Step 6: Run the source-analysis tests and verify GREEN**
 
 Run:
 
@@ -177,7 +177,7 @@ pnpm --filter @dawn-ai/core test -- compiler-source-analysis.test.ts
 
 Expected: all new tests PASS with no warnings beyond existing Node SQLite notices.
 
-- [ ] **Step 7: Run the existing Vite extractor/JSDoc suites as characterization**
+- [x] **Step 7: Run the existing Vite extractor/JSDoc suites as characterization**
 
 Run:
 
@@ -187,7 +187,7 @@ pnpm --filter @dawn-ai/vite-plugin test -- type-extractor.test.ts jsdoc-extracto
 
 Expected: existing suites remain PASS before their implementation is removed.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add packages/core/src/compiler packages/core/test/compiler-source-analysis.test.ts
