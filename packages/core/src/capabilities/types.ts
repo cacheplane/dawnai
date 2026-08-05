@@ -24,6 +24,10 @@ export interface MemoryRecordLike {
   readonly createdAt: string
   readonly updatedAt: string
   readonly supersedes?: readonly string[]
+  /** When the remembered event actually happened (episodic); defaults to createdAt. */
+  readonly effectiveAt?: string
+  /** When the row stops being recallable (with `now` supplied) and becomes prunable. */
+  readonly expiresAt?: string
 }
 
 /**
@@ -49,8 +53,13 @@ export interface MemoryStoreLike {
     tags?: readonly string[]
     status?: MemoryStatusLike
     limit?: number
-    /** ISO recency reference for ranked searches; stores may ignore it. */
+    /** ISO recency reference for ranked searches; stores may ignore it for
+     *  ranking. Also excludes rows with expiresAt <= now. */
     now?: string
+    /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
+    since?: string
+    /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
+    until?: string
     /** When present, the store runs the hybrid keyword+vector path. */
     queryEmbedding?: Float32Array
     /** Only rows whose stored embedding model equals this are vector-compared. */
@@ -70,6 +79,12 @@ export interface MemoryStoreLike {
     readonly sourceType?: MemorySourceTypeLike
     readonly limit?: number
     readonly offset?: number
+    /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
+    readonly since?: string
+    /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
+    readonly until?: string
+    /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
+    readonly now?: string
   }): Promise<{ readonly records: readonly MemoryRecordLike[]; readonly total: number }>
   /** Aggregate counts for facet UIs. */
   stats(opts?: { readonly namespacePrefix?: string }): Promise<{
@@ -79,6 +94,14 @@ export interface MemoryStoreLike {
     readonly byNamespace: Readonly<Record<string, number>>
     readonly bySourceType: Readonly<Record<string, number>>
   }>
+  /** Delete (a) rows of any kind with expiresAt <= now, and (b) when cap is
+   *  set, the oldest episodic rows beyond `cap` per namespace (ordered by
+   *  COALESCE(effectiveAt, createdAt), id tiebreak). */
+  prune(opts: {
+    readonly now: string
+    readonly namespacePrefix?: string
+    readonly cap?: number
+  }): Promise<{ readonly deletedExpired: number; readonly deletedOverCap: number }>
 }
 
 /**
