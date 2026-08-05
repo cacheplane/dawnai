@@ -224,6 +224,9 @@ importers:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
         version: link:../../../packages/config-typescript
+      '@dawn-ai/inspector':
+        specifier: workspace:*
+        version: link:../../../packages/inspector
       '@dawn-ai/testing':
         specifier: workspace:*
         version: link:../../../packages/testing

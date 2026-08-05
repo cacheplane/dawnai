@@ -12,6 +12,7 @@ export function registryLatestSpecifiers() {
     dawnConfigTypescript: "latest",
     dawnCore: "latest",
     dawnEvals: "latest",
+    dawnInspector: "latest",
     dawnLangchain: "latest",
     dawnSandbox: "latest",
     dawnSdk: "latest",

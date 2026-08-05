@@ -24,6 +24,7 @@
   "devDependencies": {
     "@dawn-ai/config-typescript": "{{dawnConfigTypescriptSpecifier}}",
     "@dawn-ai/evals": "{{dawnEvalsSpecifier}}",
+    "@dawn-ai/inspector": "{{dawnInspectorSpecifier}}",
     "@dawn-ai/testing": "{{dawnTestingSpecifier}}",
     "@types/node": "25.6.0",
     "typescript": "6.0.2",
