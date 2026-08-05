@@ -1,5 +1,12 @@
 # @dawn-ai/sandbox
 
+## 0.8.15
+
+### Patch Changes
+
+- @dawn-ai/sdk@0.8.15
+- @dawn-ai/workspace@0.8.15
+
 ## 0.8.14
 
 ### Patch Changes
