@@ -27,6 +27,14 @@ async function compareParameters(
   expect(projected).toEqual(existing)
 }
 
+async function expectProjectedParameters(
+  source: string,
+  expected: ExtractedToolSchema["parameters"],
+): Promise<void> {
+  const { projected } = await parametersFromSource(source)
+  expect(projected).toEqual([expected])
+}
+
 async function parametersFromSource(source: string): Promise<{
   readonly existing: readonly ExtractedToolSchema["parameters"][]
   readonly projected: readonly ExtractedToolSchema["parameters"][]
@@ -46,21 +54,7 @@ async function parametersFromSource(source: string): Promise<{
   return { existing: extracted.map((tool) => tool.parameters), projected }
 }
 
-function normalizeCompilerSymbolIds(value: unknown): unknown {
-  if (typeof value === "string") return value.replace(/__@([^@]+)@\d+/g, "__@$1")
-  if (Array.isArray(value)) return value.map(normalizeCompilerSymbolIds)
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        key.replace(/__@([^@]+)@\d+/g, "__@$1"),
-        normalizeCompilerSymbolIds(entry),
-      ]),
-    )
-  }
-  return value
-}
-
-describe("compiler-neutral JSON Schema parity", () => {
+describe("compiler-neutral JSON Schema behavior", () => {
   test("keeps a top-level optional object parameter empty", async () => {
     await compareParameters(
       "export default async function tool(input?: { id: string }) { return input }",
@@ -132,13 +126,13 @@ export default async function tool(input: { a: string } & { b: number }) {
     )
   })
 
-  test("preserves legacy optionality across root intersection declarations", async () => {
-    await compareParameters(
+  test("uses effective semantic requiredness across root intersection declarations", async () => {
+    await expectProjectedParameters(
       "export default async function tool(input: { a?: string } & { a: string }) { return input }",
       {
         type: "object",
         properties: { a: { type: "string" } },
-        required: [],
+        required: ["a"],
         additionalProperties: false,
       },
     )
@@ -160,29 +154,20 @@ export default async function tool(
     )
   })
 
-  test("preserves legacy parameters for a root map intersection", async () => {
-    const { existing, projected } = await parametersFromSource(
-      "export default async function tool(input: Map<string, number> & { fixed: string }) { return input }",
-    )
-
-    expect(existing[0]?.properties.fixed).toEqual({ type: "string" })
-    expect(normalizeCompilerSymbolIds(projected)).toEqual(normalizeCompilerSymbolIds(existing))
-  })
-
-  test("preserves legacy requiredness for root Partial properties", async () => {
-    await compareParameters(
+  test("uses semantic optionality for root Partial properties", async () => {
+    await expectProjectedParameters(
       "export default async function tool(input: Partial<{ a: string }>) { return input }",
       {
         type: "object",
         properties: { a: { type: "string" } },
-        required: ["a"],
+        required: [],
         additionalProperties: false,
       },
     )
   })
 
-  test("preserves legacy requiredness for nested Partial properties", async () => {
-    await compareParameters(
+  test("uses semantic optionality for nested Partial properties", async () => {
+    await expectProjectedParameters(
       "export default async function tool(input: { nested: Partial<{ a: string }> }) { return input }",
       {
         type: "object",
@@ -190,7 +175,7 @@ export default async function tool(
           nested: {
             type: "object",
             properties: { a: { type: "string" } },
-            required: ["a"],
+            required: [],
             additionalProperties: false,
           },
         },
@@ -200,20 +185,20 @@ export default async function tool(
     )
   })
 
-  test("preserves legacy requiredness for root Readonly Partial properties", async () => {
-    await compareParameters(
+  test("uses semantic optionality for root Readonly Partial properties", async () => {
+    await expectProjectedParameters(
       "export default async function tool(input: Readonly<Partial<{ a: string }>>) { return input }",
       {
         type: "object",
         properties: { a: { type: "string" } },
-        required: ["a"],
+        required: [],
         additionalProperties: false,
       },
     )
   })
 
-  test("preserves legacy requiredness for nested Readonly Partial properties", async () => {
-    await compareParameters(
+  test("uses semantic optionality for nested Readonly Partial properties", async () => {
+    await expectProjectedParameters(
       "export default async function tool(input: { nested: Readonly<Partial<{ a: string }>> }) { return input }",
       {
         type: "object",
@@ -221,7 +206,7 @@ export default async function tool(
           nested: {
             type: "object",
             properties: { a: { type: "string" } },
-            required: ["a"],
+            required: [],
             additionalProperties: false,
           },
         },
@@ -231,8 +216,8 @@ export default async function tool(
     )
   })
 
-  test("preserves legacy requiredness for mapped optional properties", async () => {
-    await compareParameters(
+  test("uses semantic optionality for mapped optional properties", async () => {
+    await expectProjectedParameters(
       `
 type MappedOptional<T> = { [K in keyof T]?: T[K] }
 export default async function tool(input: MappedOptional<{ a: string }>) { return input }
@@ -240,21 +225,26 @@ export default async function tool(input: MappedOptional<{ a: string }>) { retur
       {
         type: "object",
         properties: { a: { type: "string" } },
-        required: ["a"],
+        required: [],
         additionalProperties: false,
       },
     )
   })
 
   test.each([
+    ["map", "Map<string, number> & { fixed: string }"],
     ["array", "string[] & { fixed: string }"],
     ["tuple", "[string, number] & { fixed: string }"],
-  ])("preserves legacy parameters for a root %s intersection", async (_name, inputType) => {
-    const { existing, projected } = await parametersFromSource(
+    ["set", "Set<boolean> & { fixed: string }"],
+  ])("uses a neutral fallback for a root %s intersection", async (_name, inputType) => {
+    await expectProjectedParameters(
       `export default async function tool(input: ${inputType}) { return input }`,
+      {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
     )
-
-    expect(existing[0]?.properties.fixed).toEqual({ type: "string" })
-    expect(normalizeCompilerSymbolIds(projected)).toEqual(normalizeCompilerSymbolIds(existing))
   })
 })

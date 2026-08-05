@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vitest"
@@ -13,28 +13,11 @@ afterEach(() => {
   }
 })
 
-function analyzeWithSchemaProjection(source: string, fileName = "lookup.ts") {
+function analyze(source: string, fileName = "lookup.ts") {
   const result = analyzeToolSource(source, fileName)
   expect(result).not.toBeNull()
   if (!result) throw new Error("Expected an analyzed tool")
   return result
-}
-
-function analyze(source: string, fileName = "lookup.ts") {
-  return stripSchemaProjections(analyzeWithSchemaProjection(source, fileName))
-}
-
-function stripSchemaProjections<T>(value: T): T {
-  if (Array.isArray(value)) return value.map(stripSchemaProjections) as T
-  if (value instanceof Map) return value
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([key]) => key !== "schemaProjection")
-        .map(([key, entry]) => [key, stripSchemaProjections(entry)]),
-    ) as T
-  }
-  return value
 }
 
 function analyzeRootIntersection(source: string) {
@@ -227,6 +210,7 @@ export default async (input: Set<boolean>) => input
   test.each([
     {
       name: "record",
+      effectiveProperties: true,
       source: "Record<string, number> & { fixed: string }",
       specialized: {
         kind: "record",
@@ -236,6 +220,7 @@ export default async (input: Set<boolean>) => input
     },
     {
       name: "map",
+      effectiveProperties: false,
       source: "Map<string, number> & { fixed: string }",
       specialized: {
         kind: "map",
@@ -245,23 +230,30 @@ export default async (input: Set<boolean>) => input
     },
     {
       name: "array",
+      effectiveProperties: false,
       source: "string[] & { fixed: string }",
       specialized: { kind: "array", element: { kind: "string" } },
     },
     {
       name: "set",
+      effectiveProperties: false,
       source: "Set<boolean> & { fixed: string }",
       specialized: { kind: "set", element: { kind: "boolean" } },
     },
     {
       name: "tuple",
+      effectiveProperties: false,
       source: "[string, number] & { fixed: string }",
       specialized: {
         kind: "tuple",
         elements: [{ kind: "string" }, { kind: "number" }],
       },
     },
-  ])("preserves specialized $name members on root intersections", ({ source, specialized }) => {
+  ])("preserves specialized $name members on root intersections", ({
+    source,
+    specialized,
+    effectiveProperties,
+  }) => {
     const parameter = analyzeRootIntersection(source)
 
     expect(parameter.members).toEqual([
@@ -271,11 +263,9 @@ export default async (input: Set<boolean>) => input
         properties: [{ name: "fixed", type: { kind: "string" }, optional: false }],
       },
     ])
-    expect(parameter.effectiveProperties?.find((property) => property.name === "fixed")).toEqual({
-      name: "fixed",
-      type: { kind: "string" },
-      optional: false,
-    })
+    expect(
+      parameter.effectiveProperties?.some((property) => property.name === "fixed") ?? false,
+    ).toBe(effectiveProperties)
   })
 
   test("allows semantic consumers to project members without effective root metadata", () => {
@@ -292,9 +282,7 @@ export default async (input: Set<boolean>) => input
     ["readonly root", "Readonly<Partial<{ a: string }>>", ["a"]],
     ["readonly nested", "{ nested: Readonly<Partial<{ a: string }>> }", ["nested", "a"]],
   ])("keeps %s Partial properties semantically optional", (_name, source, path) => {
-    const parameter = analyzeWithSchemaProjection(
-      `export default async (input: ${source}) => input`,
-    ).parameter
+    const parameter = analyze(`export default async (input: ${source}) => input`).parameter
     let property = parameter?.kind === "object" ? parameter.properties[0] : undefined
     for (const propertyName of path.slice(1)) {
       expect(property?.name).toBe(path[0])
@@ -303,11 +291,11 @@ export default async (input: Set<boolean>) => input
     }
 
     expect(property?.optional).toBe(true)
-    expect(property?.schemaProjection?.optional).toBe(false)
+    expect(property).not.toHaveProperty("schemaProjection")
   })
 
   test("keeps mapped optional properties semantically optional", () => {
-    const parameter = analyzeWithSchemaProjection(`
+    const parameter = analyze(`
 type MappedOptional<T> = { [K in keyof T]?: T[K] }
 export default async (input: MappedOptional<{ a: string }>) => input
 `).parameter
@@ -316,8 +304,28 @@ export default async (input: MappedOptional<{ a: string }>) => input
     expect(property).toMatchObject({
       name: "a",
       optional: true,
-      schemaProjection: { optional: false },
     })
+    expect(property).not.toHaveProperty("schemaProjection")
+  })
+
+  test("keeps the compiler model and backend free of JSON Schema projection details", () => {
+    const property = analyze(
+      "export default async (input: Partial<{ a: string }>) => input",
+    ).parameter
+    expect(property?.kind === "object" ? property.properties[0] : undefined).not.toHaveProperty(
+      "schemaProjection",
+    )
+
+    const backendSource = readFileSync(
+      new URL("../src/compiler/typescript-backend.ts", import.meta.url),
+      "utf8",
+    )
+    expect(backendSource).not.toMatch(
+      /JsonSchemaProperty|compilerTypeToJsonSchema|MAX_SCHEMA_DEPTH/,
+    )
+
+    const modelSource = readFileSync(new URL("../src/compiler/model.ts", import.meta.url), "utf8")
+    expect(modelSource).not.toContain("schemaProjection")
   })
 
   test("represents string literal unions as enums", () => {
