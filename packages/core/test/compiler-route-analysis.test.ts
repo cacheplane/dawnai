@@ -1,11 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import ts from "typescript"
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
 import { createAnalyzeRouteTools } from "../src/compiler/analyze-route-tools.ts"
 import { analyzeRouteTools as analyzeRouteToolsProduction } from "../src/compiler/index.ts"
-import { analyzeToolFiles } from "../src/compiler/typescript-backend.ts"
+import { createAnalyzeToolFiles } from "../src/compiler/typescript-backend.ts"
 
 let tempDir: string
 
@@ -24,7 +25,7 @@ function writeToolFile(directory: string, name: string, source: string): void {
 }
 
 describe("analyzeRouteTools", () => {
-  test("analyzes the effective sorted tool set through one real batch backend call", () => {
+  test("analyzes the effective sorted tool set with one compiler program", () => {
     const routeDir = join(tempDir, "route")
     const sharedToolsDir = join(tempDir, "shared")
 
@@ -77,6 +78,11 @@ export default async function ping(): Promise<{ pong: boolean }> {
     )
 
     let backendCalls = 0
+    let createProgramCalls = 0
+    const analyzeToolFiles = createAnalyzeToolFiles((rootNames, options) => {
+      createProgramCalls += 1
+      return ts.createProgram(rootNames, options)
+    })
     const analyzeRouteTools = createAnalyzeRouteTools((toolFiles) => {
       backendCalls += 1
       return analyzeToolFiles(toolFiles)
@@ -85,6 +91,7 @@ export default async function ping(): Promise<{ pong: boolean }> {
     const result = analyzeRouteTools({ routeDir, sharedToolsDir })
 
     expect(backendCalls).toBe(1)
+    expect(createProgramCalls).toBe(1)
     expect(result).toEqual([
       {
         name: "alpha",

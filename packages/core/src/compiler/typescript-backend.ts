@@ -18,6 +18,8 @@ interface ResolutionState {
   readonly depth: number
 }
 
+type CreateProgram = (rootNames: readonly string[], options: ts.CompilerOptions) => ts.Program
+
 export function analyzeToolSource(source: string, fileName: string): AnalyzedTool | null {
   const options = compilerOptions()
 
@@ -44,18 +46,28 @@ export function analyzeToolSource(source: string, fileName: string): AnalyzedToo
   return analyzeProgramSource(program, fileName, basename(fileName, extname(fileName)))
 }
 
-export function analyzeToolFiles(toolFiles: ReadonlyMap<string, string>): readonly AnalyzedTool[] {
-  if (toolFiles.size === 0) return []
+export function createAnalyzeToolFiles(
+  createProgram: CreateProgram = ts.createProgram,
+): (toolFiles: ReadonlyMap<string, string>) => readonly AnalyzedTool[] {
+  return (toolFiles) => {
+    if (toolFiles.size === 0) return []
 
-  const program = ts.createProgram([...toolFiles.values()], compilerOptions())
-  const results: AnalyzedTool[] = []
+    const program = createProgram([...toolFiles.values()], compilerOptions())
+    const results: AnalyzedTool[] = []
 
-  for (const [name, fileName] of toolFiles) {
-    const analyzed = analyzeProgramSource(program, fileName, name)
-    if (analyzed) results.push(analyzed)
+    for (const [name, fileName] of toolFiles) {
+      const analyzed = analyzeProgramSource(program, fileName, name)
+      if (analyzed) results.push(analyzed)
+    }
+
+    return results
   }
+}
 
-  return results
+const analyzeToolFilesWithProgram = createAnalyzeToolFiles()
+
+export function analyzeToolFiles(toolFiles: ReadonlyMap<string, string>): readonly AnalyzedTool[] {
+  return analyzeToolFilesWithProgram(toolFiles)
 }
 
 function analyzeProgramSource(
