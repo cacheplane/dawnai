@@ -1,5 +1,13 @@
 # @dawn-ai/evals
 
+## 0.8.14
+
+### Patch Changes
+
+- Updated dependencies [937be0f]
+- Updated dependencies [83e5153]
+  - @dawn-ai/testing@0.8.14
+
 ## 0.8.13
 
 ### Patch Changes
