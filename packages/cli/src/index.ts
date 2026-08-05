@@ -6,6 +6,11 @@ export {
   type ServeRuntimeOptions,
   serveRuntime,
 } from "./lib/dev/serve-runtime.js"
+export {
+  type DawnStaticModules,
+  loadStaticModules,
+  type StaticRouteModule,
+} from "./lib/runtime/static-modules.js"
 
 import { realpathSync } from "node:fs"
 import { resolve } from "node:path"

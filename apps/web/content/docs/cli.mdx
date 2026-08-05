@@ -23,6 +23,7 @@ Internally, `dawn check` loads `dawn.config.ts`, resolves the app root, runs `di
 - A `dawn.config.ts` that fails to load.
 - Any discovered route whose `index.ts` exports more than one of `agent`, `workflow`, `graph`, `chain`.
 - Any tool file that fails to parse.
+- A stale build manifest: when `.dawn/build/modules.mjs` exists (written by `dawn build`'s `node` target), its routes are compared against the routes on disk — a mismatch (for example a route renamed after the last build) fails with the missing/extra route ids and a prompt to re-run `dawn build`.
 
 Output is a `Dawn app is valid: N routes discovered.` line followed by a per-route `- <pathname> (<kind>)` summary. Exits non-zero on any violation with a detailed message.
 

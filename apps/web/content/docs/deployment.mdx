@@ -12,6 +12,7 @@ Use live-server scenario tests to catch protocol-shape issues before deploying e
 `dawn build`'s `node` target emits a runnable production server, not just a platform artifact:
 
 - **`.dawn/build/server.mjs`** — imports `serveRuntime` from `@dawn-ai/cli` and boots the full Dawn runtime on one HTTP listener: Agent Protocol (`/threads`), AG-UI (`/agui/:routeId`), and `/healthz`.
+- **`.dawn/build/modules.mjs`** — a generated static module manifest: every route, tool, state definition, and route memory module imported statically, with their schemas inlined. `server.mjs` boots from it, so production startup performs no route-tree scanning or per-file discovery — the app is wired at build time. Regenerated on every `dawn build`; `dawn check` fails when the manifest's route set no longer matches the routes on disk (a route added, renamed, or removed since the last build). Route, tool, and reducer *code* changes flow through automatically — the manifest imports the live source files — but build-time inputs like a newly added tool file or regenerated schemas are picked up on the next `dawn build`.
 - **`Dockerfile`** — a hardened multi-stage `node:22-slim` image: runs as non-root `1000:1000`, `EXPOSE 8000`, a `HEALTHCHECK` against `/healthz`, `CMD ["node", ".dawn/build/server.mjs"]`. Written to the app root unless a `Dockerfile` already exists there, in which case it's written to `.dawn/build/Dockerfile` instead so an existing Dockerfile is never overwritten.
 
 ```
