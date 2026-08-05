@@ -19,14 +19,7 @@ interface ResolutionState {
 }
 
 export function analyzeToolSource(source: string, fileName: string): AnalyzedTool | null {
-  const options: ts.CompilerOptions = {
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    strict: true,
-    noEmit: true,
-    lib: ["lib.es2022.d.ts"],
-  }
+  const options = compilerOptions()
 
   const filesystemHost = ts.createCompilerHost(options)
   const host: ts.CompilerHost = {
@@ -48,6 +41,28 @@ export function analyzeToolSource(source: string, fileName: string): AnalyzedToo
   }
 
   const program = ts.createProgram([fileName], options, host)
+  return analyzeProgramSource(program, fileName, basename(fileName, extname(fileName)))
+}
+
+export function analyzeToolFiles(toolFiles: ReadonlyMap<string, string>): readonly AnalyzedTool[] {
+  if (toolFiles.size === 0) return []
+
+  const program = ts.createProgram([...toolFiles.values()], compilerOptions())
+  const results: AnalyzedTool[] = []
+
+  for (const [name, fileName] of toolFiles) {
+    const analyzed = analyzeProgramSource(program, fileName, name)
+    if (analyzed) results.push(analyzed)
+  }
+
+  return results
+}
+
+function analyzeProgramSource(
+  program: ts.Program,
+  fileName: string,
+  name: string,
+): AnalyzedTool | null {
   const checker = program.getTypeChecker()
   const sourceFile = program.getSourceFile(fileName)
   if (!sourceFile) return null
@@ -75,7 +90,7 @@ export function analyzeToolSource(source: string, fileName: string): AnalyzedToo
   const jsDoc = extractJsDoc(sourceFile)
 
   return {
-    name: basename(fileName, extname(fileName)),
+    name,
     description: jsDoc.description,
     inputType: parameterType
       ? checker.typeToString(parameterType, undefined, ts.TypeFormatFlags.NoTruncation)
@@ -85,6 +100,17 @@ export function analyzeToolSource(source: string, fileName: string): AnalyzedToo
       ? resolveType(parameterType, checker, { activeTypes: new Set(), depth: 0 })
       : null,
     parameterDescriptions: jsDoc.params,
+  }
+}
+
+function compilerOptions(): ts.CompilerOptions {
+  return {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    strict: true,
+    noEmit: true,
+    lib: ["lib.es2022.d.ts"],
   }
 }
 
