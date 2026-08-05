@@ -420,6 +420,7 @@ export async function* streamResolvedRoute(
   // the original turn's start is not reconstructed).
   let sawDone = false
   let sawInterrupt = false
+  let recordedError = false
   let finalOutput: unknown
 
   try {
@@ -488,6 +489,7 @@ export async function* streamResolvedRoute(
       }
     }
   } catch (error) {
+    recordedError = true
     await recordRunEpisode({
       memoryContext: prepared.memoryContext,
       episodes: prepared.episodes,
@@ -497,18 +499,28 @@ export async function* streamResolvedRoute(
       ...(options.threadId ? { threadId: options.threadId } : {}),
     })
     throw error
-  }
-
-  if (sawDone && !sawInterrupt) {
-    await recordRunEpisode({
-      memoryContext: prepared.memoryContext,
-      episodes: prepared.episodes,
-      outcome: "ok",
-      output: finalOutput,
-      input: options.input,
-      startedAt,
-      ...(options.threadId ? { threadId: options.threadId } : {}),
-    })
+  } finally {
+    // The "ok" record lives in the finally, NOT after the loop: stream
+    // consumers may close the generator early — the AG-UI outbound translator
+    // early-returns on RUN_FINISHED without draining, which cascades a
+    // .return() into this generator while it is suspended at the done yield.
+    // A finally still runs on that close path (sawDone/finalOutput were
+    // assigned BEFORE yielding the done chunk, so they are already set when
+    // the close lands on the yield). `recordedError` prevents a double record
+    // when the catch above already recorded the failure; abandoned (closed
+    // before done) and parked (interrupt seen) turns record nothing.
+    // recordRunEpisode never throws, so this is finally-safe.
+    if (!recordedError && sawDone && !sawInterrupt) {
+      await recordRunEpisode({
+        memoryContext: prepared.memoryContext,
+        episodes: prepared.episodes,
+        outcome: "ok",
+        output: finalOutput,
+        input: options.input,
+        startedAt,
+        ...(options.threadId ? { threadId: options.threadId } : {}),
+      })
+    }
   }
 }
 

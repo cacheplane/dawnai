@@ -346,6 +346,40 @@ describe("dawn memory", () => {
     expect(lines.join("\n")).toMatch(/2 over-cap/)
   })
 
+  it("prune without --cap defaults to the resolved memory.episodes.cap", async () => {
+    const appRoot = await makeApp()
+    // Configure a cap of 2; `dawn memory prune` (no --cap) must enforce it —
+    // the docs promise the default retention pass applies the configured cap.
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      "export default { memory: { episodes: { cap: 2 } } }\n",
+    )
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    for (let i = 1; i <= 4; i++) {
+      await store.put({
+        ...baseRecord,
+        id: `ep-${i}`,
+        kind: "episodic",
+        status: "active",
+        effectiveAt: `2026-08-0${i}T00:00:00.000Z`,
+      })
+    }
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["prune"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    // The two oldest (ep-1, ep-2) are pruned; the two newest survive.
+    expect(await store.get("ep-1")).toBeNull()
+    expect(await store.get("ep-2")).toBeNull()
+    expect(await store.get("ep-3")).not.toBeNull()
+    expect(await store.get("ep-4")).not.toBeNull()
+    expect(lines.join("\n")).toMatch(/2 over-cap/)
+  })
+
   it("unknown subcommand throws CliError", async () => {
     const appRoot = await makeApp()
     const io = { stdout: () => {}, stderr: () => {} }

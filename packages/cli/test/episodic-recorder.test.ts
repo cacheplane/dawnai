@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { type MemoryRecord, sqliteMemoryStore } from "@dawn-ai/memory"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { executeRoute } from "../src/lib/runtime/execute-route.js"
+import { executeRoute, streamResolvedRoute } from "../src/lib/runtime/execute-route.js"
 import { type EpisodeInput, recordEpisode } from "../src/lib/runtime/record-episode.js"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
@@ -364,6 +364,52 @@ describe("episodic auto-recorder (aimock harness)", () => {
       expect(ep.source.id).toMatch(/^t-run-[0-9a-f]{8}$/)
       expect(ep.data.runId).toBe(ep.source.id)
       expect(ep.data.outcome).toBe("ok")
+      expect(ep.content).toMatch(/^run ok: Filter open items please/)
+      expect(ep.data.toolsUsed).toContain("applyFilter")
+    } finally {
+      await h.close()
+    }
+  }, 120_000)
+
+  it("early-closing consumer (AG-UI style): breaking on the done chunk without draining still records the ok episode", async () => {
+    const { createAgentHarness, script } = await loadTesting()
+    const appRoot = await makeApp("export default { memory: { episodes: { enabled: true } } }\n")
+    // Harness supplies aimock + env (and cache resets on close); the stream is
+    // driven directly so the consumer can close early — the AG-UI outbound
+    // translator returns after RUN_FINISHED without draining the generator,
+    // which triggers .return() on it mid-yield.
+    const h = await createAgentHarness({
+      appRoot,
+      route: "/chat#agent",
+      fixtures: script()
+        .user("Filter open items please")
+        .callsTool("applyFilter", { status: "open" })
+        .replies("Found 2 open items.")
+        .build(),
+    })
+    try {
+      const stream = streamResolvedRoute({
+        appRoot,
+        input: { messages: [{ role: "user", content: "Filter open items please" }] },
+        routeFile: join(appRoot, "src", "app", "chat", "index.ts"),
+        routeId: "/chat",
+        routePath: "src/app/chat/index.ts",
+        threadId: "t-early-close",
+      })
+      let sawDoneChunk = false
+      for await (const chunk of stream) {
+        if (chunk.type === "done") {
+          sawDoneChunk = true
+          break // early close WITHOUT draining — triggers generator .return()
+        }
+      }
+      expect(sawDoneChunk).toBe(true)
+
+      const episodes = await episodicRecords(appRoot)
+      expect(episodes).toHaveLength(1)
+      const ep = episodes[0] as MemoryRecord
+      expect(ep.data.outcome).toBe("ok")
+      expect(ep.source).toEqual({ type: "run", id: "t-early-close" })
       expect(ep.content).toMatch(/^run ok: Filter open items please/)
       expect(ep.data.toolsUsed).toContain("applyFilter")
     } finally {

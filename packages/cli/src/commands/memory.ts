@@ -3,7 +3,7 @@ import { approveWithReconcile, type MemoryStore } from "@dawn-ai/memory"
 import type { Command } from "commander"
 import { CliError, type CommandIo, writeLine } from "../lib/output.js"
 import { resolveIdentityKeys } from "../lib/runtime/resolve-identity.js"
-import { resolveMemoryStore } from "../lib/runtime/resolve-memory.js"
+import { resolveEpisodesConfig, resolveMemoryStore } from "../lib/runtime/resolve-memory.js"
 
 interface MemoryOptions {
   readonly cwd?: string
@@ -73,7 +73,7 @@ export async function runMemoryCommand(
       break
     }
     case "prune": {
-      await runPrune(store, argv.slice(1), io)
+      await runPrune(store, appRoot, argv.slice(1), io)
       break
     }
     default: {
@@ -147,7 +147,12 @@ async function runReject(store: MemoryStore, id: string, io: CommandIo): Promise
   writeLine(io.stdout, `Rejected and deleted: ${id}`)
 }
 
-async function runPrune(store: MemoryStore, args: readonly string[], io: CommandIo): Promise<void> {
+async function runPrune(
+  store: MemoryStore,
+  appRoot: string,
+  args: readonly string[],
+  io: CommandIo,
+): Promise<void> {
   const usage = "Usage: dawn memory prune [--cap <n>] [--namespace <prefix>]"
   let cap: number | undefined
   let namespacePrefix: string | undefined
@@ -169,9 +174,12 @@ async function runPrune(store: MemoryStore, args: readonly string[], io: Command
       throw new CliError(`Unknown argument: "${arg}".\n${usage}`, 1)
     }
   }
+  // No --cap → enforce the app's resolved episodic cap (memory.episodes.cap,
+  // default 500) so the manual retention pass matches the documented default.
+  const effectiveCap = cap ?? (await resolveEpisodesConfig(appRoot)).cap
   const res = await store.prune({
     now: new Date().toISOString(),
-    ...(cap !== undefined ? { cap } : {}),
+    cap: effectiveCap,
     ...(namespacePrefix !== undefined ? { namespacePrefix } : {}),
   })
   writeLine(io.stdout, `pruned: ${res.deletedExpired} expired, ${res.deletedOverCap} over-cap`)
