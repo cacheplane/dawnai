@@ -8,10 +8,17 @@ tmpl() { helm template test "$CHART" --set image.repository=example/app "$@"; }
 assert() { if ! grep -qE "$2"; then echo "FAIL: $1"; exit 1; fi; echo "ok: $1"; }
 refute() { if grep -qE "$2"; then echo "FAIL (expected absent): $1"; exit 1; fi; echo "ok: $1"; }
 
+# The default image tag falls back to .Chart.AppVersion, which
+# scripts/sync-chart-appversion.mjs bumps on every release — derive the
+# expectation from Chart.yaml instead of hardcoding (a hardcoded tag broke
+# this lane the first time the sync ran, at 0.8.13).
+APP_VERSION="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$CHART/Chart.yaml")"
+[ -n "$APP_VERSION" ] || { echo "FAIL: could not read appVersion from Chart.yaml"; exit 1; }
+
 # Deployment: image, probes on /healthz, SA, hardened securityContext
 DEPLOY="$(tmpl --show-only templates/deployment.yaml)"
 printf '%s\n' "$DEPLOY" | assert "deployment kind" 'kind: Deployment'
-printf '%s\n' "$DEPLOY" | assert "image repository+tag" 'image: example/app:0.8.12'
+printf '%s\n' "$DEPLOY" | assert "image repository+tag" "image: example/app:$APP_VERSION"
 printf '%s\n' "$DEPLOY" | assert "named http port" 'containerPort: 8000'
 printf '%s\n' "$DEPLOY" | assert "liveness probe path" 'path: /healthz'
 printf '%s\n' "$DEPLOY" | assert "serviceAccountName default" 'serviceAccountName: dawn-orchestrator'
