@@ -7,17 +7,6 @@ export function typeInfoToToolParameters(
   parameter: TypeInfo | null,
 ): ExtractedToolSchema["parameters"] {
   if (parameter?.kind === "object") return objectSchema(parameter.properties, -1)
-
-  if (
-    parameter?.kind === "intersection" &&
-    parameter.members.every((member) => member.kind === "object")
-  ) {
-    return objectSchema(
-      parameter.members.flatMap((member) => (member.kind === "object" ? member.properties : [])),
-      -1,
-    )
-  }
-
   return emptyParameters()
 }
 

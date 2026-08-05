@@ -85,4 +85,56 @@ export default async function tool(input: { a: string } & { b: number }) {
       },
     )
   })
+
+  test("emits one root property for duplicate compatible intersection members", async () => {
+    await compareParameters(
+      "export default async function tool(input: { a: string } & { a: string }) { return input }",
+      {
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        additionalProperties: false,
+      },
+    )
+  })
+
+  test("falls back for a conflicting effective root intersection property", async () => {
+    await compareParameters(
+      "export default async function tool(input: { a: string } & { a: number }) { return input }",
+      {
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        additionalProperties: false,
+      },
+    )
+  })
+
+  test("preserves legacy optionality across root intersection declarations", async () => {
+    await compareParameters(
+      "export default async function tool(input: { a?: string } & { a: string }) { return input }",
+      {
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: [],
+        additionalProperties: false,
+      },
+    )
+  })
+
+  test("retains fixed properties from a root record intersection", async () => {
+    await compareParameters(
+      `
+export default async function tool(
+  input: Record<string, number> & { fixed: string },
+) { return input }
+`,
+      {
+        type: "object",
+        properties: { fixed: { type: "string" } },
+        required: ["fixed"],
+        additionalProperties: false,
+      },
+    )
+  })
 })

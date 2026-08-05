@@ -108,11 +108,33 @@ function analyzeProgramSource(
       ? checker.typeToString(parameterType, undefined, ts.TypeFormatFlags.NoTruncation)
       : "void",
     outputType: checker.typeToString(returnType, undefined, ts.TypeFormatFlags.NoTruncation),
-    parameter: parameterType
-      ? resolveType(parameterType, checker, { activeTypes: new Set(), depth: 0 })
-      : null,
+    parameter: parameterType ? resolveParameterType(parameterType, checker, sourceFile) : null,
     parameterDescriptions: jsDoc.params,
   }
+}
+
+function resolveParameterType(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+): TypeInfo {
+  if (
+    type.isIntersection() &&
+    type.types.every((member) => (member.flags & ts.TypeFlags.Object) !== 0)
+  ) {
+    const state: ResolutionState = {
+      activeTypes: new Set([type]),
+      depth: 1,
+    }
+    return {
+      kind: "object",
+      properties: type
+        .getProperties()
+        .map((property) => resolveRootParameterProperty(property, checker, sourceFile, state)),
+    }
+  }
+
+  return resolveType(type, checker, { activeTypes: new Set(), depth: 0 })
 }
 
 function compilerOptions(): ts.CompilerOptions {
@@ -248,26 +270,55 @@ function resolveProperty(
   const optional = !!(property.flags & ts.SymbolFlags.Optional)
   const description = ts.displayPartsToString(property.getDocumentationComment(checker)).trim()
 
-  let resolvedType: TypeInfo
-  if (optional && propertyType.isUnion()) {
-    const definedMembers = propertyType.types.filter(
-      (member) => !(member.flags & ts.TypeFlags.Undefined),
-    )
-    if (definedMembers.length === 1 && definedMembers[0]) {
-      resolvedType = resolveType(definedMembers[0], checker, state)
-    } else {
-      resolvedType = resolveUnionMembers(definedMembers, checker, state)
-    }
-  } else {
-    resolvedType = resolveType(propertyType, checker, state)
-  }
-
   return {
     name: property.getName(),
-    type: resolvedType,
+    type: resolvePropertyType(propertyType, optional, checker, state),
     optional,
     ...(description ? { description } : {}),
   }
+}
+
+function resolveRootParameterProperty(
+  property: ts.Symbol,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  state: ResolutionState,
+): PropertyInfo {
+  const propertyType = checker.getTypeOfSymbolAtLocation(property, sourceFile)
+  const optional =
+    property
+      .getDeclarations()
+      ?.some(
+        (declaration) =>
+          ts.isPropertySignature(declaration) && declaration.questionToken !== undefined,
+      ) ?? false
+  const description = ts.displayPartsToString(property.getDocumentationComment(checker)).trim()
+
+  return {
+    name: property.getName(),
+    type: resolvePropertyType(propertyType, optional, checker, state),
+    optional,
+    ...(description ? { description } : {}),
+  }
+}
+
+function resolvePropertyType(
+  propertyType: ts.Type,
+  optional: boolean,
+  checker: ts.TypeChecker,
+  state: ResolutionState,
+): TypeInfo {
+  if (!optional || !propertyType.isUnion()) {
+    return resolveType(propertyType, checker, state)
+  }
+
+  const definedMembers = propertyType.types.filter(
+    (member) => !(member.flags & ts.TypeFlags.Undefined),
+  )
+  if (definedMembers.length === 1 && definedMembers[0]) {
+    return resolveType(definedMembers[0], checker, state)
+  }
+  return resolveUnionMembers(definedMembers, checker, state)
 }
 
 function resolveUnionMembers(

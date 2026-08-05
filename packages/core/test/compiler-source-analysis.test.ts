@@ -170,6 +170,34 @@ export default async (input: Set<boolean>) => input
     })
   })
 
+  test("preserves nested all-object intersections in the neutral model", () => {
+    expect(
+      analyze("export default async (input: { value: { a: string } & { b: number } }) => input")
+        .parameter,
+    ).toEqual({
+      kind: "object",
+      properties: [
+        {
+          name: "value",
+          optional: false,
+          type: {
+            kind: "intersection",
+            members: [
+              {
+                kind: "object",
+                properties: [{ name: "a", type: { kind: "string" }, optional: false }],
+              },
+              {
+                kind: "object",
+                properties: [{ name: "b", type: { kind: "number" }, optional: false }],
+              },
+            ],
+          },
+        },
+      ],
+    })
+  })
+
   test("represents string literal unions as enums", () => {
     expect(
       analyze('export default async (input: "pending" | "complete") => input').parameter,
@@ -244,23 +272,17 @@ export default async (input: Input) => input
     })
   })
 
-  test("preserves instantiated generic intersections in the neutral parameter model", () => {
+  test("resolves effective root properties from instantiated generic intersections", () => {
     const result = analyze(`
 type WithId<T> = { id: string } & T
 export default async (input: WithId<{ name: string }>) => input
 `)
 
     expect(result.parameter).toEqual({
-      kind: "intersection",
-      members: [
-        {
-          kind: "object",
-          properties: [{ name: "id", type: { kind: "string" }, optional: false }],
-        },
-        {
-          kind: "object",
-          properties: [{ name: "name", type: { kind: "string" }, optional: false }],
-        },
+      kind: "object",
+      properties: [
+        { name: "id", type: { kind: "string" }, optional: false },
+        { name: "name", type: { kind: "string" }, optional: false },
       ],
     })
   })
