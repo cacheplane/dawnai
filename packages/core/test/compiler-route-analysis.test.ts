@@ -1,35 +1,16 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
-import { analyzeRouteTools } from "../src/compiler/index.ts"
-
-const programCounter = vi.hoisted(() => ({ count: 0 }))
-
-vi.mock("typescript", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("typescript")>()
-  return {
-    ...actual,
-    default: new Proxy(actual.default, {
-      get(target, property, receiver) {
-        if (property === "createProgram") {
-          return (...args: Parameters<typeof target.createProgram>) => {
-            programCounter.count += 1
-            return target.createProgram(...args)
-          }
-        }
-        return Reflect.get(target, property, receiver)
-      },
-    }),
-  }
-})
+import { createAnalyzeRouteTools } from "../src/compiler/analyze-route-tools.ts"
+import { analyzeRouteTools as analyzeRouteToolsProduction } from "../src/compiler/index.ts"
+import { analyzeToolFiles } from "../src/compiler/typescript-backend.ts"
 
 let tempDir: string
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "dawn-route-analysis-"))
-  programCounter.count = 0
 })
 
 afterEach(() => {
@@ -43,7 +24,7 @@ function writeToolFile(directory: string, name: string, source: string): void {
 }
 
 describe("analyzeRouteTools", () => {
-  test("analyzes the effective sorted tool set with one compiler program", () => {
+  test("analyzes the effective sorted tool set through one real batch backend call", () => {
     const routeDir = join(tempDir, "route")
     const sharedToolsDir = join(tempDir, "shared")
 
@@ -95,9 +76,15 @@ export default async function ping(): Promise<{ pong: boolean }> {
 `,
     )
 
+    let backendCalls = 0
+    const analyzeRouteTools = createAnalyzeRouteTools((toolFiles) => {
+      backendCalls += 1
+      return analyzeToolFiles(toolFiles)
+    })
+
     const result = analyzeRouteTools({ routeDir, sharedToolsDir })
 
-    expect(programCounter.count).toBe(1)
+    expect(backendCalls).toBe(1)
     expect(result).toEqual([
       {
         name: "alpha",
@@ -138,5 +125,79 @@ export default async function ping(): Promise<{ pong: boolean }> {
         parameterDescriptions: new Map(),
       },
     ])
+  })
+
+  test("returns no tools when the tools directory is absent", () => {
+    const routeDir = join(tempDir, "route")
+    mkdirSync(routeDir, { recursive: true })
+
+    expect(analyzeRouteToolsProduction({ routeDir, sharedToolsDir: undefined })).toEqual([])
+  })
+
+  test("excludes declaration files from route tool discovery", () => {
+    const routeDir = join(tempDir, "route")
+    writeToolFile(
+      routeDir,
+      "included",
+      "export default async function included(input: string) { return input }",
+    )
+    const toolsDirectory = join(routeDir, "tools")
+    writeFileSync(
+      join(toolsDirectory, "excluded.d.ts"),
+      "export default function excluded(input: string): Promise<string>",
+    )
+
+    expect(
+      analyzeRouteToolsProduction({ routeDir, sharedToolsDir: undefined }).map((tool) => tool.name),
+    ).toEqual(["included"])
+  })
+
+  test("skips files without a callable default export", () => {
+    const routeDir = join(tempDir, "route")
+    writeToolFile(routeDir, "named", "export function named(input: string) { return input }")
+    writeToolFile(routeDir, "config", "export default { enabled: true }")
+    writeToolFile(
+      routeDir,
+      "valid",
+      "export default function valid(input: number) { return input > 0 }",
+    )
+
+    expect(
+      analyzeRouteToolsProduction({ routeDir, sharedToolsDir: undefined }).map((tool) => tool.name),
+    ).toEqual(["valid"])
+  })
+
+  test("resolves imported route-tool input and output types", () => {
+    const routeDir = join(tempDir, "route")
+    mkdirSync(routeDir, { recursive: true })
+    writeFileSync(
+      join(routeDir, "types.ts"),
+      `
+export interface ImportedInput { query: string }
+export interface ImportedOutput { matches: number }
+`,
+    )
+    writeToolFile(
+      routeDir,
+      "search",
+      `
+import type { ImportedInput, ImportedOutput } from "../types.js"
+export default async function search(input: ImportedInput): Promise<ImportedOutput> {
+  return { matches: input.query.length }
+}
+`,
+    )
+
+    const result = analyzeRouteToolsProduction({ routeDir, sharedToolsDir: undefined })
+
+    expect(result[0]).toMatchObject({
+      name: "search",
+      inputType: "ImportedInput",
+      outputType: "ImportedOutput",
+      parameter: {
+        kind: "object",
+        properties: [{ name: "query", type: { kind: "string" }, optional: false }],
+      },
+    })
   })
 })

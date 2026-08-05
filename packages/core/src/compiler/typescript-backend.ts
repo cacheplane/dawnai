@@ -157,16 +157,10 @@ function resolveTypeInner(
   }
 
   if (type.isIntersection()) {
-    const members = type.types.map((member) => resolveType(member, checker, state))
-    if (members.every((member) => member.kind === "object")) {
-      return {
-        kind: "object",
-        properties: members.flatMap((member) =>
-          member.kind === "object" ? member.properties : [],
-        ),
-      }
+    return {
+      kind: "intersection",
+      members: type.types.map((member) => resolveType(member, checker, state)),
     }
-    return { kind: "intersection", members }
   }
 
   if (type.flags & ts.TypeFlags.Object) {

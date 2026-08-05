@@ -9,21 +9,31 @@ export interface AnalyzeRouteToolsOptions {
   readonly sharedToolsDir: string | undefined
 }
 
-export function analyzeRouteTools(options: AnalyzeRouteToolsOptions): readonly AnalyzedTool[] {
-  const routeToolFiles = discoverToolFiles(join(options.routeDir, "tools"))
-  const sharedToolFiles = options.sharedToolsDir
-    ? discoverToolFiles(join(options.sharedToolsDir, "tools"))
-    : new Map<string, string>()
+export function createAnalyzeRouteTools(
+  analyzeEffectiveToolFiles: (toolFiles: ReadonlyMap<string, string>) => readonly AnalyzedTool[],
+): (options: AnalyzeRouteToolsOptions) => readonly AnalyzedTool[] {
+  return (options) => {
+    const routeToolFiles = discoverToolFiles(join(options.routeDir, "tools"))
+    const sharedToolFiles = options.sharedToolsDir
+      ? discoverToolFiles(join(options.sharedToolsDir, "tools"))
+      : new Map<string, string>()
 
-  const effectiveToolFiles = new Map(sharedToolFiles)
-  for (const [name, filePath] of routeToolFiles) {
-    effectiveToolFiles.set(name, filePath)
+    const effectiveToolFiles = new Map(sharedToolFiles)
+    for (const [name, filePath] of routeToolFiles) {
+      effectiveToolFiles.set(name, filePath)
+    }
+
+    const sortedToolFiles = new Map(
+      [...effectiveToolFiles].sort(([left], [right]) => left.localeCompare(right)),
+    )
+    return analyzeEffectiveToolFiles(sortedToolFiles)
   }
+}
 
-  const sortedToolFiles = new Map(
-    [...effectiveToolFiles].sort(([left], [right]) => left.localeCompare(right)),
-  )
-  return analyzeToolFiles(sortedToolFiles)
+const analyzeRouteToolsWithBackend = createAnalyzeRouteTools(analyzeToolFiles)
+
+export function analyzeRouteTools(options: AnalyzeRouteToolsOptions): readonly AnalyzedTool[] {
+  return analyzeRouteToolsWithBackend(options)
 }
 
 function discoverToolFiles(toolsDir: string): Map<string, string> {

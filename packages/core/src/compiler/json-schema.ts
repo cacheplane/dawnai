@@ -6,10 +6,19 @@ const MAX_SCHEMA_DEPTH = 8
 export function typeInfoToToolParameters(
   parameter: TypeInfo | null,
 ): ExtractedToolSchema["parameters"] {
-  const objectParameter = unwrapOptional(parameter)
-  if (objectParameter?.kind !== "object") return emptyParameters()
+  if (parameter?.kind === "object") return objectSchema(parameter.properties, -1)
 
-  return objectSchema(objectParameter.properties, -1)
+  if (
+    parameter?.kind === "intersection" &&
+    parameter.members.every((member) => member.kind === "object")
+  ) {
+    return objectSchema(
+      parameter.members.flatMap((member) => (member.kind === "object" ? member.properties : [])),
+      -1,
+    )
+  }
+
+  return emptyParameters()
 }
 
 function typeInfoToJsonSchema(type: TypeInfo, depth: number): JsonSchemaProperty {
@@ -78,10 +87,6 @@ function objectSchema(
     required,
     additionalProperties: false,
   }
-}
-
-function unwrapOptional(type: TypeInfo | null): TypeInfo | null {
-  return type?.kind === "optional" ? type.inner : type
 }
 
 function emptyParameters(): ExtractedToolSchema["parameters"] {

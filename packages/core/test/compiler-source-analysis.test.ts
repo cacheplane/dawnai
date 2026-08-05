@@ -244,17 +244,23 @@ export default async (input: Input) => input
     })
   })
 
-  test("resolves instantiated generic types in the neutral parameter model", () => {
+  test("preserves instantiated generic intersections in the neutral parameter model", () => {
     const result = analyze(`
 type WithId<T> = { id: string } & T
 export default async (input: WithId<{ name: string }>) => input
 `)
 
     expect(result.parameter).toEqual({
-      kind: "object",
-      properties: [
-        { name: "id", type: { kind: "string" }, optional: false },
-        { name: "name", type: { kind: "string" }, optional: false },
+      kind: "intersection",
+      members: [
+        {
+          kind: "object",
+          properties: [{ name: "id", type: { kind: "string" }, optional: false }],
+        },
+        {
+          kind: "object",
+          properties: [{ name: "name", type: { kind: "string" }, optional: false }],
+        },
       ],
     })
   })
