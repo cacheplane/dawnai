@@ -5,9 +5,11 @@ import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import {
   invokeResolvedRoute,
+  type PreparedRouteModules,
   resolveCheckpointer,
   resolvePermissionsStore,
   resolveThreadsStore,
+  seedPreparedRouteModules,
   streamResolvedRoute,
 } from "../runtime/execute-route.js"
 import { resolveMemoryStore } from "../runtime/resolve-memory.js"
@@ -64,7 +66,26 @@ export async function createRuntimeFetchHandler(
     readonly drainDeadlineMs?: number
   },
 ): Promise<RuntimeFetchHandler> {
-  const registry = await createRuntimeRegistry(options.appRoot)
+  const registry = await createRuntimeRegistry(options.appRoot, options.modules)
+  if (options.modules) {
+    // Pre-populate the per-route prepared-modules cache (execute-route.ts)
+    // from the static manifest so every route's first request also skips its
+    // dynamic loads — cache hit = static, cache miss = dynamic (unreachable
+    // here since every route in the registry came from `modules.routes`).
+    seedPreparedRouteModules(
+      new Map(
+        options.modules.routes.map((route) => [
+          route.routeFile,
+          {
+            memory: route.memory,
+            module: route.module,
+            stateFields: route.stateFields,
+            tools: route.tools,
+          } satisfies PreparedRouteModules,
+        ]),
+      ),
+    )
+  }
   const middleware = await loadMiddleware(options.appRoot)
   const threadsStore = await resolveThreadsStore(options.appRoot)
   const checkpointer = await resolveCheckpointer(options.appRoot)

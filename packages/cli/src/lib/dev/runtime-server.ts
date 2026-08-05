@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
+import type { DawnStaticModules } from "../runtime/static-modules.js"
 import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
 import { createRuntimeFetchHandler } from "./runtime-fetch-handler.js"
 
@@ -23,6 +24,15 @@ export interface StartRuntimeServerOptions {
    *   instance — no per-request read.
    */
   readonly permissionsMode?: "per-request" | "boot"
+  /**
+   * A build-time-generated module manifest (PR 2's static-wiring seam). When
+   * present, `createRuntimeFetchHandler` builds the runtime registry from it
+   * (zero `discoverRoutes` filesystem walk) and pre-seeds the per-route
+   * prepared-modules cache so every route's first request also skips its
+   * dynamic loads (route/tool/state/memory). When absent, boot and per-request
+   * behavior are byte-for-byte the existing dynamic path.
+   */
+  readonly modules?: DawnStaticModules
 }
 
 // ---------------------------------------------------------------------------

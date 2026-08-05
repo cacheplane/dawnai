@@ -1,3 +1,4 @@
+import type { DawnStaticModules } from "../runtime/static-modules.js"
 import { startRuntimeServer } from "./runtime-server.js"
 
 export interface ServeRuntimeOptions {
@@ -5,6 +6,8 @@ export interface ServeRuntimeOptions {
   readonly host?: string
   readonly port?: number
   readonly installSignalHandlers?: boolean
+  /** A build-time-generated module manifest — see `StartRuntimeServerOptions.modules`. */
+  readonly modules?: DawnStaticModules
 }
 
 export interface ServeRuntimeHandle {
@@ -68,6 +71,7 @@ export async function serveRuntime(opts: ServeRuntimeOptions): Promise<ServeRunt
   const server = await startRuntimeServer({
     appRoot: opts.appRoot,
     host,
+    ...(opts.modules ? { modules: opts.modules } : {}),
     permissionsMode: "boot",
     port,
   })
