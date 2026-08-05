@@ -5,7 +5,7 @@ import { findDawnApp, loadDawnConfig } from "@dawn-ai/core"
 
 import { type CommandIo, formatErrorMessage, writeLine } from "../output.js"
 import { buildRuntimeServerOptions } from "./boot-runtime.js"
-import { classifyChange } from "./classify-change.js"
+import { classifyChange, describeChangeReason } from "./classify-change.js"
 import { DevChildStartupError, type SpawnedDevChild, spawnDevChild } from "./dev-child.js"
 import { waitForDevServerReady } from "./health.js"
 import { loadEnvFiles } from "./load-env.js"
@@ -76,12 +76,12 @@ class InternalDevSession {
   private readonly appRoot: string
   private readonly port: number
   private readonly url: string
-  private typegenTimeout: ReturnType<typeof setTimeout> | null = null
   private watcher: AppWatcher | null = null
   private closed = false
   private hasBeenReady = false
   private restartInFlight = false
   private pendingRestart = false
+  private pendingRestartReason: string | undefined
   private resolveClosed!: () => void
   private rejectClosed!: (error: Error) => void
   private readonly closedPromise: Promise<void>
@@ -103,9 +103,6 @@ class InternalDevSession {
   }
 
   async start(): Promise<void> {
-    // Run typegen before starting dev server
-    await this.runTypegenSafe()
-
     this.watcher = watchApp({
       appRoot: this.appRoot,
       onChange: (path) => {
@@ -124,11 +121,6 @@ class InternalDevSession {
 
     this.closed = true
 
-    if (this.typegenTimeout) {
-      clearTimeout(this.typegenTimeout)
-      this.typegenTimeout = null
-    }
-
     this.watcher?.close()
     this.watcher = null
 
@@ -145,23 +137,27 @@ class InternalDevSession {
     await this.closedPromise
   }
 
-  private async requestRestart(): Promise<void> {
+  private async requestRestart(reason: string): Promise<void> {
     if (this.closed) {
       return
     }
 
     if (this.restartInFlight) {
       this.pendingRestart = true
+      this.pendingRestartReason = reason
       return
     }
 
     this.restartInFlight = true
+    let currentReason = reason
 
     try {
       do {
         this.pendingRestart = false
-        writeLine(this.io.stdout, "Restarting Dawn dev server")
+        writeLine(this.io.stdout, `Restarting Dawn dev server (${currentReason})`)
         await this.startOrRestart()
+        currentReason = this.pendingRestartReason ?? currentReason
+        this.pendingRestartReason = undefined
       } while (this.pendingRestart && !this.closed)
 
       if (!this.closed) {
@@ -216,22 +212,7 @@ class InternalDevSession {
       return
     }
 
-    if (classification === "typegen") {
-      this.scheduleTypegen()
-    } else {
-      void this.requestRestart()
-    }
-  }
-
-  private scheduleTypegen(): void {
-    if (this.typegenTimeout) {
-      clearTimeout(this.typegenTimeout)
-    }
-
-    this.typegenTimeout = setTimeout(() => {
-      this.typegenTimeout = null
-      void this.runTypegenSafe()
-    }, 100)
+    void this.requestRestart(describeChangeReason(relative))
   }
 
   private async runTypegenSafe(): Promise<void> {
@@ -254,6 +235,14 @@ class InternalDevSession {
     }
 
     const app = await validateWatchedAppRoot(this.appRoot)
+
+    // Regenerate types before every spawn (initial boot and every restart) so
+    // the child's dawn.generated.d.ts reflects the route tree it's about to
+    // serve. Tool/state/reducer edits used to get this via a debounced
+    // typegen-only reaction with no restart; now that those edits restart
+    // the child (see classifyChange), typegen runs unconditionally here
+    // instead of on a separate schedule.
+    await this.runTypegenSafe()
 
     const child = spawnDevChild({
       appRoot: app.appRoot,
