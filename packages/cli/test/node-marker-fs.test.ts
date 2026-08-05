@@ -15,18 +15,24 @@ describe("nodeMarkerFs", () => {
     const dir = await mkdtemp(join(tmpdir(), "dawn-marker-fs-"))
     cleanup.push(() => rm(dir, { force: true, recursive: true }))
     const file = join(dir, "AGENTS.md")
-    await writeFile(file, "remember the thing", "utf8")
+    const content = "remember the thing"
+    await writeFile(file, content, "utf8")
 
     expect(nodeMarkerFs.existsSync(file)).toBe(true)
-    expect(nodeMarkerFs.statSizeSync(file)).toBe(18)
-    expect(nodeMarkerFs.readFileSync(file)).toBe("remember the thing")
-    expect(nodeMarkerFs.readDirSync(dir)).toEqual(["AGENTS.md"])
+    expect(nodeMarkerFs.statSizeSync(file)).toBe(Buffer.byteLength(content))
+    expect(nodeMarkerFs.readFileSync(file)).toBe(content)
+    expect(nodeMarkerFs.readdirSync(dir)).toEqual(["AGENTS.md"])
+    expect(nodeMarkerFs.readdirSync(file)).toEqual([])
+    expect(nodeMarkerFs.statSizeSync(join(file, "under"))).toBeUndefined()
+    expect(nodeMarkerFs.isDirectorySync(dir)).toBe(true)
+    expect(nodeMarkerFs.isDirectorySync(file)).toBe(false)
   })
 
-  it("fails closed on missing paths (no throw from existsSync/statSizeSync)", () => {
+  it("fails closed on missing paths (no throw from any method)", () => {
     expect(nodeMarkerFs.existsSync("/nonexistent/definitely/not-here")).toBe(false)
+    expect(nodeMarkerFs.isDirectorySync("/nonexistent/definitely/not-here")).toBe(false)
     expect(nodeMarkerFs.statSizeSync("/nonexistent/definitely/not-here")).toBeUndefined()
-    expect(() => nodeMarkerFs.readFileSync("/nonexistent/definitely/not-here")).toThrow()
-    expect(nodeMarkerFs.readDirSync("/nonexistent/definitely/not-here")).toEqual([])
+    expect(nodeMarkerFs.readFileSync("/nonexistent/definitely/not-here")).toBeUndefined()
+    expect(nodeMarkerFs.readdirSync("/nonexistent/definitely/not-here")).toEqual([])
   })
 })

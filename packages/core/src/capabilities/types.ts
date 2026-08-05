@@ -124,19 +124,31 @@ export interface MemoryContext {
  * Minimal SYNC filesystem facade for capability markers. Sync because
  * `promptFragment.render()` is synchronous (called per model turn) — the
  * async `FilesystemBackend` cannot serve it. The node implementation lives in
- * the cli layer (keeping `node:fs` OUT of @dawn-ai/core's capability graph so
- * edge bundles stay clean); edge entries simply omit it, and markers must
- * detect-false / render-empty when it is absent.
+ * the cli layer so that markers can drop their own `node:fs` imports (keeping
+ * `node:fs` OUT of @dawn-ai/core's capability graph so edge bundles stay
+ * clean); edge entries simply omit it, and markers must detect-false /
+ * render-empty when it is absent.
  */
 export interface MarkerFs {
   /** false on any error — never throws. */
   existsSync(path: string): boolean
+  /**
+   * true only when the path exists and is a directory; false on any error —
+   * never throws. Needed by the skills marker's directory probe (a size-based
+   * probe can't distinguish dirs from files).
+   */
+  isDirectorySync(path: string): boolean
   /** Byte size, or undefined on any error — never throws. */
   statSizeSync(path: string): number | undefined
-  /** UTF-8 content; MAY throw (callers already try/catch reads). */
-  readFileSync(path: string): string
+  /**
+   * UTF-8 content, or undefined on any error — never throws.
+   * `promptFragment.render()` runs uncaught inside the model-turn path, so a
+   * throwing read would abort the turn; the whole facade is uniformly
+   * fail-closed.
+   */
+  readFileSync(path: string): string | undefined
   /** Entry names (files+dirs), [] on any error — never throws. */
-  readDirSync(path: string): readonly string[]
+  readdirSync(path: string): readonly string[]
 }
 
 export interface CapabilityMarkerContext {
@@ -150,7 +162,12 @@ export interface CapabilityMarkerContext {
   /**
    * Sync fs facade for marker detect/load/render file access. Absent on
    * runtimes with no filesystem (edge) — markers MUST treat absence as
-   * "no marker files exist".
+   * "no marker files exist". Always the HOST filesystem, even when the route
+   * runs with sandbox backends — markers that must respect a sandbox should
+   * consult `workspaceRoot` (this preserves current behavior: markers have
+   * always read host files). Paths are caller-trusted and never
+   * model-controlled — no path-jail is applied (contrast with
+   * `FilesystemBackend`'s jailed contract).
    */
   readonly markerFs?: MarkerFs
   readonly permissions?: PermissionsStore
