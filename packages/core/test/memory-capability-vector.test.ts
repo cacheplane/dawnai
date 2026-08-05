@@ -56,6 +56,9 @@ function makeContext(captured: Captured, embedder: Embedder | undefined): Capabi
       async stats() {
         return { total: 0, byStatus: {}, byKind: {}, byNamespace: {}, bySourceType: {} }
       },
+      async prune() {
+        return { deletedExpired: 0, deletedOverCap: 0 }
+      },
     },
     namespace: "route=/probe",
     writes: "auto",

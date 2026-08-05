@@ -1,4 +1,24 @@
-import type { MemoryRecord, MemoryStore } from "./types.js"
+import type { MemoryKind, MemoryRecord, MemoryStore } from "./types.js"
+
+export type WritePolicy = { readonly mode: "reconcile" } | { readonly mode: "append" }
+
+/** Per-kind write discipline. Semantic facts reconcile (identity match →
+ *  update/supersede); episodic events append (a later episode never
+ *  contradicts an earlier one). Procedural/reflection are typed but not yet
+ *  wired — throwing beats baking in accidental semantics.
+ *  Mirrored inline in packages/core/src/capabilities/built-in/memory.ts
+ *  remember (core can't import this package) — keep in sync. */
+export function writePolicyFor(kind: MemoryKind): WritePolicy {
+  switch (kind) {
+    case "semantic":
+      return { mode: "reconcile" }
+    case "episodic":
+      return { mode: "append" }
+    default:
+      throw new Error(`memory kind '${kind}' is not yet wired (semantic and episodic are)`)
+  }
+}
+
 export type WriteOp =
   | { op: "add" }
   | { op: "update"; targetId: string }
@@ -38,6 +58,8 @@ export interface ApproveResult {
  * identity + identical data → the candidate is dropped (dedupe); no identity
  * match → plain activation. Used by `dawn memory approve` and the inspector —
  * the capability's auto-write path keeps its own inline logic by design.
+ * Append-kind candidates (per writePolicyFor, e.g. episodic) bypass
+ * reconciliation entirely — approval is a plain activation, no identity scan.
  *
  * NOT transactional: MemoryStore has no CAS primitive, so the read-classify-
  * write sequence can race a concurrent same-identity auto-write. Worst case is
@@ -53,6 +75,13 @@ export async function approveWithReconcile(
   if (!candidate) throw new Error(`memory ${id} not found`)
   if (candidate.status !== "candidate")
     throw new Error(`memory ${id} is '${candidate.status}', not a candidate`)
+  if (writePolicyFor(candidate.kind).mode === "append") {
+    // Append-only kinds: approval is a plain activation — no identity scan.
+    await store.update(id, { status: "active", updatedAt: opts.now })
+    const approved = await store.get(id)
+    if (!approved) throw new Error(`approved memory ${id} vanished`)
+    return { approved, action: "activated", superseded: [], identityKeys: opts.identityKeys }
+  }
   const actives = await store.search({
     namespace: candidate.namespace,
     status: "active",

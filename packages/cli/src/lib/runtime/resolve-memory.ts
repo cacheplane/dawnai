@@ -64,6 +64,58 @@ export async function resolveMemoryWrites(appRoot: string): Promise<MemoryWrites
   }
 }
 
+/** Resolved `config.memory.episodes` — the runtime episode recorder's knobs. */
+export interface ResolvedEpisodesConfig {
+  readonly enabled: boolean
+  readonly ttlMs: number
+  readonly cap: number
+  readonly includeFailedRuns: boolean
+  readonly embed: boolean
+}
+
+let warnedEmbedUnsupported = false
+
+/**
+ * Resolves the episode-recorder config for the given appRoot.
+ *
+ * Defaults: disabled, 30-day TTL, 500-episode per-namespace cap, failed runs
+ * included, no embeddings. Uses the same cached `loadDawnConfig` loader as the
+ * other resolvers; missing/unreadable config falls back to defaults.
+ *
+ * `embed: true` is not supported this cycle — it resolves to `false` and logs
+ * a one-line warning once per process (honest, forward-compatible).
+ */
+export async function resolveEpisodesConfig(appRoot: string): Promise<ResolvedEpisodesConfig> {
+  let episodes:
+    | {
+        readonly enabled?: boolean
+        readonly ttlMs?: number
+        readonly cap?: number
+        readonly includeFailedRuns?: boolean
+        readonly embed?: boolean
+      }
+    | undefined
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    episodes = loaded.config.memory?.episodes
+  } catch {
+    // No dawn.config.ts or unreadable — use defaults.
+  }
+  if (episodes?.embed === true && !warnedEmbedUnsupported) {
+    warnedEmbedUnsupported = true
+    console.warn(
+      "[dawn] memory.episodes.embed is not yet supported; episodes are recorded without embeddings",
+    )
+  }
+  return {
+    enabled: episodes?.enabled ?? false,
+    ttlMs: episodes?.ttlMs ?? 30 * 86_400_000,
+    cap: episodes?.cap ?? 500,
+    includeFailedRuns: episodes?.includeFailedRuns ?? true,
+    embed: false,
+  }
+}
+
 /** Build the per-request memory capability context for a route with a memory.ts. */
 export function buildMemoryContext(args: {
   defined: LoadedRouteMemory

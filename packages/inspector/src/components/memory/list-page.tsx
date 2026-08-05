@@ -7,6 +7,7 @@ import { usePolling } from "../use-polling"
 import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
 import { MemoryGrid } from "./memory-grid"
+import { TimelineView } from "./timeline-view"
 
 interface ListResponse {
   readonly records: readonly MemoryRecord[]
@@ -27,6 +28,14 @@ type ErrorSource = "stats" | "list" | "search"
 const KINDS = ["semantic", "episodic", "procedural", "reflection"] as const
 const STATUSES = ["candidate", "active", "superseded"] as const
 
+/** Timeline window presets → milliseconds back from now ("all" = unbounded). */
+const WINDOWS = {
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "30d": 30 * 24 * 60 * 60 * 1000,
+} as const
+type TimelineWindow = keyof typeof WINDOWS | "all"
+
 const selectClass =
   "h-9 rounded-md border border-zinc-200 bg-white px-2 text-sm text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300"
 
@@ -35,6 +44,8 @@ export function ListPage() {
   const [status, setStatus] = useState("")
   const [kind, setKind] = useState("")
   const [query, setQuery] = useState("")
+  const [view, setView] = useState<"list" | "timeline">("list")
+  const [timelineWindow, setTimelineWindow] = useState<TimelineWindow>("all")
   const [live, setLive] = useState(true)
   const [selectedId, setSelectedId] = useState<string>()
   const [refreshKey, setRefreshKey] = useState(0)
@@ -85,9 +96,15 @@ export function ListPage() {
     const params = new URLSearchParams({ limit: "200" })
     if (namespace) params.set("namespacePrefix", namespace)
     if (status) params.set("status", status)
-    if (kind) params.set("kind", kind)
+    // Timeline is an episode view — default the kind filter to episodic there
+    // (the kind select still overrides), and thread the client-computed window.
+    const effectiveKind = kind || (view === "timeline" ? "episodic" : "")
+    if (effectiveKind) params.set("kind", effectiveKind)
+    if (view === "timeline" && timelineWindow !== "all") {
+      params.set("since", new Date(Date.now() - WINDOWS[timelineWindow]).toISOString())
+    }
     return fetchJson<ListResponse>("list", `/api/memory/list?${params}`)
-  }, [fetchJson, namespace, status, kind, refreshKey])
+  }, [fetchJson, namespace, status, kind, view, timelineWindow, refreshKey])
 
   const stats = usePolling(statsFn, 2000, live)
   const page = usePolling(pageFn, 2000, live && !query)
@@ -154,6 +171,40 @@ export function ListPage() {
           ))}
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {/* biome-ignore lint/a11y/useSemanticElements: a fieldset carries form semantics and default chrome; this is a segmented view toggle, for which role=group on a div is the standard pattern */}
+          <div
+            role="group"
+            aria-label="View"
+            className="flex overflow-hidden rounded-md border border-zinc-200"
+          >
+            {(["list", "timeline"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={view === v}
+                onClick={() => setView(v)}
+                className={`h-9 px-3 text-sm ${
+                  view === v ? "bg-zinc-900 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+          {view === "timeline" ? (
+            <select
+              aria-label="Window"
+              value={timelineWindow}
+              onChange={(e) => setTimelineWindow(e.target.value as TimelineWindow)}
+              className={selectClass}
+            >
+              {(["24h", "7d", "30d", "all"] as const).map((w) => (
+                <option key={w} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <Input
             type="search"
             aria-label="Search memories"
@@ -222,6 +273,9 @@ export function ListPage() {
             ) : (
               <p className="py-8 text-center text-sm text-zinc-400">No matches.</p>
             )
+          ) : view === "timeline" ? (
+            // TimelineView owns its empty state ("No episodes in this window.").
+            <TimelineView records={pageRecords} onSelect={setSelectedId} />
           ) : pageRecords.length > 0 ? (
             <MemoryGrid records={pageRecords} onSelect={setSelectedId} />
           ) : (
