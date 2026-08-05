@@ -30,6 +30,14 @@ export async function GET(req: Request): Promise<Response> {
   const namespaces = namespace ? [namespace] : Object.keys((await store.stats()).byNamespace)
   const groups: { namespace: string; records: readonly MemoryRecord[] }[] = []
   // One recency snapshot for every namespace — consistent ranking across groups.
+  //
+  // Deliberately NO includeExpired escape hatch here (unlike the list API):
+  // the store couples `now` to BOTH expiry exclusion and recency ranking in a
+  // single parameter, so omitting it to reveal expired rows would also skew
+  // ranked search to a data-derived recency reference. More importantly,
+  // search is meant to mirror what the agent's own recall sees — and recall
+  // always excludes expired rows. Expired-but-unpruned rows are a debugging
+  // concern, and the list API (with includeExpired=1) is the debugging surface.
   const now = new Date().toISOString()
   for (const ns of namespaces) {
     const records = await store.search({

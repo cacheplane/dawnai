@@ -243,6 +243,97 @@ describe.skipIf(!gated)("memory JSON API", () => {
   })
 })
 
+describe.skipIf(!gated)("list time windows + expiry", () => {
+  let server: InspectorServer
+
+  function episodeSeed(
+    overrides: Partial<MemoryRecord> & Pick<MemoryRecord, "id" | "effectiveAt">,
+  ): MemoryRecord {
+    return record({
+      kind: "episodic",
+      namespace: "route=/chat",
+      status: "active",
+      content: "Ran: summarize the meeting",
+      data: { input: "summarize the meeting", outcome: "ok", durationMs: 1200 },
+      source: { type: "run", id: "run-1" },
+      ...overrides,
+    })
+  }
+
+  beforeAll(async () => {
+    resetDawnDir(fixtureApp)
+    const store = sqliteMemoryStore({ path: join(fixtureApp, ".dawn", "memory.sqlite") })
+    await store.put(episodeSeed({ id: "ep-day1", effectiveAt: "2026-08-01T10:00:00.000Z" }))
+    await store.put(
+      episodeSeed({
+        id: "ep-day2",
+        content: "Ran: draft the release notes",
+        data: { input: "draft the release notes", outcome: "error", durationMs: 500 },
+        effectiveAt: "2026-08-02T12:00:00.000Z",
+      }),
+    )
+    // Already expired relative to any wall clock this test runs under.
+    await store.put(
+      episodeSeed({
+        id: "ep-expired",
+        content: "Ran: an expired episode",
+        effectiveAt: "2026-08-01T09:00:00.000Z",
+        expiresAt: "2020-01-01T00:00:00.000Z",
+      }),
+    )
+    server = await startInspector(fixtureApp)
+  })
+
+  afterAll(async () => {
+    await server?.stop()
+    removeDawnDir(fixtureApp)
+  })
+
+  it("since narrows the list to episodes at or after the bound", async () => {
+    const params = new URLSearchParams({ since: "2026-08-02T00:00:00.000Z" })
+    const res = await fetch(`${server.base}/api/memory/list?${params}`)
+    expect(res.status).toBe(200)
+    const page = (await res.json()) as { records: MemoryRecord[]; total: number }
+    expect(page.records.map((r) => r.id)).toEqual(["ep-day2"])
+    expect(page.total).toBe(1)
+  })
+
+  it("until excludes episodes at or after the bound (exclusive upper)", async () => {
+    const params = new URLSearchParams({ until: "2026-08-02T00:00:00.000Z" })
+    const res = await fetch(`${server.base}/api/memory/list?${params}`)
+    const page = (await res.json()) as { records: MemoryRecord[]; total: number }
+    // ep-expired's effectiveAt is also inside this window — expiry still hides it.
+    expect(page.records.map((r) => r.id)).toEqual(["ep-day1"])
+  })
+
+  it("expired episodes are hidden by default and revealed by includeExpired=1", async () => {
+    const res = await fetch(`${server.base}/api/memory/list`)
+    const page = (await res.json()) as { records: MemoryRecord[]; total: number }
+    expect(page.records.map((r) => r.id).sort()).toEqual(["ep-day1", "ep-day2"])
+
+    const revealed = await fetch(`${server.base}/api/memory/list?includeExpired=1`)
+    const revealedPage = (await revealed.json()) as { records: MemoryRecord[]; total: number }
+    expect(revealedPage.records.map((r) => r.id).sort()).toEqual([
+      "ep-day1",
+      "ep-day2",
+      "ep-expired",
+    ])
+  })
+
+  it("rejects unparseable since/until with a 400 {error}", async () => {
+    const bad = await fetch(`${server.base}/api/memory/list?since=notadate`)
+    expect(bad.status).toBe(400)
+    const badBody = (await bad.json()) as { error: string }
+    expect(badBody.error).toContain('invalid since "notadate"')
+
+    const badUntil = await fetch(`${server.base}/api/memory/list?until=alsonotadate`)
+    expect(badUntil.status).toBe(400)
+    expect(((await badUntil.json()) as { error: string }).error).toContain(
+      'invalid until "alsonotadate"',
+    )
+  })
+})
+
 describe.skipIf(!gated)("identity resolution error discipline", () => {
   let server: InspectorServer
 
