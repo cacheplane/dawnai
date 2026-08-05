@@ -71,7 +71,7 @@ export function analyzeToolSource(source: string, fileName: string): AnalyzedToo
         firstParameter.valueDeclaration ?? firstParameter.declarations?.[0] ?? sourceFile,
       )
     : null
-  const returnType = unwrapPromise(checker.getReturnTypeOfSignature(signature))
+  const returnType = unwrapPromise(checker.getReturnTypeOfSignature(signature), checker)
   const jsDoc = extractJsDoc(sourceFile)
 
   return {
@@ -271,9 +271,9 @@ function isStandardLibraryType(type: ts.Type, names: readonly string[]): boolean
   )
 }
 
-function unwrapPromise(type: ts.Type): ts.Type {
-  if (type.getSymbol()?.getName() !== "Promise") return type
-  return (type as ts.TypeReference).typeArguments?.[0] ?? type
+function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
+  if (!isStandardLibraryType(type, ["Promise"])) return type
+  return checker.getTypeArguments(type as ts.TypeReference)[0] ?? type
 }
 
 function extractJsDoc(sourceFile: ts.SourceFile): JsDocInfo {

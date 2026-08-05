@@ -288,6 +288,17 @@ export interface ImportedOutput { accepted: boolean }
     })
   })
 
+  test("does not unwrap a user-defined Promise return type", () => {
+    const result = analyze(`
+interface Promise<T> { wrapped: T }
+export default function customPromise(input: string): Promise<number> {
+  return { wrapped: input.length }
+}
+`)
+
+    expect(result.outputType).toBe("Promise<number>")
+  })
+
   test("represents unknown input types", () => {
     const result = analyze(
       "export default async function flexible(input: unknown): Promise<boolean> { return true }",
@@ -361,6 +372,27 @@ export default async (input: Branch) => input
         { name: "child", type: { kind: "unknown" }, optional: true },
       ],
     })
+  })
+
+  test("cuts off deeply nested acyclic types without throwing", () => {
+    const nestingDepth = 40
+    let inputType = "string"
+    for (let index = nestingDepth - 1; index >= 0; index -= 1) {
+      inputType = `{ level${index}: ${inputType} }`
+    }
+
+    const result = analyze(`export default async (input: ${inputType}) => input`)
+    let current = result.parameter
+    let resolvedDepth = 0
+
+    while (current?.kind === "object") {
+      current = current.properties[0]?.type ?? null
+      resolvedDepth += 1
+    }
+
+    expect(resolvedDepth).toBeGreaterThan(0)
+    expect(resolvedDepth).toBeLessThan(nestingDepth)
+    expect(current).toEqual({ kind: "unknown" })
   })
 
   test("extracts multiline JSDoc attached to a default export expression", () => {
