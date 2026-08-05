@@ -19,7 +19,7 @@ async function registerTsxLoader(): Promise<void> {
   await loaderPromise
 }
 
-export async function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig> {
+async function loadDawnConfigUncached(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig> {
   const configPath = join(options.appRoot, DAWN_CONFIG_FILE)
   await access(configPath, constants.F_OK)
   await registerTsxLoader()
@@ -37,4 +37,28 @@ export async function loadDawnConfig(options: LoadDawnConfigOptions): Promise<Lo
     config: mod.default as DawnConfig,
     configPath,
   }
+}
+
+const configCache = new Map<string, Promise<LoadedDawnConfig>>()
+
+/**
+ * Loads `dawn.config.ts` for the given appRoot, memoized for the lifetime of
+ * the process. Config edits during `dawn dev` are picked up because the dev
+ * loop restarts the child process on config changes — a fresh process means
+ * a fresh (empty) cache.
+ */
+export function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig> {
+  const cached = configCache.get(options.appRoot)
+  if (cached) return cached
+  const loading = loadDawnConfigUncached(options)
+  configCache.set(options.appRoot, loading)
+  // A failed load must not be cached forever (e.g. a transient syntax error
+  // would otherwise poison the process) — evict on rejection.
+  loading.catch(() => configCache.delete(options.appRoot))
+  return loading
+}
+
+/** Test-only: clear the memo so fixtures can reload a mutated config. */
+export function __clearDawnConfigCacheForTests(): void {
+  configCache.clear()
 }

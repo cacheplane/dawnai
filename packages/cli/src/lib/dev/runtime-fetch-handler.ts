@@ -1,10 +1,12 @@
 import type { MemoryStore } from "@dawn-ai/memory"
+import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import {
   invokeResolvedRoute,
   resolveCheckpointer,
+  resolvePermissionsStore,
   resolveThreadsStore,
   streamResolvedRoute,
 } from "../runtime/execute-route.js"
@@ -67,12 +69,32 @@ export async function createRuntimeFetchHandler(
   const threadsStore = await resolveThreadsStore(options.appRoot)
   const checkpointer = await resolveCheckpointer(options.appRoot)
   const sandboxManager = await resolveSandboxManager(options.appRoot)
+  // Lazy, memoized, shared: resolveMemoryStore (and the sqlite it opens) runs
+  // at most once per process, on the FIRST request that actually needs
+  // memory — not unconditionally at boot for apps with no memory routes, and
+  // not once per request for the capability path (execute-route.ts threads
+  // this same thunk down instead of calling resolveMemoryStore itself).
+  //
   // Cast: resolveMemoryStore's declared return type (MemoryStoreLike, in
   // @dawn-ai/core) is the narrower capability-facing surface. The concrete
   // store (sqlite-backed, or user-supplied via dawn.config.ts) also exposes
   // listCandidates/delete, which the memory-candidate HTTP routes need — the
   // same cast `commands/memory.ts` uses for the CLI's `dawn memory` commands.
-  const memoryStore = (await resolveMemoryStore(options.appRoot)) as unknown as MemoryStore
+  let memoryStorePromise: Promise<MemoryStore> | undefined
+  const getMemoryStore = (): Promise<MemoryStore> => {
+    memoryStorePromise ??= resolveMemoryStore(options.appRoot) as unknown as Promise<MemoryStore>
+    return memoryStorePromise
+  }
+
+  // Permissions store, per StartRuntimeServerOptions.permissionsMode:
+  // "boot" (production) loads once here and reuses the instance; the default
+  // "per-request" (dev) hands route execution a factory that re-loads
+  // `.dawn/permissions.json` each request, so HITL "Always" grants written
+  // mid-process apply immediately — the one deliberate per-request read kept.
+  const permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>) =
+    options.permissionsMode === "boot"
+      ? await resolvePermissionsStore(options.appRoot)
+      : () => resolvePermissionsStore(options.appRoot)
 
   let sandboxReaper: ReturnType<typeof setInterval> | undefined
   if (sandboxManager) {
@@ -92,8 +114,9 @@ export async function createRuntimeFetchHandler(
   const routes = buildRouteTable({
     appRoot: options.appRoot,
     checkpointer,
-    memoryStore,
+    getMemoryStore,
     middleware,
+    permissionsStore,
     registry,
     ...(sandboxManager ? { sandboxManager } : {}),
     signal: shutdownController.signal,
@@ -246,8 +269,9 @@ function trackStreamSettled(
 function buildRouteTable(ctx: {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
-  readonly memoryStore: MemoryStore
+  readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
+  readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
@@ -256,8 +280,9 @@ function buildRouteTable(ctx: {
   const {
     appRoot,
     checkpointer,
-    memoryStore,
+    getMemoryStore,
     middleware,
+    permissionsStore,
     registry,
     sandboxManager,
     signal,
@@ -352,7 +377,10 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleApStreamRequest({
           appRoot,
+          checkpointer,
+          getMemoryStore,
           middleware,
+          permissionsStore,
           registry,
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
@@ -373,7 +401,9 @@ function buildRouteTable(ctx: {
         handleAgUiFetchRequest({
           appRoot,
           checkpointer,
+          getMemoryStore,
           middleware,
+          permissionsStore,
           registry,
           threadsStore,
           ...(sandboxManager ? { sandboxManager } : {}),
@@ -389,7 +419,7 @@ function buildRouteTable(ctx: {
     // GET /memory/candidates — list memory candidates (all namespaces)
     // ------------------------------------------------------------------
     {
-      handle: async () => handleMemoryListRequest({ memoryStore }),
+      handle: async () => handleMemoryListRequest({ memoryStore: await getMemoryStore() }),
       method: "GET",
       pattern: /^\/memory\/candidates(?:\?.*)?$/,
     },
@@ -399,7 +429,7 @@ function buildRouteTable(ctx: {
     // ------------------------------------------------------------------
     {
       handle: async (_request, params) =>
-        handleMemoryApproveRequest({ id: params.id ?? "", memoryStore }),
+        handleMemoryApproveRequest({ id: params.id ?? "", memoryStore: await getMemoryStore() }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/approve(?:\?.*)?$/,
     },
@@ -409,7 +439,7 @@ function buildRouteTable(ctx: {
     // ------------------------------------------------------------------
     {
       handle: async (_request, params) =>
-        handleMemoryRejectRequest({ id: params.id ?? "", memoryStore }),
+        handleMemoryRejectRequest({ id: params.id ?? "", memoryStore: await getMemoryStore() }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/reject(?:\?.*)?$/,
     },
@@ -421,7 +451,10 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleApWaitRequest({
           appRoot,
+          checkpointer,
+          getMemoryStore,
           middleware,
+          permissionsStore,
           registry,
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
@@ -470,7 +503,9 @@ function buildRouteTable(ctx: {
         handleResumeRequest({
           appRoot,
           checkpointer,
+          getMemoryStore,
           middleware,
+          permissionsStore,
           registry,
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
@@ -524,7 +559,10 @@ async function dispatch(
 
 async function handleApStreamRequest(options: {
   readonly appRoot: string
+  readonly checkpointer: BaseCheckpointSaver
+  readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
+  readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly request: Request
   readonly sandboxManager?: SandboxManager
@@ -535,7 +573,10 @@ async function handleApStreamRequest(options: {
 }): Promise<Response> {
   const {
     appRoot,
+    checkpointer,
+    getMemoryStore,
     middleware,
+    permissionsStore,
     registry,
     request,
     sandboxManager,
@@ -607,14 +648,19 @@ async function handleApStreamRequest(options: {
         try {
           for await (const chunk of streamResolvedRoute({
             appRoot,
+            checkpointer,
             input,
+            memoryStore: getMemoryStore,
             ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
+            permissionsStore,
             routeFile: route.routeFile,
             routeId: route.routeId,
+            ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
             signal,
             threadId,
+            threadsStore,
           })) {
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
@@ -655,7 +701,10 @@ async function handleApStreamRequest(options: {
 
 async function handleApWaitRequest(options: {
   readonly appRoot: string
+  readonly checkpointer: BaseCheckpointSaver
+  readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
+  readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly request: Request
   readonly sandboxManager?: SandboxManager
@@ -666,7 +715,10 @@ async function handleApWaitRequest(options: {
 }): Promise<Response> {
   const {
     appRoot,
+    checkpointer,
+    getMemoryStore,
     middleware,
+    permissionsStore,
     registry,
     request,
     sandboxManager,
@@ -724,14 +776,19 @@ async function handleApWaitRequest(options: {
 
   const resultPromise = invokeResolvedRoute({
     appRoot,
+    checkpointer,
     input,
+    memoryStore: getMemoryStore,
     ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
+    permissionsStore,
     routeFile: route.routeFile,
     routeId: route.routeId,
+    ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
     routePath: route.routePath,
     ...(sandboxManager ? { sandboxManager } : {}),
     signal,
     threadId,
+    threadsStore,
   })
 
   const result = await raceRequestAgainstShutdown(resultPromise, signal)
@@ -779,7 +836,9 @@ async function handleApWaitRequest(options: {
 async function handleResumeRequest(options: {
   readonly appRoot: string
   readonly checkpointer: BaseCheckpointSaver
+  readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
+  readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly request: Request
   readonly sandboxManager?: SandboxManager
@@ -791,7 +850,9 @@ async function handleResumeRequest(options: {
   const {
     appRoot,
     checkpointer,
+    getMemoryStore,
     middleware,
+    permissionsStore,
     registry,
     request,
     sandboxManager,
@@ -908,15 +969,20 @@ async function handleResumeRequest(options: {
         try {
           for await (const chunk of streamResolvedRoute({
             appRoot,
+            checkpointer,
             input: {},
+            memoryStore: getMemoryStore,
             resume: decision,
             ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
+            permissionsStore,
             routeFile: route.routeFile,
             routeId: route.routeId,
+            ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
             signal,
             threadId,
+            threadsStore,
           })) {
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
