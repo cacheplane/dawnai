@@ -216,6 +216,7 @@ dawn memory inspect <id>
 dawn memory approve <id>
 dawn memory reject <id>
 dawn memory forget <id>
+dawn memory prune [--cap <n>] [--namespace <prefix>]
 ```
 
 Subcommands:
@@ -225,6 +226,10 @@ Subcommands:
 - `approve <id>` — promote a candidate to an `active` record so `recall` surfaces it.
 - `reject <id>` — drop a candidate without promoting it.
 - `forget <id>` — delete a record by id.
+- `prune` — run [episodic retention](/docs/memory#episodic-memory) manually:
+  delete expired records (TTL) and enforce the per-namespace episode cap.
+  `--cap <n>` overrides the cap for this pass; `--namespace <prefix>` scopes
+  the pass to namespaces matching the prefix.
 
 Flags:
 - `--cwd <path>` — operate on a different app root.
