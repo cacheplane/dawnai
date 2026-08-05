@@ -118,8 +118,8 @@ export async function collectRouteStaticDiscovery(options: {
  * normalized at runtime by `buildStaticRouteModule`.
  *
  * Determinism: routes are sorted by assistantId; tools keep their (already
- * deterministic, sorted-readdir) discovery order so the static tool order is
- * byte-identical to what the dynamic path derives.
+ * deterministic, sorted-readdir) discovery order so the static tool order
+ * matches exactly what the dynamic path derives.
  *
  * Portability: `routeFile`/tool paths are resolved from `import.meta.url` at
  * RUNTIME — images built at one path and run at another still get correct
