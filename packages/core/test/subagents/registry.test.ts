@@ -95,6 +95,23 @@ describe("resolveSubagentRegistry", () => {
     expect(result.map(({ name }) => name)).toEqual(["Research_1"])
   })
 
+  it("keeps POSIX semantics when the parent contains a literal backslash", async () => {
+    const posixParentRouteDir = String.raw`/app/src/app/parent\literal`
+    const result = await resolveSubagentRegistry({
+      descriptor: parent(),
+      descriptorRouteIndex: new Map(),
+      parentRouteDir: posixParentRouteDir,
+      parentRouteId,
+      routeManifest: manifest(
+        route("/parent/subagents/real", `${posixParentRouteDir}/subagents/real`),
+        route("/unrelated/subagents/imposter", "/app/src/app/parent/literal/subagents/imposter"),
+      ),
+      loadDescription: descriptions,
+    })
+
+    expect(result.map(({ name }) => name)).toEqual(["real"])
+  })
+
   it("defaults convention and explicit registrations to allow when delegation is omitted", async () => {
     const researcher = agent({ model: "gpt-5-mini", systemPrompt: "Research." })
     const result = await resolveSubagentRegistry({

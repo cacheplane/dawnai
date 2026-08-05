@@ -5,6 +5,7 @@ import type { RouteDefinition, RouteManifest } from "../types.js"
 import type { DescriptorRouteIndex, ResolvedDelegationRule, ResolvedSubagent } from "./types.js"
 
 const SUBAGENT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/
 const DEFAULT_DESCRIPTION = "No description provided."
 
 export interface ResolveSubagentRegistryArgs {
@@ -196,12 +197,16 @@ function compareNames(a: string, b: string): number {
   return 0
 }
 
+function usesWindowsPathSemantics(path: string): boolean {
+  return WINDOWS_DRIVE_ROOT.test(path) || path.startsWith("\\\\")
+}
+
 function discoverConventionRoutes(
   parentRouteDir: string,
   parentRouteId: string,
   routeManifest: RouteManifest,
 ): readonly { readonly name: string; readonly route: RouteDefinition }[] {
-  const routePath = parentRouteDir.includes("\\") ? win32 : posix
+  const routePath = usesWindowsPathSemantics(parentRouteDir) ? win32 : posix
   const subagentsDir = routePath.join(parentRouteDir, "subagents")
   const result: Array<{ readonly name: string; readonly route: RouteDefinition }> = []
 
