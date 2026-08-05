@@ -56,6 +56,8 @@ export interface ApproveResult {
  * identity + identical data → the candidate is dropped (dedupe); no identity
  * match → plain activation. Used by `dawn memory approve` and the inspector —
  * the capability's auto-write path keeps its own inline logic by design.
+ * Append-kind candidates (per writePolicyFor, e.g. episodic) bypass
+ * reconciliation entirely — approval is a plain activation, no identity scan.
  *
  * NOT transactional: MemoryStore has no CAS primitive, so the read-classify-
  * write sequence can race a concurrent same-identity auto-write. Worst case is

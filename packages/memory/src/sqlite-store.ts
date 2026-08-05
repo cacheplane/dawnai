@@ -83,6 +83,12 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE memories ADD COLUMN embedding_model TEXT;
     `,
   },
+  {
+    version: 3,
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_mem_ns_kind_effective ON memories (namespace, kind, effective_at DESC);
+    `,
+  },
 ]
 
 // ---------------------------------------------------------------------------
@@ -286,21 +292,40 @@ export function sqliteMemoryStore(opts: {
       const limit = q.limit ?? 8
       const terms = q.query ? tokenize(q.query) : []
 
-      // Shared base filter (namespace + status [+ kind]) — the "corpus".
+      // Shared base filter (namespace + status [+ kind] [+ time window]
+      // [+ expiry]) — the "corpus". Every search path (query-less, ranked,
+      // hybrid) AND the ranked path's df/N corpus stats interpolate this same
+      // clause, so window/expiry filtering and IDF stats stay coherent.
       let baseSql = `m.namespace = ? AND m.status = ?`
       const baseParams: SQLInputValue[] = [q.namespace, status]
       if (q.kind) {
         baseSql += ` AND m.kind = ?`
         baseParams.push(q.kind)
       }
+      if (q.since) {
+        baseSql += ` AND COALESCE(m.effective_at, m.created_at) >= ?`
+        baseParams.push(q.since)
+      }
+      if (q.until) {
+        baseSql += ` AND COALESCE(m.effective_at, m.created_at) < ?`
+        baseParams.push(q.until)
+      }
+      if (q.now) {
+        baseSql += ` AND (m.expires_at IS NULL OR m.expires_at > ?)`
+        baseParams.push(q.now)
+      }
 
       if (terms.length === 0) {
-        // Query-less path: EXACTLY the pre-ranking behavior (index fragment,
-        // listCandidates-adjacent consumers depend on pure recency order).
+        // Query-less path: unwindowed keeps EXACTLY the pre-ranking recency
+        // behavior (index fragment, listCandidates-adjacent consumers depend
+        // on pure recency order). A since/until window switches to event-time
+        // order — windowed queries are about "what happened then".
+        const order =
+          q.since || q.until
+            ? "COALESCE(m.effective_at, m.created_at) DESC, m.id ASC"
+            : "m.updated_at DESC, m.id ASC"
         const rows = db
-          .prepare(
-            `SELECT m.* FROM memories m WHERE ${baseSql} ORDER BY m.updated_at DESC, m.id ASC LIMIT ?`,
-          )
+          .prepare(`SELECT m.* FROM memories m WHERE ${baseSql} ORDER BY ${order} LIMIT ?`)
           .all(...baseParams, limit) as Record<string, unknown>[]
         let records = rows.map(rowToRecord)
         if (q.tags && q.tags.length > 0) {
@@ -420,6 +445,18 @@ export function sqliteMemoryStore(opts: {
       if (q.sourceType) {
         where.push("json_extract(source, '$.type') = ?")
         params.push(q.sourceType)
+      }
+      if (q.since) {
+        where.push("COALESCE(effective_at, created_at) >= ?")
+        params.push(q.since)
+      }
+      if (q.until) {
+        where.push("COALESCE(effective_at, created_at) < ?")
+        params.push(q.until)
+      }
+      if (q.now) {
+        where.push("(expires_at IS NULL OR expires_at > ?)")
+        params.push(q.now)
       }
       const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
       // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
