@@ -53,7 +53,7 @@ await serveRuntime({ appRoot, modules })
  */
 const DOCKERFILE = `${DOCKERFILE_MARKER}
 # syntax=docker/dockerfile:1
-FROM node:22-slim
+FROM node:24-slim
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8000
 COPY package.json package-lock.json* pnpm-lock.yaml* ./

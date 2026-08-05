@@ -87,7 +87,7 @@ describe("dawn verify", () => {
       const result = await invoke(["verify", "--cwd", appRoot])
       expect(result.exitCode).toBe(1)
       expect(result.stderr).toMatch(/^Verify failed:/)
-      expect(result.stderr).toContain("22.13.0")
+      expect(result.stderr).toContain("24.0.0")
       expect(result.stderr).toContain("[DAWN_E5101]")
     } finally {
       if (descriptor) Object.defineProperty(process.versions, "node", descriptor)
@@ -280,7 +280,7 @@ describe("dawn verify", () => {
           node: {
             version: expect.any(String),
             ok: true,
-            floor: "22.13.0",
+            floor: "24.0.0",
           },
           status: "passed",
         },

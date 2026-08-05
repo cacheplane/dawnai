@@ -2,12 +2,14 @@ import type { DawnErrorCode } from "@dawn-ai/sdk"
 import type { SandboxProvider } from "@dawn-ai/workspace"
 
 /**
- * Minimum Node version Dawn requires at runtime. Below this, `node:sqlite`
- * (used by @dawn-ai/sqlite-storage / @dawn-ai/memory) needs an experimental
- * flag and breaks. This check must not itself require Node ≥ floor to run —
- * it is a pure string compare with no `node:sqlite` import.
+ * Minimum Node version Dawn requires at runtime: the active LTS line. Node 24
+ * bundles npm ≥ 11, whose dependency resolver installs Dawn's scaffold graph
+ * correctly (npm 10's arborist crashes on it), and ships `node:sqlite` (used by
+ * @dawn-ai/sqlite-storage / @dawn-ai/memory) without an experimental flag.
+ * This check must not itself require Node ≥ floor to run — it is a pure string
+ * compare with no `node:sqlite` import.
  */
-const NODE_FLOOR = "22.13.0"
+const NODE_FLOOR = "24.0.0"
 
 export interface RuntimeCheckResult {
   readonly name: "runtime"
