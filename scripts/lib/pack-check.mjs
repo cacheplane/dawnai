@@ -186,6 +186,25 @@ export const packages = [
     requiredFields: libraryRequiredFields,
   },
   {
+    // Next.js standalone app — the published artifact is `.next/standalone`
+    // (created by `next build` + a post-build static-asset copy), not dist/.
+    // There is no exports/main/types: nothing imports this package — `dawn
+    // inspect` spawns the server via the `dawnInspector.server` manifest path.
+    // Build ordering: pack-check's own per-package build step runs `next build`
+    // here, which needs @dawn-ai/core + @dawn-ai/memory dist already built —
+    // CI's validate job runs the full `pnpm build` before `pnpm pack:check`,
+    // matching every other package's same assumption.
+    dir: "packages/inspector",
+    expectedFiles: [
+      ".next/standalone/packages/inspector/server.js",
+      ".next/standalone/packages/inspector/.next/static",
+      ".next/standalone/node_modules",
+      "README.md",
+      "package.json",
+    ],
+    requiredFields: [...standardRequiredFields, "dawnInspector.server", "files"],
+  },
+  {
     dir: "packages/memory-pgvector",
     expectedFiles: ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
     requiredFields: libraryRequiredFields,
@@ -256,6 +275,19 @@ export function validatePackManifest(repoRoot, manifest) {
       throw new Error(`Pack manifest is missing public package: ${packageDir}`)
     }
   }
+}
+
+/**
+ * The `dawnInspector.server` manifest path (when declared) must exist inside
+ * the packed tarball — `dawn inspect` spawns exactly that file at runtime, so
+ * a field that points at a missing file ships a broken package.
+ */
+export function missingInspectorServerPaths(packedRoot, packedPackageJson) {
+  const serverPath = packedPackageJson?.dawnInspector?.server
+  if (typeof serverPath !== "string" || serverPath.length === 0) {
+    return []
+  }
+  return existsSync(join(packedRoot, serverPath)) ? [] : [serverPath]
 }
 
 export function missingExportTargets(packedRoot, exportsField) {

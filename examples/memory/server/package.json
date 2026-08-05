@@ -8,6 +8,7 @@
     "build": "node node_modules/@dawn-ai/cli/dist/index.js build",
     "typecheck": "tsc -p . --noEmit",
     "check": "node node_modules/@dawn-ai/cli/dist/index.js check",
+    "inspect": "node node_modules/@dawn-ai/cli/dist/index.js inspect",
     "test": "vitest run"
   },
   "dependencies": {
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
+    "@dawn-ai/inspector": "workspace:*",
     "@dawn-ai/testing": "workspace:*",
     "@types/node": "26.1.1",
     "typescript": "6.0.2",

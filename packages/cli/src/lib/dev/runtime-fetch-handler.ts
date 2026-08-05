@@ -75,14 +75,12 @@ export async function createRuntimeFetchHandler(
   // not once per request for the capability path (execute-route.ts threads
   // this same thunk down instead of calling resolveMemoryStore itself).
   //
-  // Cast: resolveMemoryStore's declared return type (MemoryStoreLike, in
-  // @dawn-ai/core) is the narrower capability-facing surface. The concrete
-  // store (sqlite-backed, or user-supplied via dawn.config.ts) also exposes
-  // listCandidates/delete, which the memory-candidate HTTP routes need — the
-  // same cast `commands/memory.ts` uses for the CLI's `dawn memory` commands.
+  // No cast needed: the config-facing store type is the full MemoryStore
+  // contract (browse/stats/delete/listCandidates included), so the resolved
+  // store satisfies the memory-candidate HTTP routes directly.
   let memoryStorePromise: Promise<MemoryStore> | undefined
   const getMemoryStore = (): Promise<MemoryStore> => {
-    memoryStorePromise ??= resolveMemoryStore(options.appRoot) as unknown as Promise<MemoryStore>
+    memoryStorePromise ??= resolveMemoryStore(options.appRoot)
     return memoryStorePromise
   }
 
@@ -425,11 +423,15 @@ function buildRouteTable(ctx: {
     },
 
     // ------------------------------------------------------------------
-    // POST /memory/candidates/:id/approve — flip a candidate to active
+    // POST /memory/candidates/:id/approve — approve with reconciliation
     // ------------------------------------------------------------------
     {
       handle: async (_request, params) =>
-        handleMemoryApproveRequest({ id: params.id ?? "", memoryStore: await getMemoryStore() }),
+        handleMemoryApproveRequest({
+          appRoot,
+          id: params.id ?? "",
+          memoryStore: await getMemoryStore(),
+        }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/approve(?:\?.*)?$/,
     },

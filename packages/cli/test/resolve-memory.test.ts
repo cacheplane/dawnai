@@ -1,13 +1,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it, test } from "vitest"
+import { afterEach, describe, expect, test } from "vitest"
 
-import {
-  resolveMemoryStore,
-  resolveMemoryWrites,
-  routeNamespaceKey,
-} from "../src/lib/runtime/resolve-memory.js"
+import { resolveMemoryStore, resolveMemoryWrites } from "../src/lib/runtime/resolve-memory.js"
 
 const tempDirs: string[] = []
 
@@ -101,23 +97,5 @@ describe("resolveMemoryWrites", () => {
 
     const writes = await resolveMemoryWrites(appRoot)
     expect(writes).toBe("candidate")
-  })
-})
-
-describe("routeNamespaceKey", () => {
-  it("normalizes a file path under src/app/ to a clean route key", () => {
-    expect(routeNamespaceKey("src/app/memory-chat/index.ts")).toBe("/memory-chat")
-  })
-
-  it("handles nested dynamic segments", () => {
-    expect(routeNamespaceKey("src/app/support/[tenant]/index.ts")).toBe("/support/[tenant]")
-  })
-
-  it("leaves an already-clean URL path unchanged", () => {
-    expect(routeNamespaceKey("/chat")).toBe("/chat")
-  })
-
-  it("strips a #agent suffix from an already-clean path", () => {
-    expect(routeNamespaceKey("/memory-chat#agent")).toBe("/memory-chat")
   })
 })

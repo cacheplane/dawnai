@@ -46,6 +46,10 @@ export async function startLocalRegistry(
       "**": { access: "$all", publish: "$anonymous", proxy: "npmjs" },
     },
     log: { type: "stdout", format: "pretty", level: "warn" },
+    // Verdaccio's default max_body_size is 10mb — @dawn-ai/inspector's tarball
+    // (a Next.js .next/standalone bundle with its traced node_modules) is ~11MB
+    // and rejected with E413 at the default. Generous headroom; loopback-only.
+    max_body_size: "64mb",
   }
 
   try {

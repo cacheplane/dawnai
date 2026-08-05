@@ -120,6 +120,7 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).not.toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/testing"]).not.toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/evals"]).not.toMatch(/^file:/)
+    expect(packageJson.devDependencies["@dawn-ai/inspector"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/core"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/cli"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toBe("next")
@@ -127,6 +128,7 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toBe("next")
     expect(packageJson.devDependencies["@dawn-ai/testing"]).toBe("next")
     expect(packageJson.devDependencies["@dawn-ai/evals"]).toBe("next")
+    expect(packageJson.devDependencies["@dawn-ai/inspector"]).toBe("next")
     await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow()
   })
 
@@ -176,6 +178,7 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/testing"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/evals"]).toMatch(/^file:/)
+    expect(packageJson.devDependencies["@dawn-ai/inspector"]).toMatch(/^file:/)
     await assertExists(join(targetDir, "README.md"))
     await assertExists(join(targetDir, "src/app/research/index.ts"))
     await assertExists(join(targetDir, "src/app/research/state.ts"))

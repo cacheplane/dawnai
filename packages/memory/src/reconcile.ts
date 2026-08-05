@@ -1,4 +1,4 @@
-import type { MemoryRecord } from "./types.js"
+import type { MemoryRecord, MemoryStore } from "./types.js"
 export type WriteOp =
   | { op: "add" }
   | { op: "update"; targetId: string }
@@ -17,4 +17,81 @@ export function classifyWrite(
   if (!match) return { op: "add" }
   const same = JSON.stringify(match.data) === JSON.stringify(incoming.data)
   return same ? { op: "update", targetId: match.id } : { op: "supersede", targetId: match.id }
+}
+
+/** Upper bound on active rows scanned for an identity match during approval.
+ *  Namespaces beyond this size would silently skip reconciliation for the
+ *  overflow rows — accepted trade-off: real namespaces are orders of magnitude
+ *  smaller, and an unbounded scan risks pathological reads. */
+const ACTIVE_SCAN_LIMIT = 10_000
+
+export interface ApproveResult {
+  readonly approved: MemoryRecord
+  readonly action: "activated" | "superseded" | "deduped"
+  readonly superseded: readonly MemoryRecord[]
+  readonly identityKeys: readonly string[]
+}
+
+/**
+ * Approve a candidate WITH supersede reconciliation (fixes the two-actives bug):
+ * same identity + different data → the old active row is superseded; same
+ * identity + identical data → the candidate is dropped (dedupe); no identity
+ * match → plain activation. Used by `dawn memory approve` and the inspector —
+ * the capability's auto-write path keeps its own inline logic by design.
+ *
+ * NOT transactional: MemoryStore has no CAS primitive, so the read-classify-
+ * write sequence can race a concurrent same-identity auto-write. Worst case is
+ * the pre-existing two-actives state, which self-heals on the next auto-write
+ * or approval of that identity.
+ */
+export async function approveWithReconcile(
+  store: MemoryStore,
+  id: string,
+  opts: { readonly identityKeys: readonly string[]; readonly now: string },
+): Promise<ApproveResult> {
+  const candidate = await store.get(id)
+  if (!candidate) throw new Error(`memory ${id} not found`)
+  if (candidate.status !== "candidate")
+    throw new Error(`memory ${id} is '${candidate.status}', not a candidate`)
+  const actives = await store.search({
+    namespace: candidate.namespace,
+    status: "active",
+    kind: candidate.kind,
+    limit: ACTIVE_SCAN_LIMIT,
+  })
+  const op = classifyWrite(candidate, actives, opts.identityKeys)
+  if (op.op === "update") {
+    const existing = actives.find((r) => r.id === op.targetId)
+    if (!existing) throw new Error(`reconcile target ${op.targetId} vanished`)
+    // Deliberately does NOT refresh the surviving record (unlike the auto
+    // path's idempotent-update): approving a duplicate shouldn't reorder recency.
+    await store.delete(id)
+    return {
+      approved: existing,
+      action: "deduped",
+      superseded: [],
+      identityKeys: opts.identityKeys,
+    }
+  }
+  if (op.op === "supersede") {
+    const target = actives.find((r) => r.id === op.targetId)
+    if (!target) throw new Error(`reconcile target ${op.targetId} vanished`)
+    // Activate first, then demote — same order as the capability's auto path
+    // (put active record → store.supersede). store.supersede also appends the
+    // demoted id to this record's `supersedes` via a Set (both sqlite and
+    // pgvector), so the explicit link here cannot double-append.
+    await store.update(id, {
+      status: "active",
+      updatedAt: opts.now,
+      supersedes: [...(candidate.supersedes ?? []), target.id],
+    })
+    await store.supersede(target.id, id)
+    const approved = await store.get(id)
+    if (!approved) throw new Error(`approved memory ${id} vanished`)
+    return { approved, action: "superseded", superseded: [target], identityKeys: opts.identityKeys }
+  }
+  await store.update(id, { status: "active", updatedAt: opts.now })
+  const approved = await store.get(id)
+  if (!approved) throw new Error(`approved memory ${id} vanished`)
+  return { approved, action: "activated", superseded: [], identityKeys: opts.identityKeys }
 }

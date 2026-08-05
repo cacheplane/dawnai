@@ -8,6 +8,7 @@ import {
   expectedExportFailures,
   forbiddenPackedFiles,
   missingExportTargets,
+  missingInspectorServerPaths,
   packages,
   validatePackManifest,
 } from "./lib/pack-check.mjs"
@@ -56,6 +57,12 @@ try {
       if (readField(packedPackageJson, fieldName) === undefined) {
         failures.push(`${sourcePackageJson.name}: packed package.json is missing ${fieldName}`)
       }
+    }
+
+    for (const serverPath of missingInspectorServerPaths(packedRoot, packedPackageJson)) {
+      failures.push(
+        `${sourcePackageJson.name}: packed package.json dawnInspector.server points at ${serverPath}, which is missing from the tarball`,
+      )
     }
 
     for (const exportTarget of missingExportTargets(packedRoot, packedPackageJson.exports)) {

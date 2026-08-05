@@ -1,5 +1,7 @@
-import type { MemoryStore } from "@dawn-ai/memory"
-import { createRequestErrorBody } from "./server-errors.js"
+import { approveWithReconcile, type MemoryStore } from "@dawn-ai/memory"
+import { formatErrorMessage } from "../output.js"
+import { resolveIdentityKeys } from "../runtime/resolve-identity.js"
+import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
 
 /**
  * GET /memory/candidates — list every candidate record across all namespaces
@@ -14,16 +16,21 @@ export async function handleMemoryListRequest(options: {
 }
 
 /**
- * POST /memory/candidates/:id/approve — flip a candidate to active.
- * Mirrors `runApprove` in `commands/memory.ts` exactly: 404 if the record is
- * missing, 409 if it isn't currently a candidate, else update + return the
- * refreshed record.
+ * POST /memory/candidates/:id/approve — approve a candidate with the same
+ * supersede-aware reconciliation as `runApprove` in `commands/memory.ts`:
+ * 404 if the record is missing, 409 if it isn't currently a candidate, else
+ * `approveWithReconcile` classifies it against active records with the same
+ * identity key — a contradicting active row is superseded, an identical one
+ * dedupes the candidate. The response keeps the original `{ record }` shape
+ * and adds `action` ("activated" | "superseded" | "deduped") and the
+ * `superseded` records.
  */
 export async function handleMemoryApproveRequest(options: {
+  readonly appRoot: string
   readonly memoryStore: MemoryStore
   readonly id: string
 }): Promise<Response> {
-  const { memoryStore, id } = options
+  const { appRoot, memoryStore, id } = options
   const record = await memoryStore.get(id)
   if (!record) {
     return Response.json(createRequestErrorBody(`Record not found: ${id}`), { status: 404 })
@@ -34,9 +41,23 @@ export async function handleMemoryApproveRequest(options: {
       { status: 409 },
     )
   }
-  await memoryStore.update(id, { status: "active", updatedAt: new Date().toISOString() })
-  const updated = await memoryStore.get(id)
-  return Response.json({ record: updated }, { status: 200 })
+  try {
+    const identity = await resolveIdentityKeys(appRoot, record.namespace)
+    const result = await approveWithReconcile(memoryStore, id, {
+      identityKeys: identity.keys,
+      now: new Date().toISOString(),
+    })
+    return Response.json(
+      { record: result.approved, action: result.action, superseded: result.superseded },
+      { status: 200 },
+    )
+  } catch (cause) {
+    // Identity resolution (a broken route memory.ts) or reconciliation racing
+    // a concurrent write — surface as JSON rather than a generic 500 page.
+    return Response.json(createExecutionErrorBody(`Approve failed: ${formatErrorMessage(cause)}`), {
+      status: 500,
+    })
+  }
 }
 
 /**

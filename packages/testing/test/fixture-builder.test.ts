@@ -40,8 +40,10 @@ it("supports multiple user-turn groups", () => {
 
 it("honors an explicit tool_call id override", () => {
   const fixtures = script().user("x").callsTool("t", {}, { id: "call_custom" }).build()
-  const tc = (fixtures[0].response as { toolCalls: { id: string }[] }).toolCalls[0]
-  expect(tc.id).toBe("call_custom")
+  const fixture = fixtures[0]
+  if (!fixture) throw new Error("expected exactly one fixture")
+  const tc = (fixture.response as { toolCalls: { id: string }[] }).toolCalls[0]
+  expect(tc?.id).toBe("call_custom")
 })
 
 it("throws if a response is added before .user()", () => {

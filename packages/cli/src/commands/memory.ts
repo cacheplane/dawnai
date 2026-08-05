@@ -1,7 +1,8 @@
 import { resolve } from "node:path"
-import type { MemoryStore } from "@dawn-ai/memory"
+import { approveWithReconcile, type MemoryStore } from "@dawn-ai/memory"
 import type { Command } from "commander"
 import { CliError, type CommandIo, writeLine } from "../lib/output.js"
+import { resolveIdentityKeys } from "../lib/runtime/resolve-identity.js"
 import { resolveMemoryStore } from "../lib/runtime/resolve-memory.js"
 
 interface MemoryOptions {
@@ -34,7 +35,7 @@ export async function runMemoryCommand(
   }
 
   const appRoot = options.cwd ? resolve(options.cwd) : process.cwd()
-  const store = (await resolveMemoryStore(appRoot)) as unknown as MemoryStore
+  const store = await resolveMemoryStore(appRoot)
 
   switch (subcommand) {
     case "list": {
@@ -56,7 +57,7 @@ export async function runMemoryCommand(
     case "approve": {
       const id = argv[1]
       if (!id) throw new CliError("Usage: dawn memory approve <id>", 1)
-      await runApprove(store, id, io)
+      await runApprove(store, appRoot, id, io)
       break
     }
     case "reject": {
@@ -109,14 +110,30 @@ async function runInspect(store: MemoryStore, id: string, io: CommandIo): Promis
   writeLine(io.stdout, JSON.stringify(rec, null, 2))
 }
 
-async function runApprove(store: MemoryStore, id: string, io: CommandIo): Promise<void> {
+async function runApprove(
+  store: MemoryStore,
+  appRoot: string,
+  id: string,
+  io: CommandIo,
+): Promise<void> {
   const rec = await store.get(id)
   if (!rec) throw new CliError(`Record not found: ${id}`, 1)
   if (rec.status !== "candidate") {
     throw new CliError(`Record "${id}" is not a candidate (status: ${rec.status})`, 1)
   }
-  await store.update(id, { status: "active", updatedAt: new Date().toISOString() })
-  writeLine(io.stdout, `Approved: ${id}`)
+  const identity = await resolveIdentityKeys(appRoot, rec.namespace)
+  const res = await approveWithReconcile(store, id, {
+    identityKeys: identity.keys,
+    now: new Date().toISOString(),
+  })
+  writeLine(io.stdout, `approved ${res.approved.id} (${res.action})`)
+  for (const old of res.superseded) writeLine(io.stdout, `superseded ${old.id}`)
+  if (identity.fallback) {
+    writeLine(
+      io.stdout,
+      "note: route memory.ts not found for namespace; used default identity [subject, predicate]",
+    )
+  }
 }
 
 async function runReject(store: MemoryStore, id: string, io: CommandIo): Promise<void> {

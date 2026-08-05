@@ -11,6 +11,7 @@ const {
   expectedExportFailures,
   forbiddenPackedFiles,
   missingExportTargets,
+  missingInspectorServerPaths,
   packages,
   validatePackManifest,
 } = packCheck
@@ -224,6 +225,29 @@ describe("expectedExportFailures", () => {
     assert.deepEqual(expectedExportFailures(reordered, expected), [
       'export "./conditional" does not match required mapping',
     ])
+  })
+})
+
+describe("missingInspectorServerPaths", () => {
+  it("flags a declared dawnInspector.server path that is missing from the packed tarball", async () => {
+    const emptyRoot = await createPackedRoot([])
+    const populatedRoot = await createPackedRoot([".next/standalone/packages/inspector/server.js"])
+    const packageJson = {
+      dawnInspector: { server: ".next/standalone/packages/inspector/server.js" },
+    }
+
+    assert.deepEqual(missingInspectorServerPaths(emptyRoot, packageJson), [
+      ".next/standalone/packages/inspector/server.js",
+    ])
+    assert.deepEqual(missingInspectorServerPaths(populatedRoot, packageJson), [])
+  })
+
+  it("ignores packages without a dawnInspector.server field", async () => {
+    const packedRoot = await createPackedRoot([])
+
+    assert.deepEqual(missingInspectorServerPaths(packedRoot, {}), [])
+    assert.deepEqual(missingInspectorServerPaths(packedRoot, { dawnInspector: {} }), [])
+    assert.deepEqual(missingInspectorServerPaths(packedRoot, { dawnInspector: { server: "" } }), [])
   })
 })
 

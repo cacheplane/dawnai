@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest"
 
-const spawnSync = vi.fn(() => ({ status: 0 }))
+const spawnSync = vi.fn((_command: string, _args: readonly string[], _options?: unknown) => ({
+  status: 0,
+}))
 vi.mock("node:child_process", () => ({ spawnSync }))
 
 it("invokes the aimock recorder with the right argv", async () => {
@@ -31,7 +33,7 @@ it("defaults provider to OpenAI", async () => {
 })
 
 it("throws on non-zero recorder exit", async () => {
-  spawnSync.mockReturnValueOnce({ status: 2 } as never)
+  spawnSync.mockReturnValueOnce({ status: 2 })
   const { record } = await import("../src/record.js")
   expect(() => record({ out: "/tmp/z.json" })).toThrow()
 })

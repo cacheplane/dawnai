@@ -50,6 +50,34 @@ Each release is built from the changeset entries merged since the previous one �
 
 Pin exact versions (no `^` or `~` ranges) for `@dawn-ai/*` packages until the project reaches 1.0 — a floating range means an unreviewed minor bump can land in CI or production without the deliberate read-the-notes step above.
 
+## MemoryStore now requires `browse` and `stats`
+
+The `MemoryStore` contract gained two required methods to power the
+[Inspector](/docs/inspector)'s Memory panel. If you implement a custom store for
+`config.memory.store`, add both:
+
+- `browse(q?)` — cross-namespace/status listing, returning
+  `{ records, total }` with `records` ordered `updated_at DESC, id ASC` and
+  `total` counting all matches (ignoring `limit`/`offset`). The optional query
+  narrows by `namespacePrefix`, `status`, `kind`, and `sourceType`.
+- `stats(opts?)` — aggregate counts: `{ total, byStatus, byKind, byNamespace, bySourceType }`,
+  optionally scoped to a `namespacePrefix`.
+
+The built-in SQLite and pgvector stores already implement both, and the
+`runMemoryStoreConformance` kit in `@dawn-ai/testing` covers them — run it
+against a custom store to verify the contract.
+
+Two related behavior changes in the same release:
+
+- The config-facing store type is now the **full** `MemoryStore` contract —
+  `delete` and `listCandidates` included — rather than the narrower
+  capability-facing surface. A custom store that already satisfied the CLI's
+  `dawn memory` commands is unaffected.
+- `dawn memory approve` (and the Inspector's Approve) now **reconciles
+  supersession**: approving a candidate that contradicts an active record with
+  the same identity key supersedes the old record instead of leaving two active
+  rows; approving an identical duplicate dedupes it.
+
 ## Related
 
 <RelatedCards items={[

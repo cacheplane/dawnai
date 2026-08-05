@@ -21,6 +21,7 @@
     "devDependencies": {
       "@dawn-ai/config-typescript": "latest",
       "@dawn-ai/evals": "latest",
+      "@dawn-ai/inspector": "latest",
       "@dawn-ai/testing": "latest",
       "@types/node": "<version:@types/node>",
       "typescript": "<version:typescript>",

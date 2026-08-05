@@ -3,16 +3,24 @@ import type { DawnAgent, WorkspaceFs } from "@dawn-ai/sdk"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import type { ResolvedStateField, RouteManifest } from "../types.js"
 
+// Literal unions mirroring @dawn-ai/memory's MemoryKind/MemoryStatus/
+// MemorySource["type"]. Declared locally (NOT imported) because core must not
+// depend on @dawn-ai/memory — its barrel pulls node:sqlite (see the inline
+// comment in built-in/memory.ts). Keep in lockstep with packages/memory/src/types.ts.
+export type MemoryKindLike = "semantic" | "episodic" | "procedural" | "reflection"
+export type MemoryStatusLike = "candidate" | "active" | "superseded"
+export type MemorySourceTypeLike = "run" | "user" | "tool" | "eval" | "human"
+
 export interface MemoryRecordLike {
   readonly id: string
-  readonly kind: string
+  readonly kind: MemoryKindLike
   readonly namespace: string
   readonly content: string
   readonly data: Record<string, unknown>
-  readonly source: { readonly type: string; readonly id: string }
+  readonly source: { readonly type: MemorySourceTypeLike; readonly id: string }
   readonly confidence: number
   readonly tags: readonly string[]
-  readonly status: string
+  readonly status: MemoryStatusLike
   readonly createdAt: string
   readonly updatedAt: string
   readonly supersedes?: readonly string[]
@@ -37,9 +45,9 @@ export interface MemoryStoreLike {
   search(q: {
     namespace: string
     query?: string
-    kind?: string
+    kind?: MemoryKindLike
     tags?: readonly string[]
-    status?: string
+    status?: MemoryStatusLike
     limit?: number
     /** ISO recency reference for ranked searches; stores may ignore it. */
     now?: string
@@ -52,6 +60,25 @@ export interface MemoryStoreLike {
   }): Promise<readonly MemoryRecordLike[]>
   update(id: string, patch: Partial<MemoryRecordLike>): Promise<void>
   supersede(id: string, bySupersedingId: string): Promise<void>
+  delete(id: string): Promise<void>
+  listCandidates(namespacePrefix: string): Promise<readonly MemoryRecordLike[]>
+  /** Cross-namespace/status listing for inspection UIs. Ordered updated_at DESC, id ASC. */
+  browse(q?: {
+    readonly namespacePrefix?: string
+    readonly status?: MemoryStatusLike
+    readonly kind?: MemoryKindLike
+    readonly sourceType?: MemorySourceTypeLike
+    readonly limit?: number
+    readonly offset?: number
+  }): Promise<{ readonly records: readonly MemoryRecordLike[]; readonly total: number }>
+  /** Aggregate counts for facet UIs. */
+  stats(opts?: { readonly namespacePrefix?: string }): Promise<{
+    readonly total: number
+    readonly byStatus: Readonly<Record<string, number>>
+    readonly byKind: Readonly<Record<string, number>>
+    readonly byNamespace: Readonly<Record<string, number>>
+    readonly bySourceType: Readonly<Record<string, number>>
+  }>
 }
 
 /**
@@ -66,7 +93,7 @@ export interface MemoryContext {
   readonly namespace: string
   readonly writes: MemoryWritesMode
   readonly defined: {
-    readonly kind: string
+    readonly kind: MemoryKindLike
     readonly scope: readonly string[]
     readonly identity?: readonly string[]
   }

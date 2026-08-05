@@ -18,6 +18,16 @@ function makeContext(captured: { query?: Record<string, unknown> }): CapabilityM
       },
       async update() {},
       async supersede() {},
+      async delete() {},
+      async listCandidates() {
+        return []
+      },
+      async browse() {
+        return { records: [], total: 0 }
+      },
+      async stats() {
+        return { total: 0, byStatus: {}, byKind: {}, byNamespace: {}, bySourceType: {} }
+      },
     },
     namespace: "route=/probe",
     writes: "auto",

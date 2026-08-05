@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-
 import {
   applyCapabilities,
   type CapabilityContribution,
@@ -41,6 +40,7 @@ import {
   type SubagentResolver,
   streamAgent,
 } from "@dawn-ai/langchain"
+import { routeNamespaceKey } from "@dawn-ai/memory"
 import {
   createPermissionsStore,
   type PermissionMode,
@@ -55,12 +55,7 @@ import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
 import { type LoadedRouteMemory, loadRouteMemory } from "./load-memory.js"
 import { type NormalizedRouteModule, normalizeRouteModule } from "./load-route-kind.js"
-import {
-  buildMemoryContext,
-  resolveMemoryStore,
-  resolveMemoryWrites,
-  routeNamespaceKey,
-} from "./resolve-memory.js"
+import { buildMemoryContext, resolveMemoryStore, resolveMemoryWrites } from "./resolve-memory.js"
 import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,

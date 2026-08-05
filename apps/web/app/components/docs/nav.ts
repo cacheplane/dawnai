@@ -25,6 +25,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
       { label: "Tools", href: "/docs/tools" },
       { label: "State", href: "/docs/state" },
       { label: "Memory", href: "/docs/memory" },
+      { label: "Inspector", href: "/docs/inspector" },
       { label: "Planning", href: "/docs/planning" },
       { label: "Skills", href: "/docs/skills" },
       { label: "Subagents", href: "/docs/subagents" },
