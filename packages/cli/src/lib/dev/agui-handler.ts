@@ -201,6 +201,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
             ...(permissionsStore ? { permissionsStore } : {}),
             routeFile: route.routeFile,
             routeId: route.routeId,
+            ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
             signal,

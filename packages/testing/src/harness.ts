@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import {
   __resetMaterializedAgentsForTests,
+  __resetRouteLoadCachesForTests,
   createRuntimeRegistry,
   resolveSandboxManager,
   runTypegen,
@@ -232,6 +233,11 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       // via env + config) need that mutation to actually take effect — clear
       // the memo here so the next createAgentHarness call reloads from disk.
       __clearDawnConfigCacheForTests()
+      // Same reasoning for the per-route module cache and per-appRoot route
+      // manifest memo (perf(cli): load route modules/tools/state once per
+      // process): a fixture app mutated between harnesses (new tool file,
+      // added route) must be re-discovered by the next harness.
+      __resetRouteLoadCachesForTests()
     },
     [Symbol.asyncDispose](): Promise<void> {
       return this.close()
