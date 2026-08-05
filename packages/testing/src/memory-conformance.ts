@@ -17,9 +17,10 @@ function rec(
   }
 }
 const vec = (...xs: number[]) => new Float32Array(xs)
-const D = (day: number) => `2026-08-0${day}T00:00:00.000Z`
+const D = (day: number) => `2026-08-${String(day).padStart(2, "0")}T00:00:00.000Z`
 
-/** Episodic event fixture — the append-only kind windows/expiry/prune govern. */
+/** Record fixture with episodic defaults (kind overridable, e.g. for prune's
+ *  non-episodic immunity cases). */
 function ep(over: Partial<MemoryRecord> & Pick<MemoryRecord, "id">): MemoryRecord {
   return rec({
     namespace: "route=/n",

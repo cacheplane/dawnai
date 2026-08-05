@@ -509,6 +509,11 @@ export function pgvectorMemoryStore(opts: {
       // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
       // Two explicit SQL strings per pass (with/without prefix) — no clause
       // splicing, each statement readable on its own.
+      // Two passes are separate autocommit statements (possibly different pool
+      // connections); each is committed before the next is sent, so the cap
+      // pass never sees uncommitted expired rows. Rows written between passes
+      // wait for the next prune — acceptable, and matches sqlite's
+      // non-transactional two-pass shape.
       const expiredBase = `DELETE FROM ${T} WHERE expires_at IS NOT NULL AND expires_at <= $1`
       const expiredPrefixed = `DELETE FROM ${T}
          WHERE expires_at IS NOT NULL AND expires_at <= $1
