@@ -89,6 +89,35 @@ describe("TimelineView", () => {
     expect(screen.getByText("0.5s")).toBeDefined()
   })
 
+  it("sorts by event time (newest first), not fetch order", () => {
+    // browse orders by updated_at DESC — a mutation on an old record hoists it
+    // to the front of the fetch. Supply updated-at order: the OLD-event record
+    // first, then day-2 rows earliest-first. The timeline must re-sort by
+    // (effectiveAt ?? createdAt) descending.
+    const oldEventBumped = episode({
+      id: "ep-old",
+      content: "Ran: an old episode, recently mutated",
+      effectiveAt: "2026-08-01T09:00:00.000Z",
+      updatedAt: "2026-08-03T00:00:00.000Z",
+    })
+    const day2Early = episode({
+      id: "ep-early",
+      content: "Ran: early on day two",
+      effectiveAt: "2026-08-02T12:30:00.000Z",
+    })
+    const day2Late = episode({
+      id: "ep-late",
+      content: "Ran: late on day two",
+      effectiveAt: "2026-08-02T15:45:00.000Z",
+    })
+    render(<TimelineView records={[oldEventBumped, day2Early, day2Late]} onSelect={noop} />)
+    const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)
+    expect(headings).toEqual(["2026-08-02", "2026-08-01"])
+    // Within-day rows descend by event time: 15:45 above 12:30.
+    const times = screen.getAllByText(/^\d{2}:\d{2}$/).map((el) => el.textContent)
+    expect(times).toEqual(["15:45", "12:30", "09:00"])
+  })
+
   it("labels agent-authored episodes (no outcome) as authored", () => {
     const authored = episode({
       id: "ep3",

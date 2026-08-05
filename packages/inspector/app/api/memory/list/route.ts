@@ -22,10 +22,14 @@ function parseEnum<T extends string>(
   )
 }
 
-/** undefined when absent, the value when Date.parse-able, a 400 Response otherwise. */
+/** undefined when absent, the value normalized to full-ISO-Z when Date.parse-able,
+ *  a 400 Response otherwise. Normalization matters: the store compares these
+ *  lexicographically against stored full-ISO-Z strings, so raw offset-ISO
+ *  ("...+02:00"), zoneless-local, or loose forms would window silently wrong. */
 function parseInstant(value: string | null, name: string): string | undefined | Response {
   if (value === null) return undefined
-  if (Number.isFinite(Date.parse(value))) return value
+  const t = Date.parse(value)
+  if (Number.isFinite(t)) return new Date(t).toISOString()
   return Response.json(
     { error: `invalid ${name} "${value}" (expected an ISO-8601 date-time)` },
     { status: 400 },

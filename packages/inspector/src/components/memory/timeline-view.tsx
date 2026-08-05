@@ -19,8 +19,14 @@ export function TimelineView({
   records: readonly MemoryRecord[]
   onSelect: (id: string) => void
 }) {
+  // browse orders by updated_at DESC, so a mutation on an old record would
+  // hoist a days-old section to the top; re-sort by event time. Plain string
+  // compare is safe — both operands are full-ISO-Z timestamps.
+  const sorted = [...records].sort((a, b) =>
+    (b.effectiveAt ?? b.createdAt) < (a.effectiveAt ?? a.createdAt) ? -1 : 1,
+  )
   const days = new Map<string, MemoryRecord[]>()
-  for (const r of records) {
+  for (const r of sorted) {
     const day = dayOf(r)
     const bucket = days.get(day)
     if (bucket) bucket.push(r)

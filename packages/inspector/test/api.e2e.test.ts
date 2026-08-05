@@ -281,6 +281,21 @@ describe.skipIf(!gated)("list time windows + expiry", () => {
         expiresAt: "2020-01-01T00:00:00.000Z",
       }),
     )
+    // Isolated namespace for the offset-ISO normalization case.
+    await store.put(
+      episodeSeed({
+        id: "ep-tz-before",
+        namespace: "route=/tz",
+        effectiveAt: "2026-08-01T09:30:00.000Z",
+      }),
+    )
+    await store.put(
+      episodeSeed({
+        id: "ep-tz-after",
+        namespace: "route=/tz",
+        effectiveAt: "2026-08-01T10:30:00.000Z",
+      }),
+    )
     server = await startInspector(fixtureApp)
   })
 
@@ -299,7 +314,10 @@ describe.skipIf(!gated)("list time windows + expiry", () => {
   })
 
   it("until excludes episodes at or after the bound (exclusive upper)", async () => {
-    const params = new URLSearchParams({ until: "2026-08-02T00:00:00.000Z" })
+    const params = new URLSearchParams({
+      namespacePrefix: "route=/chat",
+      until: "2026-08-02T00:00:00.000Z",
+    })
     const res = await fetch(`${server.base}/api/memory/list?${params}`)
     const page = (await res.json()) as { records: MemoryRecord[]; total: number }
     // ep-expired's effectiveAt is also inside this window — expiry still hides it.
@@ -307,17 +325,33 @@ describe.skipIf(!gated)("list time windows + expiry", () => {
   })
 
   it("expired episodes are hidden by default and revealed by includeExpired=1", async () => {
-    const res = await fetch(`${server.base}/api/memory/list`)
+    const prefix = new URLSearchParams({ namespacePrefix: "route=/chat" })
+    const res = await fetch(`${server.base}/api/memory/list?${prefix}`)
     const page = (await res.json()) as { records: MemoryRecord[]; total: number }
     expect(page.records.map((r) => r.id).sort()).toEqual(["ep-day1", "ep-day2"])
 
-    const revealed = await fetch(`${server.base}/api/memory/list?includeExpired=1`)
+    const revealed = await fetch(`${server.base}/api/memory/list?${prefix}&includeExpired=1`)
     const revealedPage = (await revealed.json()) as { records: MemoryRecord[]; total: number }
     expect(revealedPage.records.map((r) => r.id).sort()).toEqual([
       "ep-day1",
       "ep-day2",
       "ep-expired",
     ])
+  })
+
+  it("normalizes an offset-ISO since to the correct UTC instant", async () => {
+    // route=/tz isolates the assertion. 2026-08-01T12:00:00+02:00 is
+    // 10:00:00Z — the 09:30Z row falls before it, the 10:30Z row after.
+    // Raw lexicographic pass-through would compare "...T10:30:00.000Z" against
+    // "...T12:00:00+02:00" and wrongly exclude the later row.
+    const params = new URLSearchParams({
+      namespacePrefix: "route=/tz",
+      since: "2026-08-01T12:00:00+02:00",
+    })
+    const res = await fetch(`${server.base}/api/memory/list?${params}`)
+    expect(res.status).toBe(200)
+    const page = (await res.json()) as { records: MemoryRecord[]; total: number }
+    expect(page.records.map((r) => r.id)).toEqual(["ep-tz-after"])
   })
 
   it("rejects unparseable since/until with a 400 {error}", async () => {
