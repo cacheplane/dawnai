@@ -67,6 +67,19 @@ describe("approveWithReconcile", () => {
     expect(res.approved.id).toBe("old")
     expect(await s.get("cand")).toBeNull()
   })
+  it("approves an episodic candidate as a plain activation (no identity scan, no supersession)", async () => {
+    const s = makeStore()
+    // Two episodic rows with IDENTICAL data — under semantic policy this would
+    // dedupe/supersede; append policy must activate without touching the other.
+    await s.put(rec({ id: "ep-old", status: "active", kind: "episodic" }))
+    await s.put(rec({ id: "ep-cand", status: "candidate", kind: "episodic" }))
+    const res = await approveWithReconcile(s, "ep-cand", { identityKeys: KEYS, now: NOW })
+    expect(res.action).toBe("activated")
+    expect(res.superseded).toEqual([])
+    expect((await s.get("ep-old"))?.status).toBe("active")
+    expect((await s.get("ep-cand"))?.status).toBe("active")
+    expect((await s.get("ep-cand"))?.updatedAt).toBe(NOW)
+  })
   it("rejects a non-candidate", async () => {
     const s = makeStore()
     await s.put(rec({ id: "a", status: "active" }))

@@ -1,4 +1,22 @@
-import type { MemoryRecord, MemoryStore } from "./types.js"
+import type { MemoryKind, MemoryRecord, MemoryStore } from "./types.js"
+
+export type WritePolicy = { readonly mode: "reconcile" } | { readonly mode: "append" }
+
+/** Per-kind write discipline. Semantic facts reconcile (identity match →
+ *  update/supersede); episodic events append (a later episode never
+ *  contradicts an earlier one). Procedural/reflection are typed but not yet
+ *  wired — throwing beats baking in accidental semantics. */
+export function writePolicyFor(kind: MemoryKind): WritePolicy {
+  switch (kind) {
+    case "semantic":
+      return { mode: "reconcile" }
+    case "episodic":
+      return { mode: "append" }
+    default:
+      throw new Error(`memory kind '${kind}' is not yet wired (semantic and episodic are)`)
+  }
+}
+
 export type WriteOp =
   | { op: "add" }
   | { op: "update"; targetId: string }
@@ -53,6 +71,13 @@ export async function approveWithReconcile(
   if (!candidate) throw new Error(`memory ${id} not found`)
   if (candidate.status !== "candidate")
     throw new Error(`memory ${id} is '${candidate.status}', not a candidate`)
+  if (writePolicyFor(candidate.kind).mode === "append") {
+    // Append-only kinds: approval is a plain activation — no identity scan.
+    await store.update(id, { status: "active", updatedAt: opts.now })
+    const approved = await store.get(id)
+    if (!approved) throw new Error(`approved memory ${id} vanished`)
+    return { approved, action: "activated", superseded: [], identityKeys: opts.identityKeys }
+  }
   const actives = await store.search({
     namespace: candidate.namespace,
     status: "active",
