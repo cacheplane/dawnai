@@ -15,7 +15,7 @@
     "@mdx-js/react": "^3.1.1",
     "@next/mdx": "^16.2.10",
     "@tailwindcss/postcss": "^4.3.2",
-    "next": "16.2.10",
+    "next": "16.2.11",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "rehype-pretty-code": "^0.14.4",
