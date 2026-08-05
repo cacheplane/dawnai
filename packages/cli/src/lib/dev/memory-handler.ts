@@ -1,16 +1,5 @@
-import type { ServerResponse } from "node:http"
 import type { MemoryStore } from "@dawn-ai/memory"
 import { createRequestErrorBody } from "./server-errors.js"
-
-// Local copy of runtime-server.ts's `sendJson` helper — kept private to each
-// module (like agui-handler.ts does) to avoid a circular import between
-// runtime-server.ts (which wires this handler into the route table) and this
-// file.
-function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.statusCode = statusCode
-  response.setHeader("content-type", "application/json")
-  response.end(JSON.stringify(body))
-}
 
 /**
  * GET /memory/candidates — list every candidate record across all namespaces
@@ -18,11 +7,10 @@ function sendJson(response: ServerResponse, statusCode: number, body: unknown): 
  */
 export async function handleMemoryListRequest(options: {
   readonly memoryStore: MemoryStore
-  readonly response: ServerResponse
-}): Promise<void> {
-  const { memoryStore, response } = options
+}): Promise<Response> {
+  const { memoryStore } = options
   const candidates = await memoryStore.listCandidates("")
-  sendJson(response, 200, { candidates })
+  return Response.json({ candidates }, { status: 200 })
 }
 
 /**
@@ -33,26 +21,22 @@ export async function handleMemoryListRequest(options: {
  */
 export async function handleMemoryApproveRequest(options: {
   readonly memoryStore: MemoryStore
-  readonly response: ServerResponse
   readonly id: string
-}): Promise<void> {
-  const { memoryStore, response, id } = options
+}): Promise<Response> {
+  const { memoryStore, id } = options
   const record = await memoryStore.get(id)
   if (!record) {
-    sendJson(response, 404, createRequestErrorBody(`Record not found: ${id}`))
-    return
+    return Response.json(createRequestErrorBody(`Record not found: ${id}`), { status: 404 })
   }
   if (record.status !== "candidate") {
-    sendJson(
-      response,
-      409,
+    return Response.json(
       createRequestErrorBody(`Record "${id}" is not a candidate (status: ${record.status})`),
+      { status: 409 },
     )
-    return
   }
   await memoryStore.update(id, { status: "active", updatedAt: new Date().toISOString() })
   const updated = await memoryStore.get(id)
-  sendJson(response, 200, { record: updated })
+  return Response.json({ record: updated }, { status: 200 })
 }
 
 /**
@@ -61,10 +45,9 @@ export async function handleMemoryApproveRequest(options: {
  */
 export async function handleMemoryRejectRequest(options: {
   readonly memoryStore: MemoryStore
-  readonly response: ServerResponse
   readonly id: string
-}): Promise<void> {
-  const { memoryStore, response, id } = options
+}): Promise<Response> {
+  const { memoryStore, id } = options
   await memoryStore.delete(id)
-  sendJson(response, 200, { ok: true })
+  return Response.json({ ok: true }, { status: 200 })
 }

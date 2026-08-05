@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/testing",
-  "version": "0.8.12",
+  "version": "0.8.13",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -37,8 +37,7 @@
   },
   "dependencies": {
     "@copilotkit/aimock": "^1.35.1",
-    "@dawn-ai/memory": "workspace:*",
-    "light-my-request": "^6.6.0"
+    "@dawn-ai/memory": "workspace:*"
   },
   "peerDependencies": {
     "@dawn-ai/cli": "workspace:*",

@@ -9,10 +9,15 @@ export { __resetMaterializedAgentsForTests } from "@dawn-ai/langchain"
 // Exported only to support @dawn-ai/testing's live-smoke memory tests; not a
 // stable public surface — safe to gate (NODE_ENV) or relocate if it grows.
 export { runMemoryCommand } from "./commands/memory.js"
+export {
+  createRuntimeFetchHandler,
+  type RuntimeFetchHandler,
+} from "./lib/dev/runtime-fetch-handler.js"
 export { createRuntimeRegistry, type RuntimeRegistry } from "./lib/dev/runtime-registry.js"
 export {
   createRuntimeRequestListener,
   type RuntimeRequestListener,
+  type StartRuntimeServerOptions,
   startRuntimeServer,
 } from "./lib/dev/runtime-server.js"
 export {
