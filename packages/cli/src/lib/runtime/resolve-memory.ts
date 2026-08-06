@@ -1,5 +1,5 @@
 import { basename, join } from "node:path"
-import type { MemoryContext, MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
+import type { DawnConfig, MemoryContext, MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
 import { loadDawnConfig } from "@dawn-ai/core"
 import {
   type RecallRankingOptions,
@@ -7,6 +7,8 @@ import {
   sqliteMemoryStore,
   type VectorRankingOptions,
 } from "@dawn-ai/memory"
+import type { ModelProviderId } from "@dawn-ai/sdk"
+import { inferProvider } from "@dawn-ai/sdk"
 import type { LoadedRouteMemory } from "./load-memory.js"
 
 /**
@@ -113,6 +115,67 @@ export async function resolveEpisodesConfig(appRoot: string): Promise<ResolvedEp
     cap: episodes?.cap ?? 500,
     includeFailedRuns: episodes?.includeFailedRuns ?? true,
     embed: false,
+  }
+}
+
+/** Resolved `config.memory.distill` — the distillation commands' knobs. */
+export interface ResolvedDistillConfig {
+  readonly model: string
+  readonly provider: ModelProviderId
+  readonly maxBatches: number
+  readonly consolidate: {
+    readonly olderThanMs: number
+    readonly minBatchSize: number
+    readonly maxBatchSize: number
+    /** Absent unless configured — summaries don't expire by default. */
+    readonly ttlMs?: number
+  }
+  readonly reflect: {
+    readonly minNewRecords: number
+    readonly maxRecords: number
+    readonly writes: "candidate" | "auto"
+  }
+}
+
+/**
+ * Resolves the distillation config for the given appRoot.
+ *
+ * Defaults: model `gpt-5-mini`, provider inferred from the resolved model (the
+ * same `inferProvider` route agents and the built-in summarizer use) falling
+ * back to `"openai"`, 5 batches per invocation, consolidation over records
+ * older than 7 days in batches of 5..50 with no summary TTL, and reflection
+ * after 10 new records over at most 100 records written as candidates.
+ *
+ * Uses the same cached `loadDawnConfig` loader as the other resolvers;
+ * missing/unreadable config falls back to defaults. Values are passed through
+ * as authored — no range validation here (the engine clamps at use-site).
+ */
+export async function resolveDistillConfig(appRoot: string): Promise<ResolvedDistillConfig> {
+  let distill: NonNullable<NonNullable<DawnConfig["memory"]>["distill"]> | undefined
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    distill = loaded.config.memory?.distill
+  } catch {
+    // No dawn.config.ts or unreadable — use defaults.
+  }
+  const model = distill?.model ?? "gpt-5-mini"
+  const consolidate = distill?.consolidate
+  const reflect = distill?.reflect
+  return {
+    model,
+    provider: distill?.provider ?? inferProvider(model) ?? "openai",
+    maxBatches: distill?.maxBatches ?? 5,
+    consolidate: {
+      olderThanMs: consolidate?.olderThanMs ?? 7 * 86_400_000,
+      minBatchSize: consolidate?.minBatchSize ?? 5,
+      maxBatchSize: consolidate?.maxBatchSize ?? 50,
+      ...(consolidate?.ttlMs !== undefined ? { ttlMs: consolidate.ttlMs } : {}),
+    },
+    reflect: {
+      minNewRecords: reflect?.minNewRecords ?? 10,
+      maxRecords: reflect?.maxRecords ?? 100,
+      writes: reflect?.writes ?? "candidate",
+    },
   }
 }
 
