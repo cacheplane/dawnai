@@ -74,6 +74,9 @@ jobs:
       - name: Pack Check
         run: pnpm pack:check
 
+      - name: TypeScript Tooling Pack Smoke
+        run: pnpm verify:typescript-tooling-pack
+
       - name: Harness Coordinator Self-Test
         run: pnpm verify:harness:self-test
 
