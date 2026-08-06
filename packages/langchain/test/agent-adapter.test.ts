@@ -613,6 +613,29 @@ describe("native subagent event projection", () => {
 })
 
 describe("executeAgent with DawnAgent descriptors", () => {
+  test("materializes v2 agents so parallel tool calls have independent graph tasks", async () => {
+    const createReactAgent = vi.fn(() => ({ invoke: vi.fn() }))
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {},
+    }))
+    __resetMaterializedAgentsForTests()
+
+    try {
+      await materializeAgentGraph({
+        checkpointer: new MemorySaver(),
+        descriptor: agent({ model: "gpt-5-mini", systemPrompt: "Test." }),
+        tools: [],
+      })
+
+      expect(createReactAgent).toHaveBeenCalledWith(expect.objectContaining({ version: "v2" }))
+    } finally {
+      __resetMaterializedAgentsForTests()
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+    }
+  })
+
   test("does not reuse a compiled graph across distinct subagent resolvers", async () => {
     const createReactAgent = vi.fn(() => ({ invoke: vi.fn() }))
     vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))

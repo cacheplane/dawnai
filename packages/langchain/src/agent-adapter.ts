@@ -125,6 +125,7 @@ async function materializeAgent(
   const agentOptions: Record<string, unknown> = {
     llm,
     tools: langchainTools,
+    version: "v2",
     // Function-form prompt re-renders fragments on every model turn so they
     // can reflect live state (e.g., the current todos list).
     prompt:
