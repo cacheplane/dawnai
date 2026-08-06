@@ -16,6 +16,7 @@ import {
   resolveRequestedVersion,
   run,
   validatePackageMetadata,
+  validatePublishedWaitOptions,
   waitForPublishedVersions,
 } from "./lib/published-artifacts.mjs"
 
@@ -147,6 +148,10 @@ export function parsePublishedArtifactVerifyArgs(args) {
 
     parsed.waitAttempts = waitAttempts
     parsed.waitDelayMs = waitDelayMs ?? DEFAULT_WAIT_DELAY_MS
+    validatePublishedWaitOptions({
+      attempts: parsed.waitAttempts,
+      delayMs: parsed.waitDelayMs,
+    })
   }
 
   return parsed

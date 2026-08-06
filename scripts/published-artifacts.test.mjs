@@ -10,12 +10,19 @@ import {
   assertCleanDependencySpecs,
   assertInstalledCoreResolution,
   expectedFilesForPackage,
+  isRetryableNpmViewError,
+  MAX_WAIT_ATTEMPTS,
+  MAX_WAIT_DELAY_MS,
+  MAX_WAIT_TOTAL_MS,
+  NPM_VIEW_TIMEOUT_MS,
   normalizeCliArgs,
+  npmView,
   packageSets,
   resolvePackageSet,
   resolveRequestedVersion,
   run,
   validatePackageMetadata,
+  validatePublishedWaitOptions,
   waitForPublishedVersions,
 } from "./lib/published-artifacts.mjs"
 import {
@@ -115,6 +122,71 @@ describe("packageSets", () => {
 })
 
 describe("waitForPublishedVersions", () => {
+  it("accepts exact wait-budget boundaries and the release configuration", () => {
+    assert.deepEqual(
+      validatePublishedWaitOptions({
+        attempts: MAX_WAIT_ATTEMPTS,
+        delayMs: 0,
+        requestTimeoutMs: NPM_VIEW_TIMEOUT_MS,
+      }),
+      { worstCaseMs: MAX_WAIT_TOTAL_MS },
+    )
+    assert.deepEqual(
+      validatePublishedWaitOptions({
+        attempts: 1,
+        delayMs: MAX_WAIT_DELAY_MS,
+        requestTimeoutMs: NPM_VIEW_TIMEOUT_MS,
+      }),
+      { worstCaseMs: NPM_VIEW_TIMEOUT_MS },
+    )
+    assert.deepEqual(
+      validatePublishedWaitOptions({
+        attempts: 18,
+        delayMs: 10_000,
+        requestTimeoutMs: NPM_VIEW_TIMEOUT_MS,
+      }),
+      { worstCaseMs: 440_000 },
+    )
+  })
+
+  it("rejects oversized delays, attempts, timeouts, and total budgets", () => {
+    for (const [options, expected] of [
+      [
+        { attempts: 1, delayMs: 2 ** 31, requestTimeoutMs: NPM_VIEW_TIMEOUT_MS },
+        new RegExp(`delayMs.*at most ${MAX_WAIT_DELAY_MS}`),
+      ],
+      [
+        { attempts: 1, delayMs: 60_000, requestTimeoutMs: NPM_VIEW_TIMEOUT_MS },
+        new RegExp(`delayMs.*at most ${MAX_WAIT_DELAY_MS}`),
+      ],
+      [
+        { attempts: MAX_WAIT_ATTEMPTS + 1, delayMs: 0, requestTimeoutMs: 1 },
+        new RegExp(`attempts.*at most ${MAX_WAIT_ATTEMPTS}`),
+      ],
+      [
+        { attempts: Number.MAX_SAFE_INTEGER, delayMs: 0, requestTimeoutMs: 1 },
+        new RegExp(`attempts.*at most ${MAX_WAIT_ATTEMPTS}`),
+      ],
+      [
+        { attempts: 1, delayMs: 0, requestTimeoutMs: NPM_VIEW_TIMEOUT_MS + 1 },
+        new RegExp(`requestTimeoutMs.*at most ${NPM_VIEW_TIMEOUT_MS}`),
+      ],
+      [
+        {
+          attempts: MAX_WAIT_ATTEMPTS,
+          delayMs: 1,
+          requestTimeoutMs: NPM_VIEW_TIMEOUT_MS,
+        },
+        new RegExp(
+          `worst-case wait.*${MAX_WAIT_TOTAL_MS + MAX_WAIT_ATTEMPTS - 1}ms.*limit.*${MAX_WAIT_TOTAL_MS}ms`,
+          "i",
+        ),
+      ],
+    ]) {
+      assert.throws(() => validatePublishedWaitOptions(options), expected)
+    }
+  })
+
   it("returns immediately when every package has the exact version", async () => {
     const calls = []
     const delays = []
@@ -135,6 +207,57 @@ describe("waitForPublishedVersions", () => {
 
     assert.deepEqual(calls, ["@dawn-ai/core", "@dawn-ai/vite-plugin"])
     assert.deepEqual(delays, [])
+  })
+
+  it("checks outstanding packages concurrently", async () => {
+    const calls = []
+    const resolvers = new Map()
+
+    await waitForPublishedVersions({
+      packages: ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
+      version: "0.9.0",
+      attempts: 1,
+      delayMs: 0,
+      requestTimeoutMs: 100,
+      npmViewImpl(packageName) {
+        calls.push(packageName)
+        const promise = new Promise((resolvePromise) => {
+          resolvers.set(packageName, resolvePromise)
+        })
+        if (resolvers.size === 3) {
+          for (const resolvePromise of resolvers.values()) {
+            resolvePromise({ versions: ["0.9.0"] })
+          }
+        }
+        return promise
+      },
+      async delay() {},
+    })
+
+    assert.deepEqual(calls, ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"])
+  })
+
+  it("times out a never-resolving injected registry request", async () => {
+    const startedAt = Date.now()
+
+    await assert.rejects(
+      waitForPublishedVersions({
+        packages: ["@dawn-ai/core"],
+        version: "0.9.0",
+        attempts: 1,
+        delayMs: 0,
+        requestTimeoutMs: 10,
+        npmViewImpl: async () => new Promise(() => {}),
+        async delay() {},
+      }),
+      (error) => {
+        assert.equal(error.code, "ETIMEDOUT")
+        assert.match(error.message, /@dawn-ai\/core.*timed out.*10ms/i)
+        return true
+      },
+    )
+
+    assert.ok(Date.now() - startedAt < 500, "hung registry request must remain bounded")
   })
 
   it("retries only missing packages in deterministic order", async () => {
@@ -218,7 +341,7 @@ describe("waitForPublishedVersions", () => {
         delayMs: 5,
         async npmViewImpl() {
           calls += 1
-          throw new Error(`registry E500 on call ${calls}`)
+          throw Object.assign(new Error(`registry E500 on call ${calls}`), { code: "E500" })
         },
         async delay(ms) {
           delays.push(ms)
@@ -229,6 +352,122 @@ describe("waitForPublishedVersions", () => {
 
     assert.equal(calls, 3)
     assert.deepEqual(delays, [5, 5])
+  })
+
+  it("classifies only availability and network registry failures as retryable", () => {
+    for (const error of [
+      { code: "E404" },
+      { code: "E429" },
+      { code: "E500" },
+      { code: "E503" },
+      { code: "E503", retryable: false },
+      { code: "ETIMEDOUT" },
+      { code: "ECONNRESET" },
+      { code: "ENOTFOUND" },
+      { code: "EAI_AGAIN" },
+      { statusCode: 404 },
+      { statusCode: 429 },
+      { statusCode: 502 },
+    ]) {
+      assert.equal(isRetryableNpmViewError(error), true, JSON.stringify(error))
+    }
+
+    for (const error of [
+      { code: "E401" },
+      { code: "E401", retryable: true },
+      { code: "E403" },
+      { code: "EUSAGE" },
+      { code: "ECONFIG" },
+      { code: "EINVALIDJSON" },
+      { statusCode: 401 },
+      { statusCode: 403 },
+      new Error("unknown programmer error"),
+    ]) {
+      assert.equal(isRetryableNpmViewError(error), false, JSON.stringify(error))
+    }
+  })
+
+  it("retries retryable registry failures and recovers", async () => {
+    for (const registryError of [
+      { code: "E404" },
+      { statusCode: 429 },
+      { statusCode: 503 },
+      { code: "ECONNRESET" },
+      { code: "ETIMEDOUT" },
+    ]) {
+      let calls = 0
+      const delays = []
+      await waitForPublishedVersions({
+        packages: ["@dawn-ai/core"],
+        version: "0.9.0",
+        attempts: 2,
+        delayMs: 1,
+        requestTimeoutMs: 100,
+        async npmViewImpl() {
+          calls += 1
+          if (calls === 1) {
+            throw Object.assign(new Error("retryable registry failure"), registryError)
+          }
+          return { versions: ["0.9.0"] }
+        },
+        async delay(ms) {
+          delays.push(ms)
+        },
+      })
+
+      assert.equal(calls, 2, JSON.stringify(registryError))
+      assert.deepEqual(delays, [1], JSON.stringify(registryError))
+    }
+  })
+
+  it("fails fatal registry and response errors immediately without delaying", async () => {
+    for (const failure of [
+      Object.assign(new Error("authentication required"), { code: "E401" }),
+      Object.assign(new Error("access forbidden"), { statusCode: 403 }),
+      Object.assign(new Error("invalid npm config"), { code: "ECONFIG" }),
+      Object.assign(new Error("npm usage error"), { code: "EUSAGE" }),
+      Object.assign(new Error("malformed registry JSON"), { code: "EINVALIDJSON" }),
+      new Error("unknown programmer error"),
+    ]) {
+      let calls = 0
+      const delays = []
+      await assert.rejects(
+        waitForPublishedVersions({
+          packages: ["@dawn-ai/core"],
+          version: "0.9.0",
+          attempts: 3,
+          delayMs: 1,
+          requestTimeoutMs: 100,
+          async npmViewImpl() {
+            calls += 1
+            throw failure
+          },
+          async delay(ms) {
+            delays.push(ms)
+          },
+        }),
+        (error) => error === failure,
+      )
+      assert.equal(calls, 1)
+      assert.deepEqual(delays, [])
+    }
+
+    await assert.rejects(
+      waitForPublishedVersions({
+        packages: ["@dawn-ai/core"],
+        version: "0.9.0",
+        attempts: 3,
+        delayMs: 1,
+        requestTimeoutMs: 100,
+        async npmViewImpl() {
+          return { versions: "0.9.0" }
+        },
+        async delay() {
+          assert.fail("invalid response shape must not delay")
+        },
+      }),
+      /versions.*array/i,
+    )
   })
 
   it("validates inputs before calling injected functions", async () => {
@@ -254,11 +493,11 @@ describe("waitForPublishedVersions", () => {
       ],
       [
         { packages: ["core"], version: "0.9.0", attempts: 1, delayMs: -1 },
-        /delayMs.*finite non-negative/i,
+        /delayMs.*non-negative integer/i,
       ],
       [
         { packages: ["core"], version: "0.9.0", attempts: 1, delayMs: Number.POSITIVE_INFINITY },
-        /delayMs.*finite non-negative/i,
+        /delayMs.*non-negative integer/i,
       ],
       [
         {
@@ -289,6 +528,79 @@ describe("waitForPublishedVersions", () => {
       )
     }
     assert.equal(calls, 0)
+  })
+})
+
+describe("npmView", () => {
+  it("forwards the bounded request timeout to both npm queries", async () => {
+    const calls = []
+    const view = await npmView("@dawn-ai/core", {
+      requestTimeoutMs: 321,
+      async npmJsonImpl(args, options) {
+        calls.push({ args, options })
+        return args.at(-1) === "versions" ? ["0.9.0"] : { latest: "0.9.0" }
+      },
+    })
+
+    assert.deepEqual(view, { versions: ["0.9.0"], tags: { latest: "0.9.0" } })
+    assert.deepEqual(calls, [
+      {
+        args: ["view", "@dawn-ai/core", "versions"],
+        options: { timeoutMs: 321 },
+      },
+      {
+        args: ["view", "@dawn-ai/core", "dist-tags"],
+        options: { timeoutMs: 321 },
+      },
+    ])
+  })
+
+  it("normalizes npm execution and JSON errors with retryability metadata", async () => {
+    for (const [sourceError, expected] of [
+      [new SyntaxError("Unexpected token"), { code: "EINVALIDJSON", retryable: false }],
+      [
+        Object.assign(new Error("npm failed"), { stderr: "npm error code E503" }),
+        { code: "E503", retryable: true, statusCode: 503 },
+      ],
+      [
+        Object.assign(new Error("npm failed"), { stderr: "npm error code E401" }),
+        { code: "E401", retryable: false, statusCode: 401 },
+      ],
+      [
+        Object.assign(new Error("getaddrinfo EAI_AGAIN"), { code: "EAI_AGAIN" }),
+        { code: "EAI_AGAIN", retryable: true },
+      ],
+    ]) {
+      await assert.rejects(
+        npmView("@dawn-ai/core", {
+          async npmJsonImpl() {
+            throw sourceError
+          },
+        }),
+        (error) => {
+          for (const [key, value] of Object.entries(expected)) {
+            assert.equal(error[key], value)
+          }
+          return true
+        },
+      )
+    }
+  })
+
+  it("rejects malformed registry response shapes as fatal", async () => {
+    await assert.rejects(
+      npmView("@dawn-ai/core", {
+        async npmJsonImpl(args) {
+          return args.at(-1) === "versions" ? "0.9.0" : { latest: "0.9.0" }
+        },
+      }),
+      (error) => {
+        assert.equal(error.code, "EINVALIDRESPONSE")
+        assert.equal(error.retryable, false)
+        assert.match(error.message, /versions response must be an array/i)
+        return true
+      },
+    )
   })
 })
 
@@ -326,6 +638,22 @@ describe("published artifact verification CLI", () => {
       waitAttempts: 2,
       waitDelayMs: 10_000,
     })
+  })
+
+  it("accepts the exact maximum wait-attempt boundary", () => {
+    assert.deepEqual(
+      parsePublishedArtifactVerifyArgs([
+        "--version=0.9.0",
+        `--wait-attempts=${MAX_WAIT_ATTEMPTS}`,
+        "--wait-delay-ms=0",
+      ]),
+      {
+        packageSet: "memory-pgvector-core",
+        version: "0.9.0",
+        waitAttempts: MAX_WAIT_ATTEMPTS,
+        waitDelayMs: 0,
+      },
+    )
   })
 
   it("accepts an exact prerelease version in wait mode", () => {
@@ -386,6 +714,25 @@ describe("published artifact verification CLI", () => {
       [
         ["--version", "not-a-version", "--wait-attempts", "2"],
         /--wait-attempts requires --version.*exact version/i,
+      ],
+      [
+        ["--version", "0.9.0", "--wait-attempts", String(MAX_WAIT_ATTEMPTS + 1)],
+        new RegExp(`attempts.*at most ${MAX_WAIT_ATTEMPTS}`),
+      ],
+      [
+        ["--version", "0.9.0", "--wait-attempts", "1", "--wait-delay-ms", "60000"],
+        new RegExp(`delayMs.*at most ${MAX_WAIT_DELAY_MS}`),
+      ],
+      [
+        [
+          "--version",
+          "0.9.0",
+          "--wait-attempts",
+          String(MAX_WAIT_ATTEMPTS),
+          "--wait-delay-ms",
+          "1",
+        ],
+        /worst-case wait.*limit/i,
       ],
     ]) {
       assert.throws(() => parsePublishedArtifactVerifyArgs(args), expected)
@@ -530,6 +877,14 @@ describe("release workflow published TypeScript tooling verification", () => {
     const delayMs = Number(match[2])
     assert.ok(delayMs < 60_000)
     assert.ok((attempts - 1) * delayMs < 30 * 60_000)
+  })
+
+  it("documents the manual rerun path when Changesets reports no publication", () => {
+    const workflow = readFileSync(releaseWorkflowPath, "utf8")
+
+    assert.doesNotMatch(workflow, /Runs last so it can never affect the actual publish/)
+    assert.match(workflow, /published=false.*skip.*post-publish/is)
+    assert.match(workflow, /Published Artifact Verification.*exact version.*typescript-tooling/is)
   })
 })
 
@@ -1501,6 +1856,25 @@ describe("runCommand", () => {
 })
 
 describe("run", () => {
+  it("terminates a child process that exceeds its timeout", async () => {
+    const startedAt = Date.now()
+
+    await assert.rejects(
+      run(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "pipe",
+        timeoutMs: 50,
+      }),
+      (error) => {
+        assert.equal(error.code, "ETIMEDOUT")
+        assert.equal(error.timeoutMs, 50)
+        assert.match(error.message, /timed out after 50ms/i)
+        return true
+      },
+    )
+
+    assert.ok(Date.now() - startedAt < 1_000, "timed-out child must be terminated promptly")
+  })
+
   it("removes OPENAI_API_KEY from child process environments by default", async () => {
     const previousOpenAiApiKey = process.env.OPENAI_API_KEY
     process.env.OPENAI_API_KEY = "sk-test-secret"
