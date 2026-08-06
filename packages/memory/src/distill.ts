@@ -219,6 +219,24 @@ function extractJson(raw: string): unknown {
   throw new Error(`could not parse model output as JSON: ${text.slice(0, 120)}`)
 }
 
+/** Both prompts end with their own schema example — `Respond with JSON only:
+ *  {"summary": "..."}`. A model that echoes that line back returns a payload that
+ *  is structurally perfect and semantically empty: `summary === "..."` clears a
+ *  `trim() !== ""` guard, gets written, and then SUPERSEDES the real episodes it
+ *  claims to summarize — whose content is the only other copy. That is silent,
+ *  unrecoverable history loss, so a payload carrying no letter and no digit
+ *  ANYWHERE is a parse failure: the batch fails loudly and its sources stay
+ *  active for the next pass. Deliberately a content test, not a length one —
+ *  "Two deploys, one rollback." is short and real, and `\p{L}` keeps non-Latin
+ *  scripts real too. Covered by "placeholder payloads" in distill-build.test.ts. */
+function requireMeaningful(text: string, what: string): void {
+  if (!/[\p{L}\p{N}]/u.test(text)) {
+    throw new Error(
+      `could not parse model output: ${what} is a placeholder, not content (${JSON.stringify(text.slice(0, 40))})`,
+    )
+  }
+}
+
 function asRecord(value: unknown, what: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`could not parse model output: expected a JSON object for ${what}`)
@@ -232,6 +250,7 @@ export function parseConsolidationOutput(raw: string): { summary: string } {
   if (typeof summary !== "string" || summary.trim() === "") {
     throw new Error('could not parse model output: "summary" must be a non-empty string')
   }
+  requireMeaningful(summary, '"summary"')
   return { summary }
 }
 
@@ -257,6 +276,7 @@ export function parseReflectionOutput(raw: string): { insights: ReflectionInsigh
         `could not parse model output: insight[${i}].insight must be a non-empty string`,
       )
     }
+    requireMeaningful(e.insight, `insight[${i}].insight`)
     const confidence =
       typeof e.confidence === "number" && e.confidence >= 0 && e.confidence <= 1
         ? e.confidence
@@ -320,6 +340,36 @@ export function buildSummaryRecord(
     ...(opts?.ttlMs !== undefined
       ? { expiresAt: new Date(Date.parse(now) + opts.ttlMs).toISOString() }
       : {}),
+  }
+}
+
+/** A pass that legitimately yields NO durable insight still did the work, and the
+ *  watermark is the only place that fact can live. Without this record the
+ *  namespace is re-selected — and re-PAID for — on every subsequent cron run,
+ *  forever, because `readWatermark` finds nothing to advance past.
+ *  It is written `superseded` on purpose: `recall` sees only active/candidate
+ *  rows, so the sentinel can never surface as a fake insight, while `browse`
+ *  (which readWatermark uses, and which does not filter by status unless asked)
+ *  still finds it. The id is derived from (namespace, coveredUntil) only — an
+ *  identical re-run overwrites its own sentinel instead of piling up.
+ *  Covered by "a zero-insight pass still advances the watermark" (distill-engine). */
+export function buildReflectionWatermarkRecord(input: ReflectionInput, now: string): MemoryRecord {
+  return {
+    id: `memory_rfl_pass_${shortHash(`${input.namespace}|${input.coveredUntil}`)}`,
+    kind: "reflection",
+    namespace: input.namespace,
+    content: "(no insights from this pass)",
+    data: {
+      coveredUntil: input.coveredUntil,
+      derivedFrom: input.records.map((r) => r.id),
+    },
+    source: { type: "tool", id: "reflect" },
+    confidence: 0,
+    tags: ["reflection-watermark"],
+    status: "superseded",
+    createdAt: now,
+    updatedAt: now,
+    effectiveAt: now,
   }
 }
 

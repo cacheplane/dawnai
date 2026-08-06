@@ -84,6 +84,43 @@ describe("parsing", () => {
   })
 })
 
+// Both prompts END with their own schema example — `{"summary": "..."}`. A model
+// that echoes that line back produces `summary === "..."`: structurally valid,
+// non-empty, and completely devoid of content. Written, it would then SUPERSEDE
+// the real episodes it claims to summarize — whose content is the only other
+// copy — silently destroying history. A placeholder must fail the batch LOUDLY.
+describe("placeholder payloads (prompt-echo defense)", () => {
+  const PLACEHOLDERS = ['"..."', '"…"', '"-"', '""', '"   "', '"---"', '". . ."']
+  it.each(PLACEHOLDERS)("rejects a summary of %s", (json) => {
+    expect(() => parseConsolidationOutput(`{"summary":${json}}`)).toThrow(/could not parse/i)
+  })
+  it.each(PLACEHOLDERS)("rejects an insight of %s", (json) => {
+    expect(() =>
+      parseReflectionOutput(`{"insights":[{"insight":${json},"confidence":0.5,"tags":[]}]}`),
+    ).toThrow(/could not parse/i)
+  })
+  it("rejects the schema line echoed verbatim inside a fence", () => {
+    expect(() => parseConsolidationOutput('```json\n{"summary": "..."}\n```')).toThrow(
+      /could not parse/i,
+    )
+  })
+  // The guard must not be a length heuristic: short real content is still content.
+  it("still accepts a legitimately short but real summary", () => {
+    expect(parseConsolidationOutput('{"summary":"Two deploys, one rollback."}')).toEqual({
+      summary: "Two deploys, one rollback.",
+    })
+    expect(parseConsolidationOutput('{"summary":"PR #12 landed."}')).toEqual({
+      summary: "PR #12 landed.",
+    })
+  })
+  it("still accepts short real insights, including non-Latin scripts", () => {
+    const { insights } = parseReflectionOutput(
+      '{"insights":[{"insight":"Fridays fail.","confidence":0.6,"tags":[]},{"insight":"デプロイは金曜に失敗する","confidence":0.6,"tags":[]}]}',
+    )
+    expect(insights.map((i) => i.insight)).toEqual(["Fridays fail.", "デプロイは金曜に失敗する"])
+  })
+})
+
 describe("record builders", () => {
   it("builds a summary record with provenance and a deterministic id", () => {
     const a = buildSummaryRecord(BATCH, "digest text", NOW)

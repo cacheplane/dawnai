@@ -62,6 +62,29 @@ around its training cutoff — observed live: a 2026 store queried with
 `since: "2023-10-02"` — which matches nothing, silently, because an empty result
 is indistinguishable from an empty store.
 
+**Placeholder model output can never destroy history.** Both prompts end with
+their own schema example (`{"summary": "..."}`); a model that echoes it back
+returns a payload that is structurally valid and semantically empty. Written, that
+summary would then supersede the real episodes it claims to summarize — whose
+content is the only other copy. A summary or insight carrying no letter and no
+digit anywhere is now a parse failure, so the batch fails loudly and its sources
+stay active.
+
+**A zero-insight reflection pass still advances the watermark.** It persists one
+`superseded` sentinel (content `(no insights from this pass)`) carrying
+`coveredUntil`, invisible to `recall`. Without it, a namespace whose memories
+legitimately yield no durable insight was re-examined — and re-paid for — on
+every cron run, forever.
+
+**One failed source link can no longer split a batch.** A batch is the atom of
+idempotency (its summary id hashes its own source-id list), so each source's
+supersede/expiry pair is now isolated: a transient failure on one source leaves
+that source active and unstamped while the rest of the batch links normally,
+instead of leaving the survivors to form a different chunk — and a second
+overlapping summary — on the next run. The batch still reports as failed.
+`--max-batches 0` now reports the deferred work rather than claiming there is
+nothing to do.
+
 **`kind: "reflection"` is now accepted** by `defineMemory` and the generated
 `remember` tool, where it previously threw. Reflections are append-only, like
 episodic writes — a later insight never supersedes an earlier one. This is

@@ -255,3 +255,53 @@ and state plainly that these commands spend model tokens.
   active... it can't: sources are superseded at consolidation time).
 - Default `gpt-5-mini` vs the app's own configured model as the distill default
   (leaning explicit default for cost predictability).
+
+## Amendments (shipped)
+
+The design above is the pre-build document. Where the shipped implementation
+diverges, the shipped behavior wins — recorded here so the spec is not read as a
+description of what the code does.
+
+- **A summary's `effectiveAt` is the period's END, not its start.** `effectiveAt`
+  is not a second copy of `data.period.since`: it drives retention ranking, and
+  `prune`'s per-namespace episodic cap is status-agnostic. Stamped with the
+  window's start, a summary sorts as the OLDEST row of its own batch and the cap
+  evicts it *before* the superseded sources it replaced. A summary stands for the
+  whole window, so it ranks at the window's end.
+- **The summary id folds in the source-id list**, not just `(namespace, period)`.
+  When every record in a namespace-week shares an exactly equal event time (bulk
+  import, backfill) and `maxBatchSize` splits them, each chunk derives the same
+  `since`/`until` — two distinct batches, one id, and the second summary silently
+  overwrites the first.
+- **`--dry-run` prints namespaces, windows, and record counts** — no character or
+  token estimate. A character count would read as a cost prediction the command
+  cannot honestly make.
+- **No `zod`.** `@dawn-ai/memory` stays zero-extra-dependency; model output is
+  validated by hand-written narrowing in `distill.ts`.
+- **`--provider` flag and `providerAuthored` provenance.** The distill config
+  carries an explicit provider, and `--model` re-infers the provider *unless* one
+  was authored — so overriding the model on the CLI cannot silently pin a
+  mismatched provider.
+- **`consolidate.sourceTtlMs`** (default 7 days) is stamped on each source once
+  ITS supersede succeeded. A superseded source is invisible to recall but still
+  occupies a slot in the status-agnostic per-namespace cap; without an expiry the
+  compacted rows would keep evicting live ones forever.
+- **A zero-insight reflection pass still writes a watermark.** It persists one
+  sentinel record (`kind: "reflection"`, `status: "superseded"`, content
+  `(no insights from this pass)`, id `memory_rfl_pass_<hash>`) carrying
+  `data.coveredUntil`. Without it, `readWatermark` finds nothing to advance past
+  and cron re-pays for the same barren namespace on every run, forever. The
+  `superseded` status keeps the sentinel out of recall while leaving it visible
+  to `browse`.
+- **Placeholder payloads are rejected as parse failures.** Both prompts end with
+  their own schema example (`{"summary": "..."}`); a model that echoes it returns
+  a structurally valid, semantically empty payload that would clear a non-empty
+  check, get written, and then supersede the real episodes it claims to
+  summarize. A summary or insight carrying no letter and no digit anywhere throws
+  the "could not parse model output" error, so the batch fails loudly and its
+  sources stay active.
+- **Each source's link is isolated from its siblings.** A batch is the atom of
+  idempotency (its summary id hashes its own source-id list), so a failure on
+  source *k* must not abort *k+1..n* — the survivors would form a different chunk
+  next run, yielding a different id and a second overlapping summary. The batch
+  still counts as failed.

@@ -2,6 +2,7 @@ export {
   buildConsolidationPrompt,
   buildReflectionPrompt,
   buildReflectionRecords,
+  buildReflectionWatermarkRecord,
   buildSummaryRecord,
   type ConsolidationBatch,
   eventTimeOf,

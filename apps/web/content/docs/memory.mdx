@@ -395,7 +395,11 @@ Per namespace, it collects records newer than that namespace's **watermark** (th
 
 Insights land as **candidates by default** — a model's generalization about your users is exactly the kind of write that deserves a human read before `recall` can surface it. Review them like any other candidate: the [Inspector](/docs/inspector)'s Approve button, or `dawn memory approve <id>`. Set `reflect.writes: "auto"` to write them `active` directly.
 
-Because the watermark advances with each pass, re-running `reflect` is cheap: a namespace with nothing new since its last reflection is skipped without a model call. Reflections are **append-only** — a later insight never supersedes an earlier one (see [write governance](#write-governance)); distillation accumulates insights rather than overwriting them.
+Every pass advances the watermark, including one that returns no insights — that case persists a single `superseded` sentinel record (content `(no insights from this pass)`) carrying `coveredUntil` and nothing else. It is invisible to `recall`, and it is what makes re-running `reflect` cheap *unconditionally*: a namespace with nothing new since its last pass is skipped without a model call, whether or not that pass actually produced anything. Reflections are **append-only** — a later insight never supersedes an earlier one (see [write governance](#write-governance)); distillation accumulates insights rather than overwriting them.
+
+<Callout type="warn" title="A backlog above reflect.maxRecords is skipped, not deferred">
+When a namespace has more new records than the cap, only the newest `maxRecords` are fed to the model — and the watermark then jumps to the newest record's event time, past the overflow. Those older records are never reflected on, and re-running does not pick them up. Consolidation is the opposite: its `maxBatches` ceiling *defers* work and reports how much remains. If you are turning `reflect` on over a large existing history, raise `reflect.maxRecords` for the first run rather than expecting a second run to catch up.
+</Callout>
 
 ### Distilled records are found by keyword
 

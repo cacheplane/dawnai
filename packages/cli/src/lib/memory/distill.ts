@@ -3,6 +3,7 @@ import {
   buildConsolidationPrompt,
   buildReflectionPrompt,
   buildReflectionRecords,
+  buildReflectionWatermarkRecord,
   buildSummaryRecord,
   type ConsolidationBatch,
   eventTimeOf,
@@ -132,7 +133,13 @@ export async function runConsolidation(args: DistillArgs): Promise<DistillResult
   const batches = selected.slice(0, batchLimit(config.maxBatches))
 
   if (batches.length === 0) {
-    writeLine(io.stdout, "nothing to consolidate")
+    // `--max-batches 0` is an explicit off switch, not an absence of work.
+    // "nothing to consolidate" over a real backlog would tell the operator their
+    // memory is compacted when it is not — so when work was merely deferred, the
+    // deferral IS the message. Covered by "--max-batches 0 reports the deferred
+    // work" (distill-engine).
+    if (selected.length > 0) reportRemaining(io, selected.length, "consolidate", "batch(es)")
+    else writeLine(io.stdout, "nothing to consolidate")
     return { batches: 0, written: 0, failed: 0 }
   }
 
@@ -182,9 +189,36 @@ export async function runConsolidation(args: DistillArgs): Promise<DistillResult
       // never be scheduled for deletion, because nothing summarizes it yet.
       // `update` merges the patch over the row it re-reads (and re-attaches the
       // persisted embedding), so this preserves status/content/provenance.
+      //
+      // Each source is isolated from its siblings. A batch is the ATOM of
+      // idempotency — the summary id hashes the batch's own source-id list — so
+      // letting one source's failure abort the rest would leave the survivors to
+      // form a DIFFERENT chunk next run: a different id, and a second summary
+      // overlapping the one already written. Isolating the link keeps the
+      // fallout to exactly the source that failed (left active and unstamped,
+      // so recall still sees it and nothing reaps it). The batch still counts
+      // as failed. Covered by "isolates a failing source link…" and "…cannot
+      // split the batch into a second overlapping summary" (distill-engine).
+      let linkFailures = 0
       for (const source of batch.records) {
-        await store.supersede(source.id, record.id)
-        await store.update(source.id, { expiresAt: sourceExpiresAt })
+        try {
+          await store.supersede(source.id, record.id)
+          await store.update(source.id, { expiresAt: sourceExpiresAt })
+        } catch (error) {
+          linkFailures += 1
+          writeLine(
+            io.stderr,
+            `link failed for source ${source.id} in ${batch.namespace}: ${formatErrorMessage(error)}`,
+          )
+        }
+      }
+      if (linkFailures > 0) {
+        failed += 1
+        writeLine(
+          io.stderr,
+          `consolidation partially failed for ${batch.namespace} (${batch.period.since}): ${linkFailures} of ${batch.records.length} source(s) not linked`,
+        )
+        continue
       }
       writeLine(
         io.stdout,
@@ -242,7 +276,11 @@ export async function runReflection(args: DistillArgs): Promise<DistillResult> {
   }
 
   if (inputs.length === 0) {
-    writeLine(io.stdout, "nothing to reflect on")
+    // Same as consolidation: a namespace skipped by the `maxBatches` ceiling was
+    // never even examined, so claiming there is nothing to reflect on would be a
+    // guess presented as a fact.
+    if (skipped > 0) reportRemaining(io, skipped, "reflect", "namespace(s)")
+    else writeLine(io.stdout, "nothing to reflect on")
     return { batches: 0, written: 0, failed }
   }
 
@@ -270,6 +308,13 @@ export async function runReflection(args: DistillArgs): Promise<DistillResult> {
         await store.put(record)
         written += 1
       }
+      // A pass that yielded nothing still consumed a model call, and the only
+      // place that fact can be recorded is the watermark — which lives IN a
+      // reflection record. Skip this and cron re-pays for the same barren
+      // namespace on every run, forever. The sentinel is written `superseded`
+      // so recall never sees it; `written` deliberately stays 0 (it is not an
+      // insight). Covered by "a zero-insight pass still advances the watermark".
+      if (records.length === 0) await store.put(buildReflectionWatermarkRecord(input, now))
       writeLine(
         io.stdout,
         `reflected on ${input.records.length} records in ${input.namespace} → ${records.length} ${status} insight(s)`,

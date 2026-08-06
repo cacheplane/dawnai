@@ -203,6 +203,119 @@ describe("runConsolidation", () => {
     expect(invoke).toHaveBeenCalledTimes(2)
     expect(res.written).toBe(2)
   })
+  // A batch is an ATOM for idempotency: its summary id hashes its own source-id
+  // list. If one source's link throws and aborts the rest, the survivors form a
+  // DIFFERENT chunk next run — a different id, a second overlapping summary over
+  // records the first one already covers. One transient error must not be able
+  // to split a batch, so each source's link is isolated from its siblings.
+  it("isolates a failing source link and still links the rest of the batch", async () => {
+    const store = makeStore()
+    for (const d of [1, 2, 3, 4, 5]) await store.put(ep(`e${d}`, d))
+    const flaky = {
+      ...store,
+      supersede: async (id: string, by: string) => {
+        if (id === "e2") throw new Error("link boom")
+        await store.supersede(id, by)
+      },
+    }
+    const invoke = vi.fn(async () => ({ content: '{"summary":"five runs"}' }))
+    const res = await runConsolidation({
+      store: flaky as typeof store,
+      config: CONFIG,
+      now: NOW,
+      io,
+      createModel: async () => ({ invoke }),
+    })
+    expect(res).toMatchObject({ batches: 1, written: 1, failed: 1 }) // still a failed batch
+    const expiry = new Date(Date.parse(NOW) + 7 * 86_400_000).toISOString()
+    for (const id of ["e1", "e3", "e4", "e5"]) {
+      expect((await store.get(id))?.status).toBe("superseded")
+      expect((await store.get(id))?.expiresAt).toBe(expiry)
+    }
+    // Only the source that actually failed is left behind — active (so recall
+    // still sees it) and unstamped (nothing summarizes it, so nothing may reap it).
+    expect((await store.get("e2"))?.status).toBe("active")
+    expect((await store.get("e2"))?.expiresAt).toBeUndefined()
+  })
+  it("a failed source link cannot split the batch into a second overlapping summary", async () => {
+    const store = makeStore()
+    for (const d of [1, 2, 3, 4, 5]) await store.put(ep(`e${d}`, d))
+    const flaky = {
+      ...store,
+      supersede: async (id: string, by: string) => {
+        if (id === "e2") throw new Error("link boom")
+        await store.supersede(id, by)
+      },
+    }
+    const invoke = vi.fn(async () => ({ content: '{"summary":"five runs"}' }))
+    const base = { config: CONFIG, now: NOW, io, createModel: async () => ({ invoke }) }
+    await runConsolidation({ ...base, store: flaky as typeof store })
+    await runConsolidation({ ...base, store }) // the store has healed
+    const summaries = (await store.browse({ kind: "episodic" })).records.filter((r) =>
+      r.tags.includes("consolidated"),
+    )
+    expect(summaries.length).toBe(1) // no split chunk, no second overlapping summary
+    expect(summaries[0]?.data.derivedFrom).toEqual(["e1", "e2", "e3", "e4", "e5"])
+  })
+  it("a wholly failed link phase re-runs as the SAME batch (same id, upsert) and completes", async () => {
+    const store = makeStore()
+    for (const d of [1, 2, 3, 4, 5]) await store.put(ep(`e${d}`, d))
+    const broken = {
+      ...store,
+      supersede: async () => {
+        throw new Error("link boom")
+      },
+    }
+    const invoke = vi.fn(async () => ({ content: '{"summary":"five runs"}' }))
+    const base = { config: CONFIG, now: NOW, io, createModel: async () => ({ invoke }) }
+    const first = await runConsolidation({ ...base, store: broken as typeof store })
+    expect(first.failed).toBe(1)
+    const idAfterFirst = (await store.browse({ kind: "episodic" })).records.find((r) =>
+      r.tags.includes("consolidated"),
+    )?.id
+    const second = await runConsolidation({ ...base, store }) // healed
+    expect(second).toMatchObject({ batches: 1, written: 1, failed: 0 })
+    const summaries = (await store.browse({ kind: "episodic" })).records.filter((r) =>
+      r.tags.includes("consolidated"),
+    )
+    expect(summaries.length).toBe(1)
+    expect(summaries[0]?.id).toBe(idAfterFirst) // same batch → same id → upsert
+    for (const d of [1, 2, 3, 4, 5]) expect((await store.get(`e${d}`))?.status).toBe("superseded")
+  })
+  // `--max-batches 0` is an explicit off switch, not an absence of work. Printing
+  // "nothing to consolidate" over a real backlog tells the operator their memory
+  // is compacted when it is not, and hides the one line that would explain why.
+  it("--max-batches 0 reports the deferred work instead of claiming there is none", async () => {
+    const store = makeStore()
+    for (const r of [ep("e1", 7), ep("e2", 8)]) await store.put(r)
+    const invoke = vi.fn()
+    const out: string[] = []
+    const res = await runConsolidation({
+      store,
+      config: { ...CONFIG, maxBatches: 0 },
+      now: NOW,
+      io: { stdout: (m) => out.push(m), stderr: () => {} },
+      createModel: async () => ({ invoke }),
+    })
+    expect(res).toMatchObject({ batches: 0, written: 0, failed: 0 })
+    expect(invoke).not.toHaveBeenCalled()
+    expect(out.join("\n")).toMatch(/1 more batch\(es\) not examined \(maxBatches\)/)
+    expect(out.join("\n")).not.toMatch(/nothing to consolidate/)
+  })
+  it("still says nothing to consolidate when there is genuinely nothing", async () => {
+    const store = makeStore()
+    await store.put(ep("only", 7)) // below minBatchSize
+    const out: string[] = []
+    await runConsolidation({
+      store,
+      config: { ...CONFIG, maxBatches: 0 },
+      now: NOW,
+      io: { stdout: (m) => out.push(m), stderr: () => {} },
+      createModel: async () => ({ invoke: vi.fn() }),
+    })
+    expect(out.join("\n")).toMatch(/nothing to consolidate/)
+    expect(out.join("\n")).not.toMatch(/not examined/)
+  })
   it("is idempotent — a second identical run writes no duplicate summary", async () => {
     const store = makeStore()
     for (const r of [ep("e1", 7), ep("e2", 8)]) await store.put(r)
@@ -260,7 +373,88 @@ describe("runReflection", () => {
     })
     expect((await store.browse({ kind: "reflection" })).records[0]?.status).toBe("active")
   })
-  it("an empty insight list is a clean no-write", async () => {
+  // `browse`'s namespacePrefix is a PREFIX, not an equality filter, so a pass for
+  // "route=/a" also sees every "route=/ab" row. Two independent guards keep the
+  // namespaces apart — one in readWatermark, one in gatherNamespaceMemories — and
+  // this test fails if EITHER is removed: delete the watermark guard and /ab's
+  // far-future coveredUntil silences /a forever; delete the input guard and /ab's
+  // memories get summarized into /a's insights.
+  it("a sibling namespace sharing a prefix neither blocks nor pollutes this one", async () => {
+    const store = makeStore()
+    for (const r of [ep("e1", 7), ep("e2", 8)]) await store.put(r)
+    for (const r of [ep("b1", 7), ep("b2", 8)]) await store.put({ ...r, namespace: "route=/ab" })
+    await store.put({
+      id: "memory_rfl_sibling",
+      kind: "reflection",
+      namespace: "route=/ab",
+      content: "a sibling insight",
+      data: { coveredUntil: "2099-01-01T00:00:00.000Z" },
+      source: { type: "tool", id: "reflect" },
+      confidence: 0.9,
+      tags: [],
+      status: "active",
+      createdAt: NOW,
+      updatedAt: NOW,
+      effectiveAt: NOW,
+    })
+    const prompts: string[] = []
+    const invoke = vi.fn(async (p: string) => {
+      prompts.push(p)
+      return { content: '{"insights":[{"insight":"i","confidence":0.5,"tags":[]}]}' }
+    })
+    const res = await runReflection({
+      store,
+      config: CONFIG,
+      now: NOW,
+      io,
+      createModel: async () => ({ invoke }),
+    })
+    // Guard 1 — /ab's 2099 watermark is not /a's: /a still reflects.
+    expect(res).toMatchObject({ batches: 1, written: 1, failed: 0 })
+    expect(invoke).toHaveBeenCalledTimes(1) // /ab itself IS silenced, by its own watermark
+    const prompt = prompts[0] ?? ""
+    expect(prompt).toContain("in namespace route=/a.")
+    // Guard 2 — /ab's memories never enter /a's input.
+    expect(prompt).toContain("run e1")
+    expect(prompt).not.toContain("run b1")
+    expect(prompt).not.toContain("run b2")
+    expect(prompt).not.toContain("a sibling insight")
+    const written = (await store.browse({ kind: "reflection", status: "candidate" })).records
+    expect(written.map((r) => r.namespace)).toEqual(["route=/a"])
+    expect(written[0]?.data.coveredUntil).toBe("2026-07-08T09:00:00.000Z")
+  })
+  it("--max-batches 0 reports the deferred namespaces instead of claiming there is none", async () => {
+    const store = makeStore()
+    for (const r of [ep("e1", 7), ep("e2", 8)]) await store.put(r)
+    const invoke = vi.fn()
+    const out: string[] = []
+    const res = await runReflection({
+      store,
+      config: { ...CONFIG, maxBatches: 0 },
+      now: NOW,
+      io: { stdout: (m) => out.push(m), stderr: () => {} },
+      createModel: async () => ({ invoke }),
+    })
+    expect(res).toMatchObject({ batches: 0, written: 0, failed: 0 })
+    expect(invoke).not.toHaveBeenCalled()
+    expect(out.join("\n")).toMatch(/1 more namespace\(s\) not examined \(maxBatches\)/)
+    expect(out.join("\n")).not.toMatch(/nothing to reflect on/)
+  })
+  it("still says nothing to reflect on when no namespace qualifies", async () => {
+    const store = makeStore()
+    await store.put(ep("only", 7)) // below minNewRecords
+    const out: string[] = []
+    await runReflection({
+      store,
+      config: CONFIG,
+      now: NOW,
+      io: { stdout: (m) => out.push(m), stderr: () => {} },
+      createModel: async () => ({ invoke: vi.fn() }),
+    })
+    expect(out.join("\n")).toMatch(/nothing to reflect on/)
+    expect(out.join("\n")).not.toMatch(/not examined/)
+  })
+  it("an empty insight list writes no insight", async () => {
     const store = makeStore()
     for (const r of [ep("e1", 7), ep("e2", 8)]) await store.put(r)
     const invoke = vi.fn(async () => ({ content: '{"insights":[]}' }))
@@ -272,5 +466,43 @@ describe("runReflection", () => {
       createModel: async () => ({ invoke }),
     })
     expect(res).toMatchObject({ written: 0, failed: 0 })
+    expect((await store.browse({ kind: "reflection", status: "active" })).total).toBe(0)
+    expect((await store.browse({ kind: "reflection", status: "candidate" })).total).toBe(0)
+  })
+  // Without a watermark write, a namespace whose memories legitimately yield NO
+  // durable insight is re-examined — and re-PAID for — on every single cron run,
+  // forever. The pass is only cheap to re-run if it records that it happened.
+  it("a zero-insight pass still advances the watermark, so the next pass makes no model call", async () => {
+    const store = makeStore()
+    for (const r of [ep("e1", 7), ep("e2", 8)]) await store.put(r)
+    const invoke = vi.fn(async () => ({ content: '{"insights":[]}' }))
+    const args = { store, config: CONFIG, now: NOW, io, createModel: async () => ({ invoke }) }
+    const first = await runReflection(args)
+    expect(first).toMatchObject({ batches: 1, written: 0, failed: 0 })
+    expect(invoke).toHaveBeenCalledTimes(1)
+    const second = await runReflection(args)
+    expect(second).toMatchObject({ batches: 0, written: 0, failed: 0 })
+    expect(invoke).toHaveBeenCalledTimes(1) // the pass was NOT re-paid
+    // The sentinel carries the watermark and nothing else: `superseded` keeps it
+    // out of active-only recall, so it can never surface as a fake "insight".
+    const reflections = (await store.browse({ kind: "reflection" })).records
+    expect(reflections.length).toBe(1)
+    expect(reflections[0]?.status).toBe("superseded")
+    expect(reflections[0]?.data.coveredUntil).toBe("2026-07-08T09:00:00.000Z")
+    expect(reflections[0]?.id).toMatch(/^memory_rfl_pass_[0-9a-f]{16}$/)
+  })
+  it("a later zero-insight pass advances the watermark again as new records arrive", async () => {
+    const store = makeStore()
+    for (const r of [ep("e1", 7), ep("e2", 8)]) await store.put(r)
+    const invoke = vi.fn(async () => ({ content: '{"insights":[]}' }))
+    const args = { store, config: CONFIG, now: NOW, io, createModel: async () => ({ invoke }) }
+    await runReflection(args)
+    for (const r of [ep("e3", 9), ep("e4", 9)]) await store.put({ ...r, id: `${r.id}x` })
+    const second = await runReflection(args)
+    expect(second.batches).toBe(1) // fresh records cross the threshold again
+    const covered = (await store.browse({ kind: "reflection" })).records.map(
+      (r) => r.data.coveredUntil,
+    )
+    expect(covered).toContain("2026-07-09T09:00:00.000Z")
   })
 })
