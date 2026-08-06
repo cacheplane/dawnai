@@ -5,7 +5,7 @@ import { buildDescriptorRouteIndex } from "./descriptor-route-index.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
 
 interface LoadedAgentRoute {
-  readonly descriptor: DawnAgent
+  readonly descriptor?: DawnAgent
   readonly route: RouteDefinition
 }
 
@@ -26,9 +26,10 @@ export async function collectDelegationErrors(manifest: RouteManifest): Promise<
         .map(async (route): Promise<LoadedAgentRoute | undefined> => {
           try {
             const normalized = await normalizeRouteModule(route.entryFile, manifest.appRoot)
+            if (normalized.kind !== "agent") return undefined
             return isDawnAgent(normalized.entry)
               ? { descriptor: normalized.entry, route }
-              : undefined
+              : { route }
           } catch {
             return undefined
           }
@@ -38,12 +39,14 @@ export async function collectDelegationErrors(manifest: RouteManifest): Promise<
 
   const descriptorRouteIndex = await buildDescriptorRouteIndex(manifest)
   const descriptorByRouteId = new Map(
-    loadedRoutes.map(({ descriptor, route }) => [route.id, descriptor] as const),
+    loadedRoutes.flatMap(({ descriptor, route }) =>
+      descriptor ? [[route.id, descriptor] as const] : [],
+    ),
   )
   const errors: string[] = []
 
   for (const { descriptor, route } of loadedRoutes) {
-    errors.push(...collectReservedTaskErrors(descriptor, route))
+    if (descriptor) errors.push(...collectReservedTaskErrors(descriptor, route))
     try {
       await resolveSubagentRegistry({
         descriptor,
@@ -58,7 +61,9 @@ export async function collectDelegationErrors(manifest: RouteManifest): Promise<
       const message = error instanceof Error ? error.message : String(error)
       if (message.includes("[DAWN_E1004]")) {
         errors.push(`✗ ${route.pathname}: ${message}`)
+        continue
       }
+      throw error
     }
   }
 

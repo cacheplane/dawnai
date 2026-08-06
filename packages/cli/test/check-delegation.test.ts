@@ -43,6 +43,36 @@ export default agent({ model: "gpt-5-mini", systemPrompt: "Parent.", ${body} } a
 }
 
 describe("collectDelegationErrors", () => {
+  it("validates convention children for a legacy Runnable agent parent", async () => {
+    const errors = await collect({
+      "src/app/parent/index.ts": `export const agent = {
+  invoke: async () => ({ messages: [] }),
+}
+`,
+      "src/app/parent/subagents/bad.name/index.ts": child,
+    })
+
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatch(/\[DAWN_E1004\].*Invalid convention subagent name "bad\.name"/)
+  })
+
+  it("rejects when registry resolution throws an unexpected error", async () => {
+    await expect(
+      collect({
+        "src/app/parent/index.ts": `const descriptor = {
+  [Symbol.for("dawn.agent")]: true,
+  model: "gpt-5-mini",
+  systemPrompt: "Parent.",
+  get delegation() {
+    throw new Error("unexpected delegation accessor")
+  },
+}
+export default descriptor
+`,
+      }),
+    ).rejects.toThrow("unexpected delegation accessor")
+  })
+
   it.each([
     {
       name: "unknown explicit rule",
