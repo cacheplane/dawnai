@@ -118,9 +118,9 @@ function graphInputs(metafile: Metafile): string[] {
  * The `node:` imports still reachable through UPSTREAM Dawn packages, pinned
  * so the set can only shrink. None of them is Dawn-cli code: they come from
  * barrels whose node-only members (`dawn.config.ts` loading, route discovery,
- * typegen, the local filesystem/exec backends, the offload store's content
- * hashing, the capability markers' path joins) are never CALLED on the
- * injected fetch path — the import edge is what remains.
+ * typegen, the local filesystem/exec backends, the capability markers' path
+ * joins) are never CALLED on the injected fetch path — the import edge is what
+ * remains.
  *
  * Purging them means giving `@dawn-ai/core`, `@dawn-ai/workspace` and
  * `@dawn-ai/langchain` the same pure/node split `@dawn-ai/cli` and
@@ -153,9 +153,6 @@ const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = [
   "node:url <- ../core/dist/capabilities/built-in/subagents.js",
   "node:url <- ../core/dist/config.js",
   "node:url <- ../core/dist/discovery/discover-routes.js",
-  // @dawn-ai/langchain — the offload store hashes content and joins paths
-  "node:crypto <- ../langchain/dist/offload/offload-store.js",
-  "node:path <- ../langchain/dist/offload/offload-store.js",
   // @dawn-ai/workspace — the local filesystem/exec backends
   "node:child_process <- ../workspace/dist/local-exec.js",
   "node:fs/promises <- ../workspace/dist/local-filesystem.js",

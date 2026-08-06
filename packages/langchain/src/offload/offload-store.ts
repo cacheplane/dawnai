@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto"
-import { join } from "node:path"
+import { pureJoin, sha256Hex } from "@dawn-ai/sdk/pure"
 import type { FilesystemBackend } from "@dawn-ai/workspace"
 
 // NOTE: must match the tool-outputs/ predicate in @dawn-ai/core workspace capability readFile.
@@ -24,7 +23,7 @@ export function buildOffloadFileName(
   if (toolCallId && toolCallId.length > 0) {
     return `${name}-${sanitizeSegment(toolCallId)}.txt`
   }
-  const hash = createHash("sha256").update(content).digest("hex").slice(0, 16)
+  const hash = sha256Hex(content).slice(0, 16)
   return `${name}-${hash}.txt`
 }
 
@@ -56,9 +55,9 @@ export class OffloadStore {
   async write(toolName: string, content: string, toolCallId?: string): Promise<string> {
     const fileName = buildOffloadFileName(toolName, content, toolCallId)
     const relPath = `${SUBDIR}/${fileName}`
-    const dirAbs = join(this.opts.workspaceRoot, SUBDIR)
+    const dirAbs = pureJoin(this.opts.workspaceRoot, SUBDIR)
     await this.opts.backend.mkdir?.(dirAbs, this.ctx)
-    const absPath = join(this.opts.workspaceRoot, relPath)
+    const absPath = pureJoin(this.opts.workspaceRoot, relPath)
     await this.opts.backend.writeFile(absPath, content, this.ctx)
     await this.maybeGc()
     return relPath
@@ -70,7 +69,7 @@ export class OffloadStore {
     this.lastGcAt = now
     const { backend } = this.opts
     if (!backend.statFile || !backend.removeFile) return // GC unsupported by backend
-    const dirAbs = join(this.opts.workspaceRoot, SUBDIR)
+    const dirAbs = pureJoin(this.opts.workspaceRoot, SUBDIR)
 
     let names: readonly string[]
     try {
@@ -81,7 +80,7 @@ export class OffloadStore {
 
     const entries: { abs: string; size: number; mtimeMs: number }[] = []
     for (const name of names) {
-      const abs = join(dirAbs, name)
+      const abs = pureJoin(dirAbs, name)
       try {
         const s = await backend.statFile(abs, this.ctx)
         entries.push({ abs, size: s.size, mtimeMs: s.mtimeMs })
