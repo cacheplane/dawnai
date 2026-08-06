@@ -40,6 +40,7 @@ describe("POST /threads/:thread_id/resume", () => {
       },
     ],
   ] as const
+  const resolvedOnce = { interruptId: "perm-1", status: "resolved", payload: "once" } as const
 
   test("accepts the canonical multi-entry resume envelope", async () => {
     const appRoot = await createCheckpointFixtureApp(pendingTwo)
@@ -113,6 +114,9 @@ describe("POST /threads/:thread_id/resume", () => {
 
   test.each([
     ["missing resume", { route: "/noop#graph" }],
+    ["missing route", { resume: [resolvedOnce] }],
+    ["empty route", { resume: [resolvedOnce], route: "" }],
+    ["non-string route", { resume: [resolvedOnce], route: 42 }],
     ["non-array resume", { resume: null, route: "/noop#graph" }],
     ["non-object entry", { resume: ["perm-1"], route: "/noop#graph" }],
     ["missing interruptId", { resume: [{ status: "cancelled" }], route: "/noop#graph" }],
@@ -123,6 +127,30 @@ describe("POST /threads/:thread_id/resume", () => {
     [
       "resolved entry without a decision payload",
       { resume: [{ interruptId: "perm-1", status: "resolved" }], route: "/noop#graph" },
+    ],
+    ["unknown top-level field", { resume: [resolvedOnce], route: "/noop#graph", unexpected: true }],
+    [
+      "legacy fields mixed into a canonical body",
+      {
+        resume: [resolvedOnce],
+        route: "/noop#graph",
+        interrupt_id: "perm-1",
+        decision: "once",
+      },
+    ],
+    [
+      "unknown resolved-entry field",
+      {
+        resume: [{ ...resolvedOnce, decision: "once" }],
+        route: "/noop#graph",
+      },
+    ],
+    [
+      "payload on a cancelled entry",
+      {
+        resume: [{ interruptId: "perm-1", status: "cancelled", payload: "deny" }],
+        route: "/noop#graph",
+      },
     ],
   ])("returns 400 for a malformed envelope: %s", async (_name, body) => {
     const appRoot = await createCheckpointFixtureApp(pendingOne)

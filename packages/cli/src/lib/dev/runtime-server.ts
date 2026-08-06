@@ -832,21 +832,14 @@ async function handleResumeRequest(options: {
 
   const rawBody = await readRequestBody(request)
   const parsedBody = parseJson(rawBody)
-  if (!parsedBody.ok || !isRecord(parsedBody.value)) {
+  if (!parsedBody.ok || !isDawnResumeBody(parsedBody.value)) {
     sendJson(response, 400, createRequestErrorBody("Malformed resume request body"))
     return
   }
 
   const body = parsedBody.value
-  if (!isDawnResumeEntries(body.resume)) {
-    sendJson(response, 400, createRequestErrorBody("Malformed resume entries"))
-    return
-  }
   const resume = body.resume
-  // Optional route key supplied by the client — used when the in-memory map
-  // has been cleared (e.g. after a server restart). Populated by the resume
-  // endpoint before starting the SSE stream.
-  const bodyRoute = typeof body.route === "string" ? body.route : undefined
+  const bodyRoute = body.route
   const pendingInterrupts = await readPendingInterrupts(checkpointer, threadId)
   if (!pendingInterrupts) {
     sendJson(
@@ -1058,16 +1051,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
 
-function isDawnResumeEntries(value: unknown): value is DawnResumeEntry[] {
+function isDawnResumeBody(
+  value: unknown,
+): value is { readonly resume: DawnResumeEntry[]; readonly route: string } {
   return (
-    Array.isArray(value) &&
-    value.every(
+    isRecord(value) &&
+    !Array.isArray(value) &&
+    hasExactKeys(value, ["resume", "route"]) &&
+    typeof value.route === "string" &&
+    value.route.length > 0 &&
+    Array.isArray(value.resume) &&
+    value.resume.every(
       (entry) =>
         isRecord(entry) &&
         !Array.isArray(entry) &&
         typeof entry.interruptId === "string" &&
         entry.interruptId.length > 0 &&
-        (entry.status === "resolved" || entry.status === "cancelled"),
+        ((entry.status === "resolved" &&
+          hasExactKeys(entry, ["interruptId", "payload", "status"])) ||
+          (entry.status === "cancelled" && hasExactKeys(entry, ["interruptId", "status"]))),
     )
   )
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value)
+  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key))
 }
