@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import type { MemoryStore } from "@dawn-ai/memory"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnMiddleware } from "@dawn-ai/sdk"
@@ -42,8 +43,22 @@ vi.mock("@dawn-ai/permissions", async (importOriginal) => {
   }
 })
 
+// The default memory path (resolveMemoryStore, no config `memory.store`)
+// opens exactly one DatabaseSync via sqliteMemoryStore — counting factory
+// calls counts sqlite memory opens.
+vi.mock("@dawn-ai/memory", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dawn-ai/memory")>()
+  return {
+    ...actual,
+    sqliteMemoryStore: vi.fn(actual.sqliteMemoryStore),
+  }
+})
+
+import { sqliteMemoryStore } from "@dawn-ai/memory"
 import { createPermissionsStore } from "@dawn-ai/permissions"
 import { createThreadsStore, sqliteCheckpointer } from "@dawn-ai/sqlite-storage"
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn()
@@ -54,6 +69,18 @@ afterEach(async () => {
 // static-descriptor-map.test.ts) — the subagent turn is the interesting hop,
 // because it re-enters executeResolvedRoute outside the HTTP layer.
 // ---------------------------------------------------------------------------
+
+// Both routes carry a memory.ts so BOTH the parent turn and the subagent
+// turn activate the memory capability — pinning that one memoized store
+// thunk serves the whole tree (and, un-injected, that sqlite memory opens).
+const MEMORY_TS =
+  'import { defineMemory } from "@dawn-ai/sdk"\n' +
+  'import { z } from "zod"\n' +
+  "export default defineMemory({\n" +
+  '  kind: "semantic",\n' +
+  '  scope: ["route"],\n' +
+  "  schema: z.object({ subject: z.string(), value: z.string() }),\n" +
+  "})\n"
 
 async function subagentFixtureApp(): Promise<string> {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-store-injection-"))
@@ -69,6 +96,7 @@ async function subagentFixtureApp(): Promise<string> {
       '  systemPrompt: "You coordinate work by dispatching subagents.",\n' +
       "  subagents: [helper],\n" +
       "})\n",
+    "src/app/chat/memory.ts": MEMORY_TS,
     "src/app/helper/index.ts":
       'import { agent } from "@dawn-ai/sdk"\n' +
       "export default agent({\n" +
@@ -76,12 +104,21 @@ async function subagentFixtureApp(): Promise<string> {
       '  model: "gpt-5-mini",\n' +
       '  systemPrompt: "You echo whatever the user says.",\n' +
       "})\n",
+    "src/app/helper/memory.ts": MEMORY_TS,
   }
   for (const [rel, body] of Object.entries(files)) {
     const filePath = join(appRoot, rel)
     await mkdir(join(filePath, ".."), { recursive: true })
     await writeFile(filePath, body, "utf8")
   }
+  // memory.ts imports `zod` directly — make it resolvable from the tmpdir
+  // fixture the same way lazy-memory-store.test.ts does.
+  await mkdir(join(appRoot, "node_modules"), { recursive: true })
+  await symlink(
+    join(repoRoot, "node_modules", ".pnpm", "zod@4.4.3", "node_modules", "zod"),
+    join(appRoot, "node_modules", "zod"),
+    "dir",
+  )
   return appRoot
 }
 
@@ -170,9 +207,15 @@ function fakeMemoryStore(): MemoryStore {
   }
 }
 
-function spyCounts(): { threads: number; checkpointer: number; permissions: number } {
+function spyCounts(): {
+  threads: number
+  checkpointer: number
+  permissions: number
+  memory: number
+} {
   return {
     checkpointer: vi.mocked(sqliteCheckpointer).mock.calls.length,
+    memory: vi.mocked(sqliteMemoryStore).mock.calls.length,
     permissions: vi.mocked(createPermissionsStore).mock.calls.length,
     threads: vi.mocked(createThreadsStore).mock.calls.length,
   }
@@ -216,8 +259,9 @@ describe("createRuntimeFetchHandler — full store/middleware injection", () => 
     expect(body).toContain("Helper finished.")
     expect(body).toContain("RUN_FINISHED")
 
-    // Zero sqlite constructions and zero permissions-store constructions
-    // (⇒ zero `.dawn/permissions.json` reads) across boot + both turns.
+    // Zero sqlite constructions (threads, checkpoints, memory) and zero
+    // permissions-store constructions (⇒ zero `.dawn/permissions.json`
+    // reads) across boot + both turns.
     expect(spyCounts()).toEqual(before)
 
     // The injected instances were USED, not merely tolerated: the thread the
@@ -225,6 +269,11 @@ describe("createRuntimeFetchHandler — full store/middleware injection", () => 
     // middleware ran.
     expect(threads.has("th-store-injection")).toBe(true)
     expect(middleware).toHaveBeenCalled()
+
+    // Both routes have a memory.ts, so BOTH the parent and the subagent turn
+    // resolved a memory store — yet the injected thunk fired exactly once:
+    // the fetch handler's memoization is shared across the subagent hop.
+    expect(memoryStoreThunk).toHaveBeenCalledTimes(1)
   }, 30_000)
 
   // Negative control: the same fixture WITHOUT injection must construct the
@@ -241,13 +290,29 @@ describe("createRuntimeFetchHandler — full store/middleware injection", () => 
     const handler = await createRuntimeFetchHandler({ appRoot, modules })
     cleanup.push(() => handler.close())
 
+    // Snapshot AFTER boot, BEFORE the turn, so boot-time and turn-time
+    // construction are separately attributable.
+    const afterBoot = spyCounts()
+    // Boot constructs the default sqlite threads/checkpoint stores — the spy
+    // detects the default path (the zero-assertion above is not vacuous).
+    expect(afterBoot.threads).toBeGreaterThan(before.threads)
+    expect(afterBoot.checkpointer).toBeGreaterThan(before.checkpointer)
+
     const body = await runChatTurn(handler, "th-store-default", "please delegate this task")
     expect(body).toContain("banana banana")
     expect(body).toContain("RUN_FINISHED")
 
     const after = spyCounts()
-    expect(after.threads).toBeGreaterThan(before.threads)
-    expect(after.checkpointer).toBeGreaterThan(before.checkpointer)
-    expect(after.permissions).toBeGreaterThan(before.permissions)
+    // Turn-time movement: the per-request permissions factory constructs (and
+    // re-reads `.dawn/permissions.json`) per turn, and routes with a memory.ts
+    // resolve the default sqlite memory store lazily on first use.
+    expect(after.permissions).toBeGreaterThan(afterBoot.permissions)
+    expect(after.memory).toBeGreaterThan(afterBoot.memory)
+    // Deliberately pinned at ZERO turn-delta: even un-injected, the fetch
+    // handler's boot-resolved threads/checkpoint stores are inherited by the
+    // parent turn AND the subagent hop (bootInstances threading) — the turn
+    // constructs no further sqlite stores.
+    expect(after.threads).toBe(afterBoot.threads)
+    expect(after.checkpointer).toBe(afterBoot.checkpointer)
   }, 30_000)
 })

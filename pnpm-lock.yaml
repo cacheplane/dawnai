@@ -362,6 +362,9 @@ importers:
       '@dawn-ai/permissions':
         specifier: workspace:*
         version: link:../permissions
+      '@dawn-ai/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       '@dawn-ai/sqlite-storage':
         specifier: workspace:*
         version: link:../sqlite-storage
@@ -378,9 +381,6 @@ importers:
       '@dawn-ai/sandbox':
         specifier: workspace:*
         version: link:../sandbox
-      '@dawn-ai/sdk':
-        specifier: workspace:*
-        version: link:../sdk
       '@dawn-ai/workspace':
         specifier: workspace:*
         version: link:../workspace

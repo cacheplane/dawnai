@@ -185,6 +185,15 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
  * with zero entry-file imports (`getCachedStaticDescriptorMaps`) — the
  * static path's replacement for `buildDescriptorRouteMap`'s per-route
  * dynamic imports.
+ *
+ * Subagent turns inherit these instances from the dispatching turn (see
+ * `buildSubagentResolver`'s `bootInstances`): whatever the HTTP layer
+ * resolved at boot is what every child re-entry uses too. In particular,
+ * under `permissionsMode: "boot"` the parent and its subagents share ONE
+ * mutable PermissionsStore — a child's `addAllow` ("Always" grant) is
+ * immediately visible to the parent and its later turns. That sharing is
+ * deliberate: it matches the process-wide `.dawn/permissions.json` semantics
+ * the per-request path has always had, without the per-child re-read.
  */
 interface BootResolvedInstances {
   readonly checkpointer?: BaseCheckpointSaver
@@ -995,17 +1004,24 @@ export async function prepareRouteExecution(
         routeManifest,
         descriptor,
         descriptorRouteMap,
-        // Boot-resolved instances flow into every subagent re-entry: only the
-        // INJECTED instances are forwarded (not the config/sqlite fallbacks
-        // resolved above), so a child with no injection behaves exactly as
-        // before. The manifest (and static modules, when present) ride along
-        // so the child performs no walk and no entry-file imports.
+        // Boot-resolved instances flow into every subagent re-entry. What is
+        // forwarded is whatever THIS turn received in its options — on the
+        // HTTP path (dawn dev/start) the fetch handler always populates
+        // them, so child turns inherit the parent's stores instead of
+        // re-constructing sqlite per child (and under permissionsMode
+        // "boot", parent and children share the one mutable
+        // PermissionsStore — see the BootResolvedInstances doc). Only the
+        // harness direct-call path, which passes no stores, still lets each
+        // child fall back exactly as before. The config/sqlite fallbacks
+        // resolved above are deliberately NOT forwarded. `routeManifest` is
+        // NOT included here: the resolver appends its own (required) manifest
+        // at both re-entry sites, so the child's manifest identity can never
+        // diverge from the resolver's lookup manifest.
         bootInstances: {
           ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
           ...(options.threadsStore ? { threadsStore: options.threadsStore } : {}),
           ...(options.permissionsStore ? { permissionsStore: options.permissionsStore } : {}),
           ...(options.memoryStore ? { memoryStore: options.memoryStore } : {}),
-          routeManifest,
           ...(options.staticModules ? { staticModules: options.staticModules } : {}),
         },
         ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
@@ -1430,12 +1446,13 @@ function buildSubagentResolver(args: {
    */
   readonly sandboxThreadId?: string
   /**
-   * The dispatching turn's boot-resolved instances (injected stores, the
-   * boot manifest, the static module manifest), spread verbatim into each
-   * child re-entry so subagent turns construct nothing the parent didn't —
-   * no sqlite opens, no permissions-file reads, no route walk, no entry-file
-   * imports. Callers include `routeManifest` here (same object as the
-   * required arg above) so children reuse the parent's manifest identity.
+   * The dispatching turn's boot-resolved instances (stores + static module
+   * manifest), spread verbatim into each child re-entry so subagent turns
+   * construct nothing the parent didn't — no sqlite opens, no
+   * permissions-file reads, no entry-file imports. `routeManifest` must NOT
+   * be supplied here: both re-entry sites append the required `routeManifest`
+   * arg after this spread, so the manifest the child executes with is by
+   * construction the same object the resolver uses for route lookups.
    */
   readonly bootInstances?: BootResolvedInstances
 }): SubagentResolver {
@@ -1480,10 +1497,13 @@ function buildSubagentResolver(args: {
           routeFile: route.entryFile,
           routeId: route.id,
           routePath: route.pathname,
-          // The parent's boot instances (injected stores + manifest + static
-          // modules) flow into the child: no store construction, no walk, and
-          // the descriptor-route-map cache stays warm (same object identity).
+          // The parent's boot instances (stores + static modules) flow into
+          // the child: no store construction, no entry-file imports. The
+          // resolver's own manifest is appended AFTER the spread so the
+          // child's manifest identity IS the lookup manifest (no walk, and
+          // the descriptor-route-map cache stays warm — same object).
           ...bootInstances,
+          routeManifest,
           ...(sandboxManager ? { sandboxManager } : {}),
           // Deliberately NOT `threadId`: the child must run as an independent
           // uncheckpointed invocation (forwarding the parent's threadId would
@@ -1511,8 +1531,10 @@ function buildSubagentResolver(args: {
           routeFile: route.entryFile,
           routeId: route.id,
           routePath: route.pathname,
-          // Same boot-instance threading as invoke() above.
+          // Same boot-instance threading (and manifest-after-spread rule)
+          // as invoke() above.
           ...bootInstances,
+          routeManifest,
           ...(sandboxManager ? { sandboxManager } : {}),
           // Same as invoke() above: sandbox key only, never the checkpoint id.
           ...(sandboxThreadId ? { sandboxThreadId } : {}),
