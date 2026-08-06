@@ -189,15 +189,18 @@ export function createMemoryMarker(): CapabilityMarker {
           const data = validated.value
 
           // Per-kind write policy. Core cannot import @dawn-ai/memory (its
-          // barrel pulls node:sqlite), so the policy is inlined:
-          // semantic → reconcile, episodic → append, others → not yet wired.
+          // barrel pulls node:sqlite), so the policy is inlined: semantic →
+          // reconcile, episodic/reflection → append, procedural → not yet wired.
           // Mirrored in packages/memory/src/reconcile.ts writePolicyFor — keep in sync.
-          if (mem.defined.kind === "procedural" || mem.defined.kind === "reflection") {
+          if (mem.defined.kind === "procedural") {
             return {
-              result: `memory kind '${mem.defined.kind}' is not yet wired (semantic and episodic are)`,
+              result: `memory kind '${mem.defined.kind}' is not yet wired (semantic, episodic and reflection are)`,
             }
           }
-          const append = mem.defined.kind === "episodic"
+          // Reflection insights ACCUMULATE (a later insight never contradicts an
+          // earlier one), so they append exactly like episodes; superseding
+          // stale insights is a future concern.
+          const append = mem.defined.kind === "episodic" || mem.defined.kind === "reflection"
           const identityKeys = mem.defined.identity ?? DEFAULT_SEMANTIC_IDENTITY
 
           // id is DATA-derived so contradicting values (same identity, different

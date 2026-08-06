@@ -4,8 +4,10 @@ export type WritePolicy = { readonly mode: "reconcile" } | { readonly mode: "app
 
 /** Per-kind write discipline. Semantic facts reconcile (identity match →
  *  update/supersede); episodic events append (a later episode never
- *  contradicts an earlier one). Procedural/reflection are typed but not yet
- *  wired — throwing beats baking in accidental semantics.
+ *  contradicts an earlier one); reflection insights append too — distillation
+ *  ACCUMULATES insights, and a later insight never contradicts an earlier one
+ *  (superseding stale insights is a future concern). Procedural alone is typed
+ *  but not yet wired — throwing beats baking in accidental semantics.
  *  Mirrored inline in packages/core/src/capabilities/built-in/memory.ts
  *  remember (core can't import this package) — keep in sync. */
 export function writePolicyFor(kind: MemoryKind): WritePolicy {
@@ -13,9 +15,12 @@ export function writePolicyFor(kind: MemoryKind): WritePolicy {
     case "semantic":
       return { mode: "reconcile" }
     case "episodic":
+    case "reflection":
       return { mode: "append" }
     default:
-      throw new Error(`memory kind '${kind}' is not yet wired (semantic and episodic are)`)
+      throw new Error(
+        `memory kind '${kind}' is not yet wired (semantic, episodic and reflection are)`,
+      )
   }
 }
 

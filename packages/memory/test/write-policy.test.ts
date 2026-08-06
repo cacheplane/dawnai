@@ -8,8 +8,10 @@ describe("writePolicyFor", () => {
   it("episodic appends", () => {
     expect(writePolicyFor("episodic")).toEqual({ mode: "append" })
   })
-  it("procedural and reflection throw a not-yet-wired error", () => {
+  it("reflection appends (insights accumulate)", () => {
+    expect(writePolicyFor("reflection")).toEqual({ mode: "append" })
+  })
+  it("procedural still throws a not-yet-wired error", () => {
     expect(() => writePolicyFor("procedural")).toThrow(/not yet wired/)
-    expect(() => writePolicyFor("reflection")).toThrow(/not yet wired/)
   })
 })
