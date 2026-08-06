@@ -394,52 +394,148 @@ describe("native subagent event projection", () => {
     ])
   })
 
-  test("keeps child interrupts top-level and attaches only missing child call ids", async () => {
-    const interruptError = Object.assign(new Error("GraphInterrupt"), {
-      name: "GraphInterrupt",
-      interrupts: [
-        {
-          id: "native-tool-id",
-          value: { interruptId: "perm-tool", kind: "tool", detail: { toolName: "writeFile" } },
-        },
-        {
-          id: "native-path-id",
-          value: {
-            interruptId: "perm-path",
-            kind: "path",
-            callId: "existing-path-call",
-            detail: { path: "evidence.md" },
-          },
-        },
-        {
-          id: "native-command-id",
-          value: { interruptId: "perm-command", kind: "command", detail: { command: "ls" } },
-        },
-        {
-          id: "native-memory-id",
-          value: { interruptId: "perm-memory", kind: "memory", detail: { namespace: "facts" } },
-        },
-        {
-          id: "native-subagent-id",
-          value: {
-            interruptId: "perm-subagent",
-            kind: "subagent",
-            callId: "resolver-call-id",
-            detail: { subagentName: "writer" },
-          },
-        },
-      ],
-    })
+  test("correlates metadata-less native child errors without crossing parallel siblings", async () => {
+    const researcherMetadata = {
+      dawn: {
+        subagent_stack: [{ callId: "call-researcher", name: "researcher", routeId: "/researcher" }],
+      },
+    }
+    const writerMetadata = {
+      dawn: {
+        subagent_stack: [{ callId: "call-writer", name: "writer", routeId: "/writer" }],
+      },
+    }
+    const graphInterrupt = (
+      ...interrupts: Array<{ id: string; value: Record<string, unknown> }>
+    ): Error & { interrupts: Array<{ id: string; value: Record<string, unknown> }> } =>
+      Object.assign(new Error("GraphInterrupt"), {
+        name: "GraphInterrupt",
+        interrupts,
+      })
     const entry = {
       invoke: vi.fn(),
       async *streamEvents() {
         yield {
+          event: "on_custom_event",
+          run_id: "researcher-phase",
+          name: "dawn.subagent",
+          data: {
+            phase: "start",
+            call_id: "call-researcher",
+            subagent: "researcher",
+            route_id: "/researcher",
+            depth: 1,
+          },
+          metadata: researcherMetadata,
+          parent_ids: ["root-run", "tools-node", "task-run-researcher"],
+        }
+        yield {
+          event: "on_chain_start",
+          run_id: "researcher-graph",
+          name: "LangGraph",
+          data: { input: {} },
+          metadata: researcherMetadata,
+          parent_ids: ["root-run", "tools-node", "task-run-researcher"],
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "writer-phase",
+          name: "dawn.subagent",
+          data: {
+            phase: "start",
+            call_id: "call-writer",
+            subagent: "writer",
+            route_id: "/writer",
+            depth: 1,
+          },
+          metadata: writerMetadata,
+          parent_ids: ["root-run", "tools-node", "task-run-writer"],
+        }
+        yield {
+          event: "on_chain_start",
+          run_id: "writer-graph",
+          name: "LangGraph",
+          data: { input: {} },
+          metadata: writerMetadata,
+          parent_ids: ["root-run", "tools-node", "task-run-writer"],
+        }
+        yield {
           event: "on_tool_error",
-          run_id: "child-tool-run",
-          name: "writeFile",
-          data: { error: interruptError },
-          metadata,
-          parent_ids: ["root-run", "parent-task-run"],
+          run_id: "task-run-researcher",
+          name: "task",
+          data: {
+            error: graphInterrupt(
+              {
+                id: "native-tool-id",
+                value: {
+                  interruptId: "perm-tool",
+                  kind: "tool",
+                  detail: { toolName: "writeFile" },
+                },
+              },
+              {
+                id: "native-path-id",
+                value: {
+                  interruptId: "perm-path",
+                  kind: "path",
+                  callId: "existing-path-call",
+                  detail: { path: "evidence.md" },
+                },
+              },
+              {
+                id: "native-subagent-id",
+                value: {
+                  interruptId: "perm-subagent",
+                  kind: "subagent",
+                  callId: "resolver-call-id",
+                  detail: { subagentName: "reviewer" },
+                },
+              },
+            ),
+          },
+          parent_ids: ["root-run", "tools-node"],
+        }
+        yield {
+          event: "on_tool_error",
+          run_id: "task-run-writer",
+          name: "task",
+          data: {
+            error: graphInterrupt(
+              {
+                id: "native-command-id",
+                value: {
+                  interruptId: "perm-command",
+                  kind: "command",
+                  detail: { command: "pwd" },
+                },
+              },
+              {
+                id: "native-memory-id",
+                value: {
+                  interruptId: "perm-memory",
+                  kind: "memory",
+                  detail: { namespace: "facts" },
+                },
+              },
+            ),
+          },
+          parent_ids: ["root-run", "tools-node"],
+        }
+        yield {
+          event: "on_tool_error",
+          run_id: "tools-node",
+          name: "tools",
+          data: {
+            error: graphInterrupt({
+              id: "native-shared-id",
+              value: {
+                interruptId: "perm-shared",
+                kind: "memory",
+                detail: { namespace: "shared" },
+              },
+            }),
+          },
+          parent_ids: ["root-run"],
         }
       },
     }
@@ -458,11 +554,29 @@ describe("native subagent event projection", () => {
 
     expect(chunks).toEqual([
       {
+        type: "subagent.start",
+        data: {
+          call_id: "call-researcher",
+          subagent: "researcher",
+          route_id: "/researcher",
+          depth: 1,
+        },
+      },
+      {
+        type: "subagent.start",
+        data: {
+          call_id: "call-writer",
+          subagent: "writer",
+          route_id: "/writer",
+          depth: 1,
+        },
+      },
+      {
         type: "interrupt",
         data: {
           interruptId: "perm-tool",
           kind: "tool",
-          callId: "call-child",
+          callId: "call-researcher",
           detail: { toolName: "writeFile" },
         },
       },
@@ -478,10 +592,19 @@ describe("native subagent event projection", () => {
       {
         type: "interrupt",
         data: {
+          interruptId: "perm-subagent",
+          kind: "subagent",
+          callId: "resolver-call-id",
+          detail: { subagentName: "reviewer" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
           interruptId: "perm-command",
           kind: "command",
-          callId: "call-child",
-          detail: { command: "ls" },
+          callId: "call-writer",
+          detail: { command: "pwd" },
         },
       },
       {
@@ -489,17 +612,16 @@ describe("native subagent event projection", () => {
         data: {
           interruptId: "perm-memory",
           kind: "memory",
-          callId: "call-child",
+          callId: "call-writer",
           detail: { namespace: "facts" },
         },
       },
       {
         type: "interrupt",
         data: {
-          interruptId: "perm-subagent",
-          kind: "subagent",
-          callId: "resolver-call-id",
-          detail: { subagentName: "writer" },
+          interruptId: "perm-shared",
+          kind: "memory",
+          detail: { namespace: "shared" },
         },
       },
       { type: "done", data: undefined },
