@@ -388,7 +388,7 @@ git commit -m "refactor(typegen): share compiler analysis projections"
 - Delete or migrate: `packages/vite-plugin/test/jsdoc-extractor.test.ts`
 - Search/update: Vite README/docs references to removed exports
 
-- [ ] **Step 1: Add a failing ownership-boundary test**
+- [x] **Step 1: Add a failing ownership-boundary test**
 
 In `plugin.test.ts` or a new focused test, read Vite's manifest/source and assert:
 
@@ -399,7 +399,7 @@ expect(sourceFiles.some((text) => /from ["']typescript["']/.test(text))).toBe(fa
 
 Also assert the root module no longer exports `extractJsDoc` or `extractParameterType` after the refactor.
 
-- [ ] **Step 2: Run the Vite tests and verify RED**
+- [x] **Step 2: Run the Vite tests and verify RED**
 
 ```bash
 pnpm --filter @dawn-ai/vite-plugin test -- plugin.test.ts
@@ -407,19 +407,19 @@ pnpm --filter @dawn-ai/vite-plugin test -- plugin.test.ts
 
 Expected: FAIL because Vite still owns the compiler dependency/imports and helper exports.
 
-- [ ] **Step 3: Rewire `transformToolSource`**
+- [x] **Step 3: Rewire `transformToolSource`**
 
 Import `analyzeToolSource` and `TypeInfo` from `@dawn-ai/core/internal/compiler`. Replace separate JSDoc and parameter extraction with one analysis call. Preserve existing-export detection and inject only missing values.
 
 Use the analysis' inline property descriptions first and `parameterDescriptions` as fallback. Do not mutate readonly `PropertyInfo`; make Zod generation accept both sources directly.
 
-- [ ] **Step 4: Move Vite tests to supported surfaces and delete legacy files**
+- [x] **Step 4: Move Vite tests to supported surfaces and delete legacy files**
 
 Keep plugin transform and Zod rendering tests. Move any unique type/JSDoc cases not already covered into Core's compiler tests, prove those tests pass, then delete the old Vite extraction tests and source modules.
 
 Remove the helper exports from `src/index.ts` and remove Vite's `typescript` dependency.
 
-- [ ] **Step 5: Run Vite plus Core compiler suites**
+- [x] **Step 5: Run Vite plus Core compiler suites**
 
 ```bash
 pnpm --filter @dawn-ai/core test -- compiler-source-analysis.test.ts
@@ -429,7 +429,7 @@ pnpm turbo run build --filter=@dawn-ai/vite-plugin...
 
 Expected: PASS. Confirm the ownership-boundary test is green.
 
-- [ ] **Step 6: Search for stale compiler ownership and removed APIs**
+- [x] **Step 6: Search for stale compiler ownership and removed APIs**
 
 ```bash
 rg -n 'from "typescript"|from '\''typescript'\''' packages/core/src packages/vite-plugin/src
@@ -438,7 +438,7 @@ rg -n 'extractJsDoc|extractParameterType' packages apps examples docs README.md
 
 Expected: exactly one compiler import in `packages/core/src/compiler/typescript-backend.ts`; no stale supported-surface references to removed Vite exports.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add packages/core packages/vite-plugin
