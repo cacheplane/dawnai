@@ -1,6 +1,6 @@
 import type { WorkspaceFs } from "@dawn-ai/sdk"
 
-import type { DiscoveredToolDefinition } from "./tool-discovery.js"
+import type { DiscoveredToolDefinition } from "./tool-shape.js"
 
 export interface DawnRouteContext {
   readonly middleware?: Readonly<Record<string, unknown>>

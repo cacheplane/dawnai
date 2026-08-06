@@ -8,7 +8,9 @@ import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnMiddleware } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
-import type { DawnStaticModules } from "../runtime/static-modules.js"
+import type { RuntimeBootFallbacks } from "../runtime/execute-route-core.js"
+import type { SandboxManager } from "../runtime/sandbox-manager.js"
+import type { DawnStaticModules } from "../runtime/static-modules-core.js"
 import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
 import { createRuntimeFetchHandler } from "./runtime-fetch-handler.js"
 
@@ -63,6 +65,16 @@ export interface StartRuntimeServerOptions {
   readonly memoryStore?: () => Promise<MemoryStore>
   /** Pre-loaded middleware. Absent: the dynamic src/middleware.ts probe. */
   readonly middleware?: DawnMiddleware
+  /** Boot-resolved sandbox manager. Absent: built from `config.sandbox`. */
+  readonly sandboxManager?: SandboxManager
+  /**
+   * The filesystem-backed resolutions this runtime may fall back to when a
+   * store was not injected. `runtime-fetch-handler.ts` supplies
+   * `nodeBootFallbacks` on every node path; an edge runtime supplies none, and
+   * anything it did not inject then fails loudly on first use instead of
+   * reaching for a disk or sqlite file that is not there.
+   */
+  readonly bootFallbacks?: RuntimeBootFallbacks
 }
 
 // ---------------------------------------------------------------------------

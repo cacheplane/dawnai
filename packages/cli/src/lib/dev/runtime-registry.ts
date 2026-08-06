@@ -7,7 +7,7 @@ import {
 import { pureDirname } from "../runtime/pure-path.js"
 
 import { createRouteAssistantId } from "../runtime/route-identity.js"
-import type { DawnStaticModules } from "../runtime/static-modules.js"
+import type { DawnStaticModules } from "../runtime/static-modules-core.js"
 
 export interface RuntimeRegistryEntry {
   readonly assistantId: string

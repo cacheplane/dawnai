@@ -5,18 +5,15 @@ import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import {
+  type BootResolvedInstances,
   invokeResolvedRoute,
   type PreparedRouteModules,
-  resolveCheckpointer,
-  resolvePermissionsStore,
-  resolveThreadsStore,
+  type RuntimeBootFallbacks,
   seedPreparedRouteModules,
   streamResolvedRoute,
-} from "../runtime/execute-route.js"
-import { resolveMemoryStore } from "../runtime/resolve-memory.js"
-import { resolveSandboxManager } from "../runtime/resolve-sandbox.js"
+} from "../runtime/execute-route-core.js"
 import type { SandboxManager } from "../runtime/sandbox-manager.js"
-import type { DawnStaticModules } from "../runtime/static-modules.js"
+import type { DawnStaticModules } from "../runtime/static-modules-core.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
 import { handleAgUiFetchRequest } from "./agui-handler.js"
 import {
@@ -24,7 +21,7 @@ import {
   handleMemoryListRequest,
   handleMemoryRejectRequest,
 } from "./memory-handler.js"
-import { headersToRecord, loadMiddleware, runMiddleware } from "./middleware.js"
+import { headersToRecord, runMiddleware } from "./middleware.js"
 import { readPendingInterrupts } from "./pending-interrupts.js"
 import { extractRouteParams } from "./request-context.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
@@ -41,6 +38,24 @@ import { statusResponse } from "./status-response.js"
 // ---------------------------------------------------------------------------
 
 type RouteHandler = (request: Request, params: Record<string, string>) => Promise<Response>
+
+/**
+ * Boot state threaded verbatim into every route execution: the supplied
+ * DawnConfig (so no route re-reads `dawn.config.ts`) and the node filesystem
+ * fallback bag (absent on edge runtimes, where every store is injected).
+ */
+type RouteBoot = Pick<BootResolvedInstances, "bootFallbacks" | "config">
+
+/** Fail loudly: an edge runtime that supplied nothing must not silently degrade. */
+function requireBoot(
+  fallbacks: RuntimeBootFallbacks | undefined,
+  what: string,
+): RuntimeBootFallbacks {
+  if (fallbacks) return fallbacks
+  throw new Error(
+    `${what}: no instance provided and this runtime has no filesystem fallback — pass one via options (see the edge deployment docs).`,
+  )
+}
 
 interface RouteMatcher {
   readonly method: string
@@ -68,10 +83,20 @@ export async function createRuntimeFetchHandler(
     readonly drainDeadlineMs?: number
   },
 ): Promise<RuntimeFetchHandler> {
-  // Seed the config memo FIRST — every resolver below (stores, sandbox,
+  // The node filesystem fallbacks, when this runtime has any. `dawn dev` /
+  // `dawn start` (and every existing test) come through
+  // `runtime-fetch-handler.ts`, which supplies `nodeBootFallbacks`. An edge
+  // caller supplies none: each store must then be injected, or the first use
+  // throws with a message naming what is missing.
+  const fallbacks = options.bootFallbacks
+  const boot: RouteBoot = {
+    ...(options.config ? { config: options.config } : {}),
+    ...(fallbacks ? { bootFallbacks: fallbacks } : {}),
+  }
+  // Seed the config memo FIRST — every node fallback below (stores, sandbox,
   // memory, permissions) goes through loadDawnConfig, and a supplied config
   // means `dawn.config.ts` must never be read from disk.
-  if (options.config) {
+  if (options.config && fallbacks) {
     seedDawnConfig(options.appRoot, options.config)
   }
   const registry = await createRuntimeRegistry(options.appRoot, options.modules)
@@ -97,10 +122,19 @@ export async function createRuntimeFetchHandler(
   // Caller-supplied instances win over every fallback resolution below —
   // an injected store means the corresponding disk/sqlite path never runs.
   const middleware =
-    options.middleware ?? options.modules?.middleware ?? (await loadMiddleware(options.appRoot))
-  const threadsStore = options.threadsStore ?? (await resolveThreadsStore(options.appRoot))
-  const checkpointer = options.checkpointer ?? (await resolveCheckpointer(options.appRoot))
-  const sandboxManager = await resolveSandboxManager(options.appRoot)
+    options.middleware ??
+    options.modules?.middleware ??
+    // Middleware is optional by contract, so a runtime with no filesystem
+    // fallback resolves "none" rather than failing the boot.
+    (await fallbacks?.loadMiddleware(options.appRoot))
+  const threadsStore =
+    options.threadsStore ??
+    (await requireBoot(fallbacks, "threadsStore").resolveThreadsStore(options.appRoot))
+  const checkpointer =
+    options.checkpointer ??
+    (await requireBoot(fallbacks, "checkpointer").resolveCheckpointer(options.appRoot))
+  const sandboxManager =
+    options.sandboxManager ?? (await fallbacks?.resolveSandboxManager(options.appRoot))
   // Lazy, memoized, shared: resolveMemoryStore (and the sqlite it opens) runs
   // at most once per process, on the FIRST request that actually needs
   // memory — not unconditionally at boot for apps with no memory routes, and
@@ -114,7 +148,9 @@ export async function createRuntimeFetchHandler(
   const getMemoryStore = (): Promise<MemoryStore> => {
     memoryStorePromise ??= options.memoryStore
       ? options.memoryStore()
-      : resolveMemoryStore(options.appRoot)
+      : (requireBoot(fallbacks, "memoryStore").resolveMemoryStore(
+          options.appRoot,
+        ) as Promise<MemoryStore>)
     return memoryStorePromise
   }
 
@@ -126,11 +162,11 @@ export async function createRuntimeFetchHandler(
   // execution a factory that re-loads `.dawn/permissions.json` each request,
   // so HITL "Always" grants written mid-process apply immediately — the one
   // deliberate per-request read kept.
+  const resolvePermissions = (): Promise<PermissionsStore> =>
+    requireBoot(fallbacks, "permissionsStore").resolvePermissionsStore(options.appRoot)
   const permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>) =
     options.permissionsStore ??
-    (options.permissionsMode === "boot"
-      ? await resolvePermissionsStore(options.appRoot)
-      : () => resolvePermissionsStore(options.appRoot))
+    (options.permissionsMode === "boot" ? await resolvePermissions() : resolvePermissions)
 
   let sandboxReaper: ReturnType<typeof setInterval> | undefined
   if (sandboxManager) {
@@ -149,6 +185,7 @@ export async function createRuntimeFetchHandler(
 
   const routes = buildRouteTable({
     appRoot: options.appRoot,
+    boot,
     checkpointer,
     getMemoryStore,
     middleware,
@@ -307,6 +344,7 @@ function trackStreamSettled(
 
 function buildRouteTable(ctx: {
   readonly appRoot: string
+  readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
@@ -319,6 +357,7 @@ function buildRouteTable(ctx: {
 }): RouteMatcher[] {
   const {
     appRoot,
+    boot,
     checkpointer,
     getMemoryStore,
     middleware,
@@ -418,6 +457,7 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleApStreamRequest({
           appRoot,
+          boot,
           checkpointer,
           getMemoryStore,
           middleware,
@@ -442,6 +482,7 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleAgUiFetchRequest({
           appRoot,
+          boot,
           checkpointer,
           getMemoryStore,
           middleware,
@@ -474,6 +515,9 @@ function buildRouteTable(ctx: {
       handle: async (_request, params) =>
         handleMemoryApproveRequest({
           appRoot,
+          ...(boot.bootFallbacks
+            ? { resolveIdentityKeys: boot.bootFallbacks.resolveIdentityKeys }
+            : {}),
           id: params.id ?? "",
           memoryStore: await getMemoryStore(),
         }),
@@ -498,6 +542,7 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleApWaitRequest({
           appRoot,
+          boot,
           checkpointer,
           getMemoryStore,
           middleware,
@@ -550,6 +595,7 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleResumeRequest({
           appRoot,
+          boot,
           checkpointer,
           getMemoryStore,
           middleware,
@@ -608,6 +654,7 @@ async function dispatch(
 
 async function handleApStreamRequest(options: {
   readonly appRoot: string
+  readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
@@ -623,6 +670,7 @@ async function handleApStreamRequest(options: {
 }): Promise<Response> {
   const {
     appRoot,
+    boot,
     checkpointer,
     getMemoryStore,
     middleware,
@@ -699,6 +747,7 @@ async function handleApStreamRequest(options: {
         try {
           for await (const chunk of streamResolvedRoute({
             appRoot,
+            ...boot,
             checkpointer,
             input,
             memoryStore: getMemoryStore,
@@ -753,6 +802,7 @@ async function handleApStreamRequest(options: {
 
 async function handleApWaitRequest(options: {
   readonly appRoot: string
+  readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
@@ -768,6 +818,7 @@ async function handleApWaitRequest(options: {
 }): Promise<Response> {
   const {
     appRoot,
+    boot,
     checkpointer,
     getMemoryStore,
     middleware,
@@ -830,6 +881,7 @@ async function handleApWaitRequest(options: {
 
   const resultPromise = invokeResolvedRoute({
     appRoot,
+    ...boot,
     checkpointer,
     input,
     memoryStore: getMemoryStore,
@@ -890,6 +942,7 @@ async function handleApWaitRequest(options: {
 
 async function handleResumeRequest(options: {
   readonly appRoot: string
+  readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
   readonly middleware: DawnMiddleware | undefined
@@ -905,6 +958,7 @@ async function handleResumeRequest(options: {
 }): Promise<Response> {
   const {
     appRoot,
+    boot,
     checkpointer,
     getMemoryStore,
     middleware,
@@ -1026,6 +1080,7 @@ async function handleResumeRequest(options: {
         try {
           for await (const chunk of streamResolvedRoute({
             appRoot,
+            ...boot,
             checkpointer,
             input: {},
             memoryStore: getMemoryStore,
