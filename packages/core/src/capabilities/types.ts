@@ -1,7 +1,7 @@
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnAgent, WorkspaceFs } from "@dawn-ai/sdk"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
-import type { ResolvedStateField, RouteManifest } from "../types.js"
+import type { ResolvedStateField, RouteDefinition, RouteManifest } from "../types.js"
 
 // Literal unions mirroring @dawn-ai/memory's MemoryKind/MemoryStatus/
 // MemorySource["type"]. Declared locally (NOT imported) because core must not
@@ -187,6 +187,19 @@ export interface CapabilityMarkerContext {
    * on the dynamic path, where markers fall back to their best-effort imports.
    */
   readonly routeDescriptors?: ReadonlyMap<string, DawnAgent>
+  /**
+   * Best-effort description lookup for a route whose descriptor is NOT in
+   * `routeDescriptors` (the dynamic path, where no static module map exists).
+   * The node implementation imports the route's `entryFile` from disk and
+   * lives in `@dawn-ai/core/node`, supplied by the node runtime — importing a
+   * file path needs `node:url`, which must stay out of every graph that
+   * imports a capability marker (same rule as `markerFs`/`backendFactories`).
+   * Resolves to `undefined` when the entry yields no description; absent on
+   * runtimes with no disk (edge), where `routeDescriptors` is the only source.
+   * Either way the subagents marker falls back to its default description text
+   * rather than failing capability composition.
+   */
+  readonly loadRouteDescription?: (route: RouteDefinition) => Promise<string | undefined>
   /**
    * Already-constructed backends for this run (a sandbox's, or the app's
    * `config.backends`). Takes precedence over `backendFactories`.

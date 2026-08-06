@@ -19,7 +19,7 @@ import {
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
-import { discoverRoutes, findDawnApp } from "@dawn-ai/core/node"
+import { discoverRoutes, findDawnApp, nodeLoadRouteDescription } from "@dawn-ai/core/node"
 import type { PermissionMode, PermissionsStore } from "@dawn-ai/permissions"
 import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
@@ -348,6 +348,7 @@ export const nodeBootFallbacks: RuntimeBootFallbacks = {
   hasWorkspaceDir,
   loadConfig: async (appRoot) => (await loadDawnConfig({ appRoot })).config,
   loadMiddleware,
+  loadRouteDescription: nodeLoadRouteDescription,
   loadRouteModules: loadPreparedRouteModules,
   markerFs: nodeMarkerFs,
   resolveIdentityKeys,

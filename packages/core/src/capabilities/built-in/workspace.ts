@@ -1,5 +1,11 @@
-import { join, relative, resolve, sep } from "node:path"
+// `relative`/`resolve`/`sep` still come from node:path: they implement the
+// tool-outputs containment predicate below, which shares the path-jail
+// semantics of workspace-fs.ts/permission-gate.ts and moves to the pure
+// helpers together with them (an absolute second operand must WIN, so a
+// join-shaped swap here would be a jail escape).
+import { relative, resolve, sep } from "node:path"
 import type { PermissionsStore } from "@dawn-ai/permissions"
+import { pureJoin } from "@dawn-ai/sdk/pure"
 import type { BackendContext, ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { z } from "zod"
 
@@ -16,7 +22,7 @@ const WORKSPACE_DIRNAME = "workspace"
  * activate regardless of the test runner's working directory.
  */
 function workspaceRoot(appRoot: string): string {
-  return join(appRoot, WORKSPACE_DIRNAME)
+  return pureJoin(appRoot, WORKSPACE_DIRNAME)
 }
 
 const READ_FILE_INPUT = z.object({ path: z.string().min(1) })

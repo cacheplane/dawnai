@@ -27,6 +27,7 @@ export {
 export { discoverRoutes } from "./discovery/discover-routes.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"
 export { nodeMarkerFs } from "./node-marker-fs.js"
+export { nodeLoadRouteDescription } from "./node-route-description.js"
 export type { ExtractToolSchemasOptions } from "./typegen/extract-tool-schema.js"
 export { extractToolSchemasForRoute } from "./typegen/extract-tool-schema.js"
 export type { ExtractToolTypesOptions } from "./typegen/extract-tool-types.js"

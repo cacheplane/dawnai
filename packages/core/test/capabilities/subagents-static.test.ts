@@ -8,6 +8,7 @@ import { agent } from "@dawn-ai/sdk"
 import { describe, expect, it } from "vitest"
 import { createSubagentsMarker } from "../../src/capabilities/built-in/subagents.js"
 import type { CapabilityMarkerContext } from "../../src/capabilities/types.js"
+import { nodeLoadRouteDescription } from "../../src/node-route-description.js"
 import type { RouteDefinition, RouteManifest } from "../../src/types.js"
 
 // A REAL, importable entry file default-exporting a DawnAgent WITH a
@@ -36,6 +37,10 @@ function contextFor(
   return {
     appRoot: "/app",
     descriptor: undefined,
+    // The disk-reading loader is ALWAYS supplied here (as the node runtime
+    // supplies it), so "no import happened" below is a claim about the
+    // marker's own short-circuit, not about a missing seam.
+    loadRouteDescription: nodeLoadRouteDescription,
     routeManifest: { appRoot: "/app", routes: [route] } satisfies RouteManifest,
     ...(routeDescriptors !== undefined ? { routeDescriptors } : {}),
   }
@@ -69,6 +74,22 @@ describe("subagents marker — static routeDescriptors path", () => {
     const rendered = contribution.promptFragment?.render({}) ?? ""
     expect(rendered).toContain("**helper** — No description provided.")
     expect(rendered).not.toContain("Imported description that must never surface")
+  })
+
+  // The edge shape: no static map AND no injected loader. Core itself cannot
+  // read the entry file (that needs node:url), so the marker must degrade to
+  // the default text rather than throw — composing an agent never fails over a
+  // missing description.
+  it("no routeDescriptors and no loader ⇒ default text, no throw", async () => {
+    const route = childRoute(describedEntryFile)
+    const marker = createSubagentsMarker()
+    const contribution = await marker.load(parentRouteDir, {
+      appRoot: "/app",
+      descriptor: undefined,
+      routeManifest: { appRoot: "/app", routes: [route] } satisfies RouteManifest,
+    })
+    const rendered = contribution.promptFragment?.render({}) ?? ""
+    expect(rendered).toContain("**helper** — No description provided.")
   })
 
   it("sanity: without routeDescriptors the dynamic import DOES find the description", async () => {

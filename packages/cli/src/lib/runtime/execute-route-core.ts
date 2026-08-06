@@ -22,6 +22,7 @@
 import {
   applyCapabilities,
   type CapabilityContribution,
+  type CapabilityMarkerContext,
   createAgentsMdMarker,
   createCapabilityRegistry,
   createMemoryMarker,
@@ -144,6 +145,11 @@ export interface RuntimeBootFallbacks {
   readonly hasWorkspaceDir: (appRoot: string) => boolean
   /** Node `MarkerFs` for the capability markers (AGENTS.md, skills, …). */
   readonly markerFs: MarkerFs
+  /**
+   * Disk-backed subagent description lookup, used only when no static module
+   * map supplied `routeDescriptors`.
+   */
+  readonly loadRouteDescription: NonNullable<CapabilityMarkerContext["loadRouteDescription"]>
 }
 
 /**
@@ -173,6 +179,10 @@ export interface RuntimeBootFallbacks {
  *   - `markerFs`              → omitted from `applyCapabilities`; an absent
  *                               MarkerFs means "no filesystem" by contract, so
  *                               the disk-backed markers contribute nothing
+ *   - `loadRouteDescription`  → omitted from `applyCapabilities`; subagents
+ *                               without a static descriptor map then render
+ *                               the default description text (the same text
+ *                               the disk import produced when it failed)
  *   - `hasWorkspaceDir`       → false ⇒ tool-output offloading stays off; it
  *                               is an optimization, not a capability the route
  *                               asked for (this also makes the offload store's
@@ -897,7 +907,9 @@ export async function prepareRouteExecution(
             },
           }
         : {}),
-      ...(fallbacks ? { markerFs: fallbacks.markerFs } : {}),
+      ...(fallbacks
+        ? { loadRouteDescription: fallbacks.loadRouteDescription, markerFs: fallbacks.markerFs }
+        : {}),
       permissions: permissionsStore,
       appRoot: options.appRoot,
       ...(sandboxWorkspaceRoot ? { workspaceRoot: sandboxWorkspaceRoot } : {}),

@@ -128,16 +128,12 @@ function graphInputs(metafile: Metafile): string[] {
  * are free and any NEW edge fails the build.
  */
 const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = [
-  // @dawn-ai/core — barrel drags config loading and the capability markers
-  "node:crypto <- ../core/dist/capabilities/built-in/memory.js",
-  "node:path <- ../core/dist/capabilities/built-in/agents-md.js",
-  "node:path <- ../core/dist/capabilities/built-in/memory-md.js",
-  "node:path <- ../core/dist/capabilities/built-in/planning.js",
-  "node:path <- ../core/dist/capabilities/built-in/skills.js",
+  // @dawn-ai/core — the path jail (Task 8): an absolute second operand must
+  // WIN over the root, so these three sites move to the pure helpers together,
+  // with an adversarial suite, and not before.
   "node:path <- ../core/dist/capabilities/built-in/workspace.js",
   "node:path <- ../core/dist/capabilities/permission-gate.js",
   "node:path <- ../core/dist/capabilities/workspace-fs.js",
-  "node:url <- ../core/dist/capabilities/built-in/subagents.js",
 ]
 
 /**
