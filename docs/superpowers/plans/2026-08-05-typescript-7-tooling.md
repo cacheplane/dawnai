@@ -643,11 +643,11 @@ git commit -m "test: add TypeScript tooling consumer probe"
 - Modify: `.github/workflows/ci.yml`
 - Modify: `scripts/lib/pack-check.mjs` only if shared packing helpers are extracted
 
-- [ ] **Step 1: Write failing orchestration tests**
+- [x] **Step 1: Write failing orchestration tests**
 
 Test pure selection/argument functions and inject command/temp-dir dependencies. Assert the orchestrator packs Core and Vite, installs both tarballs plus `typescript@7.0.2`, `tsx`, and `zod` in a clean project, then invokes the reusable probe. Assert cleanup runs after simulated install and probe failures.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 node --test scripts/typescript-tooling-pack-smoke.test.mjs
@@ -655,7 +655,7 @@ node --test scripts/typescript-tooling-pack-smoke.test.mjs
 
 Expected: FAIL because the smoke orchestrator is absent.
 
-- [ ] **Step 3: Implement the local pack smoke**
+- [x] **Step 3: Implement the local pack smoke**
 
 Build/pack the two packages, install their tarballs in a temporary npm project, reject native lifecycle scripts and unresolved `workspace:`/`file:` specs using existing published-artifact helpers, then run the reusable probe. Always remove the temporary root.
 
@@ -669,7 +669,7 @@ Add scripts:
 Place `pnpm verify:typescript-tooling-pack` after `pnpm pack:check` in `ci:validate`.
 Add the same command immediately after the `Pack check` step in `.github/workflows/ci.yml`'s `validate` job because that workflow spells out the Definition of Done gates rather than invoking `ci:validate`.
 
-- [ ] **Step 4: Run unit and real packed-artifact smoke**
+- [x] **Step 4: Run unit and real packed-artifact smoke**
 
 ```bash
 node --test scripts/typescript-tooling-pack-smoke.test.mjs
@@ -679,7 +679,7 @@ pnpm verify:typescript-tooling-pack
 
 Expected: unit tests and the clean installed-artifact probe PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add package.json .github/workflows/ci.yml scripts/typescript-tooling-pack-smoke.mjs scripts/typescript-tooling-pack-smoke.test.mjs scripts/lib
