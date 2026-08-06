@@ -64,6 +64,15 @@ it("captures interrupts, plan updates, and folds subagent events", async () => {
       type: "subagent.tool_call",
       data: { ...child, id: "tool-run-1", tool: "webSearch", input: { q: "x" } },
     }
+    yield { type: "subagent.message", data: { ...child, chunk: "Inspecting" } }
+    yield {
+      type: "subagent.tool_result",
+      data: { ...child, id: "tool-run-1", tool: "webSearch", output: ["result"] },
+    }
+    yield {
+      type: "subagent.memory.recalled",
+      data: { ...child, memories: [{ id: "memory-1" }] },
+    }
     yield { type: "subagent.end", data: { ...child, final_message: "found it" } }
     yield { type: "done", output: { messages: [] } }
   }
@@ -94,6 +103,38 @@ it("captures interrupts, plan updates, and folds subagent events", async () => {
       },
     },
     {
+      type: "subagent.message",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        chunk: "Inspecting",
+      },
+    },
+    {
+      type: "subagent.tool_result",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        id: "tool-run-1",
+        tool: "webSearch",
+        output: ["result"],
+      },
+    },
+    {
+      type: "subagent.memory.recalled",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        memories: [{ id: "memory-1" }],
+      },
+    },
+    {
       type: "subagent.end",
       data: {
         call_id: "c1",
@@ -105,6 +146,52 @@ it("captures interrupts, plan updates, and folds subagent events", async () => {
     },
   ])
 })
+
+it("retains distinct call ids for parallel child interrupts without changing root interrupts", async () => {
+  async function* s() {
+    yield {
+      type: "interrupt",
+      data: {
+        interruptId: "perm-alpha",
+        kind: "tool",
+        callId: "call-alpha",
+        detail: { toolName: "readFile" },
+      },
+    }
+    yield {
+      type: "interrupt",
+      data: {
+        interruptId: "perm-beta",
+        kind: "command",
+        callId: "call-beta",
+        detail: { command: "pwd" },
+      },
+    }
+    yield {
+      type: "interrupt",
+      data: { interruptId: "perm-root", kind: "memory", detail: { namespace: "facts" } },
+    }
+  }
+
+  const r = await collectRunResult(s() as never, "t")
+
+  expect(r.interrupts).toEqual([
+    {
+      interruptId: "perm-alpha",
+      kind: "tool",
+      callId: "call-alpha",
+      detail: { toolName: "readFile" },
+    },
+    {
+      interruptId: "perm-beta",
+      kind: "command",
+      callId: "call-beta",
+      detail: { command: "pwd" },
+    },
+    { interruptId: "perm-root", kind: "memory", detail: { namespace: "facts" } },
+  ])
+})
+
 it("captures a subagent error end", async () => {
   async function* s() {
     yield { type: "subagent.start", data: { call_id: "c1", subagent: "research" } }

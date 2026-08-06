@@ -62,6 +62,7 @@ export function deriveToolResults(
 export interface InterruptInfo {
   readonly interruptId: string
   readonly kind: string
+  readonly callId?: string
   readonly detail?: Record<string, unknown>
 }
 
@@ -193,6 +194,11 @@ export async function collectRunResult(
   }
 
   for await (const chunk of stream) {
+    if (chunk.type.startsWith("subagent.")) {
+      const data = (chunk as unknown as { data?: Record<string, unknown> }).data ?? {}
+      subagentEvents.push({ type: chunk.type, data })
+    }
+
     switch (chunk.type) {
       case "chunk":
         if (typeof chunk.data === "string") tokens.push(chunk.data)
@@ -214,14 +220,13 @@ export async function collectRunResult(
       }
       case "interrupt": {
         const d = (chunk as unknown as { data?: Record<string, unknown> }).data ?? {}
-        const info: InterruptInfo =
-          d.detail !== undefined
-            ? {
-                interruptId: String(d.interruptId ?? ""),
-                kind: String(d.kind ?? ""),
-                detail: d.detail as Record<string, unknown>,
-              }
-            : { interruptId: String(d.interruptId ?? ""), kind: String(d.kind ?? "") }
+        const callId = typeof d.callId === "string" && d.callId !== "" ? d.callId : undefined
+        const info: InterruptInfo = {
+          interruptId: String(d.interruptId ?? ""),
+          kind: String(d.kind ?? ""),
+          ...(callId !== undefined ? { callId } : {}),
+          ...(d.detail !== undefined ? { detail: d.detail as Record<string, unknown> } : {}),
+        }
         interrupts.push(info)
         break
       }
@@ -238,7 +243,6 @@ export async function collectRunResult(
         const callId = String(d.call_id ?? "")
         const run = subagentFor(callId)
         run.name = String(d.subagent ?? callId)
-        subagentEvents.push({ type: chunk.type, data: d })
         break
       }
       case "subagent.tool_call": {
@@ -246,7 +250,6 @@ export async function collectRunResult(
         const callId = String(d.call_id ?? "")
         const run = subagentFor(callId)
         run.toolCalls.push({ name: String(d.tool ?? ""), args: normalizeToolArgs(d.input) })
-        subagentEvents.push({ type: chunk.type, data: d })
         break
       }
       case "subagent.end": {
@@ -280,7 +283,6 @@ export async function collectRunResult(
                 ? { callId: run.callId, name: run.name, toolCalls: run.toolCalls, error: run.error }
                 : { callId: run.callId, name: run.name, toolCalls: run.toolCalls }
         finishedSubagents.push(finished)
-        subagentEvents.push({ type: chunk.type, data: d })
         break
       }
       default:
