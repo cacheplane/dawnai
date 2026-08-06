@@ -459,7 +459,7 @@ git commit -m "refactor(vite-plugin): centralize compiler analysis in core"
 - Modify: `pnpm-lock.yaml`
 - Create: `packages/core/test/compiler-dependency-boundary.test.ts`
 
-- [ ] **Step 1: Write a failing dependency-layout test**
+- [x] **Step 1: Write a failing dependency-layout test**
 
 Read Core's and Vite's manifests and assert:
 
@@ -470,7 +470,7 @@ expect(vite.dependencies?.typescript).toBeUndefined()
 
 Resolve Core's installed `typescript` from Core's package context and assert `createProgram` and `createSourceFile` are functions. Resolve root `typescript/package.json` and assert version `7.0.2`.
 
-- [ ] **Step 2: Run the dependency test and verify RED**
+- [x] **Step 2: Run the dependency test and verify RED**
 
 ```bash
 pnpm --filter @dawn-ai/core test -- compiler-dependency-boundary.test.ts
@@ -478,7 +478,7 @@ pnpm --filter @dawn-ai/core test -- compiler-dependency-boundary.test.ts
 
 Expected: FAIL because Core still declares ordinary TypeScript 5/6 and root is still TypeScript 6.
 
-- [ ] **Step 3: Update dependency manifests**
+- [x] **Step 3: Update dependency manifests**
 
 - Set Core's runtime `typescript` dependency to `npm:@typescript/typescript6@6.0.2`.
 - Remove Vite's TypeScript dependency if Task 4 did not already do so.
@@ -487,7 +487,7 @@ Expected: FAIL because Core still declares ordinary TypeScript 5/6 and root is s
 
 Use `rg -n -F '"typescript": "6.0.2"'` to ensure no unintended 6.0.2 compiler pins remain. The compatibility package's version is intentionally 6.0.2 under its npm alias.
 
-- [ ] **Step 4: Regenerate the lockfile**
+- [x] **Step 4: Regenerate the lockfile**
 
 ```bash
 pnpm install
@@ -495,7 +495,7 @@ pnpm install
 
 Inspect `pnpm-lock.yaml` to confirm root/workspace TypeScript 7 and Core's isolated compatibility alias are both present.
 
-- [ ] **Step 5: Run dependency, compiler, build, and type checks**
+- [x] **Step 5: Run dependency, compiler, build, and type checks**
 
 ```bash
 pnpm --filter @dawn-ai/core test -- compiler-dependency-boundary.test.ts compiler-source-analysis.test.ts compiler-route-analysis.test.ts compiler-json-schema.test.ts
@@ -507,7 +507,7 @@ pnpm --filter @dawn-ai/cli typecheck
 
 Expected: PASS while `pnpm exec tsc --version` reports 7.0.2.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add package.json packages examples apps test scripts/published-artifact-smoke.mjs pnpm-lock.yaml
