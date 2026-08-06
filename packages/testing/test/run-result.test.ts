@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import { collectRunResult, deriveToolResults } from "../src/run-result.js"
 
 async function* fakeStream() {
@@ -54,7 +54,11 @@ it("captures interrupts, plan updates, and folds subagent events", async () => {
   async function* s() {
     yield {
       type: "interrupt",
-      data: { interruptId: "perm-1", kind: "command", detail: { command: "rm -rf tmp" } },
+      data: {
+        interruptId: "perm-1",
+        kind: "command",
+        detail: { command: "rm -rf tmp", suggestedPattern: "rm -rf tmp" },
+      },
     }
     yield { type: "plan_update", data: { todos: [{ content: "A", status: "pending" }] } }
     yield { type: "plan_update", data: { todos: [{ content: "A", status: "completed" }] } }
@@ -78,7 +82,11 @@ it("captures interrupts, plan updates, and folds subagent events", async () => {
   }
   const r = await collectRunResult(s() as never, "t")
   expect(r.interrupts).toEqual([
-    { interruptId: "perm-1", kind: "command", detail: { command: "rm -rf tmp" } },
+    {
+      interruptId: "perm-1",
+      kind: "command",
+      detail: { command: "rm -rf tmp", suggestedPattern: "rm -rf tmp" },
+    },
   ])
   expect(r.planUpdates).toHaveLength(2)
   expect(r.todos).toEqual([{ content: "A", status: "completed" }])
@@ -155,7 +163,11 @@ it("retains distinct call ids for parallel child interrupts without changing roo
         interruptId: "perm-alpha",
         kind: "tool",
         callId: "call-alpha",
-        detail: { toolName: "readFile" },
+        detail: {
+          toolName: "readFile",
+          argsPreview: '{"path":"README.md"}',
+          suggestedPattern: "readFile",
+        },
       },
     }
     yield {
@@ -164,12 +176,23 @@ it("retains distinct call ids for parallel child interrupts without changing roo
         interruptId: "perm-beta",
         kind: "command",
         callId: "call-beta",
-        detail: { command: "pwd" },
+        detail: { command: "pwd", suggestedPattern: "pwd" },
       },
     }
     yield {
       type: "interrupt",
-      data: { interruptId: "perm-root", kind: "memory", detail: { namespace: "facts" } },
+      data: {
+        interruptId: "perm-root",
+        kind: "memory",
+        detail: {
+          namespace: "facts",
+          identity: "workspace / fact",
+          oldId: "old-1",
+          oldContent: "old",
+          newContent: "new",
+          suggestedPattern: "workspace=facts|",
+        },
+      },
     }
   }
 
@@ -180,15 +203,30 @@ it("retains distinct call ids for parallel child interrupts without changing roo
       interruptId: "perm-alpha",
       kind: "tool",
       callId: "call-alpha",
-      detail: { toolName: "readFile" },
+      detail: {
+        toolName: "readFile",
+        argsPreview: '{"path":"README.md"}',
+        suggestedPattern: "readFile",
+      },
     },
     {
       interruptId: "perm-beta",
       kind: "command",
       callId: "call-beta",
-      detail: { command: "pwd" },
+      detail: { command: "pwd", suggestedPattern: "pwd" },
     },
-    { interruptId: "perm-root", kind: "memory", detail: { namespace: "facts" } },
+    {
+      interruptId: "perm-root",
+      kind: "memory",
+      detail: {
+        namespace: "facts",
+        identity: "workspace / fact",
+        oldId: "old-1",
+        oldContent: "old",
+        newContent: "new",
+        suggestedPattern: "workspace=facts|",
+      },
+    },
   ])
 })
 
@@ -223,12 +261,72 @@ it("retains subagent approval identity and typed detail", async () => {
   })
   if (interrupt?.kind !== "subagent") throw new Error("expected a subagent interrupt")
   const detail = interrupt.detail
-  if (!detail) throw new Error("expected subagent interrupt detail")
+  expectTypeOf(detail.parentRouteId).toEqualTypeOf<string>()
+  expectTypeOf(detail.subagentName).toEqualTypeOf<string>()
+  expectTypeOf(detail.subagentRouteId).toEqualTypeOf<string>()
+  expectTypeOf(detail.inputPreview).toEqualTypeOf<string>()
+  expectTypeOf(detail.suggestedPattern).toEqualTypeOf<string>()
+  expectTypeOf(detail.reason).toEqualTypeOf<string | undefined>()
+  expectTypeOf(interrupt.callId).toEqualTypeOf<string | undefined>()
   expect(detail.parentRouteId).toBe("/support")
   expect(detail.subagentName).toBe("writer")
   expect(detail.subagentRouteId).toBe("/support/subagents/writer")
   expect(detail.inputPreview).toBe("Draft the response")
   expect(detail.reason).toBe("Drafts require review.")
+})
+
+it("rejects unknown interrupt kinds", async () => {
+  async function* s() {
+    yield {
+      type: "interrupt",
+      data: { interruptId: "perm-1", kind: "approval", detail: {} },
+    }
+  }
+
+  await expect(collectRunResult(s() as never, "t")).rejects.toThrow(
+    'Unsupported interrupt kind "approval"',
+  )
+})
+
+it("rejects malformed details for a known interrupt kind", async () => {
+  async function* s() {
+    yield {
+      type: "interrupt",
+      data: {
+        interruptId: "perm-1",
+        kind: "subagent",
+        detail: { parentRouteId: "/support", subagentName: "writer" },
+      },
+    }
+  }
+
+  await expect(collectRunResult(s() as never, "t")).rejects.toThrow(
+    'Malformed "subagent" interrupt detail',
+  )
+})
+
+it("rejects a present undefined subagent reason", async () => {
+  async function* s() {
+    yield {
+      type: "interrupt",
+      data: {
+        interruptId: "perm-1",
+        kind: "subagent",
+        detail: {
+          parentRouteId: "/support",
+          subagentName: "writer",
+          subagentRouteId: "/support/subagents/writer",
+          inputPreview: "Draft the response",
+          reason: undefined,
+          suggestedPattern: JSON.stringify(["/support", "writer"]),
+        },
+      },
+    }
+  }
+
+  await expect(collectRunResult(s() as never, "t")).rejects.toThrow(
+    'Malformed "subagent" interrupt detail',
+  )
 })
 
 it("captures a subagent error end", async () => {
@@ -264,8 +362,8 @@ describe("deriveToolResults", () => {
     const results = deriveToolResults(messages)
     expect(results.map((r) => r.name)).toEqual(["searchCorpus", "writeTodos", "readDoc"])
     expect(results.map((r) => r.isError)).toEqual([false, false, true])
-    expect(results[0].status).toBe("success")
-    expect(results[1].status).toBeUndefined()
+    expect(results[0]?.status).toBe("success")
+    expect(results[1]?.status).toBeUndefined()
   })
 })
 

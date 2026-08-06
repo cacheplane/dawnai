@@ -59,7 +59,33 @@ export function deriveToolResults(
   return results
 }
 
-export interface SubagentInterruptDetail extends Readonly<Record<string, unknown>> {
+export interface CommandInterruptDetail {
+  readonly command: string
+  readonly suggestedPattern: string
+}
+
+export interface PathInterruptDetail {
+  readonly path: string
+  readonly operation: "readFile" | "writeFile" | "listDir"
+  readonly suggestedPattern: string
+}
+
+export interface ToolInterruptDetail {
+  readonly toolName: string
+  readonly argsPreview: string
+  readonly suggestedPattern: string
+}
+
+export interface MemoryInterruptDetail {
+  readonly namespace: string
+  readonly identity: string
+  readonly oldId: string
+  readonly oldContent: string
+  readonly newContent: string
+  readonly suggestedPattern: string
+}
+
+export interface SubagentInterruptDetail {
   readonly parentRouteId: string
   readonly subagentName: string
   readonly subagentRouteId: string
@@ -68,14 +94,19 @@ export interface SubagentInterruptDetail extends Readonly<Record<string, unknown
   readonly suggestedPattern: string
 }
 
-export type InterruptDetail = Readonly<Record<string, unknown>> & Partial<SubagentInterruptDetail>
-
-export interface InterruptInfo {
+interface InterruptInfoBase {
   readonly interruptId: string
-  readonly kind: string
   readonly callId?: string
-  readonly detail?: InterruptDetail
 }
+
+export type InterruptInfo = InterruptInfoBase &
+  (
+    | { readonly kind: "command"; readonly detail: CommandInterruptDetail }
+    | { readonly kind: "path"; readonly detail: PathInterruptDetail }
+    | { readonly kind: "tool"; readonly detail: ToolInterruptDetail }
+    | { readonly kind: "memory"; readonly detail: MemoryInterruptDetail }
+    | { readonly kind: "subagent"; readonly detail: SubagentInterruptDetail }
+  )
 
 export interface Todo {
   readonly content: string
@@ -163,6 +194,103 @@ function normalizeToolArgs(raw: unknown): unknown {
   return raw
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function hasStringFields(
+  value: unknown,
+  fields: readonly string[],
+): value is Record<string, string> {
+  return isRecord(value) && fields.every((field) => typeof value[field] === "string")
+}
+
+function isCommandInterruptDetail(value: unknown): value is CommandInterruptDetail {
+  return hasStringFields(value, ["command", "suggestedPattern"])
+}
+
+function isPathInterruptDetail(value: unknown): value is PathInterruptDetail {
+  return (
+    hasStringFields(value, ["path", "operation", "suggestedPattern"]) &&
+    (value.operation === "readFile" ||
+      value.operation === "writeFile" ||
+      value.operation === "listDir")
+  )
+}
+
+function isToolInterruptDetail(value: unknown): value is ToolInterruptDetail {
+  return hasStringFields(value, ["toolName", "argsPreview", "suggestedPattern"])
+}
+
+function isMemoryInterruptDetail(value: unknown): value is MemoryInterruptDetail {
+  return hasStringFields(value, [
+    "namespace",
+    "identity",
+    "oldId",
+    "oldContent",
+    "newContent",
+    "suggestedPattern",
+  ])
+}
+
+function isSubagentInterruptDetail(value: unknown): value is SubagentInterruptDetail {
+  return (
+    hasStringFields(value, [
+      "parentRouteId",
+      "subagentName",
+      "subagentRouteId",
+      "inputPreview",
+      "suggestedPattern",
+    ]) &&
+    (!Object.hasOwn(value, "reason") || typeof value.reason === "string")
+  )
+}
+
+function parseInterruptInfo(value: unknown): InterruptInfo {
+  if (!isRecord(value)) throw new Error("Malformed interrupt envelope")
+  if (typeof value.interruptId !== "string" || value.interruptId === "") {
+    throw new Error("Malformed interrupt envelope: interruptId must be a non-empty string")
+  }
+  if (value.callId !== undefined && (typeof value.callId !== "string" || value.callId === "")) {
+    throw new Error("Malformed interrupt envelope: callId must be a non-empty string")
+  }
+
+  const base: InterruptInfoBase = {
+    interruptId: value.interruptId,
+    ...(value.callId !== undefined ? { callId: value.callId } : {}),
+  }
+
+  switch (value.kind) {
+    case "command":
+      if (!isCommandInterruptDetail(value.detail)) {
+        throw new Error('Malformed "command" interrupt detail')
+      }
+      return { ...base, kind: value.kind, detail: value.detail }
+    case "path":
+      if (!isPathInterruptDetail(value.detail)) {
+        throw new Error('Malformed "path" interrupt detail')
+      }
+      return { ...base, kind: value.kind, detail: value.detail }
+    case "tool":
+      if (!isToolInterruptDetail(value.detail)) {
+        throw new Error('Malformed "tool" interrupt detail')
+      }
+      return { ...base, kind: value.kind, detail: value.detail }
+    case "memory":
+      if (!isMemoryInterruptDetail(value.detail)) {
+        throw new Error('Malformed "memory" interrupt detail')
+      }
+      return { ...base, kind: value.kind, detail: value.detail }
+    case "subagent":
+      if (!isSubagentInterruptDetail(value.detail)) {
+        throw new Error('Malformed "subagent" interrupt detail')
+      }
+      return { ...base, kind: value.kind, detail: value.detail }
+    default:
+      throw new Error(`Unsupported interrupt kind "${String(value.kind)}"`)
+  }
+}
+
 export async function collectRunResult(
   stream: AsyncIterable<StreamChunk>,
   threadId: string,
@@ -230,15 +358,8 @@ export async function collectRunResult(
         break
       }
       case "interrupt": {
-        const d = (chunk as unknown as { data?: Record<string, unknown> }).data ?? {}
-        const callId = typeof d.callId === "string" && d.callId !== "" ? d.callId : undefined
-        const info: InterruptInfo = {
-          interruptId: String(d.interruptId ?? ""),
-          kind: String(d.kind ?? ""),
-          ...(callId !== undefined ? { callId } : {}),
-          ...(d.detail !== undefined ? { detail: d.detail as InterruptDetail } : {}),
-        }
-        interrupts.push(info)
+        const data = (chunk as unknown as { data?: unknown }).data
+        interrupts.push(parseInterruptInfo(data))
         break
       }
       case "plan_update": {
