@@ -29,10 +29,7 @@ import { sqliteMemoryStore } from "@dawn-ai/memory"
 import { localFilesystem } from "@dawn-ai/workspace"
 
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
-import {
-  __resetRouteLoadCachesForTests,
-  hasWorkspaceDir,
-} from "../src/lib/runtime/execute-route.js"
+import { hasWorkspaceDir } from "../src/lib/runtime/execute-route.js"
 import { resolveMemoryStore } from "../src/lib/runtime/resolve-memory.js"
 import { cleanup, runChatTurn, withAimock } from "./helpers/static-modules-fixture.js"
 
@@ -81,6 +78,8 @@ describe("resolve-memory — sqlite store is lazy", () => {
     )
     expect(typeof store.put).toBe("function")
     expect(typeof store.search).toBe("function")
+    // MemoryStore exposes no close(); the DatabaseSync handle is released at
+    // process exit (same as the pre-existing resolve-memory.test.ts suite).
   })
 })
 
@@ -118,18 +117,22 @@ describe("execute-route — default localFilesystem is memoized", () => {
   }, 30_000)
 })
 
-describe("execute-route — offload workspace/ probe is memoized per appRoot", () => {
-  it("probes workspace/ existence once per appRoot until caches are reset", async () => {
+describe("execute-route — offload workspace/ probe memoizes only positives", () => {
+  it("re-probes negatives (workspace/ created mid-process is seen) and caches positives", async () => {
     const appRoot = await tempDir("dawn-lazy-probe-")
 
     expect(hasWorkspaceDir(appRoot)).toBe(false)
 
-    // The directory now exists, but the memoized probe result sticks for the
-    // process lifetime (dev restarts / cache resets refresh it).
+    // Agent tools can create workspace/ mid-process (localFilesystem's
+    // writeFile mkdirs recursively) and the dev watcher ignores workspace/
+    // changes, so a negative probe must NOT stick: the very next call — no
+    // cache reset, no restart — sees the new directory.
     await mkdir(join(appRoot, "workspace"))
-    expect(hasWorkspaceDir(appRoot)).toBe(false)
+    expect(hasWorkspaceDir(appRoot)).toBe(true)
 
-    __resetRouteLoadCachesForTests()
+    // Positive results ARE memoized (the runtime never un-creates a
+    // workspace dir): removing it externally does not flip the cached true.
+    await rm(join(appRoot, "workspace"), { recursive: true })
     expect(hasWorkspaceDir(appRoot)).toBe(true)
   })
 })

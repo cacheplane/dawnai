@@ -546,8 +546,10 @@ const workspaceDirProbeCache = new Map<string, boolean>()
 /**
  * Default filesystem backend, constructed at most once per process and only
  * when a request actually needs it (no sandbox/config backend provided).
- * `localFilesystem()` is stateless with default options, so one shared
- * instance is safe.
+ * Always constructed options-free, so the instance carries no per-app or
+ * per-request state — one shared instance is safe, and it is deliberately
+ * NOT cleared by `__resetRouteLoadCachesForTests` (nothing about it can go
+ * stale).
  */
 let defaultLocalFilesystem: FilesystemBackend | undefined
 function getDefaultLocalFilesystem(): FilesystemBackend {
@@ -556,16 +558,20 @@ function getDefaultLocalFilesystem(): FilesystemBackend {
 }
 
 /**
- * Memoized `workspace/` existence probe for the offload store — once per
- * appRoot per process instead of one `existsSync` per request. Reset via
- * `__resetRouteLoadCachesForTests`; the dev child restarts on edits that
- * could change the app shape.
+ * `workspace/` existence probe for the offload store, memoizing only
+ * POSITIVE results per appRoot: the runtime never un-creates a workspace
+ * dir, so `true` is stable for the process lifetime. Negative results are
+ * re-probed on every request (one `existsSync` until the dir appears, zero
+ * after) because agent tools can create `workspace/` mid-process
+ * (`localFilesystem.writeFile` mkdirs recursively) and the dev watcher
+ * deliberately ignores workspace/ changes — no restart would refresh a
+ * cached `false`. Internal; exported for tests only. Reset via
+ * `__resetRouteLoadCachesForTests`.
  */
 export function hasWorkspaceDir(appRoot: string): boolean {
-  const cached = workspaceDirProbeCache.get(appRoot)
-  if (cached !== undefined) return cached
+  if (workspaceDirProbeCache.get(appRoot)) return true
   const present = existsSync(join(appRoot, "workspace"))
-  workspaceDirProbeCache.set(appRoot, present)
+  if (present) workspaceDirProbeCache.set(appRoot, present)
   return present
 }
 

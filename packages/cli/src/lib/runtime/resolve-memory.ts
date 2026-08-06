@@ -42,9 +42,12 @@ export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLi
   } catch {
     // no dawn.config.ts / unreadable — use default
   }
-  // Imported lazily: the default sqlite-backed store is resolved only when
-  // this fallback branch actually runs, keeping sqliteMemoryStore off this
-  // module's static import surface (a config-provided store never loads it).
+  // Imported lazily: removes the static BINDING of sqliteMemoryStore, so
+  // the default sqlite store is only resolved when this fallback branch
+  // actually runs. NOTE: the static `serializeNamespace` import above still
+  // pulls the @dawn-ai/memory barrel (which reaches node:sqlite via its
+  // sqlite-store export) — that edge remains until the memory package grows
+  // a pure subpath (planned for the fetch-entry task).
   const { sqliteMemoryStore } = await import("@dawn-ai/memory")
   return sqliteMemoryStore({
     path: join(appRoot, ".dawn", "memory.sqlite"),
