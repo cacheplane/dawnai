@@ -659,25 +659,31 @@ async function handleApStreamRequest(options: {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }
 
+  // Claim the thread's run slot. Dawn has no run_id, so one run per thread is
+  // what makes "cancel this thread's run" well-defined — and it stops two runs
+  // from interleaving checkpoint writes against the same LangGraph thread.
+  // Gated on the in-memory registry, never the persisted status column, so a
+  // process that crashed mid-run does not brick the thread with a stale "busy".
+  // Deliberately BEFORE any thread-state mutation below: a rejected request
+  // must never clobber the recorded route (or anything else) for the run that
+  // is genuinely in flight — that's the same class of corruption this gate
+  // exists to prevent, just via metadata instead of checkpoint writes.
+  const run = runRegistry.begin(threadId, signal)
+  if (!run) {
+    return Response.json(
+      createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
+        code: "run_in_flight",
+      }),
+      { status: 409 },
+    )
+  }
+
   // Record which route last ran on this thread so the resume endpoint can
   // re-invoke it without requiring the client to repeat the route key.
   // The in-memory map is fast-path for the current server session; the thread
   // metadata persists it to SQLite so resume survives a server restart.
   threadRouteMap.set(threadId, routeKey)
   await threadsStore.updateMetadata(threadId, { route: routeKey })
-
-  // Claim the thread's run slot. Dawn has no run_id, so one run per thread is
-  // what makes "cancel this thread's run" well-defined — and it stops two runs
-  // from interleaving checkpoint writes against the same LangGraph thread.
-  // Gated on the in-memory registry, never the persisted status column, so a
-  // process that crashed mid-run does not brick the thread with a stale "busy".
-  const run = runRegistry.begin(threadId, signal)
-  if (!run) {
-    return Response.json(
-      createRequestErrorBody(`A run is already in flight for thread "${threadId}"`),
-      { status: 409 },
-    )
-  }
 
   await threadsStore.updateStatus(threadId, "busy")
 

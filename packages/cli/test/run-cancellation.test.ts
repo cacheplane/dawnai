@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { createThreadsStore } from "@dawn-ai/sqlite-storage"
 import { afterEach, describe, expect, it } from "vitest"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
@@ -37,6 +37,11 @@ const BLOCKING_ROUTE = [
   "",
 ].join("\n")
 
+// A trivial second route, used only to prove that a route recorded in thread
+// metadata by a REJECTED request (one that lost the concurrency gate) is not
+// the one actually running.
+const OTHER_ROUTE = ["export const graph = async () => ({ ok: true })", ""].join("\n")
+
 async function waitForFile(path: string, timeoutMs = 15_000): Promise<string> {
   const startedAt = Date.now()
   while (Date.now() - startedAt < timeoutMs) {
@@ -57,10 +62,11 @@ async function setupBlockingRoute() {
     "dawn.config.ts": "export default {}\n",
     "package.json": '{ "name": "run-cancellation-fixture", "type": "module" }\n',
     "src/app/blocking/index.ts": BLOCKING_ROUTE,
+    "src/app/other/index.ts": OTHER_ROUTE,
   }
   for (const [rel, body] of Object.entries(files)) {
     const filePath = join(appRoot, rel)
-    await mkdir(join(filePath, ".."), { recursive: true })
+    await mkdir(dirname(filePath), { recursive: true })
     await writeFile(filePath, body, "utf8")
   }
 
@@ -81,19 +87,20 @@ async function setupBlockingRoute() {
   }
 }
 
-function runStreamRequest(threadId: string, startedFile: string, releaseFile: string): Request {
+function runStreamRequest(
+  threadId: string,
+  startedFile: string,
+  releaseFile: string,
+  route = "/blocking#graph",
+): Request {
   return new Request(`http://localhost/threads/${threadId}/runs/stream`, {
     body: JSON.stringify({
       input: { releaseFile, startedFile },
-      route: "/blocking#graph",
+      route,
     }),
     headers: { "content-type": "application/json" },
     method: "POST",
   })
-}
-
-function waitUntilRunStarted(startedFile: string): Promise<string> {
-  return waitForFile(startedFile)
 }
 
 /** Reads the response body to completion so the run finishes and close() can drain cleanly. */
@@ -117,12 +124,40 @@ describe("AP concurrency gate", () => {
     const response1 = await handler.fetch(runStreamRequest("t-409", startedFile, releaseFile))
     expect(response1.status).toBe(200)
 
-    await waitUntilRunStarted(startedFile)
+    await waitForFile(startedFile)
 
     const response2 = await handler.fetch(runStreamRequest("t-409", startedFile, releaseFile))
     expect(response2.status).toBe(409)
-    const body = (await response2.json()) as { error: { message: string } }
+    const body = (await response2.json()) as {
+      error: { message: string; details?: { code?: string } }
+    }
     expect(body.error.message).toContain("already in flight")
+    expect(body.error.details?.code).toBe("run_in_flight")
+
+    await releaseRoute()
+    await drain(response1)
+  }, 30_000)
+
+  it("a rejected concurrent run does not clobber the thread's recorded route", async () => {
+    const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute()
+    const threadId = "t-route-clobber"
+
+    const response1 = await handler.fetch(
+      runStreamRequest(threadId, startedFile, releaseFile, "/blocking#graph"),
+    )
+    expect(response1.status).toBe(200)
+
+    await waitForFile(startedFile)
+
+    const response2 = await handler.fetch(
+      runStreamRequest(threadId, startedFile, releaseFile, "/other#graph"),
+    )
+    expect(response2.status).toBe(409)
+
+    const threadResponse = await handler.fetch(new Request(`http://localhost/threads/${threadId}`))
+    expect(threadResponse.status).toBe(200)
+    const thread = (await threadResponse.json()) as { metadata: Record<string, unknown> }
+    expect(thread.metadata.route).toBe("/blocking#graph")
 
     await releaseRoute()
     await drain(response1)
@@ -134,7 +169,7 @@ describe("AP concurrency gate", () => {
     const response1 = await handler.fetch(runStreamRequest("thread-a", startedFile, releaseFile))
     expect(response1.status).toBe(200)
 
-    await waitUntilRunStarted(startedFile)
+    await waitForFile(startedFile)
 
     const response2 = await handler.fetch(runStreamRequest("thread-b", startedFile, releaseFile))
     expect(response2.status).toBe(200)
@@ -150,7 +185,7 @@ describe("AP concurrency gate", () => {
     const response1 = await handler.fetch(runStreamRequest("t-reuse", startedFile, releaseFile))
     expect(response1.status).toBe(200)
 
-    await waitUntilRunStarted(startedFile)
+    await waitForFile(startedFile)
     await releaseRoute()
     await drain(response1)
 
