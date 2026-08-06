@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
-import { dirname, join, resolve } from "node:path"
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { pathToFileURL } from "node:url"
 
 const DEFAULT_TYPESCRIPT_VERSION = "7.0.2"
@@ -84,14 +84,24 @@ const sharedToolsDir = join(root, "shared")
 assert.equal(typescript.version, expectedTypeScriptVersion)
 
 const coreRequire = createRequire(import.meta.resolve("@dawn-ai/core"))
+const coreCompilerPackagePath = coreRequire.resolve("typescript/package.json")
+const oldCompilerPackagePath = coreRequire.resolve("@typescript/old/package.json")
+const coreCompilerManifest = coreRequire(coreCompilerPackagePath)
+const oldCompilerManifest = coreRequire(oldCompilerPackagePath)
 const coreCompiler = coreRequire("typescript")
 const oldCompiler = coreRequire("@typescript/old")
+assert.equal(coreCompilerManifest.name, "@typescript/typescript6")
+assert.equal(coreCompilerManifest.version, "6.0.2")
+assert.equal(oldCompilerManifest.name, "typescript")
+assert.equal(oldCompilerManifest.version, "6.0.2")
 assert.equal(coreCompiler.version, "6.0.2")
 assert.equal(oldCompiler.version, "6.0.2")
 assert.equal(typeof coreCompiler.createProgram, "function")
 assert.equal(typeof coreCompiler.createSourceFile, "function")
 assert.equal(typeof oldCompiler.createProgram, "function")
 assert.equal(typeof oldCompiler.createSourceFile, "function")
+assert.equal(coreCompiler.createProgram, oldCompiler.createProgram)
+assert.equal(coreCompiler.createSourceFile, oldCompiler.createSourceFile)
 
 const extractionOptions = { routeDir, sharedToolsDir }
 const types = await extractToolTypesForRoute(extractionOptions)
@@ -211,6 +221,10 @@ export function typescriptToolingTypeScriptConfig() {
   }
 }
 
+/**
+ * Writes and runs the probe inside a caller-owned project root.
+ * The caller remains responsible for cleaning up that root and every generated file.
+ */
 export async function runTypeScriptToolingProbe(options) {
   validateRunnerOptions(options)
   const { expectedTypeScriptVersion, runCommand } = options
@@ -230,9 +244,11 @@ export async function runTypeScriptToolingProbe(options) {
     }),
   )
 
-  const typescriptBin = await resolveTypeScriptBin(root, expectedTypeScriptVersion)
+  const typescriptBin = await resolveTypeScriptBin({ root, expectedTypeScriptVersion })
   await runCommand(process.execPath, [PROBE_FILE], { cwd: root })
-  await runCommand(typescriptBin, ["--noEmit", "--project", TSCONFIG_FILE], { cwd: root })
+  await runCommand(process.execPath, [typescriptBin, "--project", TSCONFIG_FILE, "--noEmit"], {
+    cwd: root,
+  })
 }
 
 function validateRunnerOptions(options) {
@@ -255,26 +271,85 @@ function validateRunnerOptions(options) {
   }
 }
 
-async function resolveTypeScriptBin(root, expectedTypeScriptVersion) {
-  const consumerRequire = createRequire(pathToFileURL(join(root, "package.json")))
+export async function resolveTypeScriptBin({ root, expectedTypeScriptVersion }) {
+  const resolvedRoot = resolve(root)
+  const consumerRequire = createRequire(pathToFileURL(join(resolvedRoot, "package.json")))
   let packagePath
   try {
     packagePath = consumerRequire.resolve("typescript/package.json")
   } catch (error) {
-    throw new Error(`Unable to resolve the installed TypeScript package from ${root}`, {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; unable to resolve a valid TypeScript manifest from ${resolvedRoot}`,
+      { cause: error },
+    )
+  }
+
+  let manifest
+  try {
+    manifest = JSON.parse(await readFile(packagePath, "utf8"))
+  } catch (error) {
+    throw new Error(`Unable to read a valid TypeScript package manifest at ${packagePath}`, {
       cause: error,
     })
   }
-
-  const manifest = JSON.parse(await readFile(packagePath, "utf8"))
   if (manifest.version !== expectedTypeScriptVersion) {
     throw new Error(
-      `installed TypeScript version ${manifest.version ?? "unknown"}, expected ${expectedTypeScriptVersion}`,
+      `installed TypeScript version ${manifest.version ?? "unknown"}, expected ${expectedTypeScriptVersion} (manifest ${packagePath})`,
     )
   }
   const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.tsc
-  if (typeof bin !== "string" || bin.length === 0) {
-    throw new Error("Installed TypeScript package manifest does not declare a tsc binary")
+  const packageRoot = dirname(packagePath)
+  if (typeof bin !== "string" || bin.trim().length === 0) {
+    throw new Error(
+      `TypeScript package manifest ${packagePath} does not declare a non-empty tsc bin entry`,
+    )
   }
-  return resolve(dirname(packagePath), bin)
+  if (isAbsolute(bin)) {
+    throw new Error(
+      `TypeScript package manifest ${packagePath} declares an absolute tsc bin path: ${bin}`,
+    )
+  }
+
+  let realPackageRoot
+  try {
+    realPackageRoot = await realpath(packageRoot)
+  } catch (error) {
+    throw new Error(`Unable to resolve TypeScript package root ${packageRoot}`, { cause: error })
+  }
+  const target = resolve(realPackageRoot, bin)
+  assertContainedPath(realPackageRoot, target, packagePath)
+
+  let realTarget
+  try {
+    realTarget = await realpath(target)
+  } catch (error) {
+    throw new Error(`TypeScript tsc bin target ${target} is missing or unreadable`, {
+      cause: error,
+    })
+  }
+  assertContainedPath(realPackageRoot, realTarget, packagePath)
+
+  let targetStat
+  try {
+    targetStat = await stat(realTarget)
+  } catch (error) {
+    throw new Error(`Unable to inspect TypeScript tsc bin target ${realTarget}`, { cause: error })
+  }
+  if (!targetStat.isFile()) {
+    throw new Error(`TypeScript tsc bin target ${realTarget} is not a regular file`)
+  }
+  return realTarget
+}
+
+function assertContainedPath(realPackageRoot, target, packagePath) {
+  const relativeTarget = relative(realPackageRoot, target)
+  if (
+    relativeTarget === ".." ||
+    relativeTarget.startsWith(`..${sep}`) ||
+    isAbsolute(relativeTarget)
+  ) {
+    throw new Error(
+      `TypeScript tsc bin target ${target} is outside package root ${realPackageRoot} from ${packagePath}`,
+    )
+  }
 }

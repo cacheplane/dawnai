@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, describe, it } from "node:test"
@@ -17,6 +17,7 @@ import {
   validatePackageMetadata,
 } from "./lib/published-artifacts.mjs"
 import {
+  resolveTypeScriptBin,
   runTypeScriptToolingProbe,
   typescriptToolingConsumerSource,
   typescriptToolingProbeSource,
@@ -345,8 +346,14 @@ describe("TypeScript tooling installed probe", () => {
     assert.match(source, /typescript\.version, expectedTypeScriptVersion/)
     assert.match(source, /coreCompiler\.version, "6\.0\.2"/)
     assert.match(source, /oldCompiler\.version, "6\.0\.2"/)
+    assert.match(source, /coreCompilerManifest\.name, "@typescript\/typescript6"/)
+    assert.match(source, /coreCompilerManifest\.version, "6\.0\.2"/)
+    assert.match(source, /oldCompilerManifest\.name, "typescript"/)
+    assert.match(source, /oldCompilerManifest\.version, "6\.0\.2"/)
     assert.match(source, /typeof coreCompiler\.createProgram, "function"/)
     assert.match(source, /typeof oldCompiler\.createSourceFile, "function"/)
+    assert.match(source, /coreCompiler\.createProgram, oldCompiler\.createProgram/)
+    assert.match(source, /coreCompiler\.createSourceFile, oldCompiler\.createSourceFile/)
   })
 
   it("builds representative shared and local tool sources without repository imports", () => {
@@ -424,11 +431,133 @@ describe("TypeScript tooling installed probe", () => {
         options: { cwd: root },
       },
       {
-        command: join(realpathSync(root), "node_modules", "typescript", "custom-bin", "tsc.mjs"),
-        args: ["--noEmit", "--project", "tsconfig.typescript-tooling.json"],
+        command: process.execPath,
+        args: [
+          join(realpathSync(root), "node_modules", "typescript", "custom-bin", "tsc.mjs"),
+          "--project",
+          "tsconfig.typescript-tooling.json",
+          "--noEmit",
+        ],
         options: { cwd: root },
       },
     ])
+  })
+
+  it("resolves object and string TypeScript bins from the installed manifest", async () => {
+    const objectRoot = await createTypeScriptToolingRunnerFixture()
+    const stringRoot = await createTypeScriptToolingRunnerFixture({
+      bin: "./custom-bin/tsc.mjs",
+    })
+
+    assert.equal(
+      await resolveTypeScriptBin({
+        root: objectRoot,
+        expectedTypeScriptVersion: "7.0.2",
+      }),
+      join(realpathSync(objectRoot), "node_modules", "typescript", "custom-bin", "tsc.mjs"),
+    )
+    assert.equal(
+      await resolveTypeScriptBin({
+        root: stringRoot,
+        expectedTypeScriptVersion: "7.0.2",
+      }),
+      join(realpathSync(stringRoot), "node_modules", "typescript", "custom-bin", "tsc.mjs"),
+    )
+  })
+
+  it("rejects malformed or unsafe TypeScript bin declarations", async () => {
+    const missingEntryRoot = await createTypeScriptToolingRunnerFixture({ bin: {} })
+    await assert.rejects(
+      resolveTypeScriptBin({
+        root: missingEntryRoot,
+        expectedTypeScriptVersion: "7.0.2",
+      }),
+      new RegExp(
+        `${escapeRegExp(join(realpathSync(missingEntryRoot), "node_modules", "typescript"))}.*tsc`,
+        "s",
+      ),
+    )
+
+    const absoluteRoot = await createTypeScriptToolingRunnerFixture()
+    const absoluteTarget = join(absoluteRoot, "absolute-tsc.mjs")
+    await writeFile(absoluteTarget, "", "utf8")
+    await writeTypeScriptManifest(absoluteRoot, { bin: { tsc: absoluteTarget } })
+    await assert.rejects(
+      resolveTypeScriptBin({ root: absoluteRoot, expectedTypeScriptVersion: "7.0.2" }),
+      /absolute.*TypeScript.*bin|TypeScript.*bin.*absolute/i,
+    )
+
+    const traversalRoot = await createTypeScriptToolingRunnerFixture()
+    await writeFile(join(traversalRoot, "node_modules", "outside-tsc.mjs"), "", "utf8")
+    await writeTypeScriptManifest(traversalRoot, { bin: { tsc: "../outside-tsc.mjs" } })
+    await assert.rejects(
+      resolveTypeScriptBin({ root: traversalRoot, expectedTypeScriptVersion: "7.0.2" }),
+      /outside.*TypeScript.*package|contain/i,
+    )
+  })
+
+  it("rejects missing and non-file TypeScript bin targets with path-rich diagnostics", async () => {
+    const missingRoot = await createTypeScriptToolingRunnerFixture()
+    const missingTarget = join(
+      realpathSync(missingRoot),
+      "node_modules",
+      "typescript",
+      "custom-bin",
+      "tsc.mjs",
+    )
+    await rm(missingTarget)
+    await assert.rejects(
+      resolveTypeScriptBin({ root: missingRoot, expectedTypeScriptVersion: "7.0.2" }),
+      new RegExp(`${escapeRegExp(missingTarget)}.*(?:missing|unreadable)`, "is"),
+    )
+
+    const directoryRoot = await createTypeScriptToolingRunnerFixture()
+    const directoryTarget = join(
+      realpathSync(directoryRoot),
+      "node_modules",
+      "typescript",
+      "custom-bin",
+      "tsc.mjs",
+    )
+    await rm(directoryTarget)
+    await mkdir(directoryTarget)
+    await assert.rejects(
+      resolveTypeScriptBin({ root: directoryRoot, expectedTypeScriptVersion: "7.0.2" }),
+      new RegExp(`${escapeRegExp(directoryTarget)}.*regular file`, "is"),
+    )
+  })
+
+  it("rejects a TypeScript bin symlink that escapes its package", async (t) => {
+    const root = await createTypeScriptToolingRunnerFixture()
+    const target = join(root, "node_modules", "typescript", "custom-bin", "tsc.mjs")
+    const outsideTarget = join(root, "outside-tsc.mjs")
+    await rm(target)
+    await writeFile(outsideTarget, "", "utf8")
+    try {
+      await symlink(outsideTarget, target)
+    } catch (error) {
+      if (error?.code === "EPERM" || error?.code === "EACCES") {
+        t.skip(`symlinks unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+
+    await assert.rejects(
+      resolveTypeScriptBin({ root, expectedTypeScriptVersion: "7.0.2" }),
+      /outside.*TypeScript.*package|contain/i,
+    )
+  })
+
+  it("reports the installed TypeScript manifest path when JSON is malformed", async () => {
+    const root = await createTypeScriptToolingRunnerFixture()
+    const manifestPath = join(root, "node_modules", "typescript", "package.json")
+    await writeFile(manifestPath, "{", "utf8")
+
+    await assert.rejects(
+      resolveTypeScriptBin({ root, expectedTypeScriptVersion: "7.0.2" }),
+      new RegExp(`${escapeRegExp(manifestPath)}.*valid.*manifest`, "is"),
+    )
   })
 
   it("validates runner options and the installed TypeScript version", async () => {
@@ -795,7 +924,10 @@ describe("assertNoNativeInstallOutput", () => {
   })
 })
 
-async function createTypeScriptToolingRunnerFixture({ version = "7.0.2" } = {}) {
+async function createTypeScriptToolingRunnerFixture({
+  bin = { tsc: "./custom-bin/tsc.mjs" },
+  version = "7.0.2",
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), "dawn-typescript-tooling-probe-test-"))
   const typescriptRoot = join(root, "node_modules", "typescript")
   tempRoots.push(root)
@@ -807,13 +939,25 @@ async function createTypeScriptToolingRunnerFixture({ version = "7.0.2" } = {}) 
       JSON.stringify({
         name: "typescript",
         version,
-        bin: { tsc: "./custom-bin/tsc.mjs" },
+        bin,
       }),
       "utf8",
     ),
     writeFile(join(typescriptRoot, "custom-bin", "tsc.mjs"), "", "utf8"),
   ])
   return root
+}
+
+async function writeTypeScriptManifest(root, overrides) {
+  await writeFile(
+    join(root, "node_modules", "typescript", "package.json"),
+    JSON.stringify({ name: "typescript", version: "7.0.2", ...overrides }),
+    "utf8",
+  )
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 async function createAgUiProbeFixture(options = {}) {
