@@ -215,6 +215,90 @@ export async function npmView(packageName) {
   }
 }
 
+export async function waitForPublishedVersions({
+  packages,
+  version,
+  attempts,
+  delayMs,
+  npmViewImpl = npmView,
+  delay = defaultDelay,
+}) {
+  if (!Array.isArray(packages) || packages.length === 0) {
+    throw new TypeError("packages must be a non-empty array")
+  }
+
+  if (packages.some((packageName) => typeof packageName !== "string" || packageName.length === 0)) {
+    throw new TypeError("each package must be a non-empty string")
+  }
+
+  if (typeof version !== "string" || version.length === 0) {
+    throw new TypeError("version must be a non-empty string")
+  }
+
+  if (!Number.isInteger(attempts) || attempts <= 0) {
+    throw new TypeError("attempts must be a positive integer")
+  }
+
+  if (!Number.isFinite(delayMs) || delayMs < 0) {
+    throw new TypeError("delayMs must be a finite non-negative number")
+  }
+
+  if (typeof npmViewImpl !== "function") {
+    throw new TypeError("npmViewImpl must be a function")
+  }
+
+  if (typeof delay !== "function") {
+    throw new TypeError("delay must be a function")
+  }
+
+  const missing = new Set(packages)
+  const lastErrors = new Map()
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const outstanding = [...missing]
+    const results = await Promise.all(
+      outstanding.map(async (packageName) => {
+        try {
+          const view = await npmViewImpl(packageName)
+          return { packageName, visible: view?.versions?.includes(version) === true }
+        } catch (error) {
+          return { error, packageName, visible: false }
+        }
+      }),
+    )
+
+    for (const result of results) {
+      if (result.visible) {
+        missing.delete(result.packageName)
+        lastErrors.delete(result.packageName)
+      } else if (result.error) {
+        lastErrors.set(result.packageName, result.error)
+      }
+    }
+
+    if (missing.size === 0) {
+      return
+    }
+
+    if (attempt < attempts) {
+      await delay(delayMs)
+    }
+  }
+
+  const missingDetails = [...missing].map((packageName) => {
+    const detail = lastErrors.get(packageName)?.message
+    return `${packageName}@${version}${detail ? ` (last registry error: ${detail})` : ""}`
+  })
+  const scheduledDelayMs = Math.max(0, attempts - 1) * delayMs
+  throw new Error(
+    `Timed out waiting for published version after ${attempts} attempts and ${scheduledDelayMs}ms scheduled delay; missing: ${missingDetails.join(", ")}`,
+  )
+}
+
+function defaultDelay(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
+}
+
 export async function makeTempDir(prefix) {
   return mkdtemp(join(tmpdir(), prefix))
 }

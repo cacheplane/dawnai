@@ -2,6 +2,7 @@
 
 import { mkdir, readFile, stat } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 
 import {
   assertCleanDependencySpecs,
@@ -15,43 +16,73 @@ import {
   resolveRequestedVersion,
   run,
   validatePackageMetadata,
+  waitForPublishedVersions,
 } from "./lib/published-artifacts.mjs"
 
-try {
-  const { packageSet, version } = parseArgs(normalizeCliArgs(process.argv.slice(2)))
-  const publicPackages = await readPublicPackages()
-  const packageNames = resolvePackageSet(packageSet, publicPackages)
+const DEFAULT_WAIT_DELAY_MS = 10_000
+
+async function main() {
+  try {
+    const options = parsePublishedArtifactVerifyArgs(normalizeCliArgs(process.argv.slice(2)))
+    const { failures, packageNames } = await runPublishedArtifactVerify(options)
+
+    if (failures.length > 0) {
+      console.error(
+        `META FAIL ${failures.length} of ${packageNames.length} package(s) failed for ${options.version} in package set ${options.packageSet}`,
+      )
+      process.exitCode = 1
+    } else {
+      console.log(
+        `META PASS verified ${packageNames.length} package(s) for ${options.version} in package set ${options.packageSet}`,
+      )
+    }
+  } catch (error) {
+    console.error(`META FAIL ${error.message}`)
+    process.exitCode = 1
+  }
+}
+
+export async function runPublishedArtifactVerify(options, overrides = {}) {
+  const dependencies = {
+    readPublicPackages,
+    verifyPackage,
+    waitForPublishedVersions,
+    ...overrides,
+  }
+  const publicPackages = await dependencies.readPublicPackages()
+  const packageNames = resolvePackageSet(options.packageSet, publicPackages)
+
+  if (options.waitAttempts !== undefined) {
+    await dependencies.waitForPublishedVersions({
+      attempts: options.waitAttempts,
+      delayMs: options.waitDelayMs,
+      packages: packageNames,
+      version: options.version,
+    })
+  }
+
   const failures = []
 
   for (const packageName of packageNames) {
     try {
-      await verifyPackage(packageName, version)
+      await dependencies.verifyPackage(packageName, options.version)
     } catch (error) {
       failures.push(error)
       console.error(`META FAIL ${error.message}`)
     }
   }
 
-  if (failures.length > 0) {
-    console.error(
-      `META FAIL ${failures.length} of ${packageNames.length} package(s) failed for ${version} in package set ${packageSet}`,
-    )
-    process.exitCode = 1
-  } else {
-    console.log(
-      `META PASS verified ${packageNames.length} package(s) for ${version} in package set ${packageSet}`,
-    )
-  }
-} catch (error) {
-  console.error(`META FAIL ${error.message}`)
-  process.exitCode = 1
+  return { failures, packageNames }
 }
 
-function parseArgs(args) {
+export function parsePublishedArtifactVerifyArgs(args) {
   const parsed = {
     packageSet: "memory-pgvector-core",
     version: "latest",
   }
+  let versionProvided = false
+  let waitAttempts
+  let waitDelayMs
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]
@@ -64,6 +95,19 @@ function parseArgs(args) {
 
     if (arg === "--version") {
       parsed.version = readFlagValue(args, index, arg)
+      versionProvided = true
+      index += 1
+      continue
+    }
+
+    if (arg === "--wait-attempts") {
+      waitAttempts = parsePositiveInteger(readFlagValue(args, index, arg), arg)
+      index += 1
+      continue
+    }
+
+    if (arg === "--wait-delay-ms") {
+      waitDelayMs = parseNonNegativeInteger(readFlagValue(args, index, arg), arg)
       index += 1
       continue
     }
@@ -75,10 +119,69 @@ function parseArgs(args) {
 
     if (arg.startsWith("--version=")) {
       parsed.version = arg.slice("--version=".length)
+      versionProvided = true
+      continue
+    }
+
+    if (arg.startsWith("--wait-attempts=")) {
+      waitAttempts = parsePositiveInteger(arg.slice("--wait-attempts=".length), "--wait-attempts")
+      continue
+    }
+
+    if (arg.startsWith("--wait-delay-ms=")) {
+      waitDelayMs = parseNonNegativeInteger(arg.slice("--wait-delay-ms=".length), "--wait-delay-ms")
       continue
     }
 
     throw new Error(`Unknown argument "${arg}"`)
+  }
+
+  if (waitDelayMs !== undefined && waitAttempts === undefined) {
+    throw new Error("--wait-delay-ms requires --wait-attempts")
+  }
+
+  if (waitAttempts !== undefined) {
+    if (!versionProvided || !isExactVersion(parsed.version)) {
+      throw new Error("--wait-attempts requires --version with an exact version")
+    }
+
+    parsed.waitAttempts = waitAttempts
+    parsed.waitDelayMs = waitDelayMs ?? DEFAULT_WAIT_DELAY_MS
+  }
+
+  return parsed
+}
+
+function isExactVersion(value) {
+  const match = value.match(
+    /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+  )
+  if (!match) {
+    return false
+  }
+
+  const prerelease = match[1]
+  return (
+    prerelease === undefined ||
+    prerelease
+      .split(".")
+      .every((identifier) => !/^\d+$/.test(identifier) || /^(?:0|[1-9]\d*)$/.test(identifier))
+  )
+}
+
+function parsePositiveInteger(value, flag) {
+  const parsed = Number(value)
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flag} must be a positive integer`)
+  }
+
+  return parsed
+}
+
+function parseNonNegativeInteger(value, flag) {
+  const parsed = Number(value)
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed)) {
+    throw new Error(`${flag} must be a non-negative integer`)
   }
 
   return parsed
@@ -175,4 +278,8 @@ async function assertExpectedFiles({ packageName, packageDir, version }) {
       `${packageName}@${version} tarball is missing expected file(s): ${missing.join(", ")}`,
     )
   }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  await main()
 }

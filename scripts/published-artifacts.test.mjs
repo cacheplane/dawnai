@@ -16,6 +16,7 @@ import {
   resolveRequestedVersion,
   run,
   validatePackageMetadata,
+  waitForPublishedVersions,
 } from "./lib/published-artifacts.mjs"
 import {
   resolveTypeScriptBin,
@@ -26,6 +27,10 @@ import {
   typescriptToolingTypeScriptConfig,
 } from "./lib/typescript-tooling-probe.mjs"
 import * as publishedSmoke from "./published-artifact-smoke.mjs"
+import {
+  parsePublishedArtifactVerifyArgs,
+  runPublishedArtifactVerify,
+} from "./published-artifact-verify.mjs"
 
 const {
   agUiEsmProbeSource,
@@ -109,6 +114,347 @@ describe("packageSets", () => {
   })
 })
 
+describe("waitForPublishedVersions", () => {
+  it("returns immediately when every package has the exact version", async () => {
+    const calls = []
+    const delays = []
+
+    await waitForPublishedVersions({
+      packages: ["@dawn-ai/core", "@dawn-ai/vite-plugin"],
+      version: "0.9.0",
+      attempts: 3,
+      delayMs: 10_000,
+      async npmViewImpl(packageName) {
+        calls.push(packageName)
+        return { versions: ["0.8.15", "0.9.0"], tags: { latest: "0.9.0" } }
+      },
+      async delay(ms) {
+        delays.push(ms)
+      },
+    })
+
+    assert.deepEqual(calls, ["@dawn-ai/core", "@dawn-ai/vite-plugin"])
+    assert.deepEqual(delays, [])
+  })
+
+  it("retries only missing packages in deterministic order", async () => {
+    const calls = []
+    const delays = []
+    const packageAttempts = new Map()
+
+    await waitForPublishedVersions({
+      packages: ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/core", "@dawn-ai/cli"],
+      version: "0.9.0",
+      attempts: 3,
+      delayMs: 25,
+      async npmViewImpl(packageName) {
+        calls.push(packageName)
+        const attempt = (packageAttempts.get(packageName) ?? 0) + 1
+        packageAttempts.set(packageName, attempt)
+        const visibleAfter = packageName === "@dawn-ai/vite-plugin" ? 3 : 1
+        return { versions: attempt >= visibleAfter ? ["0.9.0"] : [] }
+      },
+      async delay(ms) {
+        delays.push(ms)
+      },
+    })
+
+    assert.deepEqual(calls, [
+      "@dawn-ai/core",
+      "@dawn-ai/vite-plugin",
+      "@dawn-ai/cli",
+      "@dawn-ai/vite-plugin",
+      "@dawn-ai/vite-plugin",
+    ])
+    assert.deepEqual(delays, [25, 25])
+  })
+
+  it("names only the packages still missing after the bounded attempts", async () => {
+    const calls = []
+    const delays = []
+
+    await assert.rejects(
+      waitForPublishedVersions({
+        packages: ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
+        version: "0.9.0",
+        attempts: 2,
+        delayMs: 250,
+        async npmViewImpl(packageName) {
+          calls.push(packageName)
+          return { versions: packageName === "@dawn-ai/vite-plugin" ? [] : ["0.9.0"] }
+        },
+        async delay(ms) {
+          delays.push(ms)
+        },
+      }),
+      (error) => {
+        assert.match(error.message, /@dawn-ai\/vite-plugin@0\.9\.0/)
+        assert.doesNotMatch(error.message, /@dawn-ai\/core@0\.9\.0/)
+        assert.doesNotMatch(error.message, /@dawn-ai\/cli@0\.9\.0/)
+        assert.match(error.message, /2 attempts/)
+        assert.match(error.message, /250ms/)
+        return true
+      },
+    )
+
+    assert.deepEqual(calls, [
+      "@dawn-ai/core",
+      "@dawn-ai/vite-plugin",
+      "@dawn-ai/cli",
+      "@dawn-ai/vite-plugin",
+    ])
+    assert.deepEqual(delays, [250])
+  })
+
+  it("treats transient npm view errors as not yet visible and reports the last error", async () => {
+    let calls = 0
+    const delays = []
+
+    await assert.rejects(
+      waitForPublishedVersions({
+        packages: ["@dawn-ai/core"],
+        version: "0.9.0",
+        attempts: 3,
+        delayMs: 5,
+        async npmViewImpl() {
+          calls += 1
+          throw new Error(`registry E500 on call ${calls}`)
+        },
+        async delay(ms) {
+          delays.push(ms)
+        },
+      }),
+      /@dawn-ai\/core@0\.9\.0.*registry E500 on call 3/s,
+    )
+
+    assert.equal(calls, 3)
+    assert.deepEqual(delays, [5, 5])
+  })
+
+  it("validates inputs before calling injected functions", async () => {
+    let calls = 0
+    const npmViewImpl = async () => {
+      calls += 1
+      return { versions: [] }
+    }
+    const delay = async () => {
+      calls += 1
+    }
+    const invalidCases = [
+      [{ packages: [], version: "0.9.0", attempts: 1, delayMs: 0 }, /packages.*non-empty/i],
+      [{ packages: [""], version: "0.9.0", attempts: 1, delayMs: 0 }, /package.*non-empty/i],
+      [{ packages: ["core"], version: "", attempts: 1, delayMs: 0 }, /version.*non-empty/i],
+      [
+        { packages: ["core"], version: "0.9.0", attempts: 0, delayMs: 0 },
+        /attempts.*positive integer/i,
+      ],
+      [
+        { packages: ["core"], version: "0.9.0", attempts: 1.5, delayMs: 0 },
+        /attempts.*positive integer/i,
+      ],
+      [
+        { packages: ["core"], version: "0.9.0", attempts: 1, delayMs: -1 },
+        /delayMs.*finite non-negative/i,
+      ],
+      [
+        { packages: ["core"], version: "0.9.0", attempts: 1, delayMs: Number.POSITIVE_INFINITY },
+        /delayMs.*finite non-negative/i,
+      ],
+      [
+        {
+          packages: ["core"],
+          version: "0.9.0",
+          attempts: 1,
+          delayMs: 0,
+          npmViewImpl: null,
+        },
+        /npmViewImpl.*function/i,
+      ],
+      [
+        {
+          packages: ["core"],
+          version: "0.9.0",
+          attempts: 1,
+          delayMs: 0,
+          delay: null,
+        },
+        /delay.*function/i,
+      ],
+    ]
+
+    for (const [options, expected] of invalidCases) {
+      await assert.rejects(
+        waitForPublishedVersions({ ...options, npmViewImpl, delay, ...options }),
+        expected,
+      )
+    }
+    assert.equal(calls, 0)
+  })
+})
+
+describe("published artifact verification CLI", () => {
+  it("keeps the existing no-wait defaults", () => {
+    assert.deepEqual(parsePublishedArtifactVerifyArgs([]), {
+      packageSet: "memory-pgvector-core",
+      version: "latest",
+    })
+  })
+
+  it("parses bounded wait flags in split and equals forms", () => {
+    assert.deepEqual(
+      parsePublishedArtifactVerifyArgs([
+        "--version",
+        "0.9.0",
+        "--package-set=typescript-tooling",
+        "--wait-attempts",
+        "18",
+        "--wait-delay-ms=10000",
+      ]),
+      {
+        packageSet: "typescript-tooling",
+        version: "0.9.0",
+        waitAttempts: 18,
+        waitDelayMs: 10_000,
+      },
+    )
+  })
+
+  it("uses a bounded default delay when attempts enable waiting", () => {
+    assert.deepEqual(parsePublishedArtifactVerifyArgs(["--version=0.9.0", "--wait-attempts=2"]), {
+      packageSet: "memory-pgvector-core",
+      version: "0.9.0",
+      waitAttempts: 2,
+      waitDelayMs: 10_000,
+    })
+  })
+
+  it("accepts an exact prerelease version in wait mode", () => {
+    assert.deepEqual(
+      parsePublishedArtifactVerifyArgs([
+        "--version=1.0.0-rc.1+build.5",
+        "--wait-attempts=2",
+        "--wait-delay-ms=0",
+      ]),
+      {
+        packageSet: "memory-pgvector-core",
+        version: "1.0.0-rc.1+build.5",
+        waitAttempts: 2,
+        waitDelayMs: 0,
+      },
+    )
+  })
+
+  it("preserves dist-tag selection in no-wait mode", () => {
+    assert.deepEqual(parsePublishedArtifactVerifyArgs(["--version=next"]), {
+      packageSet: "memory-pgvector-core",
+      version: "next",
+    })
+  })
+
+  it("rejects invalid or ambiguous wait options", () => {
+    for (const [args, expected] of [
+      [["--wait-delay-ms", "100"], /--wait-delay-ms requires --wait-attempts/],
+      [["--wait-attempts", "2"], /--wait-attempts requires --version.*exact version/i],
+      [
+        ["--version", "0.9.0", "--wait-attempts", "0"],
+        /--wait-attempts must be a positive integer/,
+      ],
+      [
+        ["--version", "0.9.0", "--wait-attempts", "1.5"],
+        /--wait-attempts must be a positive integer/,
+      ],
+      [
+        ["--version", "0.9.0", "--wait-attempts", "2", "--wait-delay-ms", "-1"],
+        /--wait-delay-ms must be a non-negative integer/,
+      ],
+      [
+        ["--version", "0.9.0", "--wait-attempts", "2", "--wait-delay-ms", "nope"],
+        /--wait-delay-ms must be a non-negative integer/,
+      ],
+      [
+        ["--version", "0.9.0", "--wait-attempts", "2", "--wait-delay-ms="],
+        /--wait-delay-ms must be a non-negative integer/,
+      ],
+      [
+        ["--version", "next", "--wait-attempts", "2"],
+        /--wait-attempts requires --version.*exact version/i,
+      ],
+      [
+        ["--version", "^0.9.0", "--wait-attempts", "2"],
+        /--wait-attempts requires --version.*exact version/i,
+      ],
+      [
+        ["--version", "not-a-version", "--wait-attempts", "2"],
+        /--wait-attempts requires --version.*exact version/i,
+      ],
+    ]) {
+      assert.throws(() => parsePublishedArtifactVerifyArgs(args), expected)
+    }
+  })
+
+  it("waits for the selected exact versions before metadata verification", async () => {
+    const events = []
+    const result = await runPublishedArtifactVerify(
+      {
+        packageSet: "typescript-tooling",
+        version: "0.9.0",
+        waitAttempts: 18,
+        waitDelayMs: 10_000,
+      },
+      {
+        async readPublicPackages() {
+          events.push({ type: "read-public" })
+          return []
+        },
+        async waitForPublishedVersions(options) {
+          events.push({ options, type: "wait" })
+        },
+        async verifyPackage(packageName, version) {
+          events.push({ packageName, type: "verify", version })
+        },
+      },
+    )
+
+    assert.deepEqual(result, {
+      failures: [],
+      packageNames: ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
+    })
+    assert.deepEqual(events, [
+      { type: "read-public" },
+      {
+        options: {
+          attempts: 18,
+          delayMs: 10_000,
+          packages: ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
+          version: "0.9.0",
+        },
+        type: "wait",
+      },
+      { packageName: "@dawn-ai/core", type: "verify", version: "0.9.0" },
+      { packageName: "@dawn-ai/vite-plugin", type: "verify", version: "0.9.0" },
+      { packageName: "@dawn-ai/cli", type: "verify", version: "0.9.0" },
+    ])
+  })
+
+  it("does not poll in the existing manual no-wait path", async () => {
+    let waited = false
+    await runPublishedArtifactVerify(
+      { packageSet: "ag-ui", version: "latest" },
+      {
+        async readPublicPackages() {
+          return []
+        },
+        async waitForPublishedVersions() {
+          waited = true
+        },
+        async verifyPackage() {},
+      },
+    )
+
+    assert.equal(waited, false)
+  })
+})
+
 describe("published artifact workflow", () => {
   it("offers TypeScript tooling without enabling pgvector or OpenAI runtime work", () => {
     const workflow = readFileSync(
@@ -131,6 +477,59 @@ describe("published artifact workflow", () => {
       workflow,
       /if \[ "\$DAWN_PACKAGE_SET" = "typescript-tooling" \]; then[\s\S]*does not support the OpenAI runtime smoke/,
     )
+  })
+})
+
+describe("release workflow published TypeScript tooling verification", () => {
+  const releaseWorkflowPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    ".github",
+    "workflows",
+    "release.yml",
+  )
+
+  it("extracts the fixed-group version after backfill under the published condition", () => {
+    const workflow = readFileSync(releaseWorkflowPath, "utf8")
+    const backfillIndex = workflow.indexOf(
+      "- name: Backfill tags/releases for bootstrapped packages",
+    )
+    const versionIndex = workflow.indexOf("- name: Read published version")
+
+    assert.ok(backfillIndex >= 0, "release workflow must retain backfill")
+    assert.ok(versionIndex > backfillIndex, "version extraction must follow backfill")
+    assert.match(
+      workflow,
+      /- name: Read published version\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: \|\n\s+DAWN_PUBLISHED_VERSION="\$\(node -p "require\('\.\/packages\/core\/package\.json'\)\.version"\)"\n\s+printf 'DAWN_PUBLISHED_VERSION=%s\\n' "\$DAWN_PUBLISHED_VERSION" >> "\$GITHUB_ENV"/,
+    )
+  })
+
+  it("verifies and then smokes the exact TypeScript tooling release", () => {
+    const workflow = readFileSync(releaseWorkflowPath, "utf8")
+    const verifyIndex = workflow.indexOf("- name: Verify published TypeScript tooling")
+    const smokeIndex = workflow.indexOf("- name: Smoke published TypeScript tooling")
+
+    assert.ok(verifyIndex >= 0, "release workflow must verify published tooling")
+    assert.ok(smokeIndex > verifyIndex, "published smoke must follow metadata verification")
+    assert.match(
+      workflow,
+      /- name: Verify published TypeScript tooling\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: pnpm published:verify -- --version "\$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000/,
+    )
+    assert.match(
+      workflow,
+      /- name: Smoke published TypeScript tooling\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: pnpm published:smoke -- --version "\$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling/,
+    )
+  })
+
+  it("keeps each registry delay below one minute and the total wait bounded", () => {
+    const workflow = readFileSync(releaseWorkflowPath, "utf8")
+    const match = workflow.match(/--wait-attempts (\d+) --wait-delay-ms (\d+)/)
+
+    assert.ok(match, "release verification must declare bounded wait settings")
+    const attempts = Number(match[1])
+    const delayMs = Number(match[2])
+    assert.ok(delayMs < 60_000)
+    assert.ok((attempts - 1) * delayMs < 30 * 60_000)
   })
 })
 
