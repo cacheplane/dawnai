@@ -821,7 +821,7 @@ git commit -m "ci: smoke TypeScript tooling after publish"
 - Modify: relevant TypeScript support documentation only where current claims require updating
 - Verify: `docs/superpowers/specs/2026-08-05-typescript-7-tooling-design.md`
 
-- [ ] **Step 1: Search for stale supported versions and removed helper APIs**
+- [x] **Step 1: Search for stale supported versions and removed helper APIs**
 
 ```bash
 rg -n 'TypeScript 6|typescript@6|6\.0\.2|extractJsDoc|extractParameterType' README.md CONTRIBUTING.md CONTRIBUTORS.md apps packages examples docs scripts test --glob '!docs/superpowers/**'
@@ -829,7 +829,7 @@ rg -n 'TypeScript 6|typescript@6|6\.0\.2|extractJsDoc|extractParameterType' READ
 
 Classify every match; update only claims and templates affected by this migration.
 
-- [ ] **Step 2: Add a patch changeset**
+- [x] **Step 2: Add a patch changeset**
 
 Include affected publishable packages such as Core, Vite plugin, CLI, Inspector, and Devkit. Describe:
 
@@ -841,7 +841,7 @@ Include affected publishable packages such as Core, Vite plugin, CLI, Inspector,
 
 Use patch bumps because the repository is on a fixed 0.x release train.
 
-- [ ] **Step 3: Run docs and changeset checks**
+- [x] **Step 3: Run docs and changeset checks**
 
 ```bash
 node scripts/check-docs.mjs
@@ -850,7 +850,7 @@ node scripts/check-changesets.mjs
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add .changeset packages/vite-plugin/README.md apps packages examples docs scripts test
@@ -864,7 +864,7 @@ git commit -m "docs: document TypeScript 7 support"
 - Verify all changed files
 - Update plan checkboxes as tasks complete
 
-- [ ] **Step 1: Run formatting/lint checks**
+- [x] **Step 1: Run formatting/lint checks**
 
 ```bash
 pnpm lint
@@ -873,7 +873,7 @@ git diff --check
 
 Expected: PASS with no formatting or whitespace errors.
 
-- [ ] **Step 2: Run targeted TypeScript-tooling tests from a fresh build**
+- [x] **Step 2: Run targeted TypeScript-tooling tests from a fresh build**
 
 ```bash
 pnpm build
@@ -885,7 +885,7 @@ pnpm verify:typescript-tooling-pack
 
 Expected: PASS.
 
-- [ ] **Step 3: Run all four Next production builds and Inspector e2e**
+- [x] **Step 3: Run all four Next production builds and Inspector e2e**
 
 ```bash
 pnpm --filter @dawn-ai/web build
@@ -897,7 +897,7 @@ DAWN_TEST_INSPECTOR=1 pnpm --filter @dawn-ai/inspector test
 
 Expected: PASS using Next 16.3's CLI checker and TypeScript 7.
 
-- [ ] **Step 4: Run the full Definition of Done lane**
+- [x] **Step 4: Run the full Definition of Done lane**
 
 ```bash
 pnpm ci:validate
@@ -905,7 +905,7 @@ pnpm ci:validate
 
 Expected: PASS through lint, build-cache, build, typecheck, tests, release-script tests, docs, pack, TypeScript-tooling packed smoke, and harness lanes.
 
-- [ ] **Step 5: Run available gated runtime smokes**
+- [x] **Step 5: Run available gated runtime smokes**
 
 Run locally available Docker/Inspector/full-arc lanes. At minimum:
 
@@ -916,7 +916,7 @@ DAWN_TEST_DOCKER=1 pnpm --filter @dawn-ai/sandbox test
 
 Run Kubernetes/pgvector/full-e2e lanes where their required infrastructure is available. Record skipped lanes explicitly for GitHub CI rather than claiming them.
 
-- [ ] **Step 6: Verify dependency and import invariants**
+- [x] **Step 6: Verify dependency and import invariants**
 
 ```bash
 pnpm exec tsc --version
@@ -932,15 +932,15 @@ Expected:
 - no unintended TypeScript 6 manifest pins;
 - pack check PASS.
 
-- [ ] **Step 7: Request code review**
+- [x] **Step 7: Request code review**
 
 Use `superpowers:requesting-code-review`. Address technically valid feedback with `superpowers:receiving-code-review`, rerunning affected verification after every change.
 
-- [ ] **Step 8: Run final fresh verification**
+- [x] **Step 8: Run final fresh verification**
 
 Use `superpowers:verification-before-completion` and rerun `pnpm ci:validate` plus the packed smoke after all review changes. Read the complete exit status before claiming success.
 
-- [ ] **Step 9: Commit any final review/verification changes**
+- [x] **Step 9: Commit any final review/verification changes**
 
 ```bash
 git status --short
