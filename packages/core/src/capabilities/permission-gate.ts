@@ -1,6 +1,7 @@
 import { sep } from "node:path"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import {
+  subagentPermissionPattern,
   suggestedCommandPattern,
   suggestedMemoryPattern,
   suggestedPathPattern,
@@ -150,6 +151,82 @@ export async function gateToolOp(
   return { allowed: true }
 }
 
+export interface SubagentGateRequest {
+  readonly callId: string
+  readonly input: string
+  readonly parentRouteId: string
+  readonly reason?: string
+  readonly subagentName: string
+  readonly subagentRouteId: string
+  readonly threadId?: string
+}
+
+/** Approval gate for one exact parent-route/subagent-name delegation edge. */
+export async function gateSubagentOp(
+  permissions: PermissionsStore | undefined,
+  request: SubagentGateRequest,
+  opts: { readonly interruptCapable: boolean },
+): Promise<GateResult> {
+  if (permissions?.mode === "bypass") return { allowed: true }
+
+  const suggestedPattern = subagentPermissionPattern(request.parentRouteId, request.subagentName)
+  if (permissions) {
+    const decision = permissions.match("subagent", suggestedPattern)
+    if (decision === "allow") return { allowed: true }
+    if (decision === "deny") {
+      return {
+        allowed: false,
+        reason: `Permission denied by user: subagent ${request.subagentName}`,
+        code: "DAWN_E3002",
+      }
+    }
+    if (permissions.mode === "non-interactive") {
+      return {
+        allowed: false,
+        reason: `Permission denied (fail-closed): subagent ${request.subagentName}`,
+        code: "DAWN_E3002",
+      }
+    }
+  }
+
+  if (
+    !permissions ||
+    opts.interruptCapable !== true ||
+    request.threadId === undefined ||
+    request.threadId.trim().length === 0
+  ) {
+    return {
+      allowed: false,
+      reason:
+        `Permission denied: subagent "${request.subagentName}" requires approval. ` +
+        `Provide a non-empty resumable thread ID and enable interrupt support, or add an allow ` +
+        `rule for "subagent" to the permissions config in dawn.config.ts.`,
+      code: "DAWN_E3002",
+    }
+  }
+
+  const result = await emitPermissionInterrupt({
+    kind: "subagent",
+    callId: request.callId,
+    parentRouteId: request.parentRouteId,
+    subagentName: request.subagentName,
+    subagentRouteId: request.subagentRouteId,
+    inputPreview: truncateDisplay(request.input),
+    ...(request.reason !== undefined ? { reason: request.reason } : {}),
+    suggestedPattern,
+    threadId: request.threadId,
+    permissions,
+  })
+  if (result === "deny") {
+    return {
+      allowed: false,
+      reason: `Permission denied by user: subagent ${request.subagentName}`,
+      code: "DAWN_E3002",
+    }
+  }
+  return { allowed: true }
+}
+
 export interface MemorySupersedeDetail {
   readonly namespace: string
   readonly identity: string
@@ -202,10 +279,14 @@ export async function gateMemorySupersede(
 function buildArgsPreview(input: unknown): string {
   try {
     const s = JSON.stringify(input)
-    return s === undefined ? String(input) : s.length > 500 ? `${s.slice(0, 500)}…` : s
+    return s === undefined ? String(input) : truncateDisplay(s)
   } catch {
     return String(input)
   }
+}
+
+function truncateDisplay(value: string): string {
+  return value.length > 500 ? `${value.slice(0, 500)}…` : value
 }
 
 /**
@@ -317,6 +398,18 @@ type InterruptArgs =
   | { kind: "path"; operation: PathOperation; path: string; permissions: PermissionsStore }
   | { kind: "tool"; toolName: string; argsPreview: string; permissions: PermissionsStore }
   | {
+      kind: "subagent"
+      callId: string
+      parentRouteId: string
+      subagentName: string
+      subagentRouteId: string
+      inputPreview: string
+      reason?: string
+      suggestedPattern: string
+      threadId: string
+      permissions: PermissionsStore
+    }
+  | {
       kind: "memory"
       namespace: string
       identity: string
@@ -333,28 +426,40 @@ async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "
       ? suggestedCommandPattern(args.command)
       : args.kind === "tool"
         ? args.toolName
-        : args.kind === "memory"
-          ? suggestedMemoryPattern(args.namespace)
-          : suggestedPathPattern(args.path)
+        : args.kind === "subagent"
+          ? args.suggestedPattern
+          : args.kind === "memory"
+            ? suggestedMemoryPattern(args.namespace)
+            : suggestedPathPattern(args.path)
   const payload = {
     interruptId,
     type: "permission-request" as const,
     kind: args.kind,
+    ...(args.kind === "subagent" ? { callId: args.callId, threadId: args.threadId } : {}),
     detail:
       args.kind === "command"
         ? { command: args.command, suggestedPattern }
         : args.kind === "tool"
           ? { toolName: args.toolName, argsPreview: args.argsPreview, suggestedPattern }
-          : args.kind === "memory"
+          : args.kind === "subagent"
             ? {
-                namespace: args.namespace,
-                identity: args.identity,
-                oldId: args.oldId,
-                oldContent: args.oldContent,
-                newContent: args.newContent,
+                parentRouteId: args.parentRouteId,
+                subagentName: args.subagentName,
+                subagentRouteId: args.subagentRouteId,
+                inputPreview: args.inputPreview,
+                ...(args.reason !== undefined ? { reason: args.reason } : {}),
                 suggestedPattern,
               }
-            : { operation: args.operation, path: args.path, suggestedPattern },
+            : args.kind === "memory"
+              ? {
+                  namespace: args.namespace,
+                  identity: args.identity,
+                  oldId: args.oldId,
+                  oldContent: args.oldContent,
+                  newContent: args.newContent,
+                  suggestedPattern,
+                }
+              : { operation: args.operation, path: args.path, suggestedPattern },
   }
   const decision = interrupt(payload) as "once" | "always" | "deny"
   if (decision === "deny") return "deny"
@@ -364,9 +469,11 @@ async function emitPermissionInterrupt(args: InterruptArgs): Promise<"allow" | "
         ? "bash"
         : args.kind === "tool"
           ? "tool"
-          : args.kind === "memory"
-            ? "memory"
-            : args.operation
+          : args.kind === "subagent"
+            ? "subagent"
+            : args.kind === "memory"
+              ? "memory"
+              : args.operation
     await args.permissions.addAllow(tool, suggestedPattern)
   }
   return "allow"

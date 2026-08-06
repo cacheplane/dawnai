@@ -2,11 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createPermissionsStore } from "@dawn-ai/permissions"
+import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import {
+  type GateResult,
   gateMemorySupersede,
   gatePathOp,
+  gateSubagentOp,
   gateToolOp,
   wrapToolWithApproval,
   wrapToolWithConstraint,
@@ -121,6 +124,189 @@ describe("gateToolOp", () => {
       expect(result.reason).toMatch(/allow rule/)
       expect(result.reason).toMatch(/dawn\.config/)
     }
+  })
+})
+
+describe("gateSubagentOp", () => {
+  let appRoot: string
+  beforeEach(() => {
+    appRoot = mkdtempSync(join(tmpdir(), "dawn-gate-subagent-test-"))
+  })
+  afterEach(() => {
+    rmSync(appRoot, { recursive: true, force: true })
+  })
+
+  async function store(
+    mode: "interactive" | "non-interactive" | "bypass",
+    config?: {
+      allow?: Record<string, readonly string[]>
+      deny?: Record<string, readonly string[]>
+    },
+  ) {
+    const permissions = createPermissionsStore({
+      appRoot,
+      config: config
+        ? { version: 1, allow: config.allow ?? {}, deny: config.deny ?? {} }
+        : undefined,
+      mode,
+    })
+    await permissions.load()
+    return permissions
+  }
+
+  const request = {
+    callId: "task-1",
+    input: "write a draft",
+    parentRouteId: "/parent",
+    reason: "Drafts require review.",
+    subagentName: "writer",
+    subagentRouteId: "/parent/subagents/writer",
+    threadId: "thread-1",
+  }
+  const { reason: _reason, threadId: _threadId, ...requestWithoutReasonOrThread } = request
+  const pattern = JSON.stringify(["/parent", "writer"])
+
+  it("allows a pre-approved exact parent/name edge", async () => {
+    const permissions = await store("interactive", { allow: { subagent: [pattern] } })
+    await expect(gateSubagentOp(permissions, request, { interruptCapable: true })).resolves.toEqual(
+      { allowed: true },
+    )
+  })
+
+  it("lets an exact deny override an exact allow", async () => {
+    const permissions = await store("interactive", {
+      allow: { subagent: [pattern] },
+      deny: { subagent: [pattern] },
+    })
+    const result = await gateSubagentOp(permissions, request, { interruptCapable: true })
+    expect(result).toEqual({
+      allowed: false,
+      code: "DAWN_E3002",
+      reason: "Permission denied by user: subagent writer",
+    })
+  })
+
+  it("fails closed on unknown approval in non-interactive mode", async () => {
+    const permissions = await store("non-interactive")
+    const result = await gateSubagentOp(permissions, request, { interruptCapable: true })
+    expect(result.allowed).toBe(false)
+    if (!result.allowed) {
+      expect(result.code).toBe("DAWN_E3002")
+      expect(result.reason).toMatch(/fail-closed.*writer/i)
+    }
+  })
+
+  it.each([
+    { interruptCapable: false, threadId: "thread-1" },
+    { interruptCapable: true, threadId: undefined },
+    { interruptCapable: true, threadId: "" },
+    { interruptCapable: true, threadId: "   " },
+  ])("fails closed without resumable interrupt context: $interruptCapable / $threadId", async ({
+    interruptCapable,
+    threadId,
+  }) => {
+    const permissions = await store("interactive")
+    const result = await gateSubagentOp(
+      permissions,
+      threadId !== undefined ? { ...request, threadId } : requestWithoutReasonOrThread,
+      { interruptCapable },
+    )
+    expect(result.allowed).toBe(false)
+    if (!result.allowed) {
+      expect(result.code).toBe("DAWN_E3002")
+      expect(result.reason).toMatch(/thread ID.*interrupt support.*allow rule/i)
+    }
+  })
+
+  it("allows bypass approval without consulting interrupt prerequisites", async () => {
+    const permissions = await store("bypass")
+    await expect(
+      gateSubagentOp(permissions, requestWithoutReasonOrThread, { interruptCapable: false }),
+    ).resolves.toEqual({ allowed: true })
+  })
+
+  async function interruptCase(decision: "once" | "always" | "deny", input = request.input) {
+    const permissions = await store("interactive")
+    const State = Annotation.Root({ result: Annotation<GateResult | undefined>() })
+    const checkpointer = new MemorySaver()
+    const graph = new StateGraph(State)
+      .addNode("permission", async () => ({
+        result: await gateSubagentOp(
+          permissions,
+          { ...request, input },
+          { interruptCapable: true },
+        ),
+      }))
+      .addEdge(START, "permission")
+      .addEdge("permission", END)
+      .compile({ checkpointer })
+    const config = { configurable: { checkpoint_ns: "", thread_id: request.threadId } }
+
+    await graph.invoke({}, config)
+    const pending = await graph.getState(config)
+    const payload = pending.tasks[0]?.interrupts[0]?.value
+    const resumed = await graph.invoke(new Command({ resume: decision }), config)
+    return { payload, permissions, result: resumed.result }
+  }
+
+  it.each([
+    ["once", { allowed: true }],
+    [
+      "deny",
+      { allowed: false, code: "DAWN_E3002", reason: "Permission denied by user: subagent writer" },
+    ],
+  ] as const)("resumes an interactive %s decision", async (decision, expected) => {
+    const { result } = await interruptCase(decision)
+    expect(result).toEqual(expected)
+  })
+
+  it("emits the exact subagent envelope with reason, call identity, and bounded preview", async () => {
+    const longInput = "x".repeat(600)
+    const { payload } = await interruptCase("once", longInput)
+    expect(payload).toEqual({
+      interruptId: expect.stringMatching(/^perm-/),
+      type: "permission-request",
+      kind: "subagent",
+      threadId: "thread-1",
+      callId: "task-1",
+      detail: {
+        parentRouteId: "/parent",
+        subagentName: "writer",
+        subagentRouteId: "/parent/subagents/writer",
+        inputPreview: `${"x".repeat(500)}…`,
+        reason: "Drafts require review.",
+        suggestedPattern: pattern,
+      },
+    })
+  })
+
+  it("omits an absent reason from the interrupt detail", async () => {
+    const permissions = await store("interactive")
+    const withoutReason = { ...requestWithoutReasonOrThread, threadId: request.threadId }
+    const State = Annotation.Root({ result: Annotation<GateResult | undefined>() })
+    const graph = new StateGraph(State)
+      .addNode("permission", async () => ({
+        result: await gateSubagentOp(permissions, withoutReason, { interruptCapable: true }),
+      }))
+      .addEdge(START, "permission")
+      .addEdge("permission", END)
+      .compile({ checkpointer: new MemorySaver() })
+    const config = { configurable: { thread_id: request.threadId } }
+    await graph.invoke({}, config)
+    const payload = (await graph.getState(config)).tasks[0]?.interrupts[0]?.value as {
+      detail?: Record<string, unknown>
+    }
+    expect(payload.detail).not.toHaveProperty("reason")
+  })
+
+  it("persists always for only the exact parent/name edge", async () => {
+    const { permissions, result } = await interruptCase("always")
+    expect(result).toEqual({ allowed: true })
+    expect(permissions.match("subagent", pattern)).toBe("allow")
+    expect(permissions.match("subagent", JSON.stringify(["/parent", "writer-extra"]))).toBe(
+      "unknown",
+    )
+    expect(permissions.match("subagent", JSON.stringify(["/other", "writer"]))).toBe("unknown")
   })
 })
 
