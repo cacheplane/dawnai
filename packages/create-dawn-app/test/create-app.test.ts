@@ -113,7 +113,6 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.scripts["memory:list"]).toBe("dawn memory list")
     expect(packageJson.scripts["memory:approve"]).toBe("dawn memory approve")
     expect(packageJson.scripts.typecheck).toBe("tsc --noEmit")
-    expect(packageJson.dependencies["@dawn-ai/core"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/cli"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/langchain"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/sandbox"]).not.toMatch(/^file:/)
@@ -121,7 +120,6 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.devDependencies["@dawn-ai/testing"]).not.toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/evals"]).not.toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/inspector"]).not.toMatch(/^file:/)
-    expect(packageJson.dependencies["@dawn-ai/core"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/cli"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/sandbox"]).toBe("next")
@@ -171,7 +169,6 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.scripts.eval).toBe("dawn eval")
     expect(packageJson.scripts["memory:list"]).toBe("dawn memory list")
     expect(packageJson.scripts["memory:approve"]).toBe("dawn memory approve")
-    expect(packageJson.dependencies["@dawn-ai/core"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/cli"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/sandbox"]).toMatch(/^file:/)
@@ -228,9 +225,6 @@ describe("create-dawn-ai-app", () => {
     }
     const pnpmWorkspace = await readFile(join(targetDir, "pnpm-workspace.yaml"), "utf8")
 
-    expect(resolveFileSpecifier(packageJson.dependencies["@dawn-ai/core"])).toBe(
-      resolve(repoRoot, "packages/core"),
-    )
     expect(resolveFileSpecifier(packageJson.dependencies["@dawn-ai/cli"])).toBe(
       resolve(repoRoot, "packages/cli"),
     )

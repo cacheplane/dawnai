@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/memory",
-  "version": "0.8.14",
+  "version": "0.8.15",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -14,7 +14,7 @@
     "url": "https://github.com/cacheplane/dawnai/issues"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24.0.0"
   },
   "files": [
     "dist"
@@ -24,6 +24,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./namespace": {
+      "types": "./dist/namespace.d.ts",
+      "default": "./dist/namespace.js"
+    },
+    "./reconcile": {
+      "types": "./dist/reconcile.d.ts",
+      "default": "./dist/reconcile.js"
     }
   },
   "publishConfig": {

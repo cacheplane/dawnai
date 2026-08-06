@@ -12,6 +12,7 @@ const fakeStore: MemoryStoreLike = {
   listCandidates: async () => [],
   browse: async () => ({ records: [], total: 0 }),
   stats: async () => ({ total: 0, byStatus: {}, byKind: {}, byNamespace: {}, bySourceType: {} }),
+  prune: async () => ({ deletedExpired: 0, deletedOverCap: 0 }),
 }
 const schema = {
   safeParse: (d: unknown) =>

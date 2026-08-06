@@ -10,6 +10,4 @@ export async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
-}
+export { isRecord } from "./pure-utils.js"

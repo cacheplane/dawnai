@@ -130,6 +130,8 @@ export function emitModulesFile(options: {
   readonly appRoot: string
   readonly buildDir: string
   readonly discoveries: readonly RouteStaticDiscovery[]
+  /** App middleware file (absolute), when the build probe found one. */
+  readonly middlewareFile?: string
 }): string {
   const { appRoot, buildDir } = options
   const sorted = [...options.discoveries].sort((left, right) =>
@@ -140,6 +142,15 @@ export function emitModulesFile(options: {
 
   const moduleImports: string[] = []
   const routeCalls: string[] = []
+
+  if (options.middlewareFile) {
+    // Namespace import + runtime normalization: the dynamic probe accepts a
+    // default OR named `middleware` export, and a bare default import would
+    // silently miss the named form.
+    moduleImports.push(
+      `import * as middlewareModule from ${JSON.stringify(importSpecifier(buildDir, options.middlewareFile))}`,
+    )
+  }
 
   sorted.forEach((discovery, routeIndex) => {
     const routeVar = `route${routeIndex}`
@@ -239,7 +250,9 @@ export function emitModulesFile(options: {
     `import { dirname, resolve } from "node:path"`,
     `import { fileURLToPath } from "node:url"`,
     ``,
-    `import { buildStaticRouteModule } from "@dawn-ai/cli/runtime"`,
+    options.middlewareFile
+      ? `import { buildStaticRouteModule, normalizeMiddlewareModule } from "@dawn-ai/cli/runtime"`
+      : `import { buildStaticRouteModule } from "@dawn-ai/cli/runtime"`,
     ``,
     ...moduleImports,
     ``,
@@ -249,6 +262,9 @@ export function emitModulesFile(options: {
     `const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")`,
     ``,
     `export default {`,
+    ...(options.middlewareFile
+      ? [`  middleware: normalizeMiddlewareModule(middlewareModule),`]
+      : []),
     `  routes: [`,
     ...routeCalls,
     `  ],`,

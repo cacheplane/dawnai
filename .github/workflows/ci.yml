@@ -44,10 +44,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
-          # available without the --experimental-sqlite flag from 22.13+.
-          # Matches release.yml and the engines floor.
-          node-version: 22.14.0
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
           cache: pnpm
 
       - name: Install
@@ -113,10 +112,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
-          # available without the --experimental-sqlite flag from 22.13+.
-          # Matches release.yml and the engines floor.
-          node-version: 22.14.0
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
           cache: pnpm
 
       - name: Install
@@ -147,10 +145,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
-          # available without the --experimental-sqlite flag from 22.13+.
-          # Matches release.yml and the engines floor.
-          node-version: 22.14.0
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
           cache: pnpm
 
       - name: Install
@@ -181,10 +178,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
-          # available without the --experimental-sqlite flag from 22.13+.
-          # Matches release.yml and the engines floor.
-          node-version: 22.14.0
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
           cache: pnpm
 
       - name: Install
@@ -277,10 +273,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
-          # available without the --experimental-sqlite flag from 22.13+.
-          # Matches release.yml and the engines floor.
-          node-version: 22.14.0
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
           cache: pnpm
 
       - name: Install
@@ -348,10 +343,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
-          # available without the --experimental-sqlite flag from 22.13+.
-          # Matches release.yml and the engines floor.
-          node-version: 22.14.0
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
           cache: pnpm
 
       - name: Install
@@ -477,10 +471,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          # 22.14.0 — node:sqlite (used by @dawn-ai/sqlite-storage) is only
-          # available without the --experimental-sqlite flag from 22.13+.
-          # Matches release.yml and the engines floor.
-          node-version: 22.14.0
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
           cache: pnpm
 
       - name: Install

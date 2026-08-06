@@ -2,25 +2,43 @@ import type { IncomingMessage } from "node:http"
 import type { DawnMiddleware, MiddlewareRequest, MiddlewareResult } from "@dawn-ai/sdk"
 
 /**
- * Load middleware from the app's middleware.ts file.
- * Convention: src/middleware.ts exports a default function (using defineMiddleware).
+ * Select the middleware function from a module namespace: the `default`
+ * export when present (nullish falls through), else the named `middleware`
+ * export; undefined when neither resolves to a function. The ONE selection
+ * rule, shared by the dynamic probe below and the static manifest's
+ * `normalizeMiddlewareModule` — built apps can never bind differently than dev.
  */
-export async function loadMiddleware(appRoot: string): Promise<DawnMiddleware | undefined> {
-  const middlewarePaths = [
+export function selectMiddlewareExport(mod: unknown): DawnMiddleware | undefined {
+  if (!mod || typeof mod !== "object") return undefined
+  const candidate = mod as { readonly default?: unknown; readonly middleware?: unknown }
+  const exported = candidate.default ?? candidate.middleware
+  return typeof exported === "function" ? (exported as DawnMiddleware) : undefined
+}
+
+/**
+ * The four middleware candidate paths, in probe precedence order — the ONE
+ * list shared by the dynamic probe below and the node target's build probe
+ * (`nodeTarget.emit`), so the static build can never bind a different file
+ * than dev would.
+ */
+export function middlewareCandidatePaths(appRoot: string): readonly string[] {
+  return [
     `${appRoot}/src/middleware.ts`,
     `${appRoot}/src/middleware.js`,
     `${appRoot}/middleware.ts`,
     `${appRoot}/middleware.js`,
   ]
+}
 
-  for (const path of middlewarePaths) {
+/**
+ * Load middleware from the app's middleware.ts file.
+ * Convention: src/middleware.ts exports a default function (using defineMiddleware).
+ */
+export async function loadMiddleware(appRoot: string): Promise<DawnMiddleware | undefined> {
+  for (const path of middlewareCandidatePaths(appRoot)) {
     try {
-      const mod = await import(path)
-      const exported = mod.default ?? mod.middleware
-
-      if (typeof exported === "function") {
-        return exported as DawnMiddleware
-      }
+      const selected = selectMiddlewareExport(await import(path))
+      if (selected) return selected
     } catch {
       // File doesn't exist or can't be loaded — try next
     }

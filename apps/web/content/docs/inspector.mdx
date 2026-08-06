@@ -68,6 +68,21 @@ Two caveats follow from the inspector running as a separate process:
 - **Reject / Forget** — hard-delete a candidate or any record, each behind a
   confirmation prompt.
 
+### Timeline view
+
+With [episodic memory](/docs/memory#episodic-memory) enabled, the panel's
+list/timeline toggle switches to a **timeline** of what the agent did: records
+grouped by day, each row showing the time it happened, an outcome badge
+(`ok`/`error` for auto-recorded runs, `authored` for agent-written episodes),
+the episode summary, and the run duration. A window select (24h / 7d / 30d /
+all) narrows the timeline, and the kind filter defaults to `episodic` there.
+Clicking a row opens the same detail sheet as the list.
+
+Like agent recall, the panel excludes **expired** episodes — search does so
+intentionally (it mirrors what the agent's `recall` can see), with no escape
+hatch. For debugging retention, the list API accepts `includeExpired=1` to
+reveal rows that are past their TTL but not yet pruned.
+
 <Callout type="info" title="Headless equivalent">
   The [`dawn memory`](/docs/cli) CLI covers the same governance flow —
   list/search/inspect/approve/reject/forget — without a browser, for CI and

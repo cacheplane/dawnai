@@ -275,18 +275,40 @@ export function pgvectorMemoryStore(opts: {
       const limit = q.limit ?? 8
       const terms = q.query ? tokenize(q.query) : []
 
-      // Shared base filter (namespace + status [+ kind]) — the "corpus".
+      // Shared base filter (namespace + status [+ kind] [+ time window]
+      // [+ expiry]) — the "corpus". Every search path (query-less, ranked,
+      // hybrid) AND the ranked path's df/N corpus stats interpolate this same
+      // clause, so window/expiry filtering and IDF stats stay coherent.
       let baseSql = "m.namespace = $1 AND m.status = $2"
       const baseParams: unknown[] = [q.namespace, status]
       if (q.kind) {
         baseParams.push(q.kind)
         baseSql += ` AND m.kind = $${baseParams.length}`
       }
+      if (q.since) {
+        baseParams.push(q.since)
+        baseSql += ` AND COALESCE(m.effective_at, m.created_at) >= $${baseParams.length}`
+      }
+      if (q.until) {
+        baseParams.push(q.until)
+        baseSql += ` AND COALESCE(m.effective_at, m.created_at) < $${baseParams.length}`
+      }
+      if (q.now) {
+        baseParams.push(q.now)
+        baseSql += ` AND (m.expires_at IS NULL OR m.expires_at > $${baseParams.length})`
+      }
 
       if (terms.length === 0) {
-        // Query-less path: pure recency order (index-fragment behavior).
+        // Query-less path: unwindowed keeps EXACTLY the pre-ranking recency
+        // behavior (byte-stable). A since/until window switches to event-time
+        // order — windowed queries are about "what happened then". COLLATE "C"
+        // pins the id ASC tiebreak to codepoint order (sqlite BINARY parity).
+        const order =
+          q.since || q.until
+            ? `COALESCE(m.effective_at, m.created_at) DESC, m.id COLLATE "C" ASC`
+            : "m.updated_at DESC, m.id ASC"
         const res = await pool.query(
-          `SELECT ${recordColumns("m")} FROM ${T} m WHERE ${baseSql} ORDER BY m.updated_at DESC, m.id ASC LIMIT $${baseParams.length + 1}`,
+          `SELECT ${recordColumns("m")} FROM ${T} m WHERE ${baseSql} ORDER BY ${order} LIMIT $${baseParams.length + 1}`,
           [...baseParams, limit],
         )
         let records = (res.rows as Record<string, unknown>[]).map(rowToRecord)
@@ -419,6 +441,18 @@ export function pgvectorMemoryStore(opts: {
         params.push(q.sourceType)
         where.push(`source->>'type' = $${params.length}`)
       }
+      if (q.since) {
+        params.push(q.since)
+        where.push(`COALESCE(effective_at, created_at) >= $${params.length}`)
+      }
+      if (q.until) {
+        params.push(q.until)
+        where.push(`COALESCE(effective_at, created_at) < $${params.length}`)
+      }
+      if (q.now) {
+        params.push(q.now)
+        where.push(`(expires_at IS NULL OR expires_at > $${params.length})`)
+      }
       const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
       // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
       // negatives — clamping to ≥0 integers unifies backend behavior.
@@ -468,6 +502,64 @@ export function pgvectorMemoryStore(opts: {
         byNamespace,
         bySourceType,
       }
+    },
+
+    async prune(pruneOpts) {
+      await ready()
+      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      // Two explicit SQL strings per pass (with/without prefix) — no clause
+      // splicing, each statement readable on its own.
+      // Two passes are separate autocommit statements (possibly different pool
+      // connections); each is committed before the next is sent, so the cap
+      // pass never sees uncommitted expired rows. Rows written between passes
+      // wait for the next prune — acceptable, and matches sqlite's
+      // non-transactional two-pass shape.
+      const expiredBase = `DELETE FROM ${T} WHERE expires_at IS NOT NULL AND expires_at <= $1`
+      const expiredPrefixed = `DELETE FROM ${T}
+         WHERE expires_at IS NOT NULL AND expires_at <= $1
+           AND left(namespace, length($2)) = $3`
+      const expired = pruneOpts.namespacePrefix
+        ? await pool.query(expiredPrefixed, [
+            pruneOpts.now,
+            pruneOpts.namespacePrefix,
+            pruneOpts.namespacePrefix,
+          ])
+        : await pool.query(expiredBase, [pruneOpts.now])
+      let deletedOverCap = 0
+      if (pruneOpts.cap !== undefined) {
+        const cap = Math.max(0, Math.trunc(pruneOpts.cap))
+        // Rank episodic rows per namespace by event time (newest first, id ASC
+        // C-collation tiebreak — the established cross-backend ordering) and
+        // delete beyond cap. Status is deliberately ignored: every episodic row
+        // counts against the namespace budget.
+        const overBase = `DELETE FROM ${T} WHERE id IN (
+           SELECT id FROM (
+             SELECT id, ROW_NUMBER() OVER (
+               PARTITION BY namespace
+               ORDER BY COALESCE(effective_at, created_at) DESC, id COLLATE "C" ASC
+             ) AS rn
+             FROM ${T} WHERE kind = 'episodic'
+           ) ranked WHERE rn > $1
+         )`
+        const overPrefixed = `DELETE FROM ${T} WHERE id IN (
+           SELECT id FROM (
+             SELECT id, ROW_NUMBER() OVER (
+               PARTITION BY namespace
+               ORDER BY COALESCE(effective_at, created_at) DESC, id COLLATE "C" ASC
+             ) AS rn
+             FROM ${T} WHERE kind = 'episodic' AND left(namespace, length($1)) = $2
+           ) ranked WHERE rn > $3
+         )`
+        const over = pruneOpts.namespacePrefix
+          ? await pool.query(overPrefixed, [
+              pruneOpts.namespacePrefix,
+              pruneOpts.namespacePrefix,
+              cap,
+            ])
+          : await pool.query(overBase, [cap])
+        deletedOverCap = over.rowCount ?? 0
+      }
+      return { deletedExpired: expired.rowCount ?? 0, deletedOverCap }
     },
 
     async close() {

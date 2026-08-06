@@ -1,6 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
-import type { DawnStaticModules } from "../runtime/static-modules.js"
+import type { DawnConfig } from "@dawn-ai/core"
+// Type-only imports below (stores, middleware, checkpointer) erase at
+// runtime — this module's VALUE graph stays node-http-only.
+import type { MemoryStore } from "@dawn-ai/memory"
+import type { PermissionsStore } from "@dawn-ai/permissions"
+import type { DawnMiddleware } from "@dawn-ai/sdk"
+import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
+import type { RuntimeBootFallbacks } from "../runtime/execute-route-core.js"
+import type { SandboxManager } from "../runtime/sandbox-manager.js"
+import type { DawnStaticModules } from "../runtime/static-modules-core.js"
 import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
 import { createRuntimeFetchHandler } from "./runtime-fetch-handler.js"
 
@@ -33,6 +43,38 @@ export interface StartRuntimeServerOptions {
    * behavior are byte-for-byte the existing dynamic path.
    */
   readonly modules?: DawnStaticModules
+  /**
+   * An already-constructed DawnConfig. When present, it is seeded into the
+   * config memo BEFORE any store/sandbox/memory resolution, so
+   * `dawn.config.ts` is never read from disk (edge runtimes have none).
+   */
+  readonly config?: DawnConfig
+  /** Boot-resolved checkpointer. Absent: config, then default sqlite. */
+  readonly checkpointer?: BaseCheckpointSaver
+  /** Boot-resolved threads store. Absent: config, then default sqlite. */
+  readonly threadsStore?: ThreadsStore
+  /**
+   * Boot-resolved permissions store (instance or per-request factory — same
+   * semantics as route execution's boot instances). When provided, it wins
+   * REGARDLESS of `permissionsMode` — the caller has taken over permissions
+   * resolution entirely. Absent: permissionsMode-driven construction from
+   * `.dawn/permissions.json`.
+   */
+  readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
+  /** Lazy memory-store thunk. Absent: sqlite-backed resolveMemoryStore. */
+  readonly memoryStore?: () => Promise<MemoryStore>
+  /** Pre-loaded middleware. Absent: the dynamic src/middleware.ts probe. */
+  readonly middleware?: DawnMiddleware
+  /** Boot-resolved sandbox manager. Absent: built from `config.sandbox`. */
+  readonly sandboxManager?: SandboxManager
+  /**
+   * The filesystem-backed resolutions this runtime may fall back to when a
+   * store was not injected. `runtime-fetch-handler.ts` supplies
+   * `nodeBootFallbacks` on every node path; an edge runtime supplies none, and
+   * anything it did not inject then fails loudly on first use instead of
+   * reaching for a disk or sqlite file that is not there.
+   */
+  readonly bootFallbacks?: RuntimeBootFallbacks
 }
 
 // ---------------------------------------------------------------------------

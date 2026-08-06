@@ -111,7 +111,7 @@ cd my-dawn-app
 npm install
 ```
 
-Requires Node.js 22.12 or later.
+Requires Node.js 24 (the active LTS) or later.
 
 2. Validate the app and generate types.
 

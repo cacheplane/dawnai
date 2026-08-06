@@ -1,5 +1,4 @@
-import { pathToFileURL } from "node:url"
-import { isDawnAgent } from "@dawn-ai/sdk"
+import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import { z } from "zod"
 import type { RouteDefinition } from "../../types.js"
 import type { CapabilityMarker, CapabilityMarkerContext, PromptFragment } from "../types.js"
@@ -27,13 +26,32 @@ function findConventionSubagents(
   })
 }
 
-async function loadDescription(route: RouteDefinition): Promise<string> {
+function extractDescription(candidate: unknown): string | undefined {
+  return isDawnAgent(candidate) && typeof candidate.description === "string"
+    ? candidate.description
+    : undefined
+}
+
+async function loadDescription(
+  route: RouteDefinition,
+  routeDescriptors: ReadonlyMap<string, DawnAgent> | undefined,
+): Promise<string> {
+  // Static-modules path: when the map exists it is authoritative — it holds
+  // every route whose entry passes isDawnAgent, so a route absent from it
+  // provably cannot yield a description via import either (extractDescription
+  // requires isDawnAgent). Never importing here keeps the static path
+  // zero-import: edge runtimes have no disk to import from.
+  if (routeDescriptors !== undefined) {
+    return routeDescriptors.get(route.id)?.description ?? "No description provided."
+  }
   try {
+    const { pathToFileURL } = await import("node:url")
     const mod = (await import(pathToFileURL(route.entryFile).href)) as {
       default?: unknown
     }
-    if (isDawnAgent(mod.default) && typeof mod.default.description === "string") {
-      return mod.default.description
+    const described = extractDescription(mod.default)
+    if (described !== undefined) {
+      return described
     }
   } catch {
     // fall through to default — never fail capability composition over a description
@@ -86,7 +104,7 @@ export function createSubagentsMarker(): CapabilityMarker {
           )
         }
         seen.add(leafName)
-        const description = await loadDescription(r)
+        const description = await loadDescription(r, context.routeDescriptors)
         discovered.push({ leafName, routeId: r.id, description })
       }
 

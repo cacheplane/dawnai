@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
+import { middlewareCandidatePaths } from "../../dev/middleware.js"
 import { writeLine } from "../../output.js"
 import type { BuildEmitContext, BuildTarget } from "./index.js"
 import {
@@ -53,7 +54,7 @@ await serveRuntime({ appRoot, modules })
  */
 const DOCKERFILE = `${DOCKERFILE_MARKER}
 # syntax=docker/dockerfile:1
-FROM node:22-slim
+FROM node:24-slim
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8000
 COPY package.json package-lock.json* pnpm-lock.yaml* ./
@@ -87,8 +88,24 @@ export const nodeTarget: BuildTarget = {
     for (const route of manifest.routes) {
       discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
     }
+    // Middleware probe: middlewareCandidatePaths is the SAME list, in the
+    // SAME precedence order, the dynamic `loadMiddleware` walks — the static
+    // build can never bind a different file than dev would.
+    const middlewareFile = middlewareCandidatePaths(appRoot).find((candidate) =>
+      existsSync(candidate),
+    )
+
     const modulesPath = join(buildDir, "modules.mjs")
-    await writeFile(modulesPath, emitModulesFile({ appRoot, buildDir, discoveries }), "utf8")
+    await writeFile(
+      modulesPath,
+      emitModulesFile({
+        appRoot,
+        buildDir,
+        discoveries,
+        ...(middlewareFile ? { middlewareFile } : {}),
+      }),
+      "utf8",
+    )
     artifacts.push(modulesPath)
 
     const serverPath = join(buildDir, "server.mjs")

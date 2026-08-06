@@ -45,6 +45,7 @@ export {
   buildStaticRouteModule,
   type DawnStaticModules,
   loadStaticModules,
+  normalizeMiddlewareModule,
   type StaticRouteModule,
   type StaticRouteModuleInput,
   type StaticToolModuleInput,

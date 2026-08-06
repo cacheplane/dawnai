@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createAgentsMdMarker } from "../../src/capabilities/built-in/agents-md.js"
 import type { CapabilityMarkerContext } from "../../src/capabilities/types.js"
+import { nodeMarkerFs } from "../../src/node-marker-fs.js"
 
 describe("createAgentsMdMarker", () => {
   let routeDir: string
@@ -30,6 +31,7 @@ describe("createAgentsMdMarker", () => {
       routeManifest: { appRoot, routes: [] },
       descriptor: undefined,
       appRoot,
+      markerFs: nodeMarkerFs,
     }
   }
 

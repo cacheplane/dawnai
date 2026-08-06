@@ -109,6 +109,18 @@ export interface DawnConfig {
       readonly recencyWeight?: number
       readonly confidenceWeight?: number
     }
+    /** Opt-in runtime episode recorder: when enabled, the runtime writes one
+     *  episodic memory per agent run (input, outcome, tools used, duration).
+     *  Defaults: enabled false, ttlMs 30 days, cap 500 episodes per namespace,
+     *  includeFailedRuns true, embed false (embed: true is not yet supported —
+     *  episodes are recalled by keyword + time window). */
+    readonly episodes?: {
+      readonly enabled?: boolean
+      readonly ttlMs?: number
+      readonly cap?: number
+      readonly includeFailedRuns?: boolean
+      readonly embed?: boolean
+    }
     /** Derive the memory namespace scope for a given route. */
     readonly resolveScope?: (ctx: {
       readonly routePath: string
@@ -155,6 +167,10 @@ export interface LoadDawnConfigOptions {
 export interface LoadedDawnConfig {
   readonly appRoot: string
   readonly config: DawnConfig
+  /**
+   * Absolute path of the loaded `dawn.config.ts` — or the `"<seeded>"`
+   * sentinel when the memo was primed via `seedDawnConfig` (no disk read).
+   */
   readonly configPath: string
 }
 

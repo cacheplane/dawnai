@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { applyCapabilities, createCapabilityRegistry, createPlanningMarker } from "@dawn-ai/core"
+import { nodeMarkerFs } from "@dawn-ai/core/node"
 import { type Command, isCommand } from "@langchain/langgraph"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { convertToolToLangChain } from "../src/tool-converter.js"
@@ -23,6 +24,7 @@ describe("planning capability — end-to-end shape", () => {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
       appRoot: routeDir,
+      markerFs: nodeMarkerFs,
     })
     expect(result.contributions).toEqual([])
   })
@@ -34,6 +36,7 @@ describe("planning capability — end-to-end shape", () => {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
       appRoot: routeDir,
+      markerFs: nodeMarkerFs,
     })
 
     expect(result.contributions).toHaveLength(1)
@@ -51,6 +54,7 @@ describe("planning capability — end-to-end shape", () => {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
       appRoot: routeDir,
+      markerFs: nodeMarkerFs,
     })
     const todosField = result.contributions[0]?.contribution.stateFields?.[0]
     expect(todosField?.default).toEqual([
@@ -66,6 +70,7 @@ describe("planning capability — end-to-end shape", () => {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
       appRoot: routeDir,
+      markerFs: nodeMarkerFs,
     })
     const fragment = result.contributions[0]?.contribution.promptFragment
     const r1 = fragment?.render({ todos: [] }) ?? ""
@@ -81,6 +86,7 @@ describe("planning capability — end-to-end shape", () => {
       routeManifest: { appRoot: routeDir, routes: [] },
       descriptor: undefined,
       appRoot: routeDir,
+      markerFs: nodeMarkerFs,
     })
     const transformer = result.contributions[0]?.contribution.streamTransformers?.[0]
 
@@ -109,6 +115,7 @@ describe("planning capability — state mutation end-to-end", () => {
       const result = await applyCapabilities(registry, routeDir, {
         routeManifest: { appRoot: routeDir, routes: [] },
         descriptor: undefined,
+        markerFs: nodeMarkerFs,
       })
       const writeTodos = result.contributions[0]?.contribution.tools?.[0]
       expect(writeTodos?.name).toBe("writeTodos")

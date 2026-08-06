@@ -1,9 +1,13 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, test } from "vitest"
+import { afterEach, describe, expect, test, vi } from "vitest"
 
-import { resolveMemoryStore, resolveMemoryWrites } from "../src/lib/runtime/resolve-memory.js"
+import {
+  resolveEpisodesConfig,
+  resolveMemoryStore,
+  resolveMemoryWrites,
+} from "../src/lib/runtime/resolve-memory.js"
 
 const tempDirs: string[] = []
 
@@ -97,5 +101,77 @@ describe("resolveMemoryWrites", () => {
 
     const writes = await resolveMemoryWrites(appRoot)
     expect(writes).toBe("candidate")
+  })
+})
+
+describe("resolveEpisodesConfig", () => {
+  test("returns defaults (disabled) when no dawn.config.ts exists", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-episodes-"))
+    tempDirs.push(appRoot)
+
+    const episodes = await resolveEpisodesConfig(appRoot)
+    expect(episodes).toEqual({
+      enabled: false,
+      ttlMs: 30 * 86_400_000,
+      cap: 500,
+      includeFailedRuns: true,
+      embed: false,
+    })
+  })
+
+  test("returns defaults when config has memory but no episodes block", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-episodes-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { writes: "auto" } }\n`,
+    )
+
+    const episodes = await resolveEpisodesConfig(appRoot)
+    expect(episodes.enabled).toBe(false)
+    expect(episodes.ttlMs).toBe(30 * 86_400_000)
+    expect(episodes.cap).toBe(500)
+  })
+
+  test("threads configured values through", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-episodes-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { episodes: { enabled: true, ttlMs: 3_600_000, cap: 3, includeFailedRuns: false } } }\n`,
+    )
+
+    const episodes = await resolveEpisodesConfig(appRoot)
+    expect(episodes).toEqual({
+      enabled: true,
+      ttlMs: 3_600_000,
+      cap: 3,
+      includeFailedRuns: false,
+      embed: false,
+    })
+  })
+
+  test("embed: true resolves to false and warns exactly once per process", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-episodes-"))
+      tempDirs.push(appRoot)
+      await writeFile(
+        join(appRoot, "dawn.config.ts"),
+        `export default { memory: { episodes: { enabled: true, embed: true } } }\n`,
+      )
+
+      const first = await resolveEpisodesConfig(appRoot)
+      expect(first.embed).toBe(false)
+      const second = await resolveEpisodesConfig(appRoot)
+      expect(second.embed).toBe(false)
+
+      const embedWarnings = warn.mock.calls.filter((c) =>
+        String(c[0]).includes("memory.episodes.embed is not yet supported"),
+      )
+      expect(embedWarnings).toHaveLength(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

@@ -126,6 +126,35 @@ This path targets LangSmith or another runtime that consumes `langgraph.json` an
   </Step>
 </Steps>
 
+## Edge runtimes (preview)
+
+`@dawn-ai/cli/fetch` is a node-free entry point for the Dawn runtime: it exports `createRuntimeFetchHandler` with a module graph that contains no filesystem, SQLite, or CLI code of Dawn's own. Instead of discovering your app on disk, you hand it everything at construction time — the build-time module manifest, a `DawnConfig` object, and store instances:
+
+```ts
+import { createRuntimeFetchHandler } from "@dawn-ai/cli/fetch"
+import modules from "./.dawn/build/modules.mjs"
+
+const handler = await createRuntimeFetchHandler({
+  appRoot: "my-app", // an opaque namespace id when there is no filesystem
+  modules,
+  config: { /* your dawn.config.ts contents, as an object */ },
+  checkpointer,
+  threadsStore,
+  permissionsStore,
+  memoryStore: async () => store,
+})
+
+export default { fetch: (request: Request) => handler.fetch(request) }
+```
+
+Anything you do not supply has no filesystem to fall back to, so the handler fails loudly at boot naming the missing piece rather than silently degrading. A few inputs are optional by contract and simply switch their feature off when absent: middleware, the sandbox provider, and the capability markers that read `workspace/AGENTS.md`, `memory.md`, `plan.md`, and `skills/`.
+
+<Callout type="warn" title="Requires a runtime with Node built-in shims">
+  Dawn's supporting packages still import `node:path`, `node:fs`, `node:crypto`, and friends at module scope, so a bundle built from this entry **links** against those specifiers even though the injected request path never calls them. That makes it deployable today on Cloudflare Workers with `nodejs_compat` enabled, and not yet on runtimes with no `node:` shim layer at all — those fail when the module graph is instantiated, before any Dawn code runs. Removing that requirement means splitting `@dawn-ai/core`, `@dawn-ai/permissions`, `@dawn-ai/workspace`, and `@dawn-ai/langchain` the same way this release split the CLI; a purity test pins the current set so it can only shrink.
+</Callout>
+
+Node-only capabilities are unavailable on this path regardless of runtime: the execution sandbox, workspace file and shell tools, skills, and the SQLite-backed default stores. Supply Postgres-backed or in-memory implementations for state you want to keep. The build target that generates a ready-to-deploy edge entry point (`hono`, covering Workers, Vercel, and Node hosts) lands in a following release.
+
 ## What Dawn does not do
 
 <Callout type="warn" title="Not a hosted platform">
