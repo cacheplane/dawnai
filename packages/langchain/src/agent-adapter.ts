@@ -179,6 +179,9 @@ async function materializeAgent(
 export async function materializeAgentGraph(options: {
   readonly checkpointer?: BaseCheckpointSaver
   readonly descriptor: DawnAgent
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly offload?: OffloadFn
+  readonly routeParamNames?: readonly string[]
   readonly tools?: readonly DawnToolDefinition[]
   readonly stateFields?: readonly ResolvedStateField[]
   readonly streamTransformers?: readonly StreamTransformer[]
@@ -194,7 +197,10 @@ export async function materializeAgentGraph(options: {
 }): Promise<unknown> {
   return materializeAgent(options.descriptor, options.tools ?? [], options.checkpointer, {
     ...(options.stateFields ? { stateFields: options.stateFields } : {}),
+    ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
     ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
+    ...(options.offload ? { offload: options.offload } : {}),
+    ...(options.routeParamNames ? { routeParamNames: options.routeParamNames } : {}),
     ...(options.summarization ? { summarization: options.summarization } : {}),
     ...(options.streamTransformers ? { streamTransformers: options.streamTransformers } : {}),
     ...(options.subagentResolver ? { subagentResolver: options.subagentResolver } : {}),

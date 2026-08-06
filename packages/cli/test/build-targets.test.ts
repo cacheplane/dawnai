@@ -101,6 +101,34 @@ describe("dawn build — targets", () => {
     expect(existsSync(join(appRoot, ".dawn/build/langgraph.json"))).toBe(true)
   })
 
+  test("keeps non-agent LangSmith exports direct", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/workflow/index.ts": `export async function workflow() { return { ok: true } }\n`,
+    })
+
+    const { stderr } = await runBuild(appRoot)
+    expect(stderr.join("")).toBe("")
+
+    const entry = await readFile(join(appRoot, ".dawn/build/workflow.ts"), "utf8")
+    expect(entry).toContain('import { workflow } from "../../src/app/workflow/index.js"')
+    expect(entry).toContain("export const graph = workflow")
+    expect(entry).not.toContain("materializeResolvedRouteGraph")
+  })
+
+  test("emits policy-aware agent entries without build-machine paths", async () => {
+    const appRoot = await createFixtureApp({})
+
+    const { stderr } = await runBuild(appRoot)
+    expect(stderr.join("")).toBe("")
+
+    const entry = await readFile(join(appRoot, ".dawn/build/hello-tenant.ts"), "utf8")
+    expect(entry).toContain('import { materializeResolvedRouteGraph } from "@dawn-ai/cli/runtime"')
+    expect(entry).toContain('const appRoot = fileURLToPath(new URL("../..", import.meta.url))')
+    expect(entry).toContain("fileURLToPath(new URL(")
+    expect(entry).not.toContain(appRoot)
+    expect(entry).not.toContain("materializeAgentGraph")
+  })
+
   test("does not clobber a user Dockerfile — emits to build dir instead", async () => {
     const userDockerfile = "FROM scratch\n# user's own Dockerfile\n"
     const appRoot = await createFixtureApp({ Dockerfile: userDockerfile })

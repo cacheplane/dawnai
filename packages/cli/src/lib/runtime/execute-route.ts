@@ -17,12 +17,13 @@ import {
   createWorkspaceMarker,
   type DawnConfig,
   discoverRoutes,
+  dispatchableSubagents,
   findDawnApp,
   loadDawnConfig,
   type ResolvedStateField,
   type ResolvedSubagent,
   type RouteDefinition,
-  type RouteManifest,
+  resolveGuardedSubagent,
   resolveStateFields,
   resolveSubagentRegistry,
   resolveToolScope,
@@ -35,9 +36,11 @@ import {
   defaultSummarize,
   defaultTokenCounter,
   executeAgent,
+  materializeAgentGraph,
   type OffloadFn,
   OffloadStore,
   offloadToolOutput,
+  type ResolvedSubagentGraph,
   type ResolvedSummarizationConfig,
   type SubagentResolver,
   streamAgent,
@@ -51,6 +54,7 @@ import { isDawnAgent, type WorkspaceFs } from "@dawn-ai/sdk"
 import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { localFilesystem } from "@dawn-ai/workspace"
+import type { RunnableConfig } from "@langchain/core/runnables"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
@@ -186,6 +190,34 @@ export async function executeResolvedRoute(options: {
   })
 }
 
+export interface MaterializeResolvedRouteGraphOptions {
+  readonly appRoot: string
+  readonly checkpointer?: BaseCheckpointSaver
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly sandboxManager?: SandboxManager
+  readonly sandboxThreadId?: string
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Materializes an agent route through the same policy-aware preparation path
+ * used by local execution. An omitted checkpointer leaves the root graph
+ * unbound so LangGraph Platform can provide it at invocation time.
+ */
+export async function materializeResolvedRouteGraph(
+  options: MaterializeResolvedRouteGraphOptions,
+): Promise<unknown> {
+  const prepared = await prepareRouteExecution({
+    ...options,
+    checkpointer: options.checkpointer ?? false,
+  })
+  if (!prepared.ok) throw new Error(prepared.message)
+  return materializePreparedAgentGraph(prepared, options.middlewareContext)
+}
+
 /**
  * Resolves the ThreadsStore for the given appRoot.
  *
@@ -313,6 +345,9 @@ export async function* streamResolvedRoute(options: {
     yield { type: "done", output }
     return
   }
+  if (!checkpointer) {
+    throw new Error("[dawn] local agent streaming requires a root checkpointer.")
+  }
 
   const routeParamNames = extractRouteParamNames(options.routeId)
 
@@ -387,7 +422,8 @@ interface PreparedRoute {
     readonly entry: unknown
   }
   readonly ok: true
-  readonly checkpointer: BaseCheckpointSaver
+  readonly routeId: string
+  readonly checkpointer: BaseCheckpointSaver | undefined
   readonly threadsStore: ThreadsStore
   readonly offload?: OffloadFn
   readonly summarization?: ResolvedSummarizationConfig
@@ -415,7 +451,11 @@ interface PreparedRouteError {
 
 async function prepareRouteExecution(options: {
   readonly appRoot: string
+  readonly checkpointer?: BaseCheckpointSaver | false
   readonly isSubagent?: boolean
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly parentDispatchCallId?: string
+  readonly routeParams?: Readonly<Record<string, string>>
   readonly routeFile: string
   readonly routeId: string
   readonly routePath: string
@@ -428,6 +468,7 @@ async function prepareRouteExecution(options: {
    * case, where the two identities coincide.
    */
   readonly sandboxThreadId?: string
+  readonly subagentDepth?: number
 }): Promise<PreparedRoute | PreparedRouteError> {
   const { isSubagent = false } = options
   const routeDir = resolve(options.routeFile, "..")
@@ -527,9 +568,12 @@ async function prepareRouteExecution(options: {
 
   let summarization: ResolvedSummarizationConfig | undefined
 
-  const checkpointer: BaseCheckpointSaver =
-    configCheckpointer ??
-    sqliteCheckpointer({ path: join(options.appRoot, ".dawn/checkpoints.sqlite") })
+  const checkpointer: BaseCheckpointSaver | undefined =
+    options.checkpointer === false
+      ? undefined
+      : (options.checkpointer ??
+        configCheckpointer ??
+        sqliteCheckpointer({ path: join(options.appRoot, ".dawn/checkpoints.sqlite") }))
 
   const threadsStore: ThreadsStore =
     configThreadsStore ??
@@ -595,6 +639,9 @@ async function prepareRouteExecution(options: {
     } catch (error) {
       return { message: formatErrorMessage(error), ok: false }
     }
+
+    const reservedTaskError = findReservedTaskPolicyError(descriptor, options.routeId)
+    if (reservedTaskError) return { message: reservedTaskError, ok: false }
 
     // Build the memory context if this route has a memory.ts.
     let memoryContext: import("@dawn-ai/core").MemoryContext | undefined
@@ -742,6 +789,11 @@ async function prepareRouteExecution(options: {
     } catch (error) {
       return { message: formatErrorMessage(error), ok: false }
     }
+    if (dispatchableSubagents(subagentRegistry).length > 0) {
+      const mutableKeptToolNames = new Set(keptToolNames)
+      mutableKeptToolNames.add("task")
+      keptToolNames = mutableKeptToolNames
+    }
     tools = tools.filter((t) => keptToolNames.has(t.name))
 
     // Per-tool approval gating (tools.approve): wrap surviving tools so each
@@ -786,16 +838,49 @@ async function prepareRouteExecution(options: {
     promptFragments = capPromptFragments
     streamTransformers = capStreamTransformers
 
-    // Build the temporary independent-invocation bridge only when the canonical
-    // registry contributed a dispatchable task tool.
+    // Resolve and prepare children only after the guarded policy boundary has
+    // allowed the current invocation. The route lookup is stable; all live
+    // config, permissions decisions, signals, and sandbox-bound tools remain
+    // per dispatch.
     const hasTaskTool = capTools.some((t) => t.name === "task")
     if (hasTaskTool) {
-      subagentResolver = buildSubagentResolver({
-        appRoot: options.appRoot,
-        routeManifest,
-        subagentRegistry,
-        ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
-        ...(sandboxKey ? { sandboxThreadId: sandboxKey } : {}),
+      const routeById = new Map(routeManifest.routes.map((route) => [route.id, route] as const))
+      subagentResolver = buildGuardedSubagentResolver({
+        fallbackDepth: options.subagentDepth ?? 0,
+        fallbackParams: options.routeParams ?? {},
+        ...(sandboxKey ? { fallbackRootSandboxKey: sandboxKey } : {}),
+        fallbackSignal: options.signal ?? new AbortController().signal,
+        interruptCapable: true,
+        parentRouteId: options.routeId,
+        permissions: permissionsStore,
+        prepareChild: async (entry, context) => {
+          const route = routeById.get(entry.routeId)
+          if (!route) throw new Error(`Validated subagent route "${entry.routeId}" is unavailable.`)
+          const childPrepared = await prepareRouteExecution({
+            appRoot: options.appRoot,
+            checkpointer: false,
+            isSubagent: true,
+            ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
+            parentDispatchCallId: context.callId,
+            routeFile: route.entryFile,
+            routeId: route.id,
+            routeParams: context.params,
+            routePath: route.pathname,
+            ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
+            ...(context.rootSandboxKey ? { sandboxThreadId: context.rootSandboxKey } : {}),
+            signal: context.signal,
+            subagentDepth: context.depth,
+          })
+          if (!childPrepared.ok) throw new Error(childPrepared.message)
+          const graph = await materializePreparedAgentGraph(
+            childPrepared,
+            options.middlewareContext,
+          )
+          assertResolvedSubagentGraph(graph)
+          return { graph, routeId: route.id }
+        },
+        registry: subagentRegistry,
+        routeParamNames: extractRouteParamNames(options.routeId),
       })
     }
   }
@@ -816,6 +901,7 @@ async function prepareRouteExecution(options: {
   return {
     normalized,
     ok: true,
+    routeId: options.routeId,
     checkpointer,
     threadsStore,
     ...(offload ? { offload } : {}),
@@ -891,8 +977,12 @@ async function executeRouteAtResolvedPath(options: {
       ...(options.signal ? { signal: options.signal } : {}),
     })
 
+    if (normalized.kind === "agent" && !checkpointer) {
+      throw new Error("[dawn] local agent execution requires a root checkpointer.")
+    }
+
     const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
-      checkpointer,
+      ...(checkpointer ? { checkpointer } : {}),
       ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
       routeId: options.routeId,
       ...(stateFields ? { stateFields } : {}),
@@ -1097,82 +1187,158 @@ async function loadSubagentDescription(route: RouteDefinition): Promise<string> 
     : "No description provided."
 }
 
-/**
- * Builds the temporary subagentResolver passed into streamAgent/executeAgent.
- * It accepts the native async request shape and temporarily re-enters
- * executeResolvedRoute until CLI-owned lazy child graphs replace it.
- */
-export function buildSubagentResolver(args: {
-  readonly appRoot: string
-  readonly routeManifest: RouteManifest
-  readonly subagentRegistry: readonly ResolvedSubagent[]
-  readonly sandboxManager?: SandboxManager
-  /**
-   * The dispatching thread's sandbox key (top routes: its checkpoint
-   * threadId; nested subagents: the inherited key). Forwarded to children as
-   * `sandboxThreadId` ONLY — children never receive a checkpoint `threadId`,
-   * so each child turn runs as an independent uncheckpointed invocation while
-   * still resolving the same per-thread SandboxHandle as its parent.
-   */
-  readonly sandboxThreadId?: string
+export interface ChildPreparationContext {
+  readonly callId: string
+  readonly depth: number
+  readonly params: Readonly<Record<string, string>>
+  readonly rootSandboxKey?: string
+  readonly signal: AbortSignal
+}
+
+export function buildGuardedSubagentResolver(args: {
+  readonly fallbackDepth?: number
+  readonly fallbackParams?: Readonly<Record<string, string>>
+  readonly fallbackRootSandboxKey?: string
+  readonly fallbackSignal?: AbortSignal
+  readonly interruptCapable: boolean
+  readonly parentRouteId: string
+  readonly permissions?: PermissionsStore
+  readonly prepareChild: (
+    entry: ResolvedSubagent,
+    context: ChildPreparationContext,
+  ) => Promise<ResolvedSubagentGraph>
+  readonly registry: readonly ResolvedSubagent[]
+  readonly routeParamNames?: readonly string[]
 }): SubagentResolver {
-  const { appRoot, routeManifest, subagentRegistry } = args
-  const { sandboxManager, sandboxThreadId } = args
-
-  const routeByName = new Map(
-    subagentRegistry
-      .filter(({ rule }) => rule.action !== "deny")
-      .map(
-        ({ name, routeId }) =>
-          [name, routeManifest.routes.find((route) => route.id === routeId)] as const,
-      )
-      .filter((entry): entry is readonly [string, RouteDefinition] => entry[1] !== undefined),
-  )
-
   return async (request) => {
-    const route = routeByName.get(request.name)
-    if (!route) {
-      return {
-        ok: false,
-        message: `[DAWN_E5003] No subagent named '${request.name}' is available.`,
-      }
-    }
+    const signal = request.config.signal ?? args.fallbackSignal ?? new AbortController().signal
+    const threadId = readStringConfigurable(request.config, "thread_id")
+    const params = readRouteParams(
+      request.config,
+      args.routeParamNames ?? Object.keys(args.fallbackParams ?? {}),
+      args.fallbackParams ?? {},
+    )
+    const dawn = readDawnMetadata(request.config)
+    const parentDepth = readNonNegativeInteger(dawn.subagent_depth) ?? args.fallbackDepth ?? 0
+    const rootSandboxKey = readNonEmptyString(dawn.root_sandbox_key) ?? args.fallbackRootSandboxKey
 
-    const graph = {
-      invoke: async (
-        input: unknown,
-        config: Parameters<SubagentResolver>[0]["config"],
-      ): Promise<unknown> => {
-        // Re-enter the same runtime so capabilities are re-applied for the
-        // child route, forwarding the native child input verbatim.
-        const result = await executeResolvedRoute({
-          appRoot,
-          input,
-          isSubagent: true,
-          routeFile: route.entryFile,
-          routeId: route.id,
-          routePath: route.pathname,
-          ...(sandboxManager ? { sandboxManager } : {}),
-          ...(config.signal ? { signal: config.signal } : {}),
-          // Deliberately NOT `threadId`: the child must run as an independent
-          // uncheckpointed invocation (forwarding the parent's threadId would
-          // share its in-flight LangGraph checkpoint and short-circuit the
-          // child turn). `sandboxThreadId` scopes only the sandbox handle, so
-          // the child still shares the parent thread's sandbox.
-          ...(sandboxThreadId ? { sandboxThreadId } : {}),
-        })
-        if (result.status === "failed") {
-          // Let the task bridge preserve the existing ordinary failure result.
-          throw new Error(result.error.message)
-        }
-        // executeAgent's output for an agent-kind route is the raw
-        // LangGraph state ({messages, ...}). Forward as-is.
-        return result.output
+    const result = await resolveGuardedSubagent({
+      callId: request.callId,
+      input: request.input,
+      interruptCapable: args.interruptCapable && threadId !== undefined,
+      name: request.name,
+      ...(args.permissions ? { permissions: args.permissions } : {}),
+      registry: args.registry,
+      resolve: async (entry) =>
+        args.prepareChild(entry, {
+          callId: request.callId,
+          depth: parentDepth + 1,
+          params,
+          ...(rootSandboxKey ? { rootSandboxKey } : {}),
+          signal,
+        }),
+      runtime: {
+        parentRouteId: args.parentRouteId,
+        ...(Object.keys(params).length > 0 ? { params } : {}),
+        signal,
+        ...(threadId ? { threadId } : {}),
       },
-    }
+    })
 
-    return { ok: true, child: { routeId: route.id, graph } }
+    return result.ok ? { child: result.value, ok: true } : { message: result.message, ok: false }
   }
+}
+
+async function materializePreparedAgentGraph(
+  prepared: PreparedRoute,
+  middlewareContext?: Readonly<Record<string, unknown>>,
+): Promise<unknown> {
+  if (prepared.normalized.kind !== "agent" || !isDawnAgent(prepared.normalized.entry)) {
+    throw new Error(
+      `[dawn] Route "${prepared.routeId}" must export a Dawn agent descriptor to be materialized.`,
+    )
+  }
+  return materializeAgentGraph({
+    ...(prepared.checkpointer ? { checkpointer: prepared.checkpointer } : {}),
+    descriptor: prepared.normalized.entry,
+    ...(middlewareContext ? { middlewareContext } : {}),
+    ...(prepared.offload ? { offload: prepared.offload } : {}),
+    ...(prepared.promptFragments ? { promptFragments: prepared.promptFragments } : {}),
+    routeParamNames: extractRouteParamNames(prepared.routeId),
+    ...(prepared.sandboxed ? { sandboxed: true } : {}),
+    ...(prepared.stateFields ? { stateFields: prepared.stateFields } : {}),
+    ...(prepared.streamTransformers ? { streamTransformers: prepared.streamTransformers } : {}),
+    ...(prepared.subagentResolver ? { subagentResolver: prepared.subagentResolver } : {}),
+    ...(prepared.summarization ? { summarization: prepared.summarization } : {}),
+    tools: prepared.tools,
+  })
+}
+
+function assertResolvedSubagentGraph(
+  value: unknown,
+): asserts value is ResolvedSubagentGraph["graph"] {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("invoke" in value) ||
+    typeof value.invoke !== "function"
+  ) {
+    throw new Error("Materialized subagent graph does not expose invoke(input, config).")
+  }
+}
+
+function findReservedTaskPolicyError(
+  descriptor: import("@dawn-ai/sdk").DawnAgent | undefined,
+  routeId: string,
+): string | undefined {
+  const tools = (descriptor as unknown as { readonly tools?: Record<string, unknown> } | undefined)
+    ?.tools
+  if (!tools || typeof tools !== "object") return undefined
+  for (const field of ["allow", "deny", "approve"] as const) {
+    if (Array.isArray(tools[field]) && tools[field].includes("task")) {
+      return `[DAWN_E1004] Parent route "${routeId}": tools.${field} references the reserved internal "task" tool. Remove that entry and use delegation to control subagent dispatch.`
+    }
+  }
+  if (
+    typeof tools.constrain === "object" &&
+    tools.constrain !== null &&
+    Object.hasOwn(tools.constrain, "task")
+  ) {
+    return `[DAWN_E1004] Parent route "${routeId}": tools.constrain references the reserved internal "task" tool. Remove that entry and use delegation to control subagent dispatch.`
+  }
+  return undefined
+}
+
+function readDawnMetadata(config: RunnableConfig): Record<string, unknown> {
+  const dawn = config.metadata?.dawn
+  return typeof dawn === "object" && dawn !== null && !Array.isArray(dawn)
+    ? (dawn as Record<string, unknown>)
+    : {}
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined
+}
+
+function readNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined
+}
+
+function readStringConfigurable(config: RunnableConfig, key: string): string | undefined {
+  return readNonEmptyString(config.configurable?.[key])
+}
+
+function readRouteParams(
+  config: RunnableConfig,
+  names: readonly string[],
+  fallback: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  const params: Record<string, string> = { ...fallback }
+  for (const name of names) {
+    const value = config.configurable?.[name]
+    if (typeof value === "string") params[name] = value
+  }
+  return params
 }
 
 function buildOffload(

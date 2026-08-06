@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createAimock, script } from "../../testing/dist/index.js"
-import { buildSubagentResolver, streamResolvedRoute } from "../src/lib/runtime/execute-route.js"
+import { streamResolvedRoute } from "../src/lib/runtime/execute-route.js"
 
 const tempDirs: string[] = []
 const mocks: Array<{ close: () => Promise<void> }> = []
@@ -25,49 +25,6 @@ afterEach(async () => {
 })
 
 describe("canonical subagent registry route preparation", () => {
-  it("builds the temporary async request/result resolver shape", async () => {
-    const route = {
-      id: "/coordinator/subagents/researcher",
-      pathname: "src/app/coordinator/subagents/researcher/index.ts",
-      kind: "agent" as const,
-      entryFile: "/app/src/app/coordinator/subagents/researcher/index.ts",
-      routeDir: "/app/src/app/coordinator/subagents/researcher",
-      segments: [],
-    }
-    const resolver = buildSubagentResolver({
-      appRoot: "/app",
-      routeManifest: { appRoot: "/app", routes: [route] },
-      subagentRegistry: [
-        {
-          name: "researcher",
-          routeId: route.id,
-          source: "convention",
-          description: "Researches.",
-          rule: { action: "allow" },
-        },
-      ],
-    })
-    const config = { configurable: { thread_id: "thread-1" } }
-
-    const result = await resolver({
-      callId: "task-1",
-      name: "researcher",
-      input: "Inspect",
-      config,
-    })
-
-    expect(result).toMatchObject({
-      ok: true,
-      child: { routeId: route.id, graph: { invoke: expect.any(Function) } },
-    })
-    await expect(
-      resolver({ callId: "task-2", name: "missing", input: "Inspect", config }),
-    ).resolves.toEqual({
-      ok: false,
-      message: "[DAWN_E5003] No subagent named 'missing' is available.",
-    })
-  })
-
   it("dispatches a keyed child under its explicit alias", async () => {
     const app = await fixtureApp({ alias: "analyst" })
     const childInput = "inspect the evidence"

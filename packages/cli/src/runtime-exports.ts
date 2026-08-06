@@ -23,6 +23,8 @@ export {
 export {
   executeResolvedRoute,
   invokeResolvedRoute,
+  type MaterializeResolvedRouteGraphOptions,
+  materializeResolvedRouteGraph,
   resolveCheckpointer,
   resolveThreadsStore,
   streamResolvedRoute,
