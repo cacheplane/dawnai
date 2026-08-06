@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -16,6 +16,13 @@ import {
   run,
   validatePackageMetadata,
 } from "./lib/published-artifacts.mjs"
+import {
+  runTypeScriptToolingProbe,
+  typescriptToolingConsumerSource,
+  typescriptToolingProbeSource,
+  typescriptToolingSourceFiles,
+  typescriptToolingTypeScriptConfig,
+} from "./lib/typescript-tooling-probe.mjs"
 import * as publishedSmoke from "./published-artifact-smoke.mjs"
 
 const {
@@ -313,6 +320,172 @@ import { ${removedFunctionName} } from "@dawn-ai/ag-ui"`),
     })
 
     await assert.rejects(compileAgUiTypeProbe(root), /Unused '@ts-expect-error' directive/)
+  })
+})
+
+describe("TypeScript tooling installed probe", () => {
+  it("generates a clean installed-package runtime probe with exact extraction assertions", () => {
+    const source = typescriptToolingProbeSource()
+
+    assert.match(source, /from "@dawn-ai\/core"/)
+    assert.match(source, /from "@dawn-ai\/vite-plugin"/)
+    assert.doesNotMatch(source, /@dawn-ai\/core\/internal\/compiler/)
+    assert.doesNotMatch(
+      source,
+      /(?:\.\.\/)+packages\/|packages\/core\/(?:src|dist)|packages\/vite-plugin\/(?:src|dist)/,
+    )
+    assert.match(source, /extractToolTypesForRoute/)
+    assert.match(source, /extractToolSchemasForRoute/)
+    assert.match(source, /dawnToolSchemaPlugin\(\)\.transform/)
+    assert.match(source, /assert\.deepEqual\(types,/)
+    assert.match(source, /assert\.deepEqual\(schemas,/)
+    assert.match(source, /__dawnGeneratedDescription2/)
+    assert.match(source, /__dawnGeneratedSchema2/)
+    assert.match(source, /__dawnGeneratedZ2/)
+    assert.match(source, /typescript\.version, expectedTypeScriptVersion/)
+    assert.match(source, /coreCompiler\.version, "6\.0\.2"/)
+    assert.match(source, /oldCompiler\.version, "6\.0\.2"/)
+    assert.match(source, /typeof coreCompiler\.createProgram, "function"/)
+    assert.match(source, /typeof oldCompiler\.createSourceFile, "function"/)
+  })
+
+  it("builds representative shared and local tool sources without repository imports", () => {
+    const files = typescriptToolingSourceFiles()
+
+    assert.deepEqual(Object.keys(files).sort(), [
+      "route/tools/fallback.ts",
+      "route/tools/shadowed.ts",
+      "shared/tool-inputs.ts",
+      "shared/tools/mapped.ts",
+      "shared/tools/shadowed.ts",
+    ])
+    assert.match(files["shared/tools/mapped.ts"], /import type .* from "\.\.\/tool-inputs\.js"/)
+    assert.match(files["shared/tools/mapped.ts"], /\[K in keyof T\]\?: T\[K\]/)
+    assert.match(files["shared/tools/mapped.ts"], /\/\*\*/)
+    assert.match(files["route/tools/fallback.ts"], /Map<string, number> & \{ fixed: string \}/)
+    assert.match(files["route/tools/shadowed.ts"], /Local shadow wins/)
+    assert.match(files["shared/tools/shadowed.ts"], /must be shadowed/)
+    for (const source of Object.values(files)) {
+      assert.doesNotMatch(
+        source,
+        /(?:\.\.\/)+packages\/|packages\/(?:core|vite-plugin)\/(?:src|dist)/,
+      )
+    }
+  })
+
+  it("generates a NodeNext consumer and config that compile the transformed tool", () => {
+    const source = typescriptToolingConsumerSource()
+
+    assert.match(source, /from "\.\/generated-tool\.js"/)
+    assert.match(source, /schema\.parse/)
+    assert.match(source, /description/)
+    assert.match(source, /async function runConsumer\(\)/)
+    assert.doesNotMatch(source, /^const result:.*= await /m)
+    assert.deepEqual(typescriptToolingTypeScriptConfig(), {
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        noEmit: true,
+        strict: true,
+        target: "ES2022",
+      },
+      files: ["generated-tool.ts", "typescript-tooling-consumer.ts"],
+    })
+  })
+
+  it("writes all probe files and runs Node before the manifest-declared TypeScript 7 bin", async () => {
+    const root = await createTypeScriptToolingRunnerFixture()
+    const calls = []
+
+    await runTypeScriptToolingProbe({
+      root,
+      expectedTypeScriptVersion: "7.0.2",
+      async runCommand(command, args, options) {
+        calls.push({ command, args, options })
+      },
+    })
+
+    for (const relativePath of [
+      ...Object.keys(typescriptToolingSourceFiles()),
+      "typescript-tooling-probe.mjs",
+      "typescript-tooling-consumer.ts",
+      "tsconfig.typescript-tooling.json",
+    ]) {
+      assert.equal(existsSync(join(root, relativePath)), true, `${relativePath} must be written`)
+    }
+    assert.match(
+      readFileSync(join(root, "typescript-tooling-probe.mjs"), "utf8"),
+      /const expectedTypeScriptVersion = "7\.0\.2"/,
+    )
+    assert.deepEqual(calls, [
+      {
+        command: process.execPath,
+        args: ["typescript-tooling-probe.mjs"],
+        options: { cwd: root },
+      },
+      {
+        command: join(realpathSync(root), "node_modules", "typescript", "custom-bin", "tsc.mjs"),
+        args: ["--noEmit", "--project", "tsconfig.typescript-tooling.json"],
+        options: { cwd: root },
+      },
+    ])
+  })
+
+  it("validates runner options and the installed TypeScript version", async () => {
+    await assert.rejects(runTypeScriptToolingProbe(), /options object/)
+    await assert.rejects(
+      runTypeScriptToolingProbe({
+        root: "",
+        runCommand: async () => {},
+        expectedTypeScriptVersion: "7.0.2",
+      }),
+      /root must be a non-empty string/,
+    )
+    await assert.rejects(
+      runTypeScriptToolingProbe({
+        root: "/tmp/example",
+        runCommand: null,
+        expectedTypeScriptVersion: "7.0.2",
+      }),
+      /runCommand must be a function/,
+    )
+    await assert.rejects(
+      runTypeScriptToolingProbe({
+        root: "/tmp/example",
+        runCommand: async () => {},
+        expectedTypeScriptVersion: "",
+      }),
+      /expectedTypeScriptVersion must be a non-empty string/,
+    )
+
+    const root = await createTypeScriptToolingRunnerFixture({ version: "7.0.1" })
+    await assert.rejects(
+      runTypeScriptToolingProbe({
+        root,
+        runCommand: async () => {},
+        expectedTypeScriptVersion: "7.0.2",
+      }),
+      /installed TypeScript version 7\.0\.1, expected 7\.0\.2/,
+    )
+  })
+
+  it("propagates command failures and does not continue to TypeScript", async () => {
+    const root = await createTypeScriptToolingRunnerFixture()
+    const failure = new Error("runtime probe failed")
+    let calls = 0
+
+    await assert.rejects(
+      runTypeScriptToolingProbe({
+        root,
+        expectedTypeScriptVersion: "7.0.2",
+        async runCommand() {
+          calls += 1
+          throw failure
+        },
+      }),
+      (error) => error === failure,
+    )
+    assert.equal(calls, 1)
   })
 })
 
@@ -621,6 +794,27 @@ describe("assertNoNativeInstallOutput", () => {
     )
   })
 })
+
+async function createTypeScriptToolingRunnerFixture({ version = "7.0.2" } = {}) {
+  const root = await mkdtemp(join(tmpdir(), "dawn-typescript-tooling-probe-test-"))
+  const typescriptRoot = join(root, "node_modules", "typescript")
+  tempRoots.push(root)
+  await mkdir(join(typescriptRoot, "custom-bin"), { recursive: true })
+  await Promise.all([
+    writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }), "utf8"),
+    writeFile(
+      join(typescriptRoot, "package.json"),
+      JSON.stringify({
+        name: "typescript",
+        version,
+        bin: { tsc: "./custom-bin/tsc.mjs" },
+      }),
+      "utf8",
+    ),
+    writeFile(join(typescriptRoot, "custom-bin", "tsc.mjs"), "", "utf8"),
+  ])
+  return root
+}
 
 async function createAgUiProbeFixture(options = {}) {
   const root = await mkdtemp(join(tmpdir(), "dawn-ag-ui-probe-test-"))
