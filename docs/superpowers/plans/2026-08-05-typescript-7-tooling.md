@@ -584,7 +584,7 @@ git commit -m "build(next): use TypeScript 7 CLI checking"
 - Create: `scripts/lib/typescript-tooling-probe.mjs`
 - Modify: `scripts/published-artifacts.test.mjs`
 
-- [ ] **Step 1: Write failing probe-source and command tests**
+- [x] **Step 1: Write failing probe-source and command tests**
 
 Add tests for missing exports from `typescript-tooling-probe.mjs`. Assert the generated probe:
 
@@ -596,7 +596,7 @@ Add tests for missing exports from `typescript-tooling-probe.mjs`. Assert the ge
 - verifies Core operations succeed, which proves its nested compatibility API is usable;
 - emits a NodeNext TypeScript consumer and runs `tsc --noEmit`.
 
-- [ ] **Step 2: Run the script tests and verify RED**
+- [x] **Step 2: Run the script tests and verify RED**
 
 ```bash
 node --test scripts/published-artifacts.test.mjs
@@ -604,7 +604,7 @@ node --test scripts/published-artifacts.test.mjs
 
 Expected: FAIL because the reusable probe module does not exist.
 
-- [ ] **Step 3: Implement reusable probe generation/execution**
+- [x] **Step 3: Implement reusable probe generation/execution**
 
 Export pure source/config builders plus a runner that accepts:
 
@@ -618,7 +618,7 @@ Export pure source/config builders plus a runner that accepts:
 
 Keep installation outside the probe library so local tarball and npm-published callers can select their own package sources. Avoid repository-relative imports in generated code.
 
-- [ ] **Step 4: Run tests and verify GREEN**
+- [x] **Step 4: Run tests and verify GREEN**
 
 ```bash
 node --test scripts/published-artifacts.test.mjs
@@ -626,7 +626,7 @@ node --test scripts/published-artifacts.test.mjs
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/typescript-tooling-probe.mjs scripts/published-artifacts.test.mjs
