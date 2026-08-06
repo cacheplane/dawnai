@@ -454,7 +454,6 @@ async function prepareRouteExecution(options: {
   readonly checkpointer?: BaseCheckpointSaver | false
   readonly isSubagent?: boolean
   readonly middlewareContext?: Readonly<Record<string, unknown>>
-  readonly parentDispatchCallId?: string
   readonly routeParams?: Readonly<Record<string, string>>
   readonly routeFile: string
   readonly routeId: string
@@ -846,6 +845,8 @@ async function prepareRouteExecution(options: {
     if (hasTaskTool) {
       const routeById = new Map(routeManifest.routes.map((route) => [route.id, route] as const))
       subagentResolver = buildGuardedSubagentResolver({
+        cacheChildGraphs:
+          options.sandboxManager === undefined && options.sandboxThreadId === undefined,
         fallbackDepth: options.subagentDepth ?? 0,
         fallbackParams: options.routeParams ?? {},
         ...(sandboxKey ? { fallbackRootSandboxKey: sandboxKey } : {}),
@@ -861,7 +862,6 @@ async function prepareRouteExecution(options: {
             checkpointer: false,
             isSubagent: true,
             ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
-            parentDispatchCallId: context.callId,
             routeFile: route.entryFile,
             routeId: route.id,
             routeParams: context.params,
@@ -1196,6 +1196,7 @@ export interface ChildPreparationContext {
 }
 
 export function buildGuardedSubagentResolver(args: {
+  readonly cacheChildGraphs?: boolean
   readonly fallbackDepth?: number
   readonly fallbackParams?: Readonly<Record<string, string>>
   readonly fallbackRootSandboxKey?: string
@@ -1210,6 +1211,8 @@ export function buildGuardedSubagentResolver(args: {
   readonly registry: readonly ResolvedSubagent[]
   readonly routeParamNames?: readonly string[]
 }): SubagentResolver {
+  const childGraphCache = new Map<string, Promise<ResolvedSubagentGraph>>()
+
   return async (request) => {
     const signal = request.config.signal ?? args.fallbackSignal ?? new AbortController().signal
     const threadId = readStringConfigurable(request.config, "thread_id")
@@ -1229,14 +1232,27 @@ export function buildGuardedSubagentResolver(args: {
       name: request.name,
       ...(args.permissions ? { permissions: args.permissions } : {}),
       registry: args.registry,
-      resolve: async (entry) =>
-        args.prepareChild(entry, {
+      resolve: async (entry) => {
+        const context: ChildPreparationContext = {
           callId: request.callId,
           depth: parentDepth + 1,
           params,
           ...(rootSandboxKey ? { rootSandboxKey } : {}),
           signal,
-        }),
+        }
+        if (args.cacheChildGraphs === false) return args.prepareChild(entry, context)
+
+        const cacheKey = childGraphCacheKey(entry, context)
+        const cached = childGraphCache.get(cacheKey)
+        if (cached) return cached
+
+        const pending = args.prepareChild(entry, context).catch((error: unknown) => {
+          if (childGraphCache.get(cacheKey) === pending) childGraphCache.delete(cacheKey)
+          throw error
+        })
+        childGraphCache.set(cacheKey, pending)
+        return pending
+      },
       runtime: {
         parentRouteId: args.parentRouteId,
         ...(Object.keys(params).length > 0 ? { params } : {}),
@@ -1247,6 +1263,15 @@ export function buildGuardedSubagentResolver(args: {
 
     return result.ok ? { child: result.value, ok: true } : { message: result.message, ok: false }
   }
+}
+
+function childGraphCacheKey(entry: ResolvedSubagent, context: ChildPreparationContext): string {
+  return JSON.stringify([
+    entry.routeId,
+    context.depth,
+    context.rootSandboxKey ?? null,
+    Object.entries(context.params).sort(([left], [right]) => left.localeCompare(right)),
+  ])
 }
 
 async function materializePreparedAgentGraph(

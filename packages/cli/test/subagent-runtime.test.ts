@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import type { DelegationContext, DelegationRequest } from "@dawn-ai/sdk"
 import type { RunnableConfig } from "@langchain/core/runnables"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createAimock, script } from "../../testing/dist/index.js"
@@ -70,7 +71,7 @@ describe("lazy CLI subagent runtime context", () => {
     })
   })
 
-  it("does not retain a live RunnableConfig between resolutions", async () => {
+  it("excludes live RunnableConfig from stable child graph cache identity", async () => {
     const prepareChild = vi.fn(async () => ({
       routeId: registry[0].routeId,
       graph: { invoke: vi.fn() },
@@ -84,29 +85,121 @@ describe("lazy CLI subagent runtime context", () => {
     const firstSignal = new AbortController().signal
     const secondSignal = new AbortController().signal
 
-    await resolver({
+    const first = await resolver({
       callId: "first",
       config: { signal: firstSignal },
       input: "one",
       name: "researcher",
     })
-    await resolver({
+    const second = await resolver({
       callId: "second",
       config: { signal: secondSignal },
       input: "two",
       name: "researcher",
     })
 
-    expect(prepareChild).toHaveBeenNthCalledWith(
-      1,
+    expect(first).toMatchObject({ ok: true })
+    expect(second).toMatchObject({ ok: true })
+    expect(prepareChild).toHaveBeenCalledTimes(1)
+    expect(prepareChild).toHaveBeenCalledWith(
       registry[0],
       expect.objectContaining({ callId: "first", signal: firstSignal }),
     )
-    expect(prepareChild).toHaveBeenNthCalledWith(
-      2,
-      registry[0],
-      expect.objectContaining({ callId: "second", signal: secondSignal }),
+  })
+
+  it("memoizes stable child graphs after evaluating policy on every call", async () => {
+    const predicate = vi.fn(
+      async (_request: DelegationRequest, _context: DelegationContext) => true as const,
     )
+    const stableGraph = { invoke: vi.fn() }
+    const prepareChild = vi.fn(async () => ({
+      graph: stableGraph,
+      routeId: registry[0].routeId,
+    }))
+    const resolver = buildGuardedSubagentResolver({
+      interruptCapable: true,
+      parentRouteId: "/parent/[tenant]/[locale]",
+      prepareChild,
+      registry: [{ ...registry[0], rule: { action: "constrain" as const, predicate } }],
+      routeParamNames: ["tenant", "locale"],
+    })
+    const firstSignal = new AbortController().signal
+    const secondSignal = new AbortController().signal
+
+    const first = await resolver({
+      callId: "first-call",
+      config: {
+        configurable: { locale: "en", tenant: "acme", thread_id: "thread-1" },
+        metadata: { dawn: { subagent_depth: 1 } },
+        signal: firstSignal,
+      },
+      input: "one",
+      name: "researcher",
+    })
+    const second = await resolver({
+      callId: "second-call",
+      config: {
+        configurable: { tenant: "acme", locale: "en", thread_id: "thread-1" },
+        metadata: { dawn: { subagent_depth: 1 } },
+        signal: secondSignal,
+      },
+      input: "two",
+      name: "researcher",
+    })
+
+    expect(first).toMatchObject({ ok: true, child: { graph: stableGraph } })
+    expect(second).toMatchObject({ ok: true, child: { graph: stableGraph } })
+    expect(predicate).toHaveBeenCalledTimes(2)
+    expect(predicate.mock.calls[0]?.[1]).toMatchObject({
+      params: { locale: "en", tenant: "acme" },
+      signal: firstSignal,
+    })
+    expect(predicate.mock.calls[1]?.[1]).toMatchObject({
+      params: { locale: "en", tenant: "acme" },
+      signal: secondSignal,
+    })
+    expect(prepareChild).toHaveBeenCalledTimes(1)
+    expect(prepareChild).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "researcher", routeId: registry[0].routeId }),
+      {
+        callId: "first-call",
+        depth: 2,
+        params: { locale: "en", tenant: "acme" },
+        signal: firstSignal,
+      },
+    )
+  })
+
+  it("removes rejected child graph preparations from the cache", async () => {
+    const liveSignal = new AbortController().signal
+    const prepareChild = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("setup failed"))
+      .mockResolvedValueOnce({ graph: { invoke: vi.fn() }, routeId: registry[0].routeId })
+    const resolver = buildGuardedSubagentResolver({
+      interruptCapable: true,
+      parentRouteId: "/parent",
+      prepareChild,
+      registry,
+    })
+
+    await expect(
+      resolver({
+        callId: "first",
+        config: { signal: liveSignal },
+        input: "one",
+        name: "researcher",
+      }),
+    ).resolves.toMatchObject({ ok: false, message: expect.stringContaining("[DAWN_E5003]") })
+    await expect(
+      resolver({
+        callId: "second",
+        config: { signal: liveSignal },
+        input: "two",
+        name: "researcher",
+      }),
+    ).resolves.toMatchObject({ ok: true })
+    expect(prepareChild).toHaveBeenCalledTimes(2)
   })
 
   it("retains task automatically for nested routes", async () => {
