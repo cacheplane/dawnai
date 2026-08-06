@@ -25,6 +25,7 @@ import {
 import { headersToRecord, loadMiddleware, runMiddleware } from "./middleware.js"
 import { readPendingInterrupts } from "./pending-interrupts.js"
 import { extractRouteParams } from "./request-context.js"
+import { createRunRegistry, type RunRegistry } from "./run-registry.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import type { StartRuntimeServerOptions } from "./runtime-server.js"
 import {
@@ -313,6 +314,12 @@ function buildRouteTable(ctx: {
   // can re-invoke the correct route without requiring the client to repeat it.
   const threadRouteMap = new Map<string, string>()
 
+  // Process-local in-flight run tracking: enables the concurrency gate, the
+  // per-run abort signal, and POST /threads/:id/cancel. Scoped to this route
+  // table (not module-level) so multiple handler instances in one process —
+  // which the (Request) => Response core exists to allow — stay isolated.
+  const runRegistry = createRunRegistry()
+
   return [
     // ------------------------------------------------------------------
     // GET /healthz
@@ -403,6 +410,7 @@ function buildRouteTable(ctx: {
           registry,
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
+          runRegistry,
           signal,
           threadId: params.thread_id ?? "",
           threadRouteMap,
@@ -588,6 +596,7 @@ async function handleApStreamRequest(options: {
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly request: Request
+  readonly runRegistry: RunRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly threadId: string
@@ -602,6 +611,7 @@ async function handleApStreamRequest(options: {
     permissionsStore,
     registry,
     request,
+    runRegistry,
     sandboxManager,
     signal,
     threadId,
@@ -656,7 +666,19 @@ async function handleApStreamRequest(options: {
   threadRouteMap.set(threadId, routeKey)
   await threadsStore.updateMetadata(threadId, { route: routeKey })
 
-  // Mark thread busy
+  // Claim the thread's run slot. Dawn has no run_id, so one run per thread is
+  // what makes "cancel this thread's run" well-defined — and it stops two runs
+  // from interleaving checkpoint writes against the same LangGraph thread.
+  // Gated on the in-memory registry, never the persisted status column, so a
+  // process that crashed mid-run does not brick the thread with a stale "busy".
+  const run = runRegistry.begin(threadId, signal)
+  if (!run) {
+    return Response.json(
+      createRequestErrorBody(`A run is already in flight for thread "${threadId}"`),
+      { status: 409 },
+    )
+  }
+
   await threadsStore.updateStatus(threadId, "busy")
 
   // Deliberate old-behavior parity: the pre-refactor server wired NO
@@ -697,6 +719,7 @@ async function handleApStreamRequest(options: {
           await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
         }
       } finally {
+        run.release()
         safeClose(controller)
       }
     },
