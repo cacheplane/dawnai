@@ -38,28 +38,28 @@ const MODEL_LAYER_EXTERNALS = ["@langchain/*", "langchain", "openai"]
  * The node TypeScript-loading machinery. It cannot be bundled at all (esbuild's
  * own runtime imports `fs`/`os`/`child_process` by BARE specifier, which
  * `platform: "neutral"` refuses to resolve), so it must be external for the
- * build to complete. That does not weaken the gate: `LOADER_EDGES` below pins
- * every import edge into it, so a new one still fails.
+ * build to complete. That does not weaken the gate: the loader-edge assertion
+ * below requires ZERO import edges into it, so a new one still fails.
  */
 const LOADER_EXTERNALS = ["tsx", "tsx/*", "typescript", "esbuild"]
 
 /**
- * Bundle a `src/` entry and return both its metafile (what the ratchet reads)
+ * Bundle a `src/` entry and return both its metafile (what the gate reads)
  * and its code (what the functional proof executes).
  *
  * IMPORTANT — the gate reads BUILT output for the workspace packages: every
  * `@dawn-ai/*` specifier resolves through the workspace link to that package's
  * `dist/`, because that is what its `exports` map points at. A new `node:`
  * import added to, say, `packages/core/src` is therefore INVISIBLE to the
- * inventories below until `pnpm build` has run. CI builds before it tests, so
- * the ratchet is honest there; a local `pnpm test` against stale `dist/` can
+ * assertions below until `pnpm build` has run. CI builds before it tests, so
+ * the gate is honest there; a local `pnpm test` against stale `dist/` can
  * pass falsely. Re-run `pnpm build` before trusting a local green.
  */
 async function bundle(entry: string): Promise<{ metafile: Metafile; code: string }> {
   const result = await build({
     // Pin esbuild's working directory so metafile paths are relative to the
     // package, not to whatever cwd the test runner was launched from —
-    // otherwise the pinned inventories below only match a package-local run.
+    // otherwise the edge strings below only match a package-local run.
     absWorkingDir: pkgRoot,
     bundle: true,
     conditions: ["import"],
@@ -77,6 +77,33 @@ async function bundle(entry: string): Promise<{ metafile: Metafile; code: string
   const output = result.outputFiles?.[0]
   if (!output || !result.metafile) throw new Error("esbuild produced no output")
   return { code: output.text, metafile: result.metafile }
+}
+
+/**
+ * Link the same entry the way a shim-less runtime would: `platform: "browser"`
+ * has no node-builtin resolution at all, and `node:*` is NOT external, so any
+ * surviving `node:` import is an unresolvable specifier and the build fails.
+ * This is the closest available proxy for a workerd/edge link check without
+ * standing up workerd, and it is the exact failure mode PR2a removed.
+ *
+ * Externals are only the model/provider layer (the app's concern, same as
+ * above). The loader externals are deliberately NOT repeated: the loader is
+ * unreachable from this entry, so nothing needs them here.
+ */
+async function bundleForBrowser(entry: string): Promise<void> {
+  await build({
+    absWorkingDir: pkgRoot,
+    bundle: true,
+    conditions: ["import"],
+    entryPoints: [join(pkgRoot, "src", entry)],
+    external: [...MODEL_LAYER_EXTERNALS],
+    format: "esm",
+    logLevel: "silent",
+    mainFields: ["module", "main"],
+    outfile: join(pkgRoot, "fetch-entry-purity.browser.bundle.mjs"),
+    platform: "browser",
+    write: false,
+  })
 }
 
 /** Every `node:` / bare-builtin / loader import in the graph, as `spec <- file`. */
@@ -114,25 +141,14 @@ function graphInputs(metafile: Metafile): string[] {
   return Object.keys(metafile.inputs)
 }
 
-/**
- * The `node:` imports still reachable through UPSTREAM Dawn packages, pinned
- * so the set can only shrink. There are none left: every upstream package the
- * fetch graph reaches now has the same pure/node split `@dawn-ai/cli` has, and
- * the last three — core's path jail — moved to the pure helpers with an
- * adversarial containment suite (`packages/core/test/capabilities/path-jail-adversarial.test.ts`).
- *
- * Still a SUBSET check here so the ratchet's shape survives until Task 9
- * replaces it with strict equality against zero.
- */
-const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = []
-
-/**
- * Import edges into the node TS loader. There are none left: reading
- * `dawn.config.ts` from disk now lives behind `@dawn-ai/core/node`, which the
- * fetch graph never reaches. Kept as its own assertion until Task 9 folds it
- * into the strict gate.
- */
-const LOADER_EDGES: readonly string[] = []
+// The gate is CLOSED: the upstream ratchet inventory that used to live here
+// (`KNOWN_UPSTREAM_NODE_EDGES`) and its loader counterpart are gone, replaced
+// by strict equality against zero. Every package the fetch graph reaches now
+// has the same pure/node split `@dawn-ai/cli` has; the last edges — core's
+// path jail — moved to the pure helpers behind an adversarial containment
+// suite (`packages/core/test/capabilities/path-jail-adversarial.test.ts`).
+// A new `node:` import anywhere in the graph fails here, and there is no
+// inventory to add it to.
 
 describe("@dawn-ai/cli/fetch graph purity", () => {
   it("contains no node: import from any @dawn-ai/cli source file", async () => {
@@ -147,18 +163,22 @@ describe("@dawn-ai/cli/fetch graph purity", () => {
     expect(inputs.filter((i) => i.includes("commander"))).toEqual([])
   }, 120_000)
 
-  it("adds no node: import beyond the pinned upstream inventory", async () => {
+  it("contains no node: import from anywhere in the graph", async () => {
     const { metafile } = await bundle("fetch-exports.ts")
-    const known = new Set(KNOWN_UPSTREAM_NODE_EDGES)
-    expect(nodeImportEdges(metafile).filter((edge) => !known.has(edge))).toEqual([])
+    expect(nodeImportEdges(metafile)).toEqual([])
   }, 120_000)
 
   it("never reaches the node TS loader", async () => {
     const { metafile } = await bundle("fetch-exports.ts")
-    // Equality, not a subset: `LOADER_EDGES` is empty, so the old
-    // non-vacuousness self-check (`edges.length > 0`) no longer applies.
-    // Task 9 folds this into the strict zero-edge gate.
-    expect(loaderImportEdges(metafile)).toEqual([...LOADER_EDGES])
+    expect(loaderImportEdges(metafile)).toEqual([])
+  }, 120_000)
+
+  it("links under platform: browser with no node: externals", async () => {
+    // Before PR2a this threw on unresolvable `node:fs` and friends; it is the
+    // only assertion here that exercises RESOLUTION rather than inspecting a
+    // metafile, so it catches a `node:` dependency even if the edge inventory
+    // above were somehow mis-filtered.
+    await expect(bundleForBrowser("fetch-exports.ts")).resolves.toBeUndefined()
   }, 120_000)
 
   // Negative control: the same gate applied to the node runtime entry MUST
@@ -169,10 +189,9 @@ describe("@dawn-ai/cli/fetch graph purity", () => {
     const { metafile } = await bundle("runtime-exports.ts")
     expect(ownNodeImportEdges(metafile).length).toBeGreaterThan(0)
     expect(graphInputs(metafile).some((i) => i.includes("sqlite"))).toBe(true)
-    const knownNode = new Set(KNOWN_UPSTREAM_NODE_EDGES)
-    expect(nodeImportEdges(metafile).filter((edge) => !knownNode.has(edge)).length).toBeGreaterThan(
-      0,
-    )
+    expect(nodeImportEdges(metafile).length).toBeGreaterThan(0)
+    expect(loaderImportEdges(metafile).length).toBeGreaterThan(0)
+    await expect(bundleForBrowser("runtime-exports.ts")).rejects.toThrow(/Could not resolve/)
   }, 120_000)
 
   // …and the commander check against the CLI bin, the one entry that has it.

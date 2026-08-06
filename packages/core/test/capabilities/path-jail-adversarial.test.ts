@@ -152,6 +152,53 @@ describe("workspace path jail — adversarial containment", () => {
 })
 
 // ---------------------------------------------------------------------------
+// The normalization invariant every host lane must satisfy
+// ---------------------------------------------------------------------------
+
+describe("workspace path jail — non-absolute roots are rejected at the boundary", () => {
+  // A host entry point that forgets to canonicalize its app root (the CLI does
+  // it in `toPosixAppRoot`) must fail HERE, at construction, naming the value —
+  // not on the first file operation, and never by quietly deciding containment
+  // against a root the caller did not mean.
+  const BAD_ROOTS = ["app/workspace", ".", "", "./workspace", "C:\\app\\workspace"]
+
+  for (const root of BAD_ROOTS) {
+    it(`rejects ${JSON.stringify(root)}`, () => {
+      const { backend } = recordingBackend()
+      let message: string | undefined
+      try {
+        createWorkspaceFs({
+          workspaceRoot: root,
+          backend,
+          permissions: undefined,
+          signal,
+          interruptCapable: false,
+        })
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain("POSIX-normalized absolute workspaceRoot")
+      // The message must name the offending value, so a new host entry point
+      // that skipped canonicalization is diagnosable from the error alone.
+      expect(message).toContain(JSON.stringify(root))
+    })
+  }
+
+  it("accepts a POSIX-absolute root", () => {
+    const { backend } = recordingBackend()
+    expect(() =>
+      createWorkspaceFs({
+        workspaceRoot: WORKSPACE_ROOT,
+        backend,
+        permissions: undefined,
+        signal,
+        interruptCapable: false,
+      }),
+    ).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // tool-outputs/ exemption predicate (built-in/workspace.ts)
 // ---------------------------------------------------------------------------
 

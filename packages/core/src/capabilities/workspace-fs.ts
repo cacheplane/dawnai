@@ -1,6 +1,6 @@
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { WorkspaceFs } from "@dawn-ai/sdk"
-import { pureResolve } from "@dawn-ai/sdk/pure"
+import { POSIX_SEP, pureResolve } from "@dawn-ai/sdk/pure"
 import type { FilesystemBackend } from "@dawn-ai/workspace"
 import { gatePathOp, type PathOperation } from "./permission-gate.js"
 
@@ -25,11 +25,30 @@ export interface CreateWorkspaceFsOptions {
 }
 
 /**
+ * The jail's precondition, enforced where core is ENTERED rather than deep
+ * inside `pureResolve`. Every host lane must canonicalize its app root to a
+ * POSIX-absolute path before handing it to core (`toPosixAppRoot` in
+ * `@dawn-ai/cli` is the node lane's single conversion); nothing mechanically
+ * forces a NEW host entry point to do so, so a miss must fail here — loudly,
+ * naming the value — instead of surfacing later as an opaque `pureResolve`
+ * throw on the first file operation, or (worse) as a containment comparison
+ * against a root that is not what the caller meant.
+ */
+function assertPosixAbsoluteWorkspaceRoot(workspaceRoot: string): void {
+  if (workspaceRoot.startsWith(POSIX_SEP)) return
+  throw new Error(
+    `createWorkspaceFs requires a POSIX-normalized absolute workspaceRoot; got ${JSON.stringify(workspaceRoot)}. ` +
+      "The host lane must canonicalize before calling core (see toPosixAppRoot in @dawn-ai/cli).",
+  )
+}
+
+/**
  * Build the author-facing sandboxed filesystem handle (`ctx.fs`). Paths are
  * workspace-relative; every call runs the same permission gate as the
  * agent-facing workspace tools.
  */
 export function createWorkspaceFs(opts: CreateWorkspaceFsOptions): WorkspaceFs {
+  assertPosixAbsoluteWorkspaceRoot(opts.workspaceRoot)
   const bctx = { signal: opts.signal, workspaceRoot: opts.workspaceRoot }
 
   async function gate(operation: PathOperation, path: string): Promise<string> {
