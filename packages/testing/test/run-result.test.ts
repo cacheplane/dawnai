@@ -58,12 +58,13 @@ it("captures interrupts, plan updates, and folds subagent events", async () => {
     }
     yield { type: "plan_update", data: { todos: [{ content: "A", status: "pending" }] } }
     yield { type: "plan_update", data: { todos: [{ content: "A", status: "completed" }] } }
-    yield { type: "subagent.start", data: { call_id: "c1", subagent: "research" } }
+    const child = { call_id: "c1", subagent: "research", route_id: "/research", depth: 1 }
+    yield { type: "subagent.start", data: child }
     yield {
       type: "subagent.tool_call",
-      data: { call_id: "c1", tool: "webSearch", input: { q: "x" } },
+      data: { ...child, id: "tool-run-1", tool: "webSearch", input: { q: "x" } },
     }
-    yield { type: "subagent.end", data: { call_id: "c1", final_message: "found it" } }
+    yield { type: "subagent.end", data: { ...child, final_message: "found it" } }
     yield { type: "done", output: { messages: [] } }
   }
   const r = await collectRunResult(s() as never, "t")
@@ -75,7 +76,34 @@ it("captures interrupts, plan updates, and folds subagent events", async () => {
   expect(r.subagents).toHaveLength(1)
   expect(r.subagents[0]).toMatchObject({ name: "research", callId: "c1", finalMessage: "found it" })
   expect(r.subagents[0]?.toolCalls).toEqual([{ name: "webSearch", args: { q: "x" } }])
-  expect(r.subagentEvents.length).toBeGreaterThanOrEqual(3)
+  expect(r.subagentEvents).toEqual([
+    {
+      type: "subagent.start",
+      data: { call_id: "c1", subagent: "research", route_id: "/research", depth: 1 },
+    },
+    {
+      type: "subagent.tool_call",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        id: "tool-run-1",
+        tool: "webSearch",
+        input: { q: "x" },
+      },
+    },
+    {
+      type: "subagent.end",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        final_message: "found it",
+      },
+    },
+  ])
 })
 it("captures a subagent error end", async () => {
   async function* s() {

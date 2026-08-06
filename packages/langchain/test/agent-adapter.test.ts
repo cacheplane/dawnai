@@ -114,7 +114,13 @@ describe("capability custom events", () => {
 
     expect(chunks[1]).toEqual({
       type: "subagent.plan_update",
-      data: { todos: ["one"] },
+      data: {
+        call_id: "call-1",
+        subagent: "researcher",
+        route_id: "/researcher",
+        depth: 1,
+        todos: ["one"],
+      },
     })
   })
 
@@ -145,6 +151,358 @@ describe("capability custom events", () => {
       { type: "plan_update", data: { todos: ["one"] } },
       { type: "memory.plan-updated", data: "accepted" },
       { type: "done", data: { ok: true } },
+    ])
+  })
+})
+
+describe("native subagent event projection", () => {
+  const metadata = {
+    dawn: {
+      subagent_stack: [
+        { callId: "call-outer", name: "planner", routeId: "/planner" },
+        { callId: "call-child", name: "researcher", routeId: "/planner/researcher" },
+      ],
+    },
+  }
+
+  test("projects child events exactly once and leaves the parent task correlated at root", async () => {
+    const entry = {
+      invoke: vi.fn(),
+      async *streamEvents() {
+        yield {
+          event: "on_chat_model_stream",
+          run_id: "parent-model",
+          name: "parent-model",
+          data: { chunk: { content: "Parent " } },
+        }
+        yield {
+          event: "on_tool_start",
+          run_id: "parent-task-run",
+          name: "task",
+          data: { input: { subagent: "researcher", input: "Investigate" } },
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "child-start",
+          name: "dawn.subagent",
+          data: {
+            phase: "start",
+            call_id: "call-child",
+            subagent: "researcher",
+            route_id: "/planner/researcher",
+            depth: 2,
+          },
+          parent_ids: ["root-run", "parent-task-run"],
+        }
+        yield {
+          event: "on_chain_start",
+          run_id: "child-graph",
+          name: "LangGraph",
+          data: { input: {} },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run"],
+        }
+        yield {
+          event: "on_chat_model_stream",
+          run_id: "child-model",
+          name: "child-model",
+          data: { chunk: { content: "Child token" } },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run", "child-graph"],
+        }
+        yield {
+          event: "on_tool_start",
+          run_id: "child-tool-run",
+          name: "readFile",
+          data: { input: { path: "evidence.md" } },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run", "child-graph"],
+        }
+        yield {
+          event: "on_tool_end",
+          run_id: "child-tool-run",
+          name: "readFile",
+          data: { output: "evidence" },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run", "child-graph"],
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "child-capability",
+          name: "dawn.capability",
+          data: { event: "plan_update", data: { todos: ["inspect"] } },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run", "child-graph"],
+        }
+        yield {
+          event: "on_chain_end",
+          run_id: "child-graph",
+          name: "LangGraph",
+          data: { output: { child: true } },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run"],
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "child-end",
+          name: "dawn.subagent",
+          data: {
+            phase: "end",
+            call_id: "call-child",
+            subagent: "researcher",
+            route_id: "/planner/researcher",
+            depth: 2,
+            final_message: "evidence",
+          },
+          parent_ids: ["root-run", "parent-task-run"],
+        }
+        yield {
+          event: "on_tool_end",
+          run_id: "parent-task-run",
+          name: "task",
+          data: { output: "evidence" },
+        }
+        yield {
+          event: "on_chain_end",
+          run_id: "root-run",
+          name: "LangGraph",
+          data: { output: { root: true } },
+          parent_ids: [],
+        }
+      },
+    }
+
+    const chunks = []
+    for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
+      entry,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    })) {
+      chunks.push(chunk)
+    }
+
+    const childIdentity = {
+      call_id: "call-child",
+      subagent: "researcher",
+      route_id: "/planner/researcher",
+      depth: 2,
+    }
+    expect(chunks).toEqual([
+      { type: "token", data: "Parent " },
+      {
+        type: "tool_call",
+        data: {
+          id: "parent-task-run",
+          name: "task",
+          input: { subagent: "researcher", input: "Investigate" },
+        },
+      },
+      { type: "subagent.start", data: childIdentity },
+      {
+        type: "subagent.message",
+        data: { ...childIdentity, chunk: "Child token" },
+      },
+      {
+        type: "subagent.tool_call",
+        data: {
+          ...childIdentity,
+          id: "child-tool-run",
+          tool: "readFile",
+          input: { path: "evidence.md" },
+        },
+      },
+      {
+        type: "subagent.tool_result",
+        data: {
+          ...childIdentity,
+          id: "child-tool-run",
+          tool: "readFile",
+          output: "evidence",
+        },
+      },
+      {
+        type: "subagent.plan_update",
+        data: { ...childIdentity, todos: ["inspect"] },
+      },
+      {
+        type: "subagent.end",
+        data: { ...childIdentity, final_message: "evidence" },
+      },
+      {
+        type: "tool_result",
+        data: { id: "parent-task-run", name: "task", output: "evidence" },
+      },
+      { type: "done", data: { root: true } },
+    ])
+    expect(chunks.filter(({ type }) => type === "token")).toEqual([
+      { type: "token", data: "Parent " },
+    ])
+    expect(chunks.filter(({ type }) => type === "tool_call")).toHaveLength(1)
+    expect(chunks.filter(({ type }) => type === "tool_result")).toHaveLength(1)
+  })
+
+  test("treats malformed Dawn stacks as root metadata", async () => {
+    const malformedMetadata = {
+      dawn: {
+        subagent_stack: [
+          { callId: "valid", name: "researcher", routeId: "/researcher" },
+          { callId: "", name: "nested", routeId: "/researcher/nested" },
+        ],
+      },
+    }
+    const entry = {
+      invoke: vi.fn(),
+      async *streamEvents() {
+        yield {
+          event: "on_chat_model_stream",
+          run_id: "model",
+          name: "model",
+          data: { chunk: { content: "root token" } },
+          metadata: malformedMetadata,
+          parent_ids: ["root"],
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "capability",
+          name: "dawn.capability",
+          data: { event: "plan_update", data: { todos: ["root"] } },
+          metadata: malformedMetadata,
+          parent_ids: ["root"],
+        }
+      },
+    }
+
+    const chunks = []
+    for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
+      entry,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    })) {
+      chunks.push(chunk)
+    }
+
+    expect(chunks).toEqual([
+      { type: "token", data: "root token" },
+      { type: "plan_update", data: { todos: ["root"] } },
+      { type: "done", data: undefined },
+    ])
+  })
+
+  test("keeps child interrupts top-level and attaches only missing child call ids", async () => {
+    const interruptError = Object.assign(new Error("GraphInterrupt"), {
+      name: "GraphInterrupt",
+      interrupts: [
+        {
+          id: "native-tool-id",
+          value: { interruptId: "perm-tool", kind: "tool", detail: { toolName: "writeFile" } },
+        },
+        {
+          id: "native-path-id",
+          value: {
+            interruptId: "perm-path",
+            kind: "path",
+            callId: "existing-path-call",
+            detail: { path: "evidence.md" },
+          },
+        },
+        {
+          id: "native-command-id",
+          value: { interruptId: "perm-command", kind: "command", detail: { command: "ls" } },
+        },
+        {
+          id: "native-memory-id",
+          value: { interruptId: "perm-memory", kind: "memory", detail: { namespace: "facts" } },
+        },
+        {
+          id: "native-subagent-id",
+          value: {
+            interruptId: "perm-subagent",
+            kind: "subagent",
+            callId: "resolver-call-id",
+            detail: { subagentName: "writer" },
+          },
+        },
+      ],
+    })
+    const entry = {
+      invoke: vi.fn(),
+      async *streamEvents() {
+        yield {
+          event: "on_tool_error",
+          run_id: "child-tool-run",
+          name: "writeFile",
+          data: { error: interruptError },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run"],
+        }
+      },
+    }
+
+    const chunks = []
+    for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
+      entry,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    })) {
+      chunks.push(chunk)
+    }
+
+    expect(chunks).toEqual([
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-tool",
+          kind: "tool",
+          callId: "call-child",
+          detail: { toolName: "writeFile" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-path",
+          kind: "path",
+          callId: "existing-path-call",
+          detail: { path: "evidence.md" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-command",
+          kind: "command",
+          callId: "call-child",
+          detail: { command: "ls" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-memory",
+          kind: "memory",
+          callId: "call-child",
+          detail: { namespace: "facts" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-subagent",
+          kind: "subagent",
+          callId: "resolver-call-id",
+          detail: { subagentName: "writer" },
+        },
+      },
+      { type: "done", data: undefined },
     ])
   })
 })

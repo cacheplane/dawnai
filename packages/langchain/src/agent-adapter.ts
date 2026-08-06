@@ -212,6 +212,35 @@ interface CapabilityEventPayload {
   readonly event: string
 }
 
+interface LangChainStreamEvent {
+  readonly event: string
+  readonly run_id: string
+  readonly data: Record<string, unknown> & {
+    readonly chunk?: unknown
+    readonly input?: unknown
+    readonly output?: unknown
+    readonly error?: unknown
+  }
+  readonly metadata?: Record<string, unknown>
+  readonly name: string
+  readonly parent_ids?: string[]
+}
+
+interface SubagentContext {
+  readonly callId: string
+  readonly depth: number
+  readonly name: string
+  readonly routeId: string
+}
+
+interface StreamEventProjection {
+  readonly capturesFinalOutput: boolean
+  readonly child: SubagentContext | undefined
+  readonly chunks: readonly AgentStreamChunk[]
+  readonly finalOutput: unknown
+  readonly interrupts: readonly RawInterruptEntry[]
+}
+
 const CAPABILITY_EVENT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*$/
 const RESERVED_ROOT_EVENT_NAMES = new Set([
   "chunk",
@@ -240,25 +269,210 @@ function parseCapabilityEvent(value: unknown): CapabilityEventPayload | undefine
   return { event: payload.event, data: payload.data }
 }
 
-function hasSubagentStack(metadata: Record<string, unknown> | undefined): boolean {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function parseSubagentContext(
+  metadata: Record<string, unknown> | undefined,
+): SubagentContext | undefined {
   const dawn = metadata?.dawn
-  if (typeof dawn !== "object" || dawn === null) return false
-  const stack = (dawn as Record<string, unknown>).subagent_stack
-  return (
-    Array.isArray(stack) &&
-    stack.length > 0 &&
-    stack.every(
-      (entry) =>
-        typeof entry === "object" &&
-        entry !== null &&
-        typeof (entry as Record<string, unknown>).callId === "string" &&
-        (entry as Record<string, unknown>).callId !== "" &&
-        typeof (entry as Record<string, unknown>).name === "string" &&
-        (entry as Record<string, unknown>).name !== "" &&
-        typeof (entry as Record<string, unknown>).routeId === "string" &&
-        (entry as Record<string, unknown>).routeId !== "",
-    )
-  )
+  if (!isRecord(dawn)) return undefined
+  const stack = dawn.subagent_stack
+  if (!Array.isArray(stack) || stack.length === 0) return undefined
+
+  for (const value of stack) {
+    if (!isRecord(value)) return undefined
+    if (typeof value.callId !== "string" || value.callId === "") return undefined
+    if (typeof value.name !== "string" || value.name === "") return undefined
+    if (typeof value.routeId !== "string" || value.routeId === "") return undefined
+  }
+
+  const top = stack.at(-1) as Record<string, unknown>
+  return {
+    callId: top.callId as string,
+    depth: stack.length,
+    name: top.name as string,
+    routeId: top.routeId as string,
+  }
+}
+
+function childIdentity(child: SubagentContext): Record<string, unknown> {
+  return {
+    call_id: child.callId,
+    subagent: child.name,
+    route_id: child.routeId,
+    depth: child.depth,
+  }
+}
+
+function childData(child: SubagentContext, data: unknown): Record<string, unknown> {
+  return {
+    ...(isRecord(data) ? data : { value: data }),
+    ...childIdentity(child),
+  }
+}
+
+function parseSubagentPhaseEvent(event: LangChainStreamEvent): AgentStreamChunk | undefined {
+  if (event.event !== "on_custom_event" || event.name !== "dawn.subagent") return undefined
+  if (!isRecord(event.data)) return undefined
+  const phase = event.data.phase
+  if (phase !== "start" && phase !== "end") return undefined
+  if (typeof event.data.call_id !== "string" || event.data.call_id === "") return undefined
+  if (typeof event.data.subagent !== "string" || event.data.subagent === "") return undefined
+  if (typeof event.data.route_id !== "string" || event.data.route_id === "") return undefined
+  if (
+    typeof event.data.depth !== "number" ||
+    !Number.isInteger(event.data.depth) ||
+    event.data.depth < 1
+  ) {
+    return undefined
+  }
+
+  const { phase: _phase, ...data } = event.data
+  return { type: `subagent.${phase}`, data }
+}
+
+function classifyStreamEvent(event: LangChainStreamEvent): StreamEventProjection {
+  const child = parseSubagentContext(event.metadata)
+  const phaseChunk = parseSubagentPhaseEvent(event)
+  if (phaseChunk) {
+    return {
+      capturesFinalOutput: false,
+      child,
+      chunks: [phaseChunk],
+      finalOutput: undefined,
+      interrupts: [],
+    }
+  }
+
+  switch (event.event) {
+    case "on_chat_model_stream": {
+      const content = (event.data.chunk as { content?: unknown })?.content
+      if (typeof content !== "string" || content.length === 0) break
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [
+          child
+            ? { type: "subagent.message", data: { ...childIdentity(child), chunk: content } }
+            : { type: "token", data: content },
+        ],
+        finalOutput: undefined,
+        interrupts: [],
+      }
+    }
+    case "on_tool_start":
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [
+          child
+            ? {
+                type: "subagent.tool_call",
+                data: {
+                  ...childIdentity(child),
+                  id: event.run_id,
+                  tool: event.name,
+                  input: event.data.input ?? event.data.chunk ?? event.data.output,
+                },
+              }
+            : {
+                type: "tool_call",
+                data: {
+                  id: event.run_id,
+                  name: event.name,
+                  input: event.data.input ?? event.data.chunk ?? event.data.output,
+                },
+              },
+        ],
+        finalOutput: undefined,
+        interrupts: [],
+      }
+    case "on_tool_end":
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [
+          child
+            ? {
+                type: "subagent.tool_result",
+                data: {
+                  ...childIdentity(child),
+                  id: event.run_id,
+                  tool: event.name,
+                  output: event.data.output,
+                },
+              }
+            : {
+                type: "tool_result",
+                data: { id: event.run_id, name: event.name, output: event.data.output },
+              },
+        ],
+        finalOutput: undefined,
+        interrupts: [],
+      }
+    case "on_custom_event": {
+      if (event.name !== "dawn.capability") break
+      const payload = parseCapabilityEvent(event.data)
+      if (!payload) break
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [
+          child
+            ? { type: `subagent.${payload.event}`, data: childData(child, payload.data) }
+            : { type: payload.event, data: payload.data },
+        ],
+        finalOutput: undefined,
+        interrupts: [],
+      }
+    }
+    case "on_chain_stream":
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [],
+        finalOutput: undefined,
+        interrupts: extractInterrupts(event.data.chunk) ?? [],
+      }
+    case "on_tool_error":
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [],
+        finalOutput: undefined,
+        interrupts: extractInterruptsFromError(event.data.error) ?? [],
+      }
+    case "on_chain_end":
+      if (!child && event.name === "LangGraph") {
+        return {
+          capturesFinalOutput: true,
+          child,
+          chunks: [],
+          finalOutput: event.data.output,
+          interrupts: extractInterrupts(event.data.output) ?? [],
+        }
+      }
+      if (child) {
+        return {
+          capturesFinalOutput: false,
+          child,
+          chunks: [],
+          finalOutput: undefined,
+          interrupts: extractInterrupts(event.data.output) ?? [],
+        }
+      }
+      break
+  }
+
+  return {
+    capturesFinalOutput: false,
+    child,
+    chunks: [],
+    finalOutput: undefined,
+    interrupts: [],
+  }
 }
 
 /**
@@ -288,6 +502,18 @@ function extractInterrupts(output: unknown): readonly RawInterruptEntry[] | unde
   const maybe = (output as Record<string, unknown>)[INTERRUPT_KEY]
   if (!Array.isArray(maybe)) return undefined
   return maybe as readonly RawInterruptEntry[]
+}
+
+const CHILD_INTERRUPT_KINDS = new Set(["command", "memory", "path", "tool"])
+
+function projectInterruptValue(
+  entry: RawInterruptEntry,
+  child: SubagentContext | undefined,
+): unknown {
+  const value = entry.value
+  if (!child || !isRecord(value) || Object.hasOwn(value, "callId")) return value
+  if (!CHILD_INTERRUPT_KINDS.has(String(value.kind))) return value
+  return { ...value, callId: child.callId }
 }
 
 /**
@@ -542,13 +768,7 @@ async function* streamFromRunnable(
     streamEvents?: (
       input: unknown,
       options: Record<string, unknown>,
-    ) => AsyncIterable<{
-      event: string
-      run_id: string
-      data: { chunk?: unknown; input?: unknown; output?: unknown; error?: unknown }
-      metadata?: Record<string, unknown>
-      name: string
-    }>
+    ) => AsyncIterable<LangChainStreamEvent>
   }
 
   if (typeof streamable.streamEvents !== "function") {
@@ -604,119 +824,32 @@ async function* streamFromRunnable(
           ...invocationConfig,
           version: "v2",
         })) {
-          switch (event.event) {
-            case "on_chat_model_stream": {
-              const content = (event.data.chunk as { content?: unknown })?.content
-              if (content && typeof content === "string" && content.length > 0) {
-                hasYielded = true
-                yield { type: "token" as const, data: content }
+          const projection = classifyStreamEvent(event)
+          if (projection.capturesFinalOutput) {
+            finalOutput = projection.finalOutput
+          }
+          for (const chunk of projection.chunks) {
+            hasYielded = true
+            yield chunk
+          }
+          if (projection.interrupts.length > 0) {
+            capturedInterrupts = projection.interrupts
+          }
+          for (const entry of projection.interrupts) {
+            if (entry.id && emittedInterruptIds.has(entry.id)) continue
+            if (entry.id) emittedInterruptIds.add(entry.id)
+            hasYielded = true
+            if (process.env.DAWN_DEBUG_INTERRUPTS === "1") {
+              if (!isRecord(entry.value) || typeof entry.value.interruptId !== "string") {
+                console.warn(
+                  "[dawn] interrupt entry.value missing interruptId — capability bug:",
+                  JSON.stringify(entry).slice(0, 300),
+                )
               }
-              break
             }
-            case "on_tool_start": {
-              hasYielded = true
-              yield {
-                type: "tool_call" as const,
-                data: {
-                  // LangGraph assigns the same run_id to on_tool_start and
-                  // on_tool_end of one invocation — a stable correlator that
-                  // survives repeated calls to the same tool.
-                  id: event.run_id,
-                  name: event.name,
-                  input: event.data.input ?? event.data.chunk ?? event.data.output,
-                },
-              }
-              break
-            }
-            case "on_tool_end": {
-              hasYielded = true
-              yield {
-                type: "tool_result" as const,
-                data: { id: event.run_id, name: event.name, output: event.data.output },
-              }
-              break
-            }
-            case "on_custom_event": {
-              if (event.name !== "dawn.capability") break
-              const payload = parseCapabilityEvent(event.data)
-              if (!payload) break
-              hasYielded = true
-              yield {
-                type: `${hasSubagentStack(event.metadata) ? "subagent." : ""}${payload.event}`,
-                data: payload.data,
-              }
-              break
-            }
-            case "on_chain_stream": {
-              const interrupts = extractInterrupts(event.data.chunk)
-              if (!interrupts || interrupts.length === 0) break
-              capturedInterrupts = interrupts
-              for (const entry of interrupts) {
-                if (entry.id && emittedInterruptIds.has(entry.id)) continue
-                if (entry.id) emittedInterruptIds.add(entry.id)
-                hasYielded = true
-                yield { type: "interrupt" as const, data: entry.value }
-              }
-              break
-            }
-            case "on_tool_error": {
-              // LangGraph's interrupt() throws a GraphInterrupt from inside
-              // the tool node. The error bubbles through streamEvents as
-              // on_tool_error with the GraphInterrupt instance on data.error.
-              // LangGraph itself catches it to park the checkpointer state,
-              // so the outer iterator continues normally afterwards.
-              const interrupts = extractInterruptsFromError(event.data.error)
-              if (interrupts && interrupts.length > 0) {
-                capturedInterrupts = interrupts
-                for (const entry of interrupts) {
-                  if (entry.id && emittedInterruptIds.has(entry.id)) continue
-                  if (entry.id) emittedInterruptIds.add(entry.id)
-                  hasYielded = true
-                  if (process.env.DAWN_DEBUG_INTERRUPTS === "1") {
-                    if (
-                      !entry.value ||
-                      typeof (entry.value as Record<string, unknown>).interruptId !== "string"
-                    ) {
-                      console.warn(
-                        "[dawn] interrupt entry.value missing interruptId — capability bug:",
-                        JSON.stringify(entry).slice(0, 300),
-                      )
-                    }
-                  }
-                  yield {
-                    type: "interrupt" as const,
-                    // The capability's interrupt() payload is wrapped in
-                    // entry.value by LangGraph — surface it verbatim so the
-                    // SSE consumer sees the original {interruptId, kind, ...}
-                    // envelope the workspace capability emitted.
-                    data: entry.value,
-                  }
-                }
-              }
-              break
-            }
-            case "on_chain_end": {
-              if (event.name === "LangGraph") {
-                finalOutput = event.data.output
-                const interrupts = extractInterrupts(event.data.output)
-                if (interrupts && interrupts.length > 0) {
-                  capturedInterrupts = interrupts
-                  for (const entry of interrupts) {
-                    if (entry.id && emittedInterruptIds.has(entry.id)) continue
-                    if (entry.id) emittedInterruptIds.add(entry.id)
-                    hasYielded = true
-                    yield {
-                      type: "interrupt" as const,
-                      // The capability's interrupt() payload is wrapped in
-                      // entry.value by LangGraph — surface it verbatim so the
-                      // SSE consumer sees the original {interruptId, kind, ...}
-                      // envelope the workspace capability emitted.
-                      data: entry.value,
-                    }
-                  }
-                }
-              }
-              break
+            yield {
+              type: "interrupt",
+              data: projectInterruptValue(entry, projection.child),
             }
           }
         }

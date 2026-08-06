@@ -188,7 +188,10 @@ describe("convertSubagentTaskToLangChain", () => {
       .addEdge(START, "tools")
       .addEdge("tools", END)
       .compile()
-    const events: Array<{ event: string; data: unknown }> = []
+    const events: Array<{
+      event: string
+      data: unknown
+    }> = []
 
     for await (const event of root.streamEvents(
       {
@@ -209,7 +212,10 @@ describe("convertSubagentTaskToLangChain", () => {
       { version: "v2" },
     )) {
       if (event.event === "on_custom_event" && event.name === "dawn.subagent") {
-        events.push({ event: event.name, data: event.data })
+        events.push({
+          event: event.name,
+          data: event.data,
+        })
       }
       if (event.event === "on_tool_end" && event.name === "task") {
         expect(String((event.data.output as { content?: unknown }).content)).toContain(
@@ -219,8 +225,21 @@ describe("convertSubagentTaskToLangChain", () => {
     }
 
     expect(events.map(({ data }) => data)).toEqual([
-      expect.objectContaining({ phase: "start", call_id: "task-failure" }),
-      expect.objectContaining({ phase: "end", call_id: "task-failure", error: "child went boom" }),
+      {
+        phase: "start",
+        call_id: "task-failure",
+        subagent: "researcher",
+        route_id: "/parent/subagents/researcher",
+        depth: 1,
+      },
+      {
+        phase: "end",
+        call_id: "task-failure",
+        subagent: "researcher",
+        route_id: "/parent/subagents/researcher",
+        depth: 1,
+        error: "child went boom",
+      },
     ])
   })
 
