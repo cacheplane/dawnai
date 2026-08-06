@@ -110,11 +110,61 @@ export default async (input: { id: string }) => ({ id: input.id })
 `
     const result = transformToolSource(source, "tool.ts")
 
-    // Should still inject schema since only description exists
-    if (result) {
-      expect(result).not.toContain('export const description = "JSDoc description"')
-      expect(result).toContain("export const schema =")
-    }
+    expect(result).not.toBeNull()
+    expect(result).not.toContain('export const description = "JSDoc description"')
+    expect(result).toContain("export const schema =")
+  })
+
+  test("recognizes typed description and schema exports without adding a duplicate zod import", () => {
+    const source = `
+import { z } from "zod"
+export const description: string = "Explicit description"
+export const schema: z.ZodType = z.object({ id: z.string() })
+export default async (input: { id: string }) => input
+`
+
+    expect(transformToolSource(source, "tool.ts")).toBeNull()
+  })
+
+  test("ignores export-like comment text when deciding to inject schema", () => {
+    const source = `
+// A future implementation might use: export const schema = customSchema
+export default async (input: { id: string }) => input
+`
+    const result = transformToolSource(source, "tool.ts")
+
+    expect(result).not.toBeNull()
+    expect(result).toContain("export const schema = z.object(")
+  })
+
+  test("injects runtime exports when description and schema exist only as types", () => {
+    const source = `
+export interface schema { parse(value: unknown): unknown }
+class description {}
+export type { description }
+/** Generate runtime metadata. */
+export default async (input: { id: string }) => input
+`
+    const result = transformToolSource(source, "tool.ts")
+
+    expect(result).not.toBeNull()
+    expect(result).toContain('export const description = "Generate runtime metadata."')
+    expect(result).toContain("export const schema = z.object(")
+  })
+
+  test("injects description but not schema when only schema is exported", () => {
+    const source = `
+import { z } from "zod"
+export const schema = z.object({ id: z.string() })
+/** Look up a customer. */
+export default async (input: { id: string }) => input
+`
+    const result = transformToolSource(source, "tool.ts")
+
+    expect(result).not.toBeNull()
+    expect(result).toContain('export const description = "Look up a customer."')
+    expect(result?.match(/export const schema/g)).toHaveLength(1)
+    expect(result?.match(/import \{ z \} from "zod"/g)).toHaveLength(1)
   })
 
   test("does not override existing schema export", () => {
@@ -149,6 +199,13 @@ export default async (input: { id: string }) => ({ id: input.id })
     expect(result).toBeNull()
   })
 
+  test.each([
+    ["missing default", "export const tool = (input: { id: string }) => input"],
+    ["non-callable default", "export default { enabled: true }"],
+  ])("returns null for a %s module", (_case, source) => {
+    expect(transformToolSource(source, "tool.ts")).toBeNull()
+  })
+
   test("injects only description when type is unknown but JSDoc exists", () => {
     const source = `
 /**
@@ -161,5 +218,34 @@ export default async (input: unknown) => input
     expect(result).not.toBeNull()
     expect(result).toContain('export const description = "A simple tool"')
     expect(result).not.toContain("export const schema")
+  })
+
+  test("uses documentation from an aliased default export target", () => {
+    const source = `
+/** Look up a customer from the target. */
+const tool = async (input: { id: string }) => input
+export { tool as default }
+`
+    const result = transformToolSource(source, "tool.ts")
+
+    expect(result).not.toBeNull()
+    expect(result).toContain('export const description = "Look up a customer from the target."')
+    expect(result).toContain("export const schema = z.object(")
+  })
+
+  test("uses leading export-alias JSDoc for description and parameter fallback", () => {
+    const source = `
+const tool = async (input: { id: string }) => input
+/**
+ * Look up a customer from the alias.
+ * @param id - Aliased customer identifier
+ */
+export { tool as default }
+`
+    const result = transformToolSource(source, "tool.ts")
+
+    expect(result).not.toBeNull()
+    expect(result).toContain('export const description = "Look up a customer from the alias."')
+    expect(result).toContain('.describe("Aliased customer identifier")')
   })
 })

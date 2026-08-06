@@ -111,22 +111,14 @@ async function runTypegen(appRoot?: string): Promise<void> {
 }
 
 export function transformToolSource(source: string, fileName: string): string | null {
-  const hasExistingDescription = /export\s+const\s+description\s*=/.test(source)
-  const hasExistingSchema = /export\s+const\s+schema\s*=/.test(source)
-
-  // If both already exist, nothing to inject
-  if (hasExistingDescription && hasExistingSchema) {
-    return null
-  }
-
   const analysis = analyzeToolSource(source, fileName)
   if (!analysis) {
     return null
   }
 
-  const needsDescription = !hasExistingDescription && analysis.description.length > 0
+  const needsDescription = !analysis.exports.description && analysis.description.length > 0
   const needsSchema =
-    !hasExistingSchema && analysis.parameter !== null && analysis.parameter.kind !== "unknown"
+    !analysis.exports.schema && analysis.parameter !== null && analysis.parameter.kind !== "unknown"
 
   if (!needsDescription && !needsSchema) {
     return null

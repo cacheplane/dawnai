@@ -30,6 +30,10 @@ export interface PropertyInfo {
 export interface AnalyzedTool {
   readonly name: string
   readonly description: string
+  readonly exports: {
+    readonly description: boolean
+    readonly schema: boolean
+  }
   readonly inputType: string
   readonly outputType: string
   readonly parameter: TypeInfo | null

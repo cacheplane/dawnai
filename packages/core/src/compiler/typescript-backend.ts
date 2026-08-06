@@ -77,12 +77,17 @@ function analyzeProgramSource(
   const moduleSymbol = checker.getSymbolAtLocation(sourceFile)
   if (!moduleSymbol) return null
 
-  const defaultExport = checker
-    .getExportsOfModule(moduleSymbol)
-    .find((candidate) => candidate.escapedName === "default")
+  const moduleExports = checker.getExportsOfModule(moduleSymbol)
+  const defaultExport = moduleExports.find((candidate) => candidate.escapedName === "default")
   if (!defaultExport) return null
 
-  const exportType = checker.getTypeOfSymbolAtLocation(defaultExport, sourceFile)
+  const callableTarget =
+    defaultExport.flags & ts.SymbolFlags.Alias
+      ? checker.getAliasedSymbol(defaultExport)
+      : defaultExport
+  const callableDeclaration =
+    callableTarget.valueDeclaration ?? callableTarget.declarations?.[0] ?? sourceFile
+  const exportType = checker.getTypeOfSymbolAtLocation(callableTarget, callableDeclaration)
   const signature = checker.getSignaturesOfType(exportType, ts.SignatureKind.Call)[0]
   if (!signature) return null
 
@@ -94,18 +99,67 @@ function analyzeProgramSource(
       )
     : null
   const returnType = unwrapPromise(checker.getReturnTypeOfSignature(signature), checker)
-  const description = ts.displayPartsToString(defaultExport.getDocumentationComment(checker))
+  const leadingJsDoc = extractLeadingDefaultExportJsDoc(sourceFile)
+  const exportedDescription = ts.displayPartsToString(
+    defaultExport.getDocumentationComment(checker),
+  )
+  const targetDescription = ts.displayPartsToString(callableTarget.getDocumentationComment(checker))
+  const description = exportedDescription || targetDescription || leadingJsDoc.description
 
   return {
     name,
     description,
+    exports: {
+      description: hasRuntimeModuleExport(moduleExports, "description", checker, sourceFile),
+      schema: hasRuntimeModuleExport(moduleExports, "schema", checker, sourceFile),
+    },
     inputType: parameterType
       ? checker.typeToString(parameterType, undefined, ts.TypeFormatFlags.NoTruncation)
       : "void",
     outputType: checker.typeToString(returnType, undefined, ts.TypeFormatFlags.NoTruncation),
     parameter: parameterType ? resolveParameterType(parameterType, checker, sourceFile) : null,
-    parameterDescriptions: extractParameterDescriptions(sourceFile),
+    parameterDescriptions: leadingJsDoc.parameterDescriptions,
   }
+}
+
+function hasRuntimeModuleExport(
+  moduleExports: readonly ts.Symbol[],
+  name: string,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+): boolean {
+  const exportedSymbol = moduleExports.find((candidate) => candidate.escapedName === name)
+  if (!exportedSymbol) return false
+
+  const visited = new Set<ts.Symbol>()
+  let current = exportedSymbol
+  while (!visited.has(current)) {
+    visited.add(current)
+    const declarations = current.declarations ?? []
+    if (declarations.some(ts.isPartOfTypeOnlyImportOrExportDeclaration)) return false
+
+    const localDeclarations = declarations.filter(
+      (declaration) => declaration.getSourceFile() === sourceFile,
+    )
+    if (
+      localDeclarations.length > 0 &&
+      localDeclarations.every(
+        (declaration) => !!(ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Ambient),
+      )
+    ) {
+      return false
+    }
+
+    if (!(current.flags & ts.SymbolFlags.Alias)) {
+      return !!(current.flags & ts.SymbolFlags.Value)
+    }
+
+    const target = checker.getImmediateAliasedSymbol(current)
+    if (!target) return false
+    current = target
+  }
+
+  return false
 }
 
 function resolveParameterType(
@@ -349,16 +403,19 @@ function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
   return checker.getTypeArguments(type as ts.TypeReference)[0] ?? type
 }
 
-function extractParameterDescriptions(sourceFile: ts.SourceFile): ReadonlyMap<string, string> {
+function extractLeadingDefaultExportJsDoc(sourceFile: ts.SourceFile): {
+  readonly description: string
+  readonly parameterDescriptions: ReadonlyMap<string, string>
+} {
   const defaultExportNode = sourceFile.statements.find(isDefaultExport)
-  if (!defaultExportNode) return new Map()
+  if (!defaultExportNode) return { description: "", parameterDescriptions: new Map() }
 
   const source = sourceFile.getFullText()
   const commentRanges = ts.getLeadingCommentRanges(source, defaultExportNode.getFullStart()) ?? []
   const jsDocRange = commentRanges
     .filter((range) => source.slice(range.pos, range.end).startsWith("/**"))
     .at(-1)
-  if (!jsDocRange) return new Map()
+  if (!jsDocRange) return { description: "", parameterDescriptions: new Map() }
 
   const comment = source.slice(jsDocRange.pos, jsDocRange.end)
   const lines = comment
@@ -367,19 +424,35 @@ function extractParameterDescriptions(sourceFile: ts.SourceFile): ReadonlyMap<st
     .split("\n")
     .map((line) => line.replace(/^\s*\*\s?/, "").trim())
   const params = new Map<string, string>()
+  const descriptionLines: string[] = []
+  let reachedTags = false
 
   for (const line of lines) {
     if (line.startsWith("@param")) {
+      reachedTags = true
       const match = line.match(/^@param\s+(\S+)\s*(?:-\s*)?(.*)$/)
       if (match?.[1]) params.set(match[1], (match[2] ?? "").trim())
+    } else if (line.startsWith("@")) {
+      reachedTags = true
+    } else if (!reachedTags && line.length > 0) {
+      descriptionLines.push(line)
     }
   }
 
-  return params
+  return {
+    description: descriptionLines.join("\n"),
+    parameterDescriptions: params,
+  }
 }
 
 function isDefaultExport(statement: ts.Statement): boolean {
   if (ts.isExportAssignment(statement)) return !statement.isExportEquals
+  if (ts.isExportDeclaration(statement) && statement.exportClause) {
+    return (
+      ts.isNamedExports(statement.exportClause) &&
+      statement.exportClause.elements.some((element) => element.name.text === "default")
+    )
+  }
   return (
     (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
     !!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) &&

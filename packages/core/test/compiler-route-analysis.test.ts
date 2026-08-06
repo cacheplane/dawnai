@@ -96,6 +96,7 @@ export default async function ping(): Promise<{ pong: boolean }> {
       {
         name: "alpha",
         description: "Find a customer.",
+        exports: { description: false, schema: false },
         inputType: "{ id: string; limit?: number | undefined; }",
         outputType: "{ found: boolean; }",
         parameter: {
@@ -115,6 +116,7 @@ export default async function ping(): Promise<{ pong: boolean }> {
       {
         name: "lookup",
         description: "Local lookup.",
+        exports: { description: false, schema: false },
         inputType: "{ id: number; }",
         outputType: "{ local: true; }",
         parameter: {
@@ -126,6 +128,7 @@ export default async function ping(): Promise<{ pong: boolean }> {
       {
         name: "ping",
         description: "Check health.",
+        exports: { description: false, schema: false },
         inputType: "void",
         outputType: "{ pong: boolean; }",
         parameter: null,

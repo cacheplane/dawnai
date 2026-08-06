@@ -46,6 +46,7 @@ export default async function lookup(
     expect(analyze(source)).toEqual({
       name: "lookup",
       description: "Look up a customer.",
+      exports: { description: false, schema: false },
       inputType: "{ id: string; }",
       outputType: "{ found: boolean; }",
       parameter: {
@@ -54,6 +55,45 @@ export default async function lookup(
       },
       parameterDescriptions: new Map([["id", "Customer identifier"]]),
     })
+  })
+
+  test("reports description and schema presence from module exports", () => {
+    const result = analyze(`
+export const description: string = "Explicit description"
+export const schema: { parse(value: unknown): unknown } = {
+  parse: (value) => value,
+}
+export default async (input: { id: string }) => input
+`)
+
+    expect(result.exports).toEqual({ description: true, schema: true })
+  })
+
+  test("does not report type-only description and schema exports as runtime values", () => {
+    const result = analyze(`
+export interface schema { parse(value: unknown): unknown }
+class description {}
+export type { description }
+export default async (input: { id: string }) => input
+`)
+
+    expect(result.exports).toEqual({ description: false, schema: false })
+  })
+
+  test("does not report erased values through type-only alias chains or ambient declarations", () => {
+    const directory = mkdtempSync(join(tmpdir(), "dawn-compiler-exports-"))
+    tempDirectories.push(directory)
+    const sourceFile = join(directory, "tool.ts")
+    const source = `
+import type { Schema as schema } from "./schema.js"
+export { schema }
+export declare const description: string
+export default async (input: { id: string }) => input
+`
+    writeFileSync(join(directory, "schema.ts"), "export class Schema {}")
+    writeFileSync(sourceFile, source)
+
+    expect(analyze(source, sourceFile).exports).toEqual({ description: false, schema: false })
   })
 
   test("represents literal parameter types", () => {
@@ -603,5 +643,43 @@ export default async (input: { id: string }) => input
 
     expect(result.description).toBe("")
     expect(result.parameterDescriptions).toEqual(new Map([["id", "Identifier"]]))
+  })
+
+  test.each([
+    [
+      "const",
+      `
+/** Look up a customer from a const. */
+const tool = async (input: { id: string }) => input
+export { tool as default }
+`,
+      "Look up a customer from a const.",
+    ],
+    [
+      "function",
+      `
+/** Look up a customer from a function. */
+async function tool(input: { id: string }) { return input }
+export { tool as default }
+`,
+      "Look up a customer from a function.",
+    ],
+  ])("resolves documentation from an aliased %s target", (_kind, source, description) => {
+    expect(analyze(source).description).toBe(description)
+  })
+
+  test("falls back to leading JSDoc on a default export declaration", () => {
+    const result = analyze(`
+const tool = async (input: { id: string }) => input
+/**
+ * Look up a customer from an export alias.
+ * @param id - Exported customer identifier
+ *   including inactive records.
+ */
+export { tool as default }
+`)
+
+    expect(result.description).toBe("Look up a customer from an export alias.")
+    expect(result.parameterDescriptions).toEqual(new Map([["id", "Exported customer identifier"]]))
   })
 })
