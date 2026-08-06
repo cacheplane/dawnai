@@ -1,6 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import type { DawnConfig } from "@dawn-ai/core"
+// Type-only imports below (stores, middleware, checkpointer) erase at
+// runtime — this module's VALUE graph stays node-http-only.
+import type { MemoryStore } from "@dawn-ai/memory"
+import type { PermissionsStore } from "@dawn-ai/permissions"
+import type { DawnMiddleware } from "@dawn-ai/sdk"
+import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import type { DawnStaticModules } from "../runtime/static-modules.js"
 import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
 import { createRuntimeFetchHandler } from "./runtime-fetch-handler.js"
@@ -40,6 +47,22 @@ export interface StartRuntimeServerOptions {
    * `dawn.config.ts` is never read from disk (edge runtimes have none).
    */
   readonly config?: DawnConfig
+  /** Boot-resolved checkpointer. Absent: config, then default sqlite. */
+  readonly checkpointer?: BaseCheckpointSaver
+  /** Boot-resolved threads store. Absent: config, then default sqlite. */
+  readonly threadsStore?: ThreadsStore
+  /**
+   * Boot-resolved permissions store (instance or per-request factory — same
+   * semantics as route execution's boot instances). When provided, it wins
+   * REGARDLESS of `permissionsMode` — the caller has taken over permissions
+   * resolution entirely. Absent: permissionsMode-driven construction from
+   * `.dawn/permissions.json`.
+   */
+  readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
+  /** Lazy memory-store thunk. Absent: sqlite-backed resolveMemoryStore. */
+  readonly memoryStore?: () => Promise<MemoryStore>
+  /** Pre-loaded middleware. Absent: the dynamic src/middleware.ts probe. */
+  readonly middleware?: DawnMiddleware
 }
 
 // ---------------------------------------------------------------------------

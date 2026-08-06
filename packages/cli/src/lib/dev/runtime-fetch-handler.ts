@@ -94,9 +94,11 @@ export async function createRuntimeFetchHandler(
       ),
     )
   }
-  const middleware = await loadMiddleware(options.appRoot)
-  const threadsStore = await resolveThreadsStore(options.appRoot)
-  const checkpointer = await resolveCheckpointer(options.appRoot)
+  // Caller-supplied instances win over every fallback resolution below —
+  // an injected store means the corresponding disk/sqlite path never runs.
+  const middleware = options.middleware ?? (await loadMiddleware(options.appRoot))
+  const threadsStore = options.threadsStore ?? (await resolveThreadsStore(options.appRoot))
+  const checkpointer = options.checkpointer ?? (await resolveCheckpointer(options.appRoot))
   const sandboxManager = await resolveSandboxManager(options.appRoot)
   // Lazy, memoized, shared: resolveMemoryStore (and the sqlite it opens) runs
   // at most once per process, on the FIRST request that actually needs
@@ -109,19 +111,25 @@ export async function createRuntimeFetchHandler(
   // store satisfies the memory-candidate HTTP routes directly.
   let memoryStorePromise: Promise<MemoryStore> | undefined
   const getMemoryStore = (): Promise<MemoryStore> => {
-    memoryStorePromise ??= resolveMemoryStore(options.appRoot)
+    memoryStorePromise ??= options.memoryStore
+      ? options.memoryStore()
+      : resolveMemoryStore(options.appRoot)
     return memoryStorePromise
   }
 
-  // Permissions store, per StartRuntimeServerOptions.permissionsMode:
-  // "boot" (production) loads once here and reuses the instance; the default
-  // "per-request" (dev) hands route execution a factory that re-loads
-  // `.dawn/permissions.json` each request, so HITL "Always" grants written
-  // mid-process apply immediately — the one deliberate per-request read kept.
+  // Permissions store: an injected `options.permissionsStore` wins REGARDLESS
+  // of permissionsMode — the caller has taken over resolution entirely (it may
+  // itself be an instance or a per-request factory). Otherwise, per
+  // StartRuntimeServerOptions.permissionsMode: "boot" (production) loads once
+  // here and reuses the instance; the default "per-request" (dev) hands route
+  // execution a factory that re-loads `.dawn/permissions.json` each request,
+  // so HITL "Always" grants written mid-process apply immediately — the one
+  // deliberate per-request read kept.
   const permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>) =
-    options.permissionsMode === "boot"
+    options.permissionsStore ??
+    (options.permissionsMode === "boot"
       ? await resolvePermissionsStore(options.appRoot)
-      : () => resolvePermissionsStore(options.appRoot)
+      : () => resolvePermissionsStore(options.appRoot))
 
   let sandboxReaper: ReturnType<typeof setInterval> | undefined
   if (sandboxManager) {
