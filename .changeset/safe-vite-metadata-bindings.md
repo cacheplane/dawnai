@@ -7,7 +7,7 @@
 ---
 
 Support TypeScript 7 workspaces and generated apps, and move Dawn's Next.js applications
-to Next 16.3 CLI type checking.
+to Next 16.3's experimental CLI type checker with `experimental.useTypeScriptCli`.
 
 Consolidate tool analysis in Core behind one compiler boundary and program, with shared
 projections for declarations, JSON Schema, and Vite Zod metadata. Core internally pins
