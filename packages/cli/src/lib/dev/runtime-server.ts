@@ -22,7 +22,9 @@ import {
 } from "./memory-handler.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
 import {
+  createPendingResumeClaims,
   type DawnResumeEntry,
+  type PendingResumeClaims,
   readPendingInterrupts,
   resolvePendingResume,
 } from "./pending-interrupts.js"
@@ -101,6 +103,7 @@ export async function createRuntimeRequestListener(
     closed: false,
   }
   const shutdownController = new AbortController()
+  const resumeClaims = createPendingResumeClaims()
 
   const routes = buildRouteTable({
     appRoot: options.appRoot,
@@ -108,6 +111,7 @@ export async function createRuntimeRequestListener(
     memoryStore,
     middleware,
     registry,
+    resumeClaims,
     ...(sandboxManager ? { sandboxManager } : {}),
     signal: shutdownController.signal,
     threadsStore,
@@ -263,6 +267,7 @@ function buildRouteTable(ctx: {
   readonly memoryStore: MemoryStore
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
+  readonly resumeClaims: PendingResumeClaims
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly threadsStore: ThreadsStore
@@ -273,6 +278,7 @@ function buildRouteTable(ctx: {
     memoryStore,
     middleware,
     registry,
+    resumeClaims,
     sandboxManager,
     signal,
     threadsStore,
@@ -395,6 +401,7 @@ function buildRouteTable(ctx: {
           checkpointer,
           middleware,
           registry,
+          resumeClaims,
           threadsStore,
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
@@ -499,6 +506,7 @@ function buildRouteTable(ctx: {
           checkpointer,
           middleware,
           registry,
+          resumeClaims,
           request: req,
           response: res,
           ...(sandboxManager ? { sandboxManager } : {}),
@@ -803,6 +811,7 @@ async function handleResumeRequest(options: {
   readonly checkpointer: BaseCheckpointSaver
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
+  readonly resumeClaims: PendingResumeClaims
   readonly request: IncomingMessage
   readonly response: ServerResponse
   readonly sandboxManager?: SandboxManager
@@ -816,6 +825,7 @@ async function handleResumeRequest(options: {
     checkpointer,
     middleware,
     registry,
+    resumeClaims,
     request,
     response,
     sandboxManager,
@@ -840,109 +850,125 @@ async function handleResumeRequest(options: {
   const body = parsedBody.value
   const resume = body.resume
   const bodyRoute = body.route
-  const pendingInterrupts = await readPendingInterrupts(checkpointer, threadId)
-  if (!pendingInterrupts) {
-    sendJson(
-      response,
-      404,
-      createRequestErrorBody("Thread not found", { code: "thread_not_found" }),
-    )
-    return
-  }
-
-  const resumeResolution = resolvePendingResume(resume, pendingInterrupts)
-  if (!resumeResolution.ok) {
-    sendJson(
-      response,
-      resumeResolution.status,
-      createRequestErrorBody(resumeResolution.message, { code: resumeResolution.code }),
-    )
-    return
-  }
-  if (resumeResolution.mode !== "resume") {
-    sendJson(response, 409, createRequestErrorBody("Resume entries are required"))
-    return
-  }
-
-  // Resolve which route last ran on this thread, in priority order:
-  //   1. in-memory map (fast-path, current server session)
-  //   2. durable thread metadata (survives a server restart)
-  //   3. client-supplied `route` in the resume body (explicit override)
-  const persistedRoute = (await threadsStore.getThread(threadId))?.metadata.route
-  const routeKey =
-    threadRouteMap.get(threadId) ??
-    (typeof persistedRoute === "string" ? persistedRoute : undefined) ??
-    bodyRoute
-  if (!routeKey) {
+  const releaseResumeClaim = resumeClaims.tryClaim(threadId)
+  if (!releaseResumeClaim) {
     sendJson(
       response,
       409,
-      createRequestErrorBody(
-        "Cannot resume: no route recorded for this thread. " +
-          "Pass `route` in the resume body (e.g. '/chat#agent') to resume explicitly.",
-        { code: "route_not_found" },
-      ),
+      createRequestErrorBody("A resume is already in progress for this thread", {
+        code: "resume_in_progress",
+      }),
     )
     return
   }
 
-  const route = registry.lookup(routeKey)
-  if (!route) {
-    sendJson(response, 404, createRequestErrorBody(`Unknown route: ${routeKey}`))
-    return
-  }
-
-  // Run middleware with the resume URL
-  const mwRequest: MiddlewareRequest = {
-    assistantId: route.assistantId,
-    headers: parseHeaders(request),
-    method: "POST",
-    params: {},
-    routeId: route.routeId,
-    url: request.url ?? `/threads/${threadId}/resume`,
-  }
-  const mwResult = await runMiddleware(middleware, mwRequest)
-  if (mwResult.action === "reject") {
-    sendJson(response, mwResult.status, mwResult.body)
-    return
-  }
-
-  // Mark thread busy
-  await threadsStore.updateStatus(threadId, "busy")
-
-  // Open a new SSE stream, passing the exact ID-addressed resume map as input.
-  response.writeHead(200, {
-    "cache-control": "no-cache, no-transform",
-    connection: "keep-alive",
-    "content-type": "text/event-stream",
-  })
-
   try {
-    for await (const chunk of streamResolvedRoute({
-      appRoot,
-      input: {},
-      resume: resumeResolution.resume,
-      ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
-      routeFile: route.routeFile,
-      routeId: route.routeId,
-      routePath: route.routePath,
-      ...(sandboxManager ? { sandboxManager } : {}),
-      signal,
-      threadId,
-    })) {
-      response.write(toSseEvent(chunk))
+    const pendingInterrupts = await readPendingInterrupts(checkpointer, threadId)
+    if (!pendingInterrupts) {
+      sendJson(
+        response,
+        404,
+        createRequestErrorBody("Thread not found", { code: "thread_not_found" }),
+      )
+      return
     }
-    await threadsStore.updateStatus(threadId, "idle")
-  } catch (error) {
-    const errorChunk: StreamChunk = {
-      output: { error: error instanceof Error ? error.message : String(error) },
-      type: "done",
-    }
-    response.write(toSseEvent(errorChunk))
-    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
-  }
 
-  response.end()
+    const resumeResolution = resolvePendingResume(resume, pendingInterrupts)
+    if (!resumeResolution.ok) {
+      sendJson(
+        response,
+        resumeResolution.status,
+        createRequestErrorBody(resumeResolution.message, { code: resumeResolution.code }),
+      )
+      return
+    }
+    if (resumeResolution.mode !== "resume") {
+      sendJson(response, 409, createRequestErrorBody("Resume entries are required"))
+      return
+    }
+
+    // Resolve which route last ran on this thread, in priority order:
+    //   1. in-memory map (fast-path, current server session)
+    //   2. durable thread metadata (survives a server restart)
+    //   3. client-supplied `route` in the resume body (explicit override)
+    const persistedRoute = (await threadsStore.getThread(threadId))?.metadata.route
+    const routeKey =
+      threadRouteMap.get(threadId) ??
+      (typeof persistedRoute === "string" ? persistedRoute : undefined) ??
+      bodyRoute
+    if (!routeKey) {
+      sendJson(
+        response,
+        409,
+        createRequestErrorBody(
+          "Cannot resume: no route recorded for this thread. " +
+            "Pass `route` in the resume body (e.g. '/chat#agent') to resume explicitly.",
+          { code: "route_not_found" },
+        ),
+      )
+      return
+    }
+
+    const route = registry.lookup(routeKey)
+    if (!route) {
+      sendJson(response, 404, createRequestErrorBody(`Unknown route: ${routeKey}`))
+      return
+    }
+
+    // Run middleware with the resume URL
+    const mwRequest: MiddlewareRequest = {
+      assistantId: route.assistantId,
+      headers: parseHeaders(request),
+      method: "POST",
+      params: {},
+      routeId: route.routeId,
+      url: request.url ?? `/threads/${threadId}/resume`,
+    }
+    const mwResult = await runMiddleware(middleware, mwRequest)
+    if (mwResult.action === "reject") {
+      sendJson(response, mwResult.status, mwResult.body)
+      return
+    }
+
+    // Mark thread busy
+    await threadsStore.updateStatus(threadId, "busy")
+
+    // Open a new SSE stream, passing the exact ID-addressed resume map as input.
+    response.writeHead(200, {
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "content-type": "text/event-stream",
+    })
+
+    try {
+      for await (const chunk of streamResolvedRoute({
+        appRoot,
+        input: {},
+        resume: resumeResolution.resume,
+        ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
+        routeFile: route.routeFile,
+        routeId: route.routeId,
+        routePath: route.routePath,
+        ...(sandboxManager ? { sandboxManager } : {}),
+        signal,
+        threadId,
+      })) {
+        response.write(toSseEvent(chunk))
+      }
+      await threadsStore.updateStatus(threadId, "idle")
+    } catch (error) {
+      const errorChunk: StreamChunk = {
+        output: { error: error instanceof Error ? error.message : String(error) },
+        type: "done",
+      }
+      response.write(toSseEvent(errorChunk))
+      await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+    }
+
+    response.end()
+  } finally {
+    releaseResumeClaim()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1068,10 +1094,15 @@ function isDawnResumeBody(
         typeof entry.interruptId === "string" &&
         entry.interruptId.length > 0 &&
         ((entry.status === "resolved" &&
+          isPermissionDecision(entry.payload) &&
           hasExactKeys(entry, ["interruptId", "payload", "status"])) ||
           (entry.status === "cancelled" && hasExactKeys(entry, ["interruptId", "status"]))),
     )
   )
+}
+
+function isPermissionDecision(value: unknown): value is "always" | "deny" | "once" {
+  return value === "always" || value === "deny" || value === "once"
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {

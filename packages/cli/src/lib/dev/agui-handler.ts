@@ -10,7 +10,11 @@ import type { SandboxManager } from "../runtime/sandbox-manager.js"
 import type { StreamChunk } from "../runtime/stream-types.js"
 import { abortableAsyncIterable } from "./abortable-iterable.js"
 import { runMiddleware } from "./middleware.js"
-import { readPendingInterrupts, resolvePendingResume } from "./pending-interrupts.js"
+import {
+  type PendingResumeClaims,
+  readPendingInterrupts,
+  resolvePendingResume,
+} from "./pending-interrupts.js"
 import { extractRouteParams, parseHeaders } from "./request-context.js"
 import type { RuntimeRegistry } from "./runtime-registry.js"
 import { createRequestErrorBody } from "./server-errors.js"
@@ -20,6 +24,7 @@ interface AgUiRequestOptions {
   readonly checkpointer: BaseCheckpointSaver
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
+  readonly resumeClaims: PendingResumeClaims
   readonly threadsStore: ThreadsStore
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
@@ -98,6 +103,7 @@ export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<vo
     checkpointer,
     middleware,
     registry,
+    resumeClaims,
     threadsStore,
     sandboxManager,
     signal: shutdownSignal,
@@ -119,6 +125,7 @@ export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<vo
   response.on("close", onResponseClose)
   const signal = AbortSignal.any([shutdownSignal, requestController.signal])
 
+  let releaseResumeClaim: (() => void) | undefined
   try {
     const raw = await readBody(request)
     let parsedJson: unknown
@@ -155,6 +162,20 @@ export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<vo
     if (middlewareResult.action === "reject") {
       sendJson(response, middlewareResult.status, middlewareResult.body)
       return
+    }
+
+    if (dawnInput.resume !== undefined) {
+      releaseResumeClaim = resumeClaims.tryClaim(input.threadId)
+      if (!releaseResumeClaim) {
+        sendJson(
+          response,
+          409,
+          createRequestErrorBody("A resume is already in progress for this thread", {
+            code: "resume_in_progress",
+          }),
+        )
+        return
+      }
     }
 
     const newestUserMessage = [...dawnInput.messages]
@@ -214,6 +235,7 @@ export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<vo
     }
     response.end()
   } finally {
+    releaseResumeClaim?.()
     request.removeListener("aborted", onRequestAborted)
     response.removeListener("close", onResponseClose)
   }

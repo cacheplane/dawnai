@@ -8,6 +8,7 @@ import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { afterEach, expect, it } from "vitest"
 import { createAimock, script } from "../../testing/dist/index.js"
 import { handleAgUiRequest } from "../src/lib/dev/agui-handler.js"
+import { createPendingResumeClaims } from "../src/lib/dev/pending-interrupts.js"
 import { createRuntimeRequestListener } from "../src/lib/dev/runtime-server.js"
 import type { streamResolvedRoute } from "../src/lib/runtime/execute-route.js"
 
@@ -95,6 +96,7 @@ async function setupControlledServer(controlled: ControlledServerOptions): Promi
 }> {
   const appRoot = await fixtureApp()
   const threads = new Map<string, { metadata: Record<string, unknown>; status: string }>()
+  const resumeClaims = createPendingResumeClaims()
   const server: Server = createServer((request, response) => {
     const threadMatch = request.url?.match(/^\/threads\/([^/]+)$/)
     if (request.method === "GET" && threadMatch) {
@@ -121,6 +123,7 @@ async function setupControlledServer(controlled: ControlledServerOptions): Promi
           routePath: "src/app/chat/index.ts",
         }),
       },
+      resumeClaims,
       request,
       response,
       routeKey: "/chat#agent",

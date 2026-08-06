@@ -8,6 +8,13 @@ import { startRuntimeServer } from "../src/lib/dev/runtime-server.js"
 
 const tempDirs: string[] = []
 const servers: Array<{ close: () => Promise<void> }> = []
+const CONCURRENT_RESUME_GATE = "__dawnConcurrentResumeGate"
+
+interface ConcurrentResumeGate {
+  executions: number
+  readonly markStarted: () => void
+  readonly wait: Promise<void>
+}
 
 beforeEach(() => {
   // No in-memory pending state to reset — resume is now state-based.
@@ -58,6 +65,105 @@ describe("POST /threads/:thread_id/resume", () => {
     })
 
     expect(response.status).toBe(200)
+  })
+
+  test("allows only one cross-transport resume to consume a pending snapshot", async () => {
+    const appRoot = await createConcurrentResumeFixtureApp(pendingOne)
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+    const threadId = "thread-concurrent-resume"
+    let markStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    let release: (() => void) | undefined
+    const wait = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const globals = globalThis as unknown as Record<string, ConcurrentResumeGate>
+    globals[CONCURRENT_RESUME_GATE] = {
+      executions: 0,
+      markStarted: () => markStarted?.(),
+      wait,
+    }
+
+    try {
+      const winnerPromise = postResume(server.url, threadId, {
+        resume: [resolvedOnce],
+        route: "/noop#graph",
+      })
+      await started
+
+      const loser = await postAgUiResume(server.url, threadId, [resolvedOnce])
+      expect(loser.status).toBe(409)
+
+      release?.()
+      const winner = await winnerPromise
+      expect(winner.status).toBe(200)
+      await winner.text()
+      expect(globals[CONCURRENT_RESUME_GATE]?.executions).toBe(1)
+
+      const afterRelease = await postAgUiResume(server.url, threadId, [resolvedOnce])
+      expect(afterRelease.status).toBe(200)
+      await afterRelease.text()
+      expect(globals[CONCURRENT_RESUME_GATE]?.executions).toBe(2)
+    } finally {
+      release?.()
+      delete globals[CONCURRENT_RESUME_GATE]
+    }
+  })
+
+  test("rejects an invalid resolved payload before checkpoint lookup", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `
+        export default {
+          checkpointer: {
+            getTuple: async () => { throw new Error("checkpoint lookup must not run"); },
+          },
+        };
+      `,
+      "package.json": "{}\n",
+      "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
+    })
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+
+    const response = await postResume(server.url, "thread-invalid-payload", {
+      resume: [{ interruptId: "perm-1", status: "resolved", payload: "later" }],
+      route: "/noop#graph",
+    })
+
+    expect(response.status).toBe(400)
+  })
+
+  test("rejects an invalid resolved payload when no checkpoint exists", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
+    })
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+
+    const response = await postResume(server.url, "thread-missing-checkpoint", {
+      resume: [{ interruptId: "perm-1", status: "resolved", payload: "later" }],
+      route: "/noop#graph",
+    })
+
+    expect(response.status).toBe(400)
+  })
+
+  test("rejects an invalid resolved payload before a checkpoint ID mismatch", async () => {
+    const appRoot = await createCheckpointFixtureApp(pendingOne)
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+
+    const response = await postResume(server.url, "thread-mismatched-checkpoint", {
+      resume: [{ interruptId: "perm-stale", status: "resolved", payload: "later" }],
+      route: "/noop#graph",
+    })
+
+    expect(response.status).toBe(400)
   })
 
   test.each([
@@ -280,6 +386,28 @@ async function postResume(serverUrl: string, threadId: string, body: unknown): P
   })
 }
 
+async function postAgUiResume(
+  serverUrl: string,
+  threadId: string,
+  resume: readonly unknown[],
+): Promise<Response> {
+  const routeKey = encodeURIComponent("/noop#graph")
+  return fetch(new URL(`/agui/${routeKey}`, serverUrl), {
+    body: JSON.stringify({
+      context: [],
+      forwardedProps: {},
+      messages: [],
+      resume,
+      runId: "concurrent-resume-run",
+      state: {},
+      threadId,
+      tools: [],
+    }),
+    headers: { accept: "text/event-stream", "content-type": "application/json" },
+    method: "POST",
+  })
+}
+
 async function createFixtureApp(files: Readonly<Record<string, string>>) {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-resume-"))
   tempDirs.push(appRoot)
@@ -311,5 +439,29 @@ async function createCheckpointFixtureApp(pendingWrites: readonly unknown[]) {
     `,
     "package.json": "{}\n",
     "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
+  })
+}
+
+async function createConcurrentResumeFixtureApp(pendingWrites: readonly unknown[]) {
+  return createFixtureApp({
+    "dawn.config.ts": `
+      export default {
+        checkpointer: {
+          getTuple: async () => ({ pendingWrites: ${JSON.stringify(pendingWrites)} }),
+        },
+      };
+    `,
+    "package.json": "{}\n",
+    "src/app/noop/index.ts": `
+      export const graph = async () => {
+        const gate = globalThis[${JSON.stringify(CONCURRENT_RESUME_GATE)}];
+        gate.executions += 1;
+        if (gate.executions === 1) {
+          gate.markStarted();
+          await gate.wait;
+        }
+        return { executions: gate.executions };
+      };
+    `,
   })
 }

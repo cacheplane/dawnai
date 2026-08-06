@@ -19,6 +19,10 @@ export interface PendingInterruptSnapshot {
   readonly malformed: boolean
 }
 
+export interface PendingResumeClaims {
+  tryClaim(threadId: string): (() => void) | undefined
+}
+
 export type ResumeResolution =
   | { readonly ok: true; readonly mode: "turn" }
   | {
@@ -96,6 +100,22 @@ export async function readPendingInterrupts(
   }
 
   return { interrupts, malformed }
+}
+
+export function createPendingResumeClaims(): PendingResumeClaims {
+  const claimedThreadIds = new Set<string>()
+  return {
+    tryClaim(threadId) {
+      if (claimedThreadIds.has(threadId)) return undefined
+      claimedThreadIds.add(threadId)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        claimedThreadIds.delete(threadId)
+      }
+    },
+  }
 }
 
 export function resolvePendingResume(
