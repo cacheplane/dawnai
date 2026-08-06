@@ -241,8 +241,14 @@ interface StreamEventProjection {
   readonly interrupts: readonly RawInterruptEntry[]
 }
 
-interface SubagentAncestry {
-  readonly contextsByRunId: Map<string, SubagentContext | null>
+interface SubagentToolRunContexts {
+  readonly contextsByToolRunId: Map<string, SubagentContext | null>
+}
+
+interface SubagentPhaseProjection {
+  readonly chunk: AgentStreamChunk
+  readonly context: SubagentContext
+  readonly toolRunId: string | undefined
 }
 
 const CAPABILITY_EVENT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*$/
@@ -311,31 +317,26 @@ function sameSubagentContext(left: SubagentContext, right: SubagentContext): boo
 }
 
 function indexSubagentContext(
-  ancestry: SubagentAncestry,
-  runId: string | undefined,
+  toolRuns: SubagentToolRunContexts,
+  toolRunId: string,
   context: SubagentContext,
 ): void {
-  if (!runId) return
-  const existing = ancestry.contextsByRunId.get(runId)
+  const existing = toolRuns.contextsByToolRunId.get(toolRunId)
   if (existing === undefined) {
-    ancestry.contextsByRunId.set(runId, context)
+    toolRuns.contextsByToolRunId.set(toolRunId, context)
   } else if (existing !== null && !sameSubagentContext(existing, context)) {
-    ancestry.contextsByRunId.set(runId, null)
+    toolRuns.contextsByToolRunId.set(toolRunId, null)
   }
 }
 
 function resolveEventSubagentContext(
   event: LangChainStreamEvent,
-  ancestry: SubagentAncestry,
+  toolRuns: SubagentToolRunContexts,
 ): SubagentContext | undefined {
   const direct = parseSubagentContext(event.metadata)
-  if (direct) {
-    indexSubagentContext(ancestry, event.run_id, direct)
-    indexSubagentContext(ancestry, event.parent_ids?.at(-1), direct)
-    return direct
-  }
+  if (direct) return direct
   if (event.event !== "on_tool_error") return undefined
-  return ancestry.contextsByRunId.get(event.run_id) ?? undefined
+  return toolRuns.contextsByToolRunId.get(event.run_id) ?? undefined
 }
 
 function childIdentity(child: SubagentContext): Record<string, unknown> {
@@ -354,7 +355,7 @@ function childData(child: SubagentContext, data: unknown): Record<string, unknow
   }
 }
 
-function parseSubagentPhaseEvent(event: LangChainStreamEvent): AgentStreamChunk | undefined {
+function parseSubagentPhaseEvent(event: LangChainStreamEvent): SubagentPhaseProjection | undefined {
   if (event.event !== "on_custom_event" || event.name !== "dawn.subagent") return undefined
   if (!isRecord(event.data)) return undefined
   const phase = event.data.phase
@@ -370,25 +371,42 @@ function parseSubagentPhaseEvent(event: LangChainStreamEvent): AgentStreamChunk 
     return undefined
   }
 
-  const { phase: _phase, ...data } = event.data
-  return { type: `subagent.${phase}`, data }
+  const context: SubagentContext = {
+    callId: event.data.call_id,
+    depth: event.data.depth,
+    name: event.data.subagent,
+    routeId: event.data.route_id,
+  }
+  const toolRunId =
+    typeof event.data.tool_run_id === "string" && event.data.tool_run_id !== ""
+      ? event.data.tool_run_id
+      : undefined
+  const { phase: _phase, tool_run_id: _toolRunId, ...data } = event.data
+  return {
+    chunk: { type: `subagent.${phase}`, data },
+    context,
+    toolRunId,
+  }
 }
 
 function classifyStreamEvent(
   event: LangChainStreamEvent,
-  ancestry: SubagentAncestry,
+  toolRuns: SubagentToolRunContexts,
 ): StreamEventProjection {
-  const child = resolveEventSubagentContext(event, ancestry)
-  const phaseChunk = parseSubagentPhaseEvent(event)
-  if (phaseChunk) {
+  const phase = parseSubagentPhaseEvent(event)
+  if (phase) {
+    if (phase.toolRunId !== undefined) {
+      indexSubagentContext(toolRuns, phase.toolRunId, phase.context)
+    }
     return {
       capturesFinalOutput: false,
-      child,
-      chunks: [phaseChunk],
+      child: phase.context,
+      chunks: [phase.chunk],
       finalOutput: undefined,
       interrupts: [],
     }
   }
+  const child = resolveEventSubagentContext(event, toolRuns)
 
   switch (event.event) {
     case "on_chat_model_stream": {
@@ -862,14 +880,14 @@ async function* streamFromRunnable(
       finalOutput = undefined
       capturedInterrupts = []
       emittedInterruptIds = new Set()
-      const subagentAncestry: SubagentAncestry = { contextsByRunId: new Map() }
+      const subagentToolRuns: SubagentToolRunContexts = { contextsByToolRunId: new Map() }
 
       try {
         for await (const event of streamEventsFn(invocationInput, {
           ...invocationConfig,
           version: "v2",
         })) {
-          const projection = classifyStreamEvent(event, subagentAncestry)
+          const projection = classifyStreamEvent(event, subagentToolRuns)
           if (projection.capturesFinalOutput) {
             finalOutput = projection.finalOutput
           }

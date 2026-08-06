@@ -192,6 +192,7 @@ describe("convertSubagentTaskToLangChain", () => {
       event: string
       data: unknown
     }> = []
+    let toolRunId = ""
 
     for await (const event of root.streamEvents(
       {
@@ -211,6 +212,9 @@ describe("convertSubagentTaskToLangChain", () => {
       },
       { version: "v2" },
     )) {
+      if (event.event === "on_tool_start" && event.name === "task") {
+        toolRunId = event.run_id
+      }
       if (event.event === "on_custom_event" && event.name === "dawn.subagent") {
         events.push({
           event: event.name,
@@ -224,10 +228,12 @@ describe("convertSubagentTaskToLangChain", () => {
       }
     }
 
+    expect(toolRunId).not.toBe("")
     expect(events.map(({ data }) => data)).toEqual([
       {
         phase: "start",
         call_id: "task-failure",
+        tool_run_id: toolRunId,
         subagent: "researcher",
         route_id: "/parent/subagents/researcher",
         depth: 1,
@@ -235,6 +241,7 @@ describe("convertSubagentTaskToLangChain", () => {
       {
         phase: "end",
         call_id: "task-failure",
+        tool_run_id: toolRunId,
         subagent: "researcher",
         route_id: "/parent/subagents/researcher",
         depth: 1,

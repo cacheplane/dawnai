@@ -47,9 +47,11 @@ export function convertSubagentTaskToLangChain(
     name: tool.name,
     description: tool.description ?? "",
     schema: tool.schema as z.ZodTypeAny,
-    func: async (rawInput, _manager, config) => {
+    func: async (rawInput, manager, config) => {
       const liveConfig = config ?? {}
       const callId = readCallId(liveConfig) ?? `task-${randomUUID()}`
+      const toolRunId =
+        typeof manager?.runId === "string" && manager.runId !== "" ? manager.runId : undefined
       const input = rawInput as { input: string; subagent: string }
       const parentDawn = readDawnMetadata(liveConfig)
       const nextDepth = readDepth(parentDawn) + 1
@@ -85,6 +87,7 @@ export function convertSubagentTaskToLangChain(
       }
       const eventBase = {
         call_id: callId,
+        ...(toolRunId !== undefined ? { tool_run_id: toolRunId } : {}),
         subagent: input.subagent,
         route_id: resolved.child.routeId,
         depth: nextDepth,

@@ -188,6 +188,7 @@ describe("native subagent event projection", () => {
           data: {
             phase: "start",
             call_id: "call-child",
+            tool_run_id: "parent-task-run",
             subagent: "researcher",
             route_id: "/planner/researcher",
             depth: 2,
@@ -249,6 +250,7 @@ describe("native subagent event projection", () => {
           data: {
             phase: "end",
             call_id: "call-child",
+            tool_run_id: "parent-task-run",
             subagent: "researcher",
             route_id: "/planner/researcher",
             depth: 2,
@@ -417,47 +419,31 @@ describe("native subagent event projection", () => {
       async *streamEvents() {
         yield {
           event: "on_custom_event",
-          run_id: "researcher-phase",
+          run_id: "shared-custom-event-run",
           name: "dawn.subagent",
           data: {
             phase: "start",
             call_id: "call-researcher",
+            tool_run_id: "task-run-researcher",
             subagent: "researcher",
             route_id: "/researcher",
             depth: 1,
           },
           metadata: researcherMetadata,
-          parent_ids: ["root-run", "tools-node", "task-run-researcher"],
-        }
-        yield {
-          event: "on_chain_start",
-          run_id: "researcher-graph",
-          name: "LangGraph",
-          data: { input: {} },
-          metadata: researcherMetadata,
-          parent_ids: ["root-run", "tools-node", "task-run-researcher"],
         }
         yield {
           event: "on_custom_event",
-          run_id: "writer-phase",
+          run_id: "shared-custom-event-run",
           name: "dawn.subagent",
           data: {
             phase: "start",
             call_id: "call-writer",
+            tool_run_id: "task-run-writer",
             subagent: "writer",
             route_id: "/writer",
             depth: 1,
           },
           metadata: writerMetadata,
-          parent_ids: ["root-run", "tools-node", "task-run-writer"],
-        }
-        yield {
-          event: "on_chain_start",
-          run_id: "writer-graph",
-          name: "LangGraph",
-          data: { input: {} },
-          metadata: writerMetadata,
-          parent_ids: ["root-run", "tools-node", "task-run-writer"],
         }
         yield {
           event: "on_tool_error",
@@ -493,7 +479,6 @@ describe("native subagent event projection", () => {
               },
             ),
           },
-          parent_ids: ["root-run", "tools-node"],
         }
         yield {
           event: "on_tool_error",
@@ -519,7 +504,6 @@ describe("native subagent event projection", () => {
               },
             ),
           },
-          parent_ids: ["root-run", "tools-node"],
         }
         yield {
           event: "on_tool_error",
@@ -535,7 +519,6 @@ describe("native subagent event projection", () => {
               },
             }),
           },
-          parent_ids: ["root-run"],
         }
       },
     }
