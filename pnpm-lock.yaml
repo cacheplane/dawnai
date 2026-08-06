@@ -428,6 +428,9 @@ importers:
       '@langchain/langgraph':
         specifier: ^1.4.7
         version: 1.4.7(@langchain/core@1.2.1(@opentelemetry/api@1.9.1)(openai@6.45.0(ws@8.21.0)(zod@4.4.3))(ws@8.21.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(zod@4.4.3)
+      '@typescript/old':
+        specifier: npm:typescript@6.0.2
+        version: typescript@6.0.2
       tsx:
         specifier: ^4.23.0
         version: 4.23.0

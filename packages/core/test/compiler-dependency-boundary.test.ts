@@ -25,6 +25,7 @@ describe("compiler dependency boundary", () => {
     const vite = readManifest(vitePackageUrl)
 
     expect(core.dependencies?.typescript).toBe("npm:@typescript/typescript6@6.0.2")
+    expect(core.dependencies?.["@typescript/old"]).toBe("npm:typescript@6.0.2")
     for (const dependencySection of [
       vite.dependencies,
       vite.devDependencies,
