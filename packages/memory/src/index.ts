@@ -1,8 +1,15 @@
 export {
+  buildConsolidationPrompt,
+  buildReflectionPrompt,
+  buildReflectionRecords,
+  buildSummaryRecord,
   type ConsolidationBatch,
   eventTimeOf,
   isoWeekKey,
+  parseConsolidationOutput,
+  parseReflectionOutput,
   type ReflectionInput,
+  type ReflectionInsight,
   selectConsolidationBatches,
   selectReflectionInput,
 } from "./distill.js"
