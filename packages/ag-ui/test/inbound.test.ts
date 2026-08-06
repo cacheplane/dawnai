@@ -62,6 +62,17 @@ describe("fromRunAgentInput", () => {
     ])
   })
 
+  test("forwards every subagent permission decision without interpreting it", () => {
+    const resume = [
+      { interruptId: "perm-once", status: "resolved" as const, payload: "once" },
+      { interruptId: "perm-always", status: "resolved" as const, payload: "always" },
+      { interruptId: "perm-deny", status: "resolved" as const, payload: "deny" },
+    ]
+    const input = baseInput({ resume } as Partial<RunAgentInput>)
+
+    expect(fromRunAgentInput(input).resume).toEqual(resume)
+  })
+
   test("omits the resume property for an empty resume array", () => {
     const input = baseInput({ resume: [] } as Partial<RunAgentInput>)
     const result = fromRunAgentInput(input)

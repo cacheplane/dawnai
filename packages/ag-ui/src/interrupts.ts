@@ -7,7 +7,10 @@ import type { Interrupt } from "@ag-ui/core"
  */
 export interface DawnInterruptEnvelope {
   readonly interruptId: string
+  readonly type?: string
   readonly kind?: string
+  readonly callId?: string
+  readonly detail?: Readonly<Record<string, unknown>>
   readonly message?: string
   readonly toolCallId?: string
   readonly [key: string]: unknown

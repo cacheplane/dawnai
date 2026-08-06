@@ -59,11 +59,22 @@ export function deriveToolResults(
   return results
 }
 
+export interface SubagentInterruptDetail extends Readonly<Record<string, unknown>> {
+  readonly parentRouteId: string
+  readonly subagentName: string
+  readonly subagentRouteId: string
+  readonly inputPreview: string
+  readonly reason?: string
+  readonly suggestedPattern: string
+}
+
+export type InterruptDetail = Readonly<Record<string, unknown>> & Partial<SubagentInterruptDetail>
+
 export interface InterruptInfo {
   readonly interruptId: string
   readonly kind: string
   readonly callId?: string
-  readonly detail?: Record<string, unknown>
+  readonly detail?: InterruptDetail
 }
 
 export interface Todo {
@@ -225,7 +236,7 @@ export async function collectRunResult(
           interruptId: String(d.interruptId ?? ""),
           kind: String(d.kind ?? ""),
           ...(callId !== undefined ? { callId } : {}),
-          ...(d.detail !== undefined ? { detail: d.detail as Record<string, unknown> } : {}),
+          ...(d.detail !== undefined ? { detail: d.detail as InterruptDetail } : {}),
         }
         interrupts.push(info)
         break

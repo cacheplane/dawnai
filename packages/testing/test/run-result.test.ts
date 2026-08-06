@@ -192,6 +192,45 @@ it("retains distinct call ids for parallel child interrupts without changing roo
   ])
 })
 
+it("retains subagent approval identity and typed detail", async () => {
+  const envelope = {
+    interruptId: "perm-1",
+    type: "permission-request",
+    kind: "subagent",
+    callId: "task-1",
+    detail: {
+      parentRouteId: "/support",
+      subagentName: "writer",
+      subagentRouteId: "/support/subagents/writer",
+      inputPreview: "Draft the response",
+      reason: "Drafts require review.",
+      suggestedPattern: JSON.stringify(["/support", "writer"]),
+    },
+  } as const
+
+  async function* s() {
+    yield { type: "interrupt", data: envelope }
+  }
+
+  const r = await collectRunResult(s() as never, "t")
+  const interrupt = r.interrupts[0]
+
+  expect(interrupt).toEqual({
+    interruptId: envelope.interruptId,
+    kind: envelope.kind,
+    callId: envelope.callId,
+    detail: envelope.detail,
+  })
+  if (interrupt?.kind !== "subagent") throw new Error("expected a subagent interrupt")
+  const detail = interrupt.detail
+  if (!detail) throw new Error("expected subagent interrupt detail")
+  expect(detail.parentRouteId).toBe("/support")
+  expect(detail.subagentName).toBe("writer")
+  expect(detail.subagentRouteId).toBe("/support/subagents/writer")
+  expect(detail.inputPreview).toBe("Draft the response")
+  expect(detail.reason).toBe("Drafts require review.")
+})
+
 it("captures a subagent error end", async () => {
   async function* s() {
     yield { type: "subagent.start", data: { call_id: "c1", subagent: "research" } }

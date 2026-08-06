@@ -2,6 +2,29 @@ import { describe, expect, test } from "vitest"
 import { fromAguiResume, toAguiInterrupt } from "../src/interrupts.js"
 
 describe("toAguiInterrupt", () => {
+  test("preserves a subagent permission envelope as metadata", () => {
+    const envelope = {
+      interruptId: "perm-1",
+      type: "permission-request",
+      kind: "subagent",
+      callId: "task-1",
+      detail: {
+        parentRouteId: "/support",
+        subagentName: "writer",
+        subagentRouteId: "/support/subagents/writer",
+        inputPreview: "Draft the response",
+        reason: "Drafts require review.",
+        suggestedPattern: JSON.stringify(["/support", "writer"]),
+      },
+    }
+
+    expect(toAguiInterrupt(envelope)).toEqual({
+      id: "perm-1",
+      reason: "subagent",
+      metadata: envelope,
+    })
+  })
+
   test("maps a Dawn interrupt envelope to an AG-UI Interrupt, preserving the envelope as metadata", () => {
     const envelope = {
       interruptId: "perm-1",
