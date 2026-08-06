@@ -214,6 +214,7 @@ interface CapabilityEventPayload {
 
 const CAPABILITY_EVENT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*$/
 const RESERVED_ROOT_EVENT_NAMES = new Set([
+  "chunk",
   "token",
   "tool_call",
   "tool_result",

@@ -123,6 +123,7 @@ describe("capability custom events", () => {
       "line\rbreak",
       "control\u0007bell",
       "has space",
+      "chunk",
       "token",
       "tool_call",
       "tool_result",
