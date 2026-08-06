@@ -2,6 +2,7 @@ import { join } from "node:path"
 import type { NextConfig } from "next"
 
 const config: NextConfig = {
+  experimental: { useTypeScriptCli: true },
   output: "standalone",
   // Trace from the monorepo root so pnpm-linked workspace deps are copied into
   // the standalone bundle (server.js lands at .next/standalone/packages/inspector/).
