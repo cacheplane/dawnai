@@ -12,6 +12,7 @@ import {
   type RouteStaticDiscovery,
 } from "../src/lib/build/targets/modules-emitter.js"
 import { nodeTarget } from "../src/lib/build/targets/node.js"
+import { middlewareCandidatePaths } from "../src/lib/dev/middleware.js"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 import { loadStaticModules, normalizeMiddlewareModule } from "../src/lib/runtime/static-modules.js"
 import { cleanup, runChatTurn, withAimock } from "./helpers/static-modules-fixture.js"
@@ -229,6 +230,74 @@ describe("static manifest middleware — round-trip", () => {
     const modules = await loadStaticModules(pathToFileURL(modulesPath))
     expect(typeof modules.middleware).toBe("function")
   }, 30_000)
+
+  it("manifest middleware governs when the on-disk middleware disagrees", async () => {
+    const appRoot = await fixtureApp() // manifest source: the x-ok rule
+    await linkCliPackage(appRoot)
+
+    const discoveries = await collectFixtureDiscoveries(appRoot)
+    const buildDir = join(appRoot, ".dawn", "build")
+    await mkdir(buildDir, { recursive: true })
+    const modulesPath = join(buildDir, "modules.mjs")
+    await writeFile(
+      modulesPath,
+      emitModulesFile({
+        appRoot,
+        buildDir,
+        discoveries,
+        middlewareFile: join(appRoot, "src", "middleware.ts"),
+      }),
+      "utf8",
+    )
+    const modules = await loadStaticModules(pathToFileURL(modulesPath))
+    expect(typeof modules.middleware).toBe("function")
+
+    // Swap the disk truth AFTER the manifest is bound: remove the emitted
+    // source and plant a CONTRADICTORY rule (x-disk, not x-ok) at a candidate
+    // path the manifest never imported — a fresh module, so no ESM-cache
+    // ambiguity can mask a regression to the dynamic probe.
+    await rm(join(appRoot, "src", "middleware.ts"))
+    await writeFile(
+      join(appRoot, "middleware.ts"),
+      'import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"\n' +
+        "export default defineMiddleware((req) =>\n" +
+        '  req.headers["x-disk"] ? allow() : reject(401, { error: "missing x-disk" }),\n' +
+        ")\n",
+      "utf8",
+    )
+
+    await withAimock(script().user("hello").replies("Hi there, friend!").build())
+    const handler = await createRuntimeFetchHandler({ appRoot, modules })
+    cleanup.push(() => handler.close())
+
+    // Satisfies only the DISK rule → 401 proves the manifest governs (a
+    // dynamic probe would have let this request through).
+    const routeKey = encodeURIComponent("/chat#agent")
+    const rejected = await handler.fetch(
+      new Request(`http://localhost/agui/${routeKey}`, {
+        body: JSON.stringify({
+          context: [],
+          forwardedProps: {},
+          messages: [{ id: "1", role: "user", content: "hello" }],
+          runId: "rn-disk",
+          state: {},
+          threadId: "th-disk",
+          tools: [],
+        }),
+        headers: {
+          accept: "text/event-stream",
+          "content-type": "application/json",
+          "x-disk": "1",
+        },
+        method: "POST",
+      }),
+    )
+    expect(rejected.status).toBe(401)
+
+    // Satisfies only the MANIFEST rule → the turn completes.
+    const body = await runChatTurn(handler, "th-manifest-wins", "hello", { "x-ok": "1" })
+    expect(body).toContain("RUN_FINISHED")
+  }, 30_000)
 })
 
 // ---------------------------------------------------------------------------
@@ -313,18 +382,41 @@ describe("node target — middleware probe", () => {
     expect(text).toContain("middleware: normalizeMiddlewareModule(middlewareModule),")
   })
 
-  it("falls back to root middleware.ts and prefers src/ when both exist", async () => {
-    const rootOnly = await fixtureApp({ "middleware.ts": DEFAULT_EXPORT_MIDDLEWARE })
-    const rootText = await emitFixture(rootOnly)
-    expect(rootText).toContain('import * as middlewareModule from "../../middleware.ts"')
+  it("shares loadMiddleware's exact candidate list", () => {
+    expect(middlewareCandidatePaths("/app")).toEqual([
+      "/app/src/middleware.ts",
+      "/app/src/middleware.js",
+      "/app/middleware.ts",
+      "/app/middleware.js",
+    ])
+  })
 
-    const both = await fixtureApp({
-      "middleware.ts": NAMED_EXPORT_MIDDLEWARE,
+  it("probes all four candidates in loadMiddleware's precedence order", async () => {
+    const jsMiddleware =
+      "export default (req) =>\n" +
+      '  req.headers["x-ok"] ? { action: "continue" } : { action: "reject", status: 401 }\n'
+    const appRoot = await fixtureApp({
+      "middleware.js": jsMiddleware,
+      "middleware.ts": DEFAULT_EXPORT_MIDDLEWARE,
+      "src/middleware.js": jsMiddleware,
       "src/middleware.ts": DEFAULT_EXPORT_MIDDLEWARE,
     })
-    const bothText = await emitFixture(both)
-    expect(bothText).toContain('import * as middlewareModule from "../../src/middleware.ts"')
-    expect(bothText).not.toContain('from "../../middleware.ts"')
+    // Table: with all four candidates on disk, the emitted specifier follows
+    // precedence; removing the current winner promotes the next one.
+    const order = [
+      ["src/middleware.ts", "../../src/middleware.ts"],
+      ["src/middleware.js", "../../src/middleware.js"],
+      ["middleware.ts", "../../middleware.ts"],
+      ["middleware.js", "../../middleware.js"],
+    ] as const
+    for (const [rel, specifier] of order) {
+      const text = await emitFixture(appRoot)
+      expect(text).toContain(`import * as middlewareModule from ${JSON.stringify(specifier)}`)
+      await rm(join(appRoot, rel))
+    }
+    // All candidates removed → no middleware entry at all.
+    const text = await emitFixture(appRoot)
+    expect(text).not.toContain("middlewareModule")
   })
 
   it("emits no middleware entry when the app has no middleware file", async () => {

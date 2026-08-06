@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
+import { middlewareCandidatePaths } from "../../dev/middleware.js"
 import { writeLine } from "../../output.js"
 import type { BuildEmitContext, BuildTarget } from "./index.js"
 import {
@@ -87,15 +88,12 @@ export const nodeTarget: BuildTarget = {
     for (const route of manifest.routes) {
       discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
     }
-    // Middleware probe: the SAME four candidate paths, in the SAME precedence
-    // order, as the dynamic `loadMiddleware` — the static build must never
-    // bind a different file than dev would.
-    const middlewareFile = [
-      join(appRoot, "src", "middleware.ts"),
-      join(appRoot, "src", "middleware.js"),
-      join(appRoot, "middleware.ts"),
-      join(appRoot, "middleware.js"),
-    ].find((candidate) => existsSync(candidate))
+    // Middleware probe: middlewareCandidatePaths is the SAME list, in the
+    // SAME precedence order, the dynamic `loadMiddleware` walks — the static
+    // build can never bind a different file than dev would.
+    const middlewareFile = middlewareCandidatePaths(appRoot).find((candidate) =>
+      existsSync(candidate),
+    )
 
     const modulesPath = join(buildDir, "modules.mjs")
     await writeFile(

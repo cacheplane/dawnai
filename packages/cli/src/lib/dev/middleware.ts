@@ -16,18 +16,26 @@ export function selectMiddlewareExport(mod: unknown): DawnMiddleware | undefined
 }
 
 /**
- * Load middleware from the app's middleware.ts file.
- * Convention: src/middleware.ts exports a default function (using defineMiddleware).
+ * The four middleware candidate paths, in probe precedence order — the ONE
+ * list shared by the dynamic probe below and the node target's build probe
+ * (`nodeTarget.emit`), so the static build can never bind a different file
+ * than dev would.
  */
-export async function loadMiddleware(appRoot: string): Promise<DawnMiddleware | undefined> {
-  const middlewarePaths = [
+export function middlewareCandidatePaths(appRoot: string): readonly string[] {
+  return [
     `${appRoot}/src/middleware.ts`,
     `${appRoot}/src/middleware.js`,
     `${appRoot}/middleware.ts`,
     `${appRoot}/middleware.js`,
   ]
+}
 
-  for (const path of middlewarePaths) {
+/**
+ * Load middleware from the app's middleware.ts file.
+ * Convention: src/middleware.ts exports a default function (using defineMiddleware).
+ */
+export async function loadMiddleware(appRoot: string): Promise<DawnMiddleware | undefined> {
+  for (const path of middlewareCandidatePaths(appRoot)) {
     try {
       const selected = selectMiddlewareExport(await import(path))
       if (selected) return selected
