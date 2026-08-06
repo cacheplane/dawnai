@@ -20,9 +20,11 @@ import {
   findDawnApp,
   loadDawnConfig,
   type ResolvedStateField,
+  type ResolvedSubagent,
   type RouteDefinition,
   type RouteManifest,
   resolveStateFields,
+  resolveSubagentRegistry,
   resolveToolScope,
   toolOrigin,
   wrapToolWithApproval,
@@ -45,13 +47,14 @@ import {
   type PermissionMode,
   type PermissionsStore,
 } from "@dawn-ai/permissions"
-import { type DawnAgent, isDawnAgent, type WorkspaceFs } from "@dawn-ai/sdk"
+import { isDawnAgent, type WorkspaceFs } from "@dawn-ai/sdk"
 import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { localFilesystem } from "@dawn-ai/workspace"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
+import { getCachedDescriptorRouteIndex } from "./descriptor-route-index.js"
 import { loadRouteMemory } from "./load-memory.js"
 import { normalizeRouteModule } from "./load-route-kind.js"
 import {
@@ -578,12 +581,20 @@ async function prepareRouteExecution(options: {
 
     summarization = buildSummarization(loadedDawnConfig, descriptor?.model)
 
-    // Build (or reuse) the descriptor->routeId identity map used by the
-    // subagents marker to resolve `agent({ subagents: [imported] })` overrides.
-    // The cache is keyed on the manifest object identity: stable across
-    // requests in production (one manifest per CLI invocation), naturally
-    // invalidated in dev when the runtime rebuilds the manifest.
-    const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
+    const descriptorRouteIndex = await getCachedDescriptorRouteIndex(routeManifest)
+    let subagentRegistry: readonly ResolvedSubagent[]
+    try {
+      subagentRegistry = await resolveSubagentRegistry({
+        descriptor,
+        descriptorRouteIndex,
+        parentRouteDir: routeDir,
+        parentRouteId: options.routeId,
+        routeManifest,
+        loadDescription: loadSubagentDescription,
+      })
+    } catch (error) {
+      return { message: formatErrorMessage(error), ok: false }
+    }
 
     // Build the memory context if this route has a memory.ts.
     let memoryContext: import("@dawn-ai/core").MemoryContext | undefined
@@ -641,7 +652,7 @@ async function prepareRouteExecution(options: {
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
-      descriptorRouteMap,
+      subagentRegistry,
       ...(capabilityBackends ? { backends: capabilityBackends } : {}),
       permissions: permissionsStore,
       appRoot: options.appRoot,
@@ -775,16 +786,14 @@ async function prepareRouteExecution(options: {
     promptFragments = capPromptFragments
     streamTransformers = capStreamTransformers
 
-    // Build a resolver only when this route actually has subagents — either
-    // by convention (<routeDir>/subagents/*) or by descriptor.subagents override.
+    // Build the temporary independent-invocation bridge only when the canonical
+    // registry contributed a dispatchable task tool.
     const hasTaskTool = capTools.some((t) => t.name === "task")
     if (hasTaskTool) {
       subagentResolver = buildSubagentResolver({
         appRoot: options.appRoot,
-        routeDir,
         routeManifest,
-        descriptor,
-        descriptorRouteMap,
+        subagentRegistry,
         ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
         ...(sandboxKey ? { sandboxThreadId: sandboxKey } : {}),
       })
@@ -1081,66 +1090,18 @@ function extractRouteParamNames(routeId: string): string[] {
   return [...matches].map((match) => match[1]).filter((s): s is string => s !== undefined)
 }
 
-/**
- * Dynamically imports each route's entry file and records descriptor->routeId
- * for any default export that satisfies `isDawnAgent`. Used so the subagents
- * capability marker can resolve `descriptor.subagents: [...]` override entries
- * back to a routeId.
- *
- * Cost: this opens every agent route module in the manifest. Acceptable for
- * the current scale; if it becomes hot, cache by (appRoot, manifest-hash).
- */
-let descriptorRouteMapCache = new WeakMap<RouteManifest, Promise<ReadonlyMap<DawnAgent, string>>>()
-
-async function getCachedDescriptorRouteMap(
-  manifest: RouteManifest,
-): Promise<ReadonlyMap<DawnAgent, string>> {
-  let promise = descriptorRouteMapCache.get(manifest)
-  if (!promise) {
-    promise = buildDescriptorRouteMap(manifest)
-    descriptorRouteMapCache.set(manifest, promise)
-  }
-  return promise
-}
-
-export { getCachedDescriptorRouteMap }
-
-/**
- * Test-only: reset the WeakMap-backed cache. Not exported via the package
- * barrel — internal to this module's test suite.
- */
-export function __resetDescriptorRouteMapCacheForTests(): void {
-  descriptorRouteMapCache = new WeakMap()
-}
-
-async function buildDescriptorRouteMap(
-  manifest: RouteManifest,
-): Promise<ReadonlyMap<DawnAgent, string>> {
-  const map = new Map<DawnAgent, string>()
-  await Promise.all(
-    manifest.routes.map(async (route) => {
-      try {
-        const mod = (await import(pathToFileURL(route.entryFile).href)) as { default?: unknown }
-        if (isDawnAgent(mod.default)) {
-          map.set(mod.default, route.id)
-        }
-      } catch {
-        // Best-effort: skip routes whose module fails to import.
-      }
-    }),
-  )
-  return map
+async function loadSubagentDescription(route: RouteDefinition): Promise<string> {
+  const mod = (await import(pathToFileURL(route.entryFile).href)) as { default?: unknown }
+  return isDawnAgent(mod.default) && typeof mod.default.description === "string"
+    ? mod.default.description
+    : "No description provided."
 }
 
 /**
- * Builds the subagentResolver passed into streamAgent/executeAgent. Given a
- * leaf name (e.g. "researcher"), the resolver returns:
+ * Builds the temporary subagentResolver passed into streamAgent/executeAgent.
+ * Given a canonical model-facing name, the resolver returns:
  *   - the child route's id
  *   - a graph object whose .invoke(input, config) re-enters executeResolvedRoute
- *
- * Resolution order:
- *   1. Convention: route at `<routeDir>/subagents/<leaf>`
- *   2. Override: descriptor.subagents[i] whose routeId's last segment === leaf
  *
  * The returned graph exposes both `invoke` (one-shot) and `dawnStream`
  * (yields Dawn StreamChunks). The dispatcher prefers `dawnStream` so
@@ -1149,10 +1110,8 @@ async function buildDescriptorRouteMap(
  */
 function buildSubagentResolver(args: {
   readonly appRoot: string
-  readonly routeDir: string
   readonly routeManifest: RouteManifest
-  readonly descriptor: DawnAgent | undefined
-  readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
+  readonly subagentRegistry: readonly ResolvedSubagent[]
   readonly sandboxManager?: SandboxManager
   /**
    * The dispatching thread's sandbox key (top routes: its checkpoint
@@ -1163,32 +1122,21 @@ function buildSubagentResolver(args: {
    */
   readonly sandboxThreadId?: string
 }): SubagentResolver {
-  const { appRoot, routeDir, routeManifest, descriptor, descriptorRouteMap } = args
+  const { appRoot, routeManifest, subagentRegistry } = args
   const { sandboxManager, sandboxThreadId } = args
 
-  const findConventionRoute = (leaf: string): RouteDefinition | undefined => {
-    const conventionDir = `${routeDir}/subagents/${leaf}`
-    return routeManifest.routes.find((r) => r.routeDir === conventionDir)
-  }
+  const routeByName = new Map(
+    subagentRegistry
+      .filter(({ rule }) => rule.action !== "deny")
+      .map(
+        ({ name, routeId }) =>
+          [name, routeManifest.routes.find((route) => route.id === routeId)] as const,
+      )
+      .filter((entry): entry is readonly [string, RouteDefinition] => entry[1] !== undefined),
+  )
 
-  const findOverrideRoute = (leaf: string): RouteDefinition | undefined => {
-    for (const desc of descriptor?.subagents ?? []) {
-      const routeId = descriptorRouteMap.get(desc)
-      if (!routeId) continue
-      const route = routeManifest.routes.find((r) => r.id === routeId)
-      if (!route) continue
-      const lastSegment = route.segments.at(-1)
-      const lastName =
-        typeof lastSegment === "string"
-          ? lastSegment
-          : (lastSegment?.raw ?? route.id.replace(/^\//, ""))
-      if (lastName === leaf) return route
-    }
-    return undefined
-  }
-
-  return (leafName: string) => {
-    const route = findConventionRoute(leafName) ?? findOverrideRoute(leafName)
+  return (subagentName: string) => {
+    const route = routeByName.get(subagentName)
     if (!route) return undefined
 
     const graph = {
