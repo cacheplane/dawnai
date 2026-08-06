@@ -11,7 +11,10 @@ const cleanup: Array<() => Promise<void> | void> = []
 // The config memo is process-global and shared with every other test in this
 // worker — always clear what we seed, on both sides, so a leaked entry can
 // never poison (or be poisoned by) another suite.
-beforeEach(() => __clearDawnConfigCacheForTests())
+beforeEach(() => {
+  __clearDawnConfigCacheForTests()
+  delete (globalThis as { __dawnConfigImported?: boolean }).__dawnConfigImported
+})
 
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn()
@@ -22,7 +25,11 @@ async function fixtureApp(): Promise<string> {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-config-seam-"))
   cleanup.push(() => rm(appRoot, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }))
   const files: Record<string, string> = {
-    "dawn.config.ts": 'export default { permissions: { mode: "bypass" } }\n',
+    // The global is a side-effect marker: it flips to true if (and only if)
+    // the on-disk config module is ever imported.
+    "dawn.config.ts":
+      ";(globalThis as { __dawnConfigImported?: boolean }).__dawnConfigImported = true\n" +
+      'export default { permissions: { mode: "bypass" } }\n',
     "package.json": '{ "name": "config-seam-fixture", "type": "module" }\n',
     "src/app/probe/index.ts": "export const workflow = async (_input: unknown) => ({ ok: true })\n",
   }
@@ -50,6 +57,9 @@ describe("createRuntimeFetchHandler — config seam", () => {
     const loaded = await loadDawnConfig({ appRoot })
     expect(loaded.configPath).toBe("<seeded>")
     expect(loaded.config.permissions?.mode).toBe("non-interactive")
+    // Seed-BEFORE-resolvers ordering: the on-disk config module was never
+    // imported during boot, so its side-effect marker never fired.
+    expect((globalThis as { __dawnConfigImported?: boolean }).__dawnConfigImported).toBeUndefined()
   })
 
   it("without a config option, boot loads dawn.config.ts from disk (control)", async () => {
@@ -61,5 +71,7 @@ describe("createRuntimeFetchHandler — config seam", () => {
     const loaded = await loadDawnConfig({ appRoot })
     expect(loaded.configPath).toBe(join(appRoot, "dawn.config.ts"))
     expect(loaded.config.permissions?.mode).toBe("bypass")
+    // Control for the marker: the dynamic path DID import the disk module.
+    expect((globalThis as { __dawnConfigImported?: boolean }).__dawnConfigImported).toBe(true)
   })
 })
