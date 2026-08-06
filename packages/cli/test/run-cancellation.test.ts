@@ -42,6 +42,54 @@ const BLOCKING_ROUTE = [
 // the one actually running.
 const OTHER_ROUTE = ["export const graph = async () => ({ ok: true })", ""].join("\n")
 
+// A route that fails immediately, used to prove the run slot is released on
+// the failure path too — not just on normal completion and cancellation.
+const BOOM_ROUTE = [
+  "export const graph = async () => {",
+  "  throw new Error('boom')",
+  "}",
+  "",
+].join("\n")
+
+// A minimal in-memory ThreadsStore whose updateStatus() rejects when asked to
+// mark a thread "busy" — used to simulate a setup failure (e.g. a locked or
+// corrupted SQLite file) between claiming the run slot and starting the
+// stream, to prove the slot is released even then. Plain JS (no imports from
+// workspace packages): dawn.config.ts is loaded from a scratch tmp directory
+// with no node_modules, so it can only rely on what tsx can transpile inline.
+const FAULTY_THREADS_STORE_CONFIG = [
+  "const threads = new Map()",
+  "function nowIso() { return new Date().toISOString() }",
+  "const store = {",
+  "  async createThread(input) {",
+  "    const threadId = input.thread_id ?? ('t-' + Math.random().toString(36).slice(2))",
+  "    const thread = {",
+  "      thread_id: threadId,",
+  "      created_at: nowIso(),",
+  "      updated_at: nowIso(),",
+  "      metadata: input.metadata ?? {},",
+  "      status: 'idle',",
+  "    }",
+  "    threads.set(threadId, thread)",
+  "    return thread",
+  "  },",
+  "  async getThread(threadId) { return threads.get(threadId) },",
+  "  async deleteThread(threadId) { threads.delete(threadId) },",
+  "  async listThreads() { return [...threads.values()] },",
+  "  async updateStatus(threadId, status) {",
+  "    if (status === 'busy') throw new Error('simulated updateStatus failure')",
+  "    const thread = threads.get(threadId)",
+  "    if (thread) { thread.status = status; thread.updated_at = nowIso() }",
+  "  },",
+  "  async updateMetadata(threadId, patch) {",
+  "    const thread = threads.get(threadId)",
+  "    if (thread) { thread.metadata = { ...thread.metadata, ...patch }; thread.updated_at = nowIso() }",
+  "  },",
+  "}",
+  "export default { threadsStore: store }",
+  "",
+].join("\n")
+
 async function waitForFile(path: string, timeoutMs = 15_000): Promise<string> {
   const startedAt = Date.now()
   while (Date.now() - startedAt < timeoutMs) {
@@ -62,6 +110,7 @@ async function setupBlockingRoute() {
     "dawn.config.ts": "export default {}\n",
     "package.json": '{ "name": "run-cancellation-fixture", "type": "module" }\n',
     "src/app/blocking/index.ts": BLOCKING_ROUTE,
+    "src/app/boom/index.ts": BOOM_ROUTE,
     "src/app/other/index.ts": OTHER_ROUTE,
   }
   for (const [rel, body] of Object.entries(files)) {
@@ -85,6 +134,41 @@ async function setupBlockingRoute() {
     releaseRoute: () => writeFile(releaseFile, "release"),
     startedFile,
   }
+}
+
+/**
+ * A handler whose ThreadsStore rejects every "busy" status write — simulates
+ * a setup failure (locked/corrupted DB, disk error) between claiming the run
+ * slot and starting the stream. No blocking/started/release files: the run
+ * never gets far enough to need them.
+ */
+async function setupFaultyThreadsStore() {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-run-cancellation-faulty-"))
+  cleanup.push(() => rm(appRoot, { force: true, recursive: true }))
+
+  const files: Record<string, string> = {
+    "dawn.config.ts": FAULTY_THREADS_STORE_CONFIG,
+    "package.json": '{ "name": "run-cancellation-faulty-fixture", "type": "module" }\n',
+    "src/app/other/index.ts": OTHER_ROUTE,
+  }
+  for (const [rel, body] of Object.entries(files)) {
+    const filePath = join(appRoot, rel)
+    await mkdir(dirname(filePath), { recursive: true })
+    await writeFile(filePath, body, "utf8")
+  }
+
+  const handler = await createRuntimeFetchHandler({ appRoot })
+  cleanup.push(() => handler.close())
+
+  return { appRoot, handler }
+}
+
+function otherRunRequest(threadId: string): Request {
+  return new Request(`http://localhost/threads/${threadId}/runs/stream`, {
+    body: JSON.stringify({ input: {}, route: "/other#graph" }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
 }
 
 function runStreamRequest(
@@ -331,5 +415,60 @@ describe("AP per-run abort", () => {
     expect(threadResponse.status).toBe(200)
     const thread = (await threadResponse.json()) as { status: string }
     expect(thread.status).toBe("interrupted")
+  }, 10_000)
+})
+
+describe("AP run failure", () => {
+  it("frees the run slot after a run fails", async () => {
+    const { handler } = await setupBlockingRoute()
+    const threadId = "t-boom-frees-slot"
+
+    const failingResponse = await handler.fetch(
+      new Request(`http://localhost/threads/${threadId}/runs/stream`, {
+        body: JSON.stringify({ input: {}, route: "/boom#graph" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+    )
+    expect(failingResponse.status).toBe(200)
+
+    // The terminal chunk must carry the error shape, not the cancelled shape
+    // — proving the cancelled/failed discrimination added for cancellation
+    // didn't regress the ordinary failure path.
+    const text = await readSseText(failingResponse)
+    expect(text).toBe('event: done\ndata: {"output":{"error":"boom"}}\n\n')
+
+    // The failed run's slot must be released — not just the cancelled-run's
+    // and the completed-run's, both already covered above — so a follow-up
+    // run on the same thread is admitted rather than 409ing.
+    const followUp = await handler.fetch(otherRunRequest(threadId))
+    expect(followUp.status).toBe(200)
+    await drain(followUp)
+  }, 10_000)
+})
+
+describe("run slot release on setup failure", () => {
+  it("releases the run slot when updateStatus('busy') throws before the stream starts", async () => {
+    const { handler } = await setupFaultyThreadsStore()
+    const threadId = "t-setup-throws"
+
+    const response1 = await handler.fetch(otherRunRequest(threadId))
+    expect(response1.status).toBe(500)
+
+    // If the slot leaked, this would return 200 "interrupted" for a run that
+    // never actually started streaming — the exact phantom-slot bug this
+    // guard exists to prevent (a leaked slot would also 409 every future run
+    // on this thread for the rest of the process's life).
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(409)
+    const cancelBody = (await cancelResponse.json()) as { error: { details?: { code?: string } } }
+    expect(cancelBody.error.details?.code).toBe("no_run_in_flight")
+
+    // A second run attempt must fail for the same setup reason, not because
+    // the concurrency gate still thinks a run is in flight.
+    const response2 = await handler.fetch(otherRunRequest(threadId))
+    expect(response2.status).toBe(500)
+    const body2 = (await response2.json()) as { error: { details?: { code?: string } } }
+    expect(body2.error.details?.code).not.toBe("run_in_flight")
   }, 10_000)
 })

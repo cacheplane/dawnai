@@ -407,6 +407,22 @@ function buildRouteTable(ctx: {
     {
       handle: async (_request, params) => {
         const threadId = params.thread_id ?? ""
+        // Cancel first: it is synchronous, so nothing can interleave between
+        // observing the slot and aborting it. Awaiting getThread beforehand
+        // would open a window in which the run we cancel is not the run the
+        // caller observed (run N finishes and releases its slot, run N+1
+        // begins on the same thread, and the cancel — issued against N — hits
+        // N+1 instead).
+        //
+        // Known, accepted race: a cancel arriving between the route finishing
+        // and its idle-status write completing still finds the slot and reports
+        // "interrupted" for a run that actually completed. The window is a
+        // single DB write wide and corrupts nothing — the streaming client has
+        // already received the real output. Closing it would require tracking a
+        // settled state per run, which is not worth the complexity.
+        if (runRegistry.cancel(threadId)) {
+          return Response.json({ status: "interrupted", thread_id: threadId }, { status: 200 })
+        }
         const thread = await threadsStore.getThread(threadId)
         if (!thread) {
           return Response.json(
@@ -414,17 +430,14 @@ function buildRouteTable(ctx: {
             { status: 404 },
           )
         }
-        if (!runRegistry.cancel(threadId)) {
-          // Deliberately not an idempotent 200: a silent success would hide
-          // the fact that this process is not the one running the thread.
-          return Response.json(
-            createRequestErrorBody(`No run in flight for thread "${threadId}"`, {
-              code: "no_run_in_flight",
-            }),
-            { status: 409 },
-          )
-        }
-        return Response.json({ status: "interrupted", thread_id: threadId }, { status: 200 })
+        // Deliberately not an idempotent 200: a silent success would hide
+        // the fact that this process is not the one running the thread.
+        return Response.json(
+          createRequestErrorBody(`No run in flight for thread "${threadId}"`, {
+            code: "no_run_in_flight",
+          }),
+          { status: 409 },
+        )
       },
       method: "POST",
       pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/cancel(?:\?.*)?$/,
@@ -717,9 +730,16 @@ async function handleApStreamRequest(options: {
   // The in-memory map is fast-path for the current server session; the thread
   // metadata persists it to SQLite so resume survives a server restart.
   threadRouteMap.set(threadId, routeKey)
-  await threadsStore.updateMetadata(threadId, { route: routeKey })
-
-  await threadsStore.updateStatus(threadId, "busy")
+  try {
+    await threadsStore.updateMetadata(threadId, { route: routeKey })
+    await threadsStore.updateStatus(threadId, "busy")
+  } catch (error) {
+    // The stream's finally has not been armed yet, so nothing else would ever
+    // free this slot — without an explicit release the thread would 409 for the
+    // remaining life of the process.
+    run.release()
+    throw error
+  }
 
   // Deliberate old-behavior parity: the pre-refactor server wired NO
   // response-close abort for this endpoint (only AG-UI aborted on client
