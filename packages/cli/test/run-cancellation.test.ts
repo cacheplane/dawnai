@@ -617,25 +617,59 @@ describe("/runs/wait cancellation", () => {
     expect(thread.status).toBe("interrupted")
   }, 10_000)
 
-  it("frees the run slot after a cancelled wait", async () => {
+  it("holds the run slot until an abandoned wait genuinely settles, then frees it", async () => {
+    // The blocking fixture deliberately ignores ctx.signal, so cancelling
+    // /runs/wait only detaches it (raceRequestAgainstShutdown never stops the
+    // route — there is no abortable iterator here like /runs/stream has).
+    // The slot must stay held while that abandoned route is still running,
+    // or a newly admitted run on the same thread would interleave checkpoint
+    // writes with it. This replaces the old "frees the run slot after a
+    // cancelled wait" test: under the corrected behavior, the slot is
+    // deliberately NOT free immediately after cancellation.
     const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute()
-    const threadId = "t-wait-cancelled-frees-slot"
+    const threadId = "t-wait-cancelled-holds-slot"
 
     const waitPromise = handler.fetch(runWaitRequest(threadId, startedFile, releaseFile))
     await waitForFile(startedFile)
 
     const cancelResponse = await handler.fetch(cancelRequest(threadId))
     expect(cancelResponse.status).toBe(200)
-    await waitPromise
 
-    // If the slot leaked, this would 409 with run_in_flight instead of
-    // starting a fresh run.
-    const response2 = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
-    expect(response2.status).toBe(200)
+    const waitResponse = await waitPromise
+    expect(waitResponse.status).toBe(409)
+    const waitBody = (await waitResponse.json()) as {
+      error: { message: string; details?: { code?: string } }
+    }
+    expect(waitBody.error.details?.code).toBe("run_cancelled")
 
+    // The abandoned route is still running at this point — a new run on the
+    // same thread must still be rejected.
+    const stillBlockedResponse = await handler.fetch(
+      runStreamRequest(threadId, startedFile, releaseFile),
+    )
+    expect(stillBlockedResponse.status).toBe(409)
+    const stillBlockedBody = (await stillBlockedResponse.json()) as {
+      error: { details?: { code?: string } }
+    }
+    expect(stillBlockedBody.error.details?.code).toBe("run_in_flight")
+
+    // Once the abandoned route actually finishes, the slot frees and a new
+    // run is admitted — proving the hold is temporary, not a leak.
     await releaseRoute()
-    await drain(response2)
-  }, 30_000)
+    let admitted: Response | undefined
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
+      const attempt = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+      if (attempt.status === 200) {
+        admitted = attempt
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    if (!admitted) throw new Error("run slot was never freed after the abandoned route released")
+
+    await drain(admitted)
+  }, 15_000)
 })
 
 describe("/resume cancellation", () => {

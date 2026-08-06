@@ -914,8 +914,31 @@ async function handleApWaitRequest(options: {
     throw error
   }
 
+  // Shared by both places below that report a cancelled run, so the response
+  // body and the status write cannot drift apart.
+  //
+  // Deliberate asymmetry with the streaming endpoints: an SSE response has
+  // already committed to 200 and started sending bytes before cancellation is
+  // knowable, so it signals in-band via a done chunk with {cancelled:true}.
+  // /runs/wait has not sent anything yet and can still use a status code, so
+  // it does — 409 rather than 503, which would conflate cancellation with
+  // server shutdown, the exact ambiguity this feature removes.
+  const respondCancelled = async (): Promise<Response> => {
+    await threadsStore.updateStatus(threadId, "interrupted").catch(() => undefined)
+    return Response.json(
+      createRequestErrorBody(`Run cancelled for thread "${threadId}"`, {
+        code: "run_cancelled",
+      }),
+      { status: 409 },
+    )
+  }
+
+  // Set only when the route is abandoned (detached, not stopped) rather than
+  // genuinely settled — see the finally below.
+  let abandoned = false
+  let resultPromise: ReturnType<typeof invokeResolvedRoute> | undefined
   try {
-    const resultPromise = invokeResolvedRoute({
+    resultPromise = invokeResolvedRoute({
       appRoot,
       checkpointer,
       input,
@@ -939,13 +962,15 @@ async function handleApWaitRequest(options: {
       // a result that no longer exists because someone cancelled the run —
       // that is a conflict, not a 503.
       if (run.cancelled) {
-        await threadsStore.updateStatus(threadId, "interrupted").catch(() => undefined)
-        return Response.json(
-          createRequestErrorBody(`Run cancelled for thread "${threadId}"`, {
-            code: "run_cancelled",
-          }),
-          { status: 409 },
-        )
+        // raceRequestAgainstShutdown only detaches resultPromise
+        // (`execution.catch(() => undefined)`) — it never stops the route.
+        // Unlike /runs/stream there is no abortable iterator here to drive
+        // the route's own cleanup, so it may still be executing and writing
+        // checkpoints. The slot must stay held until it genuinely settles
+        // (see the finally below), or a newly admitted run on this thread
+        // would interleave with it.
+        abandoned = true
+        return await respondCancelled()
       }
       await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
       return Response.json(createRequestErrorBody("Request canceled during server shutdown"), {
@@ -953,19 +978,18 @@ async function handleApWaitRequest(options: {
       })
     }
 
-    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
-
     if (result.status === "failed") {
+      // Defensive re-check, not dead code: resultPromise can settle in the
+      // same tick the abort fires, so the Promise.race above can resolve to
+      // the settled promise rather than the abort — SHUTDOWN_ABORTED is not
+      // guaranteed to catch every cancellation. resultPromise has already
+      // settled by the time we get here, though, so — unlike the branch
+      // above — there is no orphaned work and the slot releases normally.
       if (run.signal.aborted) {
         if (run.cancelled) {
-          await threadsStore.updateStatus(threadId, "interrupted").catch(() => undefined)
-          return Response.json(
-            createRequestErrorBody(`Run cancelled for thread "${threadId}"`, {
-              code: "run_cancelled",
-            }),
-            { status: 409 },
-          )
+          return await respondCancelled()
         }
+        await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
         return Response.json(
           createRequestErrorBody("Request canceled during server shutdown", {
             error: result.error.message,
@@ -973,6 +997,8 @@ async function handleApWaitRequest(options: {
           { status: 503 },
         )
       }
+
+      await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
 
       if (result.error.kind === "execution_error") {
         return Response.json(createExecutionErrorBody(result.error.message, result.error.details), {
@@ -988,9 +1014,19 @@ async function handleApWaitRequest(options: {
       )
     }
 
+    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
     return Response.json(result.output, { status: 200 })
   } finally {
-    run.release()
+    if (abandoned && resultPromise) {
+      // Hold the slot until the abandoned route genuinely finishes rather
+      // than freeing it the instant the 409 is decided (see the comment
+      // above). The outcome is discarded — nobody is waiting on it anymore —
+      // and any rejection is swallowed so it never surfaces as an unhandled
+      // rejection.
+      void resultPromise.finally(() => run.release()).catch(() => undefined)
+    } else {
+      run.release()
+    }
   }
 }
 
