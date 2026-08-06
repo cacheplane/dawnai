@@ -6,7 +6,9 @@ import {
   type RouteKind,
   resolveStateFields,
 } from "@dawn-ai/core"
+import type { DawnMiddleware } from "@dawn-ai/sdk"
 
+import { selectMiddlewareExport } from "../dev/middleware.js"
 import { type LoadedRouteMemory, normalizeRouteMemoryExport } from "./load-memory.js"
 import { normalizeRouteModuleObject } from "./load-route-kind.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
@@ -70,6 +72,12 @@ export interface StaticRouteModule {
  * request.
  */
 export interface DawnStaticModules {
+  /**
+   * App-level middleware bound from the manifest's static import, when the
+   * app has a middleware file. `undefined` also covers a middleware file with
+   * no usable export — the dynamic probe ignores such a file too.
+   */
+  readonly middleware?: DawnMiddleware
   readonly routes: readonly StaticRouteModule[]
 }
 
@@ -178,6 +186,17 @@ export function buildStaticRouteModule(input: StaticRouteModuleInput): StaticRou
 }
 
 /**
+ * Runtime companion for the manifest's middleware entry: pick the middleware
+ * function out of the statically-imported `import * as` namespace using the
+ * SAME selection rule the dynamic probe (`loadMiddleware`) applies — `default`
+ * first, then the named `middleware` export. Returns undefined when neither
+ * is a function (a middleware file with no usable export — dev ignores it).
+ */
+export function normalizeMiddlewareModule(mod: unknown): DawnMiddleware | undefined {
+  return selectMiddlewareExport(mod)
+}
+
+/**
  * Boot-time loader for a generated `modules.mjs` — what the node target's
  * `server.mjs` calls. The manifest statically imports the app's TypeScript
  * sources, so the TS loader must be registered BEFORE the manifest is linked;
@@ -196,6 +215,15 @@ export async function loadStaticModules(manifestUrl: URL | string): Promise<Dawn
   ) {
     throw new Error(
       `Static module manifest at ${href} must default-export { routes: [...] } — re-run \`dawn build\`.`,
+    )
+  }
+  // Middleware is optional, and `undefined` is legitimate (the emitted
+  // `normalizeMiddlewareModule(...)` returns undefined for a middleware file
+  // with no usable export) — but any other non-function value is corruption.
+  const middleware = (manifest as { readonly middleware?: unknown }).middleware
+  if (middleware !== undefined && typeof middleware !== "function") {
+    throw new Error(
+      `Static module manifest at ${href} has a non-function middleware entry — re-run \`dawn build\`.`,
     )
   }
   const routes = (manifest as { readonly routes: readonly unknown[] }).routes

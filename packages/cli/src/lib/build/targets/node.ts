@@ -87,8 +87,27 @@ export const nodeTarget: BuildTarget = {
     for (const route of manifest.routes) {
       discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
     }
+    // Middleware probe: the SAME four candidate paths, in the SAME precedence
+    // order, as the dynamic `loadMiddleware` — the static build must never
+    // bind a different file than dev would.
+    const middlewareFile = [
+      join(appRoot, "src", "middleware.ts"),
+      join(appRoot, "src", "middleware.js"),
+      join(appRoot, "middleware.ts"),
+      join(appRoot, "middleware.js"),
+    ].find((candidate) => existsSync(candidate))
+
     const modulesPath = join(buildDir, "modules.mjs")
-    await writeFile(modulesPath, emitModulesFile({ appRoot, buildDir, discoveries }), "utf8")
+    await writeFile(
+      modulesPath,
+      emitModulesFile({
+        appRoot,
+        buildDir,
+        discoveries,
+        ...(middlewareFile ? { middlewareFile } : {}),
+      }),
+      "utf8",
+    )
     artifacts.push(modulesPath)
 
     const serverPath = join(buildDir, "server.mjs")

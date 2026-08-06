@@ -96,7 +96,8 @@ export async function createRuntimeFetchHandler(
   }
   // Caller-supplied instances win over every fallback resolution below —
   // an injected store means the corresponding disk/sqlite path never runs.
-  const middleware = options.middleware ?? (await loadMiddleware(options.appRoot))
+  const middleware =
+    options.middleware ?? options.modules?.middleware ?? (await loadMiddleware(options.appRoot))
   const threadsStore = options.threadsStore ?? (await resolveThreadsStore(options.appRoot))
   const checkpointer = options.checkpointer ?? (await resolveCheckpointer(options.appRoot))
   const sandboxManager = await resolveSandboxManager(options.appRoot)

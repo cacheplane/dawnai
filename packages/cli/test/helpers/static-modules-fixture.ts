@@ -96,6 +96,7 @@ export async function runChatTurn(
   handler: Awaited<ReturnType<typeof createRuntimeFetchHandler>>,
   threadId: string,
   userMessage = "hello",
+  extraHeaders: Record<string, string> = {},
 ): Promise<string> {
   const routeKey = encodeURIComponent("/chat#agent")
   const response = await handler.fetch(
@@ -109,7 +110,11 @@ export async function runChatTurn(
         threadId,
         tools: [],
       }),
-      headers: { accept: "text/event-stream", "content-type": "application/json" },
+      headers: {
+        accept: "text/event-stream",
+        "content-type": "application/json",
+        ...extraHeaders,
+      },
       method: "POST",
     }),
   )
