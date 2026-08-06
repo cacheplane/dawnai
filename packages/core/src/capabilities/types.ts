@@ -156,12 +156,14 @@ export interface CapabilityMarkerContext {
   readonly descriptor: DawnAgent | undefined
   readonly descriptorRouteMap?: ReadonlyMap<DawnAgent, string>
   /**
-   * routeId → that route's normalized default-export descriptor. Supplied on
-   * the static-modules path so capability code (e.g. the subagents marker's
-   * description lookup) never imports entry files from disk; absent on the
-   * dynamic path, where markers fall back to their best-effort imports.
+   * routeId → that route's agent descriptor (the normalized module entry that
+   * passes `isDawnAgent` — from the default export or a named `agent` export).
+   * Holds ONLY agent routes; workflow/graph/chain routes are absent. Supplied
+   * on the static-modules path so capability code (e.g. the subagents
+   * marker's description lookup) never imports entry files from disk; absent
+   * on the dynamic path, where markers fall back to their best-effort imports.
    */
-  readonly routeDescriptors?: ReadonlyMap<string, unknown>
+  readonly routeDescriptors?: ReadonlyMap<string, DawnAgent>
   readonly backends?: {
     readonly filesystem?: FilesystemBackend
     readonly exec?: ExecBackend

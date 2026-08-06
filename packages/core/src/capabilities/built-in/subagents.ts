@@ -1,5 +1,4 @@
-import { pathToFileURL } from "node:url"
-import { isDawnAgent } from "@dawn-ai/sdk"
+import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import { z } from "zod"
 import type { RouteDefinition } from "../../types.js"
 import type { CapabilityMarker, CapabilityMarkerContext, PromptFragment } from "../types.js"
@@ -35,16 +34,18 @@ function extractDescription(candidate: unknown): string | undefined {
 
 async function loadDescription(
   route: RouteDefinition,
-  routeDescriptors: ReadonlyMap<string, unknown> | undefined,
+  routeDescriptors: ReadonlyMap<string, DawnAgent> | undefined,
 ): Promise<string> {
-  // Static-modules path: the route's default-export descriptor is already in
-  // hand — extracting from it is equivalent to importing the entry file, so
-  // no dynamic import happens (edge runtimes have no disk to import from).
-  const staticDescriptor = routeDescriptors?.get(route.id)
-  if (staticDescriptor !== undefined) {
-    return extractDescription(staticDescriptor) ?? "No description provided."
+  // Static-modules path: when the map exists it is authoritative — it holds
+  // every route whose entry passes isDawnAgent, so a route absent from it
+  // provably cannot yield a description via import either (extractDescription
+  // requires isDawnAgent). Never importing here keeps the static path
+  // zero-import: edge runtimes have no disk to import from.
+  if (routeDescriptors !== undefined) {
+    return routeDescriptors.get(route.id)?.description ?? "No description provided."
   }
   try {
+    const { pathToFileURL } = await import("node:url")
     const mod = (await import(pathToFileURL(route.entryFile).href)) as {
       default?: unknown
     }

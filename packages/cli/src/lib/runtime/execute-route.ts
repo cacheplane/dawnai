@@ -1319,6 +1319,13 @@ async function getCachedDescriptorRouteMap(
 
 export { getCachedDescriptorRouteMap }
 
+export interface StaticDescriptorMaps {
+  readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
+  readonly routeDescriptors: ReadonlyMap<string, DawnAgent>
+}
+
+let staticDescriptorMapsCache = new WeakMap<DawnStaticModules, StaticDescriptorMaps>()
+
 /**
  * Test-only: reset the WeakMap-backed caches (dynamic descriptor-route map
  * and static descriptor maps). Not exported via the package barrel — internal
@@ -1329,22 +1336,19 @@ export function __resetDescriptorRouteMapCacheForTests(): void {
   staticDescriptorMapsCache = new WeakMap()
 }
 
-export interface StaticDescriptorMaps {
-  readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
-  readonly routeDescriptors: ReadonlyMap<string, unknown>
-}
-
 /**
- * Static-modules fast path: derive both descriptor maps from the manifest —
- * each agent route's `module.entry` IS its normalized default-export
- * descriptor, so no entry file is ever imported from disk (closes the last
- * B2 dynamic-import hole; edge runtimes have no disk to import from).
+ * Static-modules fast path: derive both descriptor maps from the manifest.
+ * Only agent routes whose normalized `module.entry` passes `isDawnAgent`
+ * appear (workflow/graph/chain routes are excluded; the entry may come from
+ * the default export or a named `agent` export). No entry file is ever
+ * imported from disk (closes the last B2 dynamic-import hole; edge runtimes
+ * have no disk to import from).
  */
 export function buildDescriptorMapsFromStaticModules(
   modules: DawnStaticModules,
 ): StaticDescriptorMaps {
   const descriptorRouteMap = new Map<DawnAgent, string>()
-  const routeDescriptors = new Map<string, unknown>()
+  const routeDescriptors = new Map<string, DawnAgent>()
   for (const route of modules.routes) {
     if (route.kind === "agent" && isDawnAgent(route.module.entry)) {
       descriptorRouteMap.set(route.module.entry, route.routeId)
@@ -1353,8 +1357,6 @@ export function buildDescriptorMapsFromStaticModules(
   }
   return { descriptorRouteMap, routeDescriptors }
 }
-
-let staticDescriptorMapsCache = new WeakMap<DawnStaticModules, StaticDescriptorMaps>()
 
 /** Memoized per manifest object identity — stable for the process lifetime. */
 export function getCachedStaticDescriptorMaps(modules: DawnStaticModules): StaticDescriptorMaps {
