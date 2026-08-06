@@ -1318,7 +1318,7 @@ pnpm --dir ~/tmp/dawn-app exec dawn dev --port 3031
 
 Keep the dev server running in that terminal for Step 4.
 
-- [ ] **Step 4: Exercise policy outcomes through `dawn run`/dev runtime**
+- [ ] **Step 4: Exercise policy outcomes and verify the final guard**
 
 Start an interactive run with a stable root thread id:
 
@@ -1344,18 +1344,29 @@ Use a fresh root thread id for independent deny/always/non-interactive cases.
 The checked-in integration fixture from Task 11 supplies deterministic replay;
 this smoke confirms the actual CLI/server/package wiring and presentation.
 
+Static denial needs two separate checks because the resolved registry
+intentionally omits statically denied children from the task tool schema. A
+normal HTTP call is therefore rejected before it reaches the resolver, while
+the final guarded resolver must still fail closed for stale-schema,
+direct-bridge, or otherwise malformed calls that bypass the current schema.
+
 Verify:
 
-1. Static deny returns `[DAWN_E3002]` and emits no `subagent.start`.
-2. Allow dispatches and preserves tool-call/subagent correlation.
-3. Constraint string denial preserves its reason.
-4. Constraint approval preserves its reason and preview.
-5. `once` resumes one invocation and asks again later.
-6. `always` survives process restart and only approves the exact parent/name edge.
-7. Non-interactive mode fails closed without producing a dead interrupt.
-8. A nested approval resumes through the root parent thread.
-9. Two simultaneous approvals are resumed with one complete multi-entry body.
-10. `.dawn/permissions.json` contains `allow.subagent`, never a new `allow.tool: ["task"]` entry.
+1. A normal HTTP/dev-runtime call naming a statically denied child is rejected
+   by the task tool's Zod name enum and emits no `subagent.start` (manual smoke
+   evidence: `/tmp/dawn-task15-static-deny.sse`).
+2. The stale-schema task-bridge coverage in
+   `packages/cli/test/subagent-delegation.test.ts` reaches the final guarded
+   resolver, returns `[DAWN_E3002]`, and neither prepares nor starts a child.
+3. Allow dispatches and preserves tool-call/subagent correlation.
+4. Constraint string denial preserves its reason.
+5. Constraint approval preserves its reason and preview.
+6. `once` resumes one invocation and asks again later.
+7. `always` survives process restart and only approves the exact parent/name edge.
+8. Non-interactive mode fails closed without producing a dead interrupt.
+9. A nested approval resumes through the root parent thread.
+10. Two simultaneous approvals are resumed with one complete multi-entry body.
+11. `.dawn/permissions.json` contains `allow.subagent`, never a new `allow.tool: ["task"]` entry.
 
 - [ ] **Step 5: Inspect final diff and repository state**
 
