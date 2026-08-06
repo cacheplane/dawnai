@@ -1,3 +1,10 @@
+import type { DawnConfig } from "@dawn-ai/core"
+// All store/middleware imports are type-only — they erase at runtime.
+import type { MemoryStore } from "@dawn-ai/memory"
+import type { PermissionsStore } from "@dawn-ai/permissions"
+import type { DawnMiddleware } from "@dawn-ai/sdk"
+import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
+import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import type { DawnStaticModules } from "../runtime/static-modules.js"
 import { startRuntimeServer } from "./runtime-server.js"
 
@@ -8,6 +15,22 @@ export interface ServeRuntimeOptions {
   readonly installSignalHandlers?: boolean
   /** A build-time-generated module manifest — see `StartRuntimeServerOptions.modules`. */
   readonly modules?: DawnStaticModules
+  /** An already-constructed DawnConfig — see `StartRuntimeServerOptions.config`. */
+  readonly config?: DawnConfig
+  /** Boot-resolved checkpointer — see `StartRuntimeServerOptions.checkpointer`. */
+  readonly checkpointer?: BaseCheckpointSaver
+  /** Boot-resolved threads store — see `StartRuntimeServerOptions.threadsStore`. */
+  readonly threadsStore?: ThreadsStore
+  /**
+   * Boot-resolved permissions store (instance or factory). When provided it
+   * wins regardless of the "boot" permissionsMode this entry point sets —
+   * see `StartRuntimeServerOptions.permissionsStore`.
+   */
+  readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
+  /** Lazy memory-store thunk — see `StartRuntimeServerOptions.memoryStore`. */
+  readonly memoryStore?: () => Promise<MemoryStore>
+  /** Pre-loaded middleware — see `StartRuntimeServerOptions.middleware`. */
+  readonly middleware?: DawnMiddleware
 }
 
 export interface ServeRuntimeHandle {
@@ -71,9 +94,15 @@ export async function serveRuntime(opts: ServeRuntimeOptions): Promise<ServeRunt
   const server = await startRuntimeServer({
     appRoot: opts.appRoot,
     host,
+    ...(opts.checkpointer ? { checkpointer: opts.checkpointer } : {}),
+    ...(opts.config ? { config: opts.config } : {}),
+    ...(opts.memoryStore ? { memoryStore: opts.memoryStore } : {}),
+    ...(opts.middleware ? { middleware: opts.middleware } : {}),
     ...(opts.modules ? { modules: opts.modules } : {}),
+    ...(opts.permissionsStore ? { permissionsStore: opts.permissionsStore } : {}),
     permissionsMode: "boot",
     port,
+    ...(opts.threadsStore ? { threadsStore: opts.threadsStore } : {}),
   })
 
   if (!installSignalHandlers) {

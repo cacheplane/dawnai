@@ -1,9 +1,71 @@
-import { createHash } from "node:crypto"
+/**
+ * The episode recorder: builds and writes one episodic memory per settled run.
+ *
+ * REQUEST PATH — this module is reached from `execute-route-core.ts`, so it
+ * must stay free of `node:` imports (see test/fetch-entry-purity.test.ts).
+ * That is why the record id hashes through `pure-hash.ts` rather than
+ * `node:crypto`; the digest is the same either way. The `@dawn-ai/memory`
+ * import below is TYPE-ONLY and therefore erased at bundle time — it never
+ * pulls the barrel (and its `node:sqlite`) onto the graph.
+ */
 import type { MemoryRecord, MemoryStore } from "@dawn-ai/memory"
+import { sha1Hex } from "./pure-hash.js"
 
 /** The two store methods the recorder needs. `Pick`ed so both the memory
  *  package's `MemoryStore` and core's structural `MemoryStoreLike` satisfy it. */
 export type EpisodeStore = Pick<MemoryStore, "put" | "prune">
+
+/** Resolved `config.memory.episodes` — the runtime episode recorder's knobs. */
+export interface ResolvedEpisodesConfig {
+  readonly enabled: boolean
+  readonly ttlMs: number
+  readonly cap: number
+  readonly includeFailedRuns: boolean
+  readonly embed: boolean
+}
+
+let warnedEmbedUnsupported = false
+
+/**
+ * Apply the episode-recorder defaults to a `config.memory.episodes` block.
+ *
+ * Defaults: disabled, 30-day TTL, 500-episode per-namespace cap, failed runs
+ * included, no embeddings. Absent/undefined config ⇒ all defaults, which is
+ * why an app with no `dawn.config.ts` records nothing.
+ *
+ * `embed: true` is not supported this cycle — it resolves to `false` and logs
+ * a one-line warning once per process (honest, forward-compatible).
+ *
+ * Pure by design: the request path derives this from the `DawnConfig` it has
+ * already loaded (or that the caller injected), while the node-side
+ * `resolveEpisodesConfig` in `resolve-memory.ts` reads `dawn.config.ts` from
+ * disk and delegates here. One defaulting rule, two entry points.
+ */
+export function resolveEpisodesFromConfig(
+  episodes:
+    | {
+        readonly enabled?: boolean
+        readonly ttlMs?: number
+        readonly cap?: number
+        readonly includeFailedRuns?: boolean
+        readonly embed?: boolean
+      }
+    | undefined,
+): ResolvedEpisodesConfig {
+  if (episodes?.embed === true && !warnedEmbedUnsupported) {
+    warnedEmbedUnsupported = true
+    console.warn(
+      "[dawn] memory.episodes.embed is not yet supported; episodes are recorded without embeddings",
+    )
+  }
+  return {
+    enabled: episodes?.enabled ?? false,
+    ttlMs: episodes?.ttlMs ?? 30 * 86_400_000,
+    cap: episodes?.cap ?? 500,
+    includeFailedRuns: episodes?.includeFailedRuns ?? true,
+    embed: false,
+  }
+}
 
 export interface EpisodeInput {
   readonly namespace: string
@@ -20,10 +82,7 @@ export interface EpisodeInput {
 export function buildEpisode(ep: EpisodeInput): MemoryRecord {
   const startedIso = new Date(ep.startedAt).toISOString()
   const sourceId = ep.runId ?? ep.threadId ?? startedIso
-  const id = `memory_ep_${createHash("sha1")
-    .update(`${ep.namespace}|${sourceId}|${startedIso}`)
-    .digest("hex")
-    .slice(0, 16)}`
+  const id = `memory_ep_${sha1Hex(`${ep.namespace}|${sourceId}|${startedIso}`).slice(0, 16)}`
   const durationMs = Math.max(0, ep.finishedAt - ep.startedAt)
   const seconds = (durationMs / 1000).toFixed(1)
   const inputLine = ep.input.replaceAll("\n", " ").slice(0, 80)

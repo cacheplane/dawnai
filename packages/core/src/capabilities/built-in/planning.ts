@@ -1,7 +1,6 @@
-import { existsSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
-import type { CapabilityMarker, PromptFragment, StreamTransformer } from "../types.js"
+import type { CapabilityMarker, MarkerFs, PromptFragment, StreamTransformer } from "../types.js"
 import { type PlanTodo, parsePlanMarkdown } from "./plan-md-parser.js"
 
 const PLAN_MD = "plan.md"
@@ -31,9 +30,10 @@ finished. Always include the full list — \`writeTodos\` is full-replace, not i
 export function createPlanningMarker(): CapabilityMarker {
   return {
     name: "planning",
-    detect: async (routeDir, _context) => existsSync(join(routeDir, PLAN_MD)),
-    load: async (routeDir, _context) => {
-      const seedTodos = readSeedTodos(routeDir)
+    detect: async (routeDir, context) =>
+      context.markerFs?.existsSync(join(routeDir, PLAN_MD)) ?? false,
+    load: async (routeDir, context) => {
+      const seedTodos = context.markerFs ? readSeedTodos(routeDir, context.markerFs) : []
 
       const writeTodos = {
         name: "writeTodos",
@@ -102,17 +102,14 @@ export function createPlanningMarker(): CapabilityMarker {
   }
 }
 
-function readSeedTodos(routeDir: string): RuntimeTodo[] {
+function readSeedTodos(routeDir: string, markerFs: MarkerFs): RuntimeTodo[] {
   const planPath = join(routeDir, PLAN_MD)
-  if (!existsSync(planPath)) return []
-  const size = statSync(planPath).size
+  if (!markerFs.existsSync(planPath)) return []
+  const size = markerFs.statSizeSync(planPath)
+  if (size === undefined) return []
   if (size > MAX_PLAN_BYTES) return []
-  let raw: string
-  try {
-    raw = readFileSync(planPath, "utf8")
-  } catch {
-    return []
-  }
+  const raw = markerFs.readFileSync(planPath)
+  if (raw === undefined) return []
   const parsed: PlanTodo[] = parsePlanMarkdown(raw)
   return parsed.map((t) => ({ content: t.content, status: t.status }))
 }

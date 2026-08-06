@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { createWorkspaceMarker } from "../../src/capabilities/built-in/workspace.js"
 import type { CapabilityMarkerContext, DawnToolDefinition } from "../../src/capabilities/types.js"
+import { nodeMarkerFs } from "../../src/node-marker-fs.js"
 
 const originalCwd = process.cwd()
 
@@ -21,6 +22,7 @@ function ctx(
     routeManifest: emptyManifest(),
     descriptor: undefined,
     appRoot,
+    markerFs: nodeMarkerFs,
     ...extras,
   }
 }

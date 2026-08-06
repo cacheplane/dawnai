@@ -3,8 +3,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createMemoryMdMarker } from "../../src/capabilities/built-in/memory-md.js"
+import { nodeMarkerFs } from "../../src/node-marker-fs.js"
 
-const ctx = { routeManifest: {} as never, descriptor: undefined, appRoot: "/unused" }
+const ctx = {
+  routeManifest: {} as never,
+  descriptor: undefined,
+  appRoot: "/unused",
+  markerFs: nodeMarkerFs,
+}
 
 describe("memory-md capability", () => {
   let routeDir: string

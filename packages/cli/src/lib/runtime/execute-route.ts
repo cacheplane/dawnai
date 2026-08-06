@@ -1,82 +1,65 @@
-import { randomUUID } from "node:crypto"
+/**
+ * The NODE layer of route execution: the filesystem-backed resolutions the
+ * request-path core (`execute-route-core.ts`) falls back to when the caller
+ * did not supply an instance, plus the CLI's disk-first `executeRoute` entry.
+ *
+ * This module is deliberately absent from the `@dawn-ai/cli/fetch` graph —
+ * everything here reaches `node:fs`, `node:sqlite`, or `tsx`. Every export the
+ * core owns is re-exported from here with `bootFallbacks: nodeBootFallbacks`
+ * pre-applied, so importing `execute-route.js` behaves exactly as it did
+ * before the split.
+ */
+
 import { existsSync, readFileSync } from "node:fs"
-import { isAbsolute, join, resolve } from "node:path"
+import { isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import {
-  applyCapabilities,
-  type CapabilityContribution,
-  createAgentsMdMarker,
-  createCapabilityRegistry,
-  createMemoryMarker,
-  createMemoryMdMarker,
-  createPlanningMarker,
-  createSkillsMarker,
-  createSubagentsMarker,
-  createWorkspaceFs,
-  createWorkspaceMarker,
   type DawnConfig,
   discoverRoutes,
   findDawnApp,
   loadDawnConfig,
-  type MemoryStoreLike,
   type ResolvedStateField,
-  type RouteDefinition,
   type RouteManifest,
   resolveStateFields,
-  resolveToolScope,
-  toolOrigin,
-  wrapToolWithApproval,
-  wrapToolWithConstraint,
 } from "@dawn-ai/core"
-import {
-  Command,
-  defaultSummarize,
-  defaultTokenCounter,
-  executeAgent,
-  type OffloadFn,
-  OffloadStore,
-  offloadToolOutput,
-  type ResolvedSummarizationConfig,
-  type SubagentResolver,
-  streamAgent,
-} from "@dawn-ai/langchain"
-import { routeNamespaceKey } from "@dawn-ai/memory"
 import {
   createPermissionsStore,
   type PermissionMode,
   type PermissionsStore,
 } from "@dawn-ai/permissions"
-import { type DawnAgent, isDawnAgent, type WorkspaceFs } from "@dawn-ai/sdk"
+import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
-import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
+import type { FilesystemBackend } from "@dawn-ai/workspace"
 import { localFilesystem } from "@dawn-ai/workspace"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
-import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
-import { createDawnContext } from "./dawn-context.js"
-import { type LoadedRouteMemory, loadRouteMemory } from "./load-memory.js"
-import { type NormalizedRouteModule, normalizeRouteModule } from "./load-route-kind.js"
+import { loadMiddleware } from "../dev/middleware.js"
 import {
-  extractToolNames,
-  extractUserInputText,
-  hasPendingInterrupt,
-  recordEpisode,
-} from "./record-episode.js"
-import {
-  buildMemoryContext,
-  type ResolvedEpisodesConfig,
-  resolveEpisodesConfig,
-  resolveMemoryStore,
-  resolveMemoryWrites,
-} from "./resolve-memory.js"
+  __resetPreparedRouteModulesForTests,
+  __resetStaticDescriptorMapsForTests,
+  type BootResolvedInstances,
+  executeResolvedRoute as executeResolvedRouteCore,
+  executeRouteAtResolvedPath,
+  invokeResolvedRoute as invokeResolvedRouteCore,
+  type PreparedRoute,
+  type PreparedRouteError,
+  type PreparedRouteModules,
+  prepareRouteExecution as prepareRouteExecutionCore,
+  type RuntimeBootFallbacks,
+  streamResolvedRoute as streamResolvedRouteCore,
+} from "./execute-route-core.js"
+import { loadRouteMemory } from "./load-memory.js"
+import { normalizeRouteModule } from "./load-route-kind.js"
+import { nodeMarkerFs } from "./node-marker-fs.js"
+import { pureDirname, pureJoin } from "./pure-path.js"
+import { resolveIdentityKeys } from "./resolve-identity.js"
+import { resolveMemoryStore, resolveMemoryWrites } from "./resolve-memory.js"
+import { resolveSandboxManager } from "./resolve-sandbox.js"
 import {
   createRuntimeFailureResult,
-  createRuntimeSuccessResult,
   formatErrorMessage,
-  type RuntimeExecutionMode,
   type RuntimeExecutionResult,
 } from "./result.js"
-import { deriveRouteIdentity } from "./route-identity.js"
-import type { SandboxManager } from "./sandbox-manager.js"
+import { deriveRouteIdentity } from "./route-identity-node.js"
 import { discoverStateDefinition } from "./state-discovery.js"
 import type { StreamChunk } from "./stream-types.js"
 import {
@@ -86,6 +69,23 @@ import {
 } from "./tool-discovery.js"
 import { fileExists } from "./utils.js"
 
+export type {
+  BootResolvedInstances,
+  PreparedRouteModules,
+  RouteResumePayload,
+  RuntimeBootFallbacks,
+  StaticDescriptorMaps,
+} from "./execute-route-core.js"
+// Core surface no node caller resolves differently.
+export {
+  __resetPreparedRouteModulesForTests,
+  buildDescriptorMapsFromStaticModules,
+  exemptToolSet,
+  getCachedStaticDescriptorMaps,
+  seedPreparedRouteModules,
+  toAgentInput,
+} from "./execute-route-core.js"
+
 export interface ExecuteRouteOptions {
   readonly appRoot?: string
   readonly cwd?: string
@@ -94,15 +94,325 @@ export interface ExecuteRouteOptions {
   readonly signal?: AbortSignal
 }
 
-export type RouteResumePayload =
-  | "once"
-  | "always"
-  | "deny"
-  | Readonly<Record<string, "once" | "always" | "deny">>
+// ---------------------------------------------------------------------------
+// Node fallbacks — the filesystem-backed half of route preparation
+// ---------------------------------------------------------------------------
 
-export function toAgentInput(input: unknown, resume?: RouteResumePayload): unknown {
-  return resume === undefined ? input : new Command({ resume })
+/**
+ * Per-process caches for the node-only resolutions. Promises are cached so
+ * concurrent first requests share one load; rejections are evicted so a
+ * transient load error (e.g. a syntax error mid-edit in dev) does not poison
+ * the process.
+ */
+const routeManifestCache = new Map<string, Promise<RouteManifest>>()
+const workspaceDirProbeCache = new Map<string, boolean>()
+
+/**
+ * Default filesystem backend, constructed at most once per process and only
+ * when a request actually needs it (no sandbox/config backend provided).
+ * Always constructed options-free, so the instance carries no per-app or
+ * per-request state — one shared instance is safe, and it is deliberately
+ * NOT cleared by `__resetRouteLoadCachesForTests` (nothing about it can go
+ * stale).
+ */
+let defaultLocalFilesystem: FilesystemBackend | undefined
+function getDefaultLocalFilesystem(): FilesystemBackend {
+  defaultLocalFilesystem ??= localFilesystem()
+  return defaultLocalFilesystem
 }
+
+/**
+ * `workspace/` existence probe for the offload store, memoizing only
+ * POSITIVE results per appRoot: the runtime never un-creates a workspace
+ * dir, so `true` is stable for the process lifetime. Negative results are
+ * re-probed on every request (one `existsSync` until the dir appears, zero
+ * after) because agent tools can create `workspace/` mid-process
+ * (`localFilesystem.writeFile` mkdirs recursively) and the dev watcher
+ * deliberately ignores workspace/ changes — no restart would refresh a
+ * cached `false`. Internal; exported for tests only. Reset via
+ * `__resetRouteLoadCachesForTests`.
+ */
+export function hasWorkspaceDir(appRoot: string): boolean {
+  if (workspaceDirProbeCache.get(appRoot)) return true
+  const present = existsSync(pureJoin(appRoot, "workspace"))
+  if (present) workspaceDirProbeCache.set(appRoot, present)
+  return present
+}
+
+async function loadPreparedRouteModules(options: {
+  readonly appRoot: string
+  readonly routeFile: string
+  readonly routeId: string
+}): Promise<PreparedRouteModules> {
+  const routeDir = pureDirname(options.routeFile)
+
+  const normalized = await normalizeRouteModule(options.routeFile, options.appRoot)
+
+  const discoveredTools = await discoverToolDefinitions({
+    appRoot: options.appRoot,
+    routeDir,
+  })
+
+  // Inject codegen-generated schemas for tools without explicit schema exports
+  const routeSlug =
+    options.routeId.replace(/^\//, "").replace(/\//g, "-").replace(/\[/g, "").replace(/\]/g, "") ||
+    "index"
+  const schemaManifestPath = pureJoin(options.appRoot, ".dawn", "routes", routeSlug, "tools.json")
+  let tools: readonly DiscoveredToolDefinition[] = discoveredTools
+  if (existsSync(schemaManifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(schemaManifestPath, "utf-8")) as Record<
+        string,
+        unknown
+      >
+      tools = injectGeneratedSchemas(discoveredTools, manifest)
+    } catch {
+      // Generated schema is best-effort — fall through on parse errors
+    }
+  }
+
+  let stateFields: readonly ResolvedStateField[] | undefined
+  if (normalized.kind === "agent") {
+    const stateDefinition = await discoverStateDefinition({ routeDir })
+    if (stateDefinition) {
+      stateFields = resolveStateFields({
+        defaults: stateDefinition.defaults,
+        reducerOverrides: stateDefinition.reducerOverrides,
+      })
+    }
+  }
+
+  const memoryFile = pureJoin(routeDir, "memory.ts")
+  const memory =
+    normalized.kind === "agent" && existsSync(memoryFile) ? await loadRouteMemory(memoryFile) : null
+
+  return { memory, module: normalized, stateFields, tools }
+}
+
+/** Route-tree walk, once per appRoot per process — the no-boot-manifest fallback. */
+function discoverRoutesOncePerAppRoot(appRoot: string): Promise<RouteManifest> {
+  const cached = routeManifestCache.get(appRoot)
+  if (cached) return cached
+  const loading = discoverRoutes({ appRoot })
+  routeManifestCache.set(appRoot, loading)
+  loading.catch(() => routeManifestCache.delete(appRoot))
+  return loading
+}
+
+/**
+ * Dynamically imports each route's entry file and records descriptor->routeId
+ * for any default export that satisfies `isDawnAgent`. Used so the subagents
+ * capability marker can resolve `descriptor.subagents: [...]` override entries
+ * back to a routeId.
+ *
+ * Cost: this opens every agent route module in the manifest. Acceptable for
+ * the current scale; if it becomes hot, cache by (appRoot, manifest-hash).
+ */
+let descriptorRouteMapCache = new WeakMap<RouteManifest, Promise<ReadonlyMap<DawnAgent, string>>>()
+
+export async function getCachedDescriptorRouteMap(
+  manifest: RouteManifest,
+): Promise<ReadonlyMap<DawnAgent, string>> {
+  let promise = descriptorRouteMapCache.get(manifest)
+  if (!promise) {
+    promise = buildDescriptorRouteMap(manifest)
+    descriptorRouteMapCache.set(manifest, promise)
+  }
+  return promise
+}
+
+async function buildDescriptorRouteMap(
+  manifest: RouteManifest,
+): Promise<ReadonlyMap<DawnAgent, string>> {
+  const map = new Map<DawnAgent, string>()
+  await Promise.all(
+    manifest.routes.map(async (route) => {
+      try {
+        const mod = (await import(pathToFileURL(route.entryFile).href)) as { default?: unknown }
+        if (isDawnAgent(mod.default)) {
+          map.set(mod.default, route.id)
+        }
+      } catch {
+        // Best-effort: skip routes whose module fails to import.
+      }
+    }),
+  )
+  return map
+}
+
+/**
+ * Resolves the ThreadsStore for the given appRoot.
+ *
+ * Uses `config.threadsStore` if the user's `dawn.config.ts` provides one;
+ * otherwise falls back to the default SQLite-backed store at
+ * `<appRoot>/.dawn/threads.sqlite`. Exported so the HTTP server layer
+ * can obtain the same store instance independently of route execution.
+ */
+export async function resolveThreadsStore(appRoot: string): Promise<ThreadsStore> {
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    if (loaded.config.threadsStore) {
+      return loaded.config.threadsStore
+    }
+  } catch {
+    // No dawn.config.ts or unreadable — fall through to default.
+  }
+  return createThreadsStore({ path: pureJoin(appRoot, ".dawn/threads.sqlite") })
+}
+
+/**
+ * Resolves the checkpointer for the given appRoot.
+ *
+ * Uses `config.checkpointer` if the user's `dawn.config.ts` provides one;
+ * otherwise falls back to the default SQLite-backed saver at
+ * `<appRoot>/.dawn/checkpoints.sqlite`. Exported so the HTTP server layer
+ * can obtain a checkpointer independently of route execution (e.g. for the
+ * GET /threads/:id/state endpoint).
+ */
+export async function resolveCheckpointer(appRoot: string): Promise<BaseCheckpointSaver> {
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    if (loaded.config.checkpointer) {
+      return loaded.config.checkpointer
+    }
+  } catch {
+    // No dawn.config.ts or unreadable — fall through to default.
+  }
+  return sqliteCheckpointer({ path: pureJoin(appRoot, ".dawn/checkpoints.sqlite") })
+}
+
+/**
+ * Resolves a loaded PermissionsStore for the given appRoot: config-seeded
+ * allow/deny + mode (env override wins), with `.dawn/permissions.json` read
+ * once via `load()`. Exported so the HTTP server layer can build the store at
+ * boot (production) or per request via a factory (dev — keeps HITL "Always"
+ * grants written mid-process fresh). Construction is identical to what
+ * `prepareRouteExecution` does when no store is provided.
+ */
+export async function resolvePermissionsStore(appRoot: string): Promise<PermissionsStore> {
+  let permissionsConfig: DawnConfig["permissions"] | undefined
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    permissionsConfig = loaded.config.permissions
+  } catch {
+    // No dawn.config.ts or unreadable — fall through to defaults.
+  }
+  return await buildPermissionsStore(appRoot, permissionsConfig)
+}
+
+/** Shared permissions-store construction: config + env-mode resolution + one `load()`. */
+async function buildPermissionsStore(
+  appRoot: string,
+  permissionsConfig: DawnConfig["permissions"] | undefined,
+): Promise<PermissionsStore> {
+  const envMode = process.env.DAWN_PERMISSIONS_MODE
+  const mode: PermissionMode =
+    envMode === "interactive" || envMode === "non-interactive" || envMode === "bypass"
+      ? envMode
+      : (permissionsConfig?.mode ?? "interactive")
+
+  const store = createPermissionsStore({
+    appRoot,
+    config: permissionsConfig
+      ? {
+          version: 1,
+          allow: permissionsConfig.allow ?? {},
+          deny: permissionsConfig.deny ?? {},
+        }
+      : undefined,
+    mode,
+  })
+  await store.load()
+  return store
+}
+
+/**
+ * The one node fallback bag. Handing it to the core reproduces, exactly, the
+ * pre-split behavior of every resolution the core no longer performs itself.
+ * Exported so the HTTP server layer (and any node embedder) can pass it to
+ * `createRuntimeFetchHandler`.
+ */
+export const nodeBootFallbacks: RuntimeBootFallbacks = {
+  buildPermissionsStore,
+  defaultCheckpointer: (appRoot) =>
+    sqliteCheckpointer({ path: pureJoin(appRoot, ".dawn/checkpoints.sqlite") }),
+  defaultFilesystem: getDefaultLocalFilesystem,
+  defaultThreadsStore: (appRoot) =>
+    createThreadsStore({ path: pureJoin(appRoot, ".dawn/threads.sqlite") }),
+  descriptorRouteMap: getCachedDescriptorRouteMap,
+  discoverRouteManifest: discoverRoutesOncePerAppRoot,
+  hasWorkspaceDir,
+  loadConfig: async (appRoot) => (await loadDawnConfig({ appRoot })).config,
+  loadMiddleware,
+  loadRouteModules: loadPreparedRouteModules,
+  markerFs: nodeMarkerFs,
+  resolveIdentityKeys,
+  resolveCheckpointer,
+  resolveMemoryStore,
+  resolveMemoryWrites,
+  resolvePermissionsStore,
+  resolveSandboxManager,
+  resolveThreadsStore,
+}
+
+/** Apply the node fallbacks unless the caller already chose their own. */
+function withNodeFallbacks<T extends object>(
+  options: T,
+): T & { readonly bootFallbacks: RuntimeBootFallbacks } {
+  return {
+    ...options,
+    bootFallbacks: (options as BootResolvedInstances).bootFallbacks ?? nodeBootFallbacks,
+  }
+}
+
+/**
+ * Test-only: clear the per-route module, per-appRoot manifest, and workspace
+ * probe caches so suites that mutate a fixture app mid-process (new tools,
+ * changed routes) observe the change on the next load. Mirrors
+ * `__clearDawnConfigCacheForTests`.
+ */
+export function __resetDescriptorRouteMapCacheForTests(): void {
+  descriptorRouteMapCache = new WeakMap()
+  __resetStaticDescriptorMapsForTests()
+}
+
+export function __resetRouteLoadCachesForTests(): void {
+  __resetPreparedRouteModulesForTests()
+  routeManifestCache.clear()
+  workspaceDirProbeCache.clear()
+}
+
+// ---------------------------------------------------------------------------
+// Core surface with the node fallbacks pre-applied
+// ---------------------------------------------------------------------------
+
+export async function prepareRouteExecution(
+  options: Parameters<typeof prepareRouteExecutionCore>[0],
+): Promise<PreparedRoute | PreparedRouteError> {
+  return await prepareRouteExecutionCore(withNodeFallbacks(options))
+}
+
+export async function executeResolvedRoute(
+  options: Parameters<typeof executeResolvedRouteCore>[0],
+): Promise<RuntimeExecutionResult> {
+  return await executeResolvedRouteCore(withNodeFallbacks(options))
+}
+
+export async function invokeResolvedRoute(
+  options: Parameters<typeof invokeResolvedRouteCore>[0],
+): Promise<RuntimeExecutionResult> {
+  return await invokeResolvedRouteCore(withNodeFallbacks(options))
+}
+
+export async function* streamResolvedRoute(
+  options: Parameters<typeof streamResolvedRouteCore>[0],
+): AsyncGenerator<StreamChunk> {
+  yield* streamResolvedRouteCore(withNodeFallbacks(options))
+}
+
+// ---------------------------------------------------------------------------
+// Disk-first CLI entry (`dawn run`, `dawn test`)
+// ---------------------------------------------------------------------------
 
 export async function executeRoute(options: ExecuteRouteOptions): Promise<RuntimeExecutionResult> {
   const startedAt = Date.now()
@@ -155,7 +465,7 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     })
   }
 
-  return await executeRouteAtResolvedPath({
+  const resolved = {
     appRoot,
     input: options.input,
     routeFile,
@@ -163,1239 +473,8 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     routePath: identity.routePath,
     ...(options.signal ? { signal: options.signal } : {}),
     startedAt,
-  })
-}
-
-/**
- * Boot-resolved instances (optional, additive). When the HTTP layer passes
- * them, `prepareRouteExecution` skips its per-request fallback constructions
- * (sqlite opens) and its per-request permissions `load()`. When absent,
- * behavior is exactly as before — the testing harness drives
- * `streamResolvedRoute` directly with no stores and must stay unchanged.
- *
- * `permissionsStore` accepts either a loaded store (production: one boot-time
- * read) or an async factory (dev: re-load `.dawn/permissions.json` on every
- * request so HITL "Always" grants written mid-process still apply — the one
- * deliberate per-request read kept).
- *
- * `memoryStore` is a lazy, memoized thunk (not an instance): the fetch
- * handler builds one `getMemoryStore()` at boot, shared by the
- * `/memory/candidates*` HTTP routes and, when threaded down here, by the
- * memory capability — so the store opens at most once per process, on first
- * use, instead of once at boot (unconditionally) plus once per request.
- *
- * `routeManifest` is the boot-time manifest (the runtime registry's). When
- * threaded, no request re-walks the route tree, and the manifest's stable
- * object identity keeps the descriptor-route-map WeakMap warm. When absent
- * (harness direct-call path), a per-appRoot process-lifetime memo performs
- * the walk once instead of once per request.
- */
-interface BootResolvedInstances {
-  readonly checkpointer?: BaseCheckpointSaver
-  readonly threadsStore?: ThreadsStore
-  readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
-  readonly memoryStore?: () => Promise<MemoryStoreLike>
-  readonly routeManifest?: RouteManifest
-}
-
-export async function executeResolvedRoute(
-  options: BootResolvedInstances & {
-    readonly appRoot: string
-    readonly input: unknown
-    readonly isSubagent?: boolean
-    readonly middlewareContext?: Readonly<Record<string, unknown>>
-    readonly routeFile: string
-    readonly routeId: string
-    readonly routePath: string
-    readonly sandboxManager?: SandboxManager
-    /**
-     * Sandbox scoping key, decoupled from the checkpoint `threadId`. Subagent
-     * dispatch sets this to the PARENT thread id so the child resolves the same
-     * SandboxHandle without inheriting the parent's LangGraph checkpoint thread.
-     */
-    readonly sandboxThreadId?: string
-    readonly signal?: AbortSignal
-    readonly threadId?: string
-  },
-): Promise<RuntimeExecutionResult> {
-  return await executeRouteAtResolvedPath({
-    ...options,
-    isSubagent: options.isSubagent ?? false,
-    startedAt: Date.now(),
-  })
-}
-
-/**
- * Resolves the ThreadsStore for the given appRoot.
- *
- * Uses `config.threadsStore` if the user's `dawn.config.ts` provides one;
- * otherwise falls back to the default SQLite-backed store at
- * `<appRoot>/.dawn/threads.sqlite`. Exported so the HTTP server layer (T11+)
- * can obtain the same store instance independently of route execution.
- */
-export async function resolveThreadsStore(appRoot: string): Promise<ThreadsStore> {
-  try {
-    const loaded = await loadDawnConfig({ appRoot })
-    if (loaded.config.threadsStore) {
-      return loaded.config.threadsStore
-    }
-  } catch {
-    // No dawn.config.ts or unreadable — fall through to default.
   }
-  return createThreadsStore({ path: join(appRoot, ".dawn/threads.sqlite") })
-}
-
-/**
- * Resolves the checkpointer for the given appRoot.
- *
- * Uses `config.checkpointer` if the user's `dawn.config.ts` provides one;
- * otherwise falls back to the default SQLite-backed saver at
- * `<appRoot>/.dawn/checkpoints.sqlite`. Exported so the HTTP server layer
- * (T11+) can obtain a checkpointer independently of route execution (e.g.
- * for the GET /threads/:id/state endpoint).
- */
-export async function resolveCheckpointer(appRoot: string): Promise<BaseCheckpointSaver> {
-  try {
-    const loaded = await loadDawnConfig({ appRoot })
-    if (loaded.config.checkpointer) {
-      return loaded.config.checkpointer
-    }
-  } catch {
-    // No dawn.config.ts or unreadable — fall through to default.
-  }
-  return sqliteCheckpointer({ path: join(appRoot, ".dawn/checkpoints.sqlite") })
-}
-
-/**
- * Resolves a loaded PermissionsStore for the given appRoot: config-seeded
- * allow/deny + mode (env override wins), with `.dawn/permissions.json` read
- * once via `load()`. Exported so the HTTP server layer can build the store at
- * boot (production) or per request via a factory (dev — keeps HITL "Always"
- * grants written mid-process fresh). Construction is identical to what
- * `prepareRouteExecution` does when no store is provided.
- */
-export async function resolvePermissionsStore(appRoot: string): Promise<PermissionsStore> {
-  let permissionsConfig: DawnConfig["permissions"] | undefined
-  try {
-    const loaded = await loadDawnConfig({ appRoot })
-    permissionsConfig = loaded.config.permissions
-  } catch {
-    // No dawn.config.ts or unreadable — fall through to defaults.
-  }
-  return await buildPermissionsStore(appRoot, permissionsConfig)
-}
-
-/** Shared permissions-store construction: config + env-mode resolution + one `load()`. */
-async function buildPermissionsStore(
-  appRoot: string,
-  permissionsConfig: DawnConfig["permissions"] | undefined,
-): Promise<PermissionsStore> {
-  const envMode = process.env.DAWN_PERMISSIONS_MODE
-  const mode: PermissionMode =
-    envMode === "interactive" || envMode === "non-interactive" || envMode === "bypass"
-      ? envMode
-      : (permissionsConfig?.mode ?? "interactive")
-
-  const store = createPermissionsStore({
-    appRoot,
-    config: permissionsConfig
-      ? {
-          version: 1,
-          allow: permissionsConfig.allow ?? {},
-          deny: permissionsConfig.deny ?? {},
-        }
-      : undefined,
-    mode,
-  })
-  await store.load()
-  return store
-}
-
-/**
- * Invoke a resolved route with a stable thread ID, returning the final
- * execution result. Used by the AP `POST /threads/:id/runs/wait` endpoint.
- * Behaves identically to `executeResolvedRoute` but forwards `threadId` to
- * the agent-adapter so LangGraph parks state in the checkpointer.
- */
-export async function invokeResolvedRoute(
-  options: BootResolvedInstances & {
-    readonly appRoot: string
-    readonly input: unknown
-    readonly middlewareContext?: Readonly<Record<string, unknown>>
-    readonly routeFile: string
-    readonly routeId: string
-    readonly routePath: string
-    readonly sandboxManager?: SandboxManager
-    /** Sandbox scoping key override — see `executeResolvedRoute`. */
-    readonly sandboxThreadId?: string
-    readonly signal?: AbortSignal
-    readonly threadId?: string
-  },
-): Promise<RuntimeExecutionResult> {
-  return await executeRouteAtResolvedPath({
-    ...options,
-    startedAt: Date.now(),
-  })
-}
-
-export async function* streamResolvedRoute(
-  options: BootResolvedInstances & {
-    readonly appRoot: string
-    readonly input: unknown
-    readonly isSubagent?: boolean
-    readonly middlewareContext?: Readonly<Record<string, unknown>>
-    /**
-     * When set, the agent-adapter receives `Command({resume})`
-     * as its input instead of the normal `input` field. Used by the resume
-     * endpoint to replay a parked graph state after a permission interrupt.
-     */
-    readonly resume?: RouteResumePayload
-    readonly routeFile: string
-    readonly routeId: string
-    readonly routePath: string
-    readonly sandboxManager?: SandboxManager
-    /** Sandbox scoping key override — see `executeResolvedRoute`. */
-    readonly sandboxThreadId?: string
-    readonly signal?: AbortSignal
-    /**
-     * Stable per-conversation identifier forwarded to the agent-adapter as
-     * LangGraph's `thread_id`. When set, `interrupt()` calls park graph
-     * state in the checkpointer and the `/threads/:thread_id/resume`
-     * endpoint can replay them.
-     */
-    readonly threadId?: string
-  },
-): AsyncGenerator<StreamChunk> {
-  const startedAt = Date.now()
-  const prepared = await prepareRouteExecution({
-    ...options,
-    isSubagent: options.isSubagent ?? false,
-  })
-
-  if (!prepared.ok) {
-    throw new Error(prepared.message)
-  }
-
-  const {
-    normalized,
-    tools,
-    stateFields,
-    promptFragments,
-    streamTransformers,
-    subagentResolver,
-    checkpointer,
-    offload,
-    summarization,
-    workspaceFs,
-    sandboxed,
-  } = prepared
-
-  if (normalized.kind !== "agent") {
-    // Non-agent routes don't support incremental streaming — execute and emit done
-    const context = createDawnContext({
-      ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
-      fs: workspaceFs,
-      tools,
-      ...(options.signal ? { signal: options.signal } : {}),
-    })
-    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context)
-    yield { type: "done", output }
-    return
-  }
-
-  const routeParamNames = extractRouteParamNames(options.routeId)
-
-  const agentInput = toAgentInput(options.input, options.resume)
-
-  // Episode recorder (streaming path): a COMPLETED turn records an "ok"
-  // episode; a thrown execution error records an "error" episode before
-  // propagating. Parked (HITL-interrupted) turns record NOTHING: the
-  // agent-adapter yields {type:"done"} unconditionally after its event stream
-  // — including parked turns — so "done" alone is not completion. On this
-  // path pending interrupts surface only as "interrupt" chunks (the adapter's
-  // streamEvents output does not carry `__interrupt__`), so we track them
-  // here; once an interrupt is seen the turn is parked and no further model
-  // work happens in it. The resuming turn records when it completes, with the
-  // RESUME turn's own startedAt (honest: the completing invocation's start —
-  // the original turn's start is not reconstructed).
-  let sawDone = false
-  let sawInterrupt = false
-  let recordedError = false
-  let finalOutput: unknown
-
-  try {
-    for await (const chunk of streamAgent({
-      checkpointer,
-      entry: normalized.entry,
-      input: agentInput,
-      ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
-      routeParamNames,
-      signal: options.signal ?? new AbortController().signal,
-      ...(stateFields ? { stateFields } : {}),
-      tools,
-      ...(offload ? { offload } : {}),
-      ...(summarization ? { summarization } : {}),
-      ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
-      ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
-      ...(subagentResolver ? { subagentResolver } : {}),
-      ...(options.threadId ? { threadId: options.threadId } : {}),
-      ...(sandboxed ? { sandboxed: true } : {}),
-    })) {
-      switch (chunk.type) {
-        case "token":
-          yield { type: "chunk", data: chunk.data }
-          break
-        case "tool_call": {
-          const tc = chunk.data as { id?: string; name: string; input: unknown }
-          yield {
-            type: "tool_call",
-            ...(tc.id ? { id: tc.id } : {}),
-            name: tc.name,
-            input: tc.input,
-          }
-          break
-        }
-        case "tool_result": {
-          const tr = chunk.data as { id?: string; name: string; output: unknown }
-          yield {
-            type: "tool_result",
-            ...(tr.id ? { id: tr.id } : {}),
-            name: tr.name,
-            output: tr.output,
-          }
-          break
-        }
-        case "done":
-          sawDone = true
-          finalOutput = chunk.data
-          yield { type: "done", output: chunk.data }
-          break
-        case "interrupt": {
-          // The agent-adapter registers the pending entry in
-          // pending-interrupts so the /threads/:thread_id/resume endpoint
-          // can correlate the POST. We just forward the chunk to the SSE
-          // consumer.
-          sawInterrupt = true
-          yield { type: "interrupt", data: chunk.data }
-          break
-        }
-        default: {
-          // Capability-contributed event types (e.g. plan_update from the planning capability).
-          // The langchain layer widened AgentStreamChunk["type"] to allow arbitrary strings;
-          // pass them through verbatim with their literal type as the SSE event name.
-          yield { type: chunk.type, data: chunk.data }
-          break
-        }
-      }
-    }
-  } catch (error) {
-    recordedError = true
-    await recordRunEpisode({
-      memoryContext: prepared.memoryContext,
-      episodes: prepared.episodes,
-      outcome: "error",
-      input: options.input,
-      startedAt,
-      ...(options.threadId ? { threadId: options.threadId } : {}),
-    })
-    throw error
-  } finally {
-    // The "ok" record lives in the finally, NOT after the loop: stream
-    // consumers may close the generator early — the AG-UI outbound translator
-    // early-returns on RUN_FINISHED without draining, which cascades a
-    // .return() into this generator while it is suspended at the done yield.
-    // A finally still runs on that close path (sawDone/finalOutput were
-    // assigned BEFORE yielding the done chunk, so they are already set when
-    // the close lands on the yield). `recordedError` prevents a double record
-    // when the catch above already recorded the failure; abandoned (closed
-    // before done) and parked (interrupt seen) turns record nothing.
-    // recordRunEpisode never throws, so this is finally-safe.
-    if (!recordedError && sawDone && !sawInterrupt) {
-      await recordRunEpisode({
-        memoryContext: prepared.memoryContext,
-        episodes: prepared.episodes,
-        outcome: "ok",
-        output: finalOutput,
-        input: options.input,
-        startedAt,
-        ...(options.threadId ? { threadId: options.threadId } : {}),
-      })
-    }
-  }
-}
-
-interface PreparedRoute {
-  readonly normalized: {
-    readonly kind: "agent" | "chain" | "graph" | "workflow"
-    readonly entry: unknown
-  }
-  readonly ok: true
-  readonly checkpointer: BaseCheckpointSaver
-  readonly threadsStore: ThreadsStore
-  readonly offload?: OffloadFn
-  readonly summarization?: ResolvedSummarizationConfig
-  readonly stateFields: readonly ResolvedStateField[] | undefined
-  readonly tools: readonly DiscoveredToolDefinition[]
-  readonly promptFragments?: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>>
-  readonly streamTransformers?: ReadonlyArray<
-    NonNullable<CapabilityContribution["streamTransformers"]>[number]
-  >
-  readonly subagentResolver?: SubagentResolver
-  readonly workspaceFs: WorkspaceFs
-  /** The store the route's permission gates consult this request (provided, factory-produced, or freshly constructed). */
-  readonly permissionsStore: PermissionsStore
-  /** The memory context built for this route (agent routes with a memory.ts).
-   *  Threaded out so the episode recorder can reuse the exact namespace/store/
-   *  writes the capability used. */
-  readonly memoryContext?: import("@dawn-ai/core").MemoryContext
-  /** Resolved `memory.episodes` config — present only when a memory context
-   *  was built (recorder is a no-op otherwise). */
-  readonly episodes?: ResolvedEpisodesConfig
-  /**
-   * True when a per-thread sandbox is active for this turn (sandboxManager +
-   * threadId resolved a handle). The agent-adapter uses this to bypass its
-   * materialized-agent cache so tools bound to this thread's sandbox backends
-   * are never reused for another thread.
-   */
-  readonly sandboxed?: boolean
-}
-
-interface PreparedRouteError {
-  readonly message: string
-  readonly ok: false
-}
-
-/**
- * The per-route module payload: everything `prepareRouteExecution` loads from
- * disk that is stable for the process lifetime. Loaded lazily on a route's
- * first request and cached per process; the dev child restart (tool/state/
- * reducer/route edits) is the invalidation. PR 2 (static wiring) pre-seeds
- * this cache from a generated manifest via `seedPreparedRouteModules` — a
- * fully-populated entry short-circuits every dynamic load below.
- */
-export interface PreparedRouteModules {
-  /** Normalized route module (kind + entry), from `normalizeRouteModule`. */
-  readonly module: NormalizedRouteModule
-  /**
-   * Discovered tool definitions with generated `tools.json` schemas already
-   * injected — the exact pre-capability, pre-wrap set `prepareRouteExecution`
-   * derives per request today. Never mutated downstream (all later stages
-   * produce new arrays).
-   */
-  readonly tools: readonly DiscoveredToolDefinition[]
-  /** Resolved state.ts fields (agent routes only; undefined otherwise). */
-  readonly stateFields: readonly ResolvedStateField[] | undefined
-  /** The route's memory.ts descriptor, or null when none exists. */
-  readonly memory: LoadedRouteMemory | null
-}
-
-/**
- * Per-process caches, keyed by absolute route entry file (module payloads)
- * and appRoot (route manifest). Promises are cached so concurrent first
- * requests share one load; rejections are evicted so a transient load error
- * (e.g. a syntax error mid-edit in dev) does not poison the process.
- */
-const preparedRouteModulesCache = new Map<string, Promise<PreparedRouteModules>>()
-const routeManifestCache = new Map<string, Promise<RouteManifest>>()
-
-function getPreparedRouteModules(options: {
-  readonly appRoot: string
-  readonly routeFile: string
-  readonly routeId: string
-}): Promise<PreparedRouteModules> {
-  const cached = preparedRouteModulesCache.get(options.routeFile)
-  if (cached) return cached
-  const loading = loadPreparedRouteModules(options)
-  preparedRouteModulesCache.set(options.routeFile, loading)
-  loading.catch(() => preparedRouteModulesCache.delete(options.routeFile))
-  return loading
-}
-
-async function loadPreparedRouteModules(options: {
-  readonly appRoot: string
-  readonly routeFile: string
-  readonly routeId: string
-}): Promise<PreparedRouteModules> {
-  const routeDir = resolve(options.routeFile, "..")
-
-  const normalized = await normalizeRouteModule(options.routeFile, options.appRoot)
-
-  const discoveredTools = await discoverToolDefinitions({
-    appRoot: options.appRoot,
-    routeDir,
-  })
-
-  // Inject codegen-generated schemas for tools without explicit schema exports
-  const routeSlug =
-    options.routeId.replace(/^\//, "").replace(/\//g, "-").replace(/\[/g, "").replace(/\]/g, "") ||
-    "index"
-  const schemaManifestPath = join(options.appRoot, ".dawn", "routes", routeSlug, "tools.json")
-  let tools = discoveredTools
-  if (existsSync(schemaManifestPath)) {
-    try {
-      const manifest = JSON.parse(readFileSync(schemaManifestPath, "utf-8")) as Record<
-        string,
-        unknown
-      >
-      tools = injectGeneratedSchemas(discoveredTools, manifest)
-    } catch {
-      // Generated schema is best-effort — fall through on parse errors
-    }
-  }
-
-  let stateFields: readonly ResolvedStateField[] | undefined
-  if (normalized.kind === "agent") {
-    const stateDefinition = await discoverStateDefinition({ routeDir })
-    if (stateDefinition) {
-      stateFields = resolveStateFields({
-        defaults: stateDefinition.defaults,
-        reducerOverrides: stateDefinition.reducerOverrides,
-      })
-    }
-  }
-
-  const memoryFile = join(routeDir, "memory.ts")
-  const memory =
-    normalized.kind === "agent" && existsSync(memoryFile) ? await loadRouteMemory(memoryFile) : null
-
-  return { memory, module: normalized, stateFields, tools }
-}
-
-/** Route-tree walk, once per appRoot per process — the no-boot-manifest fallback. */
-function discoverRoutesOncePerAppRoot(appRoot: string): Promise<RouteManifest> {
-  const cached = routeManifestCache.get(appRoot)
-  if (cached) return cached
-  const loading = discoverRoutes({ appRoot })
-  routeManifestCache.set(appRoot, loading)
-  loading.catch(() => routeManifestCache.delete(appRoot))
-  return loading
-}
-
-/**
- * Pre-populate the per-route module cache — the PR 2 static-wiring seam. A
- * build-time generator hands the runtime fully-loaded entries (keyed by
- * absolute route entry file) before any request; every dynamic load in
- * `prepareRouteExecution` is then skipped for the seeded routes.
- */
-export function seedPreparedRouteModules(entries: ReadonlyMap<string, PreparedRouteModules>): void {
-  for (const [routeFile, prepared] of entries) {
-    preparedRouteModulesCache.set(routeFile, Promise.resolve(prepared))
-  }
-}
-
-/**
- * Test-only: clear the per-route module and per-appRoot manifest caches so
- * suites that mutate a fixture app mid-process (new tools, changed routes)
- * observe the change on the next load. Mirrors `__clearDawnConfigCacheForTests`.
- */
-export function __resetRouteLoadCachesForTests(): void {
-  preparedRouteModulesCache.clear()
-  routeManifestCache.clear()
-}
-
-export async function prepareRouteExecution(
-  options: BootResolvedInstances & {
-    readonly appRoot: string
-    readonly isSubagent?: boolean
-    readonly routeFile: string
-    readonly routeId: string
-    readonly routePath: string
-    readonly signal?: AbortSignal
-    readonly threadId?: string
-    readonly sandboxManager?: SandboxManager
-    /**
-     * Sandbox scoping key, decoupled from `threadId` (the checkpoint identity).
-     * When absent, the sandbox handle falls back to `threadId` — the top-route
-     * case, where the two identities coincide.
-     */
-    readonly sandboxThreadId?: string
-  },
-): Promise<PreparedRoute | PreparedRouteError> {
-  const { isSubagent = false } = options
-  const routeDir = resolve(options.routeFile, "..")
-
-  // Route module, tools (with generated schemas), state fields, and memory.ts
-  // load once per route per process (lazily, on the route's first request) —
-  // see PreparedRouteModules. Everything below this block stays per-request:
-  // it depends on live state (permissions, sandbox handles, capability
-  // markers like AGENTS.md/memory.md whose per-turn re-reads are deliberate).
-  const prepared = await getPreparedRouteModules({
-    appRoot: options.appRoot,
-    routeFile: options.routeFile,
-    routeId: options.routeId,
-  })
-  const normalized = prepared.module
-  let tools = prepared.tools
-  let stateFields = prepared.stateFields
-
-  // Apply capability markers (planning, etc.). Only for agent routes.
-  let promptFragments: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>> = []
-  let streamTransformers: ReadonlyArray<
-    NonNullable<CapabilityContribution["streamTransformers"]>[number]
-  > = []
-
-  let subagentResolver: SubagentResolver | undefined
-
-  // Memory context + episode-recorder config, populated in the agent branch
-  // below when the route has a memory.ts; threaded out for the recorder.
-  let memoryContext: import("@dawn-ai/core").MemoryContext | undefined
-  let episodes: ResolvedEpisodesConfig | undefined
-
-  // Load dawn.config.ts once — used for checkpointer, threadsStore, backends,
-  // and permissions. Falls back to defaults when the config is absent/unreadable.
-  let configBackends:
-    | { readonly filesystem?: FilesystemBackend; readonly exec?: ExecBackend }
-    | undefined
-  let permissionsConfig:
-    | {
-        readonly mode?: PermissionMode
-        readonly allow?: Readonly<Record<string, readonly string[]>>
-        readonly deny?: Readonly<Record<string, readonly string[]>>
-      }
-    | undefined
-  let configCheckpointer: BaseCheckpointSaver | undefined
-  let configThreadsStore: ThreadsStore | undefined
-  let loadedDawnConfig: DawnConfig | undefined
-  try {
-    const loaded = await loadDawnConfig({ appRoot: options.appRoot })
-    loadedDawnConfig = loaded.config
-    configBackends = loaded.config.backends
-    permissionsConfig = loaded.config.permissions
-    configCheckpointer = loaded.config.checkpointer
-    configThreadsStore = loaded.config.threadsStore
-  } catch {
-    // No dawn.config.ts (or unreadable). Fall back to defaults for all fields.
-  }
-
-  // When a SandboxManager is configured and we have a stable thread id, resolve
-  // the thread's sandbox handle and route the workspace filesystem/exec (and the
-  // workspace root) into it. All of readFile/writeFile/listDir/runBash redirect
-  // into the isolated env with no capability-logic change.
-  let sandboxBackends: { filesystem: FilesystemBackend; exec: ExecBackend } | undefined
-  let sandboxWorkspaceRoot: string | undefined
-  const sandboxKey = options.sandboxThreadId ?? options.threadId
-  if (options.sandboxManager && sandboxKey) {
-    const handle = await options.sandboxManager.getForThread(
-      sandboxKey,
-      options.signal ?? new AbortController().signal,
-    )
-    sandboxBackends = { filesystem: handle.filesystem, exec: handle.exec }
-    sandboxWorkspaceRoot = handle.workspaceRoot
-  }
-
-  const offload = buildOffload(
-    loadedDawnConfig,
-    sandboxBackends?.filesystem ?? configBackends?.filesystem,
-    options.signal ?? new AbortController().signal,
-    options.appRoot,
-  )
-
-  let summarization: ResolvedSummarizationConfig | undefined
-
-  // Boot-resolved instances win when provided (no per-request sqlite open);
-  // otherwise fall back to config, then to the default sqlite stores.
-  const checkpointer: BaseCheckpointSaver =
-    options.checkpointer ??
-    configCheckpointer ??
-    sqliteCheckpointer({ path: join(options.appRoot, ".dawn/checkpoints.sqlite") })
-
-  const threadsStore: ThreadsStore =
-    options.threadsStore ??
-    configThreadsStore ??
-    createThreadsStore({ path: join(options.appRoot, ".dawn/threads.sqlite") })
-
-  // Deliberately outside the agent-only branch below: every route kind needs
-  // the loaded store for ctx.fs permission gating, and createWorkspaceFs
-  // requires it loaded. The agent branch reuses this store in applyCapabilities.
-  // A provided instance (production boot) is used as-is; a provided factory
-  // (dev) re-loads `.dawn/permissions.json` each request so HITL "Always"
-  // grants written mid-process still apply; absent both, construct+load fresh
-  // (the pre-existing per-request behavior).
-  const providedPermissions = options.permissionsStore
-  const permissionsStore: PermissionsStore =
-    typeof providedPermissions === "function"
-      ? await providedPermissions()
-      : (providedPermissions ?? (await buildPermissionsStore(options.appRoot, permissionsConfig)))
-
-  const workspaceFs = createWorkspaceFs({
-    workspaceRoot: sandboxWorkspaceRoot ?? join(options.appRoot, "workspace"),
-    backend: sandboxBackends?.filesystem ?? configBackends?.filesystem ?? localFilesystem(),
-    permissions: permissionsStore,
-    signal: options.signal ?? new AbortController().signal,
-    interruptCapable: normalized.kind === "agent",
-  })
-
-  if (normalized.kind === "agent") {
-    const registry = createCapabilityRegistry([
-      createPlanningMarker(),
-      createAgentsMdMarker(),
-      createMemoryMdMarker(),
-      createMemoryMarker(),
-      createSkillsMarker(),
-      createSubagentsMarker(),
-      createWorkspaceMarker(),
-    ])
-    // Boot manifest when threaded (HTTP layer / subagent re-entry); otherwise
-    // one walk per appRoot per process — never one per request.
-    const routeManifest =
-      options.routeManifest ?? (await discoverRoutesOncePerAppRoot(options.appRoot))
-    const descriptor =
-      normalized.kind === "agent" && isDawnAgent(normalized.entry) ? normalized.entry : undefined
-
-    summarization = buildSummarization(loadedDawnConfig, descriptor?.model)
-
-    // Build (or reuse) the descriptor->routeId identity map used by the
-    // subagents marker to resolve `agent({ subagents: [imported] })` overrides.
-    // The cache is keyed on the manifest object identity, which is stable for
-    // the process lifetime: the boot registry's manifest is threaded down via
-    // `routeManifest` (or memoized per appRoot on the fallback path), and the
-    // dev child restarts on any edit that could change it.
-    const descriptorRouteMap = await getCachedDescriptorRouteMap(routeManifest)
-
-    // Build the memory context if this route has a memory.ts (probed and
-    // loaded once per route — part of PreparedRouteModules).
-    if (prepared.memory) {
-      const defined = prepared.memory
-      // Boot-resolved thunk wins when provided (shared, lazily-opened store —
-      // no per-request sqlite open); otherwise fall back to the pre-existing
-      // per-request resolution (the testing harness path, unchanged).
-      const store = options.memoryStore
-        ? await options.memoryStore()
-        : await resolveMemoryStore(options.appRoot)
-      const writes = await resolveMemoryWrites(options.appRoot)
-      const cleanRoutePath = routeNamespaceKey(options.routePath)
-      const extraScope = loadedDawnConfig?.memory?.resolveScope?.({
-        routePath: cleanRoutePath,
-        appRoot: options.appRoot,
-      })
-      memoryContext = buildMemoryContext({
-        defined,
-        store,
-        writes,
-        appRoot: options.appRoot,
-        routePath: cleanRoutePath,
-        now: new Date().toISOString(),
-        ...(loadedDawnConfig?.memory?.indexMaxEntries !== undefined
-          ? { indexMaxEntries: loadedDawnConfig.memory.indexMaxEntries }
-          : {}),
-        ...(extraScope ? { extraScope } : {}),
-        // Vector recall: hand the capability the embedder (it embeds writes +
-        // queries) plus the hybrid tuning it threads into the store's search.
-        ...(loadedDawnConfig?.memory?.vector?.embedder
-          ? { embedder: loadedDawnConfig.memory.vector.embedder }
-          : {}),
-        ...(loadedDawnConfig?.memory?.vector
-          ? {
-              vector: {
-                ...(loadedDawnConfig.memory.vector.weights
-                  ? { weights: loadedDawnConfig.memory.vector.weights }
-                  : {}),
-                ...(loadedDawnConfig.memory.vector.rrfK !== undefined
-                  ? { rrfK: loadedDawnConfig.memory.vector.rrfK }
-                  : {}),
-                ...(loadedDawnConfig.memory.vector.vectorK !== undefined
-                  ? { vectorK: loadedDawnConfig.memory.vector.vectorK }
-                  : {}),
-                ...(loadedDawnConfig.memory.vector.recencyWeight !== undefined
-                  ? { recencyWeight: loadedDawnConfig.memory.vector.recencyWeight }
-                  : {}),
-                ...(loadedDawnConfig.memory.vector.confidenceWeight !== undefined
-                  ? { confidenceWeight: loadedDawnConfig.memory.vector.confidenceWeight }
-                  : {}),
-              },
-            }
-          : {}),
-      })
-    }
-
-    // Episode-recorder config: resolved only when this route built a memory
-    // context (same cached loadDawnConfig — no extra I/O), so routes without
-    // memory.ts and disabled apps pay zero recorder overhead.
-    if (memoryContext) {
-      episodes = await resolveEpisodesConfig(options.appRoot)
-    }
-
-    const capabilityBackends = sandboxBackends ?? configBackends
-    const applied = await applyCapabilities(registry, routeDir, {
-      routeManifest,
-      descriptor,
-      descriptorRouteMap,
-      ...(capabilityBackends ? { backends: capabilityBackends } : {}),
-      permissions: permissionsStore,
-      appRoot: options.appRoot,
-      ...(sandboxWorkspaceRoot ? { workspaceRoot: sandboxWorkspaceRoot } : {}),
-      ...(memoryContext ? { memory: memoryContext } : {}),
-    })
-
-    if (applied.errors.length > 0) {
-      const messages = applied.errors
-        .map((e) => `[${e.markerName}#${e.phase}] ${e.message}`)
-        .join("\n  ")
-      return { message: `Capability error during route prep:\n  ${messages}`, ok: false }
-    }
-
-    const capTools: DiscoveredToolDefinition[] = []
-    const capStateFields: ResolvedStateField[] = []
-    const capPromptFragments: NonNullable<CapabilityContribution["promptFragment"]>[] = []
-    const capStreamTransformers: NonNullable<
-      CapabilityContribution["streamTransformers"]
-    >[number][] = []
-
-    for (const { contribution } of applied.contributions) {
-      if (contribution.tools) {
-        for (const t of contribution.tools) {
-          // Adapt capability-contributed tools (which lack filePath/scope)
-          // into the DiscoveredToolDefinition shape used by the runtime.
-          const overridable = (t as unknown as { overridable?: boolean }).overridable
-          capTools.push({
-            ...(t.description !== undefined ? { description: t.description } : {}),
-            filePath: `<capability:${t.name}>`,
-            name: t.name,
-            ...(overridable ? { overridable: true } : {}),
-            run: t.run,
-            ...(t.schema !== undefined ? { schema: t.schema } : {}),
-            scope: "route-local",
-          } as DiscoveredToolDefinition)
-        }
-      }
-      if (contribution.stateFields) capStateFields.push(...contribution.stateFields)
-      if (contribution.promptFragment) capPromptFragments.push(contribution.promptFragment)
-      if (contribution.streamTransformers)
-        capStreamTransformers.push(...contribution.streamTransformers)
-    }
-
-    // Conflict detection (user tool shadowing capability tool or reserved name)
-    const RESERVED_TOOL_NAMES = new Set(["task"]) // names auto-generated by capabilities
-    const check = checkToolNameUniqueness({
-      userTools: tools.map((t) => ({ name: t.name })),
-      capabilityTools: capTools.map((t) => ({
-        name: t.name,
-        ...((t as unknown as { overridable?: boolean }).overridable ? { overridable: true } : {}),
-      })),
-      reservedNames: RESERVED_TOOL_NAMES,
-    })
-    if (!check.ok) {
-      return { message: check.message, ok: false }
-    }
-
-    // Use the effective set so overridden tools are dropped before merging.
-    const effectiveCapNames = new Set(check.effectiveCapabilityTools.map((t) => t.name))
-    const filteredCapTools = capTools.filter((t) => effectiveCapNames.has(t.name))
-
-    const userStateNames = new Set((stateFields ?? []).map((f) => f.name))
-    for (const f of capStateFields) {
-      if (userStateNames.has(f.name)) {
-        return {
-          message: `Capability conflict: state field "${f.name}" is contributed by a capability and also declared in state.ts. Remove the field from state.ts or remove the capability marker file.`,
-          ok: false,
-        }
-      }
-    }
-
-    tools = [...tools, ...filteredCapTools]
-
-    // Scope the merged tool set at the composition seam. Base set: top route
-    // keeps all; a subagent keeps only authored tools (capability tools, e.g.
-    // workspace runBash/writeFile and the dispatch `task`, are withheld unless
-    // explicitly allowed). descriptor.tools.allow grants, .deny revokes, deny
-    // wins. Unknown names throw and surface as a route-prep failure.
-    const scopeInputs = tools.map((t) => ({ name: t.name, origin: toolOrigin(t) }))
-    let keptToolNames: ReadonlySet<string>
-    try {
-      keptToolNames = resolveToolScope(scopeInputs, descriptor?.tools, {
-        isSubagent: isSubagent ?? false,
-        routeId: options.routeId,
-      })
-    } catch (error) {
-      return { message: formatErrorMessage(error), ok: false }
-    }
-    tools = tools.filter((t) => keptToolNames.has(t.name))
-
-    // Per-tool approval gating (tools.approve): wrap surviving tools so each
-    // call consults the permissions store; on "unknown" in interactive mode
-    // the wrapper interrupts for a human decision (kind: "tool"). Bash/path
-    // gates inside the workspace tools are separate (pattern-aware) and
-    // unaffected; `dawn check` warns on redundant overlap. A tool that ALSO has
-    // a constraint predicate is excluded here — `constrain` is authoritative and
-    // can itself escalate via `{ approve }`, so wrapping both would double-gate.
-    const constrain = descriptor?.tools?.constrain
-    const approveSet = new Set((descriptor?.tools?.approve ?? []).filter((n) => !constrain?.[n]))
-    if (approveSet.size > 0) {
-      tools = tools.map((t) =>
-        approveSet.has(t.name)
-          ? wrapToolWithApproval<
-              Parameters<DiscoveredToolDefinition["run"]>[1],
-              DiscoveredToolDefinition
-            >(t, permissionsStore)
-          : t,
-      )
-    }
-
-    // Per-tool argument constraints (tools.constrain): wrap surviving tools so
-    // each call is evaluated by the author's predicate against the model's args
-    // before the tool runs. Runs at call time; reads live identity (signal/
-    // threadId/params) from the run context. `{ approve }` verdicts reuse the
-    // same HITL gate as tools.approve.
-    if (constrain) {
-      tools = tools.map((t) => {
-        // Local const: TS does not narrow a repeated indexed access across the
-        // ternary, so bind once.
-        const predicate = constrain[t.name]
-        return predicate
-          ? wrapToolWithConstraint<
-              Parameters<DiscoveredToolDefinition["run"]>[1],
-              DiscoveredToolDefinition
-            >(t, predicate, permissionsStore, options.routeId)
-          : t
-      })
-    }
-    stateFields = stateFields ? [...stateFields, ...capStateFields] : capStateFields
-    promptFragments = capPromptFragments
-    streamTransformers = capStreamTransformers
-
-    // Build a resolver only when this route actually has subagents — either
-    // by convention (<routeDir>/subagents/*) or by descriptor.subagents override.
-    const hasTaskTool = capTools.some((t) => t.name === "task")
-    if (hasTaskTool) {
-      subagentResolver = buildSubagentResolver({
-        appRoot: options.appRoot,
-        routeDir,
-        routeManifest,
-        descriptor,
-        descriptorRouteMap,
-        ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
-        ...(sandboxKey ? { sandboxThreadId: sandboxKey } : {}),
-      })
-    }
-  }
-
-  // Inject ctx.fs once here so every downstream invoker (createDawnContext,
-  // the langchain tool converter/loop) hands tools the sandboxed handle.
-  tools = tools.map((t) => ({
-    ...t,
-    run: (
-      input: unknown,
-      ctx: {
-        readonly middleware?: Readonly<Record<string, unknown>>
-        readonly signal: AbortSignal
-      },
-    ) => t.run(input, { ...ctx, fs: workspaceFs }),
-  }))
-
-  return {
-    normalized,
-    ok: true,
-    checkpointer,
-    permissionsStore,
-    threadsStore,
-    ...(offload ? { offload } : {}),
-    ...(summarization ? { summarization } : {}),
-    ...(promptFragments.length > 0 ? { promptFragments } : {}),
-    stateFields,
-    ...(streamTransformers.length > 0 ? { streamTransformers } : {}),
-    ...(subagentResolver ? { subagentResolver } : {}),
-    tools,
-    workspaceFs,
-    ...(sandboxBackends !== undefined ? { sandboxed: true } : {}),
-    ...(memoryContext ? { memoryContext } : {}),
-    ...(episodes ? { episodes } : {}),
-  }
-}
-
-/**
- * Record one episodic memory for a settled run (the auto-recorder seam).
- *
- * No-ops unless `memory.episodes.enabled`, a memory context was built for the
- * route, and writes are not "off"; failed runs are skipped when
- * `includeFailedRuns` is false. NEVER throws — the recorder must not fail (or
- * alter the result of) a user's run; it is awaited so the write is durable
- * before the result is returned.
- */
-async function recordRunEpisode(args: {
-  readonly memoryContext: import("@dawn-ai/core").MemoryContext | undefined
-  readonly episodes: ResolvedEpisodesConfig | undefined
-  readonly outcome: "ok" | "error"
-  readonly output?: unknown
-  readonly input: unknown
-  readonly startedAt: number
-  readonly threadId?: string
-}): Promise<void> {
-  const { memoryContext, episodes } = args
-  if (!episodes?.enabled || !memoryContext) return
-  if (memoryContext.writes === "off") return
-  if (args.outcome === "error" && !episodes.includeFailedRuns) return
-  // A parked (HITL-interrupted) turn is not a completed run: the invoke()
-  // path surfaces pending interrupts as `__interrupt__` on the final state.
-  // Record nothing — the completing resume turn records instead. (The stream
-  // path tracks interrupt chunks separately; see streamResolvedRoute.)
-  if (args.outcome === "ok" && hasPendingInterrupt(args.output)) return
-  try {
-    await recordEpisode(
-      memoryContext.store,
-      {
-        namespace: memoryContext.namespace,
-        // Prefer the final state's message history: on a resume turn the run
-        // input is a Command({resume}) with no human message, while the last
-        // human message in the full state IS the original question. Fall back
-        // to the run input (error path — no final state).
-        input: extractUserInputText(args.output) || extractUserInputText(args.input),
-        outcome: args.outcome,
-        // On the failure path the final state is unavailable — record no tools.
-        toolsUsed: args.outcome === "ok" ? extractToolNames(args.output) : [],
-        startedAt: args.startedAt,
-        finishedAt: Date.now(),
-        ttlMs: episodes.ttlMs,
-        // No distinct run id exists in the runtime today; the checkpoint
-        // threadId is the per-run identifier (a fresh `t-run-*` id is minted
-        // per invocation when the caller does not thread one).
-        ...(args.threadId ? { runId: args.threadId, threadId: args.threadId } : {}),
-      },
-      { cap: episodes.cap },
-    )
-  } catch {
-    // recordEpisode already never throws; this guards the extraction helpers
-    // too so the recorder can never fail a user's run.
-  }
-}
-
-async function executeRouteAtResolvedPath(
-  options: BootResolvedInstances & {
-    readonly appRoot: string
-    readonly input: unknown
-    readonly isSubagent?: boolean
-    readonly middlewareContext?: Readonly<Record<string, unknown>>
-    readonly routeFile: string
-    readonly routeId: string
-    readonly routePath: string
-    readonly sandboxManager?: SandboxManager
-    /** Sandbox scoping key override — see `executeResolvedRoute`. */
-    readonly sandboxThreadId?: string
-    readonly signal?: AbortSignal
-    readonly startedAt: number
-    readonly threadId?: string
-  },
-): Promise<RuntimeExecutionResult> {
-  let mode: RuntimeExecutionMode | null = null
-  // Episode-recorder context, captured once prepare succeeds so the catch
-  // path can record failed runs too. Absent (recorder no-op) until then.
-  let epMemoryContext: import("@dawn-ai/core").MemoryContext | undefined
-  let epConfig: ResolvedEpisodesConfig | undefined
-  let epThreadId: string | undefined
-
-  try {
-    const prepared = await prepareRouteExecution({
-      ...options,
-      isSubagent: options.isSubagent ?? false,
-    })
-
-    if (!prepared.ok) {
-      return createRuntimeFailureResult({
-        appRoot: options.appRoot,
-        executionSource: "in-process",
-        kind: "execution_error",
-        message: prepared.message,
-        mode,
-        routeId: options.routeId,
-        routePath: options.routePath,
-        startedAt: options.startedAt,
-      })
-    }
-
-    const {
-      normalized,
-      tools,
-      stateFields,
-      promptFragments,
-      streamTransformers,
-      subagentResolver,
-      checkpointer,
-      offload,
-      summarization,
-      workspaceFs,
-      sandboxed,
-    } = prepared
-    mode = normalized.kind
-    const threadId =
-      options.threadId ??
-      (normalized.kind === "agent" ? `t-run-${randomUUID().slice(0, 8)}` : undefined)
-    epMemoryContext = prepared.memoryContext
-    epConfig = prepared.episodes
-    epThreadId = threadId
-
-    const context = createDawnContext({
-      ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
-      fs: workspaceFs,
-      tools,
-      ...(options.signal ? { signal: options.signal } : {}),
-    })
-
-    const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
-      checkpointer,
-      ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
-      routeId: options.routeId,
-      ...(stateFields ? { stateFields } : {}),
-      tools,
-      ...(offload ? { offload } : {}),
-      ...(summarization ? { summarization } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
-      ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
-      ...(subagentResolver ? { subagentResolver } : {}),
-      ...(threadId ? { threadId } : {}),
-      ...(sandboxed ? { sandboxed: true } : {}),
-    })
-
-    // Record the episode BEFORE returning so the write is durable when the
-    // caller observes the result; the result object itself is unchanged.
-    await recordRunEpisode({
-      memoryContext: epMemoryContext,
-      episodes: epConfig,
-      outcome: "ok",
-      output,
-      input: options.input,
-      startedAt: options.startedAt,
-      ...(threadId ? { threadId } : {}),
-    })
-
-    return createRuntimeSuccessResult({
-      appRoot: options.appRoot,
-      executionSource: "in-process",
-      mode: normalized.kind,
-      output,
-      routeId: options.routeId,
-      routePath: options.routePath,
-      startedAt: options.startedAt,
-    })
-  } catch (error) {
-    const kind = isBoundaryError(error) ? "unsupported_route_boundary" : "execution_error"
-    const message = formatErrorMessage(error)
-
-    await recordRunEpisode({
-      memoryContext: epMemoryContext,
-      episodes: epConfig,
-      outcome: "error",
-      input: options.input,
-      startedAt: options.startedAt,
-      ...(epThreadId ? { threadId: epThreadId } : {}),
-    })
-
-    return createRuntimeFailureResult({
-      appRoot: options.appRoot,
-      executionSource: "in-process",
-      kind,
-      message,
-      mode,
-      routeId: options.routeId,
-      routePath: options.routePath,
-      startedAt: options.startedAt,
-    })
-  }
-}
-
-async function invokeEntry(
-  kind: "agent" | "chain" | "graph" | "workflow",
-  entry: unknown,
-  input: unknown,
-  context: unknown,
-  agentContext?: {
-    readonly checkpointer?: BaseCheckpointSaver
-    readonly middlewareContext?: Readonly<Record<string, unknown>>
-    readonly offload?: OffloadFn
-    readonly summarization?: ResolvedSummarizationConfig
-    readonly routeId: string
-    readonly signal?: AbortSignal
-    readonly stateFields?: readonly ResolvedStateField[]
-    readonly tools: ReadonlyArray<{
-      readonly description?: string
-      readonly name: string
-      readonly run: (
-        input: unknown,
-        context: {
-          readonly middleware?: Readonly<Record<string, unknown>>
-          readonly signal: AbortSignal
-        },
-      ) => Promise<unknown> | unknown
-      readonly schema?: unknown
-    }>
-    readonly promptFragments?: ReadonlyArray<NonNullable<CapabilityContribution["promptFragment"]>>
-    readonly streamTransformers?: ReadonlyArray<
-      NonNullable<CapabilityContribution["streamTransformers"]>[number]
-    >
-    readonly subagentResolver?: SubagentResolver
-    readonly threadId?: string
-    readonly sandboxed?: boolean
-  },
-): Promise<unknown> {
-  if (kind === "agent") {
-    if (!agentContext?.checkpointer) {
-      throw new Error(
-        "[dawn] invokeEntry called for an agent route without a checkpointer. This is an internal bug — please report it.",
-      )
-    }
-    const routeParamNames = extractRouteParamNames(agentContext?.routeId ?? "")
-    return await executeAgent({
-      checkpointer: agentContext.checkpointer,
-      entry,
-      input,
-      ...(agentContext?.middlewareContext
-        ? { middlewareContext: agentContext.middlewareContext }
-        : {}),
-      routeParamNames,
-      signal: agentContext?.signal ?? new AbortController().signal,
-      ...(agentContext?.stateFields ? { stateFields: agentContext.stateFields } : {}),
-      tools: agentContext?.tools ?? [],
-      ...(agentContext?.offload ? { offload: agentContext.offload } : {}),
-      ...(agentContext?.summarization ? { summarization: agentContext.summarization } : {}),
-      ...(agentContext?.promptFragments && agentContext.promptFragments.length > 0
-        ? { promptFragments: agentContext.promptFragments }
-        : {}),
-      ...(agentContext?.streamTransformers && agentContext.streamTransformers.length > 0
-        ? { streamTransformers: agentContext.streamTransformers }
-        : {}),
-      ...(agentContext?.subagentResolver
-        ? { subagentResolver: agentContext.subagentResolver }
-        : {}),
-      ...(agentContext?.threadId ? { threadId: agentContext.threadId } : {}),
-      ...(agentContext?.sandboxed ? { sandboxed: true } : {}),
-    })
-  }
-
-  if (kind === "workflow") {
-    if (typeof entry !== "function") {
-      throw new Error("Workflow entry must be a function")
-    }
-    return await entry(input, context)
-  }
-
-  if (kind === "chain") {
-    if (
-      typeof entry === "object" &&
-      entry !== null &&
-      "invoke" in entry &&
-      typeof (entry as { invoke?: unknown }).invoke === "function"
-    ) {
-      return await (entry as { invoke: (input: unknown) => unknown }).invoke(input)
-    }
-    throw new Error("Chain entry must expose invoke(input)")
-  }
-
-  if (typeof entry === "function") {
-    return await entry(input, context)
-  }
-
-  if (
-    typeof entry === "object" &&
-    entry !== null &&
-    "invoke" in entry &&
-    typeof (entry as { invoke?: unknown }).invoke === "function"
-  ) {
-    return await (entry as { invoke: (input: unknown, context: unknown) => unknown }).invoke(
-      input,
-      context,
-    )
-  }
-
-  throw new Error("Graph entry must be a function or expose invoke(input)")
+  return await executeRouteAtResolvedPath(withNodeFallbacks(resolved))
 }
 
 function resolveRouteFile(options: {
@@ -1442,258 +521,4 @@ async function discoverApp(options: ExecuteRouteOptions): Promise<
       ok: false,
     }
   }
-}
-
-function extractRouteParamNames(routeId: string): string[] {
-  const matches = routeId.matchAll(/\[(\w+)\]/g)
-  return [...matches].map((match) => match[1]).filter((s): s is string => s !== undefined)
-}
-
-/**
- * Dynamically imports each route's entry file and records descriptor->routeId
- * for any default export that satisfies `isDawnAgent`. Used so the subagents
- * capability marker can resolve `descriptor.subagents: [...]` override entries
- * back to a routeId.
- *
- * Cost: this opens every agent route module in the manifest. Acceptable for
- * the current scale; if it becomes hot, cache by (appRoot, manifest-hash).
- */
-let descriptorRouteMapCache = new WeakMap<RouteManifest, Promise<ReadonlyMap<DawnAgent, string>>>()
-
-async function getCachedDescriptorRouteMap(
-  manifest: RouteManifest,
-): Promise<ReadonlyMap<DawnAgent, string>> {
-  let promise = descriptorRouteMapCache.get(manifest)
-  if (!promise) {
-    promise = buildDescriptorRouteMap(manifest)
-    descriptorRouteMapCache.set(manifest, promise)
-  }
-  return promise
-}
-
-export { getCachedDescriptorRouteMap }
-
-/**
- * Test-only: reset the WeakMap-backed cache. Not exported via the package
- * barrel — internal to this module's test suite.
- */
-export function __resetDescriptorRouteMapCacheForTests(): void {
-  descriptorRouteMapCache = new WeakMap()
-}
-
-async function buildDescriptorRouteMap(
-  manifest: RouteManifest,
-): Promise<ReadonlyMap<DawnAgent, string>> {
-  const map = new Map<DawnAgent, string>()
-  await Promise.all(
-    manifest.routes.map(async (route) => {
-      try {
-        const mod = (await import(pathToFileURL(route.entryFile).href)) as { default?: unknown }
-        if (isDawnAgent(mod.default)) {
-          map.set(mod.default, route.id)
-        }
-      } catch {
-        // Best-effort: skip routes whose module fails to import.
-      }
-    }),
-  )
-  return map
-}
-
-/**
- * Builds the subagentResolver passed into streamAgent/executeAgent. Given a
- * leaf name (e.g. "researcher"), the resolver returns:
- *   - the child route's id
- *   - a graph object whose .invoke(input, config) re-enters executeResolvedRoute
- *
- * Resolution order:
- *   1. Convention: route at `<routeDir>/subagents/<leaf>`
- *   2. Override: descriptor.subagents[i] whose routeId's last segment === leaf
- *
- * The returned graph exposes both `invoke` (one-shot) and `dawnStream`
- * (yields Dawn StreamChunks). The dispatcher prefers `dawnStream` so
- * intermediate child events (tool calls, tokens, capability events) bubble
- * up to the parent stream as `subagent.<type>` envelopes.
- */
-function buildSubagentResolver(args: {
-  readonly appRoot: string
-  readonly routeDir: string
-  readonly routeManifest: RouteManifest
-  readonly descriptor: DawnAgent | undefined
-  readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
-  readonly sandboxManager?: SandboxManager
-  /**
-   * The dispatching thread's sandbox key (top routes: its checkpoint
-   * threadId; nested subagents: the inherited key). Forwarded to children as
-   * `sandboxThreadId` ONLY — children never receive a checkpoint `threadId`,
-   * so each child turn runs as an independent uncheckpointed invocation while
-   * still resolving the same per-thread SandboxHandle as its parent.
-   */
-  readonly sandboxThreadId?: string
-}): SubagentResolver {
-  const { appRoot, routeDir, routeManifest, descriptor, descriptorRouteMap } = args
-  const { sandboxManager, sandboxThreadId } = args
-
-  const findConventionRoute = (leaf: string): RouteDefinition | undefined => {
-    const conventionDir = `${routeDir}/subagents/${leaf}`
-    return routeManifest.routes.find((r) => r.routeDir === conventionDir)
-  }
-
-  const findOverrideRoute = (leaf: string): RouteDefinition | undefined => {
-    for (const desc of descriptor?.subagents ?? []) {
-      const routeId = descriptorRouteMap.get(desc)
-      if (!routeId) continue
-      const route = routeManifest.routes.find((r) => r.id === routeId)
-      if (!route) continue
-      const lastSegment = route.segments.at(-1)
-      const lastName =
-        typeof lastSegment === "string"
-          ? lastSegment
-          : (lastSegment?.raw ?? route.id.replace(/^\//, ""))
-      if (lastName === leaf) return route
-    }
-    return undefined
-  }
-
-  return (leafName: string) => {
-    const route = findConventionRoute(leafName) ?? findOverrideRoute(leafName)
-    if (!route) return undefined
-
-    const graph = {
-      invoke: async (input: unknown, _config: unknown): Promise<unknown> => {
-        // Re-enter the same runtime; capabilities are re-applied for the
-        // child route. The dispatcher passes `{messages: [HumanMessage]}` —
-        // forward verbatim as the child's input so the agent-route path
-        // sees the protocol shape it expects.
-        const result = await executeResolvedRoute({
-          appRoot,
-          input,
-          isSubagent: true,
-          routeFile: route.entryFile,
-          routeId: route.id,
-          routePath: route.pathname,
-          // Reuse the parent's manifest so the child performs no walk and the
-          // descriptor-route-map cache stays warm (same object identity).
-          routeManifest,
-          ...(sandboxManager ? { sandboxManager } : {}),
-          // Deliberately NOT `threadId`: the child must run as an independent
-          // uncheckpointed invocation (forwarding the parent's threadId would
-          // share its in-flight LangGraph checkpoint and short-circuit the
-          // child turn). `sandboxThreadId` scopes only the sandbox handle, so
-          // the child still shares the parent thread's sandbox.
-          ...(sandboxThreadId ? { sandboxThreadId } : {}),
-        })
-        if (result.status === "failed") {
-          // Surface the failure to the dispatcher in a shape that
-          // extractFinalText can survive; the dispatcher wraps it.
-          throw new Error(result.error.message)
-        }
-        // executeAgent's output for an agent-kind route is the raw
-        // LangGraph state ({messages, ...}). Forward as-is.
-        return result.output
-      },
-      // Stream child events so the parent stream can bubble subagent.*
-      // envelopes for intermediate tool calls, tokens, and capability events.
-      dawnStream: async function* (input: unknown, _config: unknown) {
-        for await (const chunk of streamResolvedRoute({
-          appRoot,
-          input,
-          isSubagent: true,
-          routeFile: route.entryFile,
-          routeId: route.id,
-          routePath: route.pathname,
-          // Same manifest reuse as invoke() above.
-          routeManifest,
-          ...(sandboxManager ? { sandboxManager } : {}),
-          // Same as invoke() above: sandbox key only, never the checkpoint id.
-          ...(sandboxThreadId ? { sandboxThreadId } : {}),
-        })) {
-          yield chunk
-        }
-      },
-    }
-
-    return { routeId: route.id, graph }
-  }
-}
-
-function buildOffload(
-  config: DawnConfig | undefined,
-  filesystem: FilesystemBackend | undefined,
-  signal: AbortSignal,
-  appRoot?: string,
-): OffloadFn | undefined {
-  const workspaceRoot = join(appRoot ?? process.cwd(), "workspace")
-  if (!existsSync(workspaceRoot)) return undefined
-  const t = config?.toolOutput ?? {}
-  const store = new OffloadStore({
-    backend: filesystem ?? localFilesystem(),
-    workspaceRoot,
-    signal,
-    maxBytes: t.maxBytes ?? 268_435_456,
-    ttlMs: t.ttlMs ?? 10_800_000,
-    gcThrottleMs: t.gcThrottleMs ?? 10_000,
-  })
-  const thresholdChars = t.offloadThresholdChars ?? 40_000
-  const previewLines = t.previewLines ?? 10
-  const exempt = exemptToolSet(t.noOffloadTools)
-  return (content, toolName, toolCallId) => {
-    // Retrieval/inspection tools (readFile, listDir, …) must never be
-    // offloaded: their output IS the content the agent asked to read, so
-    // re-offloading it would replace it with another pointer and make the
-    // offloaded data permanently unreadable.
-    if (exempt.has(toolName)) return Promise.resolve(content)
-    return offloadToolOutput(content, {
-      toolName,
-      thresholdChars,
-      previewLines,
-      store,
-      ...(toolCallId ? { toolCallId } : {}),
-    })
-  }
-}
-
-function buildSummarization(
-  config: DawnConfig | undefined,
-  routeModel: string | undefined,
-): ResolvedSummarizationConfig | undefined {
-  const s = config?.summarization
-  if (!s?.enabled) return undefined
-  const model = s.model ?? routeModel
-  if (!model) return undefined // no model to summarize with — cannot enable
-  return {
-    maxTokens: s.maxTokens ?? 12_000,
-    keepRecentTurns: s.keepRecentTurns ?? 6,
-    model,
-    tokenCounter: s.tokenCounter ?? defaultTokenCounter,
-    // The core config types `messages` as `readonly unknown[]` because
-    // @dawn-ai/core cannot depend on @langchain/core. At runtime these are
-    // BaseMessage instances, so the cast to SummarizeFn is sound.
-    summarize:
-      (s.summarize as unknown as ResolvedSummarizationConfig["summarize"] | undefined) ??
-      defaultSummarize,
-  }
-}
-
-/**
- * Tool names whose output is never offloaded: the built-in retrieval/inspection
- * tools (always exempt) unioned with any caller-provided names. Exported for
- * unit testing.
- */
-export function exemptToolSet(noOffloadTools?: readonly string[]): ReadonlySet<string> {
-  return new Set<string>(["readFile", "listDir", ...(noOffloadTools ?? [])])
-}
-
-function isBoundaryError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false
-  }
-
-  return (
-    /must export exactly one of/.test(error.message) ||
-    /exports neither/.test(error.message) ||
-    error.message === "Workflow entry must be a function" ||
-    error.message === "Graph entry must be a function or expose invoke(input)" ||
-    error.message === "Chain entry must expose invoke(input)"
-  )
 }
