@@ -1,3 +1,11 @@
+export {
+  type ConsolidationBatch,
+  eventTimeOf,
+  isoWeekKey,
+  type ReflectionInput,
+  selectConsolidationBatches,
+  selectReflectionInput,
+} from "./distill.js"
 export { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
 export {
   type MemoryScopeTuple,
