@@ -143,14 +143,65 @@ export interface MemoryContext {
   }
 }
 
+/**
+ * Minimal SYNC filesystem facade for capability markers. Sync because
+ * `promptFragment.render()` is synchronous (called per model turn) — the
+ * async `FilesystemBackend` cannot serve it. The node implementation lives in
+ * the cli layer so that markers can drop their own `node:fs` imports (keeping
+ * `node:fs` OUT of @dawn-ai/core's capability graph so edge bundles stay
+ * clean); edge entries simply omit it, and markers must detect-false /
+ * render-empty when it is absent.
+ */
+export interface MarkerFs {
+  /** false on any error — never throws. */
+  existsSync(path: string): boolean
+  /**
+   * true only when the path exists and is a directory; false on any error —
+   * never throws. Needed by the skills marker's directory probe (a size-based
+   * probe can't distinguish dirs from files).
+   */
+  isDirectorySync(path: string): boolean
+  /** Byte size, or undefined on any error — never throws. */
+  statSizeSync(path: string): number | undefined
+  /**
+   * UTF-8 content, or undefined on any error — never throws.
+   * `promptFragment.render()` runs uncaught inside the model-turn path, so a
+   * throwing read would abort the turn; the whole facade is uniformly
+   * fail-closed.
+   */
+  readFileSync(path: string): string | undefined
+  /** Entry names (files+dirs), [] on any error — never throws. */
+  readdirSync(path: string): readonly string[]
+}
+
 export interface CapabilityMarkerContext {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
   readonly descriptorRouteMap?: ReadonlyMap<DawnAgent, string>
+  /**
+   * routeId → that route's agent descriptor (the normalized module entry that
+   * passes `isDawnAgent` — from the default export or a named `agent` export).
+   * Holds ONLY agent routes; workflow/graph/chain routes are absent. Supplied
+   * on the static-modules path so capability code (e.g. the subagents
+   * marker's description lookup) never imports entry files from disk; absent
+   * on the dynamic path, where markers fall back to their best-effort imports.
+   */
+  readonly routeDescriptors?: ReadonlyMap<string, DawnAgent>
   readonly backends?: {
     readonly filesystem?: FilesystemBackend
     readonly exec?: ExecBackend
   }
+  /**
+   * Sync fs facade for marker detect/load/render file access. Absent on
+   * runtimes with no filesystem (edge) — markers MUST treat absence as
+   * "no marker files exist". Always the HOST filesystem, even when the route
+   * runs with sandbox backends — markers that must respect a sandbox should
+   * consult `workspaceRoot` (this preserves current behavior: markers have
+   * always read host files). Paths are caller-trusted and never
+   * model-controlled — no path-jail is applied (contrast with
+   * `FilesystemBackend`'s jailed contract).
+   */
+  readonly markerFs?: MarkerFs
   readonly permissions?: PermissionsStore
   /** Absolute path to the Dawn app root. Capabilities should resolve app-relative paths (e.g. workspace/) against this, NOT process.cwd(). */
   readonly appRoot: string

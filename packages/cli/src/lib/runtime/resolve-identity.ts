@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { discoverRoutes } from "@dawn-ai/core"
-import { parseNamespace, routeNamespaceKey } from "@dawn-ai/memory"
+import { parseNamespace, routeNamespaceKey } from "@dawn-ai/memory/namespace"
 import { CliError, formatErrorMessage } from "../output.js"
 import { loadRouteMemory } from "./load-memory.js"
 

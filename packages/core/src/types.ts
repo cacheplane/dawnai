@@ -215,6 +215,10 @@ export interface LoadDawnConfigOptions {
 export interface LoadedDawnConfig {
   readonly appRoot: string
   readonly config: DawnConfig
+  /**
+   * Absolute path of the loaded `dawn.config.ts` — or the `"<seeded>"`
+   * sentinel when the memo was primed via `seedDawnConfig` (no disk read).
+   */
   readonly configPath: string
 }
 
