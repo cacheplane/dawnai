@@ -528,7 +528,7 @@ git commit -m "build: compile workspace with TypeScript 7"
 - Modify: `examples/research/web/next.config.mjs`
 - Modify: `pnpm-lock.yaml`
 
-- [ ] **Step 1: Capture the expected failing Next 16.2 + TypeScript 7 integration**
+- [x] **Step 1: Capture the expected failing Next 16.2 + TypeScript 7 integration**
 
 After Task 5 and before changing Next, run one representative build without Turbo cache:
 
@@ -538,20 +538,20 @@ pnpm --filter @dawn-example/chat-web build
 
 Expected: FAIL because Next 16.2 attempts to load the unavailable TypeScript JavaScript compiler API. Record the relevant diagnostic in the task notes; do not weaken type checking.
 
-- [ ] **Step 2: Upgrade Next and enable CLI checking**
+- [x] **Step 2: Upgrade Next and enable CLI checking**
 
 - Set all four `next` dependencies to exact `16.3.0`.
 - Set `apps/web`'s `@next/mdx` to exact `16.3.0`.
 - Add `experimental: { useTypeScriptCli: true }` to every Next config, merging with existing options.
 - Preserve Inspector's `output`, tracing root, and external-package configuration.
 
-- [ ] **Step 3: Regenerate the lockfile**
+- [x] **Step 3: Regenerate the lockfile**
 
 ```bash
 pnpm install
 ```
 
-- [ ] **Step 4: Build each Next application directly**
+- [x] **Step 4: Build each Next application directly**
 
 ```bash
 pnpm --filter @dawn-ai/web build
@@ -562,7 +562,7 @@ pnpm --filter @dawn-example/research-web build
 
 Expected: each log identifies Next 16.3 and finishes the TypeScript CLI check successfully.
 
-- [ ] **Step 5: Run Inspector standalone e2e**
+- [x] **Step 5: Run Inspector standalone e2e**
 
 ```bash
 DAWN_TEST_INSPECTOR=1 pnpm --filter @dawn-ai/inspector test
@@ -570,7 +570,7 @@ DAWN_TEST_INSPECTOR=1 pnpm --filter @dawn-ai/inspector test
 
 Expected: PASS, proving the standalone artifact resolves Core and its compatibility compiler dependency at runtime.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web packages/inspector examples/chat/web examples/research/web pnpm-lock.yaml
