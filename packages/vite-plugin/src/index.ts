@@ -9,6 +9,7 @@ import {
 } from "@dawn-ai/core"
 import { analyzeToolSource } from "@dawn-ai/core/internal/compiler"
 
+import { createGeneratedIdentifierAllocator } from "./generated-identifiers.js"
 import { generateZodSchema } from "./zod-generator.js"
 
 export { generateZodSchema } from "./zod-generator.js"
@@ -124,16 +125,31 @@ export function transformToolSource(source: string, fileName: string): string | 
     return null
   }
 
+  const allocateIdentifier = createGeneratedIdentifierAllocator(source)
+  const descriptionIdentifier = needsDescription
+    ? allocateIdentifier("__dawnGeneratedDescription")
+    : undefined
+  const schemaIdentifier = needsSchema ? allocateIdentifier("__dawnGeneratedSchema") : undefined
+  const zodIdentifier = needsSchema ? allocateIdentifier("__dawnGeneratedZ") : undefined
   const injections: string[] = []
 
-  if (needsDescription) {
-    injections.push(`export const description = ${JSON.stringify(analysis.description)}`)
+  if (zodIdentifier) {
+    injections.push(`import { z as ${zodIdentifier} } from "zod"`)
   }
 
-  if (needsSchema && analysis.parameter) {
-    const zodCode = generateZodSchema(analysis.parameter, analysis.parameterDescriptions)
-    injections.push(`import { z } from "zod"`)
-    injections.push(`export const schema = ${zodCode}`)
+  if (descriptionIdentifier) {
+    injections.push(`const ${descriptionIdentifier} = ${JSON.stringify(analysis.description)}`)
+    injections.push(`export { ${descriptionIdentifier} as description }`)
+  }
+
+  if (schemaIdentifier && zodIdentifier && analysis.parameter) {
+    const zodCode = generateZodSchema(
+      analysis.parameter,
+      analysis.parameterDescriptions,
+      zodIdentifier,
+    )
+    injections.push(`const ${schemaIdentifier} = ${zodCode}`)
+    injections.push(`export { ${schemaIdentifier} as schema }`)
   }
 
   return `${injections.join("\n")}\n${source}`

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import * as vitePlugin from "@dawn-ai/vite-plugin"
+import { transformWithEsbuild } from "vite"
 import { describe, expect, test } from "vitest"
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
@@ -36,8 +37,35 @@ describe("compiler ownership", () => {
 
 const { transformToolSource } = vitePlugin
 
+async function compileTransformedTool(source: string): Promise<{
+  readonly source: string
+  readonly code: string
+}> {
+  const transformed = transformToolSource(source, "tool.ts")
+  expect(transformed).not.toBeNull()
+  if (!transformed) throw new Error("Expected transformed tool source")
+
+  const compiled = await transformWithEsbuild(transformed, "tool.ts", {
+    format: "esm",
+    loader: "ts",
+  })
+  return { source: transformed, code: compiled.code }
+}
+
+function expectSingleRuntimeMetadataExports(code: string): void {
+  const exportedNames = [...code.matchAll(/\bexport\s*\{([^}]*)\}/gs)].flatMap((match) =>
+    (match[1] ?? "").split(",").map((specifier) => {
+      const names = specifier.trim().split(/\s+as\s+/)
+      return names.at(-1)?.trim()
+    }),
+  )
+
+  expect(exportedNames.filter((name) => name === "description")).toHaveLength(1)
+  expect(exportedNames.filter((name) => name === "schema")).toHaveLength(1)
+}
+
 describe("transformToolSource", () => {
-  test("injects schema and description for a typed tool", () => {
+  test("injects collision-free schema and description aliases for an ordinary typed tool", async () => {
     const source = `
 /**
  * Look up a customer by ID
@@ -47,13 +75,15 @@ export default async (input: { id: string }) => {
   return { name: "Acme" }
 }
 `
-    const result = transformToolSource(source, "lookup-customer.ts")
+    const result = await compileTransformedTool(source)
 
-    expect(result).not.toBeNull()
-    expect(result).toContain('export const description = "Look up a customer by ID"')
-    expect(result).toContain("export const schema =")
-    expect(result).toContain("z.object(")
-    expect(result).toContain('.describe("Customer ID")')
+    expect(result.source).toContain('const __dawnGeneratedDescription = "Look up a customer by ID"')
+    expect(result.source).toContain("export { __dawnGeneratedDescription as description }")
+    expect(result.source).toContain('import { z as __dawnGeneratedZ } from "zod"')
+    expect(result.source).toContain("const __dawnGeneratedSchema = __dawnGeneratedZ.object(")
+    expect(result.source).toContain("export { __dawnGeneratedSchema as schema }")
+    expect(result.source).toContain('.describe("Customer ID")')
+    expectSingleRuntimeMetadataExports(result.code)
   })
 
   test("prefers inline property descriptions over parameter tag fallbacks", () => {
@@ -84,7 +114,7 @@ export default async (input: { query: string }) => input
     const result = transformToolSource(source, "search.ts")
 
     expect(result).toContain(
-      'export const description = "Search across all indexed\\ncustomer records."',
+      'const __dawnGeneratedDescription = "Search across all indexed\\ncustomer records."',
     )
   })
 
@@ -96,23 +126,25 @@ export default async (input: WithId<{ name: string }>) => input
     const result = transformToolSource(source, "generic.ts")
 
     expect(result).toContain(
-      'z.intersection(z.object({ "id": z.string() }), z.object({ "name": z.string() }))',
+      '__dawnGeneratedZ.intersection(__dawnGeneratedZ.object({ "id": __dawnGeneratedZ.string() }), __dawnGeneratedZ.object({ "name": __dawnGeneratedZ.string() }))',
     )
   })
 
-  test("does not override existing description export", () => {
+  test("injects only schema when description is already exported", async () => {
     const source = `
 /**
  * JSDoc description
  */
 export const description = "Explicit description"
+const schema = "local schema binding"
+const z = "local z binding"
 export default async (input: { id: string }) => ({ id: input.id })
 `
-    const result = transformToolSource(source, "tool.ts")
+    const result = await compileTransformedTool(source)
 
-    expect(result).not.toBeNull()
-    expect(result).not.toContain('export const description = "JSDoc description"')
-    expect(result).toContain("export const schema =")
+    expect(result.source).not.toContain("__dawnGeneratedDescription")
+    expect(result.source).toContain("export { __dawnGeneratedSchema as schema }")
+    expectSingleRuntimeMetadataExports(result.code)
   })
 
   test("recognizes typed description and schema exports without adding a duplicate zod import", () => {
@@ -126,45 +158,106 @@ export default async (input: { id: string }) => input
     expect(transformToolSource(source, "tool.ts")).toBeNull()
   })
 
-  test("ignores export-like comment text when deciding to inject schema", () => {
+  test("ignores export-like comment text when deciding to inject schema", async () => {
     const source = `
 // A future implementation might use: export const schema = customSchema
 export default async (input: { id: string }) => input
 `
-    const result = transformToolSource(source, "tool.ts")
+    const result = await compileTransformedTool(source)
 
-    expect(result).not.toBeNull()
-    expect(result).toContain("export const schema = z.object(")
+    expect(result.source).toContain("export { __dawnGeneratedSchema as schema }")
   })
 
-  test("injects runtime exports when description and schema exist only as types", () => {
+  test("compiles a class-backed type-only description export", async () => {
     const source = `
-export interface schema { parse(value: unknown): unknown }
 class description {}
 export type { description }
 /** Generate runtime metadata. */
 export default async (input: { id: string }) => input
 `
-    const result = transformToolSource(source, "tool.ts")
+    const result = await compileTransformedTool(source)
 
-    expect(result).not.toBeNull()
-    expect(result).toContain('export const description = "Generate runtime metadata."')
-    expect(result).toContain("export const schema = z.object(")
+    expect(result.source).toContain("export { __dawnGeneratedDescription as description }")
+    expect(result.source).toContain("export { __dawnGeneratedSchema as schema }")
+    expectSingleRuntimeMetadataExports(result.code)
   })
 
-  test("injects description but not schema when only schema is exported", () => {
+  test("compiles an enum-backed type-only schema export", async () => {
     const source = `
-import { z } from "zod"
-export const schema = z.object({ id: z.string() })
+enum schema { Original }
+export type { schema }
+/** Generate runtime metadata. */
+export default async (input: { id: string }) => input
+`
+    const result = await compileTransformedTool(source)
+
+    expect(result.source).toContain("export { __dawnGeneratedDescription as description }")
+    expect(result.source).toContain("export { __dawnGeneratedSchema as schema }")
+    expectSingleRuntimeMetadataExports(result.code)
+  })
+
+  test("avoids non-exported local description, schema, and z bindings", async () => {
+    const source = `
+const description = "local description"
+const schema = "local schema"
+const z = "local z"
+/** Generate runtime metadata. */
+export default async (input: { id: string }) => input
+`
+    const result = await compileTransformedTool(source)
+
+    expect(result.source).toContain("export { __dawnGeneratedDescription as description }")
+    expect(result.source).toContain("export { __dawnGeneratedSchema as schema }")
+    expect(result.source).toContain('import { z as __dawnGeneratedZ } from "zod"')
+    expectSingleRuntimeMetadataExports(result.code)
+  })
+
+  test("suffixes preexisting generated identifier bindings deterministically", async () => {
+    const source = `
+const __dawnGeneratedDescription = "occupied"
+const __dawnGeneratedSchema = "occupied"
+const __dawnGeneratedZ = "occupied"
+/** Generate runtime metadata. */
+export default async (input: { id: string }) => input
+`
+    const result = await compileTransformedTool(source)
+
+    expect(result.source).toContain("export { __dawnGeneratedDescription2 as description }")
+    expect(result.source).toContain("export { __dawnGeneratedSchema2 as schema }")
+    expect(result.source).toContain('import { z as __dawnGeneratedZ2 } from "zod"')
+    expectSingleRuntimeMetadataExports(result.code)
+  })
+
+  test("suffixes Unicode-escaped generated identifiers by their canonical names", async () => {
+    const source = String.raw`
+const \u005f_dawnGeneratedDescription = "occupied"
+const \u005f_dawnGeneratedSchema = "occupied"
+const \u005f_dawnGeneratedZ = "occupied"
+const \u005f_dawnGeneratedZ2 = "also occupied"
+/** Generate runtime metadata. */
+export default async (input: { id: string }) => input
+`
+    const result = await compileTransformedTool(source)
+
+    expect(result.source).toContain("export { __dawnGeneratedDescription2 as description }")
+    expect(result.source).toContain("export { __dawnGeneratedSchema2 as schema }")
+    expect(result.source).toContain('import { z as __dawnGeneratedZ3 } from "zod"')
+    expectSingleRuntimeMetadataExports(result.code)
+  })
+
+  test("injects only description when schema is already exported", async () => {
+    const source = `
+const description = "local description binding"
+export const schema = { parse: (value: unknown) => value }
 /** Look up a customer. */
 export default async (input: { id: string }) => input
 `
-    const result = transformToolSource(source, "tool.ts")
+    const result = await compileTransformedTool(source)
 
-    expect(result).not.toBeNull()
-    expect(result).toContain('export const description = "Look up a customer."')
-    expect(result?.match(/export const schema/g)).toHaveLength(1)
-    expect(result?.match(/import \{ z \} from "zod"/g)).toHaveLength(1)
+    expect(result.source).toContain("export { __dawnGeneratedDescription as description }")
+    expect(result.source).not.toContain("__dawnGeneratedSchema")
+    expect(result.source).not.toContain("__dawnGeneratedZ")
+    expectSingleRuntimeMetadataExports(result.code)
   })
 
   test("does not override existing schema export", () => {
@@ -216,8 +309,10 @@ export default async (input: unknown) => input
     const result = transformToolSource(source, "tool.ts")
 
     expect(result).not.toBeNull()
-    expect(result).toContain('export const description = "A simple tool"')
-    expect(result).not.toContain("export const schema")
+    expect(result).toContain('const __dawnGeneratedDescription = "A simple tool"')
+    expect(result).toContain("export { __dawnGeneratedDescription as description }")
+    expect(result).not.toContain("__dawnGeneratedSchema")
+    expect(result).not.toContain("__dawnGeneratedZ")
   })
 
   test("uses documentation from an aliased default export target", () => {
@@ -229,8 +324,10 @@ export { tool as default }
     const result = transformToolSource(source, "tool.ts")
 
     expect(result).not.toBeNull()
-    expect(result).toContain('export const description = "Look up a customer from the target."')
-    expect(result).toContain("export const schema = z.object(")
+    expect(result).toContain(
+      'const __dawnGeneratedDescription = "Look up a customer from the target."',
+    )
+    expect(result).toContain("export { __dawnGeneratedSchema as schema }")
   })
 
   test("uses leading export-alias JSDoc for description and parameter fallback", () => {
@@ -245,7 +342,9 @@ export { tool as default }
     const result = transformToolSource(source, "tool.ts")
 
     expect(result).not.toBeNull()
-    expect(result).toContain('export const description = "Look up a customer from the alias."')
+    expect(result).toContain(
+      'const __dawnGeneratedDescription = "Look up a customer from the alias."',
+    )
     expect(result).toContain('.describe("Aliased customer identifier")')
   })
 })

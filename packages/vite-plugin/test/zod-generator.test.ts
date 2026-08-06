@@ -49,6 +49,13 @@ describe("generateZodSchema", () => {
     expect(generateZodSchema(type)).toBe("z.array(z.string())")
   })
 
+  it("uses a custom Zod identifier recursively", () => {
+    const type: TypeInfo = { kind: "array", element: { kind: "string" } }
+    expect(generateZodSchema(type, undefined, "generatedZod")).toBe(
+      "generatedZod.array(generatedZod.string())",
+    )
+  })
+
   it("generates z.tuple() for tuple", () => {
     const type: TypeInfo = {
       kind: "tuple",

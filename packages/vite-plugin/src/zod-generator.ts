@@ -3,31 +3,34 @@ import type { TypeInfo } from "@dawn-ai/core/internal/compiler"
 export function generateZodSchema(
   type: TypeInfo,
   descriptions?: ReadonlyMap<string, string>,
+  zodIdentifier = "z",
 ): string {
   switch (type.kind) {
     case "string":
-      return "z.string()"
+      return `${zodIdentifier}.string()`
     case "number":
-      return "z.number()"
+      return `${zodIdentifier}.number()`
     case "boolean":
-      return "z.boolean()"
+      return `${zodIdentifier}.boolean()`
     case "null":
-      return "z.null()"
+      return `${zodIdentifier}.null()`
     case "unknown":
-      return "z.unknown()"
+      return `${zodIdentifier}.unknown()`
     case "literal": {
       const val = typeof type.value === "string" ? JSON.stringify(type.value) : String(type.value)
-      return `z.literal(${val})`
+      return `${zodIdentifier}.literal(${val})`
     }
     case "array":
-      return `z.array(${generateZodSchema(type.element, descriptions)})`
+      return `${zodIdentifier}.array(${generateZodSchema(type.element, descriptions, zodIdentifier)})`
     case "tuple": {
-      const elements = type.elements.map((el) => generateZodSchema(el, descriptions)).join(", ")
-      return `z.tuple([${elements}])`
+      const elements = type.elements
+        .map((el) => generateZodSchema(el, descriptions, zodIdentifier))
+        .join(", ")
+      return `${zodIdentifier}.tuple([${elements}])`
     }
     case "object": {
       const props = type.properties.map((prop) => {
-        let schema = generateZodSchema(prop.type, descriptions)
+        let schema = generateZodSchema(prop.type, descriptions, zodIdentifier)
         if (prop.optional) {
           schema = `${schema}.optional()`
         }
@@ -37,47 +40,49 @@ export function generateZodSchema(
         }
         return `${JSON.stringify(prop.name)}: ${schema}`
       })
-      return `z.object({ ${props.join(", ")} })`
+      return `${zodIdentifier}.object({ ${props.join(", ")} })`
     }
     case "record":
-      return `z.record(${generateZodSchema(type.key, descriptions)}, ${generateZodSchema(type.value, descriptions)})`
+      return `${zodIdentifier}.record(${generateZodSchema(type.key, descriptions, zodIdentifier)}, ${generateZodSchema(type.value, descriptions, zodIdentifier)})`
     case "map":
-      return `z.map(${generateZodSchema(type.key, descriptions)}, ${generateZodSchema(type.value, descriptions)})`
+      return `${zodIdentifier}.map(${generateZodSchema(type.key, descriptions, zodIdentifier)}, ${generateZodSchema(type.value, descriptions, zodIdentifier)})`
     case "set":
-      return `z.set(${generateZodSchema(type.element, descriptions)})`
+      return `${zodIdentifier}.set(${generateZodSchema(type.element, descriptions, zodIdentifier)})`
     case "union": {
-      const members = type.members.map((m) => generateZodSchema(m, descriptions)).join(", ")
-      return `z.union([${members}])`
+      const members = type.members
+        .map((member) => generateZodSchema(member, descriptions, zodIdentifier))
+        .join(", ")
+      return `${zodIdentifier}.union([${members}])`
     }
     case "intersection": {
       if (type.members.length === 0) {
-        return "z.unknown()"
+        return `${zodIdentifier}.unknown()`
       }
       const first = type.members[0]
       if (!first) {
-        return "z.unknown()"
+        return `${zodIdentifier}.unknown()`
       }
       if (type.members.length === 1) {
-        return generateZodSchema(first, descriptions)
+        return generateZodSchema(first, descriptions, zodIdentifier)
       }
       const second = type.members[1]
       if (!second) {
-        return generateZodSchema(first, descriptions)
+        return generateZodSchema(first, descriptions, zodIdentifier)
       }
-      let result = `z.intersection(${generateZodSchema(first, descriptions)}, ${generateZodSchema(second, descriptions)})`
+      let result = `${zodIdentifier}.intersection(${generateZodSchema(first, descriptions, zodIdentifier)}, ${generateZodSchema(second, descriptions, zodIdentifier)})`
       for (let i = 2; i < type.members.length; i++) {
         const member = type.members[i]
         if (member) {
-          result = `z.intersection(${result}, ${generateZodSchema(member, descriptions)})`
+          result = `${zodIdentifier}.intersection(${result}, ${generateZodSchema(member, descriptions, zodIdentifier)})`
         }
       }
       return result
     }
     case "enum": {
       const values = type.values.map((v) => JSON.stringify(v)).join(", ")
-      return `z.enum([${values}])`
+      return `${zodIdentifier}.enum([${values}])`
     }
     case "optional":
-      return `${generateZodSchema(type.inner, descriptions)}.optional()`
+      return `${generateZodSchema(type.inner, descriptions, zodIdentifier)}.optional()`
   }
 }
