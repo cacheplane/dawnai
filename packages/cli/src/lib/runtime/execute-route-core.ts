@@ -67,6 +67,14 @@ import { createDawnContext } from "./dawn-context.js"
 import { buildMemoryContext } from "./memory-context.js"
 import { pureDirname, pureJoin } from "./pure-path.js"
 import {
+  extractToolNames,
+  extractUserInputText,
+  hasPendingInterrupt,
+  type ResolvedEpisodesConfig,
+  recordEpisode,
+  resolveEpisodesFromConfig,
+} from "./record-episode.js"
+import {
   createRuntimeFailureResult,
   createRuntimeSuccessResult,
   formatErrorMessage,
@@ -332,6 +340,7 @@ export async function* streamResolvedRoute(
     readonly threadId?: string
   },
 ): AsyncGenerator<StreamChunk> {
+  const startedAt = Date.now()
   const prepared = await prepareRouteExecution({
     ...options,
     isSubagent: options.isSubagent ?? false,
@@ -372,65 +381,119 @@ export async function* streamResolvedRoute(
 
   const agentInput = toAgentInput(options.input, options.resume)
 
-  for await (const chunk of streamAgent({
-    checkpointer,
-    entry: normalized.entry,
-    input: agentInput,
-    ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
-    routeParamNames,
-    signal: options.signal ?? new AbortController().signal,
-    ...(stateFields ? { stateFields } : {}),
-    tools,
-    ...(offload ? { offload } : {}),
-    ...(summarization ? { summarization } : {}),
-    ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
-    ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
-    ...(subagentResolver ? { subagentResolver } : {}),
-    ...(options.threadId ? { threadId: options.threadId } : {}),
-    ...(sandboxed ? { sandboxed: true } : {}),
-  })) {
-    switch (chunk.type) {
-      case "token":
-        yield { type: "chunk", data: chunk.data }
-        break
-      case "tool_call": {
-        const tc = chunk.data as { id?: string; name: string; input: unknown }
-        yield {
-          type: "tool_call",
-          ...(tc.id ? { id: tc.id } : {}),
-          name: tc.name,
-          input: tc.input,
+  // Episode recorder (streaming path): a COMPLETED turn records an "ok"
+  // episode; a thrown execution error records an "error" episode before
+  // propagating. Parked (HITL-interrupted) turns record NOTHING: the
+  // agent-adapter yields {type:"done"} unconditionally after its event stream
+  // — including parked turns — so "done" alone is not completion. On this
+  // path pending interrupts surface only as "interrupt" chunks (the adapter's
+  // streamEvents output does not carry `__interrupt__`), so we track them
+  // here; once an interrupt is seen the turn is parked and no further model
+  // work happens in it. The resuming turn records when it completes, with the
+  // RESUME turn's own startedAt (honest: the completing invocation's start —
+  // the original turn's start is not reconstructed).
+  let sawDone = false
+  let sawInterrupt = false
+  let recordedError = false
+  let finalOutput: unknown
+
+  try {
+    for await (const chunk of streamAgent({
+      checkpointer,
+      entry: normalized.entry,
+      input: agentInput,
+      ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
+      routeParamNames,
+      signal: options.signal ?? new AbortController().signal,
+      ...(stateFields ? { stateFields } : {}),
+      tools,
+      ...(offload ? { offload } : {}),
+      ...(summarization ? { summarization } : {}),
+      ...(promptFragments && promptFragments.length > 0 ? { promptFragments } : {}),
+      ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
+      ...(subagentResolver ? { subagentResolver } : {}),
+      ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(sandboxed ? { sandboxed: true } : {}),
+    })) {
+      switch (chunk.type) {
+        case "token":
+          yield { type: "chunk", data: chunk.data }
+          break
+        case "tool_call": {
+          const tc = chunk.data as { id?: string; name: string; input: unknown }
+          yield {
+            type: "tool_call",
+            ...(tc.id ? { id: tc.id } : {}),
+            name: tc.name,
+            input: tc.input,
+          }
+          break
         }
-        break
-      }
-      case "tool_result": {
-        const tr = chunk.data as { id?: string; name: string; output: unknown }
-        yield {
-          type: "tool_result",
-          ...(tr.id ? { id: tr.id } : {}),
-          name: tr.name,
-          output: tr.output,
+        case "tool_result": {
+          const tr = chunk.data as { id?: string; name: string; output: unknown }
+          yield {
+            type: "tool_result",
+            ...(tr.id ? { id: tr.id } : {}),
+            name: tr.name,
+            output: tr.output,
+          }
+          break
         }
-        break
+        case "done":
+          sawDone = true
+          finalOutput = chunk.data
+          yield { type: "done", output: chunk.data }
+          break
+        case "interrupt": {
+          // The agent-adapter registers the pending entry in
+          // pending-interrupts so the /threads/:thread_id/resume endpoint
+          // can correlate the POST. We just forward the chunk to the SSE
+          // consumer.
+          sawInterrupt = true
+          yield { type: "interrupt", data: chunk.data }
+          break
+        }
+        default: {
+          // Capability-contributed event types (e.g. plan_update from the planning capability).
+          // The langchain layer widened AgentStreamChunk["type"] to allow arbitrary strings;
+          // pass them through verbatim with their literal type as the SSE event name.
+          yield { type: chunk.type, data: chunk.data }
+          break
+        }
       }
-      case "done":
-        yield { type: "done", output: chunk.data }
-        break
-      case "interrupt": {
-        // The agent-adapter registers the pending entry in
-        // pending-interrupts so the /threads/:thread_id/resume endpoint
-        // can correlate the POST. We just forward the chunk to the SSE
-        // consumer.
-        yield { type: "interrupt", data: chunk.data }
-        break
-      }
-      default: {
-        // Capability-contributed event types (e.g. plan_update from the planning capability).
-        // The langchain layer widened AgentStreamChunk["type"] to allow arbitrary strings;
-        // pass them through verbatim with their literal type as the SSE event name.
-        yield { type: chunk.type, data: chunk.data }
-        break
-      }
+    }
+  } catch (error) {
+    recordedError = true
+    await recordRunEpisode({
+      memoryContext: prepared.memoryContext,
+      episodes: prepared.episodes,
+      outcome: "error",
+      input: options.input,
+      startedAt,
+      ...(options.threadId ? { threadId: options.threadId } : {}),
+    })
+    throw error
+  } finally {
+    // The "ok" record lives in the finally, NOT after the loop: stream
+    // consumers may close the generator early — the AG-UI outbound translator
+    // early-returns on RUN_FINISHED without draining, which cascades a
+    // .return() into this generator while it is suspended at the done yield.
+    // A finally still runs on that close path (sawDone/finalOutput were
+    // assigned BEFORE yielding the done chunk, so they are already set when
+    // the close lands on the yield). `recordedError` prevents a double record
+    // when the catch above already recorded the failure; abandoned (closed
+    // before done) and parked (interrupt seen) turns record nothing.
+    // recordRunEpisode never throws, so this is finally-safe.
+    if (!recordedError && sawDone && !sawInterrupt) {
+      await recordRunEpisode({
+        memoryContext: prepared.memoryContext,
+        episodes: prepared.episodes,
+        outcome: "ok",
+        output: finalOutput,
+        input: options.input,
+        startedAt,
+        ...(options.threadId ? { threadId: options.threadId } : {}),
+      })
     }
   }
 }
@@ -455,6 +518,13 @@ export interface PreparedRoute {
   readonly workspaceFs: WorkspaceFs
   /** The store the route's permission gates consult this request (provided, factory-produced, or freshly constructed). */
   readonly permissionsStore: PermissionsStore
+  /** The memory context built for this route (agent routes with a memory.ts).
+   *  Threaded out so the episode recorder can reuse the exact namespace/store/
+   *  writes the capability used. */
+  readonly memoryContext?: import("@dawn-ai/core").MemoryContext
+  /** Resolved `memory.episodes` config — present only when a memory context
+   *  was built (recorder is a no-op otherwise). */
+  readonly episodes?: ResolvedEpisodesConfig
   /**
    * True when a per-thread sandbox is active for this turn (sandboxManager +
    * threadId resolved a handle). The agent-adapter uses this to bypass its
@@ -589,6 +659,11 @@ export async function prepareRouteExecution(
 
   let subagentResolver: SubagentResolver | undefined
 
+  // Memory context + episode-recorder config, populated in the agent branch
+  // below when the route has a memory.ts; threaded out for the recorder.
+  let memoryContext: import("@dawn-ai/core").MemoryContext | undefined
+  let episodes: ResolvedEpisodesConfig | undefined
+
   // Load dawn.config.ts once — used for checkpointer, threadsStore, backends,
   // and permissions. Falls back to defaults when the config is absent/unreadable.
   let configBackends:
@@ -720,7 +795,6 @@ export async function prepareRouteExecution(
 
     // Build the memory context if this route has a memory.ts (probed and
     // loaded once per route — part of PreparedRouteModules).
-    let memoryContext: import("@dawn-ai/core").MemoryContext | undefined
     if (prepared.memory) {
       const defined = prepared.memory
       // Boot-resolved thunk wins when provided (shared, lazily-opened store —
@@ -779,6 +853,21 @@ export async function prepareRouteExecution(
             }
           : {}),
       })
+    }
+
+    // Episode-recorder knobs, resolved only when this route built a memory
+    // context (routes without a memory.ts and disabled apps pay nothing).
+    //
+    // Derived from the config this function ALREADY holds rather than from a
+    // second `dawn.config.ts` read: `loadedDawnConfig` is the caller-supplied
+    // config when there is one and the node fallback's `loadDawnConfig` memo
+    // otherwise, so the node path resolves exactly what the disk-reading
+    // `resolveEpisodesConfig` would (the server seeds that same memo from a
+    // supplied config), and an edge runtime that injects a config gets a
+    // working recorder instead of a silent no-op. `resolveEpisodesFromConfig`
+    // IS the defaulting rule both entry points share.
+    if (memoryContext) {
+      episodes = resolveEpisodesFromConfig(loadedDawnConfig?.memory?.episodes)
     }
 
     const capabilityBackends = sandboxBackends ?? configBackends
@@ -987,6 +1076,67 @@ export async function prepareRouteExecution(
     tools,
     workspaceFs,
     ...(sandboxBackends !== undefined ? { sandboxed: true } : {}),
+    ...(memoryContext ? { memoryContext } : {}),
+    ...(episodes ? { episodes } : {}),
+  }
+}
+
+/**
+ * Record one episodic memory for a settled run (the auto-recorder seam).
+ *
+ * No-ops unless `memory.episodes.enabled`, a memory context was built for the
+ * route, and writes are not "off"; failed runs are skipped when
+ * `includeFailedRuns` is false. NEVER throws — the recorder must not fail (or
+ * alter the result of) a user's run; it is awaited so the write is durable
+ * before the result is returned.
+ *
+ * Lives on the request path (and so stays node-free): everything it needs —
+ * the store, the namespace, the knobs — arrives on `PreparedRoute`.
+ */
+async function recordRunEpisode(args: {
+  readonly memoryContext: import("@dawn-ai/core").MemoryContext | undefined
+  readonly episodes: ResolvedEpisodesConfig | undefined
+  readonly outcome: "ok" | "error"
+  readonly output?: unknown
+  readonly input: unknown
+  readonly startedAt: number
+  readonly threadId?: string
+}): Promise<void> {
+  const { memoryContext, episodes } = args
+  if (!episodes?.enabled || !memoryContext) return
+  if (memoryContext.writes === "off") return
+  if (args.outcome === "error" && !episodes.includeFailedRuns) return
+  // A parked (HITL-interrupted) turn is not a completed run: the invoke()
+  // path surfaces pending interrupts as `__interrupt__` on the final state.
+  // Record nothing — the completing resume turn records instead. (The stream
+  // path tracks interrupt chunks separately; see streamResolvedRoute.)
+  if (args.outcome === "ok" && hasPendingInterrupt(args.output)) return
+  try {
+    await recordEpisode(
+      memoryContext.store,
+      {
+        namespace: memoryContext.namespace,
+        // Prefer the final state's message history: on a resume turn the run
+        // input is a Command({resume}) with no human message, while the last
+        // human message in the full state IS the original question. Fall back
+        // to the run input (error path — no final state).
+        input: extractUserInputText(args.output) || extractUserInputText(args.input),
+        outcome: args.outcome,
+        // On the failure path the final state is unavailable — record no tools.
+        toolsUsed: args.outcome === "ok" ? extractToolNames(args.output) : [],
+        startedAt: args.startedAt,
+        finishedAt: Date.now(),
+        ttlMs: episodes.ttlMs,
+        // No distinct run id exists in the runtime today; the checkpoint
+        // threadId is the per-run identifier (a fresh `t-run-*` id is minted
+        // per invocation when the caller does not thread one).
+        ...(args.threadId ? { runId: args.threadId, threadId: args.threadId } : {}),
+      },
+      { cap: episodes.cap },
+    )
+  } catch {
+    // recordEpisode already never throws; this guards the extraction helpers
+    // too so the recorder can never fail a user's run.
   }
 }
 
@@ -1008,6 +1158,11 @@ export async function executeRouteAtResolvedPath(
   },
 ): Promise<RuntimeExecutionResult> {
   let mode: RuntimeExecutionMode | null = null
+  // Episode-recorder context, captured once prepare succeeds so the catch
+  // path can record failed runs too. Absent (recorder no-op) until then.
+  let epMemoryContext: import("@dawn-ai/core").MemoryContext | undefined
+  let epConfig: ResolvedEpisodesConfig | undefined
+  let epThreadId: string | undefined
 
   try {
     const prepared = await prepareRouteExecution({
@@ -1047,6 +1202,9 @@ export async function executeRouteAtResolvedPath(
       (normalized.kind === "agent"
         ? `t-run-${globalThis.crypto.randomUUID().slice(0, 8)}`
         : undefined)
+    epMemoryContext = prepared.memoryContext
+    epConfig = prepared.episodes
+    epThreadId = threadId
 
     const context = createDawnContext({
       ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
@@ -1071,6 +1229,18 @@ export async function executeRouteAtResolvedPath(
       ...(sandboxed ? { sandboxed: true } : {}),
     })
 
+    // Record the episode BEFORE returning so the write is durable when the
+    // caller observes the result; the result object itself is unchanged.
+    await recordRunEpisode({
+      memoryContext: epMemoryContext,
+      episodes: epConfig,
+      outcome: "ok",
+      output,
+      input: options.input,
+      startedAt: options.startedAt,
+      ...(threadId ? { threadId } : {}),
+    })
+
     return createRuntimeSuccessResult({
       appRoot: options.appRoot,
       executionSource: "in-process",
@@ -1083,6 +1253,15 @@ export async function executeRouteAtResolvedPath(
   } catch (error) {
     const kind = isBoundaryError(error) ? "unsupported_route_boundary" : "execution_error"
     const message = formatErrorMessage(error)
+
+    await recordRunEpisode({
+      memoryContext: epMemoryContext,
+      episodes: epConfig,
+      outcome: "error",
+      input: options.input,
+      startedAt: options.startedAt,
+      ...(epThreadId ? { threadId: epThreadId } : {}),
+    })
 
     return createRuntimeFailureResult({
       appRoot: options.appRoot,

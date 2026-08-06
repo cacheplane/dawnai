@@ -10,6 +10,8 @@ export {
   approveWithReconcile,
   classifyWrite,
   type WriteOp,
+  type WritePolicy,
+  writePolicyFor,
 } from "./reconcile.js"
 export {
   DEFAULT_CANDIDATE_POOL,

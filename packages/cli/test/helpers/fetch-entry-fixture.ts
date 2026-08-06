@@ -88,6 +88,7 @@ export function fakeMemoryStore(): MemoryStore {
     delete: async () => {},
     get: async () => null,
     listCandidates: async () => [],
+    prune: async () => ({ deletedExpired: 0, deletedOverCap: 0 }),
     put: async () => {},
     search: async () => [],
     stats: async () => ({

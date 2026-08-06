@@ -464,7 +464,6 @@ async function createExpectedInternalFixture(
       dependencies: {
         ...expected.packageJson.dependencies,
         "@dawn-ai/cli": "<repo:@dawn-ai/cli>",
-        "@dawn-ai/core": "<repo:@dawn-ai/core>",
         "@dawn-ai/langchain": "<repo:@dawn-ai/langchain>",
         "@dawn-ai/sdk": "<repo:@dawn-ai/sdk>",
       },
@@ -489,7 +488,7 @@ function normalizeForFixture(
     [context.dawnVersion, "<dawn-version>"],
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
-    ["4.1.4", "<version:vitest>"],
+    ["^4.1.10", "<version:vitest>"],
     // Runtime check emits the live Node version (process.versions.node). Normalize
     // it so the fixture stays stable across Node patch releases.
     [process.versions.node, "<version:node>"],
@@ -522,7 +521,7 @@ function normalizeForInternalFixture(
     ...repoPairs,
     ["25.6.0", "<version:@types/node>"],
     ["6.0.2", "<version:typescript>"],
-    ["4.1.4", "<version:vitest>"],
+    ["^4.1.10", "<version:vitest>"],
     // Runtime check emits the live Node version (process.versions.node). Normalize
     // it so the fixture stays stable across Node patch releases.
     [process.versions.node, "<version:node>"],

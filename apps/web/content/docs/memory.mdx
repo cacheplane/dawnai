@@ -77,7 +77,7 @@ export default defineMemory({
 
 `defineMemory({ kind, scope, schema, identity? })`:
 
-- **`kind`** — `"semantic" | "episodic" | "procedural" | "reflection"`. Only `"semantic"` is wired end-to-end today; the other three are typed but deferred.
+- **`kind`** — `"semantic" | "episodic" | "procedural" | "reflection"`. `"semantic"` and [`"episodic"`](#episodic-memory) are wired end-to-end today; the other two are typed but deferred.
 - **`scope`** — a subset of `["workspace", "route", "tenant", "user", "agent"]`. The dimensions a memory is partitioned by; `["workspace", "route"]` namespaces records to the app *and* the specific route, so two routes never read each other's memories.
 - **`schema`** — a Zod schema describing your fact shape.
 - **`identity?`** — the keys used for write reconciliation (in `auto` and `ask` modes). Defaults to `["subject", "predicate"]`.
@@ -97,7 +97,7 @@ Typegen emits two typed tools for any route with a `memory.ts` into `.dawn/dawn.
   Typegen derives `remember`'s `data` type from your route's `defineMemory()` Zod schema, so TypeScript catches missing or misspelled fields in route code. The same schema is still enforced at *runtime* when the model calls `remember`.
 </Callout>
 
-**`recall({ query?, kind?, tags?, limit? })`** searches the store. It defaults `status` to `"active"` and `limit` to `8`, and returns one `id: content` line per match, or `(no memories found)` when empty.
+**`recall({ query?, kind?, tags?, limit?, since?, until? })`** searches the store. It defaults `status` to `"active"` and `limit` to `8`, and returns one `id: content` line per match, or `(no memories found)` when empty. `since`/`until` narrow to a [time window](#time-windowed-recall) — most useful with [episodic memory](#episodic-memory).
 
 **`remember({ data, content?, tags?, confidence? })`** validates `data` against the schema, then writes a record. The id is **data-derived** — `memory_` + the first 16 hex chars of `sha1(namespace | JSON(data))` — so a contradicting value (same identity, different data) gets a distinct id and can coexist with the old row. `content` defaults to `JSON.stringify(data)`, `confidence` to `1`, `tags` to `[]`.
 
@@ -236,6 +236,91 @@ These memories are available — call `recall({ query })` to load full details b
 
 The default store lives at `<appRoot>/.dawn/memory.sqlite`.
 
+## Episodic memory
+
+Semantic memory stores *beliefs* — facts that can be updated or contradicted. **Episodic memory** stores *events*: what the agent did, when. Episodes are append-only (a later event never contradicts an earlier one), carry a time the event happened (`effectiveAt`), and age out via TTL instead of living forever. With episodes recorded, an agent can answer "what did you do in the last day?" from its own history.
+
+### Enabling the run recorder
+
+The zero-effort path is the **runtime episode recorder**: opt in via `memory.episodes` in `dawn.config.ts` and Dawn writes one episodic memory per agent run, for every route that has a `memory.ts`:
+
+```ts title="dawn.config.ts"
+export default {
+  memory: {
+    episodes: {
+      enabled: true,          // default false — episodes are opt-in
+      ttlMs: 30 * 86_400_000, // default 30 days — episodes expire after this
+      cap: 500,               // default 500 — max episodes kept per namespace
+      includeFailedRuns: true, // default true — record runs that errored too
+      embed: false,           // default false — embed: true is not yet supported
+    },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
+### What gets recorded
+
+One episode per completed run, written after the run settles (both the invoke and streaming paths):
+
+- **`content`** — a one-line summary: `run ok: <input> (3 tools, 4.2s)`.
+- **`data`** — `{ input, outcome: "ok" | "error", toolsUsed, durationMs }` (plus the thread/run id when available). `input` is the user's message for the run, truncated to 500 chars.
+- **`source`** — `{ type: "run", id }`, and **`effectiveAt`** is the run's *start* time — recall time windows key on when the event happened.
+- **Deterministic ids** — `memory_ep_` + a hash of the namespace, run id, and start time, so a retried write of the same run's episode is idempotent rather than a duplicate.
+
+Recording **never fails a run**: a store error is logged once and swallowed. Human-in-the-loop turns are handled precisely — a run that *parks* on a [permission interrupt](/docs/permissions) records nothing; the resume turn that completes it records once, with the original user input (not the resume payload).
+
+### Retention
+
+Episodes expire. Each recorded episode carries `expiresAt = start + ttlMs` (default **30 days**), and every write runs a lazy retention pass that deletes expired rows and enforces the per-namespace **cap** (default **500**, oldest-first). Expired rows are excluded from recall, the injected index, and the Inspector's search. You can also run retention manually:
+
+```bash
+dawn memory prune                 # delete expired rows, enforce the default cap
+dawn memory prune --cap 100       # tighter cap for this pass
+dawn memory prune --namespace "route=/support" # scope to a namespace prefix
+```
+
+### Time-windowed recall
+
+The `recall` tool gains `since` and `until` — an ISO timestamp or a relative offset like `"-24h"`, `"-7d"`, `"-30m"`, resolved against the request clock. `since` is **inclusive**, `until` is **exclusive**, and the window compares against when the memory *happened* (`effectiveAt`, falling back to `createdAt`):
+
+```ts
+recall({ since: "-24h" })                    // everything from the last day
+recall({ kind: "episodic", since: "-7d", until: "-24h" }) // last week, minus today
+```
+
+Windows work for any kind, but they exist for episodes — "what did I do recently?" is a time query, not a keyword query. Expired episodes never come back from `recall`, windowed or not.
+
+### Governance
+
+The recorder is **runtime-authored, not agent-authored**, so it does not flow through the `remember` tool's write governance: auto-recorded episodes land `active` immediately in every `writes` mode **except `"off"`**, which disables recording entirely (recall-only means no writes, including Dawn's own). There is no candidate queue for a factual record of what the runtime just did.
+
+Agent-authored episodic writes (below) **do** honor `writes` modes — `candidate` mode holds them for review like any other write. Episodic writes are **append-only**: they never update or supersede an earlier record, and because [`ask` mode](#ask-mode) only gates supersedes, `ask` never prompts for an episodic append.
+
+### Agent-authored episodes
+
+Routes can also let the *agent* record episodes explicitly — declare an episodic collection in `memory.ts`:
+
+```ts title="src/app/ops/memory.ts"
+import { defineMemory } from "@dawn-ai/sdk"
+import { z } from "zod"
+
+export default defineMemory({
+  kind: "episodic",
+  scope: ["route"],
+  schema: z.object({
+    action: z.string(),
+    target: z.string(),
+    result: z.string(),
+  }),
+})
+```
+
+The generated `remember` tool then appends one event per call — identical data on different runs stays two distinct events (ids are salted with the request time), and nothing is ever superseded. `effectiveAt` is stamped with the request time; agent-authored episodes have no automatic TTL (retention is `dawn memory prune`'s business).
+
+<Callout type="info" title="Episodes are not embedded">
+  Auto-recorded episodes are recalled by keyword and time window only — they are not embedded, even when [semantic recall](#semantic-recall-opt-in) is configured, and `episodes.embed: true` is not yet supported (it resolves to `false` with a warning). Time plus keywords is the natural query shape for "what happened"; semantic search over episodes is a follow-up.
+</Callout>
+
 ## Write governance
 
 The `memory.writes` mode in `dawn.config.ts` controls what `remember` does. It defaults to `"candidate"`.
@@ -351,9 +436,10 @@ For deterministic coverage the aimock harness scripts exact tool arguments — w
 
 ## What's deferred
 
-Long-term memory ships with the `semantic` kind, deterministic ranked keyword recall (IDF-weighted relevance blended with recency and confidence), and [opt-in hybrid vector recall](#semantic-recall-opt-in). The following are typed or designed but **not** implemented:
+Long-term memory ships with the `semantic` and [`episodic`](#episodic-memory) kinds, deterministic ranked keyword recall (IDF-weighted relevance blended with recency and confidence), [opt-in hybrid vector recall](#semantic-recall-opt-in), and the [runtime episode recorder](#episodic-memory). The following are typed or designed but **not** implemented:
 
-- The `episodic`, `procedural`, and `reflection` kinds.
+- The `procedural` and `reflection` kinds, and background consolidation (summarizing old episodes into semantic facts).
+- Embedded episodes (`episodes.embed: true`) — auto-episodes are keyword + time-window recall only.
 - Full BM25 (term-frequency / length-normalized) ranking via FTS5, and a memory graph.
 
 A browser UI for the store — the [Dawn Inspector](/docs/inspector)'s Memory panel — ships today via `dawn inspect`.

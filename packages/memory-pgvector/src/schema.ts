@@ -47,6 +47,11 @@ export async function initSchema(
   await client.query(
     `CREATE INDEX IF NOT EXISTS ${prefix}_ns_status_updated ON ${t} (namespace, status, updated_at DESC)`,
   )
+  // Equality filter for kind-scoped windows; COALESCE(effective_at, created_at)
+  // ordering is intentionally unindexed at this scale.
+  await client.query(
+    `CREATE INDEX IF NOT EXISTS ${prefix}_ns_kind_effective ON ${t} (namespace, kind, effective_at DESC)`,
+  )
   await client.query(`CREATE INDEX IF NOT EXISTS ${prefix}_tok ON ${tk} (token)`)
   await client.query(`CREATE INDEX IF NOT EXISTS ${prefix}_tok_mem ON ${tk} (memory_id)`)
   await client.query(

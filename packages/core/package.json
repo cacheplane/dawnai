@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/core",
-  "version": "0.8.14",
+  "version": "0.8.15",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -14,7 +14,7 @@
     "url": "https://github.com/cacheplane/dawnai/issues"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.0.0"
   },
   "files": [
     "dist"

@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
+import { afterEach, describe, expect, it } from "vitest"
 import { sqliteMemoryStore } from "../src/sqlite-store.js"
 import type { MemoryRecord } from "../src/types.js"
 
@@ -615,5 +619,58 @@ describe("sqliteMemoryStore", () => {
     expect(defaultOrder[0]).toBe("old")
     expect(tinyOrder[0]).toBe("new")
     expect(tinyOrder).not.toEqual(defaultOrder)
+  })
+})
+
+describe("schema migrations", () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+
+  it("v2 → v3: opening an existing v2 db adds the episodic event-time index", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dawn-mig-"))
+    dirs.push(dir)
+    const path = join(dir, "m.sqlite")
+
+    // Hand-build a pre-EP2 (v2) database: v1 schema + v2 embedding columns,
+    // schema_version at 2 — byte-equivalent to what shipped stores wrote.
+    const raw = new DatabaseSync(path)
+    raw.exec(`
+      CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+      CREATE TABLE memories (
+        id TEXT PRIMARY KEY, kind TEXT NOT NULL, namespace TEXT NOT NULL,
+        content TEXT NOT NULL, data TEXT NOT NULL, source TEXT NOT NULL,
+        confidence REAL NOT NULL, tags TEXT NOT NULL, status TEXT NOT NULL,
+        supersedes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        effective_at TEXT, expires_at TEXT
+      );
+      CREATE INDEX idx_mem_ns_status_updated ON memories(namespace, status, updated_at DESC);
+      CREATE TABLE memory_tokens (
+        memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE, token TEXT NOT NULL
+      );
+      CREATE INDEX idx_memtok_token ON memory_tokens(token);
+      CREATE INDEX idx_memtok_mem ON memory_tokens(memory_id);
+      ALTER TABLE memories ADD COLUMN embedding BLOB;
+      ALTER TABLE memories ADD COLUMN embedding_model TEXT;
+      INSERT INTO schema_version(version) VALUES (1);
+      INSERT INTO schema_version(version) VALUES (2);
+    `)
+    raw.close()
+
+    const s = sqliteMemoryStore({ path })
+    await s.put(rec({ id: "kept", namespace: "ns", content: "still here after migration" }))
+    expect((await s.get("kept"))?.content).toBe("still here after migration")
+
+    const db = new DatabaseSync(path)
+    const idx = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?")
+      .get("idx_mem_ns_kind_effective") as { name?: string } | undefined
+    const version = db.prepare("SELECT max(version) AS v FROM schema_version").get() as {
+      v: number
+    }
+    db.close()
+    expect(idx?.name).toBe("idx_mem_ns_kind_effective")
+    expect(version.v).toBe(3)
   })
 })

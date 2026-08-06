@@ -42,7 +42,7 @@ export default config({
   ...(process.env.DAWN_DEMO_DOCKER_SANDBOX === "1"
     ? {
         sandbox: {
-          provider: dockerSandbox({ image: "node:22-slim" }),
+          provider: dockerSandbox({ image: "node:24-slim" }),
           network: { mode: "deny" },
           resources: { memoryMb: 512, cpus: 1, timeoutMs: 120_000 },
           idleTimeoutMs: 600_000,

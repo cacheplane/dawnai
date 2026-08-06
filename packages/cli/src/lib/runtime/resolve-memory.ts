@@ -2,6 +2,7 @@ import type { MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
 import { loadDawnConfig } from "@dawn-ai/core"
 import type { RecallRankingOptions, VectorRankingOptions } from "@dawn-ai/memory"
 import { pureJoin } from "./pure-path.js"
+import { type ResolvedEpisodesConfig, resolveEpisodesFromConfig } from "./record-episode.js"
 
 /**
  * Resolves the MemoryStore for the given appRoot.
@@ -62,6 +63,30 @@ export async function resolveMemoryWrites(appRoot: string): Promise<MemoryWrites
   }
 }
 
+/**
+ * Resolves the episode-recorder config for the given appRoot, reading
+ * `dawn.config.ts` through the same cached `loadDawnConfig` loader as the
+ * other resolvers; missing/unreadable config falls back to the defaults.
+ *
+ * This is the DISK entry point — `dawn memory prune` and any other node caller
+ * that has an appRoot but no loaded config. The request path does not come
+ * through here: `execute-route-core.ts` applies the same defaulting to the
+ * `DawnConfig` it already holds via `resolveEpisodesFromConfig`, which is
+ * where the rule itself lives (and which stays reachable from the node-free
+ * fetch graph).
+ */
+export async function resolveEpisodesConfig(appRoot: string): Promise<ResolvedEpisodesConfig> {
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    return resolveEpisodesFromConfig(loaded.config.memory?.episodes)
+  } catch {
+    // No dawn.config.ts or unreadable — use defaults.
+    return resolveEpisodesFromConfig(undefined)
+  }
+}
+
 // Re-exported so `resolve-memory.js` stays the one import site callers know;
-// the implementation lives in the node-free `memory-context.ts`.
+// the implementations live in the node-free `memory-context.ts` /
+// `record-episode.ts` (both are on the request path).
 export { buildMemoryContext } from "./memory-context.js"
+export type { ResolvedEpisodesConfig }
