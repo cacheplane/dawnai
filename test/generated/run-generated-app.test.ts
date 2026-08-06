@@ -488,7 +488,7 @@ function normalizeForFixture(
     [context.appRoot, "<app-root>"],
     [context.dawnVersion, "<dawn-version>"],
     ["25.6.0", "<version:@types/node>"],
-    ["6.0.2", "<version:typescript>"],
+    ["7.0.2", "<version:typescript>"],
     ["4.1.4", "<version:vitest>"],
     // Runtime check emits the live Node version (process.versions.node). Normalize
     // it so the fixture stays stable across Node patch releases.
@@ -521,7 +521,7 @@ function normalizeForInternalFixture(
     [context.appRoot, "<app-root>"],
     ...repoPairs,
     ["25.6.0", "<version:@types/node>"],
-    ["6.0.2", "<version:typescript>"],
+    ["7.0.2", "<version:typescript>"],
     ["4.1.4", "<version:vitest>"],
     // Runtime check emits the live Node version (process.versions.node). Normalize
     // it so the fixture stays stable across Node patch releases.

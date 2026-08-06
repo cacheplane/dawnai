@@ -23,7 +23,7 @@
     "@dawn-ai/inspector": "{{dawnInspectorSpecifier}}",
     "@dawn-ai/testing": "{{dawnTestingSpecifier}}",
     "@types/node": "25.6.0",
-    "typescript": "6.0.2",
+    "typescript": "7.0.2",
     "vitest": "4.1.4"
   }
 }

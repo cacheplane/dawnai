@@ -154,6 +154,38 @@ export default async function literals(input: { mode: "fast"; count: 2; enabled:
     })
   })
 
+  test("preserves standard Promise, Map, and Set identities with the TypeScript 6 bridge", () => {
+    const result = analyze(`
+export default async function collect(input: {
+  values: Map<string, number>
+  flags: Set<boolean>
+}): Promise<{ count: number }> {
+  return { count: input.values.size + input.flags.size }
+}
+`)
+
+    expect(result.outputType).toBe("{ count: number; }")
+    expect(result.parameter).toEqual({
+      kind: "object",
+      properties: [
+        {
+          name: "values",
+          optional: false,
+          type: {
+            kind: "map",
+            key: { kind: "string" },
+            value: { kind: "number" },
+          },
+        },
+        {
+          name: "flags",
+          optional: false,
+          type: { kind: "set", element: { kind: "boolean" } },
+        },
+      ],
+    })
+  })
+
   test.each([
     {
       typeName: "Array",

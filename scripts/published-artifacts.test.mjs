@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
+import { existsSync, readFileSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { afterEach, describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
 
@@ -33,7 +34,22 @@ const {
 } = publishedSmoke
 
 const tempRoots = []
-const typescriptCompilerPath = fileURLToPath(import.meta.resolve("typescript/bin/tsc"))
+const typescriptPackagePath = fileURLToPath(import.meta.resolve("typescript/package.json"))
+const typescriptPackage = JSON.parse(readFileSync(typescriptPackagePath, "utf8"))
+const typescriptCompilerPath = resolvePackageBinPath(
+  typescriptPackagePath,
+  typescriptPackage,
+  "tsc",
+)
+
+function resolvePackageBinPath(packagePath, packageManifest, binName) {
+  const bin =
+    typeof packageManifest.bin === "string" ? packageManifest.bin : packageManifest.bin?.[binName]
+  if (!bin) {
+    throw new Error(`Package manifest does not declare a ${binName} binary`)
+  }
+  return join(dirname(packagePath), bin)
+}
 
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })))
@@ -105,6 +121,11 @@ describe("expectedFilesForPackage", () => {
 })
 
 describe("AG-UI installed probes", () => {
+  it("resolves the TypeScript 7 compiler from its exported package manifest", () => {
+    assert.equal(typescriptPackage.version, "7.0.2")
+    assert.equal(existsSync(typescriptCompilerPath), true)
+  })
+
   it("generates an ESM probe for the exact canonical root surface", () => {
     const source = agUiEsmProbeSource()
 
@@ -236,7 +257,7 @@ import { ${removedFunctionName} } from "@dawn-ai/ag-ui"`),
   it("installs TypeScript and runs both probes", () => {
     assert.deepEqual(agUiProbeCommands(), [
       { command: "node", args: ["smoke-ag-ui.mjs"] },
-      { command: "npm", args: ["install", "--save-dev", "typescript@6.0.2"] },
+      { command: "npm", args: ["install", "--save-dev", "typescript@7.0.2"] },
       {
         command: "npm",
         args: ["exec", "--", "tsc", "--project", "tsconfig.ag-ui.json"],

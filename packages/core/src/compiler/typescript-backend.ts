@@ -11,6 +11,7 @@ const MAX_TYPE_DEPTH = 32
 interface ResolutionState {
   readonly activeTypes: Set<ts.Type>
   readonly depth: number
+  readonly isSourceFileDefaultLibrary: (sourceFile: ts.SourceFile) => boolean
 }
 
 type CreateProgram = (rootNames: readonly string[], options: ts.CompilerOptions) => ts.Program
@@ -91,6 +92,9 @@ function analyzeProgramSource(
   const signature = checker.getSignaturesOfType(exportType, ts.SignatureKind.Call)[0]
   if (!signature) return null
 
+  const isSourceFileDefaultLibrary = (candidate: ts.SourceFile) =>
+    program.isSourceFileDefaultLibrary(candidate)
+
   const firstParameter = signature.getParameters()[0]
   const parameterType = firstParameter
     ? checker.getTypeOfSymbolAtLocation(
@@ -98,7 +102,11 @@ function analyzeProgramSource(
         firstParameter.valueDeclaration ?? firstParameter.declarations?.[0] ?? sourceFile,
       )
     : null
-  const returnType = unwrapPromise(checker.getReturnTypeOfSignature(signature), checker)
+  const returnType = unwrapPromise(
+    checker.getReturnTypeOfSignature(signature),
+    checker,
+    isSourceFileDefaultLibrary,
+  )
   const leadingJsDoc = extractLeadingDefaultExportJsDoc(sourceFile)
   const exportedDescription = ts.displayPartsToString(
     defaultExport.getDocumentationComment(checker),
@@ -117,7 +125,9 @@ function analyzeProgramSource(
       ? checker.typeToString(parameterType, undefined, ts.TypeFormatFlags.NoTruncation)
       : "void",
     outputType: checker.typeToString(returnType, undefined, ts.TypeFormatFlags.NoTruncation),
-    parameter: parameterType ? resolveParameterType(parameterType, checker, sourceFile) : null,
+    parameter: parameterType
+      ? resolveParameterType(parameterType, checker, sourceFile, isSourceFileDefaultLibrary)
+      : null,
     parameterDescriptions: leadingJsDoc.parameterDescriptions,
   }
 }
@@ -166,8 +176,13 @@ function resolveParameterType(
   type: ts.Type,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
+  isSourceFileDefaultLibrary: (sourceFile: ts.SourceFile) => boolean,
 ): TypeInfo {
-  const resolved = resolveType(type, checker, { activeTypes: new Set(), depth: 0 })
+  const resolved = resolveType(type, checker, {
+    activeTypes: new Set(),
+    depth: 0,
+    isSourceFileDefaultLibrary,
+  })
   if (!type.isIntersection() || resolved.kind !== "intersection") return resolved
 
   const effectiveProperties = resolved.members.every(
@@ -177,6 +192,7 @@ function resolveParameterType(
         resolveRootParameterProperty(property, checker, sourceFile, {
           activeTypes: new Set([type]),
           depth: 1,
+          isSourceFileDefaultLibrary,
         }),
       )
     : undefined
@@ -208,6 +224,7 @@ function resolveType(type: ts.Type, checker: ts.TypeChecker, state: ResolutionSt
     return resolveTypeInner(type, checker, {
       activeTypes: state.activeTypes,
       depth: state.depth + 1,
+      isSourceFileDefaultLibrary: state.isSourceFileDefaultLibrary,
     })
   } finally {
     state.activeTypes.delete(type)
@@ -261,7 +278,10 @@ function resolveTypeInner(
 
     const typeArguments = checker.getTypeArguments(objectType as ts.TypeReference)
 
-    if (checker.isArrayType(type) || isStandardLibraryType(type, ["ReadonlyArray"])) {
+    if (
+      checker.isArrayType(type) ||
+      isStandardLibraryType(type, ["ReadonlyArray"], state.isSourceFileDefaultLibrary)
+    ) {
       return {
         kind: "array",
         element: typeArguments[0]
@@ -270,7 +290,7 @@ function resolveTypeInner(
       }
     }
 
-    if (isStandardLibraryType(type, ["Map", "ReadonlyMap"])) {
+    if (isStandardLibraryType(type, ["Map", "ReadonlyMap"], state.isSourceFileDefaultLibrary)) {
       return {
         kind: "map",
         key: typeArguments[0] ? resolveType(typeArguments[0], checker, state) : { kind: "unknown" },
@@ -280,7 +300,7 @@ function resolveTypeInner(
       }
     }
 
-    if (isStandardLibraryType(type, ["Set", "ReadonlySet"])) {
+    if (isStandardLibraryType(type, ["Set", "ReadonlySet"], state.isSourceFileDefaultLibrary)) {
       return {
         kind: "set",
         element: typeArguments[0]
@@ -389,17 +409,27 @@ function resolveUnionMembers(
   }
 }
 
-function isStandardLibraryType(type: ts.Type, names: readonly string[]): boolean {
+function isStandardLibraryType(
+  type: ts.Type,
+  names: readonly string[],
+  isSourceFileDefaultLibrary: (sourceFile: ts.SourceFile) => boolean,
+): boolean {
   const symbol = type.getSymbol()
   return (
     !!symbol &&
     names.includes(symbol.getName()) &&
-    !!symbol.declarations?.some((declaration) => declaration.getSourceFile().hasNoDefaultLib)
+    !!symbol.declarations?.some((declaration) =>
+      isSourceFileDefaultLibrary(declaration.getSourceFile()),
+    )
   )
 }
 
-function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
-  if (!isStandardLibraryType(type, ["Promise"])) return type
+function unwrapPromise(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  isSourceFileDefaultLibrary: (sourceFile: ts.SourceFile) => boolean,
+): ts.Type {
+  if (!isStandardLibraryType(type, ["Promise"], isSourceFileDefaultLibrary)) return type
   return checker.getTypeArguments(type as ts.TypeReference)[0] ?? type
 }
 

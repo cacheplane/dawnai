@@ -201,7 +201,7 @@ async function runAgUiInstalledProbe(tempDir) {
 export function agUiProbeCommands() {
   return [
     { command: "node", args: ["smoke-ag-ui.mjs"] },
-    { command: "npm", args: ["install", "--save-dev", "typescript@6.0.2"] },
+    { command: "npm", args: ["install", "--save-dev", "typescript@7.0.2"] },
     {
       command: "npm",
       args: ["exec", "--", "tsc", "--project", "tsconfig.ag-ui.json"],
