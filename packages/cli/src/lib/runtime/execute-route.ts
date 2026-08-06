@@ -1212,9 +1212,10 @@ export function buildGuardedSubagentResolver(args: {
   readonly routeParamNames?: readonly string[]
 }): SubagentResolver {
   const childGraphCache = new Map<string, Promise<ResolvedSubagentGraph>>()
+  const stableSignal = args.fallbackSignal ?? new AbortController().signal
 
   return async (request) => {
-    const signal = request.config.signal ?? args.fallbackSignal ?? new AbortController().signal
+    const signal = request.config.signal ?? stableSignal
     const threadId = readStringConfigurable(request.config, "thread_id")
     const params = readRouteParams(
       request.config,
@@ -1240,7 +1241,9 @@ export function buildGuardedSubagentResolver(args: {
           ...(rootSandboxKey ? { rootSandboxKey } : {}),
           signal,
         }
-        if (args.cacheChildGraphs === false) return args.prepareChild(entry, context)
+        if (args.cacheChildGraphs === false || signal !== stableSignal) {
+          return args.prepareChild(entry, context)
+        }
 
         const cacheKey = childGraphCacheKey(entry, context)
         const cached = childGraphCache.get(cacheKey)

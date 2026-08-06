@@ -2,8 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { AIMessage } from "@langchain/core/messages"
-import { Annotation, END, START, StateGraph } from "@langchain/langgraph"
-import { ToolNode } from "@langchain/langgraph/prebuilt"
+import type { RunnableConfig } from "@langchain/core/runnables"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { materializeResolvedRouteGraph } from "../src/lib/runtime/execute-route.js"
@@ -54,6 +53,12 @@ describe("materializeResolvedRouteGraph", () => {
       'subagents: { child }, delegation: { rules: { child: { action: "constrain", predicate: true } } }',
       { child: true },
       /predicate function/,
+    ],
+    [
+      "multi-action rule",
+      'subagents: { child }, delegation: { rules: { child: { action: "deny", predicate: async () => true } } }',
+      { child: true },
+      /unknown field\(s\): predicate/,
     ],
     [
       "invalid reason",
@@ -120,6 +125,7 @@ describe("materializeResolvedRouteGraph", () => {
     vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))
     vi.doMock("@langchain/openai", () => ({ ChatOpenAI: class {} }))
     const appRoot = await fixtureApp({ child: true, constrainedChild: true })
+    const rootSignal = new AbortController().signal
     Reflect.set(globalThis, "__dawnTask10PolicyCalls", 0)
 
     await materializeResolvedRouteGraph({
@@ -127,18 +133,19 @@ describe("materializeResolvedRouteGraph", () => {
       routeFile: join(appRoot, "src/app/parent/index.ts"),
       routeId: "/parent",
       routePath: "src/app/parent/index.ts",
+      signal: rootSignal,
     })
 
     expect(createReactAgent).toHaveBeenCalledTimes(1)
     const task = findTaskTool(createReactAgent.mock.calls[0]?.[0])
 
-    await invokeTask(task, "task-first")
+    await invokeTask(task, "task-first", rootSignal)
 
     expect(createReactAgent).toHaveBeenCalledTimes(2)
     const childOptions = createReactAgent.mock.calls[1]?.[0] as { readonly checkpointer?: unknown }
     expect(childOptions.checkpointer).toBeUndefined()
 
-    await invokeTask(task, "task-second")
+    await invokeTask(task, "task-second", rootSignal)
 
     expect(createReactAgent).toHaveBeenCalledTimes(2)
     expect(Reflect.get(globalThis, "__dawnTask10PolicyCalls")).toBe(2)
@@ -240,36 +247,26 @@ async function writeFixtureFiles(files: Readonly<Record<string, string>>): Promi
   return appRoot
 }
 
-function findTaskTool(options: unknown): { readonly name: string } {
-  const tools = (options as { readonly tools?: readonly { readonly name: string }[] } | undefined)
-    ?.tools
+interface TaskTool {
+  readonly name: string
+  readonly func: (
+    input: { readonly input: string; readonly subagent: string },
+    manager: undefined,
+    config: RunnableConfig,
+  ) => Promise<unknown>
+}
+
+function findTaskTool(options: unknown): TaskTool {
+  const tools = (options as { readonly tools?: readonly TaskTool[] } | undefined)?.tools
   const task = tools?.find(({ name }) => name === "task")
   if (!task) throw new Error("Expected materialized root task tool")
   return task
 }
 
-async function invokeTask(task: { readonly name: string }, callId: string): Promise<void> {
-  const graph = new StateGraph(Annotation.Root({ messages: Annotation<unknown[]>() }))
-    .addNode("tools", new ToolNode([task as never]))
-    .addEdge(START, "tools")
-    .addEdge("tools", END)
-    .compile()
-  await graph.invoke(
-    {
-      messages: [
-        new AIMessage({
-          content: "",
-          tool_calls: [
-            {
-              args: { input: "Inspect", subagent: "child" },
-              id: callId,
-              name: "task",
-              type: "tool_call",
-            },
-          ],
-        }),
-      ],
-    },
-    { configurable: { thread_id: "thread-stable" } },
-  )
+async function invokeTask(task: TaskTool, callId: string, signal: AbortSignal): Promise<void> {
+  await task.func({ input: "Inspect", subagent: "child" }, undefined, {
+    configurable: { thread_id: "thread-stable" },
+    signal,
+    toolCall: { id: callId },
+  } as RunnableConfig & { readonly toolCall: { readonly id: string } })
 }

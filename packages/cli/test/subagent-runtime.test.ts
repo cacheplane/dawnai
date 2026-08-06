@@ -71,40 +71,59 @@ describe("lazy CLI subagent runtime context", () => {
     })
   })
 
-  it("excludes live RunnableConfig from stable child graph cache identity", async () => {
+  it("does not cache child graphs across dispatch-specific signals", async () => {
     const prepareChild = vi.fn(async () => ({
       routeId: registry[0].routeId,
       graph: { invoke: vi.fn() },
     }))
+    const rootSignal = new AbortController().signal
     const resolver = buildGuardedSubagentResolver({
+      fallbackSignal: rootSignal,
       interruptCapable: true,
-      parentRouteId: "/parent",
+      parentRouteId: "/parent/[tenant]",
       prepareChild,
       registry,
+      routeParamNames: ["tenant"],
     })
     const firstSignal = new AbortController().signal
     const secondSignal = new AbortController().signal
 
     const first = await resolver({
       callId: "first",
-      config: { signal: firstSignal },
+      config: {
+        configurable: { tenant: "acme" },
+        metadata: { dawn: { subagent_depth: 1 } },
+        signal: firstSignal,
+      },
       input: "one",
       name: "researcher",
     })
     const second = await resolver({
       callId: "second",
-      config: { signal: secondSignal },
+      config: {
+        configurable: { tenant: "acme" },
+        metadata: { dawn: { subagent_depth: 1 } },
+        signal: secondSignal,
+      },
       input: "two",
       name: "researcher",
     })
 
     expect(first).toMatchObject({ ok: true })
     expect(second).toMatchObject({ ok: true })
-    expect(prepareChild).toHaveBeenCalledTimes(1)
-    expect(prepareChild).toHaveBeenCalledWith(
-      registry[0],
-      expect.objectContaining({ callId: "first", signal: firstSignal }),
-    )
+    expect(prepareChild).toHaveBeenCalledTimes(2)
+    expect(prepareChild).toHaveBeenNthCalledWith(1, registry[0], {
+      callId: "first",
+      depth: 2,
+      params: { tenant: "acme" },
+      signal: firstSignal,
+    })
+    expect(prepareChild).toHaveBeenNthCalledWith(2, registry[0], {
+      callId: "second",
+      depth: 2,
+      params: { tenant: "acme" },
+      signal: secondSignal,
+    })
   })
 
   it("memoizes stable child graphs after evaluating policy on every call", async () => {
@@ -116,22 +135,21 @@ describe("lazy CLI subagent runtime context", () => {
       graph: stableGraph,
       routeId: registry[0].routeId,
     }))
+    const rootSignal = new AbortController().signal
     const resolver = buildGuardedSubagentResolver({
+      fallbackSignal: rootSignal,
       interruptCapable: true,
       parentRouteId: "/parent/[tenant]/[locale]",
       prepareChild,
       registry: [{ ...registry[0], rule: { action: "constrain" as const, predicate } }],
       routeParamNames: ["tenant", "locale"],
     })
-    const firstSignal = new AbortController().signal
-    const secondSignal = new AbortController().signal
-
     const first = await resolver({
       callId: "first-call",
       config: {
         configurable: { locale: "en", tenant: "acme", thread_id: "thread-1" },
         metadata: { dawn: { subagent_depth: 1 } },
-        signal: firstSignal,
+        signal: rootSignal,
       },
       input: "one",
       name: "researcher",
@@ -141,7 +159,7 @@ describe("lazy CLI subagent runtime context", () => {
       config: {
         configurable: { tenant: "acme", locale: "en", thread_id: "thread-1" },
         metadata: { dawn: { subagent_depth: 1 } },
-        signal: secondSignal,
+        signal: rootSignal,
       },
       input: "two",
       name: "researcher",
@@ -152,11 +170,11 @@ describe("lazy CLI subagent runtime context", () => {
     expect(predicate).toHaveBeenCalledTimes(2)
     expect(predicate.mock.calls[0]?.[1]).toMatchObject({
       params: { locale: "en", tenant: "acme" },
-      signal: firstSignal,
+      signal: rootSignal,
     })
     expect(predicate.mock.calls[1]?.[1]).toMatchObject({
       params: { locale: "en", tenant: "acme" },
-      signal: secondSignal,
+      signal: rootSignal,
     })
     expect(prepareChild).toHaveBeenCalledTimes(1)
     expect(prepareChild).toHaveBeenCalledWith(
@@ -165,7 +183,7 @@ describe("lazy CLI subagent runtime context", () => {
         callId: "first-call",
         depth: 2,
         params: { locale: "en", tenant: "acme" },
-        signal: firstSignal,
+        signal: rootSignal,
       },
     )
   })
@@ -177,6 +195,7 @@ describe("lazy CLI subagent runtime context", () => {
       .mockRejectedValueOnce(new Error("setup failed"))
       .mockResolvedValueOnce({ graph: { invoke: vi.fn() }, routeId: registry[0].routeId })
     const resolver = buildGuardedSubagentResolver({
+      fallbackSignal: liveSignal,
       interruptCapable: true,
       parentRouteId: "/parent",
       prepareChild,
