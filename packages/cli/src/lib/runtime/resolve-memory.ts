@@ -4,7 +4,6 @@ import { loadDawnConfig } from "@dawn-ai/core"
 import {
   type RecallRankingOptions,
   serializeNamespace,
-  sqliteMemoryStore,
   type VectorRankingOptions,
 } from "@dawn-ai/memory"
 import type { LoadedRouteMemory } from "./load-memory.js"
@@ -43,6 +42,10 @@ export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLi
   } catch {
     // no dawn.config.ts / unreadable — use default
   }
+  // Imported lazily: the default sqlite-backed store is resolved only when
+  // this fallback branch actually runs, keeping sqliteMemoryStore off this
+  // module's static import surface (a config-provided store never loads it).
+  const { sqliteMemoryStore } = await import("@dawn-ai/memory")
   return sqliteMemoryStore({
     path: join(appRoot, ".dawn", "memory.sqlite"),
     ...(recall ? { recall } : {}),

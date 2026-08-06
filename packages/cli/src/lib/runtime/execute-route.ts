@@ -541,6 +541,33 @@ export interface PreparedRouteModules {
  */
 const preparedRouteModulesCache = new Map<string, Promise<PreparedRouteModules>>()
 const routeManifestCache = new Map<string, Promise<RouteManifest>>()
+const workspaceDirProbeCache = new Map<string, boolean>()
+
+/**
+ * Default filesystem backend, constructed at most once per process and only
+ * when a request actually needs it (no sandbox/config backend provided).
+ * `localFilesystem()` is stateless with default options, so one shared
+ * instance is safe.
+ */
+let defaultLocalFilesystem: FilesystemBackend | undefined
+function getDefaultLocalFilesystem(): FilesystemBackend {
+  defaultLocalFilesystem ??= localFilesystem()
+  return defaultLocalFilesystem
+}
+
+/**
+ * Memoized `workspace/` existence probe for the offload store — once per
+ * appRoot per process instead of one `existsSync` per request. Reset via
+ * `__resetRouteLoadCachesForTests`; the dev child restarts on edits that
+ * could change the app shape.
+ */
+export function hasWorkspaceDir(appRoot: string): boolean {
+  const cached = workspaceDirProbeCache.get(appRoot)
+  if (cached !== undefined) return cached
+  const present = existsSync(join(appRoot, "workspace"))
+  workspaceDirProbeCache.set(appRoot, present)
+  return present
+}
 
 function getPreparedRouteModules(options: {
   readonly appRoot: string
@@ -635,6 +662,7 @@ export function seedPreparedRouteModules(entries: ReadonlyMap<string, PreparedRo
 export function __resetRouteLoadCachesForTests(): void {
   preparedRouteModulesCache.clear()
   routeManifestCache.clear()
+  workspaceDirProbeCache.clear()
 }
 
 export async function prepareRouteExecution(
@@ -758,7 +786,8 @@ export async function prepareRouteExecution(
 
   const workspaceFs = createWorkspaceFs({
     workspaceRoot: sandboxWorkspaceRoot ?? join(options.appRoot, "workspace"),
-    backend: sandboxBackends?.filesystem ?? configBackends?.filesystem ?? localFilesystem(),
+    backend:
+      sandboxBackends?.filesystem ?? configBackends?.filesystem ?? getDefaultLocalFilesystem(),
     permissions: permissionsStore,
     signal: options.signal ?? new AbortController().signal,
     interruptCapable: normalized.kind === "agent",
@@ -1554,11 +1583,12 @@ function buildOffload(
   signal: AbortSignal,
   appRoot?: string,
 ): OffloadFn | undefined {
-  const workspaceRoot = join(appRoot ?? process.cwd(), "workspace")
-  if (!existsSync(workspaceRoot)) return undefined
+  const root = appRoot ?? process.cwd()
+  if (!hasWorkspaceDir(root)) return undefined
+  const workspaceRoot = join(root, "workspace")
   const t = config?.toolOutput ?? {}
   const store = new OffloadStore({
-    backend: filesystem ?? localFilesystem(),
+    backend: filesystem ?? getDefaultLocalFilesystem(),
     workspaceRoot,
     signal,
     maxBytes: t.maxBytes ?? 268_435_456,
