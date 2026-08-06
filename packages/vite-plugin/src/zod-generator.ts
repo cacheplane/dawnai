@@ -1,6 +1,9 @@
-import type { TypeInfo } from "./type-info.js"
+import type { TypeInfo } from "@dawn-ai/core/internal/compiler"
 
-export function generateZodSchema(type: TypeInfo, descriptions?: Map<string, string>): string {
+export function generateZodSchema(
+  type: TypeInfo,
+  descriptions?: ReadonlyMap<string, string>,
+): string {
   switch (type.kind) {
     case "string":
       return "z.string()"

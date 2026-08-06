@@ -36,8 +36,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn-ai/core": "workspace:*",
-    "typescript": "5.8.3"
+    "@dawn-ai/core": "workspace:*"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",

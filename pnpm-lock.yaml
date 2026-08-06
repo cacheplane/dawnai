@@ -764,9 +764,6 @@ importers:
       '@dawn-ai/core':
         specifier: workspace:*
         version: link:../core
-      typescript:
-        specifier: 5.8.3
-        version: 5.8.3
     devDependencies:
       '@dawn-ai/config-typescript':
         specifier: workspace:*

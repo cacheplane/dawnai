@@ -66,13 +66,12 @@ export const packages = [
     expectedFiles: [
       "dist/index.js",
       "dist/index.d.ts",
-      "dist/type-extractor.js",
-      "dist/type-extractor.d.ts",
       "dist/zod-generator.js",
       "dist/zod-generator.d.ts",
       "README.md",
       "package.json",
     ],
+    forbiddenFiles: ["dist/jsdoc-extractor.*", "dist/type-extractor.*", "dist/type-info.*"],
     requiredFields: libraryRequiredFields,
   },
   {

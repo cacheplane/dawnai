@@ -1,5 +1,6 @@
+import type { TypeInfo } from "@dawn-ai/core/internal/compiler"
 import { describe, expect, it } from "vitest"
-import type { TypeInfo } from "../src/type-info.js"
+
 import { generateZodSchema } from "../src/zod-generator.js"
 
 describe("generateZodSchema", () => {
@@ -199,6 +200,24 @@ describe("generateZodSchema", () => {
     }
     expect(generateZodSchema(type)).toBe(
       'z.intersection(z.intersection(z.object({ "a": z.string() }), z.object({ "b": z.number() })), z.object({ "c": z.boolean() }))',
+    )
+  })
+
+  it("ignores effective properties when rendering semantic intersection members", () => {
+    const type: TypeInfo = {
+      kind: "intersection",
+      members: [
+        { kind: "record", key: { kind: "string" }, value: { kind: "number" } },
+        {
+          kind: "object",
+          properties: [{ name: "fixed", type: { kind: "string" }, optional: false }],
+        },
+      ],
+      effectiveProperties: [{ name: "fixed", type: { kind: "string" }, optional: false }],
+    }
+
+    expect(generateZodSchema(type)).toBe(
+      'z.intersection(z.record(z.string(), z.number()), z.object({ "fixed": z.string() }))',
     )
   })
 
