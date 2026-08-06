@@ -1,6 +1,17 @@
-import { Command, MemorySaver } from "@langchain/langgraph"
+import { AIMessage } from "@langchain/core/messages"
+import {
+  Annotation,
+  Command,
+  END,
+  interrupt,
+  MemorySaver,
+  START,
+  StateGraph,
+} from "@langchain/langgraph"
 import { describe, expect, test } from "vitest"
+import { z } from "zod"
 import { streamAgent } from "../src/agent-adapter.js"
+import { convertSubagentTaskToLangChain } from "../src/subagent-tool-bridge.js"
 
 /**
  * These tests mimic the real LangGraph 1.x streamEvents v2 shape:
@@ -341,5 +352,79 @@ describe("streamAgent — interrupt propagation", () => {
     expect(callCount).toBe(1)
     expect(chunks.filter((c) => c.type === "interrupt")).toHaveLength(1)
     expect(chunks[chunks.length - 1]?.type).toBe("done")
+  })
+
+  test("a native child interrupt parks and resumes through the root stream", async () => {
+    const ChildState = Annotation.Root({ messages: Annotation<unknown[]>() })
+    const child = new StateGraph(ChildState)
+      .addNode("approval", () => {
+        const decision = interrupt({ interruptId: "child-permission", kind: "subagent" })
+        return { messages: [new AIMessage(`approved:${decision}`)] }
+      })
+      .addEdge(START, "approval")
+      .addEdge("approval", END)
+      .compile()
+    const task = convertSubagentTaskToLangChain(
+      {
+        name: "task",
+        description: "Delegate.",
+        schema: z.object({ subagent: z.string(), input: z.string() }),
+        run: () => "placeholder",
+      },
+      async () => ({
+        ok: true,
+        child: { routeId: "/parent/subagents/researcher", graph: child },
+      }),
+    )
+    const checkpointer = new MemorySaver()
+    const RootState = Annotation.Root({
+      messages: Annotation<unknown[]>(),
+      result: Annotation<string>(),
+    })
+    const root = new StateGraph(RootState)
+      .addNode("dispatch", async (_state, config) => ({
+        result: await task.func({ subagent: "researcher", input: "Review" }, undefined, {
+          ...config,
+          toolCall: { id: "task-native-resume" },
+        }),
+      }))
+      .addEdge(START, "dispatch")
+      .addEdge("dispatch", END)
+      .compile({ checkpointer })
+    const input = { messages: [{ role: "user", content: "Review" }] }
+    const first = []
+    for await (const chunk of streamAgent({
+      checkpointer,
+      entry: root,
+      input,
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      threadId: "native-root-thread",
+      tools: [],
+    })) {
+      first.push(chunk)
+    }
+    expect(first.filter(({ type }) => type === "interrupt").map(({ data }) => data)).toEqual([
+      { interruptId: "child-permission", kind: "subagent" },
+    ])
+
+    const rootState = await root.getState({ configurable: { thread_id: "native-root-thread" } })
+    const nativeInterruptId = rootState.tasks[0]?.interrupts[0]?.id
+    expect(nativeInterruptId).toEqual(expect.any(String))
+
+    const resumed = []
+    for await (const chunk of streamAgent({
+      checkpointer,
+      entry: root,
+      input: new Command({ resume: { [nativeInterruptId as string]: "once" } }),
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      threadId: "native-root-thread",
+      tools: [],
+    })) {
+      resumed.push(chunk)
+    }
+    const output = resumed.findLast(({ type }) => type === "done")?.data as { result?: unknown }
+    expect(output.result).toBe("approved:once")
   })
 })

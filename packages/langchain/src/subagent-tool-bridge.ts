@@ -1,68 +1,187 @@
-import {
-  dispatchSubagent,
-  type SubagentEvent,
-  type SubagentStreamContext,
-} from "./subagent-dispatcher.js"
+import { randomUUID } from "node:crypto"
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch"
+import type { RunnableConfig } from "@langchain/core/runnables"
+import { DynamicStructuredTool } from "@langchain/core/tools"
+import { isGraphInterrupt } from "@langchain/langgraph"
+import type { z } from "zod"
 
-export interface SubagentResolverResult {
+export interface ResolvedSubagentGraph {
   readonly routeId: string
   readonly graph: {
-    readonly invoke: (input: unknown, config: unknown) => Promise<unknown>
-    readonly streamEvents?: (
-      input: unknown,
-      options: Record<string, unknown>,
-    ) => AsyncIterable<unknown>
+    invoke(input: unknown, config: RunnableConfig): Promise<unknown>
   }
 }
 
-export interface BridgeOptions {
-  readonly subagentResolver: (leafName: string) => SubagentResolverResult | undefined
-  readonly writer: (event: SubagentEvent) => void
-  readonly parentConfig?: Record<string, unknown>
-  /**
-   * Shared counter that gates the parent's `on_chat_model_stream` emissions
-   * while a child run is active. See `SubagentStreamContext`.
-   */
-  readonly streamContext?: SubagentStreamContext
+export type SubagentResolver = (request: {
+  readonly callId: string
+  readonly name: string
+  readonly input: string
+  readonly config: RunnableConfig
+}) => Promise<
+  | { readonly ok: true; readonly child: ResolvedSubagentGraph }
+  | { readonly ok: false; readonly message: string }
+>
+
+interface SubagentTaskPlaceholder {
+  readonly description?: string
+  readonly name: string
+  readonly schema?: unknown
 }
 
-export interface BridgedTaskTool {
-  readonly name: "task"
-  readonly description: string
-  readonly run: (input: unknown, context: { readonly signal: AbortSignal }) => Promise<string>
+interface DawnSubagentStackEntry {
+  readonly callId: string
+  readonly name: string
+  readonly routeId: string
 }
 
-const TASK_TOOL_DESCRIPTION =
-  "Dispatch a sub-task to a specialized subagent. See the # Subagents section of your system prompt for available agents and when to use each."
+const MAX_SUBAGENT_DEPTH = 3
 
-function generateCallId(): string {
-  return `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-}
+export function convertSubagentTaskToLangChain(
+  tool: SubagentTaskPlaceholder,
+  resolver: SubagentResolver,
+): DynamicStructuredTool {
+  if (tool.schema === undefined) {
+    throw new Error("[dawn] subagent task placeholder is missing its input schema")
+  }
+  return new DynamicStructuredTool({
+    name: tool.name,
+    description: tool.description ?? "",
+    schema: tool.schema as z.ZodTypeAny,
+    func: async (rawInput, _manager, config) => {
+      const liveConfig = config ?? {}
+      const callId = readCallId(liveConfig) ?? `task-${randomUUID()}`
+      const input = rawInput as { input: string; subagent: string }
+      const parentDawn = readDawnMetadata(liveConfig)
+      const nextDepth = readDepth(parentDawn) + 1
 
-export function bridgeSubagentTool(options: BridgeOptions): BridgedTaskTool {
-  return {
-    name: "task",
-    description: TASK_TOOL_DESCRIPTION,
-    run: async (input: unknown, _ctx) => {
-      const { subagent, input: taskInput } = input as { subagent: string; input: string }
-      const resolved = options.subagentResolver(subagent)
-      if (!resolved) {
-        return `subagent_unknown: no subagent named '${subagent}' (resolver returned undefined)`
+      if (nextDepth > MAX_SUBAGENT_DEPTH) {
+        return `[DAWN_E5003] Cannot dispatch '${input.subagent}' at depth ${nextDepth}; the maximum subagent depth is ${MAX_SUBAGENT_DEPTH}.`
       }
-      // Cast through `never`: dispatcher's `childGraph` type expects a `Streamable`-shaped
-      // graph; resolver returns a slightly different shape with optional streamEvents. The
-      // dispatcher narrows internally via its own type guards.
-      const result = await dispatchSubagent({
-        childGraph: resolved.graph as never,
-        input: taskInput,
-        parentConfig: options.parentConfig ?? {},
-        writer: options.writer,
-        callId: generateCallId(),
-        childRouteId: resolved.routeId,
-        subagentName: subagent,
-        ...(options.streamContext ? { streamContext: options.streamContext } : {}),
+
+      const resolved = await resolver({
+        callId,
+        name: input.subagent,
+        input: input.input,
+        config: liveConfig,
       })
-      return result.finalText
+      if (!resolved.ok) return resolved.message
+
+      const parentStack = readSubagentStack(parentDawn)
+      const stackEntry: DawnSubagentStackEntry = {
+        callId,
+        name: input.subagent,
+        routeId: resolved.child.routeId,
+      }
+      const childConfig: RunnableConfig = {
+        ...liveConfig,
+        metadata: {
+          ...(liveConfig.metadata ?? {}),
+          dawn: {
+            ...parentDawn,
+            subagent_depth: nextDepth,
+            subagent_stack: [...parentStack, stackEntry],
+          },
+        },
+      }
+      const eventBase = {
+        call_id: callId,
+        subagent: input.subagent,
+        route_id: resolved.child.routeId,
+        depth: nextDepth,
+      }
+
+      await dispatchCustomEvent("dawn.subagent", { phase: "start", ...eventBase }, childConfig)
+
+      let output: unknown
+      try {
+        output = await resolved.child.graph.invoke(
+          { messages: [{ role: "user", content: input.input }] },
+          childConfig,
+        )
+      } catch (error) {
+        if (isGraphInterrupt(error)) throw error
+        const message = error instanceof Error ? error.message : String(error)
+        await dispatchCustomEvent(
+          "dawn.subagent",
+          { phase: "end", ...eventBase, error: message },
+          childConfig,
+        )
+        return `subagent_failed: ${message}`
+      }
+
+      const finalText = extractFinalAiText(output)
+      await dispatchCustomEvent(
+        "dawn.subagent",
+        { phase: "end", ...eventBase, final_message: finalText },
+        childConfig,
+      )
+      return finalText
     },
+  })
+}
+
+function readCallId(config: RunnableConfig): string | undefined {
+  const toolCall = (config as RunnableConfig & { toolCall?: { id?: unknown } }).toolCall
+  if (typeof toolCall?.id === "string" && toolCall.id !== "") return toolCall.id
+
+  const configurableId = config.configurable?.toolCallId
+  if (typeof configurableId === "string" && configurableId !== "") return configurableId
+
+  const metadataId = config.metadata?.tool_call_id
+  return typeof metadataId === "string" && metadataId !== "" ? metadataId : undefined
+}
+
+function readDawnMetadata(config: RunnableConfig): Record<string, unknown> {
+  const dawn = config.metadata?.dawn
+  return typeof dawn === "object" && dawn !== null && !Array.isArray(dawn)
+    ? (dawn as Record<string, unknown>)
+    : {}
+}
+
+function readDepth(dawn: Record<string, unknown>): number {
+  const depth = dawn.subagent_depth
+  return typeof depth === "number" && Number.isFinite(depth) ? depth : 0
+}
+
+function readSubagentStack(dawn: Record<string, unknown>): readonly DawnSubagentStackEntry[] {
+  const stack = dawn.subagent_stack
+  if (!Array.isArray(stack)) return []
+  return stack.filter(isSubagentStackEntry)
+}
+
+function isSubagentStackEntry(value: unknown): value is DawnSubagentStackEntry {
+  if (typeof value !== "object" || value === null) return false
+  const entry = value as Record<string, unknown>
+  return (
+    typeof entry.callId === "string" &&
+    typeof entry.name === "string" &&
+    typeof entry.routeId === "string"
+  )
+}
+
+function extractFinalAiText(output: unknown): string {
+  const messages = (output as { messages?: unknown[] } | undefined)?.messages
+  if (!Array.isArray(messages)) return ""
+
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index] as
+      | { content?: unknown; getType?: () => string; type?: string }
+      | undefined
+    const type = typeof message?.getType === "function" ? message.getType() : message?.type
+    if (type !== "ai") continue
+    if (typeof message?.content === "string") return message.content
+    if (Array.isArray(message?.content)) {
+      return message.content
+        .map((block) =>
+          typeof block === "object" &&
+          block !== null &&
+          (block as Record<string, unknown>).type === "text" &&
+          typeof (block as Record<string, unknown>).text === "string"
+            ? ((block as Record<string, unknown>).text as string)
+            : "",
+        )
+        .join("")
+    }
   }
+  return ""
 }

@@ -8,16 +8,9 @@ import { createChatModel } from "./chat-model-factory.js"
 import { resolveProvider } from "./model-provider-resolver.js"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
-import {
-  createSubagentStreamContext,
-  type SubagentEvent,
-  type SubagentStreamContext,
-} from "./subagent-dispatcher.js"
-import { bridgeSubagentTool, type SubagentResolverResult } from "./subagent-tool-bridge.js"
+import { convertSubagentTaskToLangChain, type SubagentResolver } from "./subagent-tool-bridge.js"
 import { buildSummarizationHook, type ResolvedSummarizationConfig } from "./summarization/index.js"
 import { convertToolToLangChain, type OffloadFn } from "./tool-converter.js"
-
-export type SubagentResolver = (leafName: string) => SubagentResolverResult | undefined
 
 export interface DawnToolDefinition {
   readonly description?: string
@@ -92,7 +85,7 @@ export function composePromptMessages(
 async function materializeAgent(
   descriptor: DawnAgent,
   tools: readonly DawnToolDefinition[],
-  checkpointer: BaseCheckpointSaver,
+  checkpointer: BaseCheckpointSaver | undefined,
   opts: {
     readonly stateFields?: readonly ResolvedStateField[]
     readonly middlewareContext?: Readonly<Record<string, unknown>>
@@ -102,10 +95,14 @@ async function materializeAgent(
     readonly summarization?: ResolvedSummarizationConfig
     readonly routeParamNames?: readonly string[]
     readonly streamTransformers?: readonly StreamTransformer[]
+    readonly subagentResolver?: SubagentResolver
   } = {},
 ): Promise<AgentLike> {
   const fingerprint = fragmentFingerprint(opts.promptFragments ?? [])
-  const bypassCache = opts.bypassCache === true || (opts.streamTransformers?.length ?? 0) > 0
+  const bypassCache =
+    checkpointer === undefined ||
+    opts.bypassCache === true ||
+    (opts.streamTransformers?.length ?? 0) > 0
 
   if (!bypassCache) {
     const cached = materializedAgents.get(descriptor)
@@ -117,13 +114,15 @@ async function materializeAgent(
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
 
   const langchainTools = tools.map((tool) =>
-    convertToolToLangChain(
-      tool,
-      opts.middlewareContext,
-      opts.offload,
-      opts.routeParamNames ?? [],
-      opts.streamTransformers ?? [],
-    ),
+    tool.name === "task" && opts.subagentResolver
+      ? convertSubagentTaskToLangChain(tool, opts.subagentResolver)
+      : convertToolToLangChain(
+          tool,
+          opts.middlewareContext,
+          opts.offload,
+          opts.routeParamNames ?? [],
+          opts.streamTransformers ?? [],
+        ),
   )
 
   const provider = resolveProvider({
@@ -147,9 +146,7 @@ async function materializeAgent(
         ? (state: Record<string, unknown>) =>
             composePromptMessages(descriptor.systemPrompt, fragments, state)
         : descriptor.systemPrompt,
-    // Required so `interrupt()` can park graph state and `Command({resume})`
-    // can replay it. Paired with `config.configurable.thread_id`.
-    checkpointer,
+    ...(checkpointer ? { checkpointer } : {}),
   }
 
   const runningSummaryField: ResolvedStateField = {
@@ -179,13 +176,14 @@ async function materializeAgent(
 }
 
 export async function materializeAgentGraph(options: {
-  readonly checkpointer: BaseCheckpointSaver
+  readonly checkpointer?: BaseCheckpointSaver
   readonly descriptor: DawnAgent
   readonly tools?: readonly DawnToolDefinition[]
   readonly stateFields?: readonly ResolvedStateField[]
   readonly streamTransformers?: readonly StreamTransformer[]
   readonly promptFragments?: readonly PromptFragment[]
   readonly summarization?: ResolvedSummarizationConfig
+  readonly subagentResolver?: SubagentResolver
   /**
    * Set when the caller's tools are bound to a per-thread sandbox (workspace
    * fs/exec backends). Bypasses the per-descriptor cache so one thread's
@@ -198,6 +196,7 @@ export async function materializeAgentGraph(options: {
     ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
     ...(options.summarization ? { summarization: options.summarization } : {}),
     ...(options.streamTransformers ? { streamTransformers: options.streamTransformers } : {}),
+    ...(options.subagentResolver ? { subagentResolver: options.subagentResolver } : {}),
     ...(options.sandboxed === true ? { bypassCache: true } : {}),
   })
 }
@@ -400,13 +399,7 @@ export interface AgentOptions {
   readonly tools: readonly DawnToolDefinition[]
   readonly promptFragments?: readonly PromptFragment[]
   readonly streamTransformers?: readonly StreamTransformer[]
-  /**
-   * Resolves a subagent leaf name to a child graph + routeId. When set, the
-   * `task` tool contributed by the subagents capability marker is intercepted
-   * inside `streamFromRunnable` and replaced with a bridge that dispatches the
-   * call via `dispatchSubagent`. Emitted `subagent.*` events are queued and
-   * drained alongside normal stream chunks (no module-level mutable state).
-   */
+  /** Resolves guarded task requests to lazily materialized child graphs. */
   readonly subagentResolver?: SubagentResolver
   /**
    * Stable per-conversation identifier used as LangGraph's `thread_id`. When
@@ -450,55 +443,16 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
   const { agentInput, config } = prepareAgentCall(options)
   const messages = isCommandInput ? [] : extractMessages(agentInput)
 
-  // Per-call subagent event queue. The bridge's writer pushes here; the
-  // streaming generator drains the queue alongside normal stream chunks. This
-  // avoids the module-level mutable-writer anti-pattern: each call has its
-  // own queue scoped to the surrounding generator frame.
-  const subagentEvents: AgentStreamChunk[] = []
-  const queueWriter = (event: SubagentEvent): void => {
-    subagentEvents.push({
-      type: event.event as AgentStreamChunk["type"],
-      data: event.data,
-    })
-  }
-
-  // Per-call counter shared with the dispatcher. While a child is active, the
-  // parent's on_chat_model_stream events are suppressed (LangChain v2
-  // streamEvents propagates child events to the parent listener via
-  // async-local-storage tracing, so without this gate every child token
-  // appears twice on the parent stream: once as a raw token chunk and once
-  // wrapped in a subagent.message envelope).
-  const streamContext = createSubagentStreamContext()
-
   const resolver = options.subagentResolver
   const hasTaskTool = options.tools.some((t) => t.name === "task")
-  const effectiveTools: readonly DawnToolDefinition[] =
-    resolver && hasTaskTool
-      ? options.tools.map((t) =>
-          t.name === "task"
-            ? {
-                ...t,
-                run: bridgeSubagentTool({
-                  subagentResolver: resolver,
-                  writer: queueWriter,
-                  parentConfig: config,
-                  streamContext,
-                }).run as DawnToolDefinition["run"],
-              }
-            : t,
-        )
-      : options.tools
 
   // DawnAgent descriptor path — materialize on first use
   if (isDawnAgent(options.entry)) {
-    // Bypass the per-descriptor cache when a resolver is wired: the bridged
-    // tool closes over the per-call queue + parent config, so caching would
-    // bind those to a single call. Same hazard when sandboxed: workspace tools
-    // close over a per-thread sandbox filesystem/exec backend, so caching
-    // would leak one thread's sandbox to another.
+    // Resolver and sandbox-backed tools close over route-preparation state, so
+    // they must not be reused from another materialized route invocation.
     const materializedAgent = await materializeAgent(
       options.entry,
-      effectiveTools,
+      options.tools,
       options.checkpointer,
       {
         ...(options.stateFields ? { stateFields: options.stateFields } : {}),
@@ -509,46 +463,35 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
         ...(options.summarization ? { summarization: options.summarization } : {}),
         routeParamNames: options.routeParamNames,
         ...(options.streamTransformers ? { streamTransformers: options.streamTransformers } : {}),
+        ...(resolver ? { subagentResolver: resolver } : {}),
       },
     )
     const retryConfig = options.entry.retry
     const runnableInput = isCommandInput ? options.input : { messages }
-    yield* streamFromRunnable(
-      materializedAgent,
-      runnableInput,
-      config,
-      retryConfig,
-      subagentEvents,
-      streamContext,
-    )
+    yield* streamFromRunnable(materializedAgent, runnableInput, config, retryConfig)
     return
   }
 
   // Legacy path — raw Runnable with .invoke()
   assertAgentLike(options.entry)
 
-  const langchainTools = effectiveTools.map((tool) =>
-    convertToolToLangChain(
-      tool,
-      options.middlewareContext,
-      options.offload,
-      options.routeParamNames,
-      options.streamTransformers ?? [],
-    ),
+  const langchainTools = options.tools.map((tool) =>
+    tool.name === "task" && resolver
+      ? convertSubagentTaskToLangChain(tool, resolver)
+      : convertToolToLangChain(
+          tool,
+          options.middlewareContext,
+          options.offload,
+          options.routeParamNames,
+          options.streamTransformers ?? [],
+        ),
   )
   if (langchainTools.length > 0) {
     config.tools = langchainTools
   }
 
   const runnableInput = isCommandInput ? options.input : { messages }
-  yield* streamFromRunnable(
-    options.entry,
-    runnableInput,
-    config,
-    options.retry,
-    subagentEvents,
-    streamContext,
-  )
+  yield* streamFromRunnable(options.entry, runnableInput, config, options.retry)
 }
 
 function prepareAgentCall(options: AgentOptions): {
@@ -593,18 +536,7 @@ async function* streamFromRunnable(
   input: unknown,
   config: Record<string, unknown>,
   retryConfig?: RetryConfig,
-  subagentEvents?: AgentStreamChunk[],
-  streamContext?: SubagentStreamContext,
 ): AsyncGenerator<AgentStreamChunk> {
-  // Drains any pending subagent events queued by the bridge. Called before
-  // each normal yield to keep ordering predictable on the single event loop.
-  function* drainSubagentEvents(): Generator<AgentStreamChunk> {
-    if (!subagentEvents) return
-    while (subagentEvents.length > 0) {
-      const next = subagentEvents.shift()
-      if (next) yield next
-    }
-  }
   const streamable = runnable as AgentLike & {
     streamEvents?: (
       input: unknown,
@@ -655,6 +587,7 @@ async function* streamFromRunnable(
   ): AsyncGenerator<AgentStreamChunk, PassResult, void> {
     let finalOutput: unknown
     let capturedInterrupts: readonly RawInterruptEntry[] = []
+    let emittedInterruptIds = new Set<string>()
     let hasYielded = false
 
     const maxStreamAttempts = allowRetryOnError ? (retryConfig?.maxAttempts ?? 3) : 1
@@ -663,16 +596,15 @@ async function* streamFromRunnable(
       hasYielded = false
       finalOutput = undefined
       capturedInterrupts = []
+      emittedInterruptIds = new Set()
 
       try {
         for await (const event of streamEventsFn(invocationInput, {
           ...invocationConfig,
           version: "v2",
         })) {
-          yield* drainSubagentEvents()
           switch (event.event) {
             case "on_chat_model_stream": {
-              if (streamContext && streamContext.activeChildRuns > 0) break
               const content = (event.data.chunk as { content?: unknown })?.content
               if (content && typeof content === "string" && content.length > 0) {
                 hasYielded = true
@@ -714,6 +646,18 @@ async function* streamFromRunnable(
               }
               break
             }
+            case "on_chain_stream": {
+              const interrupts = extractInterrupts(event.data.chunk)
+              if (!interrupts || interrupts.length === 0) break
+              capturedInterrupts = interrupts
+              for (const entry of interrupts) {
+                if (entry.id && emittedInterruptIds.has(entry.id)) continue
+                if (entry.id) emittedInterruptIds.add(entry.id)
+                hasYielded = true
+                yield { type: "interrupt" as const, data: entry.value }
+              }
+              break
+            }
             case "on_tool_error": {
               // LangGraph's interrupt() throws a GraphInterrupt from inside
               // the tool node. The error bubbles through streamEvents as
@@ -724,6 +668,8 @@ async function* streamFromRunnable(
               if (interrupts && interrupts.length > 0) {
                 capturedInterrupts = interrupts
                 for (const entry of interrupts) {
+                  if (entry.id && emittedInterruptIds.has(entry.id)) continue
+                  if (entry.id) emittedInterruptIds.add(entry.id)
                   hasYielded = true
                   if (process.env.DAWN_DEBUG_INTERRUPTS === "1") {
                     if (
@@ -755,6 +701,8 @@ async function* streamFromRunnable(
                 if (interrupts && interrupts.length > 0) {
                   capturedInterrupts = interrupts
                   for (const entry of interrupts) {
+                    if (entry.id && emittedInterruptIds.has(entry.id)) continue
+                    if (entry.id) emittedInterruptIds.add(entry.id)
                     hasYielded = true
                     yield {
                       type: "interrupt" as const,
@@ -792,9 +740,6 @@ async function* streamFromRunnable(
   // input. The adapter does NOT park here waiting for an in-process promise.
   const pass = yield* processEventStream(input, config, /* allowRetryOnError */ true)
 
-  // Final drain in case the last tool call was the bridged task tool —
-  // its events would otherwise be stranded after the stream ends.
-  yield* drainSubagentEvents()
   yield { type: "done", data: pass.finalOutput }
 }
 

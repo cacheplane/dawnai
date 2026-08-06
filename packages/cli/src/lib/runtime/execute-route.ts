@@ -1099,16 +1099,10 @@ async function loadSubagentDescription(route: RouteDefinition): Promise<string> 
 
 /**
  * Builds the temporary subagentResolver passed into streamAgent/executeAgent.
- * Given a canonical model-facing name, the resolver returns:
- *   - the child route's id
- *   - a graph object whose .invoke(input, config) re-enters executeResolvedRoute
- *
- * The returned graph exposes both `invoke` (one-shot) and `dawnStream`
- * (yields Dawn StreamChunks). The dispatcher prefers `dawnStream` so
- * intermediate child events (tool calls, tokens, capability events) bubble
- * up to the parent stream as `subagent.<type>` envelopes.
+ * It accepts the native async request shape and temporarily re-enters
+ * executeResolvedRoute until CLI-owned lazy child graphs replace it.
  */
-function buildSubagentResolver(args: {
+export function buildSubagentResolver(args: {
   readonly appRoot: string
   readonly routeManifest: RouteManifest
   readonly subagentRegistry: readonly ResolvedSubagent[]
@@ -1135,16 +1129,22 @@ function buildSubagentResolver(args: {
       .filter((entry): entry is readonly [string, RouteDefinition] => entry[1] !== undefined),
   )
 
-  return (subagentName: string) => {
-    const route = routeByName.get(subagentName)
-    if (!route) return undefined
+  return async (request) => {
+    const route = routeByName.get(request.name)
+    if (!route) {
+      return {
+        ok: false,
+        message: `[DAWN_E5003] No subagent named '${request.name}' is available.`,
+      }
+    }
 
     const graph = {
-      invoke: async (input: unknown, _config: unknown): Promise<unknown> => {
-        // Re-enter the same runtime; capabilities are re-applied for the
-        // child route. The dispatcher passes `{messages: [HumanMessage]}` —
-        // forward verbatim as the child's input so the agent-route path
-        // sees the protocol shape it expects.
+      invoke: async (
+        input: unknown,
+        config: Parameters<SubagentResolver>[0]["config"],
+      ): Promise<unknown> => {
+        // Re-enter the same runtime so capabilities are re-applied for the
+        // child route, forwarding the native child input verbatim.
         const result = await executeResolvedRoute({
           appRoot,
           input,
@@ -1153,6 +1153,7 @@ function buildSubagentResolver(args: {
           routeId: route.id,
           routePath: route.pathname,
           ...(sandboxManager ? { sandboxManager } : {}),
+          ...(config.signal ? { signal: config.signal } : {}),
           // Deliberately NOT `threadId`: the child must run as an independent
           // uncheckpointed invocation (forwarding the parent's threadId would
           // share its in-flight LangGraph checkpoint and short-circuit the
@@ -1161,34 +1162,16 @@ function buildSubagentResolver(args: {
           ...(sandboxThreadId ? { sandboxThreadId } : {}),
         })
         if (result.status === "failed") {
-          // Surface the failure to the dispatcher in a shape that
-          // extractFinalText can survive; the dispatcher wraps it.
+          // Let the task bridge preserve the existing ordinary failure result.
           throw new Error(result.error.message)
         }
         // executeAgent's output for an agent-kind route is the raw
         // LangGraph state ({messages, ...}). Forward as-is.
         return result.output
       },
-      // Stream child events so the parent stream can bubble subagent.*
-      // envelopes for intermediate tool calls, tokens, and capability events.
-      dawnStream: async function* (input: unknown, _config: unknown) {
-        for await (const chunk of streamResolvedRoute({
-          appRoot,
-          input,
-          isSubagent: true,
-          routeFile: route.entryFile,
-          routeId: route.id,
-          routePath: route.pathname,
-          ...(sandboxManager ? { sandboxManager } : {}),
-          // Same as invoke() above: sandbox key only, never the checkpoint id.
-          ...(sandboxThreadId ? { sandboxThreadId } : {}),
-        })) {
-          yield chunk
-        }
-      },
     }
 
-    return { routeId: route.id, graph }
+    return { ok: true, child: { routeId: route.id, graph } }
   }
 }
 
