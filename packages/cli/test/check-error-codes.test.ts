@@ -67,6 +67,32 @@ export default agent({
     expect(result.stderr).toContain("https://dawnai.org/docs/subagents#delegation-policy")
   })
 
+  test("groups delegation diagnostics independently and reports each once", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": `import { agent } from "@dawn-ai/sdk"
+export default agent({
+  model: "gpt-5-mini",
+  tools: { allow: ["task", "missingTool"] },
+} as any)
+`,
+      "src/app/other/index.ts": `import { agent } from "@dawn-ai/sdk"
+export default agent({
+  model: "gpt-5-mini",
+  tools: { approve: ["task"] },
+} as any)
+`,
+    })
+
+    const result = await invoke(["check", "--cwd", appRoot])
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr.match(/Invalid delegation policy/g)).toHaveLength(1)
+    expect(result.stderr.match(/\/hello: \[DAWN_E1004\] tools\.allow/g)).toHaveLength(1)
+    expect(result.stderr.match(/\/other: \[DAWN_E1004\] tools\.approve/g)).toHaveLength(1)
+    expect(result.stderr).not.toContain("Invalid tool scope")
+    expect(result.stderr).not.toContain("DAWN_E1001")
+  })
+
   test("unknown build target → [DAWN_E1003] with docs link", async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": 'export default { build: { targets: ["nonsense"] } };\n',

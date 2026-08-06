@@ -51,7 +51,7 @@ describe("collectDelegationErrors", () => {
         'import child from "./subagents/child/index.js"\n',
       ),
       extra: { "src/app/parent/subagents/child/index.ts": child },
-      message: /Unknown rule name "missing"/,
+      message: /Unknown rule name "missing".*Available explicit names: child/,
     },
     {
       name: "invalid registration name",
@@ -61,6 +61,18 @@ describe("collectDelegationErrors", () => {
       ),
       extra: { "src/app/parent/subagents/child/index.ts": child },
       message: /Invalid explicit subagent name "bad name"/,
+    },
+    {
+      name: "invalid convention name",
+      parent: parent(""),
+      extra: { "src/app/parent/subagents/bad.name/index.ts": child },
+      message: /Invalid convention subagent name "bad\.name"/,
+    },
+    {
+      name: "non-agent registration",
+      parent: parent("subagents: { child: {} }"),
+      extra: {},
+      message: /Explicit subagent "child" must reference a Dawn agent descriptor/,
     },
     {
       name: "unresolved descriptor",
@@ -106,6 +118,18 @@ describe("collectDelegationErrors", () => {
       message: /subagents must be a keyed object/,
     },
     {
+      name: "malformed delegation object",
+      parent: parent('delegation: "allow"'),
+      extra: {},
+      message: /delegation must be an object/,
+    },
+    {
+      name: "malformed rules object",
+      parent: parent("delegation: { rules: [] }"),
+      extra: {},
+      message: /delegation\.rules must be an object/,
+    },
+    {
       name: "malformed default",
       parent: parent('delegation: { default: "sometimes" }'),
       extra: {},
@@ -138,6 +162,15 @@ describe("collectDelegationErrors", () => {
       extra: { "src/app/parent/subagents/child/index.ts": child },
       message: /non-string reason/,
     },
+    {
+      name: "multi-action rule",
+      parent: parent(
+        'subagents: { child }, delegation: { rules: { child: { action: "deny", predicate: async () => true } } }',
+        'import child from "./subagents/child/index.js"\n',
+      ),
+      extra: { "src/app/parent/subagents/child/index.ts": child },
+      message: /unknown field\(s\): predicate/,
+    },
   ])("reports E1004 for $name", async ({ parent: parentSource, extra, message }) => {
     const errors = await collect({ "src/app/parent/index.ts": parentSource, ...extra })
 
@@ -158,6 +191,19 @@ describe("collectDelegationErrors", () => {
     expect(errors[0]).toMatch(/\[DAWN_E1004\]/)
     expect(errors[0]).toContain(`tools.${field}`)
     expect(errors[0]).toMatch(/use delegation/i)
+  })
+
+  it("reports each reserved task scope field exactly once", async () => {
+    const errors = await collect({
+      "src/app/parent/index.ts": parent(
+        'tools: { allow: ["task", "task"], deny: ["task"], approve: ["task"], constrain: { task: async () => true } }',
+      ),
+    })
+
+    expect(errors).toHaveLength(4)
+    for (const field of ["allow", "deny", "approve", "constrain"]) {
+      expect(errors.filter((error) => error.includes(`tools.${field}`))).toHaveLength(1)
+    }
   })
 
   it("keeps authored task tools reserved", () => {
