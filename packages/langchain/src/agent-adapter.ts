@@ -105,8 +105,9 @@ async function materializeAgent(
   } = {},
 ): Promise<AgentLike> {
   const fingerprint = fragmentFingerprint(opts.promptFragments ?? [])
+  const bypassCache = opts.bypassCache === true || (opts.streamTransformers?.length ?? 0) > 0
 
-  if (!opts.bypassCache) {
+  if (!bypassCache) {
     const cached = materializedAgents.get(descriptor)
     if (cached && cached.fingerprint === fingerprint) {
       return cached.agent
@@ -171,7 +172,7 @@ async function materializeAgent(
   // biome-ignore lint/suspicious/noExplicitAny: dynamically-built options don't satisfy strict StateDefinition type
   const compiled = createReactAgent(agentOptions as any)
 
-  if (!opts.bypassCache) {
+  if (!bypassCache) {
     materializedAgents.set(descriptor, { fingerprint, agent: compiled as unknown as AgentLike })
   }
   return compiled as unknown as AgentLike
@@ -211,11 +212,29 @@ interface CapabilityEventPayload {
   readonly event: string
 }
 
+const CAPABILITY_EVENT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*$/
+const RESERVED_ROOT_EVENT_NAMES = new Set([
+  "token",
+  "tool_call",
+  "tool_result",
+  "interrupt",
+  "done",
+])
+
+function isCapabilityEventName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    CAPABILITY_EVENT_NAME_PATTERN.test(value) &&
+    !RESERVED_ROOT_EVENT_NAMES.has(value) &&
+    !value.startsWith("subagent.")
+  )
+}
+
 function parseCapabilityEvent(value: unknown): CapabilityEventPayload | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
   const payload = value as Record<string, unknown>
   if (!Object.hasOwn(payload, "event")) return undefined
-  if (typeof payload.event !== "string" || payload.event.length === 0) return undefined
+  if (!isCapabilityEventName(payload.event)) return undefined
   if (!Object.hasOwn(payload, "data")) return undefined
   return { event: payload.event, data: payload.data }
 }

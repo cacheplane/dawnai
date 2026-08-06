@@ -2,9 +2,17 @@ import { agent } from "@dawn-ai/sdk"
 import { AIMessage } from "@langchain/core/messages"
 import { MemorySaver } from "@langchain/langgraph"
 import { describe, expect, test, vi } from "vitest"
-import { executeAgent, streamAgent } from "../src/agent-adapter.ts"
+import {
+  __resetMaterializedAgentsForTests,
+  executeAgent,
+  materializeAgentGraph,
+  streamAgent,
+} from "../src/agent-adapter.ts"
 
-async function collectCustomEvents(metadata?: Record<string, unknown>) {
+async function collectCustomEvents(
+  metadata?: Record<string, unknown>,
+  extraCapabilityPayloads: readonly unknown[] = [],
+) {
   const inheritedEvent = Object.assign(Object.create({ event: "inherited" }), {
     data: "invalid",
   })
@@ -44,6 +52,15 @@ async function collectCustomEvents(metadata?: Record<string, unknown>) {
         name: "other.event",
         data: { event: "ignored", data: "invalid" },
         ...(metadata ? { metadata } : {}),
+      }
+      for (const [index, data] of extraCapabilityPayloads.entries()) {
+        yield {
+          event: "on_custom_event",
+          run_id: `custom-extra-${index}`,
+          name: "dawn.capability",
+          data,
+          ...(metadata ? { metadata } : {}),
+        }
       }
       yield {
         event: "on_chain_end",
@@ -99,9 +116,84 @@ describe("capability custom events", () => {
       data: { todos: ["one"] },
     })
   })
+
+  test("projects only safe non-reserved capability event names", async () => {
+    const invalidNames = [
+      "line\nbreak",
+      "line\rbreak",
+      "control\u0007bell",
+      "has space",
+      "token",
+      "tool_call",
+      "tool_result",
+      "interrupt",
+      "done",
+      "subagent.plan_update",
+    ]
+    const chunks = await collectCustomEvents(undefined, [
+      { event: "memory.plan-updated", data: "accepted" },
+      ...invalidNames.map((event) => ({ event, data: "rejected" })),
+    ])
+
+    expect(chunks).toEqual([
+      {
+        type: "tool_result",
+        data: { id: "tool-1", name: "writeTodos", output: { todos: ["legacy"] } },
+      },
+      { type: "plan_update", data: { todos: ["one"] } },
+      { type: "memory.plan-updated", data: "accepted" },
+      { type: "done", data: { ok: true } },
+    ])
+  })
 })
 
 describe("executeAgent with DawnAgent descriptors", () => {
+  test("does not reuse a compiled graph when stream transformers change", async () => {
+    const createReactAgent = vi.fn(() => ({ invoke: vi.fn() }))
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {},
+    }))
+    __resetMaterializedAgentsForTests()
+
+    const descriptor = agent({ model: "gpt-5-mini", systemPrompt: "Test." })
+    const tool = { name: "probe", run: async () => "ok" }
+    const firstTransformer = {
+      observes: "tool_result" as const,
+      transform: async function* () {
+        yield { event: "first", data: 1 }
+      },
+    }
+    const secondTransformer = {
+      observes: "tool_result" as const,
+      transform: async function* () {
+        yield { event: "second", data: 2 }
+      },
+    }
+
+    try {
+      const first = await materializeAgentGraph({
+        checkpointer: new MemorySaver(),
+        descriptor,
+        streamTransformers: [firstTransformer],
+        tools: [tool],
+      })
+      const second = await materializeAgentGraph({
+        checkpointer: new MemorySaver(),
+        descriptor,
+        streamTransformers: [secondTransformer],
+        tools: [tool],
+      })
+
+      expect(createReactAgent).toHaveBeenCalledTimes(2)
+      expect(second).not.toBe(first)
+    } finally {
+      __resetMaterializedAgentsForTests()
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+    }
+  })
+
   test("DawnAgent descriptor is recognized and does not throw invoke error", async () => {
     let openAIModel: unknown
 

@@ -1,6 +1,7 @@
 import type { JsonSchemaProperty, StreamTransformer } from "@dawn-ai/core"
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch"
 import { ToolMessage } from "@langchain/core/messages"
+import { patchConfig } from "@langchain/core/runnables"
 import { DynamicStructuredTool } from "@langchain/core/tools"
 import { Command } from "@langchain/langgraph"
 import { z } from "zod"
@@ -37,12 +38,15 @@ export function convertToolToLangChain(
     name: tool.name,
     description: tool.description ?? "",
     schema,
-    func: async (input, _runManager, config) => {
-      const signal = config?.signal ?? new AbortController().signal
-      // config.configurable carries thread_id + the route params (set by the
+    func: async (input, runManager, config) => {
+      const liveConfig = runManager
+        ? patchConfig(config, { callbacks: runManager.getChild() })
+        : config
+      const signal = liveConfig?.signal ?? new AbortController().signal
+      // liveConfig.configurable carries thread_id + the route params (set by the
       // agent-adapter's prepareAgentCall). Forward them so tools — and the
       // argument-constraint wrapper — can read live per-call identity.
-      const configurable = (config?.configurable ?? {}) as Record<string, unknown>
+      const configurable = (liveConfig?.configurable ?? {}) as Record<string, unknown>
       const threadId =
         typeof configurable.thread_id === "string" ? configurable.thread_id : undefined
       // Allowlist against the route's declared param names. A denylist would
@@ -59,7 +63,7 @@ export function convertToolToLangChain(
         ...(Object.keys(params).length > 0 ? { params } : {}),
       })
       const { content, stateUpdates } = unwrapToolResult(rawResult)
-      const toolCallId = extractToolCallId(config)
+      const toolCallId = extractToolCallId(liveConfig)
       const finalContent = offload
         ? await offload(content, tool.name, toolCallId || undefined)
         : content
@@ -81,15 +85,19 @@ export function convertToolToLangChain(
 
       for (const transformer of streamTransformers) {
         if (transformer.observes !== "tool_result") continue
-        for await (const output of transformer.transform({
-          toolName: tool.name,
-          toolOutput: convertedResult,
-        })) {
-          await dispatchCustomEvent(
-            "dawn.capability",
-            { event: output.event, data: output.data },
-            config,
-          )
+        try {
+          for await (const output of transformer.transform({
+            toolName: tool.name,
+            toolOutput: convertedResult,
+          })) {
+            await dispatchCustomEvent(
+              "dawn.capability",
+              { event: output.event, data: output.data },
+              liveConfig,
+            )
+          }
+        } catch {
+          // Capability events are secondary; preserve the successful tool result.
         }
       }
 

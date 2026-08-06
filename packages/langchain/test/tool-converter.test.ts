@@ -93,6 +93,58 @@ describe("convertToolToLangChain", () => {
     )
   })
 
+  test("returns string content when a transformer iterator fails", async () => {
+    const converted = convertToolToLangChain(
+      { name: "probe", run: async () => "ok" },
+      undefined,
+      undefined,
+      [],
+      [
+        {
+          observes: "tool_result",
+          transform: async function* () {
+            yield { event: "before_failure", data: null }
+            throw new Error("transform failed")
+          },
+        },
+      ],
+    )
+
+    await expect(
+      converted.func({}, undefined as never, { signal: new AbortController().signal } as never),
+    ).resolves.toBe(JSON.stringify("ok"))
+  })
+
+  test("returns a state-updating Command when capability dispatch fails", async () => {
+    dispatchCustomEvent.mockRejectedValue(new Error("dispatch failed"))
+    const converted = convertToolToLangChain(
+      {
+        name: "writeState",
+        run: async () => ({ result: "updated", state: { value: 42 } }),
+      },
+      undefined,
+      undefined,
+      [],
+      [
+        {
+          observes: "tool_result",
+          transform: async function* () {
+            yield { event: "state_update", data: { value: 42 } }
+          },
+        },
+      ],
+    )
+
+    const result = await converted.func(
+      {},
+      undefined as never,
+      { signal: new AbortController().signal } as never,
+    )
+
+    expect(isCommand(result)).toBe(true)
+    expect((result as InstanceType<typeof Command>).update).toMatchObject({ value: 42 })
+  })
+
   test("converts a basic Dawn tool to a DynamicStructuredTool", async () => {
     const dawnTool = {
       name: "greet",
