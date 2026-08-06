@@ -751,7 +751,7 @@ git commit -m "ci: verify published TypeScript tooling"
 - Modify: `scripts/published-artifacts.test.mjs`
 - Modify: `.github/workflows/release.yml`
 
-- [ ] **Step 1: Write failing bounded-registry-wait tests**
+- [x] **Step 1: Write failing bounded-registry-wait tests**
 
 Add a pure/injectable helper test covering:
 
@@ -774,7 +774,7 @@ export async function waitForPublishedVersions({
 })
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 node --test scripts/published-artifacts.test.mjs
@@ -782,11 +782,11 @@ node --test scripts/published-artifacts.test.mjs
 
 Expected: FAIL because wait support is absent.
 
-- [ ] **Step 3: Implement wait support and CLI flags**
+- [x] **Step 3: Implement wait support and CLI flags**
 
 Add bounded `--wait-attempts` and `--wait-delay-ms` options to `published-artifact-verify.mjs`, defaulting to no wait for existing manual behavior. When enabled, poll all selected packages for the exact version before tarball verification.
 
-- [ ] **Step 4: Add conditional post-publish release steps**
+- [x] **Step 4: Add conditional post-publish release steps**
 
 After existing attestation/assets/backfill steps, and only when `${{ steps.changesets.outputs.published == 'true' }}`:
 
@@ -796,7 +796,7 @@ After existing attestation/assets/backfill steps, and only when `${{ steps.chang
 
 Keep each individual poll delay below 60 seconds and the total bounded by the release job timeout.
 
-- [ ] **Step 5: Run unit tests and validate workflow syntax by inspection/tooling**
+- [x] **Step 5: Run unit tests and validate workflow syntax by inspection/tooling**
 
 ```bash
 node --test scripts/published-artifacts.test.mjs
@@ -805,7 +805,7 @@ pnpm lint
 
 If `actionlint` is available, run it on both changed workflows. Otherwise rely on repository workflow lint/checks and document the unavailable local validator.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/lib/published-artifacts.mjs scripts/published-artifact-verify.mjs scripts/published-artifacts.test.mjs .github/workflows/release.yml
