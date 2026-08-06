@@ -44,6 +44,24 @@ Configured under `memory.distill` in `dawn.config.ts` (`model` defaults to
 `gpt-5-mini`; `provider` is inferred from the model id, falling back to
 `openai`).
 
+**Distilled records are written to be findable.** Recall is keyword match, and a
+model asked to generalize writes an abstraction that names none of its sources
+("earlier-week deployment windows are lower risk" for a batch about *griffin*) —
+which no realistic question retrieves, and for consolidation the sources that did
+carry the name are already superseded. Both distillation prompts now require the
+concrete entities (service and project names, ticket/error identifiers,
+filenames, people) to be carried through verbatim. Measured live, this is the
+difference between an insight that ranks first for "griffin deploys" and one that
+does not appear at all.
+
+**`recall` no longer invites guessed time windows.** The `since`/`until` schema
+descriptions now steer the model to relative offsets (`"-7d"`, resolved against
+the request clock) and state that it does not know today's date. A model asked
+"what did I work on last week?" would otherwise supply an absolute window from
+around its training cutoff — observed live: a 2026 store queried with
+`since: "2023-10-02"` — which matches nothing, silently, because an empty result
+is indistinguishable from an empty store.
+
 **`kind: "reflection"` is now accepted** by `defineMemory` and the generated
 `remember` tool, where it previously threw. Reflections are append-only, like
 episodic writes — a later insight never supersedes an earlier one. This is

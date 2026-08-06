@@ -56,4 +56,24 @@ describe("memory capability recall tool", () => {
     await recall?.run({ query: "billing threshold" }, { signal: new AbortController().signal })
     expect(captured.query?.now).toBe(NOW)
   })
+
+  // A model does not know today's date. Asked about "last week" it invents an
+  // absolute window from around its training cutoff (observed live against a
+  // 2026 store: since "2023-10-02", until "2023-10-09"), which matches nothing —
+  // and an empty result is indistinguishable from an empty store, so the mistake
+  // is silent. The schema is the only place to steer it, so pin the steer.
+  it("steers the model away from guessed absolute time windows", async () => {
+    const marker = createMemoryMarker()
+    const contribution = await marker.load("/tmp/nowhere", makeContext({}))
+    const recall = contribution.tools?.find((t) => t.name === "recall")
+    const shape = (recall?.schema as { shape?: Record<string, { description?: string }> })?.shape
+    for (const field of ["since", "until"] as const) {
+      const description = shape?.[field]?.description ?? ""
+      expect(description).toMatch(/relative/i)
+      expect(description).toContain("-7d")
+      // The load-bearing half: naming the offsets is useless if the model still
+      // believes it knows the date.
+      expect(description).toMatch(/do NOT know today's date/i)
+    }
+  })
 })

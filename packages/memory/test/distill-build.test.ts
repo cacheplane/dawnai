@@ -42,6 +42,27 @@ describe("prompts", () => {
   it("is deterministic — same input, character-for-character identical prompt", () => {
     expect(buildConsolidationPrompt(BATCH)).toBe(buildConsolidationPrompt(BATCH))
   })
+  // Recall is keyword match, so a derived record can only be found through
+  // vocabulary it contains. Without this instruction a real model writes an
+  // abstracted digest that names none of its sources' entities, and the summary/
+  // insight is unreachable once the sources are superseded. Both prompts carry
+  // it — a summary and an insight are equally keyword-retrieved.
+  it.each([
+    ["consolidation", () => buildConsolidationPrompt(BATCH)],
+    [
+      "reflection",
+      () =>
+        buildReflectionPrompt({
+          namespace: "route=/a",
+          records: BATCH.records,
+          coveredUntil: "2026-07-08T09:00:00.000Z",
+        }),
+    ],
+  ])("%s prompt instructs the model to name concrete entities verbatim", (_label, build) => {
+    const p = build()
+    expect(p).toMatch(/verbatim/i)
+    expect(p).toMatch(/keyword/i)
+  })
 })
 
 describe("parsing", () => {

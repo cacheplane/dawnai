@@ -29,6 +29,24 @@ void _allKindsListed
 const isMemoryKind = (k: string): k is MemoryKindLike =>
   (MEMORY_KINDS as readonly string[]).includes(k)
 
+/**
+ * Shared `since`/`until` guidance. A model does not know today's date, and asked
+ * a question like "what did you work on last week?" it will confidently invent an
+ * ABSOLUTE window from around its training cutoff — observed live: a 2026 store
+ * queried with `since: "2023-10-02", until: "2023-10-09"`, which matched nothing
+ * and produced a flat "I have no memories of that". The failure is silent (an
+ * empty result is indistinguishable from an empty store), so the schema steers to
+ * the relative form, which `resolveTimeExpr` anchors to the request clock, and
+ * says plainly that no bound at all beats a guessed one.
+ * Pinned by "steers the model away from guessed absolute time windows"
+ * (memory-capability-recall.test.ts).
+ */
+const TIME_BOUND_GUIDANCE =
+  'Use a RELATIVE offset ("-24h", "-7d", "-30d"), which is resolved against the current time. ' +
+  "You do NOT know today's date: an absolute ISO timestamp you guessed will silently match " +
+  "nothing. Omit this unless the user asked for a specific time range — recall is already " +
+  "ranked by recency."
+
 // A route's defineMemory() schema arrives as `unknown` (loaded via dynamic
 // import, validated structurally). Module-scoped (no closure deps) so it isn't
 // recreated on every load(). A non-Zod value must NOT be handed to z.object()
@@ -88,15 +106,11 @@ export function createMemoryMarker(): CapabilityMarker {
         since: z
           .string()
           .optional()
-          .describe(
-            'ISO timestamp or relative offset ("-24h", "-7d") — inclusive lower bound on when the memory happened.',
-          ),
+          .describe(`Inclusive lower bound on when the memory happened. ${TIME_BOUND_GUIDANCE}`),
         until: z
           .string()
           .optional()
-          .describe(
-            'ISO timestamp or relative offset ("-24h", "-7d") — exclusive upper bound on when the memory happened.',
-          ),
+          .describe(`Exclusive upper bound on when the memory happened. ${TIME_BOUND_GUIDANCE}`),
       })
 
       const recall = {

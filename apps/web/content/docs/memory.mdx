@@ -397,6 +397,25 @@ Insights land as **candidates by default** — a model's generalization about yo
 
 Because the watermark advances with each pass, re-running `reflect` is cheap: a namespace with nothing new since its last reflection is skipped without a model call. Reflections are **append-only** — a later insight never supersedes an earlier one (see [write governance](#write-governance)); distillation accumulates insights rather than overwriting them.
 
+### Distilled records are found by keyword
+
+A distilled record is only worth what `recall` can retrieve, and default recall is **keyword** match ([IDF-weighted relevance](#how-recall-ranks), no stemming, no synonyms). That is a sharper constraint for distillation than for ordinary writes, because a summary or an insight is *model-authored prose* — and a model asked to generalize will happily write an abstraction that names none of its sources:
+
+> Deployments on other weekdays have repeatedly succeeded with no incidents, suggesting earlier-week deployment windows are lower risk.
+
+That insight is true, useful, and **unreachable** by anyone who asks "what's up with `griffin` deploys?" — it shares no distinctive token with the question. For consolidation it is worse than for reflection: the sources that *did* carry the name have been superseded, so the summary is the only surviving copy.
+
+Both distillation prompts therefore instruct the model to carry the concrete entities — service and project names, ticket and error identifiers, filenames, people — through into the derived record verbatim. Measured against a real model, this is the difference between an insight that ranks first for "griffin deploys" and one that does not appear at all.
+
+Two residual limits worth knowing:
+
+- **It is a prompt, not a guarantee.** Some insights in a pass still come back purely abstract. Distillation is a model call; treat a batch's output as reviewable (which is precisely why reflection [writes candidates by default](#reflection)).
+- **Paraphrase still misses.** Keyword recall cannot connect "expedite delivery" to "faster shipping" no matter how well the summary is written. If your users ask in their own words rather than the system's, enable [vector recall](#semantic-recall-opt-in) — the hybrid path fuses keyword and embedding matches and is the real fix for paraphrase.
+
+<Callout type="info" title="A time-scoped question is not a time-scoped memory">
+  Relatedly: an agent does not know today's date. Asked "what did I work on last week?" a model will guess an absolute `since`/`until` window — and a guess from its training cutoff silently matches nothing, since an empty result looks exactly like an empty store. The `recall` schema steers it to relative offsets (`"-7d"`), which resolve against the request clock. Keep that in mind when a time-scoped question comes back empty: also note that consolidation only touches episodes older than `olderThanMs` (default 7 days), so a summary is *never* inside "the last week" by construction.
+</Callout>
+
 ### Provenance
 
 Both passes record where a derived record came from, in two independent places:
@@ -563,7 +582,7 @@ const store = await seedMemory(
 
 ### Verifying against a real model
 
-For deterministic coverage the aimock harness scripts exact tool arguments — which means it cannot tell you whether a *real* model can drive the generated tools from their schemas. A gated live-smoke suite (`packages/testing/test/memory-live.smoke.test.ts`) closes that gap: it exercises remember, recall, supersession, namespace isolation, the injected index, and the candidate-approval flow against a real model. It runs only when `OPENAI_API_KEY` is set and is skipped in CI. For hands-on behavioral checks — eyeballing the composed prompt and walking the `dawn memory` governance flow by hand — the repo also keeps a manual runbook under `docs/superpowers/runbooks/`.
+For deterministic coverage the aimock harness scripts exact tool arguments — which means it cannot tell you whether a *real* model can drive the generated tools from their schemas. A gated live-smoke suite (`packages/testing/test/memory-live.smoke.test.ts`) closes that gap: it exercises remember, recall, supersession, namespace isolation, the injected index, and the candidate-approval flow against a real model. It runs only when `OPENAI_API_KEY` is set and is skipped in CI. [Distillation](#distillation) has its own gated suite (`packages/testing/test/distill-live.smoke.test.ts`) on the same terms — it runs both passes against a real model and then has to reach the derived record, which is how the [keyword reachability](#distilled-records-are-found-by-keyword) limits above were measured rather than assumed. For hands-on behavioral checks — eyeballing the composed prompt and walking the `dawn memory` governance flow by hand — the repo also keeps a manual runbook under `docs/superpowers/runbooks/`.
 
 ## What's deferred
 
