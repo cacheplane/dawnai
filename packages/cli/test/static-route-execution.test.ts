@@ -1,20 +1,17 @@
 import { existsSync } from "node:fs"
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
-import { discoverRoutes, resolveStateFields } from "@dawn-ai/core"
+import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { createAimock, script } from "../../testing/dist/index.js"
+import { script } from "../../testing/dist/index.js"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
-import { loadRouteMemory } from "../src/lib/runtime/load-memory.js"
-import { normalizeRouteModule } from "../src/lib/runtime/load-route-kind.js"
-import { createRouteAssistantId } from "../src/lib/runtime/route-identity.js"
-import { discoverStateDefinition } from "../src/lib/runtime/state-discovery.js"
-import type { DawnStaticModules, StaticRouteModule } from "../src/lib/runtime/static-modules.js"
-import { discoverToolDefinitions } from "../src/lib/runtime/tool-discovery.js"
-
-const cleanup: Array<() => Promise<void> | void> = []
+import {
+  buildStaticModulesForFixture,
+  cleanup,
+  runChatTurn,
+  withAimock,
+} from "./helpers/static-modules-fixture.js"
 
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn()
@@ -48,105 +45,9 @@ async function fixtureApp(): Promise<string> {
   return appRoot
 }
 
-/**
- * Build a `DawnStaticModules` manifest by running the SAME dynamic loaders
- * `createRuntimeRegistry`/`loadPreparedRouteModules` use, once, against an
- * intact fixture app. Honest data — no hand-built normalized modules or
- * tool stubs.
- */
-async function buildStaticModulesForFixture(appRoot: string): Promise<DawnStaticModules> {
-  const manifest = await discoverRoutes({ appRoot })
-
-  const routes: StaticRouteModule[] = []
-  for (const route of manifest.routes) {
-    const routeDir = dirname(route.entryFile)
-    const module = await normalizeRouteModule(route.entryFile, appRoot)
-    const tools = await discoverToolDefinitions({ appRoot, routeDir })
-
-    let stateFields: StaticRouteModule["stateFields"]
-    if (route.kind === "agent") {
-      const stateDefinition = await discoverStateDefinition({ routeDir })
-      stateFields = stateDefinition
-        ? resolveStateFields({
-            defaults: stateDefinition.defaults,
-            reducerOverrides: stateDefinition.reducerOverrides,
-          })
-        : undefined
-    }
-
-    const memoryFile = join(routeDir, "memory.ts")
-    const memory =
-      route.kind === "agent" && existsSync(memoryFile) ? await loadRouteMemory(memoryFile) : null
-
-    routes.push({
-      assistantId: createRouteAssistantId(route.id, route.kind),
-      kind: route.kind,
-      memory,
-      module,
-      routeFile: route.entryFile,
-      routeId: route.id,
-      routePath: route.entryFile
-        .slice(manifest.appRoot.length + 1)
-        .split("\\")
-        .join("/"),
-      stateFields,
-      tools,
-    })
-  }
-
-  return { routes }
-}
-
-/** Point OPENAI_BASE_URL/OPENAI_API_KEY at a local aimock instance for the
- * duration of the test, restoring the previous env afterward. */
-async function withAimock(fixtures: ReturnType<ReturnType<typeof script>["build"]>): Promise<void> {
-  const aimock = await createAimock({ fixtures: [] })
-  cleanup.push(() => aimock.close())
-  const prevBaseUrl = process.env.OPENAI_BASE_URL
-  const prevKey = process.env.OPENAI_API_KEY
-  process.env.OPENAI_BASE_URL = aimock.baseUrl
-  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-not-used"
-  cleanup.push(() => {
-    if (prevBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
-    else process.env.OPENAI_BASE_URL = prevBaseUrl
-    if (prevKey === undefined) delete process.env.OPENAI_API_KEY
-    else process.env.OPENAI_API_KEY = prevKey
-  })
-  aimock.addFixtures(fixtures)
-}
-
-async function runChatTurn(
-  handler: Awaited<ReturnType<typeof createRuntimeFetchHandler>>,
-  threadId: string,
-  userMessage = "hello",
-): Promise<string> {
-  const routeKey = encodeURIComponent("/chat#agent")
-  const response = await handler.fetch(
-    new Request(`http://localhost/agui/${routeKey}`, {
-      body: JSON.stringify({
-        context: [],
-        forwardedProps: {},
-        messages: [{ id: "1", role: "user", content: userMessage }],
-        runId: `rn-${threadId}`,
-        state: {},
-        threadId,
-        tools: [],
-      }),
-      headers: { accept: "text/event-stream", "content-type": "application/json" },
-      method: "POST",
-    }),
-  )
-  expect(response.status).toBe(200)
-  const reader = response.body?.getReader()
-  if (!reader) throw new Error("expected a streaming response body")
-  const chunks: string[] = []
-  for (;;) {
-    const next = await reader.read()
-    if (next.done) break
-    chunks.push(new TextDecoder().decode(next.value))
-  }
-  return chunks.join("")
-}
+// Shared helpers (buildStaticModulesForFixture / withAimock / runChatTurn)
+// live in ./helpers/static-modules-fixture.ts — also used by
+// static-descriptor-map.test.ts.
 
 // ---------------------------------------------------------------------------
 // Test 1: pruned-fixture proof — the static manifest is generated from an

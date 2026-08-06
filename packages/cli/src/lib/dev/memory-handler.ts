@@ -1,7 +1,12 @@
-import { approveWithReconcile, type MemoryStore } from "@dawn-ai/memory"
+import type { MemoryStore } from "@dawn-ai/memory"
+// The reconcile helper comes from the pure "./reconcile" subpath, never the
+// barrel: the barrel re-exports sqliteMemoryStore and so reaches node:sqlite.
+import { approveWithReconcile } from "@dawn-ai/memory/reconcile"
 import { formatErrorMessage } from "../output.js"
-import { resolveIdentityKeys } from "../runtime/resolve-identity.js"
 import { createExecutionErrorBody, createRequestErrorBody } from "./server-errors.js"
+
+/** The identity keys used when the route's `memory.ts` cannot be consulted. */
+const DEFAULT_IDENTITY_KEYS = ["subject", "predicate"] as const
 
 /**
  * GET /memory/candidates — list every candidate record across all namespaces
@@ -29,6 +34,16 @@ export async function handleMemoryApproveRequest(options: {
   readonly appRoot: string
   readonly memoryStore: MemoryStore
   readonly id: string
+  /**
+   * Injected because resolving a route's declared `identity` reads its
+   * `memory.ts` from disk. Absent (edge runtimes, which have none), the
+   * default semantic identity is used — the same keys `resolveIdentityKeys`
+   * itself falls back to when the route cannot be resolved.
+   */
+  readonly resolveIdentityKeys?: (
+    appRoot: string,
+    namespace: string,
+  ) => Promise<{ readonly keys: readonly string[]; readonly fallback: boolean }>
 }): Promise<Response> {
   const { appRoot, memoryStore, id } = options
   const record = await memoryStore.get(id)
@@ -42,9 +57,11 @@ export async function handleMemoryApproveRequest(options: {
     )
   }
   try {
-    const identity = await resolveIdentityKeys(appRoot, record.namespace)
+    const identityKeys = options.resolveIdentityKeys
+      ? (await options.resolveIdentityKeys(appRoot, record.namespace)).keys
+      : DEFAULT_IDENTITY_KEYS
     const result = await approveWithReconcile(memoryStore, id, {
-      identityKeys: identity.keys,
+      identityKeys,
       now: new Date().toISOString(),
     })
     return Response.json(

@@ -2,33 +2,16 @@ import { readdir } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { pathToFileURL } from "node:url"
 
-import type { WorkspaceFs } from "@dawn-ai/sdk"
-import { describeError, errorDocsUrl } from "@dawn-ai/sdk"
-
 import { importModule } from "./import-module.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
-import { isRecord } from "./utils.js"
+import { type DiscoveredToolDefinition, normalizeToolModule, type ToolScope } from "./tool-shape.js"
 
-export type ToolScope = "route-local" | "shared"
-
-export interface DiscoveredToolDefinition {
-  readonly description?: string
-  readonly filePath: string
-  readonly name: string
-  readonly run: (
-    input: unknown,
-    context: {
-      readonly middleware?: Readonly<Record<string, unknown>>
-      readonly signal: AbortSignal
-      // Optional here because pre-wrap invokers (langchain tool-converter/loop)
-      // omit it; the prepareRouteExecution wrapper guarantees it at runtime,
-      // which is why the author-facing DawnToolContext declares it required.
-      readonly fs?: WorkspaceFs
-    },
-  ) => Promise<unknown> | unknown
-  readonly schema?: unknown
-  readonly scope: ToolScope
-}
+export {
+  type DiscoveredToolDefinition,
+  injectGeneratedSchemas,
+  normalizeToolModule,
+  type ToolScope,
+} from "./tool-shape.js"
 
 export async function discoverToolDefinitions(options: {
   readonly appRoot: string
@@ -100,42 +83,6 @@ async function loadToolScope(options: {
   return discovered
 }
 
-export function injectGeneratedSchemas(
-  tools: readonly DiscoveredToolDefinition[],
-  generatedSchemas: Record<string, unknown>,
-): readonly DiscoveredToolDefinition[] {
-  return tools.map((tool) => {
-    // User-exported schema takes priority
-    if (tool.schema) return tool
-
-    const generated = generatedSchemas[tool.name]
-    if (!generated || typeof generated !== "object") return tool
-
-    const entry = generated as { description?: string; parameters?: unknown }
-    const description =
-      !tool.description && typeof entry.description === "string"
-        ? entry.description
-        : tool.description
-    const schema =
-      entry.parameters && typeof entry.parameters === "object" ? entry.parameters : undefined
-
-    if (!description && !schema) return tool
-
-    return {
-      ...tool,
-      ...(description ? { description } : {}),
-      ...(schema ? { schema } : {}),
-    }
-  })
-}
-
-/** `[DAWN_E5002] See <docs>` footer, with the docs URL centralized in the registry. */
-function toolShapeDocsFooter(): string {
-  const code = describeError("DAWN_E5002").code
-  const url = errorDocsUrl("DAWN_E5002")
-  return url ? `[${code}] See ${url}` : `[${code}]`
-}
-
 async function loadToolDefinition(
   filePath: string,
   scope: ToolScope,
@@ -147,88 +94,4 @@ async function loadToolDefinition(
     sourcePath: filePath,
   })
   return normalizeToolModule(toolModule, { filePath, name: basename(filePath, ".ts"), scope })
-}
-
-/**
- * The object-normalizing core of {@link loadToolDefinition}: turn an
- * already-imported tool module namespace into a `DiscoveredToolDefinition`.
- * Exported so the static-modules runtime helper (`buildStaticRouteModule`)
- * applies the exact same shape rules (function vs `{ run }` default export,
- * named `description`/`schema` exports, LangChain-tool rejection) to
- * statically-imported tool modules.
- */
-export function normalizeToolModule(
-  toolModuleValue: unknown,
-  meta: { readonly filePath: string; readonly name: string; readonly scope: ToolScope },
-): DiscoveredToolDefinition {
-  const toolModule = (toolModuleValue ?? {}) as {
-    readonly default?: unknown
-    readonly description?: unknown
-    readonly schema?: unknown
-  }
-  const { filePath, name, scope } = meta
-  const definition = toolModule.default
-  const description =
-    typeof toolModule.description === "string" ? toolModule.description : undefined
-  const schema = toolModule.schema !== undefined ? toolModule.schema : undefined
-
-  if (typeof definition === "function") {
-    return {
-      ...(description ? { description } : {}),
-      ...(schema ? { schema } : {}),
-      filePath,
-      name,
-      run: definition as DiscoveredToolDefinition["run"],
-      scope,
-    }
-  }
-
-  if (isRecord(definition) && typeof definition.run === "function") {
-    return {
-      ...(description ? { description } : {}),
-      ...(schema ? { schema } : {}),
-      filePath,
-      name,
-      run: definition.run as DiscoveredToolDefinition["run"],
-      scope,
-    }
-  }
-
-  if (looksLikeLangChainTool(definition)) {
-    throw new Error(
-      `Tool file ${filePath} default-exports a LangChain tool() (StructuredTool "${definition.name}").\n` +
-        `Dawn tools are plain functions — Dawn infers the input/output types from the\n` +
-        `function signature, so there's no schema wrapper. Convert it like this:\n\n` +
-        `  const search = /* your existing tool or client */\n\n` +
-        `  /** Describe what the tool does. */\n` +
-        `  export default async (input: { readonly query: string }) =>\n` +
-        `    search.invoke({ query: input.query })\n\n` +
-        toolShapeDocsFooter(),
-    )
-  }
-
-  throw new Error(
-    `Tool file ${filePath} must default export a function (got ${describeExport(definition)}).\n` +
-      toolShapeDocsFooter(),
-  )
-}
-
-/**
- * Structural detection of a @langchain/core StructuredTool instance —
- * `.invoke()` plus `.name` plus a `schema` — without importing langchain.
- */
-function looksLikeLangChainTool(value: unknown): value is { readonly name: string } {
-  return (
-    isRecord(value) &&
-    typeof value.invoke === "function" &&
-    typeof value.name === "string" &&
-    "schema" in value
-  )
-}
-
-function describeExport(value: unknown): string {
-  if (value === undefined) return "no default export"
-  if (value === null) return "null"
-  if (isRecord(value)) return `an object with keys [${Object.keys(value).join(", ")}]`
-  return `a ${typeof value}`
 }

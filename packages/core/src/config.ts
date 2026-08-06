@@ -59,9 +59,27 @@ export function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDa
   const loading = loadDawnConfigUncached(options)
   configCache.set(options.appRoot, loading)
   // A failed load must not be cached forever (e.g. a transient syntax error
-  // would otherwise poison the process) — evict on rejection.
-  loading.catch(() => configCache.delete(options.appRoot))
+  // would otherwise poison the process) — evict on rejection, but only if the
+  // cache still holds THIS load: a seedDawnConfig that raced in while the
+  // load was in flight must not be evicted by the stale rejection.
+  loading.catch(() => {
+    if (configCache.get(options.appRoot) === loading) {
+      configCache.delete(options.appRoot)
+    }
+  })
   return loading
+}
+
+/**
+ * Prime the per-appRoot config memo with an already-constructed DawnConfig —
+ * the static-wiring seam for runtimes with no filesystem (edge) and for
+ * callers that carry their config as an object. Symmetric with
+ * seedPreparedRouteModules. Overwrites any cached entry: an explicit seed
+ * always beats a disk load, and survives an in-flight disk load rejecting
+ * after the seed lands (the rejection eviction is identity-checked).
+ */
+export function seedDawnConfig(appRoot: string, config: DawnConfig): void {
+  configCache.set(appRoot, Promise.resolve({ appRoot, config, configPath: "<seeded>" }))
 }
 
 /** Test-only: clear the memo so fixtures can reload a mutated config. */

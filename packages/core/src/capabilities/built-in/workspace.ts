@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs"
 import { join, relative, resolve, sep } from "node:path"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { BackendContext, ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
@@ -119,10 +118,12 @@ export function createWorkspaceMarker(): CapabilityMarker {
   return {
     name: "workspace",
     detect: async (_routeDir, context) =>
-      context.workspaceRoot !== undefined || existsSync(workspaceRoot(context.appRoot)),
+      context.workspaceRoot !== undefined ||
+      (context.markerFs?.existsSync(workspaceRoot(context.appRoot)) ?? false),
     load: async (_routeDir, context) => {
       const root = context.workspaceRoot ?? workspaceRoot(context.appRoot)
-      if (context.workspaceRoot === undefined && !existsSync(root)) return {}
+      if (context.workspaceRoot === undefined && !(context.markerFs?.existsSync(root) ?? false))
+        return {}
       const fs = context.backends?.filesystem ?? localFilesystem()
       const exec = context.backends?.exec ?? localExec()
       const permissions = context.permissions
