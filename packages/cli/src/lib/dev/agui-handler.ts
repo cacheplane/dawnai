@@ -16,7 +16,7 @@ import { headersToRecord, runMiddleware } from "./middleware.js"
 import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
 import { readPendingInterrupts, resolveAgUiResume } from "./pending-interrupts.js"
 import { extractRouteParams } from "./request-context.js"
-import type { RuntimeRegistry } from "./runtime-registry.js"
+import type { RuntimeRegistry } from "./runtime-registry-core.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
 

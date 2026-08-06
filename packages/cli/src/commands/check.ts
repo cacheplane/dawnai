@@ -2,7 +2,8 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
-import { type DawnConfig, discoverRoutes, loadDawnConfig, type RouteManifest } from "@dawn-ai/core"
+import { type DawnConfig, loadDawnConfig, type RouteManifest } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import type { Command } from "commander"
 
 import { knownTargetNames } from "../lib/build/targets/index.js"

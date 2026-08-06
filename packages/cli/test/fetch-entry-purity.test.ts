@@ -117,26 +117,21 @@ function graphInputs(metafile: Metafile): string[] {
 /**
  * The `node:` imports still reachable through UPSTREAM Dawn packages, pinned
  * so the set can only shrink. None of them is Dawn-cli code: they come from
- * barrels whose node-only members (`dawn.config.ts` loading, route discovery,
- * typegen, the capability markers' path joins) are never CALLED on the
- * injected fetch path — the import edge is what remains.
+ * barrels whose node-only members (`dawn.config.ts` loading, the capability
+ * markers' path joins) are never CALLED on the injected fetch path — the
+ * import edge is what remains.
  *
- * Purging them means giving `@dawn-ai/core` the same pure/node split
- * `@dawn-ai/cli`, `@dawn-ai/permissions` and `@dawn-ai/workspace` already
- * have. That is follow-up work; until then this inventory is a ratchet — the
- * assertion is a SUBSET check, so removals are free and any NEW edge fails the
- * build.
+ * Purging them means finishing the pure/node split `@dawn-ai/cli`,
+ * `@dawn-ai/permissions` and `@dawn-ai/workspace` already have, and that core's
+ * route discovery + tool typegen now have (`@dawn-ai/core/node`). Until then
+ * this inventory is a ratchet — the assertion is a SUBSET check, so removals
+ * are free and any NEW edge fails the build.
  */
 const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = [
-  // @dawn-ai/core — barrel drags config loading, route discovery and typegen
+  // @dawn-ai/core — barrel drags config loading and the capability markers
   "node:crypto <- ../core/dist/capabilities/built-in/memory.js",
   "node:fs <- ../core/dist/config.js",
-  "node:fs <- ../core/dist/discovery/find-dawn-app.js",
-  "node:fs <- ../core/dist/typegen/extract-tool-schema.js",
-  "node:fs <- ../core/dist/typegen/extract-tool-types.js",
   "node:fs/promises <- ../core/dist/config.js",
-  "node:fs/promises <- ../core/dist/discovery/discover-routes.js",
-  "node:fs/promises <- ../core/dist/discovery/find-dawn-app.js",
   "node:path <- ../core/dist/capabilities/built-in/agents-md.js",
   "node:path <- ../core/dist/capabilities/built-in/memory-md.js",
   "node:path <- ../core/dist/capabilities/built-in/planning.js",
@@ -145,28 +140,17 @@ const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = [
   "node:path <- ../core/dist/capabilities/permission-gate.js",
   "node:path <- ../core/dist/capabilities/workspace-fs.js",
   "node:path <- ../core/dist/config.js",
-  "node:path <- ../core/dist/discovery/discover-routes.js",
-  "node:path <- ../core/dist/discovery/find-dawn-app.js",
-  "node:path <- ../core/dist/typegen/extract-tool-schema.js",
-  "node:path <- ../core/dist/typegen/extract-tool-types.js",
   "node:url <- ../core/dist/capabilities/built-in/subagents.js",
   "node:url <- ../core/dist/config.js",
-  "node:url <- ../core/dist/discovery/discover-routes.js",
 ]
 
 /**
- * Import edges into the node TS loader, all of them dynamic branches inside
- * `@dawn-ai/core` that only run when `dawn.config.ts` is read from disk or the
- * route tree is walked — neither happens on the injected fetch path. Pinned
- * for the same ratchet reason as the inventory above; `@dawn-ai/cli` itself
- * contributes none.
+ * Import edges into the node TS loader, a dynamic branch inside
+ * `@dawn-ai/core` that only runs when `dawn.config.ts` is read from disk —
+ * which never happens on the injected fetch path. Pinned for the same ratchet
+ * reason as the inventory above; `@dawn-ai/cli` itself contributes none.
  */
-const LOADER_EDGES: readonly string[] = [
-  "tsx/esm/api <- ../core/dist/config.js",
-  "tsx/esm/api <- ../core/dist/discovery/discover-routes.js",
-  "typescript <- ../core/dist/typegen/extract-tool-schema.js",
-  "typescript <- ../core/dist/typegen/extract-tool-types.js",
-]
+const LOADER_EDGES: readonly string[] = ["tsx/esm/api <- ../core/dist/config.js"]
 
 describe("@dawn-ai/cli/fetch graph purity", () => {
   it("contains no node: import from any @dawn-ai/cli source file", async () => {

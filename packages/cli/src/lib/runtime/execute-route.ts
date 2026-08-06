@@ -15,13 +15,12 @@ import { isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import {
   type DawnConfig,
-  discoverRoutes,
-  findDawnApp,
   loadDawnConfig,
   type ResolvedStateField,
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
+import { discoverRoutes, findDawnApp } from "@dawn-ai/core/node"
 import type { PermissionMode, PermissionsStore } from "@dawn-ai/permissions"
 import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"

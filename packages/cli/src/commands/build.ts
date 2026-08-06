@@ -1,7 +1,8 @@
 import { mkdir, rm } from "node:fs/promises"
 import { relative, resolve } from "node:path"
 
-import { discoverRoutes, loadDawnConfig } from "@dawn-ai/core"
+import { loadDawnConfig } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import type { Command } from "commander"
 import {
   type BuildEmitContext,

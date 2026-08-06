@@ -1,13 +1,8 @@
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import type { RouteManifest, RouteToolTypes } from "@dawn-ai/core"
-import {
-  discoverRoutes,
-  extractToolTypesForRoute,
-  findDawnApp,
-  loadDawnConfig,
-  renderDawnTypes,
-} from "@dawn-ai/core"
+import { loadDawnConfig, renderDawnTypes } from "@dawn-ai/core"
+import { discoverRoutes, extractToolTypesForRoute, findDawnApp } from "@dawn-ai/core/node"
 import type { DawnErrorCode } from "@dawn-ai/sdk"
 import type { SandboxProvider } from "@dawn-ai/workspace"
 import { type Command, CommanderError } from "commander"

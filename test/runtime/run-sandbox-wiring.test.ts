@@ -38,7 +38,7 @@ import {
   type SandboxManager,
   streamResolvedRoute,
 } from "@dawn-ai/cli/runtime"
-import { discoverRoutes } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import { type Aimock, collectRunResult, createAimock } from "@dawn-ai/testing"
 import { afterAll, beforeAll, expect, it } from "vitest"
 
