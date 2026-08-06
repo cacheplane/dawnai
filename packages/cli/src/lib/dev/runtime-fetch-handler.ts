@@ -757,6 +757,12 @@ async function handleApStreamRequest(options: {
   // the opposite default because it is ephemeral with nothing to reattach to.
   // Rationale: docs/superpowers/specs/2026-08-06-ap-run-cancellation.md
   const encoder = new TextEncoder()
+  // Set only when abortableAsyncIterable stops CONSUMING the route on abort —
+  // it wins a race against iterator.next() and does not wait for the route's
+  // own `.return()` to settle. A route suspended at a non-abortable await
+  // (subprocess, non-abort-aware SDK, CPU-bound loop) keeps running after
+  // that race is won. See the finally below for why this matters.
+  let sourceCleanup: Promise<void> | undefined
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
@@ -779,8 +785,12 @@ async function handleApStreamRequest(options: {
           })
           // Belt-and-braces, mirroring the AG-UI handler: pass the signal to
           // the route *and* wrap the iterator, so a route that ignores its
-          // ctx.signal still stops when the run is cancelled.
-          for await (const chunk of abortableAsyncIterable(routeStream, run.signal)) {
+          // ctx.signal still stops when the run is cancelled. The third
+          // argument lets us observe when the route's OWN cleanup finishes,
+          // independently of when this loop stops consuming it.
+          for await (const chunk of abortableAsyncIterable(routeStream, run.signal, (p) => {
+            sourceCleanup = p
+          })) {
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
           await threadsStore.updateStatus(threadId, "idle")
@@ -799,7 +809,21 @@ async function handleApStreamRequest(options: {
             .catch(() => undefined)
         }
       } finally {
-        run.release()
+        // The client's stream ends here regardless — safeClose below fires on
+        // this same tick either way, so cancellation still looks instant to
+        // the caller. What differs is when the run SLOT frees.
+        if (run.cancelled && sourceCleanup) {
+          // The abort stopped us CONSUMING the route, not the route itself:
+          // abortableAsyncIterable wins a race against iterator.next(), and a
+          // generator suspended at a non-abortable await keeps going until that
+          // await settles. Hold the thread's slot until the source has genuinely
+          // unwound, or a newly admitted run would interleave checkpoint writes
+          // with it. The client's stream still ends immediately (above) —
+          // response lifetime and run lifetime are deliberately different here.
+          void sourceCleanup.finally(() => run.release())
+        } else {
+          run.release()
+        }
         safeClose(controller)
       }
     },
@@ -1197,6 +1221,10 @@ async function handleResumeRequest(options: {
   // POST /threads/:id/cancel.
   // Rationale: docs/superpowers/specs/2026-08-06-ap-run-cancellation.md
   const encoder = new TextEncoder()
+  // See the equivalent comment in handleApStreamRequest: abortableAsyncIterable
+  // stops CONSUMING the route on abort, not the route itself, so a route
+  // suspended at a non-abortable await keeps running past that point.
+  let sourceCleanup: Promise<void> | undefined
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
@@ -1220,8 +1248,12 @@ async function handleResumeRequest(options: {
           })
           // Belt-and-braces, mirroring the AG-UI handler: pass the signal to
           // the route *and* wrap the iterator, so a route that ignores its
-          // ctx.signal still stops when the run is cancelled.
-          for await (const chunk of abortableAsyncIterable(routeStream, run.signal)) {
+          // ctx.signal still stops when the run is cancelled. The third
+          // argument lets us observe when the route's OWN cleanup finishes,
+          // independently of when this loop stops consuming it.
+          for await (const chunk of abortableAsyncIterable(routeStream, run.signal, (p) => {
+            sourceCleanup = p
+          })) {
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
           await threadsStore.updateStatus(threadId, "idle")
@@ -1240,7 +1272,13 @@ async function handleResumeRequest(options: {
             .catch(() => undefined)
         }
       } finally {
-        run.release()
+        // The client's stream ends here regardless — response lifetime and run
+        // lifetime are deliberately different; see handleApStreamRequest.
+        if (run.cancelled && sourceCleanup) {
+          void sourceCleanup.finally(() => run.release())
+        } else {
+          run.release()
+        }
         safeClose(controller)
       }
     },

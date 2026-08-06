@@ -475,12 +475,77 @@ describe("POST /threads/:id/cancel", () => {
     expect(cancelResponse.status).toBe(200)
     await drain(runResponse)
 
-    const response2 = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
-    expect(response2.status).toBe(200)
+    // The blocking route ignores ctx.signal and keeps running past
+    // cancellation until told to release — the run slot is held until it
+    // genuinely stops, so the route must be released before a new run can be
+    // admitted. See "holds the run slot until a cancelled stream's route
+    // genuinely stops" below for the intermediate 409 this implies.
+    await releaseRoute()
+    let admitted: Response | undefined
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
+      const attempt = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+      if (attempt.status === 200) {
+        admitted = attempt
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    if (!admitted) throw new Error("run slot was never freed after cancelling")
+
+    await drain(admitted)
+  }, 30_000)
+})
+
+describe("AP run slot held until a cancelled route genuinely stops", () => {
+  it("holds the run slot until a cancelled stream's route genuinely stops", async () => {
+    const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute()
+    const threadId = "t-stream-cancel-holds-slot"
+
+    const runResponse = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+    expect(runResponse.status).toBe(200)
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+
+    // The client's stream must still end promptly with the cancelled chunk,
+    // even though the route itself (which ignores ctx.signal) is still
+    // running — response lifetime and run lifetime are deliberately
+    // different.
+    const text = await readSseText(runResponse)
+    expect(text).toBe('event: done\ndata: {"output":{"cancelled":true}}\n\n')
+
+    // The blocking route is still executing at this point (never told to
+    // release) — a new run on the same thread must still be rejected, or a
+    // second run would start interleaving checkpoint writes with the first.
+    const stillBlockedResponse = await handler.fetch(
+      runStreamRequest(threadId, startedFile, releaseFile),
+    )
+    expect(stillBlockedResponse.status).toBe(409)
+    const stillBlockedBody = (await stillBlockedResponse.json()) as {
+      error: { details?: { code?: string } }
+    }
+    expect(stillBlockedBody.error.details?.code).toBe("run_in_flight")
+
+    // Once the route actually finishes, the slot frees and a new run is
+    // admitted — proving the hold is temporary, not a leak.
+    await releaseRoute()
+    let admitted: Response | undefined
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
+      const attempt = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+      if (attempt.status === 200) {
+        admitted = attempt
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    if (!admitted) throw new Error("run slot was never freed after the blocking route released")
 
     await releaseRoute()
-    await drain(response2)
-  }, 30_000)
+    await drain(admitted)
+  }, 15_000)
 })
 
 describe("AP per-run abort", () => {
@@ -695,9 +760,15 @@ describe("/resume cancellation", () => {
     await expect(readFile(releaseFile, "utf8")).rejects.toThrow()
   }, 10_000)
 
-  it("frees the run slot after a cancelled resume", async () => {
+  it("holds the run slot until a cancelled resume's route genuinely stops, then frees it", async () => {
+    // Same defect and fix as the /runs/stream test above, exercised through
+    // /resume instead: the resumed route ignores ctx.signal, so cancellation
+    // only stops abortableAsyncIterable from CONSUMING it, not the route
+    // itself. The slot must stay held until the route genuinely unwinds, or a
+    // newly admitted run on this thread would interleave checkpoint writes
+    // with the still-running resumed one.
     const { handler, startedFile, releaseRoute } = await setupResumeInterrupt()
-    const threadId = "t-resume-cancelled-frees-slot"
+    const threadId = "t-resume-cancelled-holds-slot"
 
     const resumeResponse = await handler.fetch(resumeRequest(threadId))
     expect(resumeResponse.status).toBe(200)
@@ -707,12 +778,33 @@ describe("/resume cancellation", () => {
     expect(cancelResponse.status).toBe(200)
     await drain(resumeResponse)
 
-    // If the slot leaked, this would 409 with run_in_flight instead of
-    // starting a fresh resume.
-    const followUp = await handler.fetch(resumeRequest(threadId))
-    expect(followUp.status).toBe(200)
+    // The resumed route is still running at this point (never told to
+    // release) — a new run on the same thread must still be rejected.
+    const stillBlockedResponse = await handler.fetch(resumeRequest(threadId))
+    expect(stillBlockedResponse.status).toBe(409)
+    const stillBlockedBody = (await stillBlockedResponse.json()) as {
+      error: { details?: { code?: string } }
+    }
+    expect(stillBlockedBody.error.details?.code).toBe("run_in_flight")
 
+    // Once the resumed route actually finishes, the slot frees and a new
+    // resume is admitted — proving the hold is temporary, not a leak.
     await releaseRoute()
-    await drain(followUp)
+    let admitted: Response | undefined
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
+      const attempt = await handler.fetch(resumeRequest(threadId))
+      if (attempt.status === 200) {
+        admitted = attempt
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    if (!admitted) throw new Error("run slot was never freed after the resumed route released")
+
+    // releaseFile already exists from the releaseRoute() call above, so the
+    // newly admitted resume's route sees it immediately and returns without
+    // needing a second release.
+    await drain(admitted)
   }, 30_000)
 })
