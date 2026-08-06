@@ -21,7 +21,11 @@ import {
   handleMemoryRejectRequest,
 } from "./memory-handler.js"
 import { loadMiddleware, runMiddleware } from "./middleware.js"
-import { readPendingInterrupts } from "./pending-interrupts.js"
+import {
+  type DawnResumeEntry,
+  readPendingInterrupts,
+  resolvePendingResume,
+} from "./pending-interrupts.js"
 import { extractRouteParams, parseHeaders } from "./request-context.js"
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
 import {
@@ -834,21 +838,15 @@ async function handleResumeRequest(options: {
   }
 
   const body = parsedBody.value
-  const interruptId = typeof body.interrupt_id === "string" ? body.interrupt_id : undefined
-  const decision = body.decision
+  if (!isDawnResumeEntries(body.resume)) {
+    sendJson(response, 400, createRequestErrorBody("Malformed resume entries"))
+    return
+  }
+  const resume = body.resume
   // Optional route key supplied by the client — used when the in-memory map
   // has been cleared (e.g. after a server restart). Populated by the resume
   // endpoint before starting the SSE stream.
   const bodyRoute = typeof body.route === "string" ? body.route : undefined
-  if (!interruptId) {
-    sendJson(response, 400, createRequestErrorBody("Missing interrupt_id"))
-    return
-  }
-  if (decision !== "once" && decision !== "always" && decision !== "deny") {
-    sendJson(response, 400, createRequestErrorBody("decision must be 'once', 'always', or 'deny'"))
-    return
-  }
-
   const pendingInterrupts = await readPendingInterrupts(checkpointer, threadId)
   if (!pendingInterrupts) {
     sendJson(
@@ -859,23 +857,17 @@ async function handleResumeRequest(options: {
     return
   }
 
-  if (pendingInterrupts.malformed) {
+  const resumeResolution = resolvePendingResume(resume, pendingInterrupts)
+  if (!resumeResolution.ok) {
     sendJson(
       response,
-      409,
-      createRequestErrorBody("Malformed checkpoint interrupts", {
-        code: "malformed_checkpoint",
-      }),
+      resumeResolution.status,
+      createRequestErrorBody(resumeResolution.message, { code: resumeResolution.code }),
     )
     return
   }
-
-  if (!pendingInterrupts.interrupts.some((pending) => pending.aliases.includes(interruptId))) {
-    sendJson(
-      response,
-      409,
-      createRequestErrorBody("Stale interrupt_id", { code: "stale_interrupt" }),
-    )
+  if (resumeResolution.mode !== "resume") {
+    sendJson(response, 409, createRequestErrorBody("Resume entries are required"))
     return
   }
 
@@ -925,7 +917,7 @@ async function handleResumeRequest(options: {
   // Mark thread busy
   await threadsStore.updateStatus(threadId, "busy")
 
-  // Open a new SSE stream, passing Command({resume: decision}) as input.
+  // Open a new SSE stream, passing the exact ID-addressed resume map as input.
   response.writeHead(200, {
     "cache-control": "no-cache, no-transform",
     connection: "keep-alive",
@@ -936,7 +928,7 @@ async function handleResumeRequest(options: {
     for await (const chunk of streamResolvedRoute({
       appRoot,
       input: {},
-      resume: decision,
+      resume: resumeResolution.resume,
       ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
       routeFile: route.routeFile,
       routeId: route.routeId,
@@ -1064,4 +1056,18 @@ async function listen(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+function isDawnResumeEntries(value: unknown): value is DawnResumeEntry[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        isRecord(entry) &&
+        !Array.isArray(entry) &&
+        typeof entry.interruptId === "string" &&
+        entry.interruptId.length > 0 &&
+        (entry.status === "resolved" || entry.status === "cancelled"),
+    )
+  )
 }

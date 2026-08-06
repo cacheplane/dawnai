@@ -10,7 +10,7 @@ import type { SandboxManager } from "../runtime/sandbox-manager.js"
 import type { StreamChunk } from "../runtime/stream-types.js"
 import { abortableAsyncIterable } from "./abortable-iterable.js"
 import { runMiddleware } from "./middleware.js"
-import { readPendingInterrupts, resolveAgUiResume } from "./pending-interrupts.js"
+import { readPendingInterrupts, resolvePendingResume } from "./pending-interrupts.js"
 import { extractRouteParams, parseHeaders } from "./request-context.js"
 import type { RuntimeRegistry } from "./runtime-registry.js"
 import { createRequestErrorBody } from "./server-errors.js"
@@ -164,7 +164,7 @@ export async function handleAgUiRequest(options: AgUiRequestOptions): Promise<vo
       interrupts: [],
       malformed: false,
     }
-    const resumeResolution = resolveAgUiResume(dawnInput.resume, pending)
+    const resumeResolution = resolvePendingResume(dawnInput.resume, pending)
     if (!resumeResolution.ok) {
       sendJson(
         response,

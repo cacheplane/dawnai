@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url"
 import { afterAll, expect, it } from "vitest"
 import { script } from "../src/fixture-builder.js"
 import { createAgentHarness } from "../src/harness.js"
-import { expectToolCalled } from "../src/matchers.js"
+import { expectInterrupt, expectToolCalled } from "../src/matchers.js"
 
 const appRoot = fileURLToPath(new URL("./fixtures/probe-app", import.meta.url))
 const h = await createAgentHarness({ appRoot, route: "/chat#agent" })
@@ -74,3 +74,37 @@ it("captures the system prompt the model received", async () => {
 it("exposes a resume method", () => {
   expect(typeof h.resume).toBe("function")
 })
+
+it("resumes an interrupt by public ID with resume-time fixtures", async () => {
+  const harness = await createAgentHarness({ appRoot, route: "/approval-chat#agent" })
+  try {
+    const run = await harness.run({
+      input: "deploy to staging",
+      fixtures: script().user("deploy to staging").callsTool("deployProd", { env: "staging" }),
+    })
+    expectInterrupt(run).ofKind("tool")
+    const interruptId = run.interrupts[0]?.interruptId
+    if (!interruptId) throw new Error("Expected a pending interrupt")
+
+    const fixtures = [
+      {
+        match: { userMessage: "deploy to staging", turnIndex: 1, hasToolResult: true },
+        response: { content: "Deployed." },
+      },
+    ]
+    const resumed = await harness.resume({
+      resume: [
+        {
+          interruptId,
+          status: "resolved",
+          payload: "once",
+        },
+      ],
+      fixtures,
+    })
+
+    expectToolCalled(resumed, "deployProd")
+  } finally {
+    await harness.close()
+  }
+}, 60_000)

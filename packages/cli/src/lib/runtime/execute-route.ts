@@ -93,11 +93,7 @@ export interface ExecuteRouteOptions {
   readonly signal?: AbortSignal
 }
 
-export type RouteResumePayload =
-  | "once"
-  | "always"
-  | "deny"
-  | Readonly<Record<string, "once" | "always" | "deny">>
+export type RouteResumePayload = Readonly<Record<string, "once" | "always" | "deny">>
 
 export function toAgentInput(input: unknown, resume?: RouteResumePayload): unknown {
   return resume === undefined ? input : new Command({ resume })

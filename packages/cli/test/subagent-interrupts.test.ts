@@ -24,7 +24,7 @@ import {
 import { ToolNode } from "@langchain/langgraph/prebuilt"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { readPendingInterrupts, resolveAgUiResume } from "../src/lib/dev/pending-interrupts.js"
+import { readPendingInterrupts, resolvePendingResume } from "../src/lib/dev/pending-interrupts.js"
 import { buildGuardedSubagentResolver } from "../src/lib/runtime/execute-route.js"
 
 const signal = new AbortController().signal
@@ -265,13 +265,16 @@ describe("subagent interrupt replay", () => {
     const publicIds = snapshot.interrupts.map(({ interruptId }) => interruptId)
     const nativeIds = snapshot.interrupts.map(({ resumeKey }) => resumeKey as string)
     expect(
-      resolveAgUiResume([{ interruptId: publicIds[0] as string, status: "cancelled" }], snapshot),
+      resolvePendingResume(
+        [{ interruptId: publicIds[0] as string, status: "cancelled" }],
+        snapshot,
+      ),
     ).toMatchObject({
       code: "interrupt_set_mismatch",
       ok: false,
     })
     expect(
-      resolveAgUiResume(
+      resolvePendingResume(
         [
           { interruptId: publicIds[0] as string, status: "cancelled" },
           { interruptId: publicIds[0] as string, status: "cancelled" },
@@ -280,7 +283,7 @@ describe("subagent interrupt replay", () => {
       ),
     ).toMatchObject({ code: "interrupt_set_mismatch", ok: false })
     expect(
-      resolveAgUiResume(
+      resolvePendingResume(
         [
           { interruptId: "perm-stale", status: "cancelled" },
           { interruptId: publicIds[1] as string, status: "cancelled" },
@@ -289,7 +292,7 @@ describe("subagent interrupt replay", () => {
       ),
     ).toMatchObject({ code: "interrupt_set_mismatch", ok: false })
     expect(
-      resolveAgUiResume(
+      resolvePendingResume(
         [...nativeIds]
           .reverse()
           .map((interruptId) => ({ interruptId, status: "cancelled" as const })),
@@ -297,7 +300,7 @@ describe("subagent interrupt replay", () => {
       ),
     ).toMatchObject({ code: "interrupt_set_mismatch", ok: false })
 
-    const complete = resolveAgUiResume(
+    const complete = resolvePendingResume(
       [
         { interruptId: "perm-child-A", payload: "once", status: "resolved" },
         { interruptId: "perm-child-B", payload: "always", status: "resolved" },
@@ -540,7 +543,7 @@ async function resolveThread(
     readonly status: "cancelled" | "resolved"
   }[],
 ): Promise<Record<string, "always" | "deny" | "once">> {
-  const resolution = resolveAgUiResume(
+  const resolution = resolvePendingResume(
     resume,
     requireSnapshot(await readPendingInterrupts(saver, threadId)),
   )

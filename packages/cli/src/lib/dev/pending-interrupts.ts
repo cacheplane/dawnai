@@ -1,7 +1,12 @@
-import type { DawnResumeRequest } from "@dawn-ai/ag-ui"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 
 export type PermissionDecision = "once" | "always" | "deny"
+
+export interface DawnResumeEntry {
+  readonly interruptId: string
+  readonly status: "resolved" | "cancelled"
+  readonly payload?: unknown
+}
 
 export interface PendingInterrupt {
   readonly aliases: readonly string[]
@@ -93,8 +98,8 @@ export async function readPendingInterrupts(
   return { interrupts, malformed }
 }
 
-export function resolveAgUiResume(
-  resume: readonly DawnResumeRequest[] | undefined,
+export function resolvePendingResume(
+  resume: readonly DawnResumeEntry[] | undefined,
   snapshot: PendingInterruptSnapshot,
 ): ResumeResolution {
   const pendingById = new Map(snapshot.interrupts.map((entry) => [entry.interruptId, entry]))
