@@ -3,7 +3,25 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { createSubagentsMarker } from "@dawn-ai/core"
+import {
+  convertSubagentTaskToLangChain,
+  type SubagentResolver,
+  streamAgent,
+} from "@dawn-ai/langchain"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch"
+import { AIMessage } from "@langchain/core/messages"
+import type { RunnableConfig } from "@langchain/core/runnables"
+import {
+  Annotation,
+  Command,
+  END,
+  interrupt as langGraphInterrupt,
+  MemorySaver,
+  START,
+  StateGraph,
+} from "@langchain/langgraph"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { afterEach, expect, it } from "vitest"
 import { createAimock, script } from "../../testing/dist/index.js"
@@ -176,6 +194,80 @@ async function setupControlledServer(controlled: ControlledServerOptions): Promi
   }
 }
 
+async function parallelSubagentTask(firstInterruptObserved: Promise<void>) {
+  const contribution = await createSubagentsMarker().load("/fixture", {
+    subagentRegistry: [
+      {
+        description: "Fixture child.",
+        name: "researcher",
+        routeId: "/fixture/subagents/researcher",
+        rule: { action: "allow" },
+        source: "convention",
+      },
+    ],
+  } as never)
+  const placeholder = contribution.tools?.find(({ name }) => name === "task")
+  if (!placeholder) throw new Error("Expected task placeholder")
+
+  const ChildState = Annotation.Root({ messages: Annotation<unknown[]>() })
+  const child = new StateGraph(ChildState)
+    .addNode("approval", async (state, config) => {
+      const input = String((state.messages[0] as { content?: unknown } | undefined)?.content)
+      if (input === "B") {
+        await firstInterruptObserved
+        await dispatchCustomEvent(
+          "dawn.capability",
+          { event: "native.progress", data: { input } },
+          config,
+        )
+      }
+      const decision = langGraphInterrupt({
+        interruptId: `perm-child-${input}`,
+        type: "permission-request",
+        kind: "tool",
+        detail: { suggestedPattern: input, toolName: "fixture" },
+      })
+      return { messages: [new AIMessage(`child:${input}:${decision}`)] }
+    })
+    .addEdge(START, "approval")
+    .addEdge("approval", END)
+    .compile()
+  const resolver: SubagentResolver = async () => ({
+    ok: true,
+    child: { graph: child, routeId: "/parent/subagents/researcher" },
+  })
+  return convertSubagentTaskToLangChain(placeholder, resolver)
+}
+
+function parallelSubagentRoot(
+  task: Awaited<ReturnType<typeof parallelSubagentTask>>,
+  checkpointer: MemorySaver,
+) {
+  const RootState = Annotation.Root({
+    results: Annotation<string[]>({
+      reducer: (left, right) => [...left, ...right],
+      default: () => [],
+    }),
+  })
+  const dispatch =
+    (callId: string, input: string) => async (_state: unknown, config: RunnableConfig) => ({
+      results: [
+        await task.func({ input, subagent: "researcher" }, undefined, {
+          ...config,
+          toolCall: { id: callId },
+        } as RunnableConfig),
+      ],
+    })
+  return new StateGraph(RootState)
+    .addNode("first", dispatch("parallel-a", "A"))
+    .addNode("second", dispatch("parallel-b", "B"))
+    .addEdge(START, "first")
+    .addEdge(START, "second")
+    .addEdge("first", END)
+    .addEdge("second", END)
+    .compile({ checkpointer })
+}
+
 it("streams the canonical AG-UI lifecycle and successful result", async () => {
   const { port } = await setupServer(script().user("hello").replies("Hi there!").build())
   const { events, response } = await postRun(port, {
@@ -201,6 +293,114 @@ it("streams the canonical AG-UI lifecycle and successful result", async () => {
   })
   expect(events.map((event) => event.type)).not.toContain("STATE_SNAPSHOT")
   expect(events.map((event) => event.type)).not.toContain("CUSTOM")
+}, 60_000)
+
+it("collects and resumes interleaved native parallel subagent interrupts", async () => {
+  let markFirstInterruptObserved: (() => void) | undefined
+  const firstInterruptObserved = new Promise<void>((resolve) => {
+    markFirstInterruptObserved = resolve
+  })
+  const checkpointer = new MemorySaver()
+  const root = parallelSubagentRoot(
+    await parallelSubagentTask(firstInterruptObserved),
+    checkpointer,
+  )
+  const entry = {
+    invoke: root.invoke.bind(root),
+    streamEvents: (input: unknown, config: Record<string, unknown>) =>
+      root.streamEvents(input as never, { ...config, version: "v2" }),
+  }
+  const nativeChunkTypes: string[] = []
+  const streamRoute: typeof streamResolvedRoute = async function* (options) {
+    const input = options.resume === undefined ? {} : new Command({ resume: options.resume })
+    for await (const chunk of streamAgent({
+      checkpointer,
+      entry,
+      input,
+      routeParamNames: [],
+      signal: options.signal ?? new AbortController().signal,
+      ...(options.threadId ? { threadId: options.threadId } : {}),
+      tools: [],
+    })) {
+      nativeChunkTypes.push(chunk.type)
+      if (chunk.type === "interrupt") markFirstInterruptObserved?.()
+      switch (chunk.type) {
+        case "token":
+          yield { type: "chunk", data: chunk.data }
+          break
+        case "tool_call": {
+          const data = chunk.data as { id?: string; name: string; input: unknown }
+          yield {
+            type: "tool_call",
+            ...(data.id ? { id: data.id } : {}),
+            name: data.name,
+            input: data.input,
+          }
+          break
+        }
+        case "tool_result": {
+          const data = chunk.data as { id?: string; name: string; output: unknown }
+          yield {
+            type: "tool_result",
+            ...(data.id ? { id: data.id } : {}),
+            name: data.name,
+            output: data.output,
+          }
+          break
+        }
+        case "done":
+          yield { type: "done", output: chunk.data }
+          break
+        default:
+          yield { type: chunk.type, data: chunk.data }
+          break
+      }
+    }
+  }
+  const { port } = await setupControlledServer({ checkpointer, streamRoute })
+
+  const first = await postRun(port, {
+    threadId: "parallel-subagents",
+    runId: "parallel-first",
+    messages: [{ id: "1", role: "user", content: "delegate in parallel" }],
+  })
+
+  expect(first.response.status).toBe(200)
+  const finished = first.events.filter(({ type }) => type === "RUN_FINISHED")
+  expect(finished).toHaveLength(1)
+  expect(finished[0]).not.toHaveProperty("result")
+  const interrupts = (
+    finished[0]?.outcome as { interrupts?: Array<{ id: string }>; type?: string } | undefined
+  )?.interrupts
+  expect(new Set(interrupts?.map(({ id }) => id))).toEqual(
+    new Set(["perm-child-A", "perm-child-B"]),
+  )
+  const nativeInterruptIndexes = nativeChunkTypes.flatMap((type, index) =>
+    type === "interrupt" ? [index] : [],
+  )
+  expect(nativeInterruptIndexes).toHaveLength(2)
+  const [firstInterruptIndex, secondInterruptIndex] = nativeInterruptIndexes
+  if (firstInterruptIndex === undefined || secondInterruptIndex === undefined) {
+    throw new Error("Expected two native interrupt chunks")
+  }
+  expect(nativeChunkTypes.slice(firstInterruptIndex + 1, secondInterruptIndex)).toContain(
+    "subagent.native.progress",
+  )
+
+  const resumed = await postRun(port, {
+    threadId: "parallel-subagents",
+    runId: "parallel-resume",
+    messages: [],
+    resume: [
+      { interruptId: "perm-child-A", payload: "once", status: "resolved" },
+      { interruptId: "perm-child-B", payload: "always", status: "resolved" },
+    ],
+  })
+
+  expect(resumed.response.status).toBe(200)
+  expect(resumed.events.at(-1)).toMatchObject({ outcome: { type: "success" } })
+  const result = resumed.events.at(-1)?.result as { results?: string[] } | undefined
+  expect(result?.results?.sort()).toEqual(["child:A:once", "child:B:always"])
 }, 60_000)
 
 it("forwards only the newest user message on a later turn", async () => {
