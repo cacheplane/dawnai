@@ -35,21 +35,30 @@ function unavailable(reason: string): GuardedSubagentResult<never> {
   return { ok: false, code: "DAWN_E5003", message: `[DAWN_E5003] ${reason}` }
 }
 
-function isApprovalVerdict(
-  verdict: unknown,
-): verdict is { readonly approve: true; readonly reason?: string } {
-  if (typeof verdict !== "object" || verdict === null) return false
-  const prototype = Object.getPrototypeOf(verdict)
-  if (prototype !== Object.prototype && prototype !== null) return false
-  if (!Object.hasOwn(verdict, "approve")) return false
-  if ((verdict as { readonly approve?: unknown }).approve !== true) return false
-  if (
-    Object.hasOwn(verdict, "reason") &&
-    typeof (verdict as { readonly reason?: unknown }).reason !== "string"
-  ) {
-    return false
+type ApprovalVerdictValidation =
+  | { readonly approved: true; readonly reason?: string }
+  | { readonly approved: false; readonly detail: unknown }
+
+function validateApprovalVerdict(verdict: unknown): ApprovalVerdictValidation {
+  try {
+    if (typeof verdict !== "object" || verdict === null) {
+      return { approved: false, detail: verdict }
+    }
+    const prototype = Object.getPrototypeOf(verdict)
+    if (prototype !== Object.prototype && prototype !== null) {
+      return { approved: false, detail: verdict }
+    }
+    if (!Object.hasOwn(verdict, "approve")) return { approved: false, detail: verdict }
+    if (Reflect.get(verdict, "approve") !== true) return { approved: false, detail: verdict }
+    if (!Object.hasOwn(verdict, "reason")) return { approved: true }
+
+    const reason = Reflect.get(verdict, "reason")
+    return typeof reason === "string"
+      ? { approved: true, reason }
+      : { approved: false, detail: verdict }
+  } catch (error) {
+    return { approved: false, detail: error }
   }
-  return true
 }
 
 function debugConstraintFailure(
@@ -58,10 +67,14 @@ function debugConstraintFailure(
   detail: unknown,
 ): void {
   if (process.env.DAWN_DEBUG_CONSTRAINTS !== "1") return
-  console.warn(
-    `[dawn:constraints] parent ${parentRouteId} subagent ${subagentName} constraint failed:`,
-    detail,
-  )
+  try {
+    console.warn(
+      `[dawn:constraints] parent ${parentRouteId} subagent ${subagentName} constraint failed:`,
+      detail,
+    )
+  } catch {
+    // Diagnostics must never weaken the fail-closed policy boundary.
+  }
 }
 
 async function gateApproval<T>(
@@ -126,12 +139,15 @@ export async function resolveGuardedSubagent<T>(
       // Continue to resolution below.
     } else if (typeof verdict === "string") {
       return denied(verdict)
-    } else if (isApprovalVerdict(verdict)) {
-      const blocked = await gateApproval(args, entry, verdict.reason)
-      if (blocked) return blocked
     } else {
-      debugConstraintFailure(args.runtime.parentRouteId, entry.name, verdict)
-      return denied(CONSTRAINT_FAILED_REASON)
+      const approval = validateApprovalVerdict(verdict)
+      if (approval.approved) {
+        const blocked = await gateApproval(args, entry, approval.reason)
+        if (blocked) return blocked
+      } else {
+        debugConstraintFailure(args.runtime.parentRouteId, entry.name, approval.detail)
+        return denied(CONSTRAINT_FAILED_REASON)
+      }
     }
   }
 

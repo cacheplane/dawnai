@@ -279,6 +279,68 @@ describe("resolveGuardedSubagent", () => {
     expect(resolve).not.toHaveBeenCalled()
   })
 
+  it.each([
+    "approve",
+    "reason",
+  ] as const)("fails closed when the %s approval accessor throws", async (property) => {
+    const secret = new Error(`secret ${property} accessor detail`)
+    const verdict =
+      property === "approve"
+        ? Object.defineProperty({}, "approve", {
+            get: () => {
+              throw secret
+            },
+          })
+        : Object.defineProperty({ approve: true }, "reason", {
+            get: () => {
+              throw secret
+            },
+          })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const resolve = vi.fn(async () => "child")
+
+    const result = await call({
+      registry: [entry({ action: "constrain", predicate: (() => verdict) as never })],
+      resolve,
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      code: "DAWN_E3002",
+      message:
+        "[DAWN_E3002] Subagent delegation constraint check failed. The subagent was not started.",
+    })
+    expect(result.message).not.toContain(secret.message)
+    expect(warn).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it("debug-logs an approval accessor failure without exposing it in the result", async () => {
+    const secret = new Error("secret proxy accessor detail")
+    const verdict = new Proxy(
+      { approve: true, reason: "review" },
+      {
+        get: (target, property, receiver) => {
+          if (property === "reason") throw secret
+          return Reflect.get(target, property, receiver)
+        },
+      },
+    )
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    process.env.DAWN_DEBUG_CONSTRAINTS = "1"
+
+    const result = await call({
+      registry: [entry({ action: "constrain", predicate: (() => verdict) as never })],
+    })
+
+    expect(result).toMatchObject({ ok: false, code: "DAWN_E3002" })
+    if (!result.ok) expect(result.message).not.toContain(secret.message)
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/parent.*\/parent.*subagent.*writer/i),
+      secret,
+    )
+  })
+
   it("fails closed without leaking a thrown predicate error", async () => {
     const result = await call({
       registry: [
