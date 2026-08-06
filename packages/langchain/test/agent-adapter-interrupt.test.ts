@@ -8,6 +8,7 @@ import {
   START,
   StateGraph,
 } from "@langchain/langgraph"
+import { ToolNode } from "@langchain/langgraph/prebuilt"
 import { describe, expect, test } from "vitest"
 import { z } from "zod"
 import { streamAgent } from "../src/agent-adapter.js"
@@ -354,14 +355,20 @@ describe("streamAgent — interrupt propagation", () => {
     expect(chunks[chunks.length - 1]?.type).toBe("done")
   })
 
-  test("a native child interrupt parks and resumes through the root stream", async () => {
+  test("a native child tool interrupt retains its call id and resumes without restarting setup", async () => {
     const ChildState = Annotation.Root({ messages: Annotation<unknown[]>() })
+    let childSetupCount = 0
     const child = new StateGraph(ChildState)
+      .addNode("setup", () => {
+        childSetupCount++
+        return {}
+      })
       .addNode("approval", () => {
-        const decision = interrupt({ interruptId: "child-permission", kind: "subagent" })
+        const decision = interrupt({ interruptId: "child-permission", kind: "tool" })
         return { messages: [new AIMessage(`approved:${decision}`)] }
       })
-      .addEdge(START, "approval")
+      .addEdge(START, "setup")
+      .addEdge("setup", "approval")
       .addEdge("approval", END)
       .compile()
     const task = convertSubagentTaskToLangChain(
@@ -377,26 +384,40 @@ describe("streamAgent — interrupt propagation", () => {
       }),
     )
     const checkpointer = new MemorySaver()
-    const RootState = Annotation.Root({
-      messages: Annotation<unknown[]>(),
-      result: Annotation<string>(),
-    })
+    const RootState = Annotation.Root({ messages: Annotation<unknown[]>() })
     const root = new StateGraph(RootState)
-      .addNode("dispatch", async (_state, config) => ({
-        result: await task.func({ subagent: "researcher", input: "Review" }, undefined, {
-          ...config,
-          toolCall: { id: "task-native-resume" },
-        }),
-      }))
-      .addEdge(START, "dispatch")
-      .addEdge("dispatch", END)
+      .addNode("tools", new ToolNode([task]))
+      .addEdge(START, "tools")
+      .addEdge("tools", END)
       .compile({ checkpointer })
-    const input = { messages: [{ role: "user", content: "Review" }] }
+    const toolInput = {
+      messages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              args: { input: "Review", subagent: "researcher" },
+              id: "task-native-resume",
+              name: "task",
+              type: "tool_call",
+            },
+          ],
+        }),
+      ],
+    }
+    const entry = {
+      invoke: root.invoke.bind(root),
+      streamEvents: (input: unknown, config: Record<string, unknown>) =>
+        root.streamEvents(input instanceof Command ? input : toolInput, {
+          ...config,
+          version: "v2",
+        }),
+    }
     const first = []
     for await (const chunk of streamAgent({
       checkpointer,
-      entry: root,
-      input,
+      entry,
+      input: { messages: [{ role: "user", content: "Review" }] },
       routeParamNames: [],
       signal: new AbortController().signal,
       threadId: "native-root-thread",
@@ -405,8 +426,13 @@ describe("streamAgent — interrupt propagation", () => {
       first.push(chunk)
     }
     expect(first.filter(({ type }) => type === "interrupt").map(({ data }) => data)).toEqual([
-      { interruptId: "child-permission", kind: "subagent" },
+      { interruptId: "child-permission", kind: "tool", callId: "task-native-resume" },
     ])
+    expect(first).not.toContainEqual({
+      type: "subagent.end",
+      data: expect.objectContaining({ error: expect.anything() }),
+    })
+    expect(childSetupCount).toBe(1)
 
     const rootState = await root.getState({ configurable: { thread_id: "native-root-thread" } })
     const nativeInterruptId = rootState.tasks[0]?.interrupts[0]?.id
@@ -415,7 +441,7 @@ describe("streamAgent — interrupt propagation", () => {
     const resumed = []
     for await (const chunk of streamAgent({
       checkpointer,
-      entry: root,
+      entry,
       input: new Command({ resume: { [nativeInterruptId as string]: "once" } }),
       routeParamNames: [],
       signal: new AbortController().signal,
@@ -424,7 +450,10 @@ describe("streamAgent — interrupt propagation", () => {
     })) {
       resumed.push(chunk)
     }
-    const output = resumed.findLast(({ type }) => type === "done")?.data as { result?: unknown }
-    expect(output.result).toBe("approved:once")
+    const output = resumed.findLast(({ type }) => type === "done")?.data as {
+      messages?: Array<{ content?: unknown }>
+    }
+    expect(output.messages?.at(-1)?.content).toBe("approved:once")
+    expect(childSetupCount).toBe(1)
   })
 })

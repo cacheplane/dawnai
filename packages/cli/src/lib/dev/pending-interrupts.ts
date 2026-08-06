@@ -76,12 +76,17 @@ export async function readPendingInterrupts(
 
   const interruptIds = new Set<string>()
   const resumeKeys = new Set<string>()
+  const aliases = new Set<string>()
   for (const interrupt of interrupts) {
     if (interruptIds.has(interrupt.interruptId)) malformed = true
     interruptIds.add(interrupt.interruptId)
     if (interrupt.resumeKey) {
       if (resumeKeys.has(interrupt.resumeKey)) malformed = true
       resumeKeys.add(interrupt.resumeKey)
+    }
+    for (const alias of interrupt.aliases) {
+      if (aliases.has(alias)) malformed = true
+      aliases.add(alias)
     }
   }
 

@@ -247,6 +247,23 @@ describe("readPendingInterrupts", () => {
       status: 409,
     })
   })
+
+  test("rejects crossed client and outer identifiers as an ambiguous swapped set", async () => {
+    const snapshot = await readPendingInterrupts(
+      fakeCheckpointer([
+        [TASK_UUID_1, "__interrupt__", { id: RESUME_KEY_1, value: { interruptId: RESUME_KEY_2 } }],
+        [TASK_UUID_2, "__interrupt__", { id: RESUME_KEY_2, value: { interruptId: RESUME_KEY_1 } }],
+      ]),
+      "thread-swapped",
+    )
+
+    expect(snapshot).toMatchObject({ malformed: true })
+    expect(resolveAgUiResume(undefined, requireSnapshot(snapshot))).toMatchObject({
+      code: "malformed_checkpoint",
+      ok: false,
+      status: 409,
+    })
+  })
 })
 
 test("resumes a real LangGraph interrupt with the parsed outer resume key", async () => {
