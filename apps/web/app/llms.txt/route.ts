@@ -87,7 +87,7 @@ function buildLlmsTxt(): string {
       "- `GET /threads/:thread_id/state`",
       "- `POST /threads/:thread_id/resume`",
       '- Run body: `{ "route": "/research#agent", "input": { "messages": [{ "role": "user", "content": "What are common agent architectures?" }] } }`',
-      '- Resume body: `{ "interrupt_id": "<id>", "decision": "once" | "always" | "deny", "route": "/research#agent" }`; `route` is optional unless the server cannot recover the route from its in-memory thread map or durable thread metadata.',
+      '- Resume body: `{ "resume": [{ "interruptId": "<id>", "status": "resolved", "payload": "once" | "always" | "deny" }], "route": "/research#agent" }`; the strict envelope must address every currently pending interrupt exactly once. Nested interrupts resume through the root thread.',
       "",
       "## Runtime Capabilities",
       "- `toolOutput` offloads large tool results into `workspace/tool-outputs/` and keeps an in-context preview.",

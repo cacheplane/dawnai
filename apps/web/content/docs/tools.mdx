@@ -36,7 +36,7 @@ Both sets are merged into the route's `ctx.tools`. When the same tool name exist
 
 ## Scoping a route's tools
 
-By default a top route's agent sees every tool available to it — its own `tools/*.ts`, the shared `src/tools/`, and every capability-contributed tool (`writeFile`, `runBash`, `task`, `writeTodos`, `readSkill`, `remember`/`recall`, …). You can narrow that surface per route by passing `tools: { allow, deny }` to `agent()`:
+By default a top route's agent sees every public tool available to it — its own `tools/*.ts`, the shared `src/tools/`, and capability-contributed tools such as `writeFile`, `runBash`, `writeTodos`, `readSkill`, and `remember`/`recall`. You can narrow that surface per route by passing `tools: { allow, deny }` to `agent()`:
 
 - **`deny`** revokes a tool — it is never offered to the model.
 - **`allow`** grants a withheld capability tool back into the set.
@@ -52,13 +52,19 @@ Scope is enforced at composition time: a withheld tool is never wired into the g
 
 ### Subagents are least-privilege by default
 
-A subagent does **not** inherit the parent's capability tools. By default it gets only its own route-local `tools/*.ts`; the ambient capability tools (`writeFile`, `runBash`, `task`, `writeTodos`, `remember`/`recall`, …) are withheld unless you name them in `allow`. Grant back exactly what the worker needs:
+A subagent does **not** inherit the parent's capability tools. By default it gets only its own route-local `tools/*.ts`; ambient capability tools such as `writeFile`, `runBash`, `writeTodos`, and `remember`/`recall` are withheld unless you name them in `allow`. Grant back exactly what the worker needs:
 
 ```ts title="src/app/research/subagents/researcher/index.ts"
 // src/app/research/subagents/researcher/index.ts — read-only worker
-// keeps its own tools/*.ts; writeFile/runBash/task withheld by default; grant readFile:
+// keeps its own tools/*.ts; writeFile/runBash withheld by default; grant readFile:
 export default agent({ model: "gpt-5-mini", systemPrompt: "…", tools: { allow: ["readFile"] } })
 ```
+
+### The internal task mechanism
+
+`task` is the model-facing mechanism Dawn contributes when a route has at least one dispatchable child. It is internal and is not part of public tool scoping. A nested subagent with its own dispatchable child receives `task` independently, without adding it to `tools.allow`.
+
+Do not reference `task` in `tools.allow`, `tools.deny`, `tools.approve`, or `tools.constrain`. Every form is invalid and reports `DAWN_E1004` during `dawn check` and route preparation. Parent-owned [`delegation`](/docs/subagents#delegation-policy) is the sole policy boundary for dispatch.
 
 <Callout type="warn" title="This scopes the surface, not execution">
   Tool scoping controls which tools the model can *call* — it does not constrain what an allowed tool may *do* once invoked. A granted `writeFile` can still write anywhere its implementation permits. This is a capability boundary on the tool surface, not a sandbox.
@@ -255,7 +261,7 @@ Wrap the wrapped tool's output in a plain object (per the rules above) so Dawn c
   { href: "/docs/state", title: "State", subtitle: "the state contract that tools read and routes return" },
   { href: "/docs/planning", title: "Planning", subtitle: "writeTodos is a capability-contributed tool" },
   { href: "/docs/skills", title: "Skills", subtitle: "readSkill loads route-local instructions" },
-  { href: "/docs/subagents", title: "Subagents", subtitle: "task delegates to child agent routes" },
+  { href: "/docs/subagents", title: "Subagents", subtitle: "delegation policy governs child dispatch" },
   { href: "/docs/testing", title: "Testing", subtitle: "asserting tool outputs via scenario tests" },
   { href: "/docs/recipes/add-a-tool", title: "Add a tool", subtitle: "end-to-end recipe with the typed call site" },
 ]} />

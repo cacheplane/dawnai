@@ -163,18 +163,24 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     ```
   </Tab>
   <Tab label="POST /threads/:thread_id/resume">
-    Resolve a parked human-in-the-loop interrupt. The response streams the continuation as SSE (same event types as `runs/stream`).
+    Resolve every human-in-the-loop interrupt currently parked on the root thread. The response streams the continuation as SSE (same event types as `runs/stream`).
 
     ```
     POST /threads/:thread_id/resume
     Body: {
-      "interrupt_id": "<id from the interrupt event>",
-      "decision": "once" | "always" | "deny"
+      "resume": [
+        {
+          "interruptId": "<id from the interrupt event>",
+          "status": "resolved",
+          "payload": "once" | "always" | "deny"
+        }
+      ],
+      "route": "/research#agent"
     }
     -> 200 text/event-stream (continuation)
     ```
 
-    Optionally include `"route"` in the body if the server restarted and lost its in-memory route map.
+    `resume` must contain the complete pending interrupt set, with each public `interruptId` exactly once. A `cancelled` entry has only `interruptId` and `status` and maps to denial. The body requires exactly `resume` and `route`, and each entry rejects unknown fields. Nested subagent interrupts are resumed through this root thread; clients never address the child checkpoint separately. The removed scalar resume body is not accepted.
   </Tab>
 </Tabs>
 

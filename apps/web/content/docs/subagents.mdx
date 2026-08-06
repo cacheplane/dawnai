@@ -2,9 +2,13 @@
 
 Subagents let one agent route delegate a bounded task to another agent route.
 
-The parent gets a `task({ subagent, input })` tool and a `# Subagents` prompt section. The child remains a real Dawn route with its own prompt, tools, state, memory, planning, skills, and subagents.
+When at least one child is dispatchable, the parent gets an internal `task({ subagent, input })` mechanism and a `# Subagents` prompt section. The child remains a real Dawn route with its own prompt, tools, state, memory, planning, skills, and subagents.
 
 Use subagents when a specialist should own a piece of work instead of becoming another helper function in the parent prompt.
+
+<Callout type="info" title="Delegation allows by default">
+  Omitting `delegation` is equivalent to `delegation: { default: "allow", rules: {} }`. Both convention-discovered and explicitly registered children are dispatchable unless the parent declares a stricter policy. Use `default: "deny"` with explicit allow rules to create an allowlist.
+</Callout>
 
 ## Quick start
 
@@ -44,7 +48,7 @@ task({
 The parent receives the child's final text as the tool result.
 
 <Callout type="info" title="Subagents are least-privilege by default">
-  A child route does not inherit the parent's capability tools. By default it sees only its own `tools/*.ts`; ambient tools like `writeFile`, `runBash`, and `task` are withheld unless granted via `tools: { allow: [...] }`. See [Scoping a route's tools](/docs/tools#scoping-a-routes-tools).
+  A child route does not inherit the parent's capability tools. By default it sees only its own `tools/*.ts`; ambient tools like `writeFile` and `runBash` are withheld unless granted via `tools: { allow: [...] }`. A child with a dispatchable child of its own receives the internal `task` mechanism independently; `task` cannot be granted or controlled through tool policy. See [Scoping a route's tools](/docs/tools#scoping-a-routes-tools).
 </Callout>
 
 A subagent can also declare its own `tools: { approve: [...] }` to require human approval per call on any of its tools. The resulting `kind: "tool"` interrupt surfaces on the **parent's** stream, alongside the other `subagent.*` events, not on a separate child stream. See [Per-tool approval](/docs/permissions#per-tool-approval).
@@ -63,26 +67,100 @@ Only immediate children count for the parent prompt. A child can have its own `s
 
 If a child route has no `description`, Dawn lists it as `No description provided.` The route still works, but selection quality will be worse.
 
-## Descriptor overrides
+Convention-only children receive the parent's `delegation.default` rule. They cannot have named exceptions because named rules are typed from explicit registration keys. Import and register a convention child when it needs its own rule.
 
-You can also expose child descriptors through `agent({ subagents })`:
+## Keyed registration
+
+Register descriptors in a keyed object when you need a parent-local name or a named policy rule:
 
 ```ts title="src/app/support/[tenant]/index.ts"
 import { agent } from "@dawn-ai/sdk"
 import researcher from "./shared-researcher/index.js"
+import writer from "./subagents/writer/index.js"
 
 export default agent({
   model: "gpt-5-mini",
   systemPrompt: "You coordinate customer support work.",
-  subagents: [researcher],
+  subagents: {
+    policyResearch: researcher,
+    draftWriter: writer,
+  },
+  delegation: {
+    default: "deny",
+    rules: {
+      policyResearch: { action: "allow" },
+      draftWriter: {
+        action: "approve",
+        reason: "Draft generation requires review.",
+      },
+    },
+  },
 })
 ```
 
-Dawn resolves descriptor overrides by importing route modules and mapping each `DawnAgent` descriptor back to its route id.
+The object key is the name shown to the parent model and the identity used by delegation policy and permission persistence. It is local to that parent, so different parents can expose the same child descriptor under different names.
 
-Prefer the `subagents/<leaf>/index.ts` convention when possible. It is easier to read in the tree, and current type generation detects the convention path when adding the generated `task` tool type.
+Named `delegation.rules` keys are restricted by TypeScript to the keys in `subagents`. Registration names must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`; Dawn uses the exact spelling without trimming or case folding.
 
-Descriptor-only subagents work at runtime, but current type generation does not discover them. If you want generated `RouteTools` to include `task`, use the convention path.
+If an explicit descriptor points to a convention-discovered child, its explicit key replaces the folder-name identity for that parent. The convention name does not remain as an alias. This lets an explicit alias carry the named rule without leaving an ungoverned path to the same child.
+
+Array-form registration is removed. Use a keyed registry such as `subagents: { researcher, writer }`; Dawn has no array compatibility path.
+
+## Delegation policy
+
+Each parent owns the policy for its direct outbound dispatches:
+
+```ts
+delegation: {
+  default: "deny",
+  rules: {
+    researcher: { action: "allow" },
+    writer: { action: "deny", reason: "Drafting is disabled." },
+    reviewer: { action: "approve", reason: "Review external input." },
+  },
+}
+```
+
+`default` can be `"allow"`, `"deny"`, or `"approve"` and defaults to `"allow"`. A named rule can use one of four actions:
+
+| Action | Result |
+|---|---|
+| `allow` | Dispatch immediately |
+| `deny` | Return `[DAWN_E3002]` with the configured or default reason |
+| `approve` | Pause for a `kind: "subagent"` permission decision |
+| `constrain` | Evaluate the current input and return allow, deny, or approval |
+
+A constraint receives `{ input }` plus the live parent route, child name and route, thread, route parameters, and cancellation signal:
+
+```ts
+import { agent, type DelegationConstraintPredicate } from "@dawn-ai/sdk"
+import researcher from "./shared-researcher/index.js"
+
+const restrictResearch: DelegationConstraintPredicate = ({ input }, context) => {
+  if (context.params?.tenant === "blocked") return "Tenant cannot delegate research."
+  if (input.includes("external")) {
+    return { approve: true, reason: "External research requires review." }
+  }
+  return true
+}
+
+export default agent({
+  model: "gpt-5-mini",
+  systemPrompt: "Coordinate support work.",
+  subagents: { researcher },
+  delegation: {
+    rules: {
+      researcher: { action: "constrain", predicate: restrictResearch },
+    },
+  },
+})
+```
+
+`true` allows the dispatch, a string denies it with that reason, and `{ approve: true, reason? }` enters the approval gate. A predicate that throws or returns any other value fails closed, and the child does not start. Constraints inspect the input but cannot rewrite it.
+
+Policy is evaluated again at every level. A parent rule governs only that parent's direct children; it does not authorize a child to dispatch a grandchild. The child's own `delegation` policy controls that next edge.
+
+Approval decisions also follow the exact edge. `always` persists the tuple of parent route id and parent-local subagent name. Approving `researcher` under `/support` does not approve a child with the same name under `/finance`, another child of `/support`, or a deeper dispatch. See [Subagent approval](/docs/permissions#subagent-approval).
 
 ## What the model sees
 
@@ -98,21 +176,28 @@ for each piece of work.
 - **research** - Find relevant policy and product documentation before a support reply.
 ```
 
-The runtime `task` tool schema uses an enum of available leaf names, so the model is constrained to known subagents. Generated TypeScript currently represents the subagent field as `string`.
+The runtime `task` schema uses an enum of available parent-local names, so the model is constrained to known subagents. Statically denied children are omitted from both the prompt and schema. Allowed, approval-gated, and constrained children stay visible because a valid call may dispatch them.
 
 ## Runtime behavior
 
-At runtime, the `task` tool is first contributed by the core subagents marker, then replaced by the LangChain bridge before the agent runs.
-
-The bridge resolves the child route, calls back into Dawn's route executor, and passes the task as a user message:
+At runtime, Dawn resolves the canonical registry and applies the parent's policy at the final dispatch boundary. The child receives the task as a user message:
 
 ```ts
 { messages: [{ role: "user", content: input }] }
 ```
 
-If the child route fails, the parent receives a string beginning with `subagent_failed:`. If the resolver cannot find the child, the parent receives `subagent_unknown:`.
+Each dispatch runs as a per-invocation LangGraph subgraph that inherits the root thread's checkpointer. Nested and parallel children keep independent checkpoint namespaces while remaining resumable through the root thread.
 
-Dawn's dispatcher has a depth guard with a maximum depth of 3. In the current Dawn route re-entry path, depth metadata is not preserved through nested `task` calls, so do not design recursive subagent systems around that guard yet. Treat subagents as a one-level or carefully bounded delegation boundary.
+Dawn's dispatcher preserves depth metadata across nested calls and enforces its maximum depth of 3. Explicit registration cycles resolve lazily and are stopped by this runtime guard.
+
+## Dispatch failures
+
+Delegation failures return coded results to the parent model:
+
+- `DAWN_E3002` means policy, a constraint, an approval decision, or non-interactive mode denied the dispatch.
+- `DAWN_E5003` means the requested identity is unavailable, stale, or could not be started.
+
+Invalid registration or policy configuration fails route checking or preparation with `DAWN_E1004`; it never falls back to allow. Underlying constraint exceptions are hidden from the model. Set `DAWN_DEBUG_CONSTRAINTS=1` locally to log those details with the parent and child identities.
 
 ## Streaming
 
@@ -129,13 +214,15 @@ Each forwarded event includes a generated `call_id`. `subagent.start` also inclu
 
 Dawn suppresses duplicate parent token events while a child run is active, so child tokens should appear as `subagent.message` rather than also leaking into the parent stream as ordinary message chunks.
 
-## Name conflicts
+If a child reaches a tool, path, command, memory, or delegation approval, Dawn surfaces a top-level `interrupt` on the root parent's stream. Resume the root thread with the complete ID-addressed pending interrupt set; do not start or resume the child separately. See [Resuming an interrupted run](/docs/permissions#resuming-an-interrupted-run).
 
-Convention subagents and descriptor overrides share the same leaf-name namespace.
+## Names and reserved policy fields
 
-If two child routes resolve to the same leaf name, route preparation fails with a duplicate leaf-name error. Rename one of the routes or adjust the descriptor override.
+Convention and explicit subagents share one parent-local namespace. Route preparation reports `DAWN_E1004` for invalid names, unresolved or ambiguous descriptors, duplicate explicit registrations of one route, and unresolved name collisions.
 
-The `task` name is reserved for this capability. Do not create your own route tool named `task`.
+`task` is Dawn's internal model-facing dispatch mechanism, not a public tool-policy resource. It is invalid in `tools.allow`, `tools.deny`, `tools.approve`, and `tools.constrain`; the parent's `delegation` policy is the only dispatch authority. A subagent registration key may itself be `task` because registration values use a separate namespace.
+
+Do not create a route tool named `task`. The scalar interrupt resume body is also removed; use the complete multi-entry resume envelope documented in [Permissions](/docs/permissions#resuming-an-interrupted-run).
 
 ## Related
 
@@ -143,5 +230,5 @@ The `task` name is reserved for this capability. Do not create your own route to
   { href: "/docs/agents", title: "Agents", subtitle: "child routes are still Dawn agents" },
   { href: "/docs/routes", title: "Routes", subtitle: "how folder paths become route ids" },
   { href: "/docs/planning", title: "Planning", subtitle: "child plan updates stream as subagent.plan_update" },
-  { href: "/docs/tools", title: "Tools", subtitle: "the parent sees task as a capability tool" },
+  { href: "/docs/tools", title: "Tools", subtitle: "task is an internal delegation mechanism" },
 ]} />
