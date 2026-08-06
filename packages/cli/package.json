@@ -30,6 +30,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./fetch": {
+      "types": "./dist/fetch-exports.d.ts",
+      "default": "./dist/fetch-exports.js"
+    },
     "./runtime": {
       "types": "./dist/runtime-exports.d.ts",
       "default": "./dist/runtime-exports.js"
@@ -68,6 +72,7 @@
     "@langchain/core": "1.2.1",
     "@langchain/langgraph": "1.4.7",
     "@langchain/langgraph-checkpoint": "^1.1.3",
-    "@types/node": "26.1.1"
+    "@types/node": "26.1.1",
+    "esbuild": "^0.25.0"
   }
 }

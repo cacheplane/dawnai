@@ -396,6 +396,9 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
 
   packages/config-biome: {}
 
