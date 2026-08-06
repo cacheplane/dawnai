@@ -1,4 +1,5 @@
-import { rm, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { MemorySaver } from "@langchain/langgraph"
@@ -42,6 +43,18 @@ const MODEL_LAYER_EXTERNALS = ["@langchain/*", "langchain", "openai"]
  */
 const LOADER_EXTERNALS = ["tsx", "tsx/*", "typescript", "esbuild"]
 
+/**
+ * Bundle a `src/` entry and return both its metafile (what the ratchet reads)
+ * and its code (what the functional proof executes).
+ *
+ * IMPORTANT — the gate reads BUILT output for the workspace packages: every
+ * `@dawn-ai/*` specifier resolves through the workspace link to that package's
+ * `dist/`, because that is what its `exports` map points at. A new `node:`
+ * import added to, say, `packages/core/src` is therefore INVISIBLE to the
+ * inventories below until `pnpm build` has run. CI builds before it tests, so
+ * the ratchet is honest there; a local `pnpm test` against stale `dist/` can
+ * pass falsely. Re-run `pnpm build` before trusting a local green.
+ */
 async function bundle(entry: string): Promise<{ metafile: Metafile; code: string }> {
   const result = await build({
     // Pin esbuild's working directory so metafile paths are relative to the
@@ -56,6 +69,7 @@ async function bundle(entry: string): Promise<{ metafile: Metafile; code: string
     logLevel: "silent",
     mainFields: ["module", "main"],
     metafile: true,
+    // Never written to disk (`write: false`) — esbuild only needs a name.
     outfile: join(pkgRoot, "fetch-entry-purity.bundle.mjs"),
     platform: "neutral",
     write: false,
@@ -223,16 +237,24 @@ describe("@dawn-ai/cli/fetch graph purity", () => {
 // ---------------------------------------------------------------------------
 
 /**
- * The bundle is written under `packages/langchain/` rather than next to this
- * test because its externals — `@langchain/core`, and the `@langchain/openai`
- * the provider layer imports on demand — resolve from there. (A data: URL
- * cannot resolve bare specifiers at all, which is why this is a real file.)
+ * Write the bundle to a scratch dir whose `node_modules` symlinks to
+ * `packages/langchain/`'s — the only place the externals the bundle still
+ * imports by bare specifier (`@langchain/core`, and the `@langchain/openai`
+ * the provider layer loads on demand) all resolve from. A data: URL cannot
+ * resolve bare specifiers at all, which is why this is a real file; keeping it
+ * out of the repo means no build artifact can be left behind by a crashed run.
  */
-const BUNDLE_PATH = join(pkgRoot, "..", "langchain", "fetch-entry-purity.bundle.mjs")
+async function writeBundle(code: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "dawn-fetch-bundle-"))
+  cleanup.push(() => rm(dir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }))
+  await symlink(join(pkgRoot, "..", "langchain", "node_modules"), join(dir, "node_modules"), "dir")
+  const bundlePath = join(dir, "bundle.mjs")
+  await writeFile(bundlePath, code, "utf8")
+  return bundlePath
+}
 
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn()
-  await rm(BUNDLE_PATH, { force: true })
 })
 
 describe("@dawn-ai/cli/fetch — bundled runtime serves a turn", () => {
@@ -242,8 +264,7 @@ describe("@dawn-ai/cli/fetch — bundled runtime serves a turn", () => {
     await withAimock(simpleScript())
 
     const { code } = await bundle("fetch-exports.ts")
-    await writeFile(BUNDLE_PATH, code, "utf8")
-    const bundled = (await import(pathToFileURL(BUNDLE_PATH).href)) as {
+    const bundled = (await import(pathToFileURL(await writeBundle(code)).href)) as {
       readonly createRuntimeFetchHandler: typeof createFetchHandler
     }
 
@@ -275,8 +296,7 @@ describe("@dawn-ai/cli/fetch — bundled runtime serves a turn", () => {
     const modules = await buildStaticModulesForFixture(appRoot)
 
     const { code } = await bundle("fetch-exports.ts")
-    await writeFile(BUNDLE_PATH, code, "utf8")
-    const bundled = (await import(`${pathToFileURL(BUNDLE_PATH).href}?missing-store`)) as {
+    const bundled = (await import(pathToFileURL(await writeBundle(code)).href)) as {
       readonly createRuntimeFetchHandler: typeof createFetchHandler
     }
 

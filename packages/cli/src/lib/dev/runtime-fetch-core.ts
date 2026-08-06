@@ -46,7 +46,12 @@ type RouteHandler = (request: Request, params: Record<string, string>) => Promis
  */
 type RouteBoot = Pick<BootResolvedInstances, "bootFallbacks" | "config">
 
-/** Fail loudly: an edge runtime that supplied nothing must not silently degrade. */
+/**
+ * Fail loudly for the inputs a correct run cannot do without. Which inputs
+ * throw and which degrade to a documented default is enumerated once, on
+ * `requireFallbacks` in `execute-route-core.ts` — that list covers this
+ * module too.
+ */
 function requireBoot(
   fallbacks: RuntimeBootFallbacks | undefined,
   what: string,
@@ -133,6 +138,8 @@ export async function createRuntimeFetchHandler(
   const checkpointer =
     options.checkpointer ??
     (await requireBoot(fallbacks, "checkpointer").resolveCheckpointer(options.appRoot))
+  // Degrades rather than throws: sandboxing is opt-in, so no fallbacks means
+  // no sandbox provider — the same result as an app with no `sandbox` config.
   const sandboxManager =
     options.sandboxManager ?? (await fallbacks?.resolveSandboxManager(options.appRoot))
   // Lazy, memoized, shared: resolveMemoryStore (and the sqlite it opens) runs

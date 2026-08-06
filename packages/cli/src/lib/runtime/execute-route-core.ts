@@ -9,8 +9,9 @@
  * `.dawn/permissions.json`, disk route/tool/state loads, `dawn.config.ts`,
  * `AGENTS.md`-style markers) live in `execute-route.ts` and reach this module
  * only as an optional `bootFallbacks` bag. Absent a needed input AND absent
- * `bootFallbacks`, the call fails loudly rather than silently degrading —
- * which is exactly what an edge deployment wants.
+ * `bootFallbacks`, a resolution either fails loudly or degrades to a
+ * documented default — which is which is enumerated per input on
+ * `requireFallbacks` below, and is never a blanket rule.
  *
  * `execute-route.ts` re-exports this module's surface with
  * `bootFallbacks: nodeBootFallbacks` pre-applied, so every existing node
@@ -135,7 +136,42 @@ export interface RuntimeBootFallbacks {
   readonly markerFs: MarkerFs
 }
 
-/** Fail loudly: an edge runtime that supplied nothing must not silently degrade. */
+/**
+ * Absent `bootFallbacks`, a resolution either THROWS or DEGRADES. Which is
+ * which is a deliberate, per-input decision, not a blanket rule — this is the
+ * complete list for both this module and `runtime-fetch-core.ts`.
+ *
+ * THROWS (via `requireFallbacks` here / `requireBoot` there) — the run cannot
+ * be correct without it, so an edge deployment must inject it:
+ *   - route modules for <routeId>   (this module; only on a cache miss, i.e.
+ *                                    a route absent from the seeded manifest)
+ *   - checkpointer                  (both modules)
+ *   - threadsStore                  (both modules)
+ *   - permissionsStore              (both modules)
+ *   - memoryStore                   (both modules; only for a route with a
+ *                                    memory.ts and no config `memory.store`)
+ *   - workspace filesystem backend  (this module; no sandbox/config backend)
+ *   - routeManifest                 (this module; no boot manifest threaded)
+ *   - subagent descriptor map       (this module; no static modules threaded)
+ *
+ * DEGRADES to a documented default — each is optional by contract, so failing
+ * the boot would be wrong:
+ *   - `loadConfig`            → no DawnConfig; every config-derived setting
+ *                               takes its documented default
+ *   - `resolveMemoryWrites`   → "candidate" (the same default an app with no
+ *                               `memory.writes` gets)
+ *   - `markerFs`              → omitted from `applyCapabilities`; an absent
+ *                               MarkerFs means "no filesystem" by contract, so
+ *                               the disk-backed markers contribute nothing
+ *   - `hasWorkspaceDir`       → false ⇒ tool-output offloading stays off; it
+ *                               is an optimization, not a capability the route
+ *                               asked for (this also makes the offload store's
+ *                               `defaultFilesystem` unreachable)
+ *   - `loadMiddleware`        → no middleware (fetch-core)
+ *   - `resolveSandboxManager` → no sandbox provider (fetch-core)
+ *   - `resolveIdentityKeys`   → the default semantic identity for memory
+ *                               approve (memory-handler)
+ */
 function requireFallbacks(
   fallbacks: RuntimeBootFallbacks | undefined,
   what: string,
@@ -694,10 +730,11 @@ export async function prepareRouteExecution(
         ? await options.memoryStore()
         : (loadedDawnConfig?.memory?.store ??
           (await requireFallbacks(fallbacks, "memoryStore").resolveMemoryStore(options.appRoot)))
-      // A supplied config answers this without touching disk; the fallback's
-      // own resolution (which re-reads dawn.config.ts) is the node default.
+      // Same config source as the store read above (`loadedDawnConfig`, which
+      // is the supplied config when there is one). The fallback's own
+      // resolution — which re-reads dawn.config.ts — is the node default.
       const writes =
-        options.config?.memory?.writes ??
+        loadedDawnConfig?.memory?.writes ??
         (fallbacks ? await fallbacks.resolveMemoryWrites(options.appRoot) : "candidate")
       const cleanRoutePath = routeNamespaceKey(options.routePath)
       const extraScope = loadedDawnConfig?.memory?.resolveScope?.({
@@ -1364,11 +1401,11 @@ function buildOffload(
   // spill large tool output to — offloading stays off rather than throwing,
   // since it is an optimization, not a capability the route asked for.
   if (!fallbacks?.hasWorkspaceDir(root)) return undefined
+  // `fallbacks` is non-null from here — the probe above returns otherwise.
   const workspaceRoot = pureJoin(root, "workspace")
   const t = config?.toolOutput ?? {}
   const store = new OffloadStore({
-    backend:
-      filesystem ?? requireFallbacks(fallbacks, "offload filesystem backend").defaultFilesystem(),
+    backend: filesystem ?? fallbacks.defaultFilesystem(),
     workspaceRoot,
     signal,
     maxBytes: t.maxBytes ?? 268_435_456,
