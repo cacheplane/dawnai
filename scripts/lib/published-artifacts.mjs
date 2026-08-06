@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process"
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises"
+import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 
@@ -10,6 +11,7 @@ export const packageSets = {
   "ag-ui": ["@dawn-ai/ag-ui"],
   "memory-pgvector-core": ["@dawn-ai/memory-pgvector", "@dawn-ai/memory", "@dawn-ai/langchain"],
   public: null,
+  "typescript-tooling": ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
 }
 
 const packageFileExpectations = {
@@ -140,6 +142,36 @@ export function validatePackageMetadata(packageName, packageJson, expectedVersio
   }
 
   return failures
+}
+
+export async function assertInstalledCoreResolution({ consumerRoot, expectedCoreVersion }) {
+  const rootRequire = createRequire(pathToFileURL(join(consumerRoot, "package.json")))
+  const vitePackageJsonPath = join(
+    consumerRoot,
+    "node_modules",
+    "@dawn-ai",
+    "vite-plugin",
+    "package.json",
+  )
+  const viteRequire = createRequire(pathToFileURL(vitePackageJsonPath))
+  const rootCoreEntry = await realpath(rootRequire.resolve("@dawn-ai/core"))
+  const viteCoreEntry = await realpath(viteRequire.resolve("@dawn-ai/core"))
+
+  if (viteCoreEntry !== rootCoreEntry) {
+    throw new Error(
+      `Vite resolves @dawn-ai/core to ${viteCoreEntry}, expected root artifact ${rootCoreEntry}`,
+    )
+  }
+
+  const coreManifestPath = join(consumerRoot, "node_modules", "@dawn-ai", "core", "package.json")
+  const coreManifest = JSON.parse(await readFile(coreManifestPath, "utf8"))
+  if (coreManifest.version !== expectedCoreVersion) {
+    throw new Error(
+      `resolved @dawn-ai/core version ${coreManifest.version}, expected version ${expectedCoreVersion}`,
+    )
+  }
+
+  return rootCoreEntry
 }
 
 function exportsRequireTypes(exportsField) {

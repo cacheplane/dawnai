@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 
 import {
   assertCleanDependencySpecs,
+  assertInstalledCoreResolution,
   expectedFilesForPackage,
   normalizeCliArgs,
   packageSets,
@@ -33,12 +34,17 @@ const {
   agUiTypeScriptConfig,
   assertNoNativeInstallOutput,
   assertNoNativeLifecycleScripts,
+  installTypeScriptTooling,
   parseDockerMappedHostPort,
   pgvectorDatabaseUrl,
   readInstalledPackageManifests,
+  runPublishedArtifactSmoke,
   runCommand,
+  selectedPackageInstallArgs,
   shouldRunAgUiProbe,
   shouldRunOpenAiSmoke,
+  shouldRunTypeScriptToolingProbe,
+  typescriptToolingInstallArgs,
 } = publishedSmoke
 
 const tempRoots = []
@@ -75,6 +81,14 @@ describe("resolvePackageSet", () => {
   it("rejects unknown package sets", () => {
     assert.throws(() => resolvePackageSet("unknown"), /Unknown package set/)
   })
+
+  it("resolves the TypeScript tooling package set", () => {
+    assert.deepEqual(resolvePackageSet("typescript-tooling"), [
+      "@dawn-ai/core",
+      "@dawn-ai/vite-plugin",
+      "@dawn-ai/cli",
+    ])
+  })
 })
 
 describe("packageSets", () => {
@@ -84,6 +98,39 @@ describe("packageSets", () => {
 
   it("includes the public package set placeholder", () => {
     assert.equal(packageSets.public, null)
+  })
+
+  it("includes Core, Vite, and CLI in the TypeScript tooling package set", () => {
+    assert.deepEqual(packageSets["typescript-tooling"], [
+      "@dawn-ai/core",
+      "@dawn-ai/vite-plugin",
+      "@dawn-ai/cli",
+    ])
+  })
+})
+
+describe("published artifact workflow", () => {
+  it("offers TypeScript tooling without enabling pgvector or OpenAI runtime work", () => {
+    const workflow = readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "..",
+        ".github",
+        "workflows",
+        "published-artifact-verify.yml",
+      ),
+      "utf8",
+    )
+
+    assert.match(workflow, /- typescript-tooling/)
+    assert.match(
+      workflow,
+      /if \[ "\$DAWN_RUN_PGVECTOR" = "true" \] && \[ "\$DAWN_PACKAGE_SET" != "typescript-tooling" \]/,
+    )
+    assert.match(
+      workflow,
+      /if \[ "\$DAWN_PACKAGE_SET" = "typescript-tooling" \]; then[\s\S]*does not support the OpenAI runtime smoke/,
+    )
   })
 })
 
@@ -618,6 +665,258 @@ describe("TypeScript tooling installed probe", () => {
   })
 })
 
+describe("published TypeScript tooling smoke", () => {
+  const packageVersion = "0.9.0"
+  const toolingPackages = [
+    { name: "@dawn-ai/core", version: packageVersion },
+    { name: "@dawn-ai/vite-plugin", version: packageVersion },
+    { name: "@dawn-ai/cli", version: packageVersion },
+  ]
+
+  it("selects the probe only when both Core and Vite are installed", () => {
+    assert.equal(shouldRunTypeScriptToolingProbe(toolingPackages), true)
+    assert.equal(
+      shouldRunTypeScriptToolingProbe([
+        { name: "extra", version: "1.0.0" },
+        toolingPackages[1],
+        toolingPackages[1],
+        toolingPackages[0],
+      ]),
+      true,
+    )
+    assert.equal(shouldRunTypeScriptToolingProbe([toolingPackages[0], toolingPackages[2]]), false)
+    assert.equal(shouldRunTypeScriptToolingProbe([toolingPackages[1], toolingPackages[2]]), false)
+    assert.equal(shouldRunTypeScriptToolingProbe([toolingPackages[2]]), false)
+  })
+
+  it("uses separate exact, no-lock installs for selected Dawn packages and root tooling", () => {
+    assert.deepEqual(selectedPackageInstallArgs(toolingPackages), [
+      "install",
+      "--save-exact",
+      "--package-lock=false",
+      "@dawn-ai/core@0.9.0",
+      "@dawn-ai/vite-plugin@0.9.0",
+      "@dawn-ai/cli@0.9.0",
+    ])
+    assert.deepEqual(typescriptToolingInstallArgs(), [
+      "install",
+      "--ignore-scripts",
+      "--save-exact",
+      "--package-lock=false",
+      "typescript@7.0.2",
+      "tsx@4.23.0",
+      "zod@4.4.3",
+    ])
+    assert.equal(
+      typescriptToolingInstallArgs().some((arg) => arg.startsWith("@dawn-ai/")),
+      false,
+    )
+  })
+
+  it("enforces exact installed identities for all root tooling packages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dawn-published-tooling-install-test-"))
+    tempRoots.push(root)
+    const calls = []
+
+    await installTypeScriptTooling(root, {
+      async runCommand(command, args, options) {
+        calls.push({ args, command, options })
+        await Promise.all([
+          writeResolutionPackage(join(root, "node_modules", "typescript"), "typescript", "7.0.2"),
+          writeResolutionPackage(join(root, "node_modules", "tsx"), "tsx", "4.23.0"),
+          writeResolutionPackage(join(root, "node_modules", "zod"), "zod", "4.4.3"),
+        ])
+        return { stderr: "", stdout: "" }
+      },
+    })
+
+    assert.deepEqual(calls, [
+      {
+        args: typescriptToolingInstallArgs(),
+        command: "npm",
+        options: { cwd: root },
+      },
+    ])
+
+    await assert.rejects(
+      installTypeScriptTooling(root, {
+        async runCommand() {
+          await writeResolutionPackage(join(root, "node_modules", "zod"), "zod", "4.4.2")
+          return { stderr: "", stdout: "" }
+        },
+      }),
+      /zod installed identity zod@4\.4\.2, expected zod@4\.4\.3/,
+    )
+  })
+
+  it("installs selected packages, installs root tooling, checks Core identity, then probes offline", async () => {
+    const harness = await createPublishedSmokeHarness({ selectedPackages: toolingPackages })
+
+    await runPublishedArtifactSmoke(harness.options, harness.dependencies)
+
+    assert.deepEqual(
+      harness.events.map(({ type }) => type),
+      [
+        "select",
+        "selected-install",
+        "command",
+        "tooling-install",
+        "command",
+        "core-resolution",
+        "tooling-probe",
+        "command",
+        "command",
+        "cleanup",
+      ],
+    )
+    assert.deepEqual(harness.events[2], {
+      args: selectedPackageInstallArgs(toolingPackages),
+      command: "npm",
+      cwd: harness.tempDir,
+      type: "command",
+    })
+    assert.deepEqual(harness.events[4], {
+      args: typescriptToolingInstallArgs(),
+      command: "npm",
+      cwd: harness.tempDir,
+      type: "command",
+    })
+    assert.deepEqual(harness.events[5], {
+      consumerRoot: harness.tempDir,
+      expectedCoreVersion: packageVersion,
+      type: "core-resolution",
+    })
+    assert.deepEqual(harness.events[6], {
+      expectedTypeScriptVersion: "7.0.2",
+      root: harness.tempDir,
+      type: "tooling-probe",
+    })
+
+    const afterToolingInstall = harness.events.slice(5)
+    assert.equal(
+      afterToolingInstall.some(
+        (event) => event.type === "command" && ["npm", "pnpm", "yarn"].includes(event.command),
+      ),
+      false,
+    )
+    assert.equal(
+      harness.events.some(({ type }) => type === "docker"),
+      false,
+    )
+    assert.equal(harness.cleaned, true)
+  })
+
+  it("propagates probe failures and still cleans the smoke root", async () => {
+    const probeFailure = new Error("published TypeScript tooling probe failed")
+    const harness = await createPublishedSmokeHarness({
+      probeFailure,
+      selectedPackages: toolingPackages,
+    })
+
+    await assert.rejects(
+      runPublishedArtifactSmoke(harness.options, harness.dependencies),
+      (error) => error === probeFailure,
+    )
+
+    assert.equal(harness.events.at(-1).type, "cleanup")
+    assert.equal(harness.cleaned, true)
+    assert.equal(
+      harness.events.some(({ type }) => type === "docker"),
+      false,
+    )
+  })
+
+  it("propagates tooling-install failures and still cleans before probing", async () => {
+    const toolingInstallFailure = new Error("root tooling install failed")
+    const harness = await createPublishedSmokeHarness({
+      selectedPackages: toolingPackages,
+      toolingInstallFailure,
+    })
+
+    await assert.rejects(
+      runPublishedArtifactSmoke(harness.options, harness.dependencies),
+      (error) => error === toolingInstallFailure,
+    )
+
+    assert.equal(
+      harness.events.some(({ type }) => type === "tooling-probe"),
+      false,
+    )
+    assert.equal(harness.events.at(-1).type, "cleanup")
+    assert.equal(harness.cleaned, true)
+  })
+
+  it("preserves AG-UI probing without installing TypeScript tooling", async () => {
+    const harness = await createPublishedSmokeHarness({
+      selectedPackages: [{ name: "@dawn-ai/ag-ui", version: packageVersion }],
+    })
+
+    await runPublishedArtifactSmoke(harness.options, harness.dependencies)
+
+    assert.equal(
+      harness.events.some(({ type }) => type === "ag-ui-probe"),
+      true,
+    )
+    assert.equal(
+      harness.events.some(({ type }) => type === "tooling-install"),
+      false,
+    )
+    assert.equal(
+      harness.events.some(({ type }) => type === "tooling-probe"),
+      false,
+    )
+    assert.equal(harness.events.at(-1).type, "cleanup")
+  })
+
+  it("preserves the non-pgvector skip path for existing package sets", async () => {
+    const harness = await createPublishedSmokeHarness({
+      selectedPackages: [
+        { name: "@dawn-ai/memory-pgvector", version: packageVersion },
+        { name: "@dawn-ai/memory", version: packageVersion },
+        { name: "@dawn-ai/langchain", version: packageVersion },
+      ],
+    })
+
+    await runPublishedArtifactSmoke(harness.options, harness.dependencies)
+
+    assert.equal(
+      harness.events.some(({ type }) => type === "ag-ui-probe"),
+      false,
+    )
+    assert.equal(
+      harness.events.some(({ type }) => type === "tooling-install"),
+      false,
+    )
+    assert.equal(
+      harness.events.some(({ type }) => type === "tooling-probe"),
+      false,
+    )
+    assert.equal(
+      harness.events.some(({ type }) => type === "docker"),
+      false,
+    )
+    assert.equal(harness.events.at(-1).type, "cleanup")
+  })
+
+  it("uses the shared Task 8 helper to reject a different nested Core artifact", async () => {
+    const root = await createCoreResolutionFixture({ nestedViteCore: true })
+
+    await assert.rejects(
+      assertInstalledCoreResolution({ consumerRoot: root, expectedCoreVersion: packageVersion }),
+      /Vite resolves @dawn-ai\/core to .* expected root artifact/s,
+    )
+  })
+
+  it("uses the shared Task 8 helper to enforce the exact installed Core version", async () => {
+    const root = await createCoreResolutionFixture({ coreVersion: "0.8.9" })
+
+    await assert.rejects(
+      assertInstalledCoreResolution({ consumerRoot: root, expectedCoreVersion: packageVersion }),
+      /resolved @dawn-ai\/core version 0\.8\.9, expected version 0\.9\.0/,
+    )
+  })
+})
+
 describe("resolveRequestedVersion", () => {
   it("resolves latest through dist-tags", () => {
     assert.equal(
@@ -923,6 +1222,134 @@ describe("assertNoNativeInstallOutput", () => {
     )
   })
 })
+
+async function createPublishedSmokeHarness({
+  probeFailure,
+  selectedPackages,
+  toolingInstallFailure,
+}) {
+  const testRoot = await mkdtemp(join(tmpdir(), "dawn-published-smoke-orchestration-test-"))
+  const tempDir = join(testRoot, "owned-smoke-root")
+  const events = []
+  let cleaned = false
+  tempRoots.push(testRoot)
+
+  const runCommandForHarness = async (command, args, options = {}) => {
+    events.push({ args: [...args], command, cwd: options.cwd, type: "command" })
+    return { stderr: "", stdout: "" }
+  }
+  const dependencies = {
+    async assertDockerAvailable() {
+      events.push({ type: "docker" })
+    },
+    async assertInstalledCoreResolution(options) {
+      events.push({ ...options, type: "core-resolution" })
+    },
+    async databaseUrlForPgvector() {
+      events.push({ type: "docker" })
+      return "postgres://unused"
+    },
+    async installTypeScriptTooling(root, { runCommand: command }) {
+      events.push({ root, type: "tooling-install" })
+      await command("npm", typescriptToolingInstallArgs(), { cwd: root })
+      if (toolingInstallFailure) {
+        throw toolingInstallFailure
+      }
+    },
+    async makeTempDir(prefix) {
+      assert.equal(prefix, "dawn-published-smoke-")
+      await mkdir(tempDir)
+      return tempDir
+    },
+    async removeContainer() {
+      events.push({ type: "docker" })
+    },
+    async removeDir(path) {
+      events.push({ path, type: "cleanup" })
+      await rm(path, { force: true, recursive: true })
+      cleaned = true
+    },
+    async runAgUiInstalledProbe(root) {
+      events.push({ root, type: "ag-ui-probe" })
+    },
+    async runInstallSmoke(root, packages, { runCommand: command }) {
+      events.push({ packages, root, type: "selected-install" })
+      await command("npm", selectedPackageInstallArgs(packages), { cwd: root })
+    },
+    runCommand: runCommandForHarness,
+    async runRuntimeSmoke() {
+      events.push({ type: "docker" })
+    },
+    async runTypeScriptToolingProbe({ expectedTypeScriptVersion, root, runCommand: command }) {
+      events.push({ expectedTypeScriptVersion, root, type: "tooling-probe" })
+      if (probeFailure) {
+        throw probeFailure
+      }
+      await command(process.execPath, ["typescript-tooling-probe.mjs"], { cwd: root })
+      await command(process.execPath, ["typescript-tsc.mjs", "--noEmit"], { cwd: root })
+    },
+    async selectedPackageVersions(options) {
+      events.push({ options, type: "select" })
+      return selectedPackages
+    },
+    async startPgvector() {
+      events.push({ type: "docker" })
+    },
+    async waitForPgvector() {
+      events.push({ type: "docker" })
+    },
+  }
+
+  return {
+    dependencies,
+    events,
+    get cleaned() {
+      return cleaned
+    },
+    options: {
+      openai: false,
+      packageSet: "test-fixture",
+      pgvector: false,
+      version: "latest",
+    },
+    tempDir,
+  }
+}
+
+async function createCoreResolutionFixture({ coreVersion = "0.9.0", nestedViteCore = false } = {}) {
+  const root = await mkdtemp(join(tmpdir(), "dawn-published-core-resolution-test-"))
+  const nodeModules = join(root, "node_modules")
+  tempRoots.push(root)
+  await Promise.all([
+    writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }), "utf8"),
+    writeResolutionPackage(join(nodeModules, "@dawn-ai", "core"), "@dawn-ai/core", coreVersion),
+    writeResolutionPackage(
+      join(nodeModules, "@dawn-ai", "vite-plugin"),
+      "@dawn-ai/vite-plugin",
+      "0.9.0",
+    ),
+  ])
+  if (nestedViteCore) {
+    await writeResolutionPackage(
+      join(nodeModules, "@dawn-ai", "vite-plugin", "node_modules", "@dawn-ai", "core"),
+      "@dawn-ai/core",
+      coreVersion,
+    )
+  }
+  return root
+}
+
+async function writeResolutionPackage(root, name, version) {
+  await mkdir(root, { recursive: true })
+  await Promise.all([
+    writeFile(join(root, "index.js"), "export {}\n", "utf8"),
+    writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ main: "./index.js", name, type: "module", version }),
+      "utf8",
+    ),
+  ])
+}
 
 async function createTypeScriptToolingRunnerFixture({
   bin = { tsc: "./custom-bin/tsc.mjs" },

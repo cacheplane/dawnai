@@ -6,6 +6,7 @@ import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import {
+  assertInstalledCoreResolution,
   makeTempDir,
   normalizeCliArgs,
   npmView,
@@ -14,6 +15,7 @@ import {
   resolvePackageSet,
   resolveRequestedVersion,
 } from "./lib/published-artifacts.mjs"
+import { runTypeScriptToolingProbe as defaultRunTypeScriptToolingProbe } from "./lib/typescript-tooling-probe.mjs"
 
 const NATIVE_BUILD_INDICATORS =
   /\b(?:node-gyp|prebuild|prebuild-install|node-pre-gyp|cmake-js|node-gyp-build|prebuildify)\b|gyp ERR!/i
@@ -21,6 +23,10 @@ const NATIVE_LIFECYCLE_INDICATORS =
   /\b(?:node-gyp|prebuild|prebuild-install|node-pre-gyp|cmake-js|node-gyp-build|prebuildify)\b|binding\.gyp/i
 const NATIVE_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall"]
 const REQUIRED_PGVECTOR_PACKAGES = new Set(["@dawn-ai/memory-pgvector", "@dawn-ai/langchain"])
+
+export const TYPESCRIPT_VERSION = "7.0.2"
+export const TSX_VERSION = "4.23.0"
+export const ZOD_VERSION = "4.4.3"
 
 export function shouldRunOpenAiSmoke({ enabled, env = process.env }) {
   if (!enabled) {
@@ -42,16 +48,58 @@ async function main() {
 
   shouldRunOpenAiSmoke({ enabled: options.openai })
 
-  const tempDir = await makeTempDir("dawn-published-smoke-")
+  await runPublishedArtifactSmoke(options)
+}
+
+export async function runPublishedArtifactSmoke(options, overrides = {}) {
+  const dependencies = {
+    assertDockerAvailable,
+    assertInstalledCoreResolution,
+    databaseUrlForPgvector,
+    installTypeScriptTooling,
+    makeTempDir,
+    removeContainer,
+    removeDir,
+    runAgUiInstalledProbe,
+    runCommand,
+    runInstallSmoke,
+    runRuntimeSmoke,
+    runTypeScriptToolingProbe: defaultRunTypeScriptToolingProbe,
+    selectedPackageVersions,
+    startPgvector,
+    waitForPgvector,
+    ...overrides,
+  }
+
+  const tempDir = await dependencies.makeTempDir("dawn-published-smoke-")
   const containerName = `dawn-published-smoke-${process.pid}-${Date.now()}`
   let containerCleanupNeeded = false
 
   try {
-    const selectedPackages = await selectedPackageVersions(options)
-    await runInstallSmoke(tempDir, selectedPackages)
+    const selectedPackages = await dependencies.selectedPackageVersions(options)
+    await dependencies.runInstallSmoke(tempDir, selectedPackages, {
+      runCommand: dependencies.runCommand,
+    })
 
     if (shouldRunAgUiProbe(selectedPackages)) {
-      await runAgUiInstalledProbe(tempDir)
+      await dependencies.runAgUiInstalledProbe(tempDir)
+    }
+
+    if (shouldRunTypeScriptToolingProbe(selectedPackages)) {
+      await dependencies.installTypeScriptTooling(tempDir, {
+        runCommand: dependencies.runCommand,
+      })
+      const corePackage = selectedPackages.find(({ name }) => name === "@dawn-ai/core")
+      await dependencies.assertInstalledCoreResolution({
+        consumerRoot: tempDir,
+        expectedCoreVersion: corePackage.version,
+      })
+      await dependencies.runTypeScriptToolingProbe({
+        expectedTypeScriptVersion: TYPESCRIPT_VERSION,
+        root: tempDir,
+        runCommand: dependencies.runCommand,
+      })
+      console.log("T-TYPESCRIPT-TOOLING PASS")
     }
 
     if (!options.pgvector) {
@@ -62,17 +110,17 @@ async function main() {
     }
 
     assertRuntimePackages(selectedPackages.map((pkg) => pkg.name))
-    await assertDockerAvailable()
+    await dependencies.assertDockerAvailable()
     containerCleanupNeeded = true
-    await startPgvector(containerName)
-    const databaseUrl = await databaseUrlForPgvector(containerName)
-    await waitForPgvector(containerName)
-    await runRuntimeSmoke(tempDir, { databaseUrl, openai: options.openai })
+    await dependencies.startPgvector(containerName)
+    const databaseUrl = await dependencies.databaseUrlForPgvector(containerName)
+    await dependencies.waitForPgvector(containerName)
+    await dependencies.runRuntimeSmoke(tempDir, { databaseUrl, openai: options.openai })
   } finally {
     if (containerCleanupNeeded) {
-      await removeContainer(containerName)
+      await dependencies.removeContainer(containerName)
     }
-    await removeDir(tempDir)
+    await dependencies.removeDir(tempDir)
   }
 }
 
@@ -152,12 +200,13 @@ async function selectedPackageVersions(options) {
   return resolved
 }
 
-async function runInstallSmoke(tempDir, packages) {
-  await runCommand("npm", ["init", "-y"], { cwd: tempDir })
-  await runCommand("npm", ["pkg", "set", "type=module"], { cwd: tempDir })
+export async function runInstallSmoke(tempDir, packages, overrides = {}) {
+  const command = overrides.runCommand ?? runCommand
+  await command("npm", ["init", "-y"], { cwd: tempDir })
+  await command("npm", ["pkg", "set", "type=module"], { cwd: tempDir })
 
   const specs = packages.map((pkg) => `${pkg.name}@${pkg.version}`)
-  const install = await runCommand("npm", ["install", ...specs], { cwd: tempDir })
+  const install = await command("npm", selectedPackageInstallArgs(packages), { cwd: tempDir })
   const installOutput = `${install.stdout}\n${install.stderr}`
   assertNoNativeInstallOutput(installOutput)
 
@@ -172,12 +221,57 @@ async function runInstallSmoke(tempDir, packages) {
         "utf8",
       ),
     )
-    if (manifest.version !== pkg.version) {
-      throw new Error(`${pkg.name} installed version ${manifest.version}, expected ${pkg.version}`)
+    if (manifest.name !== pkg.name || manifest.version !== pkg.version) {
+      throw new Error(
+        `${pkg.name} installed identity ${manifest.name ?? "<unknown>"}@${manifest.version ?? "<unknown>"}, expected ${pkg.name}@${pkg.version}`,
+      )
     }
   }
 
   console.log(`T0 PASS installed ${specs.join(" ")}`)
+}
+
+export function selectedPackageInstallArgs(packages) {
+  return [
+    "install",
+    "--save-exact",
+    "--package-lock=false",
+    ...packages.map(({ name, version }) => `${name}@${version}`),
+  ]
+}
+
+export function typescriptToolingInstallArgs() {
+  return [
+    "install",
+    "--ignore-scripts",
+    "--save-exact",
+    "--package-lock=false",
+    `typescript@${TYPESCRIPT_VERSION}`,
+    `tsx@${TSX_VERSION}`,
+    `zod@${ZOD_VERSION}`,
+  ]
+}
+
+export async function installTypeScriptTooling(tempDir, overrides = {}) {
+  const command = overrides.runCommand ?? runCommand
+  await command("npm", typescriptToolingInstallArgs(), { cwd: tempDir })
+  await assertInstalledPackageIdentities(tempDir, {
+    tsx: TSX_VERSION,
+    typescript: TYPESCRIPT_VERSION,
+    zod: ZOD_VERSION,
+  })
+}
+
+async function assertInstalledPackageIdentities(tempDir, expectedVersions) {
+  for (const [packageName, expectedVersion] of Object.entries(expectedVersions)) {
+    const manifestPath = resolve(tempDir, "node_modules", ...packageName.split("/"), "package.json")
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+    if (manifest.name !== packageName || manifest.version !== expectedVersion) {
+      throw new Error(
+        `${packageName} installed identity ${manifest.name ?? "<unknown>"}@${manifest.version ?? "<unknown>"}, expected ${packageName}@${expectedVersion}`,
+      )
+    }
+  }
 }
 
 async function runAgUiInstalledProbe(tempDir) {
@@ -211,6 +305,11 @@ export function agUiProbeCommands() {
 
 export function shouldRunAgUiProbe(packages) {
   return packages.some(({ name }) => name === "@dawn-ai/ag-ui")
+}
+
+export function shouldRunTypeScriptToolingProbe(packages) {
+  const names = new Set(packages.map(({ name }) => name))
+  return names.has("@dawn-ai/core") && names.has("@dawn-ai/vite-plugin")
 }
 
 export function agUiEsmProbeSource() {
