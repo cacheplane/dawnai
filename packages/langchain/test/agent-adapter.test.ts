@@ -2,6 +2,7 @@ import { agent } from "@dawn-ai/sdk"
 import { AIMessage } from "@langchain/core/messages"
 import { MemorySaver } from "@langchain/langgraph"
 import { describe, expect, test, vi } from "vitest"
+import { z } from "zod"
 import {
   __resetMaterializedAgentsForTests,
   executeAgent,
@@ -149,6 +150,53 @@ describe("capability custom events", () => {
 })
 
 describe("executeAgent with DawnAgent descriptors", () => {
+  test("does not reuse a compiled graph across distinct subagent resolvers", async () => {
+    const createReactAgent = vi.fn(() => ({ invoke: vi.fn() }))
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {},
+    }))
+    __resetMaterializedAgentsForTests()
+
+    const descriptor = agent({ model: "gpt-5-mini", systemPrompt: "Test." })
+    const checkpointer = new MemorySaver()
+    const task = {
+      name: "task",
+      schema: z.object({ subagent: z.string(), input: z.string() }),
+      run: async () => "placeholder",
+    }
+    const firstResolver = vi.fn(async () => ({
+      ok: false as const,
+      message: "first resolver",
+    }))
+    const secondResolver = vi.fn(async () => ({
+      ok: false as const,
+      message: "second resolver",
+    }))
+
+    try {
+      const first = await materializeAgentGraph({
+        checkpointer,
+        descriptor,
+        subagentResolver: firstResolver,
+        tools: [task],
+      })
+      const second = await materializeAgentGraph({
+        checkpointer,
+        descriptor,
+        subagentResolver: secondResolver,
+        tools: [task],
+      })
+
+      expect(createReactAgent).toHaveBeenCalledTimes(2)
+      expect(second).not.toBe(first)
+    } finally {
+      __resetMaterializedAgentsForTests()
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+    }
+  })
+
   test("does not reuse a compiled graph when stream transformers change", async () => {
     const createReactAgent = vi.fn(() => ({ invoke: vi.fn() }))
     vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))

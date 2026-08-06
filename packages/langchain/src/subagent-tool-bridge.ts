@@ -99,7 +99,9 @@ export function convertSubagentTaskToLangChain(
           childConfig,
         )
       } catch (error) {
-        if (isGraphInterrupt(error)) throw error
+        if (isGraphInterrupt(error) || liveConfig.signal?.aborted || isAbortError(error)) {
+          throw error
+        }
         const message = error instanceof Error ? error.message : String(error)
         await dispatchCustomEvent(
           "dawn.subagent",
@@ -118,6 +120,12 @@ export function convertSubagentTaskToLangChain(
       return finalText
     },
   })
+}
+
+function isAbortError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false
+  const candidate = error as { code?: unknown; name?: unknown }
+  return candidate.name === "AbortError" || candidate.code === "ABORT_ERR"
 }
 
 function readCallId(config: RunnableConfig): string | undefined {

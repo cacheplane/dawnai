@@ -101,6 +101,7 @@ async function materializeAgent(
   const fingerprint = fragmentFingerprint(opts.promptFragments ?? [])
   const bypassCache =
     checkpointer === undefined ||
+    opts.subagentResolver !== undefined ||
     opts.bypassCache === true ||
     (opts.streamTransformers?.length ?? 0) > 0
 

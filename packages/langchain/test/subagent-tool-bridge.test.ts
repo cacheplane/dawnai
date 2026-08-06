@@ -224,6 +224,61 @@ describe("convertSubagentTaskToLangChain", () => {
     ])
   })
 
+  it("rethrows a standard AbortError unchanged without an error-shaped end event", async () => {
+    const abortError = new DOMException("Child cancelled", "AbortError")
+    const child = {
+      invoke: vi.fn(async () => {
+        throw abortError
+      }),
+    }
+    const tool = convertSubagentTaskToLangChain(taskPlaceholder, async () => allowedChild(child))
+    const RootState = Annotation.Root({ result: Annotation<string>() })
+    const root = new StateGraph(RootState)
+      .addNode("dispatch", async (_state, config) => ({
+        result: await tool.func({ subagent: "researcher", input: "Cancel" }, undefined, {
+          ...config,
+          toolCall: { id: "task-cancel" },
+        }),
+      }))
+      .addEdge(START, "dispatch")
+      .addEdge("dispatch", END)
+      .compile()
+    const events: unknown[] = []
+    let thrown: unknown
+
+    try {
+      for await (const event of root.streamEvents({}, { version: "v2" })) {
+        if (event.event === "on_custom_event" && event.name === "dawn.subagent") {
+          events.push(event.data)
+        }
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBe(abortError)
+    expect(events).toEqual([expect.objectContaining({ phase: "start", call_id: "task-cancel" })])
+  })
+
+  it("rethrows child errors unchanged when the inherited signal is aborted", async () => {
+    const cancellation = new Error("cancelled by parent")
+    const controller = new AbortController()
+    controller.abort()
+    const child = {
+      invoke: vi.fn(async () => {
+        throw cancellation
+      }),
+    }
+    const tool = convertSubagentTaskToLangChain(taskPlaceholder, async () => allowedChild(child))
+
+    await expect(
+      tool.func({ subagent: "researcher", input: "Cancel" }, undefined, {
+        signal: controller.signal,
+        toolCall: { id: "task-aborted-signal" },
+      } as RunnableConfig),
+    ).rejects.toBe(cancellation)
+  })
+
   it("inherits the root checkpointer and resumes a child interrupt from the root thread", async () => {
     const child = interruptingChild()
     const tool = convertSubagentTaskToLangChain(taskPlaceholder, async () => allowedChild(child))
