@@ -695,7 +695,7 @@ git commit -m "test: smoke packed TypeScript tooling"
 - Modify: `scripts/published-artifacts.test.mjs`
 - Modify: `.github/workflows/published-artifact-verify.yml`
 
-- [ ] **Step 1: Add failing package-set and selection tests**
+- [x] **Step 1: Add failing package-set and selection tests**
 
 Assert:
 
@@ -709,7 +709,7 @@ assert.deepEqual(packageSets["typescript-tooling"], [
 
 Add a `shouldRunTypeScriptToolingProbe` test that selects only when Core and Vite are both installed.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 node --test scripts/published-artifacts.test.mjs
@@ -717,13 +717,13 @@ node --test scripts/published-artifacts.test.mjs
 
 Expected: FAIL until the package set and selector exist.
 
-- [ ] **Step 3: Add the package set and published probe hook**
+- [x] **Step 3: Add the package set and published probe hook**
 
 After installing the selected npm packages and running native-script checks, explicitly install consumer-side `typescript@7.0.2`, `tsx@4.23.0`, and the repository's supported Zod version in the temporary project before invoking the reusable TypeScript-tooling probe. This explicit root install prevents Core's nested aliased TypeScript 6 dependency from becoming the consumer's apparent compiler. Do not run pgvector unless requested; the compiler probe must be network-free after package installation.
 
 Add `typescript-tooling` to the manual workflow's package-set choices.
 
-- [ ] **Step 4: Run script tests**
+- [x] **Step 4: Run script tests**
 
 ```bash
 node --test scripts/published-artifacts.test.mjs
@@ -731,11 +731,11 @@ node --test scripts/published-artifacts.test.mjs
 
 Expected: PASS.
 
-- [ ] **Step 5: Exercise against the current npm release without claiming the new bridge**
+- [x] **Step 5: Exercise against the current npm release without claiming the new bridge**
 
 Run metadata selection and installation against `latest` only if the current release contains the required probe surface. Otherwise run the command with a test double/local registry and record that the exact post-release execution is intentionally deferred until publication.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/lib/published-artifacts.mjs scripts/published-artifact-smoke.mjs scripts/published-artifacts.test.mjs .github/workflows/published-artifact-verify.yml
