@@ -360,12 +360,33 @@ export const nodeBootFallbacks: RuntimeBootFallbacks = {
   resolveThreadsStore,
 }
 
-/** Apply the node fallbacks unless the caller already chose their own. */
+/**
+ * THE single conversion between a host-supplied app root and the
+ * POSIX-normalized absolute form `@dawn-ai/core` assumes.
+ *
+ * Core derives the workspace root from `appRoot` and then decides containment
+ * with pure POSIX arithmetic against an explicit "/" — `pureResolve` throws on
+ * a relative base rather than rooting it somewhere silently. Normalizing here
+ * keeps the previous semantics of the `node:path` jail (a relative root
+ * resolved against `process.cwd()`) while giving core exactly one guaranteed
+ * input shape. Dawn targets POSIX hosts only, so this is effectively identity;
+ * a Windows port would convert here, and only here.
+ */
+export function toPosixAppRoot(appRoot: string): string {
+  return resolve(appRoot)
+}
+
+/**
+ * Apply the node fallbacks unless the caller already chose their own, and
+ * normalize the app root on the way in (see `toPosixAppRoot`).
+ */
 function withNodeFallbacks<T extends object>(
   options: T,
 ): T & { readonly bootFallbacks: RuntimeBootFallbacks } {
+  const appRoot = (options as { readonly appRoot?: unknown }).appRoot
   return {
     ...options,
+    ...(typeof appRoot === "string" ? { appRoot: toPosixAppRoot(appRoot) } : {}),
     bootFallbacks: (options as BootResolvedInstances).bootFallbacks ?? nodeBootFallbacks,
   }
 }

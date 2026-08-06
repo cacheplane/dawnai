@@ -1,11 +1,5 @@
-// `relative`/`resolve`/`sep` still come from node:path: they implement the
-// tool-outputs containment predicate below, which shares the path-jail
-// semantics of workspace-fs.ts/permission-gate.ts and moves to the pure
-// helpers together with them (an absolute second operand must WIN, so a
-// join-shaped swap here would be a jail escape).
-import { relative, resolve, sep } from "node:path"
 import type { PermissionsStore } from "@dawn-ai/permissions"
-import { pureJoin } from "@dawn-ai/sdk/pure"
+import { POSIX_SEP, pureJoin, pureRelative, pureResolve } from "@dawn-ai/sdk/pure"
 import type { BackendContext, ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { z } from "zod"
 
@@ -89,10 +83,14 @@ function buildWorkspaceTools(
     run: async (input, ctx) => {
       const { path } = READ_FILE_INPUT.parse(input)
       const handle = handleFor(ctx.signal)
-      const absPath = resolve(workspaceRoot, path)
-      const rel = relative(workspaceRoot, absPath)
+      // Same containment arithmetic as the path jail (workspace-fs.ts): an
+      // absolute `path` discards the root, so a read that escapes the
+      // workspace produces a `../…` relative path and never inherits the
+      // uncapped-read exemption.
+      const absPath = pureResolve(workspaceRoot, path)
+      const rel = pureRelative(workspaceRoot, absPath)
       // NOTE: must match SUBDIR ("tool-outputs") in @dawn-ai/langchain offload-store.ts
-      const isToolOutput = rel === "tool-outputs" || rel.startsWith(`tool-outputs${sep}`)
+      const isToolOutput = rel === "tool-outputs" || rel.startsWith(`tool-outputs${POSIX_SEP}`)
       const data = await handle.readFile(
         path,
         isToolOutput ? { maxBytes: Number.POSITIVE_INFINITY } : undefined,

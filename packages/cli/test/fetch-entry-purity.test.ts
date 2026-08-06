@@ -116,25 +116,15 @@ function graphInputs(metafile: Metafile): string[] {
 
 /**
  * The `node:` imports still reachable through UPSTREAM Dawn packages, pinned
- * so the set can only shrink. None of them is Dawn-cli code: they come from
- * barrels whose node-only members (`dawn.config.ts` loading, the capability
- * markers' path joins) are never CALLED on the injected fetch path — the
- * import edge is what remains.
+ * so the set can only shrink. There are none left: every upstream package the
+ * fetch graph reaches now has the same pure/node split `@dawn-ai/cli` has, and
+ * the last three — core's path jail — moved to the pure helpers with an
+ * adversarial containment suite (`packages/core/test/capabilities/path-jail-adversarial.test.ts`).
  *
- * Purging them means finishing the pure/node split `@dawn-ai/cli`,
- * `@dawn-ai/permissions` and `@dawn-ai/workspace` already have, and that core's
- * route discovery + tool typegen now have (`@dawn-ai/core/node`). Until then
- * this inventory is a ratchet — the assertion is a SUBSET check, so removals
- * are free and any NEW edge fails the build.
+ * Still a SUBSET check here so the ratchet's shape survives until Task 9
+ * replaces it with strict equality against zero.
  */
-const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = [
-  // @dawn-ai/core — the path jail (Task 8): an absolute second operand must
-  // WIN over the root, so these three sites move to the pure helpers together,
-  // with an adversarial suite, and not before.
-  "node:path <- ../core/dist/capabilities/built-in/workspace.js",
-  "node:path <- ../core/dist/capabilities/permission-gate.js",
-  "node:path <- ../core/dist/capabilities/workspace-fs.js",
-]
+const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = []
 
 /**
  * Import edges into the node TS loader. There are none left: reading

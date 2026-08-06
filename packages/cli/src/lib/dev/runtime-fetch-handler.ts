@@ -9,7 +9,7 @@
  * fallbacks, and inject their stores instead.
  */
 
-import { nodeBootFallbacks } from "../runtime/execute-route.js"
+import { nodeBootFallbacks, toPosixAppRoot } from "../runtime/execute-route.js"
 import {
   createRuntimeFetchHandler as createRuntimeFetchHandlerCore,
   type RuntimeFetchHandler,
@@ -22,6 +22,10 @@ export async function createRuntimeFetchHandler(
 ): Promise<RuntimeFetchHandler> {
   return await createRuntimeFetchHandlerCore({
     ...options,
+    // Normalized here, before anything downstream keys a cache or derives the
+    // workspace root from it: core's path jail assumes a POSIX-normalized
+    // absolute root, and this is the node lane's single conversion point.
+    appRoot: toPosixAppRoot(options.appRoot),
     bootFallbacks: options.bootFallbacks ?? nodeBootFallbacks,
   })
 }
