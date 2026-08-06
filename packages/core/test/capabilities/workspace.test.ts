@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createPermissionsStore } from "@dawn-ai/permissions/node"
+import { localExec, localFilesystem } from "@dawn-ai/workspace/node"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { createWorkspaceMarker } from "../../src/capabilities/built-in/workspace.js"
@@ -23,6 +24,10 @@ function ctx(
     descriptor: undefined,
     appRoot,
     markerFs: nodeMarkerFs,
+    // What the node runtime (`dawn dev`/`start`) supplies: core owns no
+    // default backend of its own. Absent both these and `backends`, a tool
+    // invocation fails loudly — see workspace-injection.test.ts.
+    backendFactories: { filesystem: () => localFilesystem(), exec: () => localExec() },
     ...extras,
   }
 }
@@ -276,7 +281,6 @@ describe("createWorkspaceMarker — load", () => {
   })
 
   it("readFile with real localFilesystem reads a >256KB tool-outputs/ file successfully", async () => {
-    const { localFilesystem } = await import("@dawn-ai/workspace")
     // Use a tiny cap (10 bytes) to prove the override kicks in
     const tinyFs = localFilesystem({ maxFileBytes: 10 })
     const outputsDir = join(workspaceDir, "tool-outputs")

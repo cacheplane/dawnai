@@ -139,7 +139,7 @@ Create a gated `WorkspaceFs` handle:
 
 ```ts
 import { createWorkspaceFs } from "@dawn-ai/core"
-import { localFilesystem } from "@dawn-ai/workspace"
+import { localFilesystem } from "@dawn-ai/workspace/node"
 
 const fs = createWorkspaceFs({
   workspaceRoot: `${process.cwd()}/workspace`,

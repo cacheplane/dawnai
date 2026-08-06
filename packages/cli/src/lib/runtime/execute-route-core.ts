@@ -138,6 +138,8 @@ export interface RuntimeBootFallbacks {
   ) => Promise<{ readonly keys: readonly string[]; readonly fallback: boolean }>
   /** Process-shared `localFilesystem()`. */
   readonly defaultFilesystem: () => FilesystemBackend
+  /** Process-shared `localExec()` — the workspace capability's `runBash`. */
+  readonly defaultExec: () => ExecBackend
   /** `<appRoot>/workspace` existence probe (gates tool-output offloading). */
   readonly hasWorkspaceDir: (appRoot: string) => boolean
   /** Node `MarkerFs` for the capability markers (AGENTS.md, skills, …). */
@@ -175,6 +177,12 @@ export interface RuntimeBootFallbacks {
  *                               is an optimization, not a capability the route
  *                               asked for (this also makes the offload store's
  *                               `defaultFilesystem` unreachable)
+ *   - `defaultFilesystem`/`defaultExec` AS `backendFactories` → omitted from
+ *                               `applyCapabilities`; the workspace capability
+ *                               then throws at TOOL-INVOCATION time unless a
+ *                               sandbox/config backend was supplied. (The
+ *                               `ctx.fs` handle above still throws at boot —
+ *                               it needs a backend to be constructed at all.)
  *   - `loadMiddleware`        → no middleware (fetch-core)
  *   - `resolveSandboxManager` → no sandbox provider (fetch-core)
  *   - `resolveIdentityKeys`   → the default semantic identity for memory
@@ -877,6 +885,18 @@ export async function prepareRouteExecution(
       descriptorRouteMap,
       ...(staticMaps ? { routeDescriptors: staticMaps.routeDescriptors } : {}),
       ...(capabilityBackends ? { backends: capabilityBackends } : {}),
+      // Core owns no node backend: the workspace capability constructs one
+      // through these ONLY when nothing above supplied an instance. Absent
+      // fallbacks (edge), a workspace tool call fails loudly instead of
+      // reaching for a filesystem the runtime does not have.
+      ...(fallbacks
+        ? {
+            backendFactories: {
+              exec: fallbacks.defaultExec,
+              filesystem: fallbacks.defaultFilesystem,
+            },
+          }
+        : {}),
       ...(fallbacks ? { markerFs: fallbacks.markerFs } : {}),
       permissions: permissionsStore,
       appRoot: options.appRoot,

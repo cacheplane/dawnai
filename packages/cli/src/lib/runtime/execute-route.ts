@@ -26,8 +26,8 @@ import type { PermissionMode, PermissionsStore } from "@dawn-ai/permissions"
 import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
-import type { FilesystemBackend } from "@dawn-ai/workspace"
-import { localFilesystem } from "@dawn-ai/workspace"
+import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
+import { localExec, localFilesystem } from "@dawn-ai/workspace/node"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { loadMiddleware } from "../dev/middleware.js"
 import {
@@ -116,6 +116,13 @@ let defaultLocalFilesystem: FilesystemBackend | undefined
 function getDefaultLocalFilesystem(): FilesystemBackend {
   defaultLocalFilesystem ??= localFilesystem()
   return defaultLocalFilesystem
+}
+
+/** Same contract as `getDefaultLocalFilesystem`, for the workspace capability's `runBash`. */
+let defaultLocalExec: ExecBackend | undefined
+function getDefaultLocalExec(): ExecBackend {
+  defaultLocalExec ??= localExec()
+  return defaultLocalExec
 }
 
 /**
@@ -333,6 +340,7 @@ export const nodeBootFallbacks: RuntimeBootFallbacks = {
   buildPermissionsStore,
   defaultCheckpointer: (appRoot) =>
     sqliteCheckpointer({ path: pureJoin(appRoot, ".dawn/checkpoints.sqlite") }),
+  defaultExec: getDefaultLocalExec,
   defaultFilesystem: getDefaultLocalFilesystem,
   defaultThreadsStore: (appRoot) =>
     createThreadsStore({ path: pureJoin(appRoot, ".dawn/threads.sqlite") }),

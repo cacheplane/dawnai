@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { localFilesystem } from "@dawn-ai/workspace"
+import { localFilesystem } from "@dawn-ai/workspace/node"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { buildOffloadFileName, OffloadStore } from "../src/offload/offload-store.js"
 

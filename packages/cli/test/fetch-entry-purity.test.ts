@@ -118,15 +118,14 @@ function graphInputs(metafile: Metafile): string[] {
  * The `node:` imports still reachable through UPSTREAM Dawn packages, pinned
  * so the set can only shrink. None of them is Dawn-cli code: they come from
  * barrels whose node-only members (`dawn.config.ts` loading, route discovery,
- * typegen, the local filesystem/exec backends, the capability markers' path
- * joins) are never CALLED on the injected fetch path — the import edge is what
- * remains.
+ * typegen, the capability markers' path joins) are never CALLED on the
+ * injected fetch path — the import edge is what remains.
  *
- * Purging them means giving `@dawn-ai/core`, `@dawn-ai/workspace` and
- * `@dawn-ai/langchain` the same pure/node split `@dawn-ai/cli` and
- * `@dawn-ai/permissions` already have. That is follow-up work; until then this
- * inventory is a ratchet — the assertion is a SUBSET check, so removals are
- * free and any NEW edge fails the build.
+ * Purging them means giving `@dawn-ai/core` the same pure/node split
+ * `@dawn-ai/cli`, `@dawn-ai/permissions` and `@dawn-ai/workspace` already
+ * have. That is follow-up work; until then this inventory is a ratchet — the
+ * assertion is a SUBSET check, so removals are free and any NEW edge fails the
+ * build.
  */
 const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = [
   // @dawn-ai/core — barrel drags config loading, route discovery and typegen
@@ -153,11 +152,6 @@ const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = [
   "node:url <- ../core/dist/capabilities/built-in/subagents.js",
   "node:url <- ../core/dist/config.js",
   "node:url <- ../core/dist/discovery/discover-routes.js",
-  // @dawn-ai/workspace — the local filesystem/exec backends
-  "node:child_process <- ../workspace/dist/local-exec.js",
-  "node:fs/promises <- ../workspace/dist/local-filesystem.js",
-  "node:path <- ../workspace/dist/local-filesystem.js",
-  "node:util <- ../workspace/dist/local-exec.js",
 ]
 
 /**
