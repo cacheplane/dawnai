@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises"
+import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
@@ -68,6 +69,7 @@ export async function runTypeScriptToolingPackSmoke(overrides = {}) {
       dependencies.onPackedArtifactValidated(artifact)
       packedArtifacts.push(artifact)
     }
+    const packedCoreVersion = assertPackedCoreDependency(packedArtifacts)
 
     await initializeCleanConsumerProject(consumerRoot)
     await dependencies.runCommand(
@@ -89,14 +91,17 @@ export async function runTypeScriptToolingPackSmoke(overrides = {}) {
     }
 
     const installedVersions = await assertInstalledVersions(consumerRoot, {
-      "@dawn-ai/core": packedArtifacts.find(({ packageName }) => packageName === "@dawn-ai/core")
-        .packageVersion,
+      "@dawn-ai/core": packedCoreVersion,
       "@dawn-ai/vite-plugin": packedArtifacts.find(
         ({ packageName }) => packageName === "@dawn-ai/vite-plugin",
       ).packageVersion,
       tsx: TSX_VERSION,
       typescript: TYPESCRIPT_VERSION,
       zod: ZOD_VERSION,
+    })
+    const coreEntryPath = await assertInstalledCoreResolution({
+      consumerRoot,
+      expectedCoreVersion: packedCoreVersion,
     })
 
     dependencies.assertNoNativeLifecycleScripts(
@@ -109,7 +114,7 @@ export async function runTypeScriptToolingPackSmoke(overrides = {}) {
       runCommand: dependencies.runCommand,
     })
 
-    return { installedVersions }
+    return { coreEntryPath, installedVersions }
   } finally {
     await dependencies.removeDir(tempRoot)
   }
@@ -139,9 +144,29 @@ export async function packWorkspacePackage({ packageConfig, packDir, repoRoot, r
   const extractDir = join(packDir, `${packageConfig.name.slice(1).replaceAll("/", "-")}-extract`)
   await mkdir(extractDir)
   await runCommand("tar", ["-xzf", tarballPath, "-C", extractDir], { cwd: repoRoot })
-  const packageJson = JSON.parse(
-    await readFile(join(extractDir, "package", "package.json"), "utf8"),
-  )
+  const extractedManifestPath = join(extractDir, "package", "package.json")
+  let manifestSource
+  try {
+    manifestSource = await readFile(extractedManifestPath, "utf8")
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error(
+        `${packageConfig.name} packed artifact is missing extracted package.json at ${extractedManifestPath}`,
+        { cause: error },
+      )
+    }
+    throw error
+  }
+
+  let packageJson
+  try {
+    packageJson = JSON.parse(manifestSource)
+  } catch (error) {
+    throw new Error(
+      `${packageConfig.name} packed artifact has invalid extracted package.json at ${extractedManifestPath}`,
+      { cause: error },
+    )
+  }
 
   return {
     packageJson,
@@ -167,6 +192,52 @@ export function validatePackedArtifact(artifact) {
     `${artifact.packageName}@${artifact.packageVersion}`,
     artifact.packageJson,
   )
+}
+
+export function assertPackedCoreDependency(packedArtifacts) {
+  const coreArtifact = packedArtifacts.find(({ packageName }) => packageName === "@dawn-ai/core")
+  const viteArtifact = packedArtifacts.find(
+    ({ packageName }) => packageName === "@dawn-ai/vite-plugin",
+  )
+  const viteCoreDependency = viteArtifact?.packageJson?.dependencies?.["@dawn-ai/core"]
+
+  if (viteCoreDependency !== coreArtifact?.packageVersion) {
+    throw new Error(
+      `@dawn-ai/vite-plugin packed dependency @dawn-ai/core is ${viteCoreDependency ?? "missing"}, expected ${coreArtifact?.packageVersion ?? "packed Core version"}`,
+    )
+  }
+
+  return coreArtifact.packageVersion
+}
+
+export async function assertInstalledCoreResolution({ consumerRoot, expectedCoreVersion }) {
+  const rootRequire = createRequire(pathToFileURL(join(consumerRoot, "package.json")))
+  const vitePackageJsonPath = join(
+    consumerRoot,
+    "node_modules",
+    "@dawn-ai",
+    "vite-plugin",
+    "package.json",
+  )
+  const viteRequire = createRequire(pathToFileURL(vitePackageJsonPath))
+  const rootCoreEntry = await realpath(rootRequire.resolve("@dawn-ai/core"))
+  const viteCoreEntry = await realpath(viteRequire.resolve("@dawn-ai/core"))
+
+  if (viteCoreEntry !== rootCoreEntry) {
+    throw new Error(
+      `Vite resolves @dawn-ai/core to ${viteCoreEntry}, expected root artifact ${rootCoreEntry}`,
+    )
+  }
+
+  const coreManifestPath = join(consumerRoot, "node_modules", "@dawn-ai", "core", "package.json")
+  const coreManifest = JSON.parse(await readFile(coreManifestPath, "utf8"))
+  if (coreManifest.version !== expectedCoreVersion) {
+    throw new Error(
+      `resolved @dawn-ai/core version ${coreManifest.version}, expected packed version ${expectedCoreVersion}`,
+    )
+  }
+
+  return rootCoreEntry
 }
 
 async function initializeCleanConsumerProject(consumerRoot) {

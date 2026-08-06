@@ -1,11 +1,14 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { describe, it } from "node:test"
+import { fileURLToPath } from "node:url"
 
 import {
+  packWorkspacePackage,
   runCommand,
   runTypeScriptToolingPackSmoke,
   TOOLING_PACKAGES,
@@ -15,6 +18,7 @@ import {
 } from "./typescript-tooling-pack-smoke.mjs"
 
 const PACKAGE_VERSION = "0.8.14"
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 
 describe("runTypeScriptToolingPackSmoke", () => {
   it("builds and validates local packs before an exact, scriptless clean-project install", async () => {
@@ -33,6 +37,10 @@ describe("runTypeScriptToolingPackSmoke", () => {
       typescript: TYPESCRIPT_VERSION,
       zod: ZOD_VERSION,
     })
+    assert.equal(
+      result.coreEntryPath,
+      join(harness.canonicalTempRoot, "consumer", "node_modules", "@dawn-ai", "core", "index.js"),
+    )
 
     const buildIndex = harness.events.findIndex(
       (event) => event.type === "command" && event.args[0] === "--filter",
@@ -114,6 +122,26 @@ describe("runTypeScriptToolingPackSmoke", () => {
     assert.equal(existsSync(harness.tempRoot), false)
   })
 
+  for (const coreDependency of ["^0.8.14", "0.8.13"]) {
+    it(`rejects packed Vite Core dependency ${coreDependency} before install`, async () => {
+      const harness = await createHarness({ packedCoreDependency: coreDependency })
+
+      await assert.rejects(
+        runTypeScriptToolingPackSmoke(harness.dependencies),
+        new RegExp(
+          `@dawn-ai/vite-plugin.*@dawn-ai/core.*${escapeRegExp(coreDependency)}.*expected ${PACKAGE_VERSION}`,
+          "s",
+        ),
+      )
+      assert.equal(
+        harness.events.some((event) => event.type === "command" && event.command === "npm"),
+        false,
+      )
+      assert.equal(harness.events.at(-1).type, "cleanup")
+      assert.equal(existsSync(harness.tempRoot), false)
+    })
+  }
+
   it("rejects native lifecycle scripts discovered in the installed package tree", async () => {
     const harness = await createHarness({ nativeLifecycleScript: true })
 
@@ -135,6 +163,21 @@ describe("runTypeScriptToolingPackSmoke", () => {
     await assert.rejects(
       runTypeScriptToolingPackSmoke(harness.dependencies),
       /consumer unexpectedly created package-lock\.json/,
+    )
+    assert.equal(
+      harness.events.some((event) => event.type === "probe"),
+      false,
+    )
+    assert.equal(harness.events.at(-1).type, "cleanup")
+    assert.equal(existsSync(harness.tempRoot), false)
+  })
+
+  it("rejects Vite resolving a nested Core instead of the root artifact", async () => {
+    const harness = await createHarness({ nestedViteCore: true })
+
+    await assert.rejects(
+      runTypeScriptToolingPackSmoke(harness.dependencies),
+      /Vite resolves @dawn-ai\/core to .* expected root artifact/s,
     )
     assert.equal(
       harness.events.some((event) => event.type === "probe"),
@@ -175,14 +218,114 @@ describe("runCommand", () => {
   })
 })
 
+describe("verify:typescript-tooling-pack", () => {
+  it("runs unit tests before the real smoke and stops when unit tests fail", async () => {
+    const packageJson = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"))
+    const verifyScript = packageJson.scripts["verify:typescript-tooling-pack"]
+    assert.equal(
+      verifyScript,
+      "pnpm test:typescript-tooling-pack-smoke && node scripts/typescript-tooling-pack-smoke.mjs",
+    )
+
+    const root = await mkdtemp(join(tmpdir(), "dawn-typescript-tooling-script-test-"))
+    try {
+      const binDir = join(root, "bin")
+      const unitMarker = join(root, "unit-marker")
+      const realMarker = join(root, "real-marker")
+      await mkdir(binDir)
+      await Promise.all([
+        writeExecutable(
+          join(binDir, "pnpm"),
+          `#!/bin/sh\nprintf '%s' "$*" > ${shellQuote(unitMarker)}\nexit 17\n`,
+        ),
+        writeExecutable(
+          join(binDir, "node"),
+          `#!/bin/sh\nprintf '%s' "$*" > ${shellQuote(realMarker)}\n`,
+        ),
+      ])
+
+      const result = spawnSync("/bin/sh", ["-c", verifyScript], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: { ...process.env, PATH: binDir },
+      })
+
+      assert.equal(result.status, 17)
+      assert.equal(await readFile(unitMarker, "utf8"), "test:typescript-tooling-pack-smoke")
+      assert.equal(existsSync(realMarker), false)
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+})
+
+describe("packWorkspacePackage", () => {
+  for (const tarballCount of [0, 2]) {
+    it(`rejects when pnpm pack produces ${tarballCount} tarballs`, async () => {
+      const fixture = await createPackFixture()
+      try {
+        await assert.rejects(
+          packWorkspacePackage({
+            ...fixture.options,
+            async runCommand(command) {
+              if (command !== "pnpm") return
+              await Promise.all(
+                Array.from({ length: tarballCount }, (_, index) =>
+                  writeFile(join(fixture.packDir, `artifact-${index}.tgz`), "", "utf8"),
+                ),
+              )
+            },
+          }),
+          new RegExp(`@dawn-ai/core pack produced ${tarballCount} new tarballs.*expected 1`),
+        )
+      } finally {
+        await fixture.cleanup()
+      }
+    })
+  }
+
+  it("reports a missing extracted package manifest with package context", async () => {
+    const fixture = await createPackFixture()
+    try {
+      await assert.rejects(
+        packWorkspacePackage({
+          ...fixture.options,
+          runCommand: extractedManifestCommand(fixture, null),
+        }),
+        /@dawn-ai\/core.*missing extracted package\.json/,
+      )
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  it("reports a malformed extracted package manifest with package context", async () => {
+    const fixture = await createPackFixture()
+    try {
+      await assert.rejects(
+        packWorkspacePackage({
+          ...fixture.options,
+          runCommand: extractedManifestCommand(fixture, "{"),
+        }),
+        /@dawn-ai\/core.*invalid extracted package\.json/,
+      )
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+})
+
 async function createHarness({
   createPackageLock = false,
   failureStage,
   nativeLifecycleScript = false,
+  nestedViteCore = false,
+  packedCoreDependency = PACKAGE_VERSION,
   packageValidationFailure = false,
 } = {}) {
   const testRoot = await mkdtemp(join(tmpdir(), "dawn-typescript-tooling-pack-test-"))
   const tempRoot = join(testRoot, "owned-temp-root")
+  const canonicalTempRoot = join(await realpath(testRoot), "owned-temp-root")
   const repoRoot = join(testRoot, "repo")
   const events = []
 
@@ -200,7 +343,7 @@ async function createHarness({
     },
     async packWorkspacePackage({ packageConfig, packDir }) {
       events.push({ type: "pack", packageConfig: { ...packageConfig } })
-      const packageJson = packedManifest(packageConfig.name)
+      const packageJson = packedManifest(packageConfig.name, { packedCoreDependency })
       if (packageValidationFailure && packageConfig.name === "@dawn-ai/core") {
         packageJson.dependencies = {
           local: "file:../local",
@@ -249,6 +392,21 @@ async function createHarness({
           throw new Error("install failure with useful context")
         }
         await installFixturePackages(options.cwd)
+        if (nestedViteCore) {
+          await writeFixturePackage(
+            join(
+              options.cwd,
+              "node_modules",
+              "@dawn-ai",
+              "vite-plugin",
+              "node_modules",
+              "@dawn-ai",
+              "core",
+            ),
+            "@dawn-ai/core",
+            PACKAGE_VERSION,
+          )
+        }
         if (createPackageLock) {
           await writeFile(join(options.cwd, "package-lock.json"), "{}\n", "utf8")
         }
@@ -273,10 +431,10 @@ async function createHarness({
     },
   }
 
-  return { dependencies, events, repoRoot, tempRoot }
+  return { canonicalTempRoot, dependencies, events, repoRoot, tempRoot }
 }
 
-function packedManifest(name) {
+function packedManifest(name, { packedCoreDependency = PACKAGE_VERSION } = {}) {
   return {
     bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
     engines: { node: ">=22.12.0" },
@@ -288,6 +446,9 @@ function packedManifest(name) {
     repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
     types: "./dist/index.d.ts",
     version: PACKAGE_VERSION,
+    ...(name === "@dawn-ai/vite-plugin"
+      ? { dependencies: { "@dawn-ai/core": packedCoreDependency } }
+      : {}),
   }
 }
 
@@ -302,11 +463,73 @@ async function installFixturePackages(root) {
 
   for (const [name, version] of Object.entries(packages)) {
     const packageRoot = join(root, "node_modules", ...name.split("/"))
-    await mkdir(packageRoot, { recursive: true })
-    await writeFile(join(packageRoot, "package.json"), JSON.stringify({ name, version }), "utf8")
+    await writeFixturePackage(packageRoot, name, version)
   }
 }
 
 async function readPackageManifest(packageRoot) {
   return JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"))
+}
+
+async function writeFixturePackage(packageRoot, name, version) {
+  await mkdir(packageRoot, { recursive: true })
+  await Promise.all([
+    writeFile(join(packageRoot, "index.js"), "export {}\n", "utf8"),
+    writeFile(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ main: "./index.js", name, type: "module", version }),
+      "utf8",
+    ),
+  ])
+}
+
+async function writeExecutable(path, contents) {
+  await writeFile(path, contents, "utf8")
+  await chmod(path, 0o755)
+}
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", `'"'"'`)}'`
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+async function createPackFixture() {
+  const root = await mkdtemp(join(tmpdir(), "dawn-typescript-tooling-pack-selector-test-"))
+  const packageDir = join(root, "repo", "packages", "core")
+  const packDir = join(root, "packs")
+  await Promise.all([mkdir(packageDir, { recursive: true }), mkdir(packDir)])
+  await writeFile(
+    join(packageDir, "package.json"),
+    JSON.stringify({ name: "@dawn-ai/core", version: PACKAGE_VERSION }),
+    "utf8",
+  )
+
+  return {
+    async cleanup() {
+      await rm(root, { force: true, recursive: true })
+    },
+    options: {
+      packageConfig: { dir: "packages/core", name: "@dawn-ai/core" },
+      packDir,
+      repoRoot: join(root, "repo"),
+    },
+    packDir,
+  }
+}
+
+function extractedManifestCommand(fixture, manifestSource) {
+  return async (command, args) => {
+    if (command === "pnpm") {
+      await writeFile(join(fixture.packDir, "artifact.tgz"), "", "utf8")
+      return
+    }
+    if (manifestSource !== null) {
+      const extractDir = args[args.indexOf("-C") + 1]
+      await mkdir(join(extractDir, "package"), { recursive: true })
+      await writeFile(join(extractDir, "package", "package.json"), manifestSource, "utf8")
+    }
+  }
 }
