@@ -53,7 +53,7 @@ describe("sha1Hex", () => {
 /**
  * `sha256Hex` gets the same treatment: it replaces `createHash("sha256")` on
  * the node-free graph (the offload store's content-hashed filenames), so it is
- * only worth having if it is byte-identical to node's.
+ * only worth having if its digest matches node's exactly.
  */
 const SHA256_CASES: readonly string[] = [
   // FIPS-180 sample vectors, including the 448-bit boundary message.
