@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { createWorkspaceMarker } from "../../src/capabilities/built-in/workspace.js"

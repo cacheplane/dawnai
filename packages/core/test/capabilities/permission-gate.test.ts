@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import {

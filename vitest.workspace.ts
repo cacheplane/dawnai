@@ -12,6 +12,7 @@ export default defineConfig({
       "./packages/evals/vitest.config.ts",
       "./packages/langchain/vitest.config.ts",
       "./packages/langgraph/vitest.config.ts",
+      "./packages/permissions/vitest.config.ts",
       "./packages/sandbox/vitest.config.ts",
       "./packages/sdk/vitest.config.ts",
       "./packages/testing/vitest.config.ts",

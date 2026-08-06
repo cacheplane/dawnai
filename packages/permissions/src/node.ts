@@ -1,3 +1,14 @@
+/**
+ * The NODE layer of `@dawn-ai/permissions`: the disk-backed store that reads
+ * and writes `.dawn/permissions.json`.
+ *
+ * It lives behind the explicitly node-only "@dawn-ai/permissions/node" subpath
+ * (NOT the "." barrel) so `node:fs` / `node:path` stay out of the default
+ * import graph — edge entries import the barrel for `matchPermission`, the
+ * suggested-pattern helpers and the `PermissionsStore` interface, and inject
+ * their own store implementation.
+ */
+
 import { existsSync } from "node:fs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"

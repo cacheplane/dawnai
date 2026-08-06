@@ -22,11 +22,8 @@ import {
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
-import {
-  createPermissionsStore,
-  type PermissionMode,
-  type PermissionsStore,
-} from "@dawn-ai/permissions"
+import type { PermissionMode, PermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { FilesystemBackend } from "@dawn-ai/workspace"

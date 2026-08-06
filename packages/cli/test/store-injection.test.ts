@@ -35,8 +35,8 @@ vi.mock("@dawn-ai/sqlite-storage", async (importOriginal) => {
 // `.dawn/permissions.json` read (store.load() inside buildPermissionsStore /
 // resolvePermissionsStore), so zero createPermissionsStore calls proves zero
 // permissions-file reads.
-vi.mock("@dawn-ai/permissions", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@dawn-ai/permissions")>()
+vi.mock("@dawn-ai/permissions/node", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dawn-ai/permissions/node")>()
   return {
     ...actual,
     createPermissionsStore: vi.fn(actual.createPermissionsStore),
@@ -55,7 +55,7 @@ vi.mock("@dawn-ai/memory", async (importOriginal) => {
 })
 
 import { sqliteMemoryStore } from "@dawn-ai/memory"
-import { createPermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { createThreadsStore, sqliteCheckpointer } from "@dawn-ai/sqlite-storage"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")

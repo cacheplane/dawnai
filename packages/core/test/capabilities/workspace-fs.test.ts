@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { localFilesystem } from "@dawn-ai/workspace"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createWorkspaceFs } from "../../src/capabilities/workspace-fs.js"
