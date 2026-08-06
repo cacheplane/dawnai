@@ -1,12 +1,7 @@
-import type { MemoryContext, MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
+import type { MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
 import { loadDawnConfig } from "@dawn-ai/core"
-import {
-  type RecallRankingOptions,
-  serializeNamespace,
-  type VectorRankingOptions,
-} from "@dawn-ai/memory"
-import type { LoadedRouteMemory } from "./load-memory.js"
-import { pureBasename, pureJoin } from "./pure-path.js"
+import type { RecallRankingOptions, VectorRankingOptions } from "@dawn-ai/memory"
+import { pureJoin } from "./pure-path.js"
 
 /**
  * Resolves the MemoryStore for the given appRoot.
@@ -43,11 +38,8 @@ export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLi
     // no dawn.config.ts / unreadable — use default
   }
   // Imported lazily: removes the static BINDING of sqliteMemoryStore, so
-  // the default sqlite store is only resolved when this fallback branch
-  // actually runs. NOTE: the static `serializeNamespace` import above still
-  // pulls the @dawn-ai/memory barrel (which reaches node:sqlite via its
-  // sqlite-store export) — that edge remains until the memory package grows
-  // a pure subpath (planned for the fetch-entry task).
+  // the default sqlite store (and node:sqlite behind it) is only reached when
+  // this fallback branch actually runs.
   const { sqliteMemoryStore } = await import("@dawn-ai/memory")
   return sqliteMemoryStore({
     path: pureJoin(appRoot, ".dawn", "memory.sqlite"),
@@ -70,71 +62,6 @@ export async function resolveMemoryWrites(appRoot: string): Promise<MemoryWrites
   }
 }
 
-/** Build the per-request memory capability context for a route with a memory.ts. */
-export function buildMemoryContext(args: {
-  defined: LoadedRouteMemory
-  store: MemoryContext["store"]
-  writes: MemoryWritesMode
-  appRoot: string
-  routePath: string
-  now: string
-  indexMaxEntries?: number
-  extraScope?: Record<string, string>
-  /** Resolved embedder when vector recall is enabled — the capability embeds
-   *  writes + queries through it. Absent → keyword-only. */
-  embedder?: MemoryContext["embedder"]
-  /** Hybrid recall tuning threaded to the store's search (no embedder). */
-  vector?: MemoryContext["vector"]
-}): MemoryContext {
-  const { defined } = args
-  // Build all available dimensions from known sources.
-  const allDims: Record<string, string> = {
-    workspace: pureBasename(args.appRoot) || "app",
-    route: args.routePath,
-    ...(args.extraScope ?? {}),
-  }
-  // Restrict to only the dimensions this route declared in scope.
-  // serializeNamespace accepts the MemoryScopeTuple keys (workspace, route, tenant, user, agent).
-  const tuple: Record<string, string> = {}
-  for (const dim of defined.scope) {
-    if (allDims[dim] !== undefined) tuple[dim] = allDims[dim]
-  }
-  const namespace = serializeNamespace(
-    tuple as import("@dawn-ai/memory").MemoryScopeTuple & Record<string, string>,
-  )
-  const schema = defined.schema as {
-    safeParse(d: unknown): {
-      success: boolean
-      data?: unknown
-      error?: { message: string }
-    }
-  }
-  return {
-    store: args.store,
-    namespace,
-    writes: args.writes,
-    defined: {
-      kind: defined.kind,
-      scope: defined.scope,
-      ...(defined.identity ? { identity: defined.identity } : {}),
-    },
-    // The route's zod schema — surfaced as the `remember` tool's `data` shape.
-    schema: defined.schema,
-    validate: (data: unknown) => {
-      const r = schema.safeParse(data)
-      return r.success
-        ? {
-            ok: true as const,
-            value: (r.data ?? {}) as Record<string, unknown>,
-          }
-        : {
-            ok: false as const,
-            errors: r.error?.message ?? "memory data failed schema validation",
-          }
-    },
-    now: args.now,
-    ...(args.indexMaxEntries !== undefined ? { indexMaxEntries: args.indexMaxEntries } : {}),
-    ...(args.embedder ? { embedder: args.embedder } : {}),
-    ...(args.vector ? { vector: args.vector } : {}),
-  }
-}
+// Re-exported so `resolve-memory.js` stays the one import site callers know;
+// the implementation lives in the node-free `memory-context.ts`.
+export { buildMemoryContext } from "./memory-context.js"

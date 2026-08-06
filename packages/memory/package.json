@@ -24,6 +24,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./namespace": {
+      "types": "./dist/namespace.d.ts",
+      "default": "./dist/namespace.js"
+    },
+    "./reconcile": {
+      "types": "./dist/reconcile.d.ts",
+      "default": "./dist/reconcile.js"
     }
   },
   "publishConfig": {
