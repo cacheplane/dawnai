@@ -10,6 +10,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@dawn-ai/cli/runtime": resolve(rootDir, "../../packages/cli/src/runtime-exports.ts"),
+      "@dawn-ai/core/internal/compiler": resolve(
+        rootDir,
+        "../../packages/core/src/compiler/index.ts",
+      ),
       "@dawn-ai/core": resolve(rootDir, "../../packages/core/src/index.ts"),
       "@dawn-ai/langchain": resolve(rootDir, "../../packages/langchain/src/index.ts"),
       "@dawn-ai/langgraph": resolve(rootDir, "../../packages/langgraph/src/index.ts"),
