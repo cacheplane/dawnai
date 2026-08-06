@@ -113,6 +113,23 @@ async function drain(response: Response): Promise<void> {
   }
 }
 
+/** Reads the response body to completion, returning it as decoded SSE text. */
+async function readSseText(response: Response): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) return ""
+  const decoder = new TextDecoder()
+  let text = ""
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) return text
+    text += decoder.decode(value, { stream: true })
+  }
+}
+
+function cancelRequest(threadId: string): Request {
+  return new Request(`http://localhost/threads/${threadId}/cancel`, { method: "POST" })
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -211,4 +228,108 @@ describe("AP concurrency gate", () => {
     await releaseRoute()
     await drain(response)
   }, 30_000)
+})
+
+describe("POST /threads/:id/cancel", () => {
+  it("404s for an unknown thread", async () => {
+    const { handler } = await setupBlockingRoute()
+
+    // Never referenced by any run or POST /threads call in this test.
+    const response = await handler.fetch(cancelRequest("never-seen-thread"))
+    expect(response.status).toBe(404)
+    const body = (await response.json()) as { error: { details?: { code?: string } } }
+    expect(body.error.details?.code).toBe("thread_not_found")
+  }, 30_000)
+
+  it("409s when the thread exists but no run is in flight", async () => {
+    const { handler } = await setupBlockingRoute()
+
+    const createResponse = await handler.fetch(
+      new Request("http://localhost/threads", { method: "POST" }),
+    )
+    expect(createResponse.status).toBe(200)
+    const thread = (await createResponse.json()) as { thread_id: string }
+
+    const response = await handler.fetch(cancelRequest(thread.thread_id))
+    expect(response.status).toBe(409)
+    const body = (await response.json()) as { error: { details?: { code?: string } } }
+    expect(body.error.details?.code).toBe("no_run_in_flight")
+  }, 30_000)
+
+  it("cancels an in-flight run and reports interrupted", async () => {
+    const { handler, startedFile, releaseFile } = await setupBlockingRoute()
+    const threadId = "t-cancel-reports-interrupted"
+
+    const runResponse = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+    expect(runResponse.status).toBe(200)
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+    const body = await cancelResponse.json()
+    expect(body).toEqual({ status: "interrupted", thread_id: threadId })
+
+    await drain(runResponse)
+  }, 10_000)
+
+  it("frees the run slot so a new run is admitted after cancelling", async () => {
+    const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute()
+    const threadId = "t-cancel-frees-slot"
+
+    const runResponse = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+    expect(runResponse.status).toBe(200)
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+    await drain(runResponse)
+
+    const response2 = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+    expect(response2.status).toBe(200)
+
+    await releaseRoute()
+    await drain(response2)
+  }, 30_000)
+})
+
+describe("AP per-run abort", () => {
+  it("stops a route that ignores ctx.signal", async () => {
+    const { handler, startedFile, releaseFile } = await setupBlockingRoute()
+    const threadId = "t-abort-ignores-signal"
+
+    const runResponse = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+    expect(runResponse.status).toBe(200)
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+
+    // Reads to completion — if the wrapper didn't stop the stream, this would
+    // hang until the fixture's 15s self-release (well past this test's 10s
+    // timeout, so a regression fails fast rather than passing slowly).
+    const text = await readSseText(runResponse)
+    expect(text).toBe('event: done\ndata: {"output":{"cancelled":true}}\n\n')
+
+    // The route itself is still blocked (never told to release) — proves the
+    // wrapper, not route cooperation, is what stopped the stream.
+    await expect(readFile(releaseFile, "utf8")).rejects.toThrow()
+  }, 10_000)
+
+  it("marks the thread interrupted after cancellation", async () => {
+    const { handler, startedFile, releaseFile } = await setupBlockingRoute()
+    const threadId = "t-abort-marks-interrupted"
+
+    const runResponse = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+    expect(runResponse.status).toBe(200)
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+    await drain(runResponse)
+
+    const threadResponse = await handler.fetch(new Request(`http://localhost/threads/${threadId}`))
+    expect(threadResponse.status).toBe(200)
+    const thread = (await threadResponse.json()) as { status: string }
+    expect(thread.status).toBe("interrupted")
+  }, 10_000)
 })

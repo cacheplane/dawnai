@@ -16,6 +16,7 @@ import { resolveMemoryStore } from "../runtime/resolve-memory.js"
 import { resolveSandboxManager } from "../runtime/resolve-sandbox.js"
 import type { SandboxManager } from "../runtime/sandbox-manager.js"
 import { type StreamChunk, toSseEvent } from "../runtime/stream-types.js"
+import { abortableAsyncIterable } from "./abortable-iterable.js"
 import { handleAgUiFetchRequest } from "./agui-handler.js"
 import {
   handleMemoryApproveRequest,
@@ -397,6 +398,39 @@ function buildRouteTable(ctx: {
     },
 
     // ------------------------------------------------------------------
+    // POST /threads/:thread_id/cancel — stop the in-flight run
+    // ------------------------------------------------------------------
+    // Thread-scoped rather than LangGraph's runs/:run_id/cancel: Dawn has no
+    // run identity, and the one-run-per-thread gate makes the thread id an
+    // unambiguous stand-in. Semantics match LangGraph's action=interrupt —
+    // stop the run, keep checkpointed state. Rollback is not supported.
+    {
+      handle: async (_request, params) => {
+        const threadId = params.thread_id ?? ""
+        const thread = await threadsStore.getThread(threadId)
+        if (!thread) {
+          return Response.json(
+            createRequestErrorBody("Thread not found", { code: "thread_not_found" }),
+            { status: 404 },
+          )
+        }
+        if (!runRegistry.cancel(threadId)) {
+          // Deliberately not an idempotent 200: a silent success would hide
+          // the fact that this process is not the one running the thread.
+          return Response.json(
+            createRequestErrorBody(`No run in flight for thread "${threadId}"`, {
+              code: "no_run_in_flight",
+            }),
+            { status: 409 },
+          )
+        }
+        return Response.json({ status: "interrupted", thread_id: threadId }, { status: 200 })
+      },
+      method: "POST",
+      pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/cancel(?:\?.*)?$/,
+    },
+
+    // ------------------------------------------------------------------
     // POST /threads/:thread_id/runs/stream — stream SSE
     // ------------------------------------------------------------------
     {
@@ -697,7 +731,7 @@ async function handleApStreamRequest(options: {
     async start(controller) {
       try {
         try {
-          for await (const chunk of streamResolvedRoute({
+          const routeStream = streamResolvedRoute({
             appRoot,
             checkpointer,
             input,
@@ -709,20 +743,30 @@ async function handleApStreamRequest(options: {
             ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
-            signal,
+            signal: run.signal,
             threadId,
             threadsStore,
-          })) {
+          })
+          // Belt-and-braces, mirroring the AG-UI handler: pass the signal to
+          // the route *and* wrap the iterator, so a route that ignores its
+          // ctx.signal still stops when the run is cancelled.
+          for await (const chunk of abortableAsyncIterable(routeStream, run.signal)) {
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
           await threadsStore.updateStatus(threadId, "idle")
         } catch (error) {
-          const errorChunk: StreamChunk = {
-            output: { error: error instanceof Error ? error.message : String(error) },
-            type: "done",
-          }
-          safeEnqueue(controller, encoder.encode(toSseEvent(errorChunk)))
-          await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+          // A cancelled run is not a failure: clients must be able to tell the
+          // two apart without inferring it from a truncated stream.
+          const terminalChunk: StreamChunk = run.cancelled
+            ? { output: { cancelled: true }, type: "done" }
+            : {
+                output: { error: error instanceof Error ? error.message : String(error) },
+                type: "done",
+              }
+          safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
+          await threadsStore
+            .updateStatus(threadId, run.cancelled ? "interrupted" : "idle")
+            .catch(() => undefined)
         }
       } finally {
         run.release()
