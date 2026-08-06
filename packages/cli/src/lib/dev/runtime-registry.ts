@@ -1,11 +1,10 @@
-import { dirname } from "node:path"
-
 import {
   discoverRoutes,
   type RouteDefinition,
   type RouteManifest,
   toRouteSegments,
 } from "@dawn-ai/core"
+import { pureDirname } from "../runtime/pure-path.js"
 
 import { createRouteAssistantId } from "../runtime/route-identity.js"
 import type { DawnStaticModules } from "../runtime/static-modules.js"
@@ -101,7 +100,7 @@ function createStaticRuntimeRegistry(appRoot: string, modules: DawnStaticModules
       id: route.routeId,
       kind: route.kind,
       pathname: route.routeId,
-      routeDir: dirname(route.routeFile),
+      routeDir: pureDirname(route.routeFile),
       segments: toRouteSegments(segments),
     } satisfies RouteDefinition
   })

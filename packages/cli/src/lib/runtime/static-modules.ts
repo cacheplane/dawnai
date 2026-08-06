@@ -1,5 +1,3 @@
-import { dirname, join } from "node:path"
-
 import {
   type NormalizedRouteModule,
   type ResolvedStateField,
@@ -11,6 +9,7 @@ import type { DawnMiddleware } from "@dawn-ai/sdk"
 import { selectMiddlewareExport } from "../dev/middleware.js"
 import { type LoadedRouteMemory, normalizeRouteMemoryExport } from "./load-memory.js"
 import { normalizeRouteModuleObject } from "./load-route-kind.js"
+import { pureDirname, pureJoin } from "./pure-path.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import { createRouteAssistantId } from "./route-identity.js"
 import {
@@ -169,7 +168,7 @@ export function buildStaticRouteModule(input: StaticRouteModuleInput): StaticRou
       ? null
       : normalizeRouteMemoryExport(
           ((input.memoryModule ?? {}) as { readonly default?: unknown }).default,
-          join(dirname(input.routeFile), "memory.ts"),
+          pureJoin(pureDirname(input.routeFile), "memory.ts"),
         )
 
   return {

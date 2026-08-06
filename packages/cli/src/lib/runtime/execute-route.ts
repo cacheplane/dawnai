@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
-import { isAbsolute, join, resolve } from "node:path"
+import { isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import {
   applyCapabilities,
@@ -56,6 +55,7 @@ import { createDawnContext } from "./dawn-context.js"
 import { type LoadedRouteMemory, loadRouteMemory } from "./load-memory.js"
 import { type NormalizedRouteModule, normalizeRouteModule } from "./load-route-kind.js"
 import { nodeMarkerFs } from "./node-marker-fs.js"
+import { pureDirname, pureJoin } from "./pure-path.js"
 import { buildMemoryContext, resolveMemoryStore, resolveMemoryWrites } from "./resolve-memory.js"
 import {
   createRuntimeFailureResult,
@@ -64,7 +64,7 @@ import {
   type RuntimeExecutionMode,
   type RuntimeExecutionResult,
 } from "./result.js"
-import { deriveRouteIdentity } from "./route-identity.js"
+import { deriveRouteIdentity } from "./route-identity-node.js"
 import type { SandboxManager } from "./sandbox-manager.js"
 import { discoverStateDefinition } from "./state-discovery.js"
 import type { DawnStaticModules } from "./static-modules.js"
@@ -248,7 +248,7 @@ export async function resolveThreadsStore(appRoot: string): Promise<ThreadsStore
   } catch {
     // No dawn.config.ts or unreadable — fall through to default.
   }
-  return createThreadsStore({ path: join(appRoot, ".dawn/threads.sqlite") })
+  return createThreadsStore({ path: pureJoin(appRoot, ".dawn/threads.sqlite") })
 }
 
 /**
@@ -269,7 +269,7 @@ export async function resolveCheckpointer(appRoot: string): Promise<BaseCheckpoi
   } catch {
     // No dawn.config.ts or unreadable — fall through to default.
   }
-  return sqliteCheckpointer({ path: join(appRoot, ".dawn/checkpoints.sqlite") })
+  return sqliteCheckpointer({ path: pureJoin(appRoot, ".dawn/checkpoints.sqlite") })
 }
 
 /**
@@ -570,7 +570,7 @@ function getDefaultLocalFilesystem(): FilesystemBackend {
  */
 export function hasWorkspaceDir(appRoot: string): boolean {
   if (workspaceDirProbeCache.get(appRoot)) return true
-  const present = existsSync(join(appRoot, "workspace"))
+  const present = existsSync(pureJoin(appRoot, "workspace"))
   if (present) workspaceDirProbeCache.set(appRoot, present)
   return present
 }
@@ -593,7 +593,7 @@ async function loadPreparedRouteModules(options: {
   readonly routeFile: string
   readonly routeId: string
 }): Promise<PreparedRouteModules> {
-  const routeDir = resolve(options.routeFile, "..")
+  const routeDir = pureDirname(options.routeFile)
 
   const normalized = await normalizeRouteModule(options.routeFile, options.appRoot)
 
@@ -606,7 +606,7 @@ async function loadPreparedRouteModules(options: {
   const routeSlug =
     options.routeId.replace(/^\//, "").replace(/\//g, "-").replace(/\[/g, "").replace(/\]/g, "") ||
     "index"
-  const schemaManifestPath = join(options.appRoot, ".dawn", "routes", routeSlug, "tools.json")
+  const schemaManifestPath = pureJoin(options.appRoot, ".dawn", "routes", routeSlug, "tools.json")
   let tools = discoveredTools
   if (existsSync(schemaManifestPath)) {
     try {
@@ -631,7 +631,7 @@ async function loadPreparedRouteModules(options: {
     }
   }
 
-  const memoryFile = join(routeDir, "memory.ts")
+  const memoryFile = pureJoin(routeDir, "memory.ts")
   const memory =
     normalized.kind === "agent" && existsSync(memoryFile) ? await loadRouteMemory(memoryFile) : null
 
@@ -690,7 +690,7 @@ export async function prepareRouteExecution(
   },
 ): Promise<PreparedRoute | PreparedRouteError> {
   const { isSubagent = false } = options
-  const routeDir = resolve(options.routeFile, "..")
+  const routeDir = pureDirname(options.routeFile)
 
   // Route module, tools (with generated schemas), state fields, and memory.ts
   // load once per route per process (lazily, on the route's first request) —
@@ -770,12 +770,12 @@ export async function prepareRouteExecution(
   const checkpointer: BaseCheckpointSaver =
     options.checkpointer ??
     configCheckpointer ??
-    sqliteCheckpointer({ path: join(options.appRoot, ".dawn/checkpoints.sqlite") })
+    sqliteCheckpointer({ path: pureJoin(options.appRoot, ".dawn/checkpoints.sqlite") })
 
   const threadsStore: ThreadsStore =
     options.threadsStore ??
     configThreadsStore ??
-    createThreadsStore({ path: join(options.appRoot, ".dawn/threads.sqlite") })
+    createThreadsStore({ path: pureJoin(options.appRoot, ".dawn/threads.sqlite") })
 
   // Deliberately outside the agent-only branch below: every route kind needs
   // the loaded store for ctx.fs permission gating, and createWorkspaceFs
@@ -791,7 +791,7 @@ export async function prepareRouteExecution(
       : (providedPermissions ?? (await buildPermissionsStore(options.appRoot, permissionsConfig)))
 
   const workspaceFs = createWorkspaceFs({
-    workspaceRoot: sandboxWorkspaceRoot ?? join(options.appRoot, "workspace"),
+    workspaceRoot: sandboxWorkspaceRoot ?? pureJoin(options.appRoot, "workspace"),
     backend:
       sandboxBackends?.filesystem ?? configBackends?.filesystem ?? getDefaultLocalFilesystem(),
     permissions: permissionsStore,
@@ -1150,7 +1150,9 @@ async function executeRouteAtResolvedPath(
     mode = normalized.kind
     const threadId =
       options.threadId ??
-      (normalized.kind === "agent" ? `t-run-${randomUUID().slice(0, 8)}` : undefined)
+      (normalized.kind === "agent"
+        ? `t-run-${globalThis.crypto.randomUUID().slice(0, 8)}`
+        : undefined)
 
     const context = createDawnContext({
       ...(options.middlewareContext ? { middleware: options.middlewareContext } : {}),
@@ -1591,7 +1593,7 @@ function buildOffload(
 ): OffloadFn | undefined {
   const root = appRoot ?? process.cwd()
   if (!hasWorkspaceDir(root)) return undefined
-  const workspaceRoot = join(root, "workspace")
+  const workspaceRoot = pureJoin(root, "workspace")
   const t = config?.toolOutput ?? {}
   const store = new OffloadStore({
     backend: filesystem ?? getDefaultLocalFilesystem(),

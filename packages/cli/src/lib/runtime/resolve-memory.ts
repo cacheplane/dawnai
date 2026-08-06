@@ -1,4 +1,3 @@
-import { basename, join } from "node:path"
 import type { MemoryContext, MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
 import { loadDawnConfig } from "@dawn-ai/core"
 import {
@@ -7,6 +6,7 @@ import {
   type VectorRankingOptions,
 } from "@dawn-ai/memory"
 import type { LoadedRouteMemory } from "./load-memory.js"
+import { pureBasename, pureJoin } from "./pure-path.js"
 
 /**
  * Resolves the MemoryStore for the given appRoot.
@@ -50,7 +50,7 @@ export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLi
   // a pure subpath (planned for the fetch-entry task).
   const { sqliteMemoryStore } = await import("@dawn-ai/memory")
   return sqliteMemoryStore({
-    path: join(appRoot, ".dawn", "memory.sqlite"),
+    path: pureJoin(appRoot, ".dawn", "memory.sqlite"),
     ...(recall ? { recall } : {}),
     ...(storeVector ? { vector: storeVector } : {}),
   })
@@ -89,7 +89,7 @@ export function buildMemoryContext(args: {
   const { defined } = args
   // Build all available dimensions from known sources.
   const allDims: Record<string, string> = {
-    workspace: basename(args.appRoot) || "app",
+    workspace: pureBasename(args.appRoot) || "app",
     route: args.routePath,
     ...(args.extraScope ?? {}),
   }
