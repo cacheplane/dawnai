@@ -1,6 +1,6 @@
 # CLI Reference
 
-Dawn ships a single `dawn` binary with thirteen commands: `add`, `build`, `check`, `dev`, `docs`, `eval`, `memory`, `routes`, `run`, `start`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
+Dawn ships a single `dawn` binary with fourteen commands: `add`, `build`, `check`, `dev`, `docs`, `eval`, `inspect`, `memory`, `routes`, `run`, `start`, `test`, `typegen`, and `verify`. Most commands read `dawn.config.ts` from the current working directory or from `--cwd <path>`; `dawn dev` currently uses the current working directory and exposes only its own server flags.
 
 ## Running the CLI
 
@@ -23,6 +23,7 @@ Internally, `dawn check` loads `dawn.config.ts`, resolves the app root, runs `di
 - A `dawn.config.ts` that fails to load.
 - Any discovered route whose `index.ts` exports more than one of `agent`, `workflow`, `graph`, `chain`.
 - Any tool file that fails to parse.
+- A stale build manifest: when `.dawn/build/modules.mjs` exists (written by `dawn build`'s `node` target), its routes are compared against the routes on disk — a mismatch (for example a route renamed after the last build) fails with the missing/extra route ids and a prompt to re-run `dawn build`.
 
 Output is a `Dawn app is valid: N routes discovered.` line followed by a per-route `- <pathname> (<kind>)` summary. Exits non-zero on any violation with a detailed message.
 
@@ -57,7 +58,7 @@ Flags:
 The `deps` check covers missing packages and missing env vars (advisory). It is **provider-aware**: it derives the API-key env var from the providers your routes actually use — an Anthropic-only app is checked for `ANTHROPIC_API_KEY`, an OpenAI app for `OPENAI_API_KEY`, a multi-provider app for the union, and a local Ollama app for none. A missing key is a warning, not a failure (the key may come from the runtime environment).
 
 The `runtime` check gates **environment readiness**:
-- **Node** — asserts the running Node version is at least `22.13.0` (Dawn's floor; below it `node:sqlite` breaks). Below the floor **fails** `verify` with a non-zero exit.
+- **Node** — asserts the running Node version is at least `24.0.0` (Dawn's floor: the active LTS line, which bundles npm ≥ 11 and ships `node:sqlite` unflagged). Below the floor **fails** `verify` with a non-zero exit.
 - **Docker** — present only when `dawn.config.ts` configures a sandbox provider; it runs the provider's daemon preflight and **fails** if the daemon is unreachable. Apps with no sandbox skip this sub-check entirely.
 
 See [Deployment](/docs/deployment) for the recommended workflow.
@@ -92,7 +93,7 @@ dawn typegen
 The success log reports route, tool-schema, and stateful-route counts. The `tools.json` artifacts are consumed by `dawn build` to emit LangGraph entries.
 
 <Callout type="info" title="Run automatically by dawn dev">
-  `dawn dev` runs `typegen` (debounced) on saves that touch tool signatures or state schemas. You only need to invoke it manually after a fresh clone, before CI, or after a tool signature change while the dev server isn't running.
+  `dawn dev` runs `typegen` before every child (re)start, so saves that touch tool signatures or state schemas are picked up on the automatic restart. You only need to invoke it manually after a fresh clone, before CI, or after a tool signature change while the dev server isn't running.
 </Callout>
 
 ## `dawn build`
@@ -216,6 +217,7 @@ dawn memory inspect <id>
 dawn memory approve <id>
 dawn memory reject <id>
 dawn memory forget <id>
+dawn memory prune [--cap <n>] [--namespace <prefix>]
 ```
 
 Subcommands:
@@ -225,9 +227,30 @@ Subcommands:
 - `approve <id>` — promote a candidate to an `active` record so `recall` surfaces it.
 - `reject <id>` — drop a candidate without promoting it.
 - `forget <id>` — delete a record by id.
+- `prune` — run [episodic retention](/docs/memory#episodic-memory) manually:
+  delete expired records (TTL) and enforce the per-namespace episode cap.
+  `--cap <n>` overrides the cap for this pass; `--namespace <prefix>` scopes
+  the pass to namespaces matching the prefix.
 
 Flags:
 - `--cwd <path>` — operate on a different app root.
+
+## `dawn inspect`
+
+Opens the [Dawn Inspector](/docs/inspector) — a localhost-only browser UI for
+browsing, searching, and approving the app's [long-term memory](/docs/memory)
+records.
+
+```
+dawn inspect
+```
+
+The inspector binds to `127.0.0.1` on a free port and prints the URL to open.
+
+Flags:
+- `--cwd <path>` — operate on a different app root.
+- `--port <number>` — bind the inspector to a stable localhost port.
+- `--env-file <path>` — path to a `.env` file (overrides `dawn.config.ts` `env` and the default `./.env`).
 
 ## `dawn add`
 

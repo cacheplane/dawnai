@@ -6,6 +6,11 @@ export {
   type ServeRuntimeOptions,
   serveRuntime,
 } from "./lib/dev/serve-runtime.js"
+export {
+  type DawnStaticModules,
+  loadStaticModules,
+  type StaticRouteModule,
+} from "./lib/runtime/static-modules.js"
 
 import { realpathSync } from "node:fs"
 import { resolve } from "node:path"
@@ -20,6 +25,7 @@ import { registerCheckCommand } from "./commands/check.js"
 import { registerDevCommand } from "./commands/dev.js"
 import { registerDocsCommand } from "./commands/docs.js"
 import { registerEvalCommand } from "./commands/eval.js"
+import { registerInspectCommand } from "./commands/inspect.js"
 import { registerMemoryCommand } from "./commands/memory.js"
 import { registerRoutesCommand } from "./commands/routes.js"
 import { registerRunCommand } from "./commands/run.js"
@@ -59,6 +65,7 @@ export function createProgram(io: CommandIo): Command {
   registerDevCommand(program, io)
   registerDocsCommand(program, io)
   registerEvalCommand(program, io)
+  registerInspectCommand(program, io)
   registerMemoryCommand(program, io)
   registerRunCommand(program, io)
   registerRoutesCommand(program, io)

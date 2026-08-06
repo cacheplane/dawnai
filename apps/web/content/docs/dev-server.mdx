@@ -1,6 +1,6 @@
 # Dev Server
 
-`dawn dev` starts a local runtime with Agent Protocol (AP) HTTP endpoints. It also exposes an AG-UI SSE endpoint for web clients such as CopilotKit. It watches route and tool files, regenerates types when signatures change, and restarts the child route runtime for structural changes.
+`dawn dev` starts a local runtime with Agent Protocol (AP) HTTP endpoints. It also exposes an AG-UI SSE endpoint for web clients such as CopilotKit. It watches route and tool files, and on any meaningful change regenerates types and restarts the child route runtime so every request runs against current code.
 
 ## Starting the server
 
@@ -240,11 +240,11 @@ If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACI
 When you save a file under `src/app/`, the dev server:
 
 <Steps>
-  <Step title="Reclassifies the change">
-    Typegen-only changes (tool signatures, state schemas) trigger a debounced typegen run (~100ms) — the child does not restart. Structural changes restart the child.
+  <Step title="Classifies the change">
+    Ignorable paths (`.dawn/`, `workspace/`, lockfiles) are skipped. Every other change — route files, tools, `state.ts`, reducers, config, middleware — restarts the child, and the restart log line names the reason (for example `Restarting Dawn dev server (tool change: src/tools/search.ts)`).
   </Step>
-  <Step title="Restarts the child runtime when needed">
-    Dawn uses a parent-child process architecture. The parent owns the HTTP server and file watcher; the child owns the route graph. On a structural change the child is `stop()`ed (with a forced kill timeout — in-flight requests are given a brief grace window, then force-killed) and a fresh child is started.
+  <Step title="Restarts the child runtime">
+    Dawn uses a parent-child process architecture. The parent owns the HTTP server and file watcher; the child owns the route graph. Typegen runs before every spawn, so the fresh child always sees current generated types. The old child is `stop()`ed (with a forced kill timeout — in-flight requests are given a brief grace window, then force-killed) and a fresh child is started.
   </Step>
   <Step title="Preserves route ids">
     Routes keep their stable ids (`<routeId>#<kind>`) across restarts, so any agent or harness holding a `route` key continues to work without reconnection.

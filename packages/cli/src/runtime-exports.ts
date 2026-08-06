@@ -18,10 +18,15 @@ export {
   readPendingInterrupts,
   resolvePendingResume,
 } from "./lib/dev/pending-interrupts.js"
+export {
+  createRuntimeFetchHandler,
+  type RuntimeFetchHandler,
+} from "./lib/dev/runtime-fetch-handler.js"
 export { createRuntimeRegistry, type RuntimeRegistry } from "./lib/dev/runtime-registry.js"
 export {
   createRuntimeRequestListener,
   type RuntimeRequestListener,
+  type StartRuntimeServerOptions,
   startRuntimeServer,
 } from "./lib/dev/runtime-server.js"
 export {
@@ -30,12 +35,15 @@ export {
   serveRuntime,
 } from "./lib/dev/serve-runtime.js"
 export {
+  __resetRouteLoadCachesForTests,
   executeResolvedRoute,
   invokeResolvedRoute,
   type MaterializeResolvedRouteGraphOptions,
   materializeResolvedRouteGraph,
+  type PreparedRouteModules,
   resolveCheckpointer,
   resolveThreadsStore,
+  seedPreparedRouteModules,
   streamResolvedRoute,
 } from "./lib/runtime/execute-route.js"
 // Exposed so wiring tests (and any out-of-band driver) can build the same
@@ -44,5 +52,14 @@ export {
 // does internally.
 export { resolveSandboxManager } from "./lib/runtime/resolve-sandbox.js"
 export type { SandboxManager } from "./lib/runtime/sandbox-manager.js"
+export {
+  buildStaticRouteModule,
+  type DawnStaticModules,
+  loadStaticModules,
+  normalizeMiddlewareModule,
+  type StaticRouteModule,
+  type StaticRouteModuleInput,
+  type StaticToolModuleInput,
+} from "./lib/runtime/static-modules.js"
 export type { StreamChunk } from "./lib/runtime/stream-types.js"
 export { runTypegen } from "./lib/typegen/run-typegen.js"

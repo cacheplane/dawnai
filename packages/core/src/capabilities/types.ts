@@ -4,19 +4,31 @@ import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import type { ResolvedSubagent } from "../subagents/types.js"
 import type { ResolvedStateField, RouteManifest } from "../types.js"
 
+// Literal unions mirroring @dawn-ai/memory's MemoryKind/MemoryStatus/
+// MemorySource["type"]. Declared locally (NOT imported) because core must not
+// depend on @dawn-ai/memory — its barrel pulls node:sqlite (see the inline
+// comment in built-in/memory.ts). Keep in lockstep with packages/memory/src/types.ts.
+export type MemoryKindLike = "semantic" | "episodic" | "procedural" | "reflection"
+export type MemoryStatusLike = "candidate" | "active" | "superseded"
+export type MemorySourceTypeLike = "run" | "user" | "tool" | "eval" | "human"
+
 export interface MemoryRecordLike {
   readonly id: string
-  readonly kind: string
+  readonly kind: MemoryKindLike
   readonly namespace: string
   readonly content: string
   readonly data: Record<string, unknown>
-  readonly source: { readonly type: string; readonly id: string }
+  readonly source: { readonly type: MemorySourceTypeLike; readonly id: string }
   readonly confidence: number
   readonly tags: readonly string[]
-  readonly status: string
+  readonly status: MemoryStatusLike
   readonly createdAt: string
   readonly updatedAt: string
   readonly supersedes?: readonly string[]
+  /** When the remembered event actually happened (episodic); defaults to createdAt. */
+  readonly effectiveAt?: string
+  /** When the row stops being recallable (with `now` supplied) and becomes prunable. */
+  readonly expiresAt?: string
 }
 
 /**
@@ -38,12 +50,17 @@ export interface MemoryStoreLike {
   search(q: {
     namespace: string
     query?: string
-    kind?: string
+    kind?: MemoryKindLike
     tags?: readonly string[]
-    status?: string
+    status?: MemoryStatusLike
     limit?: number
-    /** ISO recency reference for ranked searches; stores may ignore it. */
+    /** ISO recency reference for ranked searches; stores may ignore it for
+     *  ranking. Also excludes rows with expiresAt <= now. */
     now?: string
+    /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
+    since?: string
+    /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
+    until?: string
     /** When present, the store runs the hybrid keyword+vector path. */
     queryEmbedding?: Float32Array
     /** Only rows whose stored embedding model equals this are vector-compared. */
@@ -53,6 +70,39 @@ export interface MemoryStoreLike {
   }): Promise<readonly MemoryRecordLike[]>
   update(id: string, patch: Partial<MemoryRecordLike>): Promise<void>
   supersede(id: string, bySupersedingId: string): Promise<void>
+  delete(id: string): Promise<void>
+  listCandidates(namespacePrefix: string): Promise<readonly MemoryRecordLike[]>
+  /** Cross-namespace/status listing for inspection UIs. Ordered updated_at DESC, id ASC. */
+  browse(q?: {
+    readonly namespacePrefix?: string
+    readonly status?: MemoryStatusLike
+    readonly kind?: MemoryKindLike
+    readonly sourceType?: MemorySourceTypeLike
+    readonly limit?: number
+    readonly offset?: number
+    /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
+    readonly since?: string
+    /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
+    readonly until?: string
+    /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
+    readonly now?: string
+  }): Promise<{ readonly records: readonly MemoryRecordLike[]; readonly total: number }>
+  /** Aggregate counts for facet UIs. */
+  stats(opts?: { readonly namespacePrefix?: string }): Promise<{
+    readonly total: number
+    readonly byStatus: Readonly<Record<string, number>>
+    readonly byKind: Readonly<Record<string, number>>
+    readonly byNamespace: Readonly<Record<string, number>>
+    readonly bySourceType: Readonly<Record<string, number>>
+  }>
+  /** Delete (a) rows of any kind with expiresAt <= now, and (b) when cap is
+   *  set, the oldest episodic rows beyond `cap` per namespace (ordered by
+   *  COALESCE(effectiveAt, createdAt), id tiebreak). */
+  prune(opts: {
+    readonly now: string
+    readonly namespacePrefix?: string
+    readonly cap?: number
+  }): Promise<{ readonly deletedExpired: number; readonly deletedOverCap: number }>
 }
 
 /**
@@ -67,7 +117,7 @@ export interface MemoryContext {
   readonly namespace: string
   readonly writes: MemoryWritesMode
   readonly defined: {
-    readonly kind: string
+    readonly kind: MemoryKindLike
     readonly scope: readonly string[]
     readonly identity?: readonly string[]
   }
@@ -94,6 +144,37 @@ export interface MemoryContext {
   }
 }
 
+/**
+ * Minimal SYNC filesystem facade for capability markers. Sync because
+ * `promptFragment.render()` is synchronous (called per model turn) — the
+ * async `FilesystemBackend` cannot serve it. The node implementation lives in
+ * the cli layer so that markers can drop their own `node:fs` imports (keeping
+ * `node:fs` OUT of @dawn-ai/core's capability graph so edge bundles stay
+ * clean); edge entries simply omit it, and markers must detect-false /
+ * render-empty when it is absent.
+ */
+export interface MarkerFs {
+  /** false on any error — never throws. */
+  existsSync(path: string): boolean
+  /**
+   * true only when the path exists and is a directory; false on any error —
+   * never throws. Needed by the skills marker's directory probe (a size-based
+   * probe can't distinguish dirs from files).
+   */
+  isDirectorySync(path: string): boolean
+  /** Byte size, or undefined on any error — never throws. */
+  statSizeSync(path: string): number | undefined
+  /**
+   * UTF-8 content, or undefined on any error — never throws.
+   * `promptFragment.render()` runs uncaught inside the model-turn path, so a
+   * throwing read would abort the turn; the whole facade is uniformly
+   * fail-closed.
+   */
+  readFileSync(path: string): string | undefined
+  /** Entry names (files+dirs), [] on any error — never throws. */
+  readdirSync(path: string): readonly string[]
+}
+
 export interface CapabilityMarkerContext {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
@@ -102,6 +183,17 @@ export interface CapabilityMarkerContext {
     readonly filesystem?: FilesystemBackend
     readonly exec?: ExecBackend
   }
+  /**
+   * Sync fs facade for marker detect/load/render file access. Absent on
+   * runtimes with no filesystem (edge) — markers MUST treat absence as
+   * "no marker files exist". Always the HOST filesystem, even when the route
+   * runs with sandbox backends — markers that must respect a sandbox should
+   * consult `workspaceRoot` (this preserves current behavior: markers have
+   * always read host files). Paths are caller-trusted and never
+   * model-controlled — no path-jail is applied (contrast with
+   * `FilesystemBackend`'s jailed contract).
+   */
+  readonly markerFs?: MarkerFs
   readonly permissions?: PermissionsStore
   /** Absolute path to the Dawn app root. Capabilities should resolve app-relative paths (e.g. workspace/) against this, NOT process.cwd(). */
   readonly appRoot: string
@@ -144,6 +236,8 @@ export interface PromptFragment {
    * (e.g., the current todos list is re-injected each turn).
    */
   readonly render: (state: Readonly<Record<string, unknown>>) => string
+  /** Fingerprint of load-time data captured by the render closure. */
+  readonly cacheKey?: string
   /** Optional live renderer used by async agent prompt composition. */
   readonly renderAsync?: (state: Readonly<Record<string, unknown>>) => Promise<string>
 }

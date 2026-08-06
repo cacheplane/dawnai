@@ -1,22 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "node:http"
-import { createRuntimeRequestListener } from "@dawn-ai/cli/runtime"
-
-// light-my-request uses `export =` which conflicts with exactOptionalPropertyTypes.
-// We import at runtime and type the minimal surface we need.
-// biome-ignore lint/suspicious/noExplicitAny: third-party CJS-interop boundary
-const lmr = (await import("light-my-request")) as any
-
-type LmrInjectFn = (
-  dispatch: (req: IncomingMessage, res: ServerResponse) => void,
-  opts: {
-    method: string
-    url: string
-    headers?: Record<string, string>
-    payload?: string
-  },
-) => Promise<{ statusCode: number; body: string; headers: Record<string, unknown> }>
-
-const lmrInject: LmrInjectFn = lmr.default ?? lmr
+import { createRuntimeFetchHandler } from "@dawn-ai/cli/runtime"
+import { __clearDawnConfigCacheForTests } from "@dawn-ai/core"
 
 export interface InjectResult {
   readonly statusCode: number
@@ -38,23 +21,51 @@ export interface AgentProtocolInjector {
 export async function createAgentProtocolInjector(options: {
   appRoot: string
 }): Promise<AgentProtocolInjector> {
-  const { listener, close } = await createRuntimeRequestListener({ appRoot: options.appRoot })
+  const core = await createRuntimeFetchHandler({ appRoot: options.appRoot })
 
   const injector: AgentProtocolInjector = {
     async inject(opts) {
-      const res = await lmrInject(listener, {
-        method: opts.method,
-        url: opts.url,
-        headers: { "content-type": "application/json", ...opts.headers },
-        ...(opts.payload !== undefined ? { payload: JSON.stringify(opts.payload) } : {}),
+      const requestHeaders = new Headers({
+        "content-type": "application/json",
+        ...opts.headers,
       })
+      const request = new Request(new URL(opts.url, "http://localhost"), {
+        headers: requestHeaders,
+        method: opts.method,
+        ...(opts.payload !== undefined ? { body: JSON.stringify(opts.payload) } : {}),
+      })
+
+      const response = await core.fetch(request)
+      // Read the (possibly SSE) body to completion — the harness's `inject`
+      // contract is synchronous-style, matching the pre-refactor
+      // light-my-request behavior of returning the fully buffered body.
+      const body = await response.text()
+
+      const headers: Record<string, unknown> = {}
+      for (const [key, value] of response.headers) {
+        // `getSetCookie` preserves multiple Set-Cookie headers, which
+        // `Headers` iteration would otherwise join into one comma-separated
+        // value.
+        if (key.toLowerCase() === "set-cookie") continue
+        headers[key] = value
+      }
+      const setCookie = response.headers.getSetCookie?.() ?? []
+      if (setCookie.length > 0) headers["set-cookie"] = setCookie
+
       return {
-        statusCode: res.statusCode,
-        body: res.body,
-        headers: res.headers,
+        body,
+        headers,
+        statusCode: response.status,
       }
     },
-    close,
+    async close() {
+      await core.close()
+      // See harness.ts's close() for why: loadDawnConfig is memoized per
+      // appRoot for the process lifetime, so a fixture app's dawn.config.ts
+      // mutated and re-served through a fresh injector in the same process
+      // needs the memo cleared to pick up the change.
+      __clearDawnConfigCacheForTests()
+    },
     [Symbol.asyncDispose](): Promise<void> {
       return this.close()
     },

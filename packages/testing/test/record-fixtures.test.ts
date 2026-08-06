@@ -5,19 +5,21 @@ function userReq(text: string): Recording["request"] {
   return { messages: [{ role: "user", content: text }] }
 }
 function toolRoundReq(userText: string): Recording["request"] {
-  return {
-    messages: [
-      { role: "user", content: userText },
-      {
-        role: "assistant",
-        content: "",
-        tool_calls: [
-          { id: "call_x", type: "function", function: { name: "greet", arguments: "{}" } },
-        ],
-      },
-      { role: "tool", content: "ok", tool_call_id: "call_x" },
-    ],
-  }
+  // Built as a standalone const so the extra OpenAI wire-shape fields
+  // (tool_calls, tool_call_id) aren't rejected by excess-property checks
+  // against Recording's minimal structural message type.
+  const messages = [
+    { role: "user", content: userText },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        { id: "call_x", type: "function", function: { name: "greet", arguments: "{}" } },
+      ],
+    },
+    { role: "tool", content: "ok", tool_call_id: "call_x" },
+  ]
+  return { messages }
 }
 
 describe("recordingsToFixtures", () => {

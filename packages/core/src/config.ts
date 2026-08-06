@@ -9,7 +9,13 @@ export const DAWN_CONFIG_FILE = "dawn.config.ts"
 
 let loaderPromise: Promise<void> | undefined
 
-async function registerTsxLoader(): Promise<void> {
+/**
+ * Register the tsx ESM loader (idempotent). Exported so callers that import
+ * user-authored TS modules directly (e.g. the inspector loading a route's
+ * memory.ts) get deterministic TS loading even when no dawn.config.ts exists —
+ * loadDawnConfig only registers the loader when a config file is present.
+ */
+export async function registerTsxLoader(): Promise<void> {
   loaderPromise ??= (async () => {
     const { register } = (await import("tsx/esm/api")) as {
       readonly register: () => unknown
@@ -19,7 +25,7 @@ async function registerTsxLoader(): Promise<void> {
   await loaderPromise
 }
 
-export async function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig> {
+async function loadDawnConfigUncached(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig> {
   const configPath = join(options.appRoot, DAWN_CONFIG_FILE)
   await access(configPath, constants.F_OK)
   await registerTsxLoader()
@@ -37,4 +43,46 @@ export async function loadDawnConfig(options: LoadDawnConfigOptions): Promise<Lo
     config: mod.default as DawnConfig,
     configPath,
   }
+}
+
+const configCache = new Map<string, Promise<LoadedDawnConfig>>()
+
+/**
+ * Loads `dawn.config.ts` for the given appRoot, memoized for the lifetime of
+ * the process. Config edits during `dawn dev` are picked up because the dev
+ * loop restarts the child process on config changes — a fresh process means
+ * a fresh (empty) cache.
+ */
+export function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig> {
+  const cached = configCache.get(options.appRoot)
+  if (cached) return cached
+  const loading = loadDawnConfigUncached(options)
+  configCache.set(options.appRoot, loading)
+  // A failed load must not be cached forever (e.g. a transient syntax error
+  // would otherwise poison the process) — evict on rejection, but only if the
+  // cache still holds THIS load: a seedDawnConfig that raced in while the
+  // load was in flight must not be evicted by the stale rejection.
+  loading.catch(() => {
+    if (configCache.get(options.appRoot) === loading) {
+      configCache.delete(options.appRoot)
+    }
+  })
+  return loading
+}
+
+/**
+ * Prime the per-appRoot config memo with an already-constructed DawnConfig —
+ * the static-wiring seam for runtimes with no filesystem (edge) and for
+ * callers that carry their config as an object. Symmetric with
+ * seedPreparedRouteModules. Overwrites any cached entry: an explicit seed
+ * always beats a disk load, and survives an in-flight disk load rejecting
+ * after the seed lands (the rejection eviction is identity-checked).
+ */
+export function seedDawnConfig(appRoot: string, config: DawnConfig): void {
+  configCache.set(appRoot, Promise.resolve({ appRoot, config, configPath: "<seeded>" }))
+}
+
+/** Test-only: clear the memo so fixtures can reload a mutated config. */
+export function __clearDawnConfigCacheForTests(): void {
+  configCache.clear()
 }

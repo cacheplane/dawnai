@@ -1,5 +1,90 @@
 # @dawn-ai/testing
 
+## 0.8.15
+
+### Patch Changes
+
+- 029a2cf: Episodic memory: Dawn apps can now remember what happened. An opt-in runtime
+  recorder (`memory.episodes.enabled`) writes one episode per agent run from the
+  trace — input, outcome, tools used, duration — with TTL + per-namespace cap
+  retention; routes can also author episodes via `defineMemory({ kind: "episodic" })`
+  (append-only, never superseded). `recall` gains `since`/`until` time windows
+  (ISO or relative like "-24h"); the Inspector gains a timeline view; `dawn memory
+prune` runs retention manually.
+
+  BREAKING: `MemoryStore` now requires `prune(opts)`; `search`/`browse` accept
+  `since`/`until` and exclude expired rows when `now` is supplied. Custom stores
+  must implement `prune` (`runMemoryStoreConformance` enforces the contract).
+
+- Updated dependencies [029a2cf]
+- Updated dependencies [48dbddf]
+  - @dawn-ai/memory@0.8.15
+  - @dawn-ai/core@0.8.15
+  - @dawn-ai/cli@0.8.15
+  - @dawn-ai/sdk@0.8.15
+  - @dawn-ai/workspace@0.8.15
+
+## 0.8.14
+
+### Patch Changes
+
+- 937be0f: New `@dawn-ai/inspector`: a browser-based runtime inspector (`dawn inspect`) with a
+  Memory panel — browse, search (recall-equivalent hybrid), inspect, and govern
+  memories with supersede-aware approval. Ships as a scaffold devDependency.
+
+  BREAKING: `MemoryStore` now requires `browse(q?)` and `stats(opts?)`; custom stores
+  must implement them (the built-in sqlite/pgvector stores already do, and
+  `runMemoryStoreConformance` enforces the contract). The config-facing store type is
+  now the full `MemoryStore` contract. `dawn memory approve` now supersedes a
+  contradicting active row instead of leaving two actives.
+
+- 83e5153: Load the app once per process. `dawn.config.ts` is memoized per app root; the
+  runtime passes its boot-resolved checkpointer, threads store, and permissions
+  store into route execution instead of reconstructing them per request (three
+  SQLite opens per turn eliminated); the memory store opens lazily on first use
+  and is shared between the memory HTTP routes and the memory capability; route
+  modules, tools, state, and route memory load once per route and are cached for
+  the process lifetime, and the per-request route rediscovery is gone. In
+  `dawn dev`, tool/state/reducer edits now restart the child runtime — fixing a
+  stale-module bug where such edits silently did not apply (the previous
+  re-import mechanism was a no-op under tsx) — and the restart log names the
+  reason. Groundwork for build-time static wiring and the edge deploy targets.
+- Updated dependencies [937be0f]
+- Updated dependencies [83e5153]
+  - @dawn-ai/memory@0.8.14
+  - @dawn-ai/core@0.8.14
+  - @dawn-ai/cli@0.8.14
+  - @dawn-ai/sdk@0.8.14
+  - @dawn-ai/workspace@0.8.14
+
+## 0.8.13
+
+### Patch Changes
+
+- df54695: Internal refactor: the runtime server now runs on a transport-agnostic
+  `(Request) => Promise<Response>` core (`createRuntimeFetchHandler`, exported from
+  `@dawn-ai/cli/runtime`), with the Node listener reimplemented as a thin adapter
+  over it. No behavior change — routes, status codes, headers, JSON error bodies,
+  SSE framing, streaming incrementality, and shutdown/drain semantics are
+  preserved (verified against the full suite unchanged plus new wire-parity
+  tests). The `@dawn-ai/testing` Agent-Protocol harness now drives the fetch core
+  directly (dropping `light-my-request`). This is the first step of the
+  deploy-anywhere epic: edge build targets (Cloudflare Workers / Vercel / Hono)
+  build on this core.
+- Updated dependencies [20f0407]
+- Updated dependencies [5bbd6e3]
+- Updated dependencies [2b6be86]
+- Updated dependencies [628d1c3]
+- Updated dependencies [18df470]
+- Updated dependencies [ee83a96]
+- Updated dependencies [361a9ac]
+- Updated dependencies [df54695]
+  - @dawn-ai/cli@0.8.13
+  - @dawn-ai/sdk@0.8.13
+  - @dawn-ai/core@0.8.13
+  - @dawn-ai/memory@0.8.13
+  - @dawn-ai/workspace@0.8.13
+
 ## 0.8.12
 
 ### Patch Changes

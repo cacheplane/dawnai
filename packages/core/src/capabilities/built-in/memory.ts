@@ -1,9 +1,34 @@
 import { createHash } from "node:crypto"
 import { z } from "zod"
 import { gateMemorySupersede } from "../permission-gate.js"
-import type { CapabilityMarker, MemoryContext, PromptFragment } from "../types.js"
+import type {
+  CapabilityMarker,
+  MemoryContext,
+  MemoryKindLike,
+  MemoryRecordLike,
+  PromptFragment,
+} from "../types.js"
+import { resolveTimeExpr } from "./time-expr.js"
 
 const DEFAULT_SEMANTIC_IDENTITY = ["subject", "predicate"] as const
+
+// The valid memory kinds, surfaced to the MODEL via the recall schema's enum.
+// `satisfies` proves every listed member IS a MemoryKindLike (a typo won't
+// compile); the `_AllKindsListed` line proves the reverse — every MemoryKindLike
+// is listed — so the pair keeps this in lockstep with the union in ../types.js.
+const MEMORY_KINDS = [
+  "semantic",
+  "episodic",
+  "procedural",
+  "reflection",
+] as const satisfies readonly MemoryKindLike[]
+type _AllKindsListed = MemoryKindLike extends (typeof MEMORY_KINDS)[number] ? true : never
+const _allKindsListed: _AllKindsListed = true
+void _allKindsListed
+// Belt to the schema's suspenders: run() casts its input without trusting
+// upstream validation, so re-check membership before touching the store.
+const isMemoryKind = (k: string): k is MemoryKindLike =>
+  (MEMORY_KINDS as readonly string[]).includes(k)
 
 // A route's defineMemory() schema arrives as `unknown` (loaded via dynamic
 // import, validated structurally). Module-scoped (no closure deps) so it isn't
@@ -48,9 +73,21 @@ export function createMemoryMarker(): CapabilityMarker {
       })
       const recallSchema = z.object({
         query: z.string().optional().describe("Keywords to match against stored memories."),
-        kind: z.string().optional(),
+        kind: z.enum(MEMORY_KINDS).optional().describe("Filter by memory kind."),
         tags: z.array(z.string()).optional(),
         limit: z.number().int().positive().optional(),
+        since: z
+          .string()
+          .optional()
+          .describe(
+            'ISO timestamp or relative offset ("-24h", "-7d") — inclusive lower bound on when the memory happened.',
+          ),
+        until: z
+          .string()
+          .optional()
+          .describe(
+            'ISO timestamp or relative offset ("-24h", "-7d") — exclusive upper bound on when the memory happened.',
+          ),
       })
 
       const recall = {
@@ -63,6 +100,27 @@ export function createMemoryMarker(): CapabilityMarker {
             kind?: string
             tags?: string[]
             limit?: number
+            since?: string
+            until?: string
+          }
+          // An unknown kind can never match a stored row — answer directly
+          // instead of passing an out-of-contract string to the store.
+          let kind: MemoryKindLike | undefined
+          if (q.kind) {
+            if (!isMemoryKind(q.kind)) return { result: "(no memories found)" }
+            kind = q.kind
+          }
+          const now = mem.now()
+          // Resolve since/until (ISO or relative "-24h") against the request
+          // clock. A parse failure is a MODEL mistake — return the actionable
+          // message as the tool result (never throw) so it can self-correct.
+          let since: string | undefined
+          let until: string | undefined
+          try {
+            if (q.since) since = resolveTimeExpr(q.since, now)
+            if (q.until) until = resolveTimeExpr(q.until, now)
+          } catch (err) {
+            return { result: err instanceof Error ? err.message : String(err) }
           }
           // Embed the query for the hybrid keyword+vector path when an embedder
           // is configured. Embed FAILURE degrades to keyword-only — never throw,
@@ -86,12 +144,14 @@ export function createMemoryMarker(): CapabilityMarker {
           const rows = await mem.store.search({
             namespace: mem.namespace,
             ...(q.query ? { query: q.query } : {}),
-            ...(q.kind ? { kind: q.kind } : {}),
+            ...(kind ? { kind } : {}),
             ...(q.tags ? { tags: q.tags } : {}),
+            ...(since ? { since } : {}),
+            ...(until ? { until } : {}),
             limit: q.limit ?? 8,
             // Recency reference for ranked recall — the per-request timestamp,
             // NOT Date.now() (determinism rule; see module docblock).
-            now: mem.now(),
+            now,
             ...(queryVec && mem.embedder
               ? { queryEmbedding: queryVec, embedderId: mem.embedder.id, vector: mem.vector }
               : {}),
@@ -119,16 +179,34 @@ export function createMemoryMarker(): CapabilityMarker {
           // All returns below wrap in {result} — see the recall tool's note.
           if (!validated.ok) return { result: `Rejected: ${validated.errors}` }
           const data = validated.value
+
+          // Per-kind write policy. Core cannot import @dawn-ai/memory (its
+          // barrel pulls node:sqlite), so the policy is inlined:
+          // semantic → reconcile, episodic → append, others → not yet wired.
+          // Mirrored in packages/memory/src/reconcile.ts writePolicyFor — keep in sync.
+          if (mem.defined.kind === "procedural" || mem.defined.kind === "reflection") {
+            return {
+              result: `memory kind '${mem.defined.kind}' is not yet wired (semantic and episodic are)`,
+            }
+          }
+          const append = mem.defined.kind === "episodic"
           const identityKeys = mem.defined.identity ?? DEFAULT_SEMANTIC_IDENTITY
+          const now = mem.now()
 
           // id is DATA-derived so contradicting values (same identity, different
           // value) get distinct ids and can coexist as active/superseded rows.
+          // Append kinds additionally hash the request timestamp: identical
+          // episodic data on different runs is DIFFERENT events, and put() is
+          // an id-keyed upsert in the real stores — same-id appends would
+          // silently collapse into one row.
           const id = `memory_${createHash("sha1")
-            .update(`${mem.namespace}|${JSON.stringify(data)}`)
+            .update(`${mem.namespace}|${JSON.stringify(data)}${append ? `|${now}` : ""}`)
             .digest("hex")
             .slice(0, 16)}`
 
           // "ask" shares auto's write semantics; only its SUPERSEDE branch gates.
+          // Append kinds never supersede, so in "ask" mode no gate ever fires
+          // for them — episodic writes land silently, exactly like "auto".
           const autoLike = mem.writes === "auto" || mem.writes === "ask"
           const status = autoLike ? "active" : "candidate"
           const content =
@@ -137,9 +215,8 @@ export function createMemoryMarker(): CapabilityMarker {
               : JSON.stringify(data)
           const confidence = typeof inp.confidence === "number" ? inp.confidence : 1
           const tags = inp.tags ?? []
-          const now = mem.now()
 
-          const record = {
+          const record: MemoryRecordLike = {
             id,
             kind: mem.defined.kind,
             namespace: mem.namespace,
@@ -151,6 +228,10 @@ export function createMemoryMarker(): CapabilityMarker {
             status,
             createdAt: now,
             updatedAt: now,
+            // Append kinds record WHEN the event happened (the request time —
+            // same clock as createdAt/updatedAt above). No expiresAt: TTL for
+            // agent-authored episodes is the store-level prune's business.
+            ...(append ? { effectiveAt: now } : {}),
           }
 
           // Embed the content for vector recall when an embedder is configured.
@@ -173,6 +254,19 @@ export function createMemoryMarker(): CapabilityMarker {
             }
           }
 
+          // Append-only kinds skip the entire identity/reconcile block: an
+          // episode is an event, not a belief — a later one never contradicts
+          // an earlier one, so nothing is deduped, updated, or superseded (and
+          // the "ask" gate never fires; see the autoLike comment above).
+          if (append) {
+            await mem.store.put(record, putOpts)
+            return {
+              result: autoLike
+                ? `Stored memory ${id}.`
+                : `Stored memory candidate ${id} (pending approval).`,
+            }
+          }
+
           if (autoLike) {
             // Inline identity key helper — avoids importing from @dawn-ai/memory
             const identityKey = (d: Record<string, unknown>) =>
@@ -182,6 +276,8 @@ export function createMemoryMarker(): CapabilityMarker {
               namespace: mem.namespace,
               status: "active",
               limit: 50,
+              // Deliberately NO `now`: an expired-but-still-active row must
+              // remain visible here so a new write can still supersede it.
             })
             const target = existing.find((m) => identityKey(m.data) === identityKey(data))
 
@@ -235,8 +331,20 @@ export function createMemoryMarker(): CapabilityMarker {
         },
       }
 
+      // Fingerprint the snapshot captured at load time for callers that cache
+      // materialized agents. renderAsync below handles longer-lived prepared
+      // child graphs that do not pass through materialization again.
+      const indexCacheKey =
+        indexEntries.length === 0
+          ? "memory:empty"
+          : `memory:${createHash("sha1")
+              .update(indexEntries.map((r) => `${r.id}@${r.updatedAt}`).join("\n"))
+              .digest("hex")
+              .slice(0, 16)}`
+
       const promptFragment: PromptFragment = {
         placement: "after_user_prompt",
+        cacheKey: indexCacheKey,
         render: () => renderIndexEntries(indexEntries),
         renderAsync: async () => {
           const refreshed = await loadIndexEntries(mem)
@@ -256,6 +364,9 @@ function loadIndexEntries(mem: MemoryContext) {
     namespace: mem.namespace,
     status: "active",
     limit: mem.indexMaxEntries ?? 20,
+    // Keep the index and recall views consistent by filtering expired rows
+    // against the live clock supplied by the runtime.
+    now: mem.now(),
   })
 }
 

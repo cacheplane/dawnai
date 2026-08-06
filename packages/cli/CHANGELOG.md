@@ -1,5 +1,142 @@
 # @dawn-ai/cli
 
+## 0.8.15
+
+### Patch Changes
+
+- 029a2cf: Episodic memory: Dawn apps can now remember what happened. An opt-in runtime
+  recorder (`memory.episodes.enabled`) writes one episode per agent run from the
+  trace — input, outcome, tools used, duration — with TTL + per-namespace cap
+  retention; routes can also author episodes via `defineMemory({ kind: "episodic" })`
+  (append-only, never superseded). `recall` gains `since`/`until` time windows
+  (ISO or relative like "-24h"); the Inspector gains a timeline view; `dawn memory
+prune` runs retention manually.
+
+  BREAKING: `MemoryStore` now requires `prune(opts)`; `search`/`browse` accept
+  `since`/`until` and exclude expired rows when `now` is supplied. Custom stores
+  must implement `prune` (`runMemoryStoreConformance` enforces the contract).
+
+- 48dbddf: `dawn build`'s node target now emits `.dawn/build/modules.mjs` — a generated
+  static module manifest that imports every route, tool, state definition, and
+  route memory module and inlines their schemas. The built `server.mjs` boots
+  from it, so production startup performs no route-tree scanning or per-file
+  discovery. The runtime accepts the manifest via a new optional
+  `modules` field on `serveRuntime`/`startRuntimeServer` (absent = dynamic
+  discovery, unchanged), and `dawn check` fails on a manifest that has drifted
+  from the routes on disk. Static and dynamic serving are verified
+  response-equivalent end to end. This is the mechanism the upcoming edge build
+  targets consume.
+- Updated dependencies [029a2cf]
+  - @dawn-ai/memory@0.8.15
+  - @dawn-ai/core@0.8.15
+  - @dawn-ai/langchain@0.8.15
+  - @dawn-ai/ag-ui@0.8.15
+  - @dawn-ai/langgraph@0.8.15
+  - @dawn-ai/permissions@0.8.15
+  - @dawn-ai/sqlite-storage@0.8.15
+
+## 0.8.14
+
+### Patch Changes
+
+- 937be0f: New `@dawn-ai/inspector`: a browser-based runtime inspector (`dawn inspect`) with a
+  Memory panel — browse, search (recall-equivalent hybrid), inspect, and govern
+  memories with supersede-aware approval. Ships as a scaffold devDependency.
+
+  BREAKING: `MemoryStore` now requires `browse(q?)` and `stats(opts?)`; custom stores
+  must implement them (the built-in sqlite/pgvector stores already do, and
+  `runMemoryStoreConformance` enforces the contract). The config-facing store type is
+  now the full `MemoryStore` contract. `dawn memory approve` now supersedes a
+  contradicting active row instead of leaving two actives.
+
+- 83e5153: Load the app once per process. `dawn.config.ts` is memoized per app root; the
+  runtime passes its boot-resolved checkpointer, threads store, and permissions
+  store into route execution instead of reconstructing them per request (three
+  SQLite opens per turn eliminated); the memory store opens lazily on first use
+  and is shared between the memory HTTP routes and the memory capability; route
+  modules, tools, state, and route memory load once per route and are cached for
+  the process lifetime, and the per-request route rediscovery is gone. In
+  `dawn dev`, tool/state/reducer edits now restart the child runtime — fixing a
+  stale-module bug where such edits silently did not apply (the previous
+  re-import mechanism was a no-op under tsx) — and the restart log names the
+  reason. Groundwork for build-time static wiring and the edge deploy targets.
+- Updated dependencies [937be0f]
+- Updated dependencies [83e5153]
+  - @dawn-ai/memory@0.8.14
+  - @dawn-ai/core@0.8.14
+  - @dawn-ai/langchain@0.8.14
+  - @dawn-ai/ag-ui@0.8.14
+  - @dawn-ai/langgraph@0.8.14
+  - @dawn-ai/permissions@0.8.14
+  - @dawn-ai/sqlite-storage@0.8.14
+
+## 0.8.13
+
+### Patch Changes
+
+- 20f0407: Consolidate the existing `@dawn-ai/ag-ui` package as Dawn's pure canonical AG-UI
+  adapter. Its root API now maps standard `RunAgentInput` requests and Dawn stream
+  chunks, including standard interrupt outcomes and addressed resume decisions,
+  while the focused `@dawn-ai/ag-ui/sse` subpath provides event-stream encoding
+  without taking ownership of a server or runtime transport.
+
+  The CLI AG-UI endpoint now uses the canonical adapter, applies the same request
+  projection as other runtime middleware, and emits canonical events without the
+  former custom state event shapes. Pending checkpoint interrupts are resolved
+  through the standard resume contract.
+
+  The langchain adapter surfaces each tool invocation's `run_id` on its
+  `tool_call` and `tool_result` chunks, and the CLI preserves those IDs through
+  Dawn and AG-UI streams for reliable `toolCallId` correlation. Local in-process
+  `dawn run` also assigns agent routes a one-shot thread ID so the default SQLite
+  checkpointer can execute the same route shape supported by `dawn dev`.
+
+- 2b6be86: Run app middleware for the `POST /agui/{routeId}` endpoint, matching
+  `runs/stream` / `runs/wait` / `resume`. A middleware that rejects now blocks an
+  AG-UI run (returning its status/body), and a middleware that returns `context`
+  has it threaded into the run — so auth, rate-limiting, and context injection
+  apply to AG-UI clients too, not just the Agent-Protocol endpoints.
+- 628d1c3: Wire `DAWN_E` error codes into `dawn verify`'s runtime preflight. Add
+  `DAWN_E5101` ("Node version below the supported floor") to the error-code
+  registry, and surface it (or `DAWN_E2002` for an unreachable sandbox daemon)
+  on a failed `dawn verify` runtime check — in both the CLI's `[CODE] See <docs>`
+  line and the `--json` output's `runtime.node.code` / `runtime.docker.code`
+  fields.
+- 18df470: Add a central `DAWN_Exxxx` error-code registry in `@dawn-ai/sdk` and surface
+  codes on the failure channels. `CliError` now carries an optional `code` and the
+  CLI prints `[CODE] See <docs>`; HTTP/SSE error bodies gain optional `code`/`docsUrl`;
+  permission denials returned as tool results are prefixed with `[DAWN_E3001]`.
+  The high-value families are wired (`dawn check` config errors, sandbox
+  unavailable, permission denied, missing model provider / unknown model id, and
+  tool-file shape errors), and a generated `/docs/errors` reference page is guarded
+  against drift. Additive and backward-compatible.
+- ee83a96: Add dev-server HTTP endpoints for memory candidates so a web client can review
+  durable-memory proposals without the CLI: `GET /memory/candidates`,
+  `POST /memory/candidates/:id/approve` (candidate → active, 404/409 guarded), and
+  `POST /memory/candidates/:id/reject`. Backed by the same store methods as
+  `dawn memory list/approve/reject`.
+- 361a9ac: `dawn verify` now runs an environment preflight. A new `runtime` check asserts the running Node version meets Dawn's `22.13.0` floor (a stale Node fails verify) and, when `dawn.config.ts` configures a sandbox provider, runs the provider's Docker daemon preflight. The `deps` env-var check is now provider-aware: it derives the required API-key env var from the providers your routes actually use (e.g. `ANTHROPIC_API_KEY` for an Anthropic-only app) instead of always nagging about `OPENAI_API_KEY`.
+- df54695: Internal refactor: the runtime server now runs on a transport-agnostic
+  `(Request) => Promise<Response>` core (`createRuntimeFetchHandler`, exported from
+  `@dawn-ai/cli/runtime`), with the Node listener reimplemented as a thin adapter
+  over it. No behavior change — routes, status codes, headers, JSON error bodies,
+  SSE framing, streaming incrementality, and shutdown/drain semantics are
+  preserved (verified against the full suite unchanged plus new wire-parity
+  tests). The `@dawn-ai/testing` Agent-Protocol harness now drives the fetch core
+  directly (dropping `light-my-request`). This is the first step of the
+  deploy-anywhere epic: edge build targets (Cloudflare Workers / Vercel / Hono)
+  build on this core.
+- Updated dependencies [20f0407]
+- Updated dependencies [5bbd6e3]
+- Updated dependencies [18df470]
+  - @dawn-ai/ag-ui@0.8.13
+  - @dawn-ai/langchain@0.8.13
+  - @dawn-ai/core@0.8.13
+  - @dawn-ai/langgraph@0.8.13
+  - @dawn-ai/memory@0.8.13
+  - @dawn-ai/permissions@0.8.13
+  - @dawn-ai/sqlite-storage@0.8.13
+
 ## 0.8.12
 
 ### Patch Changes

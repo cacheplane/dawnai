@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { serializeNamespace } from "../src/namespace.js"
+import { parseNamespace, routeNamespaceKey, serializeNamespace } from "../src/namespace.js"
 
 describe("serializeNamespace", () => {
   it("serializes a scope tuple with stable key order", () => {
@@ -50,5 +50,44 @@ describe("serializeNamespace", () => {
       expect(injected).toBe("workspace=app|tenant=a%7Croute%3D/x")
       expect(genuine).toBe("workspace=app|route=/x|tenant=a")
     })
+  })
+})
+
+describe("parseNamespace", () => {
+  it("round-trips serializeNamespace for plain values", () => {
+    const tuple = { workspace: "acme", route: "/support", user: "u-1" }
+    expect(parseNamespace(serializeNamespace(tuple))).toEqual(tuple)
+  })
+  it("round-trips encoded values containing | = %", () => {
+    const tuple = { workspace: "app", tenant: "a|b=c%d" }
+    expect(parseNamespace(serializeNamespace(tuple))).toEqual(tuple)
+  })
+  it("round-trips the delimiter-injection case", () => {
+    const tuple = { workspace: "app", tenant: "a|route=/x" }
+    expect(parseNamespace(serializeNamespace(tuple))).toEqual(tuple)
+  })
+  it("ignores unknown keys", () => {
+    expect(parseNamespace("ws=app|route=/r|bogus=1")).toEqual({ route: "/r" })
+  })
+  it("handles single-dimension namespaces", () => {
+    expect(parseNamespace("route=/notes")).toEqual({ route: "/notes" })
+  })
+  it("ignores malformed parts (no '=' or empty key)", () => {
+    expect(parseNamespace("route=/r|junk|=v")).toEqual({ route: "/r" })
+  })
+})
+
+describe("routeNamespaceKey", () => {
+  it("converts a route file path to a clean namespace key", () => {
+    expect(routeNamespaceKey("src/app/memory-chat/index.ts")).toBe("/memory-chat")
+  })
+  it("keeps dynamic segments", () => {
+    expect(routeNamespaceKey("src/app/support/[tenant]/index.ts")).toBe("/support/[tenant]")
+  })
+  it("leaves an already-clean URL path unchanged", () => {
+    expect(routeNamespaceKey("/chat")).toBe("/chat")
+  })
+  it("strips a #agent suffix", () => {
+    expect(routeNamespaceKey("/memory-chat#agent")).toBe("/memory-chat")
   })
 })

@@ -10,6 +10,7 @@ export interface GeneratedAppSpecifiers {
   readonly dawnConfigTypescript: string
   readonly dawnCore: string
   readonly dawnEvals: string
+  readonly dawnInspector: string
   readonly dawnLangchain: string
   readonly dawnSandbox: string
   readonly dawnSdk: string
@@ -49,6 +50,7 @@ export async function createGeneratedApp(
       dawnConfigTypescriptSpecifier: specifiers.dawnConfigTypescript,
       dawnCoreSpecifier: specifiers.dawnCore,
       dawnEvalsSpecifier: specifiers.dawnEvals,
+      dawnInspectorSpecifier: specifiers.dawnInspector,
       dawnLangchainSpecifier: specifiers.dawnLangchain,
       dawnSandboxSpecifier: specifiers.dawnSandbox,
       dawnSdkSpecifier: specifiers.dawnSdk,
@@ -76,6 +78,7 @@ function normalizeSpecifiers(
     dawnConfigTypescript: specifiers?.dawnConfigTypescript ?? "workspace:*",
     dawnCore: specifiers?.dawnCore ?? "workspace:*",
     dawnEvals: specifiers?.dawnEvals ?? "workspace:*",
+    dawnInspector: specifiers?.dawnInspector ?? "workspace:*",
     dawnLangchain: specifiers?.dawnLangchain ?? "workspace:*",
     dawnSandbox: specifiers?.dawnSandbox ?? "workspace:*",
     dawnSdk: specifiers?.dawnSdk ?? "workspace:*",

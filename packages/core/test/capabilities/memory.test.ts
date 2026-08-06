@@ -222,7 +222,11 @@ describe("memory capability", () => {
 
   it("reads the memory clock once per remember invocation", async () => {
     const store = fakeStore()
-    const timestamps = ["2026-01-01T00:00:00.000Z", "2026-01-01T00:00:01.000Z"]
+    const timestamps = [
+      "2025-12-31T23:59:59.000Z",
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:01.000Z",
+    ]
     const ctx = ctxWith(store, "auto")
     ctx.memory = { ...ctx.memory, now: () => timestamps.shift() ?? "clock exhausted" }
     const c = await createMemoryMarker().load("/r", ctx)
@@ -241,6 +245,7 @@ describe("memory capability", () => {
       "2026-01-01T00:00:00.000Z",
       "2026-01-01T00:00:01.000Z",
     ])
+    expect(timestamps).toEqual([])
   })
 
   it("auto mode UPDATEs idempotently for identical data (no second row)", async () => {

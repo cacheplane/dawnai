@@ -1,40 +1,8 @@
-import { basename, join } from "node:path"
-import type { MemoryContext, MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
+import type { MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
 import { loadDawnConfig } from "@dawn-ai/core"
-import {
-  type RecallRankingOptions,
-  serializeNamespace,
-  sqliteMemoryStore,
-  type VectorRankingOptions,
-} from "@dawn-ai/memory"
-import type { LoadedRouteMemory } from "./load-memory.js"
-
-/**
- * Normalize a route path to a clean namespace key. Converts a route FILE path
- * like "src/app/memory-chat/index.ts" → "/memory-chat" (and ".../support/[tenant]/index.ts"
- * → "/support/[tenant]"); leaves an already-clean URL path like "/chat" unchanged.
- */
-export function routeNamespaceKey(routePath: string): string {
-  // Regex-free on purpose: each step is a linear string op, so there is no
-  // ReDoS surface even though routePath ultimately derives from caller input.
-  let p = routePath.split("\\").join("/")
-  const appMarker = "/app/"
-  const idx = p.lastIndexOf(appMarker)
-  if (idx >= 0) p = p.slice(idx + appMarker.length - 1) // keep leading "/": "/memory-chat/index.ts"
-  // Strip a trailing /index.<ext>.
-  const lower = p.toLowerCase()
-  for (const ext of ["/index.ts", "/index.tsx", "/index.js", "/index.mjs"]) {
-    if (lower.endsWith(ext)) {
-      p = p.slice(0, p.length - ext.length)
-      break
-    }
-  }
-  // Strip a #agent (or any #suffix).
-  const hash = p.indexOf("#")
-  if (hash >= 0) p = p.slice(0, hash)
-  if (!p.startsWith("/")) p = `/${p}`
-  return p === "" ? "/" : p
-}
+import type { RecallRankingOptions, VectorRankingOptions } from "@dawn-ai/memory"
+import { pureJoin } from "./pure-path.js"
+import { type ResolvedEpisodesConfig, resolveEpisodesFromConfig } from "./record-episode.js"
 
 /**
  * Resolves the MemoryStore for the given appRoot.
@@ -48,7 +16,7 @@ export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLi
   let storeVector: VectorRankingOptions | undefined
   try {
     const loaded = await loadDawnConfig({ appRoot })
-    if (loaded.config.memory?.store) return loaded.config.memory.store as MemoryStoreLike
+    if (loaded.config.memory?.store) return loaded.config.memory.store
     recall = loaded.config.memory?.recall
     // The store gets only the hybrid TUNING (weights/rrfK/vectorK/recency/
     // confidence) — NOT the embedder. The store never embeds; the capability
@@ -70,11 +38,15 @@ export async function resolveMemoryStore(appRoot: string): Promise<MemoryStoreLi
   } catch {
     // no dawn.config.ts / unreadable — use default
   }
+  // Imported lazily: removes the static BINDING of sqliteMemoryStore, so
+  // the default sqlite store (and node:sqlite behind it) is only reached when
+  // this fallback branch actually runs.
+  const { sqliteMemoryStore } = await import("@dawn-ai/memory")
   return sqliteMemoryStore({
-    path: join(appRoot, ".dawn", "memory.sqlite"),
+    path: pureJoin(appRoot, ".dawn", "memory.sqlite"),
     ...(recall ? { recall } : {}),
     ...(storeVector ? { vector: storeVector } : {}),
-  }) as unknown as MemoryStoreLike
+  })
 }
 
 /**
@@ -91,71 +63,30 @@ export async function resolveMemoryWrites(appRoot: string): Promise<MemoryWrites
   }
 }
 
-/** Build the per-request memory capability context for a route with a memory.ts. */
-export function buildMemoryContext(args: {
-  defined: LoadedRouteMemory
-  store: MemoryContext["store"]
-  writes: MemoryWritesMode
-  appRoot: string
-  routePath: string
-  now: () => string
-  indexMaxEntries?: number
-  extraScope?: Record<string, string>
-  /** Resolved embedder when vector recall is enabled — the capability embeds
-   *  writes + queries through it. Absent → keyword-only. */
-  embedder?: MemoryContext["embedder"]
-  /** Hybrid recall tuning threaded to the store's search (no embedder). */
-  vector?: MemoryContext["vector"]
-}): MemoryContext {
-  const { defined } = args
-  // Build all available dimensions from known sources.
-  const allDims: Record<string, string> = {
-    workspace: basename(args.appRoot) || "app",
-    route: args.routePath,
-    ...(args.extraScope ?? {}),
-  }
-  // Restrict to only the dimensions this route declared in scope.
-  // serializeNamespace accepts the MemoryScopeTuple keys (workspace, route, tenant, user, agent).
-  const tuple: Record<string, string> = {}
-  for (const dim of defined.scope) {
-    if (allDims[dim] !== undefined) tuple[dim] = allDims[dim]
-  }
-  const namespace = serializeNamespace(
-    tuple as import("@dawn-ai/memory").MemoryScopeTuple & Record<string, string>,
-  )
-  const schema = defined.schema as {
-    safeParse(d: unknown): {
-      success: boolean
-      data?: unknown
-      error?: { message: string }
-    }
-  }
-  return {
-    store: args.store,
-    namespace,
-    writes: args.writes,
-    defined: {
-      kind: defined.kind,
-      scope: defined.scope,
-      ...(defined.identity ? { identity: defined.identity } : {}),
-    },
-    // The route's zod schema — surfaced as the `remember` tool's `data` shape.
-    schema: defined.schema,
-    validate: (data: unknown) => {
-      const r = schema.safeParse(data)
-      return r.success
-        ? {
-            ok: true as const,
-            value: (r.data ?? {}) as Record<string, unknown>,
-          }
-        : {
-            ok: false as const,
-            errors: r.error?.message ?? "memory data failed schema validation",
-          }
-    },
-    now: args.now,
-    ...(args.indexMaxEntries !== undefined ? { indexMaxEntries: args.indexMaxEntries } : {}),
-    ...(args.embedder ? { embedder: args.embedder } : {}),
-    ...(args.vector ? { vector: args.vector } : {}),
+/**
+ * Resolves the episode-recorder config for the given appRoot, reading
+ * `dawn.config.ts` through the same cached `loadDawnConfig` loader as the
+ * other resolvers; missing/unreadable config falls back to the defaults.
+ *
+ * This is the DISK entry point — `dawn memory prune` and any other node caller
+ * that has an appRoot but no loaded config. The request path does not come
+ * through here: `execute-route-core.ts` applies the same defaulting to the
+ * `DawnConfig` it already holds via `resolveEpisodesFromConfig`, which is
+ * where the rule itself lives (and which stays reachable from the node-free
+ * fetch graph).
+ */
+export async function resolveEpisodesConfig(appRoot: string): Promise<ResolvedEpisodesConfig> {
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    return resolveEpisodesFromConfig(loaded.config.memory?.episodes)
+  } catch {
+    // No dawn.config.ts or unreadable — use defaults.
+    return resolveEpisodesFromConfig(undefined)
   }
 }
+
+// Re-exported so `resolve-memory.js` stays the one import site callers know;
+// the implementations live in the node-free `memory-context.ts` /
+// `record-episode.ts` (both are on the request path).
+export { buildMemoryContext } from "./memory-context.js"
+export type { ResolvedEpisodesConfig }

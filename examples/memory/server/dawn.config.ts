@@ -21,6 +21,10 @@ export default {
   appDir: "src/app",
   memory: {
     writes: "auto",
+    // Record one episodic memory per agent run (input, outcome, tools used,
+    // duration) — recallable with `recall({ since: "-24h" })`. Defaults for
+    // TTL (30d) and per-namespace cap (500) apply.
+    episodes: { enabled: true },
     ...(embedder ? { vector: { embedder } } : {}),
     ...(url ? { store: pgvectorMemoryStore({ connectionString: url, dimensions: 1536 }) } : {}),
   },

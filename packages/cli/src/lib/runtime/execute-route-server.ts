@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto"
-
 import { normalizeServerResult } from "./normalize-server-result.js"
 import {
   createRuntimeFailureResult,
@@ -34,7 +32,7 @@ export async function executeRouteServer(
 
   try {
     const assistantId = createRouteAssistantId(options.routeId, options.mode)
-    const threadId = `t-cli-${randomUUID().slice(0, 8)}`
+    const threadId = `t-cli-${globalThis.crypto.randomUUID().slice(0, 8)}`
     const response = await fetch(createRunsWaitUrl(options.baseUrl, threadId), {
       body: JSON.stringify({
         input: options.input,

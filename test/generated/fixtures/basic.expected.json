@@ -12,7 +12,6 @@
       "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-      "@dawn-ai/core": "latest",
       "@dawn-ai/cli": "latest",
       "@dawn-ai/langchain": "latest",
       "@dawn-ai/sdk": "latest",
@@ -21,10 +20,14 @@
     "devDependencies": {
       "@dawn-ai/config-typescript": "latest",
       "@dawn-ai/evals": "latest",
+      "@dawn-ai/inspector": "latest",
       "@dawn-ai/testing": "latest",
       "@types/node": "<version:@types/node>",
       "typescript": "<version:typescript>",
       "vitest": "<version:vitest>"
+    },
+    "engines": {
+      "node": ">=24.0.0"
     }
   },
   "verifyJson": {
@@ -50,7 +53,11 @@
       },
       {
         "missingEnvVars": [],
-        "missingPackages": ["@langchain/core", "@langchain/openai", "@langchain/langgraph"],
+        "missingPackages": [
+          "@langchain/core",
+          "@langchain/openai",
+          "@langchain/langgraph"
+        ],
         "name": "deps",
         "status": "warning"
       },
@@ -59,7 +66,7 @@
         "node": {
           "version": "<version:node>",
           "ok": true,
-          "floor": "22.13.0"
+          "floor": "24.0.0"
         },
         "status": "passed"
       }

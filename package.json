@@ -17,13 +17,13 @@
     }
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "build": "turbo run build",
     "check": "turbo run check",
     "check:build-cache": "node scripts/check-build-cache-config.mjs",
-    "ci:validate": "pnpm lint && pnpm check:build-cache && pnpm build && pnpm typecheck && pnpm test && pnpm test:release-publish && pnpm test:upload-release-assets && pnpm test:backfill-release-tags && node scripts/check-docs.mjs && pnpm pack:check && pnpm verify:harness:self-test && pnpm verify:harness",
+    "ci:validate": "pnpm lint && pnpm check:build-cache && pnpm build && pnpm typecheck && pnpm test && pnpm test:release-publish && pnpm test:upload-release-assets && pnpm test:backfill-release-tags && pnpm test:sync-chart-appversion && node scripts/check-docs.mjs && pnpm pack:check && pnpm verify:harness:self-test && pnpm verify:harness",
     "dev": "turbo run dev --parallel",
     "docs:errors": "node scripts/generate-error-docs.mjs",
     "lint": "pnpm exec biome check --config-path packages/config-biome/biome.json package.json scripts && turbo run lint",
@@ -32,6 +32,9 @@
     "published:smoke": "node scripts/published-artifact-smoke.mjs",
     "published:verify": "node scripts/published-artifact-verify.mjs",
     "release:publish": "node scripts/release-publish.mjs",
+    "sync:chart-appversion": "node scripts/sync-chart-appversion.mjs",
+    "test:sync-chart-appversion": "node --test scripts/sync-chart-appversion.test.mjs",
+    "version": "changeset version && node scripts/sync-chart-appversion.mjs",
     "test": "node scripts/test.mjs",
     "test:pack-check": "node --test scripts/pack-check.test.mjs",
     "test:published-artifacts": "node --test scripts/published-artifacts.test.mjs",

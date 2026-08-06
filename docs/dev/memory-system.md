@@ -294,10 +294,29 @@ RRF-fused, bounded recency/confidence second stage; see §4). Vector recall is e
 supplying `DawnConfig.memory.vector.embedder`; absent, recall is the unchanged keyword path.
 The **Tier-2 Postgres / pgvector store backend** (`@dawn-ai/memory-pgvector`) also ships now:
 HNSW + cosine retrieval in SQL, the same shared ranking core, dimension branch (`vector` ≤2000 /
-`halfvec` ≤4000), enabled via `config.memory.store` (see §4). Explicitly still deferred (spec
-§"Out of scope"):
+`halfvec` ≤4000), enabled via `config.memory.store` (see §4).
 
-- `episodic` / `procedural` / `reflection` kinds; episodic-from-traces; background consolidation.
+**The `episodic` kind ships now too** — both agent-authored (`defineMemory({ kind: "episodic" })`,
+append-only via the `writePolicyFor` kind seam in `reconcile.ts`: never update/supersede, ids
+salted with the request time, `ask` never gates appends) and **episodic-from-runs**: an opt-in
+runtime recorder (`DawnConfig.memory.episodes`) writes one episode per settled agent run.
+Recorder architecture: a post-run hook in `execute-route.ts` covering **both** the invoke and
+stream paths (`recordRunEpisode` → `record-episode.ts`'s pure `buildEpisode`/`recordEpisode`),
+purely-structural extraction of the user input and tool names from the final LangGraph state,
+HITL-safe parked-turn semantics (a pending `__interrupt__` records nothing; the completing
+resume records once with the original input), deterministic `memory_ep_*` ids, and never-fails-
+a-run error containment. Retention: episodes carry `expiresAt` (TTL, default 30d) and a
+per-namespace cap (default 500) enforced by the new required `MemoryStore.prune()` — run lazily
+after each recorded write and manually via `dawn memory prune`. `search`/`browse` gained
+`since`/`until` windows (vs `effectiveAt`, `createdAt` fallback; since inclusive / until
+exclusive) and exclude expired rows when `now` is supplied; the `recall` tool exposes the
+windows (ISO or relative `"-24h"`, resolved by `core`'s pure `time-expr.ts`); the Inspector
+gained a timeline view. All of it is conformance-kit enforced across both stores. Explicitly
+still deferred (spec §"Out of scope"):
+
+- `procedural` / `reflection` kinds; background consolidation (episodes → semantic facts).
+- Embedded episodes (`memory.episodes.embed: true` resolves to `false` with a one-time warning —
+  auto-episodes are keyword + time-window recall only).
 - BM25/FTS5 (term frequency is not stored).
 - Faster ANN over the *local* store — a `sqlite-vec` middle tier. Vector recall on the sqlite
   backend is brute-force cosine in JS over Float32 BLOBs (fine for typical per-namespace corpora;
@@ -305,7 +324,16 @@ HNSW + cosine retrieval in SQL, the same shared ranking core, dimension branch (
 - pgvector follow-ups: `pgvectorscale` / DiskANN indexing, and pushing the RRF fusion down into
   SQL (today pgvector retrieves both lists and fuses in the shared JS core).
 - Memory graph (edges/relations).
-- Dev-server Memory Inspector UI (no dev UI host exists today).
+
+The Memory Inspector UI — previously deferred here for lack of a dev UI host — now ships
+as the standalone `@dawn-ai/inspector` package, launched via `dawn inspect`. Architecture:
+a Next.js standalone app (packed as `.next/standalone`, spawned by the CLI via the
+package's `dawnInspector.server` manifest path) that resolves the app's LIVE
+`config.memory.store` at runtime (`DAWN_APP_ROOT` + `loadDawnConfig`, custom stores
+included) and serves it over a localhost-guarded JSON API. It is powered by the
+`browse(q?)`/`stats(opts?)` methods added to the `MemoryStore` contract (both backends,
+conformance-kit covered) and approves candidates through `approveWithReconcile` — the
+same supersede-aware path as `dawn memory approve`.
 
 Typegen now derives `remember.data` from the route's `defineMemory().schema`, so
 route code sees the same fact shape the runtime validates.

@@ -95,6 +95,33 @@ describe("resolveSubagentRegistry", () => {
     expect(result.map(({ name }) => name)).toEqual(["Research_1"])
   })
 
+  it("discovers only immediate convention children from UNC paths", async () => {
+    const uncParentRouteDir = String.raw`\\server\share\app\src\app\parent`
+    const result = await resolveSubagentRegistry({
+      descriptor: parent(),
+      descriptorRouteIndex: new Map(),
+      parentRouteDir: uncParentRouteDir,
+      parentRouteId,
+      routeManifest: manifest(
+        route(
+          "/parent/subagents/research",
+          String.raw`\\server\share\app\src\app\parent\subagents\research`,
+        ),
+        route(
+          "/parent/subagents/team/writer",
+          String.raw`\\server\share\app\src\app\parent\subagents\team\writer`,
+        ),
+        route(
+          "/other/subagents/imposter",
+          String.raw`\\server\share\app\src\app\other\subagents\imposter`,
+        ),
+      ),
+      loadDescription: descriptions,
+    })
+
+    expect(result.map(({ name }) => name)).toEqual(["research"])
+  })
+
   it("keeps POSIX semantics when the parent contains a literal backslash", async () => {
     const posixParentRouteDir = String.raw`/app/src/app/parent\literal`
     const result = await resolveSubagentRegistry({

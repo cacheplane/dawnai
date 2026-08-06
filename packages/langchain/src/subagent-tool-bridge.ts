@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto"
 import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch"
 import type { RunnableConfig } from "@langchain/core/runnables"
 import { DynamicStructuredTool } from "@langchain/core/tools"
@@ -49,7 +48,7 @@ export function convertSubagentTaskToLangChain(
     schema: tool.schema as z.ZodTypeAny,
     func: async (rawInput, manager, config) => {
       const liveConfig = config ?? {}
-      const callId = readCallId(liveConfig) ?? `task-${randomUUID()}`
+      const callId = readCallId(liveConfig) ?? `task-${globalThis.crypto.randomUUID()}`
       const toolRunId =
         typeof manager?.runId === "string" && manager.runId !== "" ? manager.runId : undefined
       const input = rawInput as { input: string; subagent: string }

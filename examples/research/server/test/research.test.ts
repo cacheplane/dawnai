@@ -125,7 +125,7 @@ it("approves a memory candidate through the CLI and recalls it in a fresh thread
   expect(id).toBeDefined()
 
   const approved = await runCli(["memory", "--cwd", appRoot, "approve", id ?? ""])
-  expect(approved).toContain(`Approved: ${id}`)
+  expect(approved).toContain(`approved ${id} (activated)`)
 
   h.reset()
   const recalled = await h.run({

@@ -29,8 +29,13 @@ export interface MemoryQuery {
   readonly limit?: number
   /** ISO timestamp used as the recency reference for ranked (query) searches.
    *  Optional; when absent, recency is measured relative to the newest
-   *  candidate's updatedAt (data-derived — the library never reads a clock). */
+   *  candidate's updatedAt (data-derived — the library never reads a clock).
+   *  Also excludes rows with expiresAt <= now. */
   readonly now?: string
+  /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
+  readonly since?: string
+  /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
+  readonly until?: string
   /** When present, the store runs the hybrid path: keyword ∪ vector-nearest, RRF-fused. */
   readonly queryEmbedding?: Float32Array
   /** Only rows whose stored embedding_model equals this are vector-compared. */
@@ -46,6 +51,31 @@ export interface VectorRankingOptions {
   readonly confidenceWeight?: number
   readonly recencyHalfLifeMs?: number
 }
+export interface BrowseQuery {
+  readonly namespacePrefix?: string
+  readonly status?: MemoryStatus
+  readonly kind?: MemoryKind
+  readonly sourceType?: MemorySource["type"]
+  readonly limit?: number
+  readonly offset?: number
+  /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
+  readonly since?: string
+  /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
+  readonly until?: string
+  /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
+  readonly now?: string
+}
+export interface BrowsePage {
+  readonly records: readonly MemoryRecord[]
+  readonly total: number
+}
+export interface MemoryStats {
+  readonly total: number
+  readonly byStatus: Readonly<Record<string, number>>
+  readonly byKind: Readonly<Record<string, number>>
+  readonly byNamespace: Readonly<Record<string, number>>
+  readonly bySourceType: Readonly<Record<string, number>>
+}
 export interface MemoryStore {
   put(
     rec: MemoryRecord,
@@ -57,4 +87,16 @@ export interface MemoryStore {
   supersede(id: string, bySupersedingId: string): Promise<void>
   delete(id: string): Promise<void>
   listCandidates(namespacePrefix: string): Promise<readonly MemoryRecord[]>
+  /** Cross-namespace/status listing for inspection UIs. Ordered updated_at DESC, id ASC. */
+  browse(q?: BrowseQuery): Promise<BrowsePage>
+  /** Aggregate counts for facet UIs. */
+  stats(opts?: { readonly namespacePrefix?: string }): Promise<MemoryStats>
+  /** Delete (a) rows of any kind with expiresAt <= now, and (b) when cap is
+   *  set, the oldest episodic rows beyond `cap` per namespace (ordered by
+   *  COALESCE(effectiveAt, createdAt), id tiebreak). */
+  prune(opts: {
+    readonly now: string
+    readonly namespacePrefix?: string
+    readonly cap?: number
+  }): Promise<{ readonly deletedExpired: number; readonly deletedOverCap: number }>
 }

@@ -15,8 +15,27 @@ interface CliOptions {
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repoRoot = resolve(packageRoot, "../..")
 
+/**
+ * Minimum Node version for Dawn apps: the active LTS line. Node 24 bundles
+ * npm ≥ 11 (npm 10's resolver cannot install the scaffold's dependency graph)
+ * and ships `node:sqlite` unflagged. Checked up front so users fail fast with
+ * a clear message instead of a broken install later.
+ */
+const NODE_FLOOR_MAJOR = 24
+
+export function assertSupportedNode(version: string = process.version): void {
+  const major = Number.parseInt(version.replace(/^v/, "").split(".")[0] ?? "0", 10)
+  if (major < NODE_FLOOR_MAJOR) {
+    throw new Error(
+      `Dawn requires Node ${NODE_FLOOR_MAJOR}+ (current LTS); you are running ${version}.\n` +
+        `Upgrade Node (e.g. \`nvm install ${NODE_FLOOR_MAJOR}\`) and re-run.`,
+    )
+  }
+}
+
 export async function run(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   try {
+    assertSupportedNode()
     const options = parseArgs(argv)
     await scaffoldApp(options)
     printNextSteps(options)
@@ -202,6 +221,7 @@ function createTemplateReplacements(
   readonly dawnConfigTypescriptSpecifier: string
   readonly dawnCoreSpecifier: string
   readonly dawnEvalsSpecifier: string
+  readonly dawnInspectorSpecifier: string
   readonly dawnLangchainSpecifier: string
   readonly dawnLanggraphSpecifier: string
   readonly dawnMemorySpecifier: string
@@ -222,6 +242,7 @@ function createTemplateReplacements(
       ),
       dawnCoreSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/core")),
       dawnEvalsSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/evals")),
+      dawnInspectorSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/inspector")),
       dawnLangchainSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langchain")),
       dawnLanggraphSpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/langgraph")),
       dawnMemorySpecifier: createAbsoluteFileSpecifier(resolve(repoRoot, "packages/memory")),
@@ -245,6 +266,7 @@ function createTemplateReplacements(
     dawnConfigTypescriptSpecifier: options.distTag,
     dawnCoreSpecifier: options.distTag,
     dawnEvalsSpecifier: options.distTag,
+    dawnInspectorSpecifier: options.distTag,
     dawnLangchainSpecifier: options.distTag,
     dawnLanggraphSpecifier: options.distTag,
     dawnMemorySpecifier: options.distTag,
@@ -267,6 +289,7 @@ async function applyInternalModePackageOverrides(
     "@dawn-ai/config-typescript": replacements.dawnConfigTypescriptSpecifier,
     "@dawn-ai/core": replacements.dawnCoreSpecifier,
     "@dawn-ai/evals": replacements.dawnEvalsSpecifier,
+    "@dawn-ai/inspector": replacements.dawnInspectorSpecifier,
     "@dawn-ai/langchain": replacements.dawnLangchainSpecifier,
     "@dawn-ai/langgraph": replacements.dawnLanggraphSpecifier,
     "@dawn-ai/memory": replacements.dawnMemorySpecifier,

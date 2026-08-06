@@ -130,7 +130,8 @@ function memoryExtraTools(routeDir: string, dawnDir: string): readonly Extracted
     {
       name: "recall",
       description: "Recall typed long-term memories by keyword/kind/tags.",
-      inputType: `{ query?: string; kind?: string; tags?: string[]; limit?: number }`,
+      // `kind` mirrors the recall tool's z.enum (see core's built-in/memory.ts).
+      inputType: `{ query?: string; kind?: "semantic" | "episodic" | "procedural" | "reflection"; tags?: string[]; limit?: number }`,
       outputType: `string`,
     },
   ]

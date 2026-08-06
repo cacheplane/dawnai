@@ -1,6 +1,18 @@
 export { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
-export { type MemoryScopeTuple, serializeNamespace } from "./namespace.js"
-export { classifyWrite, type WriteOp } from "./reconcile.js"
+export {
+  type MemoryScopeTuple,
+  parseNamespace,
+  routeNamespaceKey,
+  serializeNamespace,
+} from "./namespace.js"
+export {
+  type ApproveResult,
+  approveWithReconcile,
+  classifyWrite,
+  type WriteOp,
+  type WritePolicy,
+  writePolicyFor,
+} from "./reconcile.js"
 export {
   DEFAULT_CANDIDATE_POOL,
   DEFAULT_RECALL_WEIGHTS,
@@ -14,10 +26,13 @@ export {
 export { sqliteMemoryStore } from "./sqlite-store.js"
 export { tokenize } from "./tokenize.js"
 export type {
+  BrowsePage,
+  BrowseQuery,
   MemoryKind,
   MemoryQuery,
   MemoryRecord,
   MemorySource,
+  MemoryStats,
   MemoryStatus,
   MemoryStore,
   VectorRankingOptions,

@@ -1,4 +1,3 @@
-import { posix, win32 } from "node:path"
 import type { DawnAgent, DelegationConstraintPredicate } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import type { RouteDefinition, RouteManifest } from "../types.js"
@@ -201,26 +200,84 @@ function usesWindowsPathSemantics(path: string): boolean {
   return WINDOWS_DRIVE_ROOT.test(path) || path.startsWith("\\\\")
 }
 
+interface ParsedPath {
+  readonly root: string
+  readonly segments: readonly string[]
+}
+
+function parsePath(path: string, windows: boolean): ParsedPath {
+  const normalized = windows ? path.replaceAll("/", "\\") : path
+  let root = ""
+  let remainder = normalized
+
+  if (windows && normalized.startsWith("\\\\")) {
+    const unc = normalized.slice(2).split(/\\+/)
+    if (unc.length >= 2) {
+      root = `\\\\${unc[0]}\\${unc[1]}`
+      remainder = unc.slice(2).join("\\")
+    }
+  } else if (windows) {
+    const drive = /^([A-Za-z]:)\\/.exec(normalized)
+    if (drive) {
+      root = drive[1] as string
+      remainder = normalized.slice(drive[0].length)
+    }
+  } else if (normalized.startsWith("/")) {
+    root = "/"
+    remainder = normalized.slice(1)
+  }
+
+  const segments: string[] = []
+  for (const segment of remainder.split(windows ? /\\+/ : /\/+/)) {
+    if (segment.length === 0 || segment === ".") continue
+    if (segment === "..") {
+      if (segments.length > 0 && segments.at(-1) !== "..") {
+        segments.pop()
+      } else if (root.length === 0) {
+        segments.push(segment)
+      }
+      continue
+    }
+    segments.push(segment)
+  }
+
+  return { root, segments }
+}
+
+function samePathComponent(left: string, right: string, windows: boolean): boolean {
+  return windows ? left.toLowerCase() === right.toLowerCase() : left === right
+}
+
+function immediateConventionName(
+  parentRouteDir: string,
+  candidateRouteDir: string,
+): string | undefined {
+  const windows = usesWindowsPathSemantics(parentRouteDir)
+  const parent = parsePath(parentRouteDir, windows)
+  const candidate = parsePath(candidateRouteDir, windows)
+
+  if (!samePathComponent(parent.root, candidate.root, windows)) return undefined
+  const prefix = [...parent.segments, "subagents"]
+  if (candidate.segments.length !== prefix.length + 1) return undefined
+  for (const [index, segment] of prefix.entries()) {
+    const candidateSegment = candidate.segments[index]
+    if (candidateSegment === undefined || !samePathComponent(segment, candidateSegment, windows)) {
+      return undefined
+    }
+  }
+  return candidate.segments.at(-1)
+}
+
 function discoverConventionRoutes(
   parentRouteDir: string,
   parentRouteId: string,
   routeManifest: RouteManifest,
 ): readonly { readonly name: string; readonly route: RouteDefinition }[] {
-  const routePath = usesWindowsPathSemantics(parentRouteDir) ? win32 : posix
-  const subagentsDir = routePath.join(parentRouteDir, "subagents")
   const result: Array<{ readonly name: string; readonly route: RouteDefinition }> = []
 
   for (const route of routeManifest.routes) {
-    const name = routePath.relative(subagentsDir, route.routeDir)
-    if (
-      name.length === 0 ||
-      routePath.isAbsolute(name) ||
-      name === ".." ||
-      name.startsWith(`..${routePath.sep}`) ||
-      routePath.dirname(name) !== "."
-    ) {
-      continue
-    }
+    const name = immediateConventionName(parentRouteDir, route.routeDir)
+    if (name === undefined) continue
     validateName(name, "convention", parentRouteId)
     result.push({ name, route })
   }

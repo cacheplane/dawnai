@@ -50,6 +50,70 @@ Each release is built from the changeset entries merged since the previous one �
 
 Pin exact versions (no `^` or `~` ranges) for `@dawn-ai/*` packages until the project reaches 1.0 — a floating range means an unreviewed minor bump can land in CI or production without the deliberate read-the-notes step above.
 
+## MemoryStore now requires `browse` and `stats`
+
+The `MemoryStore` contract gained two required methods to power the
+[Inspector](/docs/inspector)'s Memory panel. If you implement a custom store for
+`config.memory.store`, add both:
+
+- `browse(q?)` — cross-namespace/status listing, returning
+  `{ records, total }` with `records` ordered `updated_at DESC, id ASC` and
+  `total` counting all matches (ignoring `limit`/`offset`). The optional query
+  narrows by `namespacePrefix`, `status`, `kind`, and `sourceType`.
+- `stats(opts?)` — aggregate counts: `{ total, byStatus, byKind, byNamespace, bySourceType }`,
+  optionally scoped to a `namespacePrefix`.
+
+The built-in SQLite and pgvector stores already implement both, and the
+`runMemoryStoreConformance` kit in `@dawn-ai/testing` covers them — run it
+against a custom store to verify the contract.
+
+Two related behavior changes in the same release:
+
+- The config-facing store type is now the **full** `MemoryStore` contract —
+  `delete` and `listCandidates` included — rather than the narrower
+  capability-facing surface. A custom store that already satisfied the CLI's
+  `dawn memory` commands is unaffected.
+- `dawn memory approve` (and the Inspector's Approve) now **reconciles
+  supersession**: approving a candidate that contradicts an active record with
+  the same identity key supersedes the old record instead of leaving two active
+  rows; approving an identical duplicate dedupes it.
+
+## MemoryStore now requires `prune`
+
+[Episodic memory](/docs/memory#episodic-memory) added a required retention
+method to the `MemoryStore` contract. If you implement a custom store for
+`config.memory.store`, add it:
+
+```ts
+prune(opts: {
+  now: string              // the clock — rows with expiresAt <= now are expired
+  namespacePrefix?: string // scope the pass to matching namespaces
+  cap?: number             // per-namespace cap for episodic records
+}): Promise<{ deletedExpired: number; deletedOverCap: number }>
+```
+
+Semantics:
+
+- **TTL** — delete every record whose `expiresAt` is at or before `now`
+  (records without `expiresAt` never expire).
+- **Cap** — within each namespace, keep at most `cap` **episodic** records,
+  deleting the oldest beyond it. No `cap` means no cap pass.
+
+The runtime episode recorder calls `prune` lazily after each write, and
+`dawn memory prune` runs it manually.
+
+Two related behavior changes in the same release:
+
+- `search` and `browse` accept **`since`/`until`** (ISO instants; `since`
+  inclusive, `until` exclusive) comparing against `effectiveAt` with a
+  `createdAt` fallback.
+- When a query supplies **`now`**, `search` and `browse` must **exclude
+  expired rows** (`expiresAt <= now`). Queries without `now` are unchanged.
+
+The built-in SQLite and pgvector stores already implement all of this, and the
+`runMemoryStoreConformance` kit in `@dawn-ai/testing` covers it — run the kit
+against a custom store to verify the contract.
+
 ## Related
 
 <RelatedCards items={[

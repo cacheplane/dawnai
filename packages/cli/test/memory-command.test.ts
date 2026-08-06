@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -69,6 +69,161 @@ describe("dawn memory", () => {
     expect(updated?.status).toBe("active")
   })
 
+  it("approve supersedes a contradicting active row", async () => {
+    // No src/app or route memory.ts → identity resolution falls back to the
+    // default [subject, predicate] keys.
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    await store.put({
+      ...baseRecord,
+      id: "old",
+      status: "active",
+      data: { subject: "acme", predicate: "threshold", value: "500" },
+    })
+    await store.put({
+      ...baseRecord,
+      id: "cand",
+      status: "candidate",
+      data: { subject: "acme", predicate: "threshold", value: "750" },
+    })
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["approve", "cand"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    expect((await store.get("cand"))?.status).toBe("active")
+    expect((await store.get("old"))?.status).toBe("superseded")
+    const output = lines.join("\n")
+    expect(output).toContain("approved cand (superseded)")
+    expect(output).toContain("superseded old")
+    expect(output).toContain("default identity")
+  })
+
+  it("approve respects a route's custom identity", async () => {
+    const appRoot = await makeApp()
+    // Full Dawn app shape so discoverRoutes finds the /notes route and its
+    // memory.ts (mirrors packages/inspector/test/fixtures/app).
+    await writeFile(join(appRoot, "dawn.config.ts"), "export default {}\n")
+    const routeDir = join(appRoot, "src", "app", "notes")
+    await mkdir(routeDir, { recursive: true })
+    await writeFile(join(routeDir, "index.ts"), "export const agent = {}\n")
+    await mkdir(join(appRoot, "node_modules"), { recursive: true })
+    await symlink(
+      join(repoRoot, "node_modules", ".pnpm", "zod@4.4.3", "node_modules", "zod"),
+      join(appRoot, "node_modules", "zod"),
+      "dir",
+    )
+    await writeFile(
+      join(routeDir, "memory.ts"),
+      [
+        'import { z } from "zod"',
+        "export default {",
+        '  kind: "semantic",',
+        '  scope: ["route"],',
+        "  schema: z.object({ subject: z.string(), predicate: z.string(), value: z.string() }),",
+        '  identity: ["subject"],',
+        "}",
+      ].join("\n"),
+    )
+
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    // Same subject, different predicate+value: contradicts under identity
+    // ["subject"] but would be a plain ADD under the default [subject, predicate].
+    await store.put({
+      ...baseRecord,
+      id: "old",
+      status: "active",
+      namespace: "route=/notes",
+      data: { subject: "acme", predicate: "threshold", value: "500" },
+    })
+    await store.put({
+      ...baseRecord,
+      id: "cand",
+      status: "candidate",
+      namespace: "route=/notes",
+      data: { subject: "acme", predicate: "limit", value: "750" },
+    })
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["approve", "cand"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    expect((await store.get("cand"))?.status).toBe("active")
+    expect((await store.get("old"))?.status).toBe("superseded")
+    const output = lines.join("\n")
+    expect(output).toContain("approved cand (superseded)")
+    expect(output).not.toContain("default identity")
+  })
+
+  it("approve fails loudly when a route's memory.ts exists but cannot load", async () => {
+    // A broken memory.ts must NOT silently fall back to default identity keys
+    // (wrong keys could miss or mis-target a supersede).
+    const appRoot = await makeApp()
+    await writeFile(join(appRoot, "dawn.config.ts"), "export default {}\n")
+    const routeDir = join(appRoot, "src", "app", "notes")
+    await mkdir(routeDir, { recursive: true })
+    await writeFile(join(routeDir, "index.ts"), "export const agent = {}\n")
+    await writeFile(join(routeDir, "memory.ts"), "export default {{{ not valid ts\n")
+
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    await store.put({
+      ...baseRecord,
+      id: "old",
+      status: "active",
+      namespace: "route=/notes",
+      data: { subject: "acme", predicate: "threshold", value: "500" },
+    })
+    await store.put({
+      ...baseRecord,
+      id: "cand",
+      status: "candidate",
+      namespace: "route=/notes",
+      data: { subject: "acme", predicate: "threshold", value: "750" },
+    })
+
+    const io = { stdout: () => {}, stderr: () => {} }
+    await expect(runMemoryCommand(["approve", "cand"], { cwd: appRoot }, io)).rejects.toThrow(
+      /Failed to load .*memory\.ts/,
+    )
+    // No reconciliation with (fallback) keys happened.
+    expect((await store.get("cand"))?.status).toBe("candidate")
+    expect((await store.get("old"))?.status).toBe("active")
+  })
+
+  it("approve dedupes an identical-data candidate", async () => {
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    await store.put({
+      ...baseRecord,
+      id: "old",
+      status: "active",
+      data: { subject: "acme", predicate: "threshold", value: "500" },
+    })
+    await store.put({
+      ...baseRecord,
+      id: "cand",
+      status: "candidate",
+      data: { subject: "acme", predicate: "threshold", value: "500" },
+    })
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["approve", "cand"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    expect(lines.join("\n")).toContain("approved old (deduped)")
+    expect(await store.get("cand")).toBeNull()
+    expect((await store.get("old"))?.status).toBe("active")
+  })
+
   it("forget hard-deletes a record", async () => {
     const appRoot = await makeApp()
     const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
@@ -130,6 +285,99 @@ describe("dawn memory", () => {
     await runMemoryCommand(["reject", "m1"], { cwd: appRoot }, io)
 
     expect(await store.get("m1")).toBeNull()
+  })
+
+  it("prune deletes expired rows and reports counts", async () => {
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    await store.put({
+      ...baseRecord,
+      id: "expired",
+      status: "active",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    })
+    await store.put({
+      ...baseRecord,
+      id: "live",
+      kind: "episodic",
+      status: "active",
+      effectiveAt: new Date().toISOString(),
+    })
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["prune"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    const output = lines.join("\n")
+    expect(output).toMatch(/1 expired/)
+    expect(output).toMatch(/0 over-cap/)
+    expect(await store.get("expired")).toBeNull()
+    expect(await store.get("live")).not.toBeNull()
+  })
+
+  it("prune --cap enforces the episodic cap", async () => {
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    for (let i = 1; i <= 4; i++) {
+      await store.put({
+        ...baseRecord,
+        id: `ep-${i}`,
+        kind: "episodic",
+        status: "active",
+        effectiveAt: `2026-08-0${i}T00:00:00.000Z`,
+      })
+    }
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["prune", "--cap", "2"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    // The two oldest (ep-1, ep-2) are pruned; the two newest survive.
+    expect(await store.get("ep-1")).toBeNull()
+    expect(await store.get("ep-2")).toBeNull()
+    expect(await store.get("ep-3")).not.toBeNull()
+    expect(await store.get("ep-4")).not.toBeNull()
+    expect(lines.join("\n")).toMatch(/2 over-cap/)
+  })
+
+  it("prune without --cap defaults to the resolved memory.episodes.cap", async () => {
+    const appRoot = await makeApp()
+    // Configure a cap of 2; `dawn memory prune` (no --cap) must enforce it —
+    // the docs promise the default retention pass applies the configured cap.
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      "export default { memory: { episodes: { cap: 2 } } }\n",
+    )
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    for (let i = 1; i <= 4; i++) {
+      await store.put({
+        ...baseRecord,
+        id: `ep-${i}`,
+        kind: "episodic",
+        status: "active",
+        effectiveAt: `2026-08-0${i}T00:00:00.000Z`,
+      })
+    }
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["prune"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    // The two oldest (ep-1, ep-2) are pruned; the two newest survive.
+    expect(await store.get("ep-1")).toBeNull()
+    expect(await store.get("ep-2")).toBeNull()
+    expect(await store.get("ep-3")).not.toBeNull()
+    expect(await store.get("ep-4")).not.toBeNull()
+    expect(lines.join("\n")).toMatch(/2 over-cap/)
   })
 
   it("unknown subcommand throws CliError", async () => {

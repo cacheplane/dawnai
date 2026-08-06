@@ -1,12 +1,18 @@
+import type { MemoryStoreLike } from "@dawn-ai/core"
 import { describe, expect, it } from "vitest"
 import { buildMemoryContext } from "../src/lib/runtime/resolve-memory.js"
 
-const fakeStore = {
+const fakeStore: MemoryStoreLike = {
   put: async () => {},
   get: async () => null,
   search: async () => [],
   update: async () => {},
   supersede: async () => {},
+  delete: async () => {},
+  listCandidates: async () => [],
+  browse: async () => ({ records: [], total: 0 }),
+  stats: async () => ({ total: 0, byStatus: {}, byKind: {}, byNamespace: {}, bySourceType: {} }),
+  prune: async () => ({ deletedExpired: 0, deletedOverCap: 0 }),
 }
 const schema = {
   safeParse: (d: unknown) =>
@@ -19,7 +25,7 @@ describe("buildMemoryContext", () => {
   it("computes a namespace from the route's declared scope", () => {
     const ctx = buildMemoryContext({
       defined: { kind: "semantic", scope: ["workspace", "route"], schema },
-      store: fakeStore as Parameters<typeof buildMemoryContext>[0]["store"],
+      store: fakeStore,
       writes: "candidate",
       appRoot: "/tmp/acme-app",
       routePath: "/support",
@@ -32,7 +38,7 @@ describe("buildMemoryContext", () => {
   it("validate accepts conforming data and rejects bad data", () => {
     const ctx = buildMemoryContext({
       defined: { kind: "semantic", scope: ["route"], schema },
-      store: fakeStore as Parameters<typeof buildMemoryContext>[0]["store"],
+      store: fakeStore,
       writes: "candidate",
       appRoot: "/x",
       routePath: "/r",

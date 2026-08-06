@@ -1,15 +1,16 @@
 import { resolve } from "node:path"
-import type { MemoryStore } from "@dawn-ai/memory"
+import { approveWithReconcile, type MemoryStore } from "@dawn-ai/memory"
 import type { Command } from "commander"
 import { CliError, type CommandIo, writeLine } from "../lib/output.js"
-import { resolveMemoryStore } from "../lib/runtime/resolve-memory.js"
+import { resolveIdentityKeys } from "../lib/runtime/resolve-identity.js"
+import { resolveEpisodesConfig, resolveMemoryStore } from "../lib/runtime/resolve-memory.js"
 
 interface MemoryOptions {
   readonly cwd?: string
 }
 
 const USAGE =
-  "dawn memory <subcommand> [args]\n  subcommands: list, search <query>, inspect <id>, approve <id>, reject <id>, forget <id>"
+  "dawn memory <subcommand> [args]\n  subcommands: list, search <query>, inspect <id>, approve <id>, reject <id>, forget <id>, prune [--cap <n>] [--namespace <prefix>]"
 
 export function registerMemoryCommand(program: Command, io: CommandIo): void {
   program
@@ -34,7 +35,7 @@ export async function runMemoryCommand(
   }
 
   const appRoot = options.cwd ? resolve(options.cwd) : process.cwd()
-  const store = (await resolveMemoryStore(appRoot)) as unknown as MemoryStore
+  const store = await resolveMemoryStore(appRoot)
 
   switch (subcommand) {
     case "list": {
@@ -56,7 +57,7 @@ export async function runMemoryCommand(
     case "approve": {
       const id = argv[1]
       if (!id) throw new CliError("Usage: dawn memory approve <id>", 1)
-      await runApprove(store, id, io)
+      await runApprove(store, appRoot, id, io)
       break
     }
     case "reject": {
@@ -69,6 +70,10 @@ export async function runMemoryCommand(
       const id = argv[1]
       if (!id) throw new CliError("Usage: dawn memory forget <id>", 1)
       await runForget(store, id, io)
+      break
+    }
+    case "prune": {
+      await runPrune(store, appRoot, argv.slice(1), io)
       break
     }
     default: {
@@ -109,14 +114,30 @@ async function runInspect(store: MemoryStore, id: string, io: CommandIo): Promis
   writeLine(io.stdout, JSON.stringify(rec, null, 2))
 }
 
-async function runApprove(store: MemoryStore, id: string, io: CommandIo): Promise<void> {
+async function runApprove(
+  store: MemoryStore,
+  appRoot: string,
+  id: string,
+  io: CommandIo,
+): Promise<void> {
   const rec = await store.get(id)
   if (!rec) throw new CliError(`Record not found: ${id}`, 1)
   if (rec.status !== "candidate") {
     throw new CliError(`Record "${id}" is not a candidate (status: ${rec.status})`, 1)
   }
-  await store.update(id, { status: "active", updatedAt: new Date().toISOString() })
-  writeLine(io.stdout, `Approved: ${id}`)
+  const identity = await resolveIdentityKeys(appRoot, rec.namespace)
+  const res = await approveWithReconcile(store, id, {
+    identityKeys: identity.keys,
+    now: new Date().toISOString(),
+  })
+  writeLine(io.stdout, `approved ${res.approved.id} (${res.action})`)
+  for (const old of res.superseded) writeLine(io.stdout, `superseded ${old.id}`)
+  if (identity.fallback) {
+    writeLine(
+      io.stdout,
+      "note: route memory.ts not found for namespace; used default identity [subject, predicate]",
+    )
+  }
 }
 
 async function runReject(store: MemoryStore, id: string, io: CommandIo): Promise<void> {
@@ -124,6 +145,44 @@ async function runReject(store: MemoryStore, id: string, io: CommandIo): Promise
   if (!rec) throw new CliError(`Record not found: ${id}`, 1)
   await store.delete(id)
   writeLine(io.stdout, `Rejected and deleted: ${id}`)
+}
+
+async function runPrune(
+  store: MemoryStore,
+  appRoot: string,
+  args: readonly string[],
+  io: CommandIo,
+): Promise<void> {
+  const usage = "Usage: dawn memory prune [--cap <n>] [--namespace <prefix>]"
+  let cap: number | undefined
+  let namespacePrefix: string | undefined
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === "--cap") {
+      const raw = args[++i]
+      if (raw === undefined) throw new CliError(`Missing value for --cap.\n${usage}`, 1)
+      const parsed = Number(raw)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new CliError(`Invalid --cap value: "${raw}" (expected a number >= 0).\n${usage}`, 1)
+      }
+      cap = parsed
+    } else if (arg === "--namespace") {
+      const raw = args[++i]
+      if (raw === undefined) throw new CliError(`Missing value for --namespace.\n${usage}`, 1)
+      namespacePrefix = raw
+    } else {
+      throw new CliError(`Unknown argument: "${arg}".\n${usage}`, 1)
+    }
+  }
+  // No --cap → enforce the app's resolved episodic cap (memory.episodes.cap,
+  // default 500) so the manual retention pass matches the documented default.
+  const effectiveCap = cap ?? (await resolveEpisodesConfig(appRoot)).cap
+  const res = await store.prune({
+    now: new Date().toISOString(),
+    cap: effectiveCap,
+    ...(namespacePrefix !== undefined ? { namespacePrefix } : {}),
+  })
+  writeLine(io.stdout, `pruned: ${res.deletedExpired} expired, ${res.deletedOverCap} over-cap`)
 }
 
 async function runForget(store: MemoryStore, id: string, io: CommandIo): Promise<void> {

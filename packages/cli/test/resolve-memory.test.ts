@@ -1,12 +1,12 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it, test } from "vitest"
+import { afterEach, describe, expect, test, vi } from "vitest"
 
 import {
+  resolveEpisodesConfig,
   resolveMemoryStore,
   resolveMemoryWrites,
-  routeNamespaceKey,
 } from "../src/lib/runtime/resolve-memory.js"
 
 const tempDirs: string[] = []
@@ -104,20 +104,74 @@ describe("resolveMemoryWrites", () => {
   })
 })
 
-describe("routeNamespaceKey", () => {
-  it("normalizes a file path under src/app/ to a clean route key", () => {
-    expect(routeNamespaceKey("src/app/memory-chat/index.ts")).toBe("/memory-chat")
+describe("resolveEpisodesConfig", () => {
+  test("returns defaults (disabled) when no dawn.config.ts exists", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-episodes-"))
+    tempDirs.push(appRoot)
+
+    const episodes = await resolveEpisodesConfig(appRoot)
+    expect(episodes).toEqual({
+      enabled: false,
+      ttlMs: 30 * 86_400_000,
+      cap: 500,
+      includeFailedRuns: true,
+      embed: false,
+    })
   })
 
-  it("handles nested dynamic segments", () => {
-    expect(routeNamespaceKey("src/app/support/[tenant]/index.ts")).toBe("/support/[tenant]")
+  test("returns defaults when config has memory but no episodes block", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-episodes-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { writes: "auto" } }\n`,
+    )
+
+    const episodes = await resolveEpisodesConfig(appRoot)
+    expect(episodes.enabled).toBe(false)
+    expect(episodes.ttlMs).toBe(30 * 86_400_000)
+    expect(episodes.cap).toBe(500)
   })
 
-  it("leaves an already-clean URL path unchanged", () => {
-    expect(routeNamespaceKey("/chat")).toBe("/chat")
+  test("threads configured values through", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-episodes-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { episodes: { enabled: true, ttlMs: 3_600_000, cap: 3, includeFailedRuns: false } } }\n`,
+    )
+
+    const episodes = await resolveEpisodesConfig(appRoot)
+    expect(episodes).toEqual({
+      enabled: true,
+      ttlMs: 3_600_000,
+      cap: 3,
+      includeFailedRuns: false,
+      embed: false,
+    })
   })
 
-  it("strips a #agent suffix from an already-clean path", () => {
-    expect(routeNamespaceKey("/memory-chat#agent")).toBe("/memory-chat")
+  test("embed: true resolves to false and warns exactly once per process", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-episodes-"))
+      tempDirs.push(appRoot)
+      await writeFile(
+        join(appRoot, "dawn.config.ts"),
+        `export default { memory: { episodes: { enabled: true, embed: true } } }\n`,
+      )
+
+      const first = await resolveEpisodesConfig(appRoot)
+      expect(first.embed).toBe(false)
+      const second = await resolveEpisodesConfig(appRoot)
+      expect(second.embed).toBe(false)
+
+      const embedWarnings = warn.mock.calls.filter((c) =>
+        String(c[0]).includes("memory.episodes.embed is not yet supported"),
+      )
+      expect(embedWarnings).toHaveLength(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

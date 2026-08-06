@@ -2,8 +2,14 @@ import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
+import { middlewareCandidatePaths } from "../../dev/middleware.js"
 import { writeLine } from "../../output.js"
 import type { BuildEmitContext, BuildTarget } from "./index.js"
+import {
+  collectRouteStaticDiscovery,
+  emitModulesFile,
+  type RouteStaticDiscovery,
+} from "./modules-emitter.js"
 
 /**
  * Stable marker written as the first line of every Dawn-authored Dockerfile.
@@ -19,14 +25,19 @@ const DOCKERFILE_MARKER =
  * two directories up from the module's own location. Verified against
  * `buildDir = <appRoot>/.dawn/build`.
  */
-const SERVER_ENTRY = `import { serveRuntime } from "@dawn-ai/cli"
+const SERVER_ENTRY = `import { loadStaticModules, serveRuntime } from "@dawn-ai/cli"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 
 // server.mjs lives at <appRoot>/.dawn/build/server.mjs → appRoot is two dirs up
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
 
-await serveRuntime({ appRoot })
+// modules.mjs statically imports the app's TypeScript sources, so it can't be
+// a bare static import here — loadStaticModules registers the TS loader first,
+// then imports the manifest through it. Boot performs no route-tree walk.
+const modules = await loadStaticModules(new URL("./modules.mjs", import.meta.url))
+
+await serveRuntime({ appRoot, modules })
 `
 
 /**
@@ -43,7 +54,7 @@ await serveRuntime({ appRoot })
  */
 const DOCKERFILE = `${DOCKERFILE_MARKER}
 # syntax=docker/dockerfile:1
-FROM node:22-slim
+FROM node:24-slim
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8000
 COPY package.json package-lock.json* pnpm-lock.yaml* ./
@@ -68,8 +79,34 @@ CMD ["node", ".dawn/build/server.mjs"]
  */
 export const nodeTarget: BuildTarget = {
   name: "node",
-  async emit({ appRoot, buildDir, io }: BuildEmitContext) {
+  async emit({ appRoot, buildDir, io, manifest }: BuildEmitContext) {
     const artifacts: string[] = []
+
+    // Static module manifest: the runtime's own discovery functions run once
+    // here at build time; server.mjs then boots without any route-tree walk.
+    const discoveries: RouteStaticDiscovery[] = []
+    for (const route of manifest.routes) {
+      discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
+    }
+    // Middleware probe: middlewareCandidatePaths is the SAME list, in the
+    // SAME precedence order, the dynamic `loadMiddleware` walks — the static
+    // build can never bind a different file than dev would.
+    const middlewareFile = middlewareCandidatePaths(appRoot).find((candidate) =>
+      existsSync(candidate),
+    )
+
+    const modulesPath = join(buildDir, "modules.mjs")
+    await writeFile(
+      modulesPath,
+      emitModulesFile({
+        appRoot,
+        buildDir,
+        discoveries,
+        ...(middlewareFile ? { middlewareFile } : {}),
+      }),
+      "utf8",
+    )
+    artifacts.push(modulesPath)
 
     const serverPath = join(buildDir, "server.mjs")
     await writeFile(serverPath, SERVER_ENTRY, "utf8")

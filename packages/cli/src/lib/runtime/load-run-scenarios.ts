@@ -7,7 +7,7 @@ import { discoverRoutes, findDawnApp } from "@dawn-ai/core"
 import { loadRouteKind } from "./load-route-kind.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import type { RuntimeExecutionResult } from "./result.js"
-import { deriveRouteIdentity } from "./route-identity.js"
+import { deriveRouteIdentity } from "./route-identity-node.js"
 
 const RUN_TEST_FILE = "run.test.ts"
 

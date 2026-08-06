@@ -11,6 +11,15 @@ name: Claude Review
 # deadlocked until a maintainer hand-resolved threads (see PR #289).
 # Uses `pull_request` (not pull_request_target) so ANTHROPIC_API_KEY is
 # never exposed to fork PRs.
+#
+# FAILS LOUDLY BY DESIGN. Between 2026-07-08 05:42 and 14:49 UTC every run
+# started failing at the first API call (~300ms, 1 turn, $0.00 cost) and the
+# job still went green for ~4 weeks: claude-code-action derives its conclusion
+# from `resultMessage.subtype === "success"` and never inspects `is_error`, so
+# an `{"subtype":"success","is_error":true}` result looks like a clean run and
+# the tracking comment is left on its "I'll analyze this and get back to you."
+# placeholder. The preflight and result-guard steps below close that hole. The
+# job is still NOT a required check, so a red X here never blocks a merge.
 
 on:
   pull_request:
@@ -36,8 +45,62 @@ jobs:
         with:
           fetch-depth: 1
 
+      # One ~$0.00003 call that names the failure instead of leaving it buried
+      # in a redacted agent log: 401 = key revoked/invalid, 400 with
+      # `credit balance` = org out of credits, 404 = REVIEW_MODEL retired.
+      # Without this the only symptom is a 300ms is_error result with no
+      # message, because the action redacts agent output unless
+      # `show_full_output: true` (which would dump the whole review transcript).
+      - name: Preflight — Anthropic credentials and model
+        id: preflight
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REVIEW_MODEL: claude-sonnet-4-6
+        run: |
+          set -uo pipefail
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "::warning::ANTHROPIC_API_KEY is unavailable (fork PR — secrets are not exposed to fork \`pull_request\` runs). Skipping review."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+          # Keep the key out of argv (and therefore out of the process list) by
+          # passing it through a 0600 curl config file rather than -H.
+          rc="$(mktemp)"; body="$(mktemp)"
+          trap 'rm -f "$rc" "$body"' EXIT
+          printf 'header = "x-api-key: %s"\n' "${ANTHROPIC_API_KEY}" > "$rc"
+
+          code="$(curl -sS -o "$body" -w '%{http_code}' \
+            --config "$rc" \
+            -H 'anthropic-version: 2023-06-01' \
+            -H 'content-type: application/json' \
+            -d "{\"model\":\"${REVIEW_MODEL}\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" \
+            https://api.anthropic.com/v1/messages)" || {
+              echo "::warning::Preflight request could not be sent; continuing and letting the review step report."
+              exit 0
+            }
+
+          case "$code" in
+            200)
+              echo "Anthropic API reachable; key valid; model ${REVIEW_MODEL} available."
+              ;;
+            429|5??)
+              echo "::warning::Preflight got HTTP ${code} (rate limit / transient). Key looks valid; continuing."
+              ;;
+            *)
+              echo "::error::Anthropic preflight failed with HTTP ${code} for model ${REVIEW_MODEL} — the review agent cannot run."
+              jq -r '.error | "\(.type): \(.message)"' < "$body" 2>/dev/null || head -c 500 "$body"
+              echo
+              echo "401 => rotate ANTHROPIC_API_KEY. 400 mentioning credit balance => top up the Anthropic org. 404 => REVIEW_MODEL is no longer available to this org."
+              exit 1
+              ;;
+          esac
+
       - name: Claude review
-        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
+        id: claude
+        if: steps.preflight.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342 # v1
         with:
           # Pass GITHUB_TOKEN explicitly (maps to OVERRIDE_GITHUB_TOKEN) so the
           # action skips OIDC token exchange — that path needs `id-token: write`
@@ -72,3 +135,37 @@ jobs:
             --model claude-sonnet-4-6
             --max-turns 40
             --allowedTools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+
+      # The action reports success whenever the result subtype is "success",
+      # even when that same result carries is_error: true. Re-check the raw
+      # execution log (unredacted, unlike the console output) and fail on it.
+      - name: Verify the review actually ran
+        if: always() && steps.claude.conclusion != 'skipped'
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          set -uo pipefail
+          if [ -z "${EXECUTION_FILE}" ] || [ ! -f "${EXECUTION_FILE}" ]; then
+            echo "::error::No Claude execution log was produced — the review agent never reported a result."
+            exit 1
+          fi
+
+          result="$(jq -c '[.[] | select(.type == "result")] | last // empty' "${EXECUTION_FILE}")"
+          if [ -z "${result}" ]; then
+            echo "::error::Claude execution log contains no result message — the agent did not finish."
+            exit 1
+          fi
+
+          is_error="$(jq -r '.is_error // false' <<<"${result}")"
+          subtype="$(jq -r '.subtype // "unknown"' <<<"${result}")"
+          if [ "${is_error}" = "true" ] || [ "${subtype}" != "success" ]; then
+            echo "::error::Claude review failed (subtype=${subtype}, is_error=${is_error}). No review was posted."
+            echo "--- agent error detail (truncated) ---"
+            jq -r '.result // .error // "no detail in result message"' <<<"${result}" | head -c 2000
+            echo
+            exit 1
+          fi
+
+          turns="$(jq -r '.num_turns // 0' <<<"${result}")"
+          cost="$(jq -r '.total_cost_usd // 0' <<<"${result}")"
+          echo "Review completed: ${turns} turn(s), \$${cost}."

@@ -113,20 +113,20 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.scripts["memory:list"]).toBe("dawn memory list")
     expect(packageJson.scripts["memory:approve"]).toBe("dawn memory approve")
     expect(packageJson.scripts.typecheck).toBe("tsc --noEmit")
-    expect(packageJson.dependencies["@dawn-ai/core"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/cli"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/langchain"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/sandbox"]).not.toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).not.toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/testing"]).not.toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/evals"]).not.toMatch(/^file:/)
-    expect(packageJson.dependencies["@dawn-ai/core"]).toBe("next")
+    expect(packageJson.devDependencies["@dawn-ai/inspector"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/cli"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toBe("next")
     expect(packageJson.dependencies["@dawn-ai/sandbox"]).toBe("next")
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toBe("next")
     expect(packageJson.devDependencies["@dawn-ai/testing"]).toBe("next")
     expect(packageJson.devDependencies["@dawn-ai/evals"]).toBe("next")
+    expect(packageJson.devDependencies["@dawn-ai/inspector"]).toBe("next")
     await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow()
   })
 
@@ -169,13 +169,13 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.scripts.eval).toBe("dawn eval")
     expect(packageJson.scripts["memory:list"]).toBe("dawn memory list")
     expect(packageJson.scripts["memory:approve"]).toBe("dawn memory approve")
-    expect(packageJson.dependencies["@dawn-ai/core"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/cli"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/sandbox"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/config-typescript"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/testing"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/evals"]).toMatch(/^file:/)
+    expect(packageJson.devDependencies["@dawn-ai/inspector"]).toMatch(/^file:/)
     await assertExists(join(targetDir, "README.md"))
     await assertExists(join(targetDir, "src/app/research/index.ts"))
     await assertExists(join(targetDir, "src/app/research/state.ts"))
@@ -225,9 +225,6 @@ describe("create-dawn-ai-app", () => {
     }
     const pnpmWorkspace = await readFile(join(targetDir, "pnpm-workspace.yaml"), "utf8")
 
-    expect(resolveFileSpecifier(packageJson.dependencies["@dawn-ai/core"])).toBe(
-      resolve(repoRoot, "packages/core"),
-    )
     expect(resolveFileSpecifier(packageJson.dependencies["@dawn-ai/cli"])).toBe(
       resolve(repoRoot, "packages/cli"),
     )

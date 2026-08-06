@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/testing",
-  "version": "0.8.12",
+  "version": "0.8.15",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -14,7 +14,7 @@
     "url": "https://github.com/cacheplane/dawnai/issues"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24.0.0"
   },
   "files": [
     "dist"
@@ -30,15 +30,14 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json",
-    "lint": "biome check --config-path ../config-biome/biome.json --vcs-enabled=true --vcs-client-kind=git --vcs-use-ignore-file=true --vcs-root=../../ package.json src test tsconfig.json vitest.config.ts",
+    "build": "tsc -b tsconfig.build.json",
+    "lint": "biome check --config-path ../config-biome/biome.json --vcs-enabled=true --vcs-client-kind=git --vcs-use-ignore-file=true --vcs-root=../../ package.json src test tsconfig.json tsconfig.build.json tsconfig.contracts.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.contracts.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.contracts.json"
   },
   "dependencies": {
     "@copilotkit/aimock": "^1.35.1",
-    "@dawn-ai/memory": "workspace:*",
-    "light-my-request": "^6.6.0"
+    "@dawn-ai/memory": "workspace:*"
   },
   "peerDependencies": {
     "@dawn-ai/cli": "workspace:*",

@@ -1,5 +1,40 @@
 # create-dawn-ai-app
 
+## 0.8.15
+
+### Patch Changes
+
+- @dawn-ai/devkit@0.8.15
+
+## 0.8.14
+
+### Patch Changes
+
+- 937be0f: New `@dawn-ai/inspector`: a browser-based runtime inspector (`dawn inspect`) with a
+  Memory panel — browse, search (recall-equivalent hybrid), inspect, and govern
+  memories with supersede-aware approval. Ships as a scaffold devDependency.
+
+  BREAKING: `MemoryStore` now requires `browse(q?)` and `stats(opts?)`; custom stores
+  must implement them (the built-in sqlite/pgvector stores already do, and
+  `runMemoryStoreConformance` enforces the contract). The config-facing store type is
+  now the full `MemoryStore` contract. `dawn memory approve` now supersedes a
+  contradicting active row instead of leaving two actives.
+
+- Updated dependencies [937be0f]
+  - @dawn-ai/devkit@0.8.14
+
+## 0.8.13
+
+### Patch Changes
+
+- a7e4ced: Improve the getting-started experience for scaffolded apps. `create-dawn-app`
+  now prints next-steps guidance after creating an app (cd / install / test / run
+  it live), the templates gain a `dev` script (`dawn dev --port 3000`) so you can
+  actually run the agent, and the research template README shows the live path
+  (ask a question via `/agui`) plus a pointer to the web-UI recipe.
+- Updated dependencies [a7e4ced]
+  - @dawn-ai/devkit@0.8.13
+
 ## 0.8.12
 
 ### Patch Changes

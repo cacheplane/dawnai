@@ -96,6 +96,11 @@ export const DAWN_ERRORS = {
     code: "DAWN_E5101",
     title: "Node version below the supported floor",
   },
+  DAWN_E5201: {
+    code: "DAWN_E5201",
+    title: "Inspector server failed",
+    docsPath: "/docs/inspector",
+  },
 } as const satisfies Record<string, DawnErrorDescriptor>
 
 /** The union of all registered error codes. Producers cannot invent codes. */
