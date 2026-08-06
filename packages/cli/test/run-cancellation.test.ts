@@ -214,6 +214,113 @@ function cancelRequest(threadId: string): Request {
   return new Request(`http://localhost/threads/${threadId}/cancel`, { method: "POST" })
 }
 
+function runWaitRequest(
+  threadId: string,
+  startedFile: string,
+  releaseFile: string,
+  route = "/blocking#graph",
+): Request {
+  return new Request(`http://localhost/threads/${threadId}/runs/wait`, {
+    body: JSON.stringify({
+      input: { releaseFile, startedFile },
+      route,
+    }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Fixture: a thread parked on a real (checkpointer-backed) HITL interrupt, for
+// exercising /resume. The checkpointer is faked via dawn.config.ts — the same
+// mechanism packages/cli/test/resume-endpoint.test.ts uses to seed a pending
+// __interrupt__ — so readPendingInterrupts() sees a genuine pending interrupt
+// without needing a live agent-mode graph to produce one. The resumed route
+// itself is the same blocking pattern as BLOCKING_ROUTE above, except the
+// resume endpoint always invokes it with `input: {}`, so the started/release
+// file paths are baked into the generated source as literals instead of being
+// threaded through the request body.
+// ---------------------------------------------------------------------------
+
+const RESUME_INTERRUPT_ID = "perm-1"
+
+const RESUME_CHECKPOINTER_CONFIG = [
+  "export default {",
+  "  checkpointer: {",
+  "    getTuple: async () => ({",
+  "      pendingWrites: [[",
+  '        "33a12321-3ec2-56a7-b4d7-0337886c4386",',
+  '        "__interrupt__",',
+  "        {",
+  '          id: "3336d0e0a2d4f198ef9aecd09cd7ac27",',
+  `          value: { interruptId: ${JSON.stringify(RESUME_INTERRUPT_ID)} },`,
+  "        },",
+  "      ]],",
+  "    }),",
+  "  },",
+  "};",
+  "",
+].join("\n")
+
+function resumeBlockingRoute(startedFile: string, releaseFile: string): string {
+  return [
+    'import { readFile, writeFile } from "node:fs/promises"',
+    `const STARTED_FILE = ${JSON.stringify(startedFile)}`,
+    `const RELEASE_FILE = ${JSON.stringify(releaseFile)}`,
+    "export const graph = async (",
+    "  _input: unknown,",
+    "  _ctx: { signal: AbortSignal },",
+    ") => {",
+    "  await writeFile(STARTED_FILE, 'started')",
+    "  const deadline = Date.now() + 15000",
+    "  while (Date.now() < deadline) {",
+    "    try { await readFile(RELEASE_FILE, 'utf8'); break } catch {}",
+    "    await new Promise((r) => setTimeout(r, 25))",
+    "  }",
+    "  return { ok: true }",
+    "}",
+    "",
+  ].join("\n")
+}
+
+async function setupResumeInterrupt() {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-run-cancellation-resume-"))
+  cleanup.push(() => rm(appRoot, { force: true, recursive: true }))
+
+  const startedFile = join(appRoot, "resume-started.json")
+  const releaseFile = join(appRoot, "resume-release.json")
+
+  const files: Record<string, string> = {
+    "dawn.config.ts": RESUME_CHECKPOINTER_CONFIG,
+    "package.json": '{ "name": "run-cancellation-resume-fixture", "type": "module" }\n',
+    "src/app/resume-blocking/index.ts": resumeBlockingRoute(startedFile, releaseFile),
+  }
+  for (const [rel, body] of Object.entries(files)) {
+    const filePath = join(appRoot, rel)
+    await mkdir(dirname(filePath), { recursive: true })
+    await writeFile(filePath, body, "utf8")
+  }
+
+  const handler = await createRuntimeFetchHandler({ appRoot })
+  cleanup.push(() => handler.close())
+
+  return {
+    appRoot,
+    handler,
+    releaseFile,
+    releaseRoute: () => writeFile(releaseFile, "release"),
+    startedFile,
+  }
+}
+
+function resumeRequest(threadId: string, route = "/resume-blocking#graph"): Request {
+  return new Request(`http://localhost/threads/${threadId}/resume`, {
+    body: JSON.stringify({ decision: "once", interrupt_id: RESUME_INTERRUPT_ID, route }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -471,4 +578,107 @@ describe("run slot release on setup failure", () => {
     const body2 = (await response2.json()) as { error: { details?: { code?: string } } }
     expect(body2.error.details?.code).not.toBe("run_in_flight")
   }, 10_000)
+})
+
+describe("/runs/wait cancellation", () => {
+  it("returns 409 run_cancelled when the in-flight run is cancelled", async () => {
+    const { handler, startedFile, releaseFile } = await setupBlockingRoute()
+    const threadId = "t-wait-cancelled"
+
+    const waitPromise = handler.fetch(runWaitRequest(threadId, startedFile, releaseFile))
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+
+    const waitResponse = await waitPromise
+    expect(waitResponse.status).toBe(409)
+    const body = (await waitResponse.json()) as {
+      error: { message: string; details?: { code?: string } }
+    }
+    expect(body.error.message).toContain("cancelled")
+    expect(body.error.details?.code).toBe("run_cancelled")
+  }, 10_000)
+
+  it("marks the thread interrupted after a cancelled wait", async () => {
+    const { handler, startedFile, releaseFile } = await setupBlockingRoute()
+    const threadId = "t-wait-cancelled-interrupted"
+
+    const waitPromise = handler.fetch(runWaitRequest(threadId, startedFile, releaseFile))
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+    await waitPromise
+
+    const threadResponse = await handler.fetch(new Request(`http://localhost/threads/${threadId}`))
+    expect(threadResponse.status).toBe(200)
+    const thread = (await threadResponse.json()) as { status: string }
+    expect(thread.status).toBe("interrupted")
+  }, 10_000)
+
+  it("frees the run slot after a cancelled wait", async () => {
+    const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute()
+    const threadId = "t-wait-cancelled-frees-slot"
+
+    const waitPromise = handler.fetch(runWaitRequest(threadId, startedFile, releaseFile))
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+    await waitPromise
+
+    // If the slot leaked, this would 409 with run_in_flight instead of
+    // starting a fresh run.
+    const response2 = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+    expect(response2.status).toBe(200)
+
+    await releaseRoute()
+    await drain(response2)
+  }, 30_000)
+})
+
+describe("/resume cancellation", () => {
+  it("terminates a cancelled resume stream with cancelled:true", async () => {
+    const { handler, startedFile, releaseFile } = await setupResumeInterrupt()
+    const threadId = "t-resume-cancelled"
+
+    const resumeResponse = await handler.fetch(resumeRequest(threadId))
+    expect(resumeResponse.status).toBe(200)
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+
+    // Reads to completion — if the wrapper didn't stop the stream, this would
+    // hang until the fixture's 15s self-release (well past this test's 10s
+    // timeout, so a regression fails fast rather than passing slowly).
+    const text = await readSseText(resumeResponse)
+    expect(text).toBe('event: done\ndata: {"output":{"cancelled":true}}\n\n')
+
+    // The route itself is still blocked (never told to release) — proves the
+    // wrapper, not route cooperation, is what stopped the stream.
+    await expect(readFile(releaseFile, "utf8")).rejects.toThrow()
+  }, 10_000)
+
+  it("frees the run slot after a cancelled resume", async () => {
+    const { handler, startedFile, releaseRoute } = await setupResumeInterrupt()
+    const threadId = "t-resume-cancelled-frees-slot"
+
+    const resumeResponse = await handler.fetch(resumeRequest(threadId))
+    expect(resumeResponse.status).toBe(200)
+    await waitForFile(startedFile)
+
+    const cancelResponse = await handler.fetch(cancelRequest(threadId))
+    expect(cancelResponse.status).toBe(200)
+    await drain(resumeResponse)
+
+    // If the slot leaked, this would 409 with run_in_flight instead of
+    // starting a fresh resume.
+    const followUp = await handler.fetch(resumeRequest(threadId))
+    expect(followUp.status).toBe(200)
+
+    await releaseRoute()
+    await drain(followUp)
+  }, 30_000)
 })

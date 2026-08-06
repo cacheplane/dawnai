@@ -535,6 +535,7 @@ function buildRouteTable(ctx: {
           permissionsStore,
           registry,
           request,
+          runRegistry,
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
           threadId: params.thread_id ?? "",
@@ -586,6 +587,7 @@ function buildRouteTable(ctx: {
           permissionsStore,
           registry,
           request,
+          runRegistry,
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
           threadId: params.thread_id ?? "",
@@ -823,6 +825,7 @@ async function handleApWaitRequest(options: {
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly request: Request
+  readonly runRegistry: RunRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly threadId: string
@@ -837,6 +840,7 @@ async function handleApWaitRequest(options: {
     permissionsStore,
     registry,
     request,
+    runRegistry,
     sandboxManager,
     signal,
     threadId,
@@ -884,65 +888,110 @@ async function handleApWaitRequest(options: {
     thread = await threadsStore.createThread({ thread_id: threadId })
   }
 
-  // Record route for potential resume (in-memory fast-path + durable metadata)
-  threadRouteMap.set(threadId, routeKey)
-  await threadsStore.updateMetadata(threadId, { route: routeKey })
-
-  await threadsStore.updateStatus(threadId, "busy")
-
-  const resultPromise = invokeResolvedRoute({
-    appRoot,
-    checkpointer,
-    input,
-    memoryStore: getMemoryStore,
-    ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
-    permissionsStore,
-    routeFile: route.routeFile,
-    routeId: route.routeId,
-    ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
-    routePath: route.routePath,
-    ...(sandboxManager ? { sandboxManager } : {}),
-    signal,
-    threadId,
-    threadsStore,
-  })
-
-  const result = await raceRequestAgainstShutdown(resultPromise, signal)
-
-  if (result === SHUTDOWN_ABORTED) {
-    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
-    return Response.json(createRequestErrorBody("Request canceled during server shutdown"), {
-      status: 503,
-    })
-  }
-
-  await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
-
-  if (result.status === "failed") {
-    if (signal.aborted) {
-      return Response.json(
-        createRequestErrorBody("Request canceled during server shutdown", {
-          error: result.error.message,
-        }),
-        { status: 503 },
-      )
-    }
-
-    if (result.error.kind === "execution_error") {
-      return Response.json(createExecutionErrorBody(result.error.message, result.error.details), {
-        status: 500,
-      })
-    }
-
+  // Claim the thread's run slot. Deliberately BEFORE any thread-state
+  // mutation below — same reasoning as the stream handler: a rejected
+  // request must never clobber the recorded route or status for the run
+  // that is genuinely in flight.
+  const run = runRegistry.begin(threadId, signal)
+  if (!run) {
     return Response.json(
-      createRequestErrorBody("Route execution failed before execution began", {
-        error: result.error,
+      createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
+        code: "run_in_flight",
       }),
-      { status: 500 },
+      { status: 409 },
     )
   }
 
-  return Response.json(result.output, { status: 200 })
+  // Record route for potential resume (in-memory fast-path + durable metadata)
+  threadRouteMap.set(threadId, routeKey)
+  try {
+    await threadsStore.updateMetadata(threadId, { route: routeKey })
+    await threadsStore.updateStatus(threadId, "busy")
+  } catch (error) {
+    // Nothing else will ever free this slot — without an explicit release
+    // the thread would 409 for the remaining life of the process.
+    run.release()
+    throw error
+  }
+
+  try {
+    const resultPromise = invokeResolvedRoute({
+      appRoot,
+      checkpointer,
+      input,
+      memoryStore: getMemoryStore,
+      ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
+      permissionsStore,
+      routeFile: route.routeFile,
+      routeId: route.routeId,
+      ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
+      routePath: route.routePath,
+      ...(sandboxManager ? { sandboxManager } : {}),
+      signal: run.signal,
+      threadId,
+      threadsStore,
+    })
+
+    const result = await raceRequestAgainstShutdown(resultPromise, run.signal)
+
+    if (result === SHUTDOWN_ABORTED) {
+      // A cancelled run is not server shutdown: the caller asked to wait for
+      // a result that no longer exists because someone cancelled the run —
+      // that is a conflict, not a 503.
+      if (run.cancelled) {
+        await threadsStore.updateStatus(threadId, "interrupted").catch(() => undefined)
+        return Response.json(
+          createRequestErrorBody(`Run cancelled for thread "${threadId}"`, {
+            code: "run_cancelled",
+          }),
+          { status: 409 },
+        )
+      }
+      await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+      return Response.json(createRequestErrorBody("Request canceled during server shutdown"), {
+        status: 503,
+      })
+    }
+
+    await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+
+    if (result.status === "failed") {
+      if (run.signal.aborted) {
+        if (run.cancelled) {
+          await threadsStore.updateStatus(threadId, "interrupted").catch(() => undefined)
+          return Response.json(
+            createRequestErrorBody(`Run cancelled for thread "${threadId}"`, {
+              code: "run_cancelled",
+            }),
+            { status: 409 },
+          )
+        }
+        return Response.json(
+          createRequestErrorBody("Request canceled during server shutdown", {
+            error: result.error.message,
+          }),
+          { status: 503 },
+        )
+      }
+
+      if (result.error.kind === "execution_error") {
+        return Response.json(createExecutionErrorBody(result.error.message, result.error.details), {
+          status: 500,
+        })
+      }
+
+      return Response.json(
+        createRequestErrorBody("Route execution failed before execution began", {
+          error: result.error,
+        }),
+        { status: 500 },
+      )
+    }
+
+    return Response.json(result.output, { status: 200 })
+  } finally {
+    run.release()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -957,6 +1006,7 @@ async function handleResumeRequest(options: {
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly request: Request
+  readonly runRegistry: RunRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly threadId: string
@@ -971,6 +1021,7 @@ async function handleResumeRequest(options: {
     permissionsStore,
     registry,
     request,
+    runRegistry,
     sandboxManager,
     signal,
     threadId,
@@ -1069,8 +1120,30 @@ async function handleResumeRequest(options: {
     return statusResponse(mwResult.status, mwResult.body)
   }
 
+  // Claim the thread's run slot. Deliberately BEFORE the busy-status
+  // mutation below — same reasoning as the stream handler: a rejected
+  // request must never clobber state for the run that is genuinely in
+  // flight.
+  const run = runRegistry.begin(threadId, signal)
+  if (!run) {
+    return Response.json(
+      createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
+        code: "run_in_flight",
+      }),
+      { status: 409 },
+    )
+  }
+
   // Mark thread busy
-  await threadsStore.updateStatus(threadId, "busy")
+  try {
+    await threadsStore.updateStatus(threadId, "busy")
+  } catch (error) {
+    // The stream's finally has not been armed yet, so nothing else would ever
+    // free this slot — without an explicit release the thread would 409 for the
+    // remaining life of the process.
+    run.release()
+    throw error
+  }
 
   // Open a new SSE stream, passing Command({resume: decision}) as input.
   // Deliberate old-behavior parity: the pre-refactor server wired NO
@@ -1083,7 +1156,7 @@ async function handleResumeRequest(options: {
     async start(controller) {
       try {
         try {
-          for await (const chunk of streamResolvedRoute({
+          const routeStream = streamResolvedRoute({
             appRoot,
             checkpointer,
             input: {},
@@ -1096,22 +1169,33 @@ async function handleResumeRequest(options: {
             ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
             routePath: route.routePath,
             ...(sandboxManager ? { sandboxManager } : {}),
-            signal,
+            signal: run.signal,
             threadId,
             threadsStore,
-          })) {
+          })
+          // Belt-and-braces, mirroring the AG-UI handler: pass the signal to
+          // the route *and* wrap the iterator, so a route that ignores its
+          // ctx.signal still stops when the run is cancelled.
+          for await (const chunk of abortableAsyncIterable(routeStream, run.signal)) {
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
           await threadsStore.updateStatus(threadId, "idle")
         } catch (error) {
-          const errorChunk: StreamChunk = {
-            output: { error: error instanceof Error ? error.message : String(error) },
-            type: "done",
-          }
-          safeEnqueue(controller, encoder.encode(toSseEvent(errorChunk)))
-          await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+          // A cancelled run is not a failure: clients must be able to tell the
+          // two apart without inferring it from a truncated stream.
+          const terminalChunk: StreamChunk = run.cancelled
+            ? { output: { cancelled: true }, type: "done" }
+            : {
+                output: { error: error instanceof Error ? error.message : String(error) },
+                type: "done",
+              }
+          safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
+          await threadsStore
+            .updateStatus(threadId, run.cancelled ? "interrupted" : "idle")
+            .catch(() => undefined)
         }
       } finally {
+        run.release()
         safeClose(controller)
       }
     },
