@@ -209,7 +209,10 @@ async function waitForFile(path: string, timeoutMs = 15_000): Promise<string> {
 }
 
 describe("runtime fetch handler parity", () => {
-  it("AP stream: client disconnect does not abort the run (old-behavior parity)", async () => {
+  // Not merely legacy parity: continuing on disconnect is the documented
+  // decision for the durable AP surface. Explicit stop is POST /threads/:id/cancel.
+  // See docs/superpowers/specs/2026-08-06-ap-run-cancellation.md
+  it("AP stream: client disconnect does not abort the run (deliberate)", async () => {
     const appRoot = await fixtureApp()
     const handler = await createRuntimeFetchHandler({ appRoot })
     cleanup.push(() => handler.close())

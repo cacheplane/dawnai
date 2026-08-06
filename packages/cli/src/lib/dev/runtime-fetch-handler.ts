@@ -743,11 +743,19 @@ async function handleApStreamRequest(options: {
     throw error
   }
 
-  // Deliberate old-behavior parity: the pre-refactor server wired NO
-  // response-close abort for this endpoint (only AG-UI aborted on client
-  // disconnect). A disconnect leaves the run going to completion — writes
-  // simply become no-ops — and only server shutdown (`signal`) aborts it.
-  // Whether AP streams *should* abort on disconnect is a follow-up question.
+  // A client disconnect deliberately does NOT stop the run.
+  //
+  // Agent Protocol is Dawn's durable surface: runs are checkpointed and a
+  // thread can be resumed, so a dropped socket is a lost viewer, not a lost
+  // intent — and a deliberate stop and a network drop are indistinguishable
+  // on the wire. LangGraph Platform, the reference AP server, defaults to
+  // on_disconnect: "continue" for exactly this pair of endpoints. Aborting
+  // instead would discard streamed-but-not-yet-checkpointed state and leave
+  // the thread behind what the user already saw (LangGraph issue #5672).
+  //
+  // Cancellation is therefore explicit: POST /threads/:id/cancel. AG-UI takes
+  // the opposite default because it is ephemeral with nothing to reattach to.
+  // Rationale: docs/superpowers/specs/2026-08-06-ap-run-cancellation.md
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -796,10 +804,10 @@ async function handleApStreamRequest(options: {
       }
     },
     cancel() {
-      // Deliberate old-behavior parity: do NOT abort the run on client
-      // disconnect (see the comment above the stream). Further enqueues
-      // no-op via safeEnqueue, and the fetch wrapper's stream tracking
-      // settles the in-flight slot on cancellation.
+      // Intentionally empty — see the disconnect note above the stream.
+      // Further enqueues no-op via safeEnqueue, and the fetch wrapper's stream
+      // tracking settles the in-flight slot. To actually stop the run, call
+      // POST /threads/:id/cancel.
     },
   })
 
@@ -1182,11 +1190,12 @@ async function handleResumeRequest(options: {
   }
 
   // Open a new SSE stream, passing Command({resume: decision}) as input.
-  // Deliberate old-behavior parity: the pre-refactor server wired NO
-  // response-close abort for the resume endpoint (only AG-UI aborted on
-  // client disconnect). A disconnect leaves the resumed run going to
-  // completion, and only server shutdown (`signal`) aborts it. Whether
-  // resume streams *should* abort on disconnect is a follow-up question.
+  //
+  // As with /runs/stream, a client disconnect deliberately does NOT stop the
+  // resumed run — Agent Protocol is the durable surface, and a resumed run is
+  // if anything more expensive to discard than a fresh one. Explicit stop is
+  // POST /threads/:id/cancel.
+  // Rationale: docs/superpowers/specs/2026-08-06-ap-run-cancellation.md
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -1236,10 +1245,10 @@ async function handleResumeRequest(options: {
       }
     },
     cancel() {
-      // Deliberate old-behavior parity: do NOT abort the run on client
-      // disconnect (see the comment above the stream). Further enqueues
-      // no-op via safeEnqueue, and the fetch wrapper's stream tracking
-      // settles the in-flight slot on cancellation.
+      // Intentionally empty — see the disconnect note above the stream.
+      // Further enqueues no-op via safeEnqueue, and the fetch wrapper's stream
+      // tracking settles the in-flight slot. To actually stop the run, call
+      // POST /threads/:id/cancel.
     },
   })
 

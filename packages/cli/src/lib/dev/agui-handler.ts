@@ -227,8 +227,11 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       }
     },
     cancel() {
-      // Client disconnected — stop the run exactly as the old response-close
-      // handler did.
+      // Client disconnected — stop the run. AG-UI is the ephemeral surface:
+      // there is no reattach and no run to resume, so a dropped socket really
+      // does end the work. The Agent Protocol endpoints deliberately take the
+      // opposite default and keep running; see the disconnect note in
+      // runtime-fetch-handler.ts.
       abortRequest("AG-UI response closed")
     },
   })
