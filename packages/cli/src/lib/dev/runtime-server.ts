@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
+import type { DawnConfig } from "@dawn-ai/core"
 import type { DawnStaticModules } from "../runtime/static-modules.js"
 import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
 import { createRuntimeFetchHandler } from "./runtime-fetch-handler.js"
@@ -33,6 +34,12 @@ export interface StartRuntimeServerOptions {
    * behavior are byte-for-byte the existing dynamic path.
    */
   readonly modules?: DawnStaticModules
+  /**
+   * An already-constructed DawnConfig. When present, it is seeded into the
+   * config memo BEFORE any store/sandbox/memory resolution, so
+   * `dawn.config.ts` is never read from disk (edge runtimes have none).
+   */
+  readonly config?: DawnConfig
 }
 
 // ---------------------------------------------------------------------------

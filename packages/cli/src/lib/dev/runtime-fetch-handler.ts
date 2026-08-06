@@ -1,3 +1,4 @@
+import { seedDawnConfig } from "@dawn-ai/core"
 import type { MemoryStore } from "@dawn-ai/memory"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
@@ -67,6 +68,12 @@ export async function createRuntimeFetchHandler(
     readonly drainDeadlineMs?: number
   },
 ): Promise<RuntimeFetchHandler> {
+  // Seed the config memo FIRST — every resolver below (stores, sandbox,
+  // memory, permissions) goes through loadDawnConfig, and a supplied config
+  // means `dawn.config.ts` must never be read from disk.
+  if (options.config) {
+    seedDawnConfig(options.appRoot, options.config)
+  }
   const registry = await createRuntimeRegistry(options.appRoot, options.modules)
   if (options.modules) {
     // Pre-populate the per-route prepared-modules cache (execute-route.ts)

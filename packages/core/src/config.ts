@@ -64,6 +64,17 @@ export function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDa
   return loading
 }
 
+/**
+ * Prime the per-appRoot config memo with an already-constructed DawnConfig —
+ * the static-wiring seam for runtimes with no filesystem (edge) and for
+ * callers that carry their config as an object. Symmetric with
+ * seedPreparedRouteModules. Overwrites any cached entry: an explicit seed
+ * always beats a disk load.
+ */
+export function seedDawnConfig(appRoot: string, config: DawnConfig): void {
+  configCache.set(appRoot, Promise.resolve({ appRoot, config, configPath: "<seeded>" }))
+}
+
 /** Test-only: clear the memo so fixtures can reload a mutated config. */
 export function __clearDawnConfigCacheForTests(): void {
   configCache.clear()

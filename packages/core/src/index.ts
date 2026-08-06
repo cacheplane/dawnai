@@ -46,7 +46,12 @@ export type {
 } from "./capabilities/types.js"
 export type { CreateWorkspaceFsOptions } from "./capabilities/workspace-fs.js"
 export { createWorkspaceFs } from "./capabilities/workspace-fs.js"
-export { __clearDawnConfigCacheForTests, loadDawnConfig, registerTsxLoader } from "./config.js"
+export {
+  __clearDawnConfigCacheForTests,
+  loadDawnConfig,
+  registerTsxLoader,
+  seedDawnConfig,
+} from "./config.js"
 export { config } from "./config-helper.js"
 export { discoverRoutes } from "./discovery/discover-routes.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"
