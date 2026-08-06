@@ -452,6 +452,7 @@ interface PreparedRouteError {
 async function prepareRouteExecution(options: {
   readonly appRoot: string
   readonly checkpointer?: BaseCheckpointSaver | false
+  readonly inheritedPermissionsStore?: PermissionsStore
   readonly isSubagent?: boolean
   readonly middlewareContext?: Readonly<Record<string, unknown>>
   readonly routeParams?: Readonly<Record<string, string>>
@@ -587,25 +588,30 @@ async function prepareRouteExecution(options: {
       ? envMode
       : (permissionsConfig?.mode ?? "interactive")
 
-  const permissionsStore: PermissionsStore = createPermissionsStore({
-    appRoot: options.appRoot,
-    config: permissionsConfig
-      ? {
-          version: 1,
-          allow: permissionsConfig.allow ?? {},
-          deny: permissionsConfig.deny ?? {},
-        }
-      : undefined,
-    mode,
-  })
-  await permissionsStore.load()
+  const permissionsStore: PermissionsStore =
+    options.inheritedPermissionsStore ??
+    createPermissionsStore({
+      appRoot: options.appRoot,
+      config: permissionsConfig
+        ? {
+            version: 1,
+            allow: permissionsConfig.allow ?? {},
+            deny: permissionsConfig.deny ?? {},
+          }
+        : undefined,
+      mode,
+    })
+  if (options.inheritedPermissionsStore === undefined) await permissionsStore.load()
 
-  const workspaceFs = createWorkspaceFs({
+  const workspaceFsOptions = {
     workspaceRoot: sandboxWorkspaceRoot ?? join(options.appRoot, "workspace"),
     backend: sandboxBackends?.filesystem ?? configBackends?.filesystem ?? localFilesystem(),
     permissions: permissionsStore,
-    signal: options.signal ?? new AbortController().signal,
     interruptCapable: normalized.kind === "agent",
+  }
+  const workspaceFs = createWorkspaceFs({
+    ...workspaceFsOptions,
+    signal: options.signal ?? new AbortController().signal,
   })
 
   if (normalized.kind === "agent") {
@@ -660,7 +666,7 @@ async function prepareRouteExecution(options: {
         writes,
         appRoot: options.appRoot,
         routePath: cleanRoutePath,
-        now: new Date().toISOString(),
+        now: () => new Date().toISOString(),
         ...(loadedDawnConfig?.memory?.indexMaxEntries !== undefined
           ? { indexMaxEntries: loadedDawnConfig.memory.indexMaxEntries }
           : {}),
@@ -860,6 +866,7 @@ async function prepareRouteExecution(options: {
           const childPrepared = await prepareRouteExecution({
             appRoot: options.appRoot,
             checkpointer: false,
+            inheritedPermissionsStore: permissionsStore,
             isSubagent: true,
             ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
             routeFile: route.entryFile,
@@ -885,8 +892,9 @@ async function prepareRouteExecution(options: {
     }
   }
 
-  // Inject ctx.fs once here so every downstream invoker (createDawnContext,
-  // the langchain tool converter/loop) hands tools the sandboxed handle.
+  // Authored tools receive a handle built from stable route preparation inputs
+  // and the live tool-call signal. Capability workspace tools already construct
+  // their own live handles, so the injected fs is harmless for them.
   tools = tools.map((t) => ({
     ...t,
     run: (
@@ -895,7 +903,11 @@ async function prepareRouteExecution(options: {
         readonly middleware?: Readonly<Record<string, unknown>>
         readonly signal: AbortSignal
       },
-    ) => t.run(input, { ...ctx, fs: workspaceFs }),
+    ) =>
+      t.run(input, {
+        ...ctx,
+        fs: createWorkspaceFs({ ...workspaceFsOptions, signal: ctx.signal }),
+      }),
   }))
 
   return {
@@ -1195,6 +1207,8 @@ export interface ChildPreparationContext {
   readonly signal: AbortSignal
 }
 
+const MAX_CHILD_GRAPH_CACHE_ENTRIES = 32
+
 export function buildGuardedSubagentResolver(args: {
   readonly cacheChildGraphs?: boolean
   readonly fallbackDepth?: number
@@ -1215,7 +1229,8 @@ export function buildGuardedSubagentResolver(args: {
   const stableSignal = args.fallbackSignal ?? new AbortController().signal
 
   return async (request) => {
-    const signal = request.config.signal ?? stableSignal
+    const requestSignal = request.config.signal
+    const signal = requestSignal ?? stableSignal
     const threadId = readStringConfigurable(request.config, "thread_id")
     const params = readRouteParams(
       request.config,
@@ -1241,18 +1256,30 @@ export function buildGuardedSubagentResolver(args: {
           ...(rootSandboxKey ? { rootSandboxKey } : {}),
           signal,
         }
-        if (args.cacheChildGraphs === false || signal !== stableSignal) {
+        if (
+          args.cacheChildGraphs === false ||
+          requestSignal === undefined ||
+          requestSignal !== stableSignal
+        ) {
           return args.prepareChild(entry, context)
         }
 
         const cacheKey = childGraphCacheKey(entry, context)
         const cached = childGraphCache.get(cacheKey)
-        if (cached) return cached
+        if (cached) {
+          childGraphCache.delete(cacheKey)
+          childGraphCache.set(cacheKey, cached)
+          return cached
+        }
 
         const pending = args.prepareChild(entry, context).catch((error: unknown) => {
           if (childGraphCache.get(cacheKey) === pending) childGraphCache.delete(cacheKey)
           throw error
         })
+        if (childGraphCache.size >= MAX_CHILD_GRAPH_CACHE_ENTRIES) {
+          const oldestKey = childGraphCache.keys().next().value
+          if (oldestKey !== undefined) childGraphCache.delete(oldestKey)
+        }
         childGraphCache.set(cacheKey, pending)
         return pending
       },
@@ -1389,7 +1416,7 @@ function buildOffload(
   const thresholdChars = t.offloadThresholdChars ?? 40_000
   const previewLines = t.previewLines ?? 10
   const exempt = exemptToolSet(t.noOffloadTools)
-  return (content, toolName, toolCallId) => {
+  return (content, toolName, context) => {
     // Retrieval/inspection tools (readFile, listDir, …) must never be
     // offloaded: their output IS the content the agent asked to read, so
     // re-offloading it would replace it with another pointer and make the
@@ -1399,8 +1426,9 @@ function buildOffload(
       toolName,
       thresholdChars,
       previewLines,
+      signal: context.signal,
       store,
-      ...(toolCallId ? { toolCallId } : {}),
+      ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
     })
   }
 }

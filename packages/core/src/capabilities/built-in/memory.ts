@@ -19,7 +19,7 @@ const isZodSchema = (s: unknown): s is z.ZodTypeAny =>
  * typed, namespaced memory store, plus a memory-index prompt fragment listing
  * the in-scope memories the agent can recall. Activated only when the CLI
  * supplies context.memory (i.e. the route has a memory.ts). Deterministic: no
- * Date.now()/new Date(); timestamps come from context.memory.now.
+ * Date.now()/new Date(); timestamps come from context.memory.now().
  */
 export function createMemoryMarker(): CapabilityMarker {
   return {
@@ -29,12 +29,6 @@ export function createMemoryMarker(): CapabilityMarker {
       const mem = context.memory
       if (!mem) return {}
       const permissions = context.permissions
-      const indexEntries = await mem.store.search({
-        namespace: mem.namespace,
-        status: "active",
-        limit: mem.indexMaxEntries ?? 20,
-      })
-
       // Tool input schemas exposed to the MODEL (so it knows what to pass). The
       // `remember.data` shape is the route's own defineMemory() zod schema; without
       // this the model calls remember/recall with the wrong/empty args and writes
@@ -96,7 +90,7 @@ export function createMemoryMarker(): CapabilityMarker {
             limit: q.limit ?? 8,
             // Recency reference for ranked recall — the per-request timestamp,
             // NOT Date.now() (determinism rule; see module docblock).
-            now: mem.now,
+            now: mem.now(),
             ...(queryVec && mem.embedder
               ? { queryEmbedding: queryVec, embedderId: mem.embedder.id, vector: mem.vector }
               : {}),
@@ -142,6 +136,7 @@ export function createMemoryMarker(): CapabilityMarker {
               : JSON.stringify(data)
           const confidence = typeof inp.confidence === "number" ? inp.confidence : 1
           const tags = inp.tags ?? []
+          const now = mem.now()
 
           const record = {
             id,
@@ -153,8 +148,8 @@ export function createMemoryMarker(): CapabilityMarker {
             confidence,
             tags,
             status,
-            createdAt: mem.now,
-            updatedAt: mem.now,
+            createdAt: now,
+            updatedAt: now,
           }
 
           // Embed the content for vector recall when an embedder is configured.
@@ -193,7 +188,7 @@ export function createMemoryMarker(): CapabilityMarker {
               if (JSON.stringify(target.data) === JSON.stringify(data)) {
                 // Idempotent update — same identity AND same data
                 await mem.store.update(target.id, {
-                  updatedAt: mem.now,
+                  updatedAt: now,
                   content,
                   confidence,
                   tags,
@@ -239,24 +234,14 @@ export function createMemoryMarker(): CapabilityMarker {
         },
       }
 
-      // Fingerprint the snapshot the render closure froze at load time. `id`
-      // covers adds/removes (supersede flips a row out of the active set);
-      // `updatedAt` covers in-place content/confidence updates that keep the
-      // same id. The agent adapter folds this into its materialize cache key so
-      // a memory written after first materialize re-keys the cache (see
-      // PromptFragment.cacheKey).
-      const indexCacheKey =
-        indexEntries.length === 0
-          ? "memory:empty"
-          : `memory:${createHash("sha1")
-              .update(indexEntries.map((r) => `${r.id}@${r.updatedAt}`).join("\n"))
-              .digest("hex")
-              .slice(0, 16)}`
-
       const promptFragment: PromptFragment = {
         placement: "after_user_prompt",
-        cacheKey: indexCacheKey,
-        render: () => {
+        render: async () => {
+          const indexEntries = await mem.store.search({
+            namespace: mem.namespace,
+            status: "active",
+            limit: mem.indexMaxEntries ?? 20,
+          })
           if (indexEntries.length === 0) return ""
           const lines = indexEntries.map((r) => `- ${r.id}: ${r.content.slice(0, 80)}`).join("\n")
           return `# Long-Term Memory\n\nThese memories are available — call \`recall({ query })\` to load full details before relying on them.\n\n${lines}`

@@ -12,6 +12,7 @@ const tempDirs: string[] = []
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })))
   Reflect.deleteProperty(globalThis, "__dawnTask10PolicyCalls")
+  Reflect.deleteProperty(globalThis, "__dawnTask10Filesystem")
   vi.doUnmock("@langchain/langgraph/prebuilt")
   vi.doUnmock("@langchain/openai")
 })
@@ -150,6 +151,56 @@ describe("materializeResolvedRouteGraph", () => {
     expect(createReactAgent).toHaveBeenCalledTimes(2)
     expect(Reflect.get(globalThis, "__dawnTask10PolicyCalls")).toBe(2)
   })
+
+  it("builds authored-tool workspace fs from the live tool-call signal", async () => {
+    const preparationSignal = new AbortController().signal
+    const liveSignal = new AbortController().signal
+    const seenContexts: Array<{ readonly signal: AbortSignal; readonly workspaceRoot: string }> = []
+    Reflect.set(globalThis, "__dawnTask10Filesystem", {
+      listDir: async () => [],
+      readFile: async (_path: string, context: (typeof seenContexts)[number]) => {
+        seenContexts.push(context)
+        return "live contents"
+      },
+      realPath: async (path: string, context: (typeof seenContexts)[number]) => {
+        seenContexts.push(context)
+        return path
+      },
+      writeFile: async () => ({ bytesWritten: 0 }),
+    })
+    const createReactAgent = vi.fn((options: unknown) => ({ options }))
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))
+    vi.doMock("@langchain/openai", () => ({ ChatOpenAI: class {} }))
+    const appRoot = await writeFixtureFiles({
+      "dawn.config.ts": `const filesystem = globalThis.__dawnTask10Filesystem
+export default { backends: { filesystem }, permissions: { mode: "bypass" } }
+`,
+      "src/app/parent/index.ts": `import { agent } from "@dawn-ai/sdk"
+export default agent({ model: "gpt-5-mini", systemPrompt: "Parent." })
+`,
+      "src/app/parent/tools/read-live.ts": `import type { DawnToolContext } from "@dawn-ai/sdk"
+export default async (_input: unknown, ctx: DawnToolContext) => ctx.fs.readFile("note.txt")
+`,
+    })
+
+    await materializeResolvedRouteGraph({
+      appRoot,
+      routeFile: join(appRoot, "src/app/parent/index.ts"),
+      routeId: "/parent",
+      routePath: "/parent",
+      signal: preparationSignal,
+    })
+    const readLive = findNamedTool(createReactAgent.mock.calls[0]?.[0], "read-live")
+
+    await expect(readLive.func({}, undefined, { signal: liveSignal })).resolves.toBe(
+      JSON.stringify("live contents"),
+    )
+    expect(seenContexts.length).toBeGreaterThan(0)
+    expect(seenContexts.every((context) => context.signal === liveSignal)).toBe(true)
+    expect(
+      seenContexts.every((context) => context.workspaceRoot === join(appRoot, "workspace")),
+    ).toBe(true)
+  })
 })
 
 async function fixtureApp(options: {
@@ -254,6 +305,18 @@ interface TaskTool {
     manager: undefined,
     config: RunnableConfig,
   ) => Promise<unknown>
+}
+
+interface CallableTool {
+  readonly name: string
+  readonly func: (input: unknown, manager: undefined, config: RunnableConfig) => Promise<unknown>
+}
+
+function findNamedTool(options: unknown, name: string): CallableTool {
+  const tools = (options as { readonly tools?: readonly CallableTool[] } | undefined)?.tools
+  const tool = tools?.find((candidate) => candidate.name === name)
+  if (!tool) throw new Error(`Expected materialized ${name} tool`)
+  return tool
 }
 
 function findTaskTool(options: unknown): TaskTool {

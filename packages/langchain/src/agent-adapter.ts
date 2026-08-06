@@ -40,22 +40,7 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
   }
 }
 
-// Cache keyed on descriptor, guarded by a fingerprint of the prompt fragments'
-// load-time data. Prompt fragments come from the route directory (stable per
-// descriptor), but some fragments close over external state captured at load
-// time — e.g. the memory-index fragment snapshots the active store rows. Those
-// fragments expose a `cacheKey`; when it changes (a memory written mid-process)
-// the fingerprint changes and the agent re-materializes instead of serving a
-// stale prompt. Fragments without a cacheKey are treated as stable.
-interface CachedAgent {
-  readonly fingerprint: string
-  readonly agent: AgentLike
-}
-let materializedAgents = new WeakMap<DawnAgent, CachedAgent>()
-
-function fragmentFingerprint(fragments: readonly PromptFragment[]): string {
-  return fragments.map((f) => f.cacheKey ?? "").join("|")
-}
+let materializedAgents = new WeakMap<DawnAgent, AgentLike>()
 
 /**
  * Test-only escape hatch: reset the materialized-agents cache so the next
@@ -68,15 +53,18 @@ export function __resetMaterializedAgentsForTests(): void {
   materializedAgents = new WeakMap()
 }
 
-export function composePromptMessages(
+export async function composePromptMessages(
   systemPrompt: string,
   promptFragments: readonly PromptFragment[],
   state: Record<string, unknown>,
-): BaseMessageLike[] {
-  const rendered = promptFragments
-    .filter((f) => f.placement === "after_user_prompt")
-    .map((f) => f.render(state))
-    .filter((s) => s.length > 0)
+): Promise<BaseMessageLike[]> {
+  const rendered = (
+    await Promise.all(
+      promptFragments
+        .filter((f) => f.placement === "after_user_prompt")
+        .map((f) => f.render(state)),
+    )
+  ).filter((s) => s.length > 0)
   const composed = [systemPrompt, ...rendered].join("\n\n")
   const messages = Array.isArray(state.messages) ? (state.messages as BaseMessageLike[]) : []
   return [{ role: "system", content: composed }, ...messages]
@@ -98,7 +86,6 @@ async function materializeAgent(
     readonly subagentResolver?: SubagentResolver
   } = {},
 ): Promise<AgentLike> {
-  const fingerprint = fragmentFingerprint(opts.promptFragments ?? [])
   const bypassCache =
     checkpointer === undefined ||
     opts.subagentResolver !== undefined ||
@@ -107,9 +94,7 @@ async function materializeAgent(
 
   if (!bypassCache) {
     const cached = materializedAgents.get(descriptor)
-    if (cached && cached.fingerprint === fingerprint) {
-      return cached.agent
-    }
+    if (cached) return cached
   }
 
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
@@ -171,7 +156,7 @@ async function materializeAgent(
   const compiled = createReactAgent(agentOptions as any)
 
   if (!bypassCache) {
-    materializedAgents.set(descriptor, { fingerprint, agent: compiled as unknown as AgentLike })
+    materializedAgents.set(descriptor, compiled as unknown as AgentLike)
   }
   return compiled as unknown as AgentLike
 }

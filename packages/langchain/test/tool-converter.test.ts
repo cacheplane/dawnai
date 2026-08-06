@@ -410,6 +410,30 @@ describe("jsonSchemaToZod nesting", () => {
 })
 
 describe("convertToolToLangChain offloading", () => {
+  it("passes the exact live tool-call signal to offloading", async () => {
+    const signal = new AbortController().signal
+    const offload = vi.fn(async () => "STUB")
+    const converted = convertToolToLangChain(
+      { name: "dump", run: async () => "x".repeat(50_000) },
+      undefined,
+      offload,
+    )
+
+    await converted.func(
+      {},
+      undefined as never,
+      {
+        signal,
+        toolCall: { id: "call-live" },
+      } as never,
+    )
+
+    expect(offload).toHaveBeenCalledWith(expect.any(String), "dump", {
+      signal,
+      toolCallId: "call-live",
+    })
+  })
+
   it("replaces large plain-return content with a stub", async () => {
     const big = "x".repeat(50_000)
     const tool = { name: "dump", description: "", run: async () => big }

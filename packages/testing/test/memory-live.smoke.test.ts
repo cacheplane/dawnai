@@ -162,10 +162,9 @@ it.skipIf(!live)(
   "injects a memory index into the system prompt once memories exist",
   async () => {
     // Seed the store BEFORE the harness boots so this assertion rides on a known
-    // index rather than real-model write variance. (Mid-process refresh of the
-    // index hint — a memory written AFTER first materialize — is covered
-    // deterministically by memory-index-refresh.test.ts; the materialize cache
-    // re-keys on the fragment's cacheKey. The recall tool is always live.)
+    // index rather than real-model write variance. Mid-process refresh after
+    // first materialization is covered deterministically by
+    // memory-index-refresh.test.ts through the fragment's render-time query.
     const store = sqliteMemoryStore({ path: dbPath(probeRoot) })
     await store.put({
       id: "memory_seed_index",

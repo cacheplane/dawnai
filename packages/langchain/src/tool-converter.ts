@@ -22,7 +22,16 @@ interface DawnToolDefinition {
   readonly schema?: unknown
 }
 
-export type OffloadFn = (content: string, toolName: string, toolCallId?: string) => Promise<string>
+export interface OffloadContext {
+  readonly signal: AbortSignal
+  readonly toolCallId?: string
+}
+
+export type OffloadFn = (
+  content: string,
+  toolName: string,
+  context: OffloadContext,
+) => Promise<string>
 
 export function convertToolToLangChain(
   tool: DawnToolDefinition,
@@ -65,7 +74,10 @@ export function convertToolToLangChain(
       const { content, stateUpdates } = unwrapToolResult(rawResult)
       const toolCallId = extractToolCallId(liveConfig)
       const finalContent = offload
-        ? await offload(content, tool.name, toolCallId || undefined)
+        ? await offload(content, tool.name, {
+            signal,
+            ...(toolCallId ? { toolCallId } : {}),
+          })
         : content
 
       const convertedResult = stateUpdates

@@ -23,7 +23,7 @@ function makeContext(captured: { query?: Record<string, unknown> }): CapabilityM
     writes: "auto",
     defined: { kind: "semantic", scope: ["route"] },
     validate: () => ({ ok: true, value: {} }),
-    now: NOW,
+    now: () => NOW,
   }
   return {
     routeManifest: {} as never,
@@ -34,7 +34,7 @@ function makeContext(captured: { query?: Record<string, unknown> }): CapabilityM
 }
 
 describe("memory capability recall tool", () => {
-  it("passes context.memory.now as the recency reference on ranked searches", async () => {
+  it("passes the current memory clock value as the recency reference on ranked searches", async () => {
     const captured: { query?: Record<string, unknown> } = {}
     const marker = createMemoryMarker()
     const contribution = await marker.load("/tmp/nowhere", makeContext(captured))

@@ -39,32 +39,42 @@ export interface OffloadStoreOptions {
   readonly now?: () => number
 }
 
+export interface OffloadWriteOptions {
+  readonly signal?: AbortSignal
+  readonly toolCallId?: string
+}
+
 export class OffloadStore {
   private lastGcAt: number
   constructor(private readonly opts: OffloadStoreOptions) {
     this.lastGcAt = (opts.now ?? Date.now)()
   }
 
-  private get ctx() {
-    return { signal: this.opts.signal, workspaceRoot: this.opts.workspaceRoot }
+  private context(signal?: AbortSignal) {
+    return { signal: signal ?? this.opts.signal, workspaceRoot: this.opts.workspaceRoot }
   }
   private now(): number {
     return (this.opts.now ?? Date.now)()
   }
 
   /** Persist full content; returns the workspace-relative path. Runs throttled GC. */
-  async write(toolName: string, content: string, toolCallId?: string): Promise<string> {
-    const fileName = buildOffloadFileName(toolName, content, toolCallId)
+  async write(
+    toolName: string,
+    content: string,
+    options: OffloadWriteOptions = {},
+  ): Promise<string> {
+    const ctx = this.context(options.signal)
+    const fileName = buildOffloadFileName(toolName, content, options.toolCallId)
     const relPath = `${SUBDIR}/${fileName}`
     const dirAbs = join(this.opts.workspaceRoot, SUBDIR)
-    await this.opts.backend.mkdir?.(dirAbs, this.ctx)
+    await this.opts.backend.mkdir?.(dirAbs, ctx)
     const absPath = join(this.opts.workspaceRoot, relPath)
-    await this.opts.backend.writeFile(absPath, content, this.ctx)
-    await this.maybeGc()
+    await this.opts.backend.writeFile(absPath, content, ctx)
+    await this.maybeGc(ctx)
     return relPath
   }
 
-  private async maybeGc(): Promise<void> {
+  private async maybeGc(ctx: { readonly signal: AbortSignal; readonly workspaceRoot: string }) {
     const now = this.now()
     if (now - this.lastGcAt < this.opts.gcThrottleMs) return
     this.lastGcAt = now
@@ -74,7 +84,7 @@ export class OffloadStore {
 
     let names: readonly string[]
     try {
-      names = await backend.listDir(dirAbs, this.ctx)
+      names = await backend.listDir(dirAbs, ctx)
     } catch {
       return // dir not created yet / unreadable
     }
@@ -83,7 +93,7 @@ export class OffloadStore {
     for (const name of names) {
       const abs = join(dirAbs, name)
       try {
-        const s = await backend.statFile(abs, this.ctx)
+        const s = await backend.statFile(abs, ctx)
         entries.push({ abs, size: s.size, mtimeMs: s.mtimeMs })
       } catch {
         /* skip unstattable */
@@ -95,7 +105,7 @@ export class OffloadStore {
     const survivors: typeof entries = []
     for (const e of entries) {
       if (e.mtimeMs < ttlCutoff) {
-        await this.safeRemove(e.abs)
+        await this.safeRemove(e.abs, ctx)
       } else {
         survivors.push(e)
       }
@@ -107,13 +117,16 @@ export class OffloadStore {
     survivors.sort((a, b) => a.mtimeMs - b.mtimeMs)
     for (const e of survivors) {
       if (total <= this.opts.maxBytes) break
-      if (await this.safeRemove(e.abs)) total -= e.size
+      if (await this.safeRemove(e.abs, ctx)) total -= e.size
     }
   }
 
-  private async safeRemove(abs: string): Promise<boolean> {
+  private async safeRemove(
+    abs: string,
+    ctx: { readonly signal: AbortSignal; readonly workspaceRoot: string },
+  ): Promise<boolean> {
     try {
-      await this.opts.backend.removeFile?.(abs, this.ctx)
+      await this.opts.backend.removeFile?.(abs, ctx)
       return true
     } catch {
       return false

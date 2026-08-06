@@ -188,6 +188,57 @@ describe("lazy CLI subagent runtime context", () => {
     )
   })
 
+  it("does not cache when the request omits its signal", async () => {
+    const rootSignal = new AbortController().signal
+    const prepareChild = vi.fn(async () => ({
+      graph: { invoke: vi.fn() },
+      routeId: registry[0].routeId,
+    }))
+    const resolver = buildGuardedSubagentResolver({
+      fallbackSignal: rootSignal,
+      interruptCapable: true,
+      parentRouteId: "/parent",
+      prepareChild,
+      registry,
+    })
+
+    await resolver({ callId: "first", config: {}, input: "one", name: "researcher" })
+    await resolver({ callId: "second", config: {}, input: "two", name: "researcher" })
+
+    expect(prepareChild).toHaveBeenCalledTimes(2)
+  })
+
+  it("bounds stable child graphs with least-recently-used eviction", async () => {
+    const rootSignal = new AbortController().signal
+    const prepareChild = vi.fn(async () => ({
+      graph: { invoke: vi.fn() },
+      routeId: registry[0].routeId,
+    }))
+    const resolver = buildGuardedSubagentResolver({
+      fallbackSignal: rootSignal,
+      interruptCapable: true,
+      parentRouteId: "/parent/[tenant]",
+      prepareChild,
+      registry,
+      routeParamNames: ["tenant"],
+    })
+    const dispatch = (tenant: string) =>
+      resolver({
+        callId: `call-${tenant}`,
+        config: { configurable: { tenant }, signal: rootSignal },
+        input: tenant,
+        name: "researcher",
+      })
+
+    for (let index = 0; index < 32; index += 1) await dispatch(String(index))
+    await dispatch("0")
+    await dispatch("32")
+    await dispatch("0")
+    await dispatch("1")
+
+    expect(prepareChild).toHaveBeenCalledTimes(34)
+  })
+
   it("removes rejected child graph preparations from the cache", async () => {
     const liveSignal = new AbortController().signal
     const prepareChild = vi
