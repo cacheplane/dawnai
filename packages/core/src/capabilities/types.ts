@@ -143,7 +143,9 @@ export interface PromptFragment {
    * Called every model turn so the rendered text can reflect live state
    * (e.g., the current todos list is re-injected each turn).
    */
-  readonly render: (state: Readonly<Record<string, unknown>>) => string | Promise<string>
+  readonly render: (state: Readonly<Record<string, unknown>>) => string
+  /** Optional live renderer used by async agent prompt composition. */
+  readonly renderAsync?: (state: Readonly<Record<string, unknown>>) => Promise<string>
 }
 
 export interface StreamTransformerInput {

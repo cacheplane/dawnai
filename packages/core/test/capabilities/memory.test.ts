@@ -88,11 +88,22 @@ describe("memory capability", () => {
     expect(c.tools?.map((t) => t.name).sort()).toEqual(["recall", "remember"])
     expect(c.promptFragment).toBeDefined()
   })
-  it("queries active memories again on every prompt render", async () => {
+  it("renders the loaded snapshot synchronously and refreshes it asynchronously", async () => {
     const store = fakeStore()
+    store.rows.push({
+      id: "memory_initial",
+      namespace: "ws=a|route=/r",
+      status: "active",
+      content: "loaded before materialization",
+      data: {},
+      kind: "semantic",
+      tags: [],
+    })
     const c = await createMemoryMarker().load("/r", baseCtx(store))
+    const fragment = c.promptFragment
+    expect(fragment).toBeDefined()
 
-    await expect(c.promptFragment?.render({})).resolves.toBe("")
+    expect(fragment?.render({})).toContain("loaded before materialization")
     store.rows.push({
       id: "memory_late",
       namespace: "ws=a|route=/r",
@@ -103,7 +114,9 @@ describe("memory capability", () => {
       tags: [],
     })
 
-    await expect(c.promptFragment?.render({})).resolves.toContain("written after materialization")
+    expect(fragment?.render({})).not.toContain("written after materialization")
+    await fragment?.renderAsync?.({})
+    expect(fragment?.render({})).toContain("written after materialization")
   })
   it("remember writes a candidate row in candidate mode", async () => {
     const store = fakeStore()

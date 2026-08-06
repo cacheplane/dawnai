@@ -76,7 +76,7 @@ describe("OffloadStore", () => {
     }
     const s = store({ backend, signal: preparedSignal })
 
-    await expect(s.write("search", "FULL CONTENT", { signal: live.signal })).rejects.toMatchObject({
+    await expect(s.write("search", "FULL CONTENT", undefined, live.signal)).rejects.toMatchObject({
       name: "AbortError",
     })
     expect(writeFile).toHaveBeenCalledWith(

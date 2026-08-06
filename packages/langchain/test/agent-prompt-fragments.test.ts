@@ -10,7 +10,8 @@ describe("agent prompt fragments", () => {
       [
         {
           placement: "after_user_prompt",
-          render: async (state) => `Current plan: ${String(state.todos ?? "(empty)")}`,
+          render: () => "Stale plan.",
+          renderAsync: async (state) => `Current plan: ${String(state.todos ?? "(empty)")}`,
         },
       ],
       { messages, todos: "(empty)" },

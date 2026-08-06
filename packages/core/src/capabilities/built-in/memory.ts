@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { z } from "zod"
 import { gateMemorySupersede } from "../permission-gate.js"
-import type { CapabilityMarker, PromptFragment } from "../types.js"
+import type { CapabilityMarker, MemoryContext, PromptFragment } from "../types.js"
 
 const DEFAULT_SEMANTIC_IDENTITY = ["subject", "predicate"] as const
 
@@ -29,6 +29,7 @@ export function createMemoryMarker(): CapabilityMarker {
       const mem = context.memory
       if (!mem) return {}
       const permissions = context.permissions
+      let indexEntries = await loadIndexEntries(mem)
       // Tool input schemas exposed to the MODEL (so it knows what to pass). The
       // `remember.data` shape is the route's own defineMemory() zod schema; without
       // this the model calls remember/recall with the wrong/empty args and writes
@@ -236,15 +237,11 @@ export function createMemoryMarker(): CapabilityMarker {
 
       const promptFragment: PromptFragment = {
         placement: "after_user_prompt",
-        render: async () => {
-          const indexEntries = await mem.store.search({
-            namespace: mem.namespace,
-            status: "active",
-            limit: mem.indexMaxEntries ?? 20,
-          })
-          if (indexEntries.length === 0) return ""
-          const lines = indexEntries.map((r) => `- ${r.id}: ${r.content.slice(0, 80)}`).join("\n")
-          return `# Long-Term Memory\n\nThese memories are available — call \`recall({ query })\` to load full details before relying on them.\n\n${lines}`
+        render: () => renderIndexEntries(indexEntries),
+        renderAsync: async () => {
+          const refreshed = await loadIndexEntries(mem)
+          indexEntries = refreshed
+          return renderIndexEntries(refreshed)
         },
       }
 
@@ -252,4 +249,18 @@ export function createMemoryMarker(): CapabilityMarker {
       return { tools, promptFragment }
     },
   }
+}
+
+function loadIndexEntries(mem: MemoryContext) {
+  return mem.store.search({
+    namespace: mem.namespace,
+    status: "active",
+    limit: mem.indexMaxEntries ?? 20,
+  })
+}
+
+function renderIndexEntries(entries: Awaited<ReturnType<typeof loadIndexEntries>>): string {
+  if (entries.length === 0) return ""
+  const lines = entries.map((r) => `- ${r.id}: ${r.content.slice(0, 80)}`).join("\n")
+  return `# Long-Term Memory\n\nThese memories are available — call \`recall({ query })\` to load full details before relying on them.\n\n${lines}`
 }

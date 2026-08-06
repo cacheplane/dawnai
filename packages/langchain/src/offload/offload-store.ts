@@ -39,11 +39,6 @@ export interface OffloadStoreOptions {
   readonly now?: () => number
 }
 
-export interface OffloadWriteOptions {
-  readonly signal?: AbortSignal
-  readonly toolCallId?: string
-}
-
 export class OffloadStore {
   private lastGcAt: number
   constructor(private readonly opts: OffloadStoreOptions) {
@@ -61,10 +56,11 @@ export class OffloadStore {
   async write(
     toolName: string,
     content: string,
-    options: OffloadWriteOptions = {},
+    toolCallId?: string,
+    signal?: AbortSignal,
   ): Promise<string> {
-    const ctx = this.context(options.signal)
-    const fileName = buildOffloadFileName(toolName, content, options.toolCallId)
+    const ctx = this.context(signal)
+    const fileName = buildOffloadFileName(toolName, content, toolCallId)
     const relPath = `${SUBDIR}/${fileName}`
     const dirAbs = join(this.opts.workspaceRoot, SUBDIR)
     await this.opts.backend.mkdir?.(dirAbs, ctx)

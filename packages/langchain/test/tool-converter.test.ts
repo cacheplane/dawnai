@@ -428,10 +428,7 @@ describe("convertToolToLangChain offloading", () => {
       } as never,
     )
 
-    expect(offload).toHaveBeenCalledWith(expect.any(String), "dump", {
-      signal,
-      toolCallId: "call-live",
-    })
+    expect(offload).toHaveBeenCalledWith(expect.any(String), "dump", "call-live", signal)
   })
 
   it("replaces large plain-return content with a stub", async () => {

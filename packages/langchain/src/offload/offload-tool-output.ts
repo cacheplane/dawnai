@@ -16,10 +16,7 @@ export async function offloadToolOutput(
 ): Promise<string> {
   if (content.length <= ctx.thresholdChars) return content
   try {
-    const relPath = await ctx.store.write(ctx.toolName, content, {
-      ...(ctx.signal ? { signal: ctx.signal } : {}),
-      ...(ctx.toolCallId ? { toolCallId: ctx.toolCallId } : {}),
-    })
+    const relPath = await ctx.store.write(ctx.toolName, content, ctx.toolCallId, ctx.signal)
     return buildStub({
       content,
       relPath,

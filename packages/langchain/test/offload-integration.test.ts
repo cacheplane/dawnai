@@ -25,13 +25,19 @@ describe("tool-output offloading end-to-end", () => {
       ttlMs: 10_800_000,
       gcThrottleMs: 0,
     })
-    const offload = (content: string, toolName: string, context: { signal: AbortSignal }) =>
+    const offload = (
+      content: string,
+      toolName: string,
+      toolCallId?: string,
+      liveSignal?: AbortSignal,
+    ) =>
       offloadToolOutput(content, {
         toolName,
         thresholdChars: 40_000,
         previewLines: 10,
-        signal: context.signal,
+        ...(liveSignal ? { signal: liveSignal } : {}),
         store,
+        ...(toolCallId ? { toolCallId } : {}),
       })
 
     const big = Array.from({ length: 5000 }, (_, i) => `row ${i}`).join("\n")

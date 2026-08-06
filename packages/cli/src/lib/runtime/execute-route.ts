@@ -1416,7 +1416,7 @@ function buildOffload(
   const thresholdChars = t.offloadThresholdChars ?? 40_000
   const previewLines = t.previewLines ?? 10
   const exempt = exemptToolSet(t.noOffloadTools)
-  return (content, toolName, context) => {
+  return (content, toolName, toolCallId, liveSignal) => {
     // Retrieval/inspection tools (readFile, listDir, …) must never be
     // offloaded: their output IS the content the agent asked to read, so
     // re-offloading it would replace it with another pointer and make the
@@ -1426,9 +1426,9 @@ function buildOffload(
       toolName,
       thresholdChars,
       previewLines,
-      signal: context.signal,
+      ...(liveSignal ? { signal: liveSignal } : {}),
       store,
-      ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}),
+      ...(toolCallId ? { toolCallId } : {}),
     })
   }
 }

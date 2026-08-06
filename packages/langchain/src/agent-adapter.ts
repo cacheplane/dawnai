@@ -62,7 +62,7 @@ export async function composePromptMessages(
     await Promise.all(
       promptFragments
         .filter((f) => f.placement === "after_user_prompt")
-        .map((f) => f.render(state)),
+        .map((f) => (f.renderAsync ? f.renderAsync(state) : f.render(state))),
     )
   ).filter((s) => s.length > 0)
   const composed = [systemPrompt, ...rendered].join("\n\n")
