@@ -1,16 +1,34 @@
 import { resolve } from "node:path"
 import { approveWithReconcile, type MemoryStore } from "@dawn-ai/memory"
 import type { Command } from "commander"
+import {
+  type DistillResult,
+  type ModelLike,
+  runConsolidation,
+  runReflection,
+} from "../lib/memory/distill.js"
 import { CliError, type CommandIo, writeLine } from "../lib/output.js"
 import { resolveIdentityKeys } from "../lib/runtime/resolve-identity.js"
-import { resolveEpisodesConfig, resolveMemoryStore } from "../lib/runtime/resolve-memory.js"
+import {
+  type ResolvedDistillConfig,
+  resolveDistillConfig,
+  resolveEpisodesConfig,
+  resolveMemoryStore,
+} from "../lib/runtime/resolve-memory.js"
 
 interface MemoryOptions {
   readonly cwd?: string
 }
 
-const USAGE =
-  "dawn memory <subcommand> [args]\n  subcommands: list, search <query>, inspect <id>, approve <id>, reject <id>, forget <id>, prune [--cap <n>] [--namespace <prefix>]"
+const DISTILL_FLAGS = "[--dry-run] [--namespace <prefix>] [--model <id>] [--max-batches <n>]"
+
+const USAGE = [
+  "dawn memory <subcommand> [args]",
+  "  subcommands: list, search <query>, inspect <id>, approve <id>, reject <id>, forget <id>,",
+  "               prune [--cap <n>] [--namespace <prefix>],",
+  `               consolidate ${DISTILL_FLAGS},`,
+  `               reflect ${DISTILL_FLAGS}`,
+].join("\n")
 
 export function registerMemoryCommand(program: Command, io: CommandIo): void {
   program
@@ -74,6 +92,11 @@ export async function runMemoryCommand(
     }
     case "prune": {
       await runPrune(store, appRoot, argv.slice(1), io)
+      break
+    }
+    case "consolidate":
+    case "reflect": {
+      await runDistill(store, appRoot, subcommand, argv.slice(1), io)
       break
     }
     default: {
@@ -183,6 +206,109 @@ async function runPrune(
     ...(namespacePrefix !== undefined ? { namespacePrefix } : {}),
   })
   writeLine(io.stdout, `pruned: ${res.deletedExpired} expired, ${res.deletedOverCap} over-cap`)
+}
+
+/**
+ * `dawn memory consolidate` / `dawn memory reflect` — the two distillation
+ * passes. Both are threshold-aware no-ops (safe for cron), share the same flags,
+ * and spend model tokens only when there is something to distill.
+ */
+async function runDistill(
+  store: MemoryStore,
+  appRoot: string,
+  command: "consolidate" | "reflect",
+  args: readonly string[],
+  io: CommandIo,
+): Promise<void> {
+  const usage = `Usage: dawn memory ${command} ${DISTILL_FLAGS}`
+  let dryRun = false
+  let namespacePrefix: string | undefined
+  let model: string | undefined
+  let maxBatches: number | undefined
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === "--dry-run") {
+      dryRun = true
+    } else if (arg === "--namespace") {
+      const raw = args[++i]
+      if (raw === undefined) throw new CliError(`Missing value for --namespace.\n${usage}`, 1)
+      namespacePrefix = raw
+    } else if (arg === "--model") {
+      // Overrides the model id only — the PROVIDER still comes from the
+      // resolved config (`memory.distill.provider`, itself inferred from the
+      // configured model). Set that when overriding across provider families.
+      const raw = args[++i]
+      if (raw === undefined) throw new CliError(`Missing value for --model.\n${usage}`, 1)
+      if (raw.trim() === "") {
+        throw new CliError(`Invalid --model value: "${raw}" (expected a model id).\n${usage}`, 1)
+      }
+      model = raw
+    } else if (arg === "--max-batches") {
+      const raw = args[++i]
+      if (raw === undefined) throw new CliError(`Missing value for --max-batches.\n${usage}`, 1)
+      const parsed = Number(raw)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new CliError(
+          `Invalid --max-batches value: "${raw}" (expected a number >= 0).\n${usage}`,
+          1,
+        )
+      }
+      maxBatches = parsed
+    } else {
+      throw new CliError(`Unknown argument: "${arg}".\n${usage}`, 1)
+    }
+  }
+
+  const resolved = await resolveDistillConfig(appRoot)
+  const config: ResolvedDistillConfig = {
+    ...resolved,
+    ...(model !== undefined ? { model } : {}),
+    ...(maxBatches !== undefined ? { maxBatches } : {}),
+  }
+
+  const run = command === "consolidate" ? runConsolidation : runReflection
+  const result: DistillResult = await run({
+    store,
+    config,
+    now: new Date().toISOString(),
+    io,
+    ...(dryRun ? { dryRun: true } : {}),
+    ...(namespacePrefix !== undefined ? { namespacePrefix } : {}),
+    // Lazy on purpose: nothing to distill → no provider resolution, no chat
+    // model, no API key required. The cron no-op stays free and offline.
+    createModel: () => createDistillModel(config),
+  })
+
+  if (result.batches > 0 || result.failed > 0) {
+    writeLine(
+      io.stdout,
+      `${command}: ${result.batches} batch(es), ${result.written} written, ${result.failed} failed`,
+    )
+  }
+  // Reported AFTER the per-batch lines the engine already printed — partial
+  // progress is visible, and the non-zero exit still tells cron something broke.
+  if (result.failed > 0) {
+    throw new CliError(
+      `${command} finished with ${result.failed} failed batch(es) — see the errors above.`,
+      1,
+    )
+  }
+}
+
+/**
+ * Builds the distillation chat model from the resolved config. `resolveProvider`
+ * narrows the configured provider id (throwing the same actionable "Unsupported
+ * agent provider" error agents get), and `createChatModel` returns the LangChain
+ * chat model — whose `.invoke(prompt)` resolves to a message with `.content`,
+ * exactly `ModelLike`'s shape (the engine normalizes string vs content-part
+ * array content). Imported lazily so `dawn memory list` never pays for the
+ * LangChain barrel.
+ */
+async function createDistillModel(config: ResolvedDistillConfig): Promise<ModelLike> {
+  const { createChatModel, resolveProvider } = await import("@dawn-ai/langchain")
+  const provider = resolveProvider({ model: config.model, provider: config.provider })
+  const model = await createChatModel({ model: config.model, provider })
+  return model as ModelLike
 }
 
 async function runForget(store: MemoryStore, id: string, io: CommandIo): Promise<void> {
