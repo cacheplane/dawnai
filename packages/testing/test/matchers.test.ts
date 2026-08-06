@@ -76,7 +76,13 @@ it("expectOffloaded asserts the tool output was offloaded to a stub", () => {
 // ── capability matchers ────────────────────────────────────────────────────
 const withInterrupt: AgentRunResult = {
   ...base,
-  interrupts: [{ interruptId: "perm-1", kind: "command", detail: { command: "rm -rf tmp" } }],
+  interrupts: [
+    {
+      interruptId: "perm-1",
+      kind: "command",
+      detail: { command: "rm -rf tmp", suggestedPattern: "rm -rf tmp" },
+    },
+  ],
 }
 const withSubagent: AgentRunResult = {
   ...base,
@@ -249,9 +255,15 @@ it("expectNoToolErrors throws and names the failed tool", () => {
 })
 
 it("expectNoToolErrors treats a HITL interrupt as NOT a tool error", () => {
-  const run = {
+  const run: AgentRunResult = {
     ...base,
-    interrupts: [{ interruptId: "p1", kind: "command", detail: { command: "x" } }],
+    interrupts: [
+      {
+        interruptId: "p1",
+        kind: "command",
+        detail: { command: "x", suggestedPattern: "x" },
+      },
+    ],
     toolResults: [],
   }
   expectNoToolErrors(run)

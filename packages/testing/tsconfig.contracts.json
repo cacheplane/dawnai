@@ -6,5 +6,10 @@
     "rootDir": ".",
     "tsBuildInfoFile": "dist/tsconfig.contracts.tsbuildinfo"
   },
-  "include": ["src/**/*.ts", "test/*.contract.ts", "test/run-result.test.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/*.contract.ts",
+    "test/matchers.test.ts",
+    "test/run-result.test.ts"
+  ]
 }
