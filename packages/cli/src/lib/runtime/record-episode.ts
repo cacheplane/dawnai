@@ -4,7 +4,7 @@
  * REQUEST PATH — this module is reached from `execute-route-core.ts`, so it
  * must stay free of `node:` imports (see test/fetch-entry-purity.test.ts).
  * That is why the record id hashes through `pure-hash.ts` rather than
- * `node:crypto`; the digest is byte-identical either way. The `@dawn-ai/memory`
+ * `node:crypto`; the digest is the same either way. The `@dawn-ai/memory`
  * import below is TYPE-ONLY and therefore erased at bundle time — it never
  * pulls the barrel (and its `node:sqlite`) onto the graph.
  */

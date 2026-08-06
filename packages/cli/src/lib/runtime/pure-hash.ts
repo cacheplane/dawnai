@@ -6,7 +6,7 @@
  * `namespace|sourceId|startedAt`, and it runs on the REQUEST path — i.e. inside
  * the `@dawn-ai/cli/fetch` graph, which may not import `node:crypto` (see
  * test/fetch-entry-purity.test.ts). Web Crypto has no synchronous digest, so
- * the algorithm is ported here instead. Output is byte-identical to node's;
+ * the algorithm is ported here instead. Output matches node's exactly;
  * test/pure-hash.test.ts pins that against `node:crypto` over a spec-vector +
  * multi-block + Unicode suite.
  *
