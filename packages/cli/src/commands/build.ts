@@ -1,7 +1,5 @@
 import { mkdir, rm } from "node:fs/promises"
 import { relative, resolve } from "node:path"
-
-import { loadDawnConfig } from "@dawn-ai/core"
 import { discoverRoutes } from "@dawn-ai/core/node"
 import type { Command } from "commander"
 import {
@@ -10,6 +8,7 @@ import {
   DEFAULT_BUILD_TARGETS,
   knownTargetNames,
 } from "../lib/build/targets/index.js"
+import { loadDawnConfig } from "../lib/node-config.js"
 import { CliError, type CommandIo, writeLine } from "../lib/output.js"
 import { runTypegen } from "../lib/typegen/run-typegen.js"
 

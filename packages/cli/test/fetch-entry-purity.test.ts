@@ -130,8 +130,6 @@ function graphInputs(metafile: Metafile): string[] {
 const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = [
   // @dawn-ai/core — barrel drags config loading and the capability markers
   "node:crypto <- ../core/dist/capabilities/built-in/memory.js",
-  "node:fs <- ../core/dist/config.js",
-  "node:fs/promises <- ../core/dist/config.js",
   "node:path <- ../core/dist/capabilities/built-in/agents-md.js",
   "node:path <- ../core/dist/capabilities/built-in/memory-md.js",
   "node:path <- ../core/dist/capabilities/built-in/planning.js",
@@ -139,18 +137,16 @@ const KNOWN_UPSTREAM_NODE_EDGES: readonly string[] = [
   "node:path <- ../core/dist/capabilities/built-in/workspace.js",
   "node:path <- ../core/dist/capabilities/permission-gate.js",
   "node:path <- ../core/dist/capabilities/workspace-fs.js",
-  "node:path <- ../core/dist/config.js",
   "node:url <- ../core/dist/capabilities/built-in/subagents.js",
-  "node:url <- ../core/dist/config.js",
 ]
 
 /**
- * Import edges into the node TS loader, a dynamic branch inside
- * `@dawn-ai/core` that only runs when `dawn.config.ts` is read from disk —
- * which never happens on the injected fetch path. Pinned for the same ratchet
- * reason as the inventory above; `@dawn-ai/cli` itself contributes none.
+ * Import edges into the node TS loader. There are none left: reading
+ * `dawn.config.ts` from disk now lives behind `@dawn-ai/core/node`, which the
+ * fetch graph never reaches. Kept as its own assertion until Task 9 folds it
+ * into the strict gate.
  */
-const LOADER_EDGES: readonly string[] = ["tsx/esm/api <- ../core/dist/config.js"]
+const LOADER_EDGES: readonly string[] = []
 
 describe("@dawn-ai/cli/fetch graph purity", () => {
   it("contains no node: import from any @dawn-ai/cli source file", async () => {
@@ -171,14 +167,12 @@ describe("@dawn-ai/cli/fetch graph purity", () => {
     expect(nodeImportEdges(metafile).filter((edge) => !known.has(edge))).toEqual([])
   }, 120_000)
 
-  it("reaches the node TS loader only through the pinned upstream edges", async () => {
+  it("never reaches the node TS loader", async () => {
     const { metafile } = await bundle("fetch-exports.ts")
-    const edges = loaderImportEdges(metafile)
-    // Non-empty: proves the detector actually matches (the subset check below
-    // could otherwise pass on an empty list).
-    expect(edges.length).toBeGreaterThan(0)
-    const known = new Set(LOADER_EDGES)
-    expect(edges.filter((edge) => !known.has(edge))).toEqual([])
+    // Equality, not a subset: `LOADER_EDGES` is empty, so the old
+    // non-vacuousness self-check (`edges.length > 0`) no longer applies.
+    // Task 9 folds this into the strict zero-edge gate.
+    expect(loaderImportEdges(metafile)).toEqual([...LOADER_EDGES])
   }, 120_000)
 
   // Negative control: the same gate applied to the node runtime entry MUST

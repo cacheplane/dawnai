@@ -15,7 +15,6 @@ import { isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import {
   type DawnConfig,
-  loadDawnConfig,
   type ResolvedStateField,
   type RouteManifest,
   resolveStateFields,
@@ -29,6 +28,7 @@ import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { localExec, localFilesystem } from "@dawn-ai/workspace/node"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { loadMiddleware } from "../dev/middleware.js"
+import { loadDawnConfig } from "../node-config.js"
 import {
   __resetPreparedRouteModulesForTests,
   __resetStaticDescriptorMapsForTests,

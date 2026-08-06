@@ -46,15 +46,16 @@ export type {
 } from "./capabilities/types.js"
 export type { CreateWorkspaceFsOptions } from "./capabilities/workspace-fs.js"
 export { createWorkspaceFs } from "./capabilities/workspace-fs.js"
+export type { DawnConfigLoader } from "./config.js"
 export {
   __clearDawnConfigCacheForTests,
   loadDawnConfig,
-  registerTsxLoader,
+  registerConfigLoader,
   seedDawnConfig,
 } from "./config.js"
 export { config } from "./config-helper.js"
 // DELIBERATELY NOT HERE: `discoverRoutes`, `findDawnApp`,
-// `assertDawnRoutesDir`, `extractToolSchemasForRoute` and
+// `assertDawnRoutesDir`, `registerTsxLoader`, `extractToolSchemasForRoute` and
 // `extractToolTypesForRoute` ship from "@dawn-ai/core/node". They read the
 // filesystem / load the TypeScript compiler, and a barrel re-export is an
 // import edge even for consumers that never call them. Their PURE siblings

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { importCore, importCoreNode, importMemory } from "./runtime-imports"
+import { importCoreNode, importMemory } from "./runtime-imports"
 
 export interface ResolvedIdentity {
   readonly keys: readonly string[]
@@ -33,8 +33,7 @@ export async function resolveIdentityKeys(
 ): Promise<ResolvedIdentity> {
   const DEFAULT = ["subject", "predicate"] as const
   const { parseNamespace, routeNamespaceKey } = await importMemory()
-  const { registerTsxLoader } = await importCore()
-  const { discoverRoutes } = await importCoreNode()
+  const { discoverRoutes, registerTsxLoader } = await importCoreNode()
   const routeKey = parseNamespace(namespace).route
   if (!routeKey) return { keys: DEFAULT, fallback: true }
   let manifest: Awaited<ReturnType<typeof discoverRoutes>>

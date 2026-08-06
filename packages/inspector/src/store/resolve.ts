@@ -3,7 +3,7 @@ import { join } from "node:path"
 import type { Embedder } from "@dawn-ai/core"
 import type { MemoryStore, RecallRankingOptions, VectorRankingOptions } from "@dawn-ai/memory"
 
-import { importCore, importMemory } from "./runtime-imports"
+import { importCore, importCoreNode, importMemory } from "./runtime-imports"
 
 export interface ResolvedStore {
   readonly store: MemoryStore
@@ -57,6 +57,10 @@ async function doResolve(): Promise<ResolvedStore> {
   }
   // Present but broken must THROW (actionable), not silently fall back.
   const { loadDawnConfig } = await importCore()
+  // The memo dispatches through a registered loader; the disk one ships from
+  // the node subpath, and this server process is the one that has to opt in.
+  const { registerNodeConfigLoader } = await importCoreNode()
+  registerNodeConfigLoader()
   const loaded = await loadDawnConfig({ appRoot })
   const memory = loaded.config.memory
   const embedder = memory?.vector?.embedder

@@ -13,8 +13,17 @@
  * The PURE members of `discovery/` and `typegen/` (route-segment parsing and
  * the `.d.ts` renderers) deliberately stay on the `.` barrel: the fetch path
  * calls `toRouteSegments` when it builds a registry from a static manifest.
+ *
+ * Importing this barrel also REGISTERS the disk config loader (`config-node.js`
+ * self-registers on import), so `loadDawnConfig` reads `dawn.config.ts` exactly
+ * as it did before the split for anything on the node lane.
  */
 
+export {
+  loadDawnConfigUncached,
+  registerNodeConfigLoader,
+  registerTsxLoader,
+} from "./config-node.js"
 export { discoverRoutes } from "./discovery/discover-routes.js"
 export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"
 export { nodeMarkerFs } from "./node-marker-fs.js"

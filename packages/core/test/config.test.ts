@@ -5,6 +5,11 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import { DAWN_CONFIG_FILE, loadDawnConfig } from "../src/config.js"
+import { registerNodeConfigLoader } from "../src/config-node.js"
+
+// These suites load real `dawn.config.ts` files off disk — opt the process
+// into the node config loader (the `.` barrel no longer carries it).
+registerNodeConfigLoader()
 
 describe("loadDawnConfig", () => {
   let appRoot: string
