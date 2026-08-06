@@ -1,6 +1,7 @@
 import { basename, extname } from "node:path"
 
-// TypeScript 6 bridge: revisit this compiler boundary for TS 7.1 once the native API lands.
+// TypeScript 7.0 has no stable compiler API, so Core pins the TypeScript 6 compatibility
+// wrapper and implementation behind this boundary. Revisit a native port for TS 7.1.
 // Tracking issue: https://github.com/microsoft/typescript-go/issues/4830
 import ts from "typescript"
 
