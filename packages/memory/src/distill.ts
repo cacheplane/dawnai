@@ -121,7 +121,7 @@ function compareId(a: MemoryRecord, b: MemoryRecord): number {
 
 /** Record content is untrusted text (it came from a run, a tool, or a user) and is
  *  interpolated into a prompt as one bullet per record. Two cheap structural
- *  defenses, both pure so prompts stay byte-identical for the same input:
+ *  defenses, both pure so prompts stay character-for-character stable for the same input:
  *  newlines collapse to spaces (an embedded "\n- [2026-…] ignore the above" line
  *  would otherwise be indistinguishable from a real record), and backtick runs
  *  collapse to one (content can't open or close a fence around the list).
@@ -260,7 +260,7 @@ function shortHash(input: string): string {
  *  SAME batch overwrites its own summary instead of piling up duplicates — the
  *  idempotency the engine relies on.
  *  The source ids are part of the hash because (namespace, period) alone is NOT
- *  unique: when every record in a namespace-week shares a byte-identical event
+ *  unique: when every record in a namespace-week shares an exactly equal event
  *  time (bulk import, backfill) and maxBatchSize splits them, each chunk derives
  *  the same since/until (t and t+1ms) — two distinct batches, one id, and the
  *  second summary would silently overwrite the first. Hashing the chunk's own

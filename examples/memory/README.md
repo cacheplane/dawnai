@@ -56,6 +56,29 @@ pnpm --filter @dawn-example/memory dev
 
 The app creates its tables + HNSW index on first write.
 
+## Distillation
+
+Once the app has accumulated some history, the two distillation passes compact it
+— consolidation summarizes old episodes per (namespace, ISO week); reflection
+derives durable insights:
+
+```sh
+# See the plan without spending a token (no model call, no key needed):
+pnpm --filter @dawn-example/memory exec dawn memory consolidate --dry-run
+pnpm --filter @dawn-example/memory exec dawn memory reflect --dry-run
+
+# Run them for real (needs OPENAI_API_KEY — the default model is gpt-5-mini):
+pnpm --filter @dawn-example/memory exec dawn memory consolidate
+pnpm --filter @dawn-example/memory exec dawn memory reflect
+```
+
+Both are threshold-aware no-ops, so running them before there is anything to
+distill just prints `nothing to consolidate` / `nothing to reflect on` and exits
+`0` without constructing a model. Reflection writes its insights as **candidates**
+by default — review them with `dawn memory list` and promote with
+`dawn memory approve <id>`. See the [distillation docs][distill] for every flag
+and the `memory.distill` config block.
+
 ## Continuous dogfood
 
 `packages/testing/test/memory-example-dogfood.test.ts` drives this **real
@@ -74,5 +97,6 @@ pnpm --filter @dawn-ai/testing exec vitest run test/memory-example-dogfood.test.
 DAWN_TEST_PGVECTOR=1 pnpm --filter @dawn-ai/testing exec vitest run test/memory-example-dogfood.test.ts
 ```
 
+[distill]: https://dawnai.org/docs/memory#distillation
 [pgvector]: https://github.com/pgvector/pgvector
 [Testcontainers]: https://testcontainers.com/

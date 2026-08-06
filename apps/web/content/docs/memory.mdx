@@ -321,6 +321,137 @@ The generated `remember` tool then appends one event per call — identical data
   Auto-recorded episodes are recalled by keyword and time window only — they are not embedded, even when [semantic recall](#semantic-recall-opt-in) is configured, and `episodes.embed: true` is not yet supported (it resolves to `false` with a warning). Time plus keywords is the natural query shape for "what happened"; semantic search over episodes is a follow-up.
 </Callout>
 
+## Distillation
+
+Episodes accumulate. A busy route writes one episodic record per run, and after a few weeks recall is sifting hundreds of near-identical "run ok: …" lines for the one that matters. **Distillation** is the compaction pass: two explicitly-invoked commands that spend a model call to turn many raw records into fewer, denser ones.
+
+```bash
+dawn memory consolidate [--dry-run] [--namespace <prefix>] [--model <id>] [--provider <id>] [--max-batches <n>]
+dawn memory reflect     [--dry-run] [--namespace <prefix>] [--model <id>] [--provider <id>] [--max-batches <n>]
+```
+
+Nothing runs automatically. Neither pass is wired into the runtime, a request, or the lazy retention pass — distillation happens **only** when you invoke one of these commands (by hand, or from cron).
+
+| Flag | What it does |
+|---|---|
+| `--dry-run` | Print the plan — which namespaces, which windows, how many records — and write nothing. Makes **zero** model calls and constructs no model. |
+| `--namespace <prefix>` | Restrict the pass to namespaces starting with this prefix (e.g. `route=/support`). |
+| `--model <id>` | Override `memory.distill.model` for this run. |
+| `--provider <id>` | Override the provider. Precedence: `--provider` → an authored `memory.distill.provider` → inference from `--model` → the resolved default. Overriding the model normally moves the provider *with* it, so a Claude model id never reaches an OpenAI client — unless the app authored a provider deliberately. |
+| `--max-batches <n>` | Cap the work (and the spend) for this invocation. Consolidation counts batches; reflection counts namespaces. |
+| `--cwd <path>` | Operate on a different app root (as with every `dawn memory` subcommand). |
+
+### Consolidation
+
+`dawn memory consolidate` compacts old episodes into one summary per window:
+
+1. **Select** — active episodic records older than `consolidate.olderThanMs` (default **7 days**), grouped per `(namespace, ISO week)`. A group smaller than `minBatchSize` (default **5**) is skipped; a group larger than `maxBatchSize` (default **50**) is split into chunks. Oldest batch first, so a capped pass always makes progress on what has waited longest.
+2. **Summarize** — one LLM call per batch.
+3. **Write, then link** — the summary record is written **first**, and only then are its sources superseded. A crash between the two leaves a redundant summary (cheap, visible) rather than orphaned superseded records with nothing summarizing them.
+
+The summary is an episodic record tagged `["consolidated"]`, with `effectiveAt` set to the window's **end** and, by default, no expiry:
+
+```json
+{
+  "kind": "episodic",
+  "tags": ["consolidated"],
+  "content": "Across the week the agent ran 12 deployment checks…",
+  "data": {
+    "period": { "since": "2026-07-27T00:00:00.000Z", "until": "2026-08-03T00:00:00.000Z" },
+    "sourceCount": 12,
+    "derivedFrom": ["memory_ep_…", "memory_ep_…"]
+  },
+  "effectiveAt": "2026-08-03T00:00:00.000Z"
+}
+```
+
+Each source is superseded (pointing at the summary, so the audit trail survives) **and** stamped with an expiry `now + consolidate.sourceTtlMs` (default **7 days**) so the normal [retention pass](#retention) reaps it later. That second step matters: a superseded row is invisible to `recall` but still occupies a slot in the per-namespace episodic cap, so without an expiry the compacted rows would keep evicting live ones forever. The window between supersede and reap is deliberate — the sources stay inspectable in the [Inspector](/docs/inspector) while you check the summary is any good.
+
+Summaries are **never re-consolidated**: any record carrying `data.derivedFrom` is excluded from every pass, so consolidation never summarizes summaries and never loses the provenance chain.
+
+<Callout type="info" title="Why summaries rank at the end of their window">
+  The episodic cap ranks rows by `effectiveAt` (falling back to `createdAt`), status-agnostic. Stamping a summary with its window's *start* would sort it as the oldest row of its own batch, and the cap would evict the summary **before** the superseded sources it replaced — compaction that loses the compacted result. A summary represents the whole window, so it ranks at the window's end and outlives its own sources.
+</Callout>
+
+### Reflection
+
+`dawn memory reflect` derives durable insights from a namespace's recent memories — the "what have I learned" pass, as opposed to consolidation's "what happened".
+
+Per namespace, it collects records newer than that namespace's **watermark** (the highest `data.coveredUntil` across existing reflections in *exactly* that namespace). Fewer than `reflect.minNewRecords` new records (default **10**) and the namespace is skipped; more than `reflect.maxRecords` (default **100**) and only the newest window is fed in. One LLM call per namespace yields 0..N reflection records:
+
+```json
+{
+  "kind": "reflection",
+  "status": "candidate",
+  "content": "Billing escalations cluster on Mondays.",
+  "data": {
+    "insight": "Billing escalations cluster on Mondays.",
+    "confidence": 0.8,
+    "coveredUntil": "2026-08-03T12:00:00.000Z",
+    "derivedFrom": ["memory_ep_…", "memory_ep_…"]
+  }
+}
+```
+
+Insights land as **candidates by default** — a model's generalization about your users is exactly the kind of write that deserves a human read before `recall` can surface it. Review them like any other candidate: the [Inspector](/docs/inspector)'s Approve button, or `dawn memory approve <id>`. Set `reflect.writes: "auto"` to write them `active` directly.
+
+Because the watermark advances with each pass, re-running `reflect` is cheap: a namespace with nothing new since its last reflection is skipped without a model call. Reflections are **append-only** — a later insight never supersedes an earlier one (see [write governance](#write-governance)); distillation accumulates insights rather than overwriting them.
+
+### Provenance
+
+Both passes record where a derived record came from, in two independent places:
+
+- **`data.derivedFrom`** — the ids of every source record fed into the model call, on the derived record itself.
+- **`supersedes` links** — consolidation additionally points each superseded source at its summary, which is what the Inspector's history view walks.
+
+That is deliberately a flat list of ids, not a graph. A proper memory graph (typed edges and relations between records) remains [deferred](#whats-deferred).
+
+### Cost
+
+These are the only `dawn memory` subcommands that **spend model tokens**. Three properties keep that predictable:
+
+- **`--dry-run` is free.** It reports the exact plan — namespaces, windows, record counts — and makes zero model calls.
+- **An idle run costs nothing and needs no key.** Both commands are threshold-aware no-ops: below the thresholds they print one line (`nothing to consolidate` / `nothing to reflect on`), exit `0`, and never construct a model — so they never read `OPENAI_API_KEY`. A nightly cron on a quiet app is free and works without any credentials configured.
+- **`--max-batches` is the ceiling.** Default **5** per invocation, so a first run against a large backlog can't turn into an unbounded spend. Remaining work is reported and picked up next run.
+
+Failures are isolated per batch: one bad batch is logged and the pass continues, then the command exits non-zero so cron notices.
+
+### Running it on a schedule
+
+```bash title="crontab"
+0 3 * * * cd /srv/app && npx dawn memory consolidate && npx dawn memory reflect
+```
+
+Both commands are safe to run every night on any app, whether or not it has anything to distill — that's what the no-op path above is for. Pair it with `dawn memory prune` if you also want retention run on a schedule rather than lazily.
+
+### Distillation configuration
+
+Every knob, with its default:
+
+```ts title="dawn.config.ts"
+export default {
+  memory: {
+    distill: {
+      model: "gpt-5-mini",   // default "gpt-5-mini"
+      // provider: "openai", // default: inferred from `model`, else "openai"
+      maxBatches: 5,         // default 5 — batches (consolidate) / namespaces (reflect) per run
+      consolidate: {
+        olderThanMs: 7 * 86_400_000,  // default 7d — only records older than this
+        minBatchSize: 5,              // default 5 — smaller groups are skipped
+        maxBatchSize: 50,             // default 50 — larger groups are split
+        // ttlMs: undefined,          // default unset — summaries never expire
+        sourceTtlMs: 7 * 86_400_000,  // default 7d — how long superseded sources linger before prune reaps them
+      },
+      reflect: {
+        minNewRecords: 10,     // default 10 — new records needed since the watermark
+        maxRecords: 100,       // default 100 — newest N fed to one pass
+        writes: "candidate",   // default "candidate" — "auto" writes insights active
+      },
+    },
+  },
+} satisfies import("@dawn-ai/core").DawnConfig
+```
+
 ## Write governance
 
 The `memory.writes` mode in `dawn.config.ts` controls what `remember` does. It defaults to `"candidate"`.
@@ -436,11 +567,12 @@ For deterministic coverage the aimock harness scripts exact tool arguments — w
 
 ## What's deferred
 
-Long-term memory ships with the `semantic` and [`episodic`](#episodic-memory) kinds, deterministic ranked keyword recall (IDF-weighted relevance blended with recency and confidence), [opt-in hybrid vector recall](#semantic-recall-opt-in), and the [runtime episode recorder](#episodic-memory). The following are typed or designed but **not** implemented:
+Long-term memory ships with the `semantic`, [`episodic`](#episodic-memory) and `reflection` kinds, deterministic ranked keyword recall (IDF-weighted relevance blended with recency and confidence), [opt-in hybrid vector recall](#semantic-recall-opt-in), the [runtime episode recorder](#episodic-memory), and [distillation](#distillation) (`dawn memory consolidate` / `dawn memory reflect`). The following are typed or designed but **not** implemented:
 
-- The `procedural` and `reflection` kinds, and background consolidation (summarizing old episodes into semantic facts).
+- The `procedural` kind (`remember` throws for it).
 - Embedded episodes (`episodes.embed: true`) — auto-episodes are keyword + time-window recall only.
 - Full BM25 (term-frequency / length-normalized) ranking via FTS5, and a memory graph.
+- Higher-order (re-)consolidation — summaries are never themselves consolidated into longer-horizon summaries.
 
 A browser UI for the store — the [Dawn Inspector](/docs/inspector)'s Memory panel — ships today via `dawn inspect`.
 

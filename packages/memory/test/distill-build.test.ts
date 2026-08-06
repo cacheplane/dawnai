@@ -39,7 +39,7 @@ describe("prompts", () => {
     expect(p).toMatch(/insight/i)
     expect(p).toMatch(/JSON/i)
   })
-  it("is deterministic — same input, byte-identical prompt", () => {
+  it("is deterministic — same input, character-for-character identical prompt", () => {
     expect(buildConsolidationPrompt(BATCH)).toBe(buildConsolidationPrompt(BATCH))
   })
 })
