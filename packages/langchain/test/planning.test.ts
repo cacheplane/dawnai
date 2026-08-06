@@ -3,8 +3,16 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { applyCapabilities, createCapabilityRegistry, createPlanningMarker } from "@dawn-ai/core"
 import { type Command, isCommand } from "@langchain/langgraph"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { convertToolToLangChain } from "../src/tool-converter.js"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { convertToolToLangChain } from "../src/tool-converter.ts"
+
+const dispatchCustomEvent = vi.hoisted(() => vi.fn())
+
+vi.mock("@langchain/core/callbacks/dispatch", () => ({ dispatchCustomEvent }))
+
+beforeEach(() => {
+  dispatchCustomEvent.mockReset()
+})
 
 describe("planning capability — end-to-end shape", () => {
   let routeDir: string
@@ -112,17 +120,20 @@ describe("planning capability — state mutation end-to-end", () => {
       })
       const writeTodos = result.contributions[0]?.contribution.tools?.[0]
       expect(writeTodos?.name).toBe("writeTodos")
+      if (!writeTodos) throw new Error("planning capability did not contribute writeTodos")
 
       const newTodos = [
         { content: "first task", status: "in_progress" as const },
         { content: "second task", status: "pending" as const },
       ]
 
-      const converted = convertToolToLangChain(writeTodos!)
+      const transformers = result.contributions[0]?.contribution.streamTransformers ?? []
+      const converted = convertToolToLangChain(writeTodos, undefined, undefined, [], transformers)
+      const config = { signal: new AbortController().signal }
       const langchainResult = await converted.func(
         { todos: newTodos },
         undefined as unknown as never,
-        { signal: new AbortController().signal } as unknown as never,
+        config as unknown as never,
       )
 
       expect(isCommand(langchainResult)).toBe(true)
@@ -135,6 +146,12 @@ describe("planning capability — state mutation end-to-end", () => {
       expect(Array.isArray(update.messages)).toBe(true)
       const msg = update.messages?.[0]
       expect(msg?.content).toBe(JSON.stringify({ todos: newTodos }))
+      expect(dispatchCustomEvent).toHaveBeenCalledTimes(1)
+      expect(dispatchCustomEvent).toHaveBeenCalledWith(
+        "dawn.capability",
+        { event: "plan_update", data: { todos: newTodos } },
+        config,
+      )
     } finally {
       rmSync(routeDir, { recursive: true, force: true })
     }

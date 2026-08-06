@@ -1,4 +1,5 @@
-import type { JsonSchemaProperty } from "@dawn-ai/core"
+import type { JsonSchemaProperty, StreamTransformer } from "@dawn-ai/core"
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch"
 import { ToolMessage } from "@langchain/core/messages"
 import { DynamicStructuredTool } from "@langchain/core/tools"
 import { Command } from "@langchain/langgraph"
@@ -27,6 +28,7 @@ export function convertToolToLangChain(
   middlewareContext?: Readonly<Record<string, unknown>>,
   offload?: OffloadFn,
   routeParamNames: readonly string[] = [],
+  streamTransformers: readonly StreamTransformer[] = [],
 ): DynamicStructuredTool {
   const schema = toZodSchema(tool.schema)
   const paramNameSet = new Set(routeParamNames)
@@ -62,22 +64,36 @@ export function convertToolToLangChain(
         ? await offload(content, tool.name, toolCallId || undefined)
         : content
 
-      if (stateUpdates) {
-        return new Command({
-          update: {
-            ...stateUpdates,
-            messages: [
-              new ToolMessage({
-                content: finalContent,
-                tool_call_id: toolCallId,
-                name: tool.name,
-              }),
-            ],
-          },
-        })
+      const convertedResult = stateUpdates
+        ? new Command({
+            update: {
+              ...stateUpdates,
+              messages: [
+                new ToolMessage({
+                  content: finalContent,
+                  tool_call_id: toolCallId,
+                  name: tool.name,
+                }),
+              ],
+            },
+          })
+        : finalContent
+
+      for (const transformer of streamTransformers) {
+        if (transformer.observes !== "tool_result") continue
+        for await (const output of transformer.transform({
+          toolName: tool.name,
+          toolOutput: convertedResult,
+        })) {
+          await dispatchCustomEvent(
+            "dawn.capability",
+            { event: output.event, data: output.data },
+            config,
+          )
+        }
       }
 
-      return finalContent
+      return convertedResult
     },
   })
 }

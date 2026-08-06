@@ -2,7 +2,104 @@ import { agent } from "@dawn-ai/sdk"
 import { AIMessage } from "@langchain/core/messages"
 import { MemorySaver } from "@langchain/langgraph"
 import { describe, expect, test, vi } from "vitest"
-import { executeAgent } from "../src/agent-adapter.js"
+import { executeAgent, streamAgent } from "../src/agent-adapter.ts"
+
+async function collectCustomEvents(metadata?: Record<string, unknown>) {
+  const inheritedEvent = Object.assign(Object.create({ event: "inherited" }), {
+    data: "invalid",
+  })
+  const entry = {
+    invoke: vi.fn(),
+    async *streamEvents() {
+      yield {
+        event: "on_tool_end",
+        run_id: "tool-1",
+        name: "writeTodos",
+        data: { output: { todos: ["legacy"] } },
+      }
+      yield {
+        event: "on_custom_event",
+        run_id: "custom-1",
+        name: "dawn.capability",
+        data: { event: "plan_update", data: { todos: ["one"] } },
+        ...(metadata ? { metadata } : {}),
+      }
+      yield {
+        event: "on_custom_event",
+        run_id: "custom-2",
+        name: "dawn.capability",
+        data: { event: 42, data: "invalid" },
+        ...(metadata ? { metadata } : {}),
+      }
+      yield {
+        event: "on_custom_event",
+        run_id: "custom-3",
+        name: "dawn.capability",
+        data: inheritedEvent,
+        ...(metadata ? { metadata } : {}),
+      }
+      yield {
+        event: "on_custom_event",
+        run_id: "custom-4",
+        name: "other.event",
+        data: { event: "ignored", data: "invalid" },
+        ...(metadata ? { metadata } : {}),
+      }
+      yield {
+        event: "on_chain_end",
+        run_id: "root",
+        name: "LangGraph",
+        data: { output: { ok: true } },
+      }
+    },
+  }
+  const chunks = []
+  for await (const chunk of streamAgent({
+    checkpointer: new MemorySaver(),
+    entry,
+    input: { question: "hi" },
+    routeParamNames: [],
+    signal: new AbortController().signal,
+    streamTransformers: [
+      {
+        observes: "tool_result",
+        transform: async function* () {
+          yield { event: "plan_update", data: { todos: ["legacy"] } }
+        },
+      },
+    ],
+    tools: [],
+  })) {
+    chunks.push(chunk)
+  }
+  return chunks
+}
+
+describe("capability custom events", () => {
+  test("maps a valid root capability payload and ignores malformed payloads", async () => {
+    await expect(collectCustomEvents()).resolves.toEqual([
+      {
+        type: "tool_result",
+        data: { id: "tool-1", name: "writeTodos", output: { todos: ["legacy"] } },
+      },
+      { type: "plan_update", data: { todos: ["one"] } },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("namespaces a child capability payload from Dawn subagent metadata", async () => {
+    const chunks = await collectCustomEvents({
+      dawn: {
+        subagent_stack: [{ callId: "call-1", name: "researcher", routeId: "/researcher" }],
+      },
+    })
+
+    expect(chunks[1]).toEqual({
+      type: "subagent.plan_update",
+      data: { todos: ["one"] },
+    })
+  })
+})
 
 describe("executeAgent with DawnAgent descriptors", () => {
   test("DawnAgent descriptor is recognized and does not throw invoke error", async () => {

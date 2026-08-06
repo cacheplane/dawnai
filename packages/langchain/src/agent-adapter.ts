@@ -101,6 +101,7 @@ async function materializeAgent(
     readonly offload?: OffloadFn
     readonly summarization?: ResolvedSummarizationConfig
     readonly routeParamNames?: readonly string[]
+    readonly streamTransformers?: readonly StreamTransformer[]
   } = {},
 ): Promise<AgentLike> {
   const fingerprint = fragmentFingerprint(opts.promptFragments ?? [])
@@ -115,7 +116,13 @@ async function materializeAgent(
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
 
   const langchainTools = tools.map((tool) =>
-    convertToolToLangChain(tool, opts.middlewareContext, opts.offload, opts.routeParamNames ?? []),
+    convertToolToLangChain(
+      tool,
+      opts.middlewareContext,
+      opts.offload,
+      opts.routeParamNames ?? [],
+      opts.streamTransformers ?? [],
+    ),
   )
 
   const provider = resolveProvider({
@@ -175,6 +182,7 @@ export async function materializeAgentGraph(options: {
   readonly descriptor: DawnAgent
   readonly tools?: readonly DawnToolDefinition[]
   readonly stateFields?: readonly ResolvedStateField[]
+  readonly streamTransformers?: readonly StreamTransformer[]
   readonly promptFragments?: readonly PromptFragment[]
   readonly summarization?: ResolvedSummarizationConfig
   /**
@@ -188,6 +196,7 @@ export async function materializeAgentGraph(options: {
     ...(options.stateFields ? { stateFields: options.stateFields } : {}),
     ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
     ...(options.summarization ? { summarization: options.summarization } : {}),
+    ...(options.streamTransformers ? { streamTransformers: options.streamTransformers } : {}),
     ...(options.sandboxed === true ? { bypassCache: true } : {}),
   })
 }
@@ -195,6 +204,41 @@ export async function materializeAgentGraph(options: {
 export interface AgentStreamChunk {
   readonly type: "token" | "tool_call" | "tool_result" | "interrupt" | "done" | (string & {})
   readonly data: unknown
+}
+
+interface CapabilityEventPayload {
+  readonly data: unknown
+  readonly event: string
+}
+
+function parseCapabilityEvent(value: unknown): CapabilityEventPayload | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const payload = value as Record<string, unknown>
+  if (!Object.hasOwn(payload, "event")) return undefined
+  if (typeof payload.event !== "string" || payload.event.length === 0) return undefined
+  if (!Object.hasOwn(payload, "data")) return undefined
+  return { event: payload.event, data: payload.data }
+}
+
+function hasSubagentStack(metadata: Record<string, unknown> | undefined): boolean {
+  const dawn = metadata?.dawn
+  if (typeof dawn !== "object" || dawn === null) return false
+  const stack = (dawn as Record<string, unknown>).subagent_stack
+  return (
+    Array.isArray(stack) &&
+    stack.length > 0 &&
+    stack.every(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        typeof (entry as Record<string, unknown>).callId === "string" &&
+        (entry as Record<string, unknown>).callId !== "" &&
+        typeof (entry as Record<string, unknown>).name === "string" &&
+        (entry as Record<string, unknown>).name !== "" &&
+        typeof (entry as Record<string, unknown>).routeId === "string" &&
+        (entry as Record<string, unknown>).routeId !== "",
+    )
+  )
 }
 
 /**
@@ -444,6 +488,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
         ...(options.offload ? { offload: options.offload } : {}),
         ...(options.summarization ? { summarization: options.summarization } : {}),
         routeParamNames: options.routeParamNames,
+        ...(options.streamTransformers ? { streamTransformers: options.streamTransformers } : {}),
       },
     )
     const retryConfig = options.entry.retry
@@ -453,7 +498,6 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       runnableInput,
       config,
       retryConfig,
-      options.streamTransformers,
       subagentEvents,
       streamContext,
     )
@@ -469,6 +513,7 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
       options.middlewareContext,
       options.offload,
       options.routeParamNames,
+      options.streamTransformers ?? [],
     ),
   )
   if (langchainTools.length > 0) {
@@ -481,7 +526,6 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
     runnableInput,
     config,
     options.retry,
-    options.streamTransformers,
     subagentEvents,
     streamContext,
   )
@@ -529,7 +573,6 @@ async function* streamFromRunnable(
   input: unknown,
   config: Record<string, unknown>,
   retryConfig?: RetryConfig,
-  streamTransformers?: readonly StreamTransformer[],
   subagentEvents?: AgentStreamChunk[],
   streamContext?: SubagentStreamContext,
 ): AsyncGenerator<AgentStreamChunk> {
@@ -550,6 +593,7 @@ async function* streamFromRunnable(
       event: string
       run_id: string
       data: { chunk?: unknown; input?: unknown; output?: unknown; error?: unknown }
+      metadata?: Record<string, unknown>
       name: string
     }>
   }
@@ -637,17 +681,16 @@ async function* streamFromRunnable(
                 type: "tool_result" as const,
                 data: { id: event.run_id, name: event.name, output: event.data.output },
               }
-              for (const transformer of streamTransformers ?? []) {
-                if (transformer.observes !== "tool_result") continue
-                for await (const out of transformer.transform({
-                  toolName: event.name,
-                  toolOutput: event.data.output,
-                })) {
-                  yield {
-                    type: out.event as AgentStreamChunk["type"],
-                    data: out.data,
-                  }
-                }
+              break
+            }
+            case "on_custom_event": {
+              if (event.name !== "dawn.capability") break
+              const payload = parseCapabilityEvent(event.data)
+              if (!payload) break
+              hasYielded = true
+              yield {
+                type: `${hasSubagentStack(event.metadata) ? "subagent." : ""}${payload.event}`,
+                data: payload.data,
               }
               break
             }
