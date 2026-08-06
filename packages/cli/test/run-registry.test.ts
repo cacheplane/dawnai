@@ -70,4 +70,15 @@ describe("createRunRegistry", () => {
     expect(run?.signal.aborted).toBe(true)
     expect(run?.cancelled).toBe(false)
   })
+
+  it("stops listening to the shutdown signal after release", () => {
+    const registry = createRunRegistry()
+    const shutdownController = new AbortController()
+    const run = registry.begin("t1", shutdownController.signal)
+    run?.release()
+    shutdownController.abort()
+    // Proxy for "the abort listener was removed": a released run no longer
+    // reacts to shutdown. Without removeEventListener this would be true.
+    expect(run?.signal.aborted).toBe(false)
+  })
 })
