@@ -121,7 +121,20 @@ export async function resolveEpisodesConfig(appRoot: string): Promise<ResolvedEp
 /** Resolved `config.memory.distill` — the distillation commands' knobs. */
 export interface ResolvedDistillConfig {
   readonly model: string
+  /** Always populated — the EFFECTIVE provider (authored, else inferred from
+   *  `model`, else `"openai"`). Pair with `providerAuthored` before overriding. */
   readonly provider: ModelProviderId
+  /**
+   * True only when `memory.distill.provider` was authored in `dawn.config.ts`.
+   *
+   * `provider` alone cannot distinguish a deliberate choice from an inferred
+   * default, and the two must be treated differently: an authored provider is a
+   * decision (a proxy, an OpenAI-compatible endpoint) that outranks inference,
+   * while an inferred one is just a guess derived from `model` — so a caller
+   * that overrides the model (`dawn memory consolidate --model …`) must re-infer
+   * rather than pair a Claude model id with ChatOpenAI.
+   */
+  readonly providerAuthored: boolean
   readonly maxBatches: number
   readonly consolidate: {
     readonly olderThanMs: number
@@ -164,6 +177,7 @@ export async function resolveDistillConfig(appRoot: string): Promise<ResolvedDis
   return {
     model,
     provider: distill?.provider ?? inferProvider(model) ?? "openai",
+    providerAuthored: distill?.provider !== undefined,
     maxBatches: distill?.maxBatches ?? 5,
     consolidate: {
       olderThanMs: consolidate?.olderThanMs ?? 7 * 86_400_000,

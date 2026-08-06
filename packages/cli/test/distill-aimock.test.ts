@@ -244,6 +244,44 @@ describe("distillation through the real chat-model path (aimock)", () => {
     expect(summaries[0]?.content).toBe("good namespace summary")
   }, 60_000)
 
+  it("an authored provider survives a --model override (end to end)", async () => {
+    // The positive half of the provider-selection story: `provider: "openai"`
+    // is authored, `--model gpt-5` overrides only the model id, and the run
+    // completes against the OpenAI-shaped mock — the authored provider was
+    // honored and the flag's model id reached the wire.
+    await startAimock([
+      {
+        match: { userMessage: CONSOLIDATION_PROMPT_MARKER },
+        response: { content: '{"summary":"summarized by the authored provider"}' },
+      },
+    ])
+    const appRoot = await makeApp()
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      DAWN_CONFIG.replace("distill: {", 'distill: { provider: "openai",'),
+    )
+    const store = await seed(
+      appRoot,
+      [6, 7].map((d) => episode(`e${d}`, d)),
+    )
+
+    const out: string[] = []
+    const err: string[] = []
+    await runMemoryCommand(
+      ["consolidate", "--model", "gpt-5"],
+      { cwd: appRoot },
+      { stdout: (m) => out.push(m), stderr: (m) => err.push(m) },
+    )
+
+    expect(err.join("")).toBe("")
+    expect(out.join("")).toMatch(/consolidate: 1 batch\(es\), 1 written, 0 failed/)
+    const summaries = (await store.browse({ kind: "episodic", limit: 100 })).records.filter((r) =>
+      r.tags.includes("consolidated"),
+    )
+    expect(summaries).toHaveLength(1)
+    expect(summaries[0]?.content).toBe("summarized by the authored provider")
+  }, 60_000)
+
   it("the real chat model's .content is a plain string for this path", async () => {
     // Documents the shape the engine parses. `createChatModel` returns a
     // LangChain chat model; over the OpenAI chat-completions wire (which is

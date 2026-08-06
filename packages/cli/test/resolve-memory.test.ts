@@ -185,6 +185,7 @@ describe("resolveDistillConfig", () => {
     expect(await resolveDistillConfig(appRoot)).toEqual({
       model: "gpt-5-mini",
       provider: "openai",
+      providerAuthored: false,
       maxBatches: 5,
       consolidate: { olderThanMs: 7 * 86_400_000, minBatchSize: 5, maxBatchSize: 50 },
       reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },
@@ -199,6 +200,7 @@ describe("resolveDistillConfig", () => {
     expect(await resolveDistillConfig(appRoot)).toEqual({
       model: "gpt-5-mini",
       provider: "openai",
+      providerAuthored: false,
       maxBatches: 5,
       consolidate: { olderThanMs: 7 * 86_400_000, minBatchSize: 5, maxBatchSize: 50 },
       reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },
@@ -238,6 +240,30 @@ describe("resolveDistillConfig", () => {
     expect(c.consolidate.ttlMs).toBe(1000)
   })
 
+  test("flags whether the provider was AUTHORED or merely inferred", async () => {
+    // `provider` is always populated (the documented default survives), so the
+    // only way a caller can tell a deliberate choice from an inferred one is
+    // this flag — `dawn memory <cmd> --model` relies on it to decide whether
+    // re-inferring from the flag's model id is safe.
+    const authoredRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(authoredRoot)
+    await writeFile(
+      join(authoredRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { provider: "anthropic" } } }\n`,
+    )
+    expect((await resolveDistillConfig(authoredRoot)).providerAuthored).toBe(true)
+
+    const inferredRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(inferredRoot)
+    await writeFile(
+      join(inferredRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { model: "claude-sonnet-4-5" } } }\n`,
+    )
+    const inferred = await resolveDistillConfig(inferredRoot)
+    expect(inferred.provider).toBe("anthropic")
+    expect(inferred.providerAuthored).toBe(false)
+  })
+
   test("infers the provider from the configured model when none is set", async () => {
     const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
     tempDirs.push(appRoot)
@@ -272,6 +298,7 @@ describe("resolveDistillConfig", () => {
     expect(await resolveDistillConfig(appRoot)).toEqual({
       model: "gpt-5-mini",
       provider: "openai",
+      providerAuthored: false,
       maxBatches: 5,
       consolidate: { olderThanMs: 7 * 86_400_000, minBatchSize: 5, maxBatchSize: 50 },
       reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },

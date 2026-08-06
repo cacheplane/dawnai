@@ -1,5 +1,7 @@
 import { resolve } from "node:path"
 import { approveWithReconcile, type MemoryStore } from "@dawn-ai/memory"
+import type { ModelProviderId } from "@dawn-ai/sdk"
+import { inferProvider } from "@dawn-ai/sdk"
 import type { Command } from "commander"
 import {
   type DistillResult,
@@ -20,7 +22,8 @@ interface MemoryOptions {
   readonly cwd?: string
 }
 
-const DISTILL_FLAGS = "[--dry-run] [--namespace <prefix>] [--model <id>] [--max-batches <n>]"
+const DISTILL_FLAGS =
+  "[--dry-run] [--namespace <prefix>] [--model <id>] [--provider <id>] [--max-batches <n>]"
 
 const USAGE = [
   "dawn memory <subcommand> [args]",
@@ -224,6 +227,7 @@ async function runDistill(
   let dryRun = false
   let namespacePrefix: string | undefined
   let model: string | undefined
+  let provider: string | undefined
   let maxBatches: number | undefined
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -234,15 +238,28 @@ async function runDistill(
       if (raw === undefined) throw new CliError(`Missing value for --namespace.\n${usage}`, 1)
       namespacePrefix = raw
     } else if (arg === "--model") {
-      // Overrides the model id only — the PROVIDER still comes from the
-      // resolved config (`memory.distill.provider`, itself inferred from the
-      // configured model). Set that when overriding across provider families.
+      // Overriding the model also moves the provider WITH it, unless the app
+      // authored `memory.distill.provider` or `--provider` is given (see
+      // `selectProvider`) — a Claude model id must never reach ChatOpenAI.
       const raw = args[++i]
       if (raw === undefined) throw new CliError(`Missing value for --model.\n${usage}`, 1)
       if (raw.trim() === "") {
         throw new CliError(`Invalid --model value: "${raw}" (expected a model id).\n${usage}`, 1)
       }
       model = raw
+    } else if (arg === "--provider") {
+      // The last resort when inference cannot help: custom/OpenAI-compatible
+      // endpoints. Validated for shape only — `resolveProvider` owns the
+      // supported-id check, and it runs lazily at model-construction time.
+      const raw = args[++i]
+      if (raw === undefined) throw new CliError(`Missing value for --provider.\n${usage}`, 1)
+      if (raw.trim() === "") {
+        throw new CliError(
+          `Invalid --provider value: "${raw}" (expected a provider id).\n${usage}`,
+          1,
+        )
+      }
+      provider = raw
     } else if (arg === "--max-batches") {
       const raw = args[++i]
       if (raw === undefined) throw new CliError(`Missing value for --max-batches.\n${usage}`, 1)
@@ -264,6 +281,7 @@ async function runDistill(
     ...resolved,
     ...(model !== undefined ? { model } : {}),
     ...(maxBatches !== undefined ? { maxBatches } : {}),
+    provider: selectProvider(resolved, model, provider),
   }
 
   const run = command === "consolidate" ? runConsolidation : runReflection
@@ -293,6 +311,31 @@ async function runDistill(
       1,
     )
   }
+}
+
+/**
+ * Which provider the distillation model is built with, in precedence order:
+ *
+ *  1. `--provider` — an explicit instruction, and the only escape hatch when
+ *     inference cannot help (custom or OpenAI-compatible endpoints).
+ *  2. An AUTHORED `memory.distill.provider` — a deliberate choice in the app's
+ *     config, so `--model` may retarget the model id without silently moving
+ *     the provider out from under it.
+ *  3. Inference from the `--model` id — because the config's provider was
+ *     itself only inferred from the CONFIGURED model, and that inference stops
+ *     being valid the moment a different model is requested. Falls back to the
+ *     resolved provider when the flag's id is unknown to `inferProvider` (a
+ *     local/proxy id keeps working; `--provider` covers the rest).
+ *  4. The resolved config provider — no flags, nothing to reconsider.
+ */
+function selectProvider(
+  resolved: ResolvedDistillConfig,
+  modelFlag: string | undefined,
+  providerFlag: string | undefined,
+): ModelProviderId {
+  if (providerFlag !== undefined) return providerFlag
+  if (modelFlag === undefined || resolved.providerAuthored) return resolved.provider
+  return inferProvider(modelFlag) ?? resolved.provider
 }
 
 /**

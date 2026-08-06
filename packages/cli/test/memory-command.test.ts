@@ -467,6 +467,97 @@ describe("dawn memory", () => {
     expect(await consolidatedRecords(store)).toHaveLength(0)
   })
 
+  // Provider selection. Every case below is asserted through a model-CONSTRUCTION
+  // error, so no test here ever reaches `.invoke()` — with both provider keys
+  // unset there is no way for a wrong branch to make a real network call.
+  async function withoutProviderKeys<T>(fn: () => Promise<T>): Promise<T> {
+    const saved = {
+      openai: process.env.OPENAI_API_KEY,
+      openaiBase: process.env.OPENAI_BASE_URL,
+      anthropic: process.env.ANTHROPIC_API_KEY,
+    }
+    process.env.OPENAI_API_KEY = undefined
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_BASE_URL
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      return await fn()
+    } finally {
+      if (saved.openai !== undefined) process.env.OPENAI_API_KEY = saved.openai
+      if (saved.openaiBase !== undefined) process.env.OPENAI_BASE_URL = saved.openaiBase
+      if (saved.anthropic !== undefined) process.env.ANTHROPIC_API_KEY = saved.anthropic
+    }
+  }
+
+  async function appWithWork(config?: string): Promise<string> {
+    const appRoot = await makeApp()
+    if (config !== undefined) await writeFile(join(appRoot, "dawn.config.ts"), config)
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    for (const day of [6, 7, 8, 9, 10]) await store.put(episode(`e${day}`, day))
+    return appRoot
+  }
+
+  it("--model re-infers the provider when none was authored", async () => {
+    // No `memory.distill.provider` in config → the resolved provider is merely
+    // INFERRED from the default model (gpt-5-mini → openai). Overriding the
+    // model across provider families must move the provider with it, or we'd
+    // hand a Claude model id to ChatOpenAI. Constructing ChatAnthropic is only
+    // reachable via provider "anthropic", and it fails loudly without a key —
+    // that error IS the proof, and it needs no Anthropic credentials.
+    const appRoot = await appWithWork()
+    const io = { stdout: () => {}, stderr: () => {} }
+    await withoutProviderKeys(async () => {
+      await expect(
+        runMemoryCommand(["consolidate", "--model", "claude-sonnet-4-5"], { cwd: appRoot }, io),
+      ).rejects.toThrow(/Anthropic API key not found/)
+    })
+  })
+
+  it("--model does NOT override an explicitly authored provider", async () => {
+    // An authored provider is a deliberate choice (proxies, OpenAI-compatible
+    // endpoints) and outranks inference. The unsupported id makes the branch
+    // unambiguous: re-inferring from the Claude model id would have produced an
+    // Anthropic key error instead.
+    const appRoot = await appWithWork(
+      'export default { memory: { distill: { provider: "definitely-not-a-provider" } } }\n',
+    )
+    const io = { stdout: () => {}, stderr: () => {} }
+    await withoutProviderKeys(async () => {
+      await expect(
+        runMemoryCommand(["consolidate", "--model", "claude-sonnet-4-5"], { cwd: appRoot }, io),
+      ).rejects.toThrow(/Unsupported agent provider "definitely-not-a-provider"/)
+    })
+  })
+
+  it("--provider overrides both the authored config and inference", async () => {
+    // Authored openai + a model id that also infers to openai: only an explicit
+    // --provider can produce an Anthropic model here.
+    const appRoot = await appWithWork(
+      'export default { memory: { distill: { provider: "openai" } } }\n',
+    )
+    const io = { stdout: () => {}, stderr: () => {} }
+    await withoutProviderKeys(async () => {
+      await expect(
+        runMemoryCommand(
+          ["consolidate", "--model", "gpt-5", "--provider", "anthropic"],
+          { cwd: appRoot },
+          io,
+        ),
+      ).rejects.toThrow(/Anthropic API key not found/)
+    })
+  })
+
+  it("reflect validates --provider like every other flag", async () => {
+    const appRoot = await makeApp()
+    const io = { stdout: () => {}, stderr: () => {} }
+    await expect(runMemoryCommand(["reflect", "--provider"], { cwd: appRoot }, io)).rejects.toThrow(
+      /Missing value for --provider/,
+    )
+    await expect(
+      runMemoryCommand(["reflect", "--provider", "  "], { cwd: appRoot }, io),
+    ).rejects.toThrow(/Invalid --provider value/)
+  })
+
   it("consolidate --dry-run prints batches without writing", async () => {
     const appRoot = await makeApp()
     const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
