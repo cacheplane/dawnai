@@ -289,7 +289,16 @@ export function buildSummaryRecord(
     status: "active",
     createdAt: now,
     updatedAt: now,
-    effectiveAt: batch.period.since,
+    // `data.period` above is the honest covered window; `effectiveAt` is NOT a
+    // second copy of `period.since`. It drives retention ranking and timeline
+    // placement — prune's per-namespace cap ranks episodic rows by
+    // COALESCE(effective_at, created_at) DESC, status-agnostic — so a summary
+    // stamped with the window's START sorts as the OLDEST row of its own batch
+    // and the cap evicts the summary BEFORE the superseded sources it replaced
+    // (which recall can no longer see). A summary represents the whole window,
+    // so it ranks at the window's end.
+    // Covered by "a summary outranks its own sources under the cap" (prune.test.ts).
+    effectiveAt: batch.period.until,
     ...(opts?.ttlMs !== undefined
       ? { expiresAt: new Date(Date.parse(now) + opts.ttlMs).toISOString() }
       : {}),

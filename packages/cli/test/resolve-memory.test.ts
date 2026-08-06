@@ -187,7 +187,12 @@ describe("resolveDistillConfig", () => {
       provider: "openai",
       providerAuthored: false,
       maxBatches: 5,
-      consolidate: { olderThanMs: 7 * 86_400_000, minBatchSize: 5, maxBatchSize: 50 },
+      consolidate: {
+        olderThanMs: 7 * 86_400_000,
+        minBatchSize: 5,
+        maxBatchSize: 50,
+        sourceTtlMs: 7 * 86_400_000,
+      },
       reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },
     })
   })
@@ -202,7 +207,12 @@ describe("resolveDistillConfig", () => {
       provider: "openai",
       providerAuthored: false,
       maxBatches: 5,
-      consolidate: { olderThanMs: 7 * 86_400_000, minBatchSize: 5, maxBatchSize: 50 },
+      consolidate: {
+        olderThanMs: 7 * 86_400_000,
+        minBatchSize: 5,
+        maxBatchSize: 50,
+        sourceTtlMs: 7 * 86_400_000,
+      },
       reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },
     })
   })
@@ -225,6 +235,23 @@ describe("resolveDistillConfig", () => {
     expect(c.reflect.writes).toBe("auto")
     expect(c.reflect.minNewRecords).toBe(10)
     expect(c.reflect.maxRecords).toBe(100)
+  })
+
+  // Unlike `ttlMs` (absent by default — summaries are permanent), `sourceTtlMs`
+  // is ALWAYS resolved: consolidation must hand the superseded sources' cap
+  // budget back, so "no expiry" is not an option the default may take.
+  test("honors an override of consolidate.sourceTtlMs", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { consolidate: { sourceTtlMs: 86400000 } } } }\n`,
+    )
+
+    const c = await resolveDistillConfig(appRoot)
+    expect(c.consolidate.sourceTtlMs).toBe(86_400_000)
+    // A partial override of the same sub-block leaves the rest at defaults.
+    expect(c.consolidate.olderThanMs).toBe(7 * 86_400_000)
   })
 
   test("threads an explicit provider through and passes consolidate.ttlMs when set", async () => {
@@ -300,7 +327,12 @@ describe("resolveDistillConfig", () => {
       provider: "openai",
       providerAuthored: false,
       maxBatches: 5,
-      consolidate: { olderThanMs: 7 * 86_400_000, minBatchSize: 5, maxBatchSize: 50 },
+      consolidate: {
+        olderThanMs: 7 * 86_400_000,
+        minBatchSize: 5,
+        maxBatchSize: 50,
+        sourceTtlMs: 7 * 86_400_000,
+      },
       reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },
     })
   })

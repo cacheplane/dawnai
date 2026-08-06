@@ -142,6 +142,9 @@ export interface ResolvedDistillConfig {
     readonly maxBatchSize: number
     /** Absent unless configured — summaries don't expire by default. */
     readonly ttlMs?: number
+    /** ALWAYS resolved (unlike `ttlMs`): how long superseded sources stay
+     *  inspectable before prune reaps them and returns their cap budget. */
+    readonly sourceTtlMs: number
   }
   readonly reflect: {
     readonly minNewRecords: number
@@ -156,8 +159,9 @@ export interface ResolvedDistillConfig {
  * Defaults: model `gpt-5-mini`, provider inferred from the resolved model (the
  * same `inferProvider` route agents and the built-in summarizer use) falling
  * back to `"openai"`, 5 batches per invocation, consolidation over records
- * older than 7 days in batches of 5..50 with no summary TTL, and reflection
- * after 10 new records over at most 100 records written as candidates.
+ * older than 7 days in batches of 5..50 with no summary TTL and a 7-day TTL on
+ * the sources it supersedes, and reflection after 10 new records over at most
+ * 100 records written as candidates.
  *
  * Uses the same cached `loadDawnConfig` loader as the other resolvers;
  * missing/unreadable config falls back to defaults. Values are passed through
@@ -183,6 +187,7 @@ export async function resolveDistillConfig(appRoot: string): Promise<ResolvedDis
       olderThanMs: consolidate?.olderThanMs ?? 7 * 86_400_000,
       minBatchSize: consolidate?.minBatchSize ?? 5,
       maxBatchSize: consolidate?.maxBatchSize ?? 50,
+      sourceTtlMs: consolidate?.sourceTtlMs ?? 7 * 86_400_000,
       ...(consolidate?.ttlMs !== undefined ? { ttlMs: consolidate.ttlMs } : {}),
     },
     reflect: {

@@ -115,10 +115,54 @@ describe("runConsolidation", () => {
     })
     expect(res.failed).toBe(1)
     expect((await store.get("e1"))?.status).toBe("active")
+    // …and UNTOUCHED: expiry is stamped only on a source that was actually
+    // superseded. Stamping a still-active source would schedule the deletion of
+    // a record nothing summarizes.
+    expect((await store.get("e1"))?.expiresAt).toBeUndefined()
+    expect((await store.get("e2"))?.expiresAt).toBeUndefined()
     const summaries = (await store.browse({ kind: "episodic" })).records.filter((r) =>
       r.tags.includes("consolidated"),
     )
     expect(summaries.length).toBe(1) // the write survived; only linking failed
+  })
+  // Without this, superseded sources keep their slice of the per-namespace cap
+  // budget forever (nothing else stamps an expiry on them), so the cap keeps
+  // reaping rows even though the batch has already been compacted.
+  it("stamps the default source TTL on every superseded source, and none on the summary", async () => {
+    const store = makeStore()
+    for (const r of [ep("e1", 7), ep("e2", 8)]) await store.put(r)
+    const invoke = vi.fn(async () => ({ content: '{"summary":"two runs"}' }))
+    await runConsolidation({
+      store,
+      config: CONFIG,
+      now: NOW,
+      io,
+      createModel: async () => ({ invoke }),
+    })
+    const expected = new Date(Date.parse(NOW) + 7 * 86_400_000).toISOString()
+    expect((await store.get("e1"))?.expiresAt).toBe(expected)
+    expect((await store.get("e2"))?.expiresAt).toBe(expected)
+    // The expiry rides alongside the supersede — it does not undo it.
+    expect((await store.get("e1"))?.status).toBe("superseded")
+    const summary = (await store.browse({ kind: "episodic" })).records.find((r) =>
+      r.tags.includes("consolidated"),
+    )
+    expect(summary?.expiresAt).toBeUndefined() // no consolidate.ttlMs configured
+  })
+  it("honors a configured consolidate.sourceTtlMs", async () => {
+    const store = makeStore()
+    for (const r of [ep("e1", 7), ep("e2", 8)]) await store.put(r)
+    const invoke = vi.fn(async () => ({ content: '{"summary":"two runs"}' }))
+    await runConsolidation({
+      store,
+      config: { ...CONFIG, consolidate: { ...CONFIG.consolidate, sourceTtlMs: 3_600_000 } },
+      now: NOW,
+      io,
+      createModel: async () => ({ invoke }),
+    })
+    expect((await store.get("e1"))?.expiresAt).toBe(
+      new Date(Date.parse(NOW) + 3_600_000).toISOString(),
+    )
   })
   it("isolates a failing batch and still processes the next", async () => {
     const store = makeStore()

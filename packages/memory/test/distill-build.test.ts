@@ -75,7 +75,18 @@ describe("record builders", () => {
     expect(a.content).toBe("digest text")
     expect(a.data.derivedFrom).toEqual(["e1", "e2"])
     expect(a.data.sourceCount).toBe(2)
-    expect(a.effectiveAt).toBe(BATCH.period.since)
+    // RETENTION, not cosmetics: `effectiveAt` is what prune's per-namespace cap
+    // ranks by (COALESCE(effective_at, created_at) DESC). A summary stamped with
+    // `period.since` sorts as the OLDEST row of its own batch and gets evicted
+    // BEFORE the sources it replaced. It must rank as the whole window's end.
+    // Do NOT "fix" this back to period.since — see the prune regression test
+    // "a summary outranks its own sources under the cap".
+    expect(a.effectiveAt).toBe(BATCH.period.until)
+    // …while the honest covered window in `data.period` is unchanged.
+    expect(a.data.period).toEqual({
+      since: BATCH.period.since,
+      until: BATCH.period.until,
+    })
     expect(a.expiresAt).toBeUndefined()
     expect(a.source).toEqual({ type: "tool", id: "consolidate" })
   })

@@ -46,6 +46,9 @@ export interface DistillConfigLike {
     readonly minBatchSize: number
     readonly maxBatchSize: number
     readonly ttlMs?: number
+    /** Optional here (the resolver always populates it) — absent falls back to
+     *  DEFAULT_SOURCE_TTL_MS so a hand-built config still frees cap budget. */
+    readonly sourceTtlMs?: number
   }
   readonly reflect: {
     readonly minNewRecords: number
@@ -88,6 +91,7 @@ const WATERMARK_SCAN_RECORDS = 200
 const DEFAULT_OLDER_THAN_MS = 7 * 86_400_000
 const DEFAULT_MIN_BATCH_SIZE = 5
 const DEFAULT_MAX_BATCH_SIZE = 50
+const DEFAULT_SOURCE_TTL_MS = 7 * 86_400_000
 const DEFAULT_MIN_NEW_RECORDS = 10
 const DEFAULT_MAX_RECORDS = 100
 
@@ -150,6 +154,15 @@ export async function runConsolidation(args: DistillArgs): Promise<DistillResult
 
   const model = await args.createModel()
   const ttlMs = config.consolidate.ttlMs
+  // A superseded source is invisible to recall but still occupies a slot in the
+  // per-namespace episodic cap, which is status-agnostic — so without an expiry
+  // the compacted rows would keep evicting live ones forever (agent-authored
+  // episodic writes carry no expiresAt of their own). Stamping one hands the
+  // budget back on the next prune, after a window in which the source is still
+  // inspectable. Covered by "stamps the default source TTL…" (distill-engine).
+  const sourceExpiresAt = new Date(
+    parseNow(now) + nonNegativeMs(config.consolidate.sourceTtlMs, DEFAULT_SOURCE_TTL_MS),
+  ).toISOString()
   let written = 0
   let failed = 0
   for (const batch of batches) {
@@ -164,9 +177,14 @@ export async function runConsolidation(args: DistillArgs): Promise<DistillResult
       )
       await store.put(record)
       written += 1
-      // Link only after the write lands.
+      // Link only after the write lands. The expiry is stamped per source and
+      // only once ITS supersede succeeded — a source that is still active must
+      // never be scheduled for deletion, because nothing summarizes it yet.
+      // `update` merges the patch over the row it re-reads (and re-attaches the
+      // persisted embedding), so this preserves status/content/provenance.
       for (const source of batch.records) {
         await store.supersede(source.id, record.id)
+        await store.update(source.id, { expiresAt: sourceExpiresAt })
       }
       writeLine(
         io.stdout,
@@ -401,7 +419,9 @@ function batchLimit(value: number): number {
   return Math.max(0, Math.trunc(value))
 }
 
-/** Durations only need to be non-negative and finite. */
-function nonNegativeMs(value: number, fallback: number): number {
-  return Number.isFinite(value) ? Math.max(0, value) : fallback
+/** Durations only need to be non-negative and finite. `undefined` (an optional
+ *  knob a hand-built config omitted) takes the documented default. */
+function nonNegativeMs(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback
+  return Math.max(0, value)
 }
