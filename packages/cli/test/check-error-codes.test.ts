@@ -51,6 +51,22 @@ async function invoke(argv: readonly string[]) {
 }
 
 describe("dawn check emits error codes", () => {
+  test("invalid delegation policy → [DAWN_E1004] with docs link", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/hello/index.ts": `import { agent } from "@dawn-ai/sdk"
+export default agent({
+  model: "gpt-5-mini",
+  tools: { approve: ["task"] },
+} as any)
+`,
+    })
+    const result = await invoke(["check", "--cwd", appRoot])
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain("Invalid delegation policy")
+    expect(result.stderr).toContain("[DAWN_E1004]")
+    expect(result.stderr).toContain("https://dawnai.org/docs/subagents#delegation-policy")
+  })
+
   test("unknown build target → [DAWN_E1003] with docs link", async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": 'export default { build: { targets: ["nonsense"] } };\n',

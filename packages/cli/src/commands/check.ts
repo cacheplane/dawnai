@@ -3,6 +3,7 @@ import type { Command } from "commander"
 
 import { knownTargetNames } from "../lib/build/targets/index.js"
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
+import { collectDelegationErrors } from "../lib/runtime/collect-delegation-errors.js"
 import { collectSandboxErrors } from "../lib/runtime/collect-sandbox-errors.js"
 import { collectToolScopeIssues } from "../lib/runtime/collect-tool-scope-errors.js"
 import { resolveMemoryWrites } from "../lib/runtime/resolve-memory.js"
@@ -46,6 +47,13 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
     }
 
     const memoryWrites = await resolveMemoryWrites(manifest.appRoot)
+    const delegationErrors = await collectDelegationErrors(manifest)
+    if (delegationErrors.length > 0) {
+      throw new CliError(`Invalid delegation policy:\n${delegationErrors.join("\n")}`, 1, {
+        code: "DAWN_E1004",
+      })
+    }
+
     const scopeIssues = await collectToolScopeIssues(manifest, undefined, { memoryWrites })
     for (const warning of scopeIssues.warnings) {
       writeLine(io.stdout, `\n${warning}`)
