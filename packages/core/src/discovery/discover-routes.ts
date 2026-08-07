@@ -3,13 +3,12 @@ import { join, relative, resolve, sep } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { RouteKind } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
+import { registerTsxLoader } from "../config-node.js"
 import type { DiscoverRoutesOptions, RouteDefinition, RouteManifest } from "../types.js"
 import { findDawnApp } from "./find-dawn-app.js"
 import { isPrivateSegment, isRouteGroupSegment, toRouteSegments } from "./route-segments.js"
 
 const INDEX_FILE = "index.ts"
-
-let loaderPromise: Promise<void> | undefined
 
 export async function discoverRoutes(options: DiscoverRoutesOptions = {}): Promise<RouteManifest> {
   const app = await findDawnApp(options)
@@ -151,16 +150,6 @@ async function loadRouteExports(indexFile: string): Promise<{
     const reason = cause instanceof Error ? cause.message : String(cause)
     throw new Error(`Failed to load route at ${indexFile}: ${reason}`, { cause })
   }
-}
-
-async function registerTsxLoader(): Promise<void> {
-  loaderPromise ??= (async () => {
-    const { register } = (await import("tsx/esm/api")) as {
-      readonly register: () => unknown
-    }
-    register()
-  })()
-  await loaderPromise
 }
 
 function validateRouteCollisions(routes: readonly RouteDefinition[]): RouteDefinition[] {

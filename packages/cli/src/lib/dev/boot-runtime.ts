@@ -1,4 +1,4 @@
-import { discoverRoutes } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 
 import { runTypegen } from "../typegen/run-typegen.js"
 import type { StartRuntimeServerOptions } from "./runtime-server.js"

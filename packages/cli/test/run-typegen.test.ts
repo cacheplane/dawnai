@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { discoverRoutes } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { runTypegen } from "../src/lib/typegen/run-typegen.js"

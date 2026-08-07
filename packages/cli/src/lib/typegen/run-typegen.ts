@@ -9,12 +9,8 @@ import type {
   RouteStateFields,
   RouteToolTypes,
 } from "@dawn-ai/core"
-import {
-  extractToolSchemasForRoute,
-  extractToolTypesForRoute,
-  renderDawnTypes,
-  resolveStateFields,
-} from "@dawn-ai/core"
+import { renderDawnTypes, resolveStateFields } from "@dawn-ai/core"
+import { extractToolSchemasForRoute, extractToolTypesForRoute } from "@dawn-ai/core/node"
 
 import { discoverStateDefinition } from "../runtime/state-discovery.js"
 

@@ -26,7 +26,11 @@ import { headersToRecord, runMiddleware } from "./middleware.js"
 import { readPendingInterrupts } from "./pending-interrupts.js"
 import { extractRouteParams } from "./request-context.js"
 import { createRunRegistry, type RunRegistry } from "./run-registry.js"
-import { createRuntimeRegistry, type RuntimeRegistry } from "./runtime-registry.js"
+import {
+  createRuntimeRegistryFromManifest,
+  createStaticRuntimeRegistry,
+  type RuntimeRegistry,
+} from "./runtime-registry-core.js"
 import type { StartRuntimeServerOptions } from "./runtime-server.js"
 import {
   createExecutionErrorBody,
@@ -106,7 +110,14 @@ export async function createRuntimeFetchHandler(
   if (options.config && fallbacks) {
     seedDawnConfig(options.appRoot, options.config)
   }
-  const registry = await createRuntimeRegistry(options.appRoot, options.modules)
+  // No `modules` means the route tree must be walked — a node-only capability
+  // reached through the boot fallbacks, never imported here (that would put
+  // `node:fs` back in the fetch graph).
+  const registry = options.modules
+    ? createStaticRuntimeRegistry(options.appRoot, options.modules)
+    : createRuntimeRegistryFromManifest(
+        await requireBoot(fallbacks, "routeManifest").discoverRouteManifest(options.appRoot),
+      )
   if (options.modules) {
     // Pre-populate the per-route prepared-modules cache (execute-route.ts)
     // from the static manifest so every route's first request also skips its

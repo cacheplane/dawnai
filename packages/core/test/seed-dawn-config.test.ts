@@ -3,6 +3,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, test } from "vitest"
 import { __clearDawnConfigCacheForTests, loadDawnConfig, seedDawnConfig } from "../src/config.js"
+import { registerNodeConfigLoader } from "../src/config-node.js"
+
+// These suites load real `dawn.config.ts` files off disk — opt the process
+// into the node config loader (the `.` barrel no longer carries it).
+registerNodeConfigLoader()
 
 const cleanup: Array<() => Promise<void> | void> = []
 

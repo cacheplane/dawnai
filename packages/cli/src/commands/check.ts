@@ -2,10 +2,11 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
-import { type DawnConfig, discoverRoutes, loadDawnConfig, type RouteManifest } from "@dawn-ai/core"
+import type { DawnConfig, RouteManifest } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import type { Command } from "commander"
-
 import { knownTargetNames } from "../lib/build/targets/index.js"
+import { loadDawnConfig } from "../lib/node-config.js"
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
 import { collectSandboxErrors } from "../lib/runtime/collect-sandbox-errors.js"
 import { collectToolScopeIssues } from "../lib/runtime/collect-tool-scope-errors.js"

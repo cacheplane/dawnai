@@ -7,15 +7,15 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 // runtime-registry.ts actually call. The mock delegates to the real
 // implementation so discovery behavior is unchanged — only call counts are
 // observable.
-vi.mock("@dawn-ai/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@dawn-ai/core")>()
+vi.mock("@dawn-ai/core/node", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dawn-ai/core/node")>()
   return {
     ...actual,
     discoverRoutes: vi.fn(actual.discoverRoutes),
   }
 })
 
-import { discoverRoutes } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 import { prepareRouteExecution } from "../src/lib/runtime/execute-route.js"
 

@@ -20,14 +20,15 @@ pnpm add @dawn-ai/workspace
 ```ts
 import {
   compose,
-  localExec,
-  localFilesystem,
   withExecLogging,
   withFilesystemLogging,
   type ExecBackend,
   type FilesystemBackend,
   type SandboxProvider,
 } from "@dawn-ai/workspace"
+// The node backends live on the `/node` subpath — importing them pulls
+// `node:child_process`/`node:fs` in, so runtimes without them stay clean.
+import { localExec, localFilesystem } from "@dawn-ai/workspace/node"
 ```
 
 ## Activation Behavior
@@ -98,7 +99,8 @@ becomes the root for agent tools and `WorkspaceFs`.
 Configure a logging filesystem backend:
 
 ```ts
-import { compose, localFilesystem, withFilesystemLogging } from "@dawn-ai/workspace"
+import { compose, withFilesystemLogging } from "@dawn-ai/workspace"
+import { localFilesystem } from "@dawn-ai/workspace/node"
 
 export default {
   backends: {

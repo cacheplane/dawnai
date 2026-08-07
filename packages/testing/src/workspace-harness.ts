@@ -5,7 +5,7 @@ import { dirname, join } from "node:path"
 import { createWorkspaceFs } from "@dawn-ai/core"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { WorkspaceFs } from "@dawn-ai/sdk"
-import { localFilesystem } from "@dawn-ai/workspace"
+import { localFilesystem } from "@dawn-ai/workspace/node"
 
 export interface WorkspaceHarness {
   readonly fs: WorkspaceFs

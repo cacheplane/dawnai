@@ -12,10 +12,11 @@ export default defineConfig({
       "@dawn-ai/cli/runtime": resolve(rootDir, "../../packages/cli/src/runtime-exports.ts"),
       // Subpath alias must precede the bare-package alias (same ordering rule
       // as @dawn-ai/sdk/testing below).
-      "@dawn-ai/core/node": resolve(rootDir, "../../packages/core/src/node-marker-fs.ts"),
+      "@dawn-ai/core/node": resolve(rootDir, "../../packages/core/src/node.ts"),
       "@dawn-ai/core": resolve(rootDir, "../../packages/core/src/index.ts"),
       "@dawn-ai/langchain": resolve(rootDir, "../../packages/langchain/src/index.ts"),
       "@dawn-ai/langgraph": resolve(rootDir, "../../packages/langgraph/src/index.ts"),
+      "@dawn-ai/sdk/pure": resolve(rootDir, "../../packages/sdk/src/pure/index.ts"),
       "@dawn-ai/sdk/testing": resolve(rootDir, "../../packages/sdk/src/testing/index.ts"),
       "@dawn-ai/sdk": resolve(rootDir, "../../packages/sdk/src/index.ts"),
       "@dawn-ai/testing": resolve(rootDir, "../../packages/testing/src/index.ts"),

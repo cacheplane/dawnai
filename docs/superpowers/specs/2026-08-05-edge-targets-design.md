@@ -197,6 +197,25 @@ Fail loud, at the earliest possible stage, naming the exact feature/config key:
 
 ## Sequencing
 
-PR1 → PR2 → PR3, same branch family (`feat/edge-*`), each its own review + merge-on-green.
-PR2 can start once PR1's injection surface is merged (it only needs the interfaces, which exist
-today), so PR1→PR2 overlap is acceptable if useful; PR3 requires both.
+**Revised 2026-08-06, after PR1 shipped.** PR1 → **PR2a (upstream purge)** → PR2b (Postgres) →
+PR3 (Hono target), same branch family (`feat/edge-*`), each its own review + merge-on-green.
+
+PR1 ([#389](https://github.com/cacheplane/dawnai/pull/389), merged `d845720a`) delivered the
+injection seams and the node-free `@dawn-ai/cli/fetch` entry, and its purity gate proved that
+**Dawn's own CLI code contributes zero `node:` edges**. But the bundle still *links* 33 `node:`
+specifiers owned by `@dawn-ai/core` (23), `@dawn-ai/permissions` (4), `@dawn-ai/workspace` (4),
+and `@dawn-ai/langchain` (2) — among them 11 `node:fs` and one `node:child_process`.
+
+That is a **link-time** dependency: an ESM `import "node:fs"` resolves when the module graph is
+instantiated, before any Dawn code runs, so the (correct) argument that those resolvers are never
+called on the injected path never gets to apply. The bundle is therefore Cloudflare-Workers-with-
+`nodejs_compat` ready, not runnable on a shim-less runtime — and PR1's functional proof runs on
+Node, so it structurally cannot detect this class of failure.
+
+**PR2a is therefore inserted before the Postgres work**: give those four packages the same
+pure/node split PR1 gave the CLI, driving `KNOWN_UPSTREAM_NODE_EDGES` to zero. This unblocks
+PR3's workerd lane and surfaces the two known-risky spots (the workspace path-jail's
+`sep`/`relative`/`resolve` containment semantics, and `@dawn-ai/langchain`'s `createHash`-derived
+persisted ids) while they are cheap to get wrong, rather than mid-PR3. The established patterns
+to follow all shipped in PR1: `@dawn-ai/core`'s `./node` subpath, `@dawn-ai/memory`'s
+`./namespace`, the `MarkerFs` injection facade, and the `pure-path`/`pure-hash` ports.
