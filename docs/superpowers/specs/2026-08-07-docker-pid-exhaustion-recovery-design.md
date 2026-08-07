@@ -77,26 +77,71 @@ OCI error, and all successful results.
 
 ### One-shot retry
 
-`dockerExec` accepts an internal optional `recoverFromPidExhaustion(signal)`
-callback. It executes the requested command once. On a matching result, it
-passes the active `runCommand` context signal to the callback, awaits recovery,
-and repeats the same Docker exec exactly once. The second result is returned
-unchanged, including another PID-exhaustion error; there is no loop. Timeout
-annotation continues to apply to the final result.
+`dockerExec` accepts an internal paired recovery contract. Before the first
+Docker exec it captures an opaque lifecycle token. On a matching result it
+passes that token and the exact Docker-exec retry closure to the provider.
+The provider invokes that closure only while holding the thread's lifecycle
+fence. A stale token returns no retry result, so `dockerExec` returns the
+original failure without executing an old command inside a newer lifecycle.
+Otherwise the recovery result becomes the final result. There is exactly one
+retry closure and no loop. Timeout annotation applies to the final result, and
+configured timeout results never trigger recovery even if their output contains
+the classifier markers.
+
+### Per-thread lifecycle coordinator
+
+The Docker provider owns a keyed serial coordinator. For a given thread,
+`acquire`, PID-exhaustion recycle, `release`, and `destroy` run exclusively and
+to completion. Operations for different threads remain independent, and normal
+exec/filesystem work is not serialized.
+
+The coordinator is the long-term lifecycle boundary rather than a recovery-only
+lock. It prevents an acquire from observing or returning a keeper while an older
+release/destroy is still removing the prior container or volume. It also makes
+same-generation recovery coalescing structural: the first queued recovery
+replaces the keeper and advances its generation; later queued recoveries see the
+advanced generation and run their own retry against that replacement without
+another remove/create. Each recovery keeps the fence through its retry, so a
+queued release/destroy/acquire cannot replace the deterministic keeper name
+between recovery and the command retry.
+
+Lifecycle operations are FIFO by invocation order. The keyed queue removes its
+entry when the last queued operation finishes, and a rejected operation does not
+poison later work for that thread.
 
 ### Volume-preserving recycle
 
-`dockerSandbox.acquire` supplies a callback closed over the thread ID and
-policy. The callback uses the active command signal passed by `dockerExec`, not
-the earlier acquire signal. Recovery:
+`dockerSandbox.acquire` creates or reuses lifecycle state while holding the
+thread coordinator and supplies an opaque token containing that state identity
+and its keeper generation. Recovery holds the same coordinator and:
 
 1. runs `docker rm -f <keeper>` and requires a successful result;
 2. calls the existing create-or-reattach path with the same thread and policy;
 3. reuses `dawn-sbx-vol-<thread>` because only the container is removed; and
-4. skips the ownership initializer because the named volume already exists.
+4. skips the ownership initializer because the named volume already exists;
+5. advances the keeper generation only after recreation succeeds; and
+6. invokes the calling command's exact retry closure before releasing the
+   lifecycle fence.
+
+Once removal starts, recycle is shared provider lifecycle work and uses a
+provider-owned non-aborted signal. A canceled caller may stop waiting or fail
+its retry, but cannot strand every handle after removal and before recreation.
+`release` and `destroy` queue behind an active recycle and then perform their
+full cleanup before any new acquire for that thread can begin.
 
 If container removal or recreation fails, the command rejects with a clear
-`Sandbox unavailable` error rather than retrying against uncertain state.
+`Sandbox unavailable` error rather than retrying against uncertain state. The
+provider retires and removes that lifecycle state before the coordinator admits
+later work. A subsequent acquire creates a fresh state identity, even if Docker
+cleanup left a keeper that can be reattached; tokens from the failed lifecycle
+remain stale.
+
+The provider stores one lifecycle state per successfully acquired live thread.
+`release` and `destroy` remove that state while holding the coordinator before
+container/volume cleanup. Failed recovery also removes it. A repeated acquire
+within the same live lifecycle reuses it. Thus state retention matches keeper
+lifetime, while idle queue entries are removed independently after their FIFO
+drains.
 Container replacement intentionally terminates background processes. This is
 acceptable only because the narrowly matched state already prevents the
 sandbox from servicing a new command.
@@ -114,6 +159,17 @@ sandbox from servicing a new command.
   preserves the named volume, skips chown-init for the existing volume, and
   returns the retried command result.
 - Failed container removal surfaces as sandbox unavailable and prevents a retry.
+- Concurrent failures for one keeper cause one replacement; each safe waiter
+  retries only after recreation completes and while holding the lifecycle fence.
+- A delayed failure from a released/destroyed lifecycle neither removes the new
+  keeper nor retries the old command in it.
+- Concurrent reacquire waits for release/destroy cleanup, then creates a fresh
+  lifecycle; cleanup cannot tear down the returned handle or its volume.
+- Caller cancellation during recovery does not interrupt shared recreation; the
+  canceled command fails through its own signal while another waiter recovers.
+- Removal or recreation failure retires lifecycle identity before a later
+  acquire; stale tokens cannot remove or execute against the new lifecycle.
+- Different thread IDs retain independent lifecycle concurrency.
 
 ### Real-Docker test
 
