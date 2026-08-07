@@ -214,10 +214,12 @@ describe("dawn build — hono target", () => {
     // pg_advisory_xact_lock, which also serializes concurrent requests.
     expect(stores).toMatch(/^let migrated = false$/m)
     expect(stores).toContain("assumeMigrated")
-    // The cold-start pass still runs under the lock; the flag only skips a pass
-    // already known to have completed, and only after it succeeded.
-    expect(stores).toContain("ready()")
-    expect(stores.indexOf("migrated = true")).toBeGreaterThan(stores.indexOf("ready()"))
+    // That the flag is only set AFTER the migration succeeded is not asserted
+    // here: a text assertion on generated code is what let the ordering rot
+    // undetected (an `indexOf("ready()")` that matched the doc comment ABOVE
+    // the code, so moving the assignment before the await stayed green). It is
+    // covered by running the emitted file instead — see "a failed cold start
+    // leaves the next request to retry the migration".
   })
 
   test("names the missing binding instead of building a pool with no connection string", async () => {
@@ -510,6 +512,59 @@ export default defineMemory({ schema: z.object({ fact: z.string() }) })
     expect(message).toContain(join("src", "app", "chat", "skills"))
   })
 
+  test("dawn check mirrors the store-handle gating, not just the loud features", async () => {
+    // The silent-divergence class — and the one `dawn check` was NOT asserted
+    // for. With only sandbox/workspace/skills covered here, narrowing the config
+    // handed to `assertEdgeCapabilities` to `{ backends, sandbox }` left every
+    // test in the repo green; tsc could not object either, because every
+    // DawnConfig field is optional, so a `Pick` that omits the store keys still
+    // satisfies the gate's parameter type.
+    for (const [key, source] of [
+      ["threadsStore", "threadsStore: { listThreads: async () => [] },"],
+      ["checkpointer", "checkpointer: { getTuple: async () => undefined },"],
+      ["permissions.store", "permissions: { store: { load: async () => {} } },"],
+      ["memory.store", "memory: { store: { recall: async () => [] } },"],
+    ] as const) {
+      const appRoot = await createFixtureApp({
+        "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  ${source}
+}
+`,
+      })
+
+      const error = await runCheck(appRoot).catch((e: unknown) => e)
+
+      expect(error).toBeInstanceOf(Error)
+      expect(String(error)).toContain(`\`${key}\``)
+    }
+  })
+
+  test("dawn check mirrors the backend and route-memory gating", async () => {
+    // The other two classes the build path covered alone. `backends.*` and an
+    // agent route's `memory.ts` are read from different places — the config and
+    // the manifest — so neither stands in for the other.
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  backends: { exec: { runCommand: async () => ({ stdout: "", stderr: "", exitCode: 0 }) } },
+}
+`,
+      "src/app/chat/memory.ts": `import { defineMemory } from "@dawn-ai/sdk"
+import { z } from "zod"
+
+export default defineMemory({ schema: z.object({ fact: z.string() }) })
+`,
+    })
+
+    const error = await runCheck(appRoot).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(Error)
+    const message = String(error)
+    expect(message).toContain("backends.exec")
+    expect(message).toContain(join("src", "app", "chat", "memory.ts"))
+  })
+
   test("dawn check leaves a node-target app alone", async () => {
     const appRoot = await createFixtureApp({
       "dawn.config.ts": 'export default { build: { targets: ["node"] } }\n',
@@ -724,17 +779,65 @@ export const createPostgresPermissionsStore = () => store
 export const createPostgresThreadsStore = () => store
 export const postgresCheckpointer = () => store
 `
-  const NEON_STUB = `export const neonConfig = {}
-/** Every connection string a pool was built with, in order. */
-export const connectionStrings = []
+
+  /**
+   * The same store trio, but whose FIRST `ready()` rejects — a failed cold
+   * start. Counts every call so a later request's migration pass is visible.
+   */
+  const FAILING_READY_STORAGE_STUB = `export const readyCalls = []
+let failNext = true
+const store = {
+  ready: async () => {
+    readyCalls.push(1)
+    if (!failNext) return
+    failNext = false
+    throw new Error("cold start failed")
+  },
+}
+export const createPostgresPermissionsStore = () => store
+export const createPostgresThreadsStore = () => store
+export const postgresCheckpointer = () => store
+`
+
+  /**
+   * `@neondatabase/serverless`, stubbed at the two seams the emitted stores.mjs
+   * actually uses.
+   *
+   * `Client` carries the driver's REAL per-instance defaults (TLS on), and
+   * `Pool` reproduces the ordering that makes the per-instance override work at
+   * all: the real Pool overwrites `this.Client` with its own class inside its
+   * constructor, and stores.mjs assigns over it afterwards. Clients are built
+   * lazily here exactly as the real Pool builds them — `new this.Client(this.options)`
+   * — which is why the pools, not the clients, are what gets recorded.
+   */
+  const NEON_STUB = `export class Client {
+  constructor(config) {
+    this.config = config
+    this.neonConfig = { pipelineConnect: "password", pipelineTLS: false, useSecureWebSocket: true }
+  }
+}
+/** Every pool built, in order. */
+export const pools = []
 export class Pool {
   constructor(options) {
-    connectionStrings.push(options.connectionString)
+    this.options = options
+    this.Client = Client
+    pools.push(this)
   }
   end() {
     return Promise.resolve()
   }
 }
+/** What the real Pool does when it opens a connection, per pool, in order. */
+export const poolConnections = () =>
+  pools.map((pool) => {
+    const client = new pool.Client(pool.options)
+    return {
+      connectionString: pool.options.connectionString ?? null,
+      useSecureWebSocket: client.neonConfig.useSecureWebSocket,
+      wsProxy: client.neonConfig.wsProxy?.("dawn-pg", 5432) ?? null,
+    }
+  })
 `
 
   /** A `@dawn-ai/cli/fetch` stub whose runtime env knows nothing. */
@@ -743,27 +846,57 @@ export class Pool {
 }
 `
 
+  /**
+   * A `@dawn-ai/cli/fetch` stub that supplies DATABASE_URL but NOT the wsproxy
+   * knob — so a request's proxy setting can only have come from its own env.
+   */
+  const NO_PROXY_RUNTIME_ENV_STUB = `export function readRuntimeEnv(name) {
+  return { DATABASE_URL: "postgres://from-runtime-env/db" }[name]
+}
+`
+
   async function driveEmittedStores(
     appRoot: string,
     envs: readonly unknown[],
-    cliStub: string = CLI_FETCH_STUB,
+    options: {
+      readonly cliStub?: string
+      /** Expression printed after the last request. */
+      readonly report?: string
+      readonly reportImports?: string
+      readonly storageStub?: string
+      /** Keep going (and record the message) when a request throws. */
+      readonly tolerateRequestFailures?: boolean
+    } = {},
   ): Promise<unknown> {
-    await writeStubPackage(appRoot, "@dawn-ai/postgres-storage", POSTGRES_STORAGE_STUB)
+    await writeStubPackage(
+      appRoot,
+      "@dawn-ai/postgres-storage",
+      options.storageStub ?? POSTGRES_STORAGE_STUB,
+    )
     await writeStubPackage(appRoot, "@neondatabase/serverless", NEON_STUB)
-    await writeStubPackage(appRoot, "@dawn-ai/cli", cliStub, { "./fetch": "./index.mjs" })
+    await writeStubPackage(appRoot, "@dawn-ai/cli", options.cliStub ?? CLI_FETCH_STUB, {
+      "./fetch": "./index.mjs",
+    })
 
     const driverPath = buildFile(appRoot, "drive-stores.test.mjs")
     await writeFile(
       driverPath,
-      `import { connectionStrings, neonConfig } from "@neondatabase/serverless"
+      `import { poolConnections } from "@neondatabase/serverless"
+${options.reportImports ?? ""}
 
 import { createRequestStores } from "./stores.mjs"
 
+const requestErrors = []
 for (const env of ${JSON.stringify(envs)}) {
-  const stores = await createRequestStores(env)
-  await stores.dispose()
+  try {
+    const stores = await createRequestStores(env)
+    await stores.dispose()
+  } catch (error) {
+    if (!${options.tolerateRequestFailures ? "true" : "false"}) throw error
+    requestErrors.push(String(error?.message ?? error))
+  }
 }
-console.log(JSON.stringify({ connectionStrings, wsProxy: typeof neonConfig.wsProxy }))
+console.log(JSON.stringify(${options.report ?? "poolConnections()"}))
 `,
     )
     const { execFile } = await import("node:child_process")
@@ -792,16 +925,78 @@ console.log(JSON.stringify({ connectionStrings, wsProxy: typeof neonConfig.wsPro
     // through `readRuntimeEnv`, which prefers the process environment. That is
     // what makes the emitted entry's Workers/Vercel/Bun claim true rather than
     // aspirational, and it reintroduces no `process` global to do it.
-    expect(observed).toEqual({
-      connectionStrings: [
-        "postgres://from-binding/db",
-        "postgres://from-runtime-env/db",
-        "postgres://from-runtime-env/db",
-      ],
-      // The proxy knob takes the same route, so a Node host can reach a local
-      // wsproxy without inventing a bindings object to carry it.
-      wsProxy: "function",
+    //
+    // The proxy knob takes the same route, so a Node host can reach a local
+    // wsproxy without inventing a bindings object to carry it — and it lands on
+    // the connection this pool opens, which is the only place it may land.
+    expect(observed).toEqual([
+      {
+        connectionString: "postgres://from-binding/db",
+        useSecureWebSocket: false,
+        wsProxy: "proxy:8080/v1?address=dawn-pg:5432",
+      },
+      {
+        connectionString: "postgres://from-runtime-env/db",
+        useSecureWebSocket: false,
+        wsProxy: "proxy:8080/v1?address=dawn-pg:5432",
+      },
+      {
+        connectionString: "postgres://from-runtime-env/db",
+        useSecureWebSocket: false,
+        wsProxy: "proxy:8080/v1?address=dawn-pg:5432",
+      },
+    ])
+  })
+
+  test("a request without the proxy binding still connects with TLS", async () => {
+    const appRoot = await createFixtureApp()
+    await runBuild(appRoot)
+
+    // The wsproxy switches turn TLS OFF. Written to the driver's process-wide
+    // `neonConfig` — which is what this used to do, with no `else` — one request
+    // carrying DAWN_PG_WS_PROXY would leave every LATER request in the isolate
+    // talking plaintext through the previous request's proxy. That binding ships
+    // in every generated stores.mjs, so setting it by accident (or by copying
+    // the CI lane's config) would silently drop TLS to a production database.
+    const observed = await driveEmittedStores(appRoot, [{ DAWN_PG_WS_PROXY: "proxy:8080" }, {}], {
+      cliStub: NO_PROXY_RUNTIME_ENV_STUB,
     })
+
+    expect(observed).toEqual([
+      {
+        connectionString: "postgres://from-runtime-env/db",
+        useSecureWebSocket: false,
+        wsProxy: "proxy:8080/v1?address=dawn-pg:5432",
+      },
+      // The second request asked for no proxy, so it gets the secure defaults —
+      // it cannot inherit a decision the first request made.
+      {
+        connectionString: "postgres://from-runtime-env/db",
+        useSecureWebSocket: true,
+        wsProxy: null,
+      },
+    ])
+  })
+
+  test("a failed cold start leaves the next request to retry the migration", async () => {
+    const appRoot = await createFixtureApp()
+    await runBuild(appRoot)
+
+    // The invariant `migrated` exists for: it is set only AFTER the migration
+    // actually succeeded. Set it before the await and a failed cold start
+    // convinces every later request in the isolate that the schema is there —
+    // which it is not, so every request fails on a missing table instead.
+    //
+    // Three `ready()` calls per cold-start pass (threads, permissions,
+    // checkpointer), so a retried pass is six and a skipped one is three.
+    const observed = await driveEmittedStores(appRoot, [{}, {}], {
+      report: "{ readyCalls: readyCalls.length, requestErrors }",
+      reportImports: 'import { readyCalls } from "@dawn-ai/postgres-storage"',
+      storageStub: FAILING_READY_STORAGE_STUB,
+      tolerateRequestFailures: true,
+    })
+
+    expect(observed).toEqual({ readyCalls: 6, requestErrors: ["cold start failed"] })
   })
 
   test("still names the missing binding when neither source has it", async () => {
@@ -811,9 +1006,9 @@ console.log(JSON.stringify({ connectionStrings, wsProxy: typeof neonConfig.wsPro
     // Same stubs, but a `readRuntimeEnv` that knows nothing — the genuinely
     // unconfigured deploy. The fallback must not turn a named error into a
     // driver-level connection failure with no hint of which binding is missing.
-    await expect(driveEmittedStores(appRoot, [{}], EMPTY_RUNTIME_ENV_STUB)).rejects.toThrow(
-      /DATABASE_URL is not set/,
-    )
+    await expect(
+      driveEmittedStores(appRoot, [{}], { cliStub: EMPTY_RUNTIME_ENV_STUB }),
+    ).rejects.toThrow(/DATABASE_URL is not set/)
   })
 })
 

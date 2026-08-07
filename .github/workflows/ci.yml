@@ -244,7 +244,47 @@ jobs:
         run: pnpm build
 
       - name: Real-workerd edge lane
-        run: DAWN_TEST_WORKERD=1 pnpm --filter @dawn-ai/cli test workerd-lane
+        # The JSON report is this job's receipt, read by the step below.
+        run: |
+          DAWN_TEST_WORKERD=1 pnpm --filter @dawn-ai/cli test workerd-lane \
+            --reporter=default --reporter=json \
+            --outputFile.json="${{ runner.temp }}/workerd-lane-report.json"
+
+      - name: Assert the workerd lane did not skip
+        # `workerd-lane.test.ts` gates itself on DAWN_TEST_WORKERD, and the step
+        # above is the ONLY place that flag is set. So any drift between the two
+        # strings — a rename on either side — turns this merge gate into a no-op
+        # THAT STILL REPORTS GREEN: every test skips and vitest exits 0.
+        # (Verified: with the flag unset, "1 skipped", exit 0, success: true.)
+        #
+        # Same bargain `DAWN_REQUIRE_DOCKER=1` strikes on validate's Source
+        # Tests: the escape hatch that lets a contributor run the suite without
+        # Docker and a workerd binary must not become a way to lose the coverage
+        # on a runner that has both.
+        #
+        # Deliberately NOT `if: always()` — a lane that genuinely FAILED has
+        # already reddened the job and reported a better message than this one.
+        # The case this exists for is the lane exiting 0 having run nothing.
+        run: |
+          node -e '
+            const fs = require("node:fs")
+            const path = process.argv[1]
+            if (!fs.existsSync(path)) {
+              throw new Error("no vitest report at " + path + " — the lane produced no run at all.")
+            }
+            const report = JSON.parse(fs.readFileSync(path, "utf8"))
+            const passed = report.numPassedTests ?? 0
+            const skipped = report.numPendingTests ?? 0
+            if (passed === 0 || skipped > 0) {
+              throw new Error(
+                "the workerd lane reported " + passed + " passed and " + skipped + " skipped. " +
+                  "This job is the only place DAWN_TEST_WORKERD=1 is set, so a skip here means the " +
+                  "merge gate ran nothing while still exiting 0. Check that the flag name in " +
+                  "packages/cli/test/workerd-lane.test.ts still matches the one this job exports.",
+              )
+            }
+            console.log("workerd lane ran: " + passed + " passed, 0 skipped.")
+          ' "${{ runner.temp }}/workerd-lane-report.json"
 
   inspector-e2e:
     runs-on: ubuntu-latest

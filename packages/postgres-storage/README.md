@@ -20,11 +20,18 @@ pnpm add @dawn-ai/postgres-storage pg
 
 ## Postgres Requirements
 
-Any Postgres 14+ database works; no extensions are required. The stores talk to
-Postgres over the standard `pg` driver, which opens a TCP connection — so this
-package runs on Node, Bun, and Vercel functions. Cloudflare Workers has no raw
-TCP socket for `pg` to use; a Workers deploy needs Hyperdrive or an HTTP-based
-driver in front of the database.
+Any Postgres 14+ database works; no extensions are required. How the stores
+reach it depends on which entry point you use — see
+[Two entry points](#two-entry-points).
+
+The `/node` entry talks to Postgres over the standard `pg` driver, which opens a
+raw TCP connection: Node, Bun, and Vercel functions. workerd has no raw TCP
+socket for `pg` to use, so an edge deploy uses the **main** entry and injects a
+pool built by a driver that speaks something workerd does have.
+`@neondatabase/serverless` over WebSocket is that driver — it is what Dawn's
+`hono` build target emits, and the only combination that has actually been run
+(see [Limitations](#limitations)). Hyperdrive should work the same way; it is
+untested here.
 
 For local development:
 
@@ -205,10 +212,17 @@ database.
 
 ## Limitations
 
-- **No Cloudflare Workers deploy is verified.** `pg` opens a raw TCP socket,
-  which workerd does not provide, so Workers needs Hyperdrive or an HTTP-based
-  driver in front of the database. Node, Bun, and Vercel functions connect
-  directly. This package makes no Workers claim.
+- **Run under workerd; never deployed to Cloudflare.** The main entry links and
+  keeps durable state inside real workerd: Dawn's gated `edge-workerd` lane
+  builds an app on the `hono` target and drives four sequential AG-UI turns
+  through all three of these stores against a real Postgres, over an injected
+  `@neondatabase/serverless` pool. That lane is `wrangler dev --local`, which
+  runs the same workerd binary the platform runs — so what it does **not**
+  settle is everything only `wrangler deploy` and a live account exercise:
+  bundle-size and startup-CPU limits, Cloudflare's ~6-simultaneous-outbound-
+  connection cap, and the 1000-subrequest limit (in production each pooled
+  connection is a subrequest). Hyperdrive is untested for the same reason — it
+  needs an account.
 - **Unchanged channel values repeat per checkpoint.** Each checkpoint stores its
   channel values as one payload rather than deduplicating across checkpoints.
   The SQLite backend has the same property and Dawn has lived with it; the same

@@ -141,7 +141,7 @@ import {
   createPostgresThreadsStore,
   postgresCheckpointer,
 } from "@dawn-ai/postgres-storage"
-import { neonConfig, Pool } from "@neondatabase/serverless"
+import { Client, Pool } from "@neondatabase/serverless"
 
 /**
  * One binding, read the way Dawn reads every other knob.
@@ -158,6 +158,46 @@ import { neonConfig, Pool } from "@neondatabase/serverless"
  * seeded. On workerd \`env\` supplies the value and neither fallback is consulted.
  */
 const binding = (env, name) => env?.[name] ?? readRuntimeEnv(name)
+
+/**
+ * The pool's client class, carrying the local-wsproxy driver switches on the
+ * INSTANCE — never on the \`neonConfig\` singleton.
+ *
+ * \`neonConfig\` is process-wide, and \`useSecureWebSocket\` defaults to TRUE. A
+ * request that flipped it from its own \`DAWN_PG_WS_PROXY\` would therefore leave
+ * every LATER request in the isolate connecting in PLAINTEXT, through a proxy it
+ * never asked for — including requests carrying no such binding at all, and
+ * including a production database, because that binding ships in every generated
+ * stores.mjs and is one copied config away from being set by accident. It is
+ * also the same cross-request leak app.mjs refuses to take with \`seedRuntimeEnv\`
+ * two sections down, and TLS is a worse thing to take it with than configuration.
+ *
+ * So nothing global is written at all. The driver supports every one of these
+ * switches per client (its CONFIG.md: "set options on individual \`Client\`
+ * instances using their \`neonConfig\` property"), and \`Pool\` opens each
+ * connection with \`new this.Client(this.options)\` — so a client class plus a
+ * pool option is what carries a PER-REQUEST setting into a per-request pool,
+ * with no shared state for a second request to inherit.
+ *
+ * Fails CLOSED if the driver ever stops routing through \`this.Client\`: an
+ * override that does not apply leaves the secure defaults in place (TLS on, no
+ * proxy), so the local wsproxy lane goes red rather than a deploy going quietly
+ * plaintext.
+ */
+class DawnPgClient extends Client {
+  constructor(config) {
+    super(config)
+    // Absent on every deploy that is not the local proxy lane — which is the
+    // whole point: this branch is per instance, so NOT taking it is not
+    // something a previous request can have decided.
+    const wsProxy = config?.dawnWsProxy
+    if (!wsProxy) return
+    this.neonConfig.useSecureWebSocket = false
+    this.neonConfig.pipelineTLS = false
+    this.neonConfig.pipelineConnect = false
+    this.neonConfig.wsProxy = (host, port) => \`\${wsProxy}/v1?address=\${host}:\${port}\`
+  }
+}
 
 /**
  * Whether THIS ISOLATE has already migrated the database it talks to.
@@ -205,15 +245,16 @@ export async function createRequestStores(env) {
         "or, on a host that passes no bindings (Node, Bun), set it in the environment.",
     )
   }
-  // Driver-level switches, not connections — set for the local wsproxy lane.
-  const wsProxy = binding(env, "DAWN_PG_WS_PROXY")
-  if (wsProxy) {
-    neonConfig.useSecureWebSocket = false
-    neonConfig.pipelineTLS = false
-    neonConfig.pipelineConnect = false
-    neonConfig.wsProxy = (host, port) => \`\${wsProxy}/v1?address=\${host}:\${port}\`
-  }
-  const pool = new Pool({ connectionString: databaseUrl })
+  // The proxy is a per-request binding exactly like DATABASE_URL, so it is read
+  // here and handed to the pool as an option rather than written anywhere shared.
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    dawnWsProxy: binding(env, "DAWN_PG_WS_PROXY"),
+  })
+  // AFTER construction, not as a \`Client\` option: this driver's Pool overwrites
+  // \`this.Client\` with its own class in its constructor. This assignment is what
+  // makes \`dawnWsProxy\` above reach anything.
+  pool.Client = DawnPgClient
   try {
     const assumeMigrated = migrated
     const stores = {
