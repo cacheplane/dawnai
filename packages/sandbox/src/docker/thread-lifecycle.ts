@@ -1,4 +1,5 @@
 export interface ThreadLifecycleCoordinator {
+  readonly pendingThreadCount: number
   run<T>(threadId: string, operation: () => Promise<T>): Promise<T>
 }
 
@@ -7,6 +8,9 @@ export function createThreadLifecycleCoordinator(): ThreadLifecycleCoordinator {
   const tails = new Map<string, Promise<void>>()
 
   return {
+    get pendingThreadCount() {
+      return tails.size
+    },
     async run<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
       const previous = tails.get(threadId) ?? Promise.resolve()
       let release = () => {}

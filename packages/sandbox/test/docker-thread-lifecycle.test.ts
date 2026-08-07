@@ -31,6 +31,7 @@ describe("thread lifecycle coordinator", () => {
 
     await Promise.resolve()
     expect(events).toEqual(["first:start"])
+    expect(coordinator.pendingThreadCount).toBe(1)
     firstGate.resolve()
     await first
     await Promise.resolve()
@@ -38,6 +39,7 @@ describe("thread lifecycle coordinator", () => {
     secondGate.resolve()
     await Promise.all([second, third])
     expect(events).toEqual(["first:start", "first:end", "second:start", "second:end", "third"])
+    expect(coordinator.pendingThreadCount).toBe(0)
   })
 
   test("permits different threads to run concurrently", async () => {
@@ -55,8 +57,10 @@ describe("thread lifecycle coordinator", () => {
 
     await other
     expect(events).toEqual(["abc:start", "xyz"])
+    expect(coordinator.pendingThreadCount).toBe(1)
     firstGate.resolve()
     await first
+    expect(coordinator.pendingThreadCount).toBe(0)
   })
 
   test("a rejection does not poison the next same-thread operation", async () => {
@@ -74,6 +78,7 @@ describe("thread lifecycle coordinator", () => {
     await expect(failed).rejects.toThrow("boom")
     await expect(next).resolves.toBe("ok")
     expect(events).toEqual(["failed", "next"])
+    expect(coordinator.pendingThreadCount).toBe(0)
   })
 
   test("a later operation does not wait on a completed idle tail", async () => {
@@ -89,5 +94,6 @@ describe("thread lifecycle coordinator", () => {
 
     expect(started).toBe(true)
     await expect(later).resolves.toBe("later")
+    expect(coordinator.pendingThreadCount).toBe(0)
   })
 })

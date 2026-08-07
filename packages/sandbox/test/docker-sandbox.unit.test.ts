@@ -243,6 +243,177 @@ describe("dockerSandbox chown-init (Architecture B)", () => {
   })
 })
 
+describe("dockerSandbox lifecycle launch configuration", () => {
+  function lifecycleDocker(
+    execResults: Array<{ stdout: string; stderr: string; exitCode: number }> = [],
+  ) {
+    const runs: string[][] = []
+    let containerExists = false
+    let volumeExists = false
+    const docker: Docker = {
+      run: async (args) => {
+        runs.push([...args])
+        if (args[0] === "ps") {
+          return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return {
+            stdout: volumeExists ? "volume" : "",
+            stderr: "",
+            exitCode: volumeExists ? 0 : 1,
+          }
+        }
+        if (args[0] === "rm") {
+          containerExists = false
+          return { stdout: "removed", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("--rm")) {
+          volumeExists = true
+          return { stdout: "initialized", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("-d")) {
+          containerExists = true
+          volumeExists = true
+          return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async () => execResults.shift() ?? { stdout: "", stderr: "", exitCode: 0 },
+    }
+    return { docker, runs }
+  }
+
+  test("reacquire accepts semantically equivalent defaults, env order, and timeout changes", async () => {
+    const { docker, runs } = lifecycleDocker()
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({
+      threadId: "abc",
+      policy: {
+        network: { mode: "deny" },
+        env: { ZED: "last", ALPHA: "first" },
+        resources: { timeoutMs: 100 },
+      },
+      signal: signal(),
+    })
+    await expect(
+      p.acquire({
+        threadId: "abc",
+        policy: {
+          network: { mode: "deny" },
+          env: { ALPHA: "first", ZED: "last" },
+          resources: { timeoutMs: 9_999 },
+          security: {
+            dropAllCapabilities: true,
+            noNewPrivileges: true,
+            readOnlyRootFilesystem: true,
+            pidsLimit: 512,
+            runAsNonRoot: { uid: 1000, gid: 1000 },
+          },
+        },
+        signal: signal(),
+      }),
+    ).resolves.toMatchObject({ threadId: "abc" })
+
+    expect(runs.filter((run) => run[0] === "run" && run.includes("-d"))).toHaveLength(1)
+  })
+
+  test.each([
+    {
+      name: "network",
+      policy: { network: { mode: "allow" as const } },
+    },
+    {
+      name: "environment",
+      policy: { network: { mode: "deny" as const }, env: { NEW_VALUE: "yes" } },
+    },
+    {
+      name: "security",
+      policy: { network: { mode: "deny" as const }, security: { pidsLimit: 128 } },
+    },
+    {
+      name: "resources",
+      policy: { network: { mode: "deny" as const }, resources: { memoryMb: 256, cpus: 0.5 } },
+    },
+    {
+      name: "uid/gid",
+      policy: {
+        network: { mode: "deny" as const },
+        security: { runAsNonRoot: { uid: 2000, gid: 3000 } },
+      },
+    },
+  ])("reacquire rejects a different effective $name config before Docker calls", async ({
+    policy,
+  }) => {
+    const { docker, runs } = lifecycleDocker()
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    await p.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "deny" } },
+      signal: signal(),
+    })
+    const runsBeforeReacquire = runs.length
+
+    await expect(p.acquire({ threadId: "abc", policy, signal: signal() })).rejects.toMatchObject({
+      code: "DAWN_E2001",
+      message: expect.stringMatching(/different keeper configuration.*release.*first/i),
+    })
+    expect(runs).toHaveLength(runsBeforeReacquire)
+  })
+
+  test("equivalent handle recovery recreates the exact state-owned keeper argv", async () => {
+    const pidFailure = {
+      stdout: "",
+      stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+      exitCode: 1,
+    }
+    const { docker, runs } = lifecycleDocker([
+      pidFailure,
+      { stdout: "recovered", stderr: "", exitCode: 0 },
+    ])
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    const policyA = {
+      network: { mode: "allow" as const },
+      env: { ZED: "last", ALPHA: "first" },
+      resources: { memoryMb: 384, cpus: 0.75, timeoutMs: 100 },
+      security: {
+        dropAllCapabilities: false,
+        noNewPrivileges: true,
+        readOnlyRootFilesystem: false,
+        pidsLimit: 77,
+        runAsNonRoot: { uid: 2100, gid: 2200 },
+      },
+    }
+    await p.acquire({ threadId: "abc", policy: policyA, signal: signal() })
+    const equivalentHandle = await p.acquire({
+      threadId: "abc",
+      policy: {
+        network: { mode: "allow" },
+        env: { ALPHA: "first", ZED: "last" },
+        resources: { cpus: 0.75, memoryMb: 384, timeoutMs: 5_000 },
+        security: {
+          pidsLimit: 77,
+          readOnlyRootFilesystem: false,
+          noNewPrivileges: true,
+          dropAllCapabilities: false,
+          runAsNonRoot: { gid: 2200, uid: 2100 },
+        },
+      },
+      signal: signal(),
+    })
+
+    const result = await equivalentHandle.exec.runCommand(
+      { command: "echo hi" },
+      { workspaceRoot: equivalentHandle.workspaceRoot, signal: signal() },
+    )
+
+    expect(result).toEqual({ stdout: "recovered", stderr: "", exitCode: 0 })
+    const keeperRuns = runs.filter((run) => run[0] === "run" && run.includes("-d"))
+    expect(keeperRuns).toHaveLength(2)
+    expect(keeperRuns[1]).toEqual(keeperRuns[0])
+    expect(keeperRuns[1]).toEqual(expect.arrayContaining(["--user", "2100:2200"]))
+  })
+})
+
 describe("dockerSandbox PID-exhaustion recovery", () => {
   function deferred() {
     let resolve = () => {}
@@ -1015,7 +1186,14 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
           { command: "echo leader" },
           { workspaceRoot: firstHandle.workspaceRoot, signal: signal() },
         ),
-      ).rejects.toMatchObject({ code: "DAWN_E2001" })
+      ).rejects.toMatchObject({
+        code: "DAWN_E2001",
+        message: expect.stringMatching(
+          failure === "recreation"
+            ? /docker run failed.*replacement denied/i
+            : /remove PID-exhausted container.*container removal denied/i,
+        ),
+      })
       const removalsAfterFailure = removalCalls
       const freshHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
       expect(freshHandle.workspaceRoot).toBe("/workspace")
@@ -1029,6 +1207,89 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
       expect(runs.filter((run) => run[0] === "run" && run.includes("-d"))).toHaveLength(
         failure === "recreation" ? 3 : 1,
       )
+    },
+  )
+
+  test.each(["removal", "recreation"] as const)(
+    "wraps a spawn-level %s error with recovery context, cause, and retired state",
+    async (failure) => {
+      const spawnError = new Error(`${failure} spawn failed`)
+      let containerExists = false
+      let volumeExists = false
+      let recovering = false
+      let threwSpawnError = false
+      let execCalls = 0
+      const docker: Docker = {
+        run: async (args) => {
+          if (args[0] === "ps") {
+            if (failure === "recreation" && recovering && !threwSpawnError) {
+              threwSpawnError = true
+              throw spawnError
+            }
+            return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "volume" && args[1] === "inspect") {
+            return {
+              stdout: volumeExists ? "volume" : "",
+              stderr: "",
+              exitCode: volumeExists ? 0 : 1,
+            }
+          }
+          if (args[0] === "rm") {
+            if (failure === "removal" && !threwSpawnError) {
+              threwSpawnError = true
+              throw spawnError
+            }
+            recovering = true
+            containerExists = false
+            return { stdout: "removed", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("--rm")) {
+            volumeExists = true
+            return { stdout: "initialized", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("-d")) {
+            containerExists = true
+            volumeExists = true
+            recovering = false
+            return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+          }
+          return { stdout: "ok", stderr: "", exitCode: 0 }
+        },
+        exec: async () => {
+          execCalls += 1
+          return {
+            stdout: "",
+            stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+            exitCode: 1,
+          }
+        },
+      }
+      const p = dockerSandbox({ image: "node:22-slim", docker })
+      const h = await p.acquire({
+        threadId: "abc",
+        policy: { network: { mode: "deny" } },
+        signal: signal(),
+      })
+
+      await expect(
+        h.exec.runCommand(
+          { command: "echo hi" },
+          { workspaceRoot: h.workspaceRoot, signal: signal() },
+        ),
+      ).rejects.toMatchObject({
+        code: "DAWN_E2001",
+        cause: spawnError,
+        message: expect.stringMatching(new RegExp(`PID recovery ${failure}.*thread "abc"`, "i")),
+      })
+      expect(execCalls).toBe(1)
+      await expect(
+        p.acquire({
+          threadId: "abc",
+          policy: { network: { mode: "allow" } },
+          signal: signal(),
+        }),
+      ).resolves.toMatchObject({ threadId: "abc" })
     },
   )
 
