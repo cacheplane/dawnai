@@ -185,7 +185,7 @@ What it provisions:
 
 - **Namespace** (`dawn-sandboxes` by default) with configurable Pod Security Standard labels.
 - **Least-privilege RBAC** — a `dawn-orchestrator` ServiceAccount, Role, and RoleBinding scoped to exactly what the provider needs: creating/getting/deleting Pods and PersistentVolumeClaims, `pods/exec`, and managing NetworkPolicies. No access to Secrets or any other resource.
-- **A default-deny egress `NetworkPolicy` backstop** — applies to every Pod in the namespace, with a carve-out for cluster DNS.
+- **A default-deny egress `NetworkPolicy` backstop** — selects Dawn-managed sandbox Pods via `app.kubernetes.io/managed-by=dawn`, with a carve-out for cluster DNS. Helm-managed reaper and control-plane Pods are excluded so they retain Kubernetes API access.
 - **`ResourceQuota` and `LimitRange`** — namespace-wide aggregate caps plus container-level cpu/memory/ephemeral-storage defaults. (PID limiting is node-level on Kubernetes and cannot be set by a namespaced chart — see [Security hardening on Kubernetes](#security-hardening-on-kubernetes).)
 - **Pod Security Standards** — namespace labels controlling what the cluster's built-in admission controller allows.
 - **A PVC reaper** — a CronJob that marks and eventually deletes sandbox PVCs that are no longer referenced by any Pod, so abandoned per-thread volumes don't accumulate.
@@ -208,14 +208,14 @@ helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-inf
 </Callout>
 
 <Callout type="warn" title="The default-deny egress backstop overrides allow-mode">
-  The chart's default-deny egress `NetworkPolicy` applies to every Pod in the namespace, including sandbox Pods configured with `network: { mode: "allow" }`. That combination still has no egress unless you disable the backstop:
+  The chart's default-deny egress `NetworkPolicy` selects Dawn-managed sandbox Pods via `app.kubernetes.io/managed-by=dawn`. It excludes Helm-managed reaper and control-plane Pods so they can reach the Kubernetes API, but sandbox Pods configured with `network: { mode: "allow" }` still have no egress unless you disable the backstop:
 
   ```bash
   helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-infra \
     --set networkPolicy.defaultDenyEgress=false
   ```
 
-  With the backstop disabled, per-thread `deny`-mode NetworkPolicies created by the provider still work as documented — only the namespace-wide backstop is removed.
+  With the backstop disabled, per-thread `deny`-mode NetworkPolicies created by the provider still work as documented — only the chart-managed backstop is removed.
 </Callout>
 
 The PVC reaper's time-to-live is configurable via `reaper.ttlHours` (default `168`, one week) — a PVC with no Pod referencing it for longer than the TTL is deleted:

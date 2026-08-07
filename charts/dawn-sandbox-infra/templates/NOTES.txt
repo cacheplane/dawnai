@@ -29,11 +29,12 @@ Pod Security Standards on this namespace:
 
 {{- if .Values.networkPolicy.defaultDenyEgress }}
 
-A namespace-wide default-deny-egress NetworkPolicy is active (+ DNS to
-kube-system). This is a fail-closed backstop: even the provider's
-`network: "allow"` per-thread mode will NOT have open egress unless you
-set `networkPolicy.defaultDenyEgress=false`. Requires a policy-capable CNI
-(e.g. Calico, Cilium) to actually be enforced.
+A default-deny-egress NetworkPolicy selects Dawn-managed sandbox Pods via
+app.kubernetes.io/managed-by=dawn (+ DNS to kube-system). Helm-managed reaper
+and control-plane Pods are excluded so they retain Kubernetes API access.
+The backstop still overrides sandbox `network: "allow"`; disable it with
+`networkPolicy.defaultDenyEgress=false`. Requires a policy-capable CNI (e.g.
+Calico, Cilium) to actually be enforced.
 {{- end }}
 
 {{- if .Values.reaper.enabled }}

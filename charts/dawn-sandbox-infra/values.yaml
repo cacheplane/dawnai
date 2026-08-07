@@ -34,7 +34,9 @@ orchestrator:
   subjects: []
 
 networkPolicy:
-  # defaultDenyEgress: namespace-wide egress backstop (+ DNS carve-out).
+  # defaultDenyEgress: egress backstop (+ DNS carve-out) for Dawn-managed
+  # sandbox Pods selected by app.kubernetes.io/managed-by=dawn. Helm-managed
+  # reaper/control-plane Pods are excluded; sandbox network:allow is overridden.
   defaultDenyEgress: true
 
 resourceQuota:
@@ -64,4 +66,4 @@ reaper:
   schedule: "17 * * * *"
   ttlHours: 168
   # Pinned by digest (tags are mutable; the reaper SA can patch/delete PVCs).
-  image: docker.io/alpine/k8s:1.31.1@sha256:dfe8c7a06c41d0b6e8757da99531f8f302e9a2687fa0155af4c4087df585c9c8 # sh + date + kubectl
+  image: docker.io/alpine/k8s:1.35.6@sha256:b7a12c5ddf261994c33d2eaaa06fd69a0803ff6b38683bfa3d30a76dcdf92807 # sh + date + sort + grep + kubectl

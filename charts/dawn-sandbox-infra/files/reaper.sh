@@ -7,29 +7,52 @@ NOW="$(date -u +%s)"
 # claimNames currently referenced by any pod in the namespace
 BOUND="$(kubectl -n "$NS" get pods -o jsonpath='{range .items[*]}{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}{end}' | sort -u)"
 
-# managed PVCs: "<name> <unbound-since-or-empty>"
-kubectl -n "$NS" get pvc -l app.kubernetes.io/managed-by=dawn \
-  -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.annotations.dawn\.sh/unbound-since}{"\n"}{end}' \
-| while read -r NAME SINCE; do
+# List only trusted Kubernetes metadata names. Annotation values are fetched
+# separately so embedded newlines cannot fabricate additional PVC records.
+PVC_NAMES="$(kubectl -n "$NS" get pvc -l app.kubernetes.io/managed-by=dawn \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
+
+printf '%s\n' "$PVC_NAMES" | while IFS= read -r NAME; do
     [ -z "$NAME" ] && continue
-    if printf '%s\n' "$BOUND" | grep -qx "$NAME"; then
+    SINCE_WITH_SENTINEL="$(kubectl -n "$NS" get pvc "$NAME" --ignore-not-found \
+      -o jsonpath='{.metadata.annotations.dawn\.sh/unbound-since}{"x"}')"
+    [ -z "$SINCE_WITH_SENTINEL" ] && continue
+    SINCE="${SINCE_WITH_SENTINEL%?}"
+
+    if printf '%s\n' "$BOUND" | grep -Fxq "$NAME"; then
       # bound → clear any marker
-      [ -n "${SINCE:-}" ] && kubectl -n "$NS" annotate pvc "$NAME" dawn.sh/unbound-since- >/dev/null 2>&1 || true
-      continue
+      [ -z "${SINCE:-}" ] && continue
+      if kubectl -n "$NS" annotate pvc "$NAME" dawn.sh/unbound-since- >/dev/null; then
+        continue
+      fi
+      PVC_AFTER_CLEAR="$(kubectl -n "$NS" get pvc "$NAME" --ignore-not-found -o name)"
+      [ -z "$PVC_AFTER_CLEAR" ] && continue
+      echo "failed to clear dawn.sh/unbound-since from bound PVC $NAME" >&2
+      exit 1
     fi
-    # Re-mark (reset the clock) when the marker is missing OR not a positive
-    # integer — a corrupted/tampered annotation must never drive a delete.
+
+    # Only canonical positive decimal epochs that fit within NOW's digit width
+    # may reach shell arithmetic. Invalid/tampered markers reset the clock.
     case "${SINCE:-}" in
-      "" | *[!0-9]*)
+      "" | 0* | *[!0-9]*)
         kubectl -n "$NS" annotate --overwrite pvc "$NAME" "dawn.sh/unbound-since=$NOW" >/dev/null
         echo "marked $NAME"
-        ;;
-      *)
-        AGE=$(( NOW - SINCE ))
-        if [ "$AGE" -gt "$TTL_SECONDS" ]; then
-          kubectl -n "$NS" delete pvc "$NAME" >/dev/null
-          echo "reaped $NAME (unbound ${AGE}s)"
-        fi
+        continue
         ;;
     esac
+
+    if [ "${#SINCE}" -gt "${#NOW}" ]; then
+      kubectl -n "$NS" annotate --overwrite pvc "$NAME" "dawn.sh/unbound-since=$NOW" >/dev/null
+      echo "marked $NAME"
+      continue
+    fi
+
+    AGE=$(( NOW - SINCE ))
+    if [ "$AGE" -lt 0 ]; then
+      kubectl -n "$NS" annotate --overwrite pvc "$NAME" "dawn.sh/unbound-since=$NOW" >/dev/null
+      echo "marked $NAME"
+    elif [ "$AGE" -gt "$TTL_SECONDS" ]; then
+      kubectl -n "$NS" delete pvc "$NAME" --wait=false >/dev/null
+      echo "reaped $NAME (unbound ${AGE}s)"
+    fi
   done
