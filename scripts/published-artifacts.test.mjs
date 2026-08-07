@@ -1784,6 +1784,61 @@ describe("validatePackageMetadata", () => {
 
     assert.deepEqual(failures, [])
   })
+
+  it("accepts a runnable app package that declares a dawnInspector server entry", () => {
+    // @dawn-ai/inspector is deliberately neither importable nor a bin: it is a Next
+    // standalone app that `dawn inspect` launches by resolving `dawnInspector.server`.
+    // That IS its entry point, so the "must expose exports or bin" rule was reporting a
+    // false positive on every published release since 0.8.14.
+    const failures = validatePackageMetadata("@dawn-ai/inspector", {
+      name: "@dawn-ai/inspector",
+      version: "1.0.0",
+      license: "MIT",
+      repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+      homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/inspector#readme",
+      bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
+      engines: { node: ">=22.13.0" },
+      publishConfig: { access: "public" },
+      dawnInspector: { server: ".next/standalone/packages/inspector/server.js" },
+    })
+
+    assert.deepEqual(failures, [])
+  })
+
+  it("still rejects a package that declares no entry point at all", () => {
+    const failures = validatePackageMetadata("@dawn-ai/nothing", {
+      name: "@dawn-ai/nothing",
+      version: "1.0.0",
+      license: "MIT",
+      repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+      homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/nothing#readme",
+      bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
+      engines: { node: ">=22.13.0" },
+      publishConfig: { access: "public" },
+    })
+
+    assert.deepEqual(failures, [
+      "@dawn-ai/nothing: package.json must expose exports, bin, or dawnInspector.server",
+    ])
+  })
+
+  it("rejects a dawnInspector field that names no server", () => {
+    const failures = validatePackageMetadata("@dawn-ai/inspector", {
+      name: "@dawn-ai/inspector",
+      version: "1.0.0",
+      license: "MIT",
+      repository: { type: "git", url: "git+https://github.com/cacheplane/dawnai.git" },
+      homepage: "https://github.com/cacheplane/dawnai/tree/main/packages/inspector#readme",
+      bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
+      engines: { node: ">=22.13.0" },
+      publishConfig: { access: "public" },
+      dawnInspector: {},
+    })
+
+    assert.deepEqual(failures, [
+      "@dawn-ai/inspector: package.json must expose exports, bin, or dawnInspector.server",
+    ])
+  })
 })
 
 describe("shouldRunOpenAiSmoke", () => {

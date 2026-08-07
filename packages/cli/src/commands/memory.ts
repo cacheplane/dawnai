@@ -43,6 +43,10 @@ export function registerMemoryCommand(program: Command, io: CommandIo): void {
     // subcommand for itself and rejects it as an unknown option before the handler runs,
     // which made EVERY documented subcommand flag unusable from the real CLI.
     .passThroughOptions()
+    // Commander only knows about `--cwd`, so `dawn memory --help` listed no subcommands
+    // at all — `consolidate`, `reflect` and every subcommand flag were discoverable only
+    // by triggering the error paths below. Same text, now reachable the obvious way.
+    .addHelpText("after", `\n${USAGE}`)
     .action(async (subcommand: string | undefined, args: string[], options: MemoryOptions) => {
       const argv = subcommand ? [subcommand, ...args] : []
       await runMemoryCommand(argv, options, io)
