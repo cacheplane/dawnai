@@ -1,5 +1,7 @@
 # @dawn-ai/config-typescript
 
+## 0.8.17
+
 ## 0.8.16
 
 ### Patch Changes
