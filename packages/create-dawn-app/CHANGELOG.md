@@ -1,5 +1,29 @@
 # create-dawn-ai-app
 
+## 0.8.16
+
+### Patch Changes
+
+- 2da55fa: Require Node 24 (the active LTS) everywhere. npm 10 — bundled with Node 22 —
+  cannot install Dawn's scaffold dependency graph (its resolver crashes), while
+  Node 24's bundled npm ≥ 11 installs it correctly and ships `node:sqlite`
+  unflagged. All packages now declare `engines.node >= 24`, `create-dawn-ai-app`
+  refuses to scaffold on older Node with an actionable message, `dawn verify`'s
+  runtime preflight enforces the same floor, and the `dawn build` node target
+  uses a `node:24-slim` base. Scaffolded apps also no longer declare
+  `@dawn-ai/core` as a direct dependency — nothing in a generated app imports it
+  (it arrives transitively via the CLI and SDK).
+- 3b8ffd5: Scaffold templates now pin `vitest` with a caret (`^4.1.10`) instead of an exact
+  stale version. The old exact `4.1.4` pin made fresh `npm install`s crash with
+  npm's arborist `edgesOut` bug after an upstream peer-landscape change (vitest
+  ≤4.1.9 became uninstallable under npm's strict peer resolution) — a failure
+  mode a caret range rides out automatically. Existing broken scaffolds can fix
+  themselves with `npm install --legacy-peer-deps` or by bumping `vitest` to
+  `^4.1.10`.
+- Updated dependencies [2da55fa]
+- Updated dependencies [3b8ffd5]
+  - @dawn-ai/devkit@0.8.16
+
 ## 0.8.15
 
 ### Patch Changes
