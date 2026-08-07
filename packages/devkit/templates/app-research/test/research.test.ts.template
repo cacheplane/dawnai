@@ -2,7 +2,6 @@ import { rmSync } from "node:fs"
 import { basename, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { run as runDawnCli } from "@dawn-ai/cli"
-import { afterAll, beforeAll, expect, it } from "vitest"
 import type { FixtureSet } from "@dawn-ai/testing"
 import {
   createAgentHarness,
@@ -11,9 +10,10 @@ import {
   expectOffloaded,
   expectSubagent,
   expectToolCalled,
-  seedMemory,
   script,
+  seedMemory,
 } from "@dawn-ai/testing"
+import { afterAll, beforeAll, expect, it } from "vitest"
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url))
 const memoryDb = join(appRoot, ".dawn", "memory.sqlite")
@@ -125,7 +125,7 @@ it("approves a memory candidate through the CLI and recalls it in a fresh thread
   expect(id).toBeDefined()
 
   const approved = await runCli(["memory", "--cwd", appRoot, "approve", id ?? ""])
-  expect(approved).toContain(`Approved: ${id}`)
+  expect(approved).toContain(`approved ${id} (activated)`)
 
   h.reset()
   const recalled = await h.run({
