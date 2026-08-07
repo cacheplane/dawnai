@@ -300,6 +300,19 @@ describe("hono target — the emitted app inside real Cloudflare workerd", () =>
               `Worker output:\n${await server.settledOutput()}`,
           )
         }
+        // A framed RUN_ERROR gets its own check, BEFORE the reply assertion.
+        // Both would fail on the same turn, but only this one names the cause:
+        // the reply assertion reports "carried no model reply", which reads as
+        // a wiring problem and sent one reviewer looking in the wrong place
+        // when the actual message was a dead Postgres pool. The 3s settle is
+        // paid only on the failing path — workerd reports an uncaught exception
+        // through wrangler asynchronously, so the log is empty without it.
+        if (sse.includes("RUN_ERROR")) {
+          expect.fail(
+            `turn ${index + 1} answered 200 but the run FAILED. Stream:\n${sse}\n` +
+              `Worker output:\n${await server.settledOutput()}`,
+          )
+        }
         // The payload, never the status: a dead model wiring still answers 200
         // with a well-formed but empty stream.
         expect(sse, `turn ${index + 1} carried no model reply:\n${server.output()}`).toContain(

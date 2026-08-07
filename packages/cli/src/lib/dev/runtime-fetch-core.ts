@@ -259,9 +259,16 @@ export async function createRuntimeFetchHandler(
   // store satisfies the memory-candidate HTTP routes directly.
   let memoryStorePromise: Promise<MemoryStore> | undefined
   const getMemoryStore = (): Promise<MemoryStore> => {
+    // `requireStore`, not `requireBoot`: memoryStore is the one slot with no
+    // `requireStore` call site of its own, and it is reachable on a deployed
+    // worker — the `/memory/candidates*` routes are registered unconditionally.
+    // A plain Error here carries no `.code`, so `fetch`'s catch-all flattened
+    // the documented DAWN_E5301 into an anonymous 500; the edge docs and
+    // `edge-capabilities.ts` both promise the code, so raise the error that
+    // actually has it.
     memoryStorePromise ??= options.memoryStore
       ? options.memoryStore()
-      : (requireBoot(fallbacks, "memoryStore").resolveMemoryStore(
+      : (requireStore(fallbacks, "memoryStore").resolveMemoryStore(
           options.appRoot,
         ) as Promise<MemoryStore>)
     return memoryStorePromise
@@ -342,6 +349,10 @@ export async function createRuntimeFetchHandler(
   // Store names already reported by the fail-loud path below, so one
   // misconfiguration logs once rather than once per request.
   const loggedMissingStores = new Set<string>()
+  // …and the same for everything else that reaches the catch-all. Keyed by the
+  // message so a repeated misconfiguration logs once, while a genuinely new
+  // failure still gets a line.
+  const loggedFailures = new Set<string>()
 
   /**
    * Dispose a request's stores once — and only once BOTH of its lifetimes have
@@ -571,7 +582,24 @@ export async function createRuntimeFetchHandler(
         )
       }
 
+      // Everything else. The BODY stays deliberately opaque — it is served to
+      // whoever made the request, and an internal message is not theirs to
+      // read — but the operator gets the real cause on stderr. Without this
+      // line the three failures most likely to greet an edge deploy
+      // (`DATABASE_URL` unset, no Workers env bound to the Request, a store the
+      // generated `stores.mjs` omits) were a bare "Unexpected runtime server
+      // failure" with nothing anywhere saying why. Deduped by message, for the
+      // same reason the MissingStoreError branch above dedupes by store: a
+      // misconfiguration fails every request identically.
       const code = dawnErrorCodeOf(error)
+      const cause = error instanceof Error ? error.message : String(error)
+      if (!loggedFailures.has(cause)) {
+        loggedFailures.add(cause)
+        console.error(
+          `Dawn runtime failure — ${cause}${code ? ` (${code})` : ""}`,
+          error instanceof Error && error.stack ? `\n${error.stack}` : "",
+        )
+      }
       return Response.json(
         createExecutionErrorBody(
           "Unexpected runtime server failure",
