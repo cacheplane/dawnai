@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { discoverRoutes } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { collectRouteProviders } from "../src/lib/runtime/collect-route-providers.js"

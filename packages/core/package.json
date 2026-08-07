@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/core",
-  "version": "0.8.15",
+  "version": "0.8.16",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -30,8 +30,8 @@
       "default": "./dist/compiler/index.js"
     },
     "./node": {
-      "types": "./dist/node-marker-fs.d.ts",
-      "default": "./dist/node-marker-fs.js"
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
     }
   },
   "publishConfig": {

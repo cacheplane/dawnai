@@ -1,5 +1,5 @@
 import { relative } from "node:path"
-import { loadDawnConfig } from "@dawn-ai/core"
+import { loadDawnConfig } from "../node-config.js"
 import { type CommandIo, writeLine } from "../output.js"
 import { loadEnvFiles } from "./load-env.js"
 import { resolveEnvPath } from "./resolve-env-path.js"

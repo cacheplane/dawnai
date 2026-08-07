@@ -8,6 +8,11 @@ export function importCore(): Promise<typeof import("@dawn-ai/core")> {
   return import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "@dawn-ai/core")
 }
 
+/** The node-only half of core (route discovery, tool typegen). */
+export function importCoreNode(): Promise<typeof import("@dawn-ai/core/node")> {
+  return import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "@dawn-ai/core/node")
+}
+
 export function importMemory(): Promise<typeof import("@dawn-ai/memory")> {
   return import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "@dawn-ai/memory")
 }

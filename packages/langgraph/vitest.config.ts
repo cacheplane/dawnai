@@ -11,6 +11,9 @@ export default defineConfig({
       "@dawn-ai/langgraph": resolve(rootDir, "src/index.ts"),
       "@dawn-ai/langgraph/define-entry": resolve(rootDir, "src/define-entry.ts"),
       "@dawn-ai/langgraph/route-module": resolve(rootDir, "src/route-module.ts"),
+      // Subpath aliases MUST precede the bare package alias — vitest matches
+      // string aliases by prefix in declaration order.
+      "@dawn-ai/sdk/pure": resolve(rootDir, "../sdk/src/pure/index.ts"),
       "@dawn-ai/sdk": resolve(rootDir, "../sdk/src/index.ts"),
     },
   },

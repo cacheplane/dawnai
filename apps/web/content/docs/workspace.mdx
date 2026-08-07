@@ -46,7 +46,8 @@ export default {
 `FilesystemMiddleware` is `(next: FilesystemBackend) => FilesystemBackend`. Wrap the default backend with `compose()` to add cross-cutting behavior:
 
 ```ts title="dawn.config.ts"
-import { compose, localFilesystem, withFilesystemLogging } from "@dawn-ai/workspace"
+import { compose, withFilesystemLogging } from "@dawn-ai/workspace"
+import { localFilesystem } from "@dawn-ai/workspace/node"
 
 export default {
   backends: {

@@ -1,6 +1,8 @@
 export { compose } from "./compose.js"
-export { type LocalExecOptions, localExec } from "./local-exec.js"
-export { type LocalFilesystemOptions, localFilesystem } from "./local-filesystem.js"
+// NOTE: `localExec`/`localFilesystem` live on the `./node` subpath — importing
+// them here would put node builtins back into every consumer's graph.
+export type { LocalExecOptions } from "./local-exec.js"
+export type { LocalFilesystemOptions } from "./local-filesystem.js"
 export type {
   SandboxConfig,
   SandboxHandle,

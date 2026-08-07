@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { z } from "zod"
 import { createMemoryMarker } from "../../src/capabilities/built-in/memory.js"
@@ -99,6 +100,25 @@ describe("memory capability", () => {
     expect(store.rows).toHaveLength(1)
     expect(store.rows[0].status).toBe("candidate")
     expect(store.rows[0].namespace).toBe("ws=a|route=/r")
+  })
+  // VALUE PIN (characterization): record ids are PERSISTED, so the derivation
+  // is a compatibility contract, not an implementation detail — a store written
+  // by one build must still resolve `get(id)`/`supersede(id)` from the next.
+  // The other id assertions in this suite check only the `memory_<16 hex>`
+  // SHAPE, which any hash would satisfy; this one fixes the exact bytes for a
+  // fixed input, both against a literal and against node:crypto's own sha1.
+  it("derives the record id as sha1(namespace|json(data)) truncated to 16 hex", async () => {
+    const store = fakeStore()
+    const c = await createMemoryMarker().load("/r", baseCtx(store))
+    const remember = c.tools!.find((t) => t.name === "remember")!
+    const data = { subject: "billing", predicate: "escalate", value: "500" }
+    await remember.run({ data, content: "esc" }, { signal: new AbortController().signal })
+    const expected = `memory_${createHash("sha1")
+      .update(`ws=a|route=/r|${JSON.stringify(data)}`)
+      .digest("hex")
+      .slice(0, 16)}`
+    expect(store.rows[0].id).toBe("memory_f9f0ec98c633f611")
+    expect(store.rows[0].id).toBe(expected)
   })
   it("recall returns namespace-scoped active rows", async () => {
     const store = fakeStore()

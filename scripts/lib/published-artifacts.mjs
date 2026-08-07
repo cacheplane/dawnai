@@ -11,7 +11,7 @@ export const packageSets = {
   "ag-ui": ["@dawn-ai/ag-ui"],
   "memory-pgvector-core": ["@dawn-ai/memory-pgvector", "@dawn-ai/memory", "@dawn-ai/langchain"],
   public: null,
-  "typescript-tooling": ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
+  "typescript-tooling": ["@dawn-ai/sdk", "@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
 }
 
 export const MAX_WAIT_DELAY_MS = 59_999

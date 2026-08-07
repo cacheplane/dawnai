@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { BackendContext, FilesystemBackend, FilesystemMiddleware } from "@dawn-ai/workspace"
-import { localFilesystem } from "@dawn-ai/workspace"
+import { localFilesystem } from "@dawn-ai/workspace/node"
 
 export interface MiddlewareHarness {
   readonly backend: FilesystemBackend

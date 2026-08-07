@@ -96,6 +96,7 @@ describe("resolvePackageSet", () => {
 
   it("resolves the TypeScript tooling package set", () => {
     assert.deepEqual(resolvePackageSet("typescript-tooling"), [
+      "@dawn-ai/sdk",
       "@dawn-ai/core",
       "@dawn-ai/vite-plugin",
       "@dawn-ai/cli",
@@ -112,8 +113,9 @@ describe("packageSets", () => {
     assert.equal(packageSets.public, null)
   })
 
-  it("includes Core, Vite, and CLI in the TypeScript tooling package set", () => {
+  it("includes SDK, Core, Vite, and CLI in the TypeScript tooling package set", () => {
     assert.deepEqual(packageSets["typescript-tooling"], [
+      "@dawn-ai/sdk",
       "@dawn-ai/core",
       "@dawn-ai/vite-plugin",
       "@dawn-ai/cli",
@@ -764,7 +766,7 @@ describe("published artifact verification CLI", () => {
 
     assert.deepEqual(result, {
       failures: [],
-      packageNames: ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
+      packageNames: ["@dawn-ai/sdk", "@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
     })
     assert.deepEqual(events, [
       { type: "read-public" },
@@ -772,11 +774,12 @@ describe("published artifact verification CLI", () => {
         options: {
           attempts: 18,
           delayMs: 10_000,
-          packages: ["@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
+          packages: ["@dawn-ai/sdk", "@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
           version: "0.9.0",
         },
         type: "wait",
       },
+      { packageName: "@dawn-ai/sdk", type: "verify", version: "0.9.0" },
       { packageName: "@dawn-ai/core", type: "verify", version: "0.9.0" },
       { packageName: "@dawn-ai/vite-plugin", type: "verify", version: "0.9.0" },
       { packageName: "@dawn-ai/cli", type: "verify", version: "0.9.0" },
@@ -1129,7 +1132,7 @@ describe("TypeScript tooling installed probe", () => {
   it("generates a clean installed-package runtime probe with exact extraction assertions", () => {
     const source = typescriptToolingProbeSource()
 
-    assert.match(source, /from "@dawn-ai\/core"/)
+    assert.match(source, /from "@dawn-ai\/core\/node"/)
     assert.match(source, /from "@dawn-ai\/vite-plugin"/)
     assert.doesNotMatch(source, /@dawn-ai\/core\/internal\/compiler/)
     assert.doesNotMatch(
@@ -1422,6 +1425,7 @@ describe("TypeScript tooling installed probe", () => {
 describe("published TypeScript tooling smoke", () => {
   const packageVersion = "0.9.0"
   const toolingPackages = [
+    { name: "@dawn-ai/sdk", version: packageVersion },
     { name: "@dawn-ai/core", version: packageVersion },
     { name: "@dawn-ai/vite-plugin", version: packageVersion },
     { name: "@dawn-ai/cli", version: packageVersion },
@@ -1432,15 +1436,15 @@ describe("published TypeScript tooling smoke", () => {
     assert.equal(
       shouldRunTypeScriptToolingProbe([
         { name: "extra", version: "1.0.0" },
+        toolingPackages[2],
+        toolingPackages[2],
         toolingPackages[1],
-        toolingPackages[1],
-        toolingPackages[0],
       ]),
       true,
     )
-    assert.equal(shouldRunTypeScriptToolingProbe([toolingPackages[0], toolingPackages[2]]), false)
-    assert.equal(shouldRunTypeScriptToolingProbe([toolingPackages[1], toolingPackages[2]]), false)
-    assert.equal(shouldRunTypeScriptToolingProbe([toolingPackages[2]]), false)
+    assert.equal(shouldRunTypeScriptToolingProbe([toolingPackages[1], toolingPackages[3]]), false)
+    assert.equal(shouldRunTypeScriptToolingProbe([toolingPackages[2], toolingPackages[3]]), false)
+    assert.equal(shouldRunTypeScriptToolingProbe([toolingPackages[3]]), false)
   })
 
   it("uses separate exact, no-lock installs for selected Dawn packages and root tooling", () => {
@@ -1448,6 +1452,7 @@ describe("published TypeScript tooling smoke", () => {
       "install",
       "--save-exact",
       "--package-lock=false",
+      "@dawn-ai/sdk@0.9.0",
       "@dawn-ai/core@0.9.0",
       "@dawn-ai/vite-plugin@0.9.0",
       "@dawn-ai/cli@0.9.0",

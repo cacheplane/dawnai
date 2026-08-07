@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/workspace",
-  "version": "0.8.15",
+  "version": "0.8.16",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -24,6 +24,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
     }
   },
   "publishConfig": {
@@ -34,6 +38,9 @@
     "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dawn-ai/sdk": "workspace:*"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",

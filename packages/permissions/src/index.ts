@@ -1,5 +1,4 @@
 export { matchPermission } from "./pattern-matching.js"
-export { createPermissionsStore } from "./permissions-store.js"
 export {
   suggestedCommandPattern,
   suggestedMemoryPattern,

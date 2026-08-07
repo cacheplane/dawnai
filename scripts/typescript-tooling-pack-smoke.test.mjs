@@ -27,11 +27,13 @@ describe("runTypeScriptToolingPackSmoke", () => {
     const result = await runTypeScriptToolingPackSmoke(harness.dependencies)
 
     assert.deepEqual(TOOLING_PACKAGES, [
+      { dir: "packages/sdk", name: "@dawn-ai/sdk" },
       { dir: "packages/core", name: "@dawn-ai/core" },
       { dir: "packages/vite-plugin", name: "@dawn-ai/vite-plugin" },
     ])
     assert.deepEqual(result.installedVersions, {
       "@dawn-ai/core": PACKAGE_VERSION,
+      "@dawn-ai/sdk": PACKAGE_VERSION,
       "@dawn-ai/vite-plugin": PACKAGE_VERSION,
       tsx: TSX_VERSION,
       typescript: TYPESCRIPT_VERSION,
@@ -60,7 +62,7 @@ describe("runTypeScriptToolingPackSmoke", () => {
       args: ["--filter", "@dawn-ai/vite-plugin...", "build"],
       cwd: harness.repoRoot,
     })
-    assert.equal(packIndexes.length, 2)
+    assert.equal(packIndexes.length, 3)
     assert.ok(packIndexes.every((index) => index > buildIndex && index < installIndex))
     assert.deepEqual(
       packIndexes.map((index) => harness.events[index].packageConfig),
@@ -74,6 +76,7 @@ describe("runTypeScriptToolingPackSmoke", () => {
       "--ignore-scripts",
       "--save-exact",
       "--package-lock=false",
+      join(harness.tempRoot, "packs", "dawn-ai-sdk-0.8.14.tgz"),
       join(harness.tempRoot, "packs", "dawn-ai-core-0.8.14.tgz"),
       join(harness.tempRoot, "packs", "dawn-ai-vite-plugin-0.8.14.tgz"),
       `typescript@${TYPESCRIPT_VERSION}`,
@@ -363,7 +366,14 @@ async function createHarness({
     async readInstalledPackageManifests(nodeModulesDir) {
       events.push({ type: "inspect-installed", nodeModulesDir })
       const manifests = []
-      for (const name of ["@dawn-ai/core", "@dawn-ai/vite-plugin", "typescript", "tsx", "zod"]) {
+      for (const name of [
+        "@dawn-ai/core",
+        "@dawn-ai/sdk",
+        "@dawn-ai/vite-plugin",
+        "typescript",
+        "tsx",
+        "zod",
+      ]) {
         manifests.push({
           manifest: await readPackageManifest(join(nodeModulesDir, ...name.split("/"))),
         })
@@ -455,6 +465,7 @@ function packedManifest(name, { packedCoreDependency = PACKAGE_VERSION } = {}) {
 async function installFixturePackages(root) {
   const packages = {
     "@dawn-ai/core": PACKAGE_VERSION,
+    "@dawn-ai/sdk": PACKAGE_VERSION,
     "@dawn-ai/vite-plugin": PACKAGE_VERSION,
     tsx: TSX_VERSION,
     typescript: TYPESCRIPT_VERSION,

@@ -1,13 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { RouteToolTypes } from "@dawn-ai/core"
-import {
-  discoverRoutes,
-  extractToolTypesForRoute,
-  findDawnApp,
-  renderDawnTypes,
-} from "@dawn-ai/core"
+import { renderDawnTypes } from "@dawn-ai/core"
 import { analyzeToolSource } from "@dawn-ai/core/internal/compiler"
+import { discoverRoutes, extractToolTypesForRoute, findDawnApp } from "@dawn-ai/core/node"
 
 import { createGeneratedIdentifierAllocator } from "./generated-identifiers.js"
 import { generateZodSchema } from "./zod-generator.js"

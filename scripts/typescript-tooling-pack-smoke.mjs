@@ -23,6 +23,7 @@ export const TSX_VERSION = "4.23.0"
 export const ZOD_VERSION = "4.4.3"
 
 export const TOOLING_PACKAGES = [
+  { dir: "packages/sdk", name: "@dawn-ai/sdk" },
   { dir: "packages/core", name: "@dawn-ai/core" },
   { dir: "packages/vite-plugin", name: "@dawn-ai/vite-plugin" },
 ]
@@ -92,6 +93,8 @@ export async function runTypeScriptToolingPackSmoke(overrides = {}) {
 
     const installedVersions = await assertInstalledVersions(consumerRoot, {
       "@dawn-ai/core": packedCoreVersion,
+      "@dawn-ai/sdk": packedArtifacts.find(({ packageName }) => packageName === "@dawn-ai/sdk")
+        .packageVersion,
       "@dawn-ai/vite-plugin": packedArtifacts.find(
         ({ packageName }) => packageName === "@dawn-ai/vite-plugin",
       ).packageVersion,

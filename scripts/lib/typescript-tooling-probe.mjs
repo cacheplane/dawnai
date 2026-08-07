@@ -72,7 +72,7 @@ import { fileURLToPath } from "node:url"
 import {
   extractToolSchemasForRoute,
   extractToolTypesForRoute,
-} from "@dawn-ai/core"
+} from "@dawn-ai/core/node"
 import { dawnToolSchemaPlugin } from "@dawn-ai/vite-plugin"
 import typescript from "typescript"
 

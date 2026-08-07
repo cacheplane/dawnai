@@ -668,6 +668,10 @@ importers:
         version: 8.20.0
 
   packages/permissions:
+    dependencies:
+      '@dawn-ai/sdk':
+        specifier: workspace:*
+        version: link:../sdk
     devDependencies:
       '@dawn-ai/config-typescript':
         specifier: workspace:*
@@ -675,6 +679,9 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
 
   packages/sandbox:
     dependencies:
@@ -785,6 +792,10 @@ importers:
         version: 4.4.3
 
   packages/workspace:
+    dependencies:
+      '@dawn-ai/sdk':
+        specifier: workspace:*
+        version: link:../sdk
     devDependencies:
       '@dawn-ai/config-typescript':
         specifier: workspace:*

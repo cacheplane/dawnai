@@ -75,7 +75,7 @@ sandbox: {
 | `image.digest` | `""` | If set, pins `repository@sha256:...` instead of `tag`. |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | |
-| `replicaCount` | `1` | Ignored (omitted) when `autoscaling.enabled=true`. |
+| `replicaCount` | `1` | Ignored (omitted) when `autoscaling.enabled=true`. **Keep at 1** — see "Single replica only" below. |
 | `containerPort` | `8000` | The port your image's HTTP server listens on inside the container — matches `dawn build`'s node-target Dockerfile (`EXPOSE 8000`) by default; verify against your built image if it differs. |
 | `healthPath` | `/healthz` | HTTP path used for liveness/readiness/startup probes; matches the node target's `/healthz` by default. |
 | `probes.*` | see `values.yaml` | Per-probe timing (initialDelaySeconds/periodSeconds/timeoutSeconds/failureThreshold). |
@@ -97,8 +97,25 @@ sandbox: {
 | `securityContext.readOnlyRootFilesystem` | `false` | The app runtime likely writes temp state; a writable `/tmp` emptyDir is always mounted regardless. Set `true` if your image tolerates it. |
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | |
 
+### Single replica only
+
+Dawn's Agent Protocol surface keeps per-thread state on the pod's local
+filesystem — the threads database and LangGraph checkpoints both live under
+`<appRoot>/.dawn/` — and in-flight run tracking (the one-run-per-thread gate
+and `POST /threads/:id/cancel`) is in-memory and process-local.
+
+With more than one replica: threads diverge across pods, the concurrency gate
+only sees runs on its own pod, and a cancel request reaches the pod actually
+running the thread only by chance. `replicaCount > 1` and
+`autoscaling.maxReplicas > 1` are therefore unsupported until a shared threads
+and checkpoint backend ships. The chart does not enforce this — the HPA
+defaults ship with `maxReplicas: 5` — so it is on the operator to keep the
+deployment at one replica.
+
 ## Honest scope
 
+- **Single replica only** — see above. Horizontal scaling needs a shared
+  threads/checkpoint backend that does not exist yet.
 - This chart runs a **user-built** image; it does not build the image or
   bake `dawn.config.ts`. The app image is the runtime contract — build it
   with `dawn build`'s `node` target (recommended, especially with

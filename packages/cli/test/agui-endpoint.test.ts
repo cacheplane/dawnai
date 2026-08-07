@@ -88,6 +88,7 @@ async function setupServer(fixtures: ReturnType<ReturnType<typeof script>["build
 interface ControlledServerOptions {
   readonly checkpointer?: BaseCheckpointSaver
   readonly streamRoute: typeof streamResolvedRoute
+  readonly shutdownSignal?: AbortSignal
 }
 
 async function setupControlledServer(controlled: ControlledServerOptions): Promise<{
@@ -124,7 +125,7 @@ async function setupControlledServer(controlled: ControlledServerOptions): Promi
       request,
       response,
       routeKey: "/chat#agent",
-      signal: new AbortController().signal,
+      signal: controlled.shutdownSignal ?? new AbortController().signal,
       streamRoute: controlled.streamRoute,
       threadsStore: {
         createThread: async ({ thread_id }: { thread_id?: string }) => {
@@ -508,5 +509,33 @@ it("does not abort the route signal after a normal response", async () => {
   })
 
   expect(result.response.status).toBe(200)
+  expect(routeSignal?.aborted).toBe(false)
+})
+
+it("stops listening to the shutdown signal after a normal response completes", async () => {
+  let routeSignal: AbortSignal | undefined
+  const streamRoute: typeof streamResolvedRoute = async function* (options) {
+    routeSignal = options.signal
+    yield { type: "done", output: { ok: true } }
+  }
+  const shutdownController = new AbortController()
+  const { port } = await setupControlledServer({
+    streamRoute,
+    shutdownSignal: shutdownController.signal,
+  })
+
+  const result = await postRun(port, {
+    threadId: "shutdown-release-thread",
+    runId: "shutdown-release-run",
+    messages: [{ id: "1", role: "user", content: "hello" }],
+  })
+  expect(result.response.status).toBe(200)
+  expect(routeSignal?.aborted).toBe(false)
+
+  shutdownController.abort()
+  // Proxy for "the shutdown listener was removed after the request finished":
+  // with the old AbortSignal.any composition the (already-finished) route
+  // signal stayed subscribed to the shutdown signal forever, so this abort
+  // would flip it to true. A removed listener leaves it false.
   expect(routeSignal?.aborted).toBe(false)
 })

@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve } from "node:path"
-
-import { findDawnApp, loadDawnConfig } from "@dawn-ai/core"
+import { findDawnApp } from "@dawn-ai/core/node"
+import { loadDawnConfig } from "../node-config.js"
 
 import { type CommandIo, formatErrorMessage, writeLine } from "../output.js"
 import { allocateFreePort } from "./allocate-port.js"

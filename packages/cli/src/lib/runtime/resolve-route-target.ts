@@ -1,6 +1,7 @@
 import { relative, sep } from "node:path"
 
-import { discoverRoutes, type RouteManifest } from "@dawn-ai/core"
+import type { RouteManifest } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import {
   createRuntimeFailureResult,
   formatErrorMessage,

@@ -1,5 +1,42 @@
 # @dawn-ai/memory
 
+## 0.8.16
+
+### Patch Changes
+
+- d845720: Runtime edge-readiness (deploy-anywhere B3, PR 1 of 3).
+
+  New `@dawn-ai/cli/fetch` entry exposes the web-standard runtime with a module
+  graph that contains none of Dawn's own filesystem, SQLite, or CLI code —
+  enforced by an esbuild-metafile test that also pins the remaining upstream
+  `node:` edges so the set can only shrink.
+
+  `serveRuntime`/`startRuntimeServer`/`createRuntimeFetchHandler` now accept an
+  injected checkpointer, threads store, permissions store, memory store,
+  middleware, and a `DawnConfig` object (`seedDawnConfig`). With everything
+  supplied, nothing reads `dawn.config.ts` or opens SQLite — including subagent
+  turns, which previously rebuilt their own stores. On the injected path a
+  missing store fails loudly at boot instead of silently falling back.
+
+  Capability markers read through a new sync `MarkerFs` facade (node
+  implementation behind `@dawn-ai/core/node`), the subagents descriptor map is
+  derived from the static module manifest with no dynamic imports, the manifest
+  now carries `src/middleware.ts`, and `@dawn-ai/memory` gained pure
+  `./namespace` and `./reconcile` subpaths. Behavior with nothing injected is
+  unchanged.
+
+- 2da55fa: Require Node 24 (the active LTS) everywhere. npm 10 — bundled with Node 22 —
+  cannot install Dawn's scaffold dependency graph (its resolver crashes), while
+  Node 24's bundled npm ≥ 11 installs it correctly and ships `node:sqlite`
+  unflagged. All packages now declare `engines.node >= 24`, `create-dawn-ai-app`
+  refuses to scaffold on older Node with an actionable message, `dawn verify`'s
+  runtime preflight enforces the same floor, and the `dawn build` node target
+  uses a `node:24-slim` base. Scaffolded apps also no longer declare
+  `@dawn-ai/core` as a direct dependency — nothing in a generated app imports it
+  (it arrives transitively via the CLI and SDK).
+- Updated dependencies [2da55fa]
+  - @dawn-ai/sqlite-storage@0.8.16
+
 ## 0.8.15
 
 ### Patch Changes
