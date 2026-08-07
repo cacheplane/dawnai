@@ -66,6 +66,28 @@ export function pgvectorMemoryStore(opts: {
   const pool =
     opts.pool ?? new Pool(opts.connectionString ? { connectionString: opts.connectionString } : {})
 
+  if (ownsPool) {
+    // `pg` emits 'error' on the POOL when an IDLE client fails — and an EventEmitter
+    // 'error' with no listener is an uncaught exception, i.e. the process dies. Idle
+    // connections are dropped as a matter of course (server restart, failover,
+    // `idle_session_timeout`, a container stopping), so without this a routine
+    // Postgres blip takes the whole app down rather than the pool quietly replacing
+    // one connection.
+    //
+    // Nothing to recover here: pg has already discarded the broken client, and the
+    // next query transparently opens a new one. Warn rather than swallow, so a
+    // genuinely unhealthy database is still visible in the logs.
+    //
+    // Only for pools this store created. A caller who passes `opts.pool` owns its
+    // lifecycle and its error handling — pg requires every pool to have a listener,
+    // so attaching one to someone else's pool would mask that contract.
+    pool.on("error", (error) => {
+      console.warn(
+        `[dawn:memory] pgvector pool client error (connection dropped): ${String(error)}`,
+      )
+    })
+  }
+
   // Memoized idempotent schema init. Every method awaits ready() first so the
   // first call to touch the store creates the extension/tables/indexes exactly
   // once; concurrent callers share the single in-flight promise.

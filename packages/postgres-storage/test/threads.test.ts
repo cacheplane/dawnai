@@ -32,6 +32,48 @@ describe.skipIf(!enabled)("postgres threads store against real Postgres", () => 
     close: (store) => (store as PostgresThreadsStore).close(),
   })
 
+  test("survives Postgres terminating an idle pooled connection", async () => {
+    // `pg` emits 'error' on the POOL when an IDLE client fails, and an EventEmitter
+    // 'error' with no listener is an uncaught exception — the process dies. These
+    // stores hold durable agent state for long-running and edge deployments, where
+    // servers restart, fail over, and reap idle sessions as a matter of course, so an
+    // unhandled pool error is a production crash rather than a dropped connection.
+    //
+    // Covers the shared `resolvePool` used by the checkpointer, threads and
+    // permissions stores alike.
+    const store = createPostgresThreadsStore({ connectionString: url, tablePrefix: freshPrefix() })
+    const uncaught: unknown[] = []
+    const onUncaught = (error: unknown) => uncaught.push(error)
+    process.on("uncaughtException", onUncaught)
+    // Captured so the test cannot pass by the pool error simply never firing.
+    const warnings: string[] = []
+    const realWarn = console.warn
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "))
+
+    try {
+      await store.createThread({ thread_id: "idle-kill", metadata: {} })
+
+      const admin = new Pool({ connectionString: url })
+      try {
+        await admin.query(
+          "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = current_database()",
+        )
+      } finally {
+        await admin.end()
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250))
+
+      expect(uncaught).toEqual([])
+      expect(warnings.some((w) => w.includes("postgres pool client error"))).toBe(true)
+      // pg discards the broken client, so the store keeps working on a new one.
+      expect((await store.getThread("idle-kill"))?.thread_id).toBe("idle-kill")
+    } finally {
+      console.warn = realWarn
+      process.off("uncaughtException", onUncaught)
+      await store.close()
+    }
+  })
+
   test("concurrent createThread on the same id yields one intact thread", async () => {
     // The cross-instance race the sqlite store cannot survive: callers
     // check-then-create, so N instances can all miss and all insert.

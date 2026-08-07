@@ -497,11 +497,11 @@ importers:
         specifier: workspace:*
         version: link:../memory
       '@pretable/core':
-        specifier: 0.0.5
-        version: 0.0.5
+        specifier: 0.0.6
+        version: 0.0.6
       '@pretable/react':
-        specifier: 0.0.5
-        version: 0.0.5(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.0.6
+        version: 0.0.6(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@pretable/ui':
         specifier: 0.0.3
         version: 0.0.3
@@ -2320,11 +2320,11 @@ packages:
   '@preact/signals-core@1.14.4':
     resolution: {integrity: sha512-HNB6HYeYKhQbJ1aKl+YRjrS4+QWHLKX6qKoUsfS/m0vqzsVaEBiZiaKbG/e+NKk2ch5ALQr/ihWaMHxiCuuWHA==}
 
-  '@pretable/core@0.0.5':
-    resolution: {integrity: sha512-kt9V3yogNQBZ3v845MzV7Z2fxRprji511UUfKuHiqFv+F0yLbEX/wZz/LcvcY/fJxL/+KS+DtrSIe4VzutkqFw==}
+  '@pretable/core@0.0.6':
+    resolution: {integrity: sha512-VUCX6hef2e/ljQJqtDwIl6xnw1iy/tJdXIiR0oa0/bchADAXULNQ72AGKcthheKAzDNivCMOj7s90YYqtLoeaA==}
 
-  '@pretable/react@0.0.5':
-    resolution: {integrity: sha512-fKfCHqyuu0S+VqVNcnJea6rJ09JavK6d+eImhYkiqGycy5HbGBHLDCSXjWO1vBiUXdGZqlsWcZH0TkW1+Tl7/g==}
+  '@pretable/react@0.0.6':
+    resolution: {integrity: sha512-ywKwscvWNxzBD5A8JfdQf9ko1lC1zW5uiCwjiumTP+Z9bkeepwd2ukCApLtNlMIoldhmyibiNKD3yfa73kbzBA==}
     peerDependencies:
       react: ^19.0.0
       react-dom: ^19.0.0
@@ -9124,11 +9124,11 @@ snapshots:
 
   '@preact/signals-core@1.14.4': {}
 
-  '@pretable/core@0.0.5': {}
+  '@pretable/core@0.0.6': {}
 
-  '@pretable/react@0.0.5(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@pretable/react@0.0.6(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@pretable/core': 0.0.5
+      '@pretable/core': 0.0.6
       '@pretable/ui': 0.0.3
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)

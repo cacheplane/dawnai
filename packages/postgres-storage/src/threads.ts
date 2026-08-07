@@ -1,5 +1,4 @@
-import { Pool } from "pg"
-import type { PostgresStoreOptions } from "./options.js"
+import { type PostgresStoreOptions, resolvePool } from "./options.js"
 import {
   assertIdentifier,
   DEFAULT_SCHEMA,
@@ -102,10 +101,7 @@ export function createPostgresThreadsStore(
   assertIdentifier("schema", schema)
   assertIdentifier("tablePrefix", prefix)
   const table = qualify({ schema, prefix }, "threads")
-  const ownsPool = !options.pool
-  const pool =
-    options.pool ??
-    new Pool(options.connectionString ? { connectionString: options.connectionString } : {})
+  const { ownsPool, pool } = resolvePool(options)
 
   let initP: Promise<void> | undefined
   const ready = (): Promise<void> => {

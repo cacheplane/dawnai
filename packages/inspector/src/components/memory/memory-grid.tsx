@@ -23,10 +23,10 @@ interface GridRow extends Record<string, unknown> {
  *  fit so a two-hit search group doesn't reserve a screenful of empty rows. */
 const MAX_VIEWPORT_PX = 560
 
-/** Column widths are fixed (pretable sizes to content or to `widthPx`, never to
- *  fill its container) and sum to ~1030px so the whole row fits beside the facet
- *  rail on a 1280px screen. Wider than that is the grid's own scroll; `content`
- *  carries the slack because it's the only column with unbounded text. */
+/** Everything but `content` is sized to what it holds — a status badge, a
+ *  namespace, a timestamp — and `content` takes whatever is left over, so the
+ *  row ends on the container's edge at any window width. It carries the slack
+ *  because it's the only column with unbounded text. */
 const COLUMNS: PretableColumn<GridRow>[] = [
   {
     id: "status",
@@ -38,7 +38,8 @@ const COLUMNS: PretableColumn<GridRow>[] = [
   {
     id: "content",
     header: "content",
-    widthPx: 360,
+    flex: 1,
+    minWidthPx: 240,
     value: (row) => row.content,
     // Cells are flex containers, and text-overflow does nothing on one — so the
     // ellipsis has to live on an inner box. min-w-0 lets it shrink below its
