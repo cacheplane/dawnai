@@ -137,10 +137,15 @@ time — correctly, because it has no session and cannot run the checkpointer's
 A LangGraph `BaseCheckpointSaver` backed by Postgres, for
 `DawnConfig.checkpointer`.
 
-Migrations run lazily on first use and are memoized per process. Call
-`checkpointer.ready()` to migrate at boot instead. Migrations take a
+Migrations run lazily on first use and are memoized **on the store instance**.
+Call `checkpointer.ready()` to migrate at boot instead. Migrations take a
 `pg_advisory_xact_lock`, so N instances cold-starting against a virgin database
 converge rather than racing.
+
+The memo being per instance rather than per process is why `assumeMigrated`
+exists: a store built once per process migrates once, but an edge deploy builds
+its stores per request, and without the opt-out every request would pay a
+migration pass and serialize on the advisory lock.
 
 The serialized checkpoint, its metadata, and pending-write values are stored as
 opaque `bytea`, matching the SQLite backend's BLOB. `jsonb` is deliberately not
