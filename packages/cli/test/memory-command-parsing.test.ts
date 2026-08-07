@@ -64,3 +64,33 @@ describe("dawn memory flag parsing", () => {
     expect(error).toBeUndefined()
   })
 })
+
+describe("dawn memory --help", () => {
+  it("lists the subcommands and their flags", async () => {
+    // `USAGE` already enumerates every subcommand, but it was only reachable by
+    // triggering an error (missing/unknown subcommand). `dawn memory --help` showed
+    // just the description and --cwd, so there was no way to discover `consolidate`,
+    // `reflect`, or any subcommand flag from the CLI itself.
+    const stdout: string[] = []
+    const io: CommandIo = { stderr: () => {}, stdout: (message) => stdout.push(message) }
+    const program = createProgram(io)
+
+    // commander's exitOverride turns `--help` into a thrown CommanderError after it
+    // has already written the help text.
+    await expect(program.parseAsync(["node", "dawn", "memory", "--help"])).rejects.toThrow()
+
+    const help = stdout.join("")
+    for (const expected of [
+      "list",
+      "search",
+      "approve",
+      "prune",
+      "consolidate",
+      "reflect",
+      "--dry-run",
+      "--cap",
+    ]) {
+      expect(help).toContain(expected)
+    }
+  })
+})
