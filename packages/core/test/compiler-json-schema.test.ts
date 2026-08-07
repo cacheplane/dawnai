@@ -185,6 +185,32 @@ describe("typeInfoToToolParameters", () => {
     })
   })
 
+  test("renders unions of arrays as structured alternatives", () => {
+    const parameter: TypeInfo = {
+      kind: "object",
+      properties: [
+        {
+          name: "values",
+          type: {
+            kind: "union",
+            members: [
+              { kind: "array", element: { kind: "string" } },
+              { kind: "array", element: { kind: "number" } },
+            ],
+          },
+          optional: false,
+        },
+      ],
+    }
+
+    expect(typeInfoToToolParameters(parameter).properties.values).toEqual({
+      anyOf: [
+        { type: "array", items: { type: "string" } },
+        { type: "array", items: { type: "number" } },
+      ],
+    })
+  })
+
   test("falls back to string for unsupported shapes", () => {
     const parameter: TypeInfo = {
       kind: "object",

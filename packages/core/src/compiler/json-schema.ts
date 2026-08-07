@@ -45,10 +45,7 @@ function typeInfoToJsonSchema(type: TypeInfo, depth: number): JsonSchemaProperty
         additionalProperties: typeInfoToJsonSchema(type.value, depth + 1),
       }
     case "union":
-      if (
-        type.members.length > 1 &&
-        type.members.every((member) => member.kind === "object" || member.kind === "record")
-      ) {
+      if (type.members.length > 1 && type.members.every(isStructuredUnionMember)) {
         return {
           anyOf: type.members.map((member) => typeInfoToJsonSchema(member, depth + 1)),
         }
@@ -59,6 +56,10 @@ function typeInfoToJsonSchema(type: TypeInfo, depth: number): JsonSchemaProperty
     default:
       return { type: "string" }
   }
+}
+
+function isStructuredUnionMember(type: TypeInfo): boolean {
+  return type.kind === "object" || type.kind === "record" || type.kind === "array"
 }
 
 function objectSchema(
