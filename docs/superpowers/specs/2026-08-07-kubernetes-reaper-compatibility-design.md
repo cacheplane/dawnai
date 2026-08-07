@@ -126,10 +126,15 @@ The test uses the chart's actual ConfigMap, ServiceAccount, image, security
 context, RBAC, and network policy on a Calico-enabled cluster. It does not wait
 for the hourly schedule or duplicate the CronJob manifest. The existing
 provider integration suite gains a `network: "allow"` case that attempts
-external HTTPS access. Allow mode emits no per-thread NetworkPolicy, so its
-failed request proves that the chart's label-scoped backstop still selects and
-blocks Dawn-managed sandbox pods. The existing `network: "deny"` test continues
-to cover the provider's per-thread policy separately.
+to reach a deterministic in-cluster HTTP control service. Before the suite,
+the CI lane starts that service in an unlabeled pod and proves an unlabeled
+client can reach it. The integration test then acquires a fresh allow-mode
+sandbox, verifies that no per-thread NetworkPolicy exists for it, and verifies
+that the same service is unreachable. Allow mode emits no per-thread policy,
+the positive control proves the service is healthy, and in-cluster DNS remains
+allowed, so the chart's label-scoped backstop is isolated as the blocker. The
+existing `network: "deny"` test continues to cover the provider's per-thread
+policy separately.
 
 ### Documentation and release metadata
 
