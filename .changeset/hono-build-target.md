@@ -13,8 +13,10 @@ catch-all hands every request to Dawn's web-standard fetch handler,
 `export default`ed — the shape Workers, Vercel and Bun all accept),
 `modules.edge.mjs` (the static module manifest, free of node builtins),
 `stores.mjs` (a per-request Postgres store factory), and a `wrangler.toml`
-scaffold at the app root. `wrangler deploy` and the app serves Agent Protocol
-and AG-UI with durable state in Postgres.
+scaffold at the app root. `wrangler deploy` is how you ship it; a gated CI lane
+boots those same artifacts under local workerd and shows them serving Agent
+Protocol and AG-UI with durable state in Postgres. No deploy to Cloudflare's
+platform has been exercised — see the caveats at the end of this note.
 
 The scaffold carries a bare `name` / `main` / `compatibility_date` and **no
 `nodejs_compat`**: the bundle links zero `node:` specifiers, so the flag would
@@ -68,6 +70,7 @@ Also new, both in service of the emitted entry: `seedModelImporter` and
 layer supplied.
 
 Full walkthrough, the supported subset, and an explicit list of what the CI lane
-does **not** settle — Hyperdrive, production connection limits, per-query
-latency, cross-isolate cold starts — are in the Deployment docs under Edge
-runtimes.
+does **not** settle — no real Cloudflare deploy, Hyperdrive, production
+connection limits, per-query latency, cross-isolate cold starts, and the bundle
+size and startup CPU that `wrangler deploy` enforces and `wrangler dev --local`
+does not — are in the Deployment docs under Edge runtimes.

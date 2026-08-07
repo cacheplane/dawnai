@@ -50,6 +50,40 @@ Each release is built from the changeset entries merged since the previous one �
 
 Pin exact versions (no `^` or `~` ranges) for `@dawn-ai/*` packages until the project reaches 1.0 — a floating range means an unreviewed minor bump can land in CI or production without the deliberate read-the-notes step above.
 
+## `@dawn-ai/postgres-storage` now requires a `pool` on its main entry
+
+`connectionString` has moved to a new `@dawn-ai/postgres-storage/node` subpath.
+In `0.8.19` the main entry accepted either and built its own `pg` pool from a
+connection string; it no longer does, because it now imports `pg` for **types
+only** so that the package links on a runtime with no TCP sockets — which is
+what makes the [`hono` edge target](/docs/deployment#the-hono-build-target)
+possible at all.
+
+`connectionString` is gone from the main entry's option type, so passing it
+there is a type error, and the factory throws at construction naming the missing
+pool. Nothing fails silently. Two ways to migrate:
+
+```ts
+// 1. Change the import — same factories, connectionString still works, and the
+//    store still builds and owns its pool.
+import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
+
+// 2. Or build the pool yourself and keep the main entry. This is what you want
+//    anyway when one pool serves all three stores.
+import { Pool } from "pg"
+const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+postgresCheckpointer({ pool })
+```
+
+The `/node` entry re-exports everything the main entry does, so option 1 is
+usually one line. Pool ownership is unchanged in both shapes: a pool the store
+built is ended by `close()`, an injected pool is left alone (`ownsPool`,
+defaulting to `false`). This shipped as a **patch** despite being breaking: under
+[fixed-group versioning](#fixed-group-versioning) a minor bump would move every
+`@dawn-ai/*` package to `1.0.0`, which is not what a pre-1.0 project wants to say
+about one entry-point split. It is also why the advice at the top of this page —
+pin exact versions and read the notes — is not boilerplate.
+
 ## `kind: "reflection"` is now accepted
 
 [Memory distillation](/docs/memory#distillation) wired the `reflection` kind.
