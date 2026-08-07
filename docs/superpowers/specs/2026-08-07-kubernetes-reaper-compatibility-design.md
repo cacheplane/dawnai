@@ -125,8 +125,11 @@ Add a focused shell script under `test/k8s-smoke/` and call it from the existing
 The test uses the chart's actual ConfigMap, ServiceAccount, image, security
 context, RBAC, and network policy on a Calico-enabled cluster. It does not wait
 for the hourly schedule or duplicate the CronJob manifest. The existing
-provider integration test continues to prove that labeled sandbox pods remain
-subject to default-deny egress.
+provider integration suite gains a `network: "allow"` case that attempts
+external HTTPS access. Allow mode emits no per-thread NetworkPolicy, so its
+failed request proves that the chart's label-scoped backstop still selects and
+blocks Dawn-managed sandbox pods. The existing `network: "deny"` test continues
+to cover the provider's per-thread policy separately.
 
 ### Documentation and release metadata
 
@@ -146,6 +149,8 @@ Changesets entry.
 - Run the reaper shell unit test and Helm render assertions.
 - Run strict Helm lint and kubeconform against rendered defaults.
 - Run `pnpm --filter @dawn-ai/sandbox test`.
+- Run the gated Kubernetes integration suite and confirm both the label-scoped
+  chart backstop and the one-off reaper Job pass under Calico.
 - Run the full repository validation lane.
 - Confirm the hosted `sandbox-k8s` job completes the real-cluster reaper smoke.
 
