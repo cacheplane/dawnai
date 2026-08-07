@@ -25,25 +25,25 @@ const RESUME_KEY_1 = "3336d0e0a2d4f198ef9aecd09cd7ac27"
 const RESUME_KEY_2 = "4447e1f1b3e5a209fa0bfde10de8bd38"
 
 describe("resolvePendingResume", () => {
-  test.each([
-    undefined,
-    [],
-  ] as const)("starts a turn with no pending interrupts and resume %j", (resume) => {
-    expect(resolvePendingResume(resume, snapshot([]))).toEqual({ ok: true, mode: "turn" })
-  })
+  test.each([undefined, []] as const)(
+    "starts a turn with no pending interrupts and resume %j",
+    (resume) => {
+      expect(resolvePendingResume(resume, snapshot([]))).toEqual({ ok: true, mode: "turn" })
+    },
+  )
 
-  test.each([
-    undefined,
-    [],
-  ] as const)("rejects resume %j when a checkpoint interrupt is pending", (resume) => {
-    expect(resolvePendingResume(resume, snapshot([pending("perm-1", RESUME_KEY_1)]))).toMatchObject(
-      {
+  test.each([undefined, []] as const)(
+    "rejects resume %j when a checkpoint interrupt is pending",
+    (resume) => {
+      expect(
+        resolvePendingResume(resume, snapshot([pending("perm-1", RESUME_KEY_1)])),
+      ).toMatchObject({
         code: "resume_required",
         ok: false,
         status: 409,
-      },
-    )
-  })
+      })
+    },
+  )
 
   test("rejects supplied resume entries when no checkpoint interrupt is pending", () => {
     expect(
@@ -51,18 +51,17 @@ describe("resolvePendingResume", () => {
     ).toMatchObject({ code: "stale_interrupt", ok: false, status: 409 })
   })
 
-  test.each<PermissionDecision>([
-    "once",
-    "always",
-    "deny",
-  ])("preserves the resolved %s decision under the outer resume key", (decision) => {
-    expect(
-      resolvePendingResume(
-        [{ interruptId: "perm-1", payload: decision, status: "resolved" }],
-        snapshot([pending("perm-1", RESUME_KEY_1)]),
-      ),
-    ).toEqual({ ok: true, mode: "resume", resume: { [RESUME_KEY_1]: decision } })
-  })
+  test.each<PermissionDecision>(["once", "always", "deny"])(
+    "preserves the resolved %s decision under the outer resume key",
+    (decision) => {
+      expect(
+        resolvePendingResume(
+          [{ interruptId: "perm-1", payload: decision, status: "resolved" }],
+          snapshot([pending("perm-1", RESUME_KEY_1)]),
+        ),
+      ).toEqual({ ok: true, mode: "resume", resume: { [RESUME_KEY_1]: decision } })
+    },
+  )
 
   test("maps a cancelled entry to deny", () => {
     expect(
@@ -124,29 +123,33 @@ describe("resolvePendingResume", () => {
     { interruptId: "perm-1", status: "resolved" },
     { interruptId: "perm-1", payload: "sometimes", status: "resolved" },
     { interruptId: "perm-1", payload: { decision: "once" }, status: "resolved" },
-  ] satisfies DawnResumeEntry[])("rejects a resolved entry with missing or unsupported payload: %j", (entry) => {
-    expect(
-      resolvePendingResume([entry], snapshot([pending("perm-1", RESUME_KEY_1)])),
-    ).toMatchObject({
-      code: "invalid_resume_payload",
-      ok: false,
-      status: 400,
-    })
-  })
+  ] satisfies DawnResumeEntry[])(
+    "rejects a resolved entry with missing or unsupported payload: %j",
+    (entry) => {
+      expect(
+        resolvePendingResume([entry], snapshot([pending("perm-1", RESUME_KEY_1)])),
+      ).toMatchObject({
+        code: "invalid_resume_payload",
+        ok: false,
+        status: 400,
+      })
+    },
+  )
 
   test.each([
     undefined,
     [{ interruptId: "perm-1", payload: "once", status: "resolved" }],
-  ] satisfies ReadonlyArray<
-    readonly DawnResumeEntry[] | undefined
-  >)("rejects malformed checkpoint state before starting or resuming: %j", (resume) => {
-    expect(
-      resolvePendingResume(resume, {
-        interrupts: [pending("perm-1", RESUME_KEY_1)],
-        malformed: true,
-      }),
-    ).toMatchObject({ code: "malformed_checkpoint", ok: false, status: 409 })
-  })
+  ] satisfies ReadonlyArray<readonly DawnResumeEntry[] | undefined>)(
+    "rejects malformed checkpoint state before starting or resuming: %j",
+    (resume) => {
+      expect(
+        resolvePendingResume(resume, {
+          interrupts: [pending("perm-1", RESUME_KEY_1)],
+          malformed: true,
+        }),
+      ).toMatchObject({ code: "malformed_checkpoint", ok: false, status: 409 })
+    },
+  )
 })
 
 describe("readPendingInterrupts", () => {

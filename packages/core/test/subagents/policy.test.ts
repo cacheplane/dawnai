@@ -163,30 +163,30 @@ describe("resolveGuardedSubagent", () => {
   it.each([
     { interruptCapable: false, threadId: "thread-1" },
     { interruptCapable: true, threadId: undefined },
-  ])("fails closed approval without resumable interrupt context", async ({
-    interruptCapable,
-    threadId,
-  }) => {
-    const store = await permissions("interactive")
-    const resolve = vi.fn(async () => "child")
-    const result = await resolveGuardedSubagent({
-      callId: "task-1",
-      input: "write a draft",
-      name: "writer",
-      registry: [entry({ action: "approve" })],
-      runtime: {
-        parentRouteId: "/parent",
-        signal,
-        ...(threadId !== undefined ? { threadId } : {}),
-      },
-      permissions: store,
-      interruptCapable,
-      resolve,
-    })
-    expect(result).toMatchObject({ ok: false, code: "DAWN_E3002" })
-    if (!result.ok) expect(result.message).toMatch(/thread ID.*interrupt support.*allow rule/i)
-    expect(resolve).not.toHaveBeenCalled()
-  })
+  ])(
+    "fails closed approval without resumable interrupt context",
+    async ({ interruptCapable, threadId }) => {
+      const store = await permissions("interactive")
+      const resolve = vi.fn(async () => "child")
+      const result = await resolveGuardedSubagent({
+        callId: "task-1",
+        input: "write a draft",
+        name: "writer",
+        registry: [entry({ action: "approve" })],
+        runtime: {
+          parentRouteId: "/parent",
+          signal,
+          ...(threadId !== undefined ? { threadId } : {}),
+        },
+        permissions: store,
+        interruptCapable,
+        resolve,
+      })
+      expect(result).toMatchObject({ ok: false, code: "DAWN_E3002" })
+      if (!result.ok) expect(result.message).toMatch(/thread ID.*interrupt support.*allow rule/i)
+      expect(resolve).not.toHaveBeenCalled()
+    },
+  )
 
   it("lets bypass skip approval but not static or constraint denials", async () => {
     const store = await permissions("bypass")
@@ -324,41 +324,41 @@ describe("resolveGuardedSubagent", () => {
     })
   })
 
-  it.each([
-    "approve",
-    "reason",
-  ] as const)("fails closed when the %s approval accessor throws", async (property) => {
-    const secret = new Error(`secret ${property} accessor detail`)
-    const verdict =
-      property === "approve"
-        ? Object.defineProperty({}, "approve", {
-            get: () => {
-              throw secret
-            },
-          })
-        : Object.defineProperty({ approve: true }, "reason", {
-            get: () => {
-              throw secret
-            },
-          })
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
-    const resolve = vi.fn(async () => "child")
+  it.each(["approve", "reason"] as const)(
+    "fails closed when the %s approval accessor throws",
+    async (property) => {
+      const secret = new Error(`secret ${property} accessor detail`)
+      const verdict =
+        property === "approve"
+          ? Object.defineProperty({}, "approve", {
+              get: () => {
+                throw secret
+              },
+            })
+          : Object.defineProperty({ approve: true }, "reason", {
+              get: () => {
+                throw secret
+              },
+            })
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      const resolve = vi.fn(async () => "child")
 
-    const result = await call({
-      registry: [entry({ action: "constrain", predicate: (() => verdict) as never })],
-      resolve,
-    })
+      const result = await call({
+        registry: [entry({ action: "constrain", predicate: (() => verdict) as never })],
+        resolve,
+      })
 
-    expect(result).toEqual({
-      ok: false,
-      code: "DAWN_E3002",
-      message:
-        "[DAWN_E3002] Subagent delegation constraint check failed. The subagent was not started.",
-    })
-    expect(result.message).not.toContain(secret.message)
-    expect(warn).not.toHaveBeenCalled()
-    expect(resolve).not.toHaveBeenCalled()
-  })
+      expect(result).toEqual({
+        ok: false,
+        code: "DAWN_E3002",
+        message:
+          "[DAWN_E3002] Subagent delegation constraint check failed. The subagent was not started.",
+      })
+      expect(result.message).not.toContain(secret.message)
+      expect(warn).not.toHaveBeenCalled()
+      expect(resolve).not.toHaveBeenCalled()
+    },
+  )
 
   it("debug-logs an approval accessor failure without exposing it in the result", async () => {
     const secret = new Error("secret proxy accessor detail")

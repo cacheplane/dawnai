@@ -21,14 +21,12 @@ describe("model provider resolver", () => {
     expect(inferProvider(model)).toBe(provider)
   })
 
-  test.each([
-    "my-custom-model",
-    "llama-3.3-70b-versatile",
-    "qwen3-32b",
-    "deepseek-r1",
-  ])("does not infer ambiguous model %s", (model) => {
-    expect(inferProvider(model)).toBeUndefined()
-  })
+  test.each(["my-custom-model", "llama-3.3-70b-versatile", "qwen3-32b", "deepseek-r1"])(
+    "does not infer ambiguous model %s",
+    (model) => {
+      expect(inferProvider(model)).toBeUndefined()
+    },
+  )
 
   test("explicit provider bypasses inference", () => {
     expect(resolveProvider({ provider: "groq", model: "llama-3.3-70b-versatile" })).toBe("groq")

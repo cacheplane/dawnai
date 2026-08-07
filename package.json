@@ -52,15 +52,15 @@
     "verify:typescript-tooling-pack": "pnpm test:typescript-tooling-pack-smoke && node scripts/typescript-tooling-pack-smoke.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.3",
-    "@changesets/cli": "2.31.0",
-    "@copilotkit/aimock": "^1.35.1",
+    "@biomejs/biome": "2.5.6",
+    "@changesets/cli": "2.31.1",
+    "@copilotkit/aimock": "^1.37.4",
     "@dawn-ai/sdk": "workspace:*",
-    "publint": "0.3.21",
-    "tsx": "^4.23.0",
-    "turbo": "2.10.4",
+    "publint": "0.3.22",
+    "tsx": "^4.23.5",
+    "turbo": "2.10.8",
     "typescript": "7.0.2",
-    "verdaccio": "^6.7.4",
+    "verdaccio": "^6.9.2",
     "vitest": "4.1.10"
   }
 }

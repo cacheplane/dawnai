@@ -321,24 +321,23 @@ export default async (input: Set<boolean>) => input
         elements: [{ kind: "string" }, { kind: "number" }],
       },
     },
-  ])("preserves specialized $name members on root intersections", ({
-    source,
-    specialized,
-    effectiveProperties,
-  }) => {
-    const parameter = analyzeRootIntersection(source)
+  ])(
+    "preserves specialized $name members on root intersections",
+    ({ source, specialized, effectiveProperties }) => {
+      const parameter = analyzeRootIntersection(source)
 
-    expect(parameter.members).toEqual([
-      specialized,
-      {
-        kind: "object",
-        properties: [{ name: "fixed", type: { kind: "string" }, optional: false }],
-      },
-    ])
-    expect(
-      parameter.effectiveProperties?.some((property) => property.name === "fixed") ?? false,
-    ).toBe(effectiveProperties)
-  })
+      expect(parameter.members).toEqual([
+        specialized,
+        {
+          kind: "object",
+          properties: [{ name: "fixed", type: { kind: "string" }, optional: false }],
+        },
+      ])
+      expect(
+        parameter.effectiveProperties?.some((property) => property.name === "fixed") ?? false,
+      ).toBe(effectiveProperties)
+    },
+  )
 
   test("allows semantic consumers to project members without effective root metadata", () => {
     const parameter = analyzeRootIntersection("Map<string, number> & { fixed: string }")

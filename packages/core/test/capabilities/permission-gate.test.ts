@@ -213,22 +213,22 @@ describe("gateSubagentOp", () => {
     { interruptCapable: true, threadId: undefined },
     { interruptCapable: true, threadId: "" },
     { interruptCapable: true, threadId: "   " },
-  ])("fails closed without resumable interrupt context: $interruptCapable / $threadId", async ({
-    interruptCapable,
-    threadId,
-  }) => {
-    const permissions = await store("interactive")
-    const result = await gateSubagentOp(
-      permissions,
-      threadId !== undefined ? { ...request, threadId } : requestWithoutReasonOrThread,
-      { interruptCapable },
-    )
-    expect(result.allowed).toBe(false)
-    if (!result.allowed) {
-      expect(result.code).toBe("DAWN_E3002")
-      expect(result.reason).toMatch(/thread ID.*interrupt support.*allow rule/i)
-    }
-  })
+  ])(
+    "fails closed without resumable interrupt context: $interruptCapable / $threadId",
+    async ({ interruptCapable, threadId }) => {
+      const permissions = await store("interactive")
+      const result = await gateSubagentOp(
+        permissions,
+        threadId !== undefined ? { ...request, threadId } : requestWithoutReasonOrThread,
+        { interruptCapable },
+      )
+      expect(result.allowed).toBe(false)
+      if (!result.allowed) {
+        expect(result.code).toBe("DAWN_E3002")
+        expect(result.reason).toMatch(/thread ID.*interrupt support.*allow rule/i)
+      }
+    },
+  )
 
   it("allows bypass approval without consulting interrupt prerequisites", async () => {
     const permissions = await store("bypass")
