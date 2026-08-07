@@ -130,6 +130,35 @@ export const THREADS_MIGRATIONS: readonly Migration[] = [
 ]
 
 /**
+ * One row per granted pattern, rather than one JSON document per store: that is
+ * what makes `addAllow` an `INSERT … ON CONFLICT DO NOTHING` — atomic across
+ * instances, where the file store's read-modify-write of permissions.json needs
+ * an in-process write queue and still loses grants across processes.
+ *
+ * `scope` and `kind` are stored explicitly even though only `('runtime',
+ * 'allow')` rows are written today: config entries come from `dawn.config.ts`
+ * on every construction and are deliberately never persisted, so `load()`
+ * filters on `scope = 'runtime'` and config can never leak in from the table.
+ * The primary key IS the conflict target — it is what makes a repeat grant a
+ * no-op instead of a duplicate row.
+ */
+export const PERMISSIONS_MIGRATIONS: readonly Migration[] = [
+  {
+    version: 1,
+    up: (naming) => `
+      CREATE TABLE IF NOT EXISTS ${qualify(naming, "permissions")} (
+        scope text NOT NULL,
+        kind text NOT NULL,
+        tool text NOT NULL,
+        pattern text NOT NULL,
+        created_at text NOT NULL,
+        PRIMARY KEY (scope, kind, tool, pattern)
+      );
+    `,
+  },
+]
+
+/**
  * Checkpoint and metadata are BYTEA, not jsonb. Dawn serializes both with
  * LangGraph's `JsonPlusSerializer` and stores the resulting bytes opaquely,
  * exactly as the SQLite saver stores a BLOB. jsonb cannot hold a NUL byte

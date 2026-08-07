@@ -9,6 +9,7 @@ import type {
 import { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { Pool } from "pg"
 import { withTransaction } from "./internal/tx.js"
+import type { PostgresStoreOptions } from "./options.js"
 import {
   assertIdentifier,
   CHECKPOINTER_MIGRATIONS,
@@ -112,20 +113,7 @@ async function buildTuple(
   return base
 }
 
-export interface PostgresCheckpointerOptions {
-  /** Postgres connection string; used to build an owned pool. */
-  readonly connectionString?: string
-  /**
-   * An existing pool to use instead of building one from `connectionString`.
-   * Share one pool across the checkpointer, threads and permissions stores to
-   * stay inside a managed Postgres connection cap.
-   */
-  readonly pool?: Pool
-  /** Postgres schema to place tables in. Defaults to `public`. */
-  readonly schema?: string
-  /** Table name prefix. Defaults to `dawn`; vary it to share one database. */
-  readonly tablePrefix?: string
-}
+export type PostgresCheckpointerOptions = PostgresStoreOptions
 
 /**
  * A LangGraph checkpointer backed by Postgres, storing the serialized
