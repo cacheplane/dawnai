@@ -1,12 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { RouteToolTypes } from "@dawn-ai/core"
-import {
-  discoverRoutes,
-  extractToolTypesForRoute,
-  findDawnApp,
-  renderDawnTypes,
-} from "@dawn-ai/core"
+import { renderDawnTypes } from "@dawn-ai/core"
+import { discoverRoutes, extractToolTypesForRoute, findDawnApp } from "@dawn-ai/core/node"
 
 import { extractJsDoc } from "./jsdoc-extractor.js"
 import { extractParameterType } from "./type-extractor.js"

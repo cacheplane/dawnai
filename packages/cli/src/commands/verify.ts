@@ -1,16 +1,12 @@
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import type { RouteManifest, RouteToolTypes } from "@dawn-ai/core"
-import {
-  discoverRoutes,
-  extractToolTypesForRoute,
-  findDawnApp,
-  loadDawnConfig,
-  renderDawnTypes,
-} from "@dawn-ai/core"
+import { renderDawnTypes } from "@dawn-ai/core"
+import { discoverRoutes, extractToolTypesForRoute, findDawnApp } from "@dawn-ai/core/node"
 import type { DawnErrorCode } from "@dawn-ai/sdk"
 import type { SandboxProvider } from "@dawn-ai/workspace"
 import { type Command, CommanderError } from "commander"
+import { loadDawnConfig } from "../lib/node-config.js"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
 import { collectRouteProviders } from "../lib/runtime/collect-route-providers.js"

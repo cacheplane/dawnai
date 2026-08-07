@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { sha1Hex } from "@dawn-ai/sdk/pure"
 import { z } from "zod"
 import { gateMemorySupersede } from "../permission-gate.js"
 import type {
@@ -223,10 +223,9 @@ export function createMemoryMarker(): CapabilityMarker {
           // episodic data on different runs is DIFFERENT events, and put() is
           // an id-keyed upsert in the real stores — same-id appends would
           // silently collapse into one row.
-          const id = `memory_${createHash("sha1")
-            .update(`${mem.namespace}|${JSON.stringify(data)}${append ? `|${mem.now}` : ""}`)
-            .digest("hex")
-            .slice(0, 16)}`
+          const id = `memory_${sha1Hex(
+            `${mem.namespace}|${JSON.stringify(data)}${append ? `|${mem.now}` : ""}`,
+          ).slice(0, 16)}`
 
           // "ask" shares auto's write semantics; only its SUPERSEDE branch gates.
           // Append kinds never supersede, so in "ask" mode no gate ever fires
@@ -364,10 +363,10 @@ export function createMemoryMarker(): CapabilityMarker {
       const indexCacheKey =
         indexEntries.length === 0
           ? "memory:empty"
-          : `memory:${createHash("sha1")
-              .update(indexEntries.map((r) => `${r.id}@${r.updatedAt}`).join("\n"))
-              .digest("hex")
-              .slice(0, 16)}`
+          : `memory:${sha1Hex(indexEntries.map((r) => `${r.id}@${r.updatedAt}`).join("\n")).slice(
+              0,
+              16,
+            )}`
 
       const promptFragment: PromptFragment = {
         placement: "after_user_prompt",

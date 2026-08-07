@@ -1,5 +1,62 @@
 # @dawn-ai/cli
 
+## 0.8.16
+
+### Patch Changes
+
+- 451c000: Add `POST /threads/:thread_id/cancel` to stop an in-flight Agent Protocol run, and enforce one run per thread.
+
+  Runs previously had no way to be stopped short of killing the process — the only `AbortSignal` reaching a route was the server shutdown signal. Cancellation now works across `/runs/stream`, `/runs/wait`, and `/resume`, and keeps checkpointed state (LangGraph's `action=interrupt` semantics; there is no rollback). The endpoint returns `200 {thread_id, status:"interrupted"}`, `404` for an unknown thread, or `409` when no run is in flight. A cancelled SSE run ends with `done` carrying `{"cancelled":true}`, distinguishing it from a failure; a cancelled `runs/wait` returns `409` with code `run_cancelled`, since it has not committed to a response body yet.
+
+  **Behaviour change:** a second concurrent run on a thread that is already running now returns `409` with code `run_in_flight` instead of being admitted. Concurrent runs previously drove the same LangGraph checkpoint thread and interleaved their writes last-writer-wins, silently corrupting thread state, so this converts data loss into a clear error. The gate is keyed on in-memory state rather than the persisted thread status, so a process that crashes mid-run does not leave the thread permanently unusable.
+
+  Client-disconnect behaviour is unchanged and now documented rather than incidental: Agent Protocol runs continue (matching LangGraph Platform's `on_disconnect: "continue"` default for a durable, resumable surface), while AG-UI keeps aborting because it is ephemeral with nothing to reattach to.
+
+  Also fixes an unbounded memory leak in the AG-UI handler, which composed `AbortSignal.any([shutdownSignal, requestController.signal])` once per request. A composed signal is retained for the lifetime of its source, and the shutdown signal lives as long as the process, so memory grew with total historical request count and was never freed — roughly 92 MB per 200k requests on Node 24. Both the AG-UI handler and the new run registry use a manual listener with explicit removal instead.
+
+  Run tracking is process-local, so the concurrency gate and `/cancel` assume a single replica — a constraint that already applied to Dawn's pod-local threads database and checkpoints, and is now documented in the `dawn-app` chart README.
+
+- d845720: Runtime edge-readiness (deploy-anywhere B3, PR 1 of 3).
+
+  New `@dawn-ai/cli/fetch` entry exposes the web-standard runtime with a module
+  graph that contains none of Dawn's own filesystem, SQLite, or CLI code —
+  enforced by an esbuild-metafile test that also pins the remaining upstream
+  `node:` edges so the set can only shrink.
+
+  `serveRuntime`/`startRuntimeServer`/`createRuntimeFetchHandler` now accept an
+  injected checkpointer, threads store, permissions store, memory store,
+  middleware, and a `DawnConfig` object (`seedDawnConfig`). With everything
+  supplied, nothing reads `dawn.config.ts` or opens SQLite — including subagent
+  turns, which previously rebuilt their own stores. On the injected path a
+  missing store fails loudly at boot instead of silently falling back.
+
+  Capability markers read through a new sync `MarkerFs` facade (node
+  implementation behind `@dawn-ai/core/node`), the subagents descriptor map is
+  derived from the static module manifest with no dynamic imports, the manifest
+  now carries `src/middleware.ts`, and `@dawn-ai/memory` gained pure
+  `./namespace` and `./reconcile` subpaths. Behavior with nothing injected is
+  unchanged.
+
+- 2da55fa: Require Node 24 (the active LTS) everywhere. npm 10 — bundled with Node 22 —
+  cannot install Dawn's scaffold dependency graph (its resolver crashes), while
+  Node 24's bundled npm ≥ 11 installs it correctly and ships `node:sqlite`
+  unflagged. All packages now declare `engines.node >= 24`, `create-dawn-ai-app`
+  refuses to scaffold on older Node with an actionable message, `dawn verify`'s
+  runtime preflight enforces the same floor, and the `dawn build` node target
+  uses a `node:24-slim` base. Scaffolded apps also no longer declare
+  `@dawn-ai/core` as a direct dependency — nothing in a generated app imports it
+  (it arrives transitively via the CLI and SDK).
+- Updated dependencies [d845720]
+- Updated dependencies [2da55fa]
+  - @dawn-ai/core@0.8.16
+  - @dawn-ai/memory@0.8.16
+  - @dawn-ai/langchain@0.8.16
+  - @dawn-ai/ag-ui@0.8.16
+  - @dawn-ai/langgraph@0.8.16
+  - @dawn-ai/permissions@0.8.16
+  - @dawn-ai/sdk@0.8.16
+  - @dawn-ai/sqlite-storage@0.8.16
+
 ## 0.8.15
 
 ### Patch Changes

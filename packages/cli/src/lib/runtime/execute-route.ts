@@ -15,24 +15,20 @@ import { isAbsolute, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import {
   type DawnConfig,
-  discoverRoutes,
-  findDawnApp,
-  loadDawnConfig,
   type ResolvedStateField,
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
-import {
-  createPermissionsStore,
-  type PermissionMode,
-  type PermissionsStore,
-} from "@dawn-ai/permissions"
+import { discoverRoutes, findDawnApp, nodeLoadRouteDescription } from "@dawn-ai/core/node"
+import type { PermissionMode, PermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
 import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
-import type { FilesystemBackend } from "@dawn-ai/workspace"
-import { localFilesystem } from "@dawn-ai/workspace"
+import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
+import { localExec, localFilesystem } from "@dawn-ai/workspace/node"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { loadMiddleware } from "../dev/middleware.js"
+import { loadDawnConfig } from "../node-config.js"
 import {
   __resetPreparedRouteModulesForTests,
   __resetStaticDescriptorMapsForTests,
@@ -119,6 +115,13 @@ let defaultLocalFilesystem: FilesystemBackend | undefined
 function getDefaultLocalFilesystem(): FilesystemBackend {
   defaultLocalFilesystem ??= localFilesystem()
   return defaultLocalFilesystem
+}
+
+/** Same contract as `getDefaultLocalFilesystem`, for the workspace capability's `runBash`. */
+let defaultLocalExec: ExecBackend | undefined
+function getDefaultLocalExec(): ExecBackend {
+  defaultLocalExec ??= localExec()
+  return defaultLocalExec
 }
 
 /**
@@ -336,6 +339,7 @@ export const nodeBootFallbacks: RuntimeBootFallbacks = {
   buildPermissionsStore,
   defaultCheckpointer: (appRoot) =>
     sqliteCheckpointer({ path: pureJoin(appRoot, ".dawn/checkpoints.sqlite") }),
+  defaultExec: getDefaultLocalExec,
   defaultFilesystem: getDefaultLocalFilesystem,
   defaultThreadsStore: (appRoot) =>
     createThreadsStore({ path: pureJoin(appRoot, ".dawn/threads.sqlite") }),
@@ -344,6 +348,7 @@ export const nodeBootFallbacks: RuntimeBootFallbacks = {
   hasWorkspaceDir,
   loadConfig: async (appRoot) => (await loadDawnConfig({ appRoot })).config,
   loadMiddleware,
+  loadRouteDescription: nodeLoadRouteDescription,
   loadRouteModules: loadPreparedRouteModules,
   markerFs: nodeMarkerFs,
   resolveIdentityKeys,
@@ -355,12 +360,33 @@ export const nodeBootFallbacks: RuntimeBootFallbacks = {
   resolveThreadsStore,
 }
 
-/** Apply the node fallbacks unless the caller already chose their own. */
+/**
+ * THE single conversion between a host-supplied app root and the
+ * POSIX-normalized absolute form `@dawn-ai/core` assumes.
+ *
+ * Core derives the workspace root from `appRoot` and then decides containment
+ * with pure POSIX arithmetic against an explicit "/" — `pureResolve` throws on
+ * a relative base rather than rooting it somewhere silently. Normalizing here
+ * keeps the previous semantics of the `node:path` jail (a relative root
+ * resolved against `process.cwd()`) while giving core exactly one guaranteed
+ * input shape. Dawn targets POSIX hosts only, so this is effectively identity;
+ * a Windows port would convert here, and only here.
+ */
+export function toPosixAppRoot(appRoot: string): string {
+  return resolve(appRoot)
+}
+
+/**
+ * Apply the node fallbacks unless the caller already chose their own, and
+ * normalize the app root on the way in (see `toPosixAppRoot`).
+ */
 function withNodeFallbacks<T extends object>(
   options: T,
 ): T & { readonly bootFallbacks: RuntimeBootFallbacks } {
+  const appRoot = (options as { readonly appRoot?: unknown }).appRoot
   return {
     ...options,
+    ...(typeof appRoot === "string" ? { appRoot: toPosixAppRoot(appRoot) } : {}),
     bootFallbacks: (options as BootResolvedInstances).bootFallbacks ?? nodeBootFallbacks,
   }
 }

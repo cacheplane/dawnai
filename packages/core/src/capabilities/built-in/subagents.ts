@@ -1,7 +1,9 @@
-import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
+import type { DawnAgent } from "@dawn-ai/sdk"
 import { z } from "zod"
 import type { RouteDefinition } from "../../types.js"
 import type { CapabilityMarker, CapabilityMarkerContext, PromptFragment } from "../types.js"
+
+const DEFAULT_DESCRIPTION = "No description provided."
 
 const SUBAGENTS_PROMPT_HEADER = `# Subagents
 
@@ -26,37 +28,23 @@ function findConventionSubagents(
   })
 }
 
-function extractDescription(candidate: unknown): string | undefined {
-  return isDawnAgent(candidate) && typeof candidate.description === "string"
-    ? candidate.description
-    : undefined
-}
-
 async function loadDescription(
   route: RouteDefinition,
   routeDescriptors: ReadonlyMap<string, DawnAgent> | undefined,
+  loadRouteDescription: CapabilityMarkerContext["loadRouteDescription"],
 ): Promise<string> {
   // Static-modules path: when the map exists it is authoritative — it holds
   // every route whose entry passes isDawnAgent, so a route absent from it
-  // provably cannot yield a description via import either (extractDescription
-  // requires isDawnAgent). Never importing here keeps the static path
+  // provably cannot yield a description via the loader either (the loader also
+  // requires isDawnAgent). Consulting no loader here keeps the static path
   // zero-import: edge runtimes have no disk to import from.
   if (routeDescriptors !== undefined) {
-    return routeDescriptors.get(route.id)?.description ?? "No description provided."
+    return routeDescriptors.get(route.id)?.description ?? DEFAULT_DESCRIPTION
   }
-  try {
-    const { pathToFileURL } = await import("node:url")
-    const mod = (await import(pathToFileURL(route.entryFile).href)) as {
-      default?: unknown
-    }
-    const described = extractDescription(mod.default)
-    if (described !== undefined) {
-      return described
-    }
-  } catch {
-    // fall through to default — never fail capability composition over a description
-  }
-  return "No description provided."
+  // Dynamic path. The loader reads the entry file, which needs node:url —
+  // hence the injection. No loader (or no description) ⇒ the same default the
+  // failed-import case has always produced.
+  return (await loadRouteDescription?.(route)) ?? DEFAULT_DESCRIPTION
 }
 
 export function createSubagentsMarker(): CapabilityMarker {
@@ -104,7 +92,11 @@ export function createSubagentsMarker(): CapabilityMarker {
           )
         }
         seen.add(leafName)
-        const description = await loadDescription(r, context.routeDescriptors)
+        const description = await loadDescription(
+          r,
+          context.routeDescriptors,
+          context.loadRouteDescription,
+        )
         discovered.push({ leafName, routeId: r.id, description })
       }
 

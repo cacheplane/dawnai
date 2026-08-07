@@ -1,4 +1,4 @@
-import { join } from "node:path"
+import { pureJoin } from "@dawn-ai/sdk/pure"
 import { z } from "zod"
 import type { CapabilityMarker, MarkerFs, PromptFragment, StreamTransformer } from "../types.js"
 import { type PlanTodo, parsePlanMarkdown } from "./plan-md-parser.js"
@@ -31,7 +31,7 @@ export function createPlanningMarker(): CapabilityMarker {
   return {
     name: "planning",
     detect: async (routeDir, context) =>
-      context.markerFs?.existsSync(join(routeDir, PLAN_MD)) ?? false,
+      context.markerFs?.existsSync(pureJoin(routeDir, PLAN_MD)) ?? false,
     load: async (routeDir, context) => {
       const seedTodos = context.markerFs ? readSeedTodos(routeDir, context.markerFs) : []
 
@@ -103,7 +103,7 @@ export function createPlanningMarker(): CapabilityMarker {
 }
 
 function readSeedTodos(routeDir: string, markerFs: MarkerFs): RuntimeTodo[] {
-  const planPath = join(routeDir, PLAN_MD)
+  const planPath = pureJoin(routeDir, PLAN_MD)
   if (!markerFs.existsSync(planPath)) return []
   const size = markerFs.statSizeSync(planPath)
   if (size === undefined) return []

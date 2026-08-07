@@ -1,5 +1,19 @@
 # @dawn-ai/config-biome
 
+## 0.8.16
+
+### Patch Changes
+
+- 2da55fa: Require Node 24 (the active LTS) everywhere. npm 10 — bundled with Node 22 —
+  cannot install Dawn's scaffold dependency graph (its resolver crashes), while
+  Node 24's bundled npm ≥ 11 installs it correctly and ships `node:sqlite`
+  unflagged. All packages now declare `engines.node >= 24`, `create-dawn-ai-app`
+  refuses to scaffold on older Node with an actionable message, `dawn verify`'s
+  runtime preflight enforces the same floor, and the `dawn build` node target
+  uses a `node:24-slim` base. Scaffolded apps also no longer declare
+  `@dawn-ai/core` as a direct dependency — nothing in a generated app imports it
+  (it arrives transitively via the CLI and SDK).
+
 ## 0.8.15
 
 ## 0.8.14

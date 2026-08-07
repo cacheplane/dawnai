@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { __clearDawnConfigCacheForTests, discoverRoutes } from "@dawn-ai/core"
+import { __clearDawnConfigCacheForTests } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import { __resetMaterializedAgentsForTests } from "@dawn-ai/langchain"
 import { afterEach, describe, expect, it } from "vitest"
 

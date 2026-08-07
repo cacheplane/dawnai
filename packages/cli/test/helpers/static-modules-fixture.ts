@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { discoverRoutes, resolveStateFields } from "@dawn-ai/core"
+import { resolveStateFields } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import { expect } from "vitest"
 
 import { type Aimock, createAimock, type script } from "../../../testing/dist/index.js"

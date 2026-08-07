@@ -8,7 +8,7 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   resolve: {
     alias: {
-      "@dawn-ai/core/node": resolve(rootDir, "../core/src/node-marker-fs.ts"),
+      "@dawn-ai/core/node": resolve(rootDir, "../core/src/node.ts"),
       "@dawn-ai/core": resolve(rootDir, "../core/src/index.ts"),
       "@dawn-ai/langchain": resolve(rootDir, "../langchain/src/index.ts"),
       "@dawn-ai/langgraph": resolve(rootDir, "../langgraph/src/index.ts"),
@@ -19,6 +19,7 @@ export default defineConfig({
       "@dawn-ai/memory/reconcile": resolve(rootDir, "../memory/src/reconcile.ts"),
       "@dawn-ai/memory": resolve(rootDir, "../memory/src/index.ts"),
       "@dawn-ai/sandbox/testing": resolve(rootDir, "../sandbox/src/testing/index.ts"),
+      "@dawn-ai/sdk/pure": resolve(rootDir, "../sdk/src/pure/index.ts"),
       "@dawn-ai/sdk/testing": resolve(rootDir, "../sdk/src/testing/index.ts"),
       "@dawn-ai/sdk": resolve(rootDir, "../sdk/src/index.ts"),
     },

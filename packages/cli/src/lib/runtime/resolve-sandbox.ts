@@ -1,5 +1,5 @@
-import { loadDawnConfig } from "@dawn-ai/core"
 import type { SandboxConfig, SandboxPolicy } from "@dawn-ai/workspace"
+import { loadDawnConfig } from "../node-config.js"
 import { SandboxManager } from "./sandbox-manager.js"
 
 const DEFAULT_IDLE_MS = 600_000

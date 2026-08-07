@@ -1,4 +1,4 @@
-import { join } from "node:path"
+import { pureJoin } from "@dawn-ai/sdk/pure"
 import { z } from "zod"
 import type { CapabilityMarker, MarkerFs, PromptFragment } from "../types.js"
 import { parseFrontmatter } from "./frontmatter.js"
@@ -74,14 +74,14 @@ export function createSkillsMarker(): CapabilityMarker {
 }
 
 function discoverSkillDirs(routeDir: string, markerFs: MarkerFs): readonly string[] {
-  const skillsDir = join(routeDir, SKILLS_DIR)
+  const skillsDir = pureJoin(routeDir, SKILLS_DIR)
   if (!markerFs.existsSync(skillsDir)) return []
   const entries = markerFs.readdirSync(skillsDir)
   return entries.filter((name) => {
     if (!VALID_DIR_NAME.test(name)) return false
-    const full = join(skillsDir, name)
+    const full = pureJoin(skillsDir, name)
     if (!markerFs.isDirectorySync(full)) return false
-    return markerFs.existsSync(join(full, SKILL_FILE))
+    return markerFs.existsSync(pureJoin(full, SKILL_FILE))
   })
 }
 
@@ -91,7 +91,7 @@ function loadSkills(routeDir: string, markerFs: MarkerFs): readonly LoadedSkill[
   const seenNames = new Set<string>()
 
   for (const dirName of dirNames) {
-    const path = join(routeDir, SKILLS_DIR, dirName, SKILL_FILE)
+    const path = pureJoin(routeDir, SKILLS_DIR, dirName, SKILL_FILE)
     const raw = markerFs.readFileSync(path)
     if (raw === undefined) {
       throw new Error(`Failed to read ${path}`)
