@@ -714,6 +714,109 @@ export function createRequestStores(env) {
   })
 })
 
+describe("hono target — bindings on a host that has none", () => {
+  /**
+   * Stubs for what the emitted `stores.mjs` imports, so the REAL emitted file
+   * can be executed and asked where it got its connection string.
+   */
+  const POSTGRES_STORAGE_STUB = `const store = { ready: async () => {} }
+export const createPostgresPermissionsStore = () => store
+export const createPostgresThreadsStore = () => store
+export const postgresCheckpointer = () => store
+`
+  const NEON_STUB = `export const neonConfig = {}
+/** Every connection string a pool was built with, in order. */
+export const connectionStrings = []
+export class Pool {
+  constructor(options) {
+    connectionStrings.push(options.connectionString)
+  }
+  end() {
+    return Promise.resolve()
+  }
+}
+`
+
+  /** A `@dawn-ai/cli/fetch` stub whose runtime env knows nothing. */
+  const EMPTY_RUNTIME_ENV_STUB = `export function readRuntimeEnv() {
+  return undefined
+}
+`
+
+  async function driveEmittedStores(
+    appRoot: string,
+    envs: readonly unknown[],
+    cliStub: string = CLI_FETCH_STUB,
+  ): Promise<unknown> {
+    await writeStubPackage(appRoot, "@dawn-ai/postgres-storage", POSTGRES_STORAGE_STUB)
+    await writeStubPackage(appRoot, "@neondatabase/serverless", NEON_STUB)
+    await writeStubPackage(appRoot, "@dawn-ai/cli", cliStub, { "./fetch": "./index.mjs" })
+
+    const driverPath = buildFile(appRoot, "drive-stores.test.mjs")
+    await writeFile(
+      driverPath,
+      `import { connectionStrings, neonConfig } from "@neondatabase/serverless"
+
+import { createRequestStores } from "./stores.mjs"
+
+for (const env of ${JSON.stringify(envs)}) {
+  const stores = await createRequestStores(env)
+  await stores.dispose()
+}
+console.log(JSON.stringify({ connectionStrings, wsProxy: typeof neonConfig.wsProxy }))
+`,
+    )
+    const { execFile } = await import("node:child_process")
+    const { promisify } = await import("node:util")
+    const { stdout } = await promisify(execFile)(process.execPath, [driverPath], { cwd: appRoot })
+    return JSON.parse(stdout.trim()) as unknown
+  }
+
+  test("falls back to the runtime env when the host passes no bindings", async () => {
+    const appRoot = await createFixtureApp()
+    await runBuild(appRoot)
+
+    // Three hosts, in the three shapes a fetch handler's second argument
+    // actually takes: a Workers bindings object; `@hono/node-server`'s
+    // `{ incoming, outgoing }` (Node handles, no bindings in them at all);
+    // and nothing.
+    const observed = await driveEmittedStores(appRoot, [
+      { DATABASE_URL: "postgres://from-binding/db" },
+      { incoming: {}, outgoing: {} },
+      undefined,
+    ])
+
+    // The binding wins where there is one. Where there is not — which is EVERY
+    // non-Workers host, and is why `serve({ fetch: app.fetch })` used to build
+    // a pool with `connectionString: undefined` — the same value is read
+    // through `readRuntimeEnv`, which prefers the process environment. That is
+    // what makes the emitted entry's Workers/Vercel/Bun claim true rather than
+    // aspirational, and it reintroduces no `process` global to do it.
+    expect(observed).toEqual({
+      connectionStrings: [
+        "postgres://from-binding/db",
+        "postgres://from-runtime-env/db",
+        "postgres://from-runtime-env/db",
+      ],
+      // The proxy knob takes the same route, so a Node host can reach a local
+      // wsproxy without inventing a bindings object to carry it.
+      wsProxy: "function",
+    })
+  })
+
+  test("still names the missing binding when neither source has it", async () => {
+    const appRoot = await createFixtureApp()
+    await runBuild(appRoot)
+
+    // Same stubs, but a `readRuntimeEnv` that knows nothing — the genuinely
+    // unconfigured deploy. The fallback must not turn a named error into a
+    // driver-level connection failure with no hint of which binding is missing.
+    await expect(driveEmittedStores(appRoot, [{}], EMPTY_RUNTIME_ENV_STUB)).rejects.toThrow(
+      /DATABASE_URL is not set/,
+    )
+  })
+})
+
 /**
  * A minimal `hono` stub with the shape the emitted entry uses. Mirrors real
  * Hono: `app.fetch(request, env, ctx)` is the Workers entry signature, `c.env`
@@ -750,6 +853,15 @@ export function seedModelImporter() {}
 export const seededEnvs = []
 export function seedRuntimeEnv(env) {
   seededEnvs.push(env)
+}
+/**
+ * Stands in for the real seam, whose own precedence (process.env first, seeded
+ * map second) is @dawn-ai/core's tested contract. What the emitted stores.mjs
+ * has to get right — and what this records — is that it CONSULTS the seam at
+ * all when a binding is absent, and uses what comes back.
+ */
+export function readRuntimeEnv(name) {
+  return { DATABASE_URL: "postgres://from-runtime-env/db", DAWN_PG_WS_PROXY: "proxy:8080" }[name]
 }
 `
 

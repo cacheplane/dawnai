@@ -65,6 +65,14 @@ jobs:
         run: pnpm typecheck
 
       - name: Source Tests
+        # `hono-node-roundtrip` needs a Docker daemon — the first suite in
+        # `pnpm test` ever to, since previously only the `*-docker` jobs did. It
+        # SKIPS without one so a contributor with no Docker can still run the
+        # suite, and this flag is the other half of that bargain: on a runner,
+        # which always has Docker, a skip means the coverage was lost silently,
+        # so the flag turns it into a hard failure instead.
+        env:
+          DAWN_REQUIRE_DOCKER: "1"
         run: pnpm test
 
       - name: Docs Check

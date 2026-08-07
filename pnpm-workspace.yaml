@@ -3,3 +3,13 @@ packages:
   - packages/*
   - templates/*
   - examples/*/*
+
+# pnpm 10 blocks every dependency lifecycle script by default. `workerd` is the
+# one exception this repo makes: its postinstall is what DOWNLOADS the runtime
+# binary, so without this entry `wrangler dev` — and with it the gated workerd
+# lane (packages/cli/test/workerd-lane.test.ts, DAWN_TEST_WORKERD=1) that runs a
+# Dawn app inside real Cloudflare workerd — fails at startup with no binary to
+# exec. Keep this list minimal; every addition is a package whose install-time
+# script runs on every contributor's machine.
+onlyBuiltDependencies:
+  - workerd

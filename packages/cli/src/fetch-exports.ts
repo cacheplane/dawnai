@@ -23,7 +23,15 @@
  * rather than debug output — `OPENAI_BASE_URL` above all, which is how the
  * workerd lane points the model at a local aimock.
  */
-export { type RuntimeEnv, seedDawnConfig, seedRuntimeEnv } from "@dawn-ai/core"
+/**
+ * `readRuntimeEnv` is the other half, and the emitted `stores.mjs` uses it: a
+ * generated entry must read its own bindings the way Dawn does — `process.env`
+ * first, the seeded map second — so the SAME file serves a Workers deploy (where
+ * bindings arrive as `env` and there is no `process`) and a Node or Bun host
+ * (where the host's second argument is not a bindings object at all and the
+ * values live in the process environment).
+ */
+export { type RuntimeEnv, readRuntimeEnv, seedDawnConfig, seedRuntimeEnv } from "@dawn-ai/core"
 /**
  * Re-exported for build-emitted edge entry points: an edge bundle cannot keep
  * `createChatModel`'s default `import(specifier)` (a bundler cannot follow a
