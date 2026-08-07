@@ -30,7 +30,12 @@ export interface RequestStores {
   readonly threadsStore?: ThreadsStore
   readonly permissionsStore?: PermissionsStore
   readonly memoryStore?: MemoryStore
-  /** Called once the response body has settled. Never called mid-stream. */
+  /**
+   * Called once BOTH the response body has settled and any run the request
+   * started has released its slot — never mid-stream, and never while route
+   * work that outlived the response (an aborted stream, an abandoned
+   * `/runs/wait`) is still writing through these stores.
+   */
   readonly dispose?: () => Promise<void>
 }
 
@@ -102,6 +107,11 @@ export interface StartRuntimeServerOptions {
    * boot resolution of the others optional on a runtime with no filesystem
    * fallback (they then fail loudly on first use, as an omitted store already
    * does).
+   *
+   * The factory owns cleanup of a PARTIAL allocation: `dispose` is only ever
+   * called on a `RequestStores` this returned, so a factory that opens a pool
+   * and then throws must close it itself — the runtime has nothing to dispose
+   * in that case and will answer the request with a 500.
    */
   readonly requestStores?: (request: Request) => RequestStores | Promise<RequestStores>
 }

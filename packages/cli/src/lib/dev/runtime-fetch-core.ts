@@ -110,8 +110,11 @@ function requireStore<T>(store: T | undefined, what: string): T {
  * one day appends a charset would otherwise silently downgrade a live stream to
  * "settled" — releasing sandboxes and disposing per-request stores mid-stream,
  * the exact failure the tracking exists to prevent.
+ *
+ * Exported for the tests: no route produces a parameterized content-type today,
+ * so the guard is only reachable directly.
  */
-function isEventStream(contentType: string | null): boolean {
+export function isEventStream(contentType: string | null): boolean {
   return contentType?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream"
 }
 
@@ -119,6 +122,20 @@ interface RouteMatcher {
   readonly method: string
   readonly pattern: RegExp
   readonly handle: RouteHandler
+}
+
+/**
+ * What one request keeps alive: the stores built for it, and the two lifetimes
+ * that must BOTH end before those stores may be disposed — the response body,
+ * and any run slot the request's route work still holds.
+ */
+interface RequestLifetime {
+  readonly stores: RequestStores
+  /** The response, including a streaming body, has fully settled. */
+  bodySettled: boolean
+  /** Run slots this request claimed that have not been released yet. */
+  pendingRuns: number
+  disposed: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +310,10 @@ export async function createRuntimeFetchHandler(
   // closed" — an edge host awaiting shutdown has no other signal.
   const pendingDisposals = new Set<Promise<void>>()
 
+  // Store names already reported by the fail-loud path below, so one
+  // misconfiguration logs once rather than once per request.
+  const loggedMissingStores = new Set<string>()
+
   /**
    * Dispose a request's stores once — and only once BOTH of its lifetimes have
    * ended.
@@ -391,11 +412,11 @@ export async function createRuntimeFetchHandler(
     getCheckpointer,
     getMemoryStoreFor,
     getPermissionsStore,
+    getRunRegistry,
     getThreadsStore,
     middleware,
     registry,
     resumeClaims,
-    runRegistry,
     ...(sandboxManager ? { sandboxManager } : {}),
     signal: shutdownController.signal,
     // Boot manifest → route execution derives the subagents descriptor maps
@@ -412,27 +433,23 @@ export async function createRuntimeFetchHandler(
 
     state.activeRequests++
     let transferredToStream = false
-    let stores: RequestStores | undefined
-    const disposeStores = async (): Promise<void> => {
-      const dispose = stores?.dispose
-      if (!dispose) return
-      try {
-        await dispose()
-      } catch {
-        // Teardown must never turn a served response into a failure.
-      }
-    }
+    let lifetime: RequestLifetime | undefined
     try {
       // Inside the try on purpose: a factory that throws (a pool that cannot
       // connect) must become a 500 through the handler below, not leak the
       // in-flight slot and wedge close()'s drain.
       if (options.requestStores) {
-        stores = await options.requestStores(request)
-        perRequest.set(request, stores)
+        lifetime = {
+          bodySettled: false,
+          disposed: false,
+          pendingRuns: 0,
+          stores: await options.requestStores(request),
+        }
+        perRequest.set(request, lifetime)
       }
       const response = await dispatch(routes, request, shutdownController.signal)
       const body = response.body
-      if (body && response.headers.get("content-type") === "text/event-stream") {
+      if (body && isEventStream(response.headers.get("content-type"))) {
         // The Response exists but its SSE body is still streaming. Hold the
         // in-flight slot until the stream settles (fully read, canceled, or
         // errored) so close() cannot release sandboxes mid-stream. The flag
@@ -440,11 +457,12 @@ export async function createRuntimeFetchHandler(
         // construction throws, the finally below must still decrement.
         // Disposal chains onto the SAME settle hook, never onto `fetch`
         // resolving: an SSE turn is still streaming at that point, and ending
-        // a pool mid-stream breaks the tail of every streaming turn.
+        // a pool mid-stream breaks the tail of every streaming turn. Settling
+        // the body only ARMS disposal — see maybeDispose for the run half.
         const tracked = new Response(
           trackStreamSettled(body, () => {
             state.activeRequests--
-            void disposeStores()
+            settleBody(lifetime)
           }),
           {
             headers: response.headers,
@@ -465,6 +483,22 @@ export async function createRuntimeFetchHandler(
         )
       }
 
+      if (error instanceof MissingStoreError) {
+        // A misconfiguration, not a request failure: every request will fail
+        // the same way until the deployment supplies the store. The generic
+        // 500 below would name neither the store nor the cause, so this one
+        // carries the message and logs it — once per store, so a busy edge
+        // host is not flooded with the same line.
+        if (!loggedMissingStores.has(error.store)) {
+          loggedMissingStores.add(error.store)
+          console.error(`Dawn runtime misconfigured — ${error.message}`)
+        }
+        return Response.json(
+          createExecutionErrorBody(error.message, { store: error.store }, { code: error.code }),
+          { status: 500 },
+        )
+      }
+
       const code = dawnErrorCodeOf(error)
       return Response.json(
         createExecutionErrorBody(
@@ -477,7 +511,7 @@ export async function createRuntimeFetchHandler(
     } finally {
       if (!transferredToStream) {
         state.activeRequests--
-        void disposeStores()
+        settleBody(lifetime)
       }
     }
   }
@@ -504,18 +538,23 @@ export async function createRuntimeFetchHandler(
     // fetch wrapper (which only holds the slot for text/event-stream bodies)
     // has already decremented — draining on activeRequests alone would release
     // sandboxes out from under work still using them.
+    //
+    // Per-request store disposals count too: they start only once both of the
+    // above have finished for their request, and a caller that awaits close()
+    // is entitled to assume the pools are actually shut.
     const drainDeadlineMs = options.drainDeadlineMs ?? CLOSE_DRAIN_DEADLINE_MS
     await new Promise<void>((resolve) => {
       const startedAt = Date.now()
       const check = () => {
         const activeRuns = runRegistry.activeCount()
-        if (state.activeRequests === 0 && activeRuns === 0) {
+        if (state.activeRequests === 0 && activeRuns === 0 && pendingDisposals.size === 0) {
           resolve()
           return
         }
         if (Date.now() - startedAt >= drainDeadlineMs) {
           console.warn(
-            `close(): ${state.activeRequests} request(s) and ${activeRuns} run(s) still ` +
+            `close(): ${state.activeRequests} request(s), ` +
+              `${pendingDisposals.size} store disposal(s) and ${activeRuns} run(s) still ` +
               `active after ${Math.round(drainDeadlineMs / 1000)}s — proceeding with shutdown`,
           )
           resolve()
@@ -599,11 +638,16 @@ function buildRouteTable(ctx: {
   readonly getPermissionsStore: (
     request: Request,
   ) => PermissionsStore | (() => Promise<PermissionsStore>)
+  /**
+   * Also request-aware, and for the same reason: a request whose stores are
+   * disposed on completion must know when the run it started actually ends,
+   * which is not when its response does.
+   */
+  readonly getRunRegistry: (request: Request) => RunRegistry
   readonly getThreadsStore: (request: Request) => ThreadsStore
   readonly middleware: DawnMiddleware | undefined
   readonly registry: RuntimeRegistry
   readonly resumeClaims: PendingResumeClaims
-  readonly runRegistry: RunRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
@@ -614,11 +658,11 @@ function buildRouteTable(ctx: {
     getCheckpointer,
     getMemoryStoreFor,
     getPermissionsStore,
+    getRunRegistry,
     getThreadsStore,
     middleware,
     registry,
     resumeClaims,
-    runRegistry,
     sandboxManager,
     signal,
     staticModules,
@@ -735,7 +779,7 @@ function buildRouteTable(ctx: {
         // single DB write wide and corrupts nothing — the streaming client has
         // already received the real output. Closing it would require tracking a
         // settled state per run, which is not worth the complexity.
-        if (runRegistry.cancel(threadId)) {
+        if (getRunRegistry(request).cancel(threadId)) {
           return Response.json({ status: "interrupted", thread_id: threadId }, { status: 200 })
         }
         const thread = await getThreadsStore(request).getThread(threadId)
@@ -775,7 +819,7 @@ function buildRouteTable(ctx: {
           registry,
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
-          runRegistry,
+          runRegistry: getRunRegistry(request),
           signal,
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
@@ -800,7 +844,7 @@ function buildRouteTable(ctx: {
           permissionsStore: getPermissionsStore(request),
           registry,
           resumeClaims,
-          runRegistry,
+          runRegistry: getRunRegistry(request),
           threadsStore: getThreadsStore(request),
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
@@ -866,7 +910,7 @@ function buildRouteTable(ctx: {
           permissionsStore: getPermissionsStore(request),
           registry,
           request,
-          runRegistry,
+          runRegistry: getRunRegistry(request),
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
           ...(staticModules ? { staticModules } : {}),
@@ -921,7 +965,7 @@ function buildRouteTable(ctx: {
           registry,
           resumeClaims,
           request,
-          runRegistry,
+          runRegistry: getRunRegistry(request),
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
           ...(staticModules ? { staticModules } : {}),
