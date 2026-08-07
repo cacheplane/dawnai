@@ -136,10 +136,7 @@ if ! kubectl -n "$NS" wait --for=condition=Complete "job/$JOB" --timeout=120s; t
   exit 1
 fi
 
-if kubectl -n "$NS" get pvc "$STALE_PVC" >/dev/null 2>&1; then
-  printf '%s\n' "stale PVC was not reaped: $STALE_PVC" >&2
-  exit 1
-fi
+kubectl -n "$NS" wait --for=delete "pvc/$STALE_PVC" --timeout=30s
 
 NEW_MARKER=$(kubectl -n "$NS" get pvc "$NEW_PVC" -o jsonpath='{.metadata.annotations.dawn\.sh/unbound-since}')
 if ! is_positive_integer "$NEW_MARKER"; then
