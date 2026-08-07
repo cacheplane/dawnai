@@ -1,5 +1,7 @@
-import type { MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
+import type { DawnConfig, MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
 import type { RecallRankingOptions, VectorRankingOptions } from "@dawn-ai/memory"
+import type { ModelProviderId } from "@dawn-ai/sdk"
+import { inferProvider } from "@dawn-ai/sdk"
 import { loadDawnConfig } from "../node-config.js"
 import { pureJoin } from "./pure-path.js"
 import { type ResolvedEpisodesConfig, resolveEpisodesFromConfig } from "./record-episode.js"
@@ -82,6 +84,93 @@ export async function resolveEpisodesConfig(appRoot: string): Promise<ResolvedEp
   } catch {
     // No dawn.config.ts or unreadable — use defaults.
     return resolveEpisodesFromConfig(undefined)
+  }
+}
+
+/** Resolved `config.memory.distill` — the distillation commands' knobs. */
+export interface ResolvedDistillConfig {
+  readonly model: string
+  /** Always populated — the EFFECTIVE provider (authored, else inferred from
+   *  `model`, else `"openai"`). Pair with `providerAuthored` before overriding. */
+  readonly provider: ModelProviderId
+  /**
+   * True only when `memory.distill.provider` was authored in `dawn.config.ts`.
+   *
+   * `provider` alone cannot distinguish a deliberate choice from an inferred
+   * default, and the two must be treated differently: an authored provider is a
+   * decision (a proxy, an OpenAI-compatible endpoint) that outranks inference,
+   * while an inferred one is just a guess derived from `model` — so a caller
+   * that overrides the model (`dawn memory consolidate --model …`) must re-infer
+   * rather than pair a Claude model id with ChatOpenAI.
+   */
+  readonly providerAuthored: boolean
+  readonly maxBatches: number
+  readonly consolidate: {
+    readonly olderThanMs: number
+    readonly minBatchSize: number
+    readonly maxBatchSize: number
+    /** Absent unless configured — summaries don't expire by default. */
+    readonly ttlMs?: number
+    /** ALWAYS resolved (unlike `ttlMs`): how long superseded sources stay
+     *  inspectable before prune reaps them and returns their cap budget. */
+    readonly sourceTtlMs: number
+  }
+  readonly reflect: {
+    readonly minNewRecords: number
+    readonly maxRecords: number
+    readonly writes: "candidate" | "auto"
+  }
+}
+
+/**
+ * Resolves the distillation config for the given appRoot.
+ *
+ * Defaults: model `gpt-5-mini`, provider inferred from the resolved model (the
+ * same `inferProvider` route agents and the built-in summarizer use) falling
+ * back to `"openai"`, 5 batches per invocation, consolidation over records
+ * older than 7 days in batches of 5..50 with no summary TTL and a 7-day TTL on
+ * the sources it supersedes, and reflection after 10 new records over at most
+ * 100 records written as candidates.
+ *
+ * Uses the same cached `loadDawnConfig` loader as the other resolvers;
+ * missing/unreadable config falls back to defaults. Values are passed through
+ * as authored — no range validation here (the engine clamps at use-site).
+ *
+ * Unlike the episodes rule, the defaulting stays INLINE here rather than being
+ * split into a pure module: distillation is invoked only by `dawn memory
+ * consolidate` / `dawn memory reflect`, so this resolver has exactly one
+ * caller and no request-path twin. Nothing in the `@dawn-ai/cli/fetch` graph
+ * reaches it (see test/fetch-entry-purity.test.ts) — the file still carries no
+ * `node:` import of its own, so the split would buy nothing.
+ */
+export async function resolveDistillConfig(appRoot: string): Promise<ResolvedDistillConfig> {
+  let distill: NonNullable<NonNullable<DawnConfig["memory"]>["distill"]> | undefined
+  try {
+    const loaded = await loadDawnConfig({ appRoot })
+    distill = loaded.config.memory?.distill
+  } catch {
+    // No dawn.config.ts or unreadable — use defaults.
+  }
+  const model = distill?.model ?? "gpt-5-mini"
+  const consolidate = distill?.consolidate
+  const reflect = distill?.reflect
+  return {
+    model,
+    provider: distill?.provider ?? inferProvider(model) ?? "openai",
+    providerAuthored: distill?.provider !== undefined,
+    maxBatches: distill?.maxBatches ?? 5,
+    consolidate: {
+      olderThanMs: consolidate?.olderThanMs ?? 7 * 86_400_000,
+      minBatchSize: consolidate?.minBatchSize ?? 5,
+      maxBatchSize: consolidate?.maxBatchSize ?? 50,
+      sourceTtlMs: consolidate?.sourceTtlMs ?? 7 * 86_400_000,
+      ...(consolidate?.ttlMs !== undefined ? { ttlMs: consolidate.ttlMs } : {}),
+    },
+    reflect: {
+      minNewRecords: reflect?.minNewRecords ?? 10,
+      maxRecords: reflect?.maxRecords ?? 100,
+      writes: reflect?.writes ?? "candidate",
+    },
   }
 }
 

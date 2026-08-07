@@ -634,5 +634,31 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("supersede links and demotes episodic records (consolidation's dependency)", async () => {
+      const s = await makeStore()
+      try {
+        // Consolidation writes a summary then supersedes each source episode.
+        // Both backends must fan MANY sources into ONE summary's link list, and
+        // active-only browse must stop surfacing the sources — otherwise recall
+        // double-counts the events the summary already covers.
+        await s.put(ep({ id: "src1", namespace: "ns", content: "run one" }))
+        await s.put(ep({ id: "src2", namespace: "ns", content: "run two" }))
+        await s.put(ep({ id: "sum", namespace: "ns", content: "summary", tags: ["consolidated"] }))
+        await s.supersede("src1", "sum")
+        await s.supersede("src2", "sum")
+        await s.supersede("src1", "sum") // repeat: links merge through a Set, never duplicate
+        expect((await s.get("src1"))?.status).toBe("superseded")
+        expect((await s.get("src2"))?.status).toBe("superseded")
+        const links = (await s.get("sum"))?.supersedes
+        expect(links).toEqual(expect.arrayContaining(["src1", "src2"]))
+        expect(links).toHaveLength(2)
+        // active-only browse no longer surfaces the sources
+        expect(
+          (await s.browse({ status: "active", kind: "episodic" })).records.map((r) => r.id),
+        ).toEqual(["sum"])
+      } finally {
+        await close?.(s)
+      }
+    })
   })
 }

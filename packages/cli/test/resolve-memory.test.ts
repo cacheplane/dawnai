@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, test, vi } from "vitest"
 
 import {
+  resolveDistillConfig,
   resolveEpisodesConfig,
   resolveMemoryStore,
   resolveMemoryWrites,
@@ -173,5 +174,166 @@ describe("resolveEpisodesConfig", () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+describe("resolveDistillConfig", () => {
+  test("returns documented defaults when no dawn.config.ts exists", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(appRoot)
+
+    expect(await resolveDistillConfig(appRoot)).toEqual({
+      model: "gpt-5-mini",
+      provider: "openai",
+      providerAuthored: false,
+      maxBatches: 5,
+      consolidate: {
+        olderThanMs: 7 * 86_400_000,
+        minBatchSize: 5,
+        maxBatchSize: 50,
+        sourceTtlMs: 7 * 86_400_000,
+      },
+      reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },
+    })
+  })
+
+  test("returns defaults when config has memory but no distill block", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(appRoot)
+    await writeFile(join(appRoot, "dawn.config.ts"), `export default { memory: {} }\n`)
+
+    expect(await resolveDistillConfig(appRoot)).toEqual({
+      model: "gpt-5-mini",
+      provider: "openai",
+      providerAuthored: false,
+      maxBatches: 5,
+      consolidate: {
+        olderThanMs: 7 * 86_400_000,
+        minBatchSize: 5,
+        maxBatchSize: 50,
+        sourceTtlMs: 7 * 86_400_000,
+      },
+      reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },
+    })
+  })
+
+  test("honors overrides and leaves untouched defaults intact", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { model: "gpt-5", maxBatches: 2, consolidate: { minBatchSize: 3 }, reflect: { writes: "auto" } } } }\n`,
+    )
+
+    const c = await resolveDistillConfig(appRoot)
+    expect(c.model).toBe("gpt-5")
+    expect(c.maxBatches).toBe(2)
+    expect(c.consolidate.minBatchSize).toBe(3)
+    // Untouched defaults survive a partial override of the same sub-block.
+    expect(c.consolidate.maxBatchSize).toBe(50)
+    expect(c.consolidate.olderThanMs).toBe(7 * 86_400_000)
+    expect(c.reflect.writes).toBe("auto")
+    expect(c.reflect.minNewRecords).toBe(10)
+    expect(c.reflect.maxRecords).toBe(100)
+  })
+
+  // Unlike `ttlMs` (absent by default — summaries are permanent), `sourceTtlMs`
+  // is ALWAYS resolved: consolidation must hand the superseded sources' cap
+  // budget back, so "no expiry" is not an option the default may take.
+  test("honors an override of consolidate.sourceTtlMs", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { consolidate: { sourceTtlMs: 86400000 } } } }\n`,
+    )
+
+    const c = await resolveDistillConfig(appRoot)
+    expect(c.consolidate.sourceTtlMs).toBe(86_400_000)
+    // A partial override of the same sub-block leaves the rest at defaults.
+    expect(c.consolidate.olderThanMs).toBe(7 * 86_400_000)
+  })
+
+  test("threads an explicit provider through and passes consolidate.ttlMs when set", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { provider: "anthropic", consolidate: { ttlMs: 1000 } } } }\n`,
+    )
+
+    const c = await resolveDistillConfig(appRoot)
+    expect(c.provider).toBe("anthropic")
+    expect(c.consolidate.ttlMs).toBe(1000)
+  })
+
+  test("flags whether the provider was AUTHORED or merely inferred", async () => {
+    // `provider` is always populated (the documented default survives), so the
+    // only way a caller can tell a deliberate choice from an inferred one is
+    // this flag — `dawn memory <cmd> --model` relies on it to decide whether
+    // re-inferring from the flag's model id is safe.
+    const authoredRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(authoredRoot)
+    await writeFile(
+      join(authoredRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { provider: "anthropic" } } }\n`,
+    )
+    expect((await resolveDistillConfig(authoredRoot)).providerAuthored).toBe(true)
+
+    const inferredRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(inferredRoot)
+    await writeFile(
+      join(inferredRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { model: "claude-sonnet-4-5" } } }\n`,
+    )
+    const inferred = await resolveDistillConfig(inferredRoot)
+    expect(inferred.provider).toBe("anthropic")
+    expect(inferred.providerAuthored).toBe(false)
+  })
+
+  test("infers the provider from the configured model when none is set", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { model: "claude-sonnet-4-5" } } }\n`,
+    )
+
+    const c = await resolveDistillConfig(appRoot)
+    expect(c.provider).toBe("anthropic")
+  })
+
+  test("falls back to openai when the model's provider cannot be inferred", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(appRoot)
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      `export default { memory: { distill: { model: "some-local-model" } } }\n`,
+    )
+
+    const c = await resolveDistillConfig(appRoot)
+    expect(c.provider).toBe("openai")
+  })
+
+  test("returns defaults (never throws) when dawn.config.ts is invalid", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "dawn-resolve-distill-"))
+    tempDirs.push(appRoot)
+    // Not an object default export → loadDawnConfig rejects, same catch path the
+    // "no dawn.config.ts" case exercises.
+    await writeFile(join(appRoot, "dawn.config.ts"), `export default 42\n`)
+
+    expect(await resolveDistillConfig(appRoot)).toEqual({
+      model: "gpt-5-mini",
+      provider: "openai",
+      providerAuthored: false,
+      maxBatches: 5,
+      consolidate: {
+        olderThanMs: 7 * 86_400_000,
+        minBatchSize: 5,
+        maxBatchSize: 50,
+        sourceTtlMs: 7 * 86_400_000,
+      },
+      reflect: { minNewRecords: 10, maxRecords: 100, writes: "candidate" },
+    })
   })
 })

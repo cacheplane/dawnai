@@ -30,8 +30,9 @@ unless stated. "Smarter recall" touches exactly one function inside L3.
 - `hybrid.ts` — the **shared, backend-agnostic ranking core**: `rankKeywordCandidates()` (IDF relevance over a store-supplied candidate pool + df/N stats) and `fuseHybrid()` (co-equal RRF over a keyword list and a vector list + the bounded recency/confidence second stage). Pure — no I/O, no clock. Both stores call it after doing their own retrieval, so recall ordering is the same across backends.
 - `tokenize.ts` — lowercase / split / drop-1-char / **dedupe** → tokens.
 - `namespace.ts` — `serializeNamespace()` + `MemoryScopeTuple`.
-- `reconcile.ts` — `classifyWrite()` (deterministic add/update/supersede).
-- `index.ts` — barrel (also re-exports `rankKeywordCandidates` / `fuseHybrid`).
+- `reconcile.ts` — `classifyWrite()` (deterministic add/update/supersede) + `writePolicyFor()` (the per-kind reconcile/append seam) + `approveWithReconcile()`.
+- `distill.ts` — the **pure** distillation layer (see §13): `selectConsolidationBatches()` / `selectReflectionInput()` (selection), `buildConsolidationPrompt()` / `buildReflectionPrompt()`, `parseConsolidationOutput()` / `parseReflectionOutput()`, `buildSummaryRecord()` / `buildReflectionRecords()`, plus `eventTimeOf()` / `isoWeekKey()`. No I/O, no clock, no model — every function takes records in and returns records/strings out.
+- `index.ts` — barrel (also re-exports `rankKeywordCandidates` / `fuseHybrid` and the distill surface).
 
 **`@dawn-ai/memory-pgvector`** — the Tier-2 Postgres + pgvector `MemoryStore` backend (production / multi-instance):
 - `schema.ts` — `vectorColumnDef()` (the pure `vector` ≤2000 / `halfvec` ≤4000 dimension branch + cosine ops) and idempotent `initSchema()` (extension, tables, token indexes, HNSW index).
@@ -48,7 +49,8 @@ unless stated. "Smarter recall" touches exactly one function inside L3.
 - `types.ts` — `DawnConfig.memory` config shape.
 
 **`@dawn-ai/cli`**
-- `lib/runtime/resolve-memory.ts` — `resolveMemoryStore()`, `resolveMemoryWrites()`, `buildMemoryContext()`, `routeNamespaceKey()`.
+- `lib/runtime/resolve-memory.ts` — `resolveMemoryStore()`, `resolveMemoryWrites()`, `resolveEpisodesConfig()`, `resolveDistillConfig()`, `buildMemoryContext()`, `routeNamespaceKey()`.
+- `lib/memory/distill.ts` — the distillation **engine** (`runConsolidation()` / `runReflection()`): the only impure half — store reads/writes, the model call, progress output. Takes a `createModel` thunk and an ISO `now`, so tests drive the whole engine with no provider package.
 - `lib/runtime/execute-route.ts` — registers the marker, builds `MemoryContext` per request, applies capabilities.
 - `lib/typegen/run-typegen.ts` — `MEMORY_EXTRA_TOOLS` + `hasMemory()` detection.
 - `commands/memory.ts` — the `dawn memory` CLI.
@@ -311,10 +313,42 @@ after each recorded write and manually via `dawn memory prune`. `search`/`browse
 `since`/`until` windows (vs `effectiveAt`, `createdAt` fallback; since inclusive / until
 exclusive) and exclude expired rows when `now` is supplied; the `recall` tool exposes the
 windows (ISO or relative `"-24h"`, resolved by `core`'s pure `time-expr.ts`); the Inspector
-gained a timeline view. All of it is conformance-kit enforced across both stores. Explicitly
-still deferred (spec §"Out of scope"):
+gained a timeline view. All of it is conformance-kit enforced across both stores.
 
-- `procedural` / `reflection` kinds; background consolidation (episodes → semantic facts).
+**Distillation ships too** — `dawn memory consolidate` and `dawn memory reflect`, the compaction
+and insight passes over accumulated memories, plus the `reflection` kind they produce (append-only
+via the same `writePolicyFor` seam; `procedural` is now the sole unwired kind). The split is the
+one this system uses everywhere: a **pure** module in `@dawn-ai/memory` (`distill.ts` — selection,
+prompt building, output parsing, derived-record construction; no I/O, no clock, no model) and an
+**engine** in the CLI (`lib/memory/distill.ts` — store reads/writes, one model call per batch,
+progress output). The engine takes `now` as an argument and the model as a `createModel` thunk, so
+the aimock tests drive the whole thing without a provider package, and — because the thunk is only
+called when there is work — a below-threshold pass constructs no model and needs no API key.
+Both commands are threshold-aware no-ops for exactly that reason: they are meant to live in cron.
+
+Two ordering rules carry the correctness:
+
+- **Write-then-link.** Consolidation `put`s the summary FIRST and supersedes its sources only
+  afterwards (and stamps each source's `expiresAt` only once ITS supersede succeeded). A crash
+  between the two leaves a redundant summary — cheap and visible — instead of orphaned superseded
+  records with nothing summarizing them. A source that is still active is never scheduled for
+  deletion.
+- **Retention ranking.** A summary's `effectiveAt` is the covered window's **end**, not its start.
+  `prune`'s per-namespace episodic cap ranks by `COALESCE(effective_at, created_at) DESC` and is
+  status-agnostic, so a start-stamped summary would sort as the oldest row of its own batch and the
+  cap would evict the summary *before* the superseded sources it replaced. Guarded by "a summary
+  outranks its own sources under the cap" (`prune.test.ts`). The mirror-image hazard is handled by
+  `consolidate.sourceTtlMs` (default 7d): a superseded source is invisible to recall but still
+  occupies a cap slot, so consolidation stamps it with an expiry that hands the budget back on the
+  next prune — after a window in which the source is still inspectable.
+
+Summaries are excluded from every later pass (`data.derivedFrom` is the marker), so consolidation
+never summarizes summaries. Explicitly still deferred (spec §"Out of scope"):
+
+- The `procedural` kind (`writePolicyFor` throws for it — better than baking in accidental
+  semantics).
+- Higher-order (re-)consolidation: rolling week summaries up into month/quarter summaries.
+  Today `derivedFrom` records are simply excluded from every pass.
 - Embedded episodes (`memory.episodes.embed: true` resolves to `false` with a one-time warning —
   auto-episodes are keyword + time-window recall only).
 - BM25/FTS5 (term frequency is not stored).
@@ -323,7 +357,8 @@ still deferred (spec §"Out of scope"):
   linear in matching rows); the pgvector backend already uses an HNSW index for larger corpora.
 - pgvector follow-ups: `pgvectorscale` / DiskANN indexing, and pushing the RRF fusion down into
   SQL (today pgvector retrieves both lists and fuses in the shared JS core).
-- Memory graph (edges/relations).
+- Memory graph (edges/relations) — provenance today is a flat `data.derivedFrom` id list plus
+  `supersedes` links, not typed edges.
 
 The Memory Inspector UI — previously deferred here for lack of a dev UI host — now ships
 as the standalone `@dawn-ai/inspector` package, launched via `dawn inspect`. Architecture:
