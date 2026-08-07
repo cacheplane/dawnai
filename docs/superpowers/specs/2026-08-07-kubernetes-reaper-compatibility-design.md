@@ -20,6 +20,8 @@ current smoke tests pass.
   immutable.
 - Fail fast when the tested Kubernetes minor and default reaper client drift
   outside Kubernetes' supported one-minor skew.
+- Preserve default-deny egress for Dawn-managed sandbox pods while allowing
+  the Helm-managed reaper to reach the Kubernetes API reliably.
 - Exercise the installed reaper against real PVCs in Kind.
 - Document the supported default cluster window and operator override.
 
@@ -60,6 +62,34 @@ The existing `reaper.image` string remains the complete image reference. It
 already supports arbitrary registries, tags, and digests and avoids a breaking,
 more cumbersome repository/tag/digest split.
 
+The image must provide `kubectl`, a POSIX shell, `date`, `sort`, and `grep`,
+which are all invoked by `files/reaper.sh`.
+
+### Network-policy scope
+
+The existing namespace-wide default-deny policy also selects the reaper. It
+allows DNS only, so a policy-enforcing production cluster can block the
+reaper's Kubernetes API calls even though Kind may exempt node traffic.
+
+Change the policy selector from all pods to:
+
+```yaml
+podSelector:
+  matchLabels:
+    app.kubernetes.io/managed-by: dawn
+```
+
+The Kubernetes sandbox provider applies this label to every sandbox pod. The
+chart deliberately labels its own resources `app.kubernetes.io/managed-by:
+Helm`, so the reaper Job is outside the policy and can use its in-cluster API
+credentials. This preserves the fail-closed backstop for the workloads the
+chart exists to constrain without relying on cluster-specific API-server
+addresses, service translation behavior, or ports.
+
+The README description changes from a namespace-wide backstop to a backstop
+for Dawn-managed sandbox pods. Arbitrary pods manually placed in the dedicated
+namespace are outside this policy and remain the operator's responsibility.
+
 ### Static policy test
 
 Extend `packages/sandbox/test/ci-workflow-pins.test.ts`, which already parses
@@ -85,8 +115,7 @@ Add a focused shell script under `test/k8s-smoke/` and call it from the existing
 
 1. Creates a managed, unbound PVC with an old `dawn.sh/unbound-since` marker.
 2. Creates a managed, unbound PVC without a marker.
-3. Creates a managed PVC referenced by a running pod and gives it a stale
-   marker.
+3. Creates a managed PVC referenced by a pod and gives it a stale marker.
 4. Creates a one-off Job from the installed `dawn-reaper` CronJob.
 5. Waits for successful completion.
 6. Verifies the stale unbound PVC was deleted, the newly unbound PVC was marked,
@@ -94,15 +123,18 @@ Add a focused shell script under `test/k8s-smoke/` and call it from the existing
 7. Deletes smoke fixtures through a shell trap.
 
 The test uses the chart's actual ConfigMap, ServiceAccount, image, security
-context, and RBAC. It does not wait for the hourly schedule or duplicate the
-CronJob manifest.
+context, RBAC, and network policy on a Calico-enabled cluster. It does not wait
+for the hourly schedule or duplicate the CronJob manifest. The existing
+provider integration test continues to prove that labeled sandbox pods remain
+subject to default-deny egress.
 
 ### Documentation and release metadata
 
 Update the chart README to state that the default 1.35 client supports
 Kubernetes 1.34 through 1.36 under the upstream version-skew policy. Operators
 outside that window must override `reaper.image` with an image containing a
-compatible `kubectl`, POSIX shell, and `date`.
+compatible `kubectl`, POSIX shell, `date`, `sort`, and `grep`. The values table
+shows the complete default tag-plus-digest reference.
 
 Bump `charts/dawn-sandbox-infra/Chart.yaml` from `0.1.1` to `0.1.2`. This chart
 change does not alter an npm package and therefore does not require a
