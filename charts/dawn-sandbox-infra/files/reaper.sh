@@ -21,8 +21,14 @@ printf '%s\n' "$PVC_NAMES" | while IFS= read -r NAME; do
 
     if printf '%s\n' "$BOUND" | grep -Fxq "$NAME"; then
       # bound → clear any marker
-      [ -n "${SINCE:-}" ] && kubectl -n "$NS" annotate pvc "$NAME" dawn.sh/unbound-since- >/dev/null 2>&1 || true
-      continue
+      [ -z "${SINCE:-}" ] && continue
+      if kubectl -n "$NS" annotate pvc "$NAME" dawn.sh/unbound-since- >/dev/null; then
+        continue
+      fi
+      PVC_AFTER_CLEAR="$(kubectl -n "$NS" get pvc "$NAME" --ignore-not-found -o name)"
+      [ -z "$PVC_AFTER_CLEAR" ] && continue
+      echo "failed to clear dawn.sh/unbound-since from bound PVC $NAME" >&2
+      exit 1
     fi
 
     # Only canonical positive decimal epochs that fit within NOW's digit width

@@ -8,7 +8,8 @@ BIN="$TMP/bin"
 FIX="$TMP/fixtures"
 CALLS="$TMP/calls.log"
 FAILURES=0
-mkdir -p "$BIN" "$FIX/annotations" "$FIX/not-found" "$FIX/api-errors"
+mkdir -p "$BIN" "$FIX/annotations" "$FIX/not-found" "$FIX/api-errors" \
+  "$FIX/annotate-errors" "$FIX/gone-after-clear" "$FIX/existence-errors"
 trap 'rm -rf "$TMP"' 0
 export PATH="$BIN:$PATH" CALLS FIX
 
@@ -35,6 +36,19 @@ if [ "${1:-}" = "get" ] && [ "${2:-}" = "pvc" ]; then
       *) cat "$FIX/pvc-names.jsonpath" ;;
     esac
   else
+    case " $* " in
+      *' -o name '*)
+        if [ -f "$FIX/existence-errors/${3:-}" ]; then
+          printf '%s\n' 'Error from server (InternalError): injected existence check failure' >&2
+          exit 1
+        fi
+        if [ -f "$FIX/gone-after-clear/${3:-}" ]; then
+          exit 0
+        fi
+        printf 'persistentvolumeclaim/%s\n' "${3:-}"
+        exit 0
+        ;;
+    esac
     if [ -f "$FIX/api-errors/${3:-}" ]; then
       printf '%s\n' 'Error from server (InternalError): injected API failure' >&2
       exit 1
@@ -55,9 +69,19 @@ if [ "${1:-}" = "get" ] && [ "${2:-}" = "pvc" ]; then
   exit 0
 fi
 
-case "${1:-}" in
-  annotate | delete) exit 0 ;;
-esac
+if [ "${1:-}" = "annotate" ]; then
+  if [ -f "$FIX/gone-after-clear/${3:-}" ]; then
+    printf 'Error from server (NotFound): persistentvolumeclaims "%s" not found\n' "${3:-}" >&2
+    exit 1
+  fi
+  if [ -f "$FIX/annotate-errors/${3:-}" ]; then
+    printf 'Error from server (Conflict): persistentvolumeclaims "%s" was modified\n' "${3:-}" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+[ "${1:-}" != "delete" ] || exit 0
 
 printf '%s\n' "unexpected kubectl call: $*" >&2
 exit 1
@@ -72,6 +96,9 @@ reset_fixtures() {
   rm -f "$FIX/annotations"/*
   rm -f "$FIX/not-found"/*
   rm -f "$FIX/api-errors"/*
+  rm -f "$FIX/annotate-errors"/*
+  rm -f "$FIX/gone-after-clear"/*
+  rm -f "$FIX/existence-errors"/*
 }
 
 run_reaper() {
@@ -221,6 +248,42 @@ reset_fixtures
 printf '%s\n' 'dawn-sbx-vol-api-error' > "$FIX/pvc-names.jsonpath"
 : > "$FIX/api-errors/dawn-sbx-vol-api-error"
 require_reaper_failure "genuine per-PVC API errors fail the reaper"
+
+# A failed marker clear must fail while the bound PVC still exists.
+reset_fixtures
+printf '%s\n' 'dawn-sbx-vol-bound-clear-error' > "$FIX/pvc-names.jsonpath"
+printf '%s\n' 'dawn-sbx-vol-bound-clear-error' > "$FIX/pods.jsonpath"
+printf '%s' '1700000000' > "$FIX/annotations/dawn-sbx-vol-bound-clear-error"
+: > "$FIX/annotate-errors/dawn-sbx-vol-bound-clear-error"
+require_reaper_failure "bound marker clear failure for an existing PVC fails the reaper"
+require_call "failed marker clear checks whether the PVC still exists" \
+  "get pvc dawn-sbx-vol-bound-clear-error --ignore-not-found -o name"
+
+# NotFound during marker clear is safe only after a follow-up get confirms the
+# PVC disappeared; later PVC names must still be processed.
+reset_fixtures
+cat > "$FIX/pvc-names.jsonpath" <<'EOF'
+dawn-sbx-vol-bound-gone
+dawn-sbx-vol-after-bound-gone
+EOF
+printf '%s\n' 'dawn-sbx-vol-bound-gone' > "$FIX/pods.jsonpath"
+printf '%s' '1700000000' > "$FIX/annotations/dawn-sbx-vol-bound-gone"
+: > "$FIX/gone-after-clear/dawn-sbx-vol-bound-gone"
+: > "$FIX/annotations/dawn-sbx-vol-after-bound-gone"
+run_reaper
+require_call "failed clear confirms concurrent PVC deletion" \
+  "get pvc dawn-sbx-vol-bound-gone --ignore-not-found -o name"
+require_call "processing continues after concurrent bound PVC deletion" \
+  "annotate --overwrite pvc dawn-sbx-vol-after-bound-gone dawn.sh/unbound-since="
+
+# A genuine API error from the follow-up existence check must remain fatal.
+reset_fixtures
+printf '%s\n' 'dawn-sbx-vol-bound-check-error' > "$FIX/pvc-names.jsonpath"
+printf '%s\n' 'dawn-sbx-vol-bound-check-error' > "$FIX/pods.jsonpath"
+printf '%s' '1700000000' > "$FIX/annotations/dawn-sbx-vol-bound-check-error"
+: > "$FIX/annotate-errors/dawn-sbx-vol-bound-check-error"
+: > "$FIX/existence-errors/dawn-sbx-vol-bound-check-error"
+require_reaper_failure "genuine follow-up existence errors fail the reaper"
 
 if [ "$FAILURES" -ne 0 ]; then
   printf '\n%s\n' "kubectl calls from final scenario:" >&2

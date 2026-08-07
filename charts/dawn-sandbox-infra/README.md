@@ -95,6 +95,8 @@ provider's `security.pidsLimit` therefore has no effect on the Kubernetes provid
 - NetworkPolicy enforcement (backstop + per-thread) requires a
   policy-capable CNI (e.g. Calico, Cilium) — this chart does not install
   one.
+- Arbitrary non-Dawn pods manually placed in the namespace are not selected by
+  this NetworkPolicy backstop and remain the operator's responsibility.
 - Pod Security Standards, ResourceQuota, and LimitRange are
   Kubernetes-native admission controls; the chart configures them, but
   enforcement is the cluster's.
