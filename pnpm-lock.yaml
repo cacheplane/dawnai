@@ -496,6 +496,12 @@ importers:
       '@dawn-ai/memory':
         specifier: workspace:*
         version: link:../memory
+      '@pretable/react':
+        specifier: 0.0.3
+        version: 0.0.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@pretable/ui':
+        specifier: 0.0.3
+        version: 0.0.3
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -2207,6 +2213,18 @@ packages:
 
   '@preact/signals-core@1.14.4':
     resolution: {integrity: sha512-HNB6HYeYKhQbJ1aKl+YRjrS4+QWHLKX6qKoUsfS/m0vqzsVaEBiZiaKbG/e+NKk2ch5ALQr/ihWaMHxiCuuWHA==}
+
+  '@pretable/core@0.0.3':
+    resolution: {integrity: sha512-zmu6ICJroSt3dWb19fQ8o5g+4p0Np3Rzkw18WuERnWaDjVyCzEMLXJem22D0349g2qNbMh3uZHIcQlB0a9k+wA==}
+
+  '@pretable/react@0.0.3':
+    resolution: {integrity: sha512-GxAeIocUHoLfNB9+BSwSXgeHgNDzE7mEJ1LWr6FN0TjffYuQzYNjOsEvFQ2YlFYwVieDa38GiHIE4MZcXbA7+A==}
+    peerDependencies:
+      react: ^19.0.0
+      react-dom: ^19.0.0
+
+  '@pretable/ui@0.0.3':
+    resolution: {integrity: sha512-9Ic0YE7mTxBs63sq3zLuiUn0gNvX187NwvvMXU0Tu8cCCvcOMLnKLYsMRTQWeZmi9jie4vYii07ah680VTWIPA==}
 
   '@protobuf-ts/protoc@2.11.1':
     resolution: {integrity: sha512-mUZJaV0daGO6HUX90o/atzQ6A7bbN2RSuHtdwo8SSF2Qoe3zHwa4IHyCN1evftTeHfLmdz+45qo47sL+5P8nyg==}
@@ -8748,6 +8766,17 @@ snapshots:
   '@polka/url@1.0.0-next.29': {}
 
   '@preact/signals-core@1.14.4': {}
+
+  '@pretable/core@0.0.3': {}
+
+  '@pretable/react@0.0.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@pretable/core': 0.0.3
+      '@pretable/ui': 0.0.3
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+
+  '@pretable/ui@0.0.3': {}
 
   '@protobuf-ts/protoc@2.11.1': {}
 
