@@ -1,4 +1,7 @@
-import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch"
+// `/web` — see the note on the same import in tool-converter.ts. The default
+// entry drags `node:async_hooks` into the edge bundle to infer a config this
+// module always passes explicitly.
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch/web"
 import type { RunnableConfig } from "@langchain/core/runnables"
 import { DynamicStructuredTool } from "@langchain/core/tools"
 import { isGraphInterrupt } from "@langchain/langgraph"

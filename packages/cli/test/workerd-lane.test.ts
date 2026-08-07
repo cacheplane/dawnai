@@ -34,88 +34,73 @@ import {
 // is involved: `wrangler dev --local` runs the same workerd binary the platform
 // runs, against local containers.
 //
-// Gated on DAWN_TEST_WORKERD=1 — it needs Docker, the workerd binary, and about
-// a minute. The ungated round-trip beside it (`hono-node-roundtrip.test.ts`)
-// covers the same fixture on Node every run.
+// Gated on DAWN_TEST_WORKERD=1 — it needs Docker and the workerd binary, which
+// `pnpm-workspace.yaml`'s `onlyBuiltDependencies` exists to let wrangler's
+// postinstall download. The `edge-workerd` CI job sets the flag. The ungated
+// round-trip beside it (`hono-node-roundtrip.test.ts`) covers the same fixture,
+// built by the same helper, on Node every run.
 //
 // ASSERT ON THE PAYLOAD, NEVER THE STATUS. A dead model wiring still returns
 // HTTP 200 with an SSE stream — the round-trip found that the hard way — so
 // every turn below is checked for the model's actual reply text.
 //
-// WHAT THIS LANE CANNOT SETTLE, even once it is green: workerd-in-miniflare does
-// not enforce Cloudflare's ~6-simultaneous-outbound-connection cap or the
-// 1000-subrequest limit, and a wsproxy on the same machine hides per-query
-// latency — which matters, because `putWrites` issues one INSERT per write
-// inside the transaction. Hyperdrive is untested here; it needs an account.
-//
 // ═══════════════════════════════════════════════════════════════════════════
-// ⚠ THIS LANE IS RED AS OF 2026-08-07, AND THAT IS ITS FINDING.
+// WHAT IT TOOK TO GET HERE — three defects, each found only by running this.
 //
-// It is deliberately NOT wired into CI yet — an `edge-workerd` job would red
-// every pull request. Both blockers below live outside this file, and both were
-// reduced to standalone reproductions rather than inferred.
+// This lane was red on first run and stayed red through two more failures. All
+// three fixes are in the same commit; none of them is a workaround, and no
+// `nodejs_compat` flag was added at any point.
 //
-// BLOCKER 1 — the bundle does not link. wrangler fails at startup with:
+//  1. THE BUNDLE DID NOT LINK. wrangler died with `No such module
+//     "node:async_hooks"`, from ONE specifier and it was Dawn's own:
+//     `packages/langchain/src/{tool-converter,subagent-tool-bridge}.ts`
+//     imported `dispatchCustomEvent` from "@langchain/core/callbacks/dispatch",
+//     whose entry statically imports `node:async_hooks` in order to INFER the
+//     config off AsyncLocalStorage when a caller omits one. Both call sites
+//     already pass an explicit config, which is exactly what upstream's
+//     "…/dispatch/web" entry requires, so the swap is behaviour-neutral.
+//     `fetch-entry-purity` cannot see this class of defect — it externalizes
+//     `@langchain/*` — which is why the lane, not the gate, caught it.
 //
-//   Uncaught Error: No such module "node:async_hooks". imported from "app.js"
-//   …The package "node:async_hooks" wasn't found… Imported from:
-//     @langchain/core/dist/callbacks/dispatch/index.js
+//  2. EVERY REQUEST AFTER THE FIRST THREW. `Cannot perform I/O on behalf of a
+//     different request … (I/O type: RefcountedCanceler)`, from
+//     `runtime-fetch-core.ts`'s handler-scoped `shutdownController`. On workerd
+//     an AbortController is an I/O object bound to the request that built it —
+//     and the handler is necessarily built inside request one, because global
+//     scope refuses to construct one at all ("Disallowed operation called
+//     within global scope"). So a Dawn app served exactly ONE request per
+//     isolate. The shutdown signal is now minted per request
+//     (`getShutdownSignal(request)`, following the file's existing
+//     `getRunRegistry(request)` pattern) with `close()` aborting the live set.
 //
-//   ONE specifier, and it is Dawn's own: `packages/langchain/src` imports
-//   `dispatchCustomEvent` from "@langchain/core/callbacks/dispatch" in
-//   `tool-converter.ts` and `subagent-tool-bridge.ts`. That entry statically
-//   imports `node:async_hooks` so it can INFER the config off AsyncLocalStorage
-//   when a caller omits it. Upstream ships "@langchain/core/callbacks/dispatch/web"
-//   for exactly this case; it requires an explicit config, which BOTH Dawn call
-//   sites already pass. Switching the two imports makes the bundle link (an
-//   esbuild scan on `platform: browser` then reports zero `node:` specifiers)
-//   and the worker boot — verified locally. The ALS instance the default entry
-//   installs as a side effect is unaffected on Node: `@langchain/langgraph`'s
-//   main entry installs it too, and Dawn always loads that (checked directly).
+//  3. THE MODEL HAD NO CREDENTIAL. A turn returned 200 with a well-formed
+//     stream whose only content was `RUN_ERROR: Missing credentials` — the
+//     exact "status is not proof" failure this file's payload assertions exist
+//     for. `OPENAI_BASE_URL` went through `readRuntimeEnv`, but the API key was
+//     left to the provider package, which reads `process.env` and finds nothing
+//     where there is no `process`. `createChatModel` now resolves each
+//     provider's key through the same seam.
 //
-//   NOT DONE HERE because two tests inherited from main —
-//   `packages/langchain/test/{tool-converter,planning}.test.ts` — do
-//   `vi.mock("@langchain/core/callbacks/dispatch", …)`, so the source change
-//   forces a one-token edit to each mock specifier. That is a call for whoever
-//   owns those files. Note the `fetch-entry-purity` gate structurally cannot
-//   catch this class: it externalizes `@langchain/*`.
+// WHAT FOUR SEQUENTIAL TURNS ACTUALLY COVER — the reason the count is four and
+// not two. Defect 2 alternated on the spike and was total here, but either way
+// it is invisible to a single request. Turns 2-4 re-enter every handler-scoped
+// structure from a fresh I/O context: the memoized `createRuntimeFetchHandler`
+// promise in `app.mjs`, the `runRegistry` (begin/release per turn), and
+// `resumeClaims`, which the AG-UI path claims on EVERY turn (agui-handler.ts),
+// not only on resume. `getMemoryStoreFor`'s memoized promise is the one
+// handler-scoped cache this cannot reach — long-term memory is gated off the
+// hono target at build time, so it is unreachable by construction rather than
+// untested; if that gate is ever relaxed, it is the next thing to check here.
 //
-// BLOCKER 2 — behind it, and larger. With blocker 1 patched locally, the worker
-// boots and the FIRST request is served end to end: `GET /healthz` returns 200,
-// which means the per-request Neon pool connected through the wsproxy and all
-// three migrations ran inside workerd. Every request AFTER the first fails:
+// WHAT IT STILL CANNOT SETTLE: workerd-in-miniflare does not enforce
+// Cloudflare's ~6-simultaneous-outbound-connection cap or the 1000-subrequest
+// limit, and a wsproxy on the same machine hides per-query latency — which
+// matters, because `putWrites` issues one INSERT per write inside the
+// transaction. Hyperdrive is untested; it needs an account. And one isolate
+// serves the whole run, so cross-isolate cold starts are not exercised.
 //
-//   Error: Cannot perform I/O on behalf of a different request. I/O objects
-//   (such as streams, request/response bodies, and others) created in the
-//   context of one request handler cannot be accessed from a different
-//   request's handler. (I/O type: RefcountedCanceler)
-//     at Object.fetch (…/lib/dev/runtime-fetch-core.js)
-//
-//   The cause is `runtime-fetch-core.ts`'s handler-scoped `shutdownController`
-//   (`const shutdownController = new AbortController()`). On workerd the
-//   handler is necessarily constructed inside the FIRST request — global scope
-//   cannot build one, since `new AbortController()` there is itself a
-//   "Disallowed operation called within global scope" — so the controller
-//   belongs to request one's I/O context, and requests two onward throw the
-//   moment anything touches `shutdownController.signal`: the `.aborted` read in
-//   the catch, the `dispatch(…, signal)` hand-off, and the three
-//   `runRegistry.begin(threadId, signal)` calls.
-//
-//   Reduced to a twelve-line worker with no Dawn code in it: lazily create one
-//   AbortController on the first request and read `.signal.aborted`. Request
-//   one answers `{"first":true,"readAborted":false}`; every later request
-//   throws. `AbortSignal.any([…])` over it throws identically.
-//
-//   This is not a storage finding, and an in-memory fallback would not dodge
-//   it: a Dawn app on workerd currently serves exactly ONE request per isolate.
-//   The fix is to make the shutdown signal per-request — the file already has
-//   the pattern (`getRunRegistry(request)`, `getCheckpointer(request)`), so it
-//   becomes `getShutdownSignal(request)` with `close()` aborting the live set —
-//   but that changes shutdown/drain semantics the node path depends on, and
-//   `runtime-fetch-core.ts` belongs to another task in this plan.
-//
-// Leave the assertions below exactly as they are. They are what the edge claim
-// has to survive, and softening them to get a green is the one thing that would
+// Leave the assertions below at full strength. They are what the edge claim has
+// to survive, and softening one to keep a green is the only thing that would
 // make this file worse than not having it.
 // ═══════════════════════════════════════════════════════════════════════════
 // ---------------------------------------------------------------------------
@@ -330,6 +315,12 @@ describe("hono target — the emitted app inside real Cloudflare workerd", () =>
       // Every turn produced the identical AG-UI shape — the later ones are the
       // ones that matter, for the alternating-failure reason above.
       for (const types of turnEventTypes) expect(types).toEqual(turnEventTypes[0])
+
+      // A non-turn route, LAST rather than first. `/healthz` already ran as the
+      // readiness probe, so serving it again after four turns is the cheapest
+      // evidence that a second route family also survives being re-entered from
+      // a later request's I/O context — not just the AG-UI path.
+      expect((await fetch(`${server.origin}/healthz`)).status).toBe(200)
 
       // ---- 2. The model was genuinely reached, four times ------------------
       const modelRequests = aimock.getRequests()

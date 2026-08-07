@@ -4,7 +4,7 @@ import { convertToolToLangChain, jsonSchemaToZod } from "../src/tool-converter.t
 
 const dispatchCustomEvent = vi.hoisted(() => vi.fn())
 
-vi.mock("@langchain/core/callbacks/dispatch", () => ({ dispatchCustomEvent }))
+vi.mock("@langchain/core/callbacks/dispatch/web", () => ({ dispatchCustomEvent }))
 
 beforeEach(() => {
   dispatchCustomEvent.mockReset()

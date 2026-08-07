@@ -8,18 +8,51 @@ type ChatModelConstructor = new (options: Record<string, unknown>) => unknown
 interface ProviderSpec {
   readonly packageName: string
   readonly exportName: string
+  /**
+   * The environment variable this provider's package reads its credential from
+   * when the constructor is given none.
+   *
+   * Named here so {@link createChatModel} can read it through `readRuntimeEnv`
+   * and pass it explicitly. Every one of these packages resolves it with
+   * LangChain's `getEnvironmentVariable`, which reaches for `process.env` — and
+   * on a runtime without `process` (workerd without `nodejs_compat`, which the
+   * `hono` build target deliberately omits) that yields nothing, so the model
+   * fails with "Missing credentials" no matter what the deployment's bindings
+   * say. `ollama` has no entry because it needs no credential.
+   */
+  readonly apiKeyEnv?: string
 }
 
 const providerSpecs: Record<BuiltInModelProviderId, ProviderSpec> = {
-  openai: { packageName: "@langchain/openai", exportName: "ChatOpenAI" },
-  anthropic: { packageName: "@langchain/anthropic", exportName: "ChatAnthropic" },
+  openai: {
+    packageName: "@langchain/openai",
+    exportName: "ChatOpenAI",
+    apiKeyEnv: "OPENAI_API_KEY",
+  },
+  anthropic: {
+    packageName: "@langchain/anthropic",
+    exportName: "ChatAnthropic",
+    apiKeyEnv: "ANTHROPIC_API_KEY",
+  },
   // Official LangChain JS docs and current npm availability support this stable package/class.
-  google: { packageName: "@langchain/google-genai", exportName: "ChatGoogleGenerativeAI" },
-  mistral: { packageName: "@langchain/mistralai", exportName: "ChatMistralAI" },
-  groq: { packageName: "@langchain/groq", exportName: "ChatGroq" },
+  google: {
+    packageName: "@langchain/google-genai",
+    exportName: "ChatGoogleGenerativeAI",
+    apiKeyEnv: "GOOGLE_API_KEY",
+  },
+  mistral: {
+    packageName: "@langchain/mistralai",
+    exportName: "ChatMistralAI",
+    apiKeyEnv: "MISTRAL_API_KEY",
+  },
+  groq: { packageName: "@langchain/groq", exportName: "ChatGroq", apiKeyEnv: "GROQ_API_KEY" },
   ollama: { packageName: "@langchain/ollama", exportName: "ChatOllama" },
-  xai: { packageName: "@langchain/xai", exportName: "ChatXAI" },
-  openrouter: { packageName: "@langchain/openrouter", exportName: "ChatOpenRouter" },
+  xai: { packageName: "@langchain/xai", exportName: "ChatXAI", apiKeyEnv: "XAI_API_KEY" },
+  openrouter: {
+    packageName: "@langchain/openrouter",
+    exportName: "ChatOpenRouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+  },
 }
 
 /** Provider → the package that ships its chat model class. */
@@ -108,6 +141,20 @@ export async function createChatModel(options: {
   const constructorOptions: Record<string, unknown> = { model: options.model }
   if (options.provider === "openai" && options.reasoning?.effort) {
     constructorOptions.reasoningEffort = options.reasoning.effort
+  }
+
+  // The credential, resolved the same way the base URL below is.
+  //
+  // On Node this is a NO-OP by construction: `readRuntimeEnv` prefers
+  // `process.env`, so the value passed here is byte-for-byte the one the
+  // provider package would have read for itself, and when the variable is unset
+  // nothing is passed and the package raises its own "Missing credentials"
+  // exactly as before. What it changes is the runtime with no `process` at all,
+  // where the package's own lookup silently finds nothing and no binding —
+  // however correctly the operator set it — could ever reach the model.
+  if (spec.apiKeyEnv) {
+    const apiKey = readRuntimeEnv(spec.apiKeyEnv)
+    if (apiKey) constructorOptions.apiKey = apiKey
   }
 
   if (options.provider === "openai") {

@@ -135,7 +135,21 @@ interface RequestLifetime {
   bodySettled: boolean
   /** Run slots this request claimed that have not been released yet. */
   pendingRuns: number
-  disposed: boolean
+  /** Body settled AND every run released: nothing more can reference this. */
+  settled: boolean
+  /**
+   * This request's own shutdown signal source, created on first use.
+   *
+   * Per request rather than per handler because an AbortController is an I/O
+   * object on workerd: one created while serving request A throws
+   * "Cannot perform I/O on behalf of a different request" the moment request B
+   * touches it — and since a worker builds its handler inside the FIRST
+   * request (global scope refuses to construct an AbortController at all), a
+   * handler-scoped one made every request after the first fail. Dropped in
+   * `maybeSettle`, which is what keeps the live set from growing once per
+   * request forever.
+   */
+  shutdownController?: AbortController
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +298,22 @@ export async function createRuntimeFetchHandler(
     activeRequests: 0,
     closed: false,
   }
+  // Shutdown is represented twice, and the split is the whole fix for workerd.
+  //
+  //  • `shutdownReason` is a PLAIN VALUE. Every "are we shutting down?" test
+  //    reads this, so no request has to touch an AbortSignal that belongs to
+  //    another request's I/O context;
+  //  • the signal itself is minted PER REQUEST by `getShutdownSignal` below and
+  //    registered here, so `close()` can still abort all of them at once.
+  //
+  // `shutdownController` survives only as the handler's public handle (nothing
+  // in the request path reads it any more). It stays because it is part of the
+  // exported RuntimeFetchHandler shape; on workerd it is constructed inside the
+  // first request and then never touched again, which is harmless.
   const shutdownController = new AbortController()
+  let shutdownReason: Error | undefined
+  /** Per-request shutdown sources that may still have listeners attached. */
+  const liveShutdownControllers = new Set<AbortController>()
 
   // Process-local in-flight run tracking: enables the concurrency gate, the
   // per-run abort signal, and POST /threads/:id/cancel. Scoped to this handler
@@ -326,9 +355,16 @@ export async function createRuntimeFetchHandler(
    * already draws exactly this distinction by draining on the run registry as
    * well as on activeRequests; disposal adopts the same rule.
    */
-  const maybeDispose = (lifetime: RequestLifetime): void => {
-    if (lifetime.disposed || !lifetime.bodySettled || lifetime.pendingRuns > 0) return
-    lifetime.disposed = true
+  const maybeSettle = (lifetime: RequestLifetime): void => {
+    if (lifetime.settled || !lifetime.bodySettled || lifetime.pendingRuns > 0) return
+    lifetime.settled = true
+    // Both halves fire under the SAME condition, and that is deliberate: the
+    // request's shutdown signal must stay abortable for exactly as long as its
+    // stores must stay open — until the body has settled and every run it
+    // started has released. Dropping it earlier would leave a detached run that
+    // `close()` can no longer stop, so the drain would sit on it until the
+    // deadline instead of unwinding promptly.
+    if (lifetime.shutdownController) liveShutdownControllers.delete(lifetime.shutdownController)
     const dispose = lifetime.stores.dispose
     if (!dispose) return
     const running = (async () => {
@@ -345,20 +381,54 @@ export async function createRuntimeFetchHandler(
   const settleBody = (lifetime: RequestLifetime | undefined): void => {
     if (!lifetime) return
     lifetime.bodySettled = true
-    maybeDispose(lifetime)
+    maybeSettle(lifetime)
+  }
+
+  /**
+   * This request's shutdown signal — the one to hand `runRegistry.begin`.
+   *
+   * Memoized on the lifetime so a request that starts several runs composes
+   * them all off one controller, exactly as the single handler-scoped
+   * controller used to. Already-aborted when the handler is closing, which is
+   * what `begin` checks synchronously, so a request that slips past the
+   * `acceptingRequests` gate still gets a dead run rather than a live one.
+   *
+   * A request with no lifetime cannot happen from `fetch` (one is always
+   * installed before dispatch); the fallback keeps this total for any caller
+   * that reaches a route table by another path.
+   */
+  const getShutdownSignal = (request: Request): AbortSignal => {
+    const lifetime = perRequest.get(request)
+    if (!lifetime) {
+      const orphan = new AbortController()
+      if (shutdownReason) orphan.abort(shutdownReason)
+      return orphan.signal
+    }
+    let controller = lifetime.shutdownController
+    if (!controller) {
+      controller = new AbortController()
+      lifetime.shutdownController = controller
+      if (shutdownReason) controller.abort(shutdownReason)
+      else if (!lifetime.settled) liveShutdownControllers.add(controller)
+    }
+    return controller.signal
   }
 
   /**
    * The run registry a request's route work claims its slot from.
    *
-   * Requests with nothing to dispose — every node caller — get the shared
-   * registry itself, unwrapped: no accounting, no behavior change. Otherwise
-   * the wrapper counts the slots this request holds so `maybeDispose` can wait
-   * for route work that outlives the response.
+   * The wrapper counts the slots THIS request holds, so `maybeSettle` can wait
+   * for route work that outlives the response before it disposes the request's
+   * stores or drops its shutdown signal.
+   *
+   * It wraps for every request, not only for requests with stores to dispose:
+   * the shutdown-signal half applies to node callers too, and the counting is
+   * transparent — same handle, same idempotent release, same `activeCount`,
+   * `cancel` and `has` straight through to the shared registry.
    */
   const getRunRegistry = (request: Request): RunRegistry => {
     const lifetime = perRequest.get(request)
-    if (!lifetime?.stores.dispose) return runRegistry
+    if (!lifetime) return runRegistry
     return {
       activeCount: () => runRegistry.activeCount(),
       begin: (threadId, shutdownSignal) => {
@@ -377,7 +447,7 @@ export async function createRuntimeFetchHandler(
             if (released) return
             released = true
             lifetime.pendingRuns--
-            maybeDispose(lifetime)
+            maybeSettle(lifetime)
           },
           signal: handle.signal,
         }
@@ -418,7 +488,7 @@ export async function createRuntimeFetchHandler(
     registry,
     resumeClaims,
     ...(sandboxManager ? { sandboxManager } : {}),
-    signal: shutdownController.signal,
+    getShutdownSignal,
     // Boot manifest → route execution derives the subagents descriptor maps
     // from it with zero entry-file imports.
     ...(options.modules ? { staticModules: options.modules } : {}),
@@ -438,16 +508,18 @@ export async function createRuntimeFetchHandler(
       // Inside the try on purpose: a factory that throws (a pool that cannot
       // connect) must become a 500 through the handler below, not leak the
       // in-flight slot and wedge close()'s drain.
-      if (options.requestStores) {
-        lifetime = {
-          bodySettled: false,
-          disposed: false,
-          pendingRuns: 0,
-          stores: await options.requestStores(request),
-        }
-        perRequest.set(request, lifetime)
+      lifetime = {
+        bodySettled: false,
+        pendingRuns: 0,
+        settled: false,
+        // `{}` for a caller with no per-request stores — every field then falls
+        // through to the boot-resolved instance exactly as before. Installed
+        // UNCONDITIONALLY now because the lifetime also carries this request's
+        // shutdown controller, which every caller needs.
+        stores: options.requestStores ? await options.requestStores(request) : {},
       }
-      const response = await dispatch(routes, request, shutdownController.signal)
+      perRequest.set(request, lifetime)
+      const response = await dispatch(routes, request)
       const body = response.body
       if (body && isEventStream(response.headers.get("content-type"))) {
         // The Response exists but its SSE body is still streaming. Hold the
@@ -458,7 +530,7 @@ export async function createRuntimeFetchHandler(
         // Disposal chains onto the SAME settle hook, never onto `fetch`
         // resolving: an SSE turn is still streaming at that point, and ending
         // a pool mid-stream breaks the tail of every streaming turn. Settling
-        // the body only ARMS disposal — see maybeDispose for the run half.
+        // the body only ARMS disposal — see maybeSettle for the run half.
         const tracked = new Response(
           trackStreamSettled(body, () => {
             state.activeRequests--
@@ -474,7 +546,7 @@ export async function createRuntimeFetchHandler(
       }
       return response
     } catch (error) {
-      if (shutdownController.signal.aborted) {
+      if (shutdownReason) {
         return Response.json(
           createRequestErrorBody("Request canceled during server shutdown", {
             error: error instanceof Error ? error.message : String(error),
@@ -523,7 +595,13 @@ export async function createRuntimeFetchHandler(
 
     state.acceptingRequests = false
     state.closed = true
-    shutdownController.abort(new Error("Runtime server shutting down"))
+    shutdownReason = new Error("Runtime server shutting down")
+    // The public handle, plus every request whose work may still be listening.
+    // Draining below is unchanged; aborting here is only what makes in-flight
+    // runs unwind promptly instead of sitting until the deadline.
+    shutdownController.abort(shutdownReason)
+    for (const controller of liveShutdownControllers) controller.abort(shutdownReason)
+    liveShutdownControllers.clear()
 
     if (sandboxReaper) clearInterval(sandboxReaper)
 
@@ -649,7 +727,15 @@ function buildRouteTable(ctx: {
   readonly registry: RuntimeRegistry
   readonly resumeClaims: PendingResumeClaims
   readonly sandboxManager?: SandboxManager
-  readonly signal: AbortSignal
+  /**
+   * This request's shutdown signal, minted per request rather than shared.
+   *
+   * A single handler-scoped AbortSignal cannot work here: on workerd it is an
+   * I/O object bound to whichever request constructed it, so every later
+   * request throws on touching it. Route handlers call this with their own
+   * `request` and forward the result exactly as they forwarded the old one.
+   */
+  readonly getShutdownSignal: (request: Request) => AbortSignal
   readonly staticModules?: DawnStaticModules
 }): RouteMatcher[] {
   const {
@@ -662,9 +748,9 @@ function buildRouteTable(ctx: {
     getThreadsStore,
     middleware,
     registry,
+    getShutdownSignal,
     resumeClaims,
     sandboxManager,
-    signal,
     staticModules,
   } = ctx
 
@@ -820,7 +906,7 @@ function buildRouteTable(ctx: {
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
           runRegistry: getRunRegistry(request),
-          signal,
+          signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
@@ -847,7 +933,7 @@ function buildRouteTable(ctx: {
           runRegistry: getRunRegistry(request),
           threadsStore: getThreadsStore(request),
           ...(sandboxManager ? { sandboxManager } : {}),
-          signal,
+          signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
           request,
           routeKey: params.routeId ?? "",
@@ -912,7 +998,7 @@ function buildRouteTable(ctx: {
           request,
           runRegistry: getRunRegistry(request),
           ...(sandboxManager ? { sandboxManager } : {}),
-          signal,
+          signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
@@ -967,7 +1053,7 @@ function buildRouteTable(ctx: {
           request,
           runRegistry: getRunRegistry(request),
           ...(sandboxManager ? { sandboxManager } : {}),
-          signal,
+          signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
@@ -983,11 +1069,7 @@ function buildRouteTable(ctx: {
 // Dispatcher
 // ---------------------------------------------------------------------------
 
-async function dispatch(
-  routes: RouteMatcher[],
-  request: Request,
-  _signal: AbortSignal,
-): Promise<Response> {
+async function dispatch(routes: RouteMatcher[], request: Request): Promise<Response> {
   const method = request.method
   const pathname = new URL(request.url).pathname
 

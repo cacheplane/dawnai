@@ -206,6 +206,46 @@ jobs:
       - name: Real-Postgres storage tests
         run: DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/postgres-storage test
 
+  edge-workerd:
+    runs-on: ubuntu-latest
+    # Postgres + a wsproxy container, plus `wrangler dev` booting real workerd.
+    # 30 minutes leaves headroom for a cold image pull and the workerd binary
+    # download without masking a hung startup.
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        # The workerd binary arrives through wrangler's postinstall, which pnpm
+        # 10 blocks unless the package is in `onlyBuiltDependencies` — it is, in
+        # pnpm-workspace.yaml. Without that the lane fails with no binary to exec.
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        # Full topological build, not a filtered one: the lane builds a fixture
+        # app with `dawn build` and then resolves @dawn-ai/* from dist exactly as
+        # a deployed bundle does, so every workspace package must be compiled
+        # first (same #320 lesson as inspector-e2e below).
+        run: pnpm build
+
+      - name: Real-workerd edge lane
+        run: DAWN_TEST_WORKERD=1 pnpm --filter @dawn-ai/cli test workerd-lane
+
   inspector-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20
