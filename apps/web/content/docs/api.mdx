@@ -966,7 +966,7 @@ import {
 } from "@dawn-ai/postgres-storage"
 ```
 
-The stores talk to Postgres through the standard `pg` driver, which opens a TCP connection. Node, Bun, and Vercel functions can use it directly; Cloudflare Workers provides no raw TCP socket, so a Workers deploy needs Hyperdrive or an HTTP-based driver in front of the database. Dawn does not currently ship a verified Workers configuration for these stores.
+The stores take a pool rather than opening connections themselves, and the pool is typed structurally — so the driver is yours to pick. `pg` opens a TCP connection and works on Node, Bun, and Vercel functions. Cloudflare Workers provides no raw TCP socket, so a Workers deploy injects a `@neondatabase/serverless` WebSocket pool instead; `dawn build`'s [`hono` target](/docs/deployment#the-hono-build-target) generates exactly that wiring, and a gated CI lane exercises it inside real workerd. Hyperdrive should also work but is untested.
 
 See [Configuration](/docs/configuration#postgres-backend) for the shared-pool setup, teardown ownership, and the storage-shape limits.
 
