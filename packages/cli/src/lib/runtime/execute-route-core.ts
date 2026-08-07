@@ -740,6 +740,7 @@ export async function prepareRouteExecution(
         readonly mode?: PermissionMode
         readonly allow?: Readonly<Record<string, readonly string[]>>
         readonly deny?: Readonly<Record<string, readonly string[]>>
+        readonly store?: PermissionsStore
       }
     | undefined
   let configCheckpointer: BaseCheckpointSaver | undefined
@@ -803,15 +804,29 @@ export async function prepareRouteExecution(
   // (dev) re-loads `.dawn/permissions.json` each request so HITL "Always"
   // grants written mid-process still apply; absent both, construct+load fresh
   // (the pre-existing per-request behavior).
+  //
+  // A config-supplied `permissions.store` is honored here for the same reason
+  // `checkpointer` and `threadsStore` are above: otherwise the store an app
+  // configures would apply on the HTTP path (via resolvePermissionsStore) but
+  // silently NOT on this one, which is the sort of divergence that only shows
+  // up in production. The store owns its own mode/allow/deny, so the sibling
+  // config fields are deliberately not re-applied to it.
   const providedPermissions = options.permissionsStore
-  const permissionsStore: PermissionsStore =
-    typeof providedPermissions === "function"
-      ? await providedPermissions()
-      : (providedPermissions ??
-        (await requireFallbacks(fallbacks, "permissionsStore").buildPermissionsStore(
-          options.appRoot,
-          permissionsConfig,
-        )))
+  const configPermissionsStore = permissionsConfig?.store
+  let permissionsStore: PermissionsStore
+  if (typeof providedPermissions === "function") {
+    permissionsStore = await providedPermissions()
+  } else if (providedPermissions) {
+    permissionsStore = providedPermissions
+  } else if (configPermissionsStore) {
+    await configPermissionsStore.load()
+    permissionsStore = configPermissionsStore
+  } else {
+    permissionsStore = await requireFallbacks(fallbacks, "permissionsStore").buildPermissionsStore(
+      options.appRoot,
+      permissionsConfig,
+    )
+  }
 
   const workspaceFsOptions = {
     workspaceRoot: sandboxWorkspaceRoot ?? pureJoin(options.appRoot, "workspace"),
