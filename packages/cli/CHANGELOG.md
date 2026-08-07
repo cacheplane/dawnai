@@ -21,7 +21,7 @@
   commander's parsing layer. Added tests that drive the real program.
 
   **A fresh `create-dawn-ai-app` research app failed `npm test` out of the box.** The
-  research template's `test/research.test.ts.template` is kept byte-identical to the
+  research template's `test/research.test.ts.template` is kept character-for-character identical to the
   dogfooded `examples/research/server/test/research.test.ts`, but the Memory Inspector
   change that reworded CLI approve output to `approved <id> (activated)` updated only the
   example. The template kept asserting `Approved: <id>`, so the default template — the one
