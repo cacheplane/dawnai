@@ -4,7 +4,7 @@
 
 **Goal:** Recover Docker thread sandboxes when PID saturation prevents OCI from starting a command, while preserving workspace data and making the real-Docker containment lane deterministic.
 
-**Architecture:** `docker-exec.ts` narrowly classifies observed OCI PID-exhaustion startup results and uses an opaque lifecycle token plus a single retry closure. A keyed coordinator serializes Docker lifecycle mutations per thread; `docker-sandbox.ts` removes only the keeper, recreates it with the original policy and a provider-owned signal, retains the named volume, and invokes retry while the lifecycle fence is still held.
+**Architecture:** `docker-exec.ts` narrowly classifies observed OCI PID-exhaustion startup results and uses an opaque lifecycle token plus a single retry closure. A keyed fair shared/exclusive coordinator permits concurrent container operations while making lifecycle mutations wait for admitted work and block later starts; `docker-sandbox.ts` removes only the keeper, recreates it with the original policy and a provider-owned signal, retains the named volume, and invokes retry while the exclusive lifecycle fence is still held.
 
 **Tech Stack:** TypeScript 7, Node.js 24, Vitest 4, Docker CLI, Changesets, pnpm.
 
@@ -13,7 +13,7 @@
 ## File map
 
 - `packages/sandbox/src/docker/docker-exec.ts`: private PID-exhaustion classifier and one-shot retry orchestration.
-- `packages/sandbox/src/docker/thread-lifecycle.ts`: keyed lifecycle serialization for Docker thread resources.
+- `packages/sandbox/src/docker/thread-lifecycle.ts`: keyed shared/exclusive lifecycle coordination for Docker thread resources.
 - `packages/sandbox/src/docker/docker-sandbox.ts`: volume-preserving container recycle callback and lifecycle errors.
 - `packages/sandbox/test/docker-backends.test.ts`: classifier, active-signal, and retry-boundary unit tests.
 - `packages/sandbox/test/docker-thread-lifecycle.test.ts`: queue ordering, failure isolation, per-thread parallelism, and cleanup tests.
@@ -125,14 +125,19 @@ Expected: recovery assertions fail because the provider supplies no callback.
 
 - [ ] **Step 4: Implement the provider recovery callback**
 
-Add a focused keyed coordinator whose `run(threadId, operation)` serializes
-operations for one key, permits different keys to run concurrently, continues
-after a rejected operation, and deletes idle queue entries. Expose a small
-internal pending-key count so cleanup is asserted directly rather than inferred
-from timing. Unit-test those properties before wiring it into the provider.
+Add a focused keyed fair shared/exclusive coordinator. Shared operations for one
+key run concurrently until an exclusive operation queues; that exclusive waits
+for admitted shared work to drain and blocks later shared starts. Exclusive
+operations remain FIFO, different keys run concurrently, rejection does not
+poison the queue, and idle queue entries are deleted. Expose a small internal
+pending-key count so cleanup is asserted directly rather than inferred from
+timing. Unit-test those properties before wiring it into the provider.
 
 Run `acquire`, recycle, `release`, and `destroy` through that coordinator for the
-entire Docker lifecycle operation. Replace recovery-only in-flight/closing
+entire exclusive Docker lifecycle operation. Run exec and filesystem Docker
+calls under shared leases so lifecycle mutation cannot remove the keeper under
+admitted work; preserve concurrency among those shared calls. The recovery retry
+runs directly while its exclusive lease is held. Replace recovery-only in-flight/closing
 bookkeeping with lifecycle state identity plus keeper generation. Use an opaque
 token and provider-owned retry closure so stale old-lifecycle commands do not
 retry inside a newly acquired keeper. Hold the coordinator through the retry,
@@ -164,6 +169,9 @@ destroy cannot remove the new lifecycle's volume. Also model the canceled
 caller's retry accurately: it rejects while an active waiter succeeds. Gate a
 retry and prove queued cleanup starts only after that retry settles. Cover failed
 recreation followed by fresh acquire and prove the old token stays retired.
+Hold an admitted successful peer exec while a PID failure queues recovery;
+assert replacement waits for the peer, then completes before any later exec is
+admitted.
 Add policy-ownership tests: equivalent reacquire succeeds; different effective
 keeper policy rejects before Docker mutation; recovery from an original handle
 retains its exact launch flags and ownership. Add a spawn-rejection recovery

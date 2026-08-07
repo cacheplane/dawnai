@@ -95,10 +95,13 @@ the classifier markers.
 
 ### Per-thread lifecycle coordinator
 
-The Docker provider owns a keyed serial coordinator. For a given thread,
-`acquire`, PID-exhaustion recycle, `release`, and `destroy` run exclusively and
-to completion. Operations for different threads remain independent, and normal
-exec/filesystem work is not serialized.
+The Docker provider owns a keyed fair shared/exclusive coordinator. Normal exec
+and filesystem operations take shared leases, so admitted work for one thread
+remains concurrent. `acquire`, PID-exhaustion recycle, `release`, and `destroy`
+take exclusive leases and run to completion. An exclusive waiter starts only
+after admitted shared work drains, and its queue position blocks later shared
+work from entering the keeper. Operations for different threads remain
+independent.
 
 The coordinator is the long-term lifecycle boundary rather than a recovery-only
 lock. It prevents an acquire from observing or returning a keeper while an older
@@ -108,11 +111,15 @@ replaces the keeper and advances its generation; later queued recoveries see the
 advanced generation and run their own retry against that replacement without
 another remove/create. Each recovery keeps the fence through its retry, so a
 queued release/destroy/acquire cannot replace the deterministic keeper name
-between recovery and the command retry.
+between recovery and the command retry. This same fence prevents recycle from
+force-removing a keeper under an admitted command or filesystem operation. The
+recovery retry runs directly under the exclusive lease rather than attempting a
+nested shared lease.
 
-Lifecycle operations are FIFO by invocation order. The keyed queue removes its
-entry when the last queued operation finishes, and a rejected operation does not
-poison later work for that thread.
+Exclusive operations are FIFO by invocation order. Consecutive shared waiters
+ahead of the next exclusive operation are admitted together. The keyed queue
+removes its entry when the last operation finishes, and a rejected operation
+does not poison later work for that thread.
 
 ### Volume-preserving recycle
 
@@ -189,6 +196,9 @@ sandbox from servicing a new command.
 - Failed container removal surfaces as sandbox unavailable and prevents a retry.
 - Concurrent failures for one keeper cause one replacement; each safe waiter
   retries only after recreation completes and while holding the lifecycle fence.
+- Recovery waits for already-admitted exec/filesystem work to settle and blocks
+  later work from entering until replacement and retry complete, so recycling
+  cannot kill a successful peer command or race a new Docker exec start.
 - A delayed failure from a released/destroyed lifecycle neither removes the new
   keeper nor retries the old command in it.
 - Concurrent reacquire waits for release/destroy cleanup, then creates a fresh
@@ -214,9 +224,9 @@ fixed assumption about the instant the short-lived children release their PID
 slots. This proves containment and eventual recovery without racing Docker.
 
 The runtime recovery path is separately exercised against real Docker by
-holding the PID cgroup at its limit, issuing a command through the acquired
-handle, and asserting that the command succeeds after recycle while a workspace
-sentinel remains present.
+holding the PID cgroup at its limit, issuing a concurrent command wave through
+the acquired handle, and asserting that every command succeeds after recycle
+while a workspace sentinel remains present.
 
 ### Verification
 

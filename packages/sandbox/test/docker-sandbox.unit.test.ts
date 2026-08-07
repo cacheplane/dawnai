@@ -722,9 +722,9 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
       { command: "echo second" },
       { workspaceRoot: secondHandle.workspaceRoot, signal: secondSignal },
     )
-    const firstResult = await firstResultPromise
+    await secondStarted
     releaseSecondFailure()
-    const secondResult = await secondResultPromise
+    const [firstResult, secondResult] = await Promise.all([firstResultPromise, secondResultPromise])
 
     expect(firstResult).toEqual({ stdout: "first recovered", stderr: "", exitCode: 0 })
     expect(secondResult).toEqual({ stdout: "second recovered", stderr: "", exitCode: 0 })
@@ -742,6 +742,115 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     const keeperRuns = runs.filter((run) => run.args[0] === "run" && run.args.includes("-d"))
     expect(keeperRuns).toHaveLength(2)
     expect(keeperRuns[1]?.signal).toBe(removals[0]?.signal)
+  })
+
+  test("waits for an admitted peer exec before replacing the keeper", async () => {
+    const heldStarted = deferred()
+    const releaseHeld = deferred()
+    const pidFailureReturned = deferred()
+    const events: string[] = []
+    let containerExists = false
+    let volumeExists = false
+    let recoveryAttempts = 0
+    const docker: Docker = {
+      run: async (args) => {
+        if (args[0] === "ps") {
+          return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return {
+            stdout: volumeExists ? "volume" : "",
+            stderr: "",
+            exitCode: volumeExists ? 0 : 1,
+          }
+        }
+        if (args[0] === "rm") {
+          events.push("remove")
+          containerExists = false
+          return { stdout: "removed", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("--rm")) {
+          volumeExists = true
+          return { stdout: "initialized", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("-d")) {
+          events.push(containerExists ? "unexpected-create" : "create")
+          containerExists = true
+          volumeExists = true
+          return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async (_container, command) => {
+        const shellCommand = command.at(-1) ?? ""
+        if (shellCommand.includes("echo held")) {
+          events.push("held:start")
+          heldStarted.resolve()
+          await releaseHeld.promise
+          events.push("held:end")
+          return { stdout: "held\n", stderr: "", exitCode: 0 }
+        }
+        if (shellCommand.includes("echo late")) {
+          events.push("late:start")
+          return { stdout: "late\n", stderr: "", exitCode: 0 }
+        }
+        recoveryAttempts += 1
+        events.push(`recovery:${recoveryAttempts}`)
+        if (recoveryAttempts === 1) {
+          pidFailureReturned.resolve()
+          return {
+            stdout: "",
+            stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+            exitCode: 1,
+          }
+        }
+        return { stdout: "recovered\n", stderr: "", exitCode: 0 }
+      },
+    }
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    const handle = await p.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "deny" } },
+      signal: signal(),
+    })
+    events.length = 0
+
+    const held = handle.exec.runCommand(
+      { command: "echo held" },
+      { workspaceRoot: handle.workspaceRoot, signal: signal() },
+    )
+    await heldStarted.promise
+    const recovering = handle.exec.runCommand(
+      { command: "echo recovering" },
+      { workspaceRoot: handle.workspaceRoot, signal: signal() },
+    )
+    await pidFailureReturned.promise
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const late = handle.exec.runCommand(
+      { command: "echo late" },
+      { workspaceRoot: handle.workspaceRoot, signal: signal() },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(events).toEqual(["held:start", "recovery:1"])
+    releaseHeld.resolve()
+
+    await expect(held).resolves.toEqual({ stdout: "held\n", stderr: "", exitCode: 0 })
+    await expect(recovering).resolves.toEqual({
+      stdout: "recovered\n",
+      stderr: "",
+      exitCode: 0,
+    })
+    await expect(late).resolves.toEqual({ stdout: "late\n", stderr: "", exitCode: 0 })
+    expect(events).toEqual([
+      "held:start",
+      "recovery:1",
+      "held:end",
+      "remove",
+      "create",
+      "recovery:2",
+      "late:start",
+    ])
   })
 
   test.each(["release", "destroy"] as const)(
@@ -808,13 +917,23 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
       )
       await execStarted.promise
 
-      if (operation === "release") await p.release("abc")
-      else await p.destroy("abc")
-      expect(containerExists).toBe(false)
-      const newHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+      const cleanupPromise = operation === "release" ? p.release("abc") : p.destroy("abc")
+      let reacquired = false
+      const newHandlePromise = p
+        .acquire({ threadId: "abc", policy, signal: signal() })
+        .then((handle) => {
+          reacquired = true
+          return handle
+        })
+      await Promise.resolve()
+      expect(containerExists).toBe(true)
+      expect(reacquired).toBe(false)
+
+      releaseFailure.resolve()
+      await cleanupPromise
+      const newHandle = await newHandlePromise
       expect(newHandle.workspaceRoot).toBe("/workspace")
       expect(containerExists).toBe(true)
-      releaseFailure.resolve()
       const oldResult = await oldResultPromise
 
       expect(oldResult).toEqual(originalFailure)
@@ -1101,14 +1220,20 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
       { command: "echo second" },
       { workspaceRoot: secondHandle.workspaceRoot, signal: secondController.signal },
     )
-    const firstRejected = expect(firstResultPromise).rejects.toThrow("first caller retry aborted")
+    const firstOutcome = firstResultPromise.then(
+      () => new Error("first caller retry unexpectedly resolved"),
+      (error: unknown) => error,
+    )
 
+    await secondStarted.promise
+    releaseSecondFailure.resolve()
     await replacementStarted.promise
     firstController.abort()
-    releaseSecondFailure.resolve()
     await Promise.resolve()
     releaseReplacement.resolve()
-    await firstRejected
+    const firstError = await firstOutcome
+    expect(firstError).toBeInstanceOf(Error)
+    expect((firstError as Error).message).toContain("first caller retry aborted")
     const secondResult = await secondResultPromise
 
     expect(secondResult.stdout).toBe("second recovered")
@@ -1233,6 +1358,7 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     "%s failure retires lifecycle state before fresh acquire",
     async (failure) => {
       const delayedStarted = deferred()
+      const leaderFailureReturned = deferred()
       const releaseDelayedFailure = deferred()
       const pidFailure = {
         stdout: "partial",
@@ -1297,7 +1423,10 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
             await releaseDelayedFailure.promise
             return pidFailure
           }
-          if (attempt === 1) return pidFailure
+          if (attempt === 1) {
+            leaderFailureReturned.resolve()
+            return pidFailure
+          }
           return { stdout: `${name} retried`, stderr: "", exitCode: 0 }
         },
       }
@@ -1311,12 +1440,13 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
       )
       await delayedStarted.promise
 
-      await expect(
-        firstHandle.exec.runCommand(
-          { command: "echo leader" },
-          { workspaceRoot: firstHandle.workspaceRoot, signal: signal() },
-        ),
-      ).rejects.toMatchObject({
+      const leaderResultPromise = firstHandle.exec.runCommand(
+        { command: "echo leader" },
+        { workspaceRoot: firstHandle.workspaceRoot, signal: signal() },
+      )
+      await leaderFailureReturned.promise
+      releaseDelayedFailure.resolve()
+      await expect(leaderResultPromise).rejects.toMatchObject({
         code: "DAWN_E2001",
         message: expect.stringMatching(
           failure === "recreation"
@@ -1331,7 +1461,6 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
         signal: signal(),
       })
       expect(freshHandle.workspaceRoot).toBe("/workspace")
-      releaseDelayedFailure.resolve()
       const delayedResult = await delayedResultPromise
 
       expect(delayedResult).toEqual(pidFailure)

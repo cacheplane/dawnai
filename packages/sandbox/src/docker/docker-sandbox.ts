@@ -251,7 +251,7 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
     token: unknown,
     retry: () => Promise<SpawnResult>,
   ) =>
-    lifecycle.run(threadId, async () => {
+    lifecycle.runExclusive(threadId, async () => {
       if (!isRecoveryAttempt(token)) return undefined
       const { state, generation } = token
       if (lifecycleStates.get(threadId) !== state || generation > state.generation) {
@@ -296,7 +296,7 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
   return {
     name: "docker",
     acquire({ threadId, policy, signal }): Promise<SandboxHandle> {
-      return lifecycle.run(threadId, async () => {
+      return lifecycle.runExclusive(threadId, async () => {
         const requestedLaunchConfig = resolveLaunchConfig(policy)
         const requestedLaunchConfigKey = launchConfigKey(requestedLaunchConfig)
         const existingState = lifecycleStates.get(threadId)
@@ -321,8 +321,11 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
         lifecycleStates.set(threadId, state)
         return {
           threadId,
-          filesystem: dockerFilesystem(docker, container),
+          filesystem: dockerFilesystem(docker, container, (operation) =>
+            lifecycle.runShared(threadId, operation),
+          ),
           exec: dockerExec(docker, container, {
+            runWithExecLease: (operation) => lifecycle.runShared(threadId, operation),
             ...(policy.resources?.timeoutMs !== undefined
               ? { timeoutMs: policy.resources.timeoutMs }
               : {}),
@@ -340,13 +343,13 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
       })
     },
     release(threadId) {
-      return lifecycle.run(threadId, async () => {
+      return lifecycle.runExclusive(threadId, async () => {
         lifecycleStates.delete(threadId)
         await docker.run(["rm", "-f", containerName(threadId)]).catch(() => {})
       })
     },
     destroy(threadId) {
-      return lifecycle.run(threadId, async () => {
+      return lifecycle.runExclusive(threadId, async () => {
         lifecycleStates.delete(threadId)
         await docker.run(["rm", "-f", containerName(threadId)]).catch(() => {})
         await docker.run(["volume", "rm", volumeName(threadId)]).catch(() => {})

@@ -4,6 +4,7 @@ import type { Docker, SpawnResult } from "./docker-cli.js"
 
 interface DockerExecOptions {
   readonly timeoutMs?: number
+  readonly runWithExecLease?: <T>(operation: () => Promise<T>) => Promise<T>
   readonly pidExhaustionRecovery?: {
     readonly captureToken: () => unknown
     readonly recoverAndRetry: (
@@ -59,7 +60,7 @@ export function dockerExec(
       const timeoutSecs =
         opts.timeoutMs !== undefined ? Math.ceil(opts.timeoutMs / 1000) : undefined
       const argv = timeoutSecs !== undefined ? ["timeout", `${timeoutSecs}s`, ...shArgs] : shArgs
-      const execute = async () => {
+      const attempt = async () => {
         const result = await docker.exec(container, argv, { signal: ctx.signal })
         const started = result.stdout.startsWith(startedPrefix)
         return {
@@ -69,6 +70,8 @@ export function dockerExec(
           started,
         }
       }
+      const execute = () =>
+        opts.runWithExecLease !== undefined ? opts.runWithExecLease(attempt) : attempt()
       const recoveryToken = opts.pidExhaustionRecovery?.captureToken()
       const firstAttempt = await execute()
       let r = firstAttempt.result
@@ -82,7 +85,9 @@ export function dockerExec(
       ) {
         const recovered = await opts.pidExhaustionRecovery.recoverAndRetry(
           recoveryToken,
-          async () => (await execute()).result,
+          // Recovery owns the exclusive lifecycle lease, so its retry must run
+          // directly rather than attempting to acquire a nested shared lease.
+          async () => (await attempt()).result,
         )
         if (recovered !== undefined) r = recovered
       }
