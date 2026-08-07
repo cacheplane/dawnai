@@ -762,6 +762,9 @@ importers:
       '@dawn-ai/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@dawn-ai/sqlite-storage':
+        specifier: workspace:*
+        version: link:../sqlite-storage
       '@dawn-ai/workspace':
         specifier: workspace:*
         version: link:../workspace
