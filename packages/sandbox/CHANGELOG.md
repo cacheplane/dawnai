@@ -1,5 +1,13 @@
 # @dawn-ai/sandbox
 
+## 0.8.17
+
+### Patch Changes
+
+- Updated dependencies [713797f]
+  - @dawn-ai/sdk@0.8.17
+  - @dawn-ai/workspace@0.8.17
+
 ## 0.8.16
 
 ### Patch Changes
