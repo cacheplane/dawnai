@@ -308,6 +308,11 @@ const userFacingRoots = [
   "apps/web/content",
   "docs",
   "packages",
+  // Changesets become CHANGELOG prose verbatim when the Version PR runs. Scanning
+  // them here is what makes a banned phrase fail on the PR that writes it, rather
+  // than on main after the release bakes it in — the failure mode that took main
+  // red when a changeset described a template as byte-identical to its source.
+  ".changeset",
 ]
 
 const forbiddenContent = [
@@ -364,7 +369,12 @@ const forbiddenContent = [
     // kept byte-identical to its source.
     pattern: /byte-identical/,
     message: "overstates local/prod protocol or deployment parity",
-    shouldCheck: (filePath) => !/CHANGELOG\.md$/.test(filePath),
+    // Exempt in CHANGELOGs and in the changesets they are generated from — the
+    // two must agree, or a phrase would be rejected at authoring time and then
+    // permitted in the file it becomes. See the rule above for why this one
+    // phrase is exempt at all while the genuine parity claims are not.
+    shouldCheck: (filePath) =>
+      !/CHANGELOG\.md$/.test(filePath) && !/[\\/]\.changeset[\\/]/.test(filePath),
   },
   {
     pattern: /auto-bound|auto-registered/,

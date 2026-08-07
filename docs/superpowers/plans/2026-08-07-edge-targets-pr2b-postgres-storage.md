@@ -1,0 +1,247 @@
+# Edge Targets PR 2b — `@dawn-ai/postgres-storage` Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A new package giving Dawn durable Postgres-backed state — checkpointer, threads store, permissions store — so an edge deploy (no filesystem, no SQLite) is fully durable from one `DATABASE_URL`.
+
+**Architecture:** Clone `@dawn-ai/memory-pgvector`'s shape and **implement all three stores directly over `pg`**. The Task 1 spike REJECTED wrapping LangChain's `PostgresSaver` — see the SPIKE RESULT block below. The checkpointer stores the whole `Checkpoint` as one opaque **BYTEA**, exactly as Dawn's SQLite saver stores a BLOB, which is the only shape that round-trips the payloads Dawn actually produces. Behavioral parity with the incumbent SQLite/file stores is established by **conformance kits in `@dawn-ai/testing`, written and proven against the incumbents FIRST**, then run against pg behind a gated lane.
+
+**Tech Stack:** TypeScript strict + `exactOptionalPropertyTypes`, vitest, `pg` 8.22 (already resolved), Testcontainers `postgres:16`, Node 24.
+
+**Spec:** `docs/superpowers/specs/2026-08-05-edge-targets-design.md` (PR2 section). **Survey:** the grounding report is reproduced inline where it matters — no task needs to re-derive it.
+
+**Branch:** `feat/postgres-storage` (cut from `main` at `713797f4`). Pin before dispatching subagents.
+
+**ENVIRONMENT:** Node 24 required — every command needs `export PATH="$HOME/.nvm/versions/node/v24.18.0/bin:$PATH"`. Process-spawning cli suites flake under full-suite parallelism (ENOTEMPTY / "cwd was likely removed"); re-run isolated before calling a regression. Baseline to confirm at Task 1: root `pnpm test` ≈ **1808 passed / 0 failed / 33 skipped**.
+
+**Invariant:** ZERO edits to existing test assertions. Import-path updates and *added* assertions are fine; changing an existing expectation means STOP + report BLOCKED.
+
+**PLATFORM:** POSIX-only. Never add a win32 branch.
+
+---
+
+## SPIKE RESULT (Task 1, DONE) — the wrap is REJECTED
+
+Run against a real `postgres:16` container with `@langchain/langgraph-checkpoint-postgres@1.0.4`. **Implement directly over `pg`; do not wrap.** Evidence:
+
+**Two independent encoding failures, not one.** `PostgresSaver` stores `checkpoint` AND `metadata` as `jsonb`:
+
+| payload | SQLite | Postgres |
+|---|---|---|
+| NUL in a string | lossless | throws `22P05` — `\u0000 cannot be converted to text` |
+| lone surrogate `\ud800` | lossless | throws `22P02` — `Unicode low surrogate must follow a high surrogate` |
+
+The blast radius is wider than `metadata`: the `checkpoint` column is jsonb too, so a channel **name**, a `versions_seen` key, `checkpoint.ts`, and `pending_sends` all fail the same way. Only the `bytea` columns (channel values, `putWrites` values) are immune.
+
+**It is a live vector, not synthetic.** Sandbox stdout flows unmodified into tool results (`packages/sandbox/src/docker/docker-exec.ts:46`, `kubernetes/kube-exec.ts:47`); a `ToolMessage` carrying stdout with a NUL, in the exact metadata shape LangGraph builds, reproduced `sqlite: PUT OK` / `pg: PUT FAILED 22P05`. Failure is loud and transactional (0 orphan rows, pool healthy) — but environment-dependent: fine in `dawn dev` on SQLite, crashes in production on pg.
+
+**A sanitizing serde cannot rescue it**, for three separate reasons: (1) upstream already ships one at `dist/index.js:156-159` and it is DEAD — `JsonPlusSerializer` emits the 6-char escape `\u0000`, never a raw 0x00, so `/\0/g` matches nothing (independently verified); (2) serde injection is structurally impossible because the escape is not idempotent — `_loadMetadata` does `dumpsTyped(row) → loadsTyped(...)`, so a put/read cycle yields `E(M)`, not `M`; (3) sanitizing writes mangled text into the standard schema, forfeiting the ecosystem compatibility that was the only reason to wrap.
+
+**BYTEA round-trips everything** — NUL, lone surrogate, emoji, C0 controls — the same property SQLite's BLOB has. Tested.
+
+**Parity:** 12/13 assertions from Dawn's existing checkpointer cases are identical. The one divergence is a test-shape artifact (`newVersions: {}` causes PostgresSaver to drop `channel_values`, since it externalizes them into `checkpoint_blobs` keyed by version) — not a NUL issue, and it bites a BYTEA impl too, so the kit must pass a realistic `newVersions` or it silently permits the divergence.
+
+**Ordering:** 300 real uuid6 ids ordered identically on both backends under `en_US.utf8`, but mixed-case ASCII proves the collation is locale-sensitive. Since we now own the SQL, use **`COLLATE "C"`** — free, byte-identical to SQLite by construction, no locale dependency. (Only glibc `en_US.utf8` was tested; ICU/`C.UTF-8` inferred, not verified.)
+
+**NEW, and it changes Task 5 regardless of this decision:** `PostgresSaver.setup()` is **not concurrency-safe on a cold database** — 8 concurrent calls on a virgin DB gave 1 success and 7 crashes (`23505` on `pg_type_typname_nsp_index` and on `checkpoint_migrations_pkey`). An edge deploy scaling 0→N cold-starts N processes that all migrate at once. **A memoized in-process `ready()` does not help across processes: migrations MUST take `pg_advisory_xact_lock`.**
+
+**Capabilities Dawn loses by not wrapping:** `list()` `pendingWrites` and `list({filter})`. Dawn calls neither — a grep across `packages/{cli,core,inspector,langgraph}/src` finds only `getTuple` (`pending-interrupts.ts:40`, `runtime-fetch-core.ts:643`); `.list()` is never called. Implement `filter` app-side anyway (deserialize + compare in JS, the same retrieve-then-fuse posture `memory-pgvector` already uses) so the kit's capability flags can be `true` for both backends.
+
+**Known trade to DOCUMENT, not fix:** one opaque BLOB gives up per-channel dedup, so large unchanged channel values repeat in every checkpoint. SQLite has the same property and Dawn has lived with it; it costs more on Postgres (network + TOAST). Not benchmarked.
+
+---
+
+### Task 1: The spike — **DONE**. Result recorded in the SPIKE RESULT block above; the wrap is rejected.
+
+---
+
+### Task 2: Conformance kits in `@dawn-ai/testing`, proven against the incumbents
+
+The real deliverable of this PR. Written and green against SQLite/file **before pg exists**, so the kits describe the contract Dawn already trusts rather than being retrofitted to whatever pg happens to do.
+
+**Files:**
+- Create: `packages/testing/src/threads-conformance.ts`, `permissions-conformance.ts`, `checkpointer-conformance.ts`
+- Modify: `packages/testing/src/index.ts` (export all three)
+- Create: `packages/sqlite-storage/test/threads-conformance.test.ts`, `checkpointer-conformance.test.ts`
+- Create: `packages/permissions/test/permissions-conformance.test.ts`
+
+Follow `packages/testing/src/memory-conformance.ts` (638 LOC) exactly — same signature shape, including the **injected `describe`** so callers can nest the kit inside a gated `describe.skipIf(...)`:
+
+```ts
+export function runThreadsStoreConformance(opts: {
+  readonly name: string
+  readonly makeStore: () => Promise<ThreadsStore> | ThreadsStore   // FRESH empty store per call
+  readonly describe: (name: string, fn: () => void) => void
+  readonly close?: (store: ThreadsStore) => Promise<void> | void
+}): void
+```
+
+- [ ] **Step 1: Threads kit.** Cover every method (`packages/sqlite-storage/src/threads/store.ts:19-31`): create→get round-trip; `getThread` on a missing id → `undefined`; `deleteThread` idempotent; `listThreads` ordered `updated_at DESC`; `updateStatus` changes status AND bumps `updated_at`; `updateMetadata` **shallow**-merges (assert a nested object is REPLACED, not deep-merged); both updates are silent no-ops for a missing thread; `createThread` returns a synthesized object (not a DB re-read); generated ids match `/^t-[0-9a-f]{8}$/`; `metadata` defaults to `{}`; timestamps are ISO strings.
+
+  **Deliberately NOT asserted:** that a duplicate `createThread` throws. SQLite's bare INSERT throws; the pg store will use `ON CONFLICT DO NOTHING` because callers do check-then-create (`runtime-fetch-core.ts:800-803`, `:1020`, `agui-handler.ts:209-211`) which races across instances. Add a kit test asserting **"a duplicate create does not corrupt state"** (either outcome accepted: throws OR returns), with a comment explaining why the stronger assertion is wrong.
+
+- [ ] **Step 2: Permissions kit.** Cover `packages/permissions/src/node.ts`'s state machine: `mode: "bypass"` → `match()` always `"unknown"`; `"non-interactive"` → config only, runtime grants ignored; `"interactive"` → config concatenated with runtime per tool key; deny wins over allow; prefix matching **except** the reserved `"tool"` key which is exact (so `"deploy"` does not match `"deployProd"`); no entries → `"unknown"`; `addAllow` is visible to `match()` after it resolves and is idempotent (adding twice does not duplicate); `load()` is re-callable.
+
+- [ ] **Step 3: Checkpointer kit.** Cover through the API only — **never the tables** (the two backends genuinely differ at the storage layer: SQLite puts the whole Checkpoint in one BLOB and ignores `newVersions`; PostgresSaver externalizes `channel_values` into `checkpoint_blobs` keyed by version). `put`→`getTuple` round-trip incl. `channel_values`; `parentConfig` chain; `putWrites`→ visible in `getTuple().pendingWrites`; `list()` ordering newest-first; `list({limit})`; `list({before})`; `deleteThread` removes everything for that thread and leaves others intact; namespace (`checkpoint_ns`) isolation.
+
+  **Divergences to encode as ALLOWANCES, not assertions:** `list()` `pendingWrites` (SQLite `[]`, pg populated) and `list({filter})` (SQLite ignores, pg honors). Express as a capability flag on the kit options (e.g. `supports: { listPendingWrites?: boolean; listFilter?: boolean }`) so each backend asserts what it actually promises. Document why in the kit's doc comment.
+
+  **Plus BOTH hostile round-trips from the spike** — a NUL inside a string AND a lone surrogate (`\ud800`) — in `metadata` AND in a channel name, so the encoding property is locked forever. **And pass a REALISTIC `newVersions`**: the spike found that `newVersions: {}` lets a backend silently drop `channel_values` and still pass, which would encode SQLite's laxity as contract.
+
+- [ ] **Step 4: Wire the kits to the incumbents and run them.** SQLite threads + checkpointer (in-process, ungated), file permissions (tmpdir, ungated). **They must pass. If a kit test fails against the incumbent, the KIT is wrong — fix the kit, not the store** (unless you have found a real incumbent bug, in which case STOP and report it as a finding).
+
+- [ ] **Step 5: Full verify + commit**
+
+```bash
+git commit -m "test(testing): threads/permissions/checkpointer conformance kits, proven against the sqlite+file incumbents"
+```
+
+---
+
+### Task 3: Package scaffold + every registration
+
+**Files:** new `packages/postgres-storage/{package.json,tsconfig.json,vitest.config.ts,README.md,src/index.ts}` plus the registrations below.
+
+- [ ] **Step 1: Clone `packages/memory-pgvector`'s shape.** `package.json`: version matching the train, `private: false`, `type: module`, MIT, `homepage`/`repository`(with `directory`)/`bugs`, `engines.node: ">=24.0.0"`, `files: ["dist"]`, `types` + single `exports["."]`, `publishConfig.access: "public"`, and exactly the four scripts (`build`/`lint`/`test`/`typecheck`) copied verbatim. Deps: `pg ^8.22.0`, `@dawn-ai/permissions` (workspace, **barrel only** — for `matchPermission` + types). **NOT `@langchain/langgraph-checkpoint-postgres`** — the spike rejected the wrap. Dev: `@dawn-ai/config-typescript`, `@dawn-ai/testing`, `@testcontainers/postgresql ^12.0.4`, `@types/node`, `@types/pg ^8.20.0`. Peers: `@langchain/core` + `@langchain/langgraph-checkpoint`, matching `packages/sqlite-storage`'s posture.
+
+  **`ThreadsStore` type:** it currently lives in `@dawn-ai/sqlite-storage`. Use `import type` ONLY (erased, no runtime edge, no `node:sqlite`). Do NOT add a runtime dependency on sqlite-storage.
+
+- [ ] **Step 2: tsconfig** — copy `packages/memory-pgvector/tsconfig.json` verbatim. `scripts/check-build-cache-config.mjs` REQUIRES `tsBuildInfoFile: "dist/tsconfig.tsbuildinfo"` exactly; `pnpm check:build-cache` enforces it.
+
+- [ ] **Step 3: EVERY registration** (the survey enumerated these; a miss is invisible until release):
+  - `.changeset/config.json` `fixed[0]` — **add the package name** or it version-drifts from the train.
+  - `scripts/lib/pack-check.mjs` `packages` array — `{ dir, expectedFiles: ["dist/index.js","dist/index.d.ts","README.md","package.json"], requiredFields: libraryRequiredFields }`.
+  - `vitest.workspace.ts` — **add `"./packages/postgres-storage/vitest.config.ts"`.**
+  - `README.md` — required by `scripts/check-docs.mjs:232-261`, which also requires the package be named in `apps/web/content/docs/api.mdx` or its own README. Do both.
+  - Root `tsconfig.json`: **nothing** (references only core/langgraph/cli.build/devkit/create-dawn-app; turbo's topological `dependsOn: ["^build"]` covers the rest). `turbo.json`: **nothing** (tasks are name-based).
+
+- [ ] **Step 4: FIX THE CI COVERAGE GAP found by the survey.** `packages/memory-pgvector` and `packages/inspector` have vitest configs but no `vitest.workspace.ts` entry. `packages/memory-pgvector/test/schema.test.ts` is **ungated** — 7 tests covering `assertIdentifier`, the SQL-injection guard for DDL identifiers — and has **never run** in the main CI lane (verified: it passes 7/7 when run directly). Enroll both. Their gated suites skip cleanly without the env var. Separate commit so it is reviewable alone.
+
+- [ ] **Step 5: Verify + commit (two commits)**
+
+```bash
+git commit -m "test: enroll memory-pgvector + inspector in the vitest workspace"   # step 4
+git commit -m "feat(postgres-storage): package scaffold + release registrations"   # steps 1-3
+```
+
+---
+
+### Task 4: The checkpointer — direct `pg` implementation
+
+**Files:** `packages/postgres-storage/src/checkpointer.ts`, `src/schema.ts`, `test/checkpointer.test.ts`
+
+Per the spike: ~250 LOC implementing `BaseCheckpointSaver` over `pg`. Dawn's SQLite saver (`packages/sqlite-storage/src/checkpointer/saver.ts`, 237 LOC + 31 LOC schema) is the reference — read it first and mirror its structure, because behavioral parity with it is the whole point.
+
+- [ ] **Step 1: Schema.** Two tables mirroring SQLite's shape (`packages/sqlite-storage/src/checkpointer/schema.ts:3-31`), with the checkpoint stored as **one opaque `BYTEA`** via the inherited `JsonPlusSerializer` — the ONLY shape the spike found that round-trips NUL, lone surrogates, emoji, and C0 controls:
+
+```sql
+checkpoints(thread_id text, checkpoint_ns text DEFAULT '', checkpoint_id text,
+            parent_checkpoint_id text, type text, checkpoint bytea, metadata bytea,
+            PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id))
+writes(thread_id text, checkpoint_ns text, checkpoint_id text, task_id text, idx int,
+       channel text, type text, value bytea,
+       PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx))
+```
+
+`metadata` is BYTEA too, NOT jsonb — that is precisely what fails. Honor `tablePrefix`/`schema` via the copied `assertIdentifier`.
+
+- [ ] **Step 2: All five abstract methods** — `getTuple`, `list`, `put`, `putWrites`, `deleteThread`. **`ORDER BY checkpoint_id COLLATE "C" DESC`** so ordering is byte-identical to SQLite regardless of database locale (the spike proved the default collation is locale-sensitive; uuid6 happens to agree today, but `COLLATE "C"` removes the dependency for free). Wrap `put`/`putWrites` in `BEGIN`/`COMMIT` with a quiet rollback, mirroring `saver.ts:213-222`.
+
+- [ ] **Step 3: Implement `list({filter})` app-side** — deserialize metadata and compare in JS, the retrieve-then-fuse-in-JS posture `@dawn-ai/memory-pgvector` already uses. This is a capability SQLite lacks; implementing it lets the kit's flags be `true` for both backends rather than encoding a lowest common denominator. Populate `pendingWrites` in `list()` too.
+
+- [ ] **Step 4: Lifecycle** — lazy memoized `ready()` (`packages/memory-pgvector/src/pgvector-store.ts:72-87`), injected-pool support so all three stores share ONE pool, and `ownsPool` discipline (`:65-67,93-100`): `close()` ends the pool only if we created it, and never mutate an injected pool's listeners.
+
+- [ ] **Step 5: Run the Task 2 checkpointer kit** against it (gated, Testcontainers `postgres:16`), declaring `supports: { listPendingWrites: true, listFilter: true }`. The NUL and lone-surrogate round-trips must pass.
+
+- [ ] **Step 6: Verify + commit** — `feat(postgres-storage): checkpointer over pg with opaque BYTEA payloads`
+
+---
+
+### Task 5: The threads store — with the concurrency fixes baked in
+
+**Files:** `packages/postgres-storage/src/threads.ts`, `src/schema.ts`, `test/threads.test.ts`
+
+- [ ] **Step 1: Schema + migrations.** Use the **versioned** migration form (`packages/sqlite-storage/src/internal/migrate.ts:8-26`), shared by all three stores (there is no upstream `checkpoint_migrations` table to coexist with now). **MIGRATIONS MUST TAKE `pg_advisory_xact_lock`** — the spike proved that 8 concurrent cold-start migrations produce 1 success and 7 crashes (`23505` on catalog and PK indexes). A memoized in-process `ready()` fixes only the in-process race; an edge deploy scaling 0→N cold-starts N processes that all migrate at once. Add a kit/integration test that runs N concurrent `ready()` calls against a virgin database and asserts ALL succeed. Copy `assertIdentifier` from `packages/memory-pgvector/src/schema.ts:14-19` verbatim (schema/prefix cannot be `$1` placeholders — this is the SQL-injection guard) and support a `tablePrefix` (default `dawn`) + `schema` option so two apps can share one database.
+
+  **Column types matter:** `created_at`/`updated_at` are **app-generated ISO strings stored as `text`**, NOT `timestamptz` and NOT `now()` — the `Thread` object is serialized straight to JSON on the wire (`runtime-fetch-core.ts:436,451`), and ISO-8601 sorts lexicographically so `ORDER BY updated_at DESC` is unchanged. `metadata` is **`jsonb`** — and `pg` auto-parses jsonb, so do **NOT** `JSON.parse` it (the trap called out at `packages/memory-pgvector/src/queries.ts:43-45`).
+
+- [ ] **Step 2: Implement, fixing the three single-writer assumptions:**
+  - `createThread`: **`INSERT … ON CONFLICT (thread_id) DO NOTHING`** then fall back to a `SELECT`. SQLite's bare INSERT throws, and callers check-then-create, which races across instances.
+  - `updateMetadata`: **`UPDATE … SET metadata = metadata || $1::jsonb`** — one atomic statement with identical shallow-merge semantics. SQLite's read-modify-write across two statements is a lost update under concurrency.
+  - Id generation: `t-${8 hex}` format preserved, but via **Web Crypto `crypto.getRandomValues`**, not `node:crypto` — keeps the package importable from an edge entry.
+
+- [ ] **Step 3: Run the Task 2 threads kit** against it (gated). Per-test isolation via a **random `tablePrefix`** (`t_${Math.random().toString(36).slice(2)}`) rather than truncation — the pgvector conformance trick, no cross-test bleed, no teardown.
+
+- [ ] **Step 4: Verify + commit** — `feat(postgres-storage): threads store with atomic upsert and jsonb metadata merge`
+
+---
+
+### Task 6: The permissions store + the missing config seam
+
+**Files:** `packages/postgres-storage/src/permissions.ts`, `test/permissions.test.ts`; plus `packages/core/src/types.ts`, `packages/cli/src/lib/runtime/execute-route.ts`
+
+- [ ] **Step 1: Implement the cache-with-async-hydration store.** `load()` hydrates in-memory maps from pg; `match()` reads memory **synchronously** and delegates to `matchPermission` from the `@dawn-ai/permissions` barrel; `addAllow` does `INSERT … ON CONFLICT DO NOTHING` on `(scope, kind, tool, pattern)` and updates the map — atomic, so the in-process `writeQueue` the file store needs (`node.ts:79,153`) disappears entirely. Honor `mode` exactly as `packages/permissions/src/node.ts:47-69` does: `"bypass"` → both effective maps empty (always `"unknown"`); `"non-interactive"` → config only, runtime ignored; `"interactive"` → config concatenated with runtime per tool key.
+
+- [ ] **Step 2: Add the config seam (it does not exist today).** `DawnConfig.permissions` (`packages/core/src/types.ts:15-19`) gains:
+
+```ts
+/** Custom permissions store. Defaults to the file-backed store at <appRoot>/.dawn/permissions.json. */
+readonly store?: PermissionsStore
+```
+
+Import the type from the `@dawn-ai/permissions` **barrel** (already how `PermissionMode` arrives at `types.ts:1` — no new node graph). Nest under `permissions` (matching `memory.store`) because the store coexists with `mode`/`allow`/`deny`.
+
+Then in `resolvePermissionsStore` (`packages/cli/src/lib/runtime/execute-route.ts:295-304`): if `loaded.config.permissions?.store` exists, `await store.load()` and return it. Leave `buildPermissionsStore` file-only — it is exposed on `RuntimeBootFallbacks` as the "config + env mode + one load()" primitive. Document who calls `load()`.
+
+- [ ] **Step 3: Run the Task 2 permissions kit** against the pg store (gated).
+
+- [ ] **Step 4: Verify + commit** — `feat(postgres-storage,core): permissions store + DawnConfig.permissions.store seam`
+
+---
+
+### Task 7: Gated CI lane
+
+**Files:** `.github/workflows/ci.yml`
+
+- [ ] **Step 1: Clone the `pgvector-docker` job** (`.github/workflows/ci.yml:129-160`) as `postgres-storage-docker`: `DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/postgres-storage test`.
+
+**Use full `pnpm build`, NOT a filtered build.** The comment at `:154-156` is scar tissue from issue #320: a narrow `--filter` build fails with TS2307 because the package compiles from source against its workspace deps.
+
+- [ ] **Step 2: RUN THE GATED LANE LOCALLY AGAINST REAL DOCKER BEFORE THE PR.** The pgvector plan's own self-review names this: "the gated lane … must actually run against Docker locally before the PR, not just be written." Docker 27.4.0 is available on this machine.
+
+- [ ] **Step 3: Commit** — `ci: gated postgres-storage lane (Testcontainers postgres:16)`
+
+---
+
+### Task 8: Docs, changeset, full verification, PR
+
+- [ ] **Step 1: README** (required by the docs check) modeled on `packages/memory-pgvector/README.md`, plus a `## Postgres backend` section in `apps/web/content/docs/configuration.mdx` beside the existing `checkpointer` (`:155`) / `threadsStore` (`:167`) entries and the commented lines at `:71-72`, and a signature block in `api.mdx`. Show ONE config using a shared pool:
+
+```ts
+const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+export default config({
+  checkpointer: postgresCheckpointer({ pool }),
+  threadsStore: createPostgresThreadsStore({ pool }),
+  permissions: { mode: "non-interactive", store: createPostgresPermissionsStore({ pool }) },
+})
+```
+
+**Document honestly:** raw `pg` opens TCP, which Cloudflare Workers does not provide — Workers needs **Hyperdrive** (or an HTTP driver); Vercel/Node/Bun work directly. **Do not claim Workers support from this PR** — PR3's workerd lane is what proves it. Also document that `handler.close()` does NOT close stores (`runtime-fetch-core.ts:273-310` never touches them) — the app owns store teardown via `close()`, matching pgvector's posture.
+
+- [ ] **Step 2: Changeset** — **patch**; expect `postgres-storage` (new), `core` (config seam), `testing` (kits), `cli` (resolver). Note the new package and the additive `permissions.store` field.
+
+- [ ] **Step 3: Full gates** — `pnpm install && pnpm build && pnpm typecheck && pnpm lint && pnpm test && node scripts/check-docs.mjs && pnpm pack:check && pnpm check:build-cache`, plus `verify:harness:runtime` + `smoke` + `framework`.
+
+- [ ] **Step 4: PR + the release gotcha.** Title: `feat(postgres-storage): Postgres checkpointer/threads/permissions for durable edge state (deploy-anywhere B3, PR 2b)`.
+
+**⚠️ OIDC BOOTSTRAP — the blocking release step.** OIDC trusted publishing **cannot create a new package**. Before the Version PR merges, the package must be manually `npm publish`ed once so the name exists, then configured as a trusted publisher. The automated run then finds it published, skips it, and `scripts/backfill-release-tags.mjs` creates the missing tag/release idempotently (`.github/workflows/release.yml:98-107`). **Flag this in the PR description — it is a human step, and getting the order wrong breaks the release train (see the 0.8.3 partial-publish saga).**
+
+---
+
+## Self-review notes
+
+- **Spike-first ordering is deliberate.** The NUL/JSONB divergence can invalidate the wrap; scaffolding a package around a decision that hasn't been tested would be building on sand.
+- **Kits before implementations** so they encode the incumbent's contract, not pg's behavior. This is the `runMemoryStoreConformance` playbook that has already kept sqlite and pgvector aligned.
+- **The three concurrency fixes are specified up front** rather than left to discovery — each is a real multi-instance bug that SQLite's single-writer model hides, and an edge deploy is multi-instance by definition.
+- **Capability flags, not lowest-common-denominator assertions**, for the two places pg is legitimately better than SQLite. A kit that asserted SQLite's shortcuts would fail pg for the wrong reason.
+- **Known limitation to state, not fix:** the run gate is deliberately in-memory (`runtime-fetch-core.ts:805-813`), so two instances can each start a run on the same thread. A shared store exposes this; it does not cause it. Out of scope — name it in the docs.

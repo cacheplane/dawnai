@@ -1,4 +1,4 @@
-import type { PermissionMode } from "@dawn-ai/permissions"
+import type { PermissionMode, PermissionsStore } from "@dawn-ai/permissions"
 import type { ModelProviderId, RouteKind } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend, SandboxConfig } from "@dawn-ai/workspace"
@@ -16,6 +16,13 @@ export interface DawnConfig {
     readonly mode?: PermissionMode
     readonly allow?: Readonly<Record<string, readonly string[]>>
     readonly deny?: Readonly<Record<string, readonly string[]>>
+    /**
+     * Custom permissions store. Defaults to the file-backed store at
+     * `<appRoot>/.dawn/permissions.json`. A custom store receives `mode` and
+     * the `allow`/`deny` lists above through its own options — the runtime
+     * only calls `load()` on it, then reads it.
+     */
+    readonly store?: PermissionsStore
   }
   readonly checkpointer?: BaseCheckpointSaver
   readonly threadsStore?: ThreadsStore

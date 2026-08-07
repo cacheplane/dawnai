@@ -1,4 +1,5 @@
 export { type Aimock, createAimock } from "./aimock-runner.js"
+export { runCheckpointerConformance } from "./checkpointer-conformance.js"
 export { fakeEmbedder } from "./fake-embedder.js"
 export {
   type AimockFixture,
@@ -39,6 +40,10 @@ export {
   createMiddlewareHarness,
   type MiddlewareHarness,
 } from "./middleware-harness.js"
+export {
+  type PermissionsStoreInit,
+  runPermissionsStoreConformance,
+} from "./permissions-conformance.js"
 export { type RecordOptions, record } from "./record.js"
 export {
   type AgentRunResult,
@@ -48,6 +53,7 @@ export {
   type ObservedToolResult,
 } from "./run-result.js"
 export { createSubprocessApp, type SubprocessApp } from "./subprocess.js"
+export { runThreadsStoreConformance } from "./threads-conformance.js"
 export {
   createToolHarness,
   type ToolHarness,

@@ -51,6 +51,7 @@ const packageFileExpectations = {
     "package.json",
   ],
   "@dawn-ai/memory-pgvector": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
+  "@dawn-ai/postgres-storage": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
   "@dawn-ai/memory": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
   "@dawn-ai/langchain": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
 }
@@ -160,8 +161,14 @@ export function validatePackageMetadata(packageName, packageJson, expectedVersio
     )
   }
 
-  if (!packageJson.exports && !packageJson.bin) {
-    failures.push(`${packageName}: package.json must expose exports or bin`)
+  // A published package must declare SOME way to be consumed. Three shapes qualify:
+  // `exports` (importable), `bin` (executable), and `dawnInspector.server` — a runnable
+  // app whose entry is a built server that `dawn inspect` resolves and launches.
+  // @dawn-ai/inspector is deliberately none of the first two (it is a Next standalone
+  // app, not a library), so requiring exports-or-bin reported a false positive against
+  // every published release from 0.8.14 on.
+  if (!packageJson.exports && !packageJson.bin && !packageJson.dawnInspector?.server) {
+    failures.push(`${packageName}: package.json must expose exports, bin, or dawnInspector.server`)
   }
 
   if (packageJson.exports && exportsRequireTypes(packageJson.exports) && !packageJson.types) {
