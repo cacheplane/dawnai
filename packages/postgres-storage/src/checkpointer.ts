@@ -162,7 +162,7 @@ export class DawnPostgresSaver extends BaseCheckpointSaver {
     return this.initP
   }
 
-  /** Close the underlying pool. No-op if an external pool was injected. */
+  /** Close the pool if this store owns it (`ownsPool`); otherwise a no-op. */
   async close(): Promise<void> {
     if (this.ownsPool) await this.pool.end()
   }

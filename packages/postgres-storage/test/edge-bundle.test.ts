@@ -16,7 +16,10 @@ async function linkForEdge(entry: string): Promise<void> {
     bundle: true,
     conditions: ["import"],
     entryPoints: [join(pkgRoot, "src", entry)],
-    external: ["@langchain/*", "@dawn-ai/permissions"],
+    // `@dawn-ai/permissions` is deliberately NOT external: it links clean on
+    // the browser platform (PR2a gave it a pure/node split), so bundling it
+    // here keeps this test covering that too rather than trusting it.
+    external: ["@langchain/*"],
     format: "esm",
     logLevel: "silent",
     mainFields: ["module", "main"],

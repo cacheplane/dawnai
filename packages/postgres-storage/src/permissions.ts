@@ -26,7 +26,7 @@ export interface PostgresPermissionsStoreOptions extends PostgresStoreOptions {
 export interface PostgresPermissionsStore extends PermissionsStore {
   /** Apply migrations. Idempotent and memoized; call at boot to migrate eagerly. */
   ready(): Promise<void>
-  /** Close the underlying pool. No-op if an external pool was injected. */
+  /** Close the pool if this store owns it (`ownsPool`); otherwise a no-op. */
   close(): Promise<void>
 }
 

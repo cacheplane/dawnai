@@ -3,7 +3,8 @@
  *
  * Kept out of the main entry because a *value* import of `pg` pulls net/tls/dns
  * into the module graph, which makes the package unlinkable on an edge runtime
- * (verified: 17 unresolved-builtin errors bundling on platform: browser).
+ * (verified: 16 unresolved-builtin errors bundling this file on platform:
+ * browser — `test/edge-bundle.test.ts` keeps that a negative control).
  *
  * Every export here is the main entry's factory with the pool filled in, so
  * behaviour is otherwise identical — including pool ownership: a store that

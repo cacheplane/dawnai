@@ -65,7 +65,7 @@ independently.
 
 ### Two entry points
 
-The main entry never imports `pg` as a value — only as a type — so it links on
+The main entry does not import `pg` at all — not even for types — so it links on
 an edge runtime, where a raw TCP driver cannot be bundled at all. `pool` is
 therefore required there; the stores throw if it is missing.
 

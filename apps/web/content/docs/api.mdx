@@ -1012,7 +1012,7 @@ export interface NodePostgresStoreOptions extends PostgresStoreOptions {
 
 The same three factories with a `connectionString` convenience, plus everything the main entry exports. A store built from a connection string builds and owns its pool, so `close()` ends it.
 
-This entry imports `pg` as a *value*, which pulls `net`/`tls`/`dns` into the module graph — that is why it is a separate subpath. The main entry imports `pg` for types only and links on a runtime with no TCP sockets.
+This entry imports `pg` as a *value*, which pulls `net`/`tls`/`dns` into the module graph — that is why it is a separate subpath. The main entry does not reference `pg` at all, and links on a runtime with no TCP sockets.
 
 ### `postgresCheckpointer(options)`
 
