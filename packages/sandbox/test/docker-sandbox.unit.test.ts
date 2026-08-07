@@ -242,3 +242,136 @@ describe("dockerSandbox chown-init (Architecture B)", () => {
     expect(chownRun(runs)).toBeUndefined()
   })
 })
+
+describe("dockerSandbox PID-exhaustion recovery", () => {
+  test("removes and recreates the keeper with its volume before retrying the command", async () => {
+    const acquireSignal = signal()
+    const activeSignal = signal()
+    const runs: Array<{ args: readonly string[]; signal: AbortSignal | undefined }> = []
+    const events: string[] = []
+    const execSignals: Array<AbortSignal | undefined> = []
+    let volumeInspects = 0
+    let execCalls = 0
+    const docker: Docker = {
+      run: async (args, opts) => {
+        runs.push({ args: [...args], signal: opts?.signal })
+        events.push(`run:${args.join(" ")}`)
+        if (args[0] === "ps") return { stdout: "", stderr: "", exitCode: 0 }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          volumeInspects += 1
+          return { stdout: "", stderr: "", exitCode: volumeInspects === 1 ? 1 : 0 }
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async (_container, _command, opts) => {
+        execCalls += 1
+        execSignals.push(opts?.signal)
+        events.push(`exec:${execCalls}`)
+        return execCalls === 1
+          ? {
+              stdout: "",
+              stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+              exitCode: 1,
+            }
+          : { stdout: "recovered", stderr: "", exitCode: 0 }
+      },
+    }
+    const policy = {
+      network: { mode: "deny" as const },
+      env: { FOO: "bar" },
+      resources: { memoryMb: 256, cpus: 0.5, timeoutMs: 1_250 },
+      security: { pidsLimit: 64, runAsNonRoot: { uid: 2000, gid: 3000 } },
+    }
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    const h = await p.acquire({ threadId: "abc", policy, signal: acquireSignal })
+
+    const result = await h.exec.runCommand(
+      { command: "echo hi" },
+      { workspaceRoot: h.workspaceRoot, signal: activeSignal },
+    )
+
+    expect(result).toEqual({ stdout: "recovered", stderr: "", exitCode: 0 })
+    expect(execSignals).toEqual([activeSignal, activeSignal])
+    const removal = runs.find((run) => run.args[0] === "rm")
+    expect(removal?.args).toEqual(["rm", "-f", "dawn-sbx-abc"])
+    expect(removal?.signal).toBe(activeSignal)
+    expect(removal?.signal).not.toBe(acquireSignal)
+    const keeperRuns = runs.filter((run) => run.args[0] === "run" && run.args.includes("-d"))
+    expect(keeperRuns).toHaveLength(2)
+    expect(keeperRuns[1]?.args).toEqual(keeperRuns[0]?.args)
+    expect(keeperRuns[1]?.args).toEqual(
+      expect.arrayContaining([
+        "dawn-sbx-vol-abc:/workspace",
+        "--network",
+        "none",
+        "FOO=bar",
+        "--memory",
+        "256m",
+        "--cpus",
+        "0.5",
+        "--pids-limit",
+        "64",
+        "--user",
+        "2000:3000",
+        "node:22-slim",
+      ]),
+    )
+    expect(keeperRuns[1]?.signal).toBe(activeSignal)
+    expect(keeperRuns[1]?.signal).not.toBe(acquireSignal)
+    const chownRuns = runs.filter(
+      (run) =>
+        run.args[0] === "run" && run.args.includes("--rm") && run.args.join(" ").includes("chown"),
+    )
+    expect(chownRuns).toHaveLength(1)
+    expect(volumeInspects).toBe(2)
+    expect(events.indexOf("exec:1")).toBeLessThan(events.indexOf("run:rm -f dawn-sbx-abc"))
+    expect(events.indexOf("run:rm -f dawn-sbx-abc")).toBeLessThan(events.indexOf("exec:2"))
+  })
+
+  test("rejects with DAWN_E2001 when the exhausted keeper cannot be removed", async () => {
+    const runs: string[][] = []
+    let execCalls = 0
+    const docker: Docker = {
+      run: async (args) => {
+        runs.push([...args])
+        if (args[0] === "ps") return { stdout: "", stderr: "", exitCode: 0 }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return { stdout: "ok", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "rm") {
+          return { stdout: "", stderr: "container removal denied", exitCode: 1 }
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async () => {
+        execCalls += 1
+        return {
+          stdout: "",
+          stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+          exitCode: 1,
+        }
+      },
+    }
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    const h = await p.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "deny" } },
+      signal: signal(),
+    })
+
+    await expect(
+      h.exec.runCommand(
+        { command: "echo hi" },
+        { workspaceRoot: h.workspaceRoot, signal: signal() },
+      ),
+    ).rejects.toMatchObject({
+      code: "DAWN_E2001",
+      message: expect.stringMatching(
+        /remove PID-exhausted container.*abc.*container removal denied/i,
+      ),
+    })
+    expect(execCalls).toBe(1)
+    expect(runs.filter((run) => run[0] === "run" && run.includes("-d"))).toHaveLength(1)
+    expect(runs.filter((run) => run[0] === "rm")).toEqual([["rm", "-f", "dawn-sbx-abc"]])
+  })
+})

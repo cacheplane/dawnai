@@ -139,6 +139,20 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
     return name
   }
 
+  const recycleContainer = async (
+    threadId: string,
+    policy: SandboxPolicy,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const removed = await docker.run(["rm", "-f", containerName(threadId)], { signal })
+    if (removed.exitCode !== 0) {
+      throw sandboxUnavailable(
+        `Sandbox unavailable: could not remove PID-exhausted container for thread "${threadId}": ${removed.stderr.trim() || "unknown error"}. Run \`dawn check\`.`,
+      )
+    }
+    await ensureContainer(threadId, policy, signal)
+  }
+
   return {
     name: "docker",
     async acquire({ threadId, policy, signal }): Promise<SandboxHandle> {
@@ -146,13 +160,12 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
       return {
         threadId,
         filesystem: dockerFilesystem(docker, container),
-        exec: dockerExec(
-          docker,
-          container,
-          policy.resources?.timeoutMs !== undefined
+        exec: dockerExec(docker, container, {
+          ...(policy.resources?.timeoutMs !== undefined
             ? { timeoutMs: policy.resources.timeoutMs }
-            : {},
-        ),
+            : {}),
+          recoverFromPidExhaustion: (signal) => recycleContainer(threadId, policy, signal),
+        }),
         workspaceRoot: ROOT,
       }
     },
