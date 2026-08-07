@@ -99,9 +99,25 @@ jobs:
       # i.e. a brand-new package that had to be bootstrap-published manually before
       # this run (OIDC cannot create a new package name), so changesets/action found
       # it already on npm and left it untagged. Idempotent: a no-op on normal
-      # releases. Runs last so it can never affect the actual publish.
+      # releases. Runs before post-publish verification and cannot affect publishing.
       - name: Backfill tags/releases for bootstrapped packages
         if: ${{ steps.changesets.outputs.published == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/backfill-release-tags.mjs
+
+      # Changesets runs with published=false skip these post-publish steps. Rerun via
+      # Published Artifact Verification with the exact version and typescript-tooling set.
+      - name: Read published version
+        if: ${{ steps.changesets.outputs.published == 'true' }}
+        run: |
+          DAWN_PUBLISHED_VERSION="$(node -p "require('./packages/core/package.json').version")"
+          printf 'DAWN_PUBLISHED_VERSION=%s\n' "$DAWN_PUBLISHED_VERSION" >> "$GITHUB_ENV"
+
+      - name: Verify published TypeScript tooling
+        if: ${{ steps.changesets.outputs.published == 'true' }}
+        run: pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000
+
+      - name: Smoke published TypeScript tooling
+        if: ${{ steps.changesets.outputs.published == 'true' }}
+        run: pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling

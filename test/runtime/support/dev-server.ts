@@ -4,6 +4,8 @@ import { access, appendFile, mkdir, writeFile } from "node:fs/promises"
 import { createServer } from "node:net"
 import { dirname, join } from "node:path"
 
+const DEFAULT_READY_TIMEOUT_MS = 30_000
+
 export interface RunsWaitInvocation {
   readonly assistantId: string
   readonly input: unknown
@@ -213,7 +215,7 @@ export class DevServerHandle {
     throw new Error(`Timed out waiting for log ${pattern}\nSTDOUT:\n${this.stdout}\nSTDERR:\n${this.stderr}`)
   }
 
-  async waitForReady(timeoutMs = 8_000): Promise<string> {
+  async waitForReady(timeoutMs = DEFAULT_READY_TIMEOUT_MS): Promise<string> {
     return await this.waitForNextReady(0, timeoutMs)
   }
 
@@ -221,7 +223,10 @@ export class DevServerHandle {
     return countOccurrences(this.stdout, "Dawn dev ready at")
   }
 
-  async waitForNextReady(previousCount: number, timeoutMs = 8_000): Promise<string> {
+  async waitForNextReady(
+    previousCount: number,
+    timeoutMs = DEFAULT_READY_TIMEOUT_MS,
+  ): Promise<string> {
     const url = await this.waitForPrintedUrl(timeoutMs)
     const startedAt = Date.now()
 

@@ -12,7 +12,11 @@ export type TypeInfo =
   | { readonly kind: "map"; readonly key: TypeInfo; readonly value: TypeInfo }
   | { readonly kind: "set"; readonly element: TypeInfo }
   | { readonly kind: "union"; readonly members: readonly TypeInfo[] }
-  | { readonly kind: "intersection"; readonly members: readonly TypeInfo[] }
+  | {
+      readonly kind: "intersection"
+      readonly members: readonly TypeInfo[]
+      readonly effectiveProperties?: readonly PropertyInfo[]
+    }
   | { readonly kind: "enum"; readonly values: readonly string[] }
   | { readonly kind: "optional"; readonly inner: TypeInfo }
 
@@ -21,4 +25,17 @@ export interface PropertyInfo {
   readonly type: TypeInfo
   readonly optional: boolean
   readonly description?: string
+}
+
+export interface AnalyzedTool {
+  readonly name: string
+  readonly description: string
+  readonly exports: {
+    readonly description: boolean
+    readonly schema: boolean
+  }
+  readonly inputType: string
+  readonly outputType: string
+  readonly parameter: TypeInfo | null
+  readonly parameterDescriptions: ReadonlyMap<string, string>
 }

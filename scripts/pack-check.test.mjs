@@ -82,6 +82,25 @@ describe("pack manifest validation", () => {
     ])
   })
 
+  it("forbids retired Vite compiler artifacts", () => {
+    const vitePluginPackage = packages.find(({ dir }) => dir === "packages/vite-plugin")
+
+    assert.ok(vitePluginPackage, "Pack manifest is missing packages/vite-plugin")
+    assert.ok(vitePluginPackage.expectedFiles.includes("dist/zod-generator.js"))
+    assert.ok(vitePluginPackage.expectedFiles.includes("dist/zod-generator.d.ts"))
+    assert.deepEqual(vitePluginPackage.forbiddenFiles, [
+      "dist/jsdoc-extractor.*",
+      "dist/type-extractor.*",
+      "dist/type-info.*",
+    ])
+    for (const retiredFile of ["dist/type-extractor.js", "dist/type-extractor.d.ts"]) {
+      assert.ok(
+        !vitePluginPackage.expectedFiles.includes(retiredFile),
+        `Vite plugin must not expect ${retiredFile}`,
+      )
+    }
+  })
+
   it("checks the create app executable", () => {
     const createAppPackage = packages.find(({ dir }) => dir === "packages/create-dawn-app")
 
