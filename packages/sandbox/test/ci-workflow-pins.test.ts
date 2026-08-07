@@ -5,10 +5,14 @@ import { parse } from "yaml"
 const kindActionPrefix = "helm/kind-action@"
 const calicoManifestUrl =
   /https:\/\/raw\.githubusercontent\.com\/projectcalico\/calico\/(v[^/]+)\/manifests\/calico\.yaml/g
-const kubectlApplyCommand = /^kubectl(?:\s+--?\S+(?:\s+(?!-|apply(?:\s|$))\S+)?)*\s+apply(?:\s|$)/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isKubectlApplyCommand(command: string): boolean {
+  const [executable, ...args] = command.split(/\s+/)
+  return executable === "kubectl" && args.includes("apply")
 }
 
 function collectKubernetesPins(workflowSource: string) {
@@ -41,7 +45,7 @@ function collectKubernetesPins(workflowSource: string) {
       const commands = step.run.replace(/\\\r?\n/g, " ").split(/\r?\n/)
       for (const command of commands) {
         const executable = command.trim().replace(/\s+#.*$/, "")
-        if (!kubectlApplyCommand.test(executable)) {
+        if (!isKubectlApplyCommand(executable)) {
           continue
         }
 
