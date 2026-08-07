@@ -74,7 +74,11 @@ jobs:
           commit: Version Packages
           createGithubReleases: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          # A PAT, not the default GITHUB_TOKEN: GitHub does not trigger
+          # workflows on pushes made with GITHUB_TOKEN, so the Version PR this
+          # step opens would never get CI and would block on required checks.
+          # Falls back to GITHUB_TOKEN when the secret is absent.
 
       # Attest the just-published tarballs (kept in release-artifacts/ by
       # release-publish.mjs). Keyless OIDC — registers SLSA in-toto provenance
