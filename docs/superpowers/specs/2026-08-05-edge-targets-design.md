@@ -178,22 +178,69 @@ Three PRs, one spec. Each independently green and shippable.
     strongest option: **add an HTTP-driver path so `@dawn-ai/postgres-storage` works on workerd**,
     and have the lane assert thread state actually persisted in Postgres from inside the worker.
 
-    Implementation shape to spike FIRST (same discipline as PR2b's checkpointer spike — this can
-    invalidate the approach):
-    - **Prefer NO driver abstraction.** If the stores type their `pool` option *structurally*
-      (a minimal `{ query, connect, end }` shape) rather than as `pg.Pool`, then
-      `@neondatabase/serverless`'s pool drops in with no new dependency in Dawn at all. Verify
-      that the structural type is honest against both drivers.
-    - **Transactions are the risk.** Neon's HTTP path is single-shot and has no sessions, while
-      the checkpointer wraps `put`/`putWrites` in `BEGIN`/`COMMIT` and migrations take
-      `pg_advisory_xact_lock`. The WebSocket variant is likely required — confirm, and if the HTTP
-      path cannot serve the checkpointer, say so rather than weakening the transaction boundaries.
-    - **CI needs a WebSocket-to-TCP proxy** beside Postgres for the driver to reach a local
-      database (Neon publishes a compose recipe). That is a third container in the lane; budget
-      for it and for the startup-timeout posture PR2b already had to raise.
-    - If the spike fails, fall back to proving the RUNTIME on workerd with in-memory stores and
-      documenting Postgres-on-Workers as unverified — but report that outcome explicitly rather
-      than quietly narrowing the lane.
+    **SPIKE RESULT 2026-08-07 — WORKS, with two mandatory changes.** The spike ran the real built
+    `packages/postgres-storage/dist` (not a reimplementation) against `postgres:16-alpine` +
+    `ghcr.io/neondatabase/wsproxy` under **real workerd** (wrangler 4.120.0 / workerd
+    1.20260801.1): 8/8 in-worker assertions, with durability confirmed **out-of-band via `psql`**
+    — the worker's own migrations created all 7 tables and its thread/checkpoint/write rows were
+    really there. Node-side driver-parity run: 10 assertions incl. a `pg` control for the one
+    mismatch, which turned out to be the spike's own wrong expectation, not driver divergence.
+
+    - **No driver abstraction needed.** Typing `pool` structurally is honest against both drivers:
+      `tsc --strict` accepts `pg.Pool`, `pg.PoolClient`, `NeonPool` and `NeonPoolClient` against
+      `SqlPool { query, connect, end }` / `SqlClient { query, release }`. Better, the structural
+      type **is itself the guard**: `neon()`'s transaction-incapable HTTP function is rejected at
+      compile time (`TS2739: missing … connect, end`). Keep that property.
+    - **But the type change is not sufficient.** `checkpointer.ts`, `threads.ts` and
+      `permissions.ts` each **value**-import `Pool` from `pg` for the `options.pool ?? new Pool(…)`
+      default, which drags TCP `pg` into the graph: bundling today's `dist` on `platform: browser`
+      fails to link with 17 errors (`net`, `tls`, `dns`, `stream`, `util`). PR2a's clean-link
+      result does **not** carry over to this package. Make `pg` type-only and relocate the
+      `connectionString` convenience to a Node-only entry; on the edge `options.pool` is required.
+      With that change the same graph links clean on `platform: browser` with zero `node:` imports,
+      at 1.18 MB minified / 294 KiB gzipped — comfortable against the 3 MB compressed Workers limit.
+    - **Transactions are fully supported on the WebSocket path**, tested inside workerd rather than
+      inferred: `BEGIN`/`COMMIT`/`ROLLBACK` are real session transactions
+      (`pg_current_xact_id_if_assigned()` non-null after a write; temp table gone after rollback),
+      and `pg_advisory_xact_lock` genuinely blocks a second session. **8 concurrent cold-start
+      migrations inside workerd → 0 failures**, reproducing PR2b's negative control. No weakening
+      of `internal/tx.ts` or `runMigrations` is needed or warranted.
+    - **⚠️ NO MODULE-SCOPE POOL — this changes `app.mjs`/`stores.mjs`.** A pool created at module
+      scope and reused across requests — *the shape a naive generated entry would emit* — fails on
+      workerd, and fails silently: it **hangs ~30s until the runtime cancels the request**, in a
+      perfectly alternating pattern (call 1 OK, call 2 hang, call 3 OK…). The pool returns a client
+      to idle at end of request 1; request 2 picks up that idle WebSocket, which belongs to a dead
+      I/O context, and waits forever; the hang kills the client, so request 3 opens a fresh one.
+      **50% of requests hang.** The `hono` target must therefore construct the pool and stores
+      **per request** (`ctx.waitUntil(pool.end())`), or hand the handler a per-request store
+      *factory* rather than instances — so the spec's "`stores.mjs` imports the user's configured
+      factories [at module scope]" and `DawnConfig` carrying store *instances* must become a
+      per-request seam on this target. Interaction to handle: the stores memoize `initP`, so a
+      per-request instance re-runs `runMigrations` every request (one advisory-lock transaction per
+      request). Add a module-scope "migrations already done" boolean — safe, because it guards only
+      a no-op re-check, never the lock itself.
+    - **CI lane: three containers, no Cloudflare account.** `postgres:16-alpine` +
+      `ghcr.io/neondatabase/wsproxy` (`ALLOW_ADDR_REGEX=.*`, **omit `APPEND_PORT`** — it
+      concatenates onto the client-supplied address, yielding `host:5432host:5432` →
+      "too many colons in address") + `wrangler dev --local` (no auth; set
+      `WRANGLER_SEND_METRICS=false`). Driver config: `useSecureWebSocket=false`,
+      `pipelineTLS=false`, `pipelineConnect=false`,
+      `wsProxy=(host,port)=>` `localhost:5480/v1?address=${host}:${port}` (path is `/v1`; `/v2`
+      404s on this image). workerd supplies `WebSocket` globally; only Node needs
+      `webSocketConstructor = ws`. Wrangler ready in ~18s; budget ~60s startup and keep PR2b's
+      raised container timeouts. Caveat: `wrangler` pulls `workerd`+`esbuild` via postinstall, so a
+      blocked-scripts policy breaks the lane at startup.
+    - **`nodejs_compat` is NOT required** — correcting the `wrangler.toml` scaffold above. A bare
+      `name` / `main` / `compatibility_date` boots the fetch handler.
+
+    Residual doubts to document rather than paper over: **local workerd is not the edge** —
+    miniflare does not enforce Cloudflare's ~6-simultaneous-outbound-connection or
+    1000-subrequest limits (20 simultaneous WS connections opened locally with no ceiling), and in
+    production each pooled connection is a subrequest; only a real-Cloudflare smoke test settles
+    it, and the CI lane will not. A local wsproxy also hides per-query round-trip latency, which
+    matters because `putWrites` issues one `INSERT` per write in a loop inside the transaction.
+    Hyperdrive remains untested (needs an account). Pin the structural-type assertion test so a
+    driver bump (`pg` 8.22.0 / neon 1.1.0 as tested) cannot silently break it.
   - static-vs-static-edge equivalence on Node: the B2 equivalence harness compares the node
     `modules.mjs` path against the edge `modules.edge.mjs` + injected-store path for the same
     conversation (volatile ids normalized) — proving the edge wiring doesn't drift.
