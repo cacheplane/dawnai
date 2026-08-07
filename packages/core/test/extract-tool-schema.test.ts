@@ -183,6 +183,19 @@ export default async function plain(input: {
     expect("description" in (result[0]?.parameters.properties.value ?? {})).toBe(false)
   })
 
+  test("keeps remarks tag continuation out of the tool description", async () => {
+    const schemas = await extractSchemasFromSource(`
+      /**
+       * Searches indexed records.
+       * @remarks
+       * Uses the tenant-specific search index.
+       */
+      export default async function search(input: { query: string }) { return input }
+    `)
+
+    expect(schemas[0]?.description).toBe("Searches indexed records.")
+  })
+
   test("no-parameter tools get empty properties and required", async () => {
     const routeDir = join(tempDir, "route")
     writeToolFile(

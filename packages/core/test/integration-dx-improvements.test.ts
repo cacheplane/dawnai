@@ -3,8 +3,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
+import { extractToolArtifactsForRoute } from "../src/compiler/index.ts"
 import { extractToolSchemasForRoute } from "../src/typegen/extract-tool-schema"
-import { extractToolTypesForRoute } from "../src/typegen/extract-tool-types"
 
 let tempDir: string
 
@@ -69,7 +69,7 @@ export default async (input: {
     expect(schema.parameters.required).toEqual(["query", "category"])
   })
 
-  test("type extraction and schema extraction produce consistent results", async () => {
+  test("one analysis produces mutually consistent tool types and schemas", () => {
     const routeDir = join(tempDir, "route")
     const toolsDir = join(routeDir, "tools")
     mkdirSync(toolsDir, { recursive: true })
@@ -84,18 +84,33 @@ export default async (input: { name: string }) => {
 `,
     )
 
-    const types = await extractToolTypesForRoute({
-      routeDir,
-      sharedToolsDir: undefined,
-    })
-    const schemas = await extractToolSchemasForRoute({
+    const { types, schemas } = extractToolArtifactsForRoute({
       routeDir,
       sharedToolsDir: undefined,
     })
 
-    expect(types).toHaveLength(1)
-    expect(schemas).toHaveLength(1)
-    expect(types[0]?.name).toBe(schemas[0]?.name)
-    expect(types[0]?.description).toBe(schemas[0]?.description)
+    expect(types).toEqual([
+      {
+        name: "greet",
+        description: "Greets someone.",
+        inputType: "{ name: string; }",
+        outputType: "{ message: string; }",
+      },
+    ])
+    expect(schemas).toEqual([
+      {
+        name: "greet",
+        description: "Greets someone.",
+        parameters: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+          additionalProperties: false,
+        },
+      },
+    ])
+    expect(types.map(({ name, description }) => ({ name, description }))).toEqual(
+      schemas.map(({ name, description }) => ({ name, description })),
+    )
   })
 })

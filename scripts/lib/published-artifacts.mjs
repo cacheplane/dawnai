@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process"
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises"
+import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 
@@ -10,7 +11,35 @@ export const packageSets = {
   "ag-ui": ["@dawn-ai/ag-ui"],
   "memory-pgvector-core": ["@dawn-ai/memory-pgvector", "@dawn-ai/memory", "@dawn-ai/langchain"],
   public: null,
+  "typescript-tooling": ["@dawn-ai/sdk", "@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
 }
+
+export const MAX_WAIT_DELAY_MS = 59_999
+export const NPM_VIEW_TIMEOUT_MS = 15_000
+export const MAX_WAIT_TOTAL_MS = 600_000
+export const MAX_WAIT_ATTEMPTS = Math.floor(MAX_WAIT_TOTAL_MS / NPM_VIEW_TIMEOUT_MS)
+
+const RETRYABLE_NPM_VIEW_CODES = new Set([
+  "E404",
+  "E429",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+])
+const FATAL_NPM_VIEW_CODES = new Set([
+  "E401",
+  "E403",
+  "ECONFIG",
+  "EINVALIDJSON",
+  "EINVALIDRESPONSE",
+  "EUSAGE",
+])
 
 const packageFileExpectations = {
   "@dawn-ai/ag-ui": [
@@ -142,6 +171,36 @@ export function validatePackageMetadata(packageName, packageJson, expectedVersio
   return failures
 }
 
+export async function assertInstalledCoreResolution({ consumerRoot, expectedCoreVersion }) {
+  const rootRequire = createRequire(pathToFileURL(join(consumerRoot, "package.json")))
+  const vitePackageJsonPath = join(
+    consumerRoot,
+    "node_modules",
+    "@dawn-ai",
+    "vite-plugin",
+    "package.json",
+  )
+  const viteRequire = createRequire(pathToFileURL(vitePackageJsonPath))
+  const rootCoreEntry = await realpath(rootRequire.resolve("@dawn-ai/core"))
+  const viteCoreEntry = await realpath(viteRequire.resolve("@dawn-ai/core"))
+
+  if (viteCoreEntry !== rootCoreEntry) {
+    throw new Error(
+      `Vite resolves @dawn-ai/core to ${viteCoreEntry}, expected root artifact ${rootCoreEntry}`,
+    )
+  }
+
+  const coreManifestPath = join(consumerRoot, "node_modules", "@dawn-ai", "core", "package.json")
+  const coreManifest = JSON.parse(await readFile(coreManifestPath, "utf8"))
+  if (coreManifest.version !== expectedCoreVersion) {
+    throw new Error(
+      `resolved @dawn-ai/core version ${coreManifest.version}, expected version ${expectedCoreVersion}`,
+    )
+  }
+
+  return rootCoreEntry
+}
+
 function exportsRequireTypes(exportsField) {
   return exportedTargets(exportsField).some((target) => !target.endsWith(".json"))
 }
@@ -171,16 +230,274 @@ export async function npmJson(args, options = {}) {
   return JSON.parse(output || "null")
 }
 
-export async function npmView(packageName) {
-  const [versions, tags] = await Promise.all([
-    npmJson(["view", packageName, "versions"]),
-    npmJson(["view", packageName, "dist-tags"]),
-  ])
+export async function npmView(
+  packageName,
+  { requestTimeoutMs = NPM_VIEW_TIMEOUT_MS, npmJsonImpl = npmJson } = {},
+) {
+  try {
+    const [versions, tags] = await Promise.all([
+      npmJsonImpl(["view", packageName, "versions"], { timeoutMs: requestTimeoutMs }),
+      npmJsonImpl(["view", packageName, "dist-tags"], { timeoutMs: requestTimeoutMs }),
+    ])
 
-  return {
-    versions: Array.isArray(versions) ? versions : [],
-    tags: tags ?? {},
+    if (!Array.isArray(versions) || versions.some((version) => typeof version !== "string")) {
+      throw registryError(`${packageName} npm versions response must be an array of strings`, {
+        code: "EINVALIDRESPONSE",
+        retryable: false,
+      })
+    }
+
+    if (!isPlainObject(tags)) {
+      throw registryError(`${packageName} npm dist-tags response must be an object`, {
+        code: "EINVALIDRESPONSE",
+        retryable: false,
+      })
+    }
+
+    return { tags, versions }
+  } catch (error) {
+    throw normalizeNpmViewError(packageName, error)
   }
+}
+
+export function isRetryableNpmViewError(error) {
+  const statusCode = error?.statusCode
+  if (statusCode === 404 || statusCode === 429 || (statusCode >= 500 && statusCode <= 599)) {
+    return true
+  }
+  if (statusCode === 401 || statusCode === 403) {
+    return false
+  }
+
+  const code = typeof error?.code === "string" ? error.code.toUpperCase() : ""
+  if (RETRYABLE_NPM_VIEW_CODES.has(code) || /^E5\d\d$/.test(code)) {
+    return true
+  }
+  if (FATAL_NPM_VIEW_CODES.has(code)) {
+    return false
+  }
+
+  return error?.retryable === true
+}
+
+export function validatePublishedWaitOptions({
+  attempts,
+  delayMs,
+  requestTimeoutMs = NPM_VIEW_TIMEOUT_MS,
+}) {
+  if (!Number.isSafeInteger(attempts) || attempts <= 0) {
+    throw new TypeError("attempts must be a positive integer within the safe integer range")
+  }
+  if (attempts > MAX_WAIT_ATTEMPTS) {
+    throw new RangeError(`attempts must be at most ${MAX_WAIT_ATTEMPTS}; received ${attempts}`)
+  }
+
+  if (!Number.isSafeInteger(delayMs) || delayMs < 0) {
+    throw new TypeError("delayMs must be a non-negative integer within the safe integer range")
+  }
+  if (delayMs > MAX_WAIT_DELAY_MS) {
+    throw new RangeError(`delayMs must be at most ${MAX_WAIT_DELAY_MS}ms; received ${delayMs}ms`)
+  }
+
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new TypeError("requestTimeoutMs must be a positive integer within the safe integer range")
+  }
+  if (requestTimeoutMs > NPM_VIEW_TIMEOUT_MS) {
+    throw new RangeError(
+      `requestTimeoutMs must be at most ${NPM_VIEW_TIMEOUT_MS}ms; received ${requestTimeoutMs}ms`,
+    )
+  }
+
+  const worstCaseMs = attempts * requestTimeoutMs + (attempts - 1) * delayMs
+  if (!Number.isSafeInteger(worstCaseMs) || worstCaseMs > MAX_WAIT_TOTAL_MS) {
+    throw new RangeError(
+      `worst-case wait is ${worstCaseMs}ms; limit is ${MAX_WAIT_TOTAL_MS}ms ` +
+        `(${attempts} request(s) × ${requestTimeoutMs}ms + ${attempts - 1} delay(s) × ${delayMs}ms)`,
+    )
+  }
+
+  return { worstCaseMs }
+}
+
+export async function waitForPublishedVersions({
+  packages,
+  version,
+  attempts,
+  delayMs,
+  requestTimeoutMs = NPM_VIEW_TIMEOUT_MS,
+  npmViewImpl = npmView,
+  delay = defaultDelay,
+}) {
+  if (!Array.isArray(packages) || packages.length === 0) {
+    throw new TypeError("packages must be a non-empty array")
+  }
+
+  if (packages.some((packageName) => typeof packageName !== "string" || packageName.length === 0)) {
+    throw new TypeError("each package must be a non-empty string")
+  }
+
+  if (typeof version !== "string" || version.length === 0) {
+    throw new TypeError("version must be a non-empty string")
+  }
+
+  validatePublishedWaitOptions({ attempts, delayMs, requestTimeoutMs })
+
+  if (typeof npmViewImpl !== "function") {
+    throw new TypeError("npmViewImpl must be a function")
+  }
+
+  if (typeof delay !== "function") {
+    throw new TypeError("delay must be a function")
+  }
+
+  const missing = new Set(packages)
+  const lastErrors = new Map()
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const outstanding = [...missing]
+    const results = await Promise.all(
+      outstanding.map(async (packageName) => {
+        try {
+          const view = await withTimeout(
+            () => npmViewImpl(packageName, { requestTimeoutMs }),
+            requestTimeoutMs,
+            packageName,
+          )
+          assertNpmViewResult(packageName, view)
+          return { packageName, visible: view?.versions?.includes(version) === true }
+        } catch (error) {
+          return { error, packageName, visible: false }
+        }
+      }),
+    )
+
+    const fatal = results.find((result) => result.error && !isRetryableNpmViewError(result.error))
+    if (fatal) {
+      throw fatal.error
+    }
+
+    for (const result of results) {
+      if (result.visible) {
+        missing.delete(result.packageName)
+        lastErrors.delete(result.packageName)
+      } else if (result.error) {
+        lastErrors.set(result.packageName, result.error)
+      }
+    }
+
+    if (missing.size === 0) {
+      return
+    }
+
+    if (attempt < attempts) {
+      await delay(delayMs)
+    }
+  }
+
+  const missingDetails = [...missing].map((packageName) => {
+    const detail = lastErrors.get(packageName)?.message
+    return `${packageName}@${version}${detail ? ` (last registry error: ${detail})` : ""}`
+  })
+  const scheduledDelayMs = Math.max(0, attempts - 1) * delayMs
+  const timeoutError = new Error(
+    `Timed out waiting for published version after ${attempts} attempts and ${scheduledDelayMs}ms scheduled delay; missing: ${missingDetails.join(", ")}`,
+  )
+  timeoutError.code = [...missing].every(
+    (packageName) => lastErrors.get(packageName)?.code === "ETIMEDOUT",
+  )
+    ? "ETIMEDOUT"
+    : "EPUBLISHWAIT"
+  timeoutError.lastErrors = new Map(lastErrors)
+  throw timeoutError
+}
+
+function assertNpmViewResult(packageName, view) {
+  if (!view || !Array.isArray(view.versions)) {
+    throw registryError(`${packageName} npm view versions must be an array`, {
+      code: "EINVALIDRESPONSE",
+      retryable: false,
+    })
+  }
+
+  if (view.versions.some((version) => typeof version !== "string")) {
+    throw registryError(`${packageName} npm view versions must contain only strings`, {
+      code: "EINVALIDRESPONSE",
+      retryable: false,
+    })
+  }
+}
+
+function withTimeout(operation, timeoutMs, packageName) {
+  let timer
+  return Promise.race([
+    Promise.resolve().then(operation),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          registryError(`${packageName} npm view timed out after ${timeoutMs}ms`, {
+            code: "ETIMEDOUT",
+            retryable: true,
+          }),
+        )
+      }, timeoutMs)
+    }),
+  ]).finally(() => clearTimeout(timer))
+}
+
+function normalizeNpmViewError(packageName, error) {
+  if (typeof error?.retryable === "boolean") {
+    return error
+  }
+
+  if (error instanceof SyntaxError) {
+    return registryError(`${packageName} npm view returned invalid JSON: ${error.message}`, {
+      cause: error,
+      code: "EINVALIDJSON",
+      retryable: false,
+    })
+  }
+
+  const details = `${error?.stderr ?? ""}\n${error?.message ?? ""}`
+  const recognizedCode = details.match(
+    /\b(E404|E429|E5\d\d|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|EPIPE|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|E401|E403|ECONFIG|EUSAGE)\b/i,
+  )?.[1]
+  const statusCodeText =
+    recognizedCode?.match(/^E([45]\d\d)$/i)?.[1] ??
+    details.match(/\b(?:http(?: status)?|status(?: code)?|npm error)\s*:?\s*([45]\d\d)\b/i)?.[1]
+  const code = recognizedCode?.toUpperCase() ?? error?.code ?? "ENPMVIEW"
+  const statusCode = statusCodeText === undefined ? undefined : Number(statusCodeText)
+  const normalized = registryError(`${packageName} npm view failed: ${error?.message ?? error}`, {
+    cause: error,
+    code,
+    ...(statusCode !== undefined ? { statusCode } : {}),
+  })
+  normalized.retryable = isRetryableNpmViewError(normalized)
+  return normalized
+}
+
+function registryError(message, options = {}) {
+  const error = new Error(
+    message,
+    options.cause === undefined ? undefined : { cause: options.cause },
+  )
+  if (options.code !== undefined) {
+    error.code = options.code
+  }
+  if (options.statusCode !== undefined) {
+    error.statusCode = options.statusCode
+  }
+  if (options.retryable !== undefined) {
+    error.retryable = options.retryable
+  }
+  return error
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function defaultDelay(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
 }
 
 export async function makeTempDir(prefix) {
@@ -192,6 +509,13 @@ export async function removeDir(path) {
 }
 
 export async function run(command, args, options = {}) {
+  if (
+    options.timeoutMs !== undefined &&
+    (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)
+  ) {
+    throw new TypeError("timeoutMs must be a positive safe integer")
+  }
+
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -205,6 +529,34 @@ export async function run(command, args, options = {}) {
 
     let stdout = ""
     let stderr = ""
+    let timedOut = false
+    let settled = false
+    let forceKillTimer
+    const timeoutTimer =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true
+            child.kill("SIGTERM")
+            forceKillTimer = setTimeout(() => {
+              if (child.exitCode === null && child.signalCode === null) {
+                child.kill("SIGKILL")
+              }
+            }, 250)
+            forceKillTimer.unref()
+          }, options.timeoutMs)
+
+    const rejectOnce = (error) => {
+      if (!settled) {
+        settled = true
+        reject(error)
+      }
+    }
+
+    const cleanupTimers = () => {
+      clearTimeout(timeoutTimer)
+      clearTimeout(forceKillTimer)
+    }
 
     child.stdout?.on("data", (chunk) => {
       stdout += chunk
@@ -212,16 +564,49 @@ export async function run(command, args, options = {}) {
     child.stderr?.on("data", (chunk) => {
       stderr += chunk
     })
-    child.on("error", reject)
+    child.on("error", (error) => {
+      cleanupTimers()
+      if (timedOut) {
+        rejectOnce(commandTimeoutError(command, args, options.timeoutMs, stderr, error))
+      } else {
+        rejectOnce(error)
+      }
+    })
     child.on("close", (code) => {
-      if (code === 0) {
-        resolvePromise(stdout)
+      cleanupTimers()
+      if (timedOut) {
+        rejectOnce(commandTimeoutError(command, args, options.timeoutMs, stderr))
         return
       }
 
-      reject(new Error(`${command} ${args.join(" ")} failed with exit code ${code}\n${stderr}`))
+      if (code === 0) {
+        if (!settled) {
+          settled = true
+          resolvePromise(stdout)
+        }
+        return
+      }
+
+      const error = new Error(
+        `${command} ${args.join(" ")} failed with exit code ${code}\n${stderr}`,
+      )
+      error.command = command
+      error.exitCode = code
+      error.stderr = stderr
+      rejectOnce(error)
     })
   })
+}
+
+function commandTimeoutError(command, args, timeoutMs, stderr, cause) {
+  const error = new Error(`${command} ${args.join(" ")} timed out after ${timeoutMs}ms`, {
+    ...(cause !== undefined ? { cause } : {}),
+  })
+  error.code = "ETIMEDOUT"
+  error.command = command
+  error.stderr = stderr
+  error.timeoutMs = timeoutMs
+  return error
 }
 
 function childProcessEnv(env, options = {}) {

@@ -25,6 +25,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./internal/compiler": {
+      "types": "./dist/compiler/index.d.ts",
+      "default": "./dist/compiler/index.js"
+    },
     "./node": {
       "types": "./dist/node.d.ts",
       "default": "./dist/node.js"
@@ -45,8 +49,9 @@
     "@dawn-ai/sqlite-storage": "workspace:*",
     "@dawn-ai/workspace": "workspace:*",
     "@langchain/langgraph": "^1.4.7",
+    "@typescript/old": "npm:typescript@6.0.2",
     "tsx": "^4.23.0",
-    "typescript": "5.8.3",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

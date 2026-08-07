@@ -187,8 +187,8 @@ Inside an `agent` route, you do not call tools yourself. `dawn build` wires the 
 ## Input and output rules
 
 <Steps>
-  <Step title="Use a typed input parameter">
-    Annotate the input parameter with an inline type. This is what Dawn's compiler pass extracts.
+  <Step title="Use a typed, object-shaped input">
+    Dawn's compiler pass extracts serializable input shapes written inline, declared as local aliases or interfaces, or imported from another module. Keep the root input object-shaped so Dawn can emit the model-facing tool schema.
 
     ```ts
     export default async (input: { readonly tenant: string; readonly limit?: number }) => { ... }
@@ -200,8 +200,8 @@ Inside an `agent` route, you do not call tools yourself. `dawn build` wires the 
   <Step title="Keep inputs and outputs JSON-serializable">
     Dawn serializes through the runtime boundary. Classes, Dates, Maps, functions — none of them survive. Use primitives, plain objects, and arrays.
   </Step>
-  <Step title="Return a plain object">
-    Always return an object literal, not a primitive or array. Dawn's type inference handles shape-based returns cleanly; a bare `return someString` muddles the generated types.
+  <Step title="Return serializable data">
+    Output types may be inferred or annotated inline, declared as local aliases or interfaces, or imported from another module. Serializable primitives, arrays, and plain objects are supported; avoid the non-serializable values listed above.
   </Step>
 </Steps>
 
@@ -244,7 +244,7 @@ export default async (input: { readonly query: string }) => {
 }
 ```
 
-Wrap the wrapped tool's output in a plain object (per the rules above) so Dawn can infer the return shape — community tools often return loosely-typed values.
+This example wraps the community tool's loosely typed output in a plain object to give it a concrete, serializable return shape. Outputs that already have a serializable primitive, array, or object type do not need that wrapper.
 
 ## Related
 

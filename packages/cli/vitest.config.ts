@@ -8,6 +8,7 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   resolve: {
     alias: {
+      "@dawn-ai/core/internal/compiler": resolve(rootDir, "../core/src/compiler/index.ts"),
       "@dawn-ai/core/node": resolve(rootDir, "../core/src/node.ts"),
       "@dawn-ai/core": resolve(rootDir, "../core/src/index.ts"),
       "@dawn-ai/langchain": resolve(rootDir, "../langchain/src/index.ts"),

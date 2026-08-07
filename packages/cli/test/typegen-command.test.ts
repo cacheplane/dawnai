@@ -173,7 +173,10 @@ describe("dawn typegen", () => {
   })
 
   test("runs from an externally installed dawn bin against a custom appDir", {
-    timeout: 60_000,
+    // This builds and packs ten workspace packages, installs them into a clean
+    // consumer, and runs two external CLI processes. Leave headroom for the
+    // repository-wide suite running other package builds concurrently.
+    timeout: 120_000,
   }, async () => {
     const installerRoot = await mkdtemp(join(tmpdir(), "dawn-cli-packed-installer-"))
     const packsRoot = join(installerRoot, "packs")

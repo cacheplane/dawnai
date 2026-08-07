@@ -240,6 +240,33 @@ export default async function greet(input: { name: string }): Promise<{ message:
     expect(result[0]?.description).toBe("Greets the user by name.")
   })
 
+  test("preserves paragraph breaks from compiler-symbol documentation", async () => {
+    const routeDir = join(tempDir, "route")
+    writeToolFile(
+      routeDir,
+      "greet",
+      `
+/**
+ * Greets the user by name.
+ *
+ * Returns a personalized message.
+ */
+export default async function greet(input: { name: string }): Promise<{ message: string }> {
+  return { message: "hello " + input.name }
+}
+`,
+    )
+
+    const result = await extractToolTypesForRoute({
+      routeDir,
+      sharedToolsDir: undefined,
+    })
+
+    expect(result[0]?.description).toBe(
+      "Greets the user by name.\n\nReturns a personalized message.",
+    )
+  })
+
   test("returns empty description when no JSDoc", async () => {
     const routeDir = join(tempDir, "route")
     writeToolFile(

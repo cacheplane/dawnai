@@ -36,12 +36,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dawn-ai/core": "workspace:*",
-    "typescript": "5.8.3"
+    "@dawn-ai/core": "workspace:*"
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
     "@types/node": "26.1.1",
+    "vite": "6.4.3",
     "zod": "4.4.3"
   }
 }
