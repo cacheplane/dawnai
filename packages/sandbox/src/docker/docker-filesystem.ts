@@ -6,12 +6,19 @@ function q(s: string): string {
 }
 
 /** FilesystemBackend whose ops run inside a docker container via `docker exec`. */
-export function dockerFilesystem(docker: Docker, container: string): FilesystemBackend {
-  const run = (cmd: string, ctx: BackendContext, stdin?: string) =>
-    docker.exec(container, ["sh", "-c", cmd], {
-      ...(stdin !== undefined ? { stdin } : {}),
-      signal: ctx.signal,
-    })
+export function dockerFilesystem(
+  docker: Docker,
+  container: string,
+  runWithExecLease?: <T>(operation: () => Promise<T>) => Promise<T>,
+): FilesystemBackend {
+  const run = (cmd: string, ctx: BackendContext, stdin?: string) => {
+    const operation = () =>
+      docker.exec(container, ["sh", "-c", cmd], {
+        ...(stdin !== undefined ? { stdin } : {}),
+        signal: ctx.signal,
+      })
+    return runWithExecLease !== undefined ? runWithExecLease(operation) : operation()
+  }
   return {
     async readFile(path, ctx, opts) {
       const r = await run(`cat ${q(path)}`, ctx)

@@ -102,6 +102,10 @@ describe("resolvePackageSet", () => {
       "@dawn-ai/cli",
     ])
   })
+
+  it("resolves the Docker sandbox package set", () => {
+    assert.deepEqual(resolvePackageSet("docker-sandbox"), ["@dawn-ai/sandbox"])
+  })
 })
 
 describe("packageSets", () => {
@@ -120,6 +124,10 @@ describe("packageSets", () => {
       "@dawn-ai/vite-plugin",
       "@dawn-ai/cli",
     ])
+  })
+
+  it("includes the Docker sandbox package set", () => {
+    assert.deepEqual(packageSets["docker-sandbox"], ["@dawn-ai/sandbox"])
   })
 })
 
@@ -819,13 +827,14 @@ describe("published artifact workflow", () => {
     )
 
     assert.match(workflow, /- typescript-tooling/)
+    assert.match(workflow, /- docker-sandbox/)
     assert.match(
       workflow,
-      /if \[ "\$DAWN_RUN_PGVECTOR" = "true" \] && \[ "\$DAWN_PACKAGE_SET" != "typescript-tooling" \]/,
+      /if \[ "\$DAWN_RUN_PGVECTOR" = "true" \] && \[ "\$DAWN_PACKAGE_SET" != "typescript-tooling" \] && \[ "\$DAWN_PACKAGE_SET" != "docker-sandbox" \]/,
     )
     assert.match(
       workflow,
-      /if \[ "\$DAWN_PACKAGE_SET" = "typescript-tooling" \]; then[\s\S]*does not support the OpenAI runtime smoke/,
+      /if \[ "\$DAWN_PACKAGE_SET" = "typescript-tooling" \] \|\| \[ "\$DAWN_PACKAGE_SET" = "docker-sandbox" \]; then[\s\S]*does not support the OpenAI runtime smoke/,
     )
   })
 })
@@ -868,6 +877,23 @@ describe("release workflow published TypeScript tooling verification", () => {
     assert.match(
       workflow,
       /- name: Smoke published TypeScript tooling\n\s+if: \$\{\{ steps\.changesets\.outputs\.published == 'true' \}\}\n\s+run: pnpm published:smoke -- --version "\$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling/,
+    )
+  })
+
+  it("verifies and then runs the Docker recovery smoke against the published sandbox", () => {
+    const workflow = readFileSync(releaseWorkflowPath, "utf8")
+    const verifyIndex = workflow.indexOf("- name: Verify published Docker sandbox")
+    const smokeIndex = workflow.indexOf("- name: Smoke published Docker sandbox PID recovery")
+
+    assert.ok(verifyIndex >= 0, "release workflow must verify the published sandbox")
+    assert.ok(smokeIndex > verifyIndex, "Docker recovery smoke must follow metadata verification")
+    assert.match(
+      workflow,
+      /published:verify -- --version "\$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000/,
+    )
+    assert.match(
+      workflow,
+      /published:smoke -- --version "\$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox/,
     )
   })
 
@@ -920,6 +946,12 @@ describe("expectedFilesForPackage", () => {
       "package.json",
     ])
     assert.deepEqual(expectedFilesForPackage("@dawn-ai/langchain"), [
+      "dist/index.js",
+      "dist/index.d.ts",
+      "README.md",
+      "package.json",
+    ])
+    assert.deepEqual(expectedFilesForPackage("@dawn-ai/sandbox"), [
       "dist/index.js",
       "dist/index.d.ts",
       "README.md",
@@ -1657,6 +1689,23 @@ describe("published TypeScript tooling smoke", () => {
     assert.equal(harness.events.at(-1).type, "cleanup")
   })
 
+  it("runs Docker PID recovery against an installed sandbox artifact before cleanup", async () => {
+    const harness = await createPublishedSmokeHarness({
+      selectedPackages: [{ name: "@dawn-ai/sandbox", version: packageVersion }],
+    })
+
+    await runPublishedArtifactSmoke(harness.options, harness.dependencies)
+
+    assert.deepEqual(
+      harness.events.map(({ type }) => type),
+      ["select", "selected-install", "command", "docker", "docker-sandbox-probe", "cleanup"],
+    )
+    assert.deepEqual(harness.events[4], {
+      root: harness.tempDir,
+      type: "docker-sandbox-probe",
+    })
+  })
+
   it("uses the shared Task 8 helper to reject a different nested Core artifact", async () => {
     const root = await createCoreResolutionFixture({ nestedViteCore: true })
 
@@ -2112,6 +2161,9 @@ async function createPublishedSmokeHarness({
     runCommand: runCommandForHarness,
     async runRuntimeSmoke() {
       events.push({ type: "docker" })
+    },
+    async runDockerSandboxInstalledProbe(root) {
+      events.push({ root, type: "docker-sandbox-probe" })
     },
     async runTypeScriptToolingProbe({ expectedTypeScriptVersion, root, runCommand: command }) {
       events.push({ expectedTypeScriptVersion, root, type: "tooling-probe" })

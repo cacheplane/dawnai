@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, test } from "vitest"
+import { createDocker, type Docker, type SpawnResult } from "../src/docker/docker-cli.ts"
 import { dockerSandbox } from "../src/index.ts"
 import { runProviderConformance } from "../src/testing/index.ts"
 
@@ -11,69 +15,66 @@ const enabled = process.env.DAWN_TEST_DOCKER === "1"
 const IMAGE = "node:22-slim"
 const ctx = (workspaceRoot: string) => ({ signal: new AbortController().signal, workspaceRoot })
 const policyDeny = { network: { mode: "deny" } } as const
+const pollIntervalMs = 100
 
-/**
- * Docker could not LAUNCH the command — its own init process failed to start.
- *
- * Matched on the launch failure itself rather than on any particular runc diagnostic:
- * pid exhaustion surfaces through several unrelated-looking messages
- * (`unable to spawn stage-1: Resource temporarily unavailable`, and
- * `read init-p: connection reset by peer` when runc's init dies mid-handshake), and
- * enumerating them is a losing game. What matters is the category: the command never
- * ran, so its output says nothing about whether the container survived. A command that
- * DID run and produced the wrong output does not match, and still fails immediately.
- */
-const FAILED_TO_LAUNCH = /OCI runtime exec failed|unable to start container process/
+const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/**
- * Runs a command, retrying only while the container has no free pids.
- *
- * The fork-bomb test leaves up to 2000 `sleep 30` processes ALIVE — they hold their
- * pids for the full 30s, so `pids-limit` keeps rejecting new processes long after
- * `runCommand` returns. A single follow-up exec therefore races the test's own
- * workload rather than any cleanup, and fails with `OCI runtime exec failed` roughly
- * a third of CI runs.
- *
- * Retrying preserves what the assertion is actually for: the container must still be
- * usable, which is only meaningful once it can spawn at all. Any OTHER failure is
- * returned immediately so a genuine regression still fails fast rather than burning
- * the whole window.
- *
- * The budget is 120s, not 60s. The drain is bounded by the sleeps' own 30s lifetime,
- * so 60s looks generous — but on a saturated runner each retry's `docker exec` is
- * itself slow to round-trip, so the loop gets only a handful of attempts and can
- * expire while the container is still draining. Observed failing on ~half of runs
- * with the 60s budget. Anything approaching 120s is a real problem, not slowness,
- * hence the explicit throw rather than a quiet return.
- */
-type SandboxHandle = Awaited<ReturnType<ReturnType<typeof dockerSandbox>["acquire"]>>
-type ExecResult = Awaited<ReturnType<SandboxHandle["exec"]["runCommand"]>>
+async function pollCommand(
+  command: () => Promise<SpawnResult>,
+  accept: (result: SpawnResult) => boolean,
+  deadlineMs: number,
+): Promise<SpawnResult> {
+  const deadline = Date.now() + deadlineMs
+  let lastResult: SpawnResult | undefined
+  do {
+    lastResult = await command()
+    if (accept(lastResult)) return lastResult
+    await wait(pollIntervalMs)
+  } while (Date.now() < deadline)
 
-async function execUntilSpawnable(
-  handle: SandboxHandle,
-  command: string,
-  { intervalMs = 1_000, timeoutMs = 120_000 } = {},
-): Promise<ExecResult> {
-  const startedAt = Date.now()
-  const deadline = startedAt + timeoutMs
-  let attempts = 0
-  for (;;) {
-    attempts++
-    const result = await handle.exec.runCommand({ command }, ctx(handle.workspaceRoot))
-    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`
-    if (!FAILED_TO_LAUNCH.test(output)) return result
-    if (Date.now() >= deadline) {
-      // Deliberately throw rather than return the launch failure. Returning it
-      // surfaced as `expected 'OCI runtime exec failed…' to contain 'alive'`,
-      // which reads like the container came back wrong when in fact it never
-      // became spawnable at all — two very different diagnoses.
-      throw new Error(
-        `container never became spawnable: ${attempts} attempt(s) over ` +
-          `${Date.now() - startedAt}ms all failed to launch. Last output: ${output.trim().slice(0, 300)}`,
-      )
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  throw new Error(
+    `Docker command did not reach the expected state within ${deadlineMs}ms; last result: ${JSON.stringify(lastResult)}`,
+  )
+}
+
+async function waitForContainerFile(
+  docker: Docker,
+  container: string,
+  containerPath: string,
+  deadlineMs: number,
+): Promise<string> {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "dawn-pids-ready-"))
+  const destination = join(temporaryDirectory, "ready")
+  const deadline = Date.now() + deadlineMs
+  let lastCopy: SpawnResult | undefined
+
+  try {
+    do {
+      await rm(destination, { force: true })
+      lastCopy = await docker.run(["cp", `${container}:${containerPath}`, destination])
+      if (lastCopy.exitCode === 0) return await readFile(destination, "utf8")
+      await wait(pollIntervalMs)
+    } while (Date.now() < deadline)
+
+    const [state, pids] = await Promise.all([
+      docker.run(["inspect", "--format", "{{json .State}}", container]),
+      docker.run(["stats", "--no-stream", "--format", "{{.PIDs}}", container]),
+    ])
+    throw new Error(
+      `PID saturation was not ready within ${deadlineMs}ms; last copy: ${JSON.stringify(lastCopy)}; container state: ${state.stdout.trim() || state.stderr.trim()}; observed PIDs: ${pids.stdout.trim() || pids.stderr.trim()}`,
+    )
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true })
   }
+}
+
+async function keeperId(docker: Docker, container: string): Promise<string> {
+  const result = await docker.run(["inspect", "--format", "{{.Id}}", container])
+  if (result.exitCode !== 0 || !result.stdout.trim()) {
+    throw new Error(`Could not inspect keeper ${container}: ${JSON.stringify(result)}`)
+  }
+  return result.stdout.trim()
 }
 
 describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, () => {
@@ -141,26 +142,218 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
   })
 
   // Adversarial hardening conformance: these tests actually attempt the abuse
-  // (fork bomb, /etc write, non-root escalation, timeout overrun) and assert
+  // (bounded process storm, /etc write, non-root escalation, timeout overrun) and assert
   // containment. fakeSandbox can't enforce kernel controls (caps/pids/
   // read-only/non-root), so these properties are Docker-lane-only.
 
-  // 300s, not 180s: the assertion below may spend up to 120s waiting for the
-  // container's pids to drain, and that budget has to fit INSIDE the test's own
-  // timeout or it can never actually be spent.
-  test("hardened defaults contain a fork bomb (pids-limit)", { timeout: 300_000 }, async () => {
+  test("configured PID limit contains a bounded process storm", {
+    timeout: 180_000,
+  }, async () => {
+    const pidsLimit = 32
     const p = dockerSandbox({ image: IMAGE })
     const threadId = `fork-${randomUUID()}`
     try {
-      const h = await p.acquire({ threadId, policy: policyDeny, signal: ctx("/").signal })
+      const h = await p.acquire({
+        threadId,
+        policy: { ...policyDeny, security: { pidsLimit } },
+        signal: ctx("/").signal,
+      })
+      const successMarker = "SPAWN_STORM_COMPLETED"
+      const storm = `
+        const { spawn } = require("node:child_process")
+
+        function errorDetails(error) {
+          return {
+            code: typeof error.code === "string" ? error.code : "UNKNOWN",
+            message: error instanceof Error ? error.message : String(error),
+          }
+        }
+
+        const attempts = Array.from({ length: ${pidsLimit * 4} }, () => new Promise((resolve) => {
+          let child
+          try {
+            child = spawn("sleep", ["2"], { stdio: "ignore" })
+          } catch (error) {
+            resolve({ error: errorDetails(error), started: false })
+            return
+          }
+          child.once("spawn", () => resolve({ started: true }))
+          child.once("error", (error) => resolve({ error: errorDetails(error), started: false }))
+        }))
+        Promise.all(attempts).then((results) => {
+          const errors = results.flatMap((result) => result.started ? [] : [result.error])
+          const report = { errors, started: results.length - errors.length }
+          if (errors.length === 0) {
+            console.log("${successMarker}")
+          } else {
+            console.error("SPAWN_STORM_BLOCKED:" + JSON.stringify(report))
+            process.exitCode = 42
+          }
+        })
+      `
       const r = await h.exec.runCommand(
-        { command: "for i in $(seq 1 2000); do sleep 30 & done; echo done" },
+        { command: `node -e ${shellQuote(storm)}` },
         ctx(h.workspaceRoot),
       )
-      expect(typeof r.exitCode).toBe("number")
-      // container still responsive → the host/container survived the spawn storm
-      const alive = await execUntilSpawnable(h, "echo alive")
-      expect(alive.stdout).toContain("alive")
+      expect(r.exitCode).not.toBe(0)
+      expect(r.stdout).not.toContain(successMarker)
+      expect(r.stderr).toContain("SPAWN_STORM_BLOCKED:")
+      const reportText = r.stderr
+        .split("\n")
+        .find((line) => line.startsWith("SPAWN_STORM_BLOCKED:"))
+        ?.slice("SPAWN_STORM_BLOCKED:".length)
+      expect(reportText, `missing spawn-storm report in stderr: ${r.stderr}`).toBeDefined()
+      const report = JSON.parse(reportText ?? "{}") as {
+        errors?: Array<{ code?: unknown; message?: unknown }>
+        started?: unknown
+      }
+      expect(report.started).toEqual(expect.any(Number))
+      expect(report.started).toBeGreaterThan(0)
+      expect(report.errors).toEqual(expect.any(Array))
+      expect(report.errors).not.toHaveLength(0)
+      for (const error of report.errors ?? []) {
+        expect(error).toEqual({ code: expect.any(String), message: expect.any(String) })
+        expect(
+          error.code === "EAGAIN" ||
+            (typeof error.message === "string" &&
+              error.message.includes("Resource temporarily unavailable")),
+        ).toBe(true)
+      }
+
+      const alive = await pollCommand(
+        () => h.exec.runCommand({ command: "echo alive" }, ctx(h.workspaceRoot)),
+        (result) => result.exitCode === 0 && result.stdout.trim() === "alive",
+        10_000,
+      )
+      expect(alive).toMatchObject({ exitCode: 0, stdout: "alive\n" })
+    } finally {
+      await p.destroy(threadId)
+    }
+  })
+
+  test("recycles a PID-exhausted keeper and preserves its workspace", {
+    timeout: 180_000,
+  }, async () => {
+    const pidsLimit = 32
+    const recoveryCommands = 24
+    const docker = createDocker()
+    const p = dockerSandbox({ image: IMAGE, docker })
+    const threadId = `pid-recovery-${randomUUID()}`
+    const container = `dawn-sbx-${threadId}`
+    const readinessPath = "/workspace/.pids-ready.json"
+    const readinessTemporaryPath = "/workspace/.pids-ready.json.tmp"
+    const sentinelPath = "/workspace/pid-recovery-sentinel.txt"
+    const sentinel = `sentinel-${randomUUID()}`
+
+    try {
+      const h = await p.acquire({
+        threadId,
+        policy: { ...policyDeny, security: { pidsLimit } },
+        signal: ctx("/").signal,
+      })
+      await h.filesystem.writeFile(sentinelPath, sentinel, ctx(h.workspaceRoot))
+      const originalKeeperId = await keeperId(docker, container)
+      const saturator = `
+        const { renameSync, rmSync, writeFileSync } = require("node:fs")
+        const { Worker } = require("node:worker_threads")
+        let started = 0
+        let settled = false
+        const workers = []
+        rmSync("${readinessTemporaryPath}", { force: true })
+        rmSync("${readinessPath}", { force: true })
+
+        function publishReadiness(status) {
+          writeFileSync("${readinessTemporaryPath}", JSON.stringify(status))
+          renameSync("${readinessTemporaryPath}", "${readinessPath}")
+        }
+
+        const keepAlive = setInterval(() => {}, 1000)
+        const deadline = setTimeout(() => {
+          settled = true
+          publishReadiness({ status: "failed", reason: "deadline", started })
+          clearInterval(keepAlive)
+          process.exit(88)
+        }, 5000)
+
+        function fail(reason, error) {
+          if (settled) return
+          settled = true
+          clearTimeout(deadline)
+          publishReadiness({ status: "failed", reason, code: error && error.code, started })
+          clearInterval(keepAlive)
+          process.exit(89)
+        }
+
+        function launch() {
+          if (settled) return
+          if (started >= ${pidsLimit * 4}) {
+            fail("attempt-limit")
+            return
+          }
+          let worker
+          try {
+            worker = new Worker("setInterval(() => {}, 1000)", { eval: true })
+          } catch (error) {
+            const message = String(error && error.message)
+            if (error.code !== "ERR_WORKER_INIT_FAILED" || !message.includes("EAGAIN")) {
+              fail("unexpected-worker-error", error)
+              return
+            }
+            settled = true
+            clearTimeout(deadline)
+            publishReadiness({ status: "ready", code: error.code, message, started })
+            return
+          }
+          worker.once("online", () => {
+            workers.push(worker)
+            started += 1
+            launch()
+          })
+          worker.once("error", (error) => fail("worker-runtime-error", error))
+        }
+
+        launch()
+      `
+      const detached = await docker.run(["exec", "-d", container, "node", "-e", saturator])
+      expect(detached).toMatchObject({ exitCode: 0 })
+
+      const readiness = JSON.parse(
+        await waitForContainerFile(docker, container, readinessPath, 10_000),
+      ) as { code?: unknown; message?: unknown; started?: unknown; status?: unknown }
+      expect(readiness).toMatchObject({ status: "ready", code: "ERR_WORKER_INIT_FAILED" })
+      expect(readiness.message).toEqual(expect.stringContaining("EAGAIN"))
+      expect(readiness.started).toEqual(expect.any(Number))
+      const saturatedPids = await docker.run([
+        "stats",
+        "--no-stream",
+        "--format",
+        "{{.PIDs}}",
+        container,
+      ])
+      expect(saturatedPids).toMatchObject({ exitCode: 0, stdout: `${pidsLimit}\n` })
+
+      // Docker Desktop may admit a single exec task into a full cgroup. A bounded
+      // concurrent wave makes OCI startup contend at the limit; the keeper-ID
+      // assertion proves that at least one command actually triggered recovery.
+      const recovered = await Promise.all(
+        Array.from({ length: recoveryCommands }, (_, index) =>
+          h.exec.runCommand({ command: `echo recovered-${index}` }, ctx(h.workspaceRoot)),
+        ),
+      )
+      const replacementKeeperId = await keeperId(docker, container)
+      expect(recovered).toEqual(
+        Array.from({ length: recoveryCommands }, (_, index) => ({
+          exitCode: 0,
+          stderr: "",
+          stdout: `recovered-${index}\n`,
+        })),
+      )
+      expect(
+        replacementKeeperId,
+        `keeper did not recycle; command results: ${JSON.stringify(recovered)}`,
+      ).not.toBe(originalKeeperId)
+      const persisted = await h.filesystem.readFile(sentinelPath, ctx(h.workspaceRoot))
+      expect(persisted).toBe(sentinel)
     } finally {
       await p.destroy(threadId)
     }

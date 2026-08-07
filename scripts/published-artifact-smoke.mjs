@@ -62,6 +62,7 @@ export async function runPublishedArtifactSmoke(options, overrides = {}) {
     removeDir,
     runAgUiInstalledProbe,
     runCommand,
+    runDockerSandboxInstalledProbe,
     runInstallSmoke,
     runRuntimeSmoke,
     runTypeScriptToolingProbe: defaultRunTypeScriptToolingProbe,
@@ -100,6 +101,11 @@ export async function runPublishedArtifactSmoke(options, overrides = {}) {
         runCommand: dependencies.runCommand,
       })
       console.log("T-TYPESCRIPT-TOOLING PASS")
+    }
+
+    if (selectedPackages.some(({ name }) => name === "@dawn-ai/sandbox")) {
+      await dependencies.assertDockerAvailable()
+      await dependencies.runDockerSandboxInstalledProbe(tempDir)
     }
 
     if (!options.pgvector) {
@@ -645,6 +651,145 @@ async function removeContainer(containerName) {
   } catch (error) {
     console.error(`WARN failed to remove Docker container ${containerName}: ${error.message}`)
   }
+}
+
+export async function runDockerSandboxInstalledProbe(tempDir) {
+  await writeFile(
+    resolve(tempDir, "smoke-docker-sandbox.mjs"),
+    dockerSandboxInstalledProbeSource(),
+    "utf8",
+  )
+  const result = await runCommand("node", ["smoke-docker-sandbox.mjs"], { cwd: tempDir })
+  process.stdout.write(result.stdout)
+  process.stderr.write(result.stderr)
+}
+
+export function dockerSandboxInstalledProbeSource() {
+  return `import assert from "node:assert/strict"
+import { execFile } from "node:child_process"
+import { readFile, rm } from "node:fs/promises"
+import { promisify } from "node:util"
+
+import { dockerSandbox } from "@dawn-ai/sandbox"
+
+const execFileAsync = promisify(execFile)
+const pidsLimit = 32
+const recoveryCommands = 24
+const threadId = "published-pid-" + process.pid + "-" + Date.now()
+const container = "dawn-sbx-" + threadId
+const readinessPath = "/workspace/.published-pids-ready.json"
+const readinessTemporaryPath = readinessPath + ".tmp"
+const localReadinessPath = ".published-pids-ready-" + process.pid + ".json"
+const sentinelPath = "/workspace/published-pid-sentinel.txt"
+const sentinel = "sentinel-" + Date.now()
+const context = (workspaceRoot) => ({ signal: new AbortController().signal, workspaceRoot })
+
+async function docker(args) {
+  try {
+    const result = await execFileAsync("docker", args, { maxBuffer: 1024 * 1024 })
+    return { exitCode: 0, stderr: result.stderr, stdout: result.stdout }
+  } catch (error) {
+    return {
+      exitCode: typeof error?.code === "number" ? error.code : 1,
+      stderr: String(error?.stderr ?? error?.message ?? error),
+      stdout: String(error?.stdout ?? ""),
+    }
+  }
+}
+
+async function inspectKeeperId() {
+  const result = await docker(["inspect", "--format", "{{.Id}}", container])
+  assert.equal(result.exitCode, 0, JSON.stringify(result))
+  assert.ok(result.stdout.trim(), "keeper inspect returned no ID")
+  return result.stdout.trim()
+}
+
+async function waitForReadiness() {
+  const deadline = Date.now() + 10_000
+  let lastResult
+  while (Date.now() < deadline) {
+    await rm(localReadinessPath, { force: true })
+    lastResult = await docker(["cp", container + ":" + readinessPath, localReadinessPath])
+    if (lastResult.exitCode === 0) {
+      return JSON.parse(await readFile(localReadinessPath, "utf8"))
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error("published Docker sandbox PID saturation was not ready: " + JSON.stringify(lastResult))
+}
+
+const saturator = [
+  'const { renameSync, rmSync, writeFileSync } = require("node:fs")',
+  'const { Worker } = require("node:worker_threads")',
+  'let started = 0',
+  'let settled = false',
+  'const workers = []',
+  'rmSync("/workspace/.published-pids-ready.json.tmp", { force: true })',
+  'rmSync("/workspace/.published-pids-ready.json", { force: true })',
+  'function publish(status) { writeFileSync("/workspace/.published-pids-ready.json.tmp", JSON.stringify(status)); renameSync("/workspace/.published-pids-ready.json.tmp", "/workspace/.published-pids-ready.json") }',
+  'const keepAlive = setInterval(() => {}, 1000)',
+  'const deadline = setTimeout(() => { settled = true; publish({ status: "failed", reason: "deadline", started }); clearInterval(keepAlive); process.exit(88) }, 5000)',
+  'function fail(reason, error) { if (settled) return; settled = true; clearTimeout(deadline); publish({ status: "failed", reason, code: error && error.code, started }); clearInterval(keepAlive); process.exit(89) }',
+  'function launch() {',
+  '  if (settled) return',
+  '  if (started >= 128) { fail("attempt-limit"); return }',
+  '  let worker',
+  '  try { worker = new Worker("setInterval(() => {}, 1000)", { eval: true }) }',
+  '  catch (error) {',
+  '    const message = String(error && error.message)',
+  '    if (error.code !== "ERR_WORKER_INIT_FAILED" || !message.includes("EAGAIN")) { fail("unexpected-worker-error", error); return }',
+  '    settled = true; clearTimeout(deadline); publish({ status: "ready", code: error.code, message, started }); return',
+  '  }',
+  '  worker.once("online", () => { workers.push(worker); started += 1; launch() })',
+  '  worker.once("error", (error) => fail("worker-runtime-error", error))',
+  '}',
+  'launch()',
+].join("\\n")
+
+const provider = dockerSandbox({ image: "node:22-slim" })
+try {
+  const handle = await provider.acquire({
+    threadId,
+    policy: { network: { mode: "deny" }, security: { pidsLimit } },
+    signal: context("/").signal,
+  })
+  await handle.filesystem.writeFile(sentinelPath, sentinel, context(handle.workspaceRoot))
+  const originalKeeperId = await inspectKeeperId()
+
+  const detached = await docker(["exec", "-d", container, "node", "-e", saturator])
+  assert.equal(detached.exitCode, 0, JSON.stringify(detached))
+  const readiness = await waitForReadiness()
+  assert.equal(readiness.status, "ready", JSON.stringify(readiness))
+  assert.equal(readiness.code, "ERR_WORKER_INIT_FAILED")
+  assert.match(String(readiness.message), /EAGAIN/)
+
+  const saturated = await docker(["stats", "--no-stream", "--format", "{{.PIDs}}", container])
+  assert.equal(saturated.exitCode, 0, JSON.stringify(saturated))
+  assert.equal(saturated.stdout.trim(), String(pidsLimit))
+
+  const recovered = await Promise.all(
+    Array.from({ length: recoveryCommands }, (_, index) =>
+      handle.exec.runCommand({ command: "echo recovered-" + index }, context(handle.workspaceRoot)),
+    ),
+  )
+  for (const [index, result] of recovered.entries()) {
+    assert.equal(result.exitCode, 0, JSON.stringify(result))
+    assert.equal(result.stdout, "recovered-" + index + "\\n")
+    assert.equal(result.stderr, "")
+  }
+
+  const replacementKeeperId = await inspectKeeperId()
+  assert.notEqual(replacementKeeperId, originalKeeperId, "PID-exhausted keeper was not replaced")
+  assert.equal(
+    await handle.filesystem.readFile(sentinelPath, context(handle.workspaceRoot)),
+    sentinel,
+  )
+  console.log("T-DOCKER-SANDBOX PASS")
+} finally {
+  await provider.destroy(threadId)
+  await rm(localReadinessPath, { force: true })
+}
+`
 }
 
 async function runRuntimeSmoke(tempDir, options) {
