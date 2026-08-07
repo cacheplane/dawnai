@@ -3,10 +3,7 @@ import type { MemoryRecord } from "@dawn-ai/memory"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 import { Badge } from "../ui/badge"
 import { Button } from "../ui/button"
-
-interface ActionResponse {
-  readonly error?: string
-}
+import { type MemoryVerb, mutateMemory } from "./actions"
 
 /** Overlays the table's right side (fixed, not in-flow — list-page renders the
  *  sheet outside its flex row). Focus-trap is deferred: this is a local dev
@@ -99,24 +96,16 @@ export function DetailSheet({
   }, [onClose])
 
   const act = useCallback(
-    async (verb: "approve" | "reject" | "forget") => {
+    async (verb: MemoryVerb) => {
       setBusy(true)
       setError(undefined)
-      try {
-        const res = await fetch(`/api/memory/${encodeURIComponent(id)}/${verb}`, {
-          method: "POST",
-        })
-        const body = (await res.json().catch(() => undefined)) as ActionResponse | undefined
-        if (!res.ok) {
-          setError(body?.error ?? `HTTP ${res.status}`)
-          return
-        }
-        onMutated()
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause))
-      } finally {
-        setBusy(false)
+      const { error: failure } = await mutateMemory(id, verb)
+      setBusy(false)
+      if (failure) {
+        setError(failure)
+        return
       }
+      onMutated()
     },
     [id, onMutated],
   )

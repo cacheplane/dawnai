@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react"
 import { Badge } from "../ui/badge"
 import { Input } from "../ui/input"
 import { usePolling } from "../use-polling"
+import { BulkBar } from "./bulk-bar"
 import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
 import { MemoryGrid } from "./memory-grid"
@@ -48,6 +49,7 @@ export function ListPage() {
   const [timelineWindow, setTimelineWindow] = useState<TimelineWindow>("all")
   const [live, setLive] = useState(true)
   const [selectedId, setSelectedId] = useState<string>()
+  const [ticked, setTicked] = useState<readonly string[]>([])
   const [refreshKey, setRefreshKey] = useState(0)
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({})
   const [search, setSearch] = useState<SearchResponse>()
@@ -144,6 +146,22 @@ export function ListPage() {
     setSelectedId(undefined)
     setRefreshKey((k) => k + 1)
   }, [])
+  // The grid keeps its own checkbox state, so clearing here would leave the
+  // boxes ticked. Remounting it (see `key` below) is what actually resets both.
+  const [gridEpoch, setGridEpoch] = useState(0)
+  const clearTicked = useCallback(() => {
+    setTicked([])
+    setGridEpoch((n) => n + 1)
+  }, [])
+  const handleBulkDone = useCallback(
+    ({ failed }: { failed: number }) => {
+      // Keep the selection when anything failed: clearing it unmounts the bar,
+      // and the report of what went wrong goes with it.
+      if (failed === 0) clearTicked()
+      setRefreshKey((k) => k + 1)
+    },
+    [clearTicked],
+  )
 
   const byStatus = stats?.byStatus ?? {}
   // The list API narrows by namespace PREFIX (server-side); a selected facet is
@@ -277,7 +295,12 @@ export function ListPage() {
             // TimelineView owns its empty state ("No episodes in this window.").
             <TimelineView records={pageRecords} onSelect={setSelectedId} />
           ) : pageRecords.length > 0 ? (
-            <MemoryGrid records={pageRecords} onSelect={setSelectedId} />
+            <MemoryGrid
+              key={gridEpoch}
+              records={pageRecords}
+              onSelect={setSelectedId}
+              onTickedChange={setTicked}
+            />
           ) : (
             <p className="py-8 text-center text-sm text-zinc-400">
               No memories yet — run your agent and watch them appear.
@@ -285,6 +308,14 @@ export function ListPage() {
           )}
         </main>
       </div>
+      {ticked.length > 0 ? (
+        <BulkBar
+          ticked={ticked}
+          records={pageRecords}
+          onDone={handleBulkDone}
+          onClear={clearTicked}
+        />
+      ) : null}
       {selectedId ? (
         // key remounts the sheet when the selection changes — otherwise record
         // A's conflict callout/error state would bleed into record B's sheet.

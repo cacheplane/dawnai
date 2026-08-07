@@ -96,9 +96,14 @@ function toRow(record: MemoryRecord): GridRow {
 export function MemoryGrid({
   records,
   onSelect,
+  onTickedChange,
 }: {
   records: readonly MemoryRecord[]
   onSelect: (id: string) => void
+  /** Opt into the checkbox column by passing this — the ticked ids, in
+   *  rendered order, for bulk actions. Omitted where bulk actions make no
+   *  sense (the grouped search results). */
+  onTickedChange?: (ids: string[]) => void
 }) {
   const rows = useMemo(() => records.map(toRow), [records])
 
@@ -122,6 +127,12 @@ export function MemoryGrid({
       rows={rows}
       getRowId={rowIdOf}
       viewportHeight={viewportHeight}
+      {...(onTickedChange
+        ? {
+            rowSelectionColumn: { enabled: true, headerCheckbox: true } as const,
+            onRowSelectionChange: onTickedChange,
+          }
+        : {})}
       // Strict ARIA grid tabbing — the default wraps Tab inside the grid, which
       // traps keyboard focus on a page that has a search box and a detail sheet.
       tabBehavior="exit"
