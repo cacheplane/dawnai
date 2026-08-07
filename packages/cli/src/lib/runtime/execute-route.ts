@@ -266,12 +266,14 @@ export async function resolveCheckpointer(appRoot: string): Promise<BaseCheckpoi
 }
 
 /**
- * Resolves a loaded PermissionsStore for the given appRoot: config-seeded
- * allow/deny + mode (env override wins), with `.dawn/permissions.json` read
- * once via `load()`. Exported so the HTTP server layer can build the store at
- * boot (production) or per request via a factory (dev — keeps HITL "Always"
- * grants written mid-process fresh). Construction is identical to what
- * `prepareRouteExecution` does when no store is provided.
+ * Resolves a loaded PermissionsStore for the given appRoot: `config.permissions.store`
+ * if the user's `dawn.config.ts` provides one, otherwise config-seeded
+ * allow/deny + mode (env override wins) over `.dawn/permissions.json`. Either
+ * way the returned store has had `load()` called exactly once — THIS resolver
+ * owns that call, because a store may be a cache that is empty until hydrated
+ * and `match()` is synchronous. Exported so the HTTP server layer can build the
+ * store at boot (production) or per request via a factory (dev — keeps HITL
+ * "Always" grants written mid-process fresh).
  */
 export async function resolvePermissionsStore(appRoot: string): Promise<PermissionsStore> {
   let permissionsConfig: DawnConfig["permissions"] | undefined
@@ -281,10 +283,24 @@ export async function resolvePermissionsStore(appRoot: string): Promise<Permissi
   } catch {
     // No dawn.config.ts or unreadable — fall through to defaults.
   }
+  const configStore = permissionsConfig?.store
+  if (configStore) {
+    // A custom store owns its own mode/allow/deny (supplied to its factory in
+    // dawn.config.ts), so neither the env mode override nor the config lists
+    // are re-applied here — re-wrapping would silently double-apply them.
+    await configStore.load()
+    return configStore
+  }
   return await buildPermissionsStore(appRoot, permissionsConfig)
 }
 
-/** Shared permissions-store construction: config + env-mode resolution + one `load()`. */
+/**
+ * Shared FILE-BACKED permissions-store construction: config + env-mode
+ * resolution + one `load()`. Deliberately does NOT consult
+ * `config.permissions.store` — it is the default-path primitive exposed on
+ * `RuntimeBootFallbacks`, and boot-level resolution (`resolvePermissionsStore`,
+ * which the HTTP layer always goes through) is where a custom store is honored.
+ */
 async function buildPermissionsStore(
   appRoot: string,
   permissionsConfig: DawnConfig["permissions"] | undefined,

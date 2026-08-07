@@ -950,6 +950,116 @@ Rejects malformed schema and table-prefix identifiers before they are interpolat
 
 ---
 
+## @dawn-ai/postgres-storage
+
+Postgres backend for Dawn's durable runtime state. Use it when the default SQLite/file stores are too local for your deployment: multiple app instances, a shared production database, or a host with no writable filesystem.
+
+```ts
+import {
+  assertIdentifier,
+  createPostgresPermissionsStore,
+  createPostgresThreadsStore,
+  DEFAULT_SCHEMA,
+  DEFAULT_TABLE_PREFIX,
+  postgresCheckpointer,
+  type PostgresStoreOptions,
+} from "@dawn-ai/postgres-storage"
+```
+
+The stores talk to Postgres through the standard `pg` driver, which opens a TCP connection. Node, Bun, and Vercel functions can use it directly; Cloudflare Workers provides no raw TCP socket, so a Workers deploy needs Hyperdrive or an HTTP-based driver in front of the database. Dawn does not currently ship a verified Workers configuration for these stores.
+
+See [Configuration](/docs/configuration#postgres-backend) for the shared-pool setup, teardown ownership, and the storage-shape limits.
+
+### `PostgresStoreOptions`
+
+```ts
+export interface PostgresStoreOptions {
+  connectionString?: string
+  pool?: Pool
+  schema?: string
+  tablePrefix?: string
+}
+```
+
+Connection and table-naming options shared by all three stores. Supply `connectionString` to have the store build and own a pool (`close()` ends it), or `pool` to inject an existing one (`close()` leaves it alone — the app that made the pool ends it). `schema` defaults to `DEFAULT_SCHEMA` and `tablePrefix` to `DEFAULT_TABLE_PREFIX`.
+
+`PostgresCheckpointerOptions` and `PostgresThreadsStoreOptions` are aliases of this type; `PostgresPermissionsStoreOptions` extends it.
+
+### `postgresCheckpointer(options)`
+
+```ts
+export function postgresCheckpointer(options?: PostgresCheckpointerOptions): DawnPostgresSaver
+
+export class DawnPostgresSaver extends BaseCheckpointSaver {
+  ready(): Promise<void>
+  close(): Promise<void>
+}
+```
+
+A LangGraph `BaseCheckpointSaver` for `DawnConfig.checkpointer`. The serialized checkpoint, its metadata, and pending-write values are stored as opaque `bytea`, matching the SQLite backend's BLOB — `jsonb` is deliberately not used, because it rejects a NUL byte (SQLSTATE `22P05`) and a lone surrogate (`22P02`), both of which reach checkpoints through normal tool output. Checkpoint ordering uses `COLLATE "C"`, so it does not depend on the database's locale.
+
+Migrations run lazily on first use, memoized per process, under a `pg_advisory_xact_lock`. `ready()` migrates eagerly at boot.
+
+### `createPostgresThreadsStore(options)`
+
+```ts
+export function createPostgresThreadsStore(
+  options?: PostgresThreadsStoreOptions,
+): PostgresThreadsStore
+
+export interface PostgresThreadsStore extends ThreadsStore {
+  ready(): Promise<void>
+  close(): Promise<void>
+}
+```
+
+An Agent Protocol threads store for `DawnConfig.threadsStore`, exporting the `ThreadsStore`, `Thread`, `ThreadStatus`, and `CreateThreadInput` types structurally (so a published consumer's types never point at a Node-only SQLite package). Its migrations are tracked separately from the checkpointer's, so a threads-only deployment never creates checkpoint tables.
+
+Two behaviors differ from the SQLite store, because Postgres has several concurrent writers: `createThread` upserts (`ON CONFLICT DO NOTHING`, then reads back) instead of throwing on a duplicate id, and `updateMetadata` merges in one statement (`metadata || $1::jsonb`) so a concurrent patch cannot be lost. The merge is shallow — a nested object is replaced wholesale — matching SQLite.
+
+### `createPostgresPermissionsStore(options)`
+
+```ts
+export function createPostgresPermissionsStore(
+  options?: PostgresPermissionsStoreOptions,
+): PostgresPermissionsStore
+
+export interface PostgresPermissionsStoreOptions extends PostgresStoreOptions {
+  config?: PermissionsFile
+  mode?: PermissionMode
+}
+
+export interface PostgresPermissionsStore extends PermissionsStore {
+  ready(): Promise<void>
+  close(): Promise<void>
+}
+```
+
+A `PermissionsStore` for `DawnConfig.permissions.store`, sharing runtime grants across instances instead of writing a per-process `.dawn/permissions.json`.
+
+`PermissionsStore.match()` is synchronous — it is called from inside tool execution and cannot await a query — so the store is a cache with async hydration: `load()` pulls runtime grants into memory, `match()` reads memory and delegates the decision to the same `matchPermission` the file store uses (so deny-wins and prefix-except-`tool` semantics cannot drift), and `addAllow` inserts the row and updates the map in one call. Because the insert is atomic, the file store's in-process write queue is not needed.
+
+`config` (the `allow`/`deny` lists from `dawn.config.ts`) is applied in memory on every construction and is never persisted — config remains the source of truth for itself. `mode` defaults to `"interactive"`; pass it explicitly, because Dawn does not re-apply the sibling `permissions.mode` field or the `DAWN_PERMISSIONS_MODE` env override on top of a custom store.
+
+### `assertIdentifier(name, value)`
+
+```ts
+export function assertIdentifier(name: string, value: string): void
+```
+
+Rejects malformed schema and table-prefix identifiers before they are interpolated into DDL. Postgres cannot bind identifiers as `$1` placeholders, so anything that is not a plain `/^[a-z_][a-z0-9_]*$/i` identifier throws.
+
+### `DEFAULT_SCHEMA` / `DEFAULT_TABLE_PREFIX`
+
+```ts
+export const DEFAULT_SCHEMA: string
+export const DEFAULT_TABLE_PREFIX: string
+```
+
+The Postgres schema (`public`) and table/index prefix (`dawn`) used when a store option is omitted. Vary the prefix to run two Dawn apps against one database.
+
+---
+
 ## @dawn-ai/testing
 
 Deterministic testing utilities for Dawn apps. The package replaces live model calls with aimock fixtures while running tools, prompts, capabilities, state, and workspace behavior normally.

@@ -67,7 +67,8 @@ export default {
   },
 
   // SQLite persistence is on by default — no config needed.
-  // Threads survive a restart. Override only if you need a custom backend.
+  // Threads survive a restart. Override only if you need a custom backend,
+  // e.g. @dawn-ai/postgres-storage for a shared database (see Postgres backend).
   // checkpointer: myCheckpointer,
   // threadsStore: myThreadsStore,
 
@@ -119,6 +120,7 @@ permissions?: {
   mode?: PermissionMode
   allow?: Record<string, string[]>
   deny?: Record<string, string[]>
+  store?: PermissionsStore
 }
 ```
 
@@ -150,6 +152,16 @@ export default {
 }
 ```
 
+#### `permissions.store`
+
+| Type | Default |
+|---|---|
+| `PermissionsStore` (`@dawn-ai/permissions`) | file-backed store at `.dawn/permissions.json` |
+
+Replaces the file-backed store — for example with [`createPostgresPermissionsStore`](#postgres-backend) when several app instances must share one set of runtime grants.
+
+A custom store **owns its own mode and allow/deny lists**: pass them to its factory. Dawn deliberately does not re-apply the sibling `permissions.mode` / `allow` / `deny` fields — or the `DAWN_PERMISSIONS_MODE` env override — on top of a custom store, because re-wrapping would silently double-apply them. The runtime only calls `load()` on the store you supply, then reads it.
+
 ---
 
 ### `checkpointer`
@@ -158,7 +170,7 @@ export default {
 |---|---|
 | `BaseCheckpointSaver` (LangGraph) | SQLite at `.dawn/checkpoints.sqlite` |
 
-A LangGraph checkpoint saver. Dawn defaults to a SQLite-backed saver that persists graph state across restarts — no configuration is needed for local development. Override to plug in a different storage backend (e.g. Redis, Postgres).
+A LangGraph checkpoint saver. Dawn defaults to a SQLite-backed saver that persists graph state across restarts — no configuration is needed for local development. Override to plug in a different storage backend; `postgresCheckpointer` from `@dawn-ai/postgres-storage` is the supported shared-database option (see [Postgres backend](#postgres-backend)).
 
 Thread state survives a `dawn dev` restart automatically when the default checkpointer is in use.
 
@@ -170,7 +182,7 @@ Thread state survives a `dawn dev` restart automatically when the default checkp
 |---|---|
 | `ThreadsStore` (`@dawn-ai/sqlite-storage`) | SQLite at `.dawn/threads.sqlite` |
 
-Stores Agent Protocol thread metadata (create time, status, latest checkpoint reference). Like `checkpointer`, Dawn defaults to SQLite and no configuration is needed for most apps. The AP thread endpoints (`POST /threads`, `GET /threads/:id/state`, and related) operate on this store — see [Dev Server](/docs/dev-server) for the full endpoint reference. Override to provide a custom store implementation.
+Stores Agent Protocol thread metadata (create time, status, latest checkpoint reference). Like `checkpointer`, Dawn defaults to SQLite and no configuration is needed for most apps. The AP thread endpoints (`POST /threads`, `GET /threads/:id/state`, and related) operate on this store — see [Dev Server](/docs/dev-server) for the full endpoint reference. Override to provide a custom store implementation — `createPostgresThreadsStore` from `@dawn-ai/postgres-storage` is the supported shared-database option (see [Postgres backend](#postgres-backend)).
 
 ---
 
@@ -301,6 +313,74 @@ sandbox?: {
 | `idleTimeoutMs` | `number` | `600000` (10 min) | Manager-level idle reap window before a warm sandbox is released. |
 
 See [Execution Sandbox](/docs/sandbox) for provider setup, the security-hardening defaults, and the Kubernetes provider.
+
+---
+
+## Postgres backend
+
+Dawn's three durable runtime stores — `checkpointer`, `threadsStore`, and `permissions.store` — all default to a local file under `.dawn/`. That is right for development and for a single long-lived process, and wrong for a deployment where more than one instance serves the same threads, or where the filesystem is ephemeral or read-only.
+
+`@dawn-ai/postgres-storage` provides all three against one Postgres database:
+
+```bash
+pnpm add @dawn-ai/postgres-storage pg
+```
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/core"
+import {
+  createPostgresPermissionsStore,
+  createPostgresThreadsStore,
+  postgresCheckpointer,
+} from "@dawn-ai/postgres-storage"
+import { Pool } from "pg"
+
+// One pool, shared by all three stores — managed Postgres caps connections,
+// and three owned pools burn three times the budget for no benefit.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+
+export default config({
+  checkpointer: postgresCheckpointer({ pool }),
+  threadsStore: createPostgresThreadsStore({ pool }),
+  permissions: {
+    mode: "non-interactive",
+    store: createPostgresPermissionsStore({ pool, mode: "non-interactive" }),
+  },
+})
+```
+
+Any Postgres 14+ database works; no extensions are required. Each store migrates lazily on first use under a `pg_advisory_xact_lock`, so N instances cold-starting against a virgin database converge instead of racing. Call `ready()` on a store to migrate at boot instead.
+
+Note that `permissions.store` receives `mode` explicitly. A custom store owns its own mode and allow/deny lists — see [`permissions.store`](#permissionsstore).
+
+### What this does and does not run on
+
+| Host | Works | Notes |
+|---|---|---|
+| Node, Bun | Yes | Direct TCP to Postgres. |
+| Vercel functions | Yes | Direct TCP to Postgres. |
+| Cloudflare Workers | **Not with a raw connection** | `pg` opens a TCP socket, which workerd does not provide. A Workers deploy needs [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) or an HTTP-based driver in front of the database. Dawn does not currently ship a verified Workers configuration for these stores. |
+
+### Your app owns store teardown
+
+`handler.close()` on the web-standard runtime handler stops accepting requests, aborts the shutdown controller, drains in-flight requests, and releases sandboxes. It does **not** touch the stores — the runtime never created them, so it does not own their lifetime.
+
+Each store exposes `close()`. A store built from `connectionString` owns its pool and `close()` ends it; a store built from an injected `pool` deliberately leaves that pool alone, so the shared-pool config above must end the pool itself:
+
+```ts
+await handler.close()
+await pool.end()
+```
+
+### Storage shape and known limits
+
+- **Checkpoint payloads are opaque.** The serialized checkpoint, its metadata, and pending-write values are stored as `bytea`, matching the SQLite backend's BLOB. `jsonb` is deliberately not used: it rejects a NUL byte (SQLSTATE `22P05`) and a lone surrogate (`22P02`), both of which reach checkpoints in normal operation through tool output.
+- **Unchanged channel values repeat per checkpoint.** Each checkpoint stores its channel values as one payload rather than deduplicating across checkpoints. SQLite has the same property and Dawn has lived with it; on Postgres the same shape costs more, because every repeat crosses the network and lands in TOAST storage. This has not been benchmarked — size your database accordingly for long threads carrying large state.
+- **The per-thread run gate is in-process.** The runtime's "one run at a time per thread" check lives in instance memory, so two instances can each start a run on the same thread. A shared store makes that visible; it does not cause it. Serialize at the routing layer if you need a hard guarantee.
+- **Thread timestamps are `text`, not `timestamptz`.** `created_at` / `updated_at` are app-generated ISO-8601 strings, so the exact string handed to an API client comes back unchanged. Ordering uses `COLLATE "C"` so it does not depend on the database's locale.
+- **Rows are plaintext.** Treat the database as sensitive application data.
+
+See [API Reference](/docs/api#dawn-aipostgres-storage) for the full option and type surface.
 
 ---
 
