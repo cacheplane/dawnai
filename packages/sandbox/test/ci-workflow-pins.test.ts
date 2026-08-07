@@ -37,10 +37,18 @@ function collectKubernetesPins(workflowSource: string) {
         continue
       }
 
-      for (const match of step.run.matchAll(calicoManifestUrl)) {
-        const version = match[1]
-        if (version !== undefined) {
-          calicoVersions.push(version)
+      const commands = step.run.replace(/\\\r?\n/g, " ").split(/\r?\n/)
+      for (const command of commands) {
+        const executable = command.trim()
+        if (!/^kubectl\s+apply(?:\s|$)/.test(executable)) {
+          continue
+        }
+
+        for (const match of executable.matchAll(calicoManifestUrl)) {
+          const version = match[1]
+          if (version !== undefined) {
+            calicoVersions.push(version)
+          }
         }
       }
     }
@@ -82,5 +90,18 @@ jobs:
       calicoVersions: ["v9.9.9"],
       kindCommits: ["quoted-commit"],
     })
+  })
+
+  test("ignores commented and echoed Calico install commands", () => {
+    const pins = collectKubernetesPins(`
+jobs:
+  synthetic:
+    steps:
+      - run: |
+          # kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v8.8.8/manifests/calico.yaml
+          echo "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v7.7.7/manifests/calico.yaml"
+`)
+
+    expect(pins.calicoVersions).toEqual([])
   })
 })
