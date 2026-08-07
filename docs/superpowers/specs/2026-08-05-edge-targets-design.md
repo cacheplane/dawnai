@@ -168,9 +168,32 @@ Three PRs, one spec. Each independently green and shippable.
   - emitter goldens + hostile-input tests (shared with B2's suite shape);
   - Hono-on-Node round-trip: build the fixture app with the `hono` target, boot `app.mjs` under
     Node's Hono adapter + Testcontainers pg, run AP turn + AG-UI stream (ungated, every CI run);
-  - **gated workerd lane** (`edge-workerd` job, `DAWN_TEST_WORKERD=1`): same fixture booted
-    under `wrangler dev` (real workerd) with aimock + Postgres reachable from the worker, drives
-    a real turn, asserts SSE stream shape and thread state persisted in pg;
+  - **gated workerd lane** (`edge-workerd` job, `DAWN_TEST_WORKERD=1`): the fixture booted under
+    `wrangler dev` (real workerd) with aimock, driving a real turn and asserting SSE shape.
+
+    **DECIDED 2026-08-07 — the lane proves DURABLE storage too, not just the runtime.** The
+    original text said "Postgres reachable from the worker", which does not survive contact with
+    workerd: raw `pg` opens TCP, which workerd does not provide, so on Workers it needs Hyperdrive
+    (a real Cloudflare account — not CI-friendly) or an HTTP/WebSocket driver. User chose the
+    strongest option: **add an HTTP-driver path so `@dawn-ai/postgres-storage` works on workerd**,
+    and have the lane assert thread state actually persisted in Postgres from inside the worker.
+
+    Implementation shape to spike FIRST (same discipline as PR2b's checkpointer spike — this can
+    invalidate the approach):
+    - **Prefer NO driver abstraction.** If the stores type their `pool` option *structurally*
+      (a minimal `{ query, connect, end }` shape) rather than as `pg.Pool`, then
+      `@neondatabase/serverless`'s pool drops in with no new dependency in Dawn at all. Verify
+      that the structural type is honest against both drivers.
+    - **Transactions are the risk.** Neon's HTTP path is single-shot and has no sessions, while
+      the checkpointer wraps `put`/`putWrites` in `BEGIN`/`COMMIT` and migrations take
+      `pg_advisory_xact_lock`. The WebSocket variant is likely required — confirm, and if the HTTP
+      path cannot serve the checkpointer, say so rather than weakening the transaction boundaries.
+    - **CI needs a WebSocket-to-TCP proxy** beside Postgres for the driver to reach a local
+      database (Neon publishes a compose recipe). That is a third container in the lane; budget
+      for it and for the startup-timeout posture PR2b already had to raise.
+    - If the spike fails, fall back to proving the RUNTIME on workerd with in-memory stores and
+      documenting Postgres-on-Workers as unverified — but report that outcome explicitly rather
+      than quietly narrowing the lane.
   - static-vs-static-edge equivalence on Node: the B2 equivalence harness compares the node
     `modules.mjs` path against the edge `modules.edge.mjs` + injected-store path for the same
     conversation (volatile ids normalized) — proving the edge wiring doesn't drift.
