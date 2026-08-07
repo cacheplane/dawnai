@@ -222,7 +222,14 @@ export const packages = [
   },
   {
     dir: "packages/postgres-storage",
-    expectedFiles: ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
+    expectedFiles: [
+      "dist/index.js",
+      "dist/index.d.ts",
+      "dist/node.js",
+      "dist/node.d.ts",
+      "README.md",
+      "package.json",
+    ],
     requiredFields: libraryRequiredFields,
   },
   {

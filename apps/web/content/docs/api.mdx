@@ -974,16 +974,45 @@ See [Configuration](/docs/configuration#postgres-backend) for the shared-pool se
 
 ```ts
 export interface PostgresStoreOptions {
-  connectionString?: string
-  pool?: Pool
+  pool?: SqlPool
+  ownsPool?: boolean
   schema?: string
   tablePrefix?: string
 }
+
+export interface SqlPool {
+  query<R = unknown>(sql: string, values?: readonly unknown[]): Promise<{ rows: R[] }>
+  connect(): Promise<SqlClient>
+  end(): Promise<void>
+}
 ```
 
-Connection and table-naming options shared by all three stores. Supply `connectionString` to have the store build and own a pool (`close()` ends it), or `pool` to inject an existing one (`close()` leaves it alone — the app that made the pool ends it). `schema` defaults to `DEFAULT_SCHEMA` and `tablePrefix` to `DEFAULT_TABLE_PREFIX`.
+Connection and table-naming options shared by all three stores. `pool` is required in practice — the stores throw a pointed error without one. It is typed structurally rather than as `pg.Pool`, so a `pg` pool and a `@neondatabase/serverless` WebSocket pool both satisfy it with no driver abstraction here. The narrowness is deliberate: `neon()`'s HTTP query function exposes no `connect()`, so it fails to satisfy `SqlPool` at compile time — correctly, because it has no session and cannot run the checkpointer's `BEGIN`/`COMMIT`.
+
+`ownsPool` (default `false`) decides whether `close()` ends the pool. An injected pool belongs to the app that made it, so `close()` leaves it alone.
+
+`schema` defaults to `DEFAULT_SCHEMA` and `tablePrefix` to `DEFAULT_TABLE_PREFIX`.
 
 `PostgresCheckpointerOptions` and `PostgresThreadsStoreOptions` are aliases of this type; `PostgresPermissionsStoreOptions` extends it.
+
+### `@dawn-ai/postgres-storage/node`
+
+```ts
+import {
+  createPostgresPermissionsStore,
+  createPostgresThreadsStore,
+  postgresCheckpointer,
+  type NodePostgresStoreOptions,
+} from "@dawn-ai/postgres-storage/node"
+
+export interface NodePostgresStoreOptions extends PostgresStoreOptions {
+  connectionString?: string
+}
+```
+
+The same three factories with a `connectionString` convenience, plus everything the main entry exports. A store built from a connection string builds and owns its pool, so `close()` ends it.
+
+This entry imports `pg` as a *value*, which pulls `net`/`tls`/`dns` into the module graph — that is why it is a separate subpath. The main entry imports `pg` for types only and links on a runtime with no TCP sockets.
 
 ### `postgresCheckpointer(options)`
 

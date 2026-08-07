@@ -351,6 +351,21 @@ export default config({
 
 Any Postgres 14+ database works; no extensions are required. Each store migrates lazily on first use under a `pg_advisory_xact_lock`, so N instances cold-starting against a virgin database converge instead of racing. Call `ready()` on a store to migrate at boot instead.
 
+#### Two entry points
+
+`pool` is **required** on the main entry, which imports `pg` for types only so that it links on a runtime where a raw TCP driver cannot be bundled at all. The pool is typed structurally (`{ query, connect, end }`), so a `pg.Pool` and a `@neondatabase/serverless` WebSocket pool both satisfy it.
+
+`@dawn-ai/postgres-storage/node` is the same three factories with a `connectionString` convenience layered on, and it does import `pg` as a value:
+
+```ts
+import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
+
+// Builds and owns a pg pool; close() ends it.
+const checkpointer = postgresCheckpointer({ connectionString: process.env.DATABASE_URL })
+```
+
+Reach for `/node` on Node, Bun, or Vercel functions when you want the convenience. Use the main entry with your own pool everywhere else.
+
 Note that `permissions.store` receives `mode` explicitly. A custom store owns its own mode and allow/deny lists — see [`permissions.store`](#permissionsstore).
 
 ### What this does and does not run on
@@ -365,7 +380,7 @@ Note that `permissions.store` receives `mode` explicitly. A custom store owns it
 
 `handler.close()` on the web-standard runtime handler stops accepting requests, aborts the shutdown controller, drains in-flight requests, and releases sandboxes. It does **not** touch the stores — the runtime never created them, so it does not own their lifetime.
 
-Each store exposes `close()`. A store built from `connectionString` owns its pool and `close()` ends it; a store built from an injected `pool` deliberately leaves that pool alone, so the shared-pool config above must end the pool itself:
+Each store exposes `close()`. A store built from `connectionString` (via the `/node` entry) owns its pool and `close()` ends it; a store built from an injected `pool` deliberately leaves that pool alone, so the shared-pool config above must end the pool itself:
 
 ```ts
 await handler.close()

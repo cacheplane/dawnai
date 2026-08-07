@@ -1,4 +1,4 @@
-import { Pool } from "pg"
+import type { SqlPool } from "./sql.js"
 
 /**
  * Connection + table-naming options shared by every store in this package.
@@ -10,50 +10,35 @@ import { Pool } from "pg"
  * copies that can drift.
  */
 export interface PostgresStoreOptions {
-  /** Postgres connection string; used to build an owned pool. */
-  readonly connectionString?: string
   /**
-   * An existing pool to use instead of building one from `connectionString`.
+   * The pool every store call goes through. Required on this entry — build one
+   * with `pg` yourself, or import from `@dawn-ai/postgres-storage/node` for the
+   * `connectionString` convenience. On an edge runtime pass a per-request pool
+   * (see the edge deployment docs): a module-scope pool hangs on workerd.
+   *
    * Share one pool across the checkpointer, threads and permissions stores to
    * stay inside a managed Postgres connection cap.
+   *
+   * Its error handling is YOURS, and `pg` requires a pool to have some: `pg`
+   * emits `'error'` on the POOL when an IDLE client fails, and an EventEmitter
+   * `'error'` with no listener is an uncaught exception that ends the process.
+   * Idle connections drop as a matter of course — server restart, failover,
+   * `idle_session_timeout`, a container stopping — so a pool without an
+   * `'error'` listener turns a routine Postgres blip into an outage. These
+   * stores deliberately do not attach one to a pool they were handed: that
+   * would mask the contract from the owner who controls the lifecycle.
+   * `@dawn-ai/postgres-storage/node` attaches one to pools IT builds.
    */
-  readonly pool?: Pool
+  readonly pool?: SqlPool
+  /**
+   * Whether the store owns `pool` and should `end()` it on `close()`. Defaults
+   * to `false`: a pool handed in here is the caller's to close, so `close()` is
+   * a no-op and the pool stays usable. `@dawn-ai/postgres-storage/node` sets it
+   * when it builds the pool itself from a connection string.
+   */
+  readonly ownsPool?: boolean
   /** Postgres schema to place tables in. Defaults to `public`. */
   readonly schema?: string
   /** Table name prefix. Defaults to `dawn`; vary it to share one database. */
   readonly tablePrefix?: string
-}
-
-/**
- * Resolves the pool a store should use: the caller's, or one built from
- * `connectionString`.
- *
- * An owned pool gets an `'error'` listener. `pg` emits that event on the POOL when
- * an IDLE client fails, and an EventEmitter `'error'` with no listener is an uncaught
- * exception — the process dies. Idle connections are dropped as a matter of course
- * (server restart, failover, `idle_session_timeout`, a container stopping), so
- * without a listener a routine Postgres blip takes the whole app down instead of the
- * pool quietly replacing one connection. That matters most precisely here, where the
- * stores hold durable state for long-running and edge deployments.
- *
- * Nothing to recover: pg has already discarded the broken client and the next query
- * opens a new one. Warn rather than swallow, so an unhealthy database stays visible.
- *
- * A caller-supplied pool is left alone — its owner controls its lifecycle and its
- * error handling, and pg requires every pool to have a listener, so attaching one to
- * someone else's pool would mask that contract.
- */
-export function resolvePool(options: PostgresStoreOptions): {
-  readonly ownsPool: boolean
-  readonly pool: Pool
-} {
-  if (options.pool) return { ownsPool: false, pool: options.pool }
-
-  const pool = new Pool(
-    options.connectionString ? { connectionString: options.connectionString } : {},
-  )
-  pool.on("error", (error) => {
-    console.warn(`[dawn:storage] postgres pool client error (connection dropped): ${String(error)}`)
-  })
-  return { ownsPool: true, pool }
 }

@@ -63,16 +63,36 @@ export default config({
 Adopt them one at a time if you prefer — each store migrates and operates
 independently.
 
+### Two entry points
+
+The main entry never imports `pg` as a value — only as a type — so it links on
+an edge runtime, where a raw TCP driver cannot be bundled at all. `pool` is
+therefore required there; the stores throw if it is missing.
+
+`@dawn-ai/postgres-storage/node` is the same three factories with a
+`connectionString` convenience layered on, and it does import `pg`:
+
+```ts
+import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
+
+// Builds and owns a pg pool; close() ends it.
+const checkpointer = postgresCheckpointer({ connectionString: process.env.DATABASE_URL })
+```
+
+Use the `/node` entry on Node, Bun, and Vercel functions when you want the
+convenience. Use the main entry — passing your own pool — everywhere else,
+including any edge deploy.
+
 ### Your app owns teardown
 
 The Dawn runtime handler's `close()` stops accepting requests, drains in-flight
 work, and releases sandboxes. It does **not** close these stores: the runtime
 never created them, so it does not own their lifetime.
 
-Each store exposes `close()`. A store built from `connectionString` owns its
-pool and `close()` ends it; a store built from an injected `pool` deliberately
-leaves that pool alone. With the shared-pool config above, end the pool
-yourself:
+Each store exposes `close()`. A store built from `connectionString` (via the
+`/node` entry) owns its pool and `close()` ends it; a store built from an
+injected `pool` deliberately leaves that pool alone. With the shared-pool config
+above, end the pool yourself:
 
 ```ts
 await handler.close()
@@ -85,15 +105,25 @@ await pool.end()
 
 Connection and table-naming options shared by all three stores:
 
-- `connectionString` — builds a pool this store owns and `close()` ends.
-- `pool` — an existing `pg` pool to use instead. Share one pool across every
-  Dawn store to stay inside a managed Postgres connection cap; `close()` leaves
-  an injected pool alone.
+- `pool` — **required.** The pool every store call goes through, typed
+  structurally as `SqlPool` (`{ query, connect, end }`) so a `pg.Pool` and a
+  `@neondatabase/serverless` WebSocket pool both satisfy it. Share one pool
+  across every Dawn store to stay inside a managed Postgres connection cap.
+- `ownsPool` (default `false`) — whether `close()` should `end()` the pool. An
+  injected pool is the caller's to close; the `/node` entry sets this when it
+  builds the pool itself.
 - `schema` (default `public`) and `tablePrefix` (default `dawn`).
 
 `PostgresCheckpointerOptions` and `PostgresThreadsStoreOptions` are aliases of
 this type; `PostgresPermissionsStoreOptions` extends it with `mode` and
-`config`.
+`config`. The `/node` entry's `NodePostgresStoreOptions` adds
+`connectionString`.
+
+`SqlPool`, `SqlClient`, and `SqlResult` are exported for anyone wiring a driver
+that is neither `pg` nor Neon. The type is deliberately narrow: `neon()`'s HTTP
+query function has no `connect()`, so it fails to satisfy `SqlPool` at compile
+time — correctly, because it has no session and cannot run the checkpointer's
+`BEGIN`/`COMMIT`.
 
 ### `postgresCheckpointer(options)`
 

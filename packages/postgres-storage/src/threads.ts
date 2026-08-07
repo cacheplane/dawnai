@@ -1,4 +1,4 @@
-import { type PostgresStoreOptions, resolvePool } from "./options.js"
+import type { PostgresStoreOptions } from "./options.js"
 import {
   assertIdentifier,
   DEFAULT_SCHEMA,
@@ -7,6 +7,7 @@ import {
   runMigrations,
   THREADS_MIGRATIONS,
 } from "./schema.js"
+import { throwNoPool } from "./sql.js"
 
 export type ThreadStatus = "idle" | "busy" | "interrupted"
 
@@ -101,7 +102,8 @@ export function createPostgresThreadsStore(
   assertIdentifier("schema", schema)
   assertIdentifier("tablePrefix", prefix)
   const table = qualify({ schema, prefix }, "threads")
-  const { ownsPool, pool } = resolvePool(options)
+  const ownsPool = options.ownsPool ?? false
+  const pool = options.pool ?? throwNoPool()
 
   let initP: Promise<void> | undefined
   const ready = (): Promise<void> => {

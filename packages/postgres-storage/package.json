@@ -24,6 +24,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
     }
   },
   "publishConfig": {
@@ -31,9 +35,9 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json src test tsconfig.json vitest.config.ts",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json src test tsconfig.json tsconfig.test.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@dawn-ai/permissions": "workspace:*",
@@ -49,8 +53,10 @@
     "@dawn-ai/testing": "workspace:*",
     "@langchain/core": "^1.2.1",
     "@langchain/langgraph-checkpoint": "^1.1.3",
+    "@neondatabase/serverless": "^1.1.0",
     "@testcontainers/postgresql": "^12.0.4",
     "@types/node": "26.1.1",
-    "@types/pg": "^8.20.0"
+    "@types/pg": "^8.20.0",
+    "esbuild": "^0.28.1"
   }
 }

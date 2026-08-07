@@ -1,5 +1,5 @@
-import type { Pool } from "pg"
 import { withTransaction } from "./internal/tx.js"
+import type { SqlPool } from "./sql.js"
 
 /**
  * Guard SQL identifiers that are interpolated into DDL (Postgres cannot bind
@@ -69,7 +69,7 @@ function advisoryLockId(key: string): number {
  * against each other.
  */
 export async function runMigrations(
-  pool: Pool,
+  pool: SqlPool,
   migrations: readonly Migration[],
   opts: { readonly schema: string; readonly prefix: string; readonly component: string },
 ): Promise<void> {
