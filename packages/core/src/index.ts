@@ -8,9 +8,13 @@ export { createSkillsMarker } from "./capabilities/built-in/skills.js"
 export { createSubagentsMarker } from "./capabilities/built-in/subagents.js"
 export { createWorkspaceMarker } from "./capabilities/built-in/workspace.js"
 export { BUILT_IN_TOOL_NAMES } from "./capabilities/built-in-tool-names.js"
-export type { MemorySupersedeDetail } from "./capabilities/permission-gate.js"
+export type {
+  MemorySupersedeDetail,
+  SubagentGateRequest,
+} from "./capabilities/permission-gate.js"
 export {
   gateMemorySupersede,
+  gateSubagentOp,
   gateToolOp,
   wrapToolWithApproval,
   wrapToolWithConstraint,
@@ -68,6 +72,21 @@ export {
 } from "./discovery/route-segments.js"
 export type { ResolveStateFieldsOptions } from "./state/resolve-state-fields.js"
 export { resolveStateFields } from "./state/resolve-state-fields.js"
+export type {
+  GuardedSubagentResult,
+  ResolveGuardedSubagentArgs,
+} from "./subagents/policy.js"
+export { resolveGuardedSubagent } from "./subagents/policy.js"
+export type { ResolveSubagentRegistryArgs } from "./subagents/registry.js"
+export {
+  dispatchableSubagents,
+  resolveSubagentRegistry,
+} from "./subagents/registry.js"
+export type {
+  DescriptorRouteIndex,
+  ResolvedDelegationRule,
+  ResolvedSubagent,
+} from "./subagents/types.js"
 export type { ScopeInput, ToolOrigin } from "./tool-scope.js"
 export { resolveToolScope, toolOrigin } from "./tool-scope.js"
 export {

@@ -48,7 +48,7 @@ function staticRoute(overrides: {
 }
 
 describe("buildDescriptorMapsFromStaticModules", () => {
-  it("builds descriptor→routeId and routeId→descriptor maps for agent routes only", () => {
+  it("builds canonical descriptor indexes for agent routes only", () => {
     __resetDescriptorRouteMapCacheForTests()
     const agentA = agent({ model: "gpt-5-mini", systemPrompt: "Agent A." })
     const agentB = agent({ model: "gpt-5-mini", systemPrompt: "Agent B." })
@@ -56,21 +56,39 @@ describe("buildDescriptorMapsFromStaticModules", () => {
     const modules: DawnStaticModules = {
       routes: [
         staticRoute({ entry: agentA, kind: "agent", routeId: "/a" }),
-        staticRoute({ entry: agentB, kind: "agent", routeId: "/a/subagents/b" }),
+        staticRoute({
+          entry: agentB,
+          kind: "agent",
+          routeId: "/a/subagents/b",
+        }),
         staticRoute({ entry: workflowEntry, kind: "workflow", routeId: "/w" }),
       ],
     }
 
     const maps = buildDescriptorMapsFromStaticModules(modules)
 
-    expect(maps.descriptorRouteMap.get(agentA)).toBe("/a")
-    expect(maps.descriptorRouteMap.get(agentB)).toBe("/a/subagents/b")
+    expect(maps.descriptorRouteIndex.get(agentA)).toEqual(["/a"])
+    expect(maps.descriptorRouteIndex.get(agentB)).toEqual(["/a/subagents/b"])
     expect(maps.routeDescriptors.get("/a")).toBe(agentA)
     expect(maps.routeDescriptors.get("/a/subagents/b")).toBe(agentB)
-    // Non-agent routes are excluded from both maps.
-    expect(maps.descriptorRouteMap.size).toBe(2)
+    // Non-agent routes are excluded from both canonical indexes.
     expect(maps.routeDescriptors.size).toBe(2)
     expect(maps.routeDescriptors.has("/w")).toBe(false)
+  })
+
+  it("preserves every route id when one descriptor is mounted more than once", () => {
+    const shared = agent({
+      model: "gpt-5-mini",
+      systemPrompt: "Shared agent.",
+    })
+    const maps = buildDescriptorMapsFromStaticModules({
+      routes: [
+        staticRoute({ entry: shared, kind: "agent", routeId: "/alpha" }),
+        staticRoute({ entry: shared, kind: "agent", routeId: "/beta" }),
+      ],
+    })
+
+    expect(maps.descriptorRouteIndex.get(shared)).toEqual(["/alpha", "/beta"])
   })
 
   it("memoizes per manifest object identity, reset by __resetDescriptorRouteMapCacheForTests", () => {
@@ -111,7 +129,14 @@ const HELPER_DESCRIPTION = "Echoes text back verbatim."
 
 async function subagentFixtureApp(): Promise<string> {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-static-descriptor-"))
-  cleanup.push(() => rm(appRoot, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }))
+  cleanup.push(() =>
+    rm(appRoot, {
+      force: true,
+      maxRetries: 5,
+      recursive: true,
+      retryDelay: 100,
+    }),
+  )
   const files: Record<string, string> = {
     "dawn.config.ts": "export default {}\n",
     "package.json": '{ "name": "static-descriptor-fixture", "type": "module" }\n',
@@ -121,7 +146,7 @@ async function subagentFixtureApp(): Promise<string> {
       "export default agent({\n" +
       '  model: "gpt-5-mini",\n' +
       '  systemPrompt: "You coordinate work by dispatching subagents.",\n' +
-      "  subagents: [helper],\n" +
+      "  subagents: { helper },\n" +
       "})\n",
     "src/app/helper/index.ts":
       'import { agent } from "@dawn-ai/sdk"\n' +
@@ -170,7 +195,12 @@ describe("subagent dispatch from static modules (pruned-source proof)", () => {
     // paths in the manifest are relocated here, where they do not exist.
     const prunedRoot = await mkdtemp(join(tmpdir(), "dawn-static-descriptor-pruned-"))
     cleanup.push(() =>
-      rm(prunedRoot, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }),
+      rm(prunedRoot, {
+        force: true,
+        maxRetries: 5,
+        recursive: true,
+        retryDelay: 100,
+      }),
     )
     await writeFile(join(prunedRoot, "dawn.config.ts"), "export default {}\n", "utf8")
     await writeFile(
@@ -199,7 +229,10 @@ describe("subagent dispatch from static modules (pruned-source proof)", () => {
         .build(),
     )
 
-    const handler = await createRuntimeFetchHandler({ appRoot: prunedRoot, modules })
+    const handler = await createRuntimeFetchHandler({
+      appRoot: prunedRoot,
+      modules,
+    })
     cleanup.push(() => handler.close())
 
     const body = await runChatTurn(handler, "th-subagent-pruned", "please delegate this task")

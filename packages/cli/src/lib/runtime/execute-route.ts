@@ -16,13 +16,14 @@ import { pathToFileURL } from "node:url"
 import {
   type DawnConfig,
   type ResolvedStateField,
+  type RouteDefinition,
   type RouteManifest,
   resolveStateFields,
 } from "@dawn-ai/core"
-import { discoverRoutes, findDawnApp, nodeLoadRouteDescription } from "@dawn-ai/core/node"
+import { discoverRoutes, findDawnApp } from "@dawn-ai/core/node"
 import type { PermissionMode, PermissionsStore } from "@dawn-ai/permissions"
 import { createPermissionsStore } from "@dawn-ai/permissions/node"
-import { type DawnAgent, isDawnAgent } from "@dawn-ai/sdk"
+import { isDawnAgent } from "@dawn-ai/sdk"
 import { createThreadsStore, sqliteCheckpointer, type ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
 import { localExec, localFilesystem } from "@dawn-ai/workspace/node"
@@ -30,12 +31,18 @@ import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { loadMiddleware } from "../dev/middleware.js"
 import { loadDawnConfig } from "../node-config.js"
 import {
+  __resetDescriptorRouteIndexCacheForTests,
+  getCachedDescriptorRouteIndex,
+} from "./descriptor-route-index.js"
+import {
   __resetPreparedRouteModulesForTests,
   __resetStaticDescriptorMapsForTests,
   type BootResolvedInstances,
   executeResolvedRoute as executeResolvedRouteCore,
   executeRouteAtResolvedPath,
   invokeResolvedRoute as invokeResolvedRouteCore,
+  type MaterializeResolvedRouteGraphOptions,
+  materializeResolvedRouteGraph as materializeResolvedRouteGraphCore,
   type PreparedRoute,
   type PreparedRouteError,
   type PreparedRouteModules,
@@ -67,6 +74,7 @@ import { fileExists } from "./utils.js"
 
 export type {
   BootResolvedInstances,
+  MaterializeResolvedRouteGraphOptions,
   PreparedRouteModules,
   RouteResumePayload,
   RuntimeBootFallbacks,
@@ -76,6 +84,7 @@ export type {
 export {
   __resetPreparedRouteModulesForTests,
   buildDescriptorMapsFromStaticModules,
+  buildGuardedSubagentResolver,
   exemptToolSet,
   getCachedStaticDescriptorMaps,
   seedPreparedRouteModules,
@@ -202,45 +211,13 @@ function discoverRoutesOncePerAppRoot(appRoot: string): Promise<RouteManifest> {
   return loading
 }
 
-/**
- * Dynamically imports each route's entry file and records descriptor->routeId
- * for any default export that satisfies `isDawnAgent`. Used so the subagents
- * capability marker can resolve `descriptor.subagents: [...]` override entries
- * back to a routeId.
- *
- * Cost: this opens every agent route module in the manifest. Acceptable for
- * the current scale; if it becomes hot, cache by (appRoot, manifest-hash).
- */
-let descriptorRouteMapCache = new WeakMap<RouteManifest, Promise<ReadonlyMap<DawnAgent, string>>>()
-
-export async function getCachedDescriptorRouteMap(
-  manifest: RouteManifest,
-): Promise<ReadonlyMap<DawnAgent, string>> {
-  let promise = descriptorRouteMapCache.get(manifest)
-  if (!promise) {
-    promise = buildDescriptorRouteMap(manifest)
-    descriptorRouteMapCache.set(manifest, promise)
+async function loadSubagentDescription(route: RouteDefinition): Promise<string> {
+  const mod = (await import(pathToFileURL(route.entryFile).href)) as {
+    default?: unknown
   }
-  return promise
-}
-
-async function buildDescriptorRouteMap(
-  manifest: RouteManifest,
-): Promise<ReadonlyMap<DawnAgent, string>> {
-  const map = new Map<DawnAgent, string>()
-  await Promise.all(
-    manifest.routes.map(async (route) => {
-      try {
-        const mod = (await import(pathToFileURL(route.entryFile).href)) as { default?: unknown }
-        if (isDawnAgent(mod.default)) {
-          map.set(mod.default, route.id)
-        }
-      } catch {
-        // Best-effort: skip routes whose module fails to import.
-      }
-    }),
-  )
-  return map
+  return isDawnAgent(mod.default) && typeof mod.default.description === "string"
+    ? mod.default.description
+    : "No description provided."
 }
 
 /**
@@ -260,7 +237,9 @@ export async function resolveThreadsStore(appRoot: string): Promise<ThreadsStore
   } catch {
     // No dawn.config.ts or unreadable — fall through to default.
   }
-  return createThreadsStore({ path: pureJoin(appRoot, ".dawn/threads.sqlite") })
+  return createThreadsStore({
+    path: pureJoin(appRoot, ".dawn/threads.sqlite"),
+  })
 }
 
 /**
@@ -281,7 +260,9 @@ export async function resolveCheckpointer(appRoot: string): Promise<BaseCheckpoi
   } catch {
     // No dawn.config.ts or unreadable — fall through to default.
   }
-  return sqliteCheckpointer({ path: pureJoin(appRoot, ".dawn/checkpoints.sqlite") })
+  return sqliteCheckpointer({
+    path: pureJoin(appRoot, ".dawn/checkpoints.sqlite"),
+  })
 }
 
 /**
@@ -343,13 +324,13 @@ export const nodeBootFallbacks: RuntimeBootFallbacks = {
   defaultFilesystem: getDefaultLocalFilesystem,
   defaultThreadsStore: (appRoot) =>
     createThreadsStore({ path: pureJoin(appRoot, ".dawn/threads.sqlite") }),
-  descriptorRouteMap: getCachedDescriptorRouteMap,
+  descriptorRouteIndex: getCachedDescriptorRouteIndex,
   discoverRouteManifest: discoverRoutesOncePerAppRoot,
   hasWorkspaceDir,
   loadConfig: async (appRoot) => (await loadDawnConfig({ appRoot })).config,
   loadMiddleware,
-  loadRouteDescription: nodeLoadRouteDescription,
   loadRouteModules: loadPreparedRouteModules,
+  loadSubagentDescription,
   markerFs: nodeMarkerFs,
   resolveIdentityKeys,
   resolveCheckpointer,
@@ -398,7 +379,7 @@ function withNodeFallbacks<T extends object>(
  * `__clearDawnConfigCacheForTests`.
  */
 export function __resetDescriptorRouteMapCacheForTests(): void {
-  descriptorRouteMapCache = new WeakMap()
+  __resetDescriptorRouteIndexCacheForTests()
   __resetStaticDescriptorMapsForTests()
 }
 
@@ -428,6 +409,12 @@ export async function invokeResolvedRoute(
   options: Parameters<typeof invokeResolvedRouteCore>[0],
 ): Promise<RuntimeExecutionResult> {
   return await invokeResolvedRouteCore(withNodeFallbacks(options))
+}
+
+export async function materializeResolvedRouteGraph(
+  options: MaterializeResolvedRouteGraphOptions,
+): Promise<unknown> {
+  return await materializeResolvedRouteGraphCore(withNodeFallbacks(options))
 }
 
 export async function* streamResolvedRoute(

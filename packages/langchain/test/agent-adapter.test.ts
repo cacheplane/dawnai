@@ -2,9 +2,733 @@ import { agent } from "@dawn-ai/sdk"
 import { AIMessage } from "@langchain/core/messages"
 import { MemorySaver } from "@langchain/langgraph"
 import { describe, expect, test, vi } from "vitest"
-import { executeAgent } from "../src/agent-adapter.js"
+import { z } from "zod"
+import {
+  __resetMaterializedAgentsForTests,
+  executeAgent,
+  materializeAgentGraph,
+  streamAgent,
+} from "../src/agent-adapter.ts"
+
+async function collectCustomEvents(
+  metadata?: Record<string, unknown>,
+  extraCapabilityPayloads: readonly unknown[] = [],
+) {
+  const inheritedEvent = Object.assign(Object.create({ event: "inherited" }), {
+    data: "invalid",
+  })
+  const entry = {
+    invoke: vi.fn(),
+    async *streamEvents() {
+      yield {
+        event: "on_tool_end",
+        run_id: "tool-1",
+        name: "writeTodos",
+        data: { output: { todos: ["legacy"] } },
+      }
+      yield {
+        event: "on_custom_event",
+        run_id: "custom-1",
+        name: "dawn.capability",
+        data: { event: "plan_update", data: { todos: ["one"] } },
+        ...(metadata ? { metadata } : {}),
+      }
+      yield {
+        event: "on_custom_event",
+        run_id: "custom-2",
+        name: "dawn.capability",
+        data: { event: 42, data: "invalid" },
+        ...(metadata ? { metadata } : {}),
+      }
+      yield {
+        event: "on_custom_event",
+        run_id: "custom-3",
+        name: "dawn.capability",
+        data: inheritedEvent,
+        ...(metadata ? { metadata } : {}),
+      }
+      yield {
+        event: "on_custom_event",
+        run_id: "custom-4",
+        name: "other.event",
+        data: { event: "ignored", data: "invalid" },
+        ...(metadata ? { metadata } : {}),
+      }
+      for (const [index, data] of extraCapabilityPayloads.entries()) {
+        yield {
+          event: "on_custom_event",
+          run_id: `custom-extra-${index}`,
+          name: "dawn.capability",
+          data,
+          ...(metadata ? { metadata } : {}),
+        }
+      }
+      yield {
+        event: "on_chain_end",
+        run_id: "root",
+        name: "LangGraph",
+        data: { output: { ok: true } },
+      }
+    },
+  }
+  const chunks = []
+  for await (const chunk of streamAgent({
+    checkpointer: new MemorySaver(),
+    entry,
+    input: { question: "hi" },
+    routeParamNames: [],
+    signal: new AbortController().signal,
+    streamTransformers: [
+      {
+        observes: "tool_result",
+        transform: async function* () {
+          yield { event: "plan_update", data: { todos: ["legacy"] } }
+        },
+      },
+    ],
+    tools: [],
+  })) {
+    chunks.push(chunk)
+  }
+  return chunks
+}
+
+describe("capability custom events", () => {
+  test("maps a valid root capability payload and ignores malformed payloads", async () => {
+    await expect(collectCustomEvents()).resolves.toEqual([
+      {
+        type: "tool_result",
+        data: { id: "tool-1", name: "writeTodos", output: { todos: ["legacy"] } },
+      },
+      { type: "plan_update", data: { todos: ["one"] } },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+
+  test("namespaces a child capability payload from Dawn subagent metadata", async () => {
+    const chunks = await collectCustomEvents({
+      dawn: {
+        subagent_stack: [{ callId: "call-1", name: "researcher", routeId: "/researcher" }],
+      },
+    })
+
+    expect(chunks[1]).toEqual({
+      type: "subagent.plan_update",
+      data: {
+        call_id: "call-1",
+        subagent: "researcher",
+        route_id: "/researcher",
+        depth: 1,
+        todos: ["one"],
+      },
+    })
+  })
+
+  test("projects only safe non-reserved capability event names", async () => {
+    const invalidNames = [
+      "line\nbreak",
+      "line\rbreak",
+      "control\u0007bell",
+      "has space",
+      "chunk",
+      "token",
+      "tool_call",
+      "tool_result",
+      "interrupt",
+      "done",
+      "subagent.plan_update",
+    ]
+    const chunks = await collectCustomEvents(undefined, [
+      { event: "memory.plan-updated", data: "accepted" },
+      ...invalidNames.map((event) => ({ event, data: "rejected" })),
+    ])
+
+    expect(chunks).toEqual([
+      {
+        type: "tool_result",
+        data: { id: "tool-1", name: "writeTodos", output: { todos: ["legacy"] } },
+      },
+      { type: "plan_update", data: { todos: ["one"] } },
+      { type: "memory.plan-updated", data: "accepted" },
+      { type: "done", data: { ok: true } },
+    ])
+  })
+})
+
+describe("native subagent event projection", () => {
+  const metadata = {
+    dawn: {
+      subagent_stack: [
+        { callId: "call-outer", name: "planner", routeId: "/planner" },
+        { callId: "call-child", name: "researcher", routeId: "/planner/researcher" },
+      ],
+    },
+  }
+
+  test("projects child events exactly once and leaves the parent task correlated at root", async () => {
+    const entry = {
+      invoke: vi.fn(),
+      async *streamEvents() {
+        yield {
+          event: "on_chat_model_stream",
+          run_id: "parent-model",
+          name: "parent-model",
+          data: { chunk: { content: "Parent " } },
+        }
+        yield {
+          event: "on_tool_start",
+          run_id: "parent-task-run",
+          name: "task",
+          data: { input: { subagent: "researcher", input: "Investigate" } },
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "child-start",
+          name: "dawn.subagent",
+          data: {
+            phase: "start",
+            call_id: "call-child",
+            tool_run_id: "parent-task-run",
+            subagent: "researcher",
+            route_id: "/planner/researcher",
+            depth: 2,
+          },
+          parent_ids: ["root-run", "parent-task-run"],
+        }
+        yield {
+          event: "on_chain_start",
+          run_id: "child-graph",
+          name: "LangGraph",
+          data: { input: {} },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run"],
+        }
+        yield {
+          event: "on_chat_model_stream",
+          run_id: "child-model",
+          name: "child-model",
+          data: { chunk: { content: "Child token" } },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run", "child-graph"],
+        }
+        yield {
+          event: "on_tool_start",
+          run_id: "child-tool-run",
+          name: "readFile",
+          data: { input: { path: "evidence.md" } },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run", "child-graph"],
+        }
+        yield {
+          event: "on_tool_end",
+          run_id: "child-tool-run",
+          name: "readFile",
+          data: { output: "evidence" },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run", "child-graph"],
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "child-capability",
+          name: "dawn.capability",
+          data: { event: "plan_update", data: { todos: ["inspect"] } },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run", "child-graph"],
+        }
+        yield {
+          event: "on_chain_end",
+          run_id: "child-graph",
+          name: "LangGraph",
+          data: { output: { child: true } },
+          metadata,
+          parent_ids: ["root-run", "parent-task-run"],
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "child-end",
+          name: "dawn.subagent",
+          data: {
+            phase: "end",
+            call_id: "call-child",
+            tool_run_id: "parent-task-run",
+            subagent: "researcher",
+            route_id: "/planner/researcher",
+            depth: 2,
+            final_message: "evidence",
+          },
+          parent_ids: ["root-run", "parent-task-run"],
+        }
+        yield {
+          event: "on_tool_end",
+          run_id: "parent-task-run",
+          name: "task",
+          data: { output: "evidence" },
+        }
+        yield {
+          event: "on_chain_end",
+          run_id: "root-run",
+          name: "LangGraph",
+          data: { output: { root: true } },
+          parent_ids: [],
+        }
+      },
+    }
+
+    const chunks = []
+    for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
+      entry,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    })) {
+      chunks.push(chunk)
+    }
+
+    const childIdentity = {
+      call_id: "call-child",
+      subagent: "researcher",
+      route_id: "/planner/researcher",
+      depth: 2,
+    }
+    expect(chunks).toEqual([
+      { type: "token", data: "Parent " },
+      {
+        type: "tool_call",
+        data: {
+          id: "parent-task-run",
+          name: "task",
+          input: { subagent: "researcher", input: "Investigate" },
+        },
+      },
+      { type: "subagent.start", data: childIdentity },
+      {
+        type: "subagent.message",
+        data: { ...childIdentity, chunk: "Child token" },
+      },
+      {
+        type: "subagent.tool_call",
+        data: {
+          ...childIdentity,
+          id: "child-tool-run",
+          tool: "readFile",
+          input: { path: "evidence.md" },
+        },
+      },
+      {
+        type: "subagent.tool_result",
+        data: {
+          ...childIdentity,
+          id: "child-tool-run",
+          tool: "readFile",
+          output: "evidence",
+        },
+      },
+      {
+        type: "subagent.plan_update",
+        data: { ...childIdentity, todos: ["inspect"] },
+      },
+      {
+        type: "subagent.end",
+        data: { ...childIdentity, final_message: "evidence" },
+      },
+      {
+        type: "tool_result",
+        data: { id: "parent-task-run", name: "task", output: "evidence" },
+      },
+      { type: "done", data: { root: true } },
+    ])
+    expect(chunks.filter(({ type }) => type === "token")).toEqual([
+      { type: "token", data: "Parent " },
+    ])
+    expect(chunks.filter(({ type }) => type === "tool_call")).toHaveLength(1)
+    expect(chunks.filter(({ type }) => type === "tool_result")).toHaveLength(1)
+  })
+
+  test("treats malformed Dawn stacks as root metadata", async () => {
+    const malformedMetadata = {
+      dawn: {
+        subagent_stack: [
+          { callId: "valid", name: "researcher", routeId: "/researcher" },
+          { callId: "", name: "nested", routeId: "/researcher/nested" },
+        ],
+      },
+    }
+    const entry = {
+      invoke: vi.fn(),
+      async *streamEvents() {
+        yield {
+          event: "on_chat_model_stream",
+          run_id: "model",
+          name: "model",
+          data: { chunk: { content: "root token" } },
+          metadata: malformedMetadata,
+          parent_ids: ["root"],
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "capability",
+          name: "dawn.capability",
+          data: { event: "plan_update", data: { todos: ["root"] } },
+          metadata: malformedMetadata,
+          parent_ids: ["root"],
+        }
+      },
+    }
+
+    const chunks = []
+    for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
+      entry,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    })) {
+      chunks.push(chunk)
+    }
+
+    expect(chunks).toEqual([
+      { type: "token", data: "root token" },
+      { type: "plan_update", data: { todos: ["root"] } },
+      { type: "done", data: undefined },
+    ])
+  })
+
+  test("correlates metadata-less native child errors without crossing parallel siblings", async () => {
+    const researcherMetadata = {
+      dawn: {
+        subagent_stack: [{ callId: "call-researcher", name: "researcher", routeId: "/researcher" }],
+      },
+    }
+    const writerMetadata = {
+      dawn: {
+        subagent_stack: [{ callId: "call-writer", name: "writer", routeId: "/writer" }],
+      },
+    }
+    const graphInterrupt = (
+      ...interrupts: Array<{ id: string; value: Record<string, unknown> }>
+    ): Error & { interrupts: Array<{ id: string; value: Record<string, unknown> }> } =>
+      Object.assign(new Error("GraphInterrupt"), {
+        name: "GraphInterrupt",
+        interrupts,
+      })
+    const entry = {
+      invoke: vi.fn(),
+      async *streamEvents() {
+        yield {
+          event: "on_custom_event",
+          run_id: "shared-custom-event-run",
+          name: "dawn.subagent",
+          data: {
+            phase: "start",
+            call_id: "call-researcher",
+            tool_run_id: "task-run-researcher",
+            subagent: "researcher",
+            route_id: "/researcher",
+            depth: 1,
+          },
+          metadata: researcherMetadata,
+        }
+        yield {
+          event: "on_custom_event",
+          run_id: "shared-custom-event-run",
+          name: "dawn.subagent",
+          data: {
+            phase: "start",
+            call_id: "call-writer",
+            tool_run_id: "task-run-writer",
+            subagent: "writer",
+            route_id: "/writer",
+            depth: 1,
+          },
+          metadata: writerMetadata,
+        }
+        yield {
+          event: "on_tool_error",
+          run_id: "task-run-researcher",
+          name: "task",
+          data: {
+            error: graphInterrupt(
+              {
+                id: "native-tool-id",
+                value: {
+                  interruptId: "perm-tool",
+                  kind: "tool",
+                  detail: { toolName: "writeFile" },
+                },
+              },
+              {
+                id: "native-path-id",
+                value: {
+                  interruptId: "perm-path",
+                  kind: "path",
+                  callId: "existing-path-call",
+                  detail: { path: "evidence.md" },
+                },
+              },
+              {
+                id: "native-subagent-id",
+                value: {
+                  interruptId: "perm-subagent",
+                  kind: "subagent",
+                  callId: "resolver-call-id",
+                  detail: { subagentName: "reviewer" },
+                },
+              },
+            ),
+          },
+        }
+        yield {
+          event: "on_tool_error",
+          run_id: "task-run-writer",
+          name: "task",
+          data: {
+            error: graphInterrupt(
+              {
+                id: "native-command-id",
+                value: {
+                  interruptId: "perm-command",
+                  kind: "command",
+                  detail: { command: "pwd" },
+                },
+              },
+              {
+                id: "native-memory-id",
+                value: {
+                  interruptId: "perm-memory",
+                  kind: "memory",
+                  detail: { namespace: "facts" },
+                },
+              },
+            ),
+          },
+        }
+        yield {
+          event: "on_tool_error",
+          run_id: "tools-node",
+          name: "tools",
+          data: {
+            error: graphInterrupt({
+              id: "native-shared-id",
+              value: {
+                interruptId: "perm-shared",
+                kind: "memory",
+                detail: { namespace: "shared" },
+              },
+            }),
+          },
+        }
+      },
+    }
+
+    const chunks = []
+    for await (const chunk of streamAgent({
+      checkpointer: new MemorySaver(),
+      entry,
+      input: { question: "hi" },
+      routeParamNames: [],
+      signal: new AbortController().signal,
+      tools: [],
+    })) {
+      chunks.push(chunk)
+    }
+
+    expect(chunks).toEqual([
+      {
+        type: "subagent.start",
+        data: {
+          call_id: "call-researcher",
+          subagent: "researcher",
+          route_id: "/researcher",
+          depth: 1,
+        },
+      },
+      {
+        type: "subagent.start",
+        data: {
+          call_id: "call-writer",
+          subagent: "writer",
+          route_id: "/writer",
+          depth: 1,
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-tool",
+          kind: "tool",
+          callId: "call-researcher",
+          detail: { toolName: "writeFile" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-path",
+          kind: "path",
+          callId: "existing-path-call",
+          detail: { path: "evidence.md" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-subagent",
+          kind: "subagent",
+          callId: "resolver-call-id",
+          detail: { subagentName: "reviewer" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-command",
+          kind: "command",
+          callId: "call-writer",
+          detail: { command: "pwd" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-memory",
+          kind: "memory",
+          callId: "call-writer",
+          detail: { namespace: "facts" },
+        },
+      },
+      {
+        type: "interrupt",
+        data: {
+          interruptId: "perm-shared",
+          kind: "memory",
+          detail: { namespace: "shared" },
+        },
+      },
+      { type: "done", data: undefined },
+    ])
+  })
+})
 
 describe("executeAgent with DawnAgent descriptors", () => {
+  test("materializes v2 agents so parallel tool calls have independent graph tasks", async () => {
+    const createReactAgent = vi.fn(() => ({ invoke: vi.fn() }))
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {},
+    }))
+    __resetMaterializedAgentsForTests()
+
+    try {
+      await materializeAgentGraph({
+        checkpointer: new MemorySaver(),
+        descriptor: agent({ model: "gpt-5-mini", systemPrompt: "Test." }),
+        tools: [],
+      })
+
+      expect(createReactAgent).toHaveBeenCalledWith(expect.objectContaining({ version: "v2" }))
+    } finally {
+      __resetMaterializedAgentsForTests()
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+    }
+  })
+
+  test("does not reuse a compiled graph across distinct subagent resolvers", async () => {
+    const createReactAgent = vi.fn(() => ({ invoke: vi.fn() }))
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {},
+    }))
+    __resetMaterializedAgentsForTests()
+
+    const descriptor = agent({ model: "gpt-5-mini", systemPrompt: "Test." })
+    const checkpointer = new MemorySaver()
+    const task = {
+      name: "task",
+      schema: z.object({ subagent: z.string(), input: z.string() }),
+      run: async () => "placeholder",
+    }
+    const firstResolver = vi.fn(async () => ({
+      ok: false as const,
+      message: "first resolver",
+    }))
+    const secondResolver = vi.fn(async () => ({
+      ok: false as const,
+      message: "second resolver",
+    }))
+
+    try {
+      const first = await materializeAgentGraph({
+        checkpointer,
+        descriptor,
+        subagentResolver: firstResolver,
+        tools: [task],
+      })
+      const second = await materializeAgentGraph({
+        checkpointer,
+        descriptor,
+        subagentResolver: secondResolver,
+        tools: [task],
+      })
+
+      expect(createReactAgent).toHaveBeenCalledTimes(2)
+      expect(second).not.toBe(first)
+    } finally {
+      __resetMaterializedAgentsForTests()
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+    }
+  })
+
+  test("does not reuse a compiled graph when stream transformers change", async () => {
+    const createReactAgent = vi.fn(() => ({ invoke: vi.fn() }))
+    vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: class {},
+    }))
+    __resetMaterializedAgentsForTests()
+
+    const descriptor = agent({ model: "gpt-5-mini", systemPrompt: "Test." })
+    const tool = { name: "probe", run: async () => "ok" }
+    const firstTransformer = {
+      observes: "tool_result" as const,
+      transform: async function* () {
+        yield { event: "first", data: 1 }
+      },
+    }
+    const secondTransformer = {
+      observes: "tool_result" as const,
+      transform: async function* () {
+        yield { event: "second", data: 2 }
+      },
+    }
+
+    try {
+      const first = await materializeAgentGraph({
+        checkpointer: new MemorySaver(),
+        descriptor,
+        streamTransformers: [firstTransformer],
+        tools: [tool],
+      })
+      const second = await materializeAgentGraph({
+        checkpointer: new MemorySaver(),
+        descriptor,
+        streamTransformers: [secondTransformer],
+        tools: [tool],
+      })
+
+      expect(createReactAgent).toHaveBeenCalledTimes(2)
+      expect(second).not.toBe(first)
+    } finally {
+      __resetMaterializedAgentsForTests()
+      vi.doUnmock("@langchain/langgraph/prebuilt")
+      vi.doUnmock("@langchain/openai")
+    }
+  })
+
   test("DawnAgent descriptor is recognized and does not throw invoke error", async () => {
     let openAIModel: unknown
 

@@ -38,6 +38,11 @@ export function registerMemoryCommand(program: Command, io: CommandIo): void {
     .command("memory [subcommand] [args...]")
     .description("Inspect and manage the Dawn app's long-term memory store")
     .option("--cwd <path>", "Path to the Dawn app root")
+    // The subcommands own their flags (`prune --cap`, `consolidate --dry-run`, …) and
+    // parse them out of `args`. Without this, commander claims every `--flag` after the
+    // subcommand for itself and rejects it as an unknown option before the handler runs,
+    // which made EVERY documented subcommand flag unusable from the real CLI.
+    .passThroughOptions()
     .action(async (subcommand: string | undefined, args: string[], options: MemoryOptions) => {
       const argv = subcommand ? [subcommand, ...args] : []
       await runMemoryCommand(argv, options, io)

@@ -174,13 +174,18 @@ Resume resolves a parked human-in-the-loop interrupt and streams the continuatio
 
 ```json
 {
-  "interrupt_id": "<id from interrupt event>",
-  "decision": "once",
+  "resume": [
+    {
+      "interruptId": "<id from interrupt event>",
+      "status": "resolved",
+      "payload": "once"
+    }
+  ],
   "route": "/research#agent"
 }
 ```
 
-`decision` must be `once`, `always`, or `deny`. `route` is optional unless the server cannot recover the route from its in-memory thread map or durable thread metadata.
+The `resume` array must address every currently pending interrupt exactly once. A resolved `payload` must be `once`, `always`, or `deny`; a `cancelled` entry omits `payload` and maps to denial. The complete envelope and `route` are required.
 
 ## Packages
 

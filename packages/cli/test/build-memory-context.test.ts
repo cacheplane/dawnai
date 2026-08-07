@@ -29,7 +29,7 @@ describe("buildMemoryContext", () => {
       writes: "candidate",
       appRoot: "/tmp/acme-app",
       routePath: "/support",
-      now: "2026-01-01T00:00:00.000Z",
+      now: () => "2026-01-01T00:00:00.000Z",
     })
     expect(ctx.namespace).toBe("workspace=acme-app|route=/support")
     expect(ctx.writes).toBe("candidate")
@@ -42,7 +42,7 @@ describe("buildMemoryContext", () => {
       writes: "candidate",
       appRoot: "/x",
       routePath: "/r",
-      now: "t",
+      now: () => "t",
     })
     expect(ctx.validate({ subject: "billing" })).toEqual({
       ok: true,

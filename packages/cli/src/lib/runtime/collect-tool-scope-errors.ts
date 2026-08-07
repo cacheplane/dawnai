@@ -77,7 +77,7 @@ export async function collectToolScopeIssues(
       ...(scope.deny ?? []),
       ...(scope.approve ?? []),
       ...constrainNames,
-    ].filter((n) => !available.has(n))
+    ].filter((n) => n !== "task" && !available.has(n))
     if (unknown.length > 0) {
       errors.push(
         `✗ ${route.pathname}: unknown tool name(s) in scope: ${unknown.join(", ")}.\n` +
@@ -88,17 +88,11 @@ export async function collectToolScopeIssues(
     const allow = new Set(scope.allow ?? [])
     const routeIsSubagent = isSubagentRoute(route.routeDir)
     for (const name of scope.approve ?? []) {
+      if (name === "task") continue
       if (INTERNALLY_GATED.has(name)) {
         warnings.push(
           `⚠ ${route.pathname}: approve lists "${name}", which is already gated ` +
             `(pattern-aware bash/path permissions). The approve entry is redundant and would double-prompt.`,
-        )
-      }
-      if (name === "task") {
-        warnings.push(
-          `⚠ ${route.pathname}: approve lists "task", which has no effect — the subagent ` +
-            `dispatch bridge replaces the task tool's run after the approval wrap. ` +
-            `Gating subagent dispatch is not yet supported.`,
         )
       }
       if (deny.has(name)) {
@@ -114,13 +108,11 @@ export async function collectToolScopeIssues(
       }
       // Skip names another warning already fully covers — advising "add it to
       // allow" would conflict with those warnings' point: internally-gated
-      // tools are redundant to approve either way, and task has no effect
-      // regardless (the dispatch bridge replaces its run).
+      // tools are redundant to approve either way.
       if (
         routeIsSubagent &&
         BUILT_IN_TOOL_NAME_SET.has(name) &&
         !INTERNALLY_GATED.has(name) &&
-        name !== "task" &&
         !allow.has(name)
       ) {
         warnings.push(
@@ -131,6 +123,7 @@ export async function collectToolScopeIssues(
     }
     const approveSetForConstrain = new Set(scope.approve ?? [])
     for (const name of constrainNames) {
+      if (name === "task") continue
       if (approveSetForConstrain.has(name)) {
         warnings.push(
           `⚠ ${route.pathname}: "${name}" is in both approve and constrain — constrain wins (it can escalate via { approve }); the approve entry is redundant.`,

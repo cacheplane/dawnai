@@ -1,13 +1,15 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import type { RouteManifest } from "@dawn-ai/core"
+import type { DawnAgent } from "@dawn-ai/sdk"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import {
-  __resetDescriptorRouteMapCacheForTests,
-  getCachedDescriptorRouteMap,
-} from "../src/lib/runtime/execute-route.js"
+  __resetDescriptorRouteIndexCacheForTests,
+  getCachedDescriptorRouteIndex,
+} from "../src/lib/runtime/descriptor-route-index.js"
 
 function manifest(routes: { id: string; entryFile: string; routeDir: string }[]): RouteManifest {
   return {
@@ -24,12 +26,12 @@ function manifest(routes: { id: string; entryFile: string; routeDir: string }[])
   }
 }
 
-describe("getCachedDescriptorRouteMap", () => {
+describe("getCachedDescriptorRouteIndex", () => {
   let tmp: string
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "dawn-cache-test-"))
-    __resetDescriptorRouteMapCacheForTests()
+    __resetDescriptorRouteIndexCacheForTests()
   })
 
   afterEach(() => {
@@ -41,8 +43,8 @@ describe("getCachedDescriptorRouteMap", () => {
     writeFileSync(entryFile, `export default { __dawn: true }`)
     const m = manifest([{ id: "/a", entryFile, routeDir: tmp }])
 
-    const first = await getCachedDescriptorRouteMap(m)
-    const second = await getCachedDescriptorRouteMap(m)
+    const first = await getCachedDescriptorRouteIndex(m)
+    const second = await getCachedDescriptorRouteIndex(m)
 
     expect(second).toBe(first)
   })
@@ -53,8 +55,8 @@ describe("getCachedDescriptorRouteMap", () => {
     const m1 = manifest([{ id: "/b", entryFile, routeDir: tmp }])
     const m2 = manifest([{ id: "/b", entryFile, routeDir: tmp }])
 
-    const map1 = await getCachedDescriptorRouteMap(m1)
-    const map2 = await getCachedDescriptorRouteMap(m2)
+    const map1 = await getCachedDescriptorRouteIndex(m1)
+    const map2 = await getCachedDescriptorRouteIndex(m2)
 
     expect(map2).not.toBe(map1)
   })
@@ -66,7 +68,30 @@ describe("getCachedDescriptorRouteMap", () => {
       `import { agent } from "@dawn-ai/sdk"\nexport default agent({ model: "gpt-5", systemPrompt: "x" })\n`,
     )
     const m = manifest([{ id: "/a", entryFile, routeDir: tmp }])
-    const map = await getCachedDescriptorRouteMap(m)
+    const map = await getCachedDescriptorRouteIndex(m)
     expect(map).toBeInstanceOf(Map)
+  })
+
+  it("stores every descriptor route candidate in stable sorted order", async () => {
+    const descriptorFile = join(tmp, "shared.ts")
+    const routeA = join(tmp, "route-a.ts")
+    const routeB = join(tmp, "route-b.ts")
+    writeFileSync(
+      descriptorFile,
+      `import { agent } from "@dawn-ai/sdk"\nexport default agent({ model: "gpt-5-mini" })\n`,
+    )
+    writeFileSync(routeA, `export { default } from "./shared.js"\n`)
+    writeFileSync(routeB, `export { default } from "./shared.js"\n`)
+    const m = manifest([
+      { id: "/z-route", entryFile: routeA, routeDir: tmp },
+      { id: "/a-route", entryFile: routeB, routeDir: tmp },
+    ])
+
+    const descriptor = (
+      (await import(pathToFileURL(descriptorFile).href)) as { default: DawnAgent }
+    ).default
+    const map = await getCachedDescriptorRouteIndex(m)
+
+    expect(map.get(descriptor)).toEqual(["/a-route", "/z-route"])
   })
 })

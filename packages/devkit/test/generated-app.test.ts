@@ -117,6 +117,13 @@ describe("generated app helper", () => {
       expect(readme).toContain("Docker sandbox")
       expect(readme).toContain("dawn memory approve")
       expect(researchTest).toContain("seedMemory")
+      expect(researchTest).toContain(`const resumed = await h.resume({
+    resume: run.interrupts.map((entry) => ({
+      interruptId: entry.interruptId,
+      status: "resolved" as const,
+      payload: "once",
+    })),
+  })`)
       expect(sandboxTest).toContain("DAWN_DEMO_DOCKER_SANDBOX")
       expect(sandboxTest).toContain("dockerSandbox")
       await expect(

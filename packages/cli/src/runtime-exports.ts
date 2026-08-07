@@ -10,6 +10,15 @@ export { __resetMaterializedAgentsForTests } from "@dawn-ai/langchain"
 // stable public surface — safe to gate (NODE_ENV) or relocate if it grows.
 export { runMemoryCommand } from "./commands/memory.js"
 export {
+  type DawnResumeEntry,
+  type PendingInterrupt,
+  type PendingInterruptSnapshot,
+  type PermissionDecision,
+  type ResumeResolution,
+  readPendingInterrupts,
+  resolvePendingResume,
+} from "./lib/dev/pending-interrupts.js"
+export {
   createRuntimeFetchHandler,
   type RuntimeFetchHandler,
 } from "./lib/dev/runtime-fetch-handler.js"
@@ -29,6 +38,8 @@ export {
   __resetRouteLoadCachesForTests,
   executeResolvedRoute,
   invokeResolvedRoute,
+  type MaterializeResolvedRouteGraphOptions,
+  materializeResolvedRouteGraph,
   type PreparedRouteModules,
   resolveCheckpointer,
   resolveThreadsStore,

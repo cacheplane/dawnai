@@ -2,8 +2,9 @@ import { createHash } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { FilesystemBackend } from "@dawn-ai/workspace"
 import { localFilesystem } from "@dawn-ai/workspace/node"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { buildOffloadFileName, OffloadStore } from "../src/offload/offload-store.js"
 
 describe("OffloadStore", () => {
@@ -59,6 +60,31 @@ describe("OffloadStore", () => {
     const c = { signal: new AbortController().signal, workspaceRoot: dir }
     expect(await localFilesystem().readFile(join(dir, a), c)).toBe("a".repeat(20))
     expect(await localFilesystem().readFile(join(dir, b), c)).toBe("b".repeat(20))
+  })
+  it("uses a live operation signal with an abort-aware backend", async () => {
+    const preparedSignal = new AbortController().signal
+    const live = new AbortController()
+    live.abort()
+    const writeFile = vi.fn(async (_path, content, ctx) => {
+      ctx.signal.throwIfAborted()
+      return { bytesWritten: content.length }
+    })
+    const backend: FilesystemBackend = {
+      listDir: async () => [],
+      readFile: async () => "",
+      realPath: async (path) => path,
+      writeFile,
+    }
+    const s = store({ backend, signal: preparedSignal })
+
+    await expect(s.write("search", "FULL CONTENT", undefined, live.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    })
+    expect(writeFile).toHaveBeenCalledWith(
+      expect.any(String),
+      "FULL CONTENT",
+      expect.objectContaining({ signal: live.signal }),
+    )
   })
 })
 

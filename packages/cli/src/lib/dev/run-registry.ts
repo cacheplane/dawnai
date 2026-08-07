@@ -38,6 +38,15 @@ export interface RunRegistry {
   /** Aborts the in-flight run. Returns false when there is nothing to cancel. */
   cancel(threadId: string, reason?: string): boolean
   has(threadId: string): boolean
+  /**
+   * How many runs still hold a slot.
+   *
+   * A slot is held for as long as route work may still be executing — including
+   * after the HTTP response has been sent, when a cancelled or abandoned run was
+   * detached rather than stopped. `close()` drains on this so sandboxes are not
+   * released out from under work that is still running.
+   */
+  activeCount(): number
 }
 
 export function createRunRegistry(): RunRegistry {
@@ -96,6 +105,9 @@ export function createRunRegistry(): RunRegistry {
     },
     has(threadId) {
       return entries.has(threadId)
+    },
+    activeCount() {
+      return entries.size
     },
   }
 }

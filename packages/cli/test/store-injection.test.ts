@@ -94,7 +94,7 @@ async function subagentFixtureApp(): Promise<string> {
       "export default agent({\n" +
       '  model: "gpt-5-mini",\n' +
       '  systemPrompt: "You coordinate work by dispatching subagents.",\n' +
-      "  subagents: [helper],\n" +
+      "  subagents: { helper },\n" +
       "})\n",
     "src/app/chat/memory.ts": MEMORY_TS,
     "src/app/helper/index.ts":

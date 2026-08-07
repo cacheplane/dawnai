@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net"
 import type { DawnConfig } from "@dawn-ai/core"
 // Type-only imports below (stores, middleware, checkpointer) erase at
-// runtime — this module's VALUE graph stays node-http-only.
+// runtime - this module's VALUE graph stays node-http-only.
 import type { MemoryStore } from "@dawn-ai/memory"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnMiddleware } from "@dawn-ai/sdk"
@@ -26,12 +26,12 @@ export interface StartRuntimeServerOptions {
   /**
    * How the runtime resolves the HITL permissions store.
    *
-   * - `"per-request"` (default — `dawn dev` and unset callers): re-load
+   * - `"per-request"` (default - `dawn dev` and unset callers): re-load
    *   `.dawn/permissions.json` on every request, so "Always" grants written
    *   mid-process by the HITL resume path apply on the very next request. The
    *   dev loop does not watch `.dawn/`, so a boot snapshot would go stale.
    * - `"boot"` (production `serveRuntime`): load once at boot and reuse the
-   *   instance — no per-request read.
+   *   instance - no per-request read.
    */
   readonly permissionsMode?: "per-request" | "boot"
   /**
@@ -54,9 +54,9 @@ export interface StartRuntimeServerOptions {
   /** Boot-resolved threads store. Absent: config, then default sqlite. */
   readonly threadsStore?: ThreadsStore
   /**
-   * Boot-resolved permissions store (instance or per-request factory — same
+   * Boot-resolved permissions store (instance or per-request factory - same
    * semantics as route execution's boot instances). When provided, it wins
-   * REGARDLESS of `permissionsMode` — the caller has taken over permissions
+   * REGARDLESS of `permissionsMode` - the caller has taken over permissions
    * resolution entirely. Absent: permissionsMode-driven construction from
    * `.dawn/permissions.json`.
    */
@@ -78,13 +78,17 @@ export interface StartRuntimeServerOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Server factory — listener-only (no port binding)
+// Server factory - listener-only (no port binding)
 // ---------------------------------------------------------------------------
 
 export interface RuntimeRequestListener {
   readonly listener: (req: IncomingMessage, res: ServerResponse) => void
   readonly close: () => Promise<void>
-  readonly state: { acceptingRequests: boolean; activeRequests: number; closed: boolean }
+  readonly state: {
+    acceptingRequests: boolean
+    activeRequests: number
+    closed: boolean
+  }
   readonly shutdownController: AbortController
 }
 
@@ -102,7 +106,7 @@ export async function createRuntimeRequestListener(
       try {
         await writeNodeResponse(res, response)
       } catch {
-        // Writing the response failed (e.g. writeHead threw) — the socket is
+        // Writing the response failed (e.g. writeHead threw) - the socket is
         // unusable for a JSON error at this point. Cancel the unread body
         // first so a tracked SSE stream releases its in-flight slot instead
         // of leaking it (which would wedge close()'s drain).
@@ -110,7 +114,7 @@ export async function createRuntimeRequestListener(
         res.destroy()
       }
     })().catch(() => {
-      // core.fetch itself rejected before a Response existed — nothing to
+      // core.fetch itself rejected before a Response existed - nothing to
       // cancel; just tear the socket down.
       res.destroy()
     })
@@ -143,7 +147,7 @@ export async function startRuntimeServer(
     throw new Error("Runtime server did not bind to a TCP address")
   }
 
-  // The bind host (e.g. "0.0.0.0") is not always dialable directly — report a
+  // The bind host (e.g. "0.0.0.0") is not always dialable directly - report a
   // dialable loopback host in the returned url while still binding the
   // requested interface.
   const urlHost = toUrlHost(options.host)
@@ -158,7 +162,7 @@ export async function startRuntimeServer(
         server.close((error) => (error ? reject(error) : resolve()))
       })
       // Abort + drain in-flight requests + clear the sandbox reaper + release
-      // sandboxes — the single shutdown path shared with the in-process
+      // sandboxes - the single shutdown path shared with the in-process
       // listener. This is the only place that flips state.closed.
       await listenerClose()
       await serverClosed
@@ -171,9 +175,9 @@ export async function startRuntimeServer(
  * Map a bind host to a dialable URL host.
  *
  * Wildcard bind hosts are not dialable, so they map to their loopback:
- * `0.0.0.0` → `127.0.0.1`, `::` → `::1`. Any IPv6 literal (contains `:` and is
+ * `0.0.0.0` -> `127.0.0.1`, `::` -> `::1`. Any IPv6 literal (contains `:` and is
  * not already bracketed) is wrapped in `[...]` so it forms a valid URL
- * authority, e.g. `::1` → `[::1]`.
+ * authority, e.g. `::1` -> `[::1]`.
  */
 function toUrlHost(host: string | undefined): string {
   const resolved = host ?? "127.0.0.1"

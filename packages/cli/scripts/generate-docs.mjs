@@ -1,18 +1,17 @@
 // Generates packages/cli/docs/ from the website MDX so the docs ship with the
 // installed CLI, version-matched. Run during the CLI build (after tsc emits
 // dist/, which this script imports). Reads only static source files.
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { buildReadme, extractSummary, extractTitle, mdxToMarkdown, parseNav } from "../dist/lib/docs-bundle.js"
+import {
+  buildReadme,
+  extractSummary,
+  extractTitle,
+  mdxToMarkdown,
+  parseNav,
+} from "../dist/lib/docs-bundle.js"
 
 const here = dirname(fileURLToPath(import.meta.url)) // packages/cli/scripts
 const pkgRoot = resolve(here, "..") // packages/cli

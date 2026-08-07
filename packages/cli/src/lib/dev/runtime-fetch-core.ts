@@ -23,7 +23,13 @@ import {
   handleMemoryRejectRequest,
 } from "./memory-handler.js"
 import { headersToRecord, runMiddleware } from "./middleware.js"
-import { readPendingInterrupts } from "./pending-interrupts.js"
+import {
+  createPendingResumeClaims,
+  type DawnResumeEntry,
+  type PendingResumeClaims,
+  readPendingInterrupts,
+  resolvePendingResume,
+} from "./pending-interrupts.js"
 import { extractRouteParams } from "./request-context.js"
 import { createRunRegistry, type RunRegistry } from "./run-registry.js"
 import {
@@ -81,7 +87,11 @@ interface RouteMatcher {
 export interface RuntimeFetchHandler {
   readonly fetch: (request: Request) => Promise<Response>
   readonly close: () => Promise<void>
-  readonly state: { acceptingRequests: boolean; activeRequests: number; closed: boolean }
+  readonly state: {
+    acceptingRequests: boolean
+    activeRequests: number
+    closed: boolean
+  }
   readonly shutdownController: AbortController
 }
 
@@ -203,6 +213,18 @@ export async function createRuntimeFetchHandler(
   }
   const shutdownController = new AbortController()
 
+  // Process-local in-flight run tracking: enables the concurrency gate, the
+  // per-run abort signal, and POST /threads/:id/cancel. Scoped to this handler
+  // (not module-level) so multiple handler instances in one process — which the
+  // (Request) => Response core exists to allow — stay isolated.
+  //
+  // Lives out here rather than inside buildRouteTable because close() drains on
+  // it: a run whose HTTP response has already been sent can still be executing
+  // (a cancelled stream, or an abandoned wait), and that work must finish before
+  // sandboxes are released.
+  const runRegistry = createRunRegistry()
+  const resumeClaims = createPendingResumeClaims()
+
   const routes = buildRouteTable({
     appRoot: options.appRoot,
     boot,
@@ -211,6 +233,8 @@ export async function createRuntimeFetchHandler(
     middleware,
     permissionsStore,
     registry,
+    resumeClaims,
+    runRegistry,
     ...(sandboxManager ? { sandboxManager } : {}),
     signal: shutdownController.signal,
     // Boot manifest → route execution derives the subagents descriptor maps
@@ -221,7 +245,9 @@ export async function createRuntimeFetchHandler(
 
   const fetch = async (request: Request): Promise<Response> => {
     if (!state.acceptingRequests) {
-      return Response.json(createRequestErrorBody("Server is shutting down"), { status: 503 })
+      return Response.json(createRequestErrorBody("Server is shutting down"), {
+        status: 503,
+      })
     }
 
     state.activeRequests++
@@ -281,20 +307,30 @@ export async function createRuntimeFetchHandler(
 
     if (sandboxReaper) clearInterval(sandboxReaper)
 
-    // Drain in-flight requests — bounded: an SSE body nobody ever reads (or a
+    // Drain in-flight work — bounded: an SSE body nobody ever reads (or a
     // leaked in-flight slot) must not wedge shutdown forever.
+    //
+    // Both counters matter, and neither implies the other. activeRequests
+    // tracks HTTP responses still being produced. runRegistry tracks route work
+    // that may still be executing AFTER its response was sent: a cancelled run
+    // whose route ignored ctx.signal, or an abandoned /runs/wait that returned
+    // 409 while invokeResolvedRoute kept going. Those return plain JSON, so the
+    // fetch wrapper (which only holds the slot for text/event-stream bodies)
+    // has already decremented — draining on activeRequests alone would release
+    // sandboxes out from under work still using them.
     const drainDeadlineMs = options.drainDeadlineMs ?? CLOSE_DRAIN_DEADLINE_MS
     await new Promise<void>((resolve) => {
       const startedAt = Date.now()
       const check = () => {
-        if (state.activeRequests === 0) {
+        const activeRuns = runRegistry.activeCount()
+        if (state.activeRequests === 0 && activeRuns === 0) {
           resolve()
           return
         }
         if (Date.now() - startedAt >= drainDeadlineMs) {
           console.warn(
-            `close(): ${state.activeRequests} request(s) still active after ` +
-              `${Math.round(drainDeadlineMs / 1000)}s — proceeding with shutdown`,
+            `close(): ${state.activeRequests} request(s) and ${activeRuns} run(s) still ` +
+              `active after ${Math.round(drainDeadlineMs / 1000)}s — proceeding with shutdown`,
           )
           resolve()
           return
@@ -370,6 +406,8 @@ function buildRouteTable(ctx: {
   readonly middleware: DawnMiddleware | undefined
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
+  readonly resumeClaims: PendingResumeClaims
+  readonly runRegistry: RunRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
@@ -383,6 +421,8 @@ function buildRouteTable(ctx: {
     middleware,
     permissionsStore,
     registry,
+    resumeClaims,
+    runRegistry,
     sandboxManager,
     signal,
     staticModules,
@@ -393,12 +433,6 @@ function buildRouteTable(ctx: {
   // Populated by runs/stream and runs/wait; read by the resume endpoint so it
   // can re-invoke the correct route without requiring the client to repeat it.
   const threadRouteMap = new Map<string, string>()
-
-  // Process-local in-flight run tracking: enables the concurrency gate, the
-  // per-run abort signal, and POST /threads/:id/cancel. Scoped to this route
-  // table (not module-level) so multiple handler instances in one process —
-  // which the (Request) => Response core exists to allow — stay isolated.
-  const runRegistry = createRunRegistry()
 
   return [
     // ------------------------------------------------------------------
@@ -446,7 +480,9 @@ function buildRouteTable(ctx: {
       handle: async (_request, params) => {
         const thread = await threadsStore.getThread(params.thread_id ?? "")
         if (!thread) {
-          return Response.json(createRequestErrorBody("Thread not found"), { status: 404 })
+          return Response.json(createRequestErrorBody("Thread not found"), {
+            status: 404,
+          })
         }
         return Response.json(thread, { status: 200 })
       },
@@ -466,7 +502,9 @@ function buildRouteTable(ctx: {
           typeof (checkpointer as unknown as { deleteThread?: unknown }).deleteThread === "function"
         ) {
           await (
-            checkpointer as unknown as { deleteThread(id: string): Promise<void> }
+            checkpointer as unknown as {
+              deleteThread(id: string): Promise<void>
+            }
           ).deleteThread(threadId)
         }
         if (sandboxManager) await sandboxManager.destroyThread(threadId)
@@ -505,7 +543,9 @@ function buildRouteTable(ctx: {
         const thread = await threadsStore.getThread(threadId)
         if (!thread) {
           return Response.json(
-            createRequestErrorBody("Thread not found", { code: "thread_not_found" }),
+            createRequestErrorBody("Thread not found", {
+              code: "thread_not_found",
+            }),
             { status: 404 },
           )
         }
@@ -561,6 +601,8 @@ function buildRouteTable(ctx: {
           middleware,
           permissionsStore,
           registry,
+          resumeClaims,
+          runRegistry,
           threadsStore,
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
@@ -603,7 +645,10 @@ function buildRouteTable(ctx: {
     // ------------------------------------------------------------------
     {
       handle: async (_request, params) =>
-        handleMemoryRejectRequest({ id: params.id ?? "", memoryStore: await getMemoryStore() }),
+        handleMemoryRejectRequest({
+          id: params.id ?? "",
+          memoryStore: await getMemoryStore(),
+        }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/reject(?:\?.*)?$/,
     },
@@ -675,6 +720,7 @@ function buildRouteTable(ctx: {
           middleware,
           permissionsStore,
           registry,
+          resumeClaims,
           request,
           runRegistry,
           ...(sandboxManager ? { sandboxManager } : {}),
@@ -765,20 +811,26 @@ async function handleApStreamRequest(options: {
   const rawBody = await request.text()
   const parsedBody = parseJson(rawBody)
   if (!parsedBody.ok || !isRecord(parsedBody.value)) {
-    return Response.json(createRequestErrorBody("Malformed request body"), { status: 400 })
+    return Response.json(createRequestErrorBody("Malformed request body"), {
+      status: 400,
+    })
   }
 
   const body = parsedBody.value
   const validated = validateApRunBody(body)
   if (!validated.ok) {
-    return Response.json(createRequestErrorBody(validated.message), { status: 400 })
+    return Response.json(createRequestErrorBody(validated.message), {
+      status: 400,
+    })
   }
 
   const { input, routeKey } = validated
 
   const route = registry.lookup(routeKey)
   if (!route) {
-    return Response.json(createRequestErrorBody(`Unknown route: ${routeKey}`), { status: 404 })
+    return Response.json(createRequestErrorBody(`Unknown route: ${routeKey}`), {
+      status: 404,
+    })
   }
 
   // Run middleware
@@ -896,7 +948,9 @@ async function handleApStreamRequest(options: {
           const terminalChunk: StreamChunk = run.cancelled
             ? { output: { cancelled: true }, type: "done" }
             : {
-                output: { error: error instanceof Error ? error.message : String(error) },
+                output: {
+                  error: error instanceof Error ? error.message : String(error),
+                },
                 type: "done",
               }
           safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
@@ -983,20 +1037,26 @@ async function handleApWaitRequest(options: {
   const rawBody = await request.text()
   const parsedBody = parseJson(rawBody)
   if (!parsedBody.ok || !isRecord(parsedBody.value)) {
-    return Response.json(createRequestErrorBody("Malformed request body"), { status: 400 })
+    return Response.json(createRequestErrorBody("Malformed request body"), {
+      status: 400,
+    })
   }
 
   const body = parsedBody.value
   const validated = validateApRunBody(body)
   if (!validated.ok) {
-    return Response.json(createRequestErrorBody(validated.message), { status: 400 })
+    return Response.json(createRequestErrorBody(validated.message), {
+      status: 400,
+    })
   }
 
   const { input, routeKey } = validated
 
   const route = registry.lookup(routeKey)
   if (!route) {
-    return Response.json(createRequestErrorBody(`Unknown route: ${routeKey}`), { status: 404 })
+    return Response.json(createRequestErrorBody(`Unknown route: ${routeKey}`), {
+      status: 404,
+    })
   }
 
   // Run middleware
@@ -1176,6 +1236,7 @@ async function handleResumeRequest(options: {
   readonly middleware: DawnMiddleware | undefined
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
+  readonly resumeClaims: PendingResumeClaims
   readonly request: Request
   readonly runRegistry: RunRegistry
   readonly sandboxManager?: SandboxManager
@@ -1193,6 +1254,7 @@ async function handleResumeRequest(options: {
     middleware,
     permissionsStore,
     registry,
+    resumeClaims,
     request,
     runRegistry,
     sandboxManager,
@@ -1211,201 +1273,193 @@ async function handleResumeRequest(options: {
 
   const rawBody = await request.text()
   const parsedBody = parseJson(rawBody)
-  if (!parsedBody.ok || !isRecord(parsedBody.value)) {
+  if (!parsedBody.ok || !isDawnResumeBody(parsedBody.value)) {
     return Response.json(createRequestErrorBody("Malformed resume request body"), { status: 400 })
   }
 
   const body = parsedBody.value
-  const interruptId = typeof body.interrupt_id === "string" ? body.interrupt_id : undefined
-  const decision = body.decision
-  // Optional route key supplied by the client — used when the in-memory map
-  // has been cleared (e.g. after a server restart). Populated by the resume
-  // endpoint before starting the SSE stream.
-  const bodyRoute = typeof body.route === "string" ? body.route : undefined
-  if (!interruptId) {
-    return Response.json(createRequestErrorBody("Missing interrupt_id"), { status: 400 })
-  }
-  if (decision !== "once" && decision !== "always" && decision !== "deny") {
-    return Response.json(createRequestErrorBody("decision must be 'once', 'always', or 'deny'"), {
-      status: 400,
-    })
-  }
-
-  const pendingInterrupts = await readPendingInterrupts(checkpointer, threadId)
-  if (!pendingInterrupts) {
-    return Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {
-      status: 404,
-    })
-  }
-
-  if (pendingInterrupts.malformed) {
+  const releaseResumeClaim = resumeClaims.tryClaim(threadId)
+  if (!releaseResumeClaim) {
     return Response.json(
-      createRequestErrorBody("Malformed checkpoint interrupts", {
-        code: "malformed_checkpoint",
+      createRequestErrorBody("A resume is already in progress for this thread", {
+        code: "resume_in_progress",
       }),
       { status: 409 },
     )
   }
 
-  if (!pendingInterrupts.interrupts.some((pending) => pending.aliases.includes(interruptId))) {
-    return Response.json(
-      createRequestErrorBody("Stale interrupt_id", { code: "stale_interrupt" }),
-      { status: 409 },
-    )
-  }
-
-  // Resolve which route last ran on this thread, in priority order:
-  //   1. in-memory map (fast-path, current server session)
-  //   2. durable thread metadata (survives a server restart)
-  //   3. client-supplied `route` in the resume body (explicit override)
-  const persistedRoute = (await threadsStore.getThread(threadId))?.metadata.route
-  const routeKey =
-    threadRouteMap.get(threadId) ??
-    (typeof persistedRoute === "string" ? persistedRoute : undefined) ??
-    bodyRoute
-  if (!routeKey) {
-    return Response.json(
-      createRequestErrorBody(
-        "Cannot resume: no route recorded for this thread. " +
-          "Pass `route` in the resume body (e.g. '/chat#agent') to resume explicitly.",
-        { code: "route_not_found" },
-      ),
-      { status: 409 },
-    )
-  }
-
-  const route = registry.lookup(routeKey)
-  if (!route) {
-    return Response.json(createRequestErrorBody(`Unknown route: ${routeKey}`), { status: 404 })
-  }
-
-  // Run middleware with the resume URL
-  const requestUrl = new URL(request.url)
-  const mwRequest: MiddlewareRequest = {
-    assistantId: route.assistantId,
-    headers: headersToRecord(request.headers),
-    method: "POST",
-    params: {},
-    routeId: route.routeId,
-    url: `${requestUrl.pathname}${requestUrl.search}`,
-  }
-  const mwResult = await runMiddleware(middleware, mwRequest)
-  if (mwResult.action === "reject") {
-    return statusResponse(mwResult.status, mwResult.body)
-  }
-
-  // Claim the thread's run slot. Deliberately BEFORE the busy-status
-  // mutation below — same reasoning as the stream handler: a rejected
-  // request must never clobber state for the run that is genuinely in
-  // flight.
-  const run = runRegistry.begin(threadId, signal)
-  if (!run) {
-    return Response.json(
-      createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
-        code: "run_in_flight",
-      }),
-      { status: 409 },
-    )
-  }
-
-  // Mark thread busy
+  let claimTransferredToStream = false
   try {
-    await threadsStore.updateStatus(threadId, "busy")
-  } catch (error) {
-    // The stream's finally has not been armed yet, so nothing else would ever
-    // free this slot — without an explicit release the thread would 409 for the
-    // remaining life of the process.
-    run.release()
-    throw error
-  }
+    const pendingInterrupts = await readPendingInterrupts(checkpointer, threadId)
+    if (!pendingInterrupts) {
+      return Response.json(
+        createRequestErrorBody("Thread not found", {
+          code: "thread_not_found",
+        }),
+        { status: 404 },
+      )
+    }
 
-  // Open a new SSE stream, passing Command({resume: decision}) as input.
-  //
-  // As with /runs/stream, a client disconnect deliberately does NOT stop the
-  // resumed run — Agent Protocol is the durable surface, and a resumed run is
-  // if anything more expensive to discard than a fresh one. Explicit stop is
-  // POST /threads/:id/cancel.
-  // Rationale: docs/superpowers/specs/2026-08-06-ap-run-cancellation.md
-  const encoder = new TextEncoder()
-  // See the equivalent comment in handleApStreamRequest: abortableAsyncIterable
-  // stops CONSUMING the route on abort, not the route itself, so a route
-  // suspended at a non-abortable await keeps running past that point.
-  let sourceCleanup: Promise<void> | undefined
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      try {
+    const resumeResolution = resolvePendingResume(body.resume, pendingInterrupts)
+    if (!resumeResolution.ok) {
+      return Response.json(
+        createRequestErrorBody(resumeResolution.message, {
+          code: resumeResolution.code,
+        }),
+        { status: resumeResolution.status },
+      )
+    }
+    if (resumeResolution.mode !== "resume") {
+      return Response.json(createRequestErrorBody("Resume entries are required"), { status: 409 })
+    }
+
+    // Resolve which route last ran on this thread, in priority order:
+    //   1. in-memory map (fast-path, current server session)
+    //   2. durable thread metadata (survives a server restart)
+    //   3. client-supplied `route` in the resume body (explicit override)
+    const persistedRoute = (await threadsStore.getThread(threadId))?.metadata.route
+    const routeKey =
+      threadRouteMap.get(threadId) ??
+      (typeof persistedRoute === "string" ? persistedRoute : undefined) ??
+      body.route
+    if (!routeKey) {
+      return Response.json(
+        createRequestErrorBody(
+          "Cannot resume: no route recorded for this thread. " +
+            "Pass `route` in the resume body (e.g. '/chat#agent') to resume explicitly.",
+          { code: "route_not_found" },
+        ),
+        { status: 409 },
+      )
+    }
+
+    const route = registry.lookup(routeKey)
+    if (!route) {
+      return Response.json(createRequestErrorBody(`Unknown route: ${routeKey}`), { status: 404 })
+    }
+
+    const requestUrl = new URL(request.url)
+    const mwRequest: MiddlewareRequest = {
+      assistantId: route.assistantId,
+      headers: headersToRecord(request.headers),
+      method: "POST",
+      params: {},
+      routeId: route.routeId,
+      url: `${requestUrl.pathname}${requestUrl.search}`,
+    }
+    const mwResult = await runMiddleware(middleware, mwRequest)
+    if (mwResult.action === "reject") {
+      return statusResponse(mwResult.status, mwResult.body)
+    }
+
+    // Claim the thread's run slot before mutating its busy status. A rejected
+    // request must not clobber state for the run genuinely in flight.
+    const run = runRegistry.begin(threadId, signal)
+    if (!run) {
+      return Response.json(
+        createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
+          code: "run_in_flight",
+        }),
+        { status: 409 },
+      )
+    }
+
+    try {
+      await threadsStore.updateStatus(threadId, "busy")
+    } catch (error) {
+      run.release()
+      throw error
+    }
+
+    // Agent Protocol is durable: disconnecting the response does not stop the
+    // resumed run. Explicit cancellation uses POST /threads/:id/cancel.
+    const encoder = new TextEncoder()
+    let sourceCleanup: Promise<void> | undefined
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
         try {
-          const routeStream = streamResolvedRoute({
-            appRoot,
-            ...boot,
-            checkpointer,
-            input: {},
-            memoryStore: getMemoryStore,
-            resume: decision,
-            ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
-            permissionsStore,
-            routeFile: route.routeFile,
-            routeId: route.routeId,
-            ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
-            routePath: route.routePath,
-            ...(sandboxManager ? { sandboxManager } : {}),
-            signal: run.signal,
-            ...(staticModules ? { staticModules } : {}),
-            threadId,
-            threadsStore,
-          })
-          // Belt-and-braces, mirroring the AG-UI handler: pass the signal to
-          // the route *and* wrap the iterator, so a route that ignores its
-          // ctx.signal still stops when the run is cancelled. The third
-          // argument lets us observe when the route's OWN cleanup finishes,
-          // independently of when this loop stops consuming it.
-          for await (const chunk of abortableAsyncIterable(routeStream, run.signal, (p) => {
-            sourceCleanup = p
-          })) {
-            safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
+          try {
+            const routeStream = streamResolvedRoute({
+              appRoot,
+              ...boot,
+              checkpointer,
+              input: {},
+              memoryStore: getMemoryStore,
+              resume: resumeResolution.resume,
+              ...(mwResult.context ? { middlewareContext: mwResult.context } : {}),
+              permissionsStore,
+              routeFile: route.routeFile,
+              routeId: route.routeId,
+              ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
+              routePath: route.routePath,
+              ...(sandboxManager ? { sandboxManager } : {}),
+              signal: run.signal,
+              ...(staticModules ? { staticModules } : {}),
+              threadId,
+              threadsStore,
+            })
+            // Belt-and-braces, mirroring the AG-UI handler: pass the signal to
+            // the route *and* wrap the iterator, so a route that ignores its
+            // ctx.signal still stops when the run is cancelled. The third
+            // argument lets us observe when the route's OWN cleanup finishes,
+            // independently of when this loop stops consuming it.
+            for await (const chunk of abortableAsyncIterable(routeStream, run.signal, (p) => {
+              sourceCleanup = p
+            })) {
+              safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
+            }
+            await threadsStore.updateStatus(threadId, "idle")
+          } catch (error) {
+            // A cancelled run is not a failure: clients must be able to tell the
+            // two apart without inferring it from a truncated stream.
+            const terminalChunk: StreamChunk = run.cancelled
+              ? { output: { cancelled: true }, type: "done" }
+              : {
+                  output: {
+                    error: error instanceof Error ? error.message : String(error),
+                  },
+                  type: "done",
+                }
+            safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
+            await threadsStore
+              .updateStatus(threadId, run.cancelled ? "interrupted" : "idle")
+              .catch(() => undefined)
           }
-          await threadsStore.updateStatus(threadId, "idle")
-        } catch (error) {
-          // A cancelled run is not a failure: clients must be able to tell the
-          // two apart without inferring it from a truncated stream.
-          const terminalChunk: StreamChunk = run.cancelled
-            ? { output: { cancelled: true }, type: "done" }
-            : {
-                output: { error: error instanceof Error ? error.message : String(error) },
-                type: "done",
-              }
-          safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
-          await threadsStore
-            .updateStatus(threadId, run.cancelled ? "interrupted" : "idle")
-            .catch(() => undefined)
+        } finally {
+          // The client's stream ends here regardless — response lifetime and run
+          // lifetime are deliberately different; see handleApStreamRequest.
+          const releaseExecutionClaims = () => {
+            run.release()
+            releaseResumeClaim()
+          }
+          if (run.cancelled && sourceCleanup) {
+            void sourceCleanup.finally(releaseExecutionClaims)
+          } else {
+            releaseExecutionClaims()
+          }
+          safeClose(controller)
         }
-      } finally {
-        // The client's stream ends here regardless — response lifetime and run
-        // lifetime are deliberately different; see handleApStreamRequest.
-        if (run.cancelled && sourceCleanup) {
-          void sourceCleanup.finally(() => run.release())
-        } else {
-          run.release()
-        }
-        safeClose(controller)
-      }
-    },
-    cancel() {
-      // Intentionally empty — see the disconnect note above the stream.
-      // Further enqueues no-op via safeEnqueue, and the fetch wrapper's stream
-      // tracking settles the in-flight slot. To actually stop the run, call
-      // POST /threads/:id/cancel.
-    },
-  })
+      },
+      cancel() {
+        // Intentionally empty — see the disconnect note above the stream.
+        // Further enqueues no-op via safeEnqueue, and the fetch wrapper's stream
+        // tracking settles the in-flight slot. To actually stop the run, call
+        // POST /threads/:id/cancel.
+      },
+    })
 
-  return new Response(stream, {
-    headers: {
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-      "content-type": "text/event-stream",
-    },
-    status: 200,
-  })
+    claimTransferredToStream = true
+    return new Response(stream, {
+      headers: {
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "content-type": "text/event-stream",
+      },
+      status: 200,
+    })
+  } finally {
+    if (!claimTransferredToStream) releaseResumeClaim()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1499,4 +1553,37 @@ function safeClose(controller: ReadableStreamDefaultController<Uint8Array>) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+function isDawnResumeBody(
+  value: unknown,
+): value is { readonly resume: DawnResumeEntry[]; readonly route: string } {
+  return (
+    isRecord(value) &&
+    !Array.isArray(value) &&
+    hasExactKeys(value, ["resume", "route"]) &&
+    typeof value.route === "string" &&
+    value.route.length > 0 &&
+    Array.isArray(value.resume) &&
+    value.resume.every(
+      (entry) =>
+        isRecord(entry) &&
+        !Array.isArray(entry) &&
+        typeof entry.interruptId === "string" &&
+        entry.interruptId.length > 0 &&
+        ((entry.status === "resolved" &&
+          isPermissionDecision(entry.payload) &&
+          hasExactKeys(entry, ["interruptId", "payload", "status"])) ||
+          (entry.status === "cancelled" && hasExactKeys(entry, ["interruptId", "status"]))),
+    )
+  )
+}
+
+function isPermissionDecision(value: unknown): value is "always" | "deny" | "once" {
+  return value === "always" || value === "deny" || value === "once"
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value)
+  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key))
 }

@@ -85,13 +85,16 @@ export async function* toAguiEvents(
   try {
     for await (const chunk of chunks) {
       if (chunk.type !== "interrupt" && pendingInterrupts.length > 0) {
-        yield {
-          type: EventType.RUN_FINISHED,
-          threadId: ctx.threadId,
-          runId: ctx.runId,
-          outcome: { type: "interrupt", interrupts: pendingInterrupts },
+        if (chunk.type === "done") {
+          yield {
+            type: EventType.RUN_FINISHED,
+            threadId: ctx.threadId,
+            runId: ctx.runId,
+            outcome: { type: "interrupt", interrupts: pendingInterrupts },
+          }
+          return
         }
-        return
+        continue
       }
 
       switch (chunk.type) {

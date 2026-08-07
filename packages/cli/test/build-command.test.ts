@@ -71,15 +71,17 @@ export default async function tenantGreet(input: { tenant: string }) {
     expect(stderr.join("")).toBe("")
 
     const entry = await readFile(join(appRoot, ".dawn/build/hello-tenant.ts"), "utf8")
+    expect(entry).toContain('import { fileURLToPath } from "node:url"')
+    expect(entry).toContain('import { materializeResolvedRouteGraph } from "@dawn-ai/cli/runtime"')
+    expect(entry).toContain('const appRoot = fileURLToPath(new URL("../..", import.meta.url))')
+    expect(entry).toContain("export const graph = await materializeResolvedRouteGraph({")
     expect(entry).toContain(
-      'import agentDescriptor from "../../src/app/(public)/hello/[tenant]/index.js"',
+      'routeFile: fileURLToPath(new URL("../../src/app/(public)/hello/[tenant]/index.js", import.meta.url))',
     )
-    expect(entry).toContain(
-      'import tool0 from "../../src/app/(public)/hello/[tenant]/tools/tenant-greet.js"',
-    )
-    expect(entry).toContain('import { materializeAgentGraph } from "@dawn-ai/langchain"')
-    expect(entry).toContain('name: "tenant-greet"')
-    expect(entry).toContain("export const graph = await materializeAgentGraph({")
+    expect(entry).toContain('routeId: "/hello/[tenant]"')
+    expect(entry).toContain('routePath: "/hello/[tenant]"')
+    expect(entry).not.toContain(appRoot)
+    expect(entry).not.toContain("materializeAgentGraph")
     expect(entry).not.toContain("bindTools")
     expect(entry).not.toContain("import { agent }")
 
@@ -128,17 +130,14 @@ export default async function tenantGreet(input: { tenant: string }) {
     expect(stderr.join("")).toBe("")
 
     const entry = await readFile(join(appRoot, ".dawn/build/support-tenant.ts"), "utf8")
+    expect(entry).toContain('import { fileURLToPath } from "node:url"')
+    expect(entry).toContain('import { materializeResolvedRouteGraph } from "@dawn-ai/cli/runtime"')
+    expect(entry).toContain("export const graph = await materializeResolvedRouteGraph({")
     expect(entry).toContain(
-      'import agentDescriptor from "../../src/app/(public)/support/[tenant]/index.js"',
+      'routeFile: fileURLToPath(new URL("../../src/app/(public)/support/[tenant]/index.js", import.meta.url))',
     )
-    expect(entry).toContain(
-      'import tool0 from "../../src/app/(public)/support/[tenant]/tools/tenant-greet.js"',
-    )
-    expect(entry).toContain('import { materializeAgentGraph } from "@dawn-ai/langchain"')
-    expect(entry).toContain('name: "tenant-greet"')
-    expect(entry).toContain("export const graph = await materializeAgentGraph({")
-    expect(entry).toContain("descriptor: agentDescriptor")
-    expect(entry).toContain("tools: [tool0Definition]")
+    expect(entry).not.toContain(appRoot)
+    expect(entry).not.toContain("materializeAgentGraph")
     expect(entry).not.toContain("@anthropic-ai")
     expect(entry).not.toContain("@langchain/anthropic")
     expect(entry).not.toContain("@langchain/openai")

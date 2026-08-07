@@ -54,13 +54,29 @@ export interface MemoryDetail {
   readonly suggestedPattern: string
 }
 
-export interface PermissionRequest {
+export interface SubagentDetail {
+  readonly parentRouteId: string
+  readonly subagentName: string
+  readonly subagentRouteId: string
+  readonly inputPreview: string
+  readonly reason?: string
+  readonly suggestedPattern: string
+}
+
+interface PermissionRequestBase {
   readonly interruptId: string
-  readonly kind: "command" | "path" | "tool" | "memory"
-  readonly detail: CommandDetail | PathDetail | ToolDetail | MemoryDetail
   readonly threadId: string
   readonly callId?: string
 }
+
+export type PermissionRequest = PermissionRequestBase &
+  (
+    | { readonly kind: "command"; readonly detail: CommandDetail }
+    | { readonly kind: "path"; readonly detail: PathDetail }
+    | { readonly kind: "tool"; readonly detail: ToolDetail }
+    | { readonly kind: "memory"; readonly detail: MemoryDetail }
+    | { readonly kind: "subagent"; readonly detail: SubagentDetail }
+  )
 
 export interface PermissionsStore {
   /** Loaded once at construction; subsequent loads not exposed in v1. */

@@ -122,6 +122,25 @@ describe("createPermissionsStore — addAllow", () => {
     expect(parsed.allow.bash).toContain("npm install")
   })
 
+  it("reloads a subagent allow for only the exact parent and name edge", async () => {
+    const supportResearcher = JSON.stringify(["/support", "researcher"])
+    const financeResearcher = JSON.stringify(["/finance", "researcher"])
+    const store = createPermissionsStore({ appRoot, config: undefined, mode: "interactive" })
+    await store.load()
+    await store.addAllow("subagent", supportResearcher)
+
+    const reloaded = createPermissionsStore({
+      appRoot,
+      config: undefined,
+      mode: "interactive",
+    })
+    await reloaded.load()
+
+    expect(reloaded.match("subagent", supportResearcher)).toBe("allow")
+    expect(reloaded.match("subagent", financeResearcher)).toBe("unknown")
+    expect(reloaded.match("subagent", `${supportResearcher}:extended`)).toBe("unknown")
+  })
+
   it("appends .dawn/ to .gitignore on first write (idempotent)", async () => {
     writeFileSync(join(appRoot, ".gitignore"), "node_modules/\n.next/\n")
     const store = createPermissionsStore({ appRoot, config: undefined, mode: "interactive" })

@@ -1,7 +1,12 @@
-import type { DawnResumeRequest } from "@dawn-ai/ag-ui"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 
 export type PermissionDecision = "once" | "always" | "deny"
+
+export interface DawnResumeEntry {
+  readonly interruptId: string
+  readonly status: "resolved" | "cancelled"
+  readonly payload?: unknown
+}
 
 export interface PendingInterrupt {
   readonly aliases: readonly string[]
@@ -12,6 +17,10 @@ export interface PendingInterrupt {
 export interface PendingInterruptSnapshot {
   readonly interrupts: readonly PendingInterrupt[]
   readonly malformed: boolean
+}
+
+export interface PendingResumeClaims {
+  tryClaim(threadId: string): (() => void) | undefined
 }
 
 export type ResumeResolution =
@@ -76,6 +85,7 @@ export async function readPendingInterrupts(
 
   const interruptIds = new Set<string>()
   const resumeKeys = new Set<string>()
+  const aliases = new Set<string>()
   for (const interrupt of interrupts) {
     if (interruptIds.has(interrupt.interruptId)) malformed = true
     interruptIds.add(interrupt.interruptId)
@@ -83,13 +93,33 @@ export async function readPendingInterrupts(
       if (resumeKeys.has(interrupt.resumeKey)) malformed = true
       resumeKeys.add(interrupt.resumeKey)
     }
+    for (const alias of interrupt.aliases) {
+      if (aliases.has(alias)) malformed = true
+      aliases.add(alias)
+    }
   }
 
   return { interrupts, malformed }
 }
 
-export function resolveAgUiResume(
-  resume: readonly DawnResumeRequest[] | undefined,
+export function createPendingResumeClaims(): PendingResumeClaims {
+  const claimedThreadIds = new Set<string>()
+  return {
+    tryClaim(threadId) {
+      if (claimedThreadIds.has(threadId)) return undefined
+      claimedThreadIds.add(threadId)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        claimedThreadIds.delete(threadId)
+      }
+    },
+  }
+}
+
+export function resolvePendingResume(
+  resume: readonly DawnResumeEntry[] | undefined,
   snapshot: PendingInterruptSnapshot,
 ): ResumeResolution {
   const pendingById = new Map(snapshot.interrupts.map((entry) => [entry.interruptId, entry]))

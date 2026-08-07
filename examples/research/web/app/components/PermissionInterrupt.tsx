@@ -15,13 +15,64 @@ import { useInterrupt } from "@copilotkit/react-core/v2"
 // payload as its decision ("once" | "always"); cancelling maps to denial.
 type PermissionMetadata = {
   kind?: string
-  detail?: { command?: string; suggestedPattern?: string }
+  detail?: {
+    command?: string
+    suggestedPattern?: string
+    parentRouteId?: string
+    subagentName?: string
+    subagentRouteId?: string
+    inputPreview?: string
+    reason?: string
+  }
 }
 
 export function PermissionInterrupt() {
   useInterrupt({
     render: ({ interrupt, resolve, cancel }) => {
       const meta = (interrupt?.metadata ?? {}) as PermissionMetadata
+      if (meta.kind === "subagent") {
+        const detail = meta.detail
+        return (
+          <div
+            style={{
+              border: "1px solid #f0c000",
+              background: "#fffbe6",
+              borderRadius: 8,
+              padding: 12,
+              margin: "8px 0",
+              fontSize: 13,
+            }}
+          >
+            <p style={{ margin: 0, fontWeight: 600 }}>Subagent approval required</p>
+            <p style={{ margin: "6px 0 0", color: "#665" }}>
+              <strong>Parent:</strong> <code>{detail?.parentRouteId ?? "Unknown route"}</code>
+            </p>
+            <p style={{ margin: "4px 0 0", color: "#665" }}>
+              <strong>Subagent:</strong> <code>{detail?.subagentName ?? "Unknown subagent"}</code>
+              {detail?.subagentRouteId ? <> ({detail.subagentRouteId})</> : null}
+            </p>
+            <p style={{ margin: "4px 0 0", color: "#665" }}>
+              <strong>Input:</strong> {detail?.inputPreview ?? "No input preview"}
+            </p>
+            {detail?.reason ? (
+              <p style={{ margin: "4px 0 8px", color: "#665" }}>
+                <strong>Reason:</strong> {detail.reason}
+              </p>
+            ) : null}
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button type="button" onClick={() => resolve("once")}>
+                Once
+              </button>
+              <button type="button" onClick={() => resolve("always")}>
+                Always
+              </button>
+              <button type="button" onClick={() => resolve("deny")}>
+                Deny
+              </button>
+            </div>
+          </div>
+        )
+      }
       const command = meta.detail?.command
       return (
         <div

@@ -49,6 +49,9 @@ export function createProgram(io: CommandIo): Command {
   program
     .name("dawn")
     .description("Dawn CLI")
+    // Required for `memory`'s passThroughOptions: commander only honours a subcommand's
+    // pass-through when the parent parses options positionally.
+    .enablePositionalOptions()
     .exitOverride()
     .configureOutput({
       writeErr: (message) => {

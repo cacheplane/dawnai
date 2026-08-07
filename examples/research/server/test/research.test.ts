@@ -2,7 +2,6 @@ import { rmSync } from "node:fs"
 import { basename, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { run as runDawnCli } from "@dawn-ai/cli"
-import { afterAll, beforeAll, expect, it } from "vitest"
 import type { FixtureSet } from "@dawn-ai/testing"
 import {
   createAgentHarness,
@@ -11,9 +10,10 @@ import {
   expectOffloaded,
   expectSubagent,
   expectToolCalled,
-  seedMemory,
   script,
+  seedMemory,
 } from "@dawn-ai/testing"
+import { afterAll, beforeAll, expect, it } from "vitest"
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url))
 const memoryDb = join(appRoot, ".dawn", "memory.sqlite")
@@ -195,6 +195,12 @@ it("gates the external fetch behind a permission prompt, then resumes", async ()
   expectInterrupt(run).ofKind("command").withDetail({
     command: "node scripts/fetch-source.mjs context windows",
   })
-  const resumed = await h.resume({ decision: "once" })
+  const resumed = await h.resume({
+    resume: run.interrupts.map((entry) => ({
+      interruptId: entry.interruptId,
+      status: "resolved" as const,
+      payload: "once",
+    })),
+  })
   expectToolCalled(resumed, "runBash")
 }, 60_000)

@@ -54,7 +54,13 @@ it("ADD never interrupts; a contradicting write interrupts with old-vs-new; resu
       newContent: "acme prefers net-45",
     })
 
-    const resumed = await h.resume({ decision: "once" })
+    const resumed = await h.resume({
+      resume: run2.interrupts.map((entry) => ({
+        interruptId: entry.interruptId,
+        status: "resolved" as const,
+        payload: "once",
+      })),
+    })
     expect(JSON.stringify(resumed)).toContain("Superseded")
   } finally {
     await h.close()
@@ -75,7 +81,13 @@ it("resume(deny) keeps the old value and reports it to the agent", async () => {
     })
     expectInterrupt(run).ofKind("memory")
 
-    const resumed = await h.resume({ decision: "deny" })
+    const resumed = await h.resume({
+      resume: run.interrupts.map((entry) => ({
+        interruptId: entry.interruptId,
+        status: "resolved" as const,
+        payload: "deny",
+      })),
+    })
     expect(JSON.stringify(resumed)).toContain("Kept existing memory")
   } finally {
     await h.close()
@@ -95,7 +107,13 @@ it("resume(always) persists the route prefix; a fresh contradiction does not pro
       fixtures: rememberScript(NET45, "acme prefers net-45", "Updated."),
     })
     expectInterrupt(run).ofKind("memory")
-    await h.resume({ decision: "always" })
+    await h.resume({
+      resume: run.interrupts.map((entry) => ({
+        interruptId: entry.interruptId,
+        status: "resolved" as const,
+        payload: "always",
+      })),
+    })
 
     const persisted = JSON.parse(readFileSync(permissionsPath, "utf8")) as {
       allow?: Record<string, string[]>

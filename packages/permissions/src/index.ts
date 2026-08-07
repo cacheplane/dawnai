@@ -1,5 +1,6 @@
 export { matchPermission } from "./pattern-matching.js"
 export {
+  subagentPermissionPattern,
   suggestedCommandPattern,
   suggestedMemoryPattern,
   suggestedPathPattern,
@@ -13,5 +14,6 @@ export type {
   PermissionRequest,
   PermissionsFile,
   PermissionsStore,
+  SubagentDetail,
   ToolDetail,
 } from "./types.js"

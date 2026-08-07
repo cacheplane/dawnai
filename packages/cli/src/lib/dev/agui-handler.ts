@@ -14,8 +14,13 @@ import type { StreamChunk } from "../runtime/stream-types.js"
 import { abortableAsyncIterable } from "./abortable-iterable.js"
 import { headersToRecord, runMiddleware } from "./middleware.js"
 import { toWebRequest, writeNodeResponse } from "./node-web-adapter.js"
-import { readPendingInterrupts, resolveAgUiResume } from "./pending-interrupts.js"
+import {
+  type PendingResumeClaims,
+  readPendingInterrupts,
+  resolvePendingResume,
+} from "./pending-interrupts.js"
 import { extractRouteParams } from "./request-context.js"
+import type { RunRegistry } from "./run-registry.js"
 import type { RuntimeRegistry } from "./runtime-registry-core.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
@@ -26,7 +31,7 @@ export interface AgUiFetchRequestOptions {
   readonly boot?: Pick<BootResolvedInstances, "bootFallbacks" | "config">
   readonly checkpointer: BaseCheckpointSaver
   /**
-   * Lazy, memoized, boot-built thunk for the shared memory store — forwarded
+   * Lazy, memoized, boot-built thunk for the shared memory store, forwarded
    * into route execution so the memory capability reuses the same store the
    * `/memory/candidates*` HTTP routes use, instead of opening its own.
    * Optional so direct callers (tests) keep their existing behavior.
@@ -40,11 +45,13 @@ export interface AgUiFetchRequestOptions {
    */
   readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
+  readonly resumeClaims: PendingResumeClaims
+  readonly runRegistry: RunRegistry
   readonly threadsStore: ThreadsStore
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   /**
-   * Boot-time static module manifest, when the server booted from one —
+   * Boot-time static module manifest, when the server booted from one,
    * forwarded into route execution so subagents descriptor maps are derived
    * without entry-file imports. Optional so direct callers (tests) keep
    * their existing behavior.
@@ -119,6 +126,8 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     middleware,
     permissionsStore,
     registry,
+    resumeClaims,
+    runRegistry,
     threadsStore,
     sandboxManager,
     signal: shutdownSignal,
@@ -154,6 +163,10 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     request.signal.removeEventListener("abort", onRequestAborted)
   }
 
+  let releaseResumeClaim: (() => void) | undefined
+  let releaseRunBeforeStream: (() => void) | undefined
+  let claimTransferredToStream = false
+  let runTransferredToStream = false
   let streamOwnsSignalCleanup = false
   try {
     const raw = await request.text()
@@ -161,12 +174,16 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     try {
       parsedJson = JSON.parse(raw)
     } catch {
-      return Response.json(createRequestErrorBody("Malformed body"), { status: 400 })
+      return Response.json(createRequestErrorBody("Malformed body"), {
+        status: 400,
+      })
     }
 
     const parsed = RunAgentInputSchema.safeParse(parsedJson)
     if (!parsed.success) {
-      return Response.json(createRequestErrorBody("Invalid RunAgentInput"), { status: 400 })
+      return Response.json(createRequestErrorBody("Invalid RunAgentInput"), {
+        status: 400,
+      })
     }
     const input = parsed.data
 
@@ -190,6 +207,18 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       return statusResponse(middlewareResult.status, middlewareResult.body)
     }
 
+    if (dawnInput.resume !== undefined) {
+      releaseResumeClaim = resumeClaims.tryClaim(input.threadId)
+      if (!releaseResumeClaim) {
+        return Response.json(
+          createRequestErrorBody("A resume is already in progress for this thread", {
+            code: "resume_in_progress",
+          }),
+          { status: 409 },
+        )
+      }
+    }
+
     const newestUserMessage = [...dawnInput.messages]
       .reverse()
       .find((message) => message.role === "user")
@@ -197,15 +226,28 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       interrupts: [],
       malformed: false,
     }
-    const resumeResolution = resolveAgUiResume(dawnInput.resume, pending)
+    const resumeResolution = resolvePendingResume(dawnInput.resume, pending)
     if (!resumeResolution.ok) {
       return Response.json(
-        createRequestErrorBody(resumeResolution.message, { code: resumeResolution.code }),
+        createRequestErrorBody(resumeResolution.message, {
+          code: resumeResolution.code,
+        }),
         { status: resumeResolution.status },
       )
     }
 
     const threadId = input.threadId
+    const run = runRegistry.begin(threadId, signal)
+    if (!run) {
+      return Response.json(
+        createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
+          code: "run_in_flight",
+        }),
+        { status: 409 },
+      )
+    }
+    releaseRunBeforeStream = run.release
+
     if (!(await threadsStore.getThread(threadId))) {
       await threadsStore.createThread({ thread_id: threadId })
     }
@@ -214,10 +256,11 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
 
     const accept = request.headers.get("accept") ?? undefined
     const encoder = new TextEncoder()
-    // From here on, the request is committed to the stream: releasing the
-    // signal listeners is this ReadableStream's job (finally/cancel below),
-    // not the outer try/finally's.
-    streamOwnsSignalCleanup = true
+    const releaseClaimWhenSettled = releaseResumeClaim
+    let sourceCleanup: Promise<void> | undefined
+    // From here on, the stream owns both the request listeners and any resume
+    // claim. Its execution-finally path releases the claim only after the
+    // interrupted route has actually unwound.
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
@@ -240,12 +283,18 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
               ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
               routePath: route.routePath,
               ...(sandboxManager ? { sandboxManager } : {}),
-              signal,
+              signal: run.signal,
               ...(staticModules ? { staticModules } : {}),
               threadId,
               threadsStore,
             })
-            const abortableRouteStream = abortableAsyncIterable(routeStream, signal)
+            const abortableRouteStream = abortableAsyncIterable(
+              routeStream,
+              run.signal,
+              (cleanup) => {
+                sourceCleanup = cleanup
+              },
+            )
             for await (const event of toAguiEvents(normalizeDawnStream(abortableRouteStream), {
               threadId,
               runId: input.runId,
@@ -262,23 +311,26 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
           // out of the handler after headers were sent, tearing the stream down
           // rather than framing an error event.
           controller.error(error)
+        } finally {
+          const releaseExecutionClaims = () => {
+            run.release()
+            releaseClaimWhenSettled?.()
+          }
+          if (sourceCleanup) void sourceCleanup.finally(releaseExecutionClaims)
+          else releaseExecutionClaims()
         }
       },
       cancel() {
-        // Client disconnected — stop the run. AG-UI is the ephemeral surface:
-        // there is no reattach and no run to resume, so a dropped socket really
-        // does end the work. The Agent Protocol endpoints deliberately take the
-        // opposite default and keep running; see the disconnect note in
-        // runtime-fetch-handler.ts.
+        // AG-UI is ephemeral: a disconnected client ends the run. The start
+        // finally releases any resume claim after execution settles.
         abortRequest("AG-UI response closed")
-        // Belt-and-suspenders: the abort above drives the running iterable to
-        // exit and hit the `finally` above (which also releases), but release
-        // here too in case cancel() ever fires without a run in flight to
-        // unwind. Safe to call twice — removeEventListener is idempotent.
         releaseSignalListeners()
       },
     })
 
+    claimTransferredToStream = true
+    runTransferredToStream = true
+    streamOwnsSignalCleanup = true
     return new Response(stream, {
       headers: {
         "cache-control": "no-cache",
@@ -288,6 +340,10 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
       status: 200,
     })
   } finally {
+    // Failures before stream ownership transfers must not leave the thread
+    // claimed. Successful streams release from their execution-finally path.
+    if (!claimTransferredToStream) releaseResumeClaim?.()
+    if (!runTransferredToStream) releaseRunBeforeStream?.()
     if (!streamOwnsSignalCleanup) releaseSignalListeners()
   }
 }
@@ -309,7 +365,7 @@ function safeEnqueue(controller: ReadableStreamDefaultController<Uint8Array>, ch
   try {
     controller.enqueue(chunk)
   } catch {
-    // The consumer already canceled the stream — writes become no-ops, exactly
+    // The consumer already canceled the stream - writes become no-ops, exactly
     // like `response.write` on a disconnected socket did.
   }
 }

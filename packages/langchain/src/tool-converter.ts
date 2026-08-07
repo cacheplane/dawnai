@@ -1,5 +1,7 @@
-import type { JsonSchemaProperty } from "@dawn-ai/core"
+import type { JsonSchemaProperty, StreamTransformer } from "@dawn-ai/core"
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch"
 import { ToolMessage } from "@langchain/core/messages"
+import { patchConfig } from "@langchain/core/runnables"
 import { DynamicStructuredTool } from "@langchain/core/tools"
 import { Command } from "@langchain/langgraph"
 import { z } from "zod"
@@ -20,13 +22,19 @@ interface DawnToolDefinition {
   readonly schema?: unknown
 }
 
-export type OffloadFn = (content: string, toolName: string, toolCallId?: string) => Promise<string>
+export type OffloadFn = (
+  content: string,
+  toolName: string,
+  toolCallId?: string,
+  signal?: AbortSignal,
+) => Promise<string>
 
 export function convertToolToLangChain(
   tool: DawnToolDefinition,
   middlewareContext?: Readonly<Record<string, unknown>>,
   offload?: OffloadFn,
   routeParamNames: readonly string[] = [],
+  streamTransformers: readonly StreamTransformer[] = [],
 ): DynamicStructuredTool {
   const schema = toZodSchema(tool.schema)
   const paramNameSet = new Set(routeParamNames)
@@ -35,12 +43,15 @@ export function convertToolToLangChain(
     name: tool.name,
     description: tool.description ?? "",
     schema,
-    func: async (input, _runManager, config) => {
-      const signal = config?.signal ?? new AbortController().signal
-      // config.configurable carries thread_id + the route params (set by the
+    func: async (input, runManager, config) => {
+      const liveConfig = runManager
+        ? patchConfig(config, { callbacks: runManager.getChild() })
+        : config
+      const signal = liveConfig?.signal ?? new AbortController().signal
+      // liveConfig.configurable carries thread_id + the route params (set by the
       // agent-adapter's prepareAgentCall). Forward them so tools — and the
       // argument-constraint wrapper — can read live per-call identity.
-      const configurable = (config?.configurable ?? {}) as Record<string, unknown>
+      const configurable = (liveConfig?.configurable ?? {}) as Record<string, unknown>
       const threadId =
         typeof configurable.thread_id === "string" ? configurable.thread_id : undefined
       // Allowlist against the route's declared param names. A denylist would
@@ -57,27 +68,45 @@ export function convertToolToLangChain(
         ...(Object.keys(params).length > 0 ? { params } : {}),
       })
       const { content, stateUpdates } = unwrapToolResult(rawResult)
-      const toolCallId = extractToolCallId(config)
+      const toolCallId = extractToolCallId(liveConfig)
       const finalContent = offload
-        ? await offload(content, tool.name, toolCallId || undefined)
+        ? await offload(content, tool.name, toolCallId || undefined, signal)
         : content
 
-      if (stateUpdates) {
-        return new Command({
-          update: {
-            ...stateUpdates,
-            messages: [
-              new ToolMessage({
-                content: finalContent,
-                tool_call_id: toolCallId,
-                name: tool.name,
-              }),
-            ],
-          },
-        })
+      const convertedResult = stateUpdates
+        ? new Command({
+            update: {
+              ...stateUpdates,
+              messages: [
+                new ToolMessage({
+                  content: finalContent,
+                  tool_call_id: toolCallId,
+                  name: tool.name,
+                }),
+              ],
+            },
+          })
+        : finalContent
+
+      for (const transformer of streamTransformers) {
+        if (transformer.observes !== "tool_result") continue
+        try {
+          for await (const output of transformer.transform({
+            toolName: tool.name,
+            toolOutput: convertedResult,
+          })) {
+            await dispatchCustomEvent(
+              "dawn.capability",
+              { event: output.event, data: output.data },
+              liveConfig,
+            )
+          }
+        } catch {
+          // Capability events are secondary; preserve the successful tool result.
+        }
       }
 
-      return finalContent
+      return convertedResult
     },
   })
 }

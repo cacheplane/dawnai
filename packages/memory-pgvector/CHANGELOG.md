@@ -1,5 +1,11 @@
 # @dawn-ai/memory-pgvector
 
+## 0.8.18
+
+### Patch Changes
+
+- @dawn-ai/memory@0.8.18
+
 ## 0.8.17
 
 ### Patch Changes
