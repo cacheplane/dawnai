@@ -101,6 +101,35 @@ export async function runMigrations(
 }
 
 /**
+ * `created_at`/`updated_at` are app-generated ISO-8601 strings kept as `text`,
+ * not `timestamptz`: a `Thread` is serialized straight to JSON on the wire, so
+ * the exact string the store handed out must come back unchanged. ISO-8601
+ * sorts lexicographically, so `ORDER BY updated_at DESC` is still chronological
+ * — under `COLLATE "C"`, which is byte ordering and therefore independent of
+ * the database's locale.
+ *
+ * `metadata` is `jsonb` so a merge is one atomic `||` rather than a
+ * read-modify-write. Note that `pg` parses jsonb on read: the driver hands back
+ * an object, and `JSON.parse`-ing it again would throw.
+ */
+export const THREADS_MIGRATIONS: readonly Migration[] = [
+  {
+    version: 1,
+    up: (naming) => `
+      CREATE TABLE IF NOT EXISTS ${qualify(naming, "threads")} (
+        thread_id text PRIMARY KEY,
+        created_at text NOT NULL,
+        updated_at text NOT NULL,
+        metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+        status text NOT NULL DEFAULT 'idle'
+      );
+      CREATE INDEX IF NOT EXISTS ${naming.prefix}_threads_updated_idx
+        ON ${qualify(naming, "threads")} (updated_at COLLATE "C" DESC);
+    `,
+  },
+]
+
+/**
  * Checkpoint and metadata are BYTEA, not jsonb. Dawn serializes both with
  * LangGraph's `JsonPlusSerializer` and stores the resulting bytes opaquely,
  * exactly as the SQLite saver stores a BLOB. jsonb cannot hold a NUL byte

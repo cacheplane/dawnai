@@ -65,6 +65,30 @@ Like the SQLite backend, each checkpoint stores its channel values as one
 payload rather than deduplicating unchanged channels across checkpoints. Large
 unchanged values therefore repeat per checkpoint.
 
+### `createPostgresThreadsStore(options)`
+
+The threads store — thread ids, status, timestamps and metadata. Takes the same
+`connectionString` / `pool` / `schema` / `tablePrefix` options, with the same
+`ready()` and `close()` lifecycle. Its migrations are tracked separately from
+the checkpointer's, so a threads-only deployment never creates checkpoint
+tables.
+
+Two behaviors differ from the SQLite store, because Postgres is shared by
+several writers:
+
+- `createThread` upserts (`ON CONFLICT DO NOTHING`, then read back) rather than
+  throwing on a duplicate id. Callers check-then-create, which races when more
+  than one instance is serving.
+- `updateMetadata` merges in a single statement (`metadata || $1::jsonb`), so a
+  concurrent patch cannot be lost the way a read-modify-write loses it. The
+  merge is shallow — a nested object is replaced wholesale — matching SQLite.
+
+`created_at` / `updated_at` are app-generated ISO-8601 strings kept in `text`
+columns, not `timestamptz`: a thread is serialized straight to JSON on the wire,
+so the exact string handed out comes back unchanged. ISO-8601 sorts
+lexicographically, and ordering uses `COLLATE "C"` so it does not depend on the
+database's locale. `metadata` is `jsonb`.
+
 ### `assertIdentifier(name, value)`
 
 Validates a schema or table-prefix identifier before it is interpolated into
