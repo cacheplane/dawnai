@@ -192,19 +192,54 @@ export function buildReflectionPrompt(input: ReflectionInput): string {
   ].join("\n")
 }
 
+const FENCE = "```"
+
+/** Every fenced block, in order, via a REGEX-FREE forward scan: find an opener,
+ *  skip an optional `json` tag, take everything up to the next fence as the body,
+ *  resume after that fence (blocks never overlap). Blank bodies are dropped.
+ *
+ *  Deliberately not a regex. The previous `/```(?:json)?\s*([\s\S]*?)```/g` paired an
+ *  unbounded `\s*` with an adjacent lazy `[\s\S]*?`: on an opener followed by a long
+ *  whitespace run with NO closing fence, every position `\s*` gives back restarts a
+ *  scan to end-of-input, which is quadratic (CodeQL js/polynomial-redos). This parser
+ *  reads MODEL OUTPUT inside the unattended `dawn memory consolidate|reflect` passes —
+ *  and record content reaches that model — so a hostile or merely unlucky response
+ *  could wedge the batch. Every step here is an `indexOf` from a strictly advancing
+ *  cursor, so the scan is linear in the input by construction.
+ *  Bounded-time coverage: "stays linear on a fence opener followed by a huge
+ *  whitespace run" in distill-build.test.ts. */
+function fencedBlocks(text: string): string[] {
+  const blocks: string[] = []
+  let cursor = 0
+  while (cursor < text.length) {
+    const open = text.indexOf(FENCE, cursor)
+    if (open === -1) break
+    let bodyStart = open + FENCE.length
+    if (text.startsWith("json", bodyStart)) bodyStart += 4
+    const close = text.indexOf(FENCE, bodyStart)
+    // An opener with no closing fence yields no block at all — the text still gets its
+    // shot as the whole-response and brace-span candidates below.
+    if (close === -1) break
+    const body = text.slice(bodyStart, close).trim()
+    if (body) blocks.push(body)
+    cursor = close + FENCE.length
+  }
+  return blocks
+}
+
 /** Best-effort JSON extraction from a model response, in descending order of
  *  confidence: every fenced block in order (models sometimes fence the schema or
  *  their reasoning BEFORE the answer, so the first fence is not always the one
  *  that parses), then the whole response, then the widest brace span (covers
  *  unfenced JSON with a trailing "Hope this helps!"). First candidate that
- *  parses wins; if none do, the caller sees a "could not parse" error. */
+ *  parses wins; if none do, the caller sees a "could not parse" error.
+ *  The fence scan is quoting-unaware, so a ``` inside a JSON string value closes the
+ *  block early and yields a truncated candidate — that candidate just fails to parse
+ *  and the brace span recovers the real object. Pinned by "falls back to the brace
+ *  span when a fence closes early on a ``` inside a string value". */
 function extractJson(raw: string): unknown {
   const text = raw.trim()
-  const candidates: string[] = []
-  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
-    const body = match[1]?.trim()
-    if (body) candidates.push(body)
-  }
+  const candidates: string[] = [...fencedBlocks(text)]
   candidates.push(text)
   const first = text.indexOf("{")
   const last = text.lastIndexOf("}")

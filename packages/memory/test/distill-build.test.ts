@@ -258,4 +258,29 @@ describe("extractJson robustness", () => {
     const { insights } = parseReflectionOutput('{"insights":[{"insight":"i","confidence":"high","tags":["ops",7,null]}]}')
     expect(insights[0]).toEqual({ insight: "i", confidence: 0.5, tags: ["ops"] })
   })
+  it("recovers the object from an UNTERMINATED fence instead of mis-slicing it", () => {
+    expect(parseConsolidationOutput('```json\n{"summary":"never closed"}')).toEqual({ summary: "never closed" })
+  })
+  it("falls back to the brace span when a fence closes early on a ``` inside a string value", () => {
+    // The fence scan does not know JSON string quoting, so the first ``` inside the
+    // VALUE closes the block and the fenced candidate is the truncated `{"summary":"use `.
+    // That candidate simply fails to parse and the widest-brace-span candidate recovers
+    // the real object — the honest behavior, and the same one the old regex produced.
+    const raw = '```json\n{"summary":"use ``` to fence"}\n```'
+    expect(parseConsolidationOutput(raw)).toEqual({ summary: "use ``` to fence" })
+  })
+  it("stays linear on a fence opener followed by a huge whitespace run (js/polynomial-redos)", () => {
+    // The old `/```(?:json)?\s*([\s\S]*?)```/g` had an unbounded `\s*` adjacent to a lazy
+    // `[\s\S]*?`: with no closing fence, every one of the N whitespace positions `\s*` gives
+    // back restarts a scan to end-of-input, so cost grows as N². Model output reaches this
+    // parser unattended in `dawn memory consolidate|reflect`, so a crafted (or unlucky)
+    // response could wedge the whole batch pass. Measured on the old regex: 945ms at
+    // 100k spaces, 3849ms at 200k — the linear scan is sub-millisecond at both.
+    const hostile = `\`\`\`json${" ".repeat(200_000)}\n{"summary":"x"}`
+    const t0 = performance.now()
+    const parsed = parseConsolidationOutput(hostile)
+    const elapsed = performance.now() - t0
+    expect(parsed).toEqual({ summary: "x" })
+    expect(elapsed).toBeLessThan(1000)
+  })
 })
