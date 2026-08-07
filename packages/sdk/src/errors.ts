@@ -101,6 +101,11 @@ export const DAWN_ERRORS = {
     title: "Inspector server failed",
     docsPath: "/docs/inspector",
   },
+  DAWN_E5301: {
+    code: "DAWN_E5301",
+    title: "Runtime store not provided",
+    docsPath: "/docs/deployment",
+  },
 } as const satisfies Record<string, DawnErrorDescriptor>
 
 /** The union of all registered error codes. Producers cannot invent codes. */

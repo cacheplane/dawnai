@@ -134,7 +134,13 @@ describe("emitEdgeModulesFile — golden", () => {
     // opaque namespace id (thread/cache keys), never something resolved onto a
     // filesystem that does not exist there.
     expect(text).not.toContain(appRoot)
-    expect(text).toContain(`const appRoot = "${APP_DIR_NAME}"`)
+    // Rooted at "/": nothing resolves it on disk, but a RELATIVE base makes
+    // Dawn's pure path helpers throw — `pureResolve` has no cwd to fall back on,
+    // and built-in capabilities resolve against the handler's appRoot (see
+    // core's agents-md.ts). A regression back to a bare basename would only
+    // surface at runtime, on an edge deploy.
+    expect(text).toContain(`const appRoot = "/${APP_DIR_NAME}"`)
+    expect(text).toMatch(/^const appRoot = "\//m)
     // The node-free entry, not @dawn-ai/cli/runtime (which reaches tsx/sqlite).
     expect(text).toContain('from "@dawn-ai/cli/fetch"')
     expect(text).not.toContain("@dawn-ai/cli/runtime")
@@ -190,8 +196,11 @@ describe("emitEdgeModulesFile — golden", () => {
       // There is no filesystem and no import.meta.url path math on an edge runtime,
       // so appRoot is a build-time literal: the app directory's name, used purely as
       // an opaque namespace id (thread keys, cache keys). Never a build-machine path
-      // — a deployed bundle must not depend on where it was built.
-      const appRoot = "edge-emitter-fixture-app"
+      // — a deployed bundle must not depend on where it was built. It is rooted at
+      // "/" because nothing resolves it on disk but Dawn's pure path helpers reject a
+      // relative base (pureResolve throws rather than rooting at a cwd that an edge
+      // runtime does not have).
+      const appRoot = "/edge-emitter-fixture-app"
 
       export default {
         routes: [
@@ -303,8 +312,19 @@ describe("emitEdgeModulesFile — hostile inputs", () => {
       buildDir: '/tmp/we"ird-app/.dawn/build',
       discoveries: [bareDiscovery({ entryFile: '/tmp/we"ird-app/src/app/plain/index.ts' })],
     })
-    expect(text).toContain(String.raw`const appRoot = "we\"ird-app"`)
-    expect(text).not.toContain('const appRoot = "we"ird-app"')
+    expect(text).toContain(String.raw`const appRoot = "/we\"ird-app"`)
+    expect(text).not.toContain('const appRoot = "/we"ird-app"')
+  })
+
+  it("falls back to a rooted namespace when the app root has no basename", () => {
+    // Degenerate app root (the filesystem root): the namespace must still be a
+    // rooted, non-empty id rather than a bare "/".
+    const text = emitEdgeModulesFile({
+      appRoot: "/",
+      buildDir: "/.dawn/build",
+      discoveries: [bareDiscovery({ entryFile: "/src/app/plain/index.ts" })],
+    })
+    expect(text).toContain('const appRoot = "/app"')
   })
 
   it("fails the build when a state default would not survive JSON inlining", () => {

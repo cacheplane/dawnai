@@ -79,12 +79,40 @@ function requireBoot(
  * boot. Reached only when `requestStores` is supplied on a runtime with no
  * filesystem fallback and the factory did not return the store this request
  * needs — the one case where boot cannot decide whether a store is missing.
+ *
+ * Its own class because `fetch`'s catch-all would otherwise flatten it into a
+ * generic 500 with no message: before this seam existed the same
+ * misconfiguration rejected `createRuntimeFetchHandler` at boot with the store's
+ * name in it, and an operator whose generated `stores.mjs` omits a store must
+ * still be told WHICH one.
  */
+class MissingStoreError extends Error {
+  /** Registry code, read back by `dawnErrorCodeOf`. */
+  readonly code = "DAWN_E5301"
+  constructor(readonly store: string) {
+    super(
+      `${store}: no instance provided and this runtime has no filesystem fallback — pass one via options (see the edge deployment docs).`,
+    )
+    this.name = "MissingStoreError"
+  }
+}
+
 function requireStore<T>(store: T | undefined, what: string): T {
   if (store) return store
-  throw new Error(
-    `${what}: no instance provided and this runtime has no filesystem fallback — pass one via options (see the edge deployment docs).`,
-  )
+  throw new MissingStoreError(what)
+}
+
+/**
+ * True for `text/event-stream` with or without parameters (`; charset=utf-8`).
+ *
+ * Deliberately not an exact compare: this predicate decides whether the
+ * response is still producing bytes after `fetch` resolves, and a producer that
+ * one day appends a charset would otherwise silently downgrade a live stream to
+ * "settled" — releasing sandboxes and disposing per-request stores mid-stream,
+ * the exact failure the tracking exists to prevent.
+ */
+function isEventStream(contentType: string | null): boolean {
+  return contentType?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream"
 }
 
 interface RouteMatcher {
@@ -258,18 +286,100 @@ export async function createRuntimeFetchHandler(
   // — the whole point of PR2a was that the bundle needs no such flag. Every
   // route handler already receives its own `request`, so a WeakMap lookup is
   // all the scoping this needs, and entries collect with the Request.
-  const perRequest = new WeakMap<Request, RequestStores>()
+  const perRequest = new WeakMap<Request, RequestLifetime>()
+
+  // Disposals that have started but not finished. close() drains on these as
+  // well, so "close() returned" genuinely implies "every per-request pool is
+  // closed" — an edge host awaiting shutdown has no other signal.
+  const pendingDisposals = new Set<Promise<void>>()
+
+  /**
+   * Dispose a request's stores once — and only once BOTH of its lifetimes have
+   * ended.
+   *
+   * Response lifetime is not run lifetime. Three paths keep executing after the
+   * response body settles: an aborted AG-UI stream (whose route unwinds behind
+   * `sourceCleanup`), an abandoned `/runs/wait` (whose 409 is sent while
+   * `invokeResolvedRoute` runs on), and a cancelled AP stream. All three keep
+   * writing checkpoints through the very stores this would tear down. `close()`
+   * already draws exactly this distinction by draining on the run registry as
+   * well as on activeRequests; disposal adopts the same rule.
+   */
+  const maybeDispose = (lifetime: RequestLifetime): void => {
+    if (lifetime.disposed || !lifetime.bodySettled || lifetime.pendingRuns > 0) return
+    lifetime.disposed = true
+    const dispose = lifetime.stores.dispose
+    if (!dispose) return
+    const running = (async () => {
+      try {
+        await dispose()
+      } catch {
+        // Teardown must never turn a served response into a failure.
+      }
+    })()
+    pendingDisposals.add(running)
+    void running.finally(() => pendingDisposals.delete(running))
+  }
+
+  const settleBody = (lifetime: RequestLifetime | undefined): void => {
+    if (!lifetime) return
+    lifetime.bodySettled = true
+    maybeDispose(lifetime)
+  }
+
+  /**
+   * The run registry a request's route work claims its slot from.
+   *
+   * Requests with nothing to dispose — every node caller — get the shared
+   * registry itself, unwrapped: no accounting, no behavior change. Otherwise
+   * the wrapper counts the slots this request holds so `maybeDispose` can wait
+   * for route work that outlives the response.
+   */
+  const getRunRegistry = (request: Request): RunRegistry => {
+    const lifetime = perRequest.get(request)
+    if (!lifetime?.stores.dispose) return runRegistry
+    return {
+      activeCount: () => runRegistry.activeCount(),
+      begin: (threadId, shutdownSignal) => {
+        const handle = runRegistry.begin(threadId, shutdownSignal)
+        if (!handle) return undefined
+        lifetime.pendingRuns++
+        let released = false
+        return {
+          get cancelled() {
+            return handle.cancelled
+          },
+          release: () => {
+            handle.release()
+            // Idempotent, exactly like the handle it wraps: callers release
+            // from a finally that a cleanup path may reach twice.
+            if (released) return
+            released = true
+            lifetime.pendingRuns--
+            maybeDispose(lifetime)
+          },
+          signal: handle.signal,
+        }
+      },
+      cancel: (threadId, reason) =>
+        reason === undefined ? runRegistry.cancel(threadId) : runRegistry.cancel(threadId, reason),
+      has: (threadId) => runRegistry.has(threadId),
+    }
+  }
 
   const getCheckpointer = (request: Request): BaseCheckpointSaver =>
-    requireStore(perRequest.get(request)?.checkpointer ?? checkpointer, "checkpointer")
+    requireStore(perRequest.get(request)?.stores.checkpointer ?? checkpointer, "checkpointer")
   const getThreadsStore = (request: Request): ThreadsStore =>
-    requireStore(perRequest.get(request)?.threadsStore ?? threadsStore, "threadsStore")
+    requireStore(perRequest.get(request)?.stores.threadsStore ?? threadsStore, "threadsStore")
   const getPermissionsStore = (
     request: Request,
   ): PermissionsStore | (() => Promise<PermissionsStore>) =>
-    requireStore(perRequest.get(request)?.permissionsStore ?? permissionsStore, "permissionsStore")
+    requireStore(
+      perRequest.get(request)?.stores.permissionsStore ?? permissionsStore,
+      "permissionsStore",
+    )
   const getMemoryStoreFor = (request: Request): Promise<MemoryStore> => {
-    const override = perRequest.get(request)?.memoryStore
+    const override = perRequest.get(request)?.stores.memoryStore
     // Only the boot path memoizes: a per-request store must not outlive its
     // request, and re-memoizing it would reintroduce the dead-context hang.
     return override ? Promise.resolve(override) : getMemoryStore()
