@@ -1,5 +1,12 @@
 # create-dawn-ai-app
 
+## 0.8.18
+
+### Patch Changes
+
+- Updated dependencies [7088072]
+  - @dawn-ai/devkit@0.8.18
+
 ## 0.8.17
 
 ### Patch Changes

@@ -1,5 +1,17 @@
 # @dawn-ai/sdk
 
+## 0.8.18
+
+### Patch Changes
+
+- c6b08a9: Add keyed, parent-owned subagent delegation policies with fail-closed
+  constraints and approval. Subagents now run as native resumable LangGraph
+  subgraphs, and interrupt resume uses one complete multi-entry request envelope.
+
+  This intentionally removes array-form subagent registration, tool policy on
+  the internal `task` mechanism, and scalar interrupt resume. Confirm the fixed
+  0.x patch release intent with Brian before release.
+
 ## 0.8.17
 
 ### Patch Changes
