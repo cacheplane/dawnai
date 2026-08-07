@@ -266,7 +266,7 @@ describe("runtime fetch handler parity", () => {
     try {
       await handler.close() // must resolve (bounded drain), not hang
       expect(warn).toHaveBeenCalledTimes(1)
-      expect(String(warn.mock.calls[0]?.[0])).toContain("request(s) still active")
+      expect(String(warn.mock.calls[0]?.[0])).toContain("1 request(s)")
       expect(String(warn.mock.calls[0]?.[0])).toContain("proceeding with shutdown")
     } finally {
       warn.mockRestore()
