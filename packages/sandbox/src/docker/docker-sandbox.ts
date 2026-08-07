@@ -16,6 +16,11 @@ export interface DockerSandboxOptions {
   readonly docker?: Docker
 }
 
+interface DockerRecoveryState {
+  generation: number
+  inFlight?: { generation: number; promise: Promise<void> }
+}
+
 /**
  * Docker reference SandboxProvider. Per thread: a persistent container
  * `dawn-sbx-<threadId>` (sleep infinity) with a named volume mounted at
@@ -27,6 +32,15 @@ export interface DockerSandboxOptions {
  */
 export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
   const docker = opts.docker ?? createDocker()
+  const recoveryStates = new Map<string, DockerRecoveryState>()
+
+  const recoveryState = (threadId: string): DockerRecoveryState => {
+    const existing = recoveryStates.get(threadId)
+    if (existing !== undefined) return existing
+    const created: DockerRecoveryState = { generation: 0 }
+    recoveryStates.set(threadId, created)
+    return created
+  }
 
   const ensureContainer = async (
     threadId: string,
@@ -142,15 +156,34 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
   const recycleContainer = async (
     threadId: string,
     policy: SandboxPolicy,
+    generation: number,
     signal: AbortSignal,
   ): Promise<void> => {
-    const removed = await docker.run(["rm", "-f", containerName(threadId)], { signal })
-    if (removed.exitCode !== 0) {
-      throw sandboxUnavailable(
-        `Sandbox unavailable: could not remove PID-exhausted container for thread "${threadId}": ${removed.stderr.trim() || "unknown error"}. Run \`dawn check\`.`,
-      )
+    const state = recoveryState(threadId)
+    if (generation !== state.generation) return
+    const inFlight = state.inFlight
+    if (inFlight !== undefined) {
+      if (inFlight.generation !== generation) return
+      await inFlight.promise
+      return
     }
-    await ensureContainer(threadId, policy, signal)
+
+    const promise = (async () => {
+      const removed = await docker.run(["rm", "-f", containerName(threadId)], { signal })
+      if (removed.exitCode !== 0) {
+        throw sandboxUnavailable(
+          `Sandbox unavailable: could not remove PID-exhausted container for thread "${threadId}": ${removed.stderr.trim() || "unknown error"}. Run \`dawn check\`.`,
+        )
+      }
+      await ensureContainer(threadId, policy, signal)
+      state.generation = generation + 1
+    })()
+    state.inFlight = { generation, promise }
+    try {
+      await promise
+    } finally {
+      if (state.inFlight?.promise === promise) delete state.inFlight
+    }
   }
 
   return {
@@ -164,7 +197,10 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
           ...(policy.resources?.timeoutMs !== undefined
             ? { timeoutMs: policy.resources.timeoutMs }
             : {}),
-          recoverFromPidExhaustion: (signal) => recycleContainer(threadId, policy, signal),
+          pidExhaustionRecovery: {
+            captureGeneration: () => recoveryState(threadId).generation,
+            recover: (generation, signal) => recycleContainer(threadId, policy, generation, signal),
+          },
         }),
         workspaceRoot: ROOT,
       }

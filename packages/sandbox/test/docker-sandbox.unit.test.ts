@@ -324,8 +324,118 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     )
     expect(chownRuns).toHaveLength(1)
     expect(volumeInspects).toBe(2)
-    expect(events.indexOf("exec:1")).toBeLessThan(events.indexOf("run:rm -f dawn-sbx-abc"))
-    expect(events.indexOf("run:rm -f dawn-sbx-abc")).toBeLessThan(events.indexOf("exec:2"))
+    const firstExecIndex = events.indexOf("exec:1")
+    const removalIndex = events.indexOf("run:rm -f dawn-sbx-abc")
+    const recoveryInspectIndex = events.findIndex(
+      (event, index) =>
+        index > removalIndex && event === "run:volume inspect dawn-sbx-vol-abc",
+    )
+    const replacementIndex = events.findIndex(
+      (event, index) => index > recoveryInspectIndex && event.startsWith("run:run -d "),
+    )
+    const secondExecIndex = events.indexOf("exec:2")
+    expect(firstExecIndex).toBeLessThan(removalIndex)
+    expect(removalIndex).toBeLessThan(recoveryInspectIndex)
+    expect(recoveryInspectIndex).toBeLessThan(replacementIndex)
+    expect(replacementIndex).toBeLessThan(secondExecIndex)
+  })
+
+  test("coalesces concurrent recovery and ignores a stale failure after replacement", async () => {
+    const firstSignal = signal()
+    const secondSignal = signal()
+    const runs: Array<{ args: readonly string[]; signal: AbortSignal | undefined }> = []
+    const execAttempts = new Map<string, number>()
+    let containerExists = false
+    let volumeExists = false
+    let resolveSecondStarted = () => {}
+    const secondStarted = new Promise<void>((resolve) => {
+      resolveSecondStarted = resolve
+    })
+    let releaseSecondFailure = () => {}
+    const secondFailureGate = new Promise<void>((resolve) => {
+      releaseSecondFailure = resolve
+    })
+    const docker: Docker = {
+      run: async (args, opts) => {
+        runs.push({ args: [...args], signal: opts?.signal })
+        if (args[0] === "ps") {
+          return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return {
+            stdout: volumeExists ? "volume" : "",
+            stderr: "",
+            exitCode: volumeExists ? 0 : 1,
+          }
+        }
+        if (args[0] === "rm") {
+          containerExists = false
+          return { stdout: "removed", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("--rm")) {
+          volumeExists = true
+          return { stdout: "initialized", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("-d")) {
+          containerExists = true
+          volumeExists = true
+          return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async (_container, command) => {
+        const shellCommand = command.at(-1) ?? ""
+        const name = shellCommand.includes("echo first") ? "first" : "second"
+        const attempt = (execAttempts.get(name) ?? 0) + 1
+        execAttempts.set(name, attempt)
+        if (attempt === 1) {
+          if (name === "first") {
+            await secondStarted
+          } else {
+            resolveSecondStarted()
+            await secondFailureGate
+          }
+          return {
+            stdout: "",
+            stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+            exitCode: 1,
+          }
+        }
+        return { stdout: `${name} recovered`, stderr: "", exitCode: 0 }
+      },
+    }
+    const policy = { network: { mode: "deny" as const } }
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    const firstHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+    const secondHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+
+    const firstResultPromise = firstHandle.exec.runCommand(
+      { command: "echo first" },
+      { workspaceRoot: firstHandle.workspaceRoot, signal: firstSignal },
+    )
+    const secondResultPromise = secondHandle.exec.runCommand(
+      { command: "echo second" },
+      { workspaceRoot: secondHandle.workspaceRoot, signal: secondSignal },
+    )
+    const firstResult = await firstResultPromise
+    releaseSecondFailure()
+    const secondResult = await secondResultPromise
+
+    expect(firstResult).toEqual({ stdout: "first recovered", stderr: "", exitCode: 0 })
+    expect(secondResult).toEqual({ stdout: "second recovered", stderr: "", exitCode: 0 })
+    expect(execAttempts).toEqual(
+      new Map([
+        ["first", 2],
+        ["second", 2],
+      ]),
+    )
+    const removals = runs.filter((run) => run.args[0] === "rm")
+    expect(removals).toHaveLength(1)
+    expect(removals[0]?.signal).toBe(firstSignal)
+    expect(removals[0]?.signal).not.toBe(secondSignal)
+    const keeperRuns = runs.filter((run) => run.args[0] === "run" && run.args.includes("-d"))
+    expect(keeperRuns).toHaveLength(2)
+    expect(keeperRuns[1]?.signal).toBe(firstSignal)
   })
 
   test("rejects with DAWN_E2001 when the exhausted keeper cannot be removed", async () => {

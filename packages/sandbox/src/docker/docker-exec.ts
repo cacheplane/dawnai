@@ -3,7 +3,10 @@ import type { Docker, SpawnResult } from "./docker-cli.js"
 
 interface DockerExecOptions {
   readonly timeoutMs?: number
-  readonly recoverFromPidExhaustion?: (signal: AbortSignal) => Promise<void>
+  readonly pidExhaustionRecovery?: {
+    readonly captureGeneration: () => number
+    readonly recover: (generation: number, signal: AbortSignal) => Promise<void>
+  }
 }
 
 function isPidExhaustion(result: SpawnResult): boolean {
@@ -51,14 +54,16 @@ export function dockerExec(
         opts.timeoutMs !== undefined ? Math.ceil(opts.timeoutMs / 1000) : undefined
       const argv = timeoutSecs !== undefined ? ["timeout", `${timeoutSecs}s`, ...shArgs] : shArgs
       const execute = () => docker.exec(container, argv, { signal: ctx.signal })
+      const recoveryGeneration = opts.pidExhaustionRecovery?.captureGeneration()
       let r = await execute()
       const isConfiguredTimeout = timeoutSecs !== undefined && r.exitCode === 124
       if (
-        opts.recoverFromPidExhaustion !== undefined &&
+        opts.pidExhaustionRecovery !== undefined &&
+        recoveryGeneration !== undefined &&
         !isConfiguredTimeout &&
         isPidExhaustion(r)
       ) {
-        await opts.recoverFromPidExhaustion(ctx.signal)
+        await opts.pidExhaustionRecovery.recover(recoveryGeneration, ctx.signal)
         r = await execute()
       }
       if (timeoutSecs !== undefined && r.exitCode === 124) {

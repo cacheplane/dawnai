@@ -166,20 +166,32 @@ describe("dockerExec", () => {
     const execSignals: Array<AbortSignal | undefined> = []
     const execCalls: Array<{ container: string; command: readonly string[] }> = []
     const recoverySignals: AbortSignal[] = []
+    const recoveryGenerations: number[] = []
+    const events: string[] = []
+    let currentGeneration = 7
     const exec = dockerExec(
       fakeDocker({
         exec: async (container, command, opts) => {
+          events.push("exec")
           execCalls.push({ container, command })
           execSignals.push(opts?.signal)
           const result = results.shift()
           if (result === undefined) throw new Error("Unexpected extra Docker exec")
+          currentGeneration = 8
           return result
         },
       }),
       "c1",
       {
-        recoverFromPidExhaustion: async (signal) => {
-          recoverySignals.push(signal)
+        pidExhaustionRecovery: {
+          captureGeneration: () => {
+            events.push("capture")
+            return currentGeneration
+          },
+          recover: async (generation, signal) => {
+            recoveryGenerations.push(generation)
+            recoverySignals.push(signal)
+          },
         },
       },
     )
@@ -191,6 +203,9 @@ describe("dockerExec", () => {
     expect(execSignals).toHaveLength(2)
     expect(execSignals[0]).toBe(activeCtx.signal)
     expect(execSignals[1]).toBe(activeCtx.signal)
+    expect(events[0]).toBe("capture")
+    expect(events.filter((event) => event === "capture")).toHaveLength(1)
+    expect(recoveryGenerations).toEqual([7])
     expect(recoverySignals).toHaveLength(1)
     expect(recoverySignals[0]).toBe(activeCtx.signal)
     expect(result).toEqual(second)
@@ -229,8 +244,11 @@ describe("dockerExec", () => {
       "c1",
       {
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        recoverFromPidExhaustion: async () => {
-          recoveryCalls += 1
+        pidExhaustionRecovery: {
+          captureGeneration: () => 0,
+          recover: async () => {
+            recoveryCalls += 1
+          },
         },
       },
     )
@@ -258,8 +276,11 @@ describe("dockerExec", () => {
       "c1",
       {
         timeoutMs: 500,
-        recoverFromPidExhaustion: async () => {
-          recoveryCalls += 1
+        pidExhaustionRecovery: {
+          captureGeneration: () => 0,
+          recover: async () => {
+            recoveryCalls += 1
+          },
         },
       },
     )
@@ -295,8 +316,11 @@ describe("dockerExec", () => {
       "c1",
       {
         timeoutMs: 500,
-        recoverFromPidExhaustion: async () => {
-          recoveryCalls += 1
+        pidExhaustionRecovery: {
+          captureGeneration: () => 0,
+          recover: async () => {
+            recoveryCalls += 1
+          },
         },
       },
     )
@@ -338,8 +362,11 @@ describe("dockerExec", () => {
       }),
       "c1",
       {
-        recoverFromPidExhaustion: async () => {
-          recoveryCalls += 1
+        pidExhaustionRecovery: {
+          captureGeneration: () => 0,
+          recover: async () => {
+            recoveryCalls += 1
+          },
         },
       },
     )
