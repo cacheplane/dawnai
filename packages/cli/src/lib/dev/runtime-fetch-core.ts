@@ -212,6 +212,17 @@ export async function createRuntimeFetchHandler(
     closed: false,
   }
   const shutdownController = new AbortController()
+
+  // Process-local in-flight run tracking: enables the concurrency gate, the
+  // per-run abort signal, and POST /threads/:id/cancel. Scoped to this handler
+  // (not module-level) so multiple handler instances in one process — which the
+  // (Request) => Response core exists to allow — stay isolated.
+  //
+  // Lives out here rather than inside buildRouteTable because close() drains on
+  // it: a run whose HTTP response has already been sent can still be executing
+  // (a cancelled stream, or an abandoned wait), and that work must finish before
+  // sandboxes are released.
+  const runRegistry = createRunRegistry()
   const resumeClaims = createPendingResumeClaims()
 
   const routes = buildRouteTable({
@@ -223,6 +234,7 @@ export async function createRuntimeFetchHandler(
     permissionsStore,
     registry,
     resumeClaims,
+    runRegistry,
     ...(sandboxManager ? { sandboxManager } : {}),
     signal: shutdownController.signal,
     // Boot manifest → route execution derives the subagents descriptor maps
@@ -295,20 +307,30 @@ export async function createRuntimeFetchHandler(
 
     if (sandboxReaper) clearInterval(sandboxReaper)
 
-    // Drain in-flight requests — bounded: an SSE body nobody ever reads (or a
+    // Drain in-flight work — bounded: an SSE body nobody ever reads (or a
     // leaked in-flight slot) must not wedge shutdown forever.
+    //
+    // Both counters matter, and neither implies the other. activeRequests
+    // tracks HTTP responses still being produced. runRegistry tracks route work
+    // that may still be executing AFTER its response was sent: a cancelled run
+    // whose route ignored ctx.signal, or an abandoned /runs/wait that returned
+    // 409 while invokeResolvedRoute kept going. Those return plain JSON, so the
+    // fetch wrapper (which only holds the slot for text/event-stream bodies)
+    // has already decremented — draining on activeRequests alone would release
+    // sandboxes out from under work still using them.
     const drainDeadlineMs = options.drainDeadlineMs ?? CLOSE_DRAIN_DEADLINE_MS
     await new Promise<void>((resolve) => {
       const startedAt = Date.now()
       const check = () => {
-        if (state.activeRequests === 0) {
+        const activeRuns = runRegistry.activeCount()
+        if (state.activeRequests === 0 && activeRuns === 0) {
           resolve()
           return
         }
         if (Date.now() - startedAt >= drainDeadlineMs) {
           console.warn(
-            `close(): ${state.activeRequests} request(s) still active after ` +
-              `${Math.round(drainDeadlineMs / 1000)}s — proceeding with shutdown`,
+            `close(): ${state.activeRequests} request(s) and ${activeRuns} run(s) still ` +
+              `active after ${Math.round(drainDeadlineMs / 1000)}s — proceeding with shutdown`,
           )
           resolve()
           return
@@ -385,6 +407,7 @@ function buildRouteTable(ctx: {
   readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly resumeClaims: PendingResumeClaims
+  readonly runRegistry: RunRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
@@ -399,6 +422,7 @@ function buildRouteTable(ctx: {
     permissionsStore,
     registry,
     resumeClaims,
+    runRegistry,
     sandboxManager,
     signal,
     staticModules,
@@ -409,12 +433,6 @@ function buildRouteTable(ctx: {
   // Populated by runs/stream and runs/wait; read by the resume endpoint so it
   // can re-invoke the correct route without requiring the client to repeat it.
   const threadRouteMap = new Map<string, string>()
-
-  // Process-local in-flight run tracking: enables the concurrency gate, the
-  // per-run abort signal, and POST /threads/:id/cancel. Scoped to this route
-  // table (not module-level) so multiple handler instances in one process —
-  // which the (Request) => Response core exists to allow — stay isolated.
-  const runRegistry = createRunRegistry()
 
   return [
     // ------------------------------------------------------------------
