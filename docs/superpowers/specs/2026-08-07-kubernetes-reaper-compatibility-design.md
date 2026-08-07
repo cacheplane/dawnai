@@ -127,14 +127,15 @@ context, RBAC, and network policy on a Calico-enabled cluster. It does not wait
 for the hourly schedule or duplicate the CronJob manifest. The existing
 provider integration suite gains a `network: "allow"` case that attempts
 to reach a deterministic in-cluster HTTP control service. Before the suite,
-the CI lane starts that service in an unlabeled pod and proves an unlabeled
-client can reach it. The integration test then acquires a fresh allow-mode
-sandbox, verifies that no per-thread NetworkPolicy exists for it, and verifies
-that the same service is unreachable. Allow mode emits no per-thread policy,
-the positive control proves the service is healthy, and in-cluster DNS remains
-allowed, so the chart's label-scoped backstop is isolated as the blocker. The
-existing `network: "deny"` test continues to cover the provider's per-thread
-policy separately.
+the CI lane starts that service in an unlabeled pod with an HTTP readiness
+probe and proves an unlabeled client can reach it. The integration test then
+acquires a fresh allow-mode sandbox, verifies that no per-thread NetworkPolicy
+exists for it, separately resolves the short service hostname through cluster
+DNS, and verifies that the same service is unreachable. Allow mode emits no
+per-thread policy, the positive control proves the service is healthy, and the
+DNS assertion excludes name-resolution failure, so the chart's label-scoped
+backstop is isolated as the blocker. The existing `network: "deny"` test
+continues to cover the provider's per-thread policy separately.
 
 ### Documentation and release metadata
 
@@ -143,6 +144,11 @@ Kubernetes 1.34 through 1.36 under the upstream version-skew policy. Operators
 outside that window must override `reaper.image` with an image containing a
 compatible `kubectl`, POSIX shell, `date`, `sort`, and `grep`. The values table
 shows the complete default tag-plus-digest reference.
+
+Correct all active namespace-wide policy claims in chart values comments,
+Helm NOTES, and the website sandbox guide to describe the Dawn-managed pod
+selector. Regenerate the CLI's bundled Markdown from the website source rather
+than editing generated files by hand.
 
 Bump `charts/dawn-sandbox-infra/Chart.yaml` from `0.1.1` to `0.1.2`. This chart
 change does not alter an npm package and therefore does not require a
