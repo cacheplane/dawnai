@@ -122,8 +122,9 @@ Expected: recovery assertions fail because the provider supplies no callback.
 
 Add a focused keyed coordinator whose `run(threadId, operation)` serializes
 operations for one key, permits different keys to run concurrently, continues
-after a rejected operation, and deletes idle queue entries. Unit-test those
-properties before wiring it into the provider.
+after a rejected operation, and deletes idle queue entries. Expose a small
+internal pending-key count so cleanup is asserted directly rather than inferred
+from timing. Unit-test those properties before wiring it into the provider.
 
 Run `acquire`, recycle, `release`, and `destroy` through that coordinator for the
 entire Docker lifecycle operation. Replace recovery-only in-flight/closing
@@ -136,6 +137,14 @@ cancellation must not strand the thread. Retire and delete lifecycle state on
 release, destroy, or failed removal/recreation; a later acquire creates a fresh
 identity and stale tokens return the original failure without retry.
 
+Resolve the effective keeper launch configuration once at the first successful
+acquire and store it immutably in lifecycle state. Recovery must use only that
+state-owned configuration. Permit semantically equivalent reacquires, but reject
+a different effective network/env/CPU/memory/security/UID configuration with
+`DAWN_E2001` and instructions to release first. Keep `resources.timeoutMs`
+handle-local. Wrap spawn-level removal/recreation exceptions in contextual
+`DAWN_E2001` errors while preserving already-coded errors and the original cause.
+
 Add deterministic provider tests for same-generation coalescing, delayed stale
 failures, caller abort during recreation, and concurrent reacquire while release
 or destroy is held. Assert cleanup finishes before the new keeper is created and
@@ -143,6 +152,10 @@ destroy cannot remove the new lifecycle's volume. Also model the canceled
 caller's retry accurately: it rejects while an active waiter succeeds. Gate a
 retry and prove queued cleanup starts only after that retry settles. Cover failed
 recreation followed by fresh acquire and prove the old token stays retired.
+Add policy-ownership tests: equivalent reacquire succeeds; different effective
+keeper policy rejects before Docker mutation; recovery from an original handle
+retains its exact launch flags and ownership. Add a spawn-rejection recovery
+test for coded context and preserved cause.
 
 - [ ] **Step 5: Run focused and package tests and verify GREEN**
 

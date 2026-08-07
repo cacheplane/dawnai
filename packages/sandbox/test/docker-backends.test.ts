@@ -165,7 +165,6 @@ describe("dockerExec", () => {
     const results = [first, second]
     const execSignals: Array<AbortSignal | undefined> = []
     const execCalls: Array<{ container: string; command: readonly string[] }> = []
-    const recoverySignals: AbortSignal[] = []
     const recoveryTokens: unknown[] = []
     const events: string[] = []
     const capturedToken = { lifecycle: "original" }
@@ -189,10 +188,9 @@ describe("dockerExec", () => {
             events.push("capture")
             return currentToken
           },
-          recover: async (token, signal) => {
+          recoverAndRetry: async (token, retry) => {
             recoveryTokens.push(token)
-            recoverySignals.push(signal)
-            return true
+            return retry()
           },
         },
       },
@@ -208,8 +206,6 @@ describe("dockerExec", () => {
     expect(events[0]).toBe("capture")
     expect(events.filter((event) => event === "capture")).toHaveLength(1)
     expect(recoveryTokens).toEqual([capturedToken])
-    expect(recoverySignals).toHaveLength(1)
-    expect(recoverySignals[0]).toBe(activeCtx.signal)
     expect(result).toEqual(second)
   })
 
@@ -248,9 +244,9 @@ describe("dockerExec", () => {
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         pidExhaustionRecovery: {
           captureToken: () => ({}),
-          recover: async () => {
+          recoverAndRetry: async (_token, retry) => {
             recoveryCalls += 1
-            return true
+            return retry()
           },
         },
       },
@@ -281,9 +277,9 @@ describe("dockerExec", () => {
         timeoutMs: 500,
         pidExhaustionRecovery: {
           captureToken: () => ({}),
-          recover: async () => {
+          recoverAndRetry: async (_token, retry) => {
             recoveryCalls += 1
-            return true
+            return retry()
           },
         },
       },
@@ -322,9 +318,9 @@ describe("dockerExec", () => {
         timeoutMs: 500,
         pidExhaustionRecovery: {
           captureToken: () => ({}),
-          recover: async () => {
+          recoverAndRetry: async (_token, retry) => {
             recoveryCalls += 1
-            return true
+            return retry()
           },
         },
       },
@@ -369,9 +365,9 @@ describe("dockerExec", () => {
       {
         pidExhaustionRecovery: {
           captureToken: () => ({}),
-          recover: async () => {
+          recoverAndRetry: async (_token, retry) => {
             recoveryCalls += 1
-            return true
+            return retry()
           },
         },
       },
@@ -385,7 +381,6 @@ describe("dockerExec", () => {
   })
 
   test("returns the original PID-exhaustion result when recovery rejects the captured token", async () => {
-    const activeCtx = { signal: new AbortController().signal, workspaceRoot: "/workspace" }
     const first = {
       stdout: "partial",
       stderr: "OCI runtime exec failed: Resource temporarily unavailable",
@@ -393,7 +388,7 @@ describe("dockerExec", () => {
     }
     const token = { lifecycle: "released" }
     let execCalls = 0
-    const recoveryCalls: Array<{ token: unknown; signal: AbortSignal }> = []
+    const recoveryTokens: unknown[] = []
     const exec = dockerExec(
       fakeDocker({
         exec: async () => {
@@ -405,18 +400,18 @@ describe("dockerExec", () => {
       {
         pidExhaustionRecovery: {
           captureToken: () => token,
-          recover: async (captured, signal) => {
-            recoveryCalls.push({ token: captured, signal })
-            return false
+          recoverAndRetry: async (captured) => {
+            recoveryTokens.push(captured)
+            return undefined
           },
         },
       },
     )
 
-    const result = await exec.runCommand({ command: "echo hi" }, activeCtx)
+    const result = await exec.runCommand({ command: "echo hi" }, ctx)
 
     expect(execCalls).toBe(1)
-    expect(recoveryCalls).toEqual([{ token, signal: activeCtx.signal }])
+    expect(recoveryTokens).toEqual([token])
     expect(result).toEqual(first)
   })
 })

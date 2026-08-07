@@ -5,7 +5,10 @@ interface DockerExecOptions {
   readonly timeoutMs?: number
   readonly pidExhaustionRecovery?: {
     readonly captureToken: () => unknown
-    readonly recover: (token: unknown, signal: AbortSignal) => Promise<boolean>
+    readonly recoverAndRetry: (
+      token: unknown,
+      retry: () => Promise<SpawnResult>,
+    ) => Promise<SpawnResult | undefined>
   }
 }
 
@@ -63,8 +66,8 @@ export function dockerExec(
         !isConfiguredTimeout &&
         isPidExhaustion(r)
       ) {
-        const recovered = await opts.pidExhaustionRecovery.recover(recoveryToken, ctx.signal)
-        if (recovered) r = await execute()
+        const recovered = await opts.pidExhaustionRecovery.recoverAndRetry(recoveryToken, execute)
+        if (recovered !== undefined) r = recovered
       }
       if (timeoutSecs !== undefined && r.exitCode === 124) {
         return {

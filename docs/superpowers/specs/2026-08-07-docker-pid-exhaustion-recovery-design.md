@@ -142,6 +142,20 @@ container/volume cleanup. Failed recovery also removes it. A repeated acquire
 within the same live lifecycle reuses it. Thus state retention matches keeper
 lifetime, while idle queue entries are removed independently after their FIFO
 drains.
+
+Lifecycle state owns an immutable resolved keeper launch configuration from the
+first successful acquire: effective network mode, environment, CPU/memory
+limits, hardening flags, and resolved UID/GID. Recovery always recreates from
+that state, never from the policy captured by whichever handle reports
+exhaustion. A repeated acquire whose effective keeper configuration differs is
+rejected with `DAWN_E2001` and must release the lifecycle before changing it.
+Semantically equivalent configurations reuse the state. Per-command
+`resources.timeoutMs` remains handle-local because it does not configure the
+keeper container.
+
+Both non-zero Docker lifecycle results and spawn-level exceptions are surfaced
+as contextual `DAWN_E2001` sandbox-unavailable errors. Wrapped spawn errors
+retain their original cause.
 Container replacement intentionally terminates background processes. This is
 acceptable only because the narrowly matched state already prevents the
 sandbox from servicing a new command.
@@ -169,6 +183,8 @@ sandbox from servicing a new command.
   canceled command fails through its own signal while another waiter recovers.
 - Removal or recreation failure retires lifecycle identity before a later
   acquire; stale tokens cannot remove or execute against the new lifecycle.
+- Reacquire with a different effective keeper policy is rejected; recovery from
+  any valid handle retains the lifecycle's original launch flags and UID/GID.
 - Different thread IDs retain independent lifecycle concurrency.
 
 ### Real-Docker test

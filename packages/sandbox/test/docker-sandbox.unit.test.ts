@@ -533,10 +533,93 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
   )
 
   test.each(["release", "destroy"] as const)(
-    "%s drains in-flight recreation before final cleanup",
+    "%s cleanup completes before a concurrent reacquire starts",
+    async (operation) => {
+      const cleanupStarted = deferred()
+      const releaseCleanup = deferred()
+      const runs: string[][] = []
+      let containerExists = false
+      let volumeExists = false
+      let keeperRuns = 0
+      let chownRuns = 0
+      const docker: Docker = {
+        run: async (args) => {
+          runs.push([...args])
+          if (args[0] === "ps") {
+            return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "volume" && args[1] === "inspect") {
+            return {
+              stdout: volumeExists ? "volume" : "",
+              stderr: "",
+              exitCode: volumeExists ? 0 : 1,
+            }
+          }
+          if (args[0] === "rm") {
+            if (operation === "release") {
+              cleanupStarted.resolve()
+              await releaseCleanup.promise
+            }
+            containerExists = false
+            return { stdout: "removed keeper", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "volume" && args[1] === "rm") {
+            cleanupStarted.resolve()
+            await releaseCleanup.promise
+            volumeExists = false
+            return { stdout: "removed volume", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("--rm")) {
+            chownRuns += 1
+            volumeExists = true
+            return { stdout: "initialized", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("-d")) {
+            keeperRuns += 1
+            containerExists = true
+            volumeExists = true
+            return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+          }
+          return { stdout: "ok", stderr: "", exitCode: 0 }
+        },
+        exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      }
+      const policy = { network: { mode: "deny" as const } }
+      const p = dockerSandbox({ image: "node:22-slim", docker })
+      await p.acquire({ threadId: "abc", policy, signal: signal() })
+      const cleanupPromise = operation === "release" ? p.release("abc") : p.destroy("abc")
+      await cleanupStarted.promise
+      const runsBeforeReacquire = runs.length
+      let reacquired = false
+      const reacquirePromise = p
+        .acquire({ threadId: "abc", policy, signal: signal() })
+        .then((handle) => {
+          reacquired = true
+          return handle
+        })
+
+      await Promise.resolve()
+      expect(reacquired).toBe(false)
+      expect(runs).toHaveLength(runsBeforeReacquire)
+      releaseCleanup.resolve()
+      await cleanupPromise
+      const newHandle = await reacquirePromise
+
+      expect(newHandle.workspaceRoot).toBe("/workspace")
+      expect(containerExists).toBe(true)
+      expect(volumeExists).toBe(true)
+      expect(keeperRuns).toBe(2)
+      expect(chownRuns).toBe(operation === "destroy" ? 2 : 1)
+    },
+  )
+
+  test.each(["release", "destroy"] as const)(
+    "%s and reacquire wait until the recovery retry settles",
     async (operation) => {
       const replacementStarted = deferred()
       const releaseReplacement = deferred()
+      const retryStarted = deferred()
+      const releaseRetry = deferred()
       const originalFailure = {
         stdout: "partial",
         stderr: "OCI runtime exec failed: Resource temporarily unavailable",
@@ -590,9 +673,11 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
         },
         exec: async () => {
           execCalls += 1
-          return execCalls === 1
-            ? originalFailure
-            : { stdout: "old command retried", stderr: "", exitCode: 0 }
+          if (execCalls === 1) return originalFailure
+          retryStarted.resolve()
+          await releaseRetry.promise
+          events.push("retry:end")
+          return { stdout: "old command retried", stderr: "", exitCode: 0 }
         },
       }
       const policy = { network: { mode: "deny" as const } }
@@ -603,24 +688,33 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
         { workspaceRoot: h.workspaceRoot, signal: signal() },
       )
       await replacementStarted.promise
-      let cleanupSettled = false
-      const cleanupPromise = (operation === "release" ? p.release("abc") : p.destroy("abc")).then(
-        () => {
-          cleanupSettled = true
-        },
-      )
+      releaseReplacement.resolve()
+      await retryStarted.promise
+      const lifecycleRunsBeforeQueue = runs.length
+      const cleanupPromise = operation === "release" ? p.release("abc") : p.destroy("abc")
+      let reacquired = false
+      const reacquirePromise = p
+        .acquire({ threadId: "abc", policy, signal: signal() })
+        .then((handle) => {
+          reacquired = true
+          return handle
+        })
 
       await Promise.resolve()
-      expect(cleanupSettled).toBe(false)
-      releaseReplacement.resolve()
-      const [commandResult] = await Promise.all([commandResultPromise, cleanupPromise])
+      expect(reacquired).toBe(false)
+      expect(runs).toHaveLength(lifecycleRunsBeforeQueue)
+      releaseRetry.resolve()
+      const commandResult = await commandResultPromise
+      await cleanupPromise
+      await reacquirePromise
 
-      expect(commandResult).toEqual(originalFailure)
-      expect(execCalls).toBe(1)
-      expect(containerExists).toBe(false)
-      expect(keeperRuns).toBe(2)
+      expect(commandResult).toEqual({ stdout: "old command retried", stderr: "", exitCode: 0 })
+      expect(execCalls).toBe(2)
+      expect(containerExists).toBe(true)
+      expect(keeperRuns).toBe(3)
       expect(runs.filter((run) => run[0] === "rm")).toHaveLength(2)
-      expect(events.lastIndexOf("keeper:2")).toBeLessThan(events.lastIndexOf("rm"))
+      expect(events.indexOf("retry:end")).toBeLessThan(events.lastIndexOf("rm"))
+      expect(events.lastIndexOf("rm")).toBeLessThan(events.lastIndexOf("keeper:3"))
       expect(runs.filter((run) => run[0] === "volume" && run[1] === "rm")).toHaveLength(
         operation === "destroy" ? 1 : 0,
       )
@@ -673,7 +767,7 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
         }
         return { stdout: "ok", stderr: "", exitCode: 0 }
       },
-      exec: async (_container, command) => {
+      exec: async (_container, command, opts) => {
         const shellCommand = command.at(-1) ?? ""
         const name = shellCommand.includes("echo first") ? "first" : "second"
         const attempt = (execAttempts.get(name) ?? 0) + 1
@@ -690,6 +784,7 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
             exitCode: 1,
           }
         }
+        if (opts?.signal?.aborted) throw new Error(`${name} caller retry aborted`)
         return { stdout: `${name} recovered`, stderr: "", exitCode: 0 }
       },
     }
@@ -705,15 +800,16 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
       { command: "echo second" },
       { workspaceRoot: secondHandle.workspaceRoot, signal: secondController.signal },
     )
+    const firstRejected = expect(firstResultPromise).rejects.toThrow("first caller retry aborted")
 
     await replacementStarted.promise
     firstController.abort()
     releaseSecondFailure.resolve()
     await Promise.resolve()
     releaseReplacement.resolve()
-    const [firstResult, secondResult] = await Promise.all([firstResultPromise, secondResultPromise])
+    await firstRejected
+    const secondResult = await secondResultPromise
 
-    expect(firstResult.stdout).toBe("first recovered")
     expect(secondResult.stdout).toBe("second recovered")
     expect(containerExists).toBe(true)
     expect(runs.filter((run) => run.args[0] === "rm")).toHaveLength(1)
@@ -837,6 +933,104 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     expect(keeperRuns).toBe(2)
     expect(containerExists).toBe(true)
   })
+
+  test.each(["removal", "recreation"] as const)(
+    "%s failure retires lifecycle state before fresh acquire",
+    async (failure) => {
+      const delayedStarted = deferred()
+      const releaseDelayedFailure = deferred()
+      const pidFailure = {
+        stdout: "partial",
+        stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+        exitCode: 1,
+      }
+      const runs: string[][] = []
+      const execAttempts = new Map<string, number>()
+      let containerExists = false
+      let volumeExists = false
+      let keeperRuns = 0
+      let removalCalls = 0
+      const docker: Docker = {
+        run: async (args) => {
+          runs.push([...args])
+          if (args[0] === "ps") {
+            return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "volume" && args[1] === "inspect") {
+            return {
+              stdout: volumeExists ? "volume" : "",
+              stderr: "",
+              exitCode: volumeExists ? 0 : 1,
+            }
+          }
+          if (args[0] === "rm") {
+            removalCalls += 1
+            if (failure === "removal" && removalCalls === 1) {
+              return { stdout: "", stderr: "container removal denied", exitCode: 1 }
+            }
+            containerExists = false
+            return { stdout: "removed", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("--rm")) {
+            volumeExists = true
+            return { stdout: "initialized", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("-d")) {
+            keeperRuns += 1
+            if (failure === "recreation" && keeperRuns === 2) {
+              return { stdout: "", stderr: "replacement denied", exitCode: 1 }
+            }
+            containerExists = true
+            volumeExists = true
+            return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+          }
+          return { stdout: "ok", stderr: "", exitCode: 0 }
+        },
+        exec: async (_container, command) => {
+          const shellCommand = command.at(-1) ?? ""
+          const name = shellCommand.includes("echo delayed") ? "delayed" : "leader"
+          const attempt = (execAttempts.get(name) ?? 0) + 1
+          execAttempts.set(name, attempt)
+          if (name === "delayed" && attempt === 1) {
+            delayedStarted.resolve()
+            await releaseDelayedFailure.promise
+            return pidFailure
+          }
+          if (attempt === 1) return pidFailure
+          return { stdout: `${name} retried`, stderr: "", exitCode: 0 }
+        },
+      }
+      const policy = { network: { mode: "deny" as const } }
+      const p = dockerSandbox({ image: "node:22-slim", docker })
+      const firstHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+      const delayedHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+      const delayedResultPromise = delayedHandle.exec.runCommand(
+        { command: "echo delayed" },
+        { workspaceRoot: delayedHandle.workspaceRoot, signal: signal() },
+      )
+      await delayedStarted.promise
+
+      await expect(
+        firstHandle.exec.runCommand(
+          { command: "echo leader" },
+          { workspaceRoot: firstHandle.workspaceRoot, signal: signal() },
+        ),
+      ).rejects.toMatchObject({ code: "DAWN_E2001" })
+      const removalsAfterFailure = removalCalls
+      const freshHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+      expect(freshHandle.workspaceRoot).toBe("/workspace")
+      releaseDelayedFailure.resolve()
+      const delayedResult = await delayedResultPromise
+
+      expect(delayedResult).toEqual(pidFailure)
+      expect(execAttempts.get("delayed")).toBe(1)
+      expect(removalCalls).toBe(removalsAfterFailure)
+      expect(containerExists).toBe(true)
+      expect(runs.filter((run) => run[0] === "run" && run.includes("-d"))).toHaveLength(
+        failure === "recreation" ? 3 : 1,
+      )
+    },
+  )
 
   test("rejects with DAWN_E2001 when the exhausted keeper cannot be removed", async () => {
     const runs: string[][] = []
