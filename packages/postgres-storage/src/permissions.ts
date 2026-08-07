@@ -1,7 +1,6 @@
 import type { PermissionMode, PermissionsFile, PermissionsStore } from "@dawn-ai/permissions"
 import { matchPermission } from "@dawn-ai/permissions"
-import { Pool } from "pg"
-import type { PostgresStoreOptions } from "./options.js"
+import { type PostgresStoreOptions, resolvePool } from "./options.js"
 import {
   assertIdentifier,
   DEFAULT_SCHEMA,
@@ -68,10 +67,7 @@ export function createPostgresPermissionsStore(
   assertIdentifier("tablePrefix", prefix)
   const table = qualify({ schema, prefix }, "permissions")
   const mode: PermissionMode = options.mode ?? "interactive"
-  const ownsPool = !options.pool
-  const pool =
-    options.pool ??
-    new Pool(options.connectionString ? { connectionString: options.connectionString } : {})
+  const { ownsPool, pool } = resolvePool(options)
 
   const configAllow = cloneMap(options.config?.allow ?? {})
   const configDeny = cloneMap(options.config?.deny ?? {})

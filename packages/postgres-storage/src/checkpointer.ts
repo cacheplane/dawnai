@@ -7,9 +7,9 @@ import type {
   CheckpointTuple,
 } from "@langchain/langgraph-checkpoint"
 import { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
-import { Pool } from "pg"
+import type { Pool } from "pg"
 import { withTransaction } from "./internal/tx.js"
-import type { PostgresStoreOptions } from "./options.js"
+import { type PostgresStoreOptions, resolvePool } from "./options.js"
 import {
   assertIdentifier,
   CHECKPOINTER_MIGRATIONS,
@@ -143,10 +143,9 @@ export class DawnPostgresSaver extends BaseCheckpointSaver {
     this.prefix = prefix
     this.checkpointsTable = qualify({ schema, prefix }, "checkpoints")
     this.writesTable = qualify({ schema, prefix }, "writes")
-    this.ownsPool = !options.pool
-    this.pool =
-      options.pool ??
-      new Pool(options.connectionString ? { connectionString: options.connectionString } : {})
+    const { ownsPool, pool } = resolvePool(options)
+    this.ownsPool = ownsPool
+    this.pool = pool
   }
 
   /**
