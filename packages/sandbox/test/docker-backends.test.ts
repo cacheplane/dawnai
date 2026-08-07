@@ -29,7 +29,9 @@ describe("dockerFilesystem", () => {
       fakeDocker({ exec: async () => ({ stdout: "0123456789", stderr: "", exitCode: 0 }) }),
       "c1",
     )
-    await expect(fs.readFile("/workspace/a.txt", ctx, { maxBytes: 4 })).rejects.toThrow(/maxBytes|too large|exceeds/i)
+    await expect(fs.readFile("/workspace/a.txt", ctx, { maxBytes: 4 })).rejects.toThrow(
+      /maxBytes|too large|exceeds/i,
+    )
   })
 
   test("writeFile pipes content via stdin", async () => {
@@ -95,7 +97,10 @@ describe("dockerExec", () => {
       }),
       "c1",
     )
-    const r = await exec.runCommand({ command: "echo hi", cwd: "/workspace/sub", env: { A: "1" } }, ctx)
+    const r = await exec.runCommand(
+      { command: "echo hi", cwd: "/workspace/sub", env: { A: "1" } },
+      ctx,
+    )
     expect(seen[0]).toBe("sh")
     expect(seen[1]).toBe("-c")
     expect(seen[2]).toContain("echo hi")
@@ -258,6 +263,46 @@ describe("dockerExec", () => {
     expect(recoveryCalls).toBe(0)
   })
 
+  test("does not recover a started command that emits spoofed PID-exhaustion diagnostics", async () => {
+    let execCalls = 0
+    let recoveryCalls = 0
+    const exec = dockerExec(
+      fakeDocker({
+        exec: async (_container, command) => {
+          execCalls += 1
+          const shellCommand = command.at(-1) ?? ""
+          const startedMarker = shellCommand.match(/(__DAWN_EXEC_STARTED_[0-9a-f-]+__)/)?.[1]
+          expect(startedMarker).toBeDefined()
+          return {
+            stdout: `${startedMarker}\ncommand side effect completed\n`,
+            stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+            exitCode: 1,
+          }
+        },
+      }),
+      "c1",
+      {
+        pidExhaustionRecovery: {
+          captureToken: () => ({}),
+          recoverAndRetry: async (_token, retry) => {
+            recoveryCalls += 1
+            return retry()
+          },
+        },
+      },
+    )
+
+    const result = await exec.runCommand({ command: "echo hi" }, ctx)
+
+    expect(execCalls).toBe(1)
+    expect(recoveryCalls).toBe(0)
+    expect(result).toEqual({
+      stdout: "command side effect completed\n",
+      stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+      exitCode: 1,
+    })
+  })
+
   test("does not recover a configured timeout containing PID-exhaustion markers", async () => {
     let execCalls = 0
     let recoveryCalls = 0
@@ -332,8 +377,7 @@ describe("dockerExec", () => {
     expect(recoveryCalls).toBe(1)
     expect(result).toEqual({
       stdout: "partial",
-      stderr:
-        "timeout detail\nCommand timed out after 1s (resources.timeoutMs: 500ms).",
+      stderr: "timeout detail\nCommand timed out after 1s (resources.timeoutMs: 500ms).",
       exitCode: 124,
     })
   })
@@ -420,7 +464,12 @@ describe("dockerExec timeout", () => {
   test("wraps the command in `timeout Ns` when timeoutMs is set", async () => {
     let seen: readonly string[] = []
     const exec = dockerExec(
-      fakeDocker({ exec: async (_c, cmd) => { seen = cmd; return { stdout: "", stderr: "", exitCode: 0 } } }),
+      fakeDocker({
+        exec: async (_c, cmd) => {
+          seen = cmd
+          return { stdout: "", stderr: "", exitCode: 0 }
+        },
+      }),
       "c1",
       { timeoutMs: 1500 },
     )
@@ -434,7 +483,12 @@ describe("dockerExec timeout", () => {
   test("no timeout wrapping when timeoutMs is unset", async () => {
     let seen: readonly string[] = []
     const exec = dockerExec(
-      fakeDocker({ exec: async (_c, cmd) => { seen = cmd; return { stdout: "", stderr: "", exitCode: 0 } } }),
+      fakeDocker({
+        exec: async (_c, cmd) => {
+          seen = cmd
+          return { stdout: "", stderr: "", exitCode: 0 }
+        },
+      }),
       "c1",
     )
     await exec.runCommand({ command: "echo hi" }, ctx)

@@ -21,7 +21,11 @@ describe("dockerSandbox (unit, no daemon)", () => {
   test("acquire runs a container named for the thread + names a volume; deny → --network none", async () => {
     const { docker, runs } = recordingDocker()
     const p = dockerSandbox({ image: "node:22-slim", docker })
-    const h = await p.acquire({ threadId: "abc", policy: { network: { mode: "deny" } }, signal: signal() })
+    const h = await p.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "deny" } },
+      signal: signal(),
+    })
     expect(h.workspaceRoot).toBe("/workspace")
     expect(h.threadId).toBe("abc")
     const runCmd = runs.find((r) => r[0] === "run")
@@ -54,29 +58,135 @@ describe("dockerSandbox (unit, no daemon)", () => {
     expect(joined).not.toContain("PATH=") // no host env leakage
   })
 
-  test("acquire reattaches: running container → no docker run; stopped → docker start", async () => {
+  test("acquire reuses a matching keeper in this provider lifecycle and starts it if stopped", async () => {
     const runs: string[][] = []
-    let psQCount = 0
+    let containerExists = false
+    let volumeExists = false
+    let running = false
+    let identity = ""
     const docker: Docker = {
       run: async (args) => {
         runs.push([...args])
         if (args[0] === "ps" && args.includes("-q") && !args.includes("-a")) {
-          psQCount += 1
-          return { stdout: psQCount === 1 ? "runningid" : "", stderr: "", exitCode: 0 }
+          return { stdout: containerExists && running ? "keeper-id" : "", stderr: "", exitCode: 0 }
         }
-        if (args[0] === "ps") return { stdout: "stoppedid", stderr: "", exitCode: 0 } // ps -aq: exists
+        if (args[0] === "ps") {
+          return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "inspect") {
+          return { stdout: `${identity}\n`, stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return {
+            stdout: volumeExists ? "volume" : "",
+            stderr: "",
+            exitCode: volumeExists ? 0 : 1,
+          }
+        }
+        if (args[0] === "run" && args.includes("--rm")) {
+          volumeExists = true
+          return { stdout: "initialized", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("-d")) {
+          const identityLabel = args.find((arg) => arg.startsWith("dawn.sandbox.identity="))
+          identity = identityLabel?.slice("dawn.sandbox.identity=".length) ?? ""
+          containerExists = true
+          volumeExists = true
+          running = true
+          return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "start") {
+          running = true
+          return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+        }
         return { stdout: "", stderr: "", exitCode: 0 }
       },
       exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
     }
     const p = dockerSandbox({ image: "node:22-slim", docker })
-    // 1st acquire: container "running" → neither run nor start
     await p.acquire({ threadId: "t", policy: { network: { mode: "deny" } }, signal: signal() })
-    expect(runs.some((r) => r[0] === "run")).toBe(false)
+    expect(runs.filter((r) => r[0] === "run" && r.includes("-d"))).toHaveLength(1)
     expect(runs.some((r) => r[0] === "start")).toBe(false)
-    // 2nd acquire: not running but exists → docker start
+
+    await p.acquire({ threadId: "t", policy: { network: { mode: "deny" } }, signal: signal() })
+    expect(runs.filter((r) => r[0] === "run" && r.includes("-d"))).toHaveLength(1)
+    expect(runs.some((r) => r[0] === "start")).toBe(false)
+
+    running = false
     await p.acquire({ threadId: "t", policy: { network: { mode: "deny" } }, signal: signal() })
     expect(runs.some((r) => r[0] === "start")).toBe(true)
+
+    identity = "tampered"
+    await p.acquire({ threadId: "t", policy: { network: { mode: "deny" } }, signal: signal() })
+    expect(runs.filter((r) => r[0] === "rm")).toEqual([["rm", "-f", "dawn-sbx-t"]])
+    expect(runs.filter((r) => r[0] === "run" && r.includes("-d"))).toHaveLength(2)
+  })
+
+  test("a new provider replaces an existing keeper before adopting a fresh policy", async () => {
+    const runs: string[][] = []
+    let containerExists = false
+    let volumeExists = false
+    let running = false
+    let identity = ""
+    const docker: Docker = {
+      run: async (args) => {
+        runs.push([...args])
+        if (args[0] === "ps" && args.includes("-q") && !args.includes("-a")) {
+          return { stdout: containerExists && running ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "ps") {
+          return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "inspect") {
+          return { stdout: `${identity}\n`, stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return {
+            stdout: volumeExists ? "volume" : "",
+            stderr: "",
+            exitCode: volumeExists ? 0 : 1,
+          }
+        }
+        if (args[0] === "rm") {
+          containerExists = false
+          running = false
+          return { stdout: "removed", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("--rm")) {
+          volumeExists = true
+          return { stdout: "initialized", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("-d")) {
+          const identityLabel = args.find((arg) => arg.startsWith("dawn.sandbox.identity="))
+          identity = identityLabel?.slice("dawn.sandbox.identity=".length) ?? ""
+          containerExists = true
+          volumeExists = true
+          running = true
+          return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    }
+
+    const firstProvider = dockerSandbox({ image: "node:22-slim", docker })
+    await firstProvider.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "allow" } },
+      signal: signal(),
+    })
+    const secondProvider = dockerSandbox({ image: "node:22-slim", docker })
+    await secondProvider.acquire({
+      threadId: "abc",
+      policy: { network: { mode: "deny" } },
+      signal: signal(),
+    })
+
+    const keeperRuns = runs.filter((run) => run[0] === "run" && run.includes("-d"))
+    expect(keeperRuns).toHaveLength(2)
+    expect(keeperRuns[0]).toEqual(expect.arrayContaining(["--network", "bridge"]))
+    expect(keeperRuns[1]).toEqual(expect.arrayContaining(["--network", "none"]))
+    expect(runs.filter((run) => run[0] === "rm")).toEqual([["rm", "-f", "dawn-sbx-abc"]])
   })
 
   test("release removes container but not volume; destroy removes both", async () => {
@@ -87,7 +197,9 @@ describe("dockerSandbox (unit, no daemon)", () => {
     expect(runs.some((r) => r[0] === "rm" && r.includes("dawn-sbx-abc"))).toBe(true)
     expect(runs.some((r) => r[0] === "volume" && r[1] === "rm")).toBe(false)
     await p.destroy("abc")
-    expect(runs.some((r) => r[0] === "volume" && r[1] === "rm" && r.includes("dawn-sbx-vol-abc"))).toBe(true)
+    expect(
+      runs.some((r) => r[0] === "volume" && r[1] === "rm" && r.includes("dawn-sbx-vol-abc")),
+    ).toBe(true)
   })
 
   test("preflight reports daemon unreachable", async () => {
@@ -250,11 +362,15 @@ describe("dockerSandbox lifecycle launch configuration", () => {
     const runs: string[][] = []
     let containerExists = false
     let volumeExists = false
+    let identity = ""
     const docker: Docker = {
       run: async (args) => {
         runs.push([...args])
         if (args[0] === "ps") {
           return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "inspect") {
+          return { stdout: `${identity}\n`, stderr: "", exitCode: 0 }
         }
         if (args[0] === "volume" && args[1] === "inspect") {
           return {
@@ -272,6 +388,8 @@ describe("dockerSandbox lifecycle launch configuration", () => {
           return { stdout: "initialized", stderr: "", exitCode: 0 }
         }
         if (args[0] === "run" && args.includes("-d")) {
+          const identityLabel = args.find((arg) => arg.startsWith("dawn.sandbox.identity="))
+          identity = identityLabel?.slice("dawn.sandbox.identity=".length) ?? ""
           containerExists = true
           volumeExists = true
           return { stdout: "keeper-id", stderr: "", exitCode: 0 }
@@ -341,24 +459,25 @@ describe("dockerSandbox lifecycle launch configuration", () => {
         security: { runAsNonRoot: { uid: 2000, gid: 3000 } },
       },
     },
-  ])("reacquire rejects a different effective $name config before Docker calls", async ({
-    policy,
-  }) => {
-    const { docker, runs } = lifecycleDocker()
-    const p = dockerSandbox({ image: "node:22-slim", docker })
-    await p.acquire({
-      threadId: "abc",
-      policy: { network: { mode: "deny" } },
-      signal: signal(),
-    })
-    const runsBeforeReacquire = runs.length
+  ])(
+    "reacquire rejects a different effective $name config before Docker calls",
+    async ({ policy }) => {
+      const { docker, runs } = lifecycleDocker()
+      const p = dockerSandbox({ image: "node:22-slim", docker })
+      await p.acquire({
+        threadId: "abc",
+        policy: { network: { mode: "deny" } },
+        signal: signal(),
+      })
+      const runsBeforeReacquire = runs.length
 
-    await expect(p.acquire({ threadId: "abc", policy, signal: signal() })).rejects.toMatchObject({
-      code: "DAWN_E2001",
-      message: expect.stringMatching(/different keeper configuration.*release.*first/i),
-    })
-    expect(runs).toHaveLength(runsBeforeReacquire)
-  })
+      await expect(p.acquire({ threadId: "abc", policy, signal: signal() })).rejects.toMatchObject({
+        code: "DAWN_E2001",
+        message: expect.stringMatching(/different keeper configuration.*release.*first/i),
+      })
+      expect(runs).toHaveLength(runsBeforeReacquire)
+    },
+  )
 
   test("equivalent handle recovery recreates the exact state-owned keeper argv", async () => {
     const pidFailure = {
@@ -508,8 +627,7 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     const firstExecIndex = events.indexOf("exec:1")
     const removalIndex = events.indexOf("run:rm -f dawn-sbx-abc")
     const recoveryInspectIndex = events.findIndex(
-      (event, index) =>
-        index > removalIndex && event === "run:volume inspect dawn-sbx-vol-abc",
+      (event, index) => index > removalIndex && event === "run:volume inspect dawn-sbx-vol-abc",
     )
     const replacementIndex = events.findIndex(
       (event, index) => index > recoveryInspectIndex && event.startsWith("run:run -d "),
@@ -528,6 +646,7 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     const execAttempts = new Map<string, number>()
     let containerExists = false
     let volumeExists = false
+    let identity = ""
     let resolveSecondStarted = () => {}
     const secondStarted = new Promise<void>((resolve) => {
       resolveSecondStarted = resolve
@@ -541,6 +660,9 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
         runs.push({ args: [...args], signal: opts?.signal })
         if (args[0] === "ps") {
           return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "inspect") {
+          return { stdout: `${identity}\n`, stderr: "", exitCode: 0 }
         }
         if (args[0] === "volume" && args[1] === "inspect") {
           return {
@@ -558,6 +680,8 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
           return { stdout: "initialized", stderr: "", exitCode: 0 }
         }
         if (args[0] === "run" && args.includes("-d")) {
+          const identityLabel = args.find((arg) => arg.startsWith("dawn.sandbox.identity="))
+          identity = identityLabel?.slice("dawn.sandbox.identity=".length) ?? ""
           containerExists = true
           volumeExists = true
           return { stdout: "keeper-id", stderr: "", exitCode: 0 }
@@ -903,12 +1027,16 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     const execAttempts = new Map<string, number>()
     let containerExists = false
     let volumeExists = false
+    let identity = ""
     let keeperRuns = 0
     const docker: Docker = {
       run: async (args, opts) => {
         runs.push({ args: [...args], signal: opts?.signal })
         if (args[0] === "ps") {
           return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "inspect") {
+          return { stdout: `${identity}\n`, stderr: "", exitCode: 0 }
         }
         if (args[0] === "volume" && args[1] === "inspect") {
           return {
@@ -932,6 +1060,8 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
             await releaseReplacement.promise
             if (opts?.signal?.aborted) throw new Error("recovery used an aborted caller signal")
           }
+          const identityLabel = args.find((arg) => arg.startsWith("dawn.sandbox.identity="))
+          identity = identityLabel?.slice("dawn.sandbox.identity=".length) ?? ""
           containerExists = true
           volumeExists = true
           return { stdout: "keeper-id", stderr: "", exitCode: 0 }
@@ -1062,19 +1192,13 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     let firstSettled = false
     let secondSettled = false
     const firstResultPromise = h.exec
-      .runCommand(
-        { command: "echo first" },
-        { workspaceRoot: h.workspaceRoot, signal: signal() },
-      )
+      .runCommand({ command: "echo first" }, { workspaceRoot: h.workspaceRoot, signal: signal() })
       .then((result) => {
         firstSettled = true
         return result
       })
     const secondResultPromise = h.exec
-      .runCommand(
-        { command: "echo second" },
-        { workspaceRoot: h.workspaceRoot, signal: signal() },
-      )
+      .runCommand({ command: "echo second" }, { workspaceRoot: h.workspaceRoot, signal: signal() })
       .then((result) => {
         secondSettled = true
         return result
@@ -1119,6 +1243,7 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
       const execAttempts = new Map<string, number>()
       let containerExists = false
       let volumeExists = false
+      let containerIdentity = ""
       let keeperRuns = 0
       let removalCalls = 0
       const docker: Docker = {
@@ -1126,6 +1251,9 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
           runs.push([...args])
           if (args[0] === "ps") {
             return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "inspect") {
+            return { stdout: `${containerIdentity}\n`, stderr: "", exitCode: 0 }
           }
           if (args[0] === "volume" && args[1] === "inspect") {
             return {
@@ -1151,6 +1279,8 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
             if (failure === "recreation" && keeperRuns === 2) {
               return { stdout: "", stderr: "replacement denied", exitCode: 1 }
             }
+            const identityLabel = args.find((arg) => arg.startsWith("dawn.sandbox.identity="))
+            containerIdentity = identityLabel?.slice("dawn.sandbox.identity=".length) ?? ""
             containerExists = true
             volumeExists = true
             return { stdout: "keeper-id", stderr: "", exitCode: 0 }
@@ -1171,7 +1301,7 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
           return { stdout: `${name} retried`, stderr: "", exitCode: 0 }
         },
       }
-      const policy = { network: { mode: "deny" as const } }
+      const policy = { network: { mode: "allow" as const } }
       const p = dockerSandbox({ image: "node:22-slim", docker })
       const firstHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
       const delayedHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
@@ -1195,18 +1325,26 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
         ),
       })
       const removalsAfterFailure = removalCalls
-      const freshHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+      const freshHandle = await p.acquire({
+        threadId: "abc",
+        policy: { network: { mode: "deny" } },
+        signal: signal(),
+      })
       expect(freshHandle.workspaceRoot).toBe("/workspace")
       releaseDelayedFailure.resolve()
       const delayedResult = await delayedResultPromise
 
       expect(delayedResult).toEqual(pidFailure)
       expect(execAttempts.get("delayed")).toBe(1)
-      expect(removalCalls).toBe(removalsAfterFailure)
+      expect(removalCalls).toBe(
+        failure === "removal" ? removalsAfterFailure + 1 : removalsAfterFailure,
+      )
       expect(containerExists).toBe(true)
       expect(runs.filter((run) => run[0] === "run" && run.includes("-d"))).toHaveLength(
-        failure === "recreation" ? 3 : 1,
+        failure === "recreation" ? 3 : 2,
       )
+      const freshKeeper = runs.filter((run) => run[0] === "run" && run.includes("-d")).at(-1)
+      expect(freshKeeper).toEqual(expect.arrayContaining(["--network", "none"]))
     },
   )
 

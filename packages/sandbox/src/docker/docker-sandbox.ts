@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/workspace"
 import { sandboxUnavailable } from "../errors.js"
 import { createDocker, type Docker, type SpawnResult } from "./docker-cli.js"
@@ -34,6 +35,7 @@ interface DockerLifecycleState {
   readonly recoverySignal: AbortSignal
   readonly launchConfig: DockerLaunchConfig
   readonly launchConfigKey: string
+  readonly keeperIdentity: string
 }
 
 const recoveryAttempt = Symbol("dockerRecoveryAttempt")
@@ -77,6 +79,11 @@ function resolveLaunchConfig(policy: SandboxPolicy): DockerLaunchConfig {
 
 const launchConfigKey = (config: DockerLaunchConfig) => JSON.stringify(config)
 
+const keeperIdentity = (image: string, config: DockerLaunchConfig) =>
+  createHash("sha256")
+    .update(JSON.stringify({ image, launchConfig: config }))
+    .digest("hex")
+
 const isDawnCodedError = (error: unknown): error is Error & { readonly code: string } =>
   error instanceof Error &&
   typeof (error as Error & { code?: unknown }).code === "string" &&
@@ -85,8 +92,9 @@ const isDawnCodedError = (error: unknown): error is Error & { readonly code: str
 /**
  * Docker reference SandboxProvider. Per thread: a persistent container
  * `dawn-sbx-<threadId>` (sleep infinity) with a named volume mounted at
- * /workspace. acquire() is create-or-reattach (running → reuse; stopped →
- * start; absent → run). release() removes the container but KEEPS the volume;
+ * /workspace. acquire() reuses only a keeper owned by this provider lifecycle
+ * with a matching persisted identity; otherwise it replaces the keeper while
+ * preserving the volume. release() removes the container but KEEPS the volume;
  * destroy() removes both. Network: deny → --network none (exact); allow →
  * bridge (denylist is best-effort and NOT enforced here — see the spec's
  * honest-scope note). Host env is never inherited; only policy.env is passed.
@@ -101,6 +109,7 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
     recoverySignal: new AbortController().signal,
     launchConfig,
     launchConfigKey: launchConfigKey(launchConfig),
+    keeperIdentity: keeperIdentity(opts.image, launchConfig),
   })
 
   const isRecoveryAttempt = (token: unknown): token is DockerRecoveryAttempt =>
@@ -119,15 +128,40 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
   const ensureContainer = async (
     threadId: string,
     launchConfig: DockerLaunchConfig,
+    expectedIdentity: string,
     signal: AbortSignal,
+    reuseExisting: boolean,
   ): Promise<string> => {
     const name = containerName(threadId)
     const running = await docker.run(["ps", "-q", "--filter", `name=^${name}$`], { signal })
-    if (running.stdout.trim()) return name
-    const existing = await docker.run(["ps", "-aq", "--filter", `name=^${name}$`], { signal })
+    const runningId = running.stdout.trim()
+    const existing = runningId
+      ? running
+      : await docker.run(["ps", "-aq", "--filter", `name=^${name}$`], { signal })
     if (existing.stdout.trim()) {
-      await docker.run(["start", name], { signal })
-      return name
+      if (reuseExisting) {
+        const inspected = await docker.run(
+          ["inspect", "--format", '{{ index .Config.Labels "dawn.sandbox.identity" }}', name],
+          { signal },
+        )
+        if (inspected.exitCode === 0 && inspected.stdout.trim() === expectedIdentity) {
+          if (runningId) return name
+          const started = await docker.run(["start", name], { signal })
+          if (started.exitCode !== 0) {
+            throw sandboxUnavailable(
+              `Sandbox unavailable: could not start keeper for thread "${threadId}": ${started.stderr.trim() || "unknown error"}. Run \`dawn check\`.`,
+            )
+          }
+          return name
+        }
+      }
+
+      const removed = await docker.run(["rm", "-f", name], { signal })
+      if (removed.exitCode !== 0) {
+        throw sandboxUnavailable(
+          `Sandbox unavailable: could not replace stale keeper for thread "${threadId}": ${removed.stderr.trim() || "unknown error"}. Run \`dawn check\`.`,
+        )
+      }
     }
     const net = ["--network", launchConfig.networkMode]
     const envArgs = launchConfig.env.flatMap(([key, value]) => ["-e", `${key}=${value}`])
@@ -190,6 +224,8 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
         name,
         "--label",
         `dawn.sandbox=${sanitize(threadId)}`,
+        "--label",
+        `dawn.sandbox.identity=${expectedIdentity}`,
         "-v",
         `${volumeName(threadId)}:${ROOT}`,
         ...net,
@@ -238,7 +274,13 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
               `Sandbox unavailable: could not remove PID-exhausted container for thread "${threadId}": ${removed.stderr.trim() || "unknown error"}. Run \`dawn check\`.`,
             )
           }
-          await ensureContainer(threadId, state.launchConfig, signal).catch((error: unknown) => {
+          await ensureContainer(
+            threadId,
+            state.launchConfig,
+            state.keeperIdentity,
+            signal,
+            false,
+          ).catch((error: unknown) => {
             throw recoveryError(threadId, "recreation", error)
           })
           state.generation = generation + 1
@@ -268,8 +310,14 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
         }
 
         const launchConfig = existingState?.launchConfig ?? requestedLaunchConfig
-        const container = await ensureContainer(threadId, launchConfig, signal)
         const state = existingState ?? createLifecycleState(launchConfig)
+        const container = await ensureContainer(
+          threadId,
+          launchConfig,
+          state.keeperIdentity,
+          signal,
+          existingState !== undefined,
+        )
         lifecycleStates.set(threadId, state)
         return {
           threadId,
