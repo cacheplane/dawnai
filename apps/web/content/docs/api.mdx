@@ -950,6 +950,35 @@ Rejects malformed schema and table-prefix identifiers before they are interpolat
 
 ---
 
+## @dawn-ai/postgres-storage
+
+Postgres backend for Dawn's durable runtime state. Use it when the default SQLite/file stores are too local for your deployment: multiple app instances, a shared production database, or a host with no writable filesystem.
+
+```ts
+import { assertIdentifier, DEFAULT_SCHEMA, DEFAULT_TABLE_PREFIX } from "@dawn-ai/postgres-storage"
+```
+
+The stores talk to Postgres through the standard `pg` driver, which opens a TCP connection. Node, Bun, and Vercel functions can use it directly; Cloudflare Workers provides no raw TCP socket, so a Workers deploy needs Hyperdrive or an HTTP-based driver in front of the database.
+
+### `assertIdentifier(name, value)`
+
+```ts
+export function assertIdentifier(name: string, value: string): void
+```
+
+Rejects malformed schema and table-prefix identifiers before they are interpolated into DDL. Postgres cannot bind identifiers as `$1` placeholders, so anything that is not a plain `/^[a-z_][a-z0-9_]*$/i` identifier throws.
+
+### `DEFAULT_SCHEMA` / `DEFAULT_TABLE_PREFIX`
+
+```ts
+export const DEFAULT_SCHEMA: string
+export const DEFAULT_TABLE_PREFIX: string
+```
+
+The Postgres schema (`public`) and table/index prefix (`dawn`) used when a store option is omitted. Vary the prefix to run two Dawn apps against one database.
+
+---
+
 ## @dawn-ai/testing
 
 Deterministic testing utilities for Dawn apps. The package replaces live model calls with aimock fixtures while running tools, prompts, capabilities, state, and workspace behavior normally.

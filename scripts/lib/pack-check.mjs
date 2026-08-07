@@ -221,6 +221,11 @@ export const packages = [
     requiredFields: libraryRequiredFields,
   },
   {
+    dir: "packages/postgres-storage",
+    expectedFiles: ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
+    requiredFields: libraryRequiredFields,
+  },
+  {
     dir: "packages/sandbox",
     expectedFiles: [
       "dist/index.js",

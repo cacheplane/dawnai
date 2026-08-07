@@ -17,6 +17,7 @@ export default defineConfig({
       "./packages/memory-pgvector/vitest.config.ts",
       "./packages/memory/vitest.config.ts",
       "./packages/permissions/vitest.config.ts",
+      "./packages/postgres-storage/vitest.config.ts",
       "./packages/sandbox/vitest.config.ts",
       "./packages/sdk/vitest.config.ts",
       "./packages/sqlite-storage/vitest.config.ts",
