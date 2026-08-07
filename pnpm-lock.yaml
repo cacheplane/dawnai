@@ -371,6 +371,9 @@ importers:
       commander:
         specifier: 15.0.0
         version: 15.0.0
+      hono:
+        specifier: ^4.12.28
+        version: 4.12.28
       tsx:
         specifier: ^4.23.5
         version: 4.23.10

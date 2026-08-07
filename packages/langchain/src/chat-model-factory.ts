@@ -21,6 +21,30 @@ const providerSpecs: Record<BuiltInModelProviderId, ProviderSpec> = {
   openrouter: { packageName: "@langchain/openrouter", exportName: "ChatOpenRouter" },
 }
 
+/** Provider → the package that ships its chat model class. */
+export const providerPackages: Readonly<Record<BuiltInModelProviderId, string>> =
+  Object.fromEntries(
+    Object.entries(providerSpecs).map(([provider, spec]) => [provider, spec.packageName]),
+  ) as Readonly<Record<BuiltInModelProviderId, string>>
+
+/**
+ * The importer used when a call site passes none. Seeded, not injected,
+ * because every `createChatModel` call sits behind route execution and threading
+ * an option down to it would touch every layer in between — the same reason
+ * `seedDawnConfig` exists.
+ *
+ * Set by a build-emitted edge entry point, whose bundle cannot contain the
+ * default below: `import(specifier)` on a variable is unresolvable to a bundler,
+ * so an edge deploy must hand over a map of STATIC specifiers instead. Unset on
+ * every node path, which keeps the dynamic import.
+ */
+let seededImporter: Importer | undefined
+
+/** Install the process-wide fallback importer. Last call wins. */
+export function seedModelImporter(importer: Importer): void {
+  seededImporter = importer
+}
+
 const warnedModelIds = new Set<string>()
 
 /** Advisory once-per-process warning; never blocks model construction. */
@@ -60,6 +84,7 @@ export async function createChatModel(options: {
   const spec = providerSpecs[options.provider]
   const importer =
     options.importer ??
+    seededImporter ??
     ((specifier: string) => import(specifier) as Promise<Record<string, unknown>>)
 
   let moduleExports: Record<string, unknown>

@@ -15,6 +15,14 @@
  */
 
 export { seedDawnConfig } from "@dawn-ai/core"
+/**
+ * Re-exported for build-emitted edge entry points: an edge bundle cannot keep
+ * `createChatModel`'s default `import(specifier)` (a bundler cannot follow a
+ * variable specifier), so the generated `app.mjs` seeds a map of static ones.
+ * Adds no weight to this graph — `execute-route-core.ts` already imports
+ * `@dawn-ai/langchain`.
+ */
+export { seedModelImporter } from "@dawn-ai/langchain"
 export {
   createRuntimeFetchHandler,
   type RuntimeFetchHandler,

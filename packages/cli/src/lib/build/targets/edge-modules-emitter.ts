@@ -29,8 +29,13 @@ const FALLBACK_APP_NAMESPACE = "app"
  *
  * Deliberately NOT the absolute build-machine path: a deployed bundle must not
  * depend on, or leak, where it was built.
+ *
+ * Exported so the `hono` target's `app.mjs` passes `createRuntimeFetchHandler`
+ * the SAME namespace this manifest bakes in, by calling this rather than
+ * re-deriving the rule: the two values are compared (thread keys, the memory
+ * `workspace` scope) and a drift between them would be silent.
  */
-function edgeAppNamespace(appRoot: string): string {
+export function edgeAppNamespace(appRoot: string): string {
   return `/${basename(appRoot) || FALLBACK_APP_NAMESPACE}`
 }
 

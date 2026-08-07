@@ -63,6 +63,7 @@
     "@dawn-ai/sdk": "workspace:*",
     "@dawn-ai/sqlite-storage": "workspace:*",
     "commander": "15.0.0",
+    "hono": "^4.12.28",
     "tsx": "^4.23.5"
   },
   "devDependencies": {

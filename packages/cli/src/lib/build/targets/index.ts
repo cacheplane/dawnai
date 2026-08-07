@@ -1,5 +1,6 @@
 import type { RouteManifest } from "@dawn-ai/core"
 import type { CommandIo } from "../../output.js"
+import { honoTarget } from "./hono.js"
 import { langsmithTarget } from "./langsmith.js"
 import { nodeTarget } from "./node.js"
 
@@ -36,9 +37,17 @@ export interface BuildTarget {
 export const buildTargets: Readonly<Record<string, BuildTarget>> = {
   [nodeTarget.name]: nodeTarget,
   [langsmithTarget.name]: langsmithTarget,
+  [honoTarget.name]: honoTarget,
 }
 
-/** Default targets emitted when `config.build.targets` is not set. */
+/**
+ * Default targets emitted when `config.build.targets` is not set.
+ *
+ * `hono` is deliberately absent: the edge serves an honest SUBSET of Dawn (no
+ * sandbox, no workspace tooling) and needs durable stores configured, so it is
+ * opt-in via `build: { targets: [...] }` rather than something every `dawn
+ * build` starts emitting.
+ */
 export const DEFAULT_BUILD_TARGETS: readonly string[] = ["node", "langsmith"]
 
 /** All known target names (for validation / error messages). */
