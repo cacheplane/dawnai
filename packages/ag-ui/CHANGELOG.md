@@ -1,5 +1,7 @@
 # @dawn-ai/ag-ui
 
+## 0.8.19
+
 ## 0.8.18
 
 ### Patch Changes

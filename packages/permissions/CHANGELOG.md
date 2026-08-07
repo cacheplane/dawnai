@@ -1,5 +1,11 @@
 # @dawn-ai/permissions
 
+## 0.8.19
+
+### Patch Changes
+
+- @dawn-ai/sdk@0.8.19
+
 ## 0.8.18
 
 ### Patch Changes

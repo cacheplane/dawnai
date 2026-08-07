@@ -1,5 +1,13 @@
 # @dawn-ai/sandbox
 
+## 0.8.19
+
+### Patch Changes
+
+- b8d0da7: Docker sandboxes now prove an OCI exec never started before recovering, drain admitted container operations before a per-thread keeper recycle, preserve the named workspace volume, and retry once. Fair shared/exclusive lifecycle coordination prevents replacement from killing peer commands, while persisted keeper identities prevent cleanup failures or provider restarts from adopting stale container policy.
+  - @dawn-ai/sdk@0.8.19
+  - @dawn-ai/workspace@0.8.19
+
 ## 0.8.18
 
 ### Patch Changes

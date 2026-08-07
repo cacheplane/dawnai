@@ -1,5 +1,12 @@
 # @dawn-ai/evals
 
+## 0.8.19
+
+### Patch Changes
+
+- Updated dependencies [9dde7c6]
+  - @dawn-ai/testing@0.8.19
+
 ## 0.8.18
 
 ### Patch Changes

@@ -1,5 +1,41 @@
 # @dawn-ai/inspector
 
+## 0.8.19
+
+### Patch Changes
+
+- b6a264c: Memory Inspector: bulk approve, reject, and forget from the grid.
+
+  Curating memory meant opening each candidate's detail sheet and approving it one
+  at a time. The grid now has a checkbox column; ticking rows raises an action bar
+  with the same verbs the sheet exposes. Approve and reject apply to the
+  candidates in the selection — approving anything else is not a thing the store
+  can do — while forget applies to everything ticked.
+
+  Actions run one at a time, because approve reconciles against the other actives
+  in its namespace and overlapping approvals would race each other into avoidable
+  conflicts. If any fail, the bar says how many and why, and keeps the selection
+  so the failures can be read and retried rather than silently disappearing.
+
+  Requires `@pretable/react` 0.0.5 for `onRowSelectionChange`, added upstream for
+  this (cacheplane/pretable#230) — the checkbox column already existed, but
+  nothing could read what it had checked.
+
+- 0aecfb3: Memory Inspector: the records grid now fills its container at any window width.
+
+  Column widths were hand-tuned to sum to ~1030px so a row fit beside the facet
+  rail on a 1280px screen — a number that was wrong on every other screen, leaving
+  dead space on wide ones and overflowing narrow ones. The `content` column now
+  takes whatever the other columns leave over, down to a 240px floor below which
+  the grid scrolls instead of squeezing the text.
+
+  Requires `@pretable/react` 0.0.6 for `column.flex`, added upstream for this
+  (cacheplane/pretable#249) — nothing in the grid could size to its container.
+
+- Updated dependencies [9dde7c6]
+  - @dawn-ai/core@0.8.19
+  - @dawn-ai/memory@0.8.19
+
 ## 0.8.18
 
 ### Patch Changes
