@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { createProgram } from "../src/index.js"
-import type { CommandIo } from "../src/lib/io.js"
+import type { CommandIo } from "../src/lib/output.js"
 
 /**
  * `dawn memory` is registered as `memory [subcommand] [args...]`, so every flag the
@@ -14,15 +14,13 @@ import type { CommandIo } from "../src/lib/io.js"
  */
 function collectIo(): { io: CommandIo; stderr: string[] } {
   const stderr: string[] = []
-  return {
-    io: {
-      stderr: (message: string) => {
-        stderr.push(message)
-      },
-      stdout: () => {},
-    } as CommandIo,
-    stderr,
+  const io: CommandIo = {
+    stderr: (message: string) => {
+      stderr.push(message)
+    },
+    stdout: () => {},
   }
+  return { io, stderr }
 }
 
 async function parse(argv: string[]): Promise<{ error?: unknown; stderr: string[] }> {
