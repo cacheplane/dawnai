@@ -327,6 +327,7 @@ jobs:
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           config: .github/kind/kind-calico.yaml
+          node_image: kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
 
       - name: Install Calico (enforces NetworkPolicy)
         run: |
@@ -400,6 +401,7 @@ jobs:
         with:
           config: .github/kind/kind-calico.yaml
           cluster_name: dawn-smoke
+          node_image: kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
 
       - name: Install Calico (enforces NetworkPolicy)
         run: |
@@ -577,6 +579,8 @@ jobs:
 
       - name: Create kind cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          node_image: kindest/node:v1.35.0@sha256:4613778f3cfcd10e615029370f5786704559103cf27bef934597ba562b269661
 
       - name: Install dawn-app (placeholder image) and verify it serves
         # nginx-unprivileged runs as non-root (UID 101, port 8080), so it satisfies
