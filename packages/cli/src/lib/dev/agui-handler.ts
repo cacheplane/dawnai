@@ -20,6 +20,7 @@ import {
   resolvePendingResume,
 } from "./pending-interrupts.js"
 import { extractRouteParams } from "./request-context.js"
+import type { RunRegistry } from "./run-registry.js"
 import type { RuntimeRegistry } from "./runtime-registry-core.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
@@ -45,6 +46,7 @@ export interface AgUiFetchRequestOptions {
   readonly permissionsStore?: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly resumeClaims: PendingResumeClaims
+  readonly runRegistry: RunRegistry
   readonly threadsStore: ThreadsStore
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
@@ -125,6 +127,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     permissionsStore,
     registry,
     resumeClaims,
+    runRegistry,
     threadsStore,
     sandboxManager,
     signal: shutdownSignal,
@@ -161,7 +164,9 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
   }
 
   let releaseResumeClaim: (() => void) | undefined
+  let releaseRunBeforeStream: (() => void) | undefined
   let claimTransferredToStream = false
+  let runTransferredToStream = false
   let streamOwnsSignalCleanup = false
   try {
     const raw = await request.text()
@@ -232,6 +237,17 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     }
 
     const threadId = input.threadId
+    const run = runRegistry.begin(threadId, signal)
+    if (!run) {
+      return Response.json(
+        createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
+          code: "run_in_flight",
+        }),
+        { status: 409 },
+      )
+    }
+    releaseRunBeforeStream = run.release
+
     if (!(await threadsStore.getThread(threadId))) {
       await threadsStore.createThread({ thread_id: threadId })
     }
@@ -241,6 +257,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     const accept = request.headers.get("accept") ?? undefined
     const encoder = new TextEncoder()
     const releaseClaimWhenSettled = releaseResumeClaim
+    let sourceCleanup: Promise<void> | undefined
     // From here on, the stream owns both the request listeners and any resume
     // claim. Its execution-finally path releases the claim only after the
     // interrupted route has actually unwound.
@@ -266,12 +283,18 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
               ...(registry.manifest ? { routeManifest: registry.manifest } : {}),
               routePath: route.routePath,
               ...(sandboxManager ? { sandboxManager } : {}),
-              signal,
+              signal: run.signal,
               ...(staticModules ? { staticModules } : {}),
               threadId,
               threadsStore,
             })
-            const abortableRouteStream = abortableAsyncIterable(routeStream, signal)
+            const abortableRouteStream = abortableAsyncIterable(
+              routeStream,
+              run.signal,
+              (cleanup) => {
+                sourceCleanup = cleanup
+              },
+            )
             for await (const event of toAguiEvents(normalizeDawnStream(abortableRouteStream), {
               threadId,
               runId: input.runId,
@@ -289,7 +312,12 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
           // rather than framing an error event.
           controller.error(error)
         } finally {
-          releaseClaimWhenSettled?.()
+          const releaseExecutionClaims = () => {
+            run.release()
+            releaseClaimWhenSettled?.()
+          }
+          if (sourceCleanup) void sourceCleanup.finally(releaseExecutionClaims)
+          else releaseExecutionClaims()
         }
       },
       cancel() {
@@ -301,6 +329,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     })
 
     claimTransferredToStream = true
+    runTransferredToStream = true
     streamOwnsSignalCleanup = true
     return new Response(stream, {
       headers: {
@@ -314,6 +343,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     // Failures before stream ownership transfers must not leave the thread
     // claimed. Successful streams release from their execution-finally path.
     if (!claimTransferredToStream) releaseResumeClaim?.()
+    if (!runTransferredToStream) releaseRunBeforeStream?.()
     if (!streamOwnsSignalCleanup) releaseSignalListeners()
   }
 }

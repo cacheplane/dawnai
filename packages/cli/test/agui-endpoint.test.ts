@@ -28,6 +28,7 @@ import { createAimock } from "../../testing/dist/aimock-runner.js"
 import { script } from "../../testing/dist/fixture-builder.js"
 import { handleAgUiRequest } from "../src/lib/dev/agui-handler.js"
 import { createPendingResumeClaims } from "../src/lib/dev/pending-interrupts.js"
+import { createRunRegistry } from "../src/lib/dev/run-registry.js"
 import { createRuntimeRequestListener } from "../src/lib/dev/runtime-server.js"
 import type { streamResolvedRoute } from "../src/lib/runtime/execute-route.js"
 
@@ -70,13 +71,23 @@ async function postRun(
   body: Record<string, unknown>,
   headers: Record<string, string> = {},
 ): Promise<{ events: Record<string, unknown>[]; response: Response }> {
+  const response = await requestRun(port, body, headers)
+  return { events: parseSseEvents(await response.text()), response }
+}
+
+async function requestRun(
+  port: number,
+  body: Record<string, unknown>,
+  headers: Record<string, string> = {},
+  signal?: AbortSignal,
+): Promise<Response> {
   const routeKey = encodeURIComponent("/chat#agent")
-  const response = await fetch(`http://127.0.0.1:${port}/agui/${routeKey}`, {
+  return await fetch(`http://127.0.0.1:${port}/agui/${routeKey}`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "text/event-stream", ...headers },
     body: JSON.stringify({ state: {}, tools: [], context: [], forwardedProps: {}, ...body }),
+    ...(signal ? { signal } : {}),
   })
-  return { events: parseSseEvents(await response.text()), response }
 }
 
 async function setupServer(fixtures: ReturnType<ReturnType<typeof script>["build"]>) {
@@ -117,6 +128,7 @@ async function setupControlledServer(controlled: ControlledServerOptions): Promi
   const appRoot = await fixtureApp()
   const threads = new Map<string, { metadata: Record<string, unknown>; status: string }>()
   const resumeClaims = createPendingResumeClaims()
+  const runRegistry = createRunRegistry()
   const server: Server = createServer((request, response) => {
     const threadMatch = request.url?.match(/^\/threads\/([^/]+)$/)
     if (request.method === "GET" && threadMatch) {
@@ -144,6 +156,7 @@ async function setupControlledServer(controlled: ControlledServerOptions): Promi
         }),
       },
       resumeClaims,
+      runRegistry,
       request,
       response,
       routeKey: "/chat#agent",
@@ -438,6 +451,42 @@ it("forwards only the newest user message on a later turn", async () => {
   })
 }, 60_000)
 
+it("rejects a concurrent AG-UI run on the same thread", async () => {
+  let markStarted: (() => void) | undefined
+  let releaseRoute: (() => void) | undefined
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve
+  })
+  const released = new Promise<void>((resolve) => {
+    releaseRoute = resolve
+  })
+  cleanup.push(() => releaseRoute?.())
+
+  const streamRoute: typeof streamResolvedRoute = async function* () {
+    markStarted?.()
+    await released
+    yield { type: "done", output: { ok: true } }
+  }
+  const { port } = await setupControlledServer({ streamRoute })
+  const body = {
+    threadId: "concurrent-agui",
+    runId: "run-1",
+    messages: [{ id: "1", role: "user", content: "wait" }],
+  }
+
+  const first = await requestRun(port, body)
+  await started
+  const second = await requestRun(port, { ...body, runId: "run-2" })
+
+  expect(second.status).toBe(409)
+  await expect(second.json()).resolves.toMatchObject({
+    error: { details: { code: "run_in_flight" } },
+  })
+
+  releaseRoute?.()
+  await first.text()
+}, 10_000)
+
 it("preserves the upstream invocation id across canonical AG-UI tool events", async () => {
   const upstreamInvocationId = "upstream-invocation-42"
   const streamRoute: typeof streamResolvedRoute = async function* () {
@@ -696,6 +745,84 @@ it("aborts route execution on client disconnect and restores the thread to idle"
       return thread.ok ? ((await thread.json()) as { status: string }).status : "missing"
     })
     .toBe("idle")
+})
+
+it("holds a resume claim until a disconnected route source unwinds", async () => {
+  let pendingWrites: readonly unknown[] = [interrupt(TASK_UUID_1, RESUME_KEY_1, "perm-1")]
+  let calls = 0
+  let markBlocked: (() => void) | undefined
+  let releaseSource: (() => void) | undefined
+  let markRouteAborted: (() => void) | undefined
+  const blocked = new Promise<void>((resolve) => {
+    markBlocked = resolve
+  })
+  const released = new Promise<void>((resolve) => {
+    releaseSource = resolve
+  })
+  const routeAborted = new Promise<void>((resolve) => {
+    markRouteAborted = resolve
+  })
+  cleanup.push(() => releaseSource?.())
+
+  const streamRoute: typeof streamResolvedRoute = async function* (options) {
+    calls += 1
+    if (calls === 1) {
+      options.signal?.addEventListener("abort", () => markRouteAborted?.(), { once: true })
+      yield { type: "chunk", data: "started" }
+      markBlocked?.()
+      await released
+      return
+    }
+    yield { type: "done", output: { resumed: true } }
+  }
+  const { port } = await setupControlledServer({
+    checkpointer: {
+      getTuple: async () => ({ pendingWrites }),
+    } as unknown as BaseCheckpointSaver,
+    streamRoute,
+  })
+  const threadId = "resume-cleanup-thread"
+  const body = {
+    threadId,
+    runId: "resume-cleanup-1",
+    messages: [],
+    resume: [{ interruptId: "perm-1", status: "cancelled" }],
+  }
+  const controller = new AbortController()
+  const first = await requestRun(port, body, {}, controller.signal)
+  await blocked
+  controller.abort()
+  await routeAborted
+
+  pendingWrites = []
+  const concurrentRun = await requestRun(port, {
+    ...body,
+    messages: [{ id: "2", role: "user", content: "new turn" }],
+    resume: undefined,
+    runId: "resume-cleanup-run-claim",
+  })
+  expect(concurrentRun.status).toBe(409)
+  await expect(concurrentRun.json()).resolves.toMatchObject({
+    error: { details: { code: "run_in_flight" } },
+  })
+
+  const concurrent = await requestRun(port, { ...body, runId: "resume-cleanup-2" })
+  expect(concurrent.status).toBe(409)
+  await expect(concurrent.json()).resolves.toMatchObject({
+    error: { details: { code: "resume_in_progress" } },
+  })
+
+  pendingWrites = [interrupt(TASK_UUID_1, RESUME_KEY_1, "perm-1")]
+  releaseSource?.()
+  await expect
+    .poll(async () => {
+      const retry = await requestRun(port, { ...body, runId: "resume-cleanup-3" })
+      if (retry.status === 200) await retry.text()
+      else await retry.body?.cancel()
+      return retry.status
+    })
+    .toBe(200)
+  await first.body?.cancel().catch(() => undefined)
 })
 
 it("does not abort the route signal after a normal response", async () => {

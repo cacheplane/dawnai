@@ -59,8 +59,8 @@ export async function* abortableAsyncIterable<T>(
   } finally {
     const cleanup = closeIterator(iterator)
     if (onSourceCleanup) onSourceCleanup(cleanup)
-    // Preserve today's fire-and-forget behaviour for callers that don't ask
-    // to observe it (e.g. AG-UI, which is ephemeral and has no run slot).
+    // Preserve fire-and-forget cleanup for callers that do not own an
+    // execution claim that must remain held until the source unwinds.
     else void cleanup
   }
 }

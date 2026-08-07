@@ -60,6 +60,7 @@ describe("resolveGuardedSubagent", () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
     delete process.env.DAWN_DEBUG_CONSTRAINTS
     rmSync(appRoot, { recursive: true, force: true })
   })
@@ -299,6 +300,28 @@ describe("resolveGuardedSubagent", () => {
         "[DAWN_E3002] Subagent delegation constraint check failed. The subagent was not started.",
     })
     expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it("fails closed without a Node process global", async () => {
+    vi.stubGlobal("process", undefined)
+
+    await expect(
+      call({
+        registry: [
+          entry({
+            action: "constrain",
+            predicate: () => {
+              throw new Error("private constraint detail")
+            },
+          }),
+        ],
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "DAWN_E3002",
+      message:
+        "[DAWN_E3002] Subagent delegation constraint check failed. The subagent was not started.",
+    })
   })
 
   it.each([

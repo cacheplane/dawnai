@@ -66,7 +66,7 @@ function debugConstraintFailure(
   subagentName: string,
   detail: unknown,
 ): void {
-  if (process.env.DAWN_DEBUG_CONSTRAINTS !== "1") return
+  if (typeof process === "undefined" || process.env.DAWN_DEBUG_CONSTRAINTS !== "1") return
   try {
     console.warn(
       `[dawn:constraints] parent ${parentRouteId} subagent ${subagentName} constraint failed:`,

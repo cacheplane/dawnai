@@ -10,6 +10,7 @@ import { handleAgUiFetchRequest } from "../src/lib/dev/agui-handler.js"
 import { headersToRecord } from "../src/lib/dev/middleware.js"
 import { toWebRequest } from "../src/lib/dev/node-web-adapter.js"
 import { createPendingResumeClaims } from "../src/lib/dev/pending-interrupts.js"
+import { createRunRegistry } from "../src/lib/dev/run-registry.js"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 import type { RuntimeRegistry } from "../src/lib/dev/runtime-registry.js"
 import { statusResponse } from "../src/lib/dev/status-response.js"
@@ -116,6 +117,7 @@ describe("AG-UI middleware reject", () => {
       }),
       registry,
       resumeClaims: createPendingResumeClaims(),
+      runRegistry: createRunRegistry(),
       request: new Request("http://localhost/agui/chat", {
         body: JSON.stringify({
           context: [],

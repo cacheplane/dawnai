@@ -584,6 +584,7 @@ function buildRouteTable(ctx: {
           permissionsStore,
           registry,
           resumeClaims,
+          runRegistry,
           threadsStore,
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,

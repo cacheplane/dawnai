@@ -171,6 +171,22 @@ function otherRunRequest(threadId: string): Request {
   })
 }
 
+function agUiRunRequest(threadId: string, route = "/other#graph"): Request {
+  return new Request(`http://localhost/agui/${encodeURIComponent(route)}`, {
+    body: JSON.stringify({
+      context: [],
+      forwardedProps: {},
+      messages: [{ id: "1", role: "user", content: "hello" }],
+      runId: `agui-${threadId}`,
+      state: {},
+      threadId,
+      tools: [],
+    }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+}
+
 function runStreamRequest(
   threadId: string,
   startedFile: string,
@@ -347,6 +363,26 @@ describe("AP concurrency gate", () => {
 
     await releaseRoute()
     await drain(response1)
+  }, 30_000)
+
+  it("shares the concurrency gate with AG-UI requests", async () => {
+    const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute()
+    cleanup.push(releaseRoute)
+    const threadId = "t-ap-agui-409"
+
+    const apResponse = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+    expect(apResponse.status).toBe(200)
+    await waitForFile(startedFile)
+
+    const agUiResponse = await handler.fetch(agUiRunRequest(threadId))
+    expect(agUiResponse.status).toBe(409)
+    const body = (await agUiResponse.json()) as {
+      error: { details?: { code?: string } }
+    }
+    expect(body.error.details?.code).toBe("run_in_flight")
+
+    await releaseRoute()
+    await drain(apResponse)
   }, 30_000)
 
   it("a rejected concurrent run does not clobber the thread's recorded route", async () => {
