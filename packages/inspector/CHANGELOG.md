@@ -1,5 +1,30 @@
 # @dawn-ai/inspector
 
+## 0.8.17
+
+### Patch Changes
+
+- 1a9ae7b: Support TypeScript 7 workspaces and generated apps, and move Dawn's Next.js applications
+  to Next 16.3's experimental CLI type checker with `experimental.useTypeScriptCli`.
+
+  Consolidate tool analysis in Core behind one compiler boundary and program, with shared
+  projections for declarations, JSON Schema, and Vite Zod metadata. Core internally pins
+  the exact TypeScript 6 compatibility wrapper and implementation until the native compiler
+  API can be revisited for TypeScript 7.1. Generated JSON schemas now preserve mapped-type
+  optionality and use a compiler-neutral fallback for collection intersections.
+
+  Generate collision-safe Vite metadata bindings and remove the unsupported `extractJsDoc`
+  and `extractParameterType` exports. Their removal is an intentional breaking change.
+
+  Add permanent packed-consumer and exact-version post-publish verification for the
+  TypeScript tooling packages.
+
+- Updated dependencies [713797f]
+- Updated dependencies [7f4bce6]
+- Updated dependencies [1a9ae7b]
+  - @dawn-ai/core@0.8.17
+  - @dawn-ai/memory@0.8.17
+
 ## 0.8.16
 
 ### Patch Changes
