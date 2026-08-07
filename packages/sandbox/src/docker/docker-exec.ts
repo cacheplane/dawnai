@@ -4,8 +4,8 @@ import type { Docker, SpawnResult } from "./docker-cli.js"
 interface DockerExecOptions {
   readonly timeoutMs?: number
   readonly pidExhaustionRecovery?: {
-    readonly captureGeneration: () => number
-    readonly recover: (generation: number, signal: AbortSignal) => Promise<void>
+    readonly captureToken: () => unknown
+    readonly recover: (token: unknown, signal: AbortSignal) => Promise<boolean>
   }
 }
 
@@ -54,17 +54,17 @@ export function dockerExec(
         opts.timeoutMs !== undefined ? Math.ceil(opts.timeoutMs / 1000) : undefined
       const argv = timeoutSecs !== undefined ? ["timeout", `${timeoutSecs}s`, ...shArgs] : shArgs
       const execute = () => docker.exec(container, argv, { signal: ctx.signal })
-      const recoveryGeneration = opts.pidExhaustionRecovery?.captureGeneration()
+      const recoveryToken = opts.pidExhaustionRecovery?.captureToken()
       let r = await execute()
       const isConfiguredTimeout = timeoutSecs !== undefined && r.exitCode === 124
       if (
         opts.pidExhaustionRecovery !== undefined &&
-        recoveryGeneration !== undefined &&
+        recoveryToken !== undefined &&
         !isConfiguredTimeout &&
         isPidExhaustion(r)
       ) {
-        await opts.pidExhaustionRecovery.recover(recoveryGeneration, ctx.signal)
-        r = await execute()
+        const recovered = await opts.pidExhaustionRecovery.recover(recoveryToken, ctx.signal)
+        if (recovered) r = await execute()
       }
       if (timeoutSecs !== undefined && r.exitCode === 124) {
         return {

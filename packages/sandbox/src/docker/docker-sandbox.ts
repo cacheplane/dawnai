@@ -18,7 +18,17 @@ export interface DockerSandboxOptions {
 
 interface DockerRecoveryState {
   generation: number
+  closing: boolean
+  recoverySignal: AbortSignal
   inFlight?: { generation: number; promise: Promise<void> }
+}
+
+const recoveryAttempt = Symbol("dockerRecoveryAttempt")
+
+interface DockerRecoveryAttempt {
+  readonly [recoveryAttempt]: true
+  readonly state: DockerRecoveryState
+  readonly generation: number
 }
 
 /**
@@ -34,13 +44,14 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
   const docker = opts.docker ?? createDocker()
   const recoveryStates = new Map<string, DockerRecoveryState>()
 
-  const recoveryState = (threadId: string): DockerRecoveryState => {
-    const existing = recoveryStates.get(threadId)
-    if (existing !== undefined) return existing
-    const created: DockerRecoveryState = { generation: 0 }
-    recoveryStates.set(threadId, created)
-    return created
-  }
+  const createRecoveryState = (): DockerRecoveryState => ({
+    generation: 0,
+    closing: false,
+    recoverySignal: new AbortController().signal,
+  })
+
+  const isRecoveryAttempt = (token: unknown): token is DockerRecoveryAttempt =>
+    typeof token === "object" && token !== null && recoveryAttempt in token
 
   const ensureContainer = async (
     threadId: string,
@@ -156,18 +167,27 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
   const recycleContainer = async (
     threadId: string,
     policy: SandboxPolicy,
-    generation: number,
-    signal: AbortSignal,
-  ): Promise<void> => {
-    const state = recoveryState(threadId)
-    if (generation !== state.generation) return
+    token: unknown,
+    _activeSignal: AbortSignal,
+  ): Promise<boolean> => {
+    if (!isRecoveryAttempt(token)) return false
+    const { state, generation } = token
+    const isActive = () => recoveryStates.get(threadId) === state && !state.closing
+    if (!isActive()) return false
+    if (generation < state.generation) return true
+    if (generation !== state.generation) return false
     const inFlight = state.inFlight
     if (inFlight !== undefined) {
-      if (inFlight.generation !== generation) return
+      if (inFlight.generation !== generation) return false
       await inFlight.promise
-      return
+      return isActive() && state.generation > generation
     }
 
+    // Recovery is shared provider lifecycle work. Once removal starts it must
+    // not inherit a caller's abortable command signal: cancellation of one
+    // waiter cannot strand every handle without a keeper. release()/destroy()
+    // close the lifecycle and drain this provider-owned work before cleanup.
+    const signal = state.recoverySignal
     const promise = (async () => {
       const removed = await docker.run(["rm", "-f", containerName(threadId)], { signal })
       if (removed.exitCode !== 0) {
@@ -184,12 +204,27 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
     } finally {
       if (state.inFlight?.promise === promise) delete state.inFlight
     }
+    return isActive() && state.generation > generation
+  }
+
+  const invalidateRecoveryState = async (threadId: string): Promise<void> => {
+    const state = recoveryStates.get(threadId)
+    if (state === undefined) return
+    state.closing = true
+    await state.inFlight?.promise.catch(() => {})
+    if (recoveryStates.get(threadId) === state) recoveryStates.delete(threadId)
   }
 
   return {
     name: "docker",
     async acquire({ threadId, policy, signal }): Promise<SandboxHandle> {
       const container = await ensureContainer(threadId, policy, signal)
+      const existingState = recoveryStates.get(threadId)
+      const state =
+        existingState !== undefined && !existingState.closing
+          ? existingState
+          : createRecoveryState()
+      recoveryStates.set(threadId, state)
       return {
         threadId,
         filesystem: dockerFilesystem(docker, container),
@@ -198,17 +233,23 @@ export function dockerSandbox(opts: DockerSandboxOptions): SandboxProvider {
             ? { timeoutMs: policy.resources.timeoutMs }
             : {}),
           pidExhaustionRecovery: {
-            captureGeneration: () => recoveryState(threadId).generation,
-            recover: (generation, signal) => recycleContainer(threadId, policy, generation, signal),
+            captureToken: (): DockerRecoveryAttempt => ({
+              [recoveryAttempt]: true,
+              state,
+              generation: state.generation,
+            }),
+            recover: (token, signal) => recycleContainer(threadId, policy, token, signal),
           },
         }),
         workspaceRoot: ROOT,
       }
     },
     async release(threadId) {
+      await invalidateRecoveryState(threadId)
       await docker.run(["rm", "-f", containerName(threadId)]).catch(() => {})
     },
     async destroy(threadId) {
+      await invalidateRecoveryState(threadId)
       await docker.run(["rm", "-f", containerName(threadId)]).catch(() => {})
       await docker.run(["volume", "rm", volumeName(threadId)]).catch(() => {})
     },

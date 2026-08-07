@@ -166,9 +166,10 @@ describe("dockerExec", () => {
     const execSignals: Array<AbortSignal | undefined> = []
     const execCalls: Array<{ container: string; command: readonly string[] }> = []
     const recoverySignals: AbortSignal[] = []
-    const recoveryGenerations: number[] = []
+    const recoveryTokens: unknown[] = []
     const events: string[] = []
-    let currentGeneration = 7
+    const capturedToken = { lifecycle: "original" }
+    let currentToken = capturedToken
     const exec = dockerExec(
       fakeDocker({
         exec: async (container, command, opts) => {
@@ -177,20 +178,21 @@ describe("dockerExec", () => {
           execSignals.push(opts?.signal)
           const result = results.shift()
           if (result === undefined) throw new Error("Unexpected extra Docker exec")
-          currentGeneration = 8
+          currentToken = { lifecycle: "replacement" }
           return result
         },
       }),
       "c1",
       {
         pidExhaustionRecovery: {
-          captureGeneration: () => {
+          captureToken: () => {
             events.push("capture")
-            return currentGeneration
+            return currentToken
           },
-          recover: async (generation, signal) => {
-            recoveryGenerations.push(generation)
+          recover: async (token, signal) => {
+            recoveryTokens.push(token)
             recoverySignals.push(signal)
+            return true
           },
         },
       },
@@ -205,7 +207,7 @@ describe("dockerExec", () => {
     expect(execSignals[1]).toBe(activeCtx.signal)
     expect(events[0]).toBe("capture")
     expect(events.filter((event) => event === "capture")).toHaveLength(1)
-    expect(recoveryGenerations).toEqual([7])
+    expect(recoveryTokens).toEqual([capturedToken])
     expect(recoverySignals).toHaveLength(1)
     expect(recoverySignals[0]).toBe(activeCtx.signal)
     expect(result).toEqual(second)
@@ -245,9 +247,10 @@ describe("dockerExec", () => {
       {
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         pidExhaustionRecovery: {
-          captureGeneration: () => 0,
+          captureToken: () => ({}),
           recover: async () => {
             recoveryCalls += 1
+            return true
           },
         },
       },
@@ -277,9 +280,10 @@ describe("dockerExec", () => {
       {
         timeoutMs: 500,
         pidExhaustionRecovery: {
-          captureGeneration: () => 0,
+          captureToken: () => ({}),
           recover: async () => {
             recoveryCalls += 1
+            return true
           },
         },
       },
@@ -317,9 +321,10 @@ describe("dockerExec", () => {
       {
         timeoutMs: 500,
         pidExhaustionRecovery: {
-          captureGeneration: () => 0,
+          captureToken: () => ({}),
           recover: async () => {
             recoveryCalls += 1
+            return true
           },
         },
       },
@@ -363,9 +368,10 @@ describe("dockerExec", () => {
       "c1",
       {
         pidExhaustionRecovery: {
-          captureGeneration: () => 0,
+          captureToken: () => ({}),
           recover: async () => {
             recoveryCalls += 1
+            return true
           },
         },
       },
@@ -376,6 +382,42 @@ describe("dockerExec", () => {
     expect(execCalls).toBe(2)
     expect(recoveryCalls).toBe(1)
     expect(result).toEqual(second)
+  })
+
+  test("returns the original PID-exhaustion result when recovery rejects the captured token", async () => {
+    const activeCtx = { signal: new AbortController().signal, workspaceRoot: "/workspace" }
+    const first = {
+      stdout: "partial",
+      stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+      exitCode: 1,
+    }
+    const token = { lifecycle: "released" }
+    let execCalls = 0
+    const recoveryCalls: Array<{ token: unknown; signal: AbortSignal }> = []
+    const exec = dockerExec(
+      fakeDocker({
+        exec: async () => {
+          execCalls += 1
+          return first
+        },
+      }),
+      "c1",
+      {
+        pidExhaustionRecovery: {
+          captureToken: () => token,
+          recover: async (captured, signal) => {
+            recoveryCalls.push({ token: captured, signal })
+            return false
+          },
+        },
+      },
+    )
+
+    const result = await exec.runCommand({ command: "echo hi" }, activeCtx)
+
+    expect(execCalls).toBe(1)
+    expect(recoveryCalls).toEqual([{ token, signal: activeCtx.signal }])
+    expect(result).toEqual(first)
   })
 })
 

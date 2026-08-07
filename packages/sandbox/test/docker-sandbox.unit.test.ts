@@ -244,6 +244,14 @@ describe("dockerSandbox chown-init (Architecture B)", () => {
 })
 
 describe("dockerSandbox PID-exhaustion recovery", () => {
+  function deferred() {
+    let resolve = () => {}
+    const promise = new Promise<void>((done) => {
+      resolve = done
+    })
+    return { promise, resolve }
+  }
+
   test("removes and recreates the keeper with its volume before retrying the command", async () => {
     const acquireSignal = signal()
     const activeSignal = signal()
@@ -294,7 +302,8 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     expect(execSignals).toEqual([activeSignal, activeSignal])
     const removal = runs.find((run) => run.args[0] === "rm")
     expect(removal?.args).toEqual(["rm", "-f", "dawn-sbx-abc"])
-    expect(removal?.signal).toBe(activeSignal)
+    expect(removal?.signal).toBeDefined()
+    expect(removal?.signal).not.toBe(activeSignal)
     expect(removal?.signal).not.toBe(acquireSignal)
     const keeperRuns = runs.filter((run) => run.args[0] === "run" && run.args.includes("-d"))
     expect(keeperRuns).toHaveLength(2)
@@ -316,7 +325,8 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
         "node:22-slim",
       ]),
     )
-    expect(keeperRuns[1]?.signal).toBe(activeSignal)
+    expect(keeperRuns[1]?.signal).toBe(removal?.signal)
+    expect(keeperRuns[1]?.signal).not.toBe(activeSignal)
     expect(keeperRuns[1]?.signal).not.toBe(acquireSignal)
     const chownRuns = runs.filter(
       (run) =>
@@ -431,11 +441,401 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     )
     const removals = runs.filter((run) => run.args[0] === "rm")
     expect(removals).toHaveLength(1)
-    expect(removals[0]?.signal).toBe(firstSignal)
+    expect(removals[0]?.signal).toBeDefined()
+    expect(removals[0]?.signal).not.toBe(firstSignal)
     expect(removals[0]?.signal).not.toBe(secondSignal)
     const keeperRuns = runs.filter((run) => run.args[0] === "run" && run.args.includes("-d"))
     expect(keeperRuns).toHaveLength(2)
-    expect(keeperRuns[1]?.signal).toBe(firstSignal)
+    expect(keeperRuns[1]?.signal).toBe(removals[0]?.signal)
+  })
+
+  test.each(["release", "destroy"] as const)(
+    "%s invalidates delayed recovery before a new lifecycle is acquired",
+    async (operation) => {
+      const execStarted = deferred()
+      const releaseFailure = deferred()
+      const originalFailure = {
+        stdout: "partial",
+        stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+        exitCode: 1,
+      }
+      const runs: string[][] = []
+      let containerExists = false
+      let volumeExists = false
+      let execCalls = 0
+      const docker: Docker = {
+        run: async (args) => {
+          runs.push([...args])
+          if (args[0] === "ps") {
+            return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "volume" && args[1] === "inspect") {
+            return {
+              stdout: volumeExists ? "volume" : "",
+              stderr: "",
+              exitCode: volumeExists ? 0 : 1,
+            }
+          }
+          if (args[0] === "volume" && args[1] === "rm") {
+            volumeExists = false
+            return { stdout: "removed volume", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "rm") {
+            containerExists = false
+            return { stdout: "removed keeper", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("--rm")) {
+            volumeExists = true
+            return { stdout: "initialized", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("-d")) {
+            containerExists = true
+            volumeExists = true
+            return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+          }
+          return { stdout: "ok", stderr: "", exitCode: 0 }
+        },
+        exec: async () => {
+          execCalls += 1
+          execStarted.resolve()
+          await releaseFailure.promise
+          return execCalls === 1
+            ? originalFailure
+            : { stdout: "old command retried", stderr: "", exitCode: 0 }
+        },
+      }
+      const policy = { network: { mode: "deny" as const } }
+      const p = dockerSandbox({ image: "node:22-slim", docker })
+      const oldHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+      const oldResultPromise = oldHandle.exec.runCommand(
+        { command: "echo old" },
+        { workspaceRoot: oldHandle.workspaceRoot, signal: signal() },
+      )
+      await execStarted.promise
+
+      if (operation === "release") await p.release("abc")
+      else await p.destroy("abc")
+      expect(containerExists).toBe(false)
+      const newHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+      expect(newHandle.workspaceRoot).toBe("/workspace")
+      expect(containerExists).toBe(true)
+      releaseFailure.resolve()
+      const oldResult = await oldResultPromise
+
+      expect(oldResult).toEqual(originalFailure)
+      expect(execCalls).toBe(1)
+      expect(runs.filter((run) => run[0] === "rm")).toHaveLength(1)
+      expect(runs.filter((run) => run[0] === "run" && run.includes("-d"))).toHaveLength(2)
+      expect(runs.filter((run) => run[0] === "volume" && run[1] === "rm")).toHaveLength(
+        operation === "destroy" ? 1 : 0,
+      )
+    },
+  )
+
+  test.each(["release", "destroy"] as const)(
+    "%s drains in-flight recreation before final cleanup",
+    async (operation) => {
+      const replacementStarted = deferred()
+      const releaseReplacement = deferred()
+      const originalFailure = {
+        stdout: "partial",
+        stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+        exitCode: 1,
+      }
+      const runs: string[][] = []
+      const events: string[] = []
+      let containerExists = false
+      let volumeExists = false
+      let keeperRuns = 0
+      let execCalls = 0
+      const docker: Docker = {
+        run: async (args) => {
+          runs.push([...args])
+          if (args[0] === "ps") {
+            return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "volume" && args[1] === "inspect") {
+            return {
+              stdout: volumeExists ? "volume" : "",
+              stderr: "",
+              exitCode: volumeExists ? 0 : 1,
+            }
+          }
+          if (args[0] === "volume" && args[1] === "rm") {
+            events.push("volume-rm")
+            volumeExists = false
+            return { stdout: "removed volume", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "rm") {
+            events.push("rm")
+            containerExists = false
+            return { stdout: "removed keeper", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("--rm")) {
+            volumeExists = true
+            return { stdout: "initialized", stderr: "", exitCode: 0 }
+          }
+          if (args[0] === "run" && args.includes("-d")) {
+            keeperRuns += 1
+            events.push(`keeper:${keeperRuns}`)
+            if (keeperRuns === 2) {
+              replacementStarted.resolve()
+              await releaseReplacement.promise
+            }
+            containerExists = true
+            volumeExists = true
+            return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+          }
+          return { stdout: "ok", stderr: "", exitCode: 0 }
+        },
+        exec: async () => {
+          execCalls += 1
+          return execCalls === 1
+            ? originalFailure
+            : { stdout: "old command retried", stderr: "", exitCode: 0 }
+        },
+      }
+      const policy = { network: { mode: "deny" as const } }
+      const p = dockerSandbox({ image: "node:22-slim", docker })
+      const h = await p.acquire({ threadId: "abc", policy, signal: signal() })
+      const commandResultPromise = h.exec.runCommand(
+        { command: "echo old" },
+        { workspaceRoot: h.workspaceRoot, signal: signal() },
+      )
+      await replacementStarted.promise
+      let cleanupSettled = false
+      const cleanupPromise = (operation === "release" ? p.release("abc") : p.destroy("abc")).then(
+        () => {
+          cleanupSettled = true
+        },
+      )
+
+      await Promise.resolve()
+      expect(cleanupSettled).toBe(false)
+      releaseReplacement.resolve()
+      const [commandResult] = await Promise.all([commandResultPromise, cleanupPromise])
+
+      expect(commandResult).toEqual(originalFailure)
+      expect(execCalls).toBe(1)
+      expect(containerExists).toBe(false)
+      expect(keeperRuns).toBe(2)
+      expect(runs.filter((run) => run[0] === "rm")).toHaveLength(2)
+      expect(events.lastIndexOf("keeper:2")).toBeLessThan(events.lastIndexOf("rm"))
+      expect(runs.filter((run) => run[0] === "volume" && run[1] === "rm")).toHaveLength(
+        operation === "destroy" ? 1 : 0,
+      )
+    },
+  )
+
+  test("caller abort cannot strand a shared in-flight recovery", async () => {
+    const firstController = new AbortController()
+    const secondController = new AbortController()
+    const secondStarted = deferred()
+    const releaseSecondFailure = deferred()
+    const replacementStarted = deferred()
+    const releaseReplacement = deferred()
+    const runs: Array<{ args: readonly string[]; signal: AbortSignal | undefined }> = []
+    const execAttempts = new Map<string, number>()
+    let containerExists = false
+    let volumeExists = false
+    let keeperRuns = 0
+    const docker: Docker = {
+      run: async (args, opts) => {
+        runs.push({ args: [...args], signal: opts?.signal })
+        if (args[0] === "ps") {
+          return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return {
+            stdout: volumeExists ? "volume" : "",
+            stderr: "",
+            exitCode: volumeExists ? 0 : 1,
+          }
+        }
+        if (args[0] === "rm") {
+          containerExists = false
+          return { stdout: "removed", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("--rm")) {
+          volumeExists = true
+          return { stdout: "initialized", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("-d")) {
+          keeperRuns += 1
+          if (keeperRuns === 2) {
+            replacementStarted.resolve()
+            await releaseReplacement.promise
+            if (opts?.signal?.aborted) throw new Error("recovery used an aborted caller signal")
+          }
+          containerExists = true
+          volumeExists = true
+          return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async (_container, command) => {
+        const shellCommand = command.at(-1) ?? ""
+        const name = shellCommand.includes("echo first") ? "first" : "second"
+        const attempt = (execAttempts.get(name) ?? 0) + 1
+        execAttempts.set(name, attempt)
+        if (attempt === 1) {
+          if (name === "first") await secondStarted.promise
+          else {
+            secondStarted.resolve()
+            await releaseSecondFailure.promise
+          }
+          return {
+            stdout: "",
+            stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+            exitCode: 1,
+          }
+        }
+        return { stdout: `${name} recovered`, stderr: "", exitCode: 0 }
+      },
+    }
+    const policy = { network: { mode: "deny" as const } }
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    const firstHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+    const secondHandle = await p.acquire({ threadId: "abc", policy, signal: signal() })
+    const firstResultPromise = firstHandle.exec.runCommand(
+      { command: "echo first" },
+      { workspaceRoot: firstHandle.workspaceRoot, signal: firstController.signal },
+    )
+    const secondResultPromise = secondHandle.exec.runCommand(
+      { command: "echo second" },
+      { workspaceRoot: secondHandle.workspaceRoot, signal: secondController.signal },
+    )
+
+    await replacementStarted.promise
+    firstController.abort()
+    releaseSecondFailure.resolve()
+    await Promise.resolve()
+    releaseReplacement.resolve()
+    const [firstResult, secondResult] = await Promise.all([firstResultPromise, secondResultPromise])
+
+    expect(firstResult.stdout).toBe("first recovered")
+    expect(secondResult.stdout).toBe("second recovered")
+    expect(containerExists).toBe(true)
+    expect(runs.filter((run) => run.args[0] === "rm")).toHaveLength(1)
+    expect(keeperRuns).toBe(2)
+    const removalIndex = runs.findIndex((run) => run.args[0] === "rm")
+    const recoveryRuns = runs.slice(removalIndex)
+    expect(recoveryRuns.every((run) => run.signal !== firstController.signal)).toBe(true)
+    expect(recoveryRuns.every((run) => run.signal !== secondController.signal)).toBe(true)
+  })
+
+  test("concurrent failures wait on the same held removal and replacement", async () => {
+    const bothFailuresStarted = deferred()
+    const removalStarted = deferred()
+    const releaseRemoval = deferred()
+    const replacementStarted = deferred()
+    const releaseReplacement = deferred()
+    const runs: string[][] = []
+    const execAttempts = new Map<string, number>()
+    let firstAttemptsStarted = 0
+    let containerExists = false
+    let volumeExists = false
+    let keeperRuns = 0
+    const docker: Docker = {
+      run: async (args) => {
+        runs.push([...args])
+        if (args[0] === "ps") {
+          return { stdout: containerExists ? "keeper-id" : "", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "volume" && args[1] === "inspect") {
+          return {
+            stdout: volumeExists ? "volume" : "",
+            stderr: "",
+            exitCode: volumeExists ? 0 : 1,
+          }
+        }
+        if (args[0] === "rm") {
+          removalStarted.resolve()
+          await releaseRemoval.promise
+          containerExists = false
+          return { stdout: "removed", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("--rm")) {
+          volumeExists = true
+          return { stdout: "initialized", stderr: "", exitCode: 0 }
+        }
+        if (args[0] === "run" && args.includes("-d")) {
+          keeperRuns += 1
+          if (keeperRuns === 2) {
+            replacementStarted.resolve()
+            await releaseReplacement.promise
+          }
+          containerExists = true
+          volumeExists = true
+          return { stdout: "keeper-id", stderr: "", exitCode: 0 }
+        }
+        return { stdout: "ok", stderr: "", exitCode: 0 }
+      },
+      exec: async (_container, command) => {
+        const shellCommand = command.at(-1) ?? ""
+        const name = shellCommand.includes("echo first") ? "first" : "second"
+        const attempt = (execAttempts.get(name) ?? 0) + 1
+        execAttempts.set(name, attempt)
+        if (attempt === 1) {
+          firstAttemptsStarted += 1
+          if (firstAttemptsStarted === 2) bothFailuresStarted.resolve()
+          await bothFailuresStarted.promise
+          return {
+            stdout: "",
+            stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+            exitCode: 1,
+          }
+        }
+        return { stdout: `${name} recovered`, stderr: "", exitCode: 0 }
+      },
+    }
+    const policy = { network: { mode: "deny" as const } }
+    const p = dockerSandbox({ image: "node:22-slim", docker })
+    const h = await p.acquire({ threadId: "abc", policy, signal: signal() })
+    let firstSettled = false
+    let secondSettled = false
+    const firstResultPromise = h.exec
+      .runCommand(
+        { command: "echo first" },
+        { workspaceRoot: h.workspaceRoot, signal: signal() },
+      )
+      .then((result) => {
+        firstSettled = true
+        return result
+      })
+    const secondResultPromise = h.exec
+      .runCommand(
+        { command: "echo second" },
+        { workspaceRoot: h.workspaceRoot, signal: signal() },
+      )
+      .then((result) => {
+        secondSettled = true
+        return result
+      })
+
+    await removalStarted.promise
+    await Promise.resolve()
+    expect(firstSettled).toBe(false)
+    expect(secondSettled).toBe(false)
+    expect(runs.filter((run) => run[0] === "rm")).toHaveLength(1)
+    releaseRemoval.resolve()
+    await replacementStarted.promise
+    expect(firstSettled).toBe(false)
+    expect(secondSettled).toBe(false)
+    expect(execAttempts).toEqual(
+      new Map([
+        ["first", 1],
+        ["second", 1],
+      ]),
+    )
+    releaseReplacement.resolve()
+    const [firstResult, secondResult] = await Promise.all([firstResultPromise, secondResultPromise])
+
+    expect(firstResult.stdout).toBe("first recovered")
+    expect(secondResult.stdout).toBe("second recovered")
+    expect(runs.filter((run) => run[0] === "rm")).toHaveLength(1)
+    expect(keeperRuns).toBe(2)
+    expect(containerExists).toBe(true)
   })
 
   test("rejects with DAWN_E2001 when the exhausted keeper cannot be removed", async () => {
