@@ -38,6 +38,13 @@ const FAILED_TO_LAUNCH = /OCI runtime exec failed|unable to start container proc
  * usable, which is only meaningful once it can spawn at all. Any OTHER failure is
  * returned immediately so a genuine regression still fails fast rather than burning
  * the whole window.
+ *
+ * The budget is 120s, not 60s. The drain is bounded by the sleeps' own 30s lifetime,
+ * so 60s looks generous — but on a saturated runner each retry's `docker exec` is
+ * itself slow to round-trip, so the loop gets only a handful of attempts and can
+ * expire while the container is still draining. Observed failing on ~half of runs
+ * with the 60s budget. Anything approaching 120s is a real problem, not slowness,
+ * hence the explicit throw rather than a quiet return.
  */
 type SandboxHandle = Awaited<ReturnType<ReturnType<typeof dockerSandbox>["acquire"]>>
 type ExecResult = Awaited<ReturnType<SandboxHandle["exec"]["runCommand"]>>
@@ -45,13 +52,26 @@ type ExecResult = Awaited<ReturnType<SandboxHandle["exec"]["runCommand"]>>
 async function execUntilSpawnable(
   handle: SandboxHandle,
   command: string,
-  { intervalMs = 1_000, timeoutMs = 60_000 } = {},
+  { intervalMs = 1_000, timeoutMs = 120_000 } = {},
 ): Promise<ExecResult> {
-  const deadline = Date.now() + timeoutMs
+  const startedAt = Date.now()
+  const deadline = startedAt + timeoutMs
+  let attempts = 0
   for (;;) {
+    attempts++
     const result = await handle.exec.runCommand({ command }, ctx(handle.workspaceRoot))
     const output = `${result.stdout ?? ""}${result.stderr ?? ""}`
-    if (!FAILED_TO_LAUNCH.test(output) || Date.now() >= deadline) return result
+    if (!FAILED_TO_LAUNCH.test(output)) return result
+    if (Date.now() >= deadline) {
+      // Deliberately throw rather than return the launch failure. Returning it
+      // surfaced as `expected 'OCI runtime exec failed…' to contain 'alive'`,
+      // which reads like the container came back wrong when in fact it never
+      // became spawnable at all — two very different diagnoses.
+      throw new Error(
+        `container never became spawnable: ${attempts} attempt(s) over ` +
+          `${Date.now() - startedAt}ms all failed to launch. Last output: ${output.trim().slice(0, 300)}`,
+      )
+    }
     await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
 }
@@ -125,7 +145,10 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
   // containment. fakeSandbox can't enforce kernel controls (caps/pids/
   // read-only/non-root), so these properties are Docker-lane-only.
 
-  test("hardened defaults contain a fork bomb (pids-limit)", { timeout: 180_000 }, async () => {
+  // 300s, not 180s: the assertion below may spend up to 120s waiting for the
+  // container's pids to drain, and that budget has to fit INSIDE the test's own
+  // timeout or it can never actually be spent.
+  test("hardened defaults contain a fork bomb (pids-limit)", { timeout: 300_000 }, async () => {
     const p = dockerSandbox({ image: IMAGE })
     const threadId = `fork-${randomUUID()}`
     try {
