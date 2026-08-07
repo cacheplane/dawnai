@@ -41,8 +41,11 @@ command signal identity at the boundary, and the successful second result.
 
 Cover a command-level `sh: Cannot fork`, a generic
 `OCI runtime exec failed`, a successful result containing similar text, and a
-timeout result. Assert no recovery. Add a case where both attempts return a
-matching exhaustion result and assert exactly two exec calls and one recovery.
+timeout result. Assert no recovery. Add a started-command spoof case whose
+non-zero output contains both recovery diagnostics; require positive wrapper
+startup provenance, strip that marker from stdout, and assert no recovery. Add
+a case where both attempts return a matching exhaustion result and assert
+exactly two exec calls and one recovery.
 
 - [ ] **Step 3: Run the focused test and verify RED**
 
@@ -65,13 +68,15 @@ readonly pidExhaustionRecovery?: {
 }
 ```
 
-Classify only non-zero results whose combined output contains the exact
-`OCI runtime exec failed` marker and either known resource signature. Execute
-the existing Docker call through a local function, recover on the first matching
-result except a configured timeout result (`timeoutMs` set and exit 124), and
-hand that function to recovery as the single retry closure. An undefined
-recovery result returns the original result; otherwise use the returned retry
-result. Apply existing timeout annotation to the final result.
+Prefix each attempt with a random internal startup marker and strip it from the
+returned stdout. Classify only non-zero results where that proof is absent and
+the combined output contains the exact `OCI runtime exec failed` marker and
+either known resource signature. Execute the existing Docker call through a
+local function, recover on the first matching result except a configured timeout
+result (`timeoutMs` set and exit 124), and hand that function to recovery as the
+single retry closure. An undefined recovery result returns the original result;
+otherwise use the returned retry result. Apply existing timeout annotation to
+the final result.
 
 - [ ] **Step 5: Run focused and full backend tests and verify GREEN**
 
@@ -145,6 +150,13 @@ a different effective network/env/CPU/memory/security/UID configuration with
 handle-local. Wrap spawn-level removal/recreation exceptions in contextual
 `DAWN_E2001` errors while preserving already-coded errors and the original cause.
 
+Persist a SHA-256 keeper identity label derived from the provider image and
+canonical launch configuration. Reuse or restart an existing keeper only when
+the current provider owns its lifecycle state and Docker inspection proves the
+label matches. A provider restart, missing/mismatched identity, or retired state
+must remove and recreate the keeper while preserving the named volume. Never
+adopt a same-name container as fresh lifecycle state based on name alone.
+
 Add deterministic provider tests for same-generation coalescing, delayed stale
 failures, caller abort during recreation, and concurrent reacquire while release
 or destroy is held. Assert cleanup finishes before the new keeper is created and
@@ -155,7 +167,9 @@ recreation followed by fresh acquire and prove the old token stays retired.
 Add policy-ownership tests: equivalent reacquire succeeds; different effective
 keeper policy rejects before Docker mutation; recovery from an original handle
 retains its exact launch flags and ownership. Add a spawn-rejection recovery
-test for coded context and preserved cause.
+test for coded context and preserved cause. Add failed-removal `allow → deny`,
+provider re-instantiation, matching-identity restart, and identity-mismatch
+replacement tests.
 
 - [ ] **Step 5: Run focused and package tests and verify GREEN**
 
@@ -261,3 +275,10 @@ recovery behavior, background-process tradeoff, and local verification.
 Enable squash auto-merge. Monitor all required checks plus `sandbox-docker`.
 Investigate any failure from logs, update the branch without force-pushing,
 and merge only after both normal validation and real-Docker CI are green.
+
+- [ ] **Step 6: Verify the published artifact**
+
+Add a `docker-sandbox` published package set and a real-Docker recovery probe
+that imports `dockerSandbox` from a clean registry install. Run it automatically
+after a successful release and expose it in the manual Published Artifact
+Verification workflow for exact-version reruns.

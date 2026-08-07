@@ -9,6 +9,7 @@ export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../.."
 
 export const packageSets = {
   "ag-ui": ["@dawn-ai/ag-ui"],
+  "docker-sandbox": ["@dawn-ai/sandbox"],
   "memory-pgvector-core": ["@dawn-ai/memory-pgvector", "@dawn-ai/memory", "@dawn-ai/langchain"],
   public: null,
   "typescript-tooling": ["@dawn-ai/sdk", "@dawn-ai/core", "@dawn-ai/vite-plugin", "@dawn-ai/cli"],
@@ -54,6 +55,7 @@ const packageFileExpectations = {
   "@dawn-ai/postgres-storage": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
   "@dawn-ai/memory": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
   "@dawn-ai/langchain": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
+  "@dawn-ai/sandbox": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
 }
 
 export function resolvePackageSet(name, publicPackages = []) {

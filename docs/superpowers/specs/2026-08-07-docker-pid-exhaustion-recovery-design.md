@@ -70,10 +70,15 @@ the Docker exec result. A result is recoverable only when all are true:
    `OCI runtime exec failed`; and
 3. the text contains a PID/resource signature observed under a saturated PID
    cgroup: `Resource temporarily unavailable` or
-   `read init-p: connection reset by peer`.
+   `read init-p: connection reset by peer`; and
+4. the per-attempt wrapper did not emit its unguessable startup marker.
 
 The classifier deliberately rejects a command-level `Cannot fork`, a generic
-OCI error, and all successful results.
+OCI error, all successful results, and command-controlled output that merely
+copies Docker's diagnostics. `dockerExec` emits a random marker as the first
+wrapper operation and strips it from returned stdout. Its presence proves the
+shell started, so a non-idempotent command is never repeated based only on text
+that the command itself can produce.
 
 ### One-shot retry
 
@@ -116,7 +121,7 @@ thread coordinator and supplies an opaque token containing that state identity
 and its keeper generation. Recovery holds the same coordinator and:
 
 1. runs `docker rm -f <keeper>` and requires a successful result;
-2. calls the existing create-or-reattach path with the same thread and policy;
+2. creates a fresh keeper with the lifecycle-owned launch configuration;
 3. reuses `dawn-sbx-vol-<thread>` because only the container is removed; and
 4. skips the ownership initializer because the named volume already exists;
 5. advances the keeper generation only after recreation succeeds; and
@@ -132,9 +137,10 @@ full cleanup before any new acquire for that thread can begin.
 If container removal or recreation fails, the command rejects with a clear
 `Sandbox unavailable` error rather than retrying against uncertain state. The
 provider retires and removes that lifecycle state before the coordinator admits
-later work. A subsequent acquire creates a fresh state identity, even if Docker
-cleanup left a keeper that can be reattached; tokens from the failed lifecycle
-remain stale.
+later work. A subsequent acquire creates a fresh state identity and forcibly
+replaces any same-name leftover keeper before returning, so failed cleanup
+cannot silently reactivate the exhausted container. Tokens from the failed
+lifecycle remain stale.
 
 The provider stores one lifecycle state per successfully acquired live thread.
 `release` and `destroy` remove that state while holding the coordinator before
@@ -153,6 +159,14 @@ Semantically equivalent configurations reuse the state. Per-command
 `resources.timeoutMs` remains handle-local because it does not configure the
 keeper container.
 
+Every keeper carries a SHA-256 identity label derived from the provider image
+and canonical resolved launch configuration. Name matching alone never grants
+trust. A keeper is reused or restarted only when this provider still owns an
+in-memory lifecycle state and Docker inspection returns the exact persisted
+identity. A missing or mismatched identity forces replacement. A new provider
+instance also replaces any existing keeper rather than adopting unknown
+process state; the named volume remains the only durable thread resource.
+
 Both non-zero Docker lifecycle results and spawn-level exceptions are surfaced
 as contextual `DAWN_E2001` sandbox-unavailable errors. Wrapped spawn errors
 retain their original cause.
@@ -168,7 +182,7 @@ sandbox from servicing a new command.
   signature, regardless of whether Docker reports it in stdout or stderr.
 - It returns the second result and never attempts a third exec.
 - It does not recover for command-level fork failures, generic OCI failures,
-  successes, or timeouts.
+  successes, timeouts, or a started command that prints spoofed OCI diagnostics.
 - Provider recovery removes the keeper, recreates it with the original policy,
   preserves the named volume, skips chown-init for the existing volume, and
   returns the retried command result.
@@ -182,9 +196,13 @@ sandbox from servicing a new command.
 - Caller cancellation during recovery does not interrupt shared recreation; the
   canceled command fails through its own signal while another waiter recovers.
 - Removal or recreation failure retires lifecycle identity before a later
-  acquire; stale tokens cannot remove or execute against the new lifecycle.
+  acquire; the later acquire replaces any leftover keeper, and stale tokens
+  cannot remove or execute against the new lifecycle.
 - Reacquire with a different effective keeper policy is rejected; recovery from
   any valid handle retains the lifecycle's original launch flags and UID/GID.
+- Reuse inside one provider requires the persisted image/config identity; a
+  provider restart or identity mismatch replaces the keeper while preserving
+  the volume.
 - Different thread IDs retain independent lifecycle concurrency.
 
 ### Real-Docker test
@@ -206,6 +224,9 @@ sentinel remains present.
 - Repeated real-Docker adversarial/recovery runs.
 - Full sandbox package tests and repository `pnpm ci:validate`.
 - The dedicated `sandbox-docker` CI lane must be green before merge.
+- The release workflow installs the published `@dawn-ai/sandbox` artifact and
+  repeats the real Docker PID-exhaustion recovery probe against that installed
+  package.
 
 ## Release
 

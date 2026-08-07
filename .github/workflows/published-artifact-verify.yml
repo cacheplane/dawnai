@@ -15,6 +15,7 @@ on:
         options:
           - memory-pgvector-core
           - typescript-tooling
+          - docker-sandbox
           - public
       runPgvector:
         description: Run Docker pgvector smoke
@@ -65,7 +66,7 @@ jobs:
         shell: bash
         run: |
           args=(--version "$DAWN_PUBLISHED_VERSION" --package-set "$DAWN_PACKAGE_SET")
-          if [ "$DAWN_RUN_PGVECTOR" = "true" ] && [ "$DAWN_PACKAGE_SET" != "typescript-tooling" ]; then
+          if [ "$DAWN_RUN_PGVECTOR" = "true" ] && [ "$DAWN_PACKAGE_SET" != "typescript-tooling" ] && [ "$DAWN_PACKAGE_SET" != "docker-sandbox" ]; then
             args+=(--pgvector)
           fi
           pnpm published:smoke -- "${args[@]}"
@@ -76,8 +77,8 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
-          if [ "$DAWN_PACKAGE_SET" = "typescript-tooling" ]; then
-            echo "typescript-tooling does not support the OpenAI runtime smoke" >&2
+          if [ "$DAWN_PACKAGE_SET" = "typescript-tooling" ] || [ "$DAWN_PACKAGE_SET" = "docker-sandbox" ]; then
+            echo "$DAWN_PACKAGE_SET does not support the OpenAI runtime smoke" >&2
             exit 1
           fi
 

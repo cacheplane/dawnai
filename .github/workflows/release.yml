@@ -121,3 +121,11 @@ jobs:
       - name: Smoke published TypeScript tooling
         if: ${{ steps.changesets.outputs.published == 'true' }}
         run: pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling
+
+      - name: Verify published Docker sandbox
+        if: ${{ steps.changesets.outputs.published == 'true' }}
+        run: pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000
+
+      - name: Smoke published Docker sandbox PID recovery
+        if: ${{ steps.changesets.outputs.published == 'true' }}
+        run: pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox
