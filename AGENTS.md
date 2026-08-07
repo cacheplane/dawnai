@@ -55,6 +55,7 @@ Every `packages/*` directory is a pnpm workspace member (verify: `pnpm -r list -
 | `@dawn-ai/memory` | Deterministic long-term memory storage and recall for Dawn's typed `memory.ts` capability — the storage/ranking layer under `@dawn-ai/core`. |
 | `@dawn-ai/memory-pgvector` | Postgres + pgvector backend for Dawn's typed long-term memory store, for deployments where SQLite is too local (multiple instances, shared DB, HNSW retrieval at scale). |
 | `@dawn-ai/sqlite-storage` | SQLite-backed storage adapter for Dawn — durable persistence for agent state and runtime data. |
+| `@dawn-ai/postgres-storage` | Postgres backend for Dawn's durable runtime state — checkpointer, Agent Protocol threads store, and permissions store over one `pg` pool, for deployments where the `.dawn/` files are too local (multiple instances, shared DB, ephemeral filesystem). |
 
 **Testing & evals**
 
@@ -133,7 +134,8 @@ few extra local-only release-script unit tests
 **Gated lanes** — these run as separate CI jobs behind env flags or dedicated
 infrastructure, not part of `validate`, and aren't required for most PRs:
 `sandbox-docker` (`DAWN_TEST_DOCKER=1`), `pgvector-docker`
-(`DAWN_TEST_PGVECTOR=1`), `sandbox-k8s` (`DAWN_TEST_K8S=1`, kind + Calico),
+(`DAWN_TEST_PGVECTOR=1`), `postgres-storage-docker` (`DAWN_TEST_PGSTORAGE=1`,
+Testcontainers `postgres:16`), `sandbox-k8s` (`DAWN_TEST_K8S=1`, kind + Calico),
 `sandbox-k8s-e2e` / `sandbox-docker-e2e` (`DAWN_TEST_SMOKE_E2E=1`, full-arc
 deployed-app smoke), `chart-validate` (Helm lint + kubeconform), and
 `chart-apply-smoke` (kind install smoke).

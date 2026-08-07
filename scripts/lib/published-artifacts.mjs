@@ -51,6 +51,7 @@ const packageFileExpectations = {
     "package.json",
   ],
   "@dawn-ai/memory-pgvector": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
+  "@dawn-ai/postgres-storage": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
   "@dawn-ai/memory": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
   "@dawn-ai/langchain": ["dist/index.js", "dist/index.d.ts", "README.md", "package.json"],
 }
