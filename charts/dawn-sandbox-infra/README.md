@@ -76,8 +76,9 @@ that window, override `reaper.image` with an image containing a compatible
 Kubernetes client. The image must provide `sh`, `date`, `sort`, `grep`, and
 `kubectl`.
 
-Invalid or tampered reaper markers are re-marked, and only trusted PVC metadata
-names drive annotation or deletion operations.
+Invalid or tampered reaper markers on unbound PVCs are re-marked, markers on
+referenced PVCs are cleared, and only trusted PVC metadata names drive annotation
+or deletion operations.
 
 ## PID limits
 
