@@ -70,10 +70,16 @@ export function dockerExec(
           started,
         }
       }
-      const execute = () =>
-        opts.runWithExecLease !== undefined ? opts.runWithExecLease(attempt) : attempt()
-      const recoveryToken = opts.pidExhaustionRecovery?.captureToken()
-      const firstAttempt = await execute()
+      const executeWithLease = <T>(operation: () => Promise<T>) =>
+        opts.runWithExecLease !== undefined ? opts.runWithExecLease(operation) : operation()
+      let recoveryToken: unknown
+      const firstAttempt = await executeWithLease(async () => {
+        // Token capture and Docker admission share one lease. A queued command
+        // therefore records the generation of the keeper it actually enters,
+        // not the generation that existed before an earlier recovery.
+        recoveryToken = opts.pidExhaustionRecovery?.captureToken()
+        return attempt()
+      })
       let r = firstAttempt.result
       const isConfiguredTimeout = timeoutSecs !== undefined && r.exitCode === 124
       if (

@@ -34,8 +34,9 @@ object. Sequence the fake Docker results so the
 first is a non-zero `OCI runtime exec failed` result with each known signature
 (`Resource temporarily unavailable` in stderr and
 `read init-p: connection reset by peer` in stdout), and the second succeeds.
-Assert token capture before exec, two exec calls, one recovery call, the active
-command signal identity at the boundary, and the successful second result.
+Assert token capture inside shared admission immediately before exec, two exec
+calls, one recovery call, the active command signal identity at the boundary,
+and the successful second result.
 
 - [ ] **Step 2: Write failing negative and retry-boundary tests**
 
@@ -171,7 +172,8 @@ retry and prove queued cleanup starts only after that retry settles. Cover faile
 recreation followed by fresh acquire and prove the old token stays retired.
 Hold an admitted successful peer exec while a PID failure queues recovery;
 assert replacement waits for the peer, then completes before any later exec is
-admitted.
+admitted. Make that later exec report a fresh PID-exhaustion failure and assert
+its lease-bound replacement generation triggers a second recycle before retry.
 Add policy-ownership tests: equivalent reacquire succeeds; different effective
 keeper policy rejects before Docker mutation; recovery from an original handle
 retains its exact launch flags and ownership. Add a spawn-rejection recovery

@@ -82,9 +82,12 @@ that the command itself can produce.
 
 ### One-shot retry
 
-`dockerExec` accepts an internal paired recovery contract. Before the first
-Docker exec it captures an opaque lifecycle token. On a matching result it
-passes that token and the exact Docker-exec retry closure to the provider.
+`dockerExec` accepts an internal paired recovery contract. Immediately before
+the first Docker exec it captures an opaque lifecycle token inside the same
+shared lease that admits the attempt. A command queued behind recovery therefore
+captures the replacement generation it actually enters, not the generation that
+existed when it began waiting. On a matching result it passes that token and the
+exact Docker-exec retry closure to the provider.
 The provider invokes that closure only while holding the thread's lifecycle
 fence. A stale token returns no retry result, so `dockerExec` returns the
 original failure without executing an old command inside a newer lifecycle.

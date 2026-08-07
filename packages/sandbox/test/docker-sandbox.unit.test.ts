@@ -752,6 +752,7 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
     let containerExists = false
     let volumeExists = false
     let recoveryAttempts = 0
+    let lateAttempts = 0
     const docker: Docker = {
       run: async (args) => {
         if (args[0] === "ps") {
@@ -791,7 +792,15 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
           return { stdout: "held\n", stderr: "", exitCode: 0 }
         }
         if (shellCommand.includes("echo late")) {
-          events.push("late:start")
+          lateAttempts += 1
+          events.push(`late:${lateAttempts}`)
+          if (lateAttempts === 1) {
+            return {
+              stdout: "",
+              stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+              exitCode: 1,
+            }
+          }
           return { stdout: "late\n", stderr: "", exitCode: 0 }
         }
         recoveryAttempts += 1
@@ -849,7 +858,10 @@ describe("dockerSandbox PID-exhaustion recovery", () => {
       "remove",
       "create",
       "recovery:2",
-      "late:start",
+      "late:1",
+      "remove",
+      "create",
+      "late:2",
     ])
   })
 
