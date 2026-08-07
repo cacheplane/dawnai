@@ -164,10 +164,12 @@ describe("dockerExec", () => {
     const second = { stdout: "recovered", stderr: "warning", exitCode: 0 }
     const results = [first, second]
     const execSignals: Array<AbortSignal | undefined> = []
+    const execCalls: Array<{ container: string; command: readonly string[] }> = []
     const recoverySignals: AbortSignal[] = []
     const exec = dockerExec(
       fakeDocker({
-        exec: async (_container, _command, opts) => {
+        exec: async (container, command, opts) => {
+          execCalls.push({ container, command })
           execSignals.push(opts?.signal)
           const result = results.shift()
           if (result === undefined) throw new Error("Unexpected extra Docker exec")
@@ -184,6 +186,8 @@ describe("dockerExec", () => {
 
     const result = await exec.runCommand({ command: "echo hi" }, activeCtx)
 
+    expect(execCalls).toHaveLength(2)
+    expect(execCalls[0]).toEqual(execCalls[1])
     expect(execSignals).toHaveLength(2)
     expect(execSignals[0]).toBe(activeCtx.signal)
     expect(execSignals[1]).toBe(activeCtx.signal)
@@ -212,15 +216,6 @@ describe("dockerExec", () => {
       },
       timeoutMs: undefined,
     },
-    {
-      name: "timeout result",
-      result: {
-        stdout: "",
-        stderr: "",
-        exitCode: 124,
-      },
-      timeoutMs: 500,
-    },
   ])("does not recover from $name", async ({ result, timeoutMs }) => {
     let execCalls = 0
     let recoveryCalls = 0
@@ -244,6 +239,78 @@ describe("dockerExec", () => {
 
     expect(execCalls).toBe(1)
     expect(recoveryCalls).toBe(0)
+  })
+
+  test("does not recover a configured timeout containing PID-exhaustion markers", async () => {
+    let execCalls = 0
+    let recoveryCalls = 0
+    const exec = dockerExec(
+      fakeDocker({
+        exec: async () => {
+          execCalls += 1
+          return {
+            stdout: "OCI runtime exec failed",
+            stderr: "Resource temporarily unavailable",
+            exitCode: 124,
+          }
+        },
+      }),
+      "c1",
+      {
+        timeoutMs: 500,
+        recoverFromPidExhaustion: async () => {
+          recoveryCalls += 1
+        },
+      },
+    )
+
+    const result = await exec.runCommand({ command: "sleep 999" }, ctx)
+
+    expect(execCalls).toBe(1)
+    expect(recoveryCalls).toBe(0)
+    expect(result.stderr).toContain("Command timed out after 1s")
+    expect(result.stderr).toContain("resources.timeoutMs: 500ms")
+  })
+
+  test("annotates a timeout returned by the retry after PID-exhaustion recovery", async () => {
+    const results = [
+      {
+        stdout: "",
+        stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+        exitCode: 1,
+      },
+      { stdout: "partial", stderr: "timeout detail", exitCode: 124 },
+    ]
+    let execCalls = 0
+    let recoveryCalls = 0
+    const exec = dockerExec(
+      fakeDocker({
+        exec: async () => {
+          execCalls += 1
+          const result = results.shift()
+          if (result === undefined) throw new Error("Unexpected extra Docker exec")
+          return result
+        },
+      }),
+      "c1",
+      {
+        timeoutMs: 500,
+        recoverFromPidExhaustion: async () => {
+          recoveryCalls += 1
+        },
+      },
+    )
+
+    const result = await exec.runCommand({ command: "sleep 999" }, ctx)
+
+    expect(execCalls).toBe(2)
+    expect(recoveryCalls).toBe(1)
+    expect(result).toEqual({
+      stdout: "partial",
+      stderr:
+        "timeout detail\nCommand timed out after 1s (resources.timeoutMs: 500ms).",
+      exitCode: 124,
+    })
   })
 
   test("retries only once when both attempts report PID exhaustion", async () => {

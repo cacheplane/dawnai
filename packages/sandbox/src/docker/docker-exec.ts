@@ -52,7 +52,12 @@ export function dockerExec(
       const argv = timeoutSecs !== undefined ? ["timeout", `${timeoutSecs}s`, ...shArgs] : shArgs
       const execute = () => docker.exec(container, argv, { signal: ctx.signal })
       let r = await execute()
-      if (opts.recoverFromPidExhaustion !== undefined && isPidExhaustion(r)) {
+      const isConfiguredTimeout = timeoutSecs !== undefined && r.exitCode === 124
+      if (
+        opts.recoverFromPidExhaustion !== undefined &&
+        !isConfiguredTimeout &&
+        isPidExhaustion(r)
+      ) {
         await opts.recoverFromPidExhaustion(ctx.signal)
         r = await execute()
       }
