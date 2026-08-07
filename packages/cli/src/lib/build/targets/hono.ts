@@ -229,12 +229,20 @@ export async function createRequestStores(env) {
 /**
  * Generate the Hono entry point.
  *
- * The one subtlety is `envByRequest`. On Workers `env` is handed to the
- * fetch handler PER INVOCATION, so a `requestStores` closure over the first
- * request's `c.env` would send every later request to the first request's
- * database — invisible in any single-request test. The WeakMap keys that env on
- * `c.req.raw`, which is the exact object `requestStores` is later called with,
- * and entries collect with the Request.
+ * The subtlety is that `env` arrives PER INVOCATION on Workers, and the two
+ * things that need it have opposite lifetimes:
+ *
+ *  - `envByRequest`, a WeakMap keyed on `c.req.raw` — the exact object
+ *    `requestStores` is later called with, so each request's pool is built from
+ *    its own bindings and the entries collect with the Request. A closure over
+ *    the first `c.env` would send every later request to the first request's
+ *    database, invisible in any single-request test;
+ *  - `seedRuntimeEnvOnce`, which fills Dawn's PROCESS-GLOBAL env fallback, and
+ *    is therefore seeded once per isolate rather than per request. The emitted
+ *    comment carries the full argument; the short form is that re-seeding
+ *    global state per request races concurrent in-flight requests, and buys
+ *    nothing where the seed is actually read (workerd, whose env is fixed per
+ *    deployment version).
  */
 function emitAppEntry(options: {
   readonly appRoot: string
@@ -250,7 +258,7 @@ function emitAppEntry(options: {
 // Dawn's web-standard fetch handler. Default-exported, the shape Workers, Vercel
 // and Bun all accept — import these same pieces yourself to compose it into a
 // larger Hono app.
-import { createRuntimeFetchHandler, seedModelImporter } from "@dawn-ai/cli/fetch"
+import { createRuntimeFetchHandler, seedModelImporter, seedRuntimeEnv } from "@dawn-ai/cli/fetch"
 import { Hono } from "hono"
 
 import modules from "./modules.edge.mjs"
@@ -279,6 +287,47 @@ seedModelImporter(providerImporter)
 // first request's database. Keying it on the incoming Request (the same object
 // the runtime passes back to \`requestStores\`) binds each request to its own.
 const envByRequest = new WeakMap()
+
+// Dawn's own environment reads — \`OPENAI_BASE_URL\` above all, plus the
+// DAWN_DEBUG_* flags — go through \`readRuntimeEnv\`, which prefers \`process.env\`
+// and falls back to whatever this seeds. Without the seed an edge deploy has no
+// way to set any of them: \`process\` does not exist on workerd without
+// \`nodejs_compat\`, which this target deliberately omits.
+//
+// SEEDED ONCE PER ISOLATE, from the FIRST request's env. Not per request, and
+// the difference is not stylistic:
+//
+//  • unlike \`envByRequest\` above, the seed is process-global. Re-seeding it on
+//    request B while request A is awaiting a model call would hand A request B's
+//    configuration mid-flight — the same silent cross-request swap a shared pool
+//    produces, on configuration instead of sockets.
+//  • seeding once is no less correct, because the seed is only ever CONSULTED
+//    where there is no \`process\` (\`readRuntimeEnv\` prefers \`process.env\`). The
+//    runtime this is for is workerd, where \`env\` carries the deployment's
+//    bindings and vars and one isolate serves exactly one deployment version —
+//    so every invocation it handles sees identical values. Where env genuinely
+//    varies per request (a Node or Bun host, a test harness) \`process\` exists
+//    and wins, so a stale seed is not observable.
+//  • and what must be right PER request does not come through this seam at all:
+//    \`DATABASE_URL\` is read straight off that request's own \`env\` in stores.mjs,
+//    which is exactly why that one can vary safely.
+//
+// So do not "simplify" this into a per-request seed.
+let runtimeEnvSeeded = false
+
+const seedRuntimeEnvOnce = (env) => {
+  if (runtimeEnvSeeded) return
+  runtimeEnvSeeded = true
+  // A RuntimeEnv is a map of strings. Only Workers hands the fetch handler a
+  // bindings object — a Node adapter's second argument is something else
+  // entirely (\`@hono/node-server\` passes { incoming, outgoing }), and those
+  // handles have no business in process-global state.
+  const values = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string") values[key] = value
+  }
+  seedRuntimeEnv(values)
+}
 
 const requestStores = (request) => {
   const env = envByRequest.get(request)
@@ -313,8 +362,11 @@ const app = new Hono()
 
 app.all("*", async (c) => {
   const request = c.req.raw
-  // Bind BEFORE dispatch: the runtime calls requestStores during fetch().
-  envByRequest.set(request, c.env ?? {})
+  const env = c.env ?? {}
+  // Both BEFORE dispatch: the runtime calls requestStores during fetch(), and
+  // a route's model is constructed inside that call.
+  envByRequest.set(request, env)
+  seedRuntimeEnvOnce(env)
   handlerPromise ??= createRuntimeFetchHandler({
     appRoot: APP_ROOT,
     config,

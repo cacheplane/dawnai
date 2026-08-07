@@ -652,6 +652,66 @@ export function createRequestStores(env) {
     // requests, because the failure is invisible with one.
     expect(observed).toEqual(["postgres://one/db", "postgres://two/db", "postgres://three/db"])
   })
+
+  test("seeds Dawn's runtime-env fallback once per isolate, from the first env", async () => {
+    const appRoot = await createFixtureApp()
+    await runBuild(appRoot)
+
+    await writeFile(buildFile(appRoot, "modules.edge.mjs"), "export default { routes: [] }\n")
+    await writeFile(
+      buildFile(appRoot, "stores.mjs"),
+      `export function createRequestStores() {
+  return { dispose: async () => {} }
+}
+`,
+    )
+    await writeStubPackage(appRoot, "hono", HONO_STUB)
+    await writeStubPackage(appRoot, "@dawn-ai/cli", CLI_FETCH_STUB, { "./fetch": "./index.mjs" })
+
+    const seeded = await driveEmittedApp(
+      appRoot,
+      ["postgres://one/db", "postgres://two/db", "postgres://three/db"],
+      {
+        expression: "seededEnvs",
+        imports: 'import { seededEnvs } from "@dawn-ai/cli/fetch"',
+      },
+    )
+
+    // ONCE, and with the first request's env — the counterpart of the WeakMap
+    // above, not a copy of it. `seedRuntimeEnv` installs PROCESS-GLOBAL state,
+    // so re-seeding it per request would let a request that is mid-await
+    // observe another request's configuration. Three requests with different
+    // envs is what tells "seeded once" apart from "seeded every time with the
+    // same value" — the latter passes any single-request test.
+    expect(seeded).toEqual([{ DATABASE_URL: "postgres://one/db" }])
+  })
+
+  test("keeps non-string bindings out of the process-global env map", async () => {
+    const appRoot = await createFixtureApp()
+    await runBuild(appRoot)
+
+    await writeFile(buildFile(appRoot, "modules.edge.mjs"), "export default { routes: [] }\n")
+    await writeFile(
+      buildFile(appRoot, "stores.mjs"),
+      `export function createRequestStores() {
+  return { dispose: async () => {} }
+}
+`,
+    )
+    await writeStubPackage(appRoot, "hono", HONO_STUB)
+    await writeStubPackage(appRoot, "@dawn-ai/cli", CLI_FETCH_STUB, { "./fetch": "./index.mjs" })
+
+    // Only Workers hands the fetch handler a bindings object. `@hono/node-server`
+    // — which the round-trip test boots this same entry under — passes
+    // `{ incoming, outgoing }`, i.e. live Node request/response handles.
+    const seeded = await driveEmittedApp(appRoot, ["postgres://one/db"], {
+      envExpression: "{ DATABASE_URL: databaseUrl, incoming: new Map(), PORT: '3000' }",
+      expression: "seededEnvs",
+      imports: 'import { seededEnvs } from "@dawn-ai/cli/fetch"',
+    })
+
+    expect(seeded).toEqual([{ DATABASE_URL: "postgres://one/db", PORT: "3000" }])
+  })
 })
 
 /**
@@ -686,6 +746,11 @@ const CLI_FETCH_STUB = `export async function createRuntimeFetchHandler(options)
   }
 }
 export function seedModelImporter() {}
+/** Every seeding call, in order — the observable for a once-per-isolate seam. */
+export const seededEnvs = []
+export function seedRuntimeEnv(env) {
+  seededEnvs.push(env)
+}
 `
 
 async function writeStubPackage(
@@ -711,21 +776,32 @@ async function writeStubPackage(
 /**
  * Import the emitted `app.mjs` in a plain Node child process and drive one
  * request per supplied `DATABASE_URL`, returning what the store factory saw.
+ *
+ * `report` names what to print instead: the emitted entry has two observables
+ * that live in different modules (the store factory's per-request env, and the
+ * `@dawn-ai/cli/fetch` stub's seeding journal), and both are read out of the
+ * child's own module instances rather than reconstructed from stdout chatter.
  */
 async function driveEmittedApp(
   appRoot: string,
   databaseUrls: readonly string[],
-): Promise<readonly (string | undefined)[]> {
+  report: {
+    /** How each request's Workers `env` is built from `databaseUrl`. */
+    readonly envExpression?: string
+    readonly expression: string
+    readonly imports: string
+  } = { expression: "seen", imports: 'import { seen } from "./stores.mjs"' },
+): Promise<unknown> {
   const driverPath = buildFile(appRoot, "drive.test.mjs")
   await writeFile(
     driverPath,
     `import app from "./app.mjs"
-import { seen } from "./stores.mjs"
+${report.imports}
 
 for (const databaseUrl of ${JSON.stringify(databaseUrls)}) {
-  await app.fetch(new Request("http://x/healthz"), { DATABASE_URL: databaseUrl })
+  await app.fetch(new Request("http://x/healthz"), ${report.envExpression ?? "{ DATABASE_URL: databaseUrl }"})
 }
-console.log(JSON.stringify(seen))
+console.log(JSON.stringify(${report.expression}))
 `,
   )
   const { execFile } = await import("node:child_process")
@@ -733,5 +809,5 @@ console.log(JSON.stringify(seen))
   const { stdout } = await promisify(execFile)(process.execPath, [driverPath], {
     cwd: appRoot,
   })
-  return JSON.parse(stdout.trim()) as readonly (string | undefined)[]
+  return JSON.parse(stdout.trim()) as unknown
 }
