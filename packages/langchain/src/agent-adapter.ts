@@ -1,4 +1,5 @@
 import type { PromptFragment, StreamTransformer } from "@dawn-ai/core"
+import { readRuntimeEnv } from "@dawn-ai/core"
 import type { DawnAgent, RetryConfig } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
@@ -894,7 +895,7 @@ async function* streamFromRunnable(
             if (entry.id && emittedInterruptIds.has(entry.id)) continue
             if (entry.id) emittedInterruptIds.add(entry.id)
             hasYielded = true
-            if (process.env.DAWN_DEBUG_INTERRUPTS === "1") {
+            if (readRuntimeEnv("DAWN_DEBUG_INTERRUPTS") === "1") {
               if (!isRecord(entry.value) || typeof entry.value.interruptId !== "string") {
                 console.warn(
                   "[dawn] interrupt entry.value missing interruptId — capability bug:",

@@ -1,3 +1,4 @@
+import { readRuntimeEnv } from "@dawn-ai/core"
 import type { BuiltInModelProviderId, ReasoningConfig } from "@dawn-ai/sdk"
 import { errorDocsUrl, validateModelId } from "@dawn-ai/sdk"
 
@@ -110,7 +111,12 @@ export async function createChatModel(options: {
   }
 
   if (options.provider === "openai") {
-    const baseURL = process.env.OPENAI_BASE_URL
+    // NOT a `typeof process` guard: this knob is load-bearing, not debug-only.
+    // Guarding it would turn a crash into an edge deploy whose base URL cannot
+    // be set at all — including the workerd CI lane, which points the model at
+    // a local aimock through exactly this variable. `readRuntimeEnv` still
+    // prefers `process.env`, so the Node path is unchanged.
+    const baseURL = readRuntimeEnv("OPENAI_BASE_URL")
     if (baseURL) {
       constructorOptions.configuration = { baseURL }
     }

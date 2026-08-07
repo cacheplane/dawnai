@@ -70,6 +70,12 @@ export {
   isRouteGroupSegment,
   toRouteSegments,
 } from "./discovery/route-segments.js"
+export type { RuntimeEnv } from "./runtime-env.js"
+export {
+  __clearSeededRuntimeEnvForTests,
+  readRuntimeEnv,
+  seedRuntimeEnv,
+} from "./runtime-env.js"
 export type { ResolveStateFieldsOptions } from "./state/resolve-state-fields.js"
 export { resolveStateFields } from "./state/resolve-state-fields.js"
 export type {

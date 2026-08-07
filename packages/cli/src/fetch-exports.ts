@@ -14,7 +14,16 @@
  * Exposed as `@dawn-ai/cli/fetch`.
  */
 
-export { seedDawnConfig } from "@dawn-ai/core"
+/**
+ * `seedRuntimeEnv` is for build-emitted edge entry points. On a runtime without
+ * `process` (workerd without `nodejs_compat` — what this target emits),
+ * `process.env` does not merely come back empty, it throws. Dawn reads env
+ * through `readRuntimeEnv`, which prefers `process.env` and falls back to what
+ * this seeds, so an edge entry can supply the knobs that are configuration
+ * rather than debug output — `OPENAI_BASE_URL` above all, which is how the
+ * workerd lane points the model at a local aimock.
+ */
+export { type RuntimeEnv, seedDawnConfig, seedRuntimeEnv } from "@dawn-ai/core"
 /**
  * Re-exported for build-emitted edge entry points: an edge bundle cannot keep
  * `createChatModel`'s default `import(specifier)` (a bundler cannot follow a
