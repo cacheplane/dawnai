@@ -267,6 +267,12 @@ async function startAimock(): Promise<{
 interface RequestStoreProbe {
   /** One label per request the factory was asked to serve, in order. */
   readonly built: string[]
+  /**
+   * Every store call, labelled `<bag> → <store>.<method>`. Records the calls
+   * that DID happen, so "no call crossed a request boundary" can be asserted
+   * without it also being satisfied by a run that made no calls at all.
+   */
+  readonly calls: string[]
   /** One label per request whose stores were torn down, in order. */
   readonly disposed: string[]
   /** Any store call that arrived after that request's stores were disposed. */
@@ -276,6 +282,7 @@ interface RequestStoreProbe {
 
 function perRequestStores(dbDir: string): RequestStoreProbe {
   const built: string[] = []
+  const calls: string[] = []
   const disposed: string[] = []
   const useAfterDispose: string[] = []
 
@@ -287,7 +294,8 @@ function perRequestStores(dbDir: string): RequestStoreProbe {
     built.push(label)
     let isDisposed = false
 
-    /** Delegates every method to the real store, flagging post-dispose use. */
+    /** Delegates every method to the real store, recording every call and
+     * flagging any that arrives after this bag was disposed. */
     const guard = <T extends object>(store: T, name: string): T =>
       new Proxy(store, {
         get(target, property) {
@@ -296,7 +304,9 @@ function perRequestStores(dbDir: string): RequestStoreProbe {
           const value = Reflect.get(target, property, target)
           if (typeof value !== "function") return value
           return (...args: unknown[]) => {
-            if (isDisposed) useAfterDispose.push(`${label} → ${name}.${String(property)}`)
+            const call = `${label} → ${name}.${String(property)}`
+            calls.push(call)
+            if (isDisposed) useAfterDispose.push(call)
             return (value as (...rest: unknown[]) => unknown).apply(target, args)
           }
         },
@@ -323,7 +333,7 @@ function perRequestStores(dbDir: string): RequestStoreProbe {
     }
   }
 
-  return { built, disposed, requestStores, useAfterDispose }
+  return { built, calls, disposed, requestStores, useAfterDispose }
 }
 
 /**
@@ -690,28 +700,34 @@ describe("node-static vs edge-static equivalence", () => {
     expect(probe.built).toHaveLength(REQUESTS_PER_CONVERSATION)
     expect(probe.disposed).toEqual(probe.built)
 
-    // ---- KNOWN BUG, pinned: the seam stops at the graph ----
-    // `materializeAgent` (langchain/src/agent-adapter.ts) memoizes the compiled
-    // graph in a process-wide `WeakMap<DawnAgent, AgentLike>` and bypasses that
-    // cache only when the checkpointer is `undefined`. The compiled graph
-    // EMBEDS the checkpointer, so every request after the one that materialized
-    // the route runs its graph against THAT request's checkpointer — which by
-    // then has been disposed. Invisible on node (one boot instance, disposed
-    // never) and invisible here in the transcript (both bags address the same
-    // sqlite files), but on workerd request N+1 would write through request N's
-    // ended pool: precisely the dead-I/O-context failure `requestStores` exists
-    // to prevent.
+    // ---- …and it holds all the way through the GRAPH ----
+    // The handler assertions above are not enough on their own. `materializeAgent`
+    // (langchain/src/agent-adapter.ts) memoizes the compiled graph, and the graph
+    // `createReactAgent` returns EMBEDS the checkpointer it was compiled with —
+    // so a cache keyed on the agent descriptor alone would hand turn 2 turn 1's
+    // checkpointer no matter how cleanly the handler built and disposed the bags.
+    // That is invisible on node (one boot instance, disposed never) and invisible
+    // in the transcript below (both bags address the same sqlite files), but on
+    // workerd request N+1 would write through request N's ended pool: precisely
+    // the dead-I/O-context failure `requestStores` exists to prevent. The cache is
+    // now keyed by (descriptor, checkpointer), and this is where that is checked
+    // against a real conversation rather than a unit fixture.
     //
-    // Pinned rather than asserted-empty so this suite can be green while the
-    // fix lands elsewhere. Both assertions fail the moment the cache honors the
-    // per-request checkpointer — which is the signal to replace this whole
-    // block with `expect(probe.useAfterDispose).toEqual([])`.
-    const staleBags = [...new Set(probe.useAfterDispose.map((entry) => entry.split(" → ")[0]))]
-    // Only the checkpointer, and only the bag belonging to request #2 — the
-    // first route execution, i.e. the one that populated the cache.
-    expect(probe.useAfterDispose.every((entry) => entry.includes("→ checkpointer."))).toBe(true)
-    expect(staleBags).toEqual([probe.built[1]])
-    expect(probe.useAfterDispose.length).toBeGreaterThan(0)
+    // Stated as two halves so neither can be satisfied by breaking the other:
+    // the calls that must exist, and the calls that must not.
+    const checkpointerCalls = (bag: string | undefined): number =>
+      probe.calls.filter((entry) => entry.startsWith(`${bag} → checkpointer.`)).length
+
+    // Bags #2 and #3 are the two `/runs/wait` turns. BOTH drove the graph
+    // through their own checkpointer — turn 2 did not merely avoid turn 1's
+    // instance by doing nothing.
+    expect(checkpointerCalls(probe.built[1])).toBeGreaterThan(0)
+    expect(checkpointerCalls(probe.built[2])).toBeGreaterThan(0)
+
+    // And not one call crossed a request boundary. Every bag is disposed when
+    // its request settles, so a call recorded here is by construction a later
+    // request reaching back into an earlier one's stores.
+    expect(probe.useAfterDispose).toEqual([])
 
     // ---- Compare ----
     // Event-type sequence first: a drift here gives the clearest signal.
