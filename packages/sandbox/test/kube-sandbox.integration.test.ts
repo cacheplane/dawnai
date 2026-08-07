@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { KubeConfig, NetworkingV1Api } from "@kubernetes/client-node"
 import { describe, expect, test } from "vitest"
 import { kubernetesSandbox } from "../src/index.ts"
 import { runProviderConformance } from "../src/testing/index.ts"
@@ -72,6 +73,55 @@ describe.skipIf(!enabled)("kubernetesSandbox (real cluster)", { timeout: 240_000
       )
       expect(r.exitCode).toBe(7)
       expect(r.stdout).toContain("BLOCKED")
+    } finally {
+      await p.destroy(t)
+    }
+  })
+
+  test("chart backstop blocks allow-mode sandbox egress without a per-thread policy", async () => {
+    const controlUrl = process.env.DAWN_TEST_K8S_EGRESS_CONTROL_URL
+    if (!controlUrl) {
+      throw new Error("DAWN_TEST_K8S_EGRESS_CONTROL_URL is required for real-cluster tests")
+    }
+
+    const controlHostname = new URL(controlUrl).hostname
+    const p = make()
+    const t = `egress-${randomUUID().slice(0, 8)}`
+    try {
+      const h = await p.acquire({
+        threadId: t,
+        policy: { network: { mode: "allow" } },
+        signal: ctx("/").signal,
+      })
+
+      const kc = new KubeConfig()
+      kc.loadFromDefault()
+      const networking = kc.makeApiClient(NetworkingV1Api)
+      const policies = await networking.listNamespacedNetworkPolicy({ namespace: NS })
+      const perThreadPolicy = policies.items.find(
+        (policy) =>
+          policy.metadata?.name === `dawn-sbx-net-${t}` ||
+          policy.metadata?.labels?.["dawn.sh/thread"] === t,
+      )
+      expect(perThreadPolicy).toBeUndefined()
+
+      const dns = await h.exec.runCommand(
+        {
+          command: `node -e 'require("node:dns").promises.lookup(${JSON.stringify(controlHostname)}).then(({ address }) => console.log(address)).catch((error) => { console.error(error); process.exit(1) })'`,
+        },
+        ctx(h.workspaceRoot),
+      )
+      expect(dns.exitCode).toBe(0)
+      expect(dns.stdout.trim()).not.toBe("")
+
+      const fetchResult = await h.exec.runCommand(
+        {
+          command: `node -e 'fetch(${JSON.stringify(controlUrl)}, { signal: AbortSignal.timeout(5000) }).then((response) => { console.log("REACHED " + response.status); process.exit(0) }).catch(() => { console.log("BLOCKED"); process.exit(7) })'`,
+        },
+        ctx(h.workspaceRoot),
+      )
+      expect(fetchResult.exitCode).not.toBe(0)
+      expect(fetchResult.stdout).toContain("BLOCKED")
     } finally {
       await p.destroy(t)
     }

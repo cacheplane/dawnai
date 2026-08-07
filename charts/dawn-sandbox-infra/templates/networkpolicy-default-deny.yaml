@@ -7,7 +7,9 @@ metadata:
   labels:
     {{- include "dawn-sandbox-infra.labels" . | nindent 4 }}
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: dawn
   policyTypes: [Egress]
   egress:
     - to:

@@ -28,7 +28,9 @@ printf '%s\n' "$RBAC" | assert "networkpolicies verbs" '\["create", "get", "list
 # Default-deny egress NetworkPolicy backstop
 NETPOL="$(tmpl --show-only templates/networkpolicy-default-deny.yaml)"
 printf '%s\n' "$NETPOL" | assert "netpol kind" 'kind: NetworkPolicy'
-printf '%s\n' "$NETPOL" | assert "netpol podSelector all" 'podSelector: \{\}'
+printf '%s\n' "$NETPOL" | assert "netpol podSelector" 'podSelector:'
+printf '%s\n' "$NETPOL" | assert "netpol podSelector matchLabels" 'matchLabels:'
+printf '%s\n' "$NETPOL" | assert "netpol selects dawn-managed pods" 'app.kubernetes.io/managed-by: dawn'
 printf '%s\n' "$NETPOL" | assert "netpol policyTypes egress" 'policyTypes: \[Egress\]'
 printf '%s\n' "$NETPOL" | assert "netpol dns to kube-system" 'kubernetes.io/metadata.name: kube-system'
 printf '%s\n' "$NETPOL" | assert "netpol dns port 53" 'port: 53'
