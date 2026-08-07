@@ -105,9 +105,16 @@ export function createPostgresThreadsStore(
   const ownsPool = options.ownsPool ?? false
   const pool = options.pool ?? throwNoPool()
 
+  const assumeMigrated = options.assumeMigrated ?? false
+
   let initP: Promise<void> | undefined
   const ready = (): Promise<void> => {
-    initP ??= runMigrations(pool, THREADS_MIGRATIONS, { schema, prefix, component: "threads" })
+    // `assumeMigrated` short-circuits to a resolved promise rather than a
+    // cheaper migration: `runMigrations` has no up-to-date fast path, so even a
+    // no-op pass costs a transaction and an advisory lock.
+    initP ??= assumeMigrated
+      ? Promise.resolve()
+      : runMigrations(pool, THREADS_MIGRATIONS, { schema, prefix, component: "threads" })
     return initP
   }
 

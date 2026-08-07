@@ -37,6 +37,26 @@ export interface PostgresStoreOptions {
    * when it builds the pool itself from a connection string.
    */
   readonly ownsPool?: boolean
+  /**
+   * Skip this store's migration pass entirely: `ready()` resolves immediately
+   * and every method proceeds straight to its statement.
+   *
+   * Defaults to `false`. Set it only when THIS DATABASE has already been
+   * migrated to this store's current schema version by something else in the
+   * same process — the caller is asserting that, and a wrong assertion surfaces
+   * as an `undefined_table` error on the first query.
+   *
+   * It exists for the per-request store lifetime an edge runtime forces. A
+   * store's own memoization lives on the instance, so a factory that builds
+   * fresh stores per request re-migrates on every request: three transactions,
+   * each taking `pg_advisory_xact_lock`, which also SERIALIZES concurrent
+   * requests on the same component key. The caller migrates once per isolate
+   * (`ready()` on a first, unflagged set of stores) and passes this thereafter.
+   *
+   * It does not weaken the lock — the migration it skips is one already known
+   * to have run, and the pass that did run took the lock as usual.
+   */
+  readonly assumeMigrated?: boolean
   /** Postgres schema to place tables in. Defaults to `public`. */
   readonly schema?: string
   /** Table name prefix. Defaults to `dawn`; vary it to share one database. */

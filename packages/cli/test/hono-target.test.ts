@@ -26,8 +26,18 @@ async function createFixtureApp(files: Readonly<Record<string, string>> = {}) {
 
   const appFiles: Record<string, string> = {
     "dawn.config.ts": 'export default { build: { targets: ["hono"] } }\n',
-    "package.json":
-      '{ "name": "hono-fixture", "dependencies": { "@dawn-ai/cli": "workspace:*" } }\n',
+    // Declares every package the emitted entry imports, so the default fixture
+    // builds with a genuinely silent stderr — the dependency notice is exercised
+    // by the cases that deliberately drop them.
+    "package.json": `${JSON.stringify({
+      dependencies: {
+        "@dawn-ai/cli": "workspace:*",
+        "@dawn-ai/postgres-storage": "workspace:*",
+        "@neondatabase/serverless": "^1.1.0",
+        hono: "^4.12.28",
+      },
+      name: "hono-fixture",
+    })}\n`,
     "src/app/chat/index.ts": `import { agent } from "@dawn-ai/sdk"
 
 export default agent({
@@ -61,10 +71,10 @@ async function runBuild(appRoot: string) {
   )
   // `dawn build` reports every emitted artifact as "  wrote <path>" — the only
   // channel the command exposes its artifact list on.
-  const artifacts = stdout
+  const artifactPaths = stdout
     .filter((line) => line.startsWith("  wrote "))
-    .map((line) => basename(line.slice("  wrote ".length).trim()))
-  return { artifacts, stderr, stdout }
+    .map((line) => line.slice("  wrote ".length).trim())
+  return { artifactPaths, artifacts: artifactPaths.map((path) => basename(path)), stderr, stdout }
 }
 
 const buildFile = (appRoot: string, name: string) => join(appRoot, ".dawn", "build", name)
@@ -122,6 +132,41 @@ describe("dawn build — hono target", () => {
     expect(stderr.join("")).toContain("wrangler.toml")
   })
 
+  test("a rebuild recognizes its own wrangler.toml", async () => {
+    const appRoot = await createFixtureApp()
+
+    const first = await runBuild(appRoot)
+    const scaffold = await readFile(join(appRoot, "wrangler.toml"), "utf8")
+    const second = await runBuild(appRoot)
+
+    // The marker is written AND read back. Without the read-back a rebuild
+    // treats its own output as a stranger's: a spurious ⚠, a redundant copy in
+    // .dawn/build/, and — quietest — the reported artifact silently moving from
+    // the app root to the build dir, so the file the operator deploys stops
+    // being the one the build named.
+    expect(second.stderr.join("")).toBe("")
+    expect(existsSync(buildFile(appRoot, "wrangler.toml"))).toBe(false)
+    // Reported paths are relative to cwd; what matters is that the wrangler.toml
+    // the build names is still the app-root one, not a build-dir duplicate.
+    expect(second.artifactPaths).toEqual(first.artifactPaths)
+    expect(
+      second.artifactPaths.some((path) => path.endsWith(join(".dawn", "build", "wrangler.toml"))),
+    ).toBe(false)
+    // Never overwritten, marker or not: a wrangler.toml accretes bindings.
+    expect(await readFile(join(appRoot, "wrangler.toml"), "utf8")).toBe(scaffold)
+  })
+
+  test("worker name starts with a letter, as Cloudflare requires", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": '{ "name": "123-app" }\n',
+    })
+
+    await runBuild(appRoot)
+
+    // `123-app` sanitizes to a name wrangler rejects outright at deploy time.
+    expect(await readFile(join(appRoot, "wrangler.toml"), "utf8")).toContain('name = "app"')
+  })
+
   test("wrangler.toml scaffold carries no nodejs_compat flag", async () => {
     const appRoot = await createFixtureApp()
 
@@ -149,13 +194,41 @@ describe("dawn build — hono target", () => {
     expect(entry).not.toMatch(/^const pool = /m)
 
     const stores = await readBuildFile(appRoot, "stores.mjs")
-    expect(stores).toContain("export function createRequestStores")
+    expect(stores).toContain("export async function createRequestStores")
     expect(stores).not.toMatch(/^const pool = /m)
     // The factory's whole point: a pool per invocation, closed on dispose.
     expect(stores).toContain("dispose")
     // `process` does not exist on workerd without nodejs_compat — every knob
     // must come off the per-request env binding.
     expect(stores).not.toContain("process.env")
+  })
+
+  test("migrates once per isolate, not once per request", async () => {
+    const appRoot = await createFixtureApp()
+
+    await runBuild(appRoot)
+
+    const stores = await readBuildFile(appRoot, "stores.mjs")
+    // Per-request stores memoize migrations on the INSTANCE, so without this
+    // flag every request pays three migration transactions — each taking
+    // pg_advisory_xact_lock, which also serializes concurrent requests.
+    expect(stores).toMatch(/^let migrated = false$/m)
+    expect(stores).toContain("assumeMigrated")
+    // The cold-start pass still runs under the lock; the flag only skips a pass
+    // already known to have completed, and only after it succeeded.
+    expect(stores).toContain("ready()")
+    expect(stores.indexOf("migrated = true")).toBeGreaterThan(stores.indexOf("ready()"))
+  })
+
+  test("names the missing binding instead of building a pool with no connection string", async () => {
+    const appRoot = await createFixtureApp()
+
+    await runBuild(appRoot)
+
+    expect(await readBuildFile(appRoot, "stores.mjs")).toContain("DATABASE_URL is not set")
+    // The other half: a Request that never passed through the catch-all has no
+    // env bound, and `?? {}` turned that into the same silent empty pool.
+    expect(await readBuildFile(appRoot, "app.mjs")).toContain("no Workers env is bound")
   })
 
   test("app.mjs uses the same opaque appRoot namespace the manifest bakes in", async () => {
@@ -176,12 +249,15 @@ describe("dawn build — hono target", () => {
   })
 
   test("inlines the config minus its non-serializable fields", async () => {
+    // No store handle here: a configured store is now a BUILD ERROR (see
+    // "fails the build on a config-supplied store…"), because stripping it
+    // silently is what let the emitted Postgres store take its place unasked.
+    // Functions are still stripped — they have no such replacement.
     const appRoot = await createFixtureApp({
       "dawn.config.ts": `export default {
   build: { targets: ["hono"] },
   memory: { enabled: true, writes: "auto" },
   summarization: { enabled: true, maxTokens: 4096, tokenCounter: (text) => text.length },
-  threadsStore: { list: async () => [] },
 }
 `,
     })
@@ -194,9 +270,7 @@ describe("dawn build — hono target", () => {
       memory: { enabled: true, writes: "auto" },
       summarization: { enabled: true, maxTokens: 4096 },
     })
-    // Store instances come from stores.mjs; functions cannot cross a build.
     expect(entry).not.toContain("tokenCounter")
-    expect(entry).not.toContain("threadsStore")
   })
 
   test("emits a static importer for the providers the routes actually use", async () => {
@@ -219,6 +293,56 @@ export default agent({
     expect(entry).toContain('import("@langchain/anthropic")')
     expect(entry).not.toContain('import("@langchain/mistralai")')
     expect(entry).toContain("seedModelImporter")
+  })
+
+  test("includes the summarization model's provider, which no route declares", async () => {
+    // `defaultSummarize` calls resolveProvider + createChatModel on its own, so
+    // an openai-only route set with an anthropic summarization model used to
+    // build green and fail at runtime on a package that was never bundled.
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  summarization: { enabled: true, model: "claude-sonnet-4-5" },
+}
+`,
+    })
+
+    await runBuild(appRoot)
+
+    const entry = await readBuildFile(appRoot, "app.mjs")
+    expect(entry).toContain('import("@langchain/openai")')
+    expect(entry).toContain('import("@langchain/anthropic")')
+  })
+
+  test("fails the build when a route cannot be loaded, rather than narrowing the map", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/broken/index.ts":
+        'import { nope } from "./missing-module.js"\nexport default nope\n',
+    })
+
+    const message = String(await runBuild(appRoot).catch((e: unknown) => e))
+
+    // A skipped route contributes no provider, and the runtime's fallback then
+    // advises "rebuild with `dawn build`" — which reproduces the same gap.
+    expect(message).toMatch(/broken/)
+    expect(existsSync(buildFile(appRoot, "app.mjs"))).toBe(false)
+  })
+
+  test("fails the build when an agent's provider cannot be determined", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/proxy/index.ts": `import { agent } from "@dawn-ai/sdk"
+
+export default agent({
+  model: "some-proxy-model",
+  systemPrompt: "Answer questions.",
+})
+`,
+    })
+
+    const message = String(await runBuild(appRoot).catch((e: unknown) => e))
+
+    expect(message).toContain("provider")
+    expect(message).toContain("proxy")
   })
 })
 
@@ -397,33 +521,74 @@ export default defineMemory({ schema: z.object({ fact: z.string() }) })
   })
 
   test("names the runtime packages the emitted entry imports but the app lacks", async () => {
-    const appRoot = await createFixtureApp()
+    const appRoot = await createFixtureApp({
+      "package.json": '{ "name": "hono-fixture", "dependencies": { "@dawn-ai/cli": "*" } }\n',
+    })
 
-    const { stdout } = await runBuild(appRoot)
+    // stderr, matching the node target's own runtime-dependency ⚠. stdout is the
+    // artifact report a caller parses; a warning about a deploy that will fail
+    // to resolve an import does not belong in it.
+    const { stderr, stdout } = await runBuild(appRoot)
 
-    const notice = stdout.join("")
+    const notice = stderr.join("")
     expect(notice).toContain("@dawn-ai/postgres-storage")
     expect(notice).toContain("@neondatabase/serverless")
     expect(notice).toContain("hono")
     expect(notice).toContain("dependencies")
+    expect(stdout.join("")).not.toContain("@neondatabase/serverless")
   })
 
   test("says nothing when the app already depends on them", async () => {
+    const appRoot = await createFixtureApp()
+
+    const { stderr } = await runBuild(appRoot)
+
+    expect(stderr.join("")).not.toContain("@neondatabase/serverless")
+  })
+
+  test("counts a devDependency as declared — wrangler bundles from the source tree", async () => {
+    // Unlike the node image's `npm ci --omit=dev`, `wrangler deploy` resolves
+    // from the tree it bundles, so a devDependency is genuinely there. Naming
+    // one as missing would be a false alarm.
     const appRoot = await createFixtureApp({
       "package.json": `${JSON.stringify({
-        dependencies: {
-          "@dawn-ai/cli": "workspace:*",
-          "@dawn-ai/postgres-storage": "^0.8.18",
-          "@neondatabase/serverless": "^1.1.0",
-          hono: "^4.0.0",
+        dependencies: { "@dawn-ai/cli": "*" },
+        devDependencies: {
+          "@dawn-ai/postgres-storage": "*",
+          "@neondatabase/serverless": "*",
+          hono: "*",
         },
         name: "hono-fixture",
       })}\n`,
     })
 
-    const { stdout } = await runBuild(appRoot)
+    const { stderr } = await runBuild(appRoot)
 
-    expect(stdout.join("")).not.toContain("@neondatabase/serverless")
+    expect(stderr.join("")).toBe("")
+  })
+
+  test("fails the build on a config-supplied store instead of silently swapping it", async () => {
+    for (const [key, source] of [
+      ["threadsStore", "threadsStore: { listThreads: async () => [] },"],
+      ["checkpointer", "checkpointer: { getTuple: async () => undefined },"],
+      ["permissions.store", "permissions: { store: { load: async () => {} } },"],
+      ["memory.store", "memory: { store: { recall: async () => [] } },"],
+    ] as const) {
+      const appRoot = await createFixtureApp({
+        "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  ${source}
+}
+`,
+      })
+
+      const message = String(await runBuild(appRoot).catch((e: unknown) => e))
+
+      // The silent-divergence class: the handle is stripped by the serializer
+      // and the emitted Postgres store takes its place with nothing said.
+      expect(message).toContain(`\`${key}\``)
+      expect(existsSync(buildFile(appRoot, "app.mjs"))).toBe(false)
+    }
   })
 })
 

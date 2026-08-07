@@ -31,9 +31,54 @@ export interface EdgeCapabilityViolation {
 /** Everything the gate inspects. All of it is available before any emit. */
 export interface EdgeCapabilityInput {
   readonly appRoot: string
-  readonly config: Pick<DawnConfig, "backends" | "sandbox">
+  readonly config: Pick<
+    DawnConfig,
+    "backends" | "checkpointer" | "memory" | "permissions" | "sandbox" | "threadsStore"
+  >
   readonly manifest: RouteManifest
 }
+
+/**
+ * Store handles the emitted `stores.mjs` supplies itself, per request.
+ *
+ * A config that sets one of these is not merely unsupported — it is SILENTLY
+ * overridden: the handle is a live object, so `toSerializableConfig` strips it
+ * out of the inlined config and the generated Postgres store takes its place
+ * with nothing said. Naming the key at build time is the whole point.
+ */
+const EDGE_OVERRIDDEN_STORES: readonly {
+  readonly key: string
+  readonly capability: string
+  /** What actually happens to it at runtime today, said plainly. */
+  readonly outcome: string
+  readonly read: (config: EdgeCapabilityInput["config"]) => unknown
+}[] = [
+  {
+    key: "checkpointer",
+    capability: "a custom checkpointer",
+    outcome: "replaced by the Postgres checkpointer the emitted stores.mjs builds per request",
+    read: (c) => c.checkpointer,
+  },
+  {
+    key: "threadsStore",
+    capability: "a custom threads store",
+    outcome: "replaced by the Postgres threads store the emitted stores.mjs builds per request",
+    read: (c) => c.threadsStore,
+  },
+  {
+    key: "permissions.store",
+    capability: "a custom permissions store",
+    outcome: "replaced by the Postgres permissions store the emitted stores.mjs builds per request",
+    read: (c) => c.permissions?.store,
+  },
+  {
+    key: "memory.store",
+    capability: "a custom memory store",
+    outcome:
+      "dropped outright — the emitted stores.mjs supplies no memory store, so the first `recall`/`remember` would fail with DAWN_E5301",
+    read: (c) => c.memory?.store,
+  },
+]
 
 /**
  * Every feature this app uses that the `hono` target cannot serve, in a stable
@@ -75,6 +120,22 @@ export function collectEdgeCapabilityViolations(
         remedy: `Remove \`backends.${kind}\``,
       })
     }
+  }
+
+  // A configured store handle is the quietest failure of the lot: nothing
+  // errors, the build succeeds, and the deployed app just uses a different
+  // database than the config says. Named by key, at build time.
+  for (const store of EDGE_OVERRIDDEN_STORES) {
+    if (store.read(config) === undefined) continue
+    violations.push({
+      capability: store.capability,
+      source: `\`${store.key}\` in dawn.config.ts`,
+      reason:
+        `a store handle is a live object, and nothing can carry an object across a build boundary ` +
+        `into a deployed bundle — only the JSON-serializable half of your config is inlined, so at ` +
+        `runtime yours is ${store.outcome}`,
+      remedy: `Remove \`${store.key}\``,
+    })
   }
 
   // The workspace marker activates on this directory alone (workspace.ts), and
@@ -159,13 +220,38 @@ export function formatEdgeCapabilityViolations(
 // runtime dependencies
 // ---------------------------------------------------------------------------
 
-/** Bare specifiers the emitted `app.mjs` / `stores.mjs` import at runtime. */
+/**
+ * Bare specifiers the emitted `app.mjs` / `stores.mjs` import at runtime.
+ *
+ * None of these is a dependency of `@dawn-ai/cli`, and that is deliberate: the
+ * CLI does not import any of them — the app it GENERATES does. Vendoring them
+ * into the CLI would resolve them only under a hoisting layout, and silently
+ * not under pnpm's strict one. The app declares what the app imports.
+ */
 const EDGE_RUNTIME_DEPENDENCIES: readonly string[] = [
   "@dawn-ai/cli",
   "@dawn-ai/postgres-storage",
   "@neondatabase/serverless",
   "hono",
 ]
+
+/**
+ * Every `package.json` field that can make a bare specifier resolve for a
+ * bundler at deploy time.
+ *
+ * Wider than the node target's `dependencies`-only check on purpose, and for a
+ * different reason: the node image runs `npm ci --omit=dev`, so a devDependency
+ * genuinely IS missing at runtime there. `wrangler deploy` bundles from the
+ * source tree instead, where a devDependency resolves fine — reporting one as
+ * missing would be a false alarm. `dependencies` is still the right advice for
+ * something the deployed app needs, which is what the notice says.
+ */
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+] as const
 
 /**
  * Advisory notice naming the packages the emitted entry imports but the app's
@@ -186,20 +272,19 @@ const EDGE_RUNTIME_DEPENDENCIES: readonly string[] = [
 export async function collectEdgeDependencyNotice(appRoot: string): Promise<string | undefined> {
   const packageJsonPath = resolve(appRoot, "package.json")
   if (!existsSync(packageJsonPath)) return undefined
-  let dependencies: Record<string, unknown> = {}
+  const declared = new Set<string>()
   try {
-    const parsed = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-      dependencies?: Record<string, unknown>
-    }
-    if (parsed.dependencies && typeof parsed.dependencies === "object") {
-      dependencies = parsed.dependencies
+    const parsed = JSON.parse(await readFile(packageJsonPath, "utf8")) as Record<string, unknown>
+    for (const field of DEPENDENCY_FIELDS) {
+      const map = parsed[field]
+      if (map && typeof map === "object") for (const name of Object.keys(map)) declared.add(name)
     }
   } catch {
     // Best-effort — an app whose package.json cannot be parsed has a louder
     // problem than this notice.
     return undefined
   }
-  const missing = EDGE_RUNTIME_DEPENDENCIES.filter((name) => !Object.hasOwn(dependencies, name))
+  const missing = EDGE_RUNTIME_DEPENDENCIES.filter((name) => !declared.has(name))
   if (missing.length === 0) return undefined
   return (
     `⚠ The "${EDGE_TARGET}" target's app.mjs/stores.mjs import ${missing.join(", ")} at runtime, ` +

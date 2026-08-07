@@ -131,6 +131,7 @@ export class DawnPostgresSaver extends BaseCheckpointSaver {
   private readonly prefix: string
   private readonly checkpointsTable: string
   private readonly writesTable: string
+  private readonly assumeMigrated: boolean
   private initP: Promise<void> | undefined
 
   constructor(options: PostgresCheckpointerOptions = {}) {
@@ -144,6 +145,7 @@ export class DawnPostgresSaver extends BaseCheckpointSaver {
     this.checkpointsTable = qualify({ schema, prefix }, "checkpoints")
     this.writesTable = qualify({ schema, prefix }, "writes")
     this.ownsPool = options.ownsPool ?? false
+    this.assumeMigrated = options.assumeMigrated ?? false
     this.pool = options.pool ?? throwNoPool()
   }
 
@@ -154,11 +156,16 @@ export class DawnPostgresSaver extends BaseCheckpointSaver {
    * is handled by the advisory lock inside `runMigrations`.
    */
   ready(): Promise<void> {
-    this.initP ??= runMigrations(this.pool, CHECKPOINTER_MIGRATIONS, {
-      schema: this.schema,
-      prefix: this.prefix,
-      component: "checkpointer",
-    })
+    // See `assumeMigrated` in options.ts: a resolved promise, not a cheaper
+    // migration — `runMigrations` costs a transaction plus an advisory lock
+    // even when there is nothing left to apply.
+    this.initP ??= this.assumeMigrated
+      ? Promise.resolve()
+      : runMigrations(this.pool, CHECKPOINTER_MIGRATIONS, {
+          schema: this.schema,
+          prefix: this.prefix,
+          component: "checkpointer",
+        })
     return this.initP
   }
 

@@ -76,13 +76,20 @@ export function createPostgresPermissionsStore(
   let runtimeAllow: MutableMap = {}
   let runtimeDeny: MutableMap = {}
 
+  const assumeMigrated = options.assumeMigrated ?? false
+
   let initP: Promise<void> | undefined
   const ready = (): Promise<void> => {
-    initP ??= runMigrations(pool, PERMISSIONS_MIGRATIONS, {
-      schema,
-      prefix,
-      component: "permissions",
-    })
+    // See `assumeMigrated` in options.ts: a resolved promise, not a cheaper
+    // migration — `runMigrations` costs a transaction plus an advisory lock
+    // even when there is nothing left to apply.
+    initP ??= assumeMigrated
+      ? Promise.resolve()
+      : runMigrations(pool, PERMISSIONS_MIGRATIONS, {
+          schema,
+          prefix,
+          component: "permissions",
+        })
     return initP
   }
 
