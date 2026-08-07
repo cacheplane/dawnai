@@ -13,7 +13,7 @@
  *  - planning   → plan.md autowires; tool writeTodos({todos:[{content,status}]});
  *                 emits plan_update.
  *  - permissions→ runBash({command}); non-allow-listed command emits interrupt
- *                 kind "command" with detail {command}; resume({decision:"once"}).
+ *                 kind "command" with detail {command}; resume by interrupt ID.
  *  - subagents  → coordinator dispatches via task({subagent,input}); child seeded
  *                 with user message == the `input` value; subagent.start carries
  *                 name "research".
@@ -26,7 +26,6 @@
  * cache), rather than holding both open at module scope.
  */
 import { fileURLToPath } from "node:url"
-import { afterAll, beforeAll, describe, it } from "vitest"
 import {
   type AgentHarness,
   createAgentHarness,
@@ -38,6 +37,7 @@ import {
   expectToolCalled,
   script,
 } from "@dawn-ai/testing"
+import { afterAll, beforeAll, describe, it } from "vitest"
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url))
 
@@ -108,7 +108,13 @@ describe("chat capabilities", () => {
     expectInterrupt(run).ofKind("command").withDetail({ command: "npm view react version" })
 
     // Resume with a one-time approval; the gate releases and runBash executes.
-    const resumed = await chat.resume({ decision: "once" })
+    const resumed = await chat.resume({
+      resume: run.interrupts.map((entry) => ({
+        interruptId: entry.interruptId,
+        status: "resolved" as const,
+        payload: "once",
+      })),
+    })
     expectToolCalled(resumed, "runBash")
   }, 60_000)
 

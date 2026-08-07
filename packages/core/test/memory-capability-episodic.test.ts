@@ -61,7 +61,7 @@ function makeContext(
     writes: "auto",
     defined: { kind: "episodic", scope: ["route"] },
     validate: () => ({ ok: true, value: { event: "deployed" } }),
-    now: NOW,
+    now: () => NOW,
     ...over,
   }
   return {

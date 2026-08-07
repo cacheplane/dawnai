@@ -1,10 +1,8 @@
 // Deterministic (aimock) regression: the long-term-memory INDEX HINT must not go
-// stale in a long-running process. The index fragment is built from the active
-// store rows at agent-materialize time, and the materialized agent is cached
-// per descriptor — so a memory written AFTER the first materialize must still
-// surface in the index hint on a later run without a process restart. The
-// recall tool is always live; this guards the hint specifically. Runs in CI
-// (no API key — aimock).
+// stale in a long-running process. The materialized agent is cached per
+// descriptor, so its prompt fragment must query active rows on every render.
+// A memory written AFTER the first materialize must surface on a later run
+// without a process restart. Runs in CI (no API key — aimock).
 import { rmSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -49,8 +47,8 @@ it("refreshes the memory index hint when a memory is written mid-process (no res
       updatedAt: "2026-06-20T00:00:00.000Z",
     })
 
-    // Run 2: same process, cached agent. The index hint must now appear —
-    // i.e. the materialize cache re-keyed on the changed memory content.
+    // Run 2: same process, cached agent. The render-time store query must make
+    // the new index hint appear without re-materializing the graph.
     h.reset()
     const r2 = await h.run({
       input: "Hello again.",

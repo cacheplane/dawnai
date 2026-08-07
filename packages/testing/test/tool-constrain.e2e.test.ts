@@ -68,7 +68,13 @@ it("escalating arg (prod) raises the kind:'tool' interrupt, then resume(once) ru
     })
     expectInterrupt(run).ofKind("tool").withDetail({ toolName: "deployProd" })
 
-    const resumed = await h.resume({ decision: "once" })
+    const resumed = await h.resume({
+      resume: run.interrupts.map((entry) => ({
+        interruptId: entry.interruptId,
+        status: "resolved" as const,
+        payload: "once",
+      })),
+    })
     expectToolCalled(resumed, "deployProd")
     // The result comes from the REAL deployProd fn, not the fixture reply.
     expect(toolResultText(resumed, "deployProd")).toContain("deployed to prod")

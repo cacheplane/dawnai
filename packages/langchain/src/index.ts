@@ -3,7 +3,6 @@ export { Command } from "@langchain/langgraph"
 export type {
   AgentStreamChunk,
   DawnToolDefinition,
-  SubagentResolver,
 } from "./agent-adapter.js"
 export {
   __resetMaterializedAgentsForTests,
@@ -23,17 +22,8 @@ export { openaiEmbedder } from "./openai-embedder.js"
 export type { RetryOptions } from "./retry.js"
 export { isRetryableError, withRetry } from "./retry.js"
 export { materializeStateSchema } from "./state-adapter.js"
-export type {
-  SubagentEvent,
-  SubagentStreamContext,
-} from "./subagent-dispatcher.js"
-export {
-  createSubagentStreamContext,
-  dispatchSubagent,
-  MAX_SUBAGENT_DEPTH,
-} from "./subagent-dispatcher.js"
-export type { SubagentResolverResult } from "./subagent-tool-bridge.js"
-export { bridgeSubagentTool } from "./subagent-tool-bridge.js"
+export type { ResolvedSubagentGraph, SubagentResolver } from "./subagent-tool-bridge.js"
+export { convertSubagentTaskToLangChain } from "./subagent-tool-bridge.js"
 export * from "./summarization/index.js"
 export type { OffloadFn } from "./tool-converter.js"
 export { convertToolToLangChain } from "./tool-converter.js"

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import { collectRunResult, deriveToolResults } from "../src/run-result.js"
 
 async function* fakeStream() {
@@ -54,29 +54,281 @@ it("captures interrupts, plan updates, and folds subagent events", async () => {
   async function* s() {
     yield {
       type: "interrupt",
-      data: { interruptId: "perm-1", kind: "command", detail: { command: "rm -rf tmp" } },
+      data: {
+        interruptId: "perm-1",
+        kind: "command",
+        detail: { command: "rm -rf tmp", suggestedPattern: "rm -rf tmp" },
+      },
     }
     yield { type: "plan_update", data: { todos: [{ content: "A", status: "pending" }] } }
     yield { type: "plan_update", data: { todos: [{ content: "A", status: "completed" }] } }
-    yield { type: "subagent.start", data: { call_id: "c1", subagent: "research" } }
+    const child = { call_id: "c1", subagent: "research", route_id: "/research", depth: 1 }
+    yield { type: "subagent.start", data: child }
     yield {
       type: "subagent.tool_call",
-      data: { call_id: "c1", tool: "webSearch", input: { q: "x" } },
+      data: { ...child, id: "tool-run-1", tool: "webSearch", input: { q: "x" } },
     }
-    yield { type: "subagent.end", data: { call_id: "c1", final_message: "found it" } }
+    yield { type: "subagent.message", data: { ...child, chunk: "Inspecting" } }
+    yield {
+      type: "subagent.tool_result",
+      data: { ...child, id: "tool-run-1", tool: "webSearch", output: ["result"] },
+    }
+    yield {
+      type: "subagent.memory.recalled",
+      data: { ...child, memories: [{ id: "memory-1" }] },
+    }
+    yield { type: "subagent.end", data: { ...child, final_message: "found it" } }
     yield { type: "done", output: { messages: [] } }
   }
   const r = await collectRunResult(s() as never, "t")
   expect(r.interrupts).toEqual([
-    { interruptId: "perm-1", kind: "command", detail: { command: "rm -rf tmp" } },
+    {
+      interruptId: "perm-1",
+      kind: "command",
+      detail: { command: "rm -rf tmp", suggestedPattern: "rm -rf tmp" },
+    },
   ])
   expect(r.planUpdates).toHaveLength(2)
   expect(r.todos).toEqual([{ content: "A", status: "completed" }])
   expect(r.subagents).toHaveLength(1)
   expect(r.subagents[0]).toMatchObject({ name: "research", callId: "c1", finalMessage: "found it" })
   expect(r.subagents[0]?.toolCalls).toEqual([{ name: "webSearch", args: { q: "x" } }])
-  expect(r.subagentEvents.length).toBeGreaterThanOrEqual(3)
+  expect(r.subagentEvents).toEqual([
+    {
+      type: "subagent.start",
+      data: { call_id: "c1", subagent: "research", route_id: "/research", depth: 1 },
+    },
+    {
+      type: "subagent.tool_call",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        id: "tool-run-1",
+        tool: "webSearch",
+        input: { q: "x" },
+      },
+    },
+    {
+      type: "subagent.message",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        chunk: "Inspecting",
+      },
+    },
+    {
+      type: "subagent.tool_result",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        id: "tool-run-1",
+        tool: "webSearch",
+        output: ["result"],
+      },
+    },
+    {
+      type: "subagent.memory.recalled",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        memories: [{ id: "memory-1" }],
+      },
+    },
+    {
+      type: "subagent.end",
+      data: {
+        call_id: "c1",
+        subagent: "research",
+        route_id: "/research",
+        depth: 1,
+        final_message: "found it",
+      },
+    },
+  ])
 })
+
+it("retains distinct call ids for parallel child interrupts without changing root interrupts", async () => {
+  async function* s() {
+    yield {
+      type: "interrupt",
+      data: {
+        interruptId: "perm-alpha",
+        kind: "tool",
+        callId: "call-alpha",
+        detail: {
+          toolName: "readFile",
+          argsPreview: '{"path":"README.md"}',
+          suggestedPattern: "readFile",
+        },
+      },
+    }
+    yield {
+      type: "interrupt",
+      data: {
+        interruptId: "perm-beta",
+        kind: "command",
+        callId: "call-beta",
+        detail: { command: "pwd", suggestedPattern: "pwd" },
+      },
+    }
+    yield {
+      type: "interrupt",
+      data: {
+        interruptId: "perm-root",
+        kind: "memory",
+        detail: {
+          namespace: "facts",
+          identity: "workspace / fact",
+          oldId: "old-1",
+          oldContent: "old",
+          newContent: "new",
+          suggestedPattern: "workspace=facts|",
+        },
+      },
+    }
+  }
+
+  const r = await collectRunResult(s() as never, "t")
+
+  expect(r.interrupts).toEqual([
+    {
+      interruptId: "perm-alpha",
+      kind: "tool",
+      callId: "call-alpha",
+      detail: {
+        toolName: "readFile",
+        argsPreview: '{"path":"README.md"}',
+        suggestedPattern: "readFile",
+      },
+    },
+    {
+      interruptId: "perm-beta",
+      kind: "command",
+      callId: "call-beta",
+      detail: { command: "pwd", suggestedPattern: "pwd" },
+    },
+    {
+      interruptId: "perm-root",
+      kind: "memory",
+      detail: {
+        namespace: "facts",
+        identity: "workspace / fact",
+        oldId: "old-1",
+        oldContent: "old",
+        newContent: "new",
+        suggestedPattern: "workspace=facts|",
+      },
+    },
+  ])
+})
+
+it("retains subagent approval identity and typed detail", async () => {
+  const envelope = {
+    interruptId: "perm-1",
+    type: "permission-request",
+    kind: "subagent",
+    callId: "task-1",
+    detail: {
+      parentRouteId: "/support",
+      subagentName: "writer",
+      subagentRouteId: "/support/subagents/writer",
+      inputPreview: "Draft the response",
+      reason: "Drafts require review.",
+      suggestedPattern: JSON.stringify(["/support", "writer"]),
+    },
+  } as const
+
+  async function* s() {
+    yield { type: "interrupt", data: envelope }
+  }
+
+  const r = await collectRunResult(s() as never, "t")
+  const interrupt = r.interrupts[0]
+
+  expect(interrupt).toEqual({
+    interruptId: envelope.interruptId,
+    kind: envelope.kind,
+    callId: envelope.callId,
+    detail: envelope.detail,
+  })
+  if (interrupt?.kind !== "subagent") throw new Error("expected a subagent interrupt")
+  const detail = interrupt.detail
+  expectTypeOf(detail.parentRouteId).toEqualTypeOf<string>()
+  expectTypeOf(detail.subagentName).toEqualTypeOf<string>()
+  expectTypeOf(detail.subagentRouteId).toEqualTypeOf<string>()
+  expectTypeOf(detail.inputPreview).toEqualTypeOf<string>()
+  expectTypeOf(detail.suggestedPattern).toEqualTypeOf<string>()
+  expectTypeOf(detail.reason).toEqualTypeOf<string | undefined>()
+  expectTypeOf(interrupt.callId).toEqualTypeOf<string | undefined>()
+  expect(detail.parentRouteId).toBe("/support")
+  expect(detail.subagentName).toBe("writer")
+  expect(detail.subagentRouteId).toBe("/support/subagents/writer")
+  expect(detail.inputPreview).toBe("Draft the response")
+  expect(detail.reason).toBe("Drafts require review.")
+})
+
+it("rejects unknown interrupt kinds", async () => {
+  async function* s() {
+    yield {
+      type: "interrupt",
+      data: { interruptId: "perm-1", kind: "approval", detail: {} },
+    }
+  }
+
+  await expect(collectRunResult(s() as never, "t")).rejects.toThrow(
+    'Unsupported interrupt kind "approval"',
+  )
+})
+
+it("rejects malformed details for a known interrupt kind", async () => {
+  async function* s() {
+    yield {
+      type: "interrupt",
+      data: {
+        interruptId: "perm-1",
+        kind: "subagent",
+        detail: { parentRouteId: "/support", subagentName: "writer" },
+      },
+    }
+  }
+
+  await expect(collectRunResult(s() as never, "t")).rejects.toThrow(
+    'Malformed "subagent" interrupt detail',
+  )
+})
+
+it("rejects a present undefined subagent reason", async () => {
+  async function* s() {
+    yield {
+      type: "interrupt",
+      data: {
+        interruptId: "perm-1",
+        kind: "subagent",
+        detail: {
+          parentRouteId: "/support",
+          subagentName: "writer",
+          subagentRouteId: "/support/subagents/writer",
+          inputPreview: "Draft the response",
+          reason: undefined,
+          suggestedPattern: JSON.stringify(["/support", "writer"]),
+        },
+      },
+    }
+  }
+
+  await expect(collectRunResult(s() as never, "t")).rejects.toThrow(
+    'Malformed "subagent" interrupt detail',
+  )
+})
+
 it("captures a subagent error end", async () => {
   async function* s() {
     yield { type: "subagent.start", data: { call_id: "c1", subagent: "research" } }

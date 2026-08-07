@@ -31,6 +31,7 @@ afterEach(async () => {
 
 interface HarnessRunResult {
   readonly finalMessage: string
+  readonly interrupts: ReadonlyArray<{ readonly interruptId: string }>
   readonly threadId: string
   readonly toolResults: ReadonlyArray<{ readonly name: string }>
 }
@@ -45,7 +46,11 @@ interface ScriptBuilderLike {
 interface HarnessLike {
   run(opts: { input: string; fixtures?: ScriptBuilderLike }): Promise<HarnessRunResult>
   resume(opts: {
-    decision: "once" | "always" | "deny"
+    resume: ReadonlyArray<{
+      readonly interruptId: string
+      readonly payload: "once" | "always" | "deny"
+      readonly status: "resolved"
+    }>
     fixtures?: ScriptBuilderLike
   }): Promise<HarnessRunResult>
   reset(): void
@@ -305,7 +310,7 @@ describe("episodic auto-recorder (aimock harness)", () => {
     try {
       // Turn 1: the model calls the approve-listed tool → the run parks on a
       // HITL interrupt. The tool did NOT execute — no episode may exist.
-      await h.run({
+      const parked = await h.run({
         input: "deploy to staging",
         fixtures: script()
           .user("deploy to staging")
@@ -318,7 +323,13 @@ describe("episodic auto-recorder (aimock harness)", () => {
       // one episode, whose input is the ORIGINAL question (a resume turn has
       // no new human message — it comes from the final state's history) and
       // whose toolsUsed reflects the actually-executed tool.
-      const resumed = await h.resume({ decision: "once" })
+      const resumed = await h.resume({
+        resume: parked.interrupts.map((entry) => ({
+          interruptId: entry.interruptId,
+          payload: "once",
+          status: "resolved",
+        })),
+      })
       expect(resumed.finalMessage).toContain("Deployed")
 
       const episodes = await episodicRecords(appRoot)

@@ -11,7 +11,9 @@ Functions and types for declaring an LLM-driven agent route. See [Agents](/docs/
 ### `agent(config)`
 
 ```ts
-export function agent(config: AgentConfig): DawnAgent
+export function agent<const Subagents extends SubagentMap = {}>(
+  config: AgentConfig<Subagents>,
+): DawnAgent<Subagents>
 ```
 
 Creates an agent route entry from a config object. The return value is the default export of a route's `index.ts`. Dawn discovers tool files found in the sibling `tools/` directory and wires them into generated agent graphs.
@@ -30,19 +32,21 @@ See [Agents](/docs/agents).
 ### `AgentConfig`
 
 ```ts
-export interface AgentConfig {
+export interface AgentConfig<Subagents extends SubagentMap = {}> {
+  readonly delegation?: DelegationConfig<NoInfer<Extract<keyof Subagents, string>>>
   readonly description?: string
   readonly model: KnownModelId
   readonly provider?: ModelProviderId
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
-  readonly subagents?: readonly DawnAgent[]
+  readonly recursionLimit?: number
+  readonly subagents?: Subagents
   readonly tools?: ToolScope
   readonly systemPrompt: string
 }
 ```
 
-Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `provider` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `subagents` lists child agent descriptors exposed through Dawn's subagent capability. `tools` scopes route-level tool exposure and approval policy with `allow`, `deny`, or `approve`. `systemPrompt` is sent as the system message on every invocation.
+Configuration passed to `agent()`. `description` is optional metadata for agent and subagent selection. `model` must be a `KnownModelId` string. `provider` is optional. When omitted, Dawn infers a provider for known model families. Set it explicitly to one of the supported built-in provider ids for aliases, ambiguous model names, local models, or provider-router model ids. `reasoning` maps to OpenAI reasoning-effort options when the selected model supports them. `retry` controls automatic retries on transient failures. `recursionLimit` caps LangGraph super-steps. `subagents` is a keyed registry of child descriptors; arrays are not accepted. `delegation` controls dispatch to those children and narrows named rules to the registry keys. `tools` scopes public route-level tools with `allow`, `deny`, `approve`, and `constrain`; the internal `task` mechanism is invalid in every tool-policy field. `systemPrompt` is sent as the system message on every invocation.
 
 The built-in `agent()` route materializes to a LangChain chat model. Dawn infers providers for known model families and lazy-loads the matching LangChain integration package. Raw `graph` and `chain` routes can still instantiate any provider directly.
 
@@ -76,13 +80,15 @@ See [Retry](/docs/retry).
 ### `DawnAgent`
 
 ```ts
-export interface DawnAgent {
+export interface DawnAgent<Subagents extends SubagentMap = SubagentMap> {
+  readonly delegation?: DelegationConfig<Extract<keyof Subagents, string>>
   readonly description?: string
   readonly model: string
   readonly provider?: ModelProviderId
   readonly reasoning?: ReasoningConfig
   readonly retry?: RetryConfig
-  readonly subagents?: readonly DawnAgent[]
+  readonly recursionLimit?: number
+  readonly subagents?: Subagents
   readonly tools?: ToolScope
   readonly systemPrompt: string
 }
@@ -91,6 +97,57 @@ export interface DawnAgent {
 Opaque branded type returned by `agent()`. Carry it as a route export; do not construct it manually. It preserves the public agent config fields plus Dawn's internal brand, including route-level tool policy. Use `isDawnAgent()` to check values at runtime.
 
 See [Agents](/docs/agents) and [Subagents](/docs/subagents).
+
+### Subagent delegation types
+
+```ts
+export type SubagentMap = Readonly<Record<string, DawnAgent>>
+
+export interface DelegationRequest {
+  readonly input: string
+}
+
+export interface DelegationContext {
+  readonly parentRouteId: string
+  readonly subagentName: string
+  readonly subagentRouteId: string
+  readonly threadId?: string
+  readonly params?: Readonly<Record<string, string>>
+  readonly signal: AbortSignal
+}
+
+export type DelegationVerdict =
+  | true
+  | string
+  | { readonly approve: true; readonly reason?: string }
+
+export type DelegationConstraintPredicate = (
+  request: DelegationRequest,
+  context: DelegationContext,
+) => DelegationVerdict | Promise<DelegationVerdict>
+
+export type DelegationRule =
+  | { readonly action: "allow" }
+  | { readonly action: "deny"; readonly reason?: string }
+  | { readonly action: "approve"; readonly reason?: string }
+  | {
+      readonly action: "constrain"
+      readonly predicate: DelegationConstraintPredicate
+    }
+
+export type DelegationRules<Name extends string> = [Name] extends [never]
+  ? Readonly<Record<string, never>>
+  : Partial<Record<Name, DelegationRule>>
+
+export interface DelegationConfig<Name extends string> {
+  readonly default?: "allow" | "deny" | "approve"
+  readonly rules?: DelegationRules<Name>
+}
+```
+
+`SubagentMap` is the keyed registry accepted by `agent()`. The key is the parent-local dispatch and permission identity. `DelegationRules` permits named rules only for explicit registry keys; with no registry, it rejects all named rules. Convention-only children are outside the compile-time key set and receive only `DelegationConfig.default`, which defaults to `"allow"`.
+
+`DelegationConstraintPredicate` receives the requested input and live dispatch context. Return `true` to allow, a string to deny with that reason, or `{ approve: true, reason? }` to enter the subagent permission gate. A throw or any other verdict fails closed. The predicate can inspect input but cannot rewrite it.
 
 ### `isDawnAgent(value)`
 

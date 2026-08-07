@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest"
+import { subagentPermissionPattern } from "../src/index.js"
 import {
   suggestedCommandPattern,
   suggestedMemoryPattern,
   suggestedPathPattern,
 } from "../src/suggested-pattern.js"
+
+describe("subagentPermissionPattern", () => {
+  it("serializes the parent route and subagent name as a JSON tuple", () => {
+    expect(subagentPermissionPattern("/support", "researcher")).toBe(
+      JSON.stringify(["/support", "researcher"]),
+    )
+  })
+})
 
 describe("suggestedCommandPattern", () => {
   it("returns the first two tokens for a multi-word command", () => {

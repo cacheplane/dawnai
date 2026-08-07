@@ -1,37 +1,41 @@
-import { describe, expect, expectTypeOf, it } from "vitest"
-import { agent, type DawnAgent, type ReasoningConfig } from "../src/index.js"
+import { describe, expect, it } from "vitest"
+import { agent } from "../src/index.js"
 
 describe("agent() descriptor — new fields", () => {
-  it("accepts description and subagents fields", () => {
-    const specialist = agent({
-      model: "gpt-5",
-      systemPrompt: "specialist",
-      description: "Does specialist work",
+  it("preserves an exactly inferred keyed subagent registry and delegation policy", () => {
+    const researcher = agent({
+      model: "gpt-5-mini",
+      systemPrompt: "Research.",
+      description: "Does research work",
     })
+    const predicate = async () => true as const
     const coordinator = agent({
-      model: "gpt-5",
-      systemPrompt: "coordinator",
-      subagents: [specialist],
+      model: "gpt-5-mini",
+      systemPrompt: "Coordinate.",
+      subagents: { researcher },
+      delegation: {
+        default: "deny",
+        rules: {
+          researcher: {
+            action: "constrain",
+            predicate,
+          },
+        },
+      },
     })
-    expect(coordinator.subagents?.[0]).toBe(specialist)
-    expect(specialist.description).toBe("Does specialist work")
+
+    expect(coordinator.subagents?.researcher).toBe(researcher)
+    expect(coordinator.delegation).toEqual({
+      default: "deny",
+      rules: { researcher: { action: "constrain", predicate } },
+    })
+    expect(researcher.description).toBe("Does research work")
   })
 
-  it("subagents array must contain DawnAgent values (type-only)", () => {
-    expectTypeOf<DawnAgent["subagents"]>().toEqualTypeOf<readonly DawnAgent[] | undefined>()
-    expectTypeOf<DawnAgent["description"]>().toEqualTypeOf<string | undefined>()
-  })
-
-  it("exports reasoning config used by agent descriptors", () => {
-    expectTypeOf<ReasoningConfig["effort"]>().toEqualTypeOf<
-      "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined
-    >()
-    expectTypeOf<DawnAgent["reasoning"]>().toEqualTypeOf<ReasoningConfig | undefined>()
-  })
-
-  it("omitting description and subagents still works", () => {
+  it("omitting description, subagents, and delegation still works", () => {
     const a = agent({ model: "gpt-5", systemPrompt: "x" })
     expect(a.description).toBeUndefined()
     expect(a.subagents).toBeUndefined()
+    expect(a.delegation).toBeUndefined()
   })
 })

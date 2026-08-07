@@ -4,8 +4,16 @@ export type {
   ConstraintPredicate,
   ConstraintVerdict,
   DawnAgent,
+  DelegationConfig,
+  DelegationConstraintPredicate,
+  DelegationContext,
+  DelegationRequest,
+  DelegationRule,
+  DelegationRules,
+  DelegationVerdict,
   ReasoningConfig,
   RetryConfig,
+  SubagentMap,
   ToolScope,
 } from "./agent.js"
 export { agent, isDawnAgent } from "./agent.js"

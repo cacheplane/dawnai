@@ -62,6 +62,45 @@ describe('reserved "tool" key uses exact matching', () => {
   })
 })
 
+describe('reserved "subagent" key uses exact tuple matching', () => {
+  const supportResearcher = JSON.stringify(["/support", "researcher"])
+  const financeResearcher = JSON.stringify(["/finance", "researcher"])
+
+  it("matches an exact parent route and subagent name tuple", () => {
+    expect(
+      matchPermission("subagent", supportResearcher, { subagent: [supportResearcher] }, {}),
+    ).toBe("allow")
+  })
+
+  it("does not match the same subagent name under another parent", () => {
+    expect(
+      matchPermission("subagent", financeResearcher, { subagent: [supportResearcher] }, {}),
+    ).toBe("unknown")
+  })
+
+  it("does not prefix-match a serialized tuple identity", () => {
+    expect(
+      matchPermission(
+        "subagent",
+        `${supportResearcher}:extended`,
+        { subagent: [supportResearcher] },
+        {},
+      ),
+    ).toBe("unknown")
+  })
+
+  it("deny wins for the same exact tuple", () => {
+    expect(
+      matchPermission(
+        "subagent",
+        supportResearcher,
+        { subagent: [supportResearcher] },
+        { subagent: [supportResearcher] },
+      ),
+    ).toBe("deny")
+  })
+})
+
 describe("memory key (prefix + terminator convention)", () => {
   // Callers match memory candidates as `namespace + "|"` so a /a rule can
   // never prefix-match a /ab namespace. matchPermission itself is unchanged.

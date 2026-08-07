@@ -235,6 +235,42 @@ describe("toAguiEvents", () => {
     ])
   })
 
+  test("collects interleaved interrupts without leaking post-interrupt events or success", async () => {
+    const events = await collect([
+      { type: "interrupt", data: { interruptId: "perm-1", kind: "command" } },
+      { type: "subagent.start", data: { callId: "sibling-call" } },
+      { type: "token", data: "must not be emitted" },
+      { type: "interrupt", data: { interruptId: "perm-2", kind: "tool" } },
+      { type: "done", data: { mustNotBecomeResult: true } },
+    ])
+
+    expect(events).toEqual([
+      { type: EventType.RUN_STARTED, threadId: "th-1", runId: "rn-1" },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: "th-1",
+        runId: "rn-1",
+        outcome: {
+          type: "interrupt",
+          interrupts: [
+            {
+              id: "perm-1",
+              reason: "command",
+              metadata: { interruptId: "perm-1", kind: "command" },
+            },
+            {
+              id: "perm-2",
+              reason: "tool",
+              metadata: { interruptId: "perm-2", kind: "tool" },
+            },
+          ],
+        },
+      },
+    ])
+    expect(events.at(-1)).not.toHaveProperty("result")
+    expect(events.at(-1)).not.toMatchObject({ outcome: { type: "success" } })
+  })
+
   test("natural completion emits accumulated interrupts", async () => {
     const events = await collect([
       { type: "interrupt", data: { interruptId: "perm-1" } },
@@ -250,7 +286,7 @@ describe("toAguiEvents", () => {
     })
   })
 
-  test("a nonterminal chunk after interrupts emits the interrupt outcome and stops", async () => {
+  test("nonterminal chunks after an interrupt are suppressed until the outcome", async () => {
     const events = await collect([
       { type: "interrupt", data: { interruptId: "perm-1" } },
       { type: "token", data: "must not be emitted" },

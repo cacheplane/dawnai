@@ -1,4 +1,3 @@
-import type { DawnResumeRequest } from "@dawn-ai/ag-ui"
 import {
   Annotation,
   Command,
@@ -12,11 +11,12 @@ import type { BaseCheckpointSaver, CheckpointTuple } from "@langchain/langgraph-
 import { describe, expect, test, vi } from "vitest"
 
 import {
+  type DawnResumeEntry,
   type PendingInterrupt,
   type PendingInterruptSnapshot,
   type PermissionDecision,
   readPendingInterrupts,
-  resolveAgUiResume,
+  resolvePendingResume,
 } from "../src/lib/dev/pending-interrupts.js"
 
 const TASK_UUID_1 = "33a12321-3ec2-56a7-b4d7-0337886c4386"
@@ -24,28 +24,30 @@ const TASK_UUID_2 = "44b23432-4fd3-67b8-c5e8-1448997d5497"
 const RESUME_KEY_1 = "3336d0e0a2d4f198ef9aecd09cd7ac27"
 const RESUME_KEY_2 = "4447e1f1b3e5a209fa0bfde10de8bd38"
 
-describe("resolveAgUiResume", () => {
+describe("resolvePendingResume", () => {
   test.each([
     undefined,
     [],
   ] as const)("starts a turn with no pending interrupts and resume %j", (resume) => {
-    expect(resolveAgUiResume(resume, snapshot([]))).toEqual({ ok: true, mode: "turn" })
+    expect(resolvePendingResume(resume, snapshot([]))).toEqual({ ok: true, mode: "turn" })
   })
 
   test.each([
     undefined,
     [],
   ] as const)("rejects resume %j when a checkpoint interrupt is pending", (resume) => {
-    expect(resolveAgUiResume(resume, snapshot([pending("perm-1", RESUME_KEY_1)]))).toMatchObject({
-      code: "resume_required",
-      ok: false,
-      status: 409,
-    })
+    expect(resolvePendingResume(resume, snapshot([pending("perm-1", RESUME_KEY_1)]))).toMatchObject(
+      {
+        code: "resume_required",
+        ok: false,
+        status: 409,
+      },
+    )
   })
 
   test("rejects supplied resume entries when no checkpoint interrupt is pending", () => {
     expect(
-      resolveAgUiResume([{ interruptId: "perm-1", status: "cancelled" }], snapshot([])),
+      resolvePendingResume([{ interruptId: "perm-1", status: "cancelled" }], snapshot([])),
     ).toMatchObject({ code: "stale_interrupt", ok: false, status: 409 })
   })
 
@@ -55,7 +57,7 @@ describe("resolveAgUiResume", () => {
     "deny",
   ])("preserves the resolved %s decision under the outer resume key", (decision) => {
     expect(
-      resolveAgUiResume(
+      resolvePendingResume(
         [{ interruptId: "perm-1", payload: decision, status: "resolved" }],
         snapshot([pending("perm-1", RESUME_KEY_1)]),
       ),
@@ -64,7 +66,7 @@ describe("resolveAgUiResume", () => {
 
   test("maps a cancelled entry to deny", () => {
     expect(
-      resolveAgUiResume(
+      resolvePendingResume(
         [{ interruptId: "perm-1", status: "cancelled" }],
         snapshot([pending("perm-1", RESUME_KEY_1)]),
       ),
@@ -73,7 +75,7 @@ describe("resolveAgUiResume", () => {
 
   test("maps two exact pending entries by outer resume key", () => {
     expect(
-      resolveAgUiResume(
+      resolvePendingResume(
         [
           { interruptId: "perm-1", payload: "always", status: "resolved" },
           { interruptId: "perm-2", status: "cancelled" },
@@ -109,9 +111,9 @@ describe("resolveAgUiResume", () => {
   ] satisfies ReadonlyArray<{
     name: string
     pending: PendingInterrupt[]
-    resume: DawnResumeRequest[]
+    resume: DawnResumeEntry[]
   }>)("rejects an inexact resume set: $name", ({ pending: entries, resume }) => {
-    expect(resolveAgUiResume(resume, snapshot(entries))).toMatchObject({
+    expect(resolvePendingResume(resume, snapshot(entries))).toMatchObject({
       code: "interrupt_set_mismatch",
       ok: false,
       status: 409,
@@ -122,8 +124,10 @@ describe("resolveAgUiResume", () => {
     { interruptId: "perm-1", status: "resolved" },
     { interruptId: "perm-1", payload: "sometimes", status: "resolved" },
     { interruptId: "perm-1", payload: { decision: "once" }, status: "resolved" },
-  ] satisfies DawnResumeRequest[])("rejects a resolved entry with missing or unsupported payload: %j", (entry) => {
-    expect(resolveAgUiResume([entry], snapshot([pending("perm-1", RESUME_KEY_1)]))).toMatchObject({
+  ] satisfies DawnResumeEntry[])("rejects a resolved entry with missing or unsupported payload: %j", (entry) => {
+    expect(
+      resolvePendingResume([entry], snapshot([pending("perm-1", RESUME_KEY_1)])),
+    ).toMatchObject({
       code: "invalid_resume_payload",
       ok: false,
       status: 400,
@@ -134,10 +138,10 @@ describe("resolveAgUiResume", () => {
     undefined,
     [{ interruptId: "perm-1", payload: "once", status: "resolved" }],
   ] satisfies ReadonlyArray<
-    readonly DawnResumeRequest[] | undefined
+    readonly DawnResumeEntry[] | undefined
   >)("rejects malformed checkpoint state before starting or resuming: %j", (resume) => {
     expect(
-      resolveAgUiResume(resume, {
+      resolvePendingResume(resume, {
         interrupts: [pending("perm-1", RESUME_KEY_1)],
         malformed: true,
       }),
@@ -197,7 +201,7 @@ describe("readPendingInterrupts", () => {
       ],
       malformed: true,
     })
-    expect(resolveAgUiResume(undefined, requireSnapshot(snapshot))).toMatchObject({
+    expect(resolvePendingResume(undefined, requireSnapshot(snapshot))).toMatchObject({
       code: "malformed_checkpoint",
       ok: false,
       status: 409,
@@ -215,7 +219,7 @@ describe("readPendingInterrupts", () => {
 
     expect(snapshot).toMatchObject({ malformed: true })
     expect(
-      resolveAgUiResume(
+      resolvePendingResume(
         [{ interruptId: "perm-1", payload: "once", status: "resolved" }],
         requireSnapshot(snapshot),
       ),
@@ -241,7 +245,24 @@ describe("readPendingInterrupts", () => {
     const snapshot = await readPendingInterrupts(fakeCheckpointer(writes), "thread-5")
 
     expect(snapshot).toMatchObject({ malformed: true })
-    expect(resolveAgUiResume(undefined, requireSnapshot(snapshot))).toMatchObject({
+    expect(resolvePendingResume(undefined, requireSnapshot(snapshot))).toMatchObject({
+      code: "malformed_checkpoint",
+      ok: false,
+      status: 409,
+    })
+  })
+
+  test("rejects crossed client and outer identifiers as an ambiguous swapped set", async () => {
+    const snapshot = await readPendingInterrupts(
+      fakeCheckpointer([
+        [TASK_UUID_1, "__interrupt__", { id: RESUME_KEY_1, value: { interruptId: RESUME_KEY_2 } }],
+        [TASK_UUID_2, "__interrupt__", { id: RESUME_KEY_2, value: { interruptId: RESUME_KEY_1 } }],
+      ]),
+      "thread-swapped",
+    )
+
+    expect(snapshot).toMatchObject({ malformed: true })
+    expect(resolvePendingResume(undefined, requireSnapshot(snapshot))).toMatchObject({
       code: "malformed_checkpoint",
       ok: false,
       status: 409,
@@ -267,7 +288,7 @@ test("resumes a real LangGraph interrupt with the parsed outer resume key", asyn
   expect(interruptWrite?.[0]).toMatch(/^[0-9a-f-]{36}$/)
 
   const snapshot = await readPendingInterrupts(checkpointer, "thread-real")
-  const resolution = resolveAgUiResume(
+  const resolution = resolvePendingResume(
     [{ interruptId: "perm-real", payload: "once", status: "resolved" }],
     requireSnapshot(snapshot),
   )

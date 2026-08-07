@@ -25,8 +25,20 @@ describe("tool-output offloading end-to-end", () => {
       ttlMs: 10_800_000,
       gcThrottleMs: 0,
     })
-    const offload = (content: string, toolName: string) =>
-      offloadToolOutput(content, { toolName, thresholdChars: 40_000, previewLines: 10, store })
+    const offload = (
+      content: string,
+      toolName: string,
+      toolCallId?: string,
+      liveSignal?: AbortSignal,
+    ) =>
+      offloadToolOutput(content, {
+        toolName,
+        thresholdChars: 40_000,
+        previewLines: 10,
+        ...(liveSignal ? { signal: liveSignal } : {}),
+        store,
+        ...(toolCallId ? { toolCallId } : {}),
+      })
 
     const big = Array.from({ length: 5000 }, (_, i) => `row ${i}`).join("\n")
     const tool = { name: "bigsearch", description: "", run: async () => ({ result: big }) }

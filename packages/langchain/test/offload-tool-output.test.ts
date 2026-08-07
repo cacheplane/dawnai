@@ -17,9 +17,10 @@ describe("offloadToolOutput", () => {
 
   it("writes and returns a stub when over threshold", async () => {
     const store = fakeStore("tool-outputs/search-1-a.txt")
+    const signal = new AbortController().signal
     const big = "x".repeat(40_001)
-    const out = await offloadToolOutput(big, { ...base, store: store as never })
-    expect(store.write).toHaveBeenCalledWith("search", big, undefined)
+    const out = await offloadToolOutput(big, { ...base, signal, store: store as never })
+    expect(store.write).toHaveBeenCalledWith("search", big, undefined, signal)
     expect(out).toContain("Tool output offloaded")
     expect(out).toContain("tool-outputs/search-1-a.txt")
   })
@@ -36,22 +37,29 @@ describe("offloadToolOutput", () => {
   })
 
   it("forwards toolCallId to store.write", async () => {
-    const calls: Array<[string, string, string | undefined]> = []
+    const calls: Array<[string, string, string | undefined, AbortSignal | undefined]> = []
     const store = {
-      write: async (toolName: string, content: string, toolCallId?: string) => {
-        calls.push([toolName, content, toolCallId])
+      write: async (
+        toolName: string,
+        content: string,
+        toolCallId?: string,
+        signal?: AbortSignal,
+      ) => {
+        calls.push([toolName, content, toolCallId, signal])
         return `tool-outputs/${toolName}-${toolCallId}.txt`
       },
     }
     const big = "z".repeat(50)
+    const signal = new AbortController().signal
     const out = await offloadToolOutput(big, {
       toolName: "generateReport",
       thresholdChars: 10,
       previewLines: 2,
+      signal,
       store,
       toolCallId: "call_xyz",
     })
-    expect(calls[0]).toEqual(["generateReport", big, "call_xyz"])
+    expect(calls[0]).toEqual(["generateReport", big, "call_xyz", signal])
     expect(out).toContain("tool-outputs/generateReport-call_xyz.txt")
   })
 })

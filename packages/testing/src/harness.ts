@@ -3,6 +3,10 @@ import {
   __resetMaterializedAgentsForTests,
   __resetRouteLoadCachesForTests,
   createRuntimeRegistry,
+  type DawnResumeEntry,
+  readPendingInterrupts,
+  resolveCheckpointer,
+  resolvePendingResume,
   resolveSandboxManager,
   runTypegen,
   type SandboxManager,
@@ -59,7 +63,7 @@ export interface AgentHarness {
   readonly baseUrl: string
   run(opts: { input: string; fixtures?: FixtureSet | ScriptBuilder }): Promise<AgentRunResult>
   resume(opts: {
-    decision: "once" | "always" | "deny"
+    resume: readonly DawnResumeEntry[]
     fixtures?: FixtureSet | ScriptBuilder
   }): Promise<AgentRunResult>
   reset(): void
@@ -141,7 +145,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
   async function drive(driveOpts: {
     fixtures?: FixtureSet | ScriptBuilder
     input?: string
-    resumeDecision?: "once" | "always" | "deny"
+    resume?: readonly DawnResumeEntry[]
   }): Promise<AgentRunResult> {
     // In live and record modes, fixtures are proxied to the upstream — skip registration.
     if (!live && !record && driveOpts.fixtures) {
@@ -157,6 +161,22 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     if (!r) {
       throw new Error(`createAgentHarness: unknown route "${options.route}"`)
     }
+    let resolvedResume: Readonly<Record<string, "once" | "always" | "deny">> | undefined
+    if (driveOpts.resume) {
+      const checkpointer = await resolveCheckpointer(options.appRoot)
+      const pending = await readPendingInterrupts(checkpointer, threadId)
+      if (!pending) {
+        throw new Error(`createAgentHarness: no checkpoint found for thread "${threadId}"`)
+      }
+      const resolution = resolvePendingResume(driveOpts.resume, pending)
+      if (!resolution.ok) {
+        throw new Error(`createAgentHarness: ${resolution.message} (${resolution.code})`)
+      }
+      if (resolution.mode !== "resume") {
+        throw new Error("createAgentHarness: no pending interrupts to resume")
+      }
+      resolvedResume = resolution.resume
+    }
     const streamArgs: Parameters<typeof streamResolvedRoute>[0] = {
       appRoot: options.appRoot,
       input:
@@ -168,7 +188,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
       routePath: r.routePath,
       threadId,
       ...(sandboxManager ? { sandboxManager } : {}),
-      ...(driveOpts.resumeDecision !== undefined ? { resume: driveOpts.resumeDecision } : {}),
+      ...(resolvedResume ? { resume: resolvedResume } : {}),
     }
     const stream = streamResolvedRoute(streamArgs)
     const result = await collectRunResult(stream, threadId)
@@ -188,7 +208,7 @@ export async function createAgentHarness(options: AgentHarnessOptions): Promise<
     },
     async resume(resumeOpts) {
       return drive({
-        resumeDecision: resumeOpts.decision,
+        resume: resumeOpts.resume,
         ...(resumeOpts.fixtures !== undefined ? { fixtures: resumeOpts.fixtures } : {}),
       })
     },

@@ -155,6 +155,122 @@ describe("runTypeScriptToolingPackSmoke", () => {
     })
   }
 
+  for (const permissionsDependency of ["^0.8.14", "0.8.13"]) {
+    it(`rejects packed Core Permissions dependency ${permissionsDependency} before install`, async () => {
+      const harness = await createHarness({ packedPermissionsDependency: permissionsDependency })
+
+      await assert.rejects(
+        runTypeScriptToolingPackSmoke(harness.dependencies),
+        new RegExp(
+          `@dawn-ai/core.*@dawn-ai/permissions.*${escapeRegExp(permissionsDependency)}.*expected ${PACKAGE_VERSION}`,
+          "s",
+        ),
+      )
+      assert.equal(
+        harness.events.some((event) => event.type === "command" && event.command === "npm"),
+        false,
+      )
+      assert.equal(harness.events.at(-1).type, "cleanup")
+      assert.equal(existsSync(harness.tempRoot), false)
+    })
+  }
+
+  for (const [dependencyName, optionName] of [
+    ["@dawn-ai/sqlite-storage", "packedSqliteStorageDependency"],
+    ["@dawn-ai/workspace", "packedWorkspaceDependency"],
+  ]) {
+    it(`rejects a stale packed Core ${dependencyName} dependency before install`, async () => {
+      const harness = await createHarness({ [optionName]: "0.8.13" })
+
+      await assert.rejects(
+        runTypeScriptToolingPackSmoke(harness.dependencies),
+        new RegExp(
+          `@dawn-ai/core.*${escapeRegExp(dependencyName)}.*0\\.8\\.13.*expected ${PACKAGE_VERSION}`,
+          "s",
+        ),
+      )
+      assert.equal(
+        harness.events.some((event) => event.type === "command" && event.command === "npm"),
+        false,
+      )
+      assert.equal(harness.events.at(-1).type, "cleanup")
+      assert.equal(existsSync(harness.tempRoot), false)
+    })
+  }
+
+  it("rejects a stale required internal peer dependency before install", async () => {
+    const harness = await createHarness({
+      packedVitePeerDependency: { name: "@dawn-ai/sdk", spec: "0.8.13" },
+    })
+
+    await assert.rejects(
+      runTypeScriptToolingPackSmoke(harness.dependencies),
+      new RegExp(
+        `@dawn-ai/vite-plugin.*@dawn-ai/sdk.*0\\.8\\.13.*expected ${PACKAGE_VERSION}`,
+        "s",
+      ),
+    )
+    assert.equal(
+      harness.events.some((event) => event.type === "command" && event.command === "npm"),
+      false,
+    )
+    assert.equal(harness.events.at(-1).type, "cleanup")
+  })
+
+  it("rejects a required internal peer without a packed artifact before install", async () => {
+    const harness = await createHarness({
+      packedVitePeerDependency: { name: "@dawn-ai/memory", spec: PACKAGE_VERSION },
+    })
+
+    await assert.rejects(
+      runTypeScriptToolingPackSmoke(harness.dependencies),
+      /@dawn-ai\/vite-plugin.*@dawn-ai\/memory.*expected a packed @dawn-ai\/memory artifact/s,
+    )
+    assert.equal(
+      harness.events.some((event) => event.type === "command" && event.command === "npm"),
+      false,
+    )
+    assert.equal(harness.events.at(-1).type, "cleanup")
+  })
+
+  it("allows an optional internal peer without adding it to the tooling closure", async () => {
+    const harness = await createHarness({
+      packedVitePeerDependency: {
+        name: "@dawn-ai/memory",
+        optional: true,
+        spec: PACKAGE_VERSION,
+      },
+    })
+
+    await runTypeScriptToolingPackSmoke(harness.dependencies)
+
+    assert.ok(harness.events.some((event) => event.type === "probe"))
+    assert.equal(harness.events.at(-1).type, "cleanup")
+  })
+
+  it("rejects a stale optional internal peer when its artifact is already packed", async () => {
+    const harness = await createHarness({
+      packedVitePeerDependency: {
+        name: "@dawn-ai/sdk",
+        optional: true,
+        spec: "0.8.13",
+      },
+    })
+
+    await assert.rejects(
+      runTypeScriptToolingPackSmoke(harness.dependencies),
+      new RegExp(
+        `@dawn-ai/vite-plugin.*@dawn-ai/sdk.*0\\.8\\.13.*expected ${PACKAGE_VERSION}`,
+        "s",
+      ),
+    )
+    assert.equal(
+      harness.events.some((event) => event.type === "command" && event.command === "npm"),
+      false,
+    )
+    assert.equal(harness.events.at(-1).type, "cleanup")
+  })
+
   it("rejects native lifecycle scripts discovered in the installed package tree", async () => {
     const harness = await createHarness({ nativeLifecycleScript: true })
 
@@ -384,6 +500,10 @@ async function createHarness({
   nativeLifecycleScript = false,
   nestedViteCore = false,
   packedCoreDependency = PACKAGE_VERSION,
+  packedPermissionsDependency = PACKAGE_VERSION,
+  packedSqliteStorageDependency = PACKAGE_VERSION,
+  packedVitePeerDependency,
+  packedWorkspaceDependency = PACKAGE_VERSION,
   packageValidationFailure = false,
 } = {}) {
   const testRoot = await mkdtemp(join(tmpdir(), "dawn-typescript-tooling-pack-test-"))
@@ -411,7 +531,13 @@ async function createHarness({
     },
     async packWorkspacePackage({ packageConfig, packDir }) {
       events.push({ type: "pack", packageConfig: { ...packageConfig } })
-      const packageJson = packedManifest(packageConfig.name, { packedCoreDependency })
+      const packageJson = packedManifest(packageConfig.name, {
+        packedCoreDependency,
+        packedPermissionsDependency,
+        packedSqliteStorageDependency,
+        packedVitePeerDependency,
+        packedWorkspaceDependency,
+      })
       if (packageValidationFailure && packageConfig.name === "@dawn-ai/core") {
         packageJson.dependencies = {
           local: "file:../local",
@@ -433,8 +559,11 @@ async function createHarness({
       const manifests = []
       for (const name of [
         "@dawn-ai/core",
+        "@dawn-ai/permissions",
         "@dawn-ai/sdk",
+        "@dawn-ai/sqlite-storage",
         "@dawn-ai/vite-plugin",
+        "@dawn-ai/workspace",
         "typescript",
         "tsx",
         "zod",
@@ -509,7 +638,16 @@ async function createHarness({
   return { canonicalTempRoot, dependencies, events, repoRoot, tempRoot }
 }
 
-function packedManifest(name, { packedCoreDependency = PACKAGE_VERSION } = {}) {
+function packedManifest(
+  name,
+  {
+    packedCoreDependency = PACKAGE_VERSION,
+    packedPermissionsDependency = PACKAGE_VERSION,
+    packedSqliteStorageDependency = PACKAGE_VERSION,
+    packedVitePeerDependency,
+    packedWorkspaceDependency = PACKAGE_VERSION,
+  } = {},
+) {
   return {
     bugs: { url: "https://github.com/cacheplane/dawnai/issues" },
     engines: { node: ">=22.12.0" },
@@ -522,8 +660,35 @@ function packedManifest(name, { packedCoreDependency = PACKAGE_VERSION } = {}) {
     types: "./dist/index.d.ts",
     version: PACKAGE_VERSION,
     ...(name === "@dawn-ai/vite-plugin"
-      ? { dependencies: { "@dawn-ai/core": packedCoreDependency } }
-      : {}),
+      ? {
+          dependencies: { "@dawn-ai/core": packedCoreDependency },
+          ...(packedVitePeerDependency
+            ? {
+                peerDependencies: {
+                  [packedVitePeerDependency.name]: packedVitePeerDependency.spec,
+                },
+                ...(packedVitePeerDependency.optional
+                  ? {
+                      peerDependenciesMeta: {
+                        [packedVitePeerDependency.name]: { optional: true },
+                      },
+                    }
+                  : {}),
+              }
+            : {}),
+        }
+      : name === "@dawn-ai/core"
+        ? {
+            dependencies: {
+              "@dawn-ai/permissions": packedPermissionsDependency,
+              "@dawn-ai/sdk": PACKAGE_VERSION,
+              "@dawn-ai/sqlite-storage": packedSqliteStorageDependency,
+              "@dawn-ai/workspace": packedWorkspaceDependency,
+            },
+          }
+        : name === "@dawn-ai/permissions" || name === "@dawn-ai/workspace"
+          ? { dependencies: { "@dawn-ai/sdk": PACKAGE_VERSION } }
+          : {}),
   }
 }
 

@@ -64,13 +64,17 @@ test("warns when approve intersects deny (dead entry)", async () => {
   expect(result.warnings.join("\n")).toMatch(/\/research.*deployProd.*deny/s)
 })
 
-test("warns that approve on task has no effect", async () => {
+test.each([
+  { allow: ["task"] },
+  { deny: ["task"] },
+  { approve: ["task"] },
+  { constrain: { task: () => true } },
+])("leaves reserved task references to delegation validation", async (scope) => {
   const result = await collectToolScopeIssues(manifest, {
-    loadScope: async () => ({ approve: ["task"] }),
+    loadScope: async () => scope,
     routeLocalToolNames: async () => [],
   })
-  expect(result.errors).toEqual([])
-  expect(result.warnings.join("\n")).toMatch(/\/research.*task.*no effect/s)
+  expect(result).toEqual({ errors: [], warnings: [] })
 })
 
 test("clean approve produces no issues", async () => {
@@ -114,16 +118,12 @@ test("does not warn when a subagent route both allows and approves a capability 
   expect(result.warnings).toEqual([])
 })
 
-test("subagent approving task draws ONLY the no-effect warning", async () => {
-  // The withheld-capability warning's "add it to allow" advice would
-  // contradict the task warning's "has no effect regardless".
+test("subagent task references are left to delegation validation", async () => {
   const result = await collectToolScopeIssues(subagentManifest, {
     loadScope: async () => ({ approve: ["task"] }),
     routeLocalToolNames: async () => [],
   })
-  expect(result.errors).toEqual([])
-  expect(result.warnings).toHaveLength(1)
-  expect(result.warnings[0]).toMatch(/no effect/)
+  expect(result).toEqual({ errors: [], warnings: [] })
 })
 
 test("subagent approving an internally-gated tool draws ONLY the already-gated warning", async () => {

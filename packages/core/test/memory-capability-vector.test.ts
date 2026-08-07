@@ -64,7 +64,7 @@ function makeContext(captured: Captured, embedder: Embedder | undefined): Capabi
     writes: "auto",
     defined: { kind: "semantic", scope: ["route"] },
     validate: () => ({ ok: true, value: { subject: "x" } }),
-    now: NOW,
+    now: () => NOW,
     ...(embedder ? { embedder } : {}),
   }
   return {

@@ -22,7 +22,6 @@
 import {
   applyCapabilities,
   type CapabilityContribution,
-  type CapabilityMarkerContext,
   createAgentsMdMarker,
   createCapabilityRegistry,
   createMemoryMarker,
@@ -33,12 +32,17 @@ import {
   createWorkspaceFs,
   createWorkspaceMarker,
   type DawnConfig,
+  type DescriptorRouteIndex,
+  dispatchableSubagents,
   type MarkerFs,
   type MemoryStoreLike,
   type MemoryWritesMode,
   type ResolvedStateField,
+  type ResolvedSubagent,
   type RouteDefinition,
   type RouteManifest,
+  resolveGuardedSubagent,
+  resolveSubagentRegistry,
   resolveToolScope,
   toolOrigin,
   wrapToolWithApproval,
@@ -49,9 +53,11 @@ import {
   defaultSummarize,
   defaultTokenCounter,
   executeAgent,
+  materializeAgentGraph,
   type OffloadFn,
   OffloadStore,
   offloadToolOutput,
+  type ResolvedSubagentGraph,
   type ResolvedSummarizationConfig,
   type SubagentResolver,
   streamAgent,
@@ -62,6 +68,8 @@ import type { DawnMiddleware } from "@dawn-ai/sdk"
 import { type DawnAgent, isDawnAgent, type WorkspaceFs } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
+import type { RunnableConfig } from "@langchain/core/runnables"
+import { isGraphInterrupt } from "@langchain/langgraph"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { checkToolNameUniqueness } from "./check-tool-name-uniqueness.js"
 import { createDawnContext } from "./dawn-context.js"
@@ -109,8 +117,10 @@ export interface RuntimeBootFallbacks {
   }) => Promise<PreparedRouteModules>
   /** `discoverRoutes` walk, memoized per appRoot. */
   readonly discoverRouteManifest: (appRoot: string) => Promise<RouteManifest>
-  /** Descriptor→routeId map built by importing every route entry file. */
-  readonly descriptorRouteMap: (manifest: RouteManifest) => Promise<ReadonlyMap<DawnAgent, string>>
+  /** Canonical descriptor→routeIds multimap built from every route entry file. */
+  readonly descriptorRouteIndex: (manifest: RouteManifest) => Promise<DescriptorRouteIndex>
+  /** Loads a child route's model-facing description from its entry module. */
+  readonly loadSubagentDescription: (route: RouteDefinition) => Promise<string>
   /** Default sqlite checkpointer at `<appRoot>/.dawn/checkpoints.sqlite`. */
   readonly defaultCheckpointer: (appRoot: string) => BaseCheckpointSaver
   /** Default sqlite threads store at `<appRoot>/.dawn/threads.sqlite`. */
@@ -136,7 +146,10 @@ export interface RuntimeBootFallbacks {
   readonly resolveIdentityKeys: (
     appRoot: string,
     namespace: string,
-  ) => Promise<{ readonly keys: readonly string[]; readonly fallback: boolean }>
+  ) => Promise<{
+    readonly keys: readonly string[]
+    readonly fallback: boolean
+  }>
   /** Process-shared `localFilesystem()`. */
   readonly defaultFilesystem: () => FilesystemBackend
   /** Process-shared `localExec()` — the workspace capability's `runBash`. */
@@ -145,11 +158,6 @@ export interface RuntimeBootFallbacks {
   readonly hasWorkspaceDir: (appRoot: string) => boolean
   /** Node `MarkerFs` for the capability markers (AGENTS.md, skills, …). */
   readonly markerFs: MarkerFs
-  /**
-   * Disk-backed subagent description lookup, used only when no static module
-   * map supplied `routeDescriptors`.
-   */
-  readonly loadRouteDescription: NonNullable<CapabilityMarkerContext["loadRouteDescription"]>
 }
 
 /**
@@ -179,10 +187,6 @@ export interface RuntimeBootFallbacks {
  *   - `markerFs`              → omitted from `applyCapabilities`; an absent
  *                               MarkerFs means "no filesystem" by contract, so
  *                               the disk-backed markers contribute nothing
- *   - `loadRouteDescription`  → omitted from `applyCapabilities`; subagents
- *                               without a static descriptor map then render
- *                               the default description text (the same text
- *                               the disk import produced when it failed)
  *   - `hasWorkspaceDir`       → false ⇒ tool-output offloading stays off; it
  *                               is an optimization, not a capability the route
  *                               asked for (this also makes the offload store's
@@ -208,11 +212,7 @@ function requireFallbacks(
   )
 }
 
-export type RouteResumePayload =
-  | "once"
-  | "always"
-  | "deny"
-  | Readonly<Record<string, "once" | "always" | "deny">>
+export type RouteResumePayload = Readonly<Record<string, "once" | "always" | "deny">>
 
 export function toAgentInput(input: unknown, resume?: RouteResumePayload): unknown {
   return resume === undefined ? input : new Command({ resume })
@@ -248,9 +248,8 @@ export function toAgentInput(input: unknown, resume?: RouteResumePayload): unkno
  * static path's replacement for `buildDescriptorRouteMap`'s per-route
  * dynamic imports.
  *
- * Subagent turns inherit these instances from the dispatching turn (see
- * `buildSubagentResolver`'s `bootInstances`): whatever the HTTP layer
- * resolved at boot is what every child re-entry uses too. In particular,
+ * Subagent turns inherit these instances from the dispatching turn: whatever
+ * the HTTP layer resolved at boot is what every child preparation uses too. In particular,
  * under `permissionsMode: "boot"` the parent and its subagents share ONE
  * mutable PermissionsStore — a child's `addAllow` ("Always" grant) is
  * immediately visible to the parent and its later turns. That sharing is
@@ -274,6 +273,27 @@ export interface BootResolvedInstances {
   readonly staticModules?: DawnStaticModules
   readonly config?: DawnConfig
   readonly bootFallbacks?: RuntimeBootFallbacks
+}
+
+export type PrepareRouteExecutionOptions = Omit<BootResolvedInstances, "checkpointer"> & {
+  readonly appRoot: string
+  readonly checkpointer?: BaseCheckpointSaver | false
+  readonly isSubagent?: boolean
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routeParams?: Readonly<Record<string, string>>
+  readonly routePath: string
+  readonly signal?: AbortSignal
+  readonly threadId?: string
+  readonly sandboxManager?: SandboxManager
+  /**
+   * Sandbox scoping key, decoupled from `threadId` (the checkpoint identity).
+   * When absent, the sandbox handle falls back to `threadId` — the top-route
+   * case, where the two identities coincide.
+   */
+  readonly sandboxThreadId?: string
+  readonly subagentDepth?: number
 }
 
 export async function executeResolvedRoute(
@@ -301,6 +321,34 @@ export async function executeResolvedRoute(
     isSubagent: options.isSubagent ?? false,
     startedAt: Date.now(),
   })
+}
+
+export type MaterializeResolvedRouteGraphOptions = Omit<BootResolvedInstances, "checkpointer"> & {
+  readonly appRoot: string
+  readonly checkpointer?: BaseCheckpointSaver
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly routeFile: string
+  readonly routeId: string
+  readonly routePath: string
+  readonly sandboxManager?: SandboxManager
+  readonly sandboxThreadId?: string
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Materializes an agent route through the same policy-aware preparation path
+ * used by local execution. An omitted checkpointer leaves the root graph
+ * unbound so the deployment runtime can provide it at invocation time.
+ */
+export async function materializeResolvedRouteGraph(
+  options: MaterializeResolvedRouteGraphOptions,
+): Promise<unknown> {
+  const prepared = await prepareRouteExecution({
+    ...options,
+    checkpointer: options.checkpointer ?? false,
+  })
+  if (!prepared.ok) throw new Error(prepared.message)
+  return await materializePreparedAgentGraph(prepared, options.middlewareContext)
 }
 
 /**
@@ -395,6 +443,12 @@ export async function* streamResolvedRoute(
     return
   }
 
+  if (!checkpointer) {
+    throw new Error(
+      "[dawn] streamResolvedRoute called for an agent route without a checkpointer. This is an internal bug — please report it.",
+    )
+  }
+
   const routeParamNames = extractRouteParamNames(options.routeId)
 
   const agentInput = toAgentInput(options.input, options.resume)
@@ -438,7 +492,11 @@ export async function* streamResolvedRoute(
           yield { type: "chunk", data: chunk.data }
           break
         case "tool_call": {
-          const tc = chunk.data as { id?: string; name: string; input: unknown }
+          const tc = chunk.data as {
+            id?: string
+            name: string
+            input: unknown
+          }
           yield {
             type: "tool_call",
             ...(tc.id ? { id: tc.id } : {}),
@@ -448,7 +506,11 @@ export async function* streamResolvedRoute(
           break
         }
         case "tool_result": {
-          const tr = chunk.data as { id?: string; name: string; output: unknown }
+          const tr = chunk.data as {
+            id?: string
+            name: string
+            output: unknown
+          }
           yield {
             type: "tool_result",
             ...(tr.id ? { id: tr.id } : {}),
@@ -522,7 +584,8 @@ export interface PreparedRoute {
     readonly entry: unknown
   }
   readonly ok: true
-  readonly checkpointer: BaseCheckpointSaver
+  readonly routeId: string
+  readonly checkpointer: BaseCheckpointSaver | undefined
   readonly threadsStore: ThreadsStore
   readonly offload?: OffloadFn
   readonly summarization?: ResolvedSummarizationConfig
@@ -631,22 +694,7 @@ export function __resetPreparedRouteModulesForTests(): void {
 }
 
 export async function prepareRouteExecution(
-  options: BootResolvedInstances & {
-    readonly appRoot: string
-    readonly isSubagent?: boolean
-    readonly routeFile: string
-    readonly routeId: string
-    readonly routePath: string
-    readonly signal?: AbortSignal
-    readonly threadId?: string
-    readonly sandboxManager?: SandboxManager
-    /**
-     * Sandbox scoping key, decoupled from `threadId` (the checkpoint identity).
-     * When absent, the sandbox handle falls back to `threadId` — the top-route
-     * case, where the two identities coincide.
-     */
-    readonly sandboxThreadId?: string
-  },
+  options: PrepareRouteExecutionOptions,
 ): Promise<PreparedRoute | PreparedRouteError> {
   const { isSubagent = false } = options
   const fallbacks = options.bootFallbacks
@@ -736,10 +784,12 @@ export async function prepareRouteExecution(
 
   // Boot-resolved instances win when provided (no per-request sqlite open);
   // otherwise fall back to config, then to the default sqlite stores.
-  const checkpointer: BaseCheckpointSaver =
-    options.checkpointer ??
-    configCheckpointer ??
-    requireFallbacks(fallbacks, "checkpointer").defaultCheckpointer(options.appRoot)
+  const checkpointer: BaseCheckpointSaver | undefined =
+    options.checkpointer === false
+      ? undefined
+      : (options.checkpointer ??
+        configCheckpointer ??
+        requireFallbacks(fallbacks, "checkpointer").defaultCheckpointer(options.appRoot))
 
   const threadsStore: ThreadsStore =
     options.threadsStore ??
@@ -763,15 +813,18 @@ export async function prepareRouteExecution(
           permissionsConfig,
         )))
 
-  const workspaceFs = createWorkspaceFs({
+  const workspaceFsOptions = {
     workspaceRoot: sandboxWorkspaceRoot ?? pureJoin(options.appRoot, "workspace"),
     backend:
       sandboxBackends?.filesystem ??
       configBackends?.filesystem ??
       requireFallbacks(fallbacks, "workspace filesystem backend").defaultFilesystem(),
     permissions: permissionsStore,
-    signal: options.signal ?? new AbortController().signal,
     interruptCapable: normalized.kind === "agent",
+  }
+  const workspaceFs = createWorkspaceFs({
+    ...workspaceFsOptions,
+    signal: options.signal ?? new AbortController().signal,
   })
 
   if (normalized.kind === "agent") {
@@ -794,22 +847,43 @@ export async function prepareRouteExecution(
 
     summarization = buildSummarization(loadedDawnConfig, descriptor?.model)
 
-    // Build (or reuse) the descriptor->routeId identity map used by the
-    // subagents marker to resolve `agent({ subagents: [imported] })` overrides.
-    // Static manifest present → derive from it with zero entry-file imports;
-    // otherwise the dynamic best-effort import path. Both caches are keyed on
-    // their source object's identity, which is stable for the process
-    // lifetime: the boot registry's manifest is threaded down via
-    // `routeManifest` (or memoized per appRoot on the fallback path), and the
-    // dev child restarts on any edit that could change it.
+    // Build the canonical descriptor -> routeIds multimap. Static deployments
+    // derive it entirely from their seeded module manifest; the Node fallback
+    // imports route entries only on the dynamic path.
     const staticMaps = options.staticModules
       ? getCachedStaticDescriptorMaps(options.staticModules)
       : undefined
-    const descriptorRouteMap =
-      staticMaps?.descriptorRouteMap ??
-      (await requireFallbacks(fallbacks, "subagent descriptor map").descriptorRouteMap(
+    const descriptorRouteIndex =
+      staticMaps?.descriptorRouteIndex ??
+      (await requireFallbacks(fallbacks, "subagent descriptor index").descriptorRouteIndex(
         routeManifest,
       ))
+    let subagentRegistry: readonly ResolvedSubagent[]
+    try {
+      subagentRegistry = await resolveSubagentRegistry({
+        descriptor,
+        descriptorRouteIndex,
+        parentRouteDir: routeDir,
+        parentRouteId: options.routeId,
+        routeManifest,
+        loadDescription: async (route) => {
+          if (staticMaps) {
+            const staticDescriptor = staticMaps.routeDescriptors.get(route.id)
+            return typeof staticDescriptor?.description === "string"
+              ? staticDescriptor.description
+              : "No description provided."
+          }
+          return await requireFallbacks(fallbacks, "subagent description").loadSubagentDescription(
+            route,
+          )
+        },
+      })
+    } catch (error) {
+      return { message: formatErrorMessage(error), ok: false }
+    }
+
+    const reservedTaskError = findReservedTaskPolicyError(descriptor, options.routeId)
+    if (reservedTaskError) return { message: reservedTaskError, ok: false }
 
     // Build the memory context if this route has a memory.ts (probed and
     // loaded once per route — part of PreparedRouteModules).
@@ -839,7 +913,7 @@ export async function prepareRouteExecution(
         writes,
         appRoot: options.appRoot,
         routePath: cleanRoutePath,
-        now: new Date().toISOString(),
+        now: () => new Date().toISOString(),
         ...(loadedDawnConfig?.memory?.indexMaxEntries !== undefined
           ? { indexMaxEntries: loadedDawnConfig.memory.indexMaxEntries }
           : {}),
@@ -862,10 +936,14 @@ export async function prepareRouteExecution(
                   ? { vectorK: loadedDawnConfig.memory.vector.vectorK }
                   : {}),
                 ...(loadedDawnConfig.memory.vector.recencyWeight !== undefined
-                  ? { recencyWeight: loadedDawnConfig.memory.vector.recencyWeight }
+                  ? {
+                      recencyWeight: loadedDawnConfig.memory.vector.recencyWeight,
+                    }
                   : {}),
                 ...(loadedDawnConfig.memory.vector.confidenceWeight !== undefined
-                  ? { confidenceWeight: loadedDawnConfig.memory.vector.confidenceWeight }
+                  ? {
+                      confidenceWeight: loadedDawnConfig.memory.vector.confidenceWeight,
+                    }
                   : {}),
               },
             }
@@ -892,8 +970,7 @@ export async function prepareRouteExecution(
     const applied = await applyCapabilities(registry, routeDir, {
       routeManifest,
       descriptor,
-      descriptorRouteMap,
-      ...(staticMaps ? { routeDescriptors: staticMaps.routeDescriptors } : {}),
+      subagentRegistry,
       ...(capabilityBackends ? { backends: capabilityBackends } : {}),
       // Core owns no node backend: the workspace capability constructs one
       // through these ONLY when nothing above supplied an instance. Absent
@@ -907,9 +984,7 @@ export async function prepareRouteExecution(
             },
           }
         : {}),
-      ...(fallbacks
-        ? { loadRouteDescription: fallbacks.loadRouteDescription, markerFs: fallbacks.markerFs }
-        : {}),
+      ...(fallbacks ? { markerFs: fallbacks.markerFs } : {}),
       permissions: permissionsStore,
       appRoot: options.appRoot,
       ...(sandboxWorkspaceRoot ? { workspaceRoot: sandboxWorkspaceRoot } : {}),
@@ -920,7 +995,10 @@ export async function prepareRouteExecution(
       const messages = applied.errors
         .map((e) => `[${e.markerName}#${e.phase}] ${e.message}`)
         .join("\n  ")
-      return { message: `Capability error during route prep:\n  ${messages}`, ok: false }
+      return {
+        message: `Capability error during route prep:\n  ${messages}`,
+        ok: false,
+      }
     }
 
     const capTools: DiscoveredToolDefinition[] = []
@@ -988,7 +1066,10 @@ export async function prepareRouteExecution(
     // workspace runBash/writeFile and the dispatch `task`, are withheld unless
     // explicitly allowed). descriptor.tools.allow grants, .deny revokes, deny
     // wins. Unknown names throw and surface as a route-prep failure.
-    const scopeInputs = tools.map((t) => ({ name: t.name, origin: toolOrigin(t) }))
+    const scopeInputs = tools.map((t) => ({
+      name: t.name,
+      origin: toolOrigin(t),
+    }))
     let keptToolNames: ReadonlySet<string>
     try {
       keptToolNames = resolveToolScope(scopeInputs, descriptor?.tools, {
@@ -997,6 +1078,11 @@ export async function prepareRouteExecution(
       })
     } catch (error) {
       return { message: formatErrorMessage(error), ok: false }
+    }
+    if (dispatchableSubagents(subagentRegistry).length > 0) {
+      const mutableKeptToolNames = new Set(keptToolNames)
+      mutableKeptToolNames.add("task")
+      keptToolNames = mutableKeptToolNames
     }
     tools = tools.filter((t) => keptToolNames.has(t.name))
 
@@ -1042,46 +1128,65 @@ export async function prepareRouteExecution(
     promptFragments = capPromptFragments
     streamTransformers = capStreamTransformers
 
-    // Build a resolver only when this route actually has subagents — either
-    // by convention (<routeDir>/subagents/*) or by descriptor.subagents override.
+    // Resolve and prepare children only after the guarded policy boundary has
+    // allowed the current invocation. Child graphs are materialized natively
+    // with no child checkpointer, while live invocation metadata propagates.
     const hasTaskTool = capTools.some((t) => t.name === "task")
     if (hasTaskTool) {
-      subagentResolver = buildSubagentResolver({
-        appRoot: options.appRoot,
-        routeDir,
-        routeManifest,
-        descriptor,
-        descriptorRouteMap,
-        // Boot-resolved instances flow into every subagent re-entry. What is
-        // forwarded is whatever THIS turn received in its options — on the
-        // HTTP path (dawn dev/start) the fetch handler always populates
-        // them, so child turns inherit the parent's stores instead of
-        // re-constructing sqlite per child (and under permissionsMode
-        // "boot", parent and children share the one mutable
-        // PermissionsStore — see the BootResolvedInstances doc). Only the
-        // harness direct-call path, which passes no stores, still lets each
-        // child fall back exactly as before. The config/sqlite fallbacks
-        // resolved above are deliberately NOT forwarded. `routeManifest` is
-        // NOT included here: the resolver appends its own (required) manifest
-        // at both re-entry sites, so the child's manifest identity can never
-        // diverge from the resolver's lookup manifest.
-        bootInstances: {
-          ...(options.checkpointer ? { checkpointer: options.checkpointer } : {}),
-          ...(options.threadsStore ? { threadsStore: options.threadsStore } : {}),
-          ...(options.permissionsStore ? { permissionsStore: options.permissionsStore } : {}),
-          ...(options.memoryStore ? { memoryStore: options.memoryStore } : {}),
-          ...(options.staticModules ? { staticModules: options.staticModules } : {}),
-          ...(options.config ? { config: options.config } : {}),
-          ...(options.bootFallbacks ? { bootFallbacks: options.bootFallbacks } : {}),
+      const routeById = new Map(routeManifest.routes.map((route) => [route.id, route] as const))
+      subagentResolver = buildGuardedSubagentResolver({
+        cacheChildGraphs:
+          options.sandboxManager === undefined && options.sandboxThreadId === undefined,
+        fallbackDepth: options.subagentDepth ?? 0,
+        fallbackParams: options.routeParams ?? {},
+        ...(sandboxKey ? { fallbackRootSandboxKey: sandboxKey } : {}),
+        fallbackSignal: options.signal ?? new AbortController().signal,
+        interruptCapable: true,
+        parentRouteId: options.routeId,
+        permissions: permissionsStore,
+        prepareChild: async (entry, context) => {
+          const route = routeById.get(entry.routeId)
+          if (!route) throw new Error(`Validated subagent route "${entry.routeId}" is unavailable.`)
+          const childPrepared = await prepareRouteExecution({
+            appRoot: options.appRoot,
+            checkpointer: false,
+            permissionsStore,
+            routeManifest,
+            ...(options.threadsStore ? { threadsStore: options.threadsStore } : {}),
+            ...(options.memoryStore ? { memoryStore: options.memoryStore } : {}),
+            ...(options.staticModules ? { staticModules: options.staticModules } : {}),
+            ...(options.config ? { config: options.config } : {}),
+            ...(options.bootFallbacks ? { bootFallbacks: options.bootFallbacks } : {}),
+            isSubagent: true,
+            ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
+            routeFile: route.entryFile,
+            routeId: route.id,
+            routeParams: context.params,
+            routePath: route.pathname,
+            ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
+            ...(context.rootSandboxKey ? { sandboxThreadId: context.rootSandboxKey } : {}),
+            signal: context.signal,
+            subagentDepth: context.depth,
+          })
+          if (!childPrepared.ok) throw new Error(childPrepared.message)
+          const graph = await materializePreparedAgentGraph(
+            childPrepared,
+            options.middlewareContext,
+          )
+          assertResolvedSubagentGraph(graph)
+          return {
+            graph: withEpisodeRecording(graph, childPrepared),
+            routeId: route.id,
+          }
         },
-        ...(options.sandboxManager ? { sandboxManager: options.sandboxManager } : {}),
-        ...(sandboxKey ? { sandboxThreadId: sandboxKey } : {}),
+        registry: subagentRegistry,
+        routeParamNames: extractRouteParamNames(options.routeId),
       })
     }
   }
 
-  // Inject ctx.fs once here so every downstream invoker (createDawnContext,
-  // the langchain tool converter/loop) hands tools the sandboxed handle.
+  // Authored tools receive a handle built from stable route preparation inputs
+  // and the live tool-call signal.
   tools = tools.map((t) => ({
     ...t,
     run: (
@@ -1090,12 +1195,17 @@ export async function prepareRouteExecution(
         readonly middleware?: Readonly<Record<string, unknown>>
         readonly signal: AbortSignal
       },
-    ) => t.run(input, { ...ctx, fs: workspaceFs }),
+    ) =>
+      t.run(input, {
+        ...ctx,
+        fs: createWorkspaceFs({ ...workspaceFsOptions, signal: ctx.signal }),
+      }),
   }))
 
   return {
     normalized,
     ok: true,
+    routeId: options.routeId,
     checkpointer,
     permissionsStore,
     threadsStore,
@@ -1246,7 +1356,7 @@ export async function executeRouteAtResolvedPath(
     })
 
     const output = await invokeEntry(normalized.kind, normalized.entry, options.input, context, {
-      checkpointer,
+      ...(checkpointer ? { checkpointer } : {}),
       ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
       routeId: options.routeId,
       ...(stateFields ? { stateFields } : {}),
@@ -1420,7 +1530,7 @@ function extractRouteParamNames(routeId: string): string[] {
 }
 
 export interface StaticDescriptorMaps {
-  readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
+  readonly descriptorRouteIndex: DescriptorRouteIndex
   readonly routeDescriptors: ReadonlyMap<string, DawnAgent>
 }
 
@@ -1446,15 +1556,21 @@ export function __resetStaticDescriptorMapsForTests(): void {
 export function buildDescriptorMapsFromStaticModules(
   modules: DawnStaticModules,
 ): StaticDescriptorMaps {
-  const descriptorRouteMap = new Map<DawnAgent, string>()
+  const mutableDescriptorRouteIndex = new Map<DawnAgent, string[]>()
   const routeDescriptors = new Map<string, DawnAgent>()
   for (const route of modules.routes) {
     if (route.kind === "agent" && isDawnAgent(route.module.entry)) {
-      descriptorRouteMap.set(route.module.entry, route.routeId)
+      mutableDescriptorRouteIndex.set(route.module.entry, [
+        ...(mutableDescriptorRouteIndex.get(route.module.entry) ?? []),
+        route.routeId,
+      ])
       routeDescriptors.set(route.routeId, route.module.entry)
     }
   }
-  return { descriptorRouteMap, routeDescriptors }
+  const descriptorRouteIndex: DescriptorRouteIndex = new Map(
+    [...mutableDescriptorRouteIndex].map(([descriptor, routeIds]) => [descriptor, routeIds.sort()]),
+  )
+  return { descriptorRouteIndex, routeDescriptors }
 }
 
 /** Memoized per manifest object identity — stable for the process lifetime. */
@@ -1467,137 +1583,247 @@ export function getCachedStaticDescriptorMaps(modules: DawnStaticModules): Stati
   return maps
 }
 
-/**
- * Builds the subagentResolver passed into streamAgent/executeAgent. Given a
- * leaf name (e.g. "researcher"), the resolver returns:
- *   - the child route's id
- *   - a graph object whose .invoke(input, config) re-enters executeResolvedRoute
- *
- * Resolution order:
- *   1. Convention: route at `<routeDir>/subagents/<leaf>`
- *   2. Override: descriptor.subagents[i] whose routeId's last segment === leaf
- *
- * The returned graph exposes both `invoke` (one-shot) and `dawnStream`
- * (yields Dawn StreamChunks). The dispatcher prefers `dawnStream` so
- * intermediate child events (tool calls, tokens, capability events) bubble
- * up to the parent stream as `subagent.<type>` envelopes.
- */
-function buildSubagentResolver(args: {
-  readonly appRoot: string
-  readonly routeDir: string
-  readonly routeManifest: RouteManifest
-  readonly descriptor: DawnAgent | undefined
-  readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
-  readonly sandboxManager?: SandboxManager
-  /**
-   * The dispatching thread's sandbox key (top routes: its checkpoint
-   * threadId; nested subagents: the inherited key). Forwarded to children as
-   * `sandboxThreadId` ONLY — children never receive a checkpoint `threadId`,
-   * so each child turn runs as an independent uncheckpointed invocation while
-   * still resolving the same per-thread SandboxHandle as its parent.
-   */
-  readonly sandboxThreadId?: string
-  /**
-   * The dispatching turn's boot-resolved instances (stores + static module
-   * manifest), spread verbatim into each child re-entry so subagent turns
-   * construct nothing the parent didn't — no sqlite opens, no
-   * permissions-file reads, no entry-file imports. `routeManifest` must NOT
-   * be supplied here: both re-entry sites append the required `routeManifest`
-   * arg after this spread, so the manifest the child executes with is by
-   * construction the same object the resolver uses for route lookups.
-   */
-  readonly bootInstances?: BootResolvedInstances
+export interface ChildPreparationContext {
+  readonly callId: string
+  readonly depth: number
+  readonly params: Readonly<Record<string, string>>
+  readonly rootSandboxKey?: string
+  readonly signal: AbortSignal
+}
+
+const MAX_CHILD_GRAPH_CACHE_ENTRIES = 32
+
+export function buildGuardedSubagentResolver(args: {
+  readonly cacheChildGraphs?: boolean
+  readonly fallbackDepth?: number
+  readonly fallbackParams?: Readonly<Record<string, string>>
+  readonly fallbackRootSandboxKey?: string
+  readonly fallbackSignal?: AbortSignal
+  readonly interruptCapable: boolean
+  readonly parentRouteId: string
+  readonly permissions?: PermissionsStore
+  readonly prepareChild: (
+    entry: ResolvedSubagent,
+    context: ChildPreparationContext,
+  ) => Promise<ResolvedSubagentGraph>
+  readonly registry: readonly ResolvedSubagent[]
+  readonly routeParamNames?: readonly string[]
 }): SubagentResolver {
-  const { appRoot, routeDir, routeManifest, descriptor, descriptorRouteMap } = args
-  const { bootInstances, sandboxManager, sandboxThreadId } = args
+  const childGraphCache = new Map<string, Promise<ResolvedSubagentGraph>>()
+  const stableSignal = args.fallbackSignal ?? new AbortController().signal
 
-  const findConventionRoute = (leaf: string): RouteDefinition | undefined => {
-    const conventionDir = `${routeDir}/subagents/${leaf}`
-    return routeManifest.routes.find((r) => r.routeDir === conventionDir)
-  }
+  return async (request) => {
+    const requestSignal = request.config.signal
+    const signal = requestSignal ?? stableSignal
+    const threadId = readStringConfigurable(request.config, "thread_id")
+    const params = readRouteParams(
+      request.config,
+      args.routeParamNames ?? Object.keys(args.fallbackParams ?? {}),
+      args.fallbackParams ?? {},
+    )
+    const dawn = readDawnMetadata(request.config)
+    const parentDepth = readNonNegativeInteger(dawn.subagent_depth) ?? args.fallbackDepth ?? 0
+    const rootSandboxKey = readNonEmptyString(dawn.root_sandbox_key) ?? args.fallbackRootSandboxKey
 
-  const findOverrideRoute = (leaf: string): RouteDefinition | undefined => {
-    for (const desc of descriptor?.subagents ?? []) {
-      const routeId = descriptorRouteMap.get(desc)
-      if (!routeId) continue
-      const route = routeManifest.routes.find((r) => r.id === routeId)
-      if (!route) continue
-      const lastSegment = route.segments.at(-1)
-      const lastName =
-        typeof lastSegment === "string"
-          ? lastSegment
-          : (lastSegment?.raw ?? route.id.replace(/^\//, ""))
-      if (lastName === leaf) return route
-    }
-    return undefined
-  }
+    const result = await resolveGuardedSubagent({
+      callId: request.callId,
+      input: request.input,
+      interruptCapable: args.interruptCapable && threadId !== undefined,
+      name: request.name,
+      ...(args.permissions ? { permissions: args.permissions } : {}),
+      registry: args.registry,
+      resolve: async (entry) => {
+        const context: ChildPreparationContext = {
+          callId: request.callId,
+          depth: parentDepth + 1,
+          params,
+          ...(rootSandboxKey ? { rootSandboxKey } : {}),
+          signal,
+        }
+        if (
+          args.cacheChildGraphs === false ||
+          requestSignal === undefined ||
+          requestSignal !== stableSignal
+        ) {
+          return args.prepareChild(entry, context)
+        }
 
-  return (leafName: string) => {
-    const route = findConventionRoute(leafName) ?? findOverrideRoute(leafName)
-    if (!route) return undefined
+        const cacheKey = childGraphCacheKey(entry, context)
+        const cached = childGraphCache.get(cacheKey)
+        if (cached) {
+          childGraphCache.delete(cacheKey)
+          childGraphCache.set(cacheKey, cached)
+          return cached
+        }
 
-    const graph = {
-      invoke: async (input: unknown, _config: unknown): Promise<unknown> => {
-        // Re-enter the same runtime; capabilities are re-applied for the
-        // child route. The dispatcher passes `{messages: [HumanMessage]}` —
-        // forward verbatim as the child's input so the agent-route path
-        // sees the protocol shape it expects.
-        const result = await executeResolvedRoute({
-          appRoot,
-          input,
-          isSubagent: true,
-          routeFile: route.entryFile,
-          routeId: route.id,
-          routePath: route.pathname,
-          // The parent's boot instances (stores + static modules) flow into
-          // the child: no store construction, no entry-file imports. The
-          // resolver's own manifest is appended AFTER the spread so the
-          // child's manifest identity IS the lookup manifest (no walk, and
-          // the descriptor-route-map cache stays warm — same object).
-          ...bootInstances,
-          routeManifest,
-          ...(sandboxManager ? { sandboxManager } : {}),
-          // Deliberately NOT `threadId`: the child must run as an independent
-          // uncheckpointed invocation (forwarding the parent's threadId would
-          // share its in-flight LangGraph checkpoint and short-circuit the
-          // child turn). `sandboxThreadId` scopes only the sandbox handle, so
-          // the child still shares the parent thread's sandbox.
-          ...(sandboxThreadId ? { sandboxThreadId } : {}),
+        const pending = args.prepareChild(entry, context).catch((error: unknown) => {
+          if (childGraphCache.get(cacheKey) === pending) childGraphCache.delete(cacheKey)
+          throw error
         })
-        if (result.status === "failed") {
-          // Surface the failure to the dispatcher in a shape that
-          // extractFinalText can survive; the dispatcher wraps it.
-          throw new Error(result.error.message)
+        if (childGraphCache.size >= MAX_CHILD_GRAPH_CACHE_ENTRIES) {
+          const oldestKey = childGraphCache.keys().next().value
+          if (oldestKey !== undefined) childGraphCache.delete(oldestKey)
         }
-        // executeAgent's output for an agent-kind route is the raw
-        // LangGraph state ({messages, ...}). Forward as-is.
-        return result.output
+        childGraphCache.set(cacheKey, pending)
+        return pending
       },
-      // Stream child events so the parent stream can bubble subagent.*
-      // envelopes for intermediate tool calls, tokens, and capability events.
-      dawnStream: async function* (input: unknown, _config: unknown) {
-        for await (const chunk of streamResolvedRoute({
-          appRoot,
-          input,
-          isSubagent: true,
-          routeFile: route.entryFile,
-          routeId: route.id,
-          routePath: route.pathname,
-          // Same boot-instance threading (and manifest-after-spread rule)
-          // as invoke() above.
-          ...bootInstances,
-          routeManifest,
-          ...(sandboxManager ? { sandboxManager } : {}),
-          // Same as invoke() above: sandbox key only, never the checkpoint id.
-          ...(sandboxThreadId ? { sandboxThreadId } : {}),
-        })) {
-          yield chunk
-        }
+      runtime: {
+        parentRouteId: args.parentRouteId,
+        ...(Object.keys(params).length > 0 ? { params } : {}),
+        signal,
+        ...(threadId ? { threadId } : {}),
       },
-    }
+    })
 
-    return { routeId: route.id, graph }
+    return result.ok ? { child: result.value, ok: true } : { message: result.message, ok: false }
   }
+}
+
+function childGraphCacheKey(entry: ResolvedSubagent, context: ChildPreparationContext): string {
+  return JSON.stringify([
+    entry.routeId,
+    context.depth,
+    context.rootSandboxKey ?? null,
+    Object.entries(context.params).sort(([left], [right]) => left.localeCompare(right)),
+  ])
+}
+
+async function materializePreparedAgentGraph(
+  prepared: PreparedRoute,
+  middlewareContext?: Readonly<Record<string, unknown>>,
+): Promise<unknown> {
+  if (prepared.normalized.kind !== "agent" || !isDawnAgent(prepared.normalized.entry)) {
+    throw new Error(
+      `[dawn] Route "${prepared.routeId}" must export a Dawn agent descriptor to be materialized.`,
+    )
+  }
+  return materializeAgentGraph({
+    ...(prepared.checkpointer ? { checkpointer: prepared.checkpointer } : {}),
+    descriptor: prepared.normalized.entry,
+    ...(middlewareContext ? { middlewareContext } : {}),
+    ...(prepared.offload ? { offload: prepared.offload } : {}),
+    ...(prepared.promptFragments ? { promptFragments: prepared.promptFragments } : {}),
+    routeParamNames: extractRouteParamNames(prepared.routeId),
+    ...(prepared.sandboxed ? { sandboxed: true } : {}),
+    ...(prepared.stateFields ? { stateFields: prepared.stateFields } : {}),
+    ...(prepared.streamTransformers ? { streamTransformers: prepared.streamTransformers } : {}),
+    ...(prepared.subagentResolver ? { subagentResolver: prepared.subagentResolver } : {}),
+    ...(prepared.summarization ? { summarization: prepared.summarization } : {}),
+    tools: prepared.tools,
+  })
+}
+
+function assertResolvedSubagentGraph(
+  value: unknown,
+): asserts value is ResolvedSubagentGraph["graph"] {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("invoke" in value) ||
+    typeof value.invoke !== "function"
+  ) {
+    throw new Error("Materialized subagent graph does not expose invoke(input, config).")
+  }
+}
+
+function withEpisodeRecording(
+  graph: ResolvedSubagentGraph["graph"],
+  prepared: PreparedRoute,
+): ResolvedSubagentGraph["graph"] {
+  return {
+    invoke: async (input, config) => {
+      const startedAt = Date.now()
+      const threadId = readStringConfigurable(config, "thread_id")
+      try {
+        const output = await graph.invoke(input, config)
+        await recordRunEpisode({
+          memoryContext: prepared.memoryContext,
+          episodes: prepared.episodes,
+          outcome: "ok",
+          output,
+          input,
+          startedAt,
+          ...(threadId ? { threadId } : {}),
+        })
+        return output
+      } catch (error) {
+        if (!isGraphInterrupt(error) && !config.signal?.aborted && !isAbortError(error)) {
+          await recordRunEpisode({
+            memoryContext: prepared.memoryContext,
+            episodes: prepared.episodes,
+            outcome: "error",
+            input,
+            startedAt,
+            ...(threadId ? { threadId } : {}),
+          })
+        }
+        throw error
+      }
+    },
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false
+  const candidate = error as {
+    readonly code?: unknown
+    readonly name?: unknown
+  }
+  return candidate.name === "AbortError" || candidate.code === "ABORT_ERR"
+}
+
+function findReservedTaskPolicyError(
+  descriptor: DawnAgent | undefined,
+  routeId: string,
+): string | undefined {
+  const tools = (descriptor as unknown as { readonly tools?: Record<string, unknown> } | undefined)
+    ?.tools
+  if (!tools || typeof tools !== "object") return undefined
+  for (const field of ["allow", "deny", "approve"] as const) {
+    if (Array.isArray(tools[field]) && tools[field].includes("task")) {
+      return `[DAWN_E1004] Parent route "${routeId}": tools.${field} references the reserved internal "task" tool. Remove that entry and use delegation to control subagent dispatch.`
+    }
+  }
+  if (
+    typeof tools.constrain === "object" &&
+    tools.constrain !== null &&
+    Object.hasOwn(tools.constrain, "task")
+  ) {
+    return `[DAWN_E1004] Parent route "${routeId}": tools.constrain references the reserved internal "task" tool. Remove that entry and use delegation to control subagent dispatch.`
+  }
+  return undefined
+}
+
+function readDawnMetadata(config: RunnableConfig): Record<string, unknown> {
+  const dawn = config.metadata?.dawn
+  return typeof dawn === "object" && dawn !== null && !Array.isArray(dawn)
+    ? (dawn as Record<string, unknown>)
+    : {}
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined
+}
+
+function readNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined
+}
+
+function readStringConfigurable(config: RunnableConfig, key: string): string | undefined {
+  return readNonEmptyString(config.configurable?.[key])
+}
+
+function readRouteParams(
+  config: RunnableConfig,
+  names: readonly string[],
+  fallback: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  const params: Record<string, string> = { ...fallback }
+  for (const name of names) {
+    const value = config.configurable?.[name]
+    if (typeof value === "string") params[name] = value
+  }
+  return params
 }
 
 function buildOffload(
@@ -1626,7 +1852,7 @@ function buildOffload(
   const thresholdChars = t.offloadThresholdChars ?? 40_000
   const previewLines = t.previewLines ?? 10
   const exempt = exemptToolSet(t.noOffloadTools)
-  return (content, toolName, toolCallId) => {
+  return (content, toolName, toolCallId, liveSignal) => {
     // Retrieval/inspection tools (readFile, listDir, …) must never be
     // offloaded: their output IS the content the agent asked to read, so
     // re-offloading it would replace it with another pointer and make the
@@ -1636,6 +1862,7 @@ function buildOffload(
       toolName,
       thresholdChars,
       previewLines,
+      ...(liveSignal ? { signal: liveSignal } : {}),
       store,
       ...(toolCallId ? { toolCallId } : {}),
     })

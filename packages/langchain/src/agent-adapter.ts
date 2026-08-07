@@ -8,16 +8,9 @@ import { createChatModel } from "./chat-model-factory.js"
 import { resolveProvider } from "./model-provider-resolver.js"
 import { isRetryableError, withRetry } from "./retry.js"
 import { materializeStateSchema, type ResolvedStateField } from "./state-adapter.js"
-import {
-  createSubagentStreamContext,
-  type SubagentEvent,
-  type SubagentStreamContext,
-} from "./subagent-dispatcher.js"
-import { bridgeSubagentTool, type SubagentResolverResult } from "./subagent-tool-bridge.js"
+import { convertSubagentTaskToLangChain, type SubagentResolver } from "./subagent-tool-bridge.js"
 import { buildSummarizationHook, type ResolvedSummarizationConfig } from "./summarization/index.js"
 import { convertToolToLangChain, type OffloadFn } from "./tool-converter.js"
-
-export type SubagentResolver = (leafName: string) => SubagentResolverResult | undefined
 
 export interface DawnToolDefinition {
   readonly description?: string
@@ -47,22 +40,7 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
   }
 }
 
-// Cache keyed on descriptor, guarded by a fingerprint of the prompt fragments'
-// load-time data. Prompt fragments come from the route directory (stable per
-// descriptor), but some fragments close over external state captured at load
-// time — e.g. the memory-index fragment snapshots the active store rows. Those
-// fragments expose a `cacheKey`; when it changes (a memory written mid-process)
-// the fingerprint changes and the agent re-materializes instead of serving a
-// stale prompt. Fragments without a cacheKey are treated as stable.
-interface CachedAgent {
-  readonly fingerprint: string
-  readonly agent: AgentLike
-}
-let materializedAgents = new WeakMap<DawnAgent, CachedAgent>()
-
-function fragmentFingerprint(fragments: readonly PromptFragment[]): string {
-  return fragments.map((f) => f.cacheKey ?? "").join("|")
-}
+let materializedAgents = new WeakMap<DawnAgent, AgentLike>()
 
 /**
  * Test-only escape hatch: reset the materialized-agents cache so the next
@@ -75,15 +53,18 @@ export function __resetMaterializedAgentsForTests(): void {
   materializedAgents = new WeakMap()
 }
 
-export function composePromptMessages(
+export async function composePromptMessages(
   systemPrompt: string,
   promptFragments: readonly PromptFragment[],
   state: Record<string, unknown>,
-): BaseMessageLike[] {
-  const rendered = promptFragments
-    .filter((f) => f.placement === "after_user_prompt")
-    .map((f) => f.render(state))
-    .filter((s) => s.length > 0)
+): Promise<BaseMessageLike[]> {
+  const rendered = (
+    await Promise.all(
+      promptFragments
+        .filter((f) => f.placement === "after_user_prompt")
+        .map((f) => (f.renderAsync ? f.renderAsync(state) : f.render(state))),
+    )
+  ).filter((s) => s.length > 0)
   const composed = [systemPrompt, ...rendered].join("\n\n")
   const messages = Array.isArray(state.messages) ? (state.messages as BaseMessageLike[]) : []
   return [{ role: "system", content: composed }, ...messages]
@@ -92,7 +73,7 @@ export function composePromptMessages(
 async function materializeAgent(
   descriptor: DawnAgent,
   tools: readonly DawnToolDefinition[],
-  checkpointer: BaseCheckpointSaver,
+  checkpointer: BaseCheckpointSaver | undefined,
   opts: {
     readonly stateFields?: readonly ResolvedStateField[]
     readonly middlewareContext?: Readonly<Record<string, unknown>>
@@ -101,21 +82,33 @@ async function materializeAgent(
     readonly offload?: OffloadFn
     readonly summarization?: ResolvedSummarizationConfig
     readonly routeParamNames?: readonly string[]
+    readonly streamTransformers?: readonly StreamTransformer[]
+    readonly subagentResolver?: SubagentResolver
   } = {},
 ): Promise<AgentLike> {
-  const fingerprint = fragmentFingerprint(opts.promptFragments ?? [])
+  const bypassCache =
+    checkpointer === undefined ||
+    opts.subagentResolver !== undefined ||
+    opts.bypassCache === true ||
+    (opts.streamTransformers?.length ?? 0) > 0
 
-  if (!opts.bypassCache) {
+  if (!bypassCache) {
     const cached = materializedAgents.get(descriptor)
-    if (cached && cached.fingerprint === fingerprint) {
-      return cached.agent
-    }
+    if (cached) return cached
   }
 
   const { createReactAgent } = await import("@langchain/langgraph/prebuilt")
 
   const langchainTools = tools.map((tool) =>
-    convertToolToLangChain(tool, opts.middlewareContext, opts.offload, opts.routeParamNames ?? []),
+    tool.name === "task" && opts.subagentResolver
+      ? convertSubagentTaskToLangChain(tool, opts.subagentResolver)
+      : convertToolToLangChain(
+          tool,
+          opts.middlewareContext,
+          opts.offload,
+          opts.routeParamNames ?? [],
+          opts.streamTransformers ?? [],
+        ),
   )
 
   const provider = resolveProvider({
@@ -132,6 +125,7 @@ async function materializeAgent(
   const agentOptions: Record<string, unknown> = {
     llm,
     tools: langchainTools,
+    version: "v2",
     // Function-form prompt re-renders fragments on every model turn so they
     // can reflect live state (e.g., the current todos list).
     prompt:
@@ -139,9 +133,7 @@ async function materializeAgent(
         ? (state: Record<string, unknown>) =>
             composePromptMessages(descriptor.systemPrompt, fragments, state)
         : descriptor.systemPrompt,
-    // Required so `interrupt()` can park graph state and `Command({resume})`
-    // can replay it. Paired with `config.configurable.thread_id`.
-    checkpointer,
+    ...(checkpointer ? { checkpointer } : {}),
   }
 
   const runningSummaryField: ResolvedStateField = {
@@ -164,19 +156,24 @@ async function materializeAgent(
   // biome-ignore lint/suspicious/noExplicitAny: dynamically-built options don't satisfy strict StateDefinition type
   const compiled = createReactAgent(agentOptions as any)
 
-  if (!opts.bypassCache) {
-    materializedAgents.set(descriptor, { fingerprint, agent: compiled as unknown as AgentLike })
+  if (!bypassCache) {
+    materializedAgents.set(descriptor, compiled as unknown as AgentLike)
   }
   return compiled as unknown as AgentLike
 }
 
 export async function materializeAgentGraph(options: {
-  readonly checkpointer: BaseCheckpointSaver
+  readonly checkpointer?: BaseCheckpointSaver
   readonly descriptor: DawnAgent
+  readonly middlewareContext?: Readonly<Record<string, unknown>>
+  readonly offload?: OffloadFn
+  readonly routeParamNames?: readonly string[]
   readonly tools?: readonly DawnToolDefinition[]
   readonly stateFields?: readonly ResolvedStateField[]
+  readonly streamTransformers?: readonly StreamTransformer[]
   readonly promptFragments?: readonly PromptFragment[]
   readonly summarization?: ResolvedSummarizationConfig
+  readonly subagentResolver?: SubagentResolver
   /**
    * Set when the caller's tools are bound to a per-thread sandbox (workspace
    * fs/exec backends). Bypasses the per-descriptor cache so one thread's
@@ -186,8 +183,13 @@ export async function materializeAgentGraph(options: {
 }): Promise<unknown> {
   return materializeAgent(options.descriptor, options.tools ?? [], options.checkpointer, {
     ...(options.stateFields ? { stateFields: options.stateFields } : {}),
+    ...(options.middlewareContext ? { middlewareContext: options.middlewareContext } : {}),
     ...(options.promptFragments ? { promptFragments: options.promptFragments } : {}),
+    ...(options.offload ? { offload: options.offload } : {}),
+    ...(options.routeParamNames ? { routeParamNames: options.routeParamNames } : {}),
     ...(options.summarization ? { summarization: options.summarization } : {}),
+    ...(options.streamTransformers ? { streamTransformers: options.streamTransformers } : {}),
+    ...(options.subagentResolver ? { subagentResolver: options.subagentResolver } : {}),
     ...(options.sandboxed === true ? { bypassCache: true } : {}),
   })
 }
@@ -195,6 +197,336 @@ export async function materializeAgentGraph(options: {
 export interface AgentStreamChunk {
   readonly type: "token" | "tool_call" | "tool_result" | "interrupt" | "done" | (string & {})
   readonly data: unknown
+}
+
+interface CapabilityEventPayload {
+  readonly data: unknown
+  readonly event: string
+}
+
+interface LangChainStreamEvent {
+  readonly event: string
+  readonly run_id: string
+  readonly data: Record<string, unknown> & {
+    readonly chunk?: unknown
+    readonly input?: unknown
+    readonly output?: unknown
+    readonly error?: unknown
+  }
+  readonly metadata?: Record<string, unknown>
+  readonly name: string
+  readonly parent_ids?: string[]
+}
+
+interface SubagentContext {
+  readonly callId: string
+  readonly depth: number
+  readonly name: string
+  readonly routeId: string
+}
+
+interface StreamEventProjection {
+  readonly capturesFinalOutput: boolean
+  readonly child: SubagentContext | undefined
+  readonly chunks: readonly AgentStreamChunk[]
+  readonly finalOutput: unknown
+  readonly interrupts: readonly RawInterruptEntry[]
+}
+
+interface SubagentToolRunContexts {
+  readonly contextsByToolRunId: Map<string, SubagentContext | null>
+}
+
+interface SubagentPhaseProjection {
+  readonly chunk: AgentStreamChunk
+  readonly context: SubagentContext
+  readonly toolRunId: string | undefined
+}
+
+const CAPABILITY_EVENT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*$/
+const RESERVED_ROOT_EVENT_NAMES = new Set([
+  "chunk",
+  "token",
+  "tool_call",
+  "tool_result",
+  "interrupt",
+  "done",
+])
+
+function isCapabilityEventName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    CAPABILITY_EVENT_NAME_PATTERN.test(value) &&
+    !RESERVED_ROOT_EVENT_NAMES.has(value) &&
+    !value.startsWith("subagent.")
+  )
+}
+
+function parseCapabilityEvent(value: unknown): CapabilityEventPayload | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const payload = value as Record<string, unknown>
+  if (!Object.hasOwn(payload, "event")) return undefined
+  if (!isCapabilityEventName(payload.event)) return undefined
+  if (!Object.hasOwn(payload, "data")) return undefined
+  return { event: payload.event, data: payload.data }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function parseSubagentContext(
+  metadata: Record<string, unknown> | undefined,
+): SubagentContext | undefined {
+  const dawn = metadata?.dawn
+  if (!isRecord(dawn)) return undefined
+  const stack = dawn.subagent_stack
+  if (!Array.isArray(stack) || stack.length === 0) return undefined
+
+  for (const value of stack) {
+    if (!isRecord(value)) return undefined
+    if (typeof value.callId !== "string" || value.callId === "") return undefined
+    if (typeof value.name !== "string" || value.name === "") return undefined
+    if (typeof value.routeId !== "string" || value.routeId === "") return undefined
+  }
+
+  const top = stack.at(-1) as Record<string, unknown>
+  return {
+    callId: top.callId as string,
+    depth: stack.length,
+    name: top.name as string,
+    routeId: top.routeId as string,
+  }
+}
+
+function sameSubagentContext(left: SubagentContext, right: SubagentContext): boolean {
+  return (
+    left.callId === right.callId &&
+    left.depth === right.depth &&
+    left.name === right.name &&
+    left.routeId === right.routeId
+  )
+}
+
+function indexSubagentContext(
+  toolRuns: SubagentToolRunContexts,
+  toolRunId: string,
+  context: SubagentContext,
+): void {
+  const existing = toolRuns.contextsByToolRunId.get(toolRunId)
+  if (existing === undefined) {
+    toolRuns.contextsByToolRunId.set(toolRunId, context)
+  } else if (existing !== null && !sameSubagentContext(existing, context)) {
+    toolRuns.contextsByToolRunId.set(toolRunId, null)
+  }
+}
+
+function resolveEventSubagentContext(
+  event: LangChainStreamEvent,
+  toolRuns: SubagentToolRunContexts,
+): SubagentContext | undefined {
+  const direct = parseSubagentContext(event.metadata)
+  if (direct) return direct
+  if (event.event !== "on_tool_error") return undefined
+  return toolRuns.contextsByToolRunId.get(event.run_id) ?? undefined
+}
+
+function childIdentity(child: SubagentContext): Record<string, unknown> {
+  return {
+    call_id: child.callId,
+    subagent: child.name,
+    route_id: child.routeId,
+    depth: child.depth,
+  }
+}
+
+function childData(child: SubagentContext, data: unknown): Record<string, unknown> {
+  return {
+    ...(isRecord(data) ? data : { value: data }),
+    ...childIdentity(child),
+  }
+}
+
+function parseSubagentPhaseEvent(event: LangChainStreamEvent): SubagentPhaseProjection | undefined {
+  if (event.event !== "on_custom_event" || event.name !== "dawn.subagent") return undefined
+  if (!isRecord(event.data)) return undefined
+  const phase = event.data.phase
+  if (phase !== "start" && phase !== "end") return undefined
+  if (typeof event.data.call_id !== "string" || event.data.call_id === "") return undefined
+  if (typeof event.data.subagent !== "string" || event.data.subagent === "") return undefined
+  if (typeof event.data.route_id !== "string" || event.data.route_id === "") return undefined
+  if (
+    typeof event.data.depth !== "number" ||
+    !Number.isInteger(event.data.depth) ||
+    event.data.depth < 1
+  ) {
+    return undefined
+  }
+
+  const context: SubagentContext = {
+    callId: event.data.call_id,
+    depth: event.data.depth,
+    name: event.data.subagent,
+    routeId: event.data.route_id,
+  }
+  const toolRunId =
+    typeof event.data.tool_run_id === "string" && event.data.tool_run_id !== ""
+      ? event.data.tool_run_id
+      : undefined
+  const { phase: _phase, tool_run_id: _toolRunId, ...data } = event.data
+  return {
+    chunk: { type: `subagent.${phase}`, data },
+    context,
+    toolRunId,
+  }
+}
+
+function classifyStreamEvent(
+  event: LangChainStreamEvent,
+  toolRuns: SubagentToolRunContexts,
+): StreamEventProjection {
+  const phase = parseSubagentPhaseEvent(event)
+  if (phase) {
+    if (phase.toolRunId !== undefined) {
+      indexSubagentContext(toolRuns, phase.toolRunId, phase.context)
+    }
+    return {
+      capturesFinalOutput: false,
+      child: phase.context,
+      chunks: [phase.chunk],
+      finalOutput: undefined,
+      interrupts: [],
+    }
+  }
+  const child = resolveEventSubagentContext(event, toolRuns)
+
+  switch (event.event) {
+    case "on_chat_model_stream": {
+      const content = (event.data.chunk as { content?: unknown })?.content
+      if (typeof content !== "string" || content.length === 0) break
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [
+          child
+            ? { type: "subagent.message", data: { ...childIdentity(child), chunk: content } }
+            : { type: "token", data: content },
+        ],
+        finalOutput: undefined,
+        interrupts: [],
+      }
+    }
+    case "on_tool_start":
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [
+          child
+            ? {
+                type: "subagent.tool_call",
+                data: {
+                  ...childIdentity(child),
+                  id: event.run_id,
+                  tool: event.name,
+                  input: event.data.input ?? event.data.chunk ?? event.data.output,
+                },
+              }
+            : {
+                type: "tool_call",
+                data: {
+                  id: event.run_id,
+                  name: event.name,
+                  input: event.data.input ?? event.data.chunk ?? event.data.output,
+                },
+              },
+        ],
+        finalOutput: undefined,
+        interrupts: [],
+      }
+    case "on_tool_end":
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [
+          child
+            ? {
+                type: "subagent.tool_result",
+                data: {
+                  ...childIdentity(child),
+                  id: event.run_id,
+                  tool: event.name,
+                  output: event.data.output,
+                },
+              }
+            : {
+                type: "tool_result",
+                data: { id: event.run_id, name: event.name, output: event.data.output },
+              },
+        ],
+        finalOutput: undefined,
+        interrupts: [],
+      }
+    case "on_custom_event": {
+      if (event.name !== "dawn.capability") break
+      const payload = parseCapabilityEvent(event.data)
+      if (!payload) break
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [
+          child
+            ? { type: `subagent.${payload.event}`, data: childData(child, payload.data) }
+            : { type: payload.event, data: payload.data },
+        ],
+        finalOutput: undefined,
+        interrupts: [],
+      }
+    }
+    case "on_chain_stream":
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [],
+        finalOutput: undefined,
+        interrupts: extractInterrupts(event.data.chunk) ?? [],
+      }
+    case "on_tool_error":
+      return {
+        capturesFinalOutput: false,
+        child,
+        chunks: [],
+        finalOutput: undefined,
+        interrupts: extractInterruptsFromError(event.data.error) ?? [],
+      }
+    case "on_chain_end":
+      if (!child && event.name === "LangGraph") {
+        return {
+          capturesFinalOutput: true,
+          child,
+          chunks: [],
+          finalOutput: event.data.output,
+          interrupts: extractInterrupts(event.data.output) ?? [],
+        }
+      }
+      if (child) {
+        return {
+          capturesFinalOutput: false,
+          child,
+          chunks: [],
+          finalOutput: undefined,
+          interrupts: extractInterrupts(event.data.output) ?? [],
+        }
+      }
+      break
+  }
+
+  return {
+    capturesFinalOutput: false,
+    child,
+    chunks: [],
+    finalOutput: undefined,
+    interrupts: [],
+  }
 }
 
 /**
@@ -224,6 +556,18 @@ function extractInterrupts(output: unknown): readonly RawInterruptEntry[] | unde
   const maybe = (output as Record<string, unknown>)[INTERRUPT_KEY]
   if (!Array.isArray(maybe)) return undefined
   return maybe as readonly RawInterruptEntry[]
+}
+
+const CHILD_INTERRUPT_KINDS = new Set(["command", "memory", "path", "tool"])
+
+function projectInterruptValue(
+  entry: RawInterruptEntry,
+  child: SubagentContext | undefined,
+): unknown {
+  const value = entry.value
+  if (!child || !isRecord(value) || Object.hasOwn(value, "callId")) return value
+  if (!CHILD_INTERRUPT_KINDS.has(String(value.kind))) return value
+  return { ...value, callId: child.callId }
 }
 
 /**
@@ -336,13 +680,7 @@ export interface AgentOptions {
   readonly tools: readonly DawnToolDefinition[]
   readonly promptFragments?: readonly PromptFragment[]
   readonly streamTransformers?: readonly StreamTransformer[]
-  /**
-   * Resolves a subagent leaf name to a child graph + routeId. When set, the
-   * `task` tool contributed by the subagents capability marker is intercepted
-   * inside `streamFromRunnable` and replaced with a bridge that dispatches the
-   * call via `dispatchSubagent`. Emitted `subagent.*` events are queued and
-   * drained alongside normal stream chunks (no module-level mutable state).
-   */
+  /** Resolves guarded task requests to lazily materialized child graphs. */
   readonly subagentResolver?: SubagentResolver
   /**
    * Stable per-conversation identifier used as LangGraph's `thread_id`. When
@@ -386,55 +724,16 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
   const { agentInput, config } = prepareAgentCall(options)
   const messages = isCommandInput ? [] : extractMessages(agentInput)
 
-  // Per-call subagent event queue. The bridge's writer pushes here; the
-  // streaming generator drains the queue alongside normal stream chunks. This
-  // avoids the module-level mutable-writer anti-pattern: each call has its
-  // own queue scoped to the surrounding generator frame.
-  const subagentEvents: AgentStreamChunk[] = []
-  const queueWriter = (event: SubagentEvent): void => {
-    subagentEvents.push({
-      type: event.event as AgentStreamChunk["type"],
-      data: event.data,
-    })
-  }
-
-  // Per-call counter shared with the dispatcher. While a child is active, the
-  // parent's on_chat_model_stream events are suppressed (LangChain v2
-  // streamEvents propagates child events to the parent listener via
-  // async-local-storage tracing, so without this gate every child token
-  // appears twice on the parent stream: once as a raw token chunk and once
-  // wrapped in a subagent.message envelope).
-  const streamContext = createSubagentStreamContext()
-
   const resolver = options.subagentResolver
   const hasTaskTool = options.tools.some((t) => t.name === "task")
-  const effectiveTools: readonly DawnToolDefinition[] =
-    resolver && hasTaskTool
-      ? options.tools.map((t) =>
-          t.name === "task"
-            ? {
-                ...t,
-                run: bridgeSubagentTool({
-                  subagentResolver: resolver,
-                  writer: queueWriter,
-                  parentConfig: config,
-                  streamContext,
-                }).run as DawnToolDefinition["run"],
-              }
-            : t,
-        )
-      : options.tools
 
   // DawnAgent descriptor path — materialize on first use
   if (isDawnAgent(options.entry)) {
-    // Bypass the per-descriptor cache when a resolver is wired: the bridged
-    // tool closes over the per-call queue + parent config, so caching would
-    // bind those to a single call. Same hazard when sandboxed: workspace tools
-    // close over a per-thread sandbox filesystem/exec backend, so caching
-    // would leak one thread's sandbox to another.
+    // Resolver and sandbox-backed tools close over route-preparation state, so
+    // they must not be reused from another materialized route invocation.
     const materializedAgent = await materializeAgent(
       options.entry,
-      effectiveTools,
+      options.tools,
       options.checkpointer,
       {
         ...(options.stateFields ? { stateFields: options.stateFields } : {}),
@@ -444,47 +743,36 @@ export async function* streamAgent(options: AgentOptions): AsyncGenerator<AgentS
         ...(options.offload ? { offload: options.offload } : {}),
         ...(options.summarization ? { summarization: options.summarization } : {}),
         routeParamNames: options.routeParamNames,
+        ...(options.streamTransformers ? { streamTransformers: options.streamTransformers } : {}),
+        ...(resolver ? { subagentResolver: resolver } : {}),
       },
     )
     const retryConfig = options.entry.retry
     const runnableInput = isCommandInput ? options.input : { messages }
-    yield* streamFromRunnable(
-      materializedAgent,
-      runnableInput,
-      config,
-      retryConfig,
-      options.streamTransformers,
-      subagentEvents,
-      streamContext,
-    )
+    yield* streamFromRunnable(materializedAgent, runnableInput, config, retryConfig)
     return
   }
 
   // Legacy path — raw Runnable with .invoke()
   assertAgentLike(options.entry)
 
-  const langchainTools = effectiveTools.map((tool) =>
-    convertToolToLangChain(
-      tool,
-      options.middlewareContext,
-      options.offload,
-      options.routeParamNames,
-    ),
+  const langchainTools = options.tools.map((tool) =>
+    tool.name === "task" && resolver
+      ? convertSubagentTaskToLangChain(tool, resolver)
+      : convertToolToLangChain(
+          tool,
+          options.middlewareContext,
+          options.offload,
+          options.routeParamNames,
+          options.streamTransformers ?? [],
+        ),
   )
   if (langchainTools.length > 0) {
     config.tools = langchainTools
   }
 
   const runnableInput = isCommandInput ? options.input : { messages }
-  yield* streamFromRunnable(
-    options.entry,
-    runnableInput,
-    config,
-    options.retry,
-    options.streamTransformers,
-    subagentEvents,
-    streamContext,
-  )
+  yield* streamFromRunnable(options.entry, runnableInput, config, options.retry)
 }
 
 function prepareAgentCall(options: AgentOptions): {
@@ -529,29 +817,12 @@ async function* streamFromRunnable(
   input: unknown,
   config: Record<string, unknown>,
   retryConfig?: RetryConfig,
-  streamTransformers?: readonly StreamTransformer[],
-  subagentEvents?: AgentStreamChunk[],
-  streamContext?: SubagentStreamContext,
 ): AsyncGenerator<AgentStreamChunk> {
-  // Drains any pending subagent events queued by the bridge. Called before
-  // each normal yield to keep ordering predictable on the single event loop.
-  function* drainSubagentEvents(): Generator<AgentStreamChunk> {
-    if (!subagentEvents) return
-    while (subagentEvents.length > 0) {
-      const next = subagentEvents.shift()
-      if (next) yield next
-    }
-  }
   const streamable = runnable as AgentLike & {
     streamEvents?: (
       input: unknown,
       options: Record<string, unknown>,
-    ) => AsyncIterable<{
-      event: string
-      run_id: string
-      data: { chunk?: unknown; input?: unknown; output?: unknown; error?: unknown }
-      name: string
-    }>
+    ) => AsyncIterable<LangChainStreamEvent>
   }
 
   if (typeof streamable.streamEvents !== "function") {
@@ -591,6 +862,7 @@ async function* streamFromRunnable(
   ): AsyncGenerator<AgentStreamChunk, PassResult, void> {
     let finalOutput: unknown
     let capturedInterrupts: readonly RawInterruptEntry[] = []
+    let emittedInterruptIds = new Set<string>()
     let hasYielded = false
 
     const maxStreamAttempts = allowRetryOnError ? (retryConfig?.maxAttempts ?? 3) : 1
@@ -599,112 +871,40 @@ async function* streamFromRunnable(
       hasYielded = false
       finalOutput = undefined
       capturedInterrupts = []
+      emittedInterruptIds = new Set()
+      const subagentToolRuns: SubagentToolRunContexts = { contextsByToolRunId: new Map() }
 
       try {
         for await (const event of streamEventsFn(invocationInput, {
           ...invocationConfig,
           version: "v2",
         })) {
-          yield* drainSubagentEvents()
-          switch (event.event) {
-            case "on_chat_model_stream": {
-              if (streamContext && streamContext.activeChildRuns > 0) break
-              const content = (event.data.chunk as { content?: unknown })?.content
-              if (content && typeof content === "string" && content.length > 0) {
-                hasYielded = true
-                yield { type: "token" as const, data: content }
+          const projection = classifyStreamEvent(event, subagentToolRuns)
+          if (projection.capturesFinalOutput) {
+            finalOutput = projection.finalOutput
+          }
+          for (const chunk of projection.chunks) {
+            hasYielded = true
+            yield chunk
+          }
+          if (projection.interrupts.length > 0) {
+            capturedInterrupts = projection.interrupts
+          }
+          for (const entry of projection.interrupts) {
+            if (entry.id && emittedInterruptIds.has(entry.id)) continue
+            if (entry.id) emittedInterruptIds.add(entry.id)
+            hasYielded = true
+            if (process.env.DAWN_DEBUG_INTERRUPTS === "1") {
+              if (!isRecord(entry.value) || typeof entry.value.interruptId !== "string") {
+                console.warn(
+                  "[dawn] interrupt entry.value missing interruptId — capability bug:",
+                  JSON.stringify(entry).slice(0, 300),
+                )
               }
-              break
             }
-            case "on_tool_start": {
-              hasYielded = true
-              yield {
-                type: "tool_call" as const,
-                data: {
-                  // LangGraph assigns the same run_id to on_tool_start and
-                  // on_tool_end of one invocation — a stable correlator that
-                  // survives repeated calls to the same tool.
-                  id: event.run_id,
-                  name: event.name,
-                  input: event.data.input ?? event.data.chunk ?? event.data.output,
-                },
-              }
-              break
-            }
-            case "on_tool_end": {
-              hasYielded = true
-              yield {
-                type: "tool_result" as const,
-                data: { id: event.run_id, name: event.name, output: event.data.output },
-              }
-              for (const transformer of streamTransformers ?? []) {
-                if (transformer.observes !== "tool_result") continue
-                for await (const out of transformer.transform({
-                  toolName: event.name,
-                  toolOutput: event.data.output,
-                })) {
-                  yield {
-                    type: out.event as AgentStreamChunk["type"],
-                    data: out.data,
-                  }
-                }
-              }
-              break
-            }
-            case "on_tool_error": {
-              // LangGraph's interrupt() throws a GraphInterrupt from inside
-              // the tool node. The error bubbles through streamEvents as
-              // on_tool_error with the GraphInterrupt instance on data.error.
-              // LangGraph itself catches it to park the checkpointer state,
-              // so the outer iterator continues normally afterwards.
-              const interrupts = extractInterruptsFromError(event.data.error)
-              if (interrupts && interrupts.length > 0) {
-                capturedInterrupts = interrupts
-                for (const entry of interrupts) {
-                  hasYielded = true
-                  if (process.env.DAWN_DEBUG_INTERRUPTS === "1") {
-                    if (
-                      !entry.value ||
-                      typeof (entry.value as Record<string, unknown>).interruptId !== "string"
-                    ) {
-                      console.warn(
-                        "[dawn] interrupt entry.value missing interruptId — capability bug:",
-                        JSON.stringify(entry).slice(0, 300),
-                      )
-                    }
-                  }
-                  yield {
-                    type: "interrupt" as const,
-                    // The capability's interrupt() payload is wrapped in
-                    // entry.value by LangGraph — surface it verbatim so the
-                    // SSE consumer sees the original {interruptId, kind, ...}
-                    // envelope the workspace capability emitted.
-                    data: entry.value,
-                  }
-                }
-              }
-              break
-            }
-            case "on_chain_end": {
-              if (event.name === "LangGraph") {
-                finalOutput = event.data.output
-                const interrupts = extractInterrupts(event.data.output)
-                if (interrupts && interrupts.length > 0) {
-                  capturedInterrupts = interrupts
-                  for (const entry of interrupts) {
-                    hasYielded = true
-                    yield {
-                      type: "interrupt" as const,
-                      // The capability's interrupt() payload is wrapped in
-                      // entry.value by LangGraph — surface it verbatim so the
-                      // SSE consumer sees the original {interruptId, kind, ...}
-                      // envelope the workspace capability emitted.
-                      data: entry.value,
-                    }
-                  }
-                }
-              }
-              break
+            yield {
+              type: "interrupt",
+              data: projectInterruptValue(entry, projection.child),
             }
           }
         }
@@ -729,9 +929,6 @@ async function* streamFromRunnable(
   // input. The adapter does NOT park here waiting for an in-process promise.
   const pass = yield* processEventStream(input, config, /* allowRetryOnError */ true)
 
-  // Final drain in case the last tool call was the bridged task tool —
-  // its events would otherwise be stranded after the stream ends.
-  yield* drainSubagentEvents()
   yield { type: "done", data: pass.finalOutput }
 }
 
