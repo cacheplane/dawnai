@@ -22,11 +22,51 @@ export const TYPESCRIPT_VERSION = "7.0.2"
 export const TSX_VERSION = "4.23.0"
 export const ZOD_VERSION = "4.4.3"
 
+/**
+ * The packed set must be CLOSED over workspace dependencies — see
+ * `assertPackedClosureIsComplete`, which enforces exactly that.
+ */
 export const TOOLING_PACKAGES = [
   { dir: "packages/sdk", name: "@dawn-ai/sdk" },
+  { dir: "packages/permissions", name: "@dawn-ai/permissions" },
+  { dir: "packages/sqlite-storage", name: "@dawn-ai/sqlite-storage" },
+  { dir: "packages/workspace", name: "@dawn-ai/workspace" },
   { dir: "packages/core", name: "@dawn-ai/core" },
   { dir: "packages/vite-plugin", name: "@dawn-ai/vite-plugin" },
 ]
+
+/**
+ * Asserts every workspace dependency of a packed package is ALSO packed.
+ *
+ * `pnpm pack` rewrites `workspace:*` to the workspace's current version, so an
+ * unpacked workspace dependency gets resolved from the public registry at that exact
+ * version. On an ordinary commit that version is already published and the install
+ * quietly succeeds — but on a RELEASE commit it is the version being published by the
+ * very run performing this check, so npm fails with `ETARGET` and the smoke breaks in
+ * the one place it cannot be allowed to. Deriving the requirement from the manifests
+ * keeps a newly added dependency from silently reintroducing that hole.
+ */
+export async function assertPackedClosureIsComplete({
+  packages = TOOLING_PACKAGES,
+  repoRoot = defaultRepoRoot,
+} = {}) {
+  const packedNames = new Set(packages.map(({ name }) => name))
+  const unpacked = []
+  for (const packageConfig of packages) {
+    const manifestPath = resolve(repoRoot, packageConfig.dir, "package.json")
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+    for (const [dependency, range] of Object.entries(manifest.dependencies ?? {})) {
+      if (String(range).startsWith("workspace:") && !packedNames.has(dependency)) {
+        unpacked.push(`${packageConfig.name} -> ${dependency}`)
+      }
+    }
+  }
+  if (unpacked.length > 0) {
+    throw new Error(
+      `TypeScript tooling pack smoke would resolve workspace dependencies from the registry: ${unpacked.join(", ")}. Add them to TOOLING_PACKAGES.`,
+    )
+  }
+}
 
 const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -37,6 +77,7 @@ const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 export async function runTypeScriptToolingPackSmoke(overrides = {}) {
   const dependencies = {
     assertNoNativeLifecycleScripts,
+    assertPackedClosureIsComplete,
     makeTempDir,
     onPackedArtifactValidated: () => {},
     packWorkspacePackage,
@@ -47,6 +88,8 @@ export async function runTypeScriptToolingPackSmoke(overrides = {}) {
     runTypeScriptToolingProbe: defaultRunTypeScriptToolingProbe,
     ...overrides,
   }
+
+  await dependencies.assertPackedClosureIsComplete({ repoRoot: dependencies.repoRoot })
 
   const tempRoot = await dependencies.makeTempDir("dawn-typescript-tooling-pack-")
   try {
@@ -92,12 +135,12 @@ export async function runTypeScriptToolingPackSmoke(overrides = {}) {
     }
 
     const installedVersions = await assertInstalledVersions(consumerRoot, {
+      // Derived from what was actually packed, so a package added to TOOLING_PACKAGES
+      // is version-asserted too rather than merely installed.
+      ...Object.fromEntries(
+        packedArtifacts.map(({ packageName, packageVersion }) => [packageName, packageVersion]),
+      ),
       "@dawn-ai/core": packedCoreVersion,
-      "@dawn-ai/sdk": packedArtifacts.find(({ packageName }) => packageName === "@dawn-ai/sdk")
-        .packageVersion,
-      "@dawn-ai/vite-plugin": packedArtifacts.find(
-        ({ packageName }) => packageName === "@dawn-ai/vite-plugin",
-      ).packageVersion,
       tsx: TSX_VERSION,
       typescript: TYPESCRIPT_VERSION,
       zod: ZOD_VERSION,
