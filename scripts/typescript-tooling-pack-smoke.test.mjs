@@ -8,6 +8,7 @@ import { describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
 
 import {
+  assertPackedClosureIsComplete,
   packWorkspacePackage,
   runCommand,
   runTypeScriptToolingPackSmoke,
@@ -28,13 +29,19 @@ describe("runTypeScriptToolingPackSmoke", () => {
 
     assert.deepEqual(TOOLING_PACKAGES, [
       { dir: "packages/sdk", name: "@dawn-ai/sdk" },
+      { dir: "packages/permissions", name: "@dawn-ai/permissions" },
+      { dir: "packages/sqlite-storage", name: "@dawn-ai/sqlite-storage" },
+      { dir: "packages/workspace", name: "@dawn-ai/workspace" },
       { dir: "packages/core", name: "@dawn-ai/core" },
       { dir: "packages/vite-plugin", name: "@dawn-ai/vite-plugin" },
     ])
     assert.deepEqual(result.installedVersions, {
       "@dawn-ai/core": PACKAGE_VERSION,
+      "@dawn-ai/permissions": PACKAGE_VERSION,
       "@dawn-ai/sdk": PACKAGE_VERSION,
+      "@dawn-ai/sqlite-storage": PACKAGE_VERSION,
       "@dawn-ai/vite-plugin": PACKAGE_VERSION,
+      "@dawn-ai/workspace": PACKAGE_VERSION,
       tsx: TSX_VERSION,
       typescript: TYPESCRIPT_VERSION,
       zod: ZOD_VERSION,
@@ -62,7 +69,7 @@ describe("runTypeScriptToolingPackSmoke", () => {
       args: ["--filter", "@dawn-ai/vite-plugin...", "build"],
       cwd: harness.repoRoot,
     })
-    assert.equal(packIndexes.length, 3)
+    assert.equal(packIndexes.length, TOOLING_PACKAGES.length)
     assert.ok(packIndexes.every((index) => index > buildIndex && index < installIndex))
     assert.deepEqual(
       packIndexes.map((index) => harness.events[index].packageConfig),
@@ -77,6 +84,9 @@ describe("runTypeScriptToolingPackSmoke", () => {
       "--save-exact",
       "--package-lock=false",
       join(harness.tempRoot, "packs", "dawn-ai-sdk-0.8.14.tgz"),
+      join(harness.tempRoot, "packs", "dawn-ai-permissions-0.8.14.tgz"),
+      join(harness.tempRoot, "packs", "dawn-ai-sqlite-storage-0.8.14.tgz"),
+      join(harness.tempRoot, "packs", "dawn-ai-workspace-0.8.14.tgz"),
       join(harness.tempRoot, "packs", "dawn-ai-core-0.8.14.tgz"),
       join(harness.tempRoot, "packs", "dawn-ai-vite-plugin-0.8.14.tgz"),
       `typescript@${TYPESCRIPT_VERSION}`,
@@ -221,6 +231,56 @@ describe("runCommand", () => {
   })
 })
 
+describe("assertPackedClosureIsComplete", () => {
+  it("accepts the real TOOLING_PACKAGES against the real workspace", async () => {
+    // The regression guard. An unpacked workspace dependency resolves from the public
+    // registry at the version pnpm pack stamped in — which exists on every ordinary
+    // commit and does NOT exist on the release commit, so the hole is invisible until
+    // it fails the publish. 0.8.17 died here on @dawn-ai/permissions.
+    await assertPackedClosureIsComplete()
+  })
+
+  it("rejects a workspace dependency that is not itself packed", async () => {
+    const testRoot = await mkdtemp(join(tmpdir(), "dawn-closure-"))
+    try {
+      await writeWorkspaceManifest(testRoot, "packages/core", "@dawn-ai/core", {
+        "@dawn-ai/permissions": "workspace:*",
+      })
+
+      await assert.rejects(
+        assertPackedClosureIsComplete({
+          packages: [{ dir: "packages/core", name: "@dawn-ai/core" }],
+          repoRoot: testRoot,
+        }),
+        /@dawn-ai\/core -> @dawn-ai\/permissions.*Add them to TOOLING_PACKAGES/s,
+      )
+    } finally {
+      await rm(testRoot, { force: true, recursive: true })
+    }
+  })
+
+  it("accepts a closed set and ignores registry dependencies", async () => {
+    const testRoot = await mkdtemp(join(tmpdir(), "dawn-closure-"))
+    try {
+      await writeWorkspaceManifest(testRoot, "packages/core", "@dawn-ai/core", {
+        "@dawn-ai/permissions": "workspace:*",
+        zod: "^4.4.3",
+      })
+      await writeWorkspaceManifest(testRoot, "packages/permissions", "@dawn-ai/permissions", {})
+
+      await assertPackedClosureIsComplete({
+        packages: [
+          { dir: "packages/core", name: "@dawn-ai/core" },
+          { dir: "packages/permissions", name: "@dawn-ai/permissions" },
+        ],
+        repoRoot: testRoot,
+      })
+    } finally {
+      await rm(testRoot, { force: true, recursive: true })
+    }
+  })
+})
+
 describe("verify:typescript-tooling-pack", () => {
   it("runs unit tests before the real smoke and stops when unit tests fail", async () => {
     const packageJson = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"))
@@ -334,6 +394,11 @@ async function createHarness({
 
   const dependencies = {
     repoRoot,
+    // The harness repo is synthetic and has no package manifests. The closure rule
+    // itself is covered directly in the assertPackedClosureIsComplete suite below.
+    async assertPackedClosureIsComplete() {
+      events.push({ type: "closure-check" })
+    },
     async makeTempDir(prefix) {
       assert.equal(prefix, "dawn-typescript-tooling-pack-")
       await mkdir(tempRoot)
@@ -465,8 +530,11 @@ function packedManifest(name, { packedCoreDependency = PACKAGE_VERSION } = {}) {
 async function installFixturePackages(root) {
   const packages = {
     "@dawn-ai/core": PACKAGE_VERSION,
+    "@dawn-ai/permissions": PACKAGE_VERSION,
     "@dawn-ai/sdk": PACKAGE_VERSION,
+    "@dawn-ai/sqlite-storage": PACKAGE_VERSION,
     "@dawn-ai/vite-plugin": PACKAGE_VERSION,
+    "@dawn-ai/workspace": PACKAGE_VERSION,
     tsx: TSX_VERSION,
     typescript: TYPESCRIPT_VERSION,
     zod: ZOD_VERSION,
@@ -543,4 +611,14 @@ function extractedManifestCommand(fixture, manifestSource) {
       await writeFile(join(extractDir, "package", "package.json"), manifestSource, "utf8")
     }
   }
+}
+
+async function writeWorkspaceManifest(root, dir, name, dependencies) {
+  const packageDir = join(root, dir)
+  await mkdir(packageDir, { recursive: true })
+  await writeFile(
+    join(packageDir, "package.json"),
+    JSON.stringify({ dependencies, name, version: PACKAGE_VERSION }),
+    "utf8",
+  )
 }
