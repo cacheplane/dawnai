@@ -498,7 +498,7 @@ importers:
         version: link:../memory
       '@pretable/react':
         specifier: 0.0.3
-        version: 0.0.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        version: 0.0.3(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@pretable/ui':
         specifier: 0.0.3
         version: 0.0.3
@@ -9080,12 +9080,12 @@ snapshots:
 
   '@pretable/core@0.0.3': {}
 
-  '@pretable/react@0.0.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@pretable/react@0.0.3(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
       '@pretable/core': 0.0.3
       '@pretable/ui': 0.0.3
-      react: 19.2.7
-      react-dom: 19.2.7(react@19.2.7)
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
 
   '@pretable/ui@0.0.3': {}
 
