@@ -214,61 +214,60 @@ describe("subagent interrupt replay", () => {
     expect(grandchildStarts).toBe(1)
   })
 
-  it.each([
-    "tool",
-    "path",
-    "memory",
-  ] as const)("surfaces and resumes a child-owned %s approval with the child call id", async (kind) => {
-    const saver = new MemorySaver()
-    let childStarts = 0
-    const child = interruptingChild(kind, () => childStarts++)
-    const resolver = guardedResolver({
-      child,
-      parentRouteId: "/parent",
-      rule: { action: "allow" },
-    })
-    const root = taskRoot(await taskTool(resolver), saver)
-    const firstChunks = await collectStream(
-      root,
-      saver,
-      taskInput("child-call", "researcher", kind),
-      {
-        threadId: `child-${kind}`,
-      },
-    )
-    const interrupts = firstChunks.filter(({ type }) => type === "interrupt")
+  it.each(["tool", "path", "memory"] as const)(
+    "surfaces and resumes a child-owned %s approval with the child call id",
+    async (kind) => {
+      const saver = new MemorySaver()
+      let childStarts = 0
+      const child = interruptingChild(kind, () => childStarts++)
+      const resolver = guardedResolver({
+        child,
+        parentRouteId: "/parent",
+        rule: { action: "allow" },
+      })
+      const root = taskRoot(await taskTool(resolver), saver)
+      const firstChunks = await collectStream(
+        root,
+        saver,
+        taskInput("child-call", "researcher", kind),
+        {
+          threadId: `child-${kind}`,
+        },
+      )
+      const interrupts = firstChunks.filter(({ type }) => type === "interrupt")
 
-    expect(interrupts).toEqual([
-      {
-        type: "interrupt",
-        data: expect.objectContaining({
-          callId: "child-call",
+      expect(interrupts).toEqual([
+        {
+          type: "interrupt",
+          data: expect.objectContaining({
+            callId: "child-call",
+            interruptId: `perm-child-${kind}`,
+            kind,
+          }),
+        },
+      ])
+      expect(firstChunks).not.toContainEqual({
+        type: "subagent.end",
+        data: expect.objectContaining({ error: expect.anything() }),
+      })
+      expect(childStarts).toBe(1)
+
+      const resolution = await resolveThread(saver, `child-${kind}`, [
+        {
           interruptId: `perm-child-${kind}`,
-          kind,
-        }),
-      },
-    ])
-    expect(firstChunks).not.toContainEqual({
-      type: "subagent.end",
-      data: expect.objectContaining({ error: expect.anything() }),
-    })
-    expect(childStarts).toBe(1)
-
-    const resolution = await resolveThread(saver, `child-${kind}`, [
-      {
-        interruptId: `perm-child-${kind}`,
-        payload: "once",
-        status: "resolved",
-      },
-    ])
-    const resumedChunks = await collectStream(root, saver, new Command({ resume: resolution }), {
-      threadId: `child-${kind}`,
-    })
-    expect([...resumedChunks].reverse().find(({ type }) => type === "done")?.data).toEqual(
-      expect.objectContaining({ messages: expect.any(Array) }),
-    )
-    expect(childStarts).toBe(1)
-  })
+          payload: "once",
+          status: "resolved",
+        },
+      ])
+      const resumedChunks = await collectStream(root, saver, new Command({ resume: resolution }), {
+        threadId: `child-${kind}`,
+      })
+      expect([...resumedChunks].reverse().find(({ type }) => type === "done")?.data).toEqual(
+        expect.objectContaining({ messages: expect.any(Array) }),
+      )
+      expect(childStarts).toBe(1)
+    },
+  )
 
   it("resumes two parallel child interrupts only from a complete ID-addressed set", async () => {
     const child = parallelInterruptingChild()

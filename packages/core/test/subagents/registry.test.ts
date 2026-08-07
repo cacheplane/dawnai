@@ -159,28 +159,28 @@ describe("resolveSubagentRegistry", () => {
     ])
   })
 
-  it.each([
-    "deny",
-    "approve",
-  ] as const)("applies the %s default to convention and unruled explicit registrations", async (action) => {
-    const researcher = agent({ model: "gpt-5-mini", systemPrompt: "Research." })
-    const result = await resolveSubagentRegistry({
-      descriptor: parent({
-        subagents: { analyst: researcher },
-        delegation: { default: action },
-      }),
-      descriptorRouteIndex: new Map([[researcher, ["/shared/research"]]]),
-      parentRouteDir,
-      parentRouteId,
-      routeManifest: manifest(
-        route("/parent/subagents/writer", `${parentRouteDir}/subagents/writer`),
-        route("/shared/research", "/app/src/app/shared/research"),
-      ),
-      loadDescription: descriptions,
-    })
+  it.each(["deny", "approve"] as const)(
+    "applies the %s default to convention and unruled explicit registrations",
+    async (action) => {
+      const researcher = agent({ model: "gpt-5-mini", systemPrompt: "Research." })
+      const result = await resolveSubagentRegistry({
+        descriptor: parent({
+          subagents: { analyst: researcher },
+          delegation: { default: action },
+        }),
+        descriptorRouteIndex: new Map([[researcher, ["/shared/research"]]]),
+        parentRouteDir,
+        parentRouteId,
+        routeManifest: manifest(
+          route("/parent/subagents/writer", `${parentRouteDir}/subagents/writer`),
+          route("/shared/research", "/app/src/app/shared/research"),
+        ),
+        loadDescription: descriptions,
+      })
 
-    expect(result.map(({ rule }) => rule)).toEqual([{ action }, { action }])
-  })
+      expect(result.map(({ rule }) => rule)).toEqual([{ action }, { action }])
+    },
+  )
 
   it("uses explicit aliases and replaces the route's convention identity", async () => {
     const researcher = agent({ model: "gpt-5-mini", systemPrompt: "Research." })
@@ -295,24 +295,22 @@ describe("resolveSubagentRegistry", () => {
     ])
   })
 
-  it.each([
-    "bad name",
-    "_hidden",
-    "-dash",
-    "slash/name",
-  ])("rejects invalid explicit name %s", async (name) => {
-    const researcher = agent({ model: "gpt-5-mini", systemPrompt: "Research." })
-    await expect(
-      resolveSubagentRegistry({
-        descriptor: parent({ subagents: { [name]: researcher } }),
-        descriptorRouteIndex: new Map([[researcher, ["/research"]]]),
-        parentRouteDir,
-        parentRouteId,
-        routeManifest: manifest(route("/research", "/app/src/app/research")),
-        loadDescription: descriptions,
-      }),
-    ).rejects.toThrow(/\[DAWN_E1004\].*\/parent.*name/i)
-  })
+  it.each(["bad name", "_hidden", "-dash", "slash/name"])(
+    "rejects invalid explicit name %s",
+    async (name) => {
+      const researcher = agent({ model: "gpt-5-mini", systemPrompt: "Research." })
+      await expect(
+        resolveSubagentRegistry({
+          descriptor: parent({ subagents: { [name]: researcher } }),
+          descriptorRouteIndex: new Map([[researcher, ["/research"]]]),
+          parentRouteDir,
+          parentRouteId,
+          routeManifest: manifest(route("/research", "/app/src/app/research")),
+          loadDescription: descriptions,
+        }),
+      ).rejects.toThrow(/\[DAWN_E1004\].*\/parent.*name/i)
+    },
+  )
 
   it("rejects invalid convention names", async () => {
     await expect(

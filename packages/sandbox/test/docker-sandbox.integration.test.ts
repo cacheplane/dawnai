@@ -12,6 +12,50 @@ const IMAGE = "node:22-slim"
 const ctx = (workspaceRoot: string) => ({ signal: new AbortController().signal, workspaceRoot })
 const policyDeny = { network: { mode: "deny" } } as const
 
+/**
+ * Docker could not LAUNCH the command — its own init process failed to start.
+ *
+ * Matched on the launch failure itself rather than on any particular runc diagnostic:
+ * pid exhaustion surfaces through several unrelated-looking messages
+ * (`unable to spawn stage-1: Resource temporarily unavailable`, and
+ * `read init-p: connection reset by peer` when runc's init dies mid-handshake), and
+ * enumerating them is a losing game. What matters is the category: the command never
+ * ran, so its output says nothing about whether the container survived. A command that
+ * DID run and produced the wrong output does not match, and still fails immediately.
+ */
+const FAILED_TO_LAUNCH = /OCI runtime exec failed|unable to start container process/
+
+/**
+ * Runs a command, retrying only while the container has no free pids.
+ *
+ * The fork-bomb test leaves up to 2000 `sleep 30` processes ALIVE — they hold their
+ * pids for the full 30s, so `pids-limit` keeps rejecting new processes long after
+ * `runCommand` returns. A single follow-up exec therefore races the test's own
+ * workload rather than any cleanup, and fails with `OCI runtime exec failed` roughly
+ * a third of CI runs.
+ *
+ * Retrying preserves what the assertion is actually for: the container must still be
+ * usable, which is only meaningful once it can spawn at all. Any OTHER failure is
+ * returned immediately so a genuine regression still fails fast rather than burning
+ * the whole window.
+ */
+type SandboxHandle = Awaited<ReturnType<ReturnType<typeof dockerSandbox>["acquire"]>>
+type ExecResult = Awaited<ReturnType<SandboxHandle["exec"]["runCommand"]>>
+
+async function execUntilSpawnable(
+  handle: SandboxHandle,
+  command: string,
+  { intervalMs = 1_000, timeoutMs = 60_000 } = {},
+): Promise<ExecResult> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const result = await handle.exec.runCommand({ command }, ctx(handle.workspaceRoot))
+    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`
+    if (!FAILED_TO_LAUNCH.test(output) || Date.now() >= deadline) return result
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+}
+
 describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, () => {
   runProviderConformance({
     name: "dockerSandbox",
@@ -92,7 +136,7 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
       )
       expect(typeof r.exitCode).toBe("number")
       // container still responsive → the host/container survived the spawn storm
-      const alive = await h.exec.runCommand({ command: "echo alive" }, ctx(h.workspaceRoot))
+      const alive = await execUntilSpawnable(h, "echo alive")
       expect(alive.stdout).toContain("alive")
     } finally {
       await p.destroy(threadId)

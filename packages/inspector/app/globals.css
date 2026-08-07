@@ -1,1 +1,17 @@
+/* grid.css self-declares `@layer pretable` and uses :where(), so its defaults
+   are specificity (0,0,0) and need no wrapping here — this only fixes where
+   that layer sits: above Tailwind's preflight, which would otherwise zero out
+   the grid's borders, and below its utilities, so the per-cell status tints in
+   memory-grid.tsx win over `[data-pretable-cell] { background: … }`. */
+@layer theme, base, components, pretable, utilities;
+
 @import "tailwindcss";
+@import "@pretable/ui/themes/excel.css";
+@import "@pretable/ui/grid.css";
+
+/* The Excel theme ships no row hover on purpose ("consumers opt in") — but every
+   row here opens a record on click, so it needs the affordance. Unlayered, so it
+   beats the theme's own token regardless of import order. */
+:root {
+  --pretable-bg-hover: var(--color-zinc-50);
+}
