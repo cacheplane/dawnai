@@ -359,6 +359,9 @@ jobs:
           DAWN_TEST_K8S_EGRESS_CONTROL_URL: http://dawn-egress-control:8080/
         run: DAWN_TEST_K8S=1 pnpm --filter @dawn-ai/sandbox test kube-sandbox.integration
 
+      - name: Exercise PVC reaper
+        run: sh test/k8s-smoke/assert-reaper.sh
+
   sandbox-k8s-e2e:
     # Full-arc smoke: a deployed Dawn app (built the user-facing way via
     # `dawn build`'s node target, run as `node .dawn/build/server.mjs`) drives
