@@ -25,7 +25,6 @@ import { createRuntimeFetchHandler as createNodeRuntimeFetchHandler } from "../s
 import type { RequestStores } from "../src/lib/dev/runtime-server.js"
 import { __resetRouteLoadCachesForTests } from "../src/lib/runtime/execute-route.js"
 import { loadStaticModules } from "../src/lib/runtime/static-modules.js"
-import { inMemoryFilesystem } from "./helpers/fetch-entry-fixture.js"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 
@@ -61,21 +60,24 @@ afterEach(async () => {
 // the fixture, the aimock script, the request sequence — is the same object
 // graph, and the transcripts must match after normalizing only volatile ids.
 //
-// …with ONE forced fourth difference, which is a finding rather than a choice.
-// `prepareRouteExecution` builds `createWorkspaceFs` EAGERLY for every route
-// execution, so with no boot fallbacks and no `backends.filesystem` in config
-// it throws "workspace filesystem backend: no instance provided and this
-// runtime has no filesystem fallback" — a 500 on every agent turn. The emitted
-// `app.mjs` inlines only the JSON-serializable half of `dawn.config.ts` and
-// `assertEdgeCapabilities` REJECTS `backends.filesystem` (a live object cannot
-// cross a build boundary), so a deployed worker cannot supply one either. The
-// design spec says it should not have to: "createWorkspaceFs's
-// localFilesystem() default … become[s] lazy (constructed only when a consuming
-// capability/tool is active)" and "with no filesystem backend (edge), markers
-// detect-false / render-empty cleanly". Until that lands, run 2 injects an
-// in-memory backend the generated entry has no way to inject — and the test
-// asserts that the gap is STILL a gap, so the workaround is deleted rather than
-// inherited once the runtime goes lazy.
+// Those three, and nothing else. In particular run 2 passes `config: {}` — the
+// literal shape the emitted `app.mjs` produces — and injects no backends,
+// because it no longer has to. It once did: `prepareRouteExecution` built
+// `createWorkspaceFs` EAGERLY, so a runtime with no boot fallbacks and no
+// `backends.filesystem` threw "workspace filesystem backend: no instance
+// provided and this runtime has no filesystem fallback" during PREPARATION —
+// a 500 on every agent turn, over a `ctx.fs` handle no turn here ever touched.
+// A worker could not have injected its way out: `app.mjs` inlines only the
+// JSON-serializable half of `dawn.config.ts`, and `assertEdgeCapabilities`
+// rejects `backends.filesystem` outright (a live object cannot cross a build
+// boundary). `resolveWorkspaceFsBackend` (execute-route-core.ts) now defers
+// that resolution to the first `ctx.fs` operation, so this run — no fallbacks,
+// no backends, empty config — is itself the regression guard: re-eagerize the
+// call and the whole conversation 500s here.
+//
+// Deferred is not defused. The second test below pins the other half: a route
+// that DOES reach for `ctx.fs` on such a runtime still fails, loudly and by
+// name, at the operation that needed a filesystem.
 //
 // NOTE ON DUPLICATION: the conversation driver, the SSE parser and the
 // normalizer below are deliberate copies of `static-equivalence.test.ts`'s.
@@ -658,19 +660,15 @@ describe("node-static vs edge-static equivalence", () => {
     const probe = perRequestStores(dbDir)
 
     const edgeAimock = await startAimock()
-    // The CORE handler, exactly as the emitted `app.mjs` calls it: no node
-    // boot fallbacks (nothing may reach for a filesystem), the namespace as
-    // appRoot, the inlined config, and stores per request.
-    //
-    // `backends.filesystem` is the one thing here `app.mjs` does NOT do — see
-    // the KNOWN GAP in the header, and the assertion below that it is still a
-    // gap. It cannot skew the comparison: the fixture has no `workspace/`
-    // directory, so `hasWorkspaceDir` is false on the node run and the
-    // fallback is absent entirely on the edge run — neither run contributes a
-    // workspace tool, and nothing ever reads through this backend.
+    // The CORE handler, exactly as the emitted `app.mjs` calls it — nothing
+    // added, nothing injected: no node boot fallbacks (nothing may reach for a
+    // filesystem), the namespace as appRoot, the inlined config verbatim, and
+    // stores per request. `config: {}` is load-bearing, not incidental: it is
+    // the whole shape a deployed worker can express, and serving the
+    // conversation from it is what proves a worker can serve one at all.
     const edgeHandler = await createEdgeRuntimeFetchHandler({
       appRoot: namespace,
-      config: { backends: { filesystem: inMemoryFilesystem() } },
+      config: {},
       modules: edgeModules,
       requestStores: probe.requestStores,
     })
@@ -683,35 +681,6 @@ describe("node-static vs edge-static equivalence", () => {
     } finally {
       await edgeHandler.close()
       await edgeAimock.stop()
-    }
-
-    // ---- The KNOWN GAP, pinned ----
-    // Exactly the shape the emitted `app.mjs` produces — inlined config, no
-    // backends — still cannot execute a route. When the eager
-    // `createWorkspaceFs` goes lazy this assertion fails, which is the signal
-    // to drop the `backends.filesystem` injection above.
-    const gapProbe = perRequestStores(dbDir)
-    const gapHandler = await createEdgeRuntimeFetchHandler({
-      appRoot: namespace,
-      config: {},
-      modules: edgeModules,
-      requestStores: gapProbe.requestStores,
-    })
-    try {
-      const gapResponse = await gapHandler.fetch(
-        new Request("http://localhost/threads/edge-gap-probe/runs/wait", {
-          body: JSON.stringify({
-            input: { messages: [{ content: "add apples", role: "user" }] },
-            route: "/chat#agent",
-          }),
-          headers: { "content-type": "application/json" },
-          method: "POST",
-        }),
-      )
-      expect(gapResponse.status).toBe(500)
-      expect(await gapResponse.text()).toContain("workspace filesystem backend")
-    } finally {
-      await gapHandler.close()
     }
 
     // The per-request seam did its job at the HANDLER boundary: one store bag
@@ -752,4 +721,119 @@ describe("node-static vs edge-static equivalence", () => {
     // deep-equal after normalizing only volatile ids and timestamps.
     expect(normalizeTranscript(edgeRun)).toEqual(normalizeTranscript(nodeRun))
   }, 120_000)
+
+  // -------------------------------------------------------------------------
+  // The other half of the deferral: DEFERRED, NOT DEFUSED.
+  //
+  // The suite above proves a route that never touches `ctx.fs` now serves turns
+  // on a filesystem-less runtime. That is only correct if a route that DOES
+  // touch it still fails — the epic's posture is fail-loud, and the fix moves
+  // WHEN the error surfaces, never WHETHER. Two workflow routes over one such
+  // runtime settle both halves in one place; workflow routes need no model, so
+  // this exercises the real handler → `prepareRouteExecution` → `ctx.fs` path
+  // with no aimock in the way.
+  // -------------------------------------------------------------------------
+  it("defers the missing-filesystem failure to first ctx.fs use, and still fails loudly", async () => {
+    const appRoot = await realpath(await mkdtemp(join(tmpdir(), "dawn-edge-fs-deferral-")))
+    cleanup.push(() =>
+      rm(appRoot, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }),
+    )
+    const files: Record<string, string> = {
+      "dawn.config.ts": "export default {}\n",
+      "package.json": '{ "name": "edge-fs-deferral-fixture", "type": "module" }\n',
+      // Reaches for the workspace on the first line — the ONE thing a
+      // filesystem-less runtime cannot serve.
+      "src/app/reads/index.ts":
+        "export const workflow = async (\n" +
+        "  _input: unknown,\n" +
+        "  ctx: { fs: { listDir: (path?: string) => Promise<readonly string[]> } },\n" +
+        ') => ({ entries: await ctx.fs.listDir(".") })\n',
+      // Never touches it — the shape that used to 500 anyway.
+      "src/app/quiet/index.ts": "export const workflow = async () => ({ ok: true })\n",
+    }
+    for (const [rel, body] of Object.entries(files)) {
+      const filePath = join(appRoot, rel)
+      await mkdir(join(filePath, ".."), { recursive: true })
+      await writeFile(filePath, body, "utf8")
+    }
+    await mkdir(join(appRoot, "node_modules", "@dawn-ai"), { recursive: true })
+    await symlink(
+      join(repoRoot, "packages", "cli"),
+      join(appRoot, "node_modules", "@dawn-ai", "cli"),
+      "dir",
+    )
+
+    const manifest = await discoverRoutes({ appRoot })
+    const discoveries: RouteStaticDiscovery[] = []
+    for (const route of manifest.routes) {
+      discoveries.push(await collectRouteStaticDiscovery({ appRoot, route }))
+    }
+    const buildDir = join(appRoot, ".dawn", "build")
+    await mkdir(buildDir, { recursive: true })
+    const edgeModulesPath = join(buildDir, "modules.edge.mjs")
+    await writeFile(
+      edgeModulesPath,
+      emitEdgeModulesFile({ appRoot, buildDir, discoveries }),
+      "utf8",
+    )
+
+    __resetRouteLoadCachesForTests()
+    __clearDawnConfigCacheForTests()
+
+    const edgeModules = await loadStaticModules(pathToFileURL(edgeModulesPath))
+    expect(edgeModules.routes.map((route) => route.assistantId).sort()).toEqual([
+      "/quiet#workflow",
+      "/reads#workflow",
+    ])
+
+    const dbDir = await realpath(await mkdtemp(join(tmpdir(), "dawn-edge-fs-deferral-db-")))
+    cleanup.push(() => rm(dbDir, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }))
+
+    // The `app.mjs` shape again: no boot fallbacks, empty config, no backends.
+    const handler = await createEdgeRuntimeFetchHandler({
+      appRoot: edgeAppNamespace(appRoot),
+      config: {},
+      modules: edgeModules,
+      requestStores: perRequestStores(dbDir).requestStores,
+    })
+    try {
+      const runRoute = async (route: string): Promise<Response> => {
+        const created = await handler.fetch(
+          new Request("http://localhost/threads", {
+            body: "{}",
+            headers: { "content-type": "application/json" },
+            method: "POST",
+          }),
+        )
+        expect(created.status).toBe(200)
+        const { thread_id: threadId } = (await created.json()) as { thread_id?: string }
+        if (typeof threadId !== "string") throw new Error("expected a thread_id")
+        return handler.fetch(
+          new Request(`http://localhost/threads/${encodeURIComponent(threadId)}/runs/wait`, {
+            body: JSON.stringify({ input: {}, route }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+          }),
+        )
+      }
+
+      // Preparation no longer throws: the route that ignores the workspace runs
+      // to completion. THIS is the assertion that fails if `ctx.fs`'s backend
+      // is ever re-resolved eagerly at preparation time.
+      const quiet = await runRoute("/quiet#workflow")
+      expect(quiet.status).toBe(200)
+      expect(await quiet.json()).toMatchObject({ ok: true })
+
+      // …and the route that does reach for it fails at the operation that
+      // needed a filesystem, naming the missing backend — not silently, not
+      // with an empty listing.
+      const reads = await runRoute("/reads#workflow")
+      expect(reads.status).toBe(500)
+      const body = await reads.text()
+      expect(body).toContain("workspace filesystem backend")
+      expect(body).toContain("this runtime has no filesystem fallback")
+    } finally {
+      await handler.close()
+    }
+  }, 60_000)
 })

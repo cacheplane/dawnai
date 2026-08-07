@@ -13,7 +13,17 @@ export interface CreateWorkspaceFsOptions {
    * roots.
    */
   readonly workspaceRoot: string
-  readonly backend: FilesystemBackend
+  /**
+   * The backend, or a thunk resolved (and memoized) at the FIRST filesystem
+   * operation. The thunk form exists for hosts that cannot know at handle-
+   * construction time whether a backend is obtainable — an edge runtime with no
+   * filesystem at all. Such a host passes a thunk that throws, and the throw
+   * lands on the operation that actually needed a filesystem instead of on
+   * every route execution, including the overwhelming majority that never
+   * touch `ctx.fs`. It is deliberately NOT a way to make a missing backend
+   * silent: the thunk still throws, by name, at first use.
+   */
+  readonly backend: FilesystemBackend | (() => FilesystemBackend)
   readonly permissions: PermissionsStore | undefined
   readonly signal: AbortSignal
   /**
@@ -48,8 +58,22 @@ function assertPosixAbsoluteWorkspaceRoot(workspaceRoot: string): void {
  * agent-facing workspace tools.
  */
 export function createWorkspaceFs(opts: CreateWorkspaceFsOptions): WorkspaceFs {
+  // Eager, and staying that way: the root is known at construction time, so a
+  // host that hands core a relative one must hear about it here rather than on
+  // some later file operation. Only the BACKEND is deferred below.
   assertPosixAbsoluteWorkspaceRoot(opts.workspaceRoot)
   const bctx = { signal: opts.signal, workspaceRoot: opts.workspaceRoot }
+
+  // Memoized after the first successful resolution, so a thunk that opens a
+  // real handle does so at most once per workspace handle. A thunk that throws
+  // is re-entered on every operation — it has produced nothing to cache, and
+  // each failed operation deserves its own loud error.
+  let resolved: FilesystemBackend | undefined =
+    typeof opts.backend === "function" ? undefined : opts.backend
+  const backend = (): FilesystemBackend => {
+    if (resolved === undefined) resolved = (opts.backend as () => FilesystemBackend)()
+    return resolved
+  }
 
   async function gate(operation: PathOperation, path: string): Promise<string> {
     // Order is load-bearing and must not be rearranged: resolve first (an
@@ -62,8 +86,9 @@ export function createWorkspaceFs(opts: CreateWorkspaceFsOptions): WorkspaceFs {
     // boundary (see `toPosixAppRoot` in @dawn-ai/cli); pureResolve throws on a
     // relative base rather than silently rooting it somewhere.
     const absPath = pureResolve(opts.workspaceRoot, path)
-    const canonicalPath = await opts.backend.realPath(absPath, bctx)
-    const canonicalRoot = await opts.backend.realPath(opts.workspaceRoot, bctx)
+    const fs = backend()
+    const canonicalPath = await fs.realPath(absPath, bctx)
+    const canonicalRoot = await fs.realPath(opts.workspaceRoot, bctx)
     const result = await gatePathOp(opts.permissions, operation, canonicalPath, canonicalRoot, {
       interruptCapable: opts.interruptCapable,
     })
@@ -73,12 +98,13 @@ export function createWorkspaceFs(opts: CreateWorkspaceFsOptions): WorkspaceFs {
 
   return {
     async readFile(path, readOpts) {
-      return opts.backend.readFile(await gate("readFile", path), bctx, readOpts)
+      return backend().readFile(await gate("readFile", path), bctx, readOpts)
     },
     async readBinaryFile(path, readOpts) {
       // Check backend capability before gating so users are never prompted to
       // approve a read that will immediately fail.
-      const { readBinaryFile } = opts.backend
+      const fs = backend()
+      const { readBinaryFile } = fs
       if (!readBinaryFile) {
         throw new Error(
           "The configured filesystem backend does not support binary reads (readBinaryFile). " +
@@ -86,13 +112,13 @@ export function createWorkspaceFs(opts: CreateWorkspaceFsOptions): WorkspaceFs {
         )
       }
       const absPath = await gate("readFile", path)
-      return readBinaryFile.call(opts.backend, absPath, bctx, readOpts)
+      return readBinaryFile.call(fs, absPath, bctx, readOpts)
     },
     async writeFile(path, content) {
-      return opts.backend.writeFile(await gate("writeFile", path), content, bctx)
+      return backend().writeFile(await gate("writeFile", path), content, bctx)
     },
     async listDir(path = ".") {
-      return [...(await opts.backend.listDir(await gate("listDir", path), bctx))]
+      return [...(await backend().listDir(await gate("listDir", path), bctx))]
     },
   }
 }

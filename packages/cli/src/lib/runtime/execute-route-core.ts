@@ -174,7 +174,10 @@ export interface RuntimeBootFallbacks {
  *   - permissionsStore              (both modules)
  *   - memoryStore                   (both modules; only for a route with a
  *                                    memory.ts and no config `memory.store`)
- *   - workspace filesystem backend  (this module; no sandbox/config backend)
+ *   - workspace filesystem backend  (this module; no sandbox/config backend —
+ *                                    thrown at the first `ctx.fs` operation,
+ *                                    not at route preparation, so a route that
+ *                                    never touches the workspace runs)
  *   - routeManifest                 (this module; no boot manifest threaded)
  *   - subagent descriptor map       (this module; no static modules threaded)
  *
@@ -195,8 +198,10 @@ export interface RuntimeBootFallbacks {
  *                               `applyCapabilities`; the workspace capability
  *                               then throws at TOOL-INVOCATION time unless a
  *                               sandbox/config backend was supplied. (The
- *                               `ctx.fs` handle above still throws at boot —
- *                               it needs a backend to be constructed at all.)
+ *                               `ctx.fs` handle above now behaves the same way
+ *                               — see `resolveWorkspaceFsBackend`; it is
+ *                               constructed unconditionally but resolves its
+ *                               backend, or throws, at first USE.)
  *   - `loadMiddleware`        → no middleware (fetch-core)
  *   - `resolveSandboxManager` → no sandbox provider (fetch-core)
  *   - `resolveIdentityKeys`   → the default semantic identity for memory
@@ -210,6 +215,38 @@ function requireFallbacks(
   throw new Error(
     `${what}: no instance provided and this runtime has no filesystem fallback — pass one via options (see the edge deployment docs).`,
   )
+}
+
+/**
+ * The backend behind `ctx.fs`, resolved as late as it can be WITHOUT changing
+ * what the node lane does.
+ *
+ * `ctx.fs` is built for every route execution, but the overwhelming majority of
+ * routes never touch it. On node that costs nothing: `defaultFilesystem()` is a
+ * process-wide memo that cannot fail, so it stays eager there and every
+ * observable — including the one-construction-per-process guarantee
+ * `lazy-node-backends.test.ts` pins — is unchanged.
+ *
+ * On a runtime with NO filesystem fallback the eager call was fatal. It threw
+ * during route PREPARATION, i.e. a 500 on every agent turn of every deployed
+ * worker, over a handle the turn never used — and `assertEdgeCapabilities`
+ * rejects `backends.filesystem` (a live object cannot cross a build boundary),
+ * so the emitted entry had no way to satisfy it either. Returning a thunk moves
+ * the SAME throw with the SAME message from preparation to the first `ctx.fs`
+ * operation: a route that genuinely reads the workspace still fails loudly and
+ * by name, a route that does not now serves its turn. Nothing becomes a silent
+ * no-op. (The agent-facing workspace TOOLS already defer exactly this way — see
+ * `backendResolver` in core's workspace marker.)
+ */
+function resolveWorkspaceFsBackend(
+  instance: FilesystemBackend | undefined,
+  fallbacks: RuntimeBootFallbacks | undefined,
+): FilesystemBackend | (() => FilesystemBackend) {
+  if (instance) return instance
+  if (fallbacks) return fallbacks.defaultFilesystem()
+  // `fallbacks` is undefined here, so this thunk always throws — deliberately,
+  // and through `requireFallbacks` so the message stays single-sourced.
+  return () => requireFallbacks(fallbacks, "workspace filesystem backend").defaultFilesystem()
 }
 
 export type RouteResumePayload = Readonly<Record<string, "once" | "always" | "deny">>
@@ -830,10 +867,10 @@ export async function prepareRouteExecution(
 
   const workspaceFsOptions = {
     workspaceRoot: sandboxWorkspaceRoot ?? pureJoin(options.appRoot, "workspace"),
-    backend:
-      sandboxBackends?.filesystem ??
-      configBackends?.filesystem ??
-      requireFallbacks(fallbacks, "workspace filesystem backend").defaultFilesystem(),
+    backend: resolveWorkspaceFsBackend(
+      sandboxBackends?.filesystem ?? configBackends?.filesystem,
+      fallbacks,
+    ),
     permissions: permissionsStore,
     interruptCapable: normalized.kind === "agent",
   }
