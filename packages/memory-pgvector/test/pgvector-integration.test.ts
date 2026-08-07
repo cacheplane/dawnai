@@ -33,6 +33,54 @@ describe.skipIf(!enabled)("pgvector integration", () => {
     await container?.stop()
   })
 
+  test("survives Postgres terminating an idle pooled connection", async () => {
+    // `pg` emits 'error' on the POOL when an IDLE client fails. With no listener,
+    // Node treats an EventEmitter 'error' as an uncaught exception and takes the
+    // process down. Managed Postgres terminates idle connections routinely
+    // (restart, failover, idle_session_timeout), so an unhandled pool error is a
+    // production crash — and it is what fails the CI lane after every test passes:
+    // stopping the container terminates idle clients with 57P01.
+    const store = pgvectorMemoryStore({
+      connectionString: url,
+      dimensions: 3,
+      tablePrefix: "t_idle_kill",
+    })
+    const uncaught: unknown[] = []
+    const onUncaught = (error: unknown) => uncaught.push(error)
+    process.on("uncaughtException", onUncaught)
+    // Capture the warning too: without this the test would also pass if the pool
+    // error never happened at all, which would quietly stop exercising the fix.
+    const warnings: string[] = []
+    const realWarn = console.warn
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "))
+
+    try {
+      // Round-trips a connection so the pool holds it IDLE.
+      await store.put(rec("idle-a", "ns", "hello billing"))
+
+      const admin = new Pool({ connectionString: url })
+      try {
+        await admin.query(
+          "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND datname = current_database()",
+        )
+      } finally {
+        await admin.end()
+      }
+      // Let the terminated client's 'error' reach the pool.
+      await new Promise((resolve) => setTimeout(resolve, 250))
+
+      expect(uncaught).toEqual([])
+      // Proves the pool error actually fired and was handled, not that it never came.
+      expect(warnings.some((w) => w.includes("pgvector pool client error"))).toBe(true)
+      // pg discards the broken client, so the store keeps working on a new one.
+      expect((await store.get("idle-a"))?.content).toBe("hello billing")
+    } finally {
+      console.warn = realWarn
+      process.off("uncaughtException", onUncaught)
+      await store.close()
+    }
+  })
+
   test("initSchema is idempotent (running twice does not error)", async () => {
     const pool = new Pool({ connectionString: url })
     try {
