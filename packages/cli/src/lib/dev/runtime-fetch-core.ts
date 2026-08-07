@@ -37,7 +37,7 @@ import {
   createStaticRuntimeRegistry,
   type RuntimeRegistry,
 } from "./runtime-registry-core.js"
-import type { StartRuntimeServerOptions } from "./runtime-server.js"
+import type { RequestStores, StartRuntimeServerOptions } from "./runtime-server.js"
 import {
   createExecutionErrorBody,
   createRequestErrorBody,
@@ -69,6 +69,19 @@ function requireBoot(
   what: string,
 ): RuntimeBootFallbacks {
   if (fallbacks) return fallbacks
+  throw new Error(
+    `${what}: no instance provided and this runtime has no filesystem fallback — pass one via options (see the edge deployment docs).`,
+  )
+}
+
+/**
+ * The same failure `requireBoot` reports, raised at first USE rather than at
+ * boot. Reached only when `requestStores` is supplied on a runtime with no
+ * filesystem fallback and the factory did not return the store this request
+ * needs — the one case where boot cannot decide whether a store is missing.
+ */
+function requireStore<T>(store: T | undefined, what: string): T {
+  if (store) return store
   throw new Error(
     `${what}: no instance provided and this runtime has no filesystem fallback — pass one via options (see the edge deployment docs).`,
   )
@@ -155,12 +168,23 @@ export async function createRuntimeFetchHandler(
     // Middleware is optional by contract, so a runtime with no filesystem
     // fallback resolves "none" rather than failing the boot.
     (await fallbacks?.loadMiddleware(options.appRoot))
+  // `requestStores` makes the boot resolution below OPTIONAL, but only on a
+  // runtime that has no filesystem to fall back to. Every node caller keeps
+  // resolving exactly as before (it has `fallbacks`); an edge caller that
+  // supplies stores per request would otherwise throw at boot, before its
+  // factory ever ran. Anything neither layer supplies still fails loudly, just
+  // at first use — see `requireStore`.
+  const bootStoresOptional = Boolean(options.requestStores) && !fallbacks
   const threadsStore =
     options.threadsStore ??
-    (await requireBoot(fallbacks, "threadsStore").resolveThreadsStore(options.appRoot))
+    (bootStoresOptional
+      ? undefined
+      : await requireBoot(fallbacks, "threadsStore").resolveThreadsStore(options.appRoot))
   const checkpointer =
     options.checkpointer ??
-    (await requireBoot(fallbacks, "checkpointer").resolveCheckpointer(options.appRoot))
+    (bootStoresOptional
+      ? undefined
+      : await requireBoot(fallbacks, "checkpointer").resolveCheckpointer(options.appRoot))
   // Degrades rather than throws: sandboxing is opt-in, so no fallbacks means
   // no sandbox provider — the same result as an app with no `sandbox` config.
   const sandboxManager =
@@ -194,9 +218,13 @@ export async function createRuntimeFetchHandler(
   // deliberate per-request read kept.
   const resolvePermissions = (): Promise<PermissionsStore> =>
     requireBoot(fallbacks, "permissionsStore").resolvePermissionsStore(options.appRoot)
-  const permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>) =
+  const permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>) | undefined =
     options.permissionsStore ??
-    (options.permissionsMode === "boot" ? await resolvePermissions() : resolvePermissions)
+    (bootStoresOptional
+      ? undefined
+      : options.permissionsMode === "boot"
+        ? await resolvePermissions()
+        : resolvePermissions)
 
   let sandboxReaper: ReturnType<typeof setInterval> | undefined
   if (sandboxManager) {
@@ -225,13 +253,36 @@ export async function createRuntimeFetchHandler(
   const runRegistry = createRunRegistry()
   const resumeClaims = createPendingResumeClaims()
 
+  // Request-scoped store overrides. Keyed on the Request object rather than
+  // carried in AsyncLocalStorage, which would require nodejs_compat on workerd
+  // — the whole point of PR2a was that the bundle needs no such flag. Every
+  // route handler already receives its own `request`, so a WeakMap lookup is
+  // all the scoping this needs, and entries collect with the Request.
+  const perRequest = new WeakMap<Request, RequestStores>()
+
+  const getCheckpointer = (request: Request): BaseCheckpointSaver =>
+    requireStore(perRequest.get(request)?.checkpointer ?? checkpointer, "checkpointer")
+  const getThreadsStore = (request: Request): ThreadsStore =>
+    requireStore(perRequest.get(request)?.threadsStore ?? threadsStore, "threadsStore")
+  const getPermissionsStore = (
+    request: Request,
+  ): PermissionsStore | (() => Promise<PermissionsStore>) =>
+    requireStore(perRequest.get(request)?.permissionsStore ?? permissionsStore, "permissionsStore")
+  const getMemoryStoreFor = (request: Request): Promise<MemoryStore> => {
+    const override = perRequest.get(request)?.memoryStore
+    // Only the boot path memoizes: a per-request store must not outlive its
+    // request, and re-memoizing it would reintroduce the dead-context hang.
+    return override ? Promise.resolve(override) : getMemoryStore()
+  }
+
   const routes = buildRouteTable({
     appRoot: options.appRoot,
     boot,
-    checkpointer,
-    getMemoryStore,
+    getCheckpointer,
+    getMemoryStoreFor,
+    getPermissionsStore,
+    getThreadsStore,
     middleware,
-    permissionsStore,
     registry,
     resumeClaims,
     runRegistry,
@@ -240,7 +291,6 @@ export async function createRuntimeFetchHandler(
     // Boot manifest → route execution derives the subagents descriptor maps
     // from it with zero entry-file imports.
     ...(options.modules ? { staticModules: options.modules } : {}),
-    threadsStore,
   })
 
   const fetch = async (request: Request): Promise<Response> => {
@@ -252,7 +302,24 @@ export async function createRuntimeFetchHandler(
 
     state.activeRequests++
     let transferredToStream = false
+    let stores: RequestStores | undefined
+    const disposeStores = async (): Promise<void> => {
+      const dispose = stores?.dispose
+      if (!dispose) return
+      try {
+        await dispose()
+      } catch {
+        // Teardown must never turn a served response into a failure.
+      }
+    }
     try {
+      // Inside the try on purpose: a factory that throws (a pool that cannot
+      // connect) must become a 500 through the handler below, not leak the
+      // in-flight slot and wedge close()'s drain.
+      if (options.requestStores) {
+        stores = await options.requestStores(request)
+        perRequest.set(request, stores)
+      }
       const response = await dispatch(routes, request, shutdownController.signal)
       const body = response.body
       if (body && response.headers.get("content-type") === "text/event-stream") {
@@ -261,8 +328,14 @@ export async function createRuntimeFetchHandler(
         // errored) so close() cannot release sandboxes mid-stream. The flag
         // flips only after the tracked Response has been constructed — if
         // construction throws, the finally below must still decrement.
+        // Disposal chains onto the SAME settle hook, never onto `fetch`
+        // resolving: an SSE turn is still streaming at that point, and ending
+        // a pool mid-stream breaks the tail of every streaming turn.
         const tracked = new Response(
-          trackStreamSettled(body, () => state.activeRequests--),
+          trackStreamSettled(body, () => {
+            state.activeRequests--
+            void disposeStores()
+          }),
           {
             headers: response.headers,
             status: response.status,
@@ -292,7 +365,10 @@ export async function createRuntimeFetchHandler(
         { status: 500 },
       )
     } finally {
-      if (!transferredToStream) state.activeRequests--
+      if (!transferredToStream) {
+        state.activeRequests--
+        void disposeStores()
+      }
     }
   }
 
@@ -398,35 +474,44 @@ function trackStreamSettled(
 // Route table builder
 // ---------------------------------------------------------------------------
 
+/**
+ * The store bindings arrive as request-aware ACCESSORS rather than instances:
+ * a request may carry its own stores (see `requestStores`), and a handler is
+ * the first place that knows which request it is serving. Each handler resolves
+ * them once, up front, and hands the resolved values to the sub-handlers below
+ * — whose signatures are unchanged.
+ */
 function buildRouteTable(ctx: {
   readonly appRoot: string
   readonly boot: RouteBoot
-  readonly checkpointer: BaseCheckpointSaver
-  readonly getMemoryStore: () => Promise<MemoryStore>
+  readonly getCheckpointer: (request: Request) => BaseCheckpointSaver
+  readonly getMemoryStoreFor: (request: Request) => Promise<MemoryStore>
+  readonly getPermissionsStore: (
+    request: Request,
+  ) => PermissionsStore | (() => Promise<PermissionsStore>)
+  readonly getThreadsStore: (request: Request) => ThreadsStore
   readonly middleware: DawnMiddleware | undefined
-  readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly resumeClaims: PendingResumeClaims
   readonly runRegistry: RunRegistry
   readonly sandboxManager?: SandboxManager
   readonly signal: AbortSignal
   readonly staticModules?: DawnStaticModules
-  readonly threadsStore: ThreadsStore
 }): RouteMatcher[] {
   const {
     appRoot,
     boot,
-    checkpointer,
-    getMemoryStore,
+    getCheckpointer,
+    getMemoryStoreFor,
+    getPermissionsStore,
+    getThreadsStore,
     middleware,
-    permissionsStore,
     registry,
     resumeClaims,
     runRegistry,
     sandboxManager,
     signal,
     staticModules,
-    threadsStore,
   } = ctx
 
   // Server-scoped map: thread_id → last routeKey used for that thread.
@@ -466,7 +551,9 @@ function buildRouteTable(ctx: {
             metadata = bodyMetadata
           }
         }
-        const thread = await threadsStore.createThread(metadata !== undefined ? { metadata } : {})
+        const thread = await getThreadsStore(request).createThread(
+          metadata !== undefined ? { metadata } : {},
+        )
         return Response.json(thread, { status: 200 })
       },
       method: "POST",
@@ -477,8 +564,8 @@ function buildRouteTable(ctx: {
     // GET /threads/:thread_id — fetch a thread
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) => {
-        const thread = await threadsStore.getThread(params.thread_id ?? "")
+      handle: async (request, params) => {
+        const thread = await getThreadsStore(request).getThread(params.thread_id ?? "")
         if (!thread) {
           return Response.json(createRequestErrorBody("Thread not found"), {
             status: 404,
@@ -494,9 +581,10 @@ function buildRouteTable(ctx: {
     // DELETE /threads/:thread_id — delete thread + checkpoints
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) => {
+      handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
-        await threadsStore.deleteThread(threadId)
+        const checkpointer = getCheckpointer(request)
+        await getThreadsStore(request).deleteThread(threadId)
         // Best-effort: delete checkpoints if the saver supports it.
         if (
           typeof (checkpointer as unknown as { deleteThread?: unknown }).deleteThread === "function"
@@ -522,7 +610,7 @@ function buildRouteTable(ctx: {
     // unambiguous stand-in. Semantics match LangGraph's action=interrupt —
     // stop the run, keep checkpointed state. Rollback is not supported.
     {
-      handle: async (_request, params) => {
+      handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
         // Cancel first: it is synchronous, so nothing can interleave between
         // observing the slot and aborting it. Awaiting getThread beforehand
@@ -540,7 +628,7 @@ function buildRouteTable(ctx: {
         if (runRegistry.cancel(threadId)) {
           return Response.json({ status: "interrupted", thread_id: threadId }, { status: 200 })
         }
-        const thread = await threadsStore.getThread(threadId)
+        const thread = await getThreadsStore(request).getThread(threadId)
         if (!thread) {
           return Response.json(
             createRequestErrorBody("Thread not found", {
@@ -570,10 +658,10 @@ function buildRouteTable(ctx: {
         handleApStreamRequest({
           appRoot,
           boot,
-          checkpointer,
-          getMemoryStore,
+          checkpointer: getCheckpointer(request),
+          getMemoryStore: () => getMemoryStoreFor(request),
           middleware,
-          permissionsStore,
+          permissionsStore: getPermissionsStore(request),
           registry,
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
@@ -582,7 +670,7 @@ function buildRouteTable(ctx: {
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
-          threadsStore,
+          threadsStore: getThreadsStore(request),
         }),
       method: "POST",
       pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/stream(?:\?.*)?$/,
@@ -596,14 +684,14 @@ function buildRouteTable(ctx: {
         handleAgUiFetchRequest({
           appRoot,
           boot,
-          checkpointer,
-          getMemoryStore,
+          checkpointer: getCheckpointer(request),
+          getMemoryStore: () => getMemoryStoreFor(request),
           middleware,
-          permissionsStore,
+          permissionsStore: getPermissionsStore(request),
           registry,
           resumeClaims,
           runRegistry,
-          threadsStore,
+          threadsStore: getThreadsStore(request),
           ...(sandboxManager ? { sandboxManager } : {}),
           signal,
           ...(staticModules ? { staticModules } : {}),
@@ -618,7 +706,8 @@ function buildRouteTable(ctx: {
     // GET /memory/candidates — list memory candidates (all namespaces)
     // ------------------------------------------------------------------
     {
-      handle: async () => handleMemoryListRequest({ memoryStore: await getMemoryStore() }),
+      handle: async (request) =>
+        handleMemoryListRequest({ memoryStore: await getMemoryStoreFor(request) }),
       method: "GET",
       pattern: /^\/memory\/candidates(?:\?.*)?$/,
     },
@@ -627,14 +716,14 @@ function buildRouteTable(ctx: {
     // POST /memory/candidates/:id/approve — approve with reconciliation
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) =>
+      handle: async (request, params) =>
         handleMemoryApproveRequest({
           appRoot,
           ...(boot.bootFallbacks
             ? { resolveIdentityKeys: boot.bootFallbacks.resolveIdentityKeys }
             : {}),
           id: params.id ?? "",
-          memoryStore: await getMemoryStore(),
+          memoryStore: await getMemoryStoreFor(request),
         }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/approve(?:\?.*)?$/,
@@ -644,10 +733,10 @@ function buildRouteTable(ctx: {
     // POST /memory/candidates/:id/reject — delete the record
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) =>
+      handle: async (request, params) =>
         handleMemoryRejectRequest({
           id: params.id ?? "",
-          memoryStore: await getMemoryStore(),
+          memoryStore: await getMemoryStoreFor(request),
         }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/reject(?:\?.*)?$/,
@@ -661,10 +750,10 @@ function buildRouteTable(ctx: {
         handleApWaitRequest({
           appRoot,
           boot,
-          checkpointer,
-          getMemoryStore,
+          checkpointer: getCheckpointer(request),
+          getMemoryStore: () => getMemoryStoreFor(request),
           middleware,
-          permissionsStore,
+          permissionsStore: getPermissionsStore(request),
           registry,
           request,
           runRegistry,
@@ -673,7 +762,7 @@ function buildRouteTable(ctx: {
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
-          threadsStore,
+          threadsStore: getThreadsStore(request),
         }),
       method: "POST",
       pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/wait(?:\?.*)?$/,
@@ -683,9 +772,9 @@ function buildRouteTable(ctx: {
     // GET /threads/:thread_id/state — latest checkpoint state
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) => {
+      handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
-        const tuple = await checkpointer.getTuple({
+        const tuple = await getCheckpointer(request).getTuple({
           configurable: { thread_id: threadId, checkpoint_ns: "" },
         })
         if (!tuple) {
@@ -715,10 +804,10 @@ function buildRouteTable(ctx: {
         handleResumeRequest({
           appRoot,
           boot,
-          checkpointer,
-          getMemoryStore,
+          checkpointer: getCheckpointer(request),
+          getMemoryStore: () => getMemoryStoreFor(request),
           middleware,
-          permissionsStore,
+          permissionsStore: getPermissionsStore(request),
           registry,
           resumeClaims,
           request,
@@ -728,7 +817,7 @@ function buildRouteTable(ctx: {
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
-          threadsStore,
+          threadsStore: getThreadsStore(request),
         }),
       method: "POST",
       pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/resume(?:\?.*)?$/,

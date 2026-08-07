@@ -19,7 +19,7 @@ export {
   createRuntimeFetchHandler,
   type RuntimeFetchHandler,
 } from "./lib/dev/runtime-fetch-core.js"
-export type { StartRuntimeServerOptions } from "./lib/dev/runtime-server.js"
+export type { RequestStores, StartRuntimeServerOptions } from "./lib/dev/runtime-server.js"
 export type {
   BootResolvedInstances,
   RuntimeBootFallbacks,
