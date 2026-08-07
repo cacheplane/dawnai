@@ -176,9 +176,39 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
 
     Optionally include `"route"` in the body if the server restarted and lost its in-memory route map.
   </Tab>
+  <Tab label="POST /threads/:thread_id/cancel">
+    Stop the run currently in flight on a thread. Checkpointed state is kept, so the thread can still be inspected or resumed afterwards; there is no rollback.
+
+    ```
+    POST /threads/:thread_id/cancel
+    -> 200 { "thread_id": "...", "status": "interrupted" }
+    -> 404 if no such thread
+    -> 409 if the thread exists but no run is in flight
+    ```
+
+    A cancelled SSE run terminates with `event: done` and `data: {"output":{"cancelled":true}}`, which is how clients tell cancellation apart from failure. A cancelled `runs/wait` returns `409` with `error.details.code` of `run_cancelled` — it has not sent a response body yet, so it can still use a status code, whereas a stream has already committed to `200`.
+  </Tab>
 </Tabs>
 
 The `route` format `<routeId>#<kind>` is the same format `dawn build` writes into the `graphs` map of `.dawn/build/langgraph.json`, so the same client request body works against `dawn dev` and against a deployed runtime.
+
+### One run at a time per thread
+
+A thread runs at most one run at a time. Starting a second run on a thread that is already running returns `409` with `error.details.code` of `run_in_flight`. Concurrent runs previously drove the same LangGraph checkpoint thread and interleaved their writes, so this turns silent state corruption into a clear error.
+
+The gate is tracked in memory by the process serving the request, not by the thread's stored status — so a server that crashes mid-run does not leave the thread permanently unrunnable.
+
+### Client disconnect
+
+Agent Protocol runs **keep going** when the client disconnects. Runs are checkpointed and threads are resumable, so a dropped connection is treated as a lost viewer rather than a lost intent — and on the wire a deliberate stop is indistinguishable from a flaky network. This matches LangGraph Platform, which defaults to `on_disconnect: "continue"` for the same endpoints.
+
+To actually stop a run, call `POST /threads/:thread_id/cancel`.
+
+The [AG-UI endpoint](#ag-ui-endpoint) takes the opposite default and aborts on disconnect, because it is an ephemeral surface with no reattach and nothing to resume.
+
+<Callout type="warn" title="Run tracking is single-replica">
+Run tracking is in-memory and process-local, so both the one-run-per-thread gate and `/cancel` assume a **single replica**. This is not a new constraint — Dawn's threads database and checkpoints are already pod-local — but it is worth knowing before scaling out. See [deployment](/docs/deployment).
+</Callout>
 
 ## AG-UI endpoint
 
