@@ -141,6 +141,148 @@ describe("dockerExec", () => {
       exec.runCommand({ command: "echo hi", env: { "BAD KEY;x": "1" } }, ctx),
     ).rejects.toThrow(/Invalid environment variable name "BAD KEY;x"/)
   })
+
+  test.each([
+    {
+      name: "resource temporarily unavailable in stderr",
+      first: {
+        stdout: "",
+        stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+        exitCode: 1,
+      },
+    },
+    {
+      name: "init pipe reset in stdout",
+      first: {
+        stdout: "OCI runtime exec failed: read init-p: connection reset by peer",
+        stderr: "",
+        exitCode: 1,
+      },
+    },
+  ])("recovers and retries after $name", async ({ first }) => {
+    const activeCtx = { signal: new AbortController().signal, workspaceRoot: "/workspace" }
+    const second = { stdout: "recovered", stderr: "warning", exitCode: 0 }
+    const results = [first, second]
+    const execSignals: Array<AbortSignal | undefined> = []
+    const recoverySignals: AbortSignal[] = []
+    const exec = dockerExec(
+      fakeDocker({
+        exec: async (_container, _command, opts) => {
+          execSignals.push(opts?.signal)
+          const result = results.shift()
+          if (result === undefined) throw new Error("Unexpected extra Docker exec")
+          return result
+        },
+      }),
+      "c1",
+      {
+        recoverFromPidExhaustion: async (signal) => {
+          recoverySignals.push(signal)
+        },
+      },
+    )
+
+    const result = await exec.runCommand({ command: "echo hi" }, activeCtx)
+
+    expect(execSignals).toHaveLength(2)
+    expect(execSignals[0]).toBe(activeCtx.signal)
+    expect(execSignals[1]).toBe(activeCtx.signal)
+    expect(recoverySignals).toHaveLength(1)
+    expect(recoverySignals[0]).toBe(activeCtx.signal)
+    expect(result).toEqual(second)
+  })
+
+  test.each([
+    {
+      name: "command-level fork failure",
+      result: { stdout: "", stderr: "sh: Cannot fork", exitCode: 1 },
+      timeoutMs: undefined,
+    },
+    {
+      name: "generic OCI runtime failure",
+      result: { stdout: "", stderr: "OCI runtime exec failed: unknown", exitCode: 1 },
+      timeoutMs: undefined,
+    },
+    {
+      name: "successful output containing the recovery markers",
+      result: {
+        stdout: "OCI runtime exec failed: Resource temporarily unavailable",
+        stderr: "",
+        exitCode: 0,
+      },
+      timeoutMs: undefined,
+    },
+    {
+      name: "timeout result",
+      result: {
+        stdout: "",
+        stderr: "",
+        exitCode: 124,
+      },
+      timeoutMs: 500,
+    },
+  ])("does not recover from $name", async ({ result, timeoutMs }) => {
+    let execCalls = 0
+    let recoveryCalls = 0
+    const exec = dockerExec(
+      fakeDocker({
+        exec: async () => {
+          execCalls += 1
+          return result
+        },
+      }),
+      "c1",
+      {
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        recoverFromPidExhaustion: async () => {
+          recoveryCalls += 1
+        },
+      },
+    )
+
+    await exec.runCommand({ command: "echo hi" }, ctx)
+
+    expect(execCalls).toBe(1)
+    expect(recoveryCalls).toBe(0)
+  })
+
+  test("retries only once when both attempts report PID exhaustion", async () => {
+    const first = {
+      stdout: "",
+      stderr: "OCI runtime exec failed: Resource temporarily unavailable",
+      exitCode: 1,
+    }
+    const second = {
+      stdout: "OCI runtime exec failed: read init-p: connection reset by peer",
+      stderr: "second failure",
+      exitCode: 137,
+    }
+    const results = [first, second]
+    let execCalls = 0
+    let recoveryCalls = 0
+    const exec = dockerExec(
+      fakeDocker({
+        exec: async () => {
+          execCalls += 1
+          const result = results.shift()
+          if (result === undefined) throw new Error("Unexpected extra Docker exec")
+          return result
+        },
+      }),
+      "c1",
+      {
+        recoverFromPidExhaustion: async () => {
+          recoveryCalls += 1
+        },
+      },
+    )
+
+    const result = await exec.runCommand({ command: "echo hi" }, ctx)
+
+    expect(execCalls).toBe(2)
+    expect(recoveryCalls).toBe(1)
+    expect(result).toEqual(second)
+  })
 })
 
 describe("dockerExec timeout", () => {

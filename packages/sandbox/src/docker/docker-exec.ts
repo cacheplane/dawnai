@@ -1,5 +1,20 @@
 import type { BackendContext, ExecBackend } from "@dawn-ai/workspace"
-import type { Docker } from "./docker-cli.ts"
+import type { Docker, SpawnResult } from "./docker-cli.js"
+
+interface DockerExecOptions {
+  readonly timeoutMs?: number
+  readonly recoverFromPidExhaustion?: (signal: AbortSignal) => Promise<void>
+}
+
+function isPidExhaustion(result: SpawnResult): boolean {
+  if (result.exitCode === 0) return false
+  const output = `${result.stdout}\n${result.stderr}`
+  return (
+    output.includes("OCI runtime exec failed") &&
+    (output.includes("Resource temporarily unavailable") ||
+      output.includes("read init-p: connection reset by peer"))
+  )
+}
 
 function shellQuote(s: string): string {
   return `'${s.replaceAll("'", `'\\''`)}'`
@@ -9,7 +24,7 @@ function shellQuote(s: string): string {
 export function dockerExec(
   docker: Docker,
   container: string,
-  opts: { readonly timeoutMs?: number } = {},
+  opts: DockerExecOptions = {},
 ): ExecBackend {
   return {
     async runCommand(args, ctx: BackendContext) {
@@ -35,7 +50,12 @@ export function dockerExec(
       const timeoutSecs =
         opts.timeoutMs !== undefined ? Math.ceil(opts.timeoutMs / 1000) : undefined
       const argv = timeoutSecs !== undefined ? ["timeout", `${timeoutSecs}s`, ...shArgs] : shArgs
-      const r = await docker.exec(container, argv, { signal: ctx.signal })
+      const execute = () => docker.exec(container, argv, { signal: ctx.signal })
+      let r = await execute()
+      if (opts.recoverFromPidExhaustion !== undefined && isPidExhaustion(r)) {
+        await opts.recoverFromPidExhaustion(ctx.signal)
+        r = await execute()
+      }
       if (timeoutSecs !== undefined && r.exitCode === 124) {
         return {
           stdout: r.stdout,
