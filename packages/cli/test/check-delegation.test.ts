@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
-import { discoverRoutes } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { checkToolNameUniqueness } from "../src/lib/runtime/check-tool-name-uniqueness.js"
@@ -202,7 +202,10 @@ export default descriptor
       message: /unknown field\(s\): predicate/,
     },
   ])("reports E1004 for $name", async ({ parent: parentSource, extra, message }) => {
-    const errors = await collect({ "src/app/parent/index.ts": parentSource, ...extra })
+    const errors = await collect({
+      "src/app/parent/index.ts": parentSource,
+      ...extra,
+    })
 
     expect(errors).toHaveLength(1)
     expect(errors[0]).toMatch(/\[DAWN_E1004\]/)

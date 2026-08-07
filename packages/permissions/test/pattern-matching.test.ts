@@ -111,9 +111,9 @@ describe("memory key (prefix + terminator convention)", () => {
   })
 
   it("allows deeper namespaces under the route", () => {
-    expect(
-      matchPermission("memory", "workspace=app|route=/a|tenant=acme|", allow, {}),
-    ).toBe("allow")
+    expect(matchPermission("memory", "workspace=app|route=/a|tenant=acme|", allow, {})).toBe(
+      "allow",
+    )
   })
 
   it("does NOT match a sibling route sharing the prefix", () => {

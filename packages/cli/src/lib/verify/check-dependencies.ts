@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { loadDawnConfig } from "@dawn-ai/core"
 import type { BuiltInModelProviderId } from "@dawn-ai/sdk"
 import { resolveEnvPath } from "../dev/resolve-env-path.js"
+import { loadDawnConfig } from "../node-config.js"
 
 export interface DependencyCheckResult {
   readonly missingPackages: readonly string[]

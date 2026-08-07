@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
@@ -98,12 +98,16 @@ describe("gateToolOp", () => {
   })
 
   it("allows a config-pre-approved tool (allow.tool exact name)", async () => {
-    const permissions = await store("interactive", { allow: { tool: ["deployProd"] } })
+    const permissions = await store("interactive", {
+      allow: { tool: ["deployProd"] },
+    })
     expect((await gateToolOp(permissions, "deployProd", "{}")).allowed).toBe(true)
   })
 
   it("blocks a config-denied tool with a reason", async () => {
-    const permissions = await store("interactive", { deny: { tool: ["deployProd"] } })
+    const permissions = await store("interactive", {
+      deny: { tool: ["deployProd"] },
+    })
     const result = await gateToolOp(permissions, "deployProd", "{}")
     expect(result.allowed).toBe(false)
     if (!result.allowed) expect(result.reason).toMatch(/denied.*deployProd/i)
@@ -118,7 +122,9 @@ describe("gateToolOp", () => {
 
   it("fails closed with guidance when interactive but interrupts unavailable", async () => {
     const permissions = await store("interactive")
-    const result = await gateToolOp(permissions, "deployProd", "{}", { interruptCapable: false })
+    const result = await gateToolOp(permissions, "deployProd", "{}", {
+      interruptCapable: false,
+    })
     expect(result.allowed).toBe(false)
     if (!result.allowed) {
       expect(result.reason).toMatch(/allow rule/)
@@ -167,7 +173,9 @@ describe("gateSubagentOp", () => {
   const pattern = JSON.stringify(["/parent", "writer"])
 
   it("allows a pre-approved exact parent/name edge", async () => {
-    const permissions = await store("interactive", { allow: { subagent: [pattern] } })
+    const permissions = await store("interactive", {
+      allow: { subagent: [pattern] },
+    })
     await expect(gateSubagentOp(permissions, request, { interruptCapable: true })).resolves.toEqual(
       { allowed: true },
     )
@@ -178,7 +186,9 @@ describe("gateSubagentOp", () => {
       allow: { subagent: [pattern] },
       deny: { subagent: [pattern] },
     })
-    const result = await gateSubagentOp(permissions, request, { interruptCapable: true })
+    const result = await gateSubagentOp(permissions, request, {
+      interruptCapable: true,
+    })
     expect(result).toEqual({
       allowed: false,
       code: "DAWN_E3002",
@@ -188,7 +198,9 @@ describe("gateSubagentOp", () => {
 
   it("fails closed on unknown approval in non-interactive mode", async () => {
     const permissions = await store("non-interactive")
-    const result = await gateSubagentOp(permissions, request, { interruptCapable: true })
+    const result = await gateSubagentOp(permissions, request, {
+      interruptCapable: true,
+    })
     expect(result.allowed).toBe(false)
     if (!result.allowed) {
       expect(result.code).toBe("DAWN_E3002")
@@ -221,13 +233,17 @@ describe("gateSubagentOp", () => {
   it("allows bypass approval without consulting interrupt prerequisites", async () => {
     const permissions = await store("bypass")
     await expect(
-      gateSubagentOp(permissions, requestWithoutReasonOrThread, { interruptCapable: false }),
+      gateSubagentOp(permissions, requestWithoutReasonOrThread, {
+        interruptCapable: false,
+      }),
     ).resolves.toEqual({ allowed: true })
   })
 
   async function interruptCase(decision: "once" | "always" | "deny", input = request.input) {
     const permissions = await store("interactive")
-    const State = Annotation.Root({ result: Annotation<GateResult | undefined>() })
+    const State = Annotation.Root({
+      result: Annotation<GateResult | undefined>(),
+    })
     const checkpointer = new MemorySaver()
     const graph = new StateGraph(State)
       .addNode("permission", async () => ({
@@ -240,7 +256,9 @@ describe("gateSubagentOp", () => {
       .addEdge(START, "permission")
       .addEdge("permission", END)
       .compile({ checkpointer })
-    const config = { configurable: { checkpoint_ns: "", thread_id: request.threadId } }
+    const config = {
+      configurable: { checkpoint_ns: "", thread_id: request.threadId },
+    }
 
     await graph.invoke({}, config)
     const pending = await graph.getState(config)
@@ -253,7 +271,11 @@ describe("gateSubagentOp", () => {
     ["once", { allowed: true }],
     [
       "deny",
-      { allowed: false, code: "DAWN_E3002", reason: "Permission denied by user: subagent writer" },
+      {
+        allowed: false,
+        code: "DAWN_E3002",
+        reason: "Permission denied by user: subagent writer",
+      },
     ],
   ] as const)("resumes an interactive %s decision", async (decision, expected) => {
     const { result } = await interruptCase(decision)
@@ -282,11 +304,18 @@ describe("gateSubagentOp", () => {
 
   it("omits an absent reason from the interrupt detail", async () => {
     const permissions = await store("interactive")
-    const withoutReason = { ...requestWithoutReasonOrThread, threadId: request.threadId }
-    const State = Annotation.Root({ result: Annotation<GateResult | undefined>() })
+    const withoutReason = {
+      ...requestWithoutReasonOrThread,
+      threadId: request.threadId,
+    }
+    const State = Annotation.Root({
+      result: Annotation<GateResult | undefined>(),
+    })
     const graph = new StateGraph(State)
       .addNode("permission", async () => ({
-        result: await gateSubagentOp(permissions, withoutReason, { interruptCapable: true }),
+        result: await gateSubagentOp(permissions, withoutReason, {
+          interruptCapable: true,
+        }),
       }))
       .addEdge(START, "permission")
       .addEdge("permission", END)
@@ -405,7 +434,10 @@ describe("wrapToolWithConstraint", () => {
   const runCtx = { signal }
 
   it("allows (runs the real tool) when the predicate returns true", async () => {
-    const tool = { name: "deployProd", run: async (i: unknown) => `ran:${JSON.stringify(i)}` }
+    const tool = {
+      name: "deployProd",
+      run: async (i: unknown) => `ran:${JSON.stringify(i)}`,
+    }
     const wrapped = wrapToolWithConstraint(tool, () => true, undefined, "/ops#agent")
     expect(await wrapped.run({ env: "staging" }, runCtx)).toBe('ran:{"env":"staging"}')
   })
@@ -431,7 +463,12 @@ describe("wrapToolWithConstraint", () => {
   })
 
   it("passes toolName/routeId and live threadId/params to the predicate", async () => {
-    let seen: { toolName?: string; routeId?: string; threadId?: string; params?: unknown } = {}
+    let seen: {
+      toolName?: string
+      routeId?: string
+      threadId?: string
+      params?: unknown
+    } = {}
     const tool = { name: "deployProd", run: async () => "ran" }
     const wrapped = wrapToolWithConstraint(
       tool,

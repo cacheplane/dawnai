@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
-import { createPermissionsStore } from "../src/permissions-store.js"
+import { createPermissionsStore } from "../src/node.js"
 
 describe("createPermissionsStore — load + match", () => {
   let appRoot: string

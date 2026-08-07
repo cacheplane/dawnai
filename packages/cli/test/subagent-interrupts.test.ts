@@ -9,7 +9,8 @@ import {
   type SubagentResolver,
   streamAgent,
 } from "@dawn-ai/langchain"
-import { createPermissionsStore, type PermissionsStore } from "@dawn-ai/permissions"
+import type { PermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { AIMessage } from "@langchain/core/messages"
 import type { RunnableConfig } from "@langchain/core/runnables"
 import {
@@ -66,7 +67,11 @@ describe("subagent interrupt replay", () => {
     expect(childStarts).toBe(0)
 
     const resolution = await resolveThread(saver, "parent-once", [
-      { interruptId: publicInterruptIds(first)[0] as string, payload: "once", status: "resolved" },
+      {
+        interruptId: publicInterruptIds(first)[0] as string,
+        payload: "once",
+        status: "resolved",
+      },
     ])
     const resumed = await root.invoke(new Command({ resume: resolution }), config)
     expect(toolContents(resumed)).toContain("reviewed")
@@ -109,7 +114,11 @@ describe("subagent interrupt replay", () => {
 
     const pattern = JSON.stringify(["/parent", "researcher"])
     const persisted = JSON.parse(await readFile(join(appRoot, ".dawn", "permissions.json"), "utf8"))
-    expect(persisted).toEqual({ version: 1, allow: { subagent: [pattern] }, deny: {} })
+    expect(persisted).toEqual({
+      version: 1,
+      allow: { subagent: [pattern] },
+      deny: {},
+    })
 
     const reloaded = await permissionStore(appRoot)
     expect(reloaded.match("subagent", pattern)).toBe("allow")
@@ -191,7 +200,11 @@ describe("subagent interrupt replay", () => {
     expect(grandchildStarts).toBe(0)
 
     const resolution = await resolveThread(saver, "nested-policy", [
-      { interruptId: publicInterruptIds(first)[0] as string, payload: "once", status: "resolved" },
+      {
+        interruptId: publicInterruptIds(first)[0] as string,
+        payload: "once",
+        status: "resolved",
+      },
     ])
     const resumed = await root.invoke(
       new Command({ resume: resolution }),
@@ -209,7 +222,11 @@ describe("subagent interrupt replay", () => {
     const saver = new MemorySaver()
     let childStarts = 0
     const child = interruptingChild(kind, () => childStarts++)
-    const resolver = guardedResolver({ child, parentRouteId: "/parent", rule: { action: "allow" } })
+    const resolver = guardedResolver({
+      child,
+      parentRouteId: "/parent",
+      rule: { action: "allow" },
+    })
     const root = taskRoot(await taskTool(resolver), saver)
     const firstChunks = await collectStream(
       root,
@@ -238,7 +255,11 @@ describe("subagent interrupt replay", () => {
     expect(childStarts).toBe(1)
 
     const resolution = await resolveThread(saver, `child-${kind}`, [
-      { interruptId: `perm-child-${kind}`, payload: "once", status: "resolved" },
+      {
+        interruptId: `perm-child-${kind}`,
+        payload: "once",
+        status: "resolved",
+      },
     ])
     const resumedChunks = await collectStream(root, saver, new Command({ resume: resolution }), {
       threadId: `child-${kind}`,
@@ -251,7 +272,11 @@ describe("subagent interrupt replay", () => {
 
   it("resumes two parallel child interrupts only from a complete ID-addressed set", async () => {
     const child = parallelInterruptingChild()
-    const resolver = guardedResolver({ child, parentRouteId: "/parent", rule: { action: "allow" } })
+    const resolver = guardedResolver({
+      child,
+      parentRouteId: "/parent",
+      rule: { action: "allow" },
+    })
     const saver = new MemorySaver()
     const root = parallelTaskRoot(await taskTool(resolver), saver)
     const config = rootConfig("parallel-children")
@@ -293,9 +318,10 @@ describe("subagent interrupt replay", () => {
     ).toMatchObject({ code: "interrupt_set_mismatch", ok: false })
     expect(
       resolvePendingResume(
-        [...nativeIds]
-          .reverse()
-          .map((interruptId) => ({ interruptId, status: "cancelled" as const })),
+        [...nativeIds].reverse().map((interruptId) => ({
+          interruptId,
+          status: "cancelled" as const,
+        })),
         snapshot,
       ),
     ).toMatchObject({ code: "interrupt_set_mismatch", ok: false })

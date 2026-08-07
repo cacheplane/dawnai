@@ -1,5 +1,5 @@
 import { existsSync, realpathSync } from "node:fs"
-import { createPermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { afterEach, expect, it } from "vitest"
 import { createWorkspaceHarness, type WorkspaceHarness } from "../src/workspace-harness.js"
 

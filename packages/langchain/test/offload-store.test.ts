@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { FilesystemBackend } from "@dawn-ai/workspace"
-import { localFilesystem } from "@dawn-ai/workspace"
+import { localFilesystem } from "@dawn-ai/workspace/node"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { buildOffloadFileName, OffloadStore } from "../src/offload/offload-store.js"
 
@@ -99,6 +100,17 @@ describe("buildOffloadFileName", () => {
     const b = buildOffloadFileName("generateReport", "hello world", "")
     expect(a).toMatch(/^generateReport-[0-9a-f]{16}\.txt$/)
     expect(b).toBe(a)
+  })
+
+  it("derives the fallback filename from a sha256 of the content (value-pinned)", () => {
+    // The filename reaches persisted artifacts (the on-disk tool-outputs/ file and
+    // the path string embedded in checkpointed tool messages), so the exact value —
+    // not just its shape — is the contract. Computed here with node:crypto so an
+    // implementation swap is a visible diff rather than an invisible one.
+    const expected = createHash("sha256").update("hello world").digest("hex").slice(0, 16)
+    expect(buildOffloadFileName("generateReport", "hello world", undefined)).toBe(
+      `generateReport-${expected}.txt`,
+    )
   })
 
   it("is stable for identical content and distinct for different content", () => {

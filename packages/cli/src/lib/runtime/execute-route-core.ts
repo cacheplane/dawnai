@@ -146,9 +146,14 @@ export interface RuntimeBootFallbacks {
   readonly resolveIdentityKeys: (
     appRoot: string,
     namespace: string,
-  ) => Promise<{ readonly keys: readonly string[]; readonly fallback: boolean }>
+  ) => Promise<{
+    readonly keys: readonly string[]
+    readonly fallback: boolean
+  }>
   /** Process-shared `localFilesystem()`. */
   readonly defaultFilesystem: () => FilesystemBackend
+  /** Process-shared `localExec()` — the workspace capability's `runBash`. */
+  readonly defaultExec: () => ExecBackend
   /** `<appRoot>/workspace` existence probe (gates tool-output offloading). */
   readonly hasWorkspaceDir: (appRoot: string) => boolean
   /** Node `MarkerFs` for the capability markers (AGENTS.md, skills, …). */
@@ -186,6 +191,12 @@ export interface RuntimeBootFallbacks {
  *                               is an optimization, not a capability the route
  *                               asked for (this also makes the offload store's
  *                               `defaultFilesystem` unreachable)
+ *   - `defaultFilesystem`/`defaultExec` AS `backendFactories` → omitted from
+ *                               `applyCapabilities`; the workspace capability
+ *                               then throws at TOOL-INVOCATION time unless a
+ *                               sandbox/config backend was supplied. (The
+ *                               `ctx.fs` handle above still throws at boot —
+ *                               it needs a backend to be constructed at all.)
  *   - `loadMiddleware`        → no middleware (fetch-core)
  *   - `resolveSandboxManager` → no sandbox provider (fetch-core)
  *   - `resolveIdentityKeys`   → the default semantic identity for memory
@@ -481,7 +492,11 @@ export async function* streamResolvedRoute(
           yield { type: "chunk", data: chunk.data }
           break
         case "tool_call": {
-          const tc = chunk.data as { id?: string; name: string; input: unknown }
+          const tc = chunk.data as {
+            id?: string
+            name: string
+            input: unknown
+          }
           yield {
             type: "tool_call",
             ...(tc.id ? { id: tc.id } : {}),
@@ -491,7 +506,11 @@ export async function* streamResolvedRoute(
           break
         }
         case "tool_result": {
-          const tr = chunk.data as { id?: string; name: string; output: unknown }
+          const tr = chunk.data as {
+            id?: string
+            name: string
+            output: unknown
+          }
           yield {
             type: "tool_result",
             ...(tr.id ? { id: tr.id } : {}),
@@ -917,10 +936,14 @@ export async function prepareRouteExecution(
                   ? { vectorK: loadedDawnConfig.memory.vector.vectorK }
                   : {}),
                 ...(loadedDawnConfig.memory.vector.recencyWeight !== undefined
-                  ? { recencyWeight: loadedDawnConfig.memory.vector.recencyWeight }
+                  ? {
+                      recencyWeight: loadedDawnConfig.memory.vector.recencyWeight,
+                    }
                   : {}),
                 ...(loadedDawnConfig.memory.vector.confidenceWeight !== undefined
-                  ? { confidenceWeight: loadedDawnConfig.memory.vector.confidenceWeight }
+                  ? {
+                      confidenceWeight: loadedDawnConfig.memory.vector.confidenceWeight,
+                    }
                   : {}),
               },
             }
@@ -949,6 +972,18 @@ export async function prepareRouteExecution(
       descriptor,
       subagentRegistry,
       ...(capabilityBackends ? { backends: capabilityBackends } : {}),
+      // Core owns no node backend: the workspace capability constructs one
+      // through these ONLY when nothing above supplied an instance. Absent
+      // fallbacks (edge), a workspace tool call fails loudly instead of
+      // reaching for a filesystem the runtime does not have.
+      ...(fallbacks
+        ? {
+            backendFactories: {
+              exec: fallbacks.defaultExec,
+              filesystem: fallbacks.defaultFilesystem,
+            },
+          }
+        : {}),
       ...(fallbacks ? { markerFs: fallbacks.markerFs } : {}),
       permissions: permissionsStore,
       appRoot: options.appRoot,
@@ -960,7 +995,10 @@ export async function prepareRouteExecution(
       const messages = applied.errors
         .map((e) => `[${e.markerName}#${e.phase}] ${e.message}`)
         .join("\n  ")
-      return { message: `Capability error during route prep:\n  ${messages}`, ok: false }
+      return {
+        message: `Capability error during route prep:\n  ${messages}`,
+        ok: false,
+      }
     }
 
     const capTools: DiscoveredToolDefinition[] = []
@@ -1028,7 +1066,10 @@ export async function prepareRouteExecution(
     // workspace runBash/writeFile and the dispatch `task`, are withheld unless
     // explicitly allowed). descriptor.tools.allow grants, .deny revokes, deny
     // wins. Unknown names throw and surface as a route-prep failure.
-    const scopeInputs = tools.map((t) => ({ name: t.name, origin: toolOrigin(t) }))
+    const scopeInputs = tools.map((t) => ({
+      name: t.name,
+      origin: toolOrigin(t),
+    }))
     let keptToolNames: ReadonlySet<string>
     try {
       keptToolNames = resolveToolScope(scopeInputs, descriptor?.tools, {
@@ -1489,8 +1530,6 @@ function extractRouteParamNames(routeId: string): string[] {
 }
 
 export interface StaticDescriptorMaps {
-  /** @deprecated Compatibility view; runtime resolution uses descriptorRouteIndex. */
-  readonly descriptorRouteMap: ReadonlyMap<DawnAgent, string>
   readonly descriptorRouteIndex: DescriptorRouteIndex
   readonly routeDescriptors: ReadonlyMap<string, DawnAgent>
 }
@@ -1517,12 +1556,10 @@ export function __resetStaticDescriptorMapsForTests(): void {
 export function buildDescriptorMapsFromStaticModules(
   modules: DawnStaticModules,
 ): StaticDescriptorMaps {
-  const descriptorRouteMap = new Map<DawnAgent, string>()
   const mutableDescriptorRouteIndex = new Map<DawnAgent, string[]>()
   const routeDescriptors = new Map<string, DawnAgent>()
   for (const route of modules.routes) {
     if (route.kind === "agent" && isDawnAgent(route.module.entry)) {
-      descriptorRouteMap.set(route.module.entry, route.routeId)
       mutableDescriptorRouteIndex.set(route.module.entry, [
         ...(mutableDescriptorRouteIndex.get(route.module.entry) ?? []),
         route.routeId,
@@ -1533,7 +1570,7 @@ export function buildDescriptorMapsFromStaticModules(
   const descriptorRouteIndex: DescriptorRouteIndex = new Map(
     [...mutableDescriptorRouteIndex].map(([descriptor, routeIds]) => [descriptor, routeIds.sort()]),
   )
-  return { descriptorRouteIndex, descriptorRouteMap, routeDescriptors }
+  return { descriptorRouteIndex, routeDescriptors }
 }
 
 /** Memoized per manifest object identity — stable for the process lifetime. */
@@ -1728,7 +1765,10 @@ function withEpisodeRecording(
 
 function isAbortError(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false
-  const candidate = error as { readonly code?: unknown; readonly name?: unknown }
+  const candidate = error as {
+    readonly code?: unknown
+    readonly name?: unknown
+  }
   return candidate.name === "AbortError" || candidate.code === "ABORT_ERR"
 }
 

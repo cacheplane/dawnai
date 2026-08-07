@@ -20,7 +20,7 @@ import {
   resolvePendingResume,
 } from "./pending-interrupts.js"
 import { extractRouteParams } from "./request-context.js"
-import type { RuntimeRegistry } from "./runtime-registry.js"
+import type { RuntimeRegistry } from "./runtime-registry-core.js"
 import { createRequestErrorBody } from "./server-errors.js"
 import { statusResponse } from "./status-response.js"
 
@@ -141,10 +141,28 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
   const onRequestAborted = () => abortRequest("AG-UI request aborted")
   if (request.signal.aborted) onRequestAborted()
   else request.signal.addEventListener("abort", onRequestAborted, { once: true })
-  const signal = AbortSignal.any([shutdownSignal, requestController.signal])
+
+  // Deliberately a manual listener rather than AbortSignal.any: a composed
+  // signal is retained for the lifetime of its SOURCE, and the shutdown signal
+  // lives as long as the process. With one composition per request that leaks
+  // without bound (measured: 92 MB retained per 200k requests on Node 24 — see
+  // run-registry.ts for the identical fix applied to the runs registry).
+  // releaseSignalListeners() below removes both listeners once the request is
+  // done. Every exit path releases it: the try/finally around the pre-stream
+  // work covers the early returns, and once the stream is constructed,
+  // ownership passes to its own finally/cancel.
+  const onShutdown = () => abortRequest("Server shutting down")
+  if (shutdownSignal.aborted) onShutdown()
+  else shutdownSignal.addEventListener("abort", onShutdown, { once: true })
+  const signal = requestController.signal
+  const releaseSignalListeners = () => {
+    shutdownSignal.removeEventListener("abort", onShutdown)
+    request.signal.removeEventListener("abort", onRequestAborted)
+  }
 
   let releaseResumeClaim: (() => void) | undefined
   let claimTransferredToStream = false
+  let streamOwnsSignalCleanup = false
   try {
     const raw = await request.text()
     let parsedJson: unknown
@@ -223,6 +241,9 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     const accept = request.headers.get("accept") ?? undefined
     const encoder = new TextEncoder()
     const releaseClaimWhenSettled = releaseResumeClaim
+    // From here on, the stream owns both the request listeners and any resume
+    // claim. Its execution-finally path releases the claim only after the
+    // interrupted route has actually unwound.
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
@@ -259,6 +280,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
             }
           } finally {
             await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
+            releaseSignalListeners()
           }
           safeClose(controller)
         } catch (error) {
@@ -271,13 +293,15 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
         }
       },
       cancel() {
-        // Client disconnected - stop the run exactly as the old response-close
-        // handler did. The stream start finally releases any resume claim.
+        // AG-UI is ephemeral: a disconnected client ends the run. The start
+        // finally releases any resume claim after execution settles.
         abortRequest("AG-UI response closed")
+        releaseSignalListeners()
       },
     })
 
     claimTransferredToStream = true
+    streamOwnsSignalCleanup = true
     return new Response(stream, {
       headers: {
         "cache-control": "no-cache",
@@ -290,6 +314,7 @@ export async function handleAgUiFetchRequest(options: AgUiFetchRequestOptions): 
     // Failures before stream ownership transfers must not leave the thread
     // claimed. Successful streams release from their execution-finally path.
     if (!claimTransferredToStream) releaseResumeClaim?.()
+    if (!streamOwnsSignalCleanup) releaseSignalListeners()
   }
 }
 

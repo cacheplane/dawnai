@@ -33,7 +33,10 @@ function contextFor(
 describe("subagents marker — pre-resolved static registry", () => {
   it("renders descriptions loaded by the canonical registry resolver", async () => {
     const route = childRoute()
-    const routeManifest = { appRoot: "/app", routes: [route] } satisfies RouteManifest
+    const routeManifest = {
+      appRoot: "/app",
+      routes: [route],
+    } satisfies RouteManifest
     const registry = await resolveSubagentRegistry({
       descriptor: agent({ model: "gpt-5-mini", systemPrompt: "Parent." }),
       descriptorRouteIndex: new Map(),

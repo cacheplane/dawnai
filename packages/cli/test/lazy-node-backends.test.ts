@@ -17,8 +17,8 @@ vi.mock("@dawn-ai/memory", async (importOriginal) => {
 
 // Passthrough spy — counts default localFilesystem backend constructions on
 // the request path (createWorkspaceFs / buildOffload fallbacks).
-vi.mock("@dawn-ai/workspace", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@dawn-ai/workspace")>()
+vi.mock("@dawn-ai/workspace/node", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dawn-ai/workspace/node")>()
   return {
     ...actual,
     localFilesystem: vi.fn(actual.localFilesystem),
@@ -26,7 +26,7 @@ vi.mock("@dawn-ai/workspace", async (importOriginal) => {
 })
 
 import { sqliteMemoryStore } from "@dawn-ai/memory"
-import { localFilesystem } from "@dawn-ai/workspace"
+import { localFilesystem } from "@dawn-ai/workspace/node"
 
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 import { hasWorkspaceDir } from "../src/lib/runtime/execute-route.js"

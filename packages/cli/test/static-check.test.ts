@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { discoverRoutes } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import { afterEach, describe, expect, test } from "vitest"
 import { run } from "../src/index.js"
 import {

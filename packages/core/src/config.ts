@@ -1,62 +1,54 @@
-import { constants } from "node:fs"
-import { access } from "node:fs/promises"
-import { join } from "node:path"
-import { pathToFileURL } from "node:url"
-
 import type { DawnConfig, LoadDawnConfigOptions, LoadedDawnConfig } from "./types.js"
 
 export const DAWN_CONFIG_FILE = "dawn.config.ts"
 
-let loaderPromise: Promise<void> | undefined
+/**
+ * How a config is materialized for an appRoot. The only implementation Dawn
+ * ships reads `dawn.config.ts` from disk through the tsx loader and lives in
+ * `config-node.ts` (`@dawn-ai/core/node`) — this module stays free of `node:`
+ * imports so the request path never drags the filesystem or a TS loader in.
+ */
+export type DawnConfigLoader = (options: LoadDawnConfigOptions) => Promise<LoadedDawnConfig>
+
+let configLoader: DawnConfigLoader | undefined
 
 /**
- * Register the tsx ESM loader (idempotent). Exported so callers that import
- * user-authored TS modules directly (e.g. the inspector loading a route's
- * memory.ts) get deterministic TS loading even when no dawn.config.ts exists —
- * loadDawnConfig only registers the loader when a config file is present.
+ * Opt this process into loading configs. The node lane registers the disk
+ * loader (`registerNodeConfigLoader` in `@dawn-ai/core/node`); an embedder on a
+ * runtime with no filesystem either registers its own or seeds the memo with
+ * `seedDawnConfig` and never reaches this path at all.
  */
-export async function registerTsxLoader(): Promise<void> {
-  loaderPromise ??= (async () => {
-    const { register } = (await import("tsx/esm/api")) as {
-      readonly register: () => unknown
-    }
-    register()
-  })()
-  await loaderPromise
+export function registerConfigLoader(loader: DawnConfigLoader): void {
+  configLoader = loader
 }
 
-async function loadDawnConfigUncached(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig> {
-  const configPath = join(options.appRoot, DAWN_CONFIG_FILE)
-  await access(configPath, constants.F_OK)
-  await registerTsxLoader()
-
-  const mod = (await import(pathToFileURL(configPath).href)) as {
-    readonly default?: unknown
-  }
-
-  if (!mod.default || typeof mod.default !== "object") {
-    throw new Error(`${DAWN_CONFIG_FILE} must export default an object. Got: ${typeof mod.default}`)
-  }
-
-  return {
-    appRoot: options.appRoot,
-    config: mod.default as DawnConfig,
-    configPath,
-  }
+/** Test-only: drop the registered loader so a suite can exercise its absence. */
+export function __clearConfigLoaderForTests(): void {
+  configLoader = undefined
 }
 
 const configCache = new Map<string, Promise<LoadedDawnConfig>>()
 
 /**
- * Loads `dawn.config.ts` for the given appRoot, memoized for the lifetime of
- * the process. Config edits during `dawn dev` are picked up because the dev
- * loop restarts the child process on config changes — a fresh process means
- * a fresh (empty) cache.
+ * Loads the config for the given appRoot through the registered loader,
+ * memoized for the lifetime of the process. Config edits during `dawn dev` are
+ * picked up because the dev loop restarts the child process on config changes
+ * — a fresh process means a fresh (empty) cache.
  */
 export function loadDawnConfig(options: LoadDawnConfigOptions): Promise<LoadedDawnConfig> {
   const cached = configCache.get(options.appRoot)
   if (cached) return cached
-  const loading = loadDawnConfigUncached(options)
+  const loader = configLoader
+  if (!loader) {
+    // Rejected, never thrown synchronously: every caller treats this as a
+    // promise-returning function.
+    return Promise.reject(
+      new Error(
+        `${options.appRoot}: no config loader registered — this runtime cannot read ${DAWN_CONFIG_FILE}; pass \`config\` to the runtime instead (see the edge deployment docs).`,
+      ),
+    )
+  }
+  const loading = loader(options)
   configCache.set(options.appRoot, loading)
   // A failed load must not be cached forever (e.g. a transient syntax error
   // would otherwise poison the process) — evict on rejection, but only if the

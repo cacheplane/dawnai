@@ -1,4 +1,4 @@
-import { join } from "node:path"
+import { pureJoin } from "@dawn-ai/sdk/pure"
 import type { CapabilityMarker, MarkerFs } from "../types.js"
 
 const MAX_MEMORY_BYTES = 32 * 1024
@@ -21,9 +21,9 @@ export function createMemoryMdMarker(): CapabilityMarker {
   return {
     name: "memory-md",
     detect: async (routeDir, context) =>
-      context.markerFs?.existsSync(join(routeDir, MEMORY_FILE)) ?? false,
+      context.markerFs?.existsSync(pureJoin(routeDir, MEMORY_FILE)) ?? false,
     load: async (routeDir, context) => {
-      const path = join(routeDir, MEMORY_FILE)
+      const path = pureJoin(routeDir, MEMORY_FILE)
       const markerFs = context.markerFs
       return {
         promptFragment: {

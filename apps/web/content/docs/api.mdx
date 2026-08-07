@@ -637,14 +637,14 @@ Resolves intersection and mapped types into a flat object shape. Makes IDE hover
 Low-level config, discovery, capability, workspace, and typegen primitives used by the Dawn CLI and runtime integrations. Route code usually imports author-facing helpers from `@dawn-ai/sdk`; use `@dawn-ai/core` when building tooling, tests, or adapters.
 
 ```ts
-import {
-  createWorkspaceFs,
-  discoverRoutes,
-  loadDawnConfig,
-  renderDawnTypes,
-  type DawnConfig,
-} from "@dawn-ai/core"
+import { createWorkspaceFs, loadDawnConfig, renderDawnTypes, type DawnConfig } from "@dawn-ai/core"
+import { discoverRoutes, findDawnApp } from "@dawn-ai/core/node"
 ```
+
+Route discovery and tool typegen read the filesystem and load the TypeScript
+compiler, so they live on the node-only `@dawn-ai/core/node` subpath rather
+than the package root — importing them cannot pull `node:fs` into a bundle
+built for a runtime that has no `node:` shim.
 
 See [Configuration](/docs/configuration), [Routes](/docs/routes), [Workspace Filesystem](/docs/workspace), [Memory](/docs/memory), and [Tools](/docs/tools).
 
@@ -709,9 +709,12 @@ Types in this group include `DawnConfig`, `LoadDawnConfigOptions`, and `LoadedDa
 ### `discoverRoutes(options)`, `findDawnApp(options)`, and route segments
 
 ```ts
+// @dawn-ai/core/node
 export function discoverRoutes(options?: DiscoverRoutesOptions): Promise<RouteManifest>
 export function findDawnApp(options?: FindDawnAppOptions): Promise<DiscoveredDawnApp>
 export function assertDawnRoutesDir(appRoot: string, routesDir?: string): Promise<void>
+
+// @dawn-ai/core
 export function toRouteSegments(routeSegments: readonly string[]): RouteSegment[]
 export function isPrivateSegment(segment: string): boolean
 export function isRouteGroupSegment(segment: string): boolean
@@ -724,18 +727,21 @@ Types in this group include `DiscoveredDawnApp`, `DiscoverRoutesOptions`, `FindD
 ### State and typegen helpers
 
 ```ts
+// @dawn-ai/core
 export function resolveStateFields(...)
-export function extractToolSchemasForRoute(...)
-export function extractToolTypesForRoute(...)
 export function renderDawnTypes(...)
 export function renderRouteTypes(...)
 export function renderStateTypes(...)
 export function renderToolTypes(...)
+
+// @dawn-ai/core/node
+export function extractToolSchemasForRoute(...)
+export function extractToolTypesForRoute(...)
 ```
 
 `resolveStateFields()` resolves route state field reducers and defaults. The extraction helpers inspect route tools for JSON schemas and TypeScript signatures. The render helpers produce the generated `dawn:routes` declaration. Some audits call this group `renderTypeDefinitions`; the public exports are the four render functions above, not a single `renderTypeDefinitions` symbol.
 
-Types in this group include `ResolveStateFieldsOptions`, `RouteStateFields`, `ExtractToolSchemasOptions`, `ExtractToolTypesOptions`, `RouteToolSchemas`, `RouteToolTypes`, `ExtractedToolSchema`, `ExtractedToolType`, `JsonSchemaProperty`, `ResolvedStateField`, and `StateFieldReducer`.
+Types in this group include `ResolveStateFieldsOptions`, `RouteStateFields`, `RouteToolSchemas`, `RouteToolTypes`, `ExtractedToolSchema`, `ExtractedToolType`, `JsonSchemaProperty`, `ResolvedStateField`, and `StateFieldReducer` (`ExtractToolSchemasOptions` and `ExtractToolTypesOptions` ship from `@dawn-ai/core/node` alongside their functions).
 
 ### Tool scope
 

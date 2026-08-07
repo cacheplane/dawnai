@@ -1,6 +1,6 @@
 import type { MemoryStoreLike, MemoryWritesMode } from "@dawn-ai/core"
-import { loadDawnConfig } from "@dawn-ai/core"
 import type { RecallRankingOptions, VectorRankingOptions } from "@dawn-ai/memory"
+import { loadDawnConfig } from "../node-config.js"
 import { pureJoin } from "./pure-path.js"
 import { type ResolvedEpisodesConfig, resolveEpisodesFromConfig } from "./record-episode.js"
 

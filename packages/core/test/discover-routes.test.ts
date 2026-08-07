@@ -4,7 +4,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
-import { discoverRoutes } from "../src/index.js"
+import { discoverRoutes } from "../src/node.js"
 
 const SDK_PATH = resolve(fileURLToPath(import.meta.url), "../../../sdk")
 

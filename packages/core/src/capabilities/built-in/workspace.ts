@@ -1,7 +1,6 @@
-import { join, relative, resolve, sep } from "node:path"
 import type { PermissionsStore } from "@dawn-ai/permissions"
+import { POSIX_SEP, pureJoin, pureRelative, pureResolve } from "@dawn-ai/sdk/pure"
 import type { BackendContext, ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
-import { localExec, localFilesystem } from "@dawn-ai/workspace"
 import { z } from "zod"
 
 import { gateBashOp } from "../permission-gate.js"
@@ -17,7 +16,7 @@ const WORKSPACE_DIRNAME = "workspace"
  * activate regardless of the test runner's working directory.
  */
 function workspaceRoot(appRoot: string): string {
-  return join(appRoot, WORKSPACE_DIRNAME)
+  return pureJoin(appRoot, WORKSPACE_DIRNAME)
 }
 
 const READ_FILE_INPUT = z.object({ path: z.string().min(1) })
@@ -33,10 +32,36 @@ interface OverridableTool extends DawnToolDefinition {
   readonly overridable: true
 }
 
+/**
+ * Backend resolution, deferred to the first tool invocation that needs it:
+ * an already-constructed instance wins, then the runtime's factory, then a
+ * loud failure. Deferring keeps `load` working on runtimes that contribute the
+ * tools but never call them, and keeps the failure attached to the operation
+ * that actually needed a backend.
+ */
+function backendResolver<T>(
+  instance: T | undefined,
+  factory: (() => T) | undefined,
+  what: string,
+): () => T {
+  let resolved: T | undefined = instance
+  return () => {
+    if (resolved === undefined) {
+      if (!factory) {
+        throw new Error(
+          `workspace ${what} backend: no instance provided and this runtime has no ${what} fallback — pass one via context.backendFactories (see the edge deployment docs).`,
+        )
+      }
+      resolved = factory()
+    }
+    return resolved
+  }
+}
+
 function buildWorkspaceTools(
   workspaceRoot: string,
-  fs: FilesystemBackend,
-  exec: ExecBackend,
+  resolveFs: () => FilesystemBackend,
+  resolveExec: () => ExecBackend,
   permissions: PermissionsStore | undefined,
 ): readonly OverridableTool[] {
   // Agent tools run inside the graph, so the handle may surface the
@@ -44,7 +69,7 @@ function buildWorkspaceTools(
   function handleFor(signal: AbortSignal) {
     return createWorkspaceFs({
       workspaceRoot,
-      backend: fs,
+      backend: resolveFs(),
       permissions,
       signal,
       interruptCapable: true,
@@ -58,14 +83,19 @@ function buildWorkspaceTools(
     run: async (input, ctx) => {
       const { path } = READ_FILE_INPUT.parse(input)
       const handle = handleFor(ctx.signal)
-      const absPath = resolve(workspaceRoot, path)
-      const rel = relative(workspaceRoot, absPath)
+      // Same containment arithmetic as the path jail (workspace-fs.ts): an
+      // absolute `path` discards the root, so a read that escapes the
+      // workspace produces a `../…` relative path and never inherits the
+      // uncapped-read exemption.
+      const absPath = pureResolve(workspaceRoot, path)
+      const rel = pureRelative(workspaceRoot, absPath)
       // NOTE: must match SUBDIR ("tool-outputs") in @dawn-ai/langchain offload-store.ts
-      const isToolOutput = rel === "tool-outputs" || rel.startsWith(`tool-outputs${sep}`)
+      const isToolOutput = rel === "tool-outputs" || rel.startsWith(`tool-outputs${POSIX_SEP}`)
       const data = await handle.readFile(
         path,
         isToolOutput ? { maxBytes: Number.POSITIVE_INFINITY } : undefined,
       )
+      const fs = resolveFs()
       if (isToolOutput && fs.touchFile) {
         try {
           await fs.touchFile(absPath, backendContext(workspaceRoot, ctx.signal))
@@ -108,7 +138,7 @@ function buildWorkspaceTools(
       if (!gate.allowed) {
         throw new Error(gate.reason)
       }
-      return exec.runCommand({ command }, backendContext(workspaceRoot, ctx.signal))
+      return resolveExec().runCommand({ command }, backendContext(workspaceRoot, ctx.signal))
     },
   }
   return [readFile, writeFile, listDir, runBash]
@@ -124,8 +154,16 @@ export function createWorkspaceMarker(): CapabilityMarker {
       const root = context.workspaceRoot ?? workspaceRoot(context.appRoot)
       if (context.workspaceRoot === undefined && !(context.markerFs?.existsSync(root) ?? false))
         return {}
-      const fs = context.backends?.filesystem ?? localFilesystem()
-      const exec = context.backends?.exec ?? localExec()
+      const resolveFs = backendResolver(
+        context.backends?.filesystem,
+        context.backendFactories?.filesystem,
+        "filesystem",
+      )
+      const resolveExec = backendResolver(
+        context.backends?.exec,
+        context.backendFactories?.exec,
+        "exec",
+      )
       const permissions = context.permissions
 
       if (permissions?.mode === "bypass") {
@@ -134,7 +172,7 @@ export function createWorkspaceMarker(): CapabilityMarker {
         )
       }
 
-      return { tools: buildWorkspaceTools(root, fs, exec, permissions) }
+      return { tools: buildWorkspaceTools(root, resolveFs, resolveExec, permissions) }
     },
   }
 }

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createPermissionsStore } from "@dawn-ai/permissions"
+import { createPermissionsStore } from "@dawn-ai/permissions/node"
 import { Annotation, END, MemorySaver, START, StateGraph } from "@langchain/langgraph"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -96,7 +96,10 @@ describe("resolveGuardedSubagent", () => {
   it("returns an exact coded static denial without resolving the child", async () => {
     const resolve = vi.fn(async () => "child")
     await expect(
-      call({ registry: [entry({ action: "deny", reason: "Drafts are disabled." })], resolve }),
+      call({
+        registry: [entry({ action: "deny", reason: "Drafts are disabled." })],
+        resolve,
+      }),
     ).resolves.toEqual({
       ok: false,
       code: "DAWN_E3002",
@@ -127,11 +130,15 @@ describe("resolveGuardedSubagent", () => {
     const pattern = JSON.stringify(["/parent", "writer"])
     const cases = [
       {
-        store: await permissions("interactive", { allow: { subagent: [pattern] } }),
+        store: await permissions("interactive", {
+          allow: { subagent: [pattern] },
+        }),
         expected: { ok: true },
       },
       {
-        store: await permissions("interactive", { deny: { subagent: [pattern] } }),
+        store: await permissions("interactive", {
+          deny: { subagent: [pattern] },
+        }),
         expected: { ok: false, code: "DAWN_E3002" },
       },
       {
@@ -186,7 +193,10 @@ describe("resolveGuardedSubagent", () => {
       call({ registry: [entry({ action: "approve" })], permissions: store }),
     ).resolves.toMatchObject({ ok: true })
     await expect(
-      call({ registry: [entry({ action: "deny", reason: "No drafts." })], permissions: store }),
+      call({
+        registry: [entry({ action: "deny", reason: "No drafts." })],
+        permissions: store,
+      }),
     ).resolves.toMatchObject({ ok: false, code: "DAWN_E3002" })
     await expect(
       call({
@@ -202,12 +212,18 @@ describe("resolveGuardedSubagent", () => {
 
   it("supports true, string, and approval constraint verdicts", async () => {
     const pattern = JSON.stringify(["/parent", "writer"])
-    const store = await permissions("interactive", { allow: { subagent: [pattern] } })
+    const store = await permissions("interactive", {
+      allow: { subagent: [pattern] },
+    })
     await expect(
-      call({ registry: [entry({ action: "constrain", predicate: () => true })] }),
+      call({
+        registry: [entry({ action: "constrain", predicate: () => true })],
+      }),
     ).resolves.toMatchObject({ ok: true })
     await expect(
-      call({ registry: [entry({ action: "constrain", predicate: () => "Tenant blocked." })] }),
+      call({
+        registry: [entry({ action: "constrain", predicate: () => "Tenant blocked." })],
+      }),
     ).resolves.toEqual({
       ok: false,
       code: "DAWN_E3002",
@@ -218,7 +234,10 @@ describe("resolveGuardedSubagent", () => {
         registry: [
           entry({
             action: "constrain",
-            predicate: () => ({ approve: true, reason: "Review tenant draft." }),
+            predicate: () => ({
+              approve: true,
+              reason: "Review tenant draft.",
+            }),
           }),
         ],
         permissions: store,
@@ -235,7 +254,10 @@ describe("resolveGuardedSubagent", () => {
           registry: [
             entry({
               action: "constrain",
-              predicate: () => ({ approve: true, reason: "Review tenant draft." }),
+              predicate: () => ({
+                approve: true,
+                reason: "Review tenant draft.",
+              }),
             }),
           ],
           permissions: store,
@@ -383,7 +405,12 @@ describe("resolveGuardedSubagent", () => {
       ],
     })
     await call({
-      registry: [entry({ action: "constrain", predicate: (() => ({ nope: true })) as never })],
+      registry: [
+        entry({
+          action: "constrain",
+          predicate: (() => ({ nope: true })) as never,
+        }),
+      ],
     })
     expect(warn).toHaveBeenCalledTimes(2)
     expect(warn.mock.calls[0]?.[0]).toMatch(/parent.*\/parent.*subagent.*writer/i)

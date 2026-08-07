@@ -1,4 +1,4 @@
-import { resolve } from "node:path"
+import { pureResolve } from "@dawn-ai/sdk/pure"
 import type { CapabilityMarker, MarkerFs } from "../types.js"
 
 const MAX_MEMORY_BYTES = 64 * 1024
@@ -37,8 +37,12 @@ export function createAgentsMdMarker(): CapabilityMarker {
   }
 }
 
+// `pureResolve` has no process.cwd() to fall back on, so it throws on a
+// relative base. context.appRoot is documented absolute (see
+// CapabilityMarkerContext.appRoot) — a caller that violates that now fails
+// loudly here instead of silently producing a cwd-relative memory path.
 function workspaceAgentsMdPath(appRoot: string): string {
-  return resolve(appRoot, "workspace", "AGENTS.md")
+  return pureResolve(appRoot, "workspace", "AGENTS.md")
 }
 
 function renderMemoryFragment(path: string, markerFs: MarkerFs): string {

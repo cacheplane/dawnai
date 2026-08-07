@@ -12,7 +12,8 @@ import {
   type SandboxManager,
   streamResolvedRoute,
 } from "@dawn-ai/cli/runtime"
-import { __clearDawnConfigCacheForTests, discoverRoutes } from "@dawn-ai/core"
+import { __clearDawnConfigCacheForTests } from "@dawn-ai/core"
+import { discoverRoutes } from "@dawn-ai/core/node"
 import { type Aimock, createAimock } from "./aimock-runner.js"
 import type { FixtureSet, ScriptBuilder } from "./fixture-builder.js"
 import { recordingsToFixtures } from "./record-fixtures.js"

@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 const permissionStores = vi.hoisted(() => [] as PermissionsStore[])
 
-vi.mock("@dawn-ai/permissions", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@dawn-ai/permissions")>()
+vi.mock("@dawn-ai/permissions/node", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dawn-ai/permissions/node")>()
   return {
     ...actual,
     createPermissionsStore: (
@@ -37,7 +37,9 @@ describe("subagent permission store inheritance", () => {
     const appRoot = await fixtureApp()
     const signal = new AbortController().signal
     const createReactAgent = vi.fn((options: unknown) => ({
-      invoke: vi.fn(async () => ({ messages: [{ content: "Child complete." }] })),
+      invoke: vi.fn(async () => ({
+        messages: [{ content: "Child complete." }],
+      })),
       options,
     }))
     vi.doMock("@langchain/langgraph/prebuilt", () => ({ createReactAgent }))
@@ -67,8 +69,9 @@ describe("subagent permission store inheritance", () => {
       childStore?.addAllow("subagent", childPattern),
     ])
 
-    const actual =
-      await vi.importActual<typeof import("@dawn-ai/permissions")>("@dawn-ai/permissions")
+    const actual = await vi.importActual<typeof import("@dawn-ai/permissions/node")>(
+      "@dawn-ai/permissions/node",
+    )
     const reloaded = actual.createPermissionsStore({
       appRoot,
       config: undefined,

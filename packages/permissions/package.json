@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/permissions",
-  "version": "0.8.15",
+  "version": "0.8.16",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -24,6 +24,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
     }
   },
   "publishConfig": {
@@ -31,12 +35,16 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json src tsconfig.json vitest.config.ts",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json src test tsconfig.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.contracts.json"
   },
+  "dependencies": {
+    "@dawn-ai/sdk": "workspace:*"
+  },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
-    "@types/node": "26.1.1"
+    "@types/node": "26.1.1",
+    "esbuild": "^0.25.0"
   }
 }

@@ -1,4 +1,3 @@
-import { sep } from "node:path"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import {
   subagentPermissionPattern,
@@ -7,6 +6,7 @@ import {
   suggestedPathPattern,
 } from "@dawn-ai/permissions"
 import type { ConstraintContext, ConstraintPredicate, DawnErrorCode } from "@dawn-ai/sdk"
+import { POSIX_SEP } from "@dawn-ai/sdk/pure"
 import { interrupt } from "@langchain/langgraph"
 
 export type PathOperation = "readFile" | "writeFile" | "listDir"
@@ -31,7 +31,11 @@ export async function gatePathOp(
   if (!permissions) return { allowed: true }
   if (permissions.mode === "bypass") return { allowed: true }
 
-  const insideWorkspace = absPath === workspaceRoot || absPath.startsWith(workspaceRoot + sep)
+  // Both operands are POSIX-normalized absolute paths (the node lane converts
+  // at its boundary), so containment compares against an explicit "/" rather
+  // than a host-derived separator. The separator in the prefix test is what
+  // keeps a sibling like `<root>-evil` outside.
+  const insideWorkspace = absPath === workspaceRoot || absPath.startsWith(workspaceRoot + POSIX_SEP)
 
   // Inside workspace: always allow silently.
   if (insideWorkspace) return { allowed: true }

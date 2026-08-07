@@ -1,4 +1,4 @@
-import { dirname } from "node:path"
+import { pureDirname } from "@dawn-ai/sdk/pure"
 
 export function subagentPermissionPattern(parentRouteId: string, subagentName: string): string {
   return JSON.stringify([parentRouteId, subagentName])
@@ -21,7 +21,7 @@ export function suggestedCommandPattern(command: string): string {
  */
 export function suggestedPathPattern(path: string): string {
   if (path.endsWith("/")) return path
-  const parent = dirname(path)
+  const parent = pureDirname(path)
   return parent === "/" ? "/" : `${parent}/`
 }
 

@@ -88,6 +88,8 @@ export const packages = [
       "dist/types.d.ts",
       "dist/route-types.js",
       "dist/route-types.d.ts",
+      "dist/pure/index.js",
+      "dist/pure/index.d.ts",
       "dist/testing/index.js",
       "dist/testing/index.d.ts",
       "README.md",

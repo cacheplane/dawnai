@@ -50,15 +50,21 @@ export type {
 } from "./capabilities/types.js"
 export type { CreateWorkspaceFsOptions } from "./capabilities/workspace-fs.js"
 export { createWorkspaceFs } from "./capabilities/workspace-fs.js"
+export type { DawnConfigLoader } from "./config.js"
 export {
   __clearDawnConfigCacheForTests,
   loadDawnConfig,
-  registerTsxLoader,
+  registerConfigLoader,
   seedDawnConfig,
 } from "./config.js"
 export { config } from "./config-helper.js"
-export { discoverRoutes } from "./discovery/discover-routes.js"
-export { assertDawnRoutesDir, findDawnApp } from "./discovery/find-dawn-app.js"
+// DELIBERATELY NOT HERE: `discoverRoutes`, `findDawnApp`,
+// `assertDawnRoutesDir`, `registerTsxLoader`, `extractToolSchemasForRoute` and
+// `extractToolTypesForRoute` ship from "@dawn-ai/core/node". They read the
+// filesystem / load the TypeScript compiler, and a barrel re-export is an
+// import edge even for consumers that never call them. Their PURE siblings
+// below (route segments, the type renderers) stay on this barrel — the fetch
+// path calls `toRouteSegments`.
 export {
   isPrivateSegment,
   isRouteGroupSegment,
@@ -83,10 +89,6 @@ export type {
 } from "./subagents/types.js"
 export type { ScopeInput, ToolOrigin } from "./tool-scope.js"
 export { resolveToolScope, toolOrigin } from "./tool-scope.js"
-export type { ExtractToolSchemasOptions } from "./typegen/extract-tool-schema.js"
-export { extractToolSchemasForRoute } from "./typegen/extract-tool-schema.js"
-export type { ExtractToolTypesOptions } from "./typegen/extract-tool-types.js"
-export { extractToolTypesForRoute } from "./typegen/extract-tool-types.js"
 export {
   renderDawnTypes,
   renderRouteTypes,

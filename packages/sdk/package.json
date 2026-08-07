@@ -1,6 +1,6 @@
 {
   "name": "@dawn-ai/sdk",
-  "version": "0.8.15",
+  "version": "0.8.16",
   "private": false,
   "type": "module",
   "license": "MIT",
@@ -24,6 +24,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./pure": {
+      "types": "./dist/pure/index.d.ts",
+      "default": "./dist/pure/index.js"
     },
     "./testing": {
       "types": "./dist/testing/index.d.ts",

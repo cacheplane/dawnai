@@ -86,7 +86,10 @@ export interface MemoryStoreLike {
     readonly until?: string
     /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
     readonly now?: string
-  }): Promise<{ readonly records: readonly MemoryRecordLike[]; readonly total: number }>
+  }): Promise<{
+    readonly records: readonly MemoryRecordLike[]
+    readonly total: number
+  }>
   /** Aggregate counts for facet UIs. */
   stats(opts?: { readonly namespacePrefix?: string }): Promise<{
     readonly total: number
@@ -102,7 +105,10 @@ export interface MemoryStoreLike {
     readonly now: string
     readonly namespacePrefix?: string
     readonly cap?: number
-  }): Promise<{ readonly deletedExpired: number; readonly deletedOverCap: number }>
+  }): Promise<{
+    readonly deletedExpired: number
+    readonly deletedOverCap: number
+  }>
 }
 
 /**
@@ -179,9 +185,28 @@ export interface CapabilityMarkerContext {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
   readonly subagentRegistry?: readonly ResolvedSubagent[]
+  /**
+   * Already-constructed backends for this run (a sandbox's, or the app's
+   * `config.backends`). Takes precedence over `backendFactories`.
+   */
   readonly backends?: {
     readonly filesystem?: FilesystemBackend
     readonly exec?: ExecBackend
+  }
+  /**
+   * How to construct a backend when no instance was supplied above. Core owns
+   * no node backend of its own — `localExec`/`localFilesystem` live in
+   * `@dawn-ai/workspace/node` and would drag `node:child_process`, `node:fs`
+   * and friends into every graph that imports a capability marker. The node
+   * runtime (`@dawn-ai/cli`'s boot fallbacks) supplies them here; an edge
+   * runtime supplies `backends` instead, or neither — in which case a
+   * workspace tool invocation fails loudly rather than silently reaching for
+   * a filesystem that is not there. Called at most once per contribution, and
+   * only when a tool that needs that backend actually runs.
+   */
+  readonly backendFactories?: {
+    readonly filesystem?: () => FilesystemBackend
+    readonly exec?: () => ExecBackend
   }
   /**
    * Sync fs facade for marker detect/load/render file access. Absent on

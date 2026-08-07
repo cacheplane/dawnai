@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { sha1Hex } from "@dawn-ai/sdk/pure"
 import { z } from "zod"
 import { gateMemorySupersede } from "../permission-gate.js"
 import type {
@@ -153,14 +153,20 @@ export function createMemoryMarker(): CapabilityMarker {
             // NOT Date.now() (determinism rule; see module docblock).
             now,
             ...(queryVec && mem.embedder
-              ? { queryEmbedding: queryVec, embedderId: mem.embedder.id, vector: mem.vector }
+              ? {
+                  queryEmbedding: queryVec,
+                  embedderId: mem.embedder.id,
+                  vector: mem.vector,
+                }
               : {}),
           })
           // Wrap in {result} so the langchain bridge uses the string verbatim as
           // the ToolMessage content; a bare string hits unwrapToolResult's
           // JSON.stringify path, quoting it and escaping the newlines below.
           if (rows.length === 0) return { result: "(no memories found)" }
-          return { result: rows.map((r) => `${r.id}: ${r.content}`).join("\n") }
+          return {
+            result: rows.map((r) => `${r.id}: ${r.content}`).join("\n"),
+          }
         },
       }
 
@@ -199,10 +205,9 @@ export function createMemoryMarker(): CapabilityMarker {
           // episodic data on different runs is DIFFERENT events, and put() is
           // an id-keyed upsert in the real stores — same-id appends would
           // silently collapse into one row.
-          const id = `memory_${createHash("sha1")
-            .update(`${mem.namespace}|${JSON.stringify(data)}${append ? `|${now}` : ""}`)
-            .digest("hex")
-            .slice(0, 16)}`
+          const id = `memory_${sha1Hex(
+            `${mem.namespace}|${JSON.stringify(data)}${append ? `|${now}` : ""}`,
+          ).slice(0, 16)}`
 
           // "ask" shares auto's write semantics; only its SUPERSEDE branch gates.
           // Append kinds never supersede, so in "ask" mode no gate ever fires
@@ -327,7 +332,9 @@ export function createMemoryMarker(): CapabilityMarker {
           // Candidate mode (and "off" never reaches here — remember tool absent):
           // write a candidate; reconciliation happens later at CLI approval.
           await mem.store.put(record, putOpts)
-          return { result: `Stored memory candidate ${id} (pending approval).` }
+          return {
+            result: `Stored memory candidate ${id} (pending approval).`,
+          }
         },
       }
 
@@ -337,10 +344,10 @@ export function createMemoryMarker(): CapabilityMarker {
       const indexCacheKey =
         indexEntries.length === 0
           ? "memory:empty"
-          : `memory:${createHash("sha1")
-              .update(indexEntries.map((r) => `${r.id}@${r.updatedAt}`).join("\n"))
-              .digest("hex")
-              .slice(0, 16)}`
+          : `memory:${sha1Hex(indexEntries.map((r) => `${r.id}@${r.updatedAt}`).join("\n")).slice(
+              0,
+              16,
+            )}`
 
       const promptFragment: PromptFragment = {
         placement: "after_user_prompt",
