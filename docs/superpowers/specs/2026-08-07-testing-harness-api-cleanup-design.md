@@ -92,19 +92,24 @@ in-process without referring to a default mode or future mode integration.
 Document `createAgentProtocolInjector()` and `createSubprocessApp()` as explicit
 lower-level factories for protocol and process-boundary testing.
 
-The website and mirrored CLI testing guide currently describe unsupported
-mode values. Remove that mode list and replace it with the same three-API model.
-Keep the mirrored files textually aligned.
+The website testing guide currently describes unsupported mode values. Remove
+that mode list and replace it with the same three-API model in
+`apps/web/content/docs/testing-agents.mdx`, then run the existing CLI docs
+generator to update `packages/cli/docs/testing-agents.md`. The generated copy
+is not textually identical because the generator removes website-only
+`RelatedCards`; verification must use the established generation and docs-
+bundle checks rather than a literal file comparison.
 
 ## Files
 
 - Modify `packages/testing/src/harness.ts` to remove the option and runtime
   branch.
 - Create `packages/testing/test/harness-options.contract.ts` for the public type
-  contract.
+  contract, importing `AgentHarnessOptions` through `../src/index.js` so the
+  test exercises the package's public export surface.
 - Modify `packages/testing/README.md`.
-- Modify `apps/web/content/docs/testing-agents.mdx` and its mirrored
-  `packages/cli/docs/testing-agents.md` copy.
+- Modify `apps/web/content/docs/testing-agents.mdx`, then regenerate
+  `packages/cli/docs/testing-agents.md` with the existing CLI docs generator.
 - Add a patch changeset for `@dawn-ai/testing`.
 
 ## Testing
@@ -113,8 +118,9 @@ Keep the mirrored files textually aligned.
    still accepted.
 2. Remove the field and runtime branch; rerun the contract lane to pass.
 3. Run `@dawn-ai/testing` build, typecheck, lint, and test commands.
-4. Run the documentation guard and verify the two testing-agent guides remain
-   synchronized.
+4. Run the CLI docs generator, documentation bundle tests, and documentation
+   guard to verify the generated testing-agent guide matches the supported
+   source transformation.
 5. Run the repository Definition of Done before publishing the PR.
 
 ## Release
