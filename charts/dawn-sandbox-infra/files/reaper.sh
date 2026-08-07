@@ -14,8 +14,9 @@ PVC_NAMES="$(kubectl -n "$NS" get pvc -l app.kubernetes.io/managed-by=dawn \
 
 printf '%s\n' "$PVC_NAMES" | while IFS= read -r NAME; do
     [ -z "$NAME" ] && continue
-    SINCE_WITH_SENTINEL="$(kubectl -n "$NS" get pvc "$NAME" \
+    SINCE_WITH_SENTINEL="$(kubectl -n "$NS" get pvc "$NAME" --ignore-not-found \
       -o jsonpath='{.metadata.annotations.dawn\.sh/unbound-since}{"x"}')"
+    [ -z "$SINCE_WITH_SENTINEL" ] && continue
     SINCE="${SINCE_WITH_SENTINEL%?}"
 
     if printf '%s\n' "$BOUND" | grep -Fxq "$NAME"; then

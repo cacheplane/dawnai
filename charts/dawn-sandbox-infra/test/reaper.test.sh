@@ -8,7 +8,7 @@ BIN="$TMP/bin"
 FIX="$TMP/fixtures"
 CALLS="$TMP/calls.log"
 FAILURES=0
-mkdir -p "$BIN" "$FIX/annotations"
+mkdir -p "$BIN" "$FIX/annotations" "$FIX/not-found" "$FIX/api-errors"
 trap 'rm -rf "$TMP"' 0
 export PATH="$BIN:$PATH" CALLS FIX
 
@@ -35,6 +35,17 @@ if [ "${1:-}" = "get" ] && [ "${2:-}" = "pvc" ]; then
       *) cat "$FIX/pvc-names.jsonpath" ;;
     esac
   else
+    if [ -f "$FIX/api-errors/${3:-}" ]; then
+      printf '%s\n' 'Error from server (InternalError): injected API failure' >&2
+      exit 1
+    fi
+    if [ -f "$FIX/not-found/${3:-}" ]; then
+      case " $* " in
+        *' --ignore-not-found '*) exit 0 ;;
+      esac
+      printf 'Error from server (NotFound): persistentvolumeclaims "%s" not found\n' "${3:-}" >&2
+      exit 1
+    fi
     marker="$FIX/annotations/${3:-}"
     [ ! -f "$marker" ] || cat "$marker"
     case "$*" in
@@ -59,6 +70,8 @@ reset_fixtures() {
   : > "$FIX/pvc-names.jsonpath"
   : > "$FIX/legacy-pvc-records.jsonpath"
   rm -f "$FIX/annotations"/*
+  rm -f "$FIX/not-found"/*
+  rm -f "$FIX/api-errors"/*
 }
 
 run_reaper() {
@@ -68,6 +81,16 @@ run_reaper() {
   printf '%s\n' "FAIL: reaper exited non-zero" >&2
   FAILURES=$((FAILURES + 1))
   return 0
+}
+
+require_reaper_failure() {
+  description=$1
+  if DAWN_SANDBOX_NS=ns DAWN_REAPER_TTL_SECONDS=3600 sh "$DIR/../files/reaper.sh"; then
+    printf '%s\n' "FAIL: $description" >&2
+    FAILURES=$((FAILURES + 1))
+  else
+    printf '%s\n' "ok: $description"
+  fi
 }
 
 require_call() {
@@ -173,6 +196,31 @@ require_call "future marker is re-marked" \
   "annotate --overwrite pvc dawn-sbx-vol-future dawn.sh/unbound-since="
 reject_call "future marker never drives deletion" \
   "delete pvc dawn-sbx-vol-future"
+
+# A PVC may disappear after the initial list. Confirmed NotFound is skipped and
+# must not prevent later listed PVCs from being processed.
+reset_fixtures
+cat > "$FIX/pvc-names.jsonpath" <<'EOF'
+dawn-sbx-vol-disappeared
+dawn-sbx-vol-after-disappeared
+EOF
+: > "$FIX/not-found/dawn-sbx-vol-disappeared"
+: > "$FIX/annotations/dawn-sbx-vol-after-disappeared"
+run_reaper
+require_call "per-PVC lookup tolerates confirmed NotFound" \
+  "get pvc dawn-sbx-vol-disappeared --ignore-not-found"
+reject_call "disappeared PVC is not annotated" \
+  "annotate --overwrite pvc dawn-sbx-vol-disappeared"
+reject_call "disappeared PVC is not deleted" \
+  "delete pvc dawn-sbx-vol-disappeared"
+require_call "processing continues after a disappeared PVC" \
+  "annotate --overwrite pvc dawn-sbx-vol-after-disappeared dawn.sh/unbound-since="
+
+# --ignore-not-found must not turn genuine API failures into successful reads.
+reset_fixtures
+printf '%s\n' 'dawn-sbx-vol-api-error' > "$FIX/pvc-names.jsonpath"
+: > "$FIX/api-errors/dawn-sbx-vol-api-error"
+require_reaper_failure "genuine per-PVC API errors fail the reaper"
 
 if [ "$FAILURES" -ne 0 ]; then
   printf '\n%s\n' "kubectl calls from final scenario:" >&2
