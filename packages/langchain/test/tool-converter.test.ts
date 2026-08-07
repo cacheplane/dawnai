@@ -1,9 +1,150 @@
-import { convertToolToLangChain } from "@dawn-ai/langchain"
 import { type Command, isCommand } from "@langchain/langgraph"
-import { describe, expect, it, test } from "vitest"
-import { jsonSchemaToZod } from "../src/tool-converter.js"
+import { beforeEach, describe, expect, it, test, vi } from "vitest"
+import { convertToolToLangChain, jsonSchemaToZod } from "../src/tool-converter.ts"
+
+const dispatchCustomEvent = vi.hoisted(() => vi.fn())
+
+vi.mock("@langchain/core/callbacks/dispatch", () => ({ dispatchCustomEvent }))
+
+beforeEach(() => {
+  dispatchCustomEvent.mockReset()
+})
 
 describe("convertToolToLangChain", () => {
+  test("dispatches every transformer output as a capability event with the live config", async () => {
+    const order: string[] = []
+    const config = {
+      configurable: { thread_id: "thread-1" },
+      signal: new AbortController().signal,
+    }
+    dispatchCustomEvent.mockImplementation(async (_name, payload) => {
+      order.push(`dispatch:${payload.event}`)
+    })
+    const converted = convertToolToLangChain(
+      {
+        name: "probe",
+        run: async () => {
+          order.push("run")
+          return { ok: true }
+        },
+      },
+      undefined,
+      undefined,
+      [],
+      [
+        {
+          observes: "tool_result",
+          transform: async function* (input) {
+            expect(input).toEqual({ toolName: "probe", toolOutput: JSON.stringify({ ok: true }) })
+            order.push("transform:first")
+            yield { event: "first", data: { index: 1 } }
+            order.push("transform:second")
+            yield { event: "second", data: { index: 2 } }
+          },
+        },
+      ],
+    )
+
+    await converted.func({}, undefined as never, config as never)
+    order.push("returned")
+
+    expect(dispatchCustomEvent.mock.calls).toEqual([
+      ["dawn.capability", { event: "first", data: { index: 1 } }, config],
+      ["dawn.capability", { event: "second", data: { index: 2 } }, config],
+    ])
+    expect(order).toEqual([
+      "run",
+      "transform:first",
+      "dispatch:first",
+      "transform:second",
+      "dispatch:second",
+      "returned",
+    ])
+  })
+
+  test("transforms and dispatches a Command result before returning it", async () => {
+    const config = { configurable: { thread_id: "thread-2" } }
+    const converted = convertToolToLangChain(
+      {
+        name: "writeState",
+        run: async () => ({ result: { ok: true }, state: { value: 42 } }),
+      },
+      undefined,
+      undefined,
+      [],
+      [
+        {
+          observes: "tool_result",
+          transform: async function* ({ toolOutput }) {
+            expect(isCommand(toolOutput)).toBe(true)
+            yield { event: "state_update", data: { value: 42 } }
+          },
+        },
+      ],
+    )
+
+    const result = await converted.func({}, undefined as never, config as never)
+
+    expect(isCommand(result)).toBe(true)
+    expect(dispatchCustomEvent).toHaveBeenCalledWith(
+      "dawn.capability",
+      { event: "state_update", data: { value: 42 } },
+      config,
+    )
+  })
+
+  test("returns string content when a transformer iterator fails", async () => {
+    const converted = convertToolToLangChain(
+      { name: "probe", run: async () => "ok" },
+      undefined,
+      undefined,
+      [],
+      [
+        {
+          observes: "tool_result",
+          transform: async function* () {
+            yield { event: "before_failure", data: null }
+            throw new Error("transform failed")
+          },
+        },
+      ],
+    )
+
+    await expect(
+      converted.func({}, undefined as never, { signal: new AbortController().signal } as never),
+    ).resolves.toBe(JSON.stringify("ok"))
+  })
+
+  test("returns a state-updating Command when capability dispatch fails", async () => {
+    dispatchCustomEvent.mockRejectedValue(new Error("dispatch failed"))
+    const converted = convertToolToLangChain(
+      {
+        name: "writeState",
+        run: async () => ({ result: "updated", state: { value: 42 } }),
+      },
+      undefined,
+      undefined,
+      [],
+      [
+        {
+          observes: "tool_result",
+          transform: async function* () {
+            yield { event: "state_update", data: { value: 42 } }
+          },
+        },
+      ],
+    )
+
+    const result = await converted.func(
+      {},
+      undefined as never,
+      { signal: new AbortController().signal } as never,
+    )
+
+    expect(isCommand(result)).toBe(true)
+    expect((result as InstanceType<typeof Command>).update).toMatchObject({ value: 42 })
+  })
+
   test("converts a basic Dawn tool to a DynamicStructuredTool", async () => {
     const dawnTool = {
       name: "greet",
@@ -269,6 +410,27 @@ describe("jsonSchemaToZod nesting", () => {
 })
 
 describe("convertToolToLangChain offloading", () => {
+  it("passes the exact live tool-call signal to offloading", async () => {
+    const signal = new AbortController().signal
+    const offload = vi.fn(async () => "STUB")
+    const converted = convertToolToLangChain(
+      { name: "dump", run: async () => "x".repeat(50_000) },
+      undefined,
+      offload,
+    )
+
+    await converted.func(
+      {},
+      undefined as never,
+      {
+        signal,
+        toolCall: { id: "call-live" },
+      } as never,
+    )
+
+    expect(offload).toHaveBeenCalledWith(expect.any(String), "dump", "call-live", signal)
+  })
+
   it("replaces large plain-return content with a stub", async () => {
     const big = "x".repeat(50_000)
     const tool = { name: "dump", description: "", run: async () => big }

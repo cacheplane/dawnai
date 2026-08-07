@@ -8,6 +8,13 @@ import { startRuntimeServer } from "../src/lib/dev/runtime-server.js"
 
 const tempDirs: string[] = []
 const servers: Array<{ close: () => Promise<void> }> = []
+const CONCURRENT_RESUME_GATE = "__dawnConcurrentResumeGate"
+
+interface ConcurrentResumeGate {
+  executions: number
+  readonly markStarted: () => void
+  readonly wait: Promise<void>
+}
 
 beforeEach(() => {
   // No in-memory pending state to reset — resume is now state-based.
@@ -19,6 +26,265 @@ afterEach(async () => {
 })
 
 describe("POST /threads/:thread_id/resume", () => {
+  const pendingOne = [
+    [
+      "33a12321-3ec2-56a7-b4d7-0337886c4386",
+      "__interrupt__",
+      {
+        id: "3336d0e0a2d4f198ef9aecd09cd7ac27",
+        value: { interruptId: "perm-1" },
+      },
+    ],
+  ] as const
+  const pendingTwo = [
+    ...pendingOne,
+    [
+      "44b23432-4fd3-67b8-c5e8-1448997d5497",
+      "__interrupt__",
+      {
+        id: "4447e1f1b3e5a209fa0bfde10de8bd38",
+        value: { interruptId: "perm-2" },
+      },
+    ],
+  ] as const
+  const resolvedOnce = { interruptId: "perm-1", status: "resolved", payload: "once" } as const
+
+  test("accepts the canonical multi-entry resume envelope", async () => {
+    const appRoot = await createCheckpointFixtureApp(pendingTwo)
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+    const threadId = "thread-multi"
+    await seedRoute(server.url, threadId)
+
+    const response = await postResume(server.url, threadId, {
+      resume: [
+        { interruptId: "perm-1", status: "resolved", payload: "once" },
+        { interruptId: "perm-2", status: "cancelled" },
+      ],
+      route: "/noop#graph",
+    })
+
+    expect(response.status).toBe(200)
+  })
+
+  test("allows only one cross-transport resume to consume a pending snapshot", async () => {
+    const appRoot = await createConcurrentResumeFixtureApp(pendingOne)
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+    const threadId = "thread-concurrent-resume"
+    let markStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    let release: (() => void) | undefined
+    const wait = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const globals = globalThis as unknown as Record<string, ConcurrentResumeGate>
+    globals[CONCURRENT_RESUME_GATE] = {
+      executions: 0,
+      markStarted: () => markStarted?.(),
+      wait,
+    }
+
+    try {
+      const winnerPromise = postResume(server.url, threadId, {
+        resume: [resolvedOnce],
+        route: "/noop#graph",
+      })
+      await started
+
+      const loser = await postAgUiResume(server.url, threadId, [resolvedOnce])
+      expect(loser.status).toBe(409)
+
+      release?.()
+      const winner = await winnerPromise
+      expect(winner.status).toBe(200)
+      await winner.text()
+      expect(globals[CONCURRENT_RESUME_GATE]?.executions).toBe(1)
+
+      const afterRelease = await postAgUiResume(server.url, threadId, [resolvedOnce])
+      expect(afterRelease.status).toBe(200)
+      await afterRelease.text()
+      expect(globals[CONCURRENT_RESUME_GATE]?.executions).toBe(2)
+    } finally {
+      release?.()
+      delete globals[CONCURRENT_RESUME_GATE]
+    }
+  })
+
+  test("rejects an invalid resolved payload before checkpoint lookup", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `
+        export default {
+          checkpointer: {
+            getTuple: async () => { throw new Error("checkpoint lookup must not run"); },
+          },
+        };
+      `,
+      "package.json": "{}\n",
+      "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
+    })
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+
+    const response = await postResume(server.url, "thread-invalid-payload", {
+      resume: [{ interruptId: "perm-1", status: "resolved", payload: "later" }],
+      route: "/noop#graph",
+    })
+
+    expect(response.status).toBe(400)
+  })
+
+  test("rejects an invalid resolved payload when no checkpoint exists", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": "export default {};\n",
+      "package.json": "{}\n",
+      "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
+    })
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+
+    const response = await postResume(server.url, "thread-missing-checkpoint", {
+      resume: [{ interruptId: "perm-1", status: "resolved", payload: "later" }],
+      route: "/noop#graph",
+    })
+
+    expect(response.status).toBe(400)
+  })
+
+  test("rejects an invalid resolved payload before a checkpoint ID mismatch", async () => {
+    const appRoot = await createCheckpointFixtureApp(pendingOne)
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+
+    const response = await postResume(server.url, "thread-mismatched-checkpoint", {
+      resume: [{ interruptId: "perm-stale", status: "resolved", payload: "later" }],
+      route: "/noop#graph",
+    })
+
+    expect(response.status).toBe(400)
+  })
+
+  test.each([
+    {
+      name: "stale public ID",
+      pendingWrites: pendingOne,
+      resume: [{ interruptId: "perm-stale", status: "cancelled" }],
+    },
+    {
+      name: "outer checkpoint alias instead of the public ID",
+      pendingWrites: pendingOne,
+      resume: [{ interruptId: "3336d0e0a2d4f198ef9aecd09cd7ac27", status: "cancelled" }],
+    },
+    {
+      name: "duplicate public ID",
+      pendingWrites: pendingOne,
+      resume: [
+        { interruptId: "perm-1", status: "cancelled" },
+        { interruptId: "perm-1", status: "cancelled" },
+      ],
+    },
+    {
+      name: "partial pending set",
+      pendingWrites: pendingTwo,
+      resume: [{ interruptId: "perm-1", status: "cancelled" }],
+    },
+    {
+      name: "extra public ID",
+      pendingWrites: pendingOne,
+      resume: [
+        { interruptId: "perm-1", status: "cancelled" },
+        { interruptId: "perm-extra", status: "cancelled" },
+      ],
+    },
+    {
+      name: "missing required set",
+      pendingWrites: pendingOne,
+      resume: [],
+    },
+  ])("returns 409 for an inexact resume set: $name", async ({ pendingWrites, resume }) => {
+    const appRoot = await createCheckpointFixtureApp(pendingWrites)
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+    const threadId = `thread-inexact-${tempDirs.length}`
+    await seedRoute(server.url, threadId)
+
+    const response = await postResume(server.url, threadId, {
+      resume,
+      route: "/noop#graph",
+    })
+
+    expect(response.status).toBe(409)
+  })
+
+  test.each([
+    ["missing resume", { route: "/noop#graph" }],
+    ["missing route", { resume: [resolvedOnce] }],
+    ["empty route", { resume: [resolvedOnce], route: "" }],
+    ["non-string route", { resume: [resolvedOnce], route: 42 }],
+    ["non-array resume", { resume: null, route: "/noop#graph" }],
+    ["non-object entry", { resume: ["perm-1"], route: "/noop#graph" }],
+    ["missing interruptId", { resume: [{ status: "cancelled" }], route: "/noop#graph" }],
+    [
+      "unsupported status",
+      { resume: [{ interruptId: "perm-1", status: "pending" }], route: "/noop#graph" },
+    ],
+    [
+      "resolved entry without a decision payload",
+      { resume: [{ interruptId: "perm-1", status: "resolved" }], route: "/noop#graph" },
+    ],
+    ["unknown top-level field", { resume: [resolvedOnce], route: "/noop#graph", unexpected: true }],
+    [
+      "legacy fields mixed into a canonical body",
+      {
+        resume: [resolvedOnce],
+        route: "/noop#graph",
+        interrupt_id: "perm-1",
+        decision: "once",
+      },
+    ],
+    [
+      "unknown resolved-entry field",
+      {
+        resume: [{ ...resolvedOnce, decision: "once" }],
+        route: "/noop#graph",
+      },
+    ],
+    [
+      "payload on a cancelled entry",
+      {
+        resume: [{ interruptId: "perm-1", status: "cancelled", payload: "deny" }],
+        route: "/noop#graph",
+      },
+    ],
+  ])("returns 400 for a malformed envelope: %s", async (_name, body) => {
+    const appRoot = await createCheckpointFixtureApp(pendingOne)
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+    const threadId = `thread-malformed-body-${tempDirs.length}`
+    await seedRoute(server.url, threadId)
+
+    const response = await postResume(server.url, threadId, body)
+
+    expect(response.status).toBe(400)
+  })
+
+  test("rejects the removed scalar interrupt_id and decision body", async () => {
+    const appRoot = await createCheckpointFixtureApp(pendingOne)
+    const server = await startRuntimeServer({ appRoot })
+    servers.push(server)
+    const threadId = "thread-legacy"
+    await seedRoute(server.url, threadId)
+
+    const response = await postResume(server.url, threadId, {
+      interrupt_id: "perm-1",
+      decision: "once",
+    })
+
+    expect(response.status).toBe(400)
+  })
+
   test.each([
     {
       name: "a malformed interrupt write",
@@ -55,7 +321,7 @@ describe("POST /threads/:thread_id/resume", () => {
         ],
       ],
     },
-  ])("returns structured 409 for $name even when an alias matches", async ({ pendingWrites }) => {
+  ])("returns structured 409 for $name", async ({ pendingWrites }) => {
     const appRoot = await createCheckpointFixtureApp(pendingWrites)
     const server = await startRuntimeServer({ appRoot })
     servers.push(server)
@@ -68,10 +334,9 @@ describe("POST /threads/:thread_id/resume", () => {
     })
     expect(seedResponse.status).toBe(200)
 
-    const response = await fetch(new URL(`/threads/${threadId}/resume`, server.url), {
-      body: JSON.stringify({ decision: "once", interrupt_id: "perm-1" }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
+    const response = await postResume(server.url, threadId, {
+      resume: [{ interruptId: "perm-1", status: "cancelled" }],
+      route: "/noop#graph",
     })
 
     expect(response.status).toBe(409)
@@ -81,89 +346,6 @@ describe("POST /threads/:thread_id/resume", () => {
         kind: "request_error",
       },
     })
-  })
-
-  test.each([
-    ["inner capability ID", "perm-1", 200],
-    ["outer interrupt ID", "3336d0e0a2d4f198ef9aecd09cd7ac27", 200],
-    ["unmatched ID", "perm-stale", 409],
-  ])("handles the %s as an AP interrupt_id when both IDs exist", async (_label, interruptId, status) => {
-    const appRoot = await createFixtureApp({
-      "dawn.config.ts": `
-        export default {
-          checkpointer: {
-            getTuple: async () => ({
-              pendingWrites: [[
-                "33a12321-3ec2-56a7-b4d7-0337886c4386",
-                "__interrupt__",
-                {
-                  id: "3336d0e0a2d4f198ef9aecd09cd7ac27",
-                  value: { interruptId: "perm-1" },
-                },
-              ]],
-            }),
-          },
-        };
-      `,
-      "package.json": "{}\n",
-      "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
-    })
-    const server = await startRuntimeServer({ appRoot })
-    servers.push(server)
-    const threadId = `thread-${interruptId}`
-
-    const seedResponse = await fetch(new URL(`/threads/${threadId}/runs/wait`, server.url), {
-      body: JSON.stringify({ input: {}, route: "/noop#graph" }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    })
-    expect(seedResponse.status).toBe(200)
-
-    const response = await fetch(new URL(`/threads/${threadId}/resume`, server.url), {
-      body: JSON.stringify({ decision: "once", interrupt_id: interruptId }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    })
-
-    expect(response.status).toBe(status)
-  })
-
-  test("returns 400 when interrupt_id is missing from body", async () => {
-    const appRoot = await createFixtureApp({
-      "dawn.config.ts": "export default {};\n",
-      "package.json": "{}\n",
-      "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
-    })
-    const server = await startRuntimeServer({ appRoot })
-    servers.push(server)
-
-    const response = await fetch(new URL("/threads/thread-1/resume", server.url), {
-      body: JSON.stringify({ decision: "once" }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    })
-
-    expect(response.status).toBe(400)
-    const body = (await response.json()) as { error?: { message?: string } }
-    expect(body.error?.message).toMatch(/interrupt_id/i)
-  })
-
-  test("returns 400 when decision is not one of once/always/deny", async () => {
-    const appRoot = await createFixtureApp({
-      "dawn.config.ts": "export default {};\n",
-      "package.json": "{}\n",
-      "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
-    })
-    const server = await startRuntimeServer({ appRoot })
-    servers.push(server)
-
-    const response = await fetch(new URL("/threads/thread-3/resume", server.url), {
-      body: JSON.stringify({ interrupt_id: "p1", decision: "bogus" }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    })
-
-    expect(response.status).toBe(400)
   })
 
   test("returns 404 when no checkpoint exists for the thread", async () => {
@@ -176,63 +358,55 @@ describe("POST /threads/:thread_id/resume", () => {
     servers.push(server)
 
     // No prior run on this thread — no checkpoint.
-    const response = await fetch(new URL("/threads/no-such-thread/resume", server.url), {
-      body: JSON.stringify({ interrupt_id: "perm-x", decision: "deny" }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
+    const response = await postResume(server.url, "no-such-thread", {
+      resume: [{ interruptId: "perm-x", status: "cancelled" }],
+      route: "/noop#graph",
     })
 
     expect(response.status).toBe(404)
     const body = (await response.json()) as { error?: { message?: string } }
     expect(body.error?.message).toMatch(/thread not found/i)
   })
-
-  test("returns 409 when interrupt_id is not in checkpoint pendingWrites", async () => {
-    const appRoot = await createFixtureApp({
-      "dawn.config.ts": "export default {};\n",
-      "package.json": "{}\n",
-      "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
-    })
-    const server = await startRuntimeServer({ appRoot })
-    servers.push(server)
-
-    // Manually seed the checkpointer with a checkpoint that has a different interrupt_id.
-    // We use the MemorySaver to exercise the interface; the real server uses SQLite.
-    // Instead, we test via the server: first get a checkpoint by writing to the state
-    // endpoint... but the simplest approach is to write the checkpoint directly via
-    // the checkpointer that the server uses.
-    //
-    // Since the server creates its own SQLite checkpointer and we cannot access it
-    // directly from here, we exercise a simpler scenario: a checkpoint exists
-    // (by running a wait call) but the interrupt_id in the resume body is stale.
-    //
-    // For now, verify that a 409 is returned when no __interrupt__ write matches.
-    // We need a checkpoint to exist first — use runs/wait to create one.
-    const runsWaitResp = await fetch(new URL("/threads/thread-stale/runs/wait", server.url), {
-      body: JSON.stringify({
-        route: "/noop#graph",
-        input: {},
-      }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    })
-    // Even if the wait call fails (no real agent), a checkpoint may or may not be written.
-    // Accept any status here — we're just trying to seed state.
-    void runsWaitResp
-
-    // Now attempt resume with a stale interrupt_id on a checkpoint that has no
-    // __interrupt__ pending writes (the noop graph finishes cleanly).
-    // The resume should return 409 (stale interrupt).
-    const resumeResp = await fetch(new URL("/threads/thread-stale/resume", server.url), {
-      body: JSON.stringify({ interrupt_id: "perm-stale-123", decision: "once" }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    })
-
-    // Either 404 (no checkpoint at all) or 409 (checkpoint exists but no matching interrupt).
-    expect([404, 409]).toContain(resumeResp.status)
-  })
 })
+
+async function seedRoute(serverUrl: string, threadId: string): Promise<void> {
+  const response = await fetch(new URL(`/threads/${threadId}/runs/wait`, serverUrl), {
+    body: JSON.stringify({ input: {}, route: "/noop#graph" }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+  expect(response.status).toBe(200)
+}
+
+async function postResume(serverUrl: string, threadId: string, body: unknown): Promise<Response> {
+  return fetch(new URL(`/threads/${threadId}/resume`, serverUrl), {
+    body: JSON.stringify(body),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+}
+
+async function postAgUiResume(
+  serverUrl: string,
+  threadId: string,
+  resume: readonly unknown[],
+): Promise<Response> {
+  const routeKey = encodeURIComponent("/noop#graph")
+  return fetch(new URL(`/agui/${routeKey}`, serverUrl), {
+    body: JSON.stringify({
+      context: [],
+      forwardedProps: {},
+      messages: [],
+      resume,
+      runId: "concurrent-resume-run",
+      state: {},
+      threadId,
+      tools: [],
+    }),
+    headers: { accept: "text/event-stream", "content-type": "application/json" },
+    method: "POST",
+  })
+}
 
 async function createFixtureApp(files: Readonly<Record<string, string>>) {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-cli-resume-"))
@@ -252,6 +426,25 @@ async function createFixtureApp(files: Readonly<Record<string, string>>) {
 async function createCheckpointFixtureApp(pendingWrites: readonly unknown[]) {
   return createFixtureApp({
     "dawn.config.ts": `
+      let reads = 0;
+      export default {
+        checkpointer: {
+          getTuple: async () => {
+            reads += 1;
+            if (reads > 1) throw new Error("resume endpoint read checkpoint more than once");
+            return { pendingWrites: ${JSON.stringify(pendingWrites)} };
+          },
+        },
+      };
+    `,
+    "package.json": "{}\n",
+    "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
+  })
+}
+
+async function createConcurrentResumeFixtureApp(pendingWrites: readonly unknown[]) {
+  return createFixtureApp({
+    "dawn.config.ts": `
       export default {
         checkpointer: {
           getTuple: async () => ({ pendingWrites: ${JSON.stringify(pendingWrites)} }),
@@ -259,6 +452,16 @@ async function createCheckpointFixtureApp(pendingWrites: readonly unknown[]) {
       };
     `,
     "package.json": "{}\n",
-    "src/app/noop/index.ts": "export const graph = async () => ({ ok: true });\n",
+    "src/app/noop/index.ts": `
+      export const graph = async () => {
+        const gate = globalThis[${JSON.stringify(CONCURRENT_RESUME_GATE)}];
+        gate.executions += 1;
+        if (gate.executions === 1) {
+          gate.markStarted();
+          await gate.wait;
+        }
+        return { executions: gate.executions };
+      };
+    `,
   })
 }

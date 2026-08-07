@@ -42,7 +42,7 @@ const baseCtx = (store: any) => ({
     writes: "candidate" as const,
     defined: { kind: "semantic", scope: ["route"], identity: ["subject", "predicate"] },
     validate: (data: unknown) => ({ ok: true as const, value: data as Record<string, unknown> }),
-    now: "2026-01-01T00:00:00.000Z",
+    now: () => "2026-01-01T00:00:00.000Z",
   },
 })
 
@@ -88,6 +88,36 @@ describe("memory capability", () => {
     const c = await createMemoryMarker().load("/r", baseCtx(fakeStore()))
     expect(c.tools?.map((t) => t.name).sort()).toEqual(["recall", "remember"])
     expect(c.promptFragment).toBeDefined()
+  })
+  it("renders the loaded snapshot synchronously and refreshes it asynchronously", async () => {
+    const store = fakeStore()
+    store.rows.push({
+      id: "memory_initial",
+      namespace: "ws=a|route=/r",
+      status: "active",
+      content: "loaded before materialization",
+      data: {},
+      kind: "semantic",
+      tags: [],
+    })
+    const c = await createMemoryMarker().load("/r", baseCtx(store))
+    const fragment = c.promptFragment
+    expect(fragment).toBeDefined()
+
+    expect(fragment?.render({})).toContain("loaded before materialization")
+    store.rows.push({
+      id: "memory_late",
+      namespace: "ws=a|route=/r",
+      status: "active",
+      content: "written after materialization",
+      data: {},
+      kind: "semantic",
+      tags: [],
+    })
+
+    expect(fragment?.render({})).not.toContain("written after materialization")
+    await fragment?.renderAsync?.({})
+    expect(fragment?.render({})).toContain("written after materialization")
   })
   it("remember writes a candidate row in candidate mode", async () => {
     const store = fakeStore()
@@ -208,6 +238,34 @@ describe("memory capability", () => {
       { signal: new AbortController().signal },
     )
     expect(store.rows.filter((r: any) => r.status === "active")).toHaveLength(1)
+  })
+
+  it("reads the memory clock once per remember invocation", async () => {
+    const store = fakeStore()
+    const timestamps = [
+      "2025-12-31T23:59:59.000Z",
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:01.000Z",
+    ]
+    const ctx = ctxWith(store, "auto")
+    ctx.memory = { ...ctx.memory, now: () => timestamps.shift() ?? "clock exhausted" }
+    const c = await createMemoryMarker().load("/r", ctx)
+    const remember = c.tools!.find((t) => t.name === "remember")!
+
+    await remember.run(
+      { data: { subject: "first", predicate: "value" }, content: "one" },
+      { signal: new AbortController().signal },
+    )
+    await remember.run(
+      { data: { subject: "second", predicate: "value" }, content: "two" },
+      { signal: new AbortController().signal },
+    )
+
+    expect(store.rows.map((row: any) => row.createdAt)).toEqual([
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:01.000Z",
+    ])
+    expect(timestamps).toEqual([])
   })
 
   it("auto mode UPDATEs idempotently for identical data (no second row)", async () => {

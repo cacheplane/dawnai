@@ -113,7 +113,7 @@ export async function runTypeScriptToolingPackSmoke(overrides = {}) {
       dependencies.onPackedArtifactValidated(artifact)
       packedArtifacts.push(artifact)
     }
-    const packedCoreVersion = assertPackedCoreDependency(packedArtifacts)
+    const packedCoreVersion = assertPackedWorkspaceDependencies(packedArtifacts)
 
     await initializeCleanConsumerProject(consumerRoot)
     await dependencies.runCommand(
@@ -240,17 +240,44 @@ export function validatePackedArtifact(artifact) {
   )
 }
 
-export function assertPackedCoreDependency(packedArtifacts) {
-  const coreArtifact = packedArtifacts.find(({ packageName }) => packageName === "@dawn-ai/core")
-  const viteArtifact = packedArtifacts.find(
-    ({ packageName }) => packageName === "@dawn-ai/vite-plugin",
+export function assertPackedWorkspaceDependencies(packedArtifacts) {
+  const artifactsByName = new Map(
+    packedArtifacts.map((artifact) => [artifact.packageName, artifact]),
   )
-  const viteCoreDependency = viteArtifact?.packageJson?.dependencies?.["@dawn-ai/core"]
+  const coreArtifact = artifactsByName.get("@dawn-ai/core")
+  if (!coreArtifact) {
+    throw new Error("TypeScript tooling smoke is missing the packed @dawn-ai/core artifact")
+  }
 
-  if (viteCoreDependency !== coreArtifact?.packageVersion) {
-    throw new Error(
-      `@dawn-ai/vite-plugin packed dependency @dawn-ai/core is ${viteCoreDependency ?? "missing"}, expected ${coreArtifact?.packageVersion ?? "packed Core version"}`,
-    )
+  for (const artifact of packedArtifacts) {
+    for (const [dependencyKind, dependencies] of [
+      ["dependencies", artifact.packageJson.dependencies],
+      ["optionalDependencies", artifact.packageJson.optionalDependencies],
+      ["peerDependencies", artifact.packageJson.peerDependencies],
+    ]) {
+      for (const [dependencyName, dependencySpec] of Object.entries(dependencies ?? {})) {
+        if (!dependencyName.startsWith("@dawn-ai/")) continue
+        const dependencyArtifact = artifactsByName.get(dependencyName)
+        if (
+          dependencyKind === "peerDependencies" &&
+          artifact.packageJson.peerDependenciesMeta?.[dependencyName]?.optional === true &&
+          !dependencyArtifact
+        ) {
+          continue
+        }
+
+        if (!dependencyArtifact) {
+          throw new Error(
+            `${artifact.packageName} packed dependency ${dependencyName} is ${dependencySpec}, expected a packed ${dependencyName} artifact`,
+          )
+        }
+        if (dependencySpec !== dependencyArtifact.packageVersion) {
+          throw new Error(
+            `${artifact.packageName} packed dependency ${dependencyName} is ${dependencySpec}, expected ${dependencyArtifact.packageVersion}`,
+          )
+        }
+      }
+    }
   }
 
   return coreArtifact.packageVersion

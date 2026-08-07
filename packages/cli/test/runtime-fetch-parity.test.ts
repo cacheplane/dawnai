@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it, test, vi } from "vitest"
 import { handleAgUiFetchRequest } from "../src/lib/dev/agui-handler.js"
 import { headersToRecord } from "../src/lib/dev/middleware.js"
 import { toWebRequest } from "../src/lib/dev/node-web-adapter.js"
+import { createPendingResumeClaims } from "../src/lib/dev/pending-interrupts.js"
+import { createRunRegistry } from "../src/lib/dev/run-registry.js"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 import type { RuntimeRegistry } from "../src/lib/dev/runtime-registry.js"
 import { statusResponse } from "../src/lib/dev/status-response.js"
@@ -76,7 +78,9 @@ describe("statusResponse", () => {
     for (const status of [99, 150, 700, 1000]) {
       const response = statusResponse(status, { error: "x" })
       expect(response.status).toBe(500)
-      const body = (await response.json()) as { error: { kind: string; message: string } }
+      const body = (await response.json()) as {
+        error: { kind: string; message: string }
+      }
       expect(body.error.kind).toBe("execution_error")
       expect(body.error.message).toBe("Unexpected runtime server failure")
     }
@@ -103,13 +107,17 @@ describe("AG-UI middleware reject", () => {
 
     const response = await handleAgUiFetchRequest({
       appRoot: "/unused",
-      checkpointer: { getTuple: async () => undefined } as unknown as BaseCheckpointSaver,
+      checkpointer: {
+        getTuple: async () => undefined,
+      } as unknown as BaseCheckpointSaver,
       middleware: async () => ({
         action: "reject",
         body: { error: "not modified" },
         status: 304,
       }),
       registry,
+      resumeClaims: createPendingResumeClaims(),
+      runRegistry: createRunRegistry(),
       request: new Request("http://localhost/agui/chat", {
         body: JSON.stringify({
           context: [],
@@ -229,7 +237,9 @@ describe("runtime fetch handler parity", () => {
     expect(handler.state.activeRequests).toBe(0)
 
     // ...but the run itself keeps going and completes un-aborted.
-    const probe = JSON.parse(await waitForFile(probeFile)) as { aborted: boolean }
+    const probe = JSON.parse(await waitForFile(probeFile)) as {
+      aborted: boolean
+    }
     expect(probe.aborted).toBe(false)
 
     // With no active requests, close() resolves promptly.
@@ -238,7 +248,10 @@ describe("runtime fetch handler parity", () => {
 
   it("close() with an entirely unread SSE body warns after the drain deadline and proceeds", async () => {
     const appRoot = await fixtureApp()
-    const handler = await createRuntimeFetchHandler({ appRoot, drainDeadlineMs: 250 })
+    const handler = await createRuntimeFetchHandler({
+      appRoot,
+      drainDeadlineMs: 250,
+    })
 
     const probeFile = join(appRoot, "probe-unread.json")
     const response = await handler.fetch(streamRequest("t-unread", probeFile))

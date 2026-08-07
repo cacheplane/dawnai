@@ -195,6 +195,12 @@ it("gates the external fetch behind a permission prompt, then resumes", async ()
   expectInterrupt(run).ofKind("command").withDetail({
     command: "node scripts/fetch-source.mjs context windows",
   })
-  const resumed = await h.resume({ decision: "once" })
+  const resumed = await h.resume({
+    resume: run.interrupts.map((entry) => ({
+      interruptId: entry.interruptId,
+      status: "resolved" as const,
+      payload: "once",
+    })),
+  })
   expectToolCalled(resumed, "runBash")
 }, 60_000)

@@ -37,6 +37,27 @@ describe("DAWN_ERRORS registry", () => {
       }
     }
   })
+
+  it("registers delegation policy, denial, and dispatch failure errors", () => {
+    expect(DAWN_ERRORS.DAWN_E1004).toEqual({
+      code: "DAWN_E1004",
+      title: "Invalid delegation policy",
+      docsPath: "/docs/subagents#delegation-policy",
+    })
+    expect(DAWN_ERRORS.DAWN_E3002).toEqual({
+      code: "DAWN_E3002",
+      title: "Subagent dispatch denied",
+      docsPath: "/docs/subagents#delegation-policy",
+    })
+    expect(DAWN_ERRORS.DAWN_E5003).toEqual({
+      code: "DAWN_E5003",
+      title: "Subagent unavailable or dispatch failed",
+      docsPath: "/docs/subagents#dispatch-failures",
+    })
+    expect(errorDocsUrl("DAWN_E1004")).toBe("https://dawnai.org/docs/subagents#delegation-policy")
+    expect(errorDocsUrl("DAWN_E3002")).toBe("https://dawnai.org/docs/subagents#delegation-policy")
+    expect(errorDocsUrl("DAWN_E5003")).toBe("https://dawnai.org/docs/subagents#dispatch-failures")
+  })
 })
 
 describe("describeError", () => {

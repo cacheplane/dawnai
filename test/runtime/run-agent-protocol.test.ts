@@ -188,7 +188,7 @@ export default {
 
 describe("agent protocol permission interrupt + resume", () => {
   // Fast negative tests — no LLM needed, always run in CI.
-  it("resume with unknown interrupt_id returns 409", { timeout: 120_000 }, async () => {
+  it("resume with an unknown interrupt ID returns 409", { timeout: 120_000 }, async () => {
     const tempRoot = await createTrackedTempDir("dap-resume-neg-", tempDirs)
     const transcriptPath = join(tempRoot, "transcripts", "resume-neg.log")
     await mkdir(dirname(transcriptPath), { recursive: true })
@@ -254,9 +254,12 @@ describe("agent protocol permission interrupt + resume", () => {
       // Accept any status — we just need a checkpoint, the echo agent may or may not succeed
       void waitResp
 
-      // Try to resume with a nonexistent interrupt_id — must get 409 stale_interrupt
+      // Try to resume with a nonexistent interrupt ID — must get 409.
       const resumeResp = await fetch(new URL(`/threads/${encodeURIComponent(tid)}/resume`, url), {
-        body: JSON.stringify({ interrupt_id: "perm-nonexistent", decision: "once" }),
+        body: JSON.stringify({
+          resume: [{ interruptId: "perm-nonexistent", status: "resolved", payload: "once" }],
+          route: "/echo#agent",
+        }),
         headers: { "content-type": "application/json" },
         method: "POST",
       })
@@ -317,7 +320,10 @@ describe("agent protocol permission interrupt + resume", () => {
 
       // Resume on a thread that has never existed — must get 404
       const resumeResp = await fetch(new URL("/threads/t-does-not-exist/resume", url), {
-        body: JSON.stringify({ interrupt_id: "perm-xyz", decision: "once" }),
+        body: JSON.stringify({
+          resume: [{ interruptId: "perm-xyz", status: "resolved", payload: "once" }],
+          route: "/echo#agent",
+        }),
         headers: { "content-type": "application/json" },
         method: "POST",
       })
@@ -481,16 +487,13 @@ describe("agent protocol permission interrupt + resume", () => {
       try {
         const url2 = await server2.waitForReady(30_000)
 
-        // POST resume WITHOUT a `route` field — the server's in-memory
-        // threadRouteMap is empty after the restart, so this exercises the
-        // durable fallback: the route persisted to thread metadata in SQLite
-        // at run-start. If metadata persistence regresses, this 409s.
+        // POST the canonical multi-entry resume envelope after a server restart.
         const resumeResp = await fetch(
           new URL(`/threads/${encodeURIComponent(threadId)}/resume`, url2),
           {
             body: JSON.stringify({
-              interrupt_id: capturedInterruptId,
-              decision: "once",
+              resume: [{ interruptId: capturedInterruptId, status: "resolved", payload: "once" }],
+              route: "/chat#agent",
             }),
             headers: { "content-type": "application/json" },
             method: "POST",

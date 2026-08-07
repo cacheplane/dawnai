@@ -1,7 +1,8 @@
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnAgent, WorkspaceFs } from "@dawn-ai/sdk"
 import type { ExecBackend, FilesystemBackend } from "@dawn-ai/workspace"
-import type { ResolvedStateField, RouteDefinition, RouteManifest } from "../types.js"
+import type { ResolvedSubagent } from "../subagents/types.js"
+import type { ResolvedStateField, RouteManifest } from "../types.js"
 
 // Literal unions mirroring @dawn-ai/memory's MemoryKind/MemoryStatus/
 // MemorySource["type"]. Declared locally (NOT imported) because core must not
@@ -85,7 +86,10 @@ export interface MemoryStoreLike {
     readonly until?: string
     /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
     readonly now?: string
-  }): Promise<{ readonly records: readonly MemoryRecordLike[]; readonly total: number }>
+  }): Promise<{
+    readonly records: readonly MemoryRecordLike[]
+    readonly total: number
+  }>
   /** Aggregate counts for facet UIs. */
   stats(opts?: { readonly namespacePrefix?: string }): Promise<{
     readonly total: number
@@ -101,7 +105,10 @@ export interface MemoryStoreLike {
     readonly now: string
     readonly namespacePrefix?: string
     readonly cap?: number
-  }): Promise<{ readonly deletedExpired: number; readonly deletedOverCap: number }>
+  }): Promise<{
+    readonly deletedExpired: number
+    readonly deletedOverCap: number
+  }>
 }
 
 /**
@@ -127,7 +134,7 @@ export interface MemoryContext {
   ) =>
     | { readonly ok: true; readonly value: Record<string, unknown> }
     | { readonly ok: false; readonly errors: string }
-  readonly now: string
+  readonly now: () => string
   readonly indexMaxEntries?: number
   /** The resolved embedder when vector recall is enabled; the capability embeds
    *  writes + queries through it. Absent → keyword-only. */
@@ -177,29 +184,7 @@ export interface MarkerFs {
 export interface CapabilityMarkerContext {
   readonly routeManifest: RouteManifest
   readonly descriptor: DawnAgent | undefined
-  readonly descriptorRouteMap?: ReadonlyMap<DawnAgent, string>
-  /**
-   * routeId → that route's agent descriptor (the normalized module entry that
-   * passes `isDawnAgent` — from the default export or a named `agent` export).
-   * Holds ONLY agent routes; workflow/graph/chain routes are absent. Supplied
-   * on the static-modules path so capability code (e.g. the subagents
-   * marker's description lookup) never imports entry files from disk; absent
-   * on the dynamic path, where markers fall back to their best-effort imports.
-   */
-  readonly routeDescriptors?: ReadonlyMap<string, DawnAgent>
-  /**
-   * Best-effort description lookup for a route whose descriptor is NOT in
-   * `routeDescriptors` (the dynamic path, where no static module map exists).
-   * The node implementation imports the route's `entryFile` from disk and
-   * lives in `@dawn-ai/core/node`, supplied by the node runtime — importing a
-   * file path needs `node:url`, which must stay out of every graph that
-   * imports a capability marker (same rule as `markerFs`/`backendFactories`).
-   * Resolves to `undefined` when the entry yields no description; absent on
-   * runtimes with no disk (edge), where `routeDescriptors` is the only source.
-   * Either way the subagents marker falls back to its default description text
-   * rather than failing capability composition.
-   */
-  readonly loadRouteDescription?: (route: RouteDefinition) => Promise<string | undefined>
+  readonly subagentRegistry?: readonly ResolvedSubagent[]
   /**
    * Already-constructed backends for this run (a sandbox's, or the app's
    * `config.backends`). Takes precedence over `backendFactories`.
@@ -276,17 +261,10 @@ export interface PromptFragment {
    * (e.g., the current todos list is re-injected each turn).
    */
   readonly render: (state: Readonly<Record<string, unknown>>) => string
-  /**
-   * Optional fingerprint of any load-time data this fragment closed over (i.e.
-   * data NOT derived from the per-turn `state` passed to `render`). The agent
-   * adapter folds it into the materialized-agent cache key, so a fragment whose
-   * frozen snapshot has changed forces a re-materialize instead of serving a
-   * stale prompt. Omit when the fragment is stable per descriptor or reads all
-   * its data live at render time. Example: the memory-index fragment sets this
-   * from the active store rows so a memory written mid-process still appears in
-   * the index hint on the next run without a restart.
-   */
+  /** Fingerprint of load-time data captured by the render closure. */
   readonly cacheKey?: string
+  /** Optional live renderer used by async agent prompt composition. */
+  readonly renderAsync?: (state: Readonly<Record<string, unknown>>) => Promise<string>
 }
 
 export interface StreamTransformerInput {
@@ -311,6 +289,7 @@ export interface CapabilityContribution {
   readonly stateFields?: ReadonlyArray<ResolvedStateField>
   readonly promptFragment?: PromptFragment
   readonly streamTransformers?: ReadonlyArray<StreamTransformer>
+  readonly subagentRegistry?: readonly ResolvedSubagent[]
 }
 
 export interface CapabilityMarker {

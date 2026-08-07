@@ -19,7 +19,7 @@ export function buildMemoryContext(args: {
   writes: MemoryWritesMode
   appRoot: string
   routePath: string
-  now: string
+  now: () => string
   indexMaxEntries?: number
   extraScope?: Record<string, string>
   /** Resolved embedder when vector recall is enabled — the capability embeds

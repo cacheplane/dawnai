@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { createAimock, script } from "../../testing/dist/index.js"
+import { createAimock } from "../../testing/dist/aimock-runner.js"
+import { script } from "../../testing/dist/fixture-builder.js"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 
 const cleanup: Array<() => Promise<void> | void> = []

@@ -31,9 +31,9 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.build.json",
-    "lint": "biome check --config-path ../config-biome/biome.json --vcs-enabled=true --vcs-client-kind=git --vcs-use-ignore-file=true --vcs-root=../../ package.json src test tsconfig.json tsconfig.build.json vitest.config.ts",
+    "lint": "biome check --config-path ../config-biome/biome.json --vcs-enabled=true --vcs-client-kind=git --vcs-use-ignore-file=true --vcs-root=../../ package.json src test tsconfig.json tsconfig.build.json tsconfig.contracts.json vitest.config.ts",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.contracts.json"
   },
   "dependencies": {
     "@copilotkit/aimock": "^1.35.1",

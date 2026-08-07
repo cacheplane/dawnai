@@ -31,7 +31,13 @@ it.skipIf(!live)(
       // wrapper must have parked it as a kind:"tool" permission interrupt.
       expectInterrupt(run).ofKind("tool").withDetail({ toolName: "deployProd" })
 
-      const resumed = await h.resume({ decision: "once" })
+      const resumed = await h.resume({
+        resume: run.interrupts.map((entry) => ({
+          interruptId: entry.interruptId,
+          status: "resolved" as const,
+          payload: "once",
+        })),
+      })
       expectToolCalled(resumed, "deployProd")
       const result = resumed.toolResults.find((t) => t.name === "deployProd")
       expect(String(result?.content ?? "")).toContain("deployed to")

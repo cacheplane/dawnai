@@ -12,6 +12,58 @@ import { describe, expect, it } from "vitest"
 import { convertToolToLangChain } from "../src/tool-converter.js"
 
 describe("convertToolToLangChain — runtime invoke path (ToolNode-style)", () => {
+  it("surfaces capability events when the converted tool streams standalone", async () => {
+    const signal = new AbortController().signal
+    let seenContext:
+      | { signal: AbortSignal; threadId?: string; params?: Readonly<Record<string, string>> }
+      | undefined
+    const converted = convertToolToLangChain(
+      {
+        name: "probe",
+        run: async (_input, context) => {
+          seenContext = context
+          return { ok: true }
+        },
+      },
+      undefined,
+      undefined,
+      ["tenant"],
+      [
+        {
+          observes: "tool_result",
+          transform: async function* () {
+            yield { event: "probe.update", data: { ok: true } }
+          },
+        },
+      ],
+    )
+
+    const events = []
+    for await (const event of converted.streamEvents(
+      {},
+      {
+        configurable: { tenant: "acme", thread_id: "thread-1" },
+        signal,
+        version: "v2",
+      },
+    )) {
+      events.push(event)
+    }
+
+    expect(seenContext).toMatchObject({
+      params: { tenant: "acme" },
+      signal,
+      threadId: "thread-1",
+    })
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "on_custom_event",
+        name: "dawn.capability",
+        data: { event: "probe.update", data: { ok: true } },
+      }),
+    )
+  })
+
   it("preserves tool_call_id when invoked via tool.invoke(ToolCall) for plain-result tools", async () => {
     const tool = {
       name: "echo",

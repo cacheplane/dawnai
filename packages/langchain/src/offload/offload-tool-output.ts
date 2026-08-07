@@ -6,6 +6,7 @@ export interface OffloadToolOutputCtx {
   readonly thresholdChars: number
   readonly previewLines: number
   readonly store: Pick<OffloadStore, "write">
+  readonly signal?: AbortSignal
   readonly toolCallId?: string
 }
 
@@ -15,7 +16,7 @@ export async function offloadToolOutput(
 ): Promise<string> {
   if (content.length <= ctx.thresholdChars) return content
   try {
-    const relPath = await ctx.store.write(ctx.toolName, content, ctx.toolCallId)
+    const relPath = await ctx.store.write(ctx.toolName, content, ctx.toolCallId, ctx.signal)
     return buildStub({
       content,
       relPath,

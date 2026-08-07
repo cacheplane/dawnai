@@ -3,6 +3,7 @@ import { z } from "zod"
 import { gateMemorySupersede } from "../permission-gate.js"
 import type {
   CapabilityMarker,
+  MemoryContext,
   MemoryKindLike,
   MemoryRecordLike,
   PromptFragment,
@@ -61,7 +62,7 @@ const isZodSchema = (s: unknown): s is z.ZodTypeAny =>
  * typed, namespaced memory store, plus a memory-index prompt fragment listing
  * the in-scope memories the agent can recall. Activated only when the CLI
  * supplies context.memory (i.e. the route has a memory.ts). Deterministic: no
- * Date.now()/new Date(); timestamps come from context.memory.now.
+ * Date.now()/new Date(); timestamps come from context.memory.now().
  */
 export function createMemoryMarker(): CapabilityMarker {
   return {
@@ -71,17 +72,7 @@ export function createMemoryMarker(): CapabilityMarker {
       const mem = context.memory
       if (!mem) return {}
       const permissions = context.permissions
-      const indexEntries = await mem.store.search({
-        namespace: mem.namespace,
-        status: "active",
-        limit: mem.indexMaxEntries ?? 20,
-        // The request-time clock (context.memory.now — the same source recall
-        // uses). Without it the index would advertise EXPIRED memories that
-        // recall (which passes now) refuses to return — the model gets told a
-        // memory exists and then can't retrieve it.
-        now: mem.now,
-      })
-
+      let indexEntries = await loadIndexEntries(mem)
       // Tool input schemas exposed to the MODEL (so it knows what to pass). The
       // `remember.data` shape is the route's own defineMemory() zod schema; without
       // this the model calls remember/recall with the wrong/empty args and writes
@@ -133,14 +124,15 @@ export function createMemoryMarker(): CapabilityMarker {
             if (!isMemoryKind(q.kind)) return { result: "(no memories found)" }
             kind = q.kind
           }
+          const now = mem.now()
           // Resolve since/until (ISO or relative "-24h") against the request
           // clock. A parse failure is a MODEL mistake — return the actionable
           // message as the tool result (never throw) so it can self-correct.
           let since: string | undefined
           let until: string | undefined
           try {
-            if (q.since) since = resolveTimeExpr(q.since, mem.now)
-            if (q.until) until = resolveTimeExpr(q.until, mem.now)
+            if (q.since) since = resolveTimeExpr(q.since, now)
+            if (q.until) until = resolveTimeExpr(q.until, now)
           } catch (err) {
             return { result: err instanceof Error ? err.message : String(err) }
           }
@@ -173,16 +165,22 @@ export function createMemoryMarker(): CapabilityMarker {
             limit: q.limit ?? 8,
             // Recency reference for ranked recall — the per-request timestamp,
             // NOT Date.now() (determinism rule; see module docblock).
-            now: mem.now,
+            now,
             ...(queryVec && mem.embedder
-              ? { queryEmbedding: queryVec, embedderId: mem.embedder.id, vector: mem.vector }
+              ? {
+                  queryEmbedding: queryVec,
+                  embedderId: mem.embedder.id,
+                  vector: mem.vector,
+                }
               : {}),
           })
           // Wrap in {result} so the langchain bridge uses the string verbatim as
           // the ToolMessage content; a bare string hits unwrapToolResult's
           // JSON.stringify path, quoting it and escaping the newlines below.
           if (rows.length === 0) return { result: "(no memories found)" }
-          return { result: rows.map((r) => `${r.id}: ${r.content}`).join("\n") }
+          return {
+            result: rows.map((r) => `${r.id}: ${r.content}`).join("\n"),
+          }
         },
       }
 
@@ -216,6 +214,7 @@ export function createMemoryMarker(): CapabilityMarker {
           // stale insights is a future concern.
           const append = mem.defined.kind === "episodic" || mem.defined.kind === "reflection"
           const identityKeys = mem.defined.identity ?? DEFAULT_SEMANTIC_IDENTITY
+          const now = mem.now()
 
           // id is DATA-derived so contradicting values (same identity, different
           // value) get distinct ids and can coexist as active/superseded rows.
@@ -224,7 +223,7 @@ export function createMemoryMarker(): CapabilityMarker {
           // an id-keyed upsert in the real stores — same-id appends would
           // silently collapse into one row.
           const id = `memory_${sha1Hex(
-            `${mem.namespace}|${JSON.stringify(data)}${append ? `|${mem.now}` : ""}`,
+            `${mem.namespace}|${JSON.stringify(data)}${append ? `|${now}` : ""}`,
           ).slice(0, 16)}`
 
           // "ask" shares auto's write semantics; only its SUPERSEDE branch gates.
@@ -249,12 +248,12 @@ export function createMemoryMarker(): CapabilityMarker {
             confidence,
             tags,
             status,
-            createdAt: mem.now,
-            updatedAt: mem.now,
+            createdAt: now,
+            updatedAt: now,
             // Append kinds record WHEN the event happened (the request time —
             // same clock as createdAt/updatedAt above). No expiresAt: TTL for
             // agent-authored episodes is the store-level prune's business.
-            ...(append ? { effectiveAt: mem.now } : {}),
+            ...(append ? { effectiveAt: now } : {}),
           }
 
           // Embed the content for vector recall when an embedder is configured.
@@ -308,7 +307,7 @@ export function createMemoryMarker(): CapabilityMarker {
               if (JSON.stringify(target.data) === JSON.stringify(data)) {
                 // Idempotent update — same identity AND same data
                 await mem.store.update(target.id, {
-                  updatedAt: mem.now,
+                  updatedAt: now,
                   content,
                   confidence,
                   tags,
@@ -350,16 +349,15 @@ export function createMemoryMarker(): CapabilityMarker {
           // Candidate mode (and "off" never reaches here — remember tool absent):
           // write a candidate; reconciliation happens later at CLI approval.
           await mem.store.put(record, putOpts)
-          return { result: `Stored memory candidate ${id} (pending approval).` }
+          return {
+            result: `Stored memory candidate ${id} (pending approval).`,
+          }
         },
       }
 
-      // Fingerprint the snapshot the render closure froze at load time. `id`
-      // covers adds/removes (supersede flips a row out of the active set);
-      // `updatedAt` covers in-place content/confidence updates that keep the
-      // same id. The agent adapter folds this into its materialize cache key so
-      // a memory written after first materialize re-keys the cache (see
-      // PromptFragment.cacheKey).
+      // Fingerprint the snapshot captured at load time for callers that cache
+      // materialized agents. renderAsync below handles longer-lived prepared
+      // child graphs that do not pass through materialization again.
       const indexCacheKey =
         indexEntries.length === 0
           ? "memory:empty"
@@ -371,10 +369,11 @@ export function createMemoryMarker(): CapabilityMarker {
       const promptFragment: PromptFragment = {
         placement: "after_user_prompt",
         cacheKey: indexCacheKey,
-        render: () => {
-          if (indexEntries.length === 0) return ""
-          const lines = indexEntries.map((r) => `- ${r.id}: ${r.content.slice(0, 80)}`).join("\n")
-          return `# Long-Term Memory\n\nThese memories are available — call \`recall({ query })\` to load full details before relying on them.\n\n${lines}`
+        render: () => renderIndexEntries(indexEntries),
+        renderAsync: async () => {
+          const refreshed = await loadIndexEntries(mem)
+          indexEntries = refreshed
+          return renderIndexEntries(refreshed)
         },
       }
 
@@ -382,4 +381,21 @@ export function createMemoryMarker(): CapabilityMarker {
       return { tools, promptFragment }
     },
   }
+}
+
+function loadIndexEntries(mem: MemoryContext) {
+  return mem.store.search({
+    namespace: mem.namespace,
+    status: "active",
+    limit: mem.indexMaxEntries ?? 20,
+    // Keep the index and recall views consistent by filtering expired rows
+    // against the live clock supplied by the runtime.
+    now: mem.now(),
+  })
+}
+
+function renderIndexEntries(entries: Awaited<ReturnType<typeof loadIndexEntries>>): string {
+  if (entries.length === 0) return ""
+  const lines = entries.map((r) => `- ${r.id}: ${r.content.slice(0, 80)}`).join("\n")
+  return `# Long-Term Memory\n\nThese memories are available — call \`recall({ query })\` to load full details before relying on them.\n\n${lines}`
 }

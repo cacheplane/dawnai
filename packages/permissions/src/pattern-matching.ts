@@ -5,10 +5,10 @@ type PatternMap = Readonly<Record<string, readonly string[]>>
  *
  * Semantics:
  *   - deny wins over allow
- *   - prefix matching: `candidate.startsWith(pattern)` — for commands/paths
- *   - EXCEPT the reserved "tool" key (per-tool approval gating), which uses
- *     exact equality: tool names must not prefix-match ("deploy" must not
- *     match "deployProd")
+ *   - prefix matching: `candidate.startsWith(pattern)` for all other keys
+ *   - EXCEPT the reserved "tool" and "subagent" keys, which use exact
+ *     equality: tool names and serialized subagent identities must not
+ *     prefix-match
  *   - no entries for tool → "unknown"
  */
 export function matchPermission(
@@ -18,7 +18,7 @@ export function matchPermission(
   deny: PatternMap,
 ): "allow" | "deny" | "unknown" {
   const matches = (pattern: string) =>
-    tool === "tool" ? candidate === pattern : candidate.startsWith(pattern)
+    tool === "tool" || tool === "subagent" ? candidate === pattern : candidate.startsWith(pattern)
   const denyList = deny[tool] ?? []
   for (const pattern of denyList) {
     if (matches(pattern)) return "deny"

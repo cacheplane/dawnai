@@ -2,11 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { createSubagentsMarker } from "../../src/capabilities/built-in/subagents.js"
 import {
   applyCapabilities,
   type CapabilityMarker,
   createCapabilityRegistry,
 } from "../../src/capabilities/registry.js"
+import type { ResolvedSubagent } from "../../src/subagents/types.js"
 
 describe("CapabilityRegistry + applyCapabilities", () => {
   let routeDir: string
@@ -103,5 +105,29 @@ describe("CapabilityRegistry + applyCapabilities", () => {
     expect(result.errors).toHaveLength(1)
     expect(result.errors[0]?.markerName).toBe("bad-load")
     expect(result.errors[0]?.message).toContain("load failed")
+  })
+
+  it("passes the same canonical subagent registry through capability application", async () => {
+    const subagentRegistry: readonly ResolvedSubagent[] = [
+      {
+        name: "research",
+        routeId: "/research",
+        source: "explicit",
+        description: "Research deeply.",
+        rule: { action: "allow" },
+      },
+    ]
+    const registry = createCapabilityRegistry([createSubagentsMarker()])
+
+    const result = await applyCapabilities(registry, routeDir, {
+      routeManifest: { appRoot: routeDir, routes: [] },
+      descriptor: undefined,
+      subagentRegistry,
+      appRoot: routeDir,
+    })
+
+    expect(result.errors).toEqual([])
+    expect(result.contributions).toHaveLength(1)
+    expect(result.contributions[0]?.contribution.subagentRegistry).toBe(subagentRegistry)
   })
 })

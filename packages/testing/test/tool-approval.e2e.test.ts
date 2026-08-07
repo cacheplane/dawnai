@@ -50,7 +50,13 @@ it("approve-listed tool interrupts, then resume(once) runs it", async () => {
     })
     expectInterrupt(run).ofKind("tool").withDetail({ toolName: "deployProd" })
 
-    const resumed = await h.resume({ decision: "once" })
+    const resumed = await h.resume({
+      resume: run.interrupts.map((entry) => ({
+        interruptId: entry.interruptId,
+        status: "resolved" as const,
+        payload: "once",
+      })),
+    })
     expectToolCalled(resumed, "deployProd")
     expect(toolResultText(resumed, "deployProd")).toContain("deployed to staging")
   } finally {
@@ -70,7 +76,13 @@ it("resume(deny) makes the denial reason the tool result", async () => {
     })
     expectInterrupt(run).ofKind("tool").withDetail({ toolName: "deployProd" })
 
-    const resumed = await h.resume({ decision: "deny" })
+    const resumed = await h.resume({
+      resume: run.interrupts.map((entry) => ({
+        interruptId: entry.interruptId,
+        status: "resolved" as const,
+        payload: "deny",
+      })),
+    })
     // The denial string renders JSON-quoted through the tool-result path —
     // match with regex, never exact equality.
     expect(toolResultText(resumed, "deployProd")).toMatch(/denied.*deployProd/i)
@@ -93,7 +105,13 @@ it("resume(always) persists allow.tool and a fresh run does not prompt", async (
     })
     expectInterrupt(run).ofKind("tool").withDetail({ toolName: "deployProd" })
 
-    const resumed = await h.resume({ decision: "always" })
+    const resumed = await h.resume({
+      resume: run.interrupts.map((entry) => ({
+        interruptId: entry.interruptId,
+        status: "resolved" as const,
+        payload: "always",
+      })),
+    })
     expectToolCalled(resumed, "deployProd")
 
     // The "always" decision is persisted under the reserved "tool" key.
