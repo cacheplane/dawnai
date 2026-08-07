@@ -162,6 +162,42 @@ jobs:
       - name: Real-Postgres pgvector tests
         run: DAWN_TEST_PGVECTOR=1 pnpm --filter @dawn-ai/memory-pgvector test
 
+  postgres-storage-docker:
+    runs-on: ubuntu-latest
+    # Three test files each start their own postgres:16 container, and a cold
+    # runner also pulls the image. 30 minutes leaves headroom for a slow pull
+    # plus the per-container startup timeout without masking a hung suite.
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        # Full topological build — @dawn-ai/postgres-storage (and @dawn-ai/testing)
+        # compile from source against @dawn-ai/cli/@dawn-ai/workspace etc., so a
+        # narrow per-package filter fails to build those deps first (TS2307).
+        run: pnpm build
+
+      - name: Real-Postgres storage tests
+        run: DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/postgres-storage test
+
   inspector-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -12,9 +12,12 @@ const freshPrefix = () => `t_${Math.random().toString(36).slice(2)}`
 
 describe.skipIf(!enabled)("postgres-storage real-Postgres conformance", () => {
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16").start()
+    // A loaded CI runner can take minutes to pull postgres:16 and accept the
+    // first connection; Testcontainers' 60s default is the honest lever here,
+    // not a blanket test retry that would hide a genuine failure.
+    container = await new PostgreSqlContainer("postgres:16").withStartupTimeout(180_000).start()
     url = container.getConnectionUri()
-  }, 120_000)
+  }, 240_000)
 
   afterAll(async () => {
     await container?.stop()
