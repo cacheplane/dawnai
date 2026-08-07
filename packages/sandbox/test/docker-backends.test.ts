@@ -164,6 +164,15 @@ describe("dockerExec", () => {
         exitCode: 1,
       },
     },
+    {
+      name: "missing procReady after PID saturation in stdout",
+      first: {
+        stdout:
+          "OCI runtime exec failed: exec failed: unable to start container process: procReady not received\r\n",
+        stderr: "",
+        exitCode: 128,
+      },
+    },
   ])("recovers and retries after $name", async ({ first }) => {
     const activeCtx = { signal: new AbortController().signal, workspaceRoot: "/workspace" }
     const second = { stdout: "recovered", stderr: "warning", exitCode: 0 }

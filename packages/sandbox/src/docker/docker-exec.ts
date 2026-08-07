@@ -20,7 +20,9 @@ function isPidExhaustion(result: SpawnResult): boolean {
   return (
     output.includes("OCI runtime exec failed") &&
     (output.includes("Resource temporarily unavailable") ||
-      output.includes("read init-p: connection reset by peer"))
+      output.includes("read init-p: connection reset by peer") ||
+      (output.includes("unable to start container process") &&
+        output.includes("procReady not received")))
   )
 }
 

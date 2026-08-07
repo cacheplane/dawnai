@@ -33,7 +33,9 @@ Add tests that construct `dockerExec` with a paired PID-exhaustion recovery
 object. Sequence the fake Docker results so the
 first is a non-zero `OCI runtime exec failed` result with each known signature
 (`Resource temporarily unavailable` in stderr and
-`read init-p: connection reset by peer` in stdout), and the second succeeds.
+`read init-p: connection reset by peer` or the paired
+`unable to start container process` / `procReady not received` diagnostic in
+stdout), and the second succeeds.
 Assert token capture inside shared admission immediately before exec, two exec
 calls, one recovery call, the active command signal identity at the boundary,
 and the successful second result.

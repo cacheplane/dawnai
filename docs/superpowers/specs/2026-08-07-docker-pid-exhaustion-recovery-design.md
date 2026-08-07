@@ -12,8 +12,10 @@ the OCI runtime cannot create its init process. The current adversarial test
 assumes an immediate follow-up exec always succeeds, so it races the bounded
 child processes and intermittently fails in CI.
 
-Observed Docker failures contain an OCI exec-start error together with either
-`Resource temporarily unavailable` or `read init-p: connection reset by peer`.
+Observed Docker/runtime versions report the saturated PID cgroup as an OCI
+exec-start error together with `Resource temporarily unavailable`,
+`read init-p: connection reset by peer`, or the paired
+`unable to start container process` / `procReady not received` diagnostic.
 Ordinary commands can also fail or print `Cannot fork`; those command-level
 failures must not trigger container replacement.
 
@@ -69,8 +71,9 @@ the Docker exec result. A result is recoverable only when all are true:
 2. the text contains the exact case-sensitive marker
    `OCI runtime exec failed`; and
 3. the text contains a PID/resource signature observed under a saturated PID
-   cgroup: `Resource temporarily unavailable` or
-   `read init-p: connection reset by peer`; and
+   cgroup: `Resource temporarily unavailable`,
+   `read init-p: connection reset by peer`, or the paired
+   `unable to start container process` and `procReady not received`; and
 4. the per-attempt wrapper did not emit its unguessable startup marker.
 
 The classifier deliberately rejects a command-level `Cannot fork`, a generic
