@@ -45,7 +45,10 @@ function typeInfoToJsonSchema(type: TypeInfo, depth: number): JsonSchemaProperty
         additionalProperties: typeInfoToJsonSchema(type.value, depth + 1),
       }
     case "union":
-      if (type.members.length > 1 && type.members.every((member) => member.kind === "object")) {
+      if (
+        type.members.length > 1 &&
+        type.members.every((member) => member.kind === "object" || member.kind === "record")
+      ) {
         return {
           anyOf: type.members.map((member) => typeInfoToJsonSchema(member, depth + 1)),
         }

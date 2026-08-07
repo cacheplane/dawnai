@@ -141,6 +141,50 @@ describe("typeInfoToToolParameters", () => {
     })
   })
 
+  test("renders unions of records as object alternatives", () => {
+    const parameter: TypeInfo = {
+      kind: "object",
+      properties: [
+        {
+          name: "lookup",
+          type: {
+            kind: "union",
+            members: [
+              {
+                kind: "record",
+                key: { kind: "string" },
+                value: { kind: "string" },
+              },
+              {
+                kind: "record",
+                key: { kind: "string" },
+                value: { kind: "number" },
+              },
+            ],
+          },
+          optional: false,
+        },
+      ],
+    }
+
+    expect(typeInfoToToolParameters(parameter).properties.lookup).toEqual({
+      anyOf: [
+        {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: { type: "string" },
+        },
+        {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: { type: "number" },
+        },
+      ],
+    })
+  })
+
   test("falls back to string for unsupported shapes", () => {
     const parameter: TypeInfo = {
       kind: "object",
