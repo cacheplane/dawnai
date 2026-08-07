@@ -1,5 +1,93 @@
 # @dawn-ai/cli
 
+## 0.8.19
+
+### Patch Changes
+
+- 251e1d5: `close()` now drains in-flight runs, not just in-flight HTTP requests, before releasing sandboxes.
+
+  A cancelled `/runs/wait` answers with plain JSON, and the fetch wrapper only holds an in-flight slot for `text/event-stream` bodies — so `activeRequests` had already dropped to zero while the abandoned route was still executing against its sandbox. A routine `close()` (a rolling deploy, say) could therefore call `releaseAll()` mid-tool-call. The same applied to a cancelled stream whose route ignores `ctx.signal`.
+
+  The run registry already tracks exactly this — a run holds its slot for as long as its route may still be running, including after the response was sent — so `close()` now waits on both counters. The wait stays bounded by the existing drain deadline, and cancelling a run can now delay shutdown by up to that deadline rather than returning immediately.
+
+- aecb2e1: `dawn memory --help` now lists the subcommands.
+
+  Commander only knew about `--cwd`, so the help output showed the description and that
+  one flag — `consolidate`, `reflect`, `prune` and every subcommand flag were discoverable
+  only by triggering an error (running no subcommand, or an unknown one). The usage text
+  already existed; it is now attached to `--help` as well.
+
+- 9dde7c6: **New package `@dawn-ai/postgres-storage`** — a Postgres backend for all three
+  of Dawn's durable runtime stores (deploy-anywhere B3, PR 2b). Dawn's defaults
+  (`.dawn/checkpoints.sqlite`, `.dawn/threads.sqlite`, `.dawn/permissions.json`)
+  assume one long-lived process with a writable disk; a multi-instance or
+  ephemeral-filesystem deploy has neither.
+
+  ```ts
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+  export default config({
+    checkpointer: postgresCheckpointer({ pool }),
+    threadsStore: createPostgresThreadsStore({ pool }),
+    permissions: {
+      mode: "non-interactive",
+      store: createPostgresPermissionsStore({ pool, mode: "non-interactive" }),
+    },
+  });
+  ```
+
+  - `postgresCheckpointer()` — a LangGraph `BaseCheckpointSaver`. Checkpoints,
+    metadata, and pending-write values are stored as opaque `bytea`, matching the
+    SQLite backend's BLOB; `jsonb` is deliberately not used, because it rejects a
+    NUL byte (SQLSTATE `22P05`) and a lone surrogate (`22P02`), both of which
+    reach checkpoints through normal tool output.
+  - `createPostgresThreadsStore()` — the Agent Protocol threads store. Two
+    behaviors differ from SQLite because Postgres has concurrent writers:
+    `createThread` upserts instead of throwing on a duplicate id, and
+    `updateMetadata` merges in one statement (`metadata || $1::jsonb`) so a
+    concurrent patch cannot be lost.
+  - `createPostgresPermissionsStore()` — runtime grants in a shared table rather
+    than a per-process JSON file. `match()` is synchronous, so the store is a
+    cache with async hydration and delegates the decision to the same
+    `matchPermission` the file store uses.
+
+  Any Postgres 14+ database works; no extensions are required. Migrations are
+  lazy, memoized per process, and taken under a `pg_advisory_xact_lock`, so N
+  instances cold-starting against a virgin database converge rather than racing.
+  Options are shared across the three stores (`PostgresStoreOptions`) so one `pg`
+  pool can serve all of them. Each store exposes `close()`; a store built from an
+  injected pool deliberately does not end that pool, and the runtime handler's
+  `close()` never touches stores — the app owns store teardown.
+
+  `pg` opens a raw TCP socket, so these stores run on Node, Bun, and Vercel
+  functions. Cloudflare Workers provides no raw TCP and would need Hyperdrive or
+  an HTTP-based driver; no Workers configuration is verified here.
+
+  **`@dawn-ai/core`: `DawnConfig.permissions.store`** — a new optional field for
+  supplying a custom `PermissionsStore`, additive and defaulting to the existing
+  file-backed store. A custom store owns its own mode and allow/deny lists: Dawn
+  deliberately does not re-apply the sibling `permissions.mode` / `allow` / `deny`
+  fields or the `DAWN_PERMISSIONS_MODE` env override on top of it, since
+  re-wrapping would double-apply them. `@dawn-ai/cli` honors the field on both the
+  HTTP and direct-call route paths.
+
+  **`@dawn-ai/testing`: three store conformance kits** —
+  `runCheckpointerConformance`, `runThreadsStoreConformance`, and
+  `runPermissionsStoreConformance`. Each encodes the incumbent SQLite/file store's
+  contract and runs against any implementation, so a new backend is held to the
+  same behavior rather than to its own. Legitimate capability differences are
+  declared with flags rather than asserted away.
+
+- Updated dependencies [9dde7c6]
+  - @dawn-ai/core@0.8.19
+  - @dawn-ai/langchain@0.8.19
+  - @dawn-ai/ag-ui@0.8.19
+  - @dawn-ai/langgraph@0.8.19
+  - @dawn-ai/memory@0.8.19
+  - @dawn-ai/permissions@0.8.19
+  - @dawn-ai/sdk@0.8.19
+  - @dawn-ai/sqlite-storage@0.8.19
+
 ## 0.8.18
 
 ### Patch Changes
