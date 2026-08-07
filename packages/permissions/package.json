@@ -44,7 +44,7 @@
   },
   "devDependencies": {
     "@dawn-ai/config-typescript": "workspace:*",
-    "@types/node": "26.1.1",
-    "esbuild": "^0.25.0"
+    "@types/node": "26.1.2",
+    "esbuild": "^0.28.1"
   }
 }
