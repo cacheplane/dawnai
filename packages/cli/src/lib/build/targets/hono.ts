@@ -10,6 +10,7 @@ import { middlewareCandidatePaths } from "../../dev/middleware.js"
 import { loadDawnConfig } from "../../node-config.js"
 import { CliError, writeLine } from "../../output.js"
 import { collectRouteProviders } from "../../runtime/collect-route-providers.js"
+import { assertEdgeCapabilities, collectEdgeDependencyNotice } from "./edge-capabilities.js"
 import { edgeAppNamespace, emitEdgeModulesFile } from "./edge-modules-emitter.js"
 import type { BuildEmitContext, BuildTarget } from "./index.js"
 import { collectRouteStaticDiscovery, type RouteStaticDiscovery } from "./modules-emitter.js"
@@ -49,6 +50,12 @@ export const honoTarget: BuildTarget = {
   async emit(ctx: BuildEmitContext) {
     const { appRoot, buildDir, io, manifest } = ctx
     const artifacts: string[] = []
+    const config = await loadBuildConfig(appRoot)
+
+    // FIRST, before a single byte is written: an app using something the edge
+    // cannot serve fails here, by name. A build that emitted three artifacts
+    // and then threw would leave a .dawn/build that looks deployable.
+    assertEdgeCapabilities({ appRoot, config, manifest })
 
     // The runtime's own discovery functions, run once here at build time —
     // identical to what the node target does, so the two manifests can only
@@ -87,7 +94,7 @@ export const honoTarget: BuildTarget = {
       appPath,
       emitAppEntry({
         appRoot,
-        config: await loadBuildConfig(appRoot),
+        config,
         providers: await collectRouteProviders(manifest),
       }),
       "utf8",
@@ -95,6 +102,14 @@ export const honoTarget: BuildTarget = {
     artifacts.push(appPath)
 
     artifacts.push(await emitWrangler(ctx))
+
+    // Advisory, and on stdout with the rest of the build report: it is guidance
+    // about what to do with what we emitted, not a failure to emit it. stderr
+    // in this target means "we could not do what you asked" (see emitWrangler).
+    if (io) {
+      const notice = await collectEdgeDependencyNotice(appRoot)
+      if (notice) writeLine(io.stdout, notice)
+    }
 
     return { artifacts }
   },

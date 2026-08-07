@@ -48,6 +48,11 @@ export const DAWN_ERRORS = {
     title: "Invalid delegation policy",
     docsPath: "/docs/subagents#delegation-policy",
   },
+  DAWN_E1005: {
+    code: "DAWN_E1005",
+    title: "Feature unsupported by the build target",
+    docsPath: "/docs/deployment",
+  },
   DAWN_E2001: {
     code: "DAWN_E2001",
     title: "Sandbox unavailable",

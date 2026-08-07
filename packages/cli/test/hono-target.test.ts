@@ -222,6 +222,211 @@ export default agent({
   })
 })
 
+/**
+ * The edge serves an honest SUBSET of Dawn. Everything below asserts the build
+ * says so BY NAME — the feature and the config key or file that introduced it —
+ * instead of emitting artifacts that fail at request time in production.
+ */
+describe("hono target — edge capability gating", () => {
+  const runCheck = async (appRoot: string) => {
+    const stdout: string[] = []
+    await runCheckCommand({ cwd: appRoot }, { stderr: () => {}, stdout: (m) => stdout.push(m) })
+    return stdout.join("")
+  }
+
+  test("fails the build when a sandbox is configured", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  sandbox: { provider: { name: "docker" } },
+}
+`,
+    })
+
+    await expect(runBuild(appRoot)).rejects.toThrow(/"hono".*sandbox.*`sandbox`/is)
+  })
+
+  test("fails the build when the app has a workspace directory", async () => {
+    const appRoot = await createFixtureApp({ "workspace/notes.md": "# notes\n" })
+
+    const error = await runBuild(appRoot).catch((e: unknown) => e)
+
+    expect(String(error)).toMatch(/workspace/)
+    // Named by the path that introduced it, relative to the app root.
+    expect(String(error)).toContain("workspace/")
+    expect(String(error)).toMatch(/runBash|readFile/)
+  })
+
+  test("fails the build when a route ships skills", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nDo research.\n",
+    })
+
+    const error = await runBuild(appRoot).catch((e: unknown) => e)
+
+    expect(String(error)).toMatch(/skills/)
+    expect(String(error)).toContain(join("src", "app", "chat", "skills"))
+  })
+
+  test("fails the build when a route has long-term memory", async () => {
+    const appRoot = await createFixtureApp({
+      "src/app/chat/memory.ts": `import { defineMemory } from "@dawn-ai/sdk"
+import { z } from "zod"
+
+export default defineMemory({ schema: z.object({ fact: z.string() }) })
+`,
+    })
+
+    const error = await runBuild(appRoot).catch((e: unknown) => e)
+
+    expect(String(error)).toMatch(/memory/)
+    // The file that introduced it AND the config key that cannot fix it.
+    expect(String(error)).toContain(join("src", "app", "chat", "memory.ts"))
+    expect(String(error)).toContain("memory.store")
+  })
+
+  test("fails the build when filesystem/exec backends are configured", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  backends: { exec: { runCommand: async () => ({ stdout: "", stderr: "", exitCode: 0 }) } },
+}
+`,
+    })
+
+    const error = await runBuild(appRoot).catch((e: unknown) => e)
+
+    expect(String(error)).toContain("backends.exec")
+  })
+
+  test("reports every unsupported feature at once, not just the first", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  sandbox: { provider: { name: "docker" } },
+}
+`,
+      "src/app/chat/memory.ts": `import { defineMemory } from "@dawn-ai/sdk"
+import { z } from "zod"
+
+export default defineMemory({ schema: z.object({ fact: z.string() }) })
+`,
+      "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nGo.\n",
+      "workspace/notes.md": "# notes\n",
+    })
+
+    const message = String(await runBuild(appRoot).catch((e: unknown) => e))
+
+    // Fixing four build failures one build at a time is a bad experience.
+    expect(message).toContain("`sandbox`")
+    expect(message).toContain("workspace/")
+    expect(message).toContain(join("src", "app", "chat", "skills"))
+    expect(message).toContain("memory.store")
+  })
+
+  test("fails BEFORE emitting anything", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  sandbox: { provider: { name: "docker" } },
+}
+`,
+    })
+
+    await expect(runBuild(appRoot)).rejects.toThrow()
+
+    // A half-built .dawn/build looks deployable. Nothing may reach disk.
+    for (const name of ["modules.edge.mjs", "stores.mjs", "app.mjs", "wrangler.toml"]) {
+      expect(existsSync(buildFile(appRoot, name))).toBe(false)
+    }
+    expect(existsSync(join(appRoot, "wrangler.toml"))).toBe(false)
+  })
+
+  test("does not fire for the node target", async () => {
+    // Every gated feature at once — and none of it is the node target's
+    // problem, so this app must keep building exactly as it does today.
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["node"] },
+  sandbox: { provider: { name: "docker" } },
+}
+`,
+      "src/app/chat/memory.ts": `import { defineMemory } from "@dawn-ai/sdk"
+import { z } from "zod"
+
+export default defineMemory({ schema: z.object({ fact: z.string() }) })
+`,
+      "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nGo.\n",
+      "workspace/notes.md": "# notes\n",
+    })
+
+    const { artifacts } = await runBuild(appRoot)
+
+    expect(artifacts).toEqual(expect.arrayContaining(["server.mjs"]))
+    expect(existsSync(buildFile(appRoot, "app.mjs"))).toBe(false)
+  })
+
+  test("dawn check mirrors the gating when hono is a configured target", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["hono"] },
+  sandbox: { provider: { name: "docker" } },
+}
+`,
+      "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nGo.\n",
+      "workspace/notes.md": "# notes\n",
+    })
+
+    const error = await runCheck(appRoot).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(Error)
+    const message = String(error)
+    expect(message).toContain("`sandbox`")
+    expect(message).toContain("workspace/")
+    expect(message).toContain(join("src", "app", "chat", "skills"))
+  })
+
+  test("dawn check leaves a node-target app alone", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["node"] } }\n',
+      "src/app/chat/skills/research/SKILL.md": "---\ndescription: Research.\n---\n\nGo.\n",
+      "workspace/notes.md": "# notes\n",
+    })
+
+    await expect(runCheck(appRoot)).resolves.toBeTypeOf("string")
+  })
+
+  test("names the runtime packages the emitted entry imports but the app lacks", async () => {
+    const appRoot = await createFixtureApp()
+
+    const { stdout } = await runBuild(appRoot)
+
+    const notice = stdout.join("")
+    expect(notice).toContain("@dawn-ai/postgres-storage")
+    expect(notice).toContain("@neondatabase/serverless")
+    expect(notice).toContain("hono")
+    expect(notice).toContain("dependencies")
+  })
+
+  test("says nothing when the app already depends on them", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": `${JSON.stringify({
+        dependencies: {
+          "@dawn-ai/cli": "workspace:*",
+          "@dawn-ai/postgres-storage": "^0.8.18",
+          "@neondatabase/serverless": "^1.1.0",
+          hono: "^4.0.0",
+        },
+        name: "hono-fixture",
+      })}\n`,
+    })
+
+    const { stdout } = await runBuild(appRoot)
+
+    expect(stdout.join("")).not.toContain("@neondatabase/serverless")
+  })
+})
+
 describe("hono target — per-request env binding", () => {
   /**
    * The contract `app.mjs` leans on: the runtime hands `requestStores` the very
