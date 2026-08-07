@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createThreadsStore } from "@dawn-ai/sqlite-storage"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 
 const cleanup: Array<() => Promise<void> | void> = []
@@ -119,7 +119,11 @@ async function setupBlockingRoute() {
     await writeFile(filePath, body, "utf8")
   }
 
-  const handler = await createRuntimeFetchHandler({ appRoot })
+  // Short drain deadline: these fixtures deliberately leave a route running
+  // after cancellation (that is the property under test), and close() now waits
+  // for in-flight runs. Without a bound, afterEach cleanup would block for the
+  // full 30s default on every cancellation test.
+  const handler = await createRuntimeFetchHandler({ appRoot, drainDeadlineMs: 250 })
   cleanup.push(() => handler.close())
 
   // Unique per setup() call (appRoot itself is unique per mkdtemp), so
@@ -157,7 +161,11 @@ async function setupFaultyThreadsStore() {
     await writeFile(filePath, body, "utf8")
   }
 
-  const handler = await createRuntimeFetchHandler({ appRoot })
+  // Short drain deadline: these fixtures deliberately leave a route running
+  // after cancellation (that is the property under test), and close() now waits
+  // for in-flight runs. Without a bound, afterEach cleanup would block for the
+  // full 30s default on every cancellation test.
+  const handler = await createRuntimeFetchHandler({ appRoot, drainDeadlineMs: 250 })
   cleanup.push(() => handler.close())
 
   return { appRoot, handler }
@@ -317,7 +325,11 @@ async function setupResumeInterrupt() {
     await writeFile(filePath, body, "utf8")
   }
 
-  const handler = await createRuntimeFetchHandler({ appRoot })
+  // Short drain deadline: these fixtures deliberately leave a route running
+  // after cancellation (that is the property under test), and close() now waits
+  // for in-flight runs. Without a bound, afterEach cleanup would block for the
+  // full 30s default on every cancellation test.
+  const handler = await createRuntimeFetchHandler({ appRoot, drainDeadlineMs: 250 })
   cleanup.push(() => handler.close())
 
   return {
@@ -773,6 +785,41 @@ describe("/runs/wait cancellation", () => {
     if (!admitted) throw new Error("run slot was never freed after the abandoned route released")
 
     await drain(admitted)
+  }, 15_000)
+
+  it("close() drains an abandoned wait's run before releasing sandboxes", async () => {
+    // A cancelled /runs/wait answers with plain JSON, so the fetch wrapper —
+    // which only holds an in-flight slot for text/event-stream bodies — has
+    // already decremented activeRequests by the time close() runs. Draining on
+    // activeRequests alone would therefore call sandboxManager.releaseAll()
+    // while the abandoned route is still executing against its sandbox, yanking
+    // it mid-tool-call. close() must drain on in-flight RUNS as well.
+    const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute()
+    const threadId = "t-close-waits-for-abandoned-wait"
+
+    const waitPromise = handler.fetch(runWaitRequest(threadId, startedFile, releaseFile))
+    await waitForFile(startedFile)
+
+    expect((await handler.fetch(cancelRequest(threadId))).status).toBe(200)
+    expect((await waitPromise).status).toBe(409)
+
+    // The HTTP side has fully settled...
+    expect(handler.state.activeRequests).toBe(0)
+
+    // ...but the run has not, so close() must NOT treat this as drained. The
+    // fixture's 250ms deadline bounds the wait; hitting it (and warning about
+    // runs) is the observable proof that close() waited on the run rather than
+    // returning immediately, which is what it did before this fix.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      await handler.close()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]?.[0])).toContain("run(s) still")
+    } finally {
+      warn.mockRestore()
+    }
+
+    await releaseRoute()
   }, 15_000)
 })
 
