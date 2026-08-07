@@ -50,6 +50,22 @@ Each release is built from the changeset entries merged since the previous one �
 
 Pin exact versions (no `^` or `~` ranges) for `@dawn-ai/*` packages until the project reaches 1.0 — a floating range means an unreviewed minor bump can land in CI or production without the deliberate read-the-notes step above.
 
+## `kind: "reflection"` is now accepted
+
+[Memory distillation](/docs/memory#distillation) wired the `reflection` kind.
+`defineMemory({ kind: "reflection" })` and the generated `remember` tool now
+accept it — previously it was typed but threw *"memory kind 'reflection' is not
+yet wired"* at write time. Reflections are **append-only** (like episodic
+writes): a later insight never supersedes an earlier one, and `ask` mode never
+prompts for one. `dawn memory reflect` produces them, as `candidate` records by
+default.
+
+`procedural` remains the one typed-but-unwired kind and still throws.
+
+**No action required.** This change is purely additive — nothing that worked
+before behaves differently, and no existing app needs to change. Adopt it only
+if you want a reflection collection or want to run the distillation commands.
+
 ## MemoryStore now requires `browse` and `stats`
 
 The `MemoryStore` contract gained two required methods to power the

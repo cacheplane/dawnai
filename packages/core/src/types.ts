@@ -1,5 +1,5 @@
 import type { PermissionMode } from "@dawn-ai/permissions"
-import type { RouteKind } from "@dawn-ai/sdk"
+import type { ModelProviderId, RouteKind } from "@dawn-ai/sdk"
 import type { ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { ExecBackend, FilesystemBackend, SandboxConfig } from "@dawn-ai/workspace"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
@@ -120,6 +120,54 @@ export interface DawnConfig {
       readonly cap?: number
       readonly includeFailedRuns?: boolean
       readonly embed?: boolean
+    }
+    /** Knobs for the explicitly-invoked distillation commands
+     *  (`dawn memory consolidate` / `dawn memory reflect`). Nothing here runs
+     *  automatically — distillation only happens when a command is invoked.
+     *  Defaults: model "gpt-5-mini"; provider inferred from `model`, falling
+     *  back to "openai"; maxBatches 5 per invocation; consolidate.olderThanMs
+     *  7 days, consolidate.minBatchSize 5, consolidate.maxBatchSize 50,
+     *  consolidate.ttlMs unset (summaries never expire),
+     *  consolidate.sourceTtlMs 7 days; reflect.minNewRecords
+     *  10, reflect.maxRecords 100, reflect.writes "candidate". */
+    readonly distill?: {
+      /** Model id for the distillation pass. Default "gpt-5-mini". */
+      readonly model?: string
+      /** Model provider. Default: inferred from `model`, else "openai". */
+      readonly provider?: ModelProviderId
+      /** Maximum batches processed per invocation. Default 5. */
+      readonly maxBatches?: number
+      readonly consolidate?: {
+        /** Only consolidate records older than this many ms. Default 604800000 (7d). */
+        readonly olderThanMs?: number
+        /** Batches smaller than this are skipped. Default 5. */
+        readonly minBatchSize?: number
+        /** Batches are truncated to this many records. Default 50. */
+        readonly maxBatchSize?: number
+        /** Expiry for written summaries. Default: unset (summaries don't expire). */
+        readonly ttlMs?: number
+        /**
+         * How long a superseded SOURCE record stays inspectable before the
+         * normal prune pass reaps it. Default 604800000 (7d).
+         *
+         * Consolidation replaces its sources with one dense summary, but a
+         * superseded row still occupies the per-namespace episodic cap while
+         * being invisible to recall — so the cap would keep evicting live rows
+         * to make room for records that have already been compacted. Stamping
+         * an expiry hands that budget back on the next prune. Sources remain
+         * visible in the Inspector (and their `supersedes` audit trail intact)
+         * for this window.
+         */
+        readonly sourceTtlMs?: number
+      }
+      readonly reflect?: {
+        /** Minimum new records since the watermark before reflecting. Default 10. */
+        readonly minNewRecords?: number
+        /** Maximum records fed to one reflection pass. Default 100. */
+        readonly maxRecords?: number
+        /** Write governance for derived insights. Default "candidate". */
+        readonly writes?: "candidate" | "auto"
+      }
     }
     /** Derive the memory namespace scope for a given route. */
     readonly resolveScope?: (ctx: {

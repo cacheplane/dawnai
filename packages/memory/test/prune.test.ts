@@ -2,7 +2,12 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { type MemoryRecord, sqliteMemoryStore } from "../src/index.js"
+import {
+  buildSummaryRecord,
+  type MemoryRecord,
+  selectConsolidationBatches,
+  sqliteMemoryStore,
+} from "../src/index.js"
 
 const dirs: string[] = []
 function makeStore() {
@@ -86,6 +91,29 @@ describe("prune", () => {
     const res = await s.prune({ now: D(5), namespacePrefix: "route=/a" })
     expect(res.deletedExpired).toBe(1)
     expect((await s.get("out"))?.id).toBe("out")
+  })
+  // Regression: consolidation writes a dense summary and supersedes its sources,
+  // but the cap pass is STATUS-AGNOSTIC — it ranks every episodic row. A summary
+  // stamped with its period's START sorts as the oldest row of its own batch, so
+  // the cap evicted the summary and kept the superseded sources that recall can
+  // no longer see: the compaction destroyed data instead of compacting it.
+  it("a summary outranks its own sources under the cap", async () => {
+    const s = makeStore()
+    const sources = [1, 2, 3].map((i) => rec({ id: `e${i}`, effectiveAt: D(i) }))
+    for (const r of sources) await s.put(r)
+    const batch = selectConsolidationBatches(sources, { minBatchSize: 2, maxBatchSize: 50 })[0]!
+    const summary = buildSummaryRecord(batch, "the week in one paragraph", D(4))
+    await s.put(summary)
+    for (const r of sources) await s.supersede(r.id, summary.id)
+
+    // 4 episodic rows, cap 3 ⇒ exactly one eviction.
+    const res = await s.prune({ now: D(9), cap: 3 })
+    expect(res.deletedOverCap).toBe(1)
+    // The summary survives; the OLDEST source is what goes.
+    expect((await s.get(summary.id))?.id).toBe(summary.id)
+    expect(await s.get("e1")).toBeNull()
+    expect((await s.get("e2"))?.id).toBe("e2")
+    expect((await s.get("e3"))?.id).toBe("e3")
   })
   it("is idempotent — a second identical prune deletes nothing", async () => {
     const s = makeStore()

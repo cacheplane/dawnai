@@ -380,6 +380,262 @@ describe("dawn memory", () => {
     expect(lines.join("\n")).toMatch(/2 over-cap/)
   })
 
+  // -------------------------------------------------------------------------
+  // Distillation subcommands (`consolidate` / `reflect`)
+  //
+  // 2026-07-06 is a Monday, so Jul 6..10 all fall in ONE ISO week — a single
+  // namespace-week batch. Those dates are also far enough in the past to clear
+  // the default `olderThanMs` (7 days) whenever this suite runs.
+  // -------------------------------------------------------------------------
+
+  function episode(id: string, day: number): MemoryRecord {
+    const at = `2026-07-${String(day).padStart(2, "0")}T09:00:00.000Z`
+    return {
+      ...baseRecord,
+      id,
+      kind: "episodic",
+      status: "active",
+      content: `run ${id}`,
+      data: {},
+      createdAt: at,
+      updatedAt: at,
+      effectiveAt: at,
+    }
+  }
+
+  async function consolidatedRecords(store: ReturnType<typeof sqliteMemoryStore>) {
+    const page = await store.browse({ kind: "episodic", limit: 100 })
+    return page.records.filter((r) => r.tags.includes("consolidated"))
+  }
+
+  it("consolidate is a no-op with nothing to do", async () => {
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    // One episode is below the default minBatchSize (5) → no batch qualifies.
+    await store.put(episode("e1", 7))
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["consolidate"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    expect(lines.join("\n")).toMatch(/nothing to consolidate/)
+    expect(await consolidatedRecords(store)).toHaveLength(0)
+    expect((await store.get("e1"))?.status).toBe("active")
+  })
+
+  it("consolidate with nothing to do never constructs a model (no provider/key needed)", async () => {
+    const appRoot = await makeApp()
+    // An unsupported provider makes model construction throw a loud, actionable
+    // error — so a clean exit here PROVES the no-op path never resolved a
+    // provider or built a chat model. `dawn memory consolidate` must be safe to
+    // put in cron on a machine with no API key.
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      'export default { memory: { distill: { provider: "definitely-not-a-provider" } } }\n',
+    )
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    await store.put(episode("e1", 7))
+
+    const lines: string[] = []
+    await expect(
+      runMemoryCommand(
+        ["consolidate"],
+        { cwd: appRoot },
+        { stdout: (m) => lines.push(m), stderr: () => {} },
+      ),
+    ).resolves.toBeUndefined()
+    expect(lines.join("\n")).toMatch(/nothing to consolidate/)
+  })
+
+  it("consolidate DOES construct a model when there is work (bad provider surfaces)", async () => {
+    const appRoot = await makeApp()
+    await writeFile(
+      join(appRoot, "dawn.config.ts"),
+      'export default { memory: { distill: { provider: "definitely-not-a-provider" } } }\n',
+    )
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    for (const day of [6, 7, 8, 9, 10]) await store.put(episode(`e${day}`, day))
+
+    const io = { stdout: () => {}, stderr: () => {} }
+    await expect(runMemoryCommand(["consolidate"], { cwd: appRoot }, io)).rejects.toThrow(
+      /Unsupported agent provider "definitely-not-a-provider"/,
+    )
+    // Nothing was written: the failure happened before any model call.
+    expect(await consolidatedRecords(store)).toHaveLength(0)
+  })
+
+  // Provider selection. Every case below is asserted through a model-CONSTRUCTION
+  // error, so no test here ever reaches `.invoke()` — with both provider keys
+  // unset there is no way for a wrong branch to make a real network call.
+  async function withoutProviderKeys<T>(fn: () => Promise<T>): Promise<T> {
+    const saved = {
+      openai: process.env.OPENAI_API_KEY,
+      openaiBase: process.env.OPENAI_BASE_URL,
+      anthropic: process.env.ANTHROPIC_API_KEY,
+    }
+    process.env.OPENAI_API_KEY = undefined
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_BASE_URL
+    delete process.env.ANTHROPIC_API_KEY
+    try {
+      return await fn()
+    } finally {
+      if (saved.openai !== undefined) process.env.OPENAI_API_KEY = saved.openai
+      if (saved.openaiBase !== undefined) process.env.OPENAI_BASE_URL = saved.openaiBase
+      if (saved.anthropic !== undefined) process.env.ANTHROPIC_API_KEY = saved.anthropic
+    }
+  }
+
+  async function appWithWork(config?: string): Promise<string> {
+    const appRoot = await makeApp()
+    if (config !== undefined) await writeFile(join(appRoot, "dawn.config.ts"), config)
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    for (const day of [6, 7, 8, 9, 10]) await store.put(episode(`e${day}`, day))
+    return appRoot
+  }
+
+  it("--model re-infers the provider when none was authored", async () => {
+    // No `memory.distill.provider` in config → the resolved provider is merely
+    // INFERRED from the default model (gpt-5-mini → openai). Overriding the
+    // model across provider families must move the provider with it, or we'd
+    // hand a Claude model id to ChatOpenAI. Constructing ChatAnthropic is only
+    // reachable via provider "anthropic", and it fails loudly without a key —
+    // that error IS the proof, and it needs no Anthropic credentials.
+    const appRoot = await appWithWork()
+    const io = { stdout: () => {}, stderr: () => {} }
+    await withoutProviderKeys(async () => {
+      await expect(
+        runMemoryCommand(["consolidate", "--model", "claude-sonnet-4-5"], { cwd: appRoot }, io),
+      ).rejects.toThrow(/Anthropic API key not found/)
+    })
+  })
+
+  it("--model does NOT override an explicitly authored provider", async () => {
+    // An authored provider is a deliberate choice (proxies, OpenAI-compatible
+    // endpoints) and outranks inference. The unsupported id makes the branch
+    // unambiguous: re-inferring from the Claude model id would have produced an
+    // Anthropic key error instead.
+    const appRoot = await appWithWork(
+      'export default { memory: { distill: { provider: "definitely-not-a-provider" } } }\n',
+    )
+    const io = { stdout: () => {}, stderr: () => {} }
+    await withoutProviderKeys(async () => {
+      await expect(
+        runMemoryCommand(["consolidate", "--model", "claude-sonnet-4-5"], { cwd: appRoot }, io),
+      ).rejects.toThrow(/Unsupported agent provider "definitely-not-a-provider"/)
+    })
+  })
+
+  it("--provider overrides both the authored config and inference", async () => {
+    // Authored openai + a model id that also infers to openai: only an explicit
+    // --provider can produce an Anthropic model here.
+    const appRoot = await appWithWork(
+      'export default { memory: { distill: { provider: "openai" } } }\n',
+    )
+    const io = { stdout: () => {}, stderr: () => {} }
+    await withoutProviderKeys(async () => {
+      await expect(
+        runMemoryCommand(
+          ["consolidate", "--model", "gpt-5", "--provider", "anthropic"],
+          { cwd: appRoot },
+          io,
+        ),
+      ).rejects.toThrow(/Anthropic API key not found/)
+    })
+  })
+
+  it("reflect validates --provider like every other flag", async () => {
+    const appRoot = await makeApp()
+    const io = { stdout: () => {}, stderr: () => {} }
+    await expect(runMemoryCommand(["reflect", "--provider"], { cwd: appRoot }, io)).rejects.toThrow(
+      /Missing value for --provider/,
+    )
+    await expect(
+      runMemoryCommand(["reflect", "--provider", "  "], { cwd: appRoot }, io),
+    ).rejects.toThrow(/Invalid --provider value/)
+  })
+
+  it("consolidate --dry-run prints batches without writing", async () => {
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    for (const day of [6, 7, 8, 9, 10]) await store.put(episode(`e${day}`, day))
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["consolidate", "--dry-run"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    const output = lines.join("\n")
+    expect(output).toContain(baseRecord.namespace)
+    expect(output).toMatch(/5 records/)
+    expect(output).toMatch(/dry run, nothing written/)
+    expect(await consolidatedRecords(store)).toHaveLength(0)
+    for (const day of [6, 7, 8, 9, 10]) {
+      expect((await store.get(`e${day}`))?.status).toBe("active")
+    }
+  })
+
+  it("reflect is a no-op below the threshold", async () => {
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    // One record is far below the default minNewRecords (10).
+    await store.put(episode("e1", 7))
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["reflect"],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    expect(lines.join("\n")).toMatch(/nothing to reflect/)
+    expect((await store.browse({ kind: "reflection", limit: 10 })).total).toBe(0)
+  })
+
+  it("consolidate rejects a non-numeric --max-batches", async () => {
+    const appRoot = await makeApp()
+    const io = { stdout: () => {}, stderr: () => {} }
+    await expect(
+      runMemoryCommand(["consolidate", "--max-batches", "notanumber"], { cwd: appRoot }, io),
+    ).rejects.toThrow(/Invalid --max-batches value: "notanumber" \(expected a number >= 0\)/)
+  })
+
+  it("reflect rejects a negative --max-batches and an unknown flag", async () => {
+    const appRoot = await makeApp()
+    const io = { stdout: () => {}, stderr: () => {} }
+    await expect(
+      runMemoryCommand(["reflect", "--max-batches", "-1"], { cwd: appRoot }, io),
+    ).rejects.toThrow(/Invalid --max-batches value: "-1"/)
+    await expect(runMemoryCommand(["reflect", "--nope"], { cwd: appRoot }, io)).rejects.toThrow(
+      /Unknown argument: "--nope"/,
+    )
+    await expect(
+      runMemoryCommand(["consolidate", "--namespace"], { cwd: appRoot }, io),
+    ).rejects.toThrow(/Missing value for --namespace/)
+  })
+
+  it("consolidate --namespace scopes the pass", async () => {
+    const appRoot = await makeApp()
+    const store = sqliteMemoryStore({ path: join(appRoot, ".dawn/memory.sqlite") })
+    for (const day of [6, 7, 8, 9, 10]) {
+      await store.put({ ...episode(`b${day}`, day), namespace: "ws=app|route=/other" })
+    }
+
+    const lines: string[] = []
+    await runMemoryCommand(
+      ["consolidate", "--dry-run", "--namespace", baseRecord.namespace],
+      { cwd: appRoot },
+      { stdout: (m) => lines.push(m), stderr: () => {} },
+    )
+
+    expect(lines.join("\n")).toMatch(/nothing to consolidate/)
+  })
+
   it("unknown subcommand throws CliError", async () => {
     const appRoot = await makeApp()
     const io = { stdout: () => {}, stderr: () => {} }

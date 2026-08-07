@@ -84,6 +84,11 @@ export interface MemoryStore {
   get(id: string): Promise<MemoryRecord | null>
   search(q: MemoryQuery): Promise<readonly MemoryRecord[]>
   update(id: string, patch: Partial<MemoryRecord>): Promise<void>
+  /** Marks `id` superseded and records the link on `bySupersedingId.supersedes`.
+   *  `supersedes` is a SET: re-superseding the same pair is idempotent (no
+   *  duplicate link, no error), which is what lets a retried consolidation pass
+   *  re-link a batch it already partly linked. Asserted by
+   *  `runMemoryStoreConformance`'s "supersede links and demotes episodic records". */
   supersede(id: string, bySupersedingId: string): Promise<void>
   delete(id: string): Promise<void>
   listCandidates(namespacePrefix: string): Promise<readonly MemoryRecord[]>

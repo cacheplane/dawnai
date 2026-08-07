@@ -120,6 +120,29 @@ describe("episodic remember (append-only)", () => {
     expect(log.puts[0]?.effectiveAt).toBe(NOW)
   })
 
+  it("accepts a reflection route and appends without reconciling", async () => {
+    const log = newLog()
+    const { remember } = await loadTools(log, {
+      defined: { kind: "reflection", scope: ["route"] },
+    })
+    const input = { data: { event: "deployed" }, content: "staging deploys cluster on Fridays" }
+    const r1 = (await remember?.run(input, signal())) as { result: string }
+    const r2 = (await remember?.run(input, signal())) as { result: string }
+    // Insights ACCUMULATE — a later insight never contradicts an earlier one.
+    expect(log.puts.length).toBe(2)
+    expect(log.updates).toBe(0)
+    expect(log.supersedes).toBe(0)
+    // Only the load-time index search ran — the append path never scans actives.
+    expect(log.searches.length).toBe(1)
+    expect(r1.result).toMatch(/Stored memory/)
+    expect(r2.result).toMatch(/Stored memory/)
+    const rec = log.puts[0]
+    expect(rec?.kind).toBe("reflection")
+    expect(rec?.status).toBe("active")
+    expect(rec?.effectiveAt).toBe(NOW)
+    expect(rec?.expiresAt).toBeUndefined()
+  })
+
   it("procedural kind returns a not-yet-wired tool error with zero store writes", async () => {
     const log = newLog()
     const { remember } = await loadTools(log, {

@@ -218,6 +218,8 @@ dawn memory approve <id>
 dawn memory reject <id>
 dawn memory forget <id>
 dawn memory prune [--cap <n>] [--namespace <prefix>]
+dawn memory consolidate [--dry-run] [--namespace <prefix>] [--model <id>] [--provider <id>] [--max-batches <n>]
+dawn memory reflect [--dry-run] [--namespace <prefix>] [--model <id>] [--provider <id>] [--max-batches <n>]
 ```
 
 Subcommands:
@@ -231,6 +233,24 @@ Subcommands:
   delete expired records (TTL) and enforce the per-namespace episode cap.
   `--cap <n>` overrides the cap for this pass; `--namespace <prefix>` scopes
   the pass to namespaces matching the prefix.
+- `consolidate` — run [distillation](/docs/memory#distillation)'s compaction
+  pass: group old episodic records per (namespace, ISO week), summarize each
+  group with one model call, then supersede the sources and stamp them with a
+  TTL so `prune` reaps them later.
+- `reflect` — run distillation's insight pass: derive durable insights from each
+  namespace's records newer than its watermark. Insights are written as
+  `candidate` by default — approve them with `approve <id>` or the Inspector.
+
+`consolidate` and `reflect` share the same flags, and both are threshold-aware
+no-ops: below the configured thresholds they print one line, exit `0`, construct
+no model and require no API key — which is what makes the cron recipe
+(`dawn memory consolidate && dawn memory reflect`) safe to run nightly on any
+app. `--dry-run` reports the plan without making a single model call;
+`--namespace <prefix>` scopes the pass; `--model <id>` / `--provider <id>`
+override `memory.distill`; `--max-batches <n>` caps the work (and spend) for one
+invocation. These are the only `dawn memory` subcommands that spend model
+tokens. See [Distillation](/docs/memory#distillation) for the full configuration
+block.
 
 Flags:
 - `--cwd <path>` — operate on a different app root.

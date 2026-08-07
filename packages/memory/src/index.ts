@@ -1,3 +1,19 @@
+export {
+  buildConsolidationPrompt,
+  buildReflectionPrompt,
+  buildReflectionRecords,
+  buildReflectionWatermarkRecord,
+  buildSummaryRecord,
+  type ConsolidationBatch,
+  eventTimeOf,
+  isoWeekKey,
+  parseConsolidationOutput,
+  parseReflectionOutput,
+  type ReflectionInput,
+  type ReflectionInsight,
+  selectConsolidationBatches,
+  selectReflectionInput,
+} from "./distill.js"
 export { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
 export {
   type MemoryScopeTuple,
