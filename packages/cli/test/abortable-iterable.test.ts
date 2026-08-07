@@ -105,3 +105,99 @@ test("a source next failure propagates even when cleanup also rejects", async ()
 
   await expect(iterator.next()).rejects.toBe(nextError)
 })
+
+test("onSourceCleanup observes the source settling only after its own suspended await resolves", async () => {
+  // Models the run-cancellation bug: the source is suspended at an await that
+  // does not resolve until `unblock()` is called — mirroring a route stuck in
+  // a non-abortable await, a subprocess, or a CPU-bound loop that ignores the
+  // abort signal. The cleanup promise handed to onSourceCleanup must not
+  // resolve until that suspended await genuinely finishes.
+  let unblock: (() => void) | undefined
+  const blocked = new Promise<void>((resolve) => {
+    unblock = resolve
+  })
+  const source = (async function* () {
+    yield "first"
+    await blocked
+    yield "second"
+  })()
+
+  const controller = new AbortController()
+  let sourceCleanup: Promise<void> | undefined
+  const iterator = abortableAsyncIterable(source, controller.signal, (p) => {
+    sourceCleanup = p
+  })[Symbol.asyncIterator]()
+
+  const first = await iterator.next()
+  expect(first).toEqual({ done: false, value: "first" })
+
+  const nextPromise = iterator.next()
+  controller.abort(new Error("aborted"))
+  await expect(nextPromise).rejects.toThrow("aborted")
+
+  // The consuming loop has stopped, but the source is still suspended in its
+  // own await — onSourceCleanup's promise must not have settled yet.
+  expect(sourceCleanup).toBeDefined()
+  let cleanupSettled = false
+  void sourceCleanup?.then(() => {
+    cleanupSettled = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  expect(cleanupSettled).toBe(false)
+
+  // Once the source's own await resolves, its `.return()` can proceed and the
+  // cleanup promise settles.
+  unblock?.()
+  await sourceCleanup
+  expect(cleanupSettled).toBe(true)
+})
+
+test("onSourceCleanup's promise never rejects, even when the source's cleanup throws", async () => {
+  const source: AsyncIterable<string> = {
+    [Symbol.asyncIterator]() {
+      return {
+        next: () => new Promise<IteratorResult<string>>(() => undefined),
+        return: async () => {
+          throw new Error("cleanup failed")
+        },
+      }
+    },
+  }
+  const controller = new AbortController()
+  let sourceCleanup: Promise<void> | undefined
+  const iterator = abortableAsyncIterable(source, controller.signal, (p) => {
+    sourceCleanup = p
+  })[Symbol.asyncIterator]()
+
+  const next = iterator.next()
+  controller.abort(new Error("client disconnected"))
+  await expect(next).rejects.toThrow("client disconnected")
+
+  expect(sourceCleanup).toBeDefined()
+  await expect(sourceCleanup).resolves.toBeUndefined()
+})
+
+test("omitting onSourceCleanup preserves fire-and-forget cleanup (existing two-argument callers)", async () => {
+  let returnCalled = false
+  const source: AsyncIterable<string> = {
+    [Symbol.asyncIterator]() {
+      return {
+        next: () => new Promise<IteratorResult<string>>(() => undefined),
+        return: async () => {
+          returnCalled = true
+          return { done: true, value: undefined }
+        },
+      }
+    },
+  }
+  const controller = new AbortController()
+  // Two-argument call, matching agui-handler.ts's usage — must keep working
+  // unchanged.
+  const iterator = abortableAsyncIterable(source, controller.signal)[Symbol.asyncIterator]()
+
+  const next = iterator.next()
+  controller.abort(new Error("aborted"))
+  await expect(next).rejects.toThrow("aborted")
+
+  expect(returnCalled).toBe(true)
+})
