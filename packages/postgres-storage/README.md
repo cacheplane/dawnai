@@ -35,8 +35,35 @@ export DATABASE_URL="postgres://postgres:postgres@localhost:5432/postgres"
 ## Public API
 
 ```ts
-import { assertIdentifier, DEFAULT_SCHEMA, DEFAULT_TABLE_PREFIX } from "@dawn-ai/postgres-storage"
+import { postgresCheckpointer } from "@dawn-ai/postgres-storage"
+
+const checkpointer = postgresCheckpointer({ connectionString: process.env.DATABASE_URL })
 ```
+
+### `postgresCheckpointer(options)`
+
+A LangGraph `BaseCheckpointSaver` backed by Postgres. Options:
+
+- `connectionString` — builds a pool this store owns and `close()` ends.
+- `pool` — an existing `pg` pool to use instead. Share one pool across every
+  Dawn store to stay inside a managed Postgres connection cap; `close()` leaves
+  an injected pool alone.
+- `schema` (default `public`) and `tablePrefix` (default `dawn`).
+
+Migrations run lazily on first use and are memoized per process. Call
+`checkpointer.ready()` to migrate at boot instead. Migrations take a
+`pg_advisory_xact_lock`, so N instances cold-starting against a virgin database
+converge rather than racing.
+
+The serialized checkpoint, its metadata, and pending-write values are stored as
+opaque `bytea`, matching the SQLite backend's BLOB. `jsonb` is deliberately not
+used: it rejects a NUL byte (SQLSTATE 22P05) and a lone surrogate (22P02), both
+of which reach checkpoints in normal operation via tool output. Checkpoint
+ordering uses `COLLATE "C"` so it does not depend on the database's locale.
+
+Like the SQLite backend, each checkpoint stores its channel values as one
+payload rather than deduplicating unchanged channels across checkpoints. Large
+unchanged values therefore repeat per checkpoint.
 
 ### `assertIdentifier(name, value)`
 
