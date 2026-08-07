@@ -351,8 +351,20 @@ const forbiddenContent = [
   },
   {
     pattern:
-      /speaks the LangSmith protocol natively|What works locally works in production|without translation|byte-identical/,
+      /speaks the LangSmith protocol natively|What works locally works in production|without translation/,
     message: "overstates local/prod protocol or deployment parity",
+  },
+  {
+    // "byte-identical" is banned as a local/prod parity claim, but it is also a
+    // perfectly ordinary way to describe two files having the same contents.
+    // CHANGELOGs are generated from changeset prose and are a historical record,
+    // so a legitimate technical use there should not be rewritten after the fact
+    // — and it must not red main once the Version PR bakes it in, which is
+    // exactly what happened when #399's changeset described a template as being
+    // kept byte-identical to its source.
+    pattern: /byte-identical/,
+    message: "overstates local/prod protocol or deployment parity",
+    shouldCheck: (filePath) => !/CHANGELOG\.md$/.test(filePath),
   },
   {
     pattern: /auto-bound|auto-registered/,
