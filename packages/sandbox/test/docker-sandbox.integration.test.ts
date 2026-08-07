@@ -142,11 +142,13 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
   })
 
   // Adversarial hardening conformance: these tests actually attempt the abuse
-  // (fork bomb, /etc write, non-root escalation, timeout overrun) and assert
+  // (bounded process storm, /etc write, non-root escalation, timeout overrun) and assert
   // containment. fakeSandbox can't enforce kernel controls (caps/pids/
   // read-only/non-root), so these properties are Docker-lane-only.
 
-  test("hardened defaults contain a fork bomb (pids-limit)", { timeout: 180_000 }, async () => {
+  test("configured PID limit contains a bounded process storm", {
+    timeout: 180_000,
+  }, async () => {
     const pidsLimit = 32
     const p = dockerSandbox({ image: IMAGE })
     const threadId = `fork-${randomUUID()}`
@@ -159,17 +161,32 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
       const successMarker = "SPAWN_STORM_COMPLETED"
       const storm = `
         const { spawn } = require("node:child_process")
+
+        function errorDetails(error) {
+          return {
+            code: typeof error.code === "string" ? error.code : "UNKNOWN",
+            message: error instanceof Error ? error.message : String(error),
+          }
+        }
+
         const attempts = Array.from({ length: ${pidsLimit * 4} }, () => new Promise((resolve) => {
-          const child = spawn("sleep", ["2"], { stdio: "ignore" })
-          child.once("spawn", () => resolve(true))
-          child.once("error", () => resolve(false))
+          let child
+          try {
+            child = spawn("sleep", ["2"], { stdio: "ignore" })
+          } catch (error) {
+            resolve({ error: errorDetails(error), started: false })
+            return
+          }
+          child.once("spawn", () => resolve({ started: true }))
+          child.once("error", (error) => resolve({ error: errorDetails(error), started: false }))
         }))
-        Promise.all(attempts).then((started) => {
-          const rejected = started.filter((value) => !value).length
-          if (rejected === 0) {
+        Promise.all(attempts).then((results) => {
+          const errors = results.flatMap((result) => result.started ? [] : [result.error])
+          const report = { errors, started: results.length - errors.length }
+          if (errors.length === 0) {
             console.log("${successMarker}")
           } else {
-            console.error("SPAWN_STORM_BLOCKED:" + rejected)
+            console.error("SPAWN_STORM_BLOCKED:" + JSON.stringify(report))
             process.exitCode = 42
           }
         })
@@ -181,6 +198,27 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
       expect(r.exitCode).not.toBe(0)
       expect(r.stdout).not.toContain(successMarker)
       expect(r.stderr).toContain("SPAWN_STORM_BLOCKED:")
+      const reportText = r.stderr
+        .split("\n")
+        .find((line) => line.startsWith("SPAWN_STORM_BLOCKED:"))
+        ?.slice("SPAWN_STORM_BLOCKED:".length)
+      expect(reportText, `missing spawn-storm report in stderr: ${r.stderr}`).toBeDefined()
+      const report = JSON.parse(reportText ?? "{}") as {
+        errors?: Array<{ code?: unknown; message?: unknown }>
+        started?: unknown
+      }
+      expect(report.started).toEqual(expect.any(Number))
+      expect(report.started).toBeGreaterThan(0)
+      expect(report.errors).toEqual(expect.any(Array))
+      expect(report.errors).not.toHaveLength(0)
+      for (const error of report.errors ?? []) {
+        expect(error).toEqual({ code: expect.any(String), message: expect.any(String) })
+        expect(
+          error.code === "EAGAIN" ||
+            (typeof error.message === "string" &&
+              error.message.includes("Resource temporarily unavailable")),
+        ).toBe(true)
+      }
 
       const alive = await pollCommand(
         () => h.exec.runCommand({ command: "echo alive" }, ctx(h.workspaceRoot)),
@@ -203,6 +241,7 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
     const threadId = `pid-recovery-${randomUUID()}`
     const container = `dawn-sbx-${threadId}`
     const readinessPath = "/workspace/.pids-ready.json"
+    const readinessTemporaryPath = "/workspace/.pids-ready.json.tmp"
     const sentinelPath = "/workspace/pid-recovery-sentinel.txt"
     const sentinel = `sentinel-${randomUUID()}`
 
@@ -215,14 +254,23 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
       await h.filesystem.writeFile(sentinelPath, sentinel, ctx(h.workspaceRoot))
       const originalKeeperId = await keeperId(docker, container)
       const saturator = `
-        const { writeFileSync } = require("node:fs")
+        const { renameSync, rmSync, writeFileSync } = require("node:fs")
         const { Worker } = require("node:worker_threads")
         let started = 0
         let settled = false
         const workers = []
+        rmSync("${readinessTemporaryPath}", { force: true })
+        rmSync("${readinessPath}", { force: true })
+
+        function publishReadiness(status) {
+          writeFileSync("${readinessTemporaryPath}", JSON.stringify(status))
+          renameSync("${readinessTemporaryPath}", "${readinessPath}")
+        }
+
         const keepAlive = setInterval(() => {}, 1000)
         const deadline = setTimeout(() => {
-          writeFileSync("${readinessPath}", JSON.stringify({ status: "failed", reason: "deadline", started }))
+          settled = true
+          publishReadiness({ status: "failed", reason: "deadline", started })
           clearInterval(keepAlive)
           process.exit(88)
         }, 5000)
@@ -231,7 +279,7 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
           if (settled) return
           settled = true
           clearTimeout(deadline)
-          writeFileSync("${readinessPath}", JSON.stringify({ status: "failed", reason, code: error && error.code, started }))
+          publishReadiness({ status: "failed", reason, code: error && error.code, started })
           clearInterval(keepAlive)
           process.exit(89)
         }
@@ -253,7 +301,7 @@ describe.skipIf(!enabled)("dockerSandbox (real Docker)", { timeout: 120_000 }, (
             }
             settled = true
             clearTimeout(deadline)
-            writeFileSync("${readinessPath}", JSON.stringify({ status: "ready", code: error.code, message, started }))
+            publishReadiness({ status: "ready", code: error.code, message, started })
             return
           }
           worker.once("online", () => {
