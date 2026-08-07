@@ -98,7 +98,8 @@ that mode list and replace it with the same three-API model in
 generator to update `packages/cli/docs/testing-agents.md`. The generated copy
 is not textually identical because the generator removes website-only
 `RelatedCards`; verification must use the established generation and docs-
-bundle checks rather than a literal file comparison.
+bundle checks rather than a literal file comparison. `packages/cli/docs/` is
+gitignored build output: regenerate it for verification, but do not commit it.
 
 ## Files
 
@@ -109,7 +110,8 @@ bundle checks rather than a literal file comparison.
   test exercises the package's public export surface.
 - Modify `packages/testing/README.md`.
 - Modify `apps/web/content/docs/testing-agents.mdx`, then regenerate
-  `packages/cli/docs/testing-agents.md` with the existing CLI docs generator.
+  the gitignored `packages/cli/docs/testing-agents.md` with the existing CLI
+  docs generator for verification only.
 - Add a patch changeset for `@dawn-ai/testing`.
 
 ## Testing
