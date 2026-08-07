@@ -30,7 +30,7 @@
   "scripts": {
     "build": "next build && node scripts/post-build.mjs",
     "dev": "next dev",
-    "lint": "biome check --config-path ../config-biome/biome.json package.json next.config.ts postcss.config.mjs vitest.config.ts src app scripts test",
+    "lint": "biome check --config-path ../config-biome/biome.json package.json next.config.ts postcss.config.mjs vitest.config.ts vitest.components.config.ts vitest.e2e.config.ts src app scripts test",
     "test": "vitest --run --config vitest.config.ts --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },

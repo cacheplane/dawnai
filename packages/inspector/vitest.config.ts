@@ -1,30 +1,11 @@
-import react from "@vitejs/plugin-react"
 import { defineConfig } from "vitest/config"
 
+// The two projects live in their own leaf config FILES rather than inline
+// objects: the root `vitest.workspace.ts` enrolls them individually, and a
+// project entry that itself declares `projects` is flattened by vitest —
+// silently dropping the nested plugins and environment.
 export default defineConfig({
   test: {
-    projects: [
-      {
-        test: {
-          name: "e2e",
-          environment: "node",
-          include: ["test/**/*.e2e.test.ts"],
-          testTimeout: 120_000,
-          hookTimeout: 120_000,
-          // e2e files boot standalone servers against the SAME fixture app (and
-          // its .dawn sqlite dir) — parallel files would clobber each other's
-          // seeds.
-          fileParallelism: false,
-        },
-      },
-      {
-        plugins: [react()],
-        test: {
-          name: "components",
-          environment: "jsdom",
-          include: ["test/components/**/*.test.tsx"],
-        },
-      },
-    ],
+    projects: ["./vitest.e2e.config.ts", "./vitest.components.config.ts"],
   },
 })
