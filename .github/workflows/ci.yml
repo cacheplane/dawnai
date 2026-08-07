@@ -288,13 +288,13 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       - name: Create kind cluster (no default CNI)
-        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           config: .github/kind/kind-calico.yaml
 
       - name: Install Calico (enforces NetworkPolicy)
         run: |
-          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml
           kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
           kubectl wait --for=condition=Ready nodes --all --timeout=180s
 
@@ -360,14 +360,14 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       - name: Create kind cluster (no default CNI)
-        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           config: .github/kind/kind-calico.yaml
           cluster_name: dawn-smoke
 
       - name: Install Calico (enforces NetworkPolicy)
         run: |
-          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml
           kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
           kubectl wait --for=condition=Ready nodes --all --timeout=180s
 
@@ -540,7 +540,7 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       - name: Create kind cluster
-        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
 
       - name: Install dawn-app (placeholder image) and verify it serves
         # nginx-unprivileged runs as non-root (UID 101, port 8080), so it satisfies
