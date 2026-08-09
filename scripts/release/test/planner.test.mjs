@@ -1,0 +1,721 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+
+import { planRelease } from "../planner.mjs"
+import { classifyObservedRelease, findReleaseConflicts, ReleaseState } from "../state.mjs"
+
+const VERSION = "0.8.20"
+const NEWER_VERSION = "0.8.21"
+const OLDER_VERSION = "0.8.19"
+const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
+const OTHER_SHA = "abcdef0123456789abcdef0123456789abcdef01"
+const WORKFLOW = "release-candidate"
+const OUTPUT_KEYS = [
+  "conflicts",
+  "disposition",
+  "nextTransition",
+  "proposedMutations",
+  "reasons",
+  "state",
+]
+const PACKAGE_IDENTITIES = [
+  {
+    name: "@dawn-ai/core",
+    version: VERSION,
+    integrity: "sha512-core",
+  },
+  {
+    name: "@dawn-ai/sdk",
+    version: VERSION,
+    integrity: "sha512-sdk",
+  },
+]
+
+test("ReleaseState is the frozen canonical state model", () => {
+  assert.deepEqual(ReleaseState, {
+    NO_CANDIDATE: "NO_CANDIDATE",
+    SUPERSEDED_NOOP: "SUPERSEDED_NOOP",
+    CANDIDATE_VALIDATED: "CANDIDATE_VALIDATED",
+    CANDIDATE_TAGGED: "CANDIDATE_TAGGED",
+    ARTIFACTS_PREPARED: "ARTIFACTS_PREPARED",
+    ARTIFACTS_ATTESTED: "ARTIFACTS_ATTESTED",
+    CANDIDATE_ESCROWED: "CANDIDATE_ESCROWED",
+    NPM_PARTIAL: "NPM_PARTIAL",
+    NPM_COMPLETE: "NPM_COMPLETE",
+    RELEASE_DRAFT_COMPLETE: "RELEASE_DRAFT_COMPLETE",
+    SMOKES_COMPLETE: "SMOKES_COMPLETE",
+    RELEASE_PUBLISHED: "RELEASE_PUBLISHED",
+    AUDIT_DISPATCHED: "AUDIT_DISPATCHED",
+    AUDIT_COMPLETE: "AUDIT_COMPLETE",
+    ABANDONED_PREPUBLICATION: "ABANDONED_PREPUBLICATION",
+  })
+  assert.equal(Object.isFrozen(ReleaseState), true)
+})
+
+const stateCases = [
+  {
+    name: "no candidate",
+    candidate: null,
+    observation: baseObservation(),
+    state: "NO_CANDIDATE",
+    disposition: "noop",
+    transition: null,
+  },
+  {
+    name: "superseded candidate",
+    observation: observationFor("SUPERSEDED_NOOP"),
+    state: "SUPERSEDED_NOOP",
+    disposition: "audit-only",
+    transition: null,
+  },
+  {
+    name: "validated candidate",
+    observation: observationFor("CANDIDATE_VALIDATED"),
+    state: "CANDIDATE_VALIDATED",
+    disposition: "would-transition",
+    transition: "create-candidate-tag",
+  },
+  {
+    name: "tagged candidate",
+    observation: observationFor("CANDIDATE_TAGGED"),
+    state: "CANDIDATE_TAGGED",
+    disposition: "would-transition",
+    transition: "prepare-artifacts",
+  },
+  {
+    name: "prepared artifacts",
+    observation: observationFor("ARTIFACTS_PREPARED"),
+    state: "ARTIFACTS_PREPARED",
+    disposition: "would-transition",
+    transition: "attest-artifacts",
+  },
+  {
+    name: "attested artifacts",
+    observation: observationFor("ARTIFACTS_ATTESTED"),
+    state: "ARTIFACTS_ATTESTED",
+    disposition: "would-transition",
+    transition: "escrow-candidate",
+  },
+  {
+    name: "escrowed candidate",
+    observation: observationFor("CANDIDATE_ESCROWED"),
+    state: "CANDIDATE_ESCROWED",
+    disposition: "would-transition",
+    transition: "publish-npm-packages",
+  },
+  {
+    name: "partially published npm fixed group",
+    observation: observationFor("NPM_PARTIAL"),
+    state: "NPM_PARTIAL",
+    disposition: "would-transition",
+    transition: "resume-npm-publish",
+  },
+  {
+    name: "complete npm fixed group",
+    observation: observationFor("NPM_COMPLETE"),
+    state: "NPM_COMPLETE",
+    disposition: "would-transition",
+    transition: "create-release-draft",
+  },
+  {
+    name: "complete GitHub Release draft metadata",
+    observation: observationFor("RELEASE_DRAFT_COMPLETE"),
+    state: "RELEASE_DRAFT_COMPLETE",
+    disposition: "would-transition",
+    transition: "run-release-smokes",
+  },
+  {
+    name: "complete exact-version smokes",
+    observation: observationFor("SMOKES_COMPLETE"),
+    state: "SMOKES_COMPLETE",
+    disposition: "would-transition",
+    transition: "publish-github-release",
+  },
+  {
+    name: "published GitHub Release",
+    observation: observationFor("RELEASE_PUBLISHED"),
+    state: "RELEASE_PUBLISHED",
+    disposition: "would-transition",
+    transition: "dispatch-release-audit",
+  },
+  {
+    name: "independent audit dispatched",
+    observation: observationFor("AUDIT_DISPATCHED"),
+    state: "AUDIT_DISPATCHED",
+    disposition: "would-transition",
+    transition: "complete-release-audit",
+  },
+  {
+    name: "independent audit complete",
+    observation: observationFor("AUDIT_COMPLETE"),
+    state: "AUDIT_COMPLETE",
+    disposition: "noop",
+    transition: null,
+  },
+  {
+    name: "manually abandoned prepublication candidate",
+    observation: observationFor("ABANDONED_PREPUBLICATION"),
+    state: "ABANDONED_PREPUBLICATION",
+    disposition: "noop",
+    transition: null,
+  },
+]
+
+for (const row of stateCases) {
+  test(`plans deterministic ${row.name} state`, () => {
+    const input = deepFreeze({
+      candidate: row.candidate === undefined ? candidate() : row.candidate,
+      observation: row.observation,
+      mode: "shadow",
+    })
+    const before = JSON.stringify(input)
+
+    const first = planRelease(input)
+    const second = planRelease(input)
+
+    assert.deepEqual(first, second)
+    assert.deepEqual(JSON.parse(JSON.stringify(first)), first)
+    assert.deepEqual(Object.keys(first).sort(), OUTPUT_KEYS)
+    assert.equal(first.state, row.state)
+    assert.equal(first.disposition, row.disposition)
+    assert.equal(first.nextTransition, row.transition)
+    assert.deepEqual(first.conflicts, [])
+    assert.ok(Array.isArray(first.reasons))
+    assert.deepEqual(
+      first.proposedMutations,
+      row.transition === null
+        ? []
+        : [
+            {
+              type: row.transition,
+              version: VERSION,
+              commitSha: COMMIT_SHA,
+            },
+          ],
+    )
+    assert.equal(JSON.stringify(input), before)
+    assertRecursivelyFrozen(input)
+    assert.equal(classifyObservedRelease(input.candidate, input.observation), row.state)
+  })
+}
+
+test("controller mode describes the same transition without executing it", () => {
+  const observation = deepFreeze(observationFor("CANDIDATE_TAGGED"))
+
+  const shadow = planRelease({ candidate: candidate(), observation, mode: "shadow" })
+  const controller = planRelease({ candidate: candidate(), observation, mode: "controller" })
+
+  assert.deepEqual(controller, shadow)
+  assert.deepEqual(controller.proposedMutations, [
+    {
+      type: "prepare-artifacts",
+      version: VERSION,
+      commitSha: COMMIT_SHA,
+    },
+  ])
+})
+
+test("a skipped candidate is superseded audit-only without a mutation proposal", () => {
+  const observation = baseObservation()
+  observation.registry.latest = { status: "present", version: NEWER_VERSION }
+
+  const plan = planRelease({ candidate: candidate(), observation })
+
+  assert.equal(plan.state, "SUPERSEDED_NOOP")
+  assert.equal(plan.disposition, "audit-only")
+  assert.equal(plan.nextTransition, null)
+  assert.deepEqual(plan.proposedMutations, [])
+})
+
+test("an older tagged incomplete release blocks a newer candidate", () => {
+  const observation = baseObservation()
+  observation.otherCandidates.push({
+    version: OLDER_VERSION,
+    state: "CANDIDATE_TAGGED",
+  })
+
+  assertBlocked(observation, "older-tagged-candidate-incomplete")
+})
+
+test("older audited or abandoned releases unblock a newer candidate", () => {
+  for (const state of ["AUDIT_COMPLETE", "ABANDONED_PREPUBLICATION"]) {
+    const observation = baseObservation()
+    observation.otherCandidates.push({ version: OLDER_VERSION, state })
+
+    const plan = planRelease({ candidate: candidate(), observation })
+
+    assert.equal(plan.state, "CANDIDATE_VALIDATED")
+    assert.equal(plan.disposition, "would-transition")
+  }
+})
+
+test("a newer registry latest cannot move a completed candidate backward", () => {
+  const observation = observationFor("AUDIT_COMPLETE")
+  observation.registry.latest = { status: "present", version: NEWER_VERSION }
+
+  const plan = planRelease({ candidate: candidate(), observation })
+
+  assert.equal(plan.state, "AUDIT_COMPLETE")
+  assert.equal(plan.disposition, "noop")
+})
+
+test("a newer registry latest conflicts with partial candidate progress", () => {
+  const observation = observationFor("NPM_PARTIAL")
+  observation.registry.latest = { status: "present", version: NEWER_VERSION }
+
+  assertBlocked(observation, "newer-registry-version-interleaved")
+})
+
+test("registry bytes must exactly match the prepared package", () => {
+  const observation = observationFor("NPM_PARTIAL")
+  observation.registry.packages[0].integrity = "sha512-other-bytes"
+
+  assertBlocked(observation, "npm-bytes-mismatch")
+})
+
+for (const field of ["workflow", "commitSha"]) {
+  test(`registry provenance ${field} must match the candidate`, () => {
+    const observation = observationFor("NPM_PARTIAL")
+    observation.registry.packages[0].provenance[field] =
+      field === "workflow" ? "other-workflow" : OTHER_SHA
+
+    assertBlocked(observation, `npm-provenance-${field}-mismatch`)
+  })
+}
+
+test("the candidate tag cannot resolve to another commit", () => {
+  const observation = observationFor("CANDIDATE_TAGGED")
+  observation.tag.commitSha = OTHER_SHA
+
+  assertBlocked(observation, "candidate-tag-commit-mismatch")
+})
+
+test("a same-name GitHub asset with different bytes is a conflict", () => {
+  const observation = observationFor("RELEASE_DRAFT_COMPLETE")
+  observation.release.assets[0].status = "different"
+
+  assertBlocked(observation, "github-asset-bytes-mismatch")
+})
+
+test("every fixed-group package must use the exact candidate version", () => {
+  const observation = baseObservation()
+  observation.inventory.packages[1].version = OLDER_VERSION
+
+  assertBlocked(observation, "fixed-group-version-mismatch")
+})
+
+const invalidCiCases = [
+  ["missing", {}, "candidate-ci-missing"],
+  ["failed", {}, "candidate-ci-failed"],
+  ["success", { commitSha: OTHER_SHA }, "candidate-ci-commit-mismatch"],
+]
+
+for (const [status, overrides, conflict] of invalidCiCases) {
+  test(`${status} exact-SHA candidate CI blocks release work`, () => {
+    const observation = baseObservation()
+    observation.ci = {
+      status,
+      workflow: WORKFLOW,
+      commitSha: COMMIT_SHA,
+      ...overrides,
+    }
+
+    assertBlocked(observation, conflict)
+  })
+}
+
+for (const status of ["missing", "corrupt", "unmanifested"]) {
+  test(`${status} prepared artifact blocks release work`, () => {
+    const observation = observationFor("ARTIFACTS_PREPARED")
+    observation.artifacts.files[0].status = status
+
+    assertBlocked(observation, `artifact-${status}`)
+  })
+}
+
+for (const status of ["missing", "failed"]) {
+  test(`${status} required smoke blocks release work`, () => {
+    const observation = observationFor("RELEASE_DRAFT_COMPLETE")
+    observation.smokes[0].status = status
+
+    assertBlocked(observation, `required-smoke-${status}`)
+  })
+}
+
+const ambiguityCases = [
+  {
+    name: "registry latest",
+    mutate(observation) {
+      observation.registry.latest = { status: "ambiguous", version: null }
+    },
+    conflict: "registry-latest-ambiguous",
+  },
+  {
+    name: "registry package",
+    mutate(observation) {
+      observation.registry.packages[0] = ambiguousRegistryPackage(
+        observation.registry.packages[0].name,
+      )
+    },
+    conflict: "registry-package-ambiguous",
+  },
+  {
+    name: "GitHub tag",
+    mutate(observation) {
+      observation.tag = { status: "ambiguous", commitSha: null }
+    },
+    conflict: "candidate-tag-ambiguous",
+  },
+  {
+    name: "GitHub Release",
+    mutate(observation) {
+      observation.release.status = "ambiguous"
+    },
+    conflict: "github-release-ambiguous",
+  },
+  {
+    name: "GitHub asset",
+    mutate(observation) {
+      observation.release = releaseRecord("draft")
+      observation.release.assets[0].status = "ambiguous"
+    },
+    conflict: "github-asset-ambiguous",
+  },
+]
+
+for (const { name, mutate, conflict } of ambiguityCases) {
+  test(`an ambiguous ${name} response blocks and is never absence`, () => {
+    const observation = baseObservation()
+    mutate(observation)
+
+    assertBlocked(observation, conflict)
+  })
+}
+
+const invalidAbandonmentCases = [
+  {
+    name: "publish job starts",
+    mutate(observation) {
+      observation.registry.publishJobStarted = true
+    },
+    conflict: "abandonment-after-publish-started",
+  },
+  {
+    name: "first registry mutation starts",
+    mutate(observation) {
+      observation.registry.mutationStarted = true
+    },
+    conflict: "abandonment-after-publish-started",
+  },
+  {
+    name: "any package is visible",
+    mutate(observation) {
+      observation.registry.packages[0] = presentRegistryPackage(PACKAGE_IDENTITIES[0])
+    },
+    conflict: "abandonment-after-package-visible",
+  },
+  {
+    name: "registry response is ambiguous",
+    mutate(observation) {
+      observation.registry.packages[0] = ambiguousRegistryPackage(
+        observation.registry.packages[0].name,
+      )
+    },
+    conflict: "abandonment-with-ambiguity",
+  },
+  {
+    name: "candidate tag mismatches",
+    mutate(observation) {
+      observation.tag.commitSha = OTHER_SHA
+    },
+    conflict: "candidate-tag-commit-mismatch",
+  },
+  {
+    name: "newer public state interleaves",
+    mutate(observation) {
+      observation.otherCandidates.push({
+        version: NEWER_VERSION,
+        state: "NPM_COMPLETE",
+      })
+    },
+    conflict: "abandonment-newer-public-state",
+  },
+]
+
+for (const { name, mutate, conflict } of invalidAbandonmentCases) {
+  test(`abandonment is rejected when ${name}`, () => {
+    const observation = observationFor("CANDIDATE_TAGGED")
+    observation.abandonment.requested = true
+    mutate(observation)
+
+    assertBlocked(observation, conflict)
+  })
+}
+
+test("abandonment is manual and permitted only from tagged through escrowed", () => {
+  const permitted = [
+    "CANDIDATE_TAGGED",
+    "ARTIFACTS_PREPARED",
+    "ARTIFACTS_ATTESTED",
+    "CANDIDATE_ESCROWED",
+  ]
+  for (const state of permitted) {
+    const observation = observationFor(state)
+    observation.abandonment.requested = true
+
+    const plan = planRelease({ candidate: candidate(), observation })
+
+    assert.equal(plan.state, state)
+    assert.equal(plan.nextTransition, "record-prepublication-abandonment")
+  }
+
+  const untagged = baseObservation()
+  untagged.abandonment.requested = true
+  assertBlocked(untagged, "abandonment-not-permitted-from-state")
+})
+
+test("an abandoned candidate later visible on npm is a hard conflict", () => {
+  const observation = observationFor("ABANDONED_PREPUBLICATION")
+  observation.registry.packages[0] = presentRegistryPackage(PACKAGE_IDENTITIES[0])
+
+  assertBlocked(observation, "abandoned-candidate-visible-on-npm")
+})
+
+test("malformed candidate identity and mode are rejected", () => {
+  const observation = baseObservation()
+
+  assert.throws(
+    () => planRelease({ candidate: candidate({ version: "v0.8.20" }), observation }),
+    /candidate\.version must be an exact SemVer/u,
+  )
+  assert.throws(
+    () => planRelease({ candidate: candidate({ commitSha: "main" }), observation }),
+    /candidate\.commitSha must be a 40-character lowercase hexadecimal SHA/u,
+  )
+  assert.throws(
+    () => planRelease({ candidate: candidate(), observation, mode: "write" }),
+    /mode must be shadow or controller/u,
+  )
+  assert.throws(
+    () => planRelease({ candidate: candidate(), observation, mode: null }),
+    /mode must be shadow or controller/u,
+  )
+})
+
+test("contradictory progress observations fail closed", () => {
+  const observation = observationFor("NPM_COMPLETE")
+  observation.escrow.status = "absent"
+
+  assertBlocked(observation, "npm-before-escrow")
+  assert.ok(findReleaseConflicts(candidate(), observation).includes("npm-before-escrow"))
+})
+
+function assertBlocked(observation, expectedConflict) {
+  const frozen = deepFreeze(observation)
+  const before = JSON.stringify(frozen)
+  const plan = planRelease({ candidate: candidate(), observation: frozen })
+
+  assert.equal(plan.disposition, "blocked")
+  assert.equal(plan.nextTransition, null)
+  assert.deepEqual(plan.proposedMutations, [])
+  assert.ok(plan.conflicts.includes(expectedConflict), JSON.stringify(plan.conflicts))
+  assert.equal(JSON.stringify(frozen), before)
+}
+
+function candidate(overrides = {}) {
+  return {
+    version: VERSION,
+    commitSha: COMMIT_SHA,
+    ...overrides,
+  }
+}
+
+function baseObservation() {
+  return {
+    inventory: {
+      status: "valid",
+      packages: structuredClone(PACKAGE_IDENTITIES),
+    },
+    ci: {
+      status: "success",
+      workflow: WORKFLOW,
+      commitSha: COMMIT_SHA,
+    },
+    otherCandidates: [],
+    tag: {
+      status: "absent",
+      commitSha: null,
+    },
+    artifacts: {
+      status: "absent",
+      manifestVersion: null,
+      manifestCommitSha: null,
+      files: PACKAGE_IDENTITIES.map(({ name }) => ({ name, status: "pending" })),
+    },
+    escrow: {
+      status: "absent",
+    },
+    registry: {
+      latest: {
+        status: "e404",
+        version: null,
+      },
+      publishJobStarted: false,
+      mutationStarted: false,
+      packages: PACKAGE_IDENTITIES.map(({ name }) => absentRegistryPackage(name)),
+    },
+    release: releaseRecord("absent"),
+    smokes: [
+      { name: "install", required: true, status: "pending", version: VERSION },
+      { name: "runtime", required: true, status: "pending", version: VERSION },
+    ],
+    audit: {
+      status: "none",
+    },
+    abandonment: {
+      requested: false,
+      recorded: false,
+    },
+  }
+}
+
+function observationFor(state) {
+  const observation = baseObservation()
+  if (state === "SUPERSEDED_NOOP") {
+    observation.registry.latest = { status: "present", version: NEWER_VERSION }
+    return observation
+  }
+  if (state === "CANDIDATE_VALIDATED") {
+    return observation
+  }
+
+  observation.tag = { status: "present", commitSha: COMMIT_SHA }
+  if (state === "CANDIDATE_TAGGED") {
+    return observation
+  }
+
+  observation.artifacts = {
+    status: state === "ARTIFACTS_PREPARED" ? "prepared" : "attested",
+    manifestVersion: VERSION,
+    manifestCommitSha: COMMIT_SHA,
+    files: PACKAGE_IDENTITIES.map(({ name }) => ({ name, status: "valid" })),
+  }
+  if (state === "ARTIFACTS_PREPARED" || state === "ARTIFACTS_ATTESTED") {
+    return observation
+  }
+
+  observation.escrow.status = "present"
+  if (state === "CANDIDATE_ESCROWED") {
+    return observation
+  }
+
+  observation.registry.publishJobStarted = true
+  observation.registry.mutationStarted = true
+  observation.registry.packages[0] = presentRegistryPackage(PACKAGE_IDENTITIES[0])
+  if (state === "NPM_PARTIAL") {
+    return observation
+  }
+
+  observation.registry.packages[1] = presentRegistryPackage(PACKAGE_IDENTITIES[1])
+  observation.registry.latest = { status: "present", version: VERSION }
+  if (state === "NPM_COMPLETE") {
+    return observation
+  }
+
+  observation.release = releaseRecord(
+    ["RELEASE_PUBLISHED", "AUDIT_DISPATCHED", "AUDIT_COMPLETE"].includes(state)
+      ? "published"
+      : "draft",
+  )
+  if (state === "RELEASE_DRAFT_COMPLETE") {
+    return observation
+  }
+
+  for (const smoke of observation.smokes) {
+    smoke.status = "passed"
+  }
+  if (state === "SMOKES_COMPLETE") {
+    return observation
+  }
+  if (state === "RELEASE_PUBLISHED") {
+    return observation
+  }
+
+  observation.audit.status = state === "AUDIT_DISPATCHED" ? "dispatched" : "complete"
+  if (state === "AUDIT_DISPATCHED" || state === "AUDIT_COMPLETE") {
+    return observation
+  }
+
+  if (state === "ABANDONED_PREPUBLICATION") {
+    const abandoned = observationFor("CANDIDATE_TAGGED")
+    abandoned.abandonment = { requested: true, recorded: true }
+    return abandoned
+  }
+  throw new Error(`Unknown test state ${state}`)
+}
+
+function absentRegistryPackage(name) {
+  return {
+    name,
+    status: "e404",
+    version: null,
+    integrity: null,
+    provenance: null,
+  }
+}
+
+function ambiguousRegistryPackage(name) {
+  return {
+    name,
+    status: "ambiguous",
+    version: null,
+    integrity: null,
+    provenance: null,
+  }
+}
+
+function presentRegistryPackage(pkg) {
+  return {
+    name: pkg.name,
+    status: "present",
+    version: pkg.version,
+    integrity: pkg.integrity,
+    provenance: {
+      workflow: WORKFLOW,
+      commitSha: COMMIT_SHA,
+    },
+  }
+}
+
+function releaseRecord(status) {
+  return {
+    status,
+    tag: status === "absent" ? null : `v${VERSION}`,
+    commitSha: status === "absent" ? null : COMMIT_SHA,
+    assets: PACKAGE_IDENTITIES.map(({ name, integrity }) => ({
+      name: `${name.replace("@dawn-ai/", "")}-${VERSION}.tgz`,
+      status: status === "absent" ? "absent" : "matching",
+      integrity,
+    })),
+  }
+}
+
+function deepFreeze(value) {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) {
+      deepFreeze(child)
+    }
+    Object.freeze(value)
+  }
+  return value
+}
+
+function assertRecursivelyFrozen(value) {
+  if (value === null || typeof value !== "object") {
+    return
+  }
+  assert.equal(Object.isFrozen(value), true)
+  for (const child of Object.values(value)) {
+    assertRecursivelyFrozen(child)
+  }
+}
