@@ -8,7 +8,7 @@ Replace the plain-array `run.test.ts` authoring format with a route-scoped,
 fluent scenario builder and add typed, invocation-local tool mocks for
 in-process scenarios. The builder makes the scenario surface discoverable
 through IntelliSense, while generated route metadata narrows tool names, mock
-inputs and outputs, and call expectations.
+inputs and returns, and call expectations.
 
 Tool mocks replace only explicitly named application tools. Unlisted tools run
 their real implementations. The mocks do not apply to built-in capability
@@ -38,6 +38,7 @@ There is no backwards-compatibility path for default-exported scenario arrays.
 - Replacing every route tool when any mock is present.
 - Tool-call ordering or mock return-value assertions in v1.
 - A scripted `mockTool().when().returns()` response language.
+- Inferring scenario input or route output types from `state.ts`.
 - Preserving the plain default-exported array format.
 
 ## Authoring API
@@ -114,8 +115,6 @@ with every discovered route. A generated entry has this conceptual shape:
 declare module "@dawn-ai/sdk" {
   interface RouteScenarioMap {
     "/research": {
-      readonly input: ResearchState
-      readonly output: ResearchState
       readonly tools: {
         readonly searchWeb: (
           input: { readonly query: string },
@@ -131,14 +130,21 @@ The route argument to `scenarios("/research")` indexes this map. It provides:
 - the valid route-path union;
 - application tool names after shared and route-local precedence is resolved;
 - each mock's parameter tuple and awaited return type;
-- each call expectation's argument type; and
-- route input and output types when typegen has state information.
+- each call expectation's argument type.
 
-For routes without generated state information, `.input()` and
-`.expectOutput()` accept `unknown`. Tool mocks remain narrow and fully typed.
-The generated map must contain every route, including routes with no state or
-application tools, so route-path completion never depends on those optional
-features.
+`.input()` and `.expectOutput()` accept `unknown` for every route in v1. Dawn's
+current state typegen emits one approximate state shape from parsed defaults;
+it does not distinguish schema input from output, add the agent message state,
+or compose dynamic route parameters. Treating that shape as the scenario input
+or output would reject valid scenarios and incorrectly require some defaulted
+fields. State-aware scenario typing therefore requires a separate design.
+
+Tool mocks remain narrow and fully typed because current tool typegen already
+extracts each discovered tool's parameter tuple and return type. The generated
+scenario map must contain every route, including routes with no application
+tools, so route-path completion never depends on optional route features. A
+route with no application tools has a tool map whose key type is `never`, which
+makes `.mockTool()` unusable for that route at compile time.
 
 ## Builder Type States
 
@@ -318,8 +324,10 @@ and README snippets that currently default-export arrays.
 
 Implementation follows TDD and covers:
 
-1. SDK contract tests for route paths, tool names, mock parameters, awaited
-   returns, call arguments, builder completion, and invalid server/mock states.
+1. SDK contract tests for route paths, tool names, zero-argument and typed-input
+   mock parameters, awaited returns, call arguments, builder completion, and
+   invalid server/mock states. The contracts also prove scenario input and
+   output remain `unknown` rather than reusing generated state defaults.
 2. SDK unit tests for builder normalization, branding, duplicate detection,
    and malformed callback results.
 3. Core typegen snapshots for the complete `RouteScenarioMap` augmentation.
