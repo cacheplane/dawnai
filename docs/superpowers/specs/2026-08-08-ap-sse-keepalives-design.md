@@ -47,7 +47,7 @@ connection as idle.
 The interval begins when the response stream starts. It is independent of
 application events: regular output does not reset the interval. This keeps the
 implementation deterministic and avoids coupling heartbeat lifecycle to route
-chunk timing. At one seven-byte frame every 15 seconds, the extra traffic is
+chunk timing. At one eight-byte frame every 15 seconds, the extra traffic is
 negligible.
 
 ### Shared lifecycle helper
@@ -130,8 +130,10 @@ not wait 15 seconds.
 2. `/resume`: hold a resumed route and assert the same idle heartbeat.
 3. Both endpoints: assert `cache-control` is exactly
    `no-cache, no-transform` and existing SSE event frames remain parseable.
-4. Lifecycle: complete or cancel a controlled stream and prove no heartbeat
-   interval survives stream teardown.
+4. Lifecycle: complete or explicitly cancel a controlled run and prove no
+   heartbeat interval survives route teardown. Consumer-side stream
+   cancellation remains a disconnect and must not stop the durable run or its
+   heartbeat lifecycle prematurely.
 5. Run the focused CLI tests, package lint/typecheck/build as appropriate, and
    the repository's broader validation lane if time and local prerequisites
    permit.
