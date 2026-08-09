@@ -55,6 +55,9 @@ export function analyzeReleaseSnapshot(candidate, observation) {
     return Object.freeze({ state: ReleaseState.NO_CANDIDATE, conflicts: Object.freeze([]) })
   }
   const evidence = correlateReleaseEvidence(candidate, observation)
+  if (!evidence.structureValid) {
+    return Object.freeze({ state: ReleaseState.CANDIDATE_VALIDATED, conflicts: evidence.conflicts })
+  }
   const state = classifySnapshot(observation, evidence)
   const conflicts = findPolicyConflicts(
     candidate,
@@ -75,6 +78,7 @@ export function findReleaseConflicts(candidate, observation) {
 }
 
 function classifySnapshot(observation, evidence) {
+  if (!evidence.schemaValid) return ReleaseState.CANDIDATE_VALIDATED
   if (observation.abandonment?.recorded) return ReleaseState.ABANDONED_PREPUBLICATION
   if (evidence.audit.complete) return ReleaseState.AUDIT_COMPLETE
   if (evidence.audit.dispatched) return ReleaseState.AUDIT_DISPATCHED

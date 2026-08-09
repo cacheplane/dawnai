@@ -11,7 +11,9 @@ const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
 const OTHER_SHA = "abcdef0123456789abcdef0123456789abcdef01"
 const MANIFEST_SHA256 = "a".repeat(64)
 const OTHER_MANIFEST_SHA256 = "b".repeat(64)
+const RELEASE_RECORD_SHA256 = "c".repeat(64)
 const CI_WORKFLOW = "CI"
+const CI_CHECK = "validate"
 const PUBLISHER_WORKFLOW = ".github/workflows/release.yml"
 const OUTPUT_KEYS = [
   "conflicts",
@@ -27,6 +29,8 @@ const PACKAGE_IDENTITIES = [
     version: VERSION,
     filename: `dawn-ai-core-${VERSION}.tgz`,
     tarballSha256: "1".repeat(64),
+    attestationFilename: `dawn-ai-core-${VERSION}.tgz.intoto.jsonl`,
+    attestationSha256: "d".repeat(64),
     integrity: "sha512-core",
   },
   {
@@ -34,6 +38,8 @@ const PACKAGE_IDENTITIES = [
     version: VERSION,
     filename: `dawn-ai-sdk-${VERSION}.tgz`,
     tarballSha256: "2".repeat(64),
+    attestationFilename: `dawn-ai-sdk-${VERSION}.tgz.intoto.jsonl`,
+    attestationSha256: "e".repeat(64),
     integrity: "sha512-sdk",
   },
 ]
@@ -197,6 +203,7 @@ for (const row of stateCases) {
               type: row.transition,
               version: VERSION,
               commitSha: COMMIT_SHA,
+              ...(row.transition === "dispatch-release-audit" ? { tag: `v${VERSION}` } : {}),
             },
           ],
     )
@@ -324,6 +331,7 @@ for (const [status, overrides, conflict] of invalidCiCases) {
     observation.ci = {
       status,
       workflow: CI_WORKFLOW,
+      check: CI_CHECK,
       commitSha: COMMIT_SHA,
       ...overrides,
     }
@@ -720,6 +728,121 @@ test("malformed candidate identity and mode are rejected", () => {
   )
 })
 
+const semanticSchemaCases = [
+  ["inventory status enum", (o) => (o.inventory.status = "unknown")],
+  ["CI status enum", (o) => (o.ci.status = "unknown")],
+  ["tag status enum", (o) => (o.tag.status = "unknown")],
+  ["artifact status enum", (o) => (o.artifacts.status = "unknown")],
+  ["artifact file status enum", (o) => (o.artifacts.files[0].status = "unknown")],
+  [
+    "attestation status enum",
+    (o) => (o.artifacts.attestations[0].status = "unknown"),
+    "ARTIFACTS_ATTESTED",
+  ],
+  ["escrow status enum", (o) => (o.escrow.status = "unknown")],
+  ["registry package status enum", (o) => (o.registry.packages[0].status = "unknown")],
+  ["registry latest status enum", (o) => (o.registry.packages[0].latest.status = "unknown")],
+  ["registry signature status enum", (o) => (o.registry.packages[0].signature.status = "unknown")],
+  ["Release status enum", (o) => (o.release.status = "unknown")],
+  ["smoke status enum", (o) => (o.smokes[0].status = "unknown")],
+  ["audit status enum", (o) => (o.audit.status = "unknown")],
+  ["strict registry booleans", (o) => (o.registry.publishJobStarted = "false")],
+  ["strict abandonment booleans", (o) => (o.abandonment.requested = 1)],
+  ["safe package name", (o) => (o.inventory.packages[0].name = "../core")],
+  ["exact package SemVer", (o) => (o.inventory.packages[0].version = `${VERSION}+build`)],
+  ["safe tarball asset name", (o) => (o.inventory.packages[0].filename = "../core.tgz")],
+  ["lowercase tarball SHA-256", (o) => (o.inventory.packages[0].tarballSha256 = "A".repeat(64))],
+  ["valid package integrity", (o) => (o.inventory.packages[0].integrity = "")],
+  ["full lowercase CI SHA", (o) => (o.ci.commitSha = "A".repeat(40))],
+  ["tag identity presence", (o) => (o.tag = { status: "present", commitSha: null })],
+  ["absent artifact null digest", (o) => (o.artifacts.manifestSha256 = MANIFEST_SHA256)],
+  ["absent escrow has no assets", (o) => o.escrow.assets.push(releaseAsset(PACKAGE_IDENTITIES[0]))],
+  ["exact e404 package absence", (o) => (o.registry.packages[0].version = VERSION)],
+  ["absent Release has no metadata", (o) => (o.release.metadataReconciled = true)],
+  ["required smoke lane type", (o) => (o.requiredSmokeLanes[0] = 1)],
+  ["audit none null identity", (o) => (o.audit.workflowRunId = 300)],
+  ["audit conclusion correlation", (o) => (o.audit.conclusion = "failure"), "AUDIT_COMPLETE"],
+]
+
+for (const [name, mutate, state = "CANDIDATE_VALIDATED"] of semanticSchemaCases) {
+  test(`semantic observation schema rejects invalid ${name}`, () => {
+    const observation = observationFor(state)
+    mutate(observation)
+
+    assertDesiredSchemaBlocked(observation, "observation-schema-invalid")
+  })
+}
+
+for (const [field, value] of [
+  ["version", VERSION],
+  ["commitSha", COMMIT_SHA],
+  ["manifestSha256", MANIFEST_SHA256],
+  ["workflowRunId", 300],
+  ["runAttempt", 1],
+  ["conclusion", "success"],
+]) {
+  test(`audit status none requires null ${field}`, () => {
+    const observation = baseObservation()
+    observation.audit[field] = value
+
+    assertDesiredSchemaBlocked(observation, "observation-schema-invalid")
+  })
+}
+
+for (const [name, mutate] of [
+  ["pending artifact file digest", (o) => (o.artifacts.files[0].sha256 = "1".repeat(64))],
+  ["pending artifact file integrity", (o) => (o.artifacts.files[0].integrity = "sha512-core")],
+  ["pending attestation digest", (o) => (o.artifacts.attestations[0].sha256 = "d".repeat(64))],
+]) {
+  test(`absent artifacts reject a ${name}`, () => {
+    const observation = baseObservation()
+    mutate(observation)
+
+    assertDesiredSchemaBlocked(observation, "observation-schema-invalid")
+  })
+}
+
+test("prepared artifacts reject already-valid attestation evidence", () => {
+  const observation = observationFor("ARTIFACTS_PREPARED")
+  observation.artifacts.attestations[0] = attestationRecord(PACKAGE_IDENTITIES[0], "valid")
+
+  assertDesiredSchemaBlocked(observation, "observation-schema-invalid")
+})
+
+test("attested artifacts reject pending attestation evidence", () => {
+  const observation = observationFor("ARTIFACTS_ATTESTED")
+  observation.artifacts.attestations[0] = attestationRecord(PACKAGE_IDENTITIES[0], "pending")
+
+  assertDesiredSchemaBlocked(observation, "observation-schema-invalid")
+})
+
+for (const [name, mutate] of [
+  ["missing artifact identity record", (o) => delete o.artifacts.manifestAsset],
+  ["non-array inventory packages", (o) => (o.inventory.packages = {})],
+  ["non-array registry packages", (o) => (o.registry.packages = {})],
+  ["non-array Release assets", (o) => (o.release.assets = {})],
+]) {
+  test(`malformed nested observation blocks without throwing: ${name}`, () => {
+    const observation = baseObservation()
+    mutate(observation)
+
+    assertDesiredSchemaBlocked(observation, "observation-schema-invalid")
+  })
+}
+
+for (const [field, value, conflict] of [
+  ["workflow", "Build", "candidate-ci-workflow-mismatch"],
+  ["check", "unit", "candidate-ci-check-mismatch"],
+  ["commitSha", OTHER_SHA, "candidate-ci-commit-mismatch"],
+]) {
+  test(`successful CI with the wrong ${field} cannot validate the candidate`, () => {
+    const observation = baseObservation()
+    observation.ci[field] = value
+
+    assertDesiredSchemaBlocked(observation, conflict)
+  })
+}
+
 test("contradictory progress observations fail closed", () => {
   const observation = observationFor("NPM_COMPLETE")
   observation.escrow.status = "absent"
@@ -934,6 +1057,107 @@ test("immutable escrow and Release assets must be a non-empty exact set", () => 
   assertDesiredSchemaBlocked(extra, "github-managed-asset-unexpected")
 })
 
+for (const { name, conflict } of [
+  { name: "manifest.json", conflict: "escrow-manifest-asset-missing" },
+  { name: "release-record.json", conflict: "escrow-release-record-asset-missing" },
+  {
+    name: PACKAGE_IDENTITIES[0].attestationFilename,
+    conflict: "escrow-attestation-asset-missing",
+  },
+  {
+    name: PACKAGE_IDENTITIES[1].attestationFilename,
+    conflict: "escrow-attestation-asset-missing",
+  },
+]) {
+  test(`immutable escrow rejects a missing ${name}`, () => {
+    const observation = observationFor("CANDIDATE_ESCROWED")
+    observation.escrow.assets = observation.escrow.assets.filter((asset) => asset.name !== name)
+
+    assertDesiredSchemaBlocked(observation, conflict)
+  })
+}
+
+for (const { name, conflict } of [
+  { name: "manifest.json", conflict: "github-manifest-asset-missing" },
+  { name: "release-record.json", conflict: "github-release-record-asset-missing" },
+  {
+    name: PACKAGE_IDENTITIES[0].attestationFilename,
+    conflict: "github-attestation-asset-missing",
+  },
+  {
+    name: PACKAGE_IDENTITIES[1].attestationFilename,
+    conflict: "github-attestation-asset-missing",
+  },
+]) {
+  test(`immutable draft Release rejects a missing ${name}`, () => {
+    const observation = observationFor("CANDIDATE_ESCROWED")
+    observation.release.assets = observation.release.assets.filter((asset) => asset.name !== name)
+
+    assertDesiredSchemaBlocked(observation, conflict)
+  })
+}
+
+test("tarball-only escrow cannot reach CANDIDATE_ESCROWED", () => {
+  const observation = observationFor("CANDIDATE_ESCROWED")
+  const tarballNames = new Set(PACKAGE_IDENTITIES.map((pkg) => pkg.filename))
+  observation.escrow.assets = observation.escrow.assets.filter((asset) =>
+    tarballNames.has(asset.name),
+  )
+  observation.release.assets = observation.release.assets.filter((asset) =>
+    tarballNames.has(asset.name),
+  )
+
+  const plan = planRelease({ candidate: candidate(), observation })
+
+  assert.notEqual(plan.state, "CANDIDATE_ESCROWED")
+  assert.equal(plan.disposition, "blocked")
+})
+
+test("immutable escrow rejects an exact-name digest mismatch", () => {
+  const observation = observationFor("CANDIDATE_ESCROWED")
+  observation.escrow.assets.find((asset) => asset.name === "manifest.json").sha256 =
+    OTHER_MANIFEST_SHA256
+
+  assertDesiredSchemaBlocked(observation, "escrow-asset-bytes-mismatch")
+})
+
+for (const status of ["failed", "expired"]) {
+  test(`a correlated ${status} audit attempt is retryable from the published Release`, () => {
+    const observation = observationFor("RELEASE_PUBLISHED")
+    observation.audit = auditRecord(status)
+
+    const plan = planRelease({ candidate: candidate(), observation })
+
+    assert.equal(plan.state, "RELEASE_PUBLISHED")
+    assert.equal(plan.disposition, "would-transition")
+    assert.equal(plan.nextTransition, "dispatch-release-audit")
+    assert.deepEqual(plan.conflicts, [])
+    assert.deepEqual(plan.proposedMutations, [
+      {
+        type: "dispatch-release-audit",
+        version: VERSION,
+        commitSha: COMMIT_SHA,
+        tag: `v${VERSION}`,
+      },
+    ])
+  })
+}
+
+test("a failed audit attempt with mismatched identity remains blocked", () => {
+  const observation = observationFor("RELEASE_PUBLISHED")
+  observation.audit = auditRecord("failed")
+  observation.audit.commitSha = OTHER_SHA
+
+  assertDesiredSchemaBlocked(observation, "release-audit-commit-mismatch")
+})
+
+test("an exactly identified ambiguous audit attempt blocks instead of becoming absence", () => {
+  const observation = observationFor("RELEASE_PUBLISHED")
+  observation.audit = auditRecord("ambiguous")
+
+  assertDesiredSchemaBlocked(observation, "release-audit-ambiguous")
+})
+
 test("assets attached while a Release is absent are contradictory", () => {
   const observation = baseObservation()
   observation.release.assets = [releaseAsset(PACKAGE_IDENTITIES[0], "matching")]
@@ -1097,6 +1321,14 @@ function auditRecord(status) {
     manifestSha256: MANIFEST_SHA256,
     workflowRunId: 300,
     runAttempt: 1,
+    conclusion:
+      status === "success"
+        ? "success"
+        : status === "failed"
+          ? "failure"
+          : status === "expired"
+            ? "expired"
+            : null,
   }
 }
 
@@ -1123,6 +1355,8 @@ function candidate(overrides = {}) {
   return {
     version: VERSION,
     commitSha: COMMIT_SHA,
+    ciWorkflow: CI_WORKFLOW,
+    ciCheck: CI_CHECK,
     publisherWorkflow: PUBLISHER_WORKFLOW,
     ...overrides,
   }
@@ -1137,6 +1371,7 @@ function baseObservation() {
     ci: {
       status: "success",
       workflow: CI_WORKFLOW,
+      check: CI_CHECK,
       commitSha: COMMIT_SHA,
     },
     otherCandidates: [],
@@ -1150,6 +1385,9 @@ function baseObservation() {
       manifestCommitSha: null,
       manifestSha256: null,
       files: PACKAGE_IDENTITIES.map((pkg) => artifactFile(pkg, "pending")),
+      manifestAsset: { name: "manifest.json", sha256: null },
+      releaseRecordAsset: { name: "release-record.json", sha256: null },
+      attestations: PACKAGE_IDENTITIES.map((pkg) => attestationRecord(pkg, "pending")),
     },
     escrow: {
       status: "absent",
@@ -1185,11 +1423,12 @@ function baseObservation() {
     ],
     audit: {
       status: "none",
-      version: VERSION,
-      commitSha: COMMIT_SHA,
+      version: null,
+      commitSha: null,
       manifestSha256: null,
-      workflowRunId: 300,
-      runAttempt: 1,
+      workflowRunId: null,
+      runAttempt: null,
+      conclusion: null,
     },
     abandonment: {
       requested: false,
@@ -1219,6 +1458,11 @@ function observationFor(state) {
     manifestCommitSha: COMMIT_SHA,
     manifestSha256: MANIFEST_SHA256,
     files: PACKAGE_IDENTITIES.map((pkg) => artifactFile(pkg, "valid")),
+    manifestAsset: { name: "manifest.json", sha256: MANIFEST_SHA256 },
+    releaseRecordAsset: { name: "release-record.json", sha256: RELEASE_RECORD_SHA256 },
+    attestations: PACKAGE_IDENTITIES.map((pkg) =>
+      attestationRecord(pkg, state === "ARTIFACTS_PREPARED" ? "pending" : "valid"),
+    ),
   }
   for (const smoke of observation.smokes) {
     smoke.manifestSha256 = MANIFEST_SHA256
@@ -1229,7 +1473,7 @@ function observationFor(state) {
 
   observation.escrow.status = "present"
   observation.escrow.manifestSha256 = MANIFEST_SHA256
-  observation.escrow.assets = PACKAGE_IDENTITIES.map((pkg) => releaseAsset(pkg, "matching"))
+  observation.escrow.assets = immutableAssets().map((asset) => ({ ...asset, status: "matching" }))
   observation.release = releaseRecord("draft")
   if (state === "CANDIDATE_ESCROWED") {
     return observation
@@ -1330,7 +1574,10 @@ function releaseRecord(status, { metadataReconciled = false } = {}) {
     tag: status === "absent" ? null : `v${VERSION}`,
     commitSha: status === "absent" ? null : COMMIT_SHA,
     metadataReconciled: status === "absent" ? false : metadataReconciled,
-    assets: status === "absent" ? [] : PACKAGE_IDENTITIES.map((pkg) => releaseAsset(pkg)),
+    assets:
+      status === "absent"
+        ? []
+        : immutableAssets().map((asset) => ({ ...asset, status: "matching" })),
   }
 }
 
@@ -1342,6 +1589,28 @@ function artifactFile(pkg, status) {
     sha256: status === "pending" ? null : pkg.tarballSha256,
     integrity: status === "pending" ? null : pkg.integrity,
   }
+}
+
+function attestationRecord(pkg, status) {
+  return {
+    name: pkg.attestationFilename,
+    status,
+    sha256: status === "valid" ? pkg.attestationSha256 : null,
+    subjectName: pkg.filename,
+    subjectSha256: pkg.tarballSha256,
+  }
+}
+
+function immutableAssets() {
+  return [
+    { name: "release-record.json", sha256: RELEASE_RECORD_SHA256 },
+    { name: "manifest.json", sha256: MANIFEST_SHA256 },
+    ...PACKAGE_IDENTITIES.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
+    ...PACKAGE_IDENTITIES.map((pkg) => ({
+      name: pkg.attestationFilename,
+      sha256: pkg.attestationSha256,
+    })),
+  ]
 }
 
 function releaseAsset(pkg, status = "matching") {

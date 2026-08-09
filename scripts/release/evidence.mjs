@@ -1,22 +1,28 @@
-import { findObservationSchemaConflicts } from "./observation-schema.mjs"
+import {
+  findObservationSchemaConflicts,
+  observationStructureIsValid,
+} from "./observation-schema.mjs"
 import { compareSemver, isExactSemver } from "./semver.mjs"
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 
 export function correlateReleaseEvidence(candidate, observation) {
   const conflicts = new Set(findObservationSchemaConflicts(observation))
+  if (!observationStructureIsValid(observation)) return invalidEvidence(conflicts)
   const inventoryPackages = Array.isArray(observation.inventory?.packages)
     ? observation.inventory.packages
     : []
   const packageByName = new Map(inventoryPackages.map((pkg) => [pkg.name, pkg]))
   const artifact = analyzeArtifacts(candidate, observation, inventoryPackages, conflicts)
-  const assets = analyzeAssets(candidate, observation, inventoryPackages, artifact, conflicts)
+  const assets = analyzeAssets(candidate, observation, artifact, conflicts)
   const npm = analyzeNpm(candidate, observation, packageByName, conflicts)
   const smokes = analyzeSmokes(candidate, observation, artifact.manifestSha256, conflicts)
   const audit = analyzeAudit(candidate, observation, artifact.manifestSha256, conflicts)
 
   return Object.freeze({
     conflicts: Object.freeze([...conflicts].sort()),
+    schemaValid: !conflicts.has("observation-schema-invalid"),
+    structureValid: true,
     artifact,
     assets,
     npm,
@@ -25,9 +31,46 @@ export function correlateReleaseEvidence(candidate, observation) {
   })
 }
 
+function invalidEvidence(conflicts) {
+  return Object.freeze({
+    conflicts: Object.freeze([...conflicts].sort()),
+    schemaValid: false,
+    structureValid: false,
+    artifact: Object.freeze({
+      prepared: false,
+      attested: false,
+      manifestSha256: null,
+      immutableAssets: Object.freeze([]),
+    }),
+    assets: Object.freeze({
+      releaseExists: false,
+      escrowComplete: false,
+      draftExact: false,
+      metadataComplete: false,
+      publishedExact: false,
+    }),
+    npm: Object.freeze({
+      complete: false,
+      presentCount: 0,
+      started: false,
+      latestNewer: false,
+      ambiguous: false,
+    }),
+    smokes: Object.freeze({ complete: false, anyPassed: false, ambiguous: false }),
+    audit: Object.freeze({
+      dispatched: false,
+      complete: false,
+      active: false,
+      ambiguous: false,
+      retryable: false,
+    }),
+  })
+}
+
 function analyzeArtifacts(candidate, observation, inventoryPackages, conflicts) {
   const artifacts = observation.artifacts ?? {}
   const files = Array.isArray(artifacts.files) ? artifacts.files : []
+  const attestations = Array.isArray(artifacts.attestations) ? artifacts.attestations : []
   const active = artifacts.status === "prepared" || artifacts.status === "attested"
   if (artifacts.status === "ambiguous") conflicts.add("artifacts-ambiguous")
   if (active && artifacts.manifestVersion !== candidate.version) {
@@ -38,6 +81,18 @@ function analyzeArtifacts(candidate, observation, inventoryPackages, conflicts) 
   }
   if (active && !isSha256(artifacts.manifestSha256)) {
     conflicts.add("artifacts-manifest-digest-missing")
+  }
+  if (active && artifacts.manifestAsset?.name !== "manifest.json") {
+    conflicts.add("artifact-manifest-asset-name-mismatch")
+  }
+  if (active && artifacts.manifestAsset?.sha256 !== artifacts.manifestSha256) {
+    conflicts.add("artifact-manifest-asset-digest-mismatch")
+  }
+  if (active && artifacts.releaseRecordAsset?.name !== "release-record.json") {
+    conflicts.add("artifact-release-record-name-mismatch")
+  }
+  if (active && !isSha256(artifacts.releaseRecordAsset?.sha256)) {
+    conflicts.add("artifact-release-record-digest-missing")
   }
   const byName = groupByName(files)
   for (const pkg of inventoryPackages) {
@@ -59,6 +114,36 @@ function analyzeArtifacts(candidate, observation, inventoryPackages, conflicts) 
   if (artifacts.status === "absent" && files.some((file) => file.status !== "pending")) {
     conflicts.add("artifact-observation-contradiction")
   }
+  const attestationBySubject = new Map(
+    attestations.map((attestation) => [attestation.subjectName, attestation]),
+  )
+  let attestationsComplete = attestations.length === inventoryPackages.length
+  for (const pkg of inventoryPackages) {
+    const attestation = attestationBySubject.get(pkg.filename)
+    if (attestation === undefined) {
+      conflicts.add("artifact-attestation-missing")
+      attestationsComplete = false
+      continue
+    }
+    if (attestation.name !== pkg.attestationFilename) {
+      conflicts.add("artifact-attestation-name-mismatch")
+      attestationsComplete = false
+    }
+    if (attestation.subjectSha256 !== pkg.tarballSha256) {
+      conflicts.add("artifact-attestation-subject-mismatch")
+      attestationsComplete = false
+    }
+    if (artifacts.status === "attested") {
+      if (attestation.status !== "valid") {
+        conflicts.add(`artifact-attestation-${attestation.status}`)
+        attestationsComplete = false
+      }
+      if (attestation.sha256 !== pkg.attestationSha256) {
+        conflicts.add("artifact-attestation-digest-mismatch")
+        attestationsComplete = false
+      }
+    }
+  }
   const valid =
     active &&
     isSha256(artifacts.manifestSha256) &&
@@ -76,18 +161,24 @@ function analyzeArtifacts(candidate, observation, inventoryPackages, conflicts) 
     })
   return Object.freeze({
     prepared: valid,
-    attested: valid && artifacts.status === "attested",
+    attested: valid && artifacts.status === "attested" && attestationsComplete,
     manifestSha256: artifacts.manifestSha256 ?? null,
+    immutableAssets: Object.freeze([
+      artifacts.releaseRecordAsset,
+      artifacts.manifestAsset,
+      ...files.map((file) => ({ name: file.assetName, sha256: file.sha256 })),
+      ...attestations.map((attestation) => ({
+        name: attestation.name,
+        sha256: attestation.sha256,
+      })),
+    ]),
   })
 }
 
-function analyzeAssets(candidate, observation, inventoryPackages, artifact, conflicts) {
+function analyzeAssets(candidate, observation, artifact, conflicts) {
   const escrow = observation.escrow ?? {}
   const release = observation.release ?? {}
-  const expected = inventoryPackages.map((pkg) => ({
-    name: pkg.filename,
-    sha256: pkg.tarballSha256,
-  }))
+  const expected = artifact.immutableAssets
   if (expected.length === 0) conflicts.add("escrow-required-assets-empty")
   if (escrow.status === "ambiguous") conflicts.add("candidate-escrow-ambiguous")
   if (escrow.status === "present") {
@@ -155,6 +246,20 @@ function exactAssetSet(actual, expected, prefix, conflicts) {
     const records = groups.get(item.name) ?? []
     if (records.length !== 1) {
       conflicts.add(prefix === "github" ? "github-required-asset-absent" : "escrow-asset-missing")
+      if (prefix === "escrow") {
+        if (item.name === "manifest.json") conflicts.add("escrow-manifest-asset-missing")
+        else if (item.name === "release-record.json") {
+          conflicts.add("escrow-release-record-asset-missing")
+        } else if (item.name.endsWith(".intoto.jsonl")) {
+          conflicts.add("escrow-attestation-asset-missing")
+        }
+      } else if (item.name === "manifest.json") {
+        conflicts.add("github-manifest-asset-missing")
+      } else if (item.name === "release-record.json") {
+        conflicts.add("github-release-record-asset-missing")
+      } else if (item.name.endsWith(".intoto.jsonl")) {
+        conflicts.add("github-attestation-asset-missing")
+      }
       exact = false
       continue
     }
@@ -314,7 +419,7 @@ function analyzeSmokes(candidate, observation, manifestSha256, conflicts) {
 
 function analyzeAudit(candidate, observation, manifestSha256, conflicts) {
   const audit = observation.audit ?? {}
-  const active = ["dispatched", "success", "failed", "ambiguous"].includes(audit.status)
+  const active = ["dispatched", "success", "failed", "expired", "ambiguous"].includes(audit.status)
   let correlated = true
   if (active && audit.version !== candidate.version) {
     conflicts.add("release-audit-version-mismatch")
@@ -328,21 +433,21 @@ function analyzeAudit(candidate, observation, manifestSha256, conflicts) {
     conflicts.add("release-audit-manifest-mismatch")
     correlated = false
   }
-  if (!isPositiveInteger(audit.workflowRunId)) {
+  if (active && !isPositiveInteger(audit.workflowRunId)) {
     conflicts.add("release-audit-workflow-run-id-invalid")
     correlated = false
   }
-  if (!isPositiveInteger(audit.runAttempt)) {
+  if (active && !isPositiveInteger(audit.runAttempt)) {
     conflicts.add("release-audit-run-attempt-invalid")
     correlated = false
   }
   if (audit.status === "ambiguous") conflicts.add("release-audit-ambiguous")
-  if (audit.status === "failed") conflicts.add("release-audit-failed")
   return Object.freeze({
     dispatched: audit.status === "dispatched" && correlated,
     complete: audit.status === "success" && correlated,
     active,
     ambiguous: audit.status === "ambiguous",
+    retryable: ["failed", "expired"].includes(audit.status) && correlated,
   })
 }
 

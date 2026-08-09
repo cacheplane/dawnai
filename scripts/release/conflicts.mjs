@@ -1,6 +1,8 @@
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 
 const TRUSTED_PUBLISHER_WORKFLOW = ".github/workflows/release.yml"
+const TRUSTED_CI_WORKFLOW = "CI"
+const TRUSTED_CI_CHECK = "validate"
 const ABANDONABLE_STATES = new Set([
   "CANDIDATE_TAGGED",
   "ARTIFACTS_PREPARED",
@@ -16,6 +18,9 @@ export function findPolicyConflicts(candidate, observation, evidence, state, pro
   }
   if (candidate.publisherWorkflow !== TRUSTED_PUBLISHER_WORKFLOW) {
     conflicts.add("publisher-workflow-untrusted")
+  }
+  if (candidate.ciWorkflow !== TRUSTED_CI_WORKFLOW || candidate.ciCheck !== TRUSTED_CI_CHECK) {
+    conflicts.add("candidate-ci-policy-untrusted")
   }
   addCiConflicts(conflicts, candidate, observation)
   addArbitrationConflicts(conflicts, candidate, observation, state, progressRank)
@@ -36,6 +41,8 @@ function addCiConflicts(conflicts, candidate, observation) {
   else if (ci.status === "failed") conflicts.add("candidate-ci-failed")
   else if (ci.status !== "success") conflicts.add("candidate-ci-invalid")
   if (ci.commitSha !== candidate.commitSha) conflicts.add("candidate-ci-commit-mismatch")
+  if (ci.workflow !== candidate.ciWorkflow) conflicts.add("candidate-ci-workflow-mismatch")
+  if (ci.check !== candidate.ciCheck) conflicts.add("candidate-ci-check-mismatch")
 }
 
 function addArbitrationConflicts(conflicts, candidate, observation, state, progressRank) {
