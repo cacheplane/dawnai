@@ -27,7 +27,8 @@ test("createHttpGet exposes only bounded GET body readers with fixed request opt
       status: "OK",
       httpStatus: 200,
       code: null,
-      headers: { link: null, rateLimitRemaining: null },
+      headers: { link: null, location: null, rateLimitRemaining: null },
+      bodyBytes: 11,
       body: { ok: true },
     },
   )
@@ -45,6 +46,7 @@ test("HTTP GET rejects redirects and ignores contradictory response ok values", 
     status: "ERROR",
     httpStatus: 302,
     code: "REDIRECT",
+    headers: { link: null, location: null, rateLimitRemaining: null },
   })
 
   const concealed = createHttpGet({
@@ -60,7 +62,8 @@ test("HTTP GET rejects redirects and ignores contradictory response ok values", 
     status: "HTTP_ERROR",
     httpStatus: 404,
     code: null,
-    headers: { link: null, rateLimitRemaining: null },
+    headers: { link: null, location: null, rateLimitRemaining: null },
+    bodyBytes: 2,
     body: {},
   })
 })
@@ -145,6 +148,102 @@ test("HTTP GET enforces its deadline and composes a caller abort signal", async 
   })
 })
 
+test("HTTP GET returns ABORTED synchronously without fetching for a pre-aborted caller", async () => {
+  const controller = new AbortController()
+  controller.abort()
+  let calls = 0
+  const http = createHttpGet({
+    fetchImpl: async () => {
+      calls += 1
+      return new Promise(() => {})
+    },
+  })
+
+  assert.deepEqual(
+    await http.getJson({ url: "https://example.test/data", signal: controller.signal }),
+    { status: "ERROR", httpStatus: null, code: "ABORTED" },
+  )
+  assert.equal(calls, 0)
+})
+
+test("HTTP GET cancels response bodies on every early return without masking errors", async () => {
+  for (const row of [
+    { status: 302, headers: { location: "https://example.test/next" }, code: "REDIRECT" },
+    { status: 200, headers: { "content-type": "text/html" }, code: "UNEXPECTED_CONTENT_TYPE" },
+    {
+      status: 200,
+      headers: { "content-type": "application/json", "content-length": "100" },
+      code: "RESPONSE_TOO_LARGE",
+    },
+  ]) {
+    let cancellations = 0
+    const body = {
+      cancel() {
+        cancellations += 1
+        throw new Error("cancel failure must be ignored")
+      },
+    }
+    const http = createHttpGet({
+      maxResponseBytes: 4,
+      fetchImpl: async () => ({ status: row.status, headers: new Headers(row.headers), body }),
+    })
+    const result = await http.getJson({ url: "https://example.test/data" })
+    assert.equal(result.code, row.code)
+    assert.equal(cancellations, 1)
+  }
+})
+
+test("HTTP GET does not wait indefinitely for best-effort body cancellation", async () => {
+  let cancellations = 0
+  const http = createHttpGet({
+    timeoutMs: 5,
+    fetchImpl: async () => ({
+      status: 302,
+      headers: new Headers({ location: "https://example.test/next" }),
+      body: {
+        cancel() {
+          cancellations += 1
+          return new Promise(() => {})
+        },
+      },
+    }),
+  })
+  const result = await Promise.race([
+    http.getJson({ url: "https://example.test/data" }),
+    new Promise((resolve) => setTimeout(() => resolve({ code: "STUCK" }), 20)),
+  ])
+  assert.equal(result.code, "REDIRECT")
+  assert.equal(cancellations, 1)
+})
+
+test("HTTP GET supports smaller per-request remaining deadline and byte budgets", async () => {
+  const timeout = createHttpGet({
+    timeoutMs: 100,
+    maxResponseBytes: 100,
+    fetchImpl: async (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(new DOMException("", "AbortError")), {
+          once: true,
+        })
+      }),
+  })
+  assert.equal(
+    (await timeout.getJson({ url: "https://example.test/data", timeoutMs: 5 })).code,
+    "TIMEOUT",
+  )
+
+  const bytes = createHttpGet({
+    timeoutMs: 100,
+    maxResponseBytes: 100,
+    fetchImpl: async () => jsonResponse({ value: "12345" }),
+  })
+  assert.deepEqual(await bytes.getJson({ url: "https://example.test/data", maxResponseBytes: 4 }), {
+    status: "ERROR",
+    httpStatus: 200,
+    code: "RESPONSE_TOO_LARGE",
+  })
+})
+
 test("HTTP GET rejects oversized declared and streamed bodies before parsing", async () => {
   const declared = createHttpGet({
     maxResponseBytes: 4,
@@ -214,7 +313,8 @@ test("HTTP binary reads are bounded and return JSON-safe canonical base64", asyn
     status: "OK",
     httpStatus: 200,
     code: null,
-    headers: { link: null, rateLimitRemaining: null },
+    headers: { link: null, location: null, rateLimitRemaining: null },
+    bodyBytes: 2,
     contentBase64: "AP8=",
   })
 })

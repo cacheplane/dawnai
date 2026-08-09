@@ -6,6 +6,9 @@ export const DEFAULT_GIT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 
 const MAX_GIT_TIMEOUT_MS = 300_000
 const MAX_GIT_OUTPUT_BYTES = 64 * 1024 * 1024
+const MAX_GIT_ROOT_BYTES = 4_096
+const MAX_GIT_REF_BYTES = 1_024
+const MAX_GIT_PATH_BYTES = 4_096
 
 export class GitReadError extends Error {
   constructor(message, options) {
@@ -27,8 +30,8 @@ export class GitReadError extends Error {
 }
 
 export class GitInputError extends GitReadError {
-  constructor(message) {
-    super(message, { code: "INVALID_INPUT" })
+  constructor(message, code = "INVALID_INPUT") {
+    super(message, { code })
     this.name = "GitInputError"
   }
 }
@@ -39,6 +42,7 @@ export function createGitReader({
   timeoutMs = DEFAULT_GIT_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_GIT_MAX_OUTPUT_BYTES,
 }) {
+  assertInputByteLength(root, MAX_GIT_ROOT_BYTES, "Git reader root")
   if (typeof root !== "string" || !isAbsolute(root) || hasControlCharacters(root)) {
     throw new GitInputError("Git reader root must be an absolute path")
   }
@@ -105,6 +109,7 @@ export function createGitReader({
 }
 
 function assertValidRef(ref) {
+  assertInputByteLength(ref, MAX_GIT_REF_BYTES, "Git ref")
   if (
     typeof ref !== "string" ||
     hasControlCharacters(ref) ||
@@ -122,9 +127,13 @@ function assertValidRef(ref) {
 }
 
 function assertValidTag(tag) {
+  assertInputByteLength(tag, MAX_GIT_REF_BYTES, "Git tag")
   try {
     assertValidRef(tag)
-  } catch {
+  } catch (error) {
+    if (error?.code === "INPUT_TOO_LONG") {
+      throw error
+    }
     throw new GitInputError("Invalid Git tag")
   }
   if (tag.startsWith("refs/") || tag.includes("^")) {
@@ -133,6 +142,7 @@ function assertValidTag(tag) {
 }
 
 function assertValidPath(path) {
+  assertInputByteLength(path, MAX_GIT_PATH_BYTES, "repository path")
   if (
     typeof path !== "string" ||
     path.length === 0 ||
@@ -227,4 +237,10 @@ function hasControlCharacters(value) {
     const codePoint = character.codePointAt(0)
     return codePoint <= 31 || codePoint === 127
   })
+}
+
+function assertInputByteLength(value, maximum, label) {
+  if (typeof value === "string" && Buffer.byteLength(value, "utf8") > maximum) {
+    throw new GitInputError(`${label} exceeds byte limit`, "INPUT_TOO_LONG")
+  }
 }

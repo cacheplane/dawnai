@@ -7,14 +7,24 @@ const OPERATIONS = new Set(["package-version", "package-metadata", "provenance"]
 const PACKAGE_NAME_PATTERN =
   /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
+const DEFAULT_REGISTRY_ORIGIN = "https://registry.npmjs.org"
+const MAX_REGISTRY_URL_BYTES = 2_048
+const MAX_PACKAGE_NAME_BYTES = 256
+const MAX_VERSION_BYTES = 256
 
 export function createNpmReader({
   registryUrl = "https://registry.npmjs.org",
   fetchImpl = fetch,
   timeoutMs,
   maxResponseBytes,
+  trustedRegistryOrigins,
 } = {}) {
+  assertInputByteLength(registryUrl, MAX_REGISTRY_URL_BYTES, "npm registry URL")
   const registry = normalizeRegistryUrl(registryUrl)
+  const trustedOrigins = normalizeTrustedRegistryOrigins(trustedRegistryOrigins)
+  if (!trustedOrigins.has(registry.origin)) {
+    throw npmInputError("npm registry origin is not trusted", "UNTRUSTED_REGISTRY_ORIGIN")
+  }
   const http = createHttpGet({
     fetchImpl,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -24,8 +34,9 @@ export function createNpmReader({
   return {
     observePackageVersion({ name, version, signal }) {
       assertPackageName(name)
+      assertInputByteLength(version, MAX_VERSION_BYTES, "exact SemVer")
       if (!isExactSemver(version)) {
-        throw new TypeError(`Invalid exact SemVer: ${String(version)}`)
+        throw new TypeError("Invalid exact SemVer")
       }
       return observePackageVersion({ registry, http, name, version, signal })
     },
@@ -403,8 +414,7 @@ function normalizeRegistryUrl(value) {
   } catch {
     throw new TypeError("Invalid npm registry URL")
   }
-  const loopback =
-    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
   if (
     (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
     url.username !== "" ||
@@ -478,9 +488,55 @@ function canonicalIntegritySha512(value) {
 }
 
 function assertPackageName(value) {
+  assertInputByteLength(value, MAX_PACKAGE_NAME_BYTES, "npm package name")
   if (typeof value !== "string" || !PACKAGE_NAME_PATTERN.test(value)) {
-    throw new TypeError(`Invalid npm package name: ${String(value)}`)
+    throw new TypeError("Invalid npm package name")
   }
+}
+
+function normalizeTrustedRegistryOrigins(value) {
+  if (value === undefined) {
+    return new Set([DEFAULT_REGISTRY_ORIGIN])
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError("Invalid trusted npm registry origins")
+  }
+  const origins = new Set([DEFAULT_REGISTRY_ORIGIN])
+  for (const origin of value) {
+    assertInputByteLength(origin, MAX_REGISTRY_URL_BYTES, "trusted npm registry origin")
+    let url
+    try {
+      url = new URL(origin)
+    } catch {
+      throw new TypeError("Invalid trusted npm registry origin")
+    }
+    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+    if (
+      (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.pathname !== "/" ||
+      url.search !== "" ||
+      url.hash !== "" ||
+      url.origin !== origin
+    ) {
+      throw new TypeError("Invalid trusted npm registry origin")
+    }
+    origins.add(origin)
+  }
+  return origins
+}
+
+function assertInputByteLength(value, maximum, label) {
+  if (typeof value === "string" && Buffer.byteLength(value, "utf8") > maximum) {
+    throw npmInputError(`${label} exceeds byte limit`, "INPUT_TOO_LONG")
+  }
+}
+
+function npmInputError(message, code) {
+  const error = new TypeError(message)
+  error.code = code
+  return error
 }
 
 function safeRegistryCode(value) {

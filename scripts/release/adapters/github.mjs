@@ -1,4 +1,4 @@
-import { createHttpGet } from "./http.mjs"
+import { createHttpGet, DEFAULT_HTTP_MAX_RESPONSE_BYTES, DEFAULT_HTTP_TIMEOUT_MS } from "./http.mjs"
 
 const API_ORIGIN = "https://api.github.com"
 const API_VERSION = "2022-11-28"
@@ -9,6 +9,26 @@ const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u
 const REPOSITORY_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/u
 const SAFE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u
 const CURSOR_PATTERN = /^[A-Za-z0-9._~+/=-]{1,512}$/u
+const MAX_DOWNLOAD_LOCATION_BYTES = 4_096
+const SIGNED_DOWNLOAD_HOSTS = new Set([
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+  "github-releases.githubusercontent.com",
+  "pipelines.actions.githubusercontent.com",
+])
+const SIGNED_AZURE_HOST_PATTERN = /^productionresultssa[0-9]+\.blob\.core\.windows\.net$/u
+const UNSAFE_REMOTE_KEYS = new Set(["__proto__", "constructor", "prototype"])
+export const DEFAULT_GITHUB_MAX_PAGES = 100
+export const DEFAULT_GITHUB_MAX_RECORDS = 10_000
+const MAX_GITHUB_PAGES = 1_000
+const MAX_GITHUB_RECORDS = 1_000_000
+const MAX_GITHUB_OWNER_BYTES = 100
+const MAX_GITHUB_REPOSITORY_BYTES = 256
+const MAX_GITHUB_REF_BYTES = 1_024
+const MAX_GITHUB_NAME_BYTES = 256
+const MAX_GITHUB_ID_BYTES = 32
+const MAX_GITHUB_DIGEST_BYTES = 128
+const MAX_GITHUB_TOKEN_BYTES = 4_096
 
 // Named methods return JSON-safe envelopes with status, operation, httpStatus, and code.
 // JSON endpoints add canonicalized value; download endpoints add base64 content.
@@ -19,22 +39,35 @@ export function createGitHubReader({
   fetchImpl = fetch,
   timeoutMs,
   maxResponseBytes,
+  maxPages = DEFAULT_GITHUB_MAX_PAGES,
+  maxRecords = DEFAULT_GITHUB_MAX_RECORDS,
 }) {
-  assertIdentity(owner, OWNER_PATTERN, "GitHub owner")
-  assertIdentity(repo, REPOSITORY_PATTERN, "GitHub repository")
+  assertIdentity(owner, OWNER_PATTERN, "GitHub owner", MAX_GITHUB_OWNER_BYTES)
+  assertIdentity(repo, REPOSITORY_PATTERN, "GitHub repository", MAX_GITHUB_REPOSITORY_BYTES)
+  assertInputByteLength(token, MAX_GITHUB_TOKEN_BYTES, "GitHub token")
   if (
     token !== undefined &&
     (typeof token !== "string" || token.length === 0 || /[\r\n]/u.test(token))
   ) {
     throw new TypeError("Invalid GitHub token")
   }
+  assertBoundedInteger(maxPages, 1, MAX_GITHUB_PAGES, "GitHub maximum pages")
+  assertBoundedInteger(maxRecords, 1, MAX_GITHUB_RECORDS, "GitHub maximum records")
   const base = `${API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
   const http = createHttpGet({
     fetchImpl,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
   })
-  const context = { base, http, token: token ?? null }
+  const context = {
+    base,
+    http,
+    token: token ?? null,
+    timeoutMs: timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+    maxResponseBytes: maxResponseBytes ?? DEFAULT_HTTP_MAX_RESPONSE_BYTES,
+    maxPages,
+    maxRecords,
+  }
 
   return {
     getCommitCheckRuns({ commitSha }) {
@@ -125,8 +158,9 @@ export function createGitHubReader({
       })
     },
     getAttestations({ subjectDigest }) {
+      assertInputByteLength(subjectDigest, MAX_GITHUB_DIGEST_BYTES, "attestation subject digest")
       if (typeof subjectDigest !== "string" || !DIGEST_PATTERN.test(subjectDigest)) {
-        throw new TypeError(`Invalid attestation subject digest: ${String(subjectDigest)}`)
+        throw new TypeError("Invalid attestation subject digest")
       }
       return readPaginated(context, {
         initialUrl: `${base}/attestations/${encodeURIComponent(subjectDigest)}?per_page=100`,
@@ -181,7 +215,17 @@ async function readObject(context, { url, operation, validate = isObject }) {
   if (!validate(result.body)) {
     return failure("ERROR", operation, result.httpStatus, "MALFORMED_SCHEMA")
   }
-  const value = canonicalJson(result.body, context.token)
+  let value
+  try {
+    value = canonicalJson(result.body, context.token)
+  } catch (error) {
+    return failure(
+      "ERROR",
+      operation,
+      result.httpStatus,
+      error instanceof UnsafeResponseKeyError ? error.code : "MALFORMED_SCHEMA",
+    )
+  }
   if (value === null) {
     return failure("ERROR", operation, result.httpStatus, "MALFORMED_SCHEMA")
   }
@@ -193,18 +237,50 @@ async function readPaginated(
   { initialUrl, operation, extract, compare, cursorPagination = false },
 ) {
   const records = []
+  const budget = createOperationBudget(context)
   let url = initialUrl
-  for (let page = 0; page < 100; page += 1) {
-    const result = await readJson(context, { url, operation })
+  for (let page = 0; page < context.maxPages; page += 1) {
+    if (budget.deadline <= Date.now()) {
+      return failure("AMBIGUOUS", operation, null, "TIMEOUT")
+    }
+    if (budget.remainingBytes < 1) {
+      return failure("ERROR", operation, null, "OPERATION_TOO_LARGE")
+    }
+    const requestBudget = remainingRequestBudget(budget)
+    if (requestBudget === null) {
+      return failure("AMBIGUOUS", operation, null, "TIMEOUT")
+    }
+    const result = await readJson(context, {
+      url,
+      operation,
+      requestBudget,
+    })
+    if (result.code === "RESPONSE_TOO_LARGE") {
+      return failure("ERROR", operation, result.httpStatus, "OPERATION_TOO_LARGE")
+    }
     if (result.status !== "PRESENT") {
       return publicResult(result)
     }
+    budget.remainingBytes -= result.bodyBytes
     const pageRecords = extract(result.body)
     if (pageRecords === null) {
       return failure("ERROR", operation, result.httpStatus, "MALFORMED_SCHEMA")
     }
+    if (records.length + pageRecords.length > context.maxRecords) {
+      return failure("ERROR", operation, result.httpStatus, "RECORD_LIMIT_EXCEEDED")
+    }
     for (const record of pageRecords) {
-      const normalized = canonicalJson(record, context.token)
+      let normalized
+      try {
+        normalized = canonicalJson(record, context.token)
+      } catch (error) {
+        return failure(
+          "ERROR",
+          operation,
+          result.httpStatus,
+          error instanceof UnsafeResponseKeyError ? error.code : "MALFORMED_SCHEMA",
+        )
+      }
       if (!isObject(normalized)) {
         return failure("ERROR", operation, result.httpStatus, "MALFORMED_SCHEMA")
       }
@@ -214,19 +290,23 @@ async function readPaginated(
       records.sort(compare)
       return { ...publicResult(result), value: records }
     }
+    if (page + 1 >= context.maxPages) {
+      return failure("ERROR", operation, result.httpStatus, "PAGE_LIMIT_EXCEEDED")
+    }
     const nextUrl = normalizeNextUrl(result.nextUrl, initialUrl, cursorPagination)
     if (nextUrl === null) {
       return failure("ERROR", operation, result.httpStatus, "UNSAFE_PAGINATION_URL")
     }
     url = nextUrl
   }
-  return failure("ERROR", operation, null, "PAGINATION_LIMIT_EXCEEDED")
+  return failure("ERROR", operation, null, "PAGE_LIMIT_EXCEEDED")
 }
 
-async function readJson(context, { url, operation }) {
+async function readJson(context, { url, operation, requestBudget = {} }) {
   const response = await context.http.getJson({
     url,
     headers: requestHeaders(context.token, JSON_ACCEPT),
+    ...requestBudget,
   })
   const classification = classifyGitHubResponse(response, operation)
   if (classification.status !== "PRESENT") {
@@ -236,18 +316,90 @@ async function readJson(context, { url, operation }) {
   if (link.status === "ERROR") {
     return failure("ERROR", operation, response.httpStatus, "MALFORMED_LINK_HEADER")
   }
-  return { ...classification, body: response.body, nextUrl: link.nextUrl }
+  return {
+    ...classification,
+    body: response.body,
+    bodyBytes: response.bodyBytes,
+    nextUrl: link.nextUrl,
+  }
 }
 
 async function readBinary(context, { url, operation }) {
+  const budget = createOperationBudget(context)
+  const firstRequest = remainingRequestBudget(budget)
+  if (firstRequest === null) {
+    return failure("AMBIGUOUS", operation, null, "TIMEOUT")
+  }
   const result = await context.http.getBinary({
     url,
     headers: requestHeaders(context.token, "application/octet-stream"),
+    ...firstRequest,
   })
+  if (result.code === "RESPONSE_TOO_LARGE") {
+    return failure("ERROR", operation, result.httpStatus, "OPERATION_TOO_LARGE")
+  }
+  if (result.code === "REDIRECT") {
+    if (result.httpStatus !== 302) {
+      return failure("ERROR", operation, result.httpStatus, "REDIRECT")
+    }
+    const signedUrl = normalizeSignedDownloadUrl(result.headers?.location)
+    if (signedUrl === null) {
+      return failure("ERROR", operation, result.httpStatus, "UNSAFE_DOWNLOAD_URL")
+    }
+    const secondRequest = remainingRequestBudget(budget)
+    if (secondRequest === null) {
+      return failure("AMBIGUOUS", operation, null, "TIMEOUT")
+    }
+    const downloaded = await context.http.getBinary({
+      url: signedUrl,
+      headers: {},
+      ...secondRequest,
+    })
+    if (downloaded.code === "RESPONSE_TOO_LARGE") {
+      return failure("ERROR", operation, downloaded.httpStatus, "OPERATION_TOO_LARGE")
+    }
+    const downloadClassification = classifyGitHubResponse(downloaded, operation)
+    return downloadClassification.status === "PRESENT"
+      ? { ...downloadClassification, contentBase64: downloaded.contentBase64 }
+      : downloadClassification
+  }
   const classification = classifyGitHubResponse(result, operation)
   return classification.status === "PRESENT"
     ? { ...classification, contentBase64: result.contentBase64 }
     : classification
+}
+
+function createOperationBudget(context) {
+  return {
+    deadline: Date.now() + context.timeoutMs,
+    remainingBytes: context.maxResponseBytes,
+  }
+}
+
+function remainingRequestBudget(budget) {
+  const timeoutMs = budget.deadline - Date.now()
+  return timeoutMs > 0
+    ? { timeoutMs: Math.min(timeoutMs, 300_000), maxResponseBytes: budget.remainingBytes }
+    : null
+}
+
+function normalizeSignedDownloadUrl(value) {
+  if (typeof value !== "string" || Buffer.byteLength(value) > MAX_DOWNLOAD_LOCATION_BYTES) {
+    return null
+  }
+  try {
+    const url = new URL(value)
+    const hostname = url.hostname.toLowerCase()
+    return url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.hash === "" &&
+      (SIGNED_DOWNLOAD_HOSTS.has(hostname) || SIGNED_AZURE_HOST_PATTERN.test(hostname))
+      ? url.href
+      : null
+  } catch {
+    return null
+  }
 }
 
 function classifyGitHubResponse(result, operation) {
@@ -449,13 +601,32 @@ function canonicalJson(value, token) {
   }
   const result = {}
   for (const key of Object.keys(value).sort()) {
+    if (
+      UNSAFE_REMOTE_KEYS.has(key) ||
+      /token|secret|authorization|cookie/iu.test(key) ||
+      (token !== null && key.includes(token))
+    ) {
+      throw new UnsafeResponseKeyError()
+    }
     const normalized = canonicalJson(value[key], token)
     if (normalized === undefined) {
       return null
     }
-    result[key] = normalized
+    Object.defineProperty(result, key, {
+      value: normalized,
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    })
   }
   return result
+}
+
+class UnsafeResponseKeyError extends Error {
+  constructor() {
+    super("Unsafe response key")
+    this.code = "UNSAFE_RESPONSE_KEY"
+  }
 }
 
 function objectArray(field) {
@@ -499,19 +670,21 @@ function compareStrings(left, right) {
 }
 
 function assertCommitSha(value) {
+  assertInputByteLength(value, MAX_GITHUB_DIGEST_BYTES, "GitHub commit SHA")
   if (typeof value !== "string" || !SHA_PATTERN.test(value)) {
-    throw new TypeError(`Invalid GitHub commit SHA: ${String(value)}`)
+    throw new TypeError("Invalid GitHub commit SHA")
   }
 }
 
 function assertTag(value) {
   assertRef(value, "GitHub tag")
   if (value.startsWith("refs/")) {
-    throw new TypeError(`Invalid GitHub tag: ${String(value)}`)
+    throw new TypeError("Invalid GitHub tag")
   }
 }
 
 function assertRef(value, label) {
+  assertInputByteLength(value, MAX_GITHUB_REF_BYTES, label)
   if (
     typeof value !== "string" ||
     !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(value) ||
@@ -520,37 +693,49 @@ function assertRef(value, label) {
     value.endsWith("/") ||
     value.split("/").some((part) => part === "" || part === "." || part === "..")
   ) {
-    throw new TypeError(`Invalid ${label}: ${String(value)}`)
+    throw new TypeError(`Invalid ${label}`)
   }
 }
 
 function assertWorkflow(value) {
+  assertInputByteLength(value, MAX_GITHUB_NAME_BYTES, "GitHub workflow")
   if (typeof value !== "string" || !SAFE_NAME_PATTERN.test(value)) {
-    throw new TypeError(`Invalid GitHub workflow: ${String(value)}`)
+    throw new TypeError("Invalid GitHub workflow")
   }
 }
 
 function assertSafeName(value, label) {
+  assertInputByteLength(value, MAX_GITHUB_NAME_BYTES, label)
   if (typeof value !== "string" || !SAFE_NAME_PATTERN.test(value)) {
-    throw new TypeError(`Invalid ${label}: ${String(value)}`)
+    throw new TypeError(`Invalid ${label}`)
   }
 }
 
 function normalizeId(value) {
+  assertInputByteLength(value, MAX_GITHUB_ID_BYTES, "GitHub resource ID")
   if (
     !(
       (Number.isSafeInteger(value) && value > 0) ||
       (typeof value === "string" && /^[1-9][0-9]*$/u.test(value))
     )
   ) {
-    throw new TypeError(`Invalid GitHub resource ID: ${String(value)}`)
+    throw new TypeError("Invalid GitHub resource ID")
   }
   return String(value)
 }
 
-function assertIdentity(value, pattern, label) {
+function assertIdentity(value, pattern, label, maximumBytes) {
+  assertInputByteLength(value, maximumBytes, label)
   if (typeof value !== "string" || !pattern.test(value)) {
-    throw new TypeError(`Invalid ${label}: ${String(value)}`)
+    throw new TypeError(`Invalid ${label}`)
+  }
+}
+
+function assertInputByteLength(value, maximum, label) {
+  if (typeof value === "string" && Buffer.byteLength(value, "utf8") > maximum) {
+    const error = new TypeError(`${label} exceeds byte limit`)
+    error.code = "INPUT_TOO_LONG"
+    throw error
   }
 }
 
@@ -564,4 +749,10 @@ function failure(status, operation, httpStatus, code) {
 
 function publicResult(result) {
   return failure(result.status, result.operation, result.httpStatus, result.code)
+}
+
+function assertBoundedInteger(value, minimum, maximum, label) {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new TypeError(`Invalid ${label}`)
+  }
 }

@@ -230,6 +230,62 @@ test("npm refuses unsafe identities and registry URLs before fetching", () => {
   }
 })
 
+test("npm rejects oversized inputs with a stable non-echoing code before parsing", () => {
+  const npm = createNpmReader({ fetchImpl: assert.fail })
+  for (const [name, version] of [
+    [`@scope/${"a".repeat(300)}`, VERSION],
+    [NAME, `1.0.0-${"a".repeat(300)}`],
+  ]) {
+    assert.throws(
+      () => npm.observePackageVersion({ name, version }),
+      (error) => error?.code === "INPUT_TOO_LONG" && !error.message.includes("a".repeat(100)),
+    )
+  }
+  assert.throws(
+    () => createNpmReader({ registryUrl: `https://${"a".repeat(2_100)}.test` }),
+    (error) => error?.code === "INPUT_TOO_LONG" && !error.message.includes("a".repeat(100)),
+  )
+})
+
+test("npm validation errors never echo control characters", () => {
+  const npm = createNpmReader({ fetchImpl: assert.fail })
+  for (const invoke of [
+    () => npm.observePackageVersion({ name: "sdk\nforged", version: VERSION }),
+    () => npm.observePackageVersion({ name: NAME, version: "1.0.0\rforged" }),
+  ]) {
+    assert.throws(invoke, errorWithoutControls)
+  }
+})
+
+test("npm requires an explicit exact trust grant for non-default registry origins", () => {
+  assert.throws(
+    () => createNpmReader({ registryUrl: "https://registry.example.test/npm/" }),
+    (error) => error?.code === "UNTRUSTED_REGISTRY_ORIGIN",
+  )
+  assert.doesNotThrow(() =>
+    createNpmReader({
+      registryUrl: "https://registry.example.test/npm/",
+      trustedRegistryOrigins: ["https://registry.example.test"],
+      fetchImpl: assert.fail,
+    }),
+  )
+  assert.doesNotThrow(() =>
+    createNpmReader({
+      registryUrl: "http://[::1]:4873/",
+      trustedRegistryOrigins: ["http://[::1]:4873"],
+      fetchImpl: assert.fail,
+    }),
+  )
+  assert.throws(
+    () =>
+      createNpmReader({
+        registryUrl: "https://registry.example.test/npm/",
+        trustedRegistryOrigins: ["https://registry.example.test.evil.test"],
+      }),
+    (error) => error?.code === "UNTRUSTED_REGISTRY_ORIGIN",
+  )
+})
+
 test("npm refuses malformed or cross-origin tarball and provenance URLs", async () => {
   for (const mutate of [
     (document) => {
@@ -282,6 +338,7 @@ test("npm binds custom-registry provenance to the exact origin endpoint", async 
 
   const result = await createNpmReader({
     registryUrl: customRegistry,
+    trustedRegistryOrigins: ["https://registry.example.test"],
     fetchImpl: recording.fetchImpl,
   }).observePackageVersion({ name: NAME, version: VERSION })
 
@@ -592,4 +649,11 @@ function responseLike({ status, ok, body, headers = { "content-type": "applicati
       },
     }),
   }
+}
+
+function errorWithoutControls(error) {
+  return ![...(error?.message ?? "")].some((character) => {
+    const codePoint = character.codePointAt(0)
+    return codePoint <= 31 || codePoint === 127
+  })
 }

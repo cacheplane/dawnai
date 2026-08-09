@@ -163,6 +163,152 @@ test("GitHub download methods return JSON-safe base64 without exposing response 
   )
 })
 
+test("GitHub downloads follow one approved signed redirect without forwarding API credentials", async () => {
+  const releaseLocation =
+    "https://release-assets.githubusercontent.com/github-production-release-asset/1/asset.zip?sig=release"
+  const actionsLocation =
+    "https://productionresultssa0.blob.core.windows.net/actions-results/run/artifact.zip?sig=actions"
+  const { fetchImpl, calls } = recordingFetch([
+    redirectResponse(releaseLocation),
+    binaryResponse(new Uint8Array([1, 2])),
+    redirectResponse(actionsLocation),
+    binaryResponse(new Uint8Array([3, 4])),
+  ])
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, token: TOKEN, fetchImpl })
+
+  assert.equal((await github.downloadReleaseAsset({ assetId: 7 })).contentBase64, "AQI=")
+  assert.equal((await github.downloadActionsArtifact({ artifactId: 8 })).contentBase64, "AwQ=")
+  assert.deepEqual(
+    calls.map(({ url, init }) => ({ url, headers: init.headers, redirect: init.redirect })),
+    [
+      {
+        url: `${BASE}/releases/assets/7`,
+        headers: {
+          Accept: "application/octet-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        redirect: "manual",
+      },
+      { url: releaseLocation, headers: {}, redirect: "manual" },
+      {
+        url: `${BASE}/actions/artifacts/8/zip`,
+        headers: {
+          Accept: "application/octet-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        redirect: "manual",
+      },
+      { url: actionsLocation, headers: {}, redirect: "manual" },
+    ],
+  )
+})
+
+test("GitHub downloads reject unsafe destinations and a second redirect", async () => {
+  const unsafeLocations = [
+    "http://release-assets.githubusercontent.com/asset.zip",
+    "https://user:secret@release-assets.githubusercontent.com/asset.zip",
+    "https://release-assets.githubusercontent.com/asset.zip#fragment",
+    "https://127.0.0.1/asset.zip",
+    "https://release-assets.githubusercontent.com.evil.test/asset.zip",
+    "https://github.com/asset.zip",
+    "https://productionresultssa0.blob.core.windows.net.evil.test/asset.zip",
+  ]
+
+  for (const location of unsafeLocations) {
+    const recording = recordingFetch([redirectResponse(location)])
+    const result = await createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      token: TOKEN,
+      fetchImpl: recording.fetchImpl,
+    }).downloadReleaseAsset({ assetId: 7 })
+    assert.equal(result.status, "ERROR")
+    assert.equal(result.code, "UNSAFE_DOWNLOAD_URL")
+    assert.equal(recording.calls.length, 1)
+    assert.doesNotMatch(JSON.stringify(result), /secret|evil/iu)
+  }
+
+  const secondRedirect = recordingFetch([
+    redirectResponse("https://release-assets.githubusercontent.com/asset.zip?sig=1"),
+    redirectResponse("https://release-assets.githubusercontent.com/asset.zip?sig=2"),
+  ])
+  assert.deepEqual(
+    await createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      token: TOKEN,
+      fetchImpl: secondRedirect.fetchImpl,
+    }).downloadReleaseAsset({ assetId: 7 }),
+    {
+      status: "ERROR",
+      operation: "release-asset-download",
+      httpStatus: 302,
+      code: "REDIRECT",
+    },
+  )
+})
+
+test("GitHub download redirect hops share one deadline and one byte budget", async () => {
+  const location = "https://release-assets.githubusercontent.com/asset.zip?sig=1"
+  let calls = 0
+  const timeout = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    timeoutMs: 10,
+    fetchImpl: async (_url, init) => {
+      calls += 1
+      if (calls === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 8))
+        return redirectResponse(location)
+      }
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(new DOMException("", "AbortError")), {
+          once: true,
+        })
+      })
+    },
+  })
+  assert.equal((await timeout.downloadReleaseAsset({ assetId: 7 })).code, "TIMEOUT")
+
+  const oversized = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    maxResponseBytes: 4,
+    fetchImpl: recordingFetch([
+      redirectResponse(location),
+      binaryResponse(new Uint8Array([1, 2, 3, 4, 5])),
+    ]).fetchImpl,
+  })
+  assert.equal((await oversized.downloadReleaseAsset({ assetId: 7 })).code, "OPERATION_TOO_LARGE")
+})
+
+test("GitHub canonicalization rejects unsafe remote keys without prototype mutation or secrets", async () => {
+  const fixtures = [
+    `{"${TOKEN}":"value"}`,
+    '{"__proto__":{"polluted":true}}',
+    '{"constructor":{"prototype":{"polluted":true}}}',
+    '{"nested":{"prototype":{"polluted":true}}}',
+  ]
+  for (const fixture of fixtures) {
+    const result = await createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      token: TOKEN,
+      fetchImpl: async () => jsonResponse(JSON.parse(fixture)),
+    }).getRef({ ref: "tags/v0.8.21" })
+    assert.deepEqual(result, {
+      status: "ERROR",
+      operation: "ref",
+      httpStatus: 200,
+      code: "UNSAFE_RESPONSE_KEY",
+    })
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(TOKEN, "u"))
+    assert.equal(Object.prototype.polluted, undefined)
+  }
+})
+
 test("GitHub distinguishes exact absence from auth, rate, network, parse, and server failures", async () => {
   const cases = [
     {
@@ -377,6 +523,84 @@ test("GitHub pagination preserves exact endpoint and fixed filters", async () =>
   }
 })
 
+test("GitHub pagination enforces total page and record limits", async () => {
+  const next = `${BASE}/git/matching-refs/tags/?per_page=100&page=2`
+  const pageLimited = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    maxPages: 1,
+    fetchImpl: async () => jsonResponse([{ ref: "refs/tags/v1" }], 200, linkHeader(next)),
+  })
+  assert.deepEqual(await pageLimited.listTagRefs(), {
+    status: "ERROR",
+    operation: "tag-refs",
+    httpStatus: 200,
+    code: "PAGE_LIMIT_EXCEEDED",
+  })
+
+  const recordLimited = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    maxRecords: 1,
+    fetchImpl: async () => jsonResponse([{ ref: "refs/tags/v1" }, { ref: "refs/tags/v2" }]),
+  })
+  assert.deepEqual(await recordLimited.listTagRefs(), {
+    status: "ERROR",
+    operation: "tag-refs",
+    httpStatus: 200,
+    code: "RECORD_LIMIT_EXCEEDED",
+  })
+})
+
+test("GitHub pagination shares one cumulative byte and wall-clock budget", async () => {
+  const next = `${BASE}/git/matching-refs/tags/?per_page=100&page=2`
+  const note = "x".repeat(45)
+  const bytes = recordingFetch([
+    jsonResponse([{ ref: "refs/tags/v1", note }], 200, linkHeader(next)),
+    jsonResponse([{ ref: "refs/tags/v2", note }]),
+  ])
+  const byteLimited = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    maxResponseBytes: 100,
+    fetchImpl: bytes.fetchImpl,
+  })
+  assert.deepEqual(await byteLimited.listTagRefs(), {
+    status: "ERROR",
+    operation: "tag-refs",
+    httpStatus: 200,
+    code: "OPERATION_TOO_LARGE",
+  })
+  assert.equal(bytes.calls.length, 2)
+
+  let calls = 0
+  const timeout = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    timeoutMs: 12,
+    fetchImpl: async (_url, init) => {
+      calls += 1
+      if (calls === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 8))
+        return jsonResponse([{ ref: "refs/tags/v1" }], 200, linkHeader(next))
+      }
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(new DOMException("", "AbortError")), {
+          once: true,
+        })
+      })
+    },
+  })
+  const started = Date.now()
+  assert.deepEqual(await timeout.listTagRefs(), {
+    status: "AMBIGUOUS",
+    operation: "tag-refs",
+    httpStatus: null,
+    code: "TIMEOUT",
+  })
+  assert.ok(Date.now() - started < 19, "pagination must not reset the deadline per page")
+})
+
 test("GitHub attestations paginate completely and sort independent of page order", async () => {
   const digest = `sha256:${"a".repeat(64)}`
   const endpoint = `${BASE}/attestations/${encodeURIComponent(digest)}?per_page=100`
@@ -517,6 +741,44 @@ test("GitHub validates repository identity and every dynamic argument before fet
   assert.throws(() => github.getWorkflow({ workflow: "../release.yml" }), /workflow/u)
   assert.throws(() => github.getAttestations({ subjectDigest: "sha256:nope" }), /digest/u)
   assert.throws(() => github.getBranchProtection({ branch: "../main" }), /branch/u)
+})
+
+test("GitHub rejects oversized identity and operation inputs before parsing or fetching", () => {
+  for (const identity of [
+    { owner: "o".repeat(1_000), repo: REPO },
+    { owner: OWNER, repo: "r".repeat(1_000) },
+  ]) {
+    assert.throws(
+      () => createGitHubReader({ ...identity, fetchImpl: assert.fail }),
+      stableInputTooLong,
+    )
+  }
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, fetchImpl: assert.fail })
+  for (const invoke of [
+    () => github.getRef({ ref: `r${"a".repeat(2_000)}` }),
+    () => github.getReleaseByTag({ tag: `v${"a".repeat(2_000)}` }),
+    () => github.listActionsArtifacts({ name: `a${"a".repeat(2_000)}` }),
+    () => github.getWorkflow({ workflow: `w${"a".repeat(2_000)}` }),
+    () => github.getActionsRun({ runId: "1".repeat(100) }),
+    () => github.getAttestations({ subjectDigest: `sha256:${"a".repeat(2_000)}` }),
+  ]) {
+    assert.throws(invoke, stableInputTooLong)
+  }
+})
+
+test("GitHub validation errors never echo control characters", () => {
+  assert.throws(
+    () => createGitHubReader({ owner: "dawn\nforged", repo: REPO, fetchImpl: assert.fail }),
+    errorWithoutControls,
+  )
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, fetchImpl: assert.fail })
+  for (const invoke of [
+    () => github.getRef({ ref: "tags/v1\nforged" }),
+    () => github.getActionsRun({ runId: "1\rforged" }),
+    () => github.getAttestations({ subjectDigest: "sha256:a\nforged" }),
+  ]) {
+    assert.throws(invoke, errorWithoutControls)
+  }
 })
 
 test("GitHub applies bounded deadlines, response limits, and numeric status validation", async () => {
@@ -686,6 +948,10 @@ function binaryResponse(bytes, status = 200) {
   })
 }
 
+function redirectResponse(location, status = 302) {
+  return new Response(null, { status, headers: { location } })
+}
+
 function linkHeader(next) {
   return { link: `<${next}>; rel="next"` }
 }
@@ -703,4 +969,15 @@ function responseLike({ status, ok, body, headers = { "content-type": "applicati
       },
     }),
   }
+}
+
+function stableInputTooLong(error) {
+  return error?.code === "INPUT_TOO_LONG" && !error.message.includes("a".repeat(100))
+}
+
+function errorWithoutControls(error) {
+  return ![...(error?.message ?? "")].some((character) => {
+    const codePoint = character.codePointAt(0)
+    return codePoint <= 31 || codePoint === 127
+  })
 }

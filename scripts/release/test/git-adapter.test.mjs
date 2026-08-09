@@ -208,6 +208,29 @@ test("createGitReader rejects control characters in roots, refs, tags, and repos
   }
 })
 
+test("createGitReader rejects oversized roots, refs, tags, and paths before parsing or running", () => {
+  assert.throws(
+    () => createGitReader({ root: `/${"r".repeat(5_000)}`, run: assert.fail }),
+    inputTooLong,
+  )
+  const git = createGitReader({ root: "/repo", run: assert.fail })
+  assert.throws(() => git.listTree({ ref: `r${"a".repeat(2_000)}` }), inputTooLong)
+  assert.throws(() => git.resolveTag({ tag: `v${"a".repeat(2_000)}` }), inputTooLong)
+  assert.throws(
+    () => git.showFile({ ref: "HEAD", path: `packages/${"a".repeat(5_000)}` }),
+    inputTooLong,
+  )
+})
+
+function inputTooLong(error) {
+  return (
+    error instanceof GitReadError &&
+    error.code === "INPUT_TOO_LONG" &&
+    !error.message.includes("a".repeat(100)) &&
+    !error.message.includes("r".repeat(100))
+  )
+}
+
 function stableInputError(error) {
   return (
     error instanceof GitReadError &&

@@ -33,8 +33,11 @@ export function createHttpGet({
 }
 
 async function get(context, request, bodyType) {
-  const { href, headers, signal } = normalizeRequest(request)
-  const deadline = createDeadline(context.timeoutMs, signal)
+  const { href, headers, signal, timeoutMs, maxResponseBytes } = normalizeRequest(request, context)
+  if (signal?.aborted === true) {
+    return transportError(null, "ABORTED")
+  }
+  const deadline = createDeadline(timeoutMs, signal)
   let response
   try {
     response = await deadline.race(
@@ -72,12 +75,9 @@ async function get(context, request, bodyType) {
     typeof responseHeadersObject !== "object" ||
     typeof responseHeadersObject.get !== "function"
   ) {
+    await safelyCancelBody(responseBody)
     deadline.dispose()
     return transportError(httpStatus, "MALFORMED_RESPONSE")
-  }
-  if (httpStatus >= 300 && httpStatus < 400) {
-    deadline.dispose()
-    return transportError(httpStatus, "REDIRECT")
   }
 
   let responseHeaders
@@ -88,28 +88,37 @@ async function get(context, request, bodyType) {
     declaredLength = responseHeadersObject.get("content-length")
     contentType = responseHeadersObject.get("content-type")
   } catch {
+    await safelyCancelBody(responseBody)
     deadline.dispose()
     return transportError(httpStatus, "MALFORMED_RESPONSE")
   }
+  if (httpStatus >= 300 && httpStatus < 400) {
+    await safelyCancelBody(responseBody)
+    deadline.dispose()
+    return transportError(httpStatus, "REDIRECT", { headers: responseHeaders })
+  }
   if (declaredLength !== null) {
     if (!/^(?:0|[1-9][0-9]*)$/u.test(declaredLength)) {
+      await safelyCancelBody(responseBody)
       deadline.dispose()
       return transportError(httpStatus, "MALFORMED_RESPONSE")
     }
-    if (BigInt(declaredLength) > BigInt(context.maxResponseBytes)) {
+    if (BigInt(declaredLength) > BigInt(maxResponseBytes)) {
+      await safelyCancelBody(responseBody)
       deadline.dispose()
       return transportError(httpStatus, "RESPONSE_TOO_LARGE")
     }
   }
 
   if (!contentTypeMatches(bodyType, contentType)) {
+    await safelyCancelBody(responseBody)
     deadline.dispose()
     return transportError(httpStatus, "UNEXPECTED_CONTENT_TYPE")
   }
 
   let bytes
   try {
-    bytes = await readBoundedBody(responseBody, context.maxResponseBytes, deadline)
+    bytes = await readBoundedBody(responseBody, maxResponseBytes, deadline)
   } catch (error) {
     deadline.dispose()
     return transportError(httpStatus, bodyReadCode(error, deadline))
@@ -118,6 +127,7 @@ async function get(context, request, bodyType) {
 
   if (bodyType === "binary") {
     return transportSuccess(httpStatus, responseHeaders, {
+      bodyBytes: bytes.byteLength,
       contentBase64: Buffer.from(bytes).toString("base64"),
     })
   }
@@ -129,16 +139,22 @@ async function get(context, request, bodyType) {
     return transportError(httpStatus, bodyType === "json" ? "MALFORMED_JSON" : "MALFORMED_TEXT")
   }
   if (bodyType === "text") {
-    return transportSuccess(httpStatus, responseHeaders, { body: text })
+    return transportSuccess(httpStatus, responseHeaders, {
+      bodyBytes: bytes.byteLength,
+      body: text,
+    })
   }
   try {
-    return transportSuccess(httpStatus, responseHeaders, { body: JSON.parse(text) })
+    return transportSuccess(httpStatus, responseHeaders, {
+      bodyBytes: bytes.byteLength,
+      body: JSON.parse(text),
+    })
   } catch {
     return transportError(httpStatus, "MALFORMED_JSON")
   }
 }
 
-function normalizeRequest(request) {
+function normalizeRequest(request, context) {
   if (request === null || typeof request !== "object" || Array.isArray(request)) {
     throw new TypeError("Invalid HTTP request")
   }
@@ -157,6 +173,16 @@ function normalizeRequest(request) {
     throw new TypeError("Invalid HTTP URL")
   }
   const headers = normalizeRequestHeaders(request.headers)
+  const timeoutMs = normalizeRequestLimit(
+    request.timeoutMs,
+    context.timeoutMs,
+    "HTTP request timeout",
+  )
+  const maxResponseBytes = normalizeRequestLimit(
+    request.maxResponseBytes,
+    context.maxResponseBytes,
+    "HTTP request maximum response bytes",
+  )
   const signal = request.signal
   if (
     signal !== undefined &&
@@ -168,7 +194,15 @@ function normalizeRequest(request) {
   ) {
     throw new TypeError("Invalid HTTP abort signal")
   }
-  return { href: url.href, headers, signal: signal ?? null }
+  return { href: url.href, headers, signal: signal ?? null, timeoutMs, maxResponseBytes }
+}
+
+function normalizeRequestLimit(value, configuredMaximum, label) {
+  if (value === undefined) {
+    return configuredMaximum
+  }
+  assertBoundedInteger(value, 1, configuredMaximum, label)
+  return value
 }
 
 function normalizeRequestHeaders(value) {
@@ -199,14 +233,16 @@ function normalizeRequestHeaders(value) {
 
 function normalizedResponseHeaders(headers) {
   const link = headers.get("link")
+  const location = headers.get("location")
   const rateLimitRemaining = headers.get("x-ratelimit-remaining")
   if (
     (link !== null && typeof link !== "string") ||
+    (location !== null && typeof location !== "string") ||
     (rateLimitRemaining !== null && typeof rateLimitRemaining !== "string")
   ) {
     throw new TypeError("Malformed HTTP response headers")
   }
-  return { link, rateLimitRemaining }
+  return { link, location, rateLimitRemaining }
 }
 
 function contentTypeMatches(bodyType, value) {
@@ -256,23 +292,36 @@ async function readBoundedBody(body, maxResponseBytes, deadline) {
       }
       size += result.value.byteLength
       if (size > maxResponseBytes) {
-        await safelyCancel(reader)
+        safelyCancel(reader)
         throw new BodyReadError("RESPONSE_TOO_LARGE")
       }
       chunks.push(result.value)
     }
+  } catch (error) {
+    safelyCancel(reader)
+    throw error
   } finally {
     reader.releaseLock()
   }
   return Buffer.concat(chunks, size)
 }
 
-async function safelyCancel(reader) {
+function safelyCancel(reader) {
   if (typeof reader.cancel === "function") {
     try {
-      await reader.cancel()
+      Promise.resolve(reader.cancel()).catch(() => {})
     } catch {
       // The bounded read has already failed closed.
+    }
+  }
+}
+
+function safelyCancelBody(body) {
+  if (body !== null && typeof body === "object" && typeof body.cancel === "function") {
+    try {
+      Promise.resolve(body.cancel()).catch(() => {})
+    } catch {
+      // Preserve the primary fail-closed result.
     }
   }
 }
@@ -336,8 +385,8 @@ function transportSuccess(httpStatus, headers, body) {
   }
 }
 
-function transportError(httpStatus, code) {
-  return { status: "ERROR", httpStatus, code }
+function transportError(httpStatus, code, details = {}) {
+  return { status: "ERROR", httpStatus, code, ...details }
 }
 
 function assertBoundedInteger(value, minimum, maximum, label) {
