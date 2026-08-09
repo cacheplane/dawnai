@@ -21,7 +21,7 @@ export function registerBuildCommand(program: Command, io: CommandIo): void {
   program
     .command("build")
     .description(
-      "Generate deployment artifacts (node + langsmith by default; hono opt-in via build.targets)",
+      "Generate deployment artifacts (node + langsmith by default; hono + vercel opt-in via build.targets)",
     )
     .option("--clean", "Remove .dawn/build/ before generating")
     .option("--cwd <path>", "Path to the Dawn app root")

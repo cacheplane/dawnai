@@ -6,9 +6,6 @@ import type { DawnConfig, RouteManifest } from "@dawn-ai/core"
 
 import { CliError } from "../../output.js"
 
-/** The target these rules describe. Named in every message. */
-const EDGE_TARGET = "hono"
-
 /**
  * One feature this app uses that an edge runtime cannot serve.
  *
@@ -81,8 +78,8 @@ const EDGE_OVERRIDDEN_STORES: readonly {
 ]
 
 /**
- * Every feature this app uses that the `hono` target cannot serve, in a stable
- * order. Empty means the app is edge-deployable.
+ * Every feature this app uses that an edge-subset target cannot serve, in a
+ * stable order. Empty means the app is edge-deployable.
  *
  * Deliberately returns the whole list rather than throwing on the first find:
  * `dawn check` reports them all at once, and discovering four of these one
@@ -188,18 +185,24 @@ export function collectEdgeCapabilityViolations(
 /**
  * Fail the build, by name, on anything the edge cannot serve.
  *
- * Called BEFORE the `hono` target writes its first byte: a build that emits
- * three artifacts and then throws leaves a `.dawn/build` that looks deployable.
+ * Called BEFORE either Hono or Vercel writes deployable artifacts: a build that
+ * emits three artifacts and then throws leaves output that looks deployable.
  */
-export function assertEdgeCapabilities(input: EdgeCapabilityInput): void {
+export function assertEdgeCapabilities(
+  input: EdgeCapabilityInput,
+  targetName: "hono" | "vercel" = "hono",
+): void {
   const violations = collectEdgeCapabilityViolations(input)
   if (violations.length === 0) return
-  throw new CliError(formatEdgeCapabilityViolations(violations), 1, { code: "DAWN_E1005" })
+  throw new CliError(formatEdgeCapabilityViolations(violations, targetName), 1, {
+    code: "DAWN_E1005",
+  })
 }
 
 /** The user-facing report. Shared verbatim by `dawn build` and `dawn check`. */
 export function formatEdgeCapabilityViolations(
   violations: readonly EdgeCapabilityViolation[],
+  targetName: "hono" | "vercel" = "hono",
 ): string {
   const lines = violations.map(
     (violation) =>
@@ -209,10 +212,10 @@ export function formatEdgeCapabilityViolations(
       `      fix:  ${violation.remedy}.`,
   )
   return (
-    `The "${EDGE_TARGET}" build target cannot serve ${violations.length} feature(s) this app uses:\n\n` +
+    `The "${targetName}" build target cannot serve ${violations.length} feature(s) this app uses:\n\n` +
     `${lines.join("\n\n")}\n\n` +
     `The edge deliberately serves a SUBSET of Dawn — no filesystem, no processes, no containers. ` +
-    `Fix the features above, or drop "${EDGE_TARGET}" from \`build.targets\` in dawn.config.ts and deploy with the "node" target instead.`
+    `Fix the features above, or drop "${targetName}" from \`build.targets\` in dawn.config.ts and deploy with the "node" target instead.`
   )
 }
 
@@ -269,7 +272,10 @@ const DEPENDENCY_FIELDS = [
  * bare specifier, so a missing one surfaces as an unresolved import during
  * `wrangler deploy` — minutes later and a process away from the cause.
  */
-export async function collectEdgeDependencyNotice(appRoot: string): Promise<string | undefined> {
+export async function collectEdgeDependencyNotice(
+  appRoot: string,
+  targetName: "hono" | "vercel" = "hono",
+): Promise<string | undefined> {
   const packageJsonPath = resolve(appRoot, "package.json")
   if (!existsSync(packageJsonPath)) return undefined
   const declared = new Set<string>()
@@ -287,7 +293,7 @@ export async function collectEdgeDependencyNotice(appRoot: string): Promise<stri
   const missing = EDGE_RUNTIME_DEPENDENCIES.filter((name) => !declared.has(name))
   if (missing.length === 0) return undefined
   return (
-    `⚠ The "${EDGE_TARGET}" target's app.mjs/stores.mjs import ${missing.join(", ")} at runtime, ` +
+    `⚠ The "${targetName}" target's app.mjs/stores.mjs import ${missing.join(", ")} at runtime, ` +
     `but ${missing.length === 1 ? "it is" : "they are"} not in this app's "dependencies" — ` +
     `the deploy will fail to resolve ${missing.length === 1 ? "it" : "them"}. Add ${missing.length === 1 ? "it" : "them"} to "dependencies" in package.json.`
   )

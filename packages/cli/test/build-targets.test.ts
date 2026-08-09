@@ -84,6 +84,28 @@ describe("dawn build — targets", () => {
       readonly graphs: Record<string, string>
     }
     expect(langgraph.graphs["/hello/[tenant]#agent"]).toBe("./.dawn/build/hello-tenant.ts:graph")
+
+    // Vercel output is opt-in, not an implicit third default deployment target.
+    expect(existsSync(join(appRoot, ".vercel/output"))).toBe(false)
+  })
+
+  test("vercel target is opt-in and reaches its temporary implementation shell", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["vercel"] } };\n',
+    })
+
+    await expect(runBuild(appRoot)).rejects.toThrow(/vercel target output is not implemented/)
+    expect(existsSync(join(appRoot, ".vercel/output"))).toBe(false)
+  })
+
+  test("vercel target runs after independently emitted node and LangSmith artifacts", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["node", "langsmith", "vercel"] } };\n',
+    })
+
+    await expect(runBuild(appRoot)).rejects.toThrow(/vercel target output is not implemented/)
+    expect(existsSync(join(appRoot, ".dawn/build/server.mjs"))).toBe(true)
+    expect(existsSync(join(appRoot, ".dawn/build/langgraph.json"))).toBe(true)
   })
 
   test("langsmith-only target emits no node artifacts", async () => {
@@ -231,7 +253,8 @@ describe("dawn check — build targets", () => {
 
   test("known build targets pass validation", async () => {
     const appRoot = await createFixtureApp({
-      "dawn.config.ts": 'export default { build: { targets: ["node", "langsmith"] } };\n',
+      "dawn.config.ts":
+        'export default { build: { targets: ["node", "langsmith", "hono", "vercel"] } };\n',
     })
 
     const stdout: string[] = []
@@ -241,5 +264,41 @@ describe("dawn check — build targets", () => {
         { stderr: () => {}, stdout: (message) => stdout.push(message) },
       ),
     ).resolves.toBeUndefined()
+  })
+
+  test("vercel dependency notice names the vercel target", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": 'export default { build: { targets: ["vercel"] } };\n',
+    })
+
+    const stdout: string[] = []
+    await expect(
+      runCheckCommand(
+        { cwd: appRoot },
+        { stderr: () => {}, stdout: (message) => stdout.push(message) },
+      ),
+    ).resolves.toBeUndefined()
+
+    const notice = stdout.join("")
+    expect(notice).toContain('The "vercel" target')
+    expect(notice).not.toContain('The "hono" target')
+  })
+
+  test("vercel target mirrors edge capability validation", async () => {
+    const appRoot = await createFixtureApp({
+      "dawn.config.ts": `export default {
+  build: { targets: ["vercel"] },
+  sandbox: { provider: { name: "docker" } },
+}
+`,
+    })
+
+    const error = await runCheckCommand(
+      { cwd: appRoot },
+      { stderr: () => {}, stdout: () => {} },
+    ).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: "DAWN_E1005" })
+    expect(String(error)).toMatch(/"vercel".*sandbox.*`sandbox`/is)
   })
 })
