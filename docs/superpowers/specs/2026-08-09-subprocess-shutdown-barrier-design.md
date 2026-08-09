@@ -62,10 +62,13 @@ Successful resolution guarantees:
 3. A bounded TCP probe confirms that the `baseUrl` port no longer accepts
    connections, covering a descendant that might briefly outlive the outer CLI.
 
-If the process has already closed, `close()` resolves without sending another
-signal. If bounded graceful and forced termination both fail to produce a
-`close` event, `close()` rejects with the process identifier and termination
-context instead of falsely reporting success.
+If the outer process has already closed, that satisfies only the child-closure
+half of the barrier. `close()` still probes the port. If a descendant continues
+serving, the helper signals the saved process-group ID and follows the same
+bounded escalation path. If bounded graceful and forced termination fail to
+produce child closure and port unavailability, `close()` rejects with the
+process identifier and termination context instead of falsely reporting
+success.
 
 ## Termination Algorithm
 
@@ -74,8 +77,9 @@ signal can be sent or exit can be missed.
 
 The shared termination helper:
 
-1. Returns the existing closure result when the child is already closed.
-2. Sends `SIGTERM` to the negative PID so the detached process group is
+1. Checks child closure and port availability independently. It resolves
+   immediately only when the child is closed and the port is unavailable.
+2. Otherwise sends `SIGTERM` to the saved negative PID so the detached process group is
    targeted; if group signalling is unavailable, falls back to `child.kill()`.
 3. Waits up to a 2,000 ms internal grace deadline for both the child `close`
    event and the `baseUrl` port to stop accepting TCP connections.
@@ -125,6 +129,9 @@ short test deadlines to verify the other new branches:
 - a scoped signal stub that leaves a child alive causes the final deadline to
   reject, after which the test forcibly cleans up the child;
 - a negative-PID signal failure falls back to `child.kill()`;
+- a detached group leader that has already exited while a descendant retains
+  the listening port is not treated as closed; the saved process group is
+  terminated and port unavailability is observed;
 - a constructor with an immediate readiness timeout does not reject until its
   delayed termination finishes, proving readiness-failure cleanup is awaited.
 
