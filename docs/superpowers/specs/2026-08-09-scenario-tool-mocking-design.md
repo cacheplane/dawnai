@@ -108,11 +108,15 @@ the scenario builder, so the main fluent chain remains readable.
 
 ## Generated Route Types
 
-The SDK owns an open `RouteScenarioMap` interface. Dawn typegen augments it
-with every discovered route. A generated entry has this conceptual shape:
+The `@dawn-ai/sdk/testing` entry point directly owns an open
+`RouteScenarioMap` interface. Dawn typegen augments that exact public module
+with every discovered route. Declaring the interface at the subpath, rather
+than re-exporting it from another SDK module, ensures TypeScript module
+augmentation merges with the symbol used by `scenarios()`. A generated entry
+has this conceptual shape:
 
 ```ts
-declare module "@dawn-ai/sdk" {
+declare module "@dawn-ai/sdk/testing" {
   interface RouteScenarioMap {
     "/research": {
       readonly tools: {
@@ -124,6 +128,18 @@ declare module "@dawn-ai/sdk" {
   }
 }
 ```
+
+The package augmentation is emitted as a separate external declaration file,
+`.dawn/scenarios.generated.d.ts`. It starts with a side-effect import of
+`@dawn-ai/sdk/testing` before the `declare module` block, which makes the block
+an augmentation of the real package rather than a new ambient module that
+would hide the package's existing exports. The existing
+`.dawn/dawn.generated.d.ts` remains a global declaration file for the virtual
+`dawn:routes` module and references the sibling scenario declaration with a
+triple-slash path directive. CLI and Vite typegen both write the pair.
+The tracked `.dawn` declarations shipped by the basic and research scaffold
+templates are regenerated as the same pair so a newly created app has the
+correct testing types before its first explicit typegen run.
 
 The route argument to `scenarios("/research")` indexes this map. It provides:
 
@@ -146,6 +162,11 @@ tools, so route-path completion never depends on optional route features. A
 route with no application tools has a tool map whose key type is `never`, which
 makes `.mockTool()` unusable for that route at compile time.
 
+Scenario typegen receives the resolved route-local and shared application-tool
+list before planning, skills, subagent, workspace, or memory capability tools
+are appended to the ordinary `dawn:routes` tool surface. This keeps capability
+tools out of `.mockTool()` completion as well as runtime override validation.
+
 ## Builder Type States
 
 The TypeScript surface makes invalid combinations unavailable where practical:
@@ -159,6 +180,10 @@ The TypeScript surface makes invalid combinations unavailable where practical:
 - `.expectTool()` accepts only tool names mocked earlier in the chain.
 - A tool name already passed to `.mockTool()` is excluded from later
   `.mockTool()` calls.
+- The `.expectTool()` callback must add at least one count or argument
+  assertion before returning.
+- A call expectation accepts at most one of `.called()`, `.calledOnce()`,
+  `.calledTimes()`, or `.notCalled()`.
 
 Runtime validation remains authoritative for JavaScript callers, type casts,
 and manually forged values. The configure callback must return a completed
@@ -272,6 +297,8 @@ Call assertions have these semantics:
 - Primitive values and arrays match exactly.
 - Zero-argument tools do not expose `.withArgs()` in their call-expectation
   type.
+- `.notCalled()` does not expose `.withArgs()` because the constraints cannot
+  both succeed.
 - Multiple `.withArgs()` calls each require a matching invocation. The same
   invocation may satisfy more than one compatible argument matcher.
 
@@ -333,7 +360,8 @@ Implementation follows TDD and covers:
    output remain `unknown` rather than reusing generated state defaults.
 2. SDK unit tests for builder normalization, branding, duplicate detection,
    and malformed callback results.
-3. Core typegen snapshots for the complete `RouteScenarioMap` augmentation.
+3. Core typegen snapshots plus CLI and Vite emission tests for the complete,
+   application-only `RouteScenarioMap` augmentation.
 4. CLI loader tests for branded suites, route matching, duplicate names,
    unknown mocks, plain-array rejection, and configuration failure messages.
 5. Runtime tests proving a named tool is replaced while unlisted tools remain
@@ -347,6 +375,9 @@ Implementation follows TDD and covers:
 
 ## Release
 
-Add patch changesets for `@dawn-ai/sdk` and `@dawn-ai/cli`. Dawn's fixed 0.x
-release group must remain on the 0.8.x line, so this feature does not use a
-minor changeset.
+Add patch changesets for `@dawn-ai/sdk`, `@dawn-ai/core`, `@dawn-ai/cli`,
+`@dawn-ai/vite-plugin`, and `@dawn-ai/devkit`. Core owns the new renderer, the
+CLI and Vite plugin both emit the generated augmentation, and Devkit ships the
+refreshed declaration pair in starter templates. Dawn's fixed 0.x release
+group must remain on the 0.8.x line, so this feature does not use a minor
+changeset.
