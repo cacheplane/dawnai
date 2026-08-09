@@ -37,9 +37,9 @@
   "dependencies": {
     "@dawn-ai/core": "workspace:*",
     "@dawn-ai/memory": "workspace:*",
-    "@pretable/core": "0.0.6",
-    "@pretable/react": "0.0.6",
-    "@pretable/ui": "0.0.3",
+    "@pretable/core": "0.0.8",
+    "@pretable/react": "0.0.8",
+    "@pretable/ui": "0.0.8",
     "class-variance-authority": "^0.7.1",
     "next": "16.3.0",
     "react": "19.2.8",
