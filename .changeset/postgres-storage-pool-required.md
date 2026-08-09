@@ -30,8 +30,24 @@ import {
 //    want anyway if you are sharing one pool across all three stores.
 import { Pool } from "pg"
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+// Do not skip this. See below.
+pool.on("error", (error) => {
+  console.error("postgres pool client error (connection dropped):", error)
+})
 postgresCheckpointer({ pool })
 ```
+
+**If you take option 2, attach an `'error'` listener to the pool you build.**
+`0.8.19` shipped that listener as a fix, and it attached it to the pool it built
+for you; now that you own the pool, you own its error handling, and these stores
+deliberately do not attach one to a pool you passed in — `pg` puts that
+responsibility on the pool owner, and attaching one silently would mask it.
+`pg` emits `'error'` on the **pool** when an **idle** client fails, and an
+EventEmitter `'error'` with no listener is an uncaught exception that ends the
+process. Idle connections are dropped as a matter of course (server restart,
+failover, `idle_session_timeout`), so a pool without one turns a routine
+Postgres blip into an outage. The `/node` entry in option 1 still attaches it to
+pools it builds.
 
 The `/node` entry is the same three factories with the `connectionString`
 convenience layered on, and it re-exports everything the main entry does, so

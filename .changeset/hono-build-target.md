@@ -36,7 +36,13 @@ of Dawn rather than all of it.
   `stores.mjs` builds the pool and all three stores inside the factory and ends
   the pool on dispose, with a module-scope flag recording that this isolate has
   already migrated so per-request instances do not re-run three migration
-  transactions each time.
+  transactions each time. That pool also gets an `'error'` listener:
+  `@neondatabase/serverless` vendors `pg-pool` *and* the `events` polyfill, so an
+  idle client's failure re-emits on the pool and the shim throws when nothing is
+  listening — the same uncaught-exception hazard node `pg` has, and one that
+  `nodejs_compat` being off does nothing to remove. A per-request pool is still
+  exposed: a client sits idle between every pair of store queries, and pg-pool's
+  idle listener outlives `end()`.
 - **`requestStores`**, a new option on `createRuntimeFetchHandler`, is the seam
   that makes that possible: a `(request) => RequestStores` factory whose every
   field is optional and falls through to the boot-resolved store when omitted.

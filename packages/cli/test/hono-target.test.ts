@@ -201,6 +201,13 @@ describe("dawn build — hono target", () => {
     // `process` does not exist on workerd without nodejs_compat — every knob
     // must come off the per-request env binding.
     expect(stores).not.toContain("process.env")
+    // `@neondatabase/serverless` vendors pg-pool AND the `events` polyfill, so
+    // an idle client's failure re-emits as a pool 'error' and the shim throws
+    // when nothing is listening — an uncaught exception out of a socket event,
+    // not a rejected query. Per-request lifetime does not remove the exposure:
+    // a client is idle between every pair of store queries, and pg-pool's idle
+    // listener survives `end()`. Pinned because it is invisible until it fires.
+    expect(stores).toMatch(/pool\.on\(\s*["']error["']/)
   })
 
   test("migrates once per isolate, not once per request", async () => {
@@ -800,7 +807,7 @@ export const postgresCheckpointer = () => store
 `
 
   /**
-   * `@neondatabase/serverless`, stubbed at the two seams the emitted stores.mjs
+   * `@neondatabase/serverless`, stubbed at the three seams the emitted stores.mjs
    * actually uses.
    *
    * `Client` carries the driver's REAL per-instance defaults (TLS on), and
@@ -809,6 +816,11 @@ export const postgresCheckpointer = () => store
    * constructor, and stores.mjs assigns over it afterwards. Clients are built
    * lazily here exactly as the real Pool builds them — `new this.Client(this.options)`
    * — which is why the pools, not the clients, are what gets recorded.
+   *
+   * `on` is here because the real Pool is an EventEmitter (the driver vendors
+   * pg-pool and the `events` polyfill) and stores.mjs registers an 'error'
+   * listener on it. A double without it would fail the emitted code for a
+   * reason the real driver never would.
    */
   const NEON_STUB = `export class Client {
   constructor(config) {
@@ -822,12 +834,20 @@ export class Pool {
   constructor(options) {
     this.options = options
     this.Client = Client
+    /** Events stores.mjs subscribed to, so a test can assert the 'error' listener exists. */
+    this.handlers = {}
     pools.push(this)
+  }
+  on(event, listener) {
+    ;(this.handlers[event] ??= []).push(listener)
+    return this
   }
   end() {
     return Promise.resolve()
   }
 }
+/** The events each pool has a listener for, in order. */
+export const poolHandlers = () => pools.map((pool) => Object.keys(pool.handlers))
 /** What the real Pool does when it opens a connection, per pool, in order. */
 export const poolConnections = () =>
   pools.map((pool) => {
@@ -946,6 +966,35 @@ console.log(JSON.stringify(${options.report ?? "poolConnections()"}))
         wsProxy: "proxy:8080/v1?address=dawn-pg:5432",
       },
     ])
+  })
+
+  test("every per-request pool gets an 'error' listener before it is used", async () => {
+    const appRoot = await createFixtureApp()
+    await runBuild(appRoot)
+
+    // `@neondatabase/serverless` vendors pg-pool, whose idle-client handler
+    // re-emits the failure on the POOL, and vendors the `events` polyfill,
+    // whose `emit` THROWS on an 'error' with no listener — exactly as Node's
+    // does. So an idle WebSocket dropped by Neon autosuspend, a proxy, or a
+    // blip raises an uncaught exception out of a socket event that no query
+    // promise is awaiting, rather than rejecting a query.
+    //
+    // Per-request lifetime does not shrink the window: a client sits idle
+    // between every pair of queries the three stores make, and pg-pool neither
+    // detaches the idle listener in `_remove` nor gates the pool-level re-emit
+    // on `ending`, so it can still fire after `dispose()`.
+    //
+    // Asserted by RUNNING the emitted file rather than grepping it, for the
+    // reason recorded on the `assumeMigrated` test: a text match on generated
+    // code can be satisfied by a doc comment.
+    const observed = await driveEmittedStores(appRoot, [{}, {}], {
+      report: "poolHandlers()",
+      reportImports: `import { poolHandlers } from "@neondatabase/serverless"`,
+    })
+
+    // One pool per request, each carrying its own listener — not one pool that
+    // happened to be listened to once.
+    expect(observed).toEqual([["error"], ["error"]])
   })
 
   test("a request without the proxy binding still connects with TLS", async () => {

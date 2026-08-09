@@ -255,6 +255,34 @@ export async function createRequestStores(env) {
   // \`this.Client\` with its own class in its constructor. This assignment is what
   // makes \`dawnWsProxy\` above reach anything.
   pool.Client = DawnPgClient
+  // Required, not defensive — and required HERE even though the pool is
+  // per-request and short-lived.
+  //
+  // \`@neondatabase/serverless\` vendors \`pg-pool\`: its \`Pool\` re-emits an IDLE
+  // client's failure on the POOL (\`makeIdleListener\` → \`pool.emit("error")\`),
+  // exactly as node \`pg\` does. It also vendors the \`events\` polyfill rather than
+  // importing \`node:events\` — and that shim throws on an 'error' with no
+  // listener just like Node's does. So the hazard does NOT go away on an edge
+  // runtime that lacks \`nodejs_compat\`; the shim is what is running.
+  //
+  // A client sits IDLE in this pool between every pair of queries the three
+  // stores make, and a WebSocket dropped in that window (Neon autosuspend, a
+  // proxy closing it, a blip) walks ws close → Client 'error' → pool 'error' →
+  // throw, out of a socket event listener that no query promise is awaiting.
+  // The throw therefore does not reject a query — it surfaces as an uncaught
+  // exception and takes down the request, or the isolate.
+  //
+  // It also outlives \`dispose()\`: pg-pool's idle listener is not detached by
+  // \`_remove\`, and its pool-level re-emit is not gated on \`ending\`, so a
+  // half-open socket erroring during teardown can emit AFTER \`pool.end()\` —
+  // when the response may already be sent. Attach once, never remove.
+  //
+  // Neon's own README prescribes this listener, and its \`Pool\` subclass
+  // whitelists 'error' specifically so registering it does not disable
+  // fetch-mode querying — the one listener it is safe to add.
+  pool.on("error", (error) => {
+    console.warn(\`[dawn:edge] postgres pool client error (connection dropped): \${String(error)}\`)
+  })
   try {
     const assumeMigrated = migrated
     const stores = {

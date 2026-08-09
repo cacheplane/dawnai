@@ -57,6 +57,16 @@ import { Pool } from "pg"
 // owned pools burn three times the budget for no benefit.
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
+// Required, not optional. `pg` emits 'error' on the POOL when an IDLE client
+// fails, and an EventEmitter 'error' with no listener is an uncaught exception
+// that ends the process. Idle connections drop routinely — server restart,
+// failover, `idle_session_timeout` — so without this a normal Postgres blip
+// takes your app down instead of the pool replacing one connection. A pool you
+// build is yours to handle; the stores never attach a listener to it.
+pool.on("error", (error) => {
+  console.error("postgres pool client error (connection dropped):", error)
+})
+
 export default config({
   checkpointer: postgresCheckpointer({ pool }),
   threadsStore: createPostgresThreadsStore({ pool }),
