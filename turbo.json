@@ -5,6 +5,15 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
+    "@dawn-ai/cli#build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/web/content/docs/**/*.mdx",
+        "$TURBO_ROOT$/apps/web/app/components/docs/nav.ts"
+      ],
+      "outputs": ["dist/**", "docs/**"]
+    },
     "check": {
       "dependsOn": ["^check"]
     },
