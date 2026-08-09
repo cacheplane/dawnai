@@ -1,5 +1,5 @@
 import { ChildProcess, spawn } from "node:child_process"
-import { createConnection } from "node:net"
+import { createConnection, createServer } from "node:net"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { expect, it, vi } from "vitest"
@@ -182,6 +182,25 @@ async function forceKillProcessGroup(groupPid: number, kill: typeof process.kill
   await waitForProcessGroupExit(-groupPid)
 }
 
+async function unavailableBaseUrl(): Promise<string> {
+  const server = createServer()
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      if (typeof address !== "object" || address === null) {
+        reject(new Error("temporary server did not expose a TCP port"))
+        return
+      }
+      resolve(address.port)
+    })
+  })
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  )
+  return `http://127.0.0.1:${port}`
+}
+
 it("boots a real dawn dev subprocess and serves the AP", async () => {
   const mock = await createAimock({ fixtures: [{ match: {}, response: { content: "ok" } }] })
   const app = await createSubprocessApp({
@@ -285,6 +304,61 @@ it.skipIf(process.platform === "win32")(
       await terminateSubprocess(child, groupPid, closed, baseUrl, TEST_TERMINATION_TIMINGS)
       expect(await canConnect(baseUrl)).toBe(false)
     } finally {
+      await forceKillProcessGroup(groupPid, realKill)
+    }
+  },
+)
+
+it.skipIf(process.platform === "win32")(
+  "escalates an ignoring process group to SIGKILL",
+  async () => {
+    const realKill = process.kill.bind(process)
+    const { child, closed, groupPid } = await spawnTree("ignore-term")
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((pid, signal) => realKill(pid, signal))
+    try {
+      await terminateSubprocess(
+        child,
+        groupPid,
+        closed,
+        await unavailableBaseUrl(),
+        TEST_TERMINATION_TIMINGS,
+      )
+      expect(killSpy).toHaveBeenCalledWith(-groupPid, "SIGKILL")
+    } finally {
+      killSpy.mockRestore()
+      await forceKillProcessGroup(groupPid, realKill)
+    }
+  },
+)
+
+it.skipIf(process.platform === "win32")(
+  "rejects on bounded failure after the forced-termination deadline",
+  async () => {
+    const realKill = process.kill.bind(process)
+    const { child, closed, groupPid } = await spawnTree("ignore-term")
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === -groupPid && (signal === "SIGTERM" || signal === "SIGKILL")) {
+        return true
+      }
+      return realKill(pid, signal)
+    })
+    try {
+      await expect(
+        terminateSubprocess(
+          child,
+          groupPid,
+          closed,
+          await unavailableBaseUrl(),
+          TEST_TERMINATION_TIMINGS,
+        ),
+      ).rejects.toThrow(
+        `subprocess group ${groupPid} did not stop within ${TEST_TERMINATION_TIMINGS.graceMs + TEST_TERMINATION_TIMINGS.forceMs}ms`,
+      )
+      expect(killSpy).toHaveBeenCalledWith(-groupPid, "SIGKILL")
+    } finally {
+      killSpy.mockRestore()
       await forceKillProcessGroup(groupPid, realKill)
     }
   },

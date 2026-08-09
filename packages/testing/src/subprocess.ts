@@ -150,8 +150,10 @@ export async function terminateSubprocess(
 
   process.kill(-groupPid, "SIGTERM")
   if (await waitUntilStopped(childState, baseUrl, timings.graceMs, timings)) return
+  process.kill(-groupPid, "SIGKILL")
+  if (await waitUntilStopped(childState, baseUrl, timings.forceMs, timings)) return
   throw new Error(
-    `subprocess group ${groupPid} did not stop within ${timings.graceMs}ms after SIGTERM`,
+    `subprocess group ${groupPid} did not stop within ${timings.graceMs + timings.forceMs}ms after SIGTERM and SIGKILL`,
   )
 }
 
