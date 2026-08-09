@@ -74,18 +74,17 @@ export function validateReleaseInventory({ fixedGroups, workspacePackages }) {
   }
   let hasInvalidPublicManifest = false
   packages.forEach((pkg, index) => {
+    if (pkg?.private === true) {
+      return
+    }
     const label = isNonEmptyString(pkg?.path) ? pkg.path : `workspacePackages[${index}]`
     if (!isNonEmptyString(pkg?.name)) {
       structuralErrors.push(`${label}: package name must be a non-empty string`)
-      if (pkg?.private !== true) {
-        hasInvalidPublicManifest = true
-      }
+      hasInvalidPublicManifest = true
     }
     if (!isNonEmptyString(pkg?.version)) {
       structuralErrors.push(`${label}: package version must be a non-empty string`)
-      if (pkg?.private !== true) {
-        hasInvalidPublicManifest = true
-      }
+      hasInvalidPublicManifest = true
     }
   })
 

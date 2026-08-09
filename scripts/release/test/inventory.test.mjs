@@ -34,7 +34,7 @@ test("validateReleaseInventory categorizes exact-set differences in stable order
       { name: "package-z", version: "1.2.3" },
       { name: "package-b", version: "1.2.3" },
       { name: "package-a", version: "1.2.3" },
-      { name: "private-package", version: "1.2.3", private: true },
+      { name: "private-package", private: true },
     ],
   })
 
@@ -44,6 +44,7 @@ test("validateReleaseInventory categorizes exact-set differences in stable order
   assert.deepEqual(result.privateMembers, ["private-package"])
   assert.deepEqual(result.unknownMembers, ["unknown-package"])
   assert.deepEqual(result.versionMismatches, [])
+  assert.deepEqual(result.structuralErrors, [])
 })
 
 test("validateReleaseInventory reports packages that do not share the canonical version", () => {
@@ -58,6 +59,22 @@ test("validateReleaseInventory reports packages that do not share the canonical 
 
   assert.equal(result.version, undefined)
   assert.deepEqual(result.versionMismatches, ["package-c"])
+})
+
+test("validateReleaseInventory accepts a private manifest without release identity", () => {
+  const inventory = {
+    fixedGroups: [["package-a"]],
+    workspacePackages: [
+      { name: "package-a", version: "1.0.0", path: "packages/a/package.json" },
+      { private: true, path: "fixtures/private/package.json" },
+    ],
+  }
+
+  const result = assertValidReleaseInventory(inventory)
+
+  assert.deepEqual(result.structuralErrors, [])
+  assert.deepEqual(result.packages, ["package-a"])
+  assert.equal(result.version, "1.0.0")
 })
 
 test("validateReleaseInventory reports empty fixed and public inventories structurally", () => {
