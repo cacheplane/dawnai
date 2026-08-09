@@ -133,15 +133,15 @@ expectState(run).field("todos").toEqual([{ content: "ship it", status: "pending"
 
 `run.state` is the full agent state after the run — the same object a checkpointer would persist.
 
-## The three execution modes
+## Choose the execution boundary
 
-`createAgentHarness` supports three modes via the `mode` option (default: `"in-process"`):
+`@dawn-ai/testing` exposes a separate factory for each execution boundary:
 
-- **`"in-process"`** (default) — runs your tools, prompts, capabilities, and state inside the test process via Dawn's runtime. Fastest; covers the vast majority of assertions. No port binding.
-- **`"http-inject"`** — **not yet implemented**. Passing `mode: "http-inject"` throws at harness construction time. `createAgentProtocolInjector` is exported as a standalone factory for advanced use, but the harness `mode` option does not support it yet.
-- **`"subprocess"`** — **not yet implemented**. Passing `mode: "subprocess"` throws at harness construction time. `createSubprocessApp` is exported as a standalone factory for advanced use, but the harness `mode` option does not support it yet.
+- **`createAgentHarness()`** runs tools, prompts, capabilities, and state directly through Dawn's runtime in the test process. It is the default choice for fast agent-behavior tests and does not bind an application port.
+- **`createAgentProtocolInjector()`** drives Agent Protocol requests through the runtime's fetch handler without binding a port. Use it when the HTTP request, response, or SSE contract is the behavior under test.
+- **`createSubprocessApp()`** starts a real `dawn dev` child process. Use it for process-boundary, restart, and persistence tests.
 
-For now, write all harness tests with the default `"in-process"` mode. The standalone `createAgentProtocolInjector` and `createSubprocessApp` factories are available for custom orchestration outside the harness API.
+These factories deliberately have separate option and result types. Choose the factory for the boundary the test needs; `createAgentHarness()` does not accept a `mode` option.
 
 ## CI setup
 
