@@ -1,5 +1,15 @@
 # @dawn-example/memory
 
+## 0.0.12
+
+### Patch Changes
+
+- @dawn-ai/cli@0.8.20
+- @dawn-ai/core@0.8.20
+- @dawn-ai/langchain@0.8.20
+- @dawn-ai/memory-pgvector@0.8.20
+- @dawn-ai/sdk@0.8.20
+
 ## 0.0.11
 
 ### Patch Changes

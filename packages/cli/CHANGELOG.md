@@ -1,5 +1,18 @@
 # @dawn-ai/cli
 
+## 0.8.20
+
+### Patch Changes
+
+- @dawn-ai/ag-ui@0.8.20
+- @dawn-ai/core@0.8.20
+- @dawn-ai/langchain@0.8.20
+- @dawn-ai/langgraph@0.8.20
+- @dawn-ai/memory@0.8.20
+- @dawn-ai/permissions@0.8.20
+- @dawn-ai/sdk@0.8.20
+- @dawn-ai/sqlite-storage@0.8.20
+
 ## 0.8.19
 
 ### Patch Changes
