@@ -42,6 +42,7 @@ const ROOT_FIELDS = [
   "abandonment",
 ]
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 
 export function classifyObservedRelease(candidate, observation) {
   const snapshot = snapshotRelease(candidate, observation)
@@ -181,6 +182,9 @@ function findSnapshotConflicts(candidate, observation) {
     if (observation.artifacts.manifestCommitSha !== candidate.commitSha) {
       conflicts.add("artifact-manifest-commit-mismatch")
     }
+    if (observation.artifacts.manifestSha256 === null) {
+      conflicts.add("artifacts-manifest-digest-missing")
+    }
     for (const artifact of observation.artifacts.files) {
       if (["missing", "corrupt", "unmanifested"].includes(artifact.status)) {
         conflicts.add(`artifact-${artifact.status}`)
@@ -200,6 +204,12 @@ function findSnapshotConflicts(candidate, observation) {
 
   if (observation.escrow.status === "ambiguous") {
     conflicts.add("candidate-escrow-ambiguous")
+  } else if (observation.escrow.status === "present") {
+    if (observation.escrow.manifestSha256 === null) {
+      conflicts.add("escrow-manifest-digest-missing")
+    } else if (observation.escrow.manifestSha256 !== observation.artifacts.manifestSha256) {
+      conflicts.add("escrow-manifest-digest-mismatch")
+    }
   }
 
   if (observation.registry.latest.status === "ambiguous") {
@@ -384,6 +394,34 @@ function analyzeRequiredSmokes(candidate, observation) {
   }
 
   const results = observation.smokes.filter((smoke) => laneSet.has(smoke.name))
+  for (const smoke of results) {
+    if (smoke.commitSha !== candidate.commitSha) {
+      conflicts.push("required-smoke-commit-mismatch")
+    }
+    if (smoke.manifestSha256 !== observation.artifacts.manifestSha256) {
+      conflicts.push("required-smoke-manifest-mismatch")
+    }
+    if (
+      smoke.workflowRunId !== null &&
+      (!Number.isSafeInteger(smoke.workflowRunId) || smoke.workflowRunId <= 0)
+    ) {
+      conflicts.push("required-smoke-workflow-run-id-invalid")
+    }
+    if (
+      smoke.runAttempt !== null &&
+      (!Number.isSafeInteger(smoke.runAttempt) || smoke.runAttempt <= 0)
+    ) {
+      conflicts.push("required-smoke-run-attempt-invalid")
+    }
+    if (smoke.status === "passed") {
+      if (!Number.isSafeInteger(smoke.workflowRunId) || smoke.workflowRunId <= 0) {
+        conflicts.push("required-smoke-workflow-run-id-invalid")
+      }
+      if (!Number.isSafeInteger(smoke.runAttempt) || smoke.runAttempt <= 0) {
+        conflicts.push("required-smoke-run-attempt-invalid")
+      }
+    }
+  }
   const complete =
     conflicts.length === 0 &&
     lanes.length > 0 &&
@@ -392,7 +430,12 @@ function analyzeRequiredSmokes(candidate, observation) {
       return (
         laneResults.length === 1 &&
         laneResults[0].status === "passed" &&
-        laneResults[0].version === candidate.version
+        laneResults[0].version === candidate.version &&
+        laneResults[0].commitSha === candidate.commitSha &&
+        laneResults[0].manifestSha256 === observation.artifacts.manifestSha256 &&
+        observation.artifacts.manifestSha256 !== null &&
+        laneResults[0].workflowRunId > 0 &&
+        laneResults[0].runAttempt > 0
       )
     })
   return { complete, conflicts, results }
@@ -549,7 +592,7 @@ function validateObservation(observation) {
   assertObject(observation.artifacts, "observation.artifacts")
   assertExactFields(
     observation.artifacts,
-    ["status", "manifestVersion", "manifestCommitSha", "files"],
+    ["status", "manifestVersion", "manifestCommitSha", "manifestSha256", "files"],
     "observation.artifacts",
   )
   assertOneOf(
@@ -559,6 +602,7 @@ function validateObservation(observation) {
   )
   assertNullableSemver(observation.artifacts.manifestVersion, "artifacts.manifestVersion")
   assertNullableSha(observation.artifacts.manifestCommitSha, "artifacts.manifestCommitSha")
+  assertNullableSha256(observation.artifacts.manifestSha256, "artifacts.manifestSha256")
   const artifactsExist = ["prepared", "attested"].includes(observation.artifacts.status)
   assertIdentityPresence(
     artifactsExist ? "present" : observation.artifacts.status,
@@ -580,8 +624,9 @@ function validateObservation(observation) {
   })
 
   assertObject(observation.escrow, "observation.escrow")
-  assertExactFields(observation.escrow, ["status"], "observation.escrow")
+  assertExactFields(observation.escrow, ["status", "manifestSha256"], "observation.escrow")
   assertOneOf(observation.escrow.status, ["absent", "present", "ambiguous"], "escrow.status")
+  assertNullableSha256(observation.escrow.manifestSha256, "escrow.manifestSha256")
 
   validateRegistry(observation.registry, packageNames)
   validateRelease(observation.release)
@@ -684,7 +729,12 @@ function validateSmokes(smokes) {
   assertArray(smokes, "smokes")
   for (const smoke of smokes) {
     assertObject(smoke, "smoke")
-    assertExactFields(smoke, ["name", "status", "version"], "smoke")
+    assertExactFields(
+      smoke,
+      ["name", "status", "version", "commitSha", "manifestSha256", "workflowRunId", "runAttempt"],
+      "smoke",
+      ["commitSha", "manifestSha256", "workflowRunId", "runAttempt"],
+    )
     assertNonEmptyString(smoke.name, "smoke.name")
     assertOneOf(
       smoke.status,
@@ -693,6 +743,12 @@ function validateSmokes(smokes) {
     )
     if (!isExactSemver(smoke.version)) {
       throw new TypeError("smoke.version must be an exact SemVer")
+    }
+    if (smoke.commitSha !== undefined && smoke.commitSha !== null) {
+      assertSha(smoke.commitSha, "smoke.commitSha")
+    }
+    if (smoke.manifestSha256 !== undefined && smoke.manifestSha256 !== null) {
+      assertNullableSha256(smoke.manifestSha256, "smoke.manifestSha256")
     }
   }
 }
@@ -834,6 +890,12 @@ function assertNullableSha(value, label) {
 function assertNullableSemver(value, label) {
   if (value !== null && !isExactSemver(value)) {
     throw new TypeError(`${label} must be null or an exact SemVer`)
+  }
+}
+
+function assertNullableSha256(value, label) {
+  if (value !== null && (typeof value !== "string" || !SHA256_PATTERN.test(value))) {
+    throw new TypeError(`${label} must be null or a lowercase SHA-256 digest`)
   }
 }
 

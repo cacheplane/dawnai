@@ -9,6 +9,8 @@ const NEWER_VERSION = "0.8.21"
 const OLDER_VERSION = "0.8.19"
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
 const OTHER_SHA = "abcdef0123456789abcdef0123456789abcdef01"
+const MANIFEST_SHA256 = "a".repeat(64)
+const OTHER_MANIFEST_SHA256 = "b".repeat(64)
 const WORKFLOW = "release-candidate"
 const OUTPUT_KEYS = [
   "conflicts",
@@ -343,7 +345,7 @@ for (const status of ["missing", "failed"]) {
 }
 
 test("every named required smoke lane needs one exact-version success", () => {
-  const observation = useExplicitSmokeSchema(observationFor("RELEASE_DRAFT_COMPLETE"))
+  const observation = useCorrelatedSmokeSchema(observationFor("RELEASE_DRAFT_COMPLETE"))
   for (const smoke of observation.smokes) {
     smoke.status = "passed"
   }
@@ -356,6 +358,105 @@ test("every named required smoke lane needs one exact-version success", () => {
   assert.equal(plan.disposition, "would-transition")
   assert.equal(plan.nextTransition, "publish-github-release")
 })
+
+test("fully correlated required smoke results authorize SMOKES_COMPLETE", () => {
+  const observation = useCorrelatedSmokeSchema(observationFor("RELEASE_DRAFT_COMPLETE"))
+  for (const smoke of observation.smokes) {
+    smoke.status = "passed"
+  }
+
+  let plan
+  assert.doesNotThrow(() => {
+    plan = planRelease({ candidate: candidate(), observation })
+  })
+  assert.equal(plan.state, "SMOKES_COMPLETE")
+  assert.equal(plan.disposition, "would-transition")
+  assert.equal(plan.nextTransition, "publish-github-release")
+})
+
+const staleSmokeIdentityCases = [
+  {
+    name: "candidate commit",
+    mutate(smoke) {
+      smoke.commitSha = OTHER_SHA
+    },
+    conflict: "required-smoke-commit-mismatch",
+  },
+  {
+    name: "manifest digest",
+    mutate(smoke) {
+      smoke.manifestSha256 = OTHER_MANIFEST_SHA256
+    },
+    conflict: "required-smoke-manifest-mismatch",
+  },
+]
+
+for (const { name, mutate, conflict } of staleSmokeIdentityCases) {
+  test(`a required smoke result from another ${name} blocks publication`, () => {
+    const observation = useCorrelatedSmokeSchema(observationFor("RELEASE_DRAFT_COMPLETE"))
+    for (const smoke of observation.smokes) {
+      smoke.status = "passed"
+    }
+    mutate(observation.smokes[0])
+
+    assertDesiredSchemaBlocked(observation, conflict)
+  })
+}
+
+const invalidSmokeRunMetadataCases = [
+  {
+    name: "missing workflow run ID",
+    mutate(smoke) {
+      delete smoke.workflowRunId
+    },
+    conflict: "required-smoke-workflow-run-id-invalid",
+  },
+  {
+    name: "missing run attempt",
+    mutate(smoke) {
+      delete smoke.runAttempt
+    },
+    conflict: "required-smoke-run-attempt-invalid",
+  },
+  {
+    name: "non-positive workflow run ID",
+    mutate(smoke) {
+      smoke.workflowRunId = 0
+    },
+    conflict: "required-smoke-workflow-run-id-invalid",
+  },
+  {
+    name: "non-integer run attempt",
+    mutate(smoke) {
+      smoke.runAttempt = 1.5
+    },
+    conflict: "required-smoke-run-attempt-invalid",
+  },
+]
+
+for (const { name, mutate, conflict } of invalidSmokeRunMetadataCases) {
+  test(`${name} blocks a required smoke result`, () => {
+    const observation = useCorrelatedSmokeSchema(observationFor("RELEASE_DRAFT_COMPLETE"))
+    for (const smoke of observation.smokes) {
+      smoke.status = "passed"
+    }
+    mutate(observation.smokes[0])
+
+    assertDesiredSchemaBlocked(observation, conflict)
+  })
+}
+
+for (const source of ["artifacts", "escrow"]) {
+  test(`missing current manifest digest in ${source} blocks correlated smokes`, () => {
+    const observation = useCorrelatedSmokeSchema(observationFor("RELEASE_DRAFT_COMPLETE"))
+    for (const smoke of observation.smokes) {
+      smoke.status = "passed"
+    }
+    observation[source].manifestSha256 = null
+
+    assertDesiredSchemaBlocked(observation, `${source}-manifest-digest-missing`)
+  })
+}
 
 const invalidRequiredLaneCases = [
   {
@@ -671,10 +772,19 @@ function assertDesiredSchemaBlocked(observation, expectedConflict) {
 
 function useExplicitSmokeSchema(observation) {
   observation.requiredSmokeLanes = ["install", "runtime"]
-  observation.smokes = observation.smokes.map(({ name, status, version }) => ({
-    name,
-    status,
-    version,
+  return observation
+}
+
+function useCorrelatedSmokeSchema(observation) {
+  useExplicitSmokeSchema(observation)
+  observation.artifacts.manifestSha256 = MANIFEST_SHA256
+  observation.escrow.manifestSha256 = MANIFEST_SHA256
+  observation.smokes = observation.smokes.map((smoke, index) => ({
+    ...smoke,
+    commitSha: COMMIT_SHA,
+    manifestSha256: MANIFEST_SHA256,
+    workflowRunId: 100 + index,
+    runAttempt: 1,
   }))
   return observation
 }
@@ -707,10 +817,12 @@ function baseObservation() {
       status: "absent",
       manifestVersion: null,
       manifestCommitSha: null,
+      manifestSha256: null,
       files: PACKAGE_IDENTITIES.map(({ name }) => ({ name, status: "pending" })),
     },
     escrow: {
       status: "absent",
+      manifestSha256: null,
     },
     registry: {
       latest: {
@@ -724,8 +836,24 @@ function baseObservation() {
     release: releaseRecord("absent"),
     requiredSmokeLanes: ["install", "runtime"],
     smokes: [
-      { name: "install", status: "pending", version: VERSION },
-      { name: "runtime", status: "pending", version: VERSION },
+      {
+        name: "install",
+        status: "pending",
+        version: VERSION,
+        commitSha: COMMIT_SHA,
+        manifestSha256: null,
+        workflowRunId: null,
+        runAttempt: null,
+      },
+      {
+        name: "runtime",
+        status: "pending",
+        version: VERSION,
+        commitSha: COMMIT_SHA,
+        manifestSha256: null,
+        workflowRunId: null,
+        runAttempt: null,
+      },
     ],
     audit: {
       status: "none",
@@ -756,13 +884,18 @@ function observationFor(state) {
     status: state === "ARTIFACTS_PREPARED" ? "prepared" : "attested",
     manifestVersion: VERSION,
     manifestCommitSha: COMMIT_SHA,
+    manifestSha256: MANIFEST_SHA256,
     files: PACKAGE_IDENTITIES.map(({ name }) => ({ name, status: "valid" })),
+  }
+  for (const smoke of observation.smokes) {
+    smoke.manifestSha256 = MANIFEST_SHA256
   }
   if (state === "ARTIFACTS_PREPARED" || state === "ARTIFACTS_ATTESTED") {
     return observation
   }
 
   observation.escrow.status = "present"
+  observation.escrow.manifestSha256 = MANIFEST_SHA256
   if (state === "CANDIDATE_ESCROWED") {
     return observation
   }
@@ -791,6 +924,8 @@ function observationFor(state) {
 
   for (const smoke of observation.smokes) {
     smoke.status = "passed"
+    smoke.workflowRunId = 100 + observation.smokes.indexOf(smoke)
+    smoke.runAttempt = 1
   }
   if (state === "SMOKES_COMPLETE") {
     return observation
