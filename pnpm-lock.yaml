@@ -497,14 +497,14 @@ importers:
         specifier: workspace:*
         version: link:../memory
       '@pretable/core':
-        specifier: 0.0.6
-        version: 0.0.6
+        specifier: 0.0.8
+        version: 0.0.8
       '@pretable/react':
-        specifier: 0.0.6
-        version: 0.0.6(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.0.8
+        version: 0.0.8(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@pretable/ui':
-        specifier: 0.0.3
-        version: 0.0.3
+        specifier: 0.0.8
+        version: 0.0.8
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -2320,17 +2320,17 @@ packages:
   '@preact/signals-core@1.14.4':
     resolution: {integrity: sha512-HNB6HYeYKhQbJ1aKl+YRjrS4+QWHLKX6qKoUsfS/m0vqzsVaEBiZiaKbG/e+NKk2ch5ALQr/ihWaMHxiCuuWHA==}
 
-  '@pretable/core@0.0.6':
-    resolution: {integrity: sha512-VUCX6hef2e/ljQJqtDwIl6xnw1iy/tJdXIiR0oa0/bchADAXULNQ72AGKcthheKAzDNivCMOj7s90YYqtLoeaA==}
+  '@pretable/core@0.0.8':
+    resolution: {integrity: sha512-9S2E0hW+RncgqMeZpC5tRTfWOy2KZOIcPOP7jfj8EnVPGDL4O28AtRNItgb3+Hu2CnSfMhhuV+v2lUILyFyswA==}
 
-  '@pretable/react@0.0.6':
-    resolution: {integrity: sha512-ywKwscvWNxzBD5A8JfdQf9ko1lC1zW5uiCwjiumTP+Z9bkeepwd2ukCApLtNlMIoldhmyibiNKD3yfa73kbzBA==}
+  '@pretable/react@0.0.8':
+    resolution: {integrity: sha512-Xv+cBnfFKi+Y6BoZWe+cEu4pYCdUzv3TWTpvBFQKPyIyfLdGrlMuwdDSpYVIemrSGNPnKr7ZqH/+IRFsRSTnxQ==}
     peerDependencies:
       react: ^19.0.0
       react-dom: ^19.0.0
 
-  '@pretable/ui@0.0.3':
-    resolution: {integrity: sha512-9Ic0YE7mTxBs63sq3zLuiUn0gNvX187NwvvMXU0Tu8cCCvcOMLnKLYsMRTQWeZmi9jie4vYii07ah680VTWIPA==}
+  '@pretable/ui@0.0.8':
+    resolution: {integrity: sha512-Zdp48L6htWAR/NjR/jWA618GQVTkbbyWjqkpSz+wpnSZ1S43Wd928gFLr9We4GVSLQXhIryN3wl2/GHOwnMARw==}
 
   '@protobuf-ts/protoc@2.11.1':
     resolution: {integrity: sha512-mUZJaV0daGO6HUX90o/atzQ6A7bbN2RSuHtdwo8SSF2Qoe3zHwa4IHyCN1evftTeHfLmdz+45qo47sL+5P8nyg==}
@@ -9124,16 +9124,16 @@ snapshots:
 
   '@preact/signals-core@1.14.4': {}
 
-  '@pretable/core@0.0.6': {}
+  '@pretable/core@0.0.8': {}
 
-  '@pretable/react@0.0.6(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@pretable/react@0.0.8(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@pretable/core': 0.0.6
-      '@pretable/ui': 0.0.3
+      '@pretable/core': 0.0.8
+      '@pretable/ui': 0.0.8
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)
 
-  '@pretable/ui@0.0.3': {}
+  '@pretable/ui@0.0.8': {}
 
   '@protobuf-ts/protoc@2.11.1': {}
 
