@@ -59,7 +59,8 @@ Successful resolution guarantees:
    termination after the grace deadline.
 2. The spawned CLI child's `close` event fired, which occurs after exit and
    stdio closure.
-3. The helper no longer owns a live server at `baseUrl`.
+3. A bounded TCP probe confirms that the `baseUrl` port no longer accepts
+   connections, covering a descendant that might briefly outlive the outer CLI.
 
 If the process has already closed, `close()` resolves without sending another
 signal. If bounded graceful and forced termination both fail to produce a
@@ -76,14 +77,21 @@ The shared termination helper:
 1. Returns the existing closure result when the child is already closed.
 2. Sends `SIGTERM` to the negative PID so the detached process group is
    targeted; if group signalling is unavailable, falls back to `child.kill()`.
-3. Waits up to a small internal grace deadline for the child `close` event.
+3. Waits up to a 2,000 ms internal grace deadline for both the child `close`
+   event and the `baseUrl` port to stop accepting TCP connections.
 4. On expiry, sends `SIGKILL` to the same target.
-5. Waits for the `close` event with a final bounded deadline and rejects if the
-   process still cannot be reaped.
+5. Waits up to a final 2,000 ms for both observations and rejects if the child
+   still cannot be reaped or the port still accepts connections.
 
-The deadlines are internal constants, not public options. The helper is also
-used when readiness fails so a failed constructor does not leave the same
-process tree running in the background.
+The TCP observation uses `node:net`, a 100 ms connection-attempt timeout, and a
+25 ms polling interval. A connection timeout is treated as still potentially
+available; only connection refusal or another socket error establishes
+unavailability. The termination deadlines and probe timings are internal
+defaults, not public API. The internal termination helper accepts shorter
+deadlines for deterministic unit tests.
+
+The helper is also used when readiness fails so a failed constructor does not
+leave the same process tree running in the background.
 
 ## Error Handling
 
@@ -109,6 +117,16 @@ The regression test will:
 4. Race closure against a shorter timer and prove the timer wins. The current
    implementation fails because both closure promises resolve immediately.
 5. Await both calls and prove `/healthz` is unreachable.
+
+Focused internal-helper tests will use disposable real child processes and
+short test deadlines to verify the other new branches:
+
+- a child that ignores `SIGTERM` receives `SIGKILL` and is reaped;
+- a scoped signal stub that leaves a child alive causes the final deadline to
+  reject, after which the test forcibly cleans up the child;
+- a negative-PID signal failure falls back to `child.kill()`;
+- a constructor with an immediate readiness timeout does not reject until its
+  delayed termination finishes, proving readiness-failure cleanup is awaited.
 
 The focused test must be observed failing before production code changes and
 passing afterward. Package build, typecheck, lint, and tests plus the repository
