@@ -61,6 +61,24 @@ function resolveDawnCliEntry(): string {
   return resolve(pkgRoot, "node_modules", "@dawn-ai", "cli", "dist", "index.js")
 }
 
+function childClosePromise(child: ChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    child.once("error", reject)
+    child.once("close", () => resolve())
+  })
+}
+
+async function terminateSubprocess(
+  child: ChildProcess,
+  groupPid: number,
+  closed: Promise<void>,
+): Promise<void> {
+  if (child.exitCode === null && child.signalCode === null) {
+    process.kill(-groupPid, "SIGTERM")
+  }
+  await closed
+}
+
 export async function createSubprocessApp(opts: {
   readonly appRoot: string
   readonly env?: Record<string, string>
@@ -76,40 +94,36 @@ export async function createSubprocessApp(opts: {
     stdio: "pipe",
     detached: true,
   })
+  const groupPid = child.pid
+  const closed = childClosePromise(child)
+  if (groupPid === undefined) {
+    await closed
+    throw new Error("dawn dev subprocess has no process id")
+  }
+
   // surface server logs for debugging on failure
   child.stdout?.on("data", (b) => process.stdout.write(`[dawn dev] ${b}`))
   child.stderr?.on("data", (b) => process.stderr.write(`[dawn dev] ${b}`))
 
   const baseUrl = `http://127.0.0.1:${port}`
+  let closePromise: Promise<void> | undefined
+  const close = (): Promise<void> => {
+    closePromise ??= terminateSubprocess(child, groupPid, closed)
+    return closePromise
+  }
+
   try {
     await waitReady(`${baseUrl}/healthz`, opts.readyTimeoutMs ?? 60_000)
   } catch (err) {
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, "SIGTERM")
-      } catch {
-        child.kill("SIGTERM")
-      }
-    }
+    await close()
     throw err
   }
 
-  let stopped = false
   const app: SubprocessApp = {
     baseUrl,
-    async close() {
-      if (stopped) return
-      stopped = true
-      if (child.pid) {
-        try {
-          process.kill(-child.pid, "SIGTERM")
-        } catch {
-          child.kill("SIGTERM")
-        }
-      }
-    },
+    close,
     [Symbol.asyncDispose](): Promise<void> {
-      return this.close()
+      return close()
     },
   }
   return app
