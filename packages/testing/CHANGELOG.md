@@ -1,5 +1,15 @@
 # @dawn-ai/testing
 
+## 0.8.20
+
+### Patch Changes
+
+- @dawn-ai/cli@0.8.20
+- @dawn-ai/core@0.8.20
+- @dawn-ai/memory@0.8.20
+- @dawn-ai/sdk@0.8.20
+- @dawn-ai/workspace@0.8.20
+
 ## 0.8.19
 
 ### Patch Changes
