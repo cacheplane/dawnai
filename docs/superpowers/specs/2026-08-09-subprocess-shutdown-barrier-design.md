@@ -55,9 +55,9 @@ async disposal, receives that promise.
 
 Successful resolution guarantees:
 
-1. Unless the child was already closed and the port unavailable, the detached
-   process group received graceful termination or forced termination after the
-   grace deadline.
+1. Unless the child was already closed and the port unavailable, teardown
+   dispatched graceful termination and, after the grace deadline, forced
+   termination using the platform's process-tree mechanism.
 2. The spawned CLI child's `close` event fired, which occurs after exit and
    stdio closure.
 3. A bounded TCP probe confirms that the `baseUrl` port no longer accepts
@@ -65,11 +65,11 @@ Successful resolution guarantees:
 
 If the outer process has already closed, that satisfies only the child-closure
 half of the barrier. `close()` still probes the port. If a descendant continues
-serving, the helper signals the saved process-group ID and follows the same
-bounded escalation path. If bounded graceful and forced termination fail to
-produce child closure and port unavailability, `close()` rejects with the
-process identifier and termination context instead of falsely reporting
-success.
+serving, POSIX can still target the saved process group; Windows never targets
+a saved PID after its child has closed. If bounded graceful and forced
+termination fail to produce child closure and port unavailability, `close()`
+rejects with the saved process identifier and termination context instead of
+falsely reporting success.
 
 ## Termination Algorithm
 
@@ -80,11 +80,18 @@ The shared termination helper:
 
 1. Checks child closure and port availability independently. It resolves
    immediately only when the child is closed and the port is unavailable.
-2. Otherwise sends `SIGTERM` to the saved negative PID so the detached process group is
-   targeted; if group signalling is unavailable, falls back to `child.kill()`.
+2. Otherwise dispatches the first phase by platform:
+   - On POSIX, sends `SIGTERM` to the saved negative PID so the detached
+     process group is targeted; if group signalling is unavailable, falls back
+     to `child.kill()`.
+   - On Windows, runs `taskkill.exe /PID <saved PID> /T /F` with the phase's
+     remaining time as its command timeout. A closed child is not targeted.
 3. Waits up to a 2,000 ms internal grace deadline for both the child `close`
    event and the `baseUrl` port to stop accepting TCP connections.
-4. On expiry, sends `SIGKILL` to the same target.
+4. On expiry, runs the forced phase. POSIX sends `SIGKILL` through the same
+   group-then-direct-child dispatch. Windows again uses bounded `taskkill.exe`
+   for the saved live child, then may make a last-resort direct-child kill only
+   if that command failed and the phase still has time remaining.
 5. Waits up to a final 2,000 ms for both observations and rejects if the child
    still cannot be reaped or the port still accepts connections.
 
@@ -95,17 +102,21 @@ unavailability. The termination deadlines and probe timings are internal
 defaults, not public API. The internal termination helper accepts shorter
 deadlines for deterministic unit tests.
 
-The helper is also used when readiness fails so a failed constructor does not
-leave the same process tree running in the background.
+Time spent running a Windows `taskkill.exe` command is charged to its grace or
+forced phase; it cannot extend either deadline. The helper is also used when
+readiness fails so a failed constructor does not leave the same process tree
+running in the background.
 
 ## Error Handling
 
-- A signal race with an already-exited process is treated as successful once
-  the closure promise resolves.
-- Group-signal failure falls back to signalling the direct child.
-- A wedged process escalates from `SIGTERM` to `SIGKILL`.
+- A dispatch race with an already-exited process is treated as successful once
+  the closure promise resolves and the port is unavailable.
+- On POSIX, group-signal failure falls back to signalling the direct child.
+- A wedged POSIX process escalates from `SIGTERM` to `SIGKILL`; Windows uses
+  bounded tree termination for both phases.
 - Failure to observe closure after forced termination rejects rather than
   hanging indefinitely.
+- Dispatch failures are retained as the final termination error's cause.
 - Readiness errors are rethrown after bounded cleanup; a teardown failure is
   surfaced when cleanup itself cannot complete.
 
@@ -124,7 +135,7 @@ The regression test will:
 5. Await both calls and prove `/healthz` is unreachable.
 
 Focused internal-helper tests will use disposable real child processes and
-short test deadlines to verify the other new branches:
+short test deadlines to verify the other new branches. POSIX-only tests cover:
 
 - a child that ignores `SIGTERM` receives `SIGKILL` and is reaped;
 - a scoped signal stub that leaves a child alive causes the final deadline to
@@ -136,6 +147,11 @@ short test deadlines to verify the other new branches:
 - a constructor with an immediate readiness timeout does not reject until its
   delayed termination finishes, proving readiness-failure cleanup is awaited.
 
+Windows-only tests use a live process-tree fixture to verify `taskkill.exe`
+terminates the tree without an unnecessary direct-child kill, and an orphan
+fixture to verify a closed child's saved PID is never targeted. The shared
+fixture file is `packages/testing/test/fixtures/subprocess-tree.mjs`.
+
 The focused test must be observed failing before production code changes and
 passing afterward. Package build, typecheck, lint, and tests plus the repository
 Definition of Done complete verification.
@@ -146,6 +162,8 @@ Definition of Done complete verification.
   barrier and bounded process-tree termination helper.
 - Modify `packages/testing/test/subprocess.test.ts` for deterministic closure,
   concurrency, and reachability assertions.
+- Add `packages/testing/test/fixtures/subprocess-tree.mjs` for real process
+  tree and orphan scenarios.
 - Add a patch changeset for `@dawn-ai/testing`.
 
 ## Release

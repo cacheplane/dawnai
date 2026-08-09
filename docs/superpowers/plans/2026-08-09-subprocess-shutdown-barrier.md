@@ -4,7 +4,7 @@
 
 **Goal:** Make `createSubprocessApp().close()` and async disposal resolve only after the owned process tree has stopped and its port is unavailable.
 
-**Architecture:** Keep the public API unchanged. Build the shutdown barrier incrementally: first await the spawned CLI's `close` event through one memoized promise, then add bounded TCP observation for surviving descendants, `SIGKILL` escalation, and direct-child fallback. Reuse the same closure function when readiness fails.
+**Architecture:** Keep the public API unchanged. Build the shutdown barrier incrementally: first await the spawned CLI's `close` event through one memoized promise, then add bounded TCP observation for surviving descendants and forced termination. On POSIX, signal the detached group and fall back to the direct child. On Windows, use bounded `taskkill.exe /PID <saved PID> /T /F` before any last-resort direct-child kill. Reuse the same closure function when readiness fails.
 
 **Tech Stack:** TypeScript, Node.js `child_process`/`net`/`timers`, Vitest, pnpm, Changesets.
 
@@ -16,7 +16,7 @@
 - Modify: `packages/testing/test/subprocess.test.ts`
 - Test: `packages/testing/test/subprocess.test.ts`
 
-- [ ] **Step 1: Build before exercising the real `dist` CLI**
+- [x] **Step 1: Build before exercising the real `dist` CLI**
 
 ```bash
 pnpm build
@@ -24,7 +24,7 @@ pnpm build
 
 Expected: PASS. This is mandatory because `createSubprocessApp()` executes `packages/cli/dist/index.js`.
 
-- [ ] **Step 2: Add deterministic delayed-signal tests**
+- [x] **Step 2: Add deterministic delayed-signal tests**
 
 Import `setTimeout as delay` from `node:timers/promises` and `vi` from Vitest. Add:
 
@@ -94,7 +94,7 @@ it("waits for cleanup when readiness fails", async () => {
 }, 120_000)
 ```
 
-- [ ] **Step 3: Run each test and verify RED**
+- [x] **Step 3: Run each test and verify RED**
 
 ```bash
 pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts -t "shares one close promise"
@@ -103,7 +103,7 @@ pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/
 
 Expected: the first fails because `close()` returns immediately and distinct async promises; the second fails because constructor rejection does not await delayed termination.
 
-- [ ] **Step 4: Commit the red tests**
+- [x] **Step 4: Commit the red tests**
 
 ```bash
 git add packages/testing/test/subprocess.test.ts
@@ -116,7 +116,7 @@ git commit -m "test(testing): pin subprocess shutdown barrier"
 - Modify: `packages/testing/src/subprocess.ts`
 - Test: `packages/testing/test/subprocess.test.ts`
 
-- [ ] **Step 1: Establish the `close` observation immediately after spawn**
+- [x] **Step 1: Establish the `close` observation immediately after spawn**
 
 Add this internal helper; do not resolve from `exitCode` or `signalCode`, because the contract requires stdio closure:
 
@@ -136,7 +136,7 @@ if (groupPid === undefined) throw new Error("dawn dev subprocess has no process 
 const closed = childClosePromise(child)
 ```
 
-- [ ] **Step 2: Add graceful process-group termination**
+- [x] **Step 2: Add graceful process-group termination**
 
 ```ts
 async function terminateSubprocess(
@@ -153,7 +153,7 @@ async function terminateSubprocess(
 
 This is deliberately the minimum green implementation. Escalation and fallback come only after their own red tests.
 
-- [ ] **Step 3: Memoize one closure function and reuse it everywhere**
+- [x] **Step 3: Memoize one closure function and reuse it everywhere**
 
 After `baseUrl` is known:
 
@@ -167,7 +167,7 @@ const close = (): Promise<void> => {
 
 Replace readiness-failure signal dispatch with `await close()`. Return `close` directly as the app object's `close` property, and make `[Symbol.asyncDispose]()` return `close()`. Remove `stopped` and the `async close()` wrapper so promise identity is preserved.
 
-- [ ] **Step 4: Run Task 1 tests and verify GREEN**
+- [x] **Step 4: Run Task 1 tests and verify GREEN**
 
 Run both Task 1 commands, then:
 
@@ -177,7 +177,7 @@ pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/
 
 Expected: all subprocess tests pass.
 
-- [ ] **Step 5: Commit the minimal barrier**
+- [x] **Step 5: Commit the minimal barrier**
 
 ```bash
 git add packages/testing/src/subprocess.ts
@@ -191,7 +191,7 @@ git commit -m "fix(testing): await subprocess closure"
 - Modify: `packages/testing/test/subprocess.test.ts`
 - Modify: `packages/testing/src/subprocess.ts`
 
-- [ ] **Step 1: Create the disposable process-tree fixture**
+- [x] **Step 1: Create the disposable process-tree fixture**
 
 Create `packages/testing/test/fixtures/subprocess-tree.mjs`:
 
@@ -227,7 +227,7 @@ if (mode === "idle" || mode === "ignore-term") {
 }
 ```
 
-- [ ] **Step 2: Add exact test helpers**
+- [x] **Step 2: Add exact test helpers**
 
 In `subprocess.test.ts`, import `spawn`, `createConnection`, and `terminateSubprocess`. Add:
 
@@ -274,7 +274,7 @@ function canConnect(baseUrl: string): Promise<boolean> {
 }
 ```
 
-- [ ] **Step 3: Add and run the surviving-descendant RED test**
+- [x] **Step 3: Add and run the surviving-descendant RED test**
 
 ```ts
 it("waits for a surviving descendant to release the port", async () => {
@@ -304,7 +304,7 @@ pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/
 
 Expected: RED at compile time because the internal helper does not yet accept `baseUrl`/timings, or behaviorally because it returns after the already-closed leader while the port remains live.
 
-- [ ] **Step 4: Implement bounded joint observation**
+- [x] **Step 4: Implement bounded joint observation**
 
 Import `createConnection` from `node:net`. Add internal defaults of 2,000 ms graceful/forced deadlines, 25 ms polling, and 100 ms probe timeout. Export `TerminationTimings` and `terminateSubprocess` from this source module for direct tests, but do not re-export either from `src/index.ts`.
 
@@ -312,7 +312,7 @@ Implement `portAcceptsConnections()` with a TCP socket that resolves `true` on c
 
 Update `terminateSubprocess()` to accept `baseUrl` and timings. Resolve immediately only when the child is closed and the port is unavailable; otherwise signal the saved group with `SIGTERM`, wait the grace deadline, and throw a PID/deadline error for now. Update the public close call to pass `baseUrl` and defaults.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run the Task 3 test and the whole subprocess file. Expected: PASS.
 
@@ -327,23 +327,23 @@ git commit -m "fix(testing): observe subprocess port shutdown"
 - Modify: `packages/testing/test/subprocess.test.ts`
 - Modify: `packages/testing/src/subprocess.ts`
 
-- [ ] **Step 1: Add and run the escalation RED test**
+- [x] **Step 1: Add and run the escalation RED test**
 
 Use `spawnTree("ignore-term")` with an unavailable base URL obtained by binding a temporary `createServer()` to port zero and closing it. Add one pass-through `process.kill` spy test that expects `terminateSubprocess()` to resolve and observes `[-groupPid, "SIGKILL"]`. Restore the spy and forcibly clean up the exact process group in `finally`.
 
 Run only the escalation test. Expected: RED because the current graceful deadline throws without attempting `SIGKILL`.
 
-- [ ] **Step 2: Add and run the final-timeout RED test**
+- [x] **Step 2: Add and run the final-timeout RED test**
 
 Add the second test described above whose exact negative-PID `SIGTERM` and `SIGKILL` calls return `true` without delivering signals. Run only that test. Expected: RED because the current error is raised after the graceful deadline and does not represent a failed forced-termination deadline. Every spawned process and spy must be restored and the exact group forcibly cleaned up in `finally`.
 
 The escalation assertion must prove `SIGKILL` was delivered. The final-timeout assertion must prove the error names the group PID and the combined `graceMs + forceMs` deadline.
 
-- [ ] **Step 3: Implement forced termination**
+- [x] **Step 3: Implement forced termination**
 
 After the graceful wait expires, signal the group with `SIGKILL`. Await the same joint child-close/port-unavailable condition for `forceMs`. Return on success; otherwise throw an error containing the group PID and `graceMs + forceMs`.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 ```bash
 pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts -t "SIGKILL|bounded failure"
@@ -351,23 +351,23 @@ git add packages/testing/src/subprocess.ts packages/testing/test/subprocess.test
 git commit -m "fix(testing): bound subprocess termination"
 ```
 
-### Task 5: Fall back when group signalling is unavailable
+### Task 5: Dispatch termination per platform
 
 **Files:**
 - Modify: `packages/testing/test/subprocess.test.ts`
 - Modify: `packages/testing/src/subprocess.ts`
 
-- [ ] **Step 1: Add the fallback RED test**
+- [x] **Step 1: Add platform-gated RED tests**
 
-Spawn `idle`, make only `process.kill(-groupPid, "SIGTERM")` throw, and install a pass-through spy on `child.kill`. Await termination and assert `child.kill("SIGTERM")` was called. Restore spies and forcibly clean up the exact group in `finally`.
+On POSIX, spawn `idle`, make only `process.kill(-groupPid, "SIGTERM")` throw, and install a pass-through spy on `child.kill`. Await termination and assert `child.kill("SIGTERM")` was called. Restore spies and forcibly clean up the exact group in `finally`.
 
-Run the test. Expected: RED because group-signalling failure currently escapes.
+On Windows, add platform-gated fixtures and tests for a live process tree and an orphaned descendant. The live-tree test proves `taskkill.exe /PID <saved PID> /T /F` terminates the tree without directly killing the outer child. The orphan test proves a closed outer child is never targeted by stale PID.
 
-- [ ] **Step 2: Implement direct-child fallback**
+- [x] **Step 2: Implement platform-specific dispatch**
 
-Extract `signalProcessTree(child, groupPid, signal)`: try `process.kill(-groupPid, signal)` and, on error, call `child.kill(signal)`. Use it for both graceful and forced signals.
+Extract `signalProcessTree(...)`. On POSIX, try `process.kill(-groupPid, signal)` and, on error, call `child.kill(signal)`. On Windows, first run bounded `taskkill.exe /PID <saved PID> /T /F`; charge that command's elapsed time to its grace or force phase. Only after a failed forced-phase command, while time remains and the child is still live, attempt a last-resort direct-child kill. Never target a saved PID after its child has closed.
 
-- [ ] **Step 3: Verify GREEN and commit**
+- [x] **Step 3: Verify GREEN and commit**
 
 ```bash
 pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts
@@ -382,7 +382,7 @@ git commit -m "fix(testing): fall back to direct process signals"
 - Verify: `packages/testing/src/subprocess.ts`
 - Verify: `packages/testing/test/subprocess.test.ts`
 
-- [ ] **Step 1: Add the exact patch changeset**
+- [x] **Step 1: Add the exact patch changeset**
 
 ```md
 ---
@@ -392,7 +392,7 @@ git commit -m "fix(testing): fall back to direct process signals"
 Wait for subprocess applications to finish terminating before `close()` or async disposal resolves.
 ```
 
-- [ ] **Step 2: Run package verification**
+- [x] **Step 2: Run package verification**
 
 ```bash
 pnpm --filter @dawn-ai/testing build
@@ -403,7 +403,7 @@ pnpm --filter @dawn-ai/testing test
 
 Expected: all commands pass.
 
-- [ ] **Step 3: Run repository validation**
+- [x] **Step 3: Run repository validation**
 
 ```bash
 pnpm ci:validate
@@ -411,7 +411,7 @@ pnpm ci:validate
 
 Expected: all Definition of Done lanes pass. Environment-gated Docker/Kubernetes lanes remain PR CI responsibilities.
 
-- [ ] **Step 4: Review tracked and uncommitted changes**
+- [x] **Step 4: Review tracked and uncommitted changes**
 
 ```bash
 git diff --check main...HEAD
@@ -422,9 +422,9 @@ git status --short
 
 Expected: no whitespace errors; only the approved spec/plan, testing source/tests/fixture, and exact changeset are changed.
 
-- [ ] **Step 5: Commit release metadata and plan progress**
+- [x] **Step 5: Commit release metadata and plan progress**
 
 ```bash
-git add .changeset/quiet-process-close.md docs/superpowers/plans/2026-08-09-subprocess-shutdown-barrier.md
+git add .changeset/quiet-process-close.md docs/superpowers/plans/2026-08-09-subprocess-shutdown-barrier.md docs/superpowers/specs/2026-08-09-subprocess-shutdown-barrier-design.md
 git commit -m "chore(testing): document subprocess shutdown fix"
 ```
