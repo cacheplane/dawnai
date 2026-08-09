@@ -16,7 +16,7 @@
 - Modify: `scripts/check-build-cache-config.mjs`
 - Test: `scripts/check-build-cache-config.mjs` through `pnpm check:build-cache`
 
-- [ ] **Step 1: Add effective-task inspection**
+- [x] **Step 1: Add effective-task inspection**
 
 Import `execFileSync` from `node:child_process`. Add paths for the CLI package,
 website docs source, navigation file, and local Turbo binary:
@@ -30,7 +30,7 @@ const turboPath = join(repoRoot, "node_modules", ".bin", "turbo")
 
 Add a recursive MDX inventory helper using `readdirSync(..., { withFileTypes: true })` and a normalizer that resolves Turbo input keys relative to `cliRoot` before converting them to repository-relative POSIX paths.
 
-- [ ] **Step 2: Parse the effective CLI build task**
+- [x] **Step 2: Parse the effective CLI build task**
 
 Run Turbo without executing the build:
 
@@ -65,7 +65,7 @@ pnpm check:build-cache
 
 Expected: FAIL. The output identifies all website MDX inputs, the navigation input, and `docs/**` as missing. `packages/cli/src/index.ts` and `dist/**` should already be present, proving the default inputs and existing output are visible.
 
-- [ ] **Step 4: Commit the red guard**
+- [x] **Step 4: Commit the red guard**
 
 ```bash
 git add scripts/check-build-cache-config.mjs
@@ -78,7 +78,7 @@ git commit -m "test(cli): guard bundled docs cache contract"
 - Modify: `turbo.json`
 - Test: `scripts/check-build-cache-config.mjs` through `pnpm check:build-cache`
 
-- [ ] **Step 1: Add the package-qualified build task**
+- [x] **Step 1: Add the package-qualified build task**
 
 Add this sibling of the generic `build` task:
 
@@ -94,7 +94,7 @@ Add this sibling of the generic `build` task:
 }
 ```
 
-- [ ] **Step 2: Run the guard and verify GREEN**
+- [x] **Step 2: Run the guard and verify GREEN**
 
 ```bash
 pnpm check:build-cache
@@ -102,7 +102,7 @@ pnpm check:build-cache
 
 Expected: PASS. The success message states that the generic `dist/**` contract and CLI bundled-docs contract were checked.
 
-- [ ] **Step 3: Inspect the effective task**
+- [x] **Step 3: Inspect the effective task**
 
 ```bash
 pnpm exec turbo run build --filter=@dawn-ai/cli --dry=json
@@ -110,7 +110,7 @@ pnpm exec turbo run build --filter=@dawn-ai/cli --dry=json
 
 Expected: `@dawn-ai/cli#build` contains all 42 current MDX files and the navigation file in `inputs`, retains `src/index.ts`, and lists `dist/**` plus `docs/**` in outputs.
 
-- [ ] **Step 4: Commit the configuration fix**
+- [x] **Step 4: Commit the configuration fix**
 
 ```bash
 git add turbo.json
@@ -123,7 +123,7 @@ git commit -m "fix(cli): cache generated documentation"
 - Generated then remove/restore: `packages/cli/docs/**`
 - Verify: `turbo.json`
 
-- [ ] **Step 1: Populate a fresh cache entry with generated docs**
+- [x] **Step 1: Populate a fresh cache entry with generated docs**
 
 ```bash
 pnpm exec turbo run build --filter=@dawn-ai/cli... --force
@@ -131,7 +131,7 @@ pnpm exec turbo run build --filter=@dawn-ai/cli... --force
 
 Expected: the CLI build executes and writes 42 topics plus `README.md`; `packages/cli/docs/README.md` exists.
 
-- [ ] **Step 2: Remove only the generated docs output**
+- [x] **Step 2: Remove only the generated docs output**
 
 Validate the exact target, then remove it:
 
@@ -143,7 +143,7 @@ test ! -d packages/cli/docs
 
 Expected: the gitignored generated directory is absent; tracked files are untouched.
 
-- [ ] **Step 3: Restore from an unchanged cache hit**
+- [x] **Step 3: Restore from an unchanged cache hit**
 
 ```bash
 pnpm exec turbo run build --filter=@dawn-ai/cli...
@@ -154,7 +154,7 @@ test -f packages/cli/docs/tools.md
 
 Expected: Turbo reports cache hits, and representative bundled docs are restored without executing the generator.
 
-- [ ] **Step 4: Confirm no generated files are tracked**
+- [x] **Step 4: Confirm no generated files are tracked**
 
 ```bash
 git status --short
@@ -169,7 +169,7 @@ Expected: `packages/cli/docs/**` does not appear; it remains gitignored.
 - Verify: `scripts/check-build-cache-config.mjs`
 - Verify: `turbo.json`
 
-- [ ] **Step 1: Add a patch changeset**
+- [x] **Step 1: Add a patch changeset**
 
 Create:
 
@@ -181,7 +181,7 @@ Create:
 Invalidate and restore the CLI's bundled documentation correctly through the Turbo build cache.
 ```
 
-- [ ] **Step 2: Run focused verification**
+- [x] **Step 2: Run focused verification**
 
 ```bash
 pnpm lint
@@ -193,7 +193,7 @@ pnpm pack:check
 
 Expected: all commands pass, the CLI docs are present after build/cache restoration, and the packed CLI contains its required documentation.
 
-- [ ] **Step 3: Run repository validation**
+- [x] **Step 3: Run repository validation**
 
 ```bash
 pnpm ci:validate
@@ -201,7 +201,7 @@ pnpm ci:validate
 
 Expected: all Definition of Done lanes pass. Environment-gated Docker/Kubernetes lanes remain PR CI responsibilities.
 
-- [ ] **Step 4: Review the final diff**
+- [x] **Step 4: Review the final diff**
 
 ```bash
 git diff --check main...HEAD
@@ -212,7 +212,7 @@ git status --short
 
 Expected: no whitespace errors; only the approved spec/plan, cache-check script, Turbo configuration, and changeset are tracked changes.
 
-- [ ] **Step 5: Commit release metadata and any plan checkmarks**
+- [x] **Step 5: Commit release metadata and any plan checkmarks**
 
 ```bash
 git add .changeset/bright-docs-cache.md docs/superpowers/plans/2026-08-09-cli-docs-turbo-cache.md
