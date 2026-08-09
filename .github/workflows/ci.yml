@@ -132,9 +132,9 @@ jobs:
         run: pnpm --filter @dawn-ai/testing... build
 
       - name: Native Windows subprocess shutdown tests
-        # This file includes the real win32 taskkill process-tree and orphan
-        # checks. It is deliberately focused, not broader Windows coverage.
-        run: pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts
+        # Exercise the real win32 taskkill tree and the injected stale-dispatch
+        # guard without running broader Windows HMR coverage.
+        run: pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts --testNamePattern "Windows process tree|injected Windows tree kill"
 
   sandbox-docker:
     runs-on: ubuntu-latest

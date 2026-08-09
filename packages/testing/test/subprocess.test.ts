@@ -159,9 +159,7 @@ function delaySubprocessTermination() {
   }
 }
 
-async function spawnTree(
-  mode: "idle" | "ignore-term" | "leader" | "windows-tree" | "windows-orphan",
-) {
+async function spawnTree(mode: "idle" | "ignore-term" | "leader" | "windows-tree") {
   const child = spawn(process.execPath, [processTreeFixture, mode], {
     detached: true,
     stdio: ["ignore", "pipe", "inherit"],
@@ -224,6 +222,31 @@ async function unavailableBaseUrl(): Promise<string> {
     server.close((error) => (error ? reject(error) : resolve())),
   )
   return `http://127.0.0.1:${port}`
+}
+
+async function liveBaseUrl(): Promise<{
+  readonly baseUrl: string
+  readonly close: () => Promise<void>
+}> {
+  const server = createServer((socket) => socket.end())
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      if (typeof address !== "object" || address === null) {
+        reject(new Error("temporary server did not expose a TCP port"))
+        return
+      }
+      resolve(address.port)
+    })
+  })
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    close: async () =>
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+  }
 }
 
 it("boots a real dawn dev subprocess and serves the AP", async () => {
@@ -464,88 +487,42 @@ it.skipIf(process.platform !== "win32")(
   10_000,
 )
 
-it.skipIf(process.platform !== "win32")(
-  "does not dispatch taskkill after a Windows outer child has closed",
-  async () => {
-    let descendantPid: number | undefined
-    let descendantBaseUrl: string | undefined
-    let childKillSpy: ReturnType<typeof vi.spyOn> | undefined
-
-    try {
-      const tree = await spawnTree("windows-orphan")
-      const topology = JSON.parse(tree.line) as { readonly pid: number; readonly port: number }
-      descendantPid = topology.pid
-      descendantBaseUrl = `http://127.0.0.1:${topology.port}`
-      await tree.closed
-      expect(await canConnect(descendantBaseUrl)).toBe(true)
-      childKillSpy = vi.spyOn(tree.child, "kill")
-
-      await expect(
-        terminateSubprocess(
-          tree.child,
-          tree.groupPid,
-          tree.closed,
-          descendantBaseUrl,
-          TEST_TERMINATION_TIMINGS,
-        ),
-      ).rejects.toThrow(`subprocess group ${tree.groupPid} did not stop`)
-
-      expect(childKillSpy).not.toHaveBeenCalled()
-      expect(await canConnect(descendantBaseUrl)).toBe(true)
-    } finally {
-      childKillSpy?.mockRestore()
-      if (
-        descendantPid !== undefined &&
-        descendantBaseUrl !== undefined &&
-        (await canConnect(descendantBaseUrl))
-      ) {
-        await taskkill(descendantPid, false)
-      }
-    }
-  },
-  10_000,
-)
-
-it("does not dispatch an injected Windows tree kill after the outer child has closed", async () => {
-  const realKill = process.kill.bind(process)
-  let groupPid: number | undefined
-  let descendantPid: number | undefined
-  let descendantBaseUrl: string | undefined
+it("does not dispatch an injected Windows tree kill after a child has closed", async () => {
+  const realChildKill = ChildProcess.prototype.kill
   const taskkillSpy = vi.fn(async (_pid: number, _timeoutMs: number) => {})
+  let tree: Awaited<ReturnType<typeof spawnTree>> | undefined
+  let server: Awaited<ReturnType<typeof liveBaseUrl>> | undefined
 
   try {
-    const tree = await spawnTree("windows-orphan")
-    groupPid = tree.groupPid
-    const topology = JSON.parse(tree.line) as { readonly pid: number; readonly port: number }
-    descendantPid = topology.pid
-    descendantBaseUrl = `http://127.0.0.1:${topology.port}`
+    tree = await spawnTree("idle")
+    server = await liveBaseUrl()
+    try {
+      realChildKill.call(tree.child, "SIGTERM")
+    } catch (error) {
+      if (!hasErrorCode(error, "ESRCH")) throw error
+    }
     await tree.closed
-    expect(await canConnect(descendantBaseUrl)).toBe(true)
 
     await expect(
       terminateSubprocess(
         tree.child,
         tree.groupPid,
         tree.closed,
-        descendantBaseUrl,
+        server.baseUrl,
         TEST_TERMINATION_TIMINGS,
         { platform: "win32", taskkillProcessTree: taskkillSpy },
       ),
-    ).rejects.toThrow(`subprocess group ${tree.groupPid} did not stop`)
+    ).rejects.toThrow(
+      `subprocess group ${tree.groupPid} did not stop within ${TEST_TERMINATION_TIMINGS.graceMs + TEST_TERMINATION_TIMINGS.forceMs}ms`,
+    )
 
     expect(taskkillSpy).not.toHaveBeenCalled()
-    expect(await canConnect(descendantBaseUrl)).toBe(true)
+    expect(await canConnect(server.baseUrl)).toBe(true)
   } finally {
-    if (
-      descendantPid !== undefined &&
-      descendantBaseUrl !== undefined &&
-      (await canConnect(descendantBaseUrl))
-    ) {
-      if (process.platform === "win32") {
-        await taskkill(descendantPid, false)
-      } else if (groupPid !== undefined) {
-        await forceKillProcessGroup(groupPid, realKill)
-      }
+    try {
+      if (tree) await waitForChildExit(tree.child, tree.closed, realChildKill)
+    } finally {
+      if (server) await server.close()
     }
   }
 })

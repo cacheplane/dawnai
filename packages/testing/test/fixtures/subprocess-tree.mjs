@@ -22,7 +22,7 @@ if (mode === "idle" || mode === "ignore-term") {
   descendant.stdout?.once("data", (chunk) => {
     process.stdout.write(chunk, () => process.exit(0))
   })
-} else if (mode === "windows-tree" || mode === "windows-orphan") {
+} else if (mode === "windows-tree") {
   const descendantSource = `
     import { createServer } from "node:net"
     const server = createServer((socket) => socket.end())
@@ -36,11 +36,9 @@ if (mode === "idle" || mode === "ignore-term") {
     stdio: ["ignore", "pipe", "inherit"],
   })
   descendant.stdout?.once("data", (chunk) => {
-    process.stdout.write(chunk, () => {
-      if (mode === "windows-orphan") process.exit(0)
-    })
+    process.stdout.write(chunk)
   })
-  if (mode === "windows-tree") setInterval(() => {}, 1_000)
+  setInterval(() => {}, 1_000)
 } else {
   throw new Error(`unknown subprocess-tree mode: ${mode}`)
 }

@@ -147,23 +147,25 @@ short test deadlines to verify the other new branches. POSIX-only tests cover:
 - a constructor with an immediate readiness timeout does not reject until its
   delayed termination finishes, proving readiness-failure cleanup is awaited.
 
-Windows-only tests use a live process-tree fixture to verify `taskkill.exe`
-terminates the tree without an unnecessary direct-child kill. A deterministic
-cross-platform test injects the Windows platform and tree-kill dispatcher for
-an orphan fixture, then verifies bounded rejection and zero dispatcher calls
-after the outer child closes. The shared fixture file is
+One Windows-only live process-tree test verifies `taskkill.exe` terminates the
+tree without an unnecessary direct-child kill. One deterministic cross-platform
+test closes an idle child while an independent TCP server stays live, injects
+the Windows platform and tree-kill dispatcher, then verifies bounded rejection
+and zero dispatcher calls. The shared fixture file is
 `packages/testing/test/fixtures/subprocess-tree.mjs`.
 
 A focused native Windows CI job builds the `@dawn-ai/testing` dependency
-closure, including the CLI distribution the test starts, then runs only
-`packages/testing/test/subprocess.test.ts` through that package's Vitest
-configuration. This validates the two real Windows `taskkill.exe` tree and
-orphan cases; it does not claim broader Windows test coverage.
+closure, including the CLI distribution the test starts, then runs only the
+live Windows process-tree test and injected stale-dispatch guard from
+`packages/testing/test/subprocess.test.ts`. The first covers real
+`taskkill.exe` process-tree shutdown; the second proves the closed-child guard
+without relying on a surviving orphan fixture. It does not claim broader
+Windows test coverage.
 
 The focused test must be observed failing before production code changes and
 passing afterward. Package build, typecheck, lint, and tests plus the repository
-Definition of Done complete verification. The native Windows CI job is the
-platform-specific verification for the real `taskkill.exe` cases.
+Definition of Done complete verification. The native Windows CI job selects the
+one real `taskkill.exe` live-tree test and the injected cross-platform guard.
 
 ## Files
 
@@ -171,8 +173,8 @@ platform-specific verification for the real `taskkill.exe` cases.
   barrier and bounded process-tree termination helper.
 - Modify `packages/testing/test/subprocess.test.ts` for deterministic closure,
   concurrency, and reachability assertions.
-- Add `packages/testing/test/fixtures/subprocess-tree.mjs` for real process
-  tree and orphan scenarios.
+- Add `packages/testing/test/fixtures/subprocess-tree.mjs` for the real
+  process-tree scenario.
 - Modify `.github/workflows/ci.yml` for the focused native Windows subprocess
   shutdown test job.
 - Add a patch changeset for `@dawn-ai/testing`.

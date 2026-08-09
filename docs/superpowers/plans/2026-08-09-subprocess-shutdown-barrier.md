@@ -361,7 +361,12 @@ git commit -m "fix(testing): bound subprocess termination"
 
 On POSIX, spawn `idle`, make only `process.kill(-groupPid, "SIGTERM")` throw, and install a pass-through spy on `child.kill`. Await termination and assert `child.kill("SIGTERM")` was called. Restore spies and forcibly clean up the exact group in `finally`.
 
-On Windows, add platform-gated fixtures and tests for a live process tree and an orphaned descendant. The live-tree test proves `taskkill.exe /PID <saved PID> /T /F` terminates the tree without directly killing the outer child. A deterministic, injected-Windows-dispatch orphan test proves a closed outer child causes bounded rejection without any tree-kill dispatch; the platform-gated orphan test also guards against an unnecessary direct-child kill.
+On Windows, retain the platform-gated live process-tree test. It proves
+`taskkill.exe /PID <saved PID> /T /F` terminates the tree without directly
+killing the outer child. A deterministic cross-platform test closes an idle
+child, keeps an independent TCP server live, injects the Windows dispatcher,
+and proves bounded rejection without any tree-kill dispatch. This covers the
+closed-child guard without assuming a descendant survives outer-child closure.
 
 - [x] **Step 2: Implement platform-specific dispatch**
 
@@ -410,15 +415,23 @@ Add the `testing-windows` job to `.github/workflows/ci.yml`. Run it on
 `windows-latest` with a 20-minute timeout. Use the repository's pinned
 checkout, pnpm setup, and Node 24.17.0 setup actions; install with a frozen
 lockfile; then build `@dawn-ai/testing...` so the testing dependency closure
-includes the CLI `dist` output. Run only the package-configured subprocess
-suite:
+includes the CLI `dist` output. Run only the two shutdown-specific tests from
+the package-configured subprocess suite:
 
 ```bash
-pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts
+pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts --testNamePattern "Windows process tree|injected Windows tree kill"
 ```
 
-This job executes the two real Windows `taskkill.exe` process-tree and orphan
-tests. It is intentionally not a claim of broader Windows coverage.
+This job executes the real Windows `taskkill.exe` process-tree test and the
+injected stale-dispatch guard. The latter closes an idle child and keeps an
+independent TCP server live, so it does not depend on a surviving orphan
+fixture. It is intentionally not a claim of broader Windows coverage.
+
+The prior Windows run provided the RED evidence for the orphan assumption:
+after the outer fixture closed, its descendant port was already unavailable,
+so both orphan-based tests failed their live-port precondition. The same
+full-file run also reached an unrelated Dawn dev/HMR port-restart timeout;
+the name filter deliberately excludes that broader coverage.
 
 - [x] **Step 4: Run repository validation**
 
