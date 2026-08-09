@@ -264,6 +264,7 @@ test("observation composition calls only named readers in inventory order and pr
 test("CI success requires independently correlated workflow-run and validate-check evidence", async () => {
   const exactRun = {
     id: 101,
+    run_attempt: 1,
     name: "CI",
     path: ".github/workflows/ci.yml",
     head_sha: SHA,
@@ -327,6 +328,54 @@ test("CI success requires independently correlated workflow-run and validate-che
       workflow: "CI",
       commitSha: SHA,
     },
+    ...[
+      {
+        name: "both suite IDs missing",
+        run: withoutFields(exactRun, ["check_suite_id"]),
+        check: withoutFields(exactCheck, ["check_suite"]),
+      },
+      {
+        name: "workflow suite ID missing",
+        run: withoutFields(exactRun, ["check_suite_id"]),
+        check: exactCheck,
+      },
+      {
+        name: "check suite ID missing",
+        run: exactRun,
+        check: withoutFields(exactCheck, ["check_suite"]),
+      },
+      {
+        name: "workflow suite ID zero",
+        run: { ...exactRun, check_suite_id: 0 },
+        check: exactCheck,
+      },
+      {
+        name: "check suite ID malformed",
+        run: exactRun,
+        check: { ...exactCheck, check_suite: { id: "501" } },
+      },
+      { name: "workflow run ID missing", run: withoutFields(exactRun, ["id"]), check: exactCheck },
+      { name: "workflow run ID zero", run: { ...exactRun, id: 0 }, check: exactCheck },
+      { name: "workflow run ID malformed", run: { ...exactRun, id: "101" }, check: exactCheck },
+      {
+        name: "workflow attempt missing",
+        run: withoutFields(exactRun, ["run_attempt"]),
+        check: exactCheck,
+      },
+      { name: "workflow attempt zero", run: { ...exactRun, run_attempt: 0 }, check: exactCheck },
+      {
+        name: "workflow attempt malformed",
+        run: { ...exactRun, run_attempt: "1" },
+        check: exactCheck,
+      },
+    ].map(({ name, run, check }) => ({
+      name,
+      runs: [run],
+      checks: [check],
+      expected: "ambiguous",
+      workflow: "CI",
+      commitSha: SHA,
+    })),
   ]
 
   for (const item of cases) {
@@ -788,6 +837,7 @@ function absentGitHub() {
       return presentEnvelope("workflow-runs", [
         {
           id: 101,
+          run_attempt: 1,
           name: "CI",
           path: ".github/workflows/ci.yml",
           head_sha: SHA,
@@ -890,4 +940,10 @@ function expectedReleaseAssets(inventory) {
       sha256: pkg.attestationSha256,
     })),
   ]
+}
+
+function withoutFields(value, fields) {
+  const copy = structuredClone(value)
+  for (const field of fields) delete copy[field]
+  return copy
 }

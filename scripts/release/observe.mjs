@@ -267,10 +267,11 @@ function mapCi(checkResult, workflowResult, candidate, diagnostics) {
   const workflowSuiteId = workflow.check_suite_id
   const checkSuiteId = check.check_suite?.id
   if (
-    (workflowSuiteId !== undefined || checkSuiteId !== undefined) &&
-    (!isPositiveId(workflowSuiteId) ||
-      !isPositiveId(checkSuiteId) ||
-      String(workflowSuiteId) !== String(checkSuiteId))
+    !isPositiveSafeInteger(workflow.id) ||
+    !isPositiveSafeInteger(workflow.run_attempt) ||
+    !isPositiveSafeInteger(workflowSuiteId) ||
+    !isPositiveSafeInteger(checkSuiteId) ||
+    workflowSuiteId !== checkSuiteId
   ) {
     addDiagnostic(diagnostics, "github", "ci-correlation", "AMBIGUOUS", "CI_RUN_MISMATCH")
     return ciIdentity("ambiguous", observed)
@@ -669,6 +670,10 @@ function isPositiveId(value) {
     (Number.isSafeInteger(value) && value > 0) ||
     (typeof value === "string" && /^[1-9][0-9]*$/u.test(value))
   )
+}
+
+function isPositiveSafeInteger(value) {
+  return Number.isSafeInteger(value) && value > 0
 }
 
 function arraysEqual(left, right) {
