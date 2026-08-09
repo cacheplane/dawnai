@@ -102,6 +102,15 @@ import {
 // Leave the assertions below at full strength. They are what the edge claim has
 // to survive, and softening one to keep a green is the only thing that would
 // make this file worse than not having it.
+//
+// THIS LANE RUNS `dist`, NOT `src`. wrangler resolves the linked packages for
+// real, and vitest will not rebuild them for you — so without help this lane
+// can test arbitrarily old code and return a red OR a genuine-looking green.
+// `@dawn-ai/langchain` is the trap: it is nowhere in the fixture's linked list,
+// arriving through `packages/cli/node_modules`. The one unreproducible failure
+// during review was exactly this — a `dist` predating dccae091 fails here 5/5.
+// `createFixtureApp` now builds the whole closure first; see
+// `helpers/hono-edge-fixture.ts`.
 // ═══════════════════════════════════════════════════════════════════════════
 // ---------------------------------------------------------------------------
 
