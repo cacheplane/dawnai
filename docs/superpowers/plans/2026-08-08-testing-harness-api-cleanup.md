@@ -19,6 +19,21 @@
 - `packages/cli/docs/testing-agents.md` is gitignored generated output used only during verification.
 - `.changeset/testing-harness-mode-cleanup.md` records the user-facing patch release.
 
+## Execution Prerequisite
+
+The default shell may resolve Node 22, while this repository requires Node 24
+or newer. Every Node or pnpm command below is prefixed with the bundled Node 24
+runtime path so the requirement holds across separate shell calls:
+
+```bash
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  node -e 'const major = Number(process.versions.node.split(".")[0]); if (major < 24) process.exit(1); console.log(process.version)'
+```
+
+Expected: prints a version beginning with `v24` or newer. If the bundled path
+changes, call the workspace dependency loader again and substitute the returned
+Node and fallback-bin paths before continuing.
+
 ### Task 1: Remove the unsupported harness option
 
 **Files:**
@@ -56,7 +71,8 @@ The existing `packages/testing/tsconfig.contracts.json` already includes
 Run:
 
 ```bash
-pnpm --filter @dawn-ai/testing typecheck
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm --filter @dawn-ai/testing typecheck
 ```
 
 Expected: FAIL with TypeScript `TS2578` on the unused `@ts-expect-error`, proving
@@ -88,8 +104,10 @@ or wiring to the two standalone factories.
 Run:
 
 ```bash
-pnpm --filter @dawn-ai/testing typecheck
-pnpm --filter @dawn-ai/testing test -- harness-construct
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm --filter @dawn-ai/testing typecheck
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm --filter @dawn-ai/testing test harness-construct
 ```
 
 Expected: both commands PASS. The type lane consumes the `@ts-expect-error`, and
@@ -115,8 +133,11 @@ git commit -m "fix(testing): remove unsupported harness modes"
 Run:
 
 ```bash
-rg -n 'three execution modes|mode.*http-inject|mode.*subprocess|default.*in-process|not yet implemented' \
-  packages/testing/README.md apps/web/content/docs/testing-agents.mdx
+if rg -n 'three execution modes|mode.*http-inject|mode.*subprocess|default.*in-process|not yet implemented' \
+  packages/testing/README.md apps/web/content/docs/testing-agents.mdx; then
+  echo "stale harness-mode documentation remains" >&2
+  exit 1
+fi
 ```
 
 Expected: matches in both documents describing the unsupported `mode` values.
@@ -170,10 +191,15 @@ Do not use a minor changeset: Dawn's fixed 0.x group would advance to 1.0.0.
 
 - [ ] **Step 5: Generate and inspect the CLI docs without committing them**
 
+First rerun the stale-claim search from Step 1. Expected: no matches.
+
 Run:
 
 ```bash
-pnpm --filter @dawn-ai/cli build
+rg -n 'three execution modes|mode.*http-inject|mode.*subprocess|default.*in-process|not yet implemented' \
+  packages/testing/README.md apps/web/content/docs/testing-agents.mdx
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm --filter @dawn-ai/cli build
 rg -n 'Choose the execution boundary|does not accept a `mode` option' \
   packages/cli/docs/testing-agents.md
 git check-ignore packages/cli/docs/testing-agents.md
@@ -188,9 +214,12 @@ prints the path, and `git status` does not list `packages/cli/docs/`.
 Run:
 
 ```bash
-pnpm --filter @dawn-ai/cli test -- docs-bundle
-node scripts/check-docs.mjs
-node scripts/check-changesets.mjs
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm --filter @dawn-ai/cli test docs-bundle
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  node scripts/check-docs.mjs
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  node scripts/check-changesets.mjs
 ```
 
 Expected: all commands PASS.
@@ -208,20 +237,23 @@ git commit -m "docs(testing): clarify harness execution boundaries"
 **Files:**
 - Verify only; no expected source changes
 
-- [ ] **Step 1: Use the repository-supported Node runtime**
+- [ ] **Step 1: Reconfirm the repository-supported Node runtime**
 
-Load the workspace's configured dependencies and confirm Node is version 24 or
-newer before final verification. Do not rely on a Node 22 shell override.
+Rerun the execution-prerequisite version check before final verification.
 
 - [ ] **Step 2: Run package gates**
 
 Run:
 
 ```bash
-pnpm --filter @dawn-ai/testing build
-pnpm --filter @dawn-ai/testing typecheck
-pnpm --filter @dawn-ai/testing lint
-pnpm --filter @dawn-ai/testing test
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm --filter @dawn-ai/testing build
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm --filter @dawn-ai/testing typecheck
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm --filter @dawn-ai/testing lint
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm --filter @dawn-ai/testing test
 ```
 
 Expected: all commands PASS.
@@ -231,7 +263,8 @@ Expected: all commands PASS.
 Run:
 
 ```bash
-pnpm ci:validate
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+  pnpm ci:validate
 ```
 
 Expected: lint, build-cache, build, typecheck, tests, documentation, package,
