@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process"
-import { createServer } from "node:net"
+import { createConnection, createServer } from "node:net"
 import { dirname, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
@@ -8,6 +8,20 @@ export interface SubprocessApp {
   readonly baseUrl: string
   close(): Promise<void>
   [Symbol.asyncDispose](): Promise<void>
+}
+
+export interface TerminationTimings {
+  readonly graceMs: number
+  readonly forceMs: number
+  readonly probeIntervalMs: number
+  readonly probeTimeoutMs: number
+}
+
+const DEFAULT_TERMINATION_TIMINGS: TerminationTimings = {
+  graceMs: 2_000,
+  forceMs: 2_000,
+  probeIntervalMs: 25,
+  probeTimeoutMs: 100,
 }
 
 /** Bind to port 0, read the OS-assigned port, release it. */
@@ -68,15 +82,77 @@ function childClosePromise(child: ChildProcess): Promise<void> {
   })
 }
 
-async function terminateSubprocess(
-  child: ChildProcess,
+function portAcceptsConnections(baseUrl: string, timeoutMs: number): Promise<boolean> {
+  const url = new URL(baseUrl)
+  return new Promise((resolve) => {
+    let settled = false
+    const socket = createConnection({ host: url.hostname, port: Number(url.port) })
+    const finish = (accepting: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      socket.destroy()
+      resolve(accepting)
+    }
+    const timer = setTimeout(() => finish(true), timeoutMs)
+    socket.once("connect", () => finish(true))
+    socket.once("error", () => finish(false))
+  })
+}
+
+async function waitUntilStopped(
+  childState: { closed: boolean; failed: boolean; error: unknown },
+  baseUrl: string,
+  timeoutMs: number,
+  timings: TerminationTimings,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (true) {
+    const remainingMs = Math.max(0, deadline - Date.now())
+    const accepting = await portAcceptsConnections(
+      baseUrl,
+      Math.min(timings.probeTimeoutMs, remainingMs),
+    )
+    if (childState.failed) throw childState.error
+    if (childState.closed && !accepting) return true
+
+    const waitMs = Math.min(timings.probeIntervalMs, deadline - Date.now())
+    if (waitMs <= 0) return false
+    await delay(waitMs)
+  }
+}
+
+export async function terminateSubprocess(
+  _child: ChildProcess,
   groupPid: number,
   closed: Promise<void>,
+  baseUrl: string,
+  timings: TerminationTimings = DEFAULT_TERMINATION_TIMINGS,
 ): Promise<void> {
-  if (child.exitCode === null && child.signalCode === null) {
-    process.kill(-groupPid, "SIGTERM")
+  const childState: { closed: boolean; failed: boolean; error: unknown } = {
+    closed: false,
+    failed: false,
+    error: undefined,
   }
-  await closed
+  void closed.then(
+    () => {
+      childState.closed = true
+    },
+    (error: unknown) => {
+      childState.failed = true
+      childState.error = error
+    },
+  )
+
+  const portAccepting = await portAcceptsConnections(baseUrl, timings.probeTimeoutMs)
+  if (childState.failed) throw childState.error
+  if (childState.closed && !portAccepting) return
+
+  process.kill(-groupPid, "SIGTERM")
+  if (await waitUntilStopped(childState, baseUrl, timings.graceMs, timings)) return
+  throw new Error(
+    `subprocess group ${groupPid} did not stop within ${timings.graceMs}ms after SIGTERM`,
+  )
 }
 
 export async function createSubprocessApp(opts: {
@@ -108,7 +184,13 @@ export async function createSubprocessApp(opts: {
   const baseUrl = `http://127.0.0.1:${port}`
   let closePromise: Promise<void> | undefined
   const close = (): Promise<void> => {
-    closePromise ??= terminateSubprocess(child, groupPid, closed)
+    closePromise ??= terminateSubprocess(
+      child,
+      groupPid,
+      closed,
+      baseUrl,
+      DEFAULT_TERMINATION_TIMINGS,
+    )
     return closePromise
   }
 

@@ -1,11 +1,19 @@
-import { ChildProcess } from "node:child_process"
+import { ChildProcess, spawn } from "node:child_process"
+import { createConnection } from "node:net"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { expect, it, vi } from "vitest"
 import { createAimock } from "../src/aimock-runner.js"
-import { createSubprocessApp } from "../src/subprocess.js"
+import { createSubprocessApp, terminateSubprocess } from "../src/subprocess.js"
 
 const appRoot = fileURLToPath(new URL("./fixtures/probe-app", import.meta.url))
+const processTreeFixture = fileURLToPath(new URL("./fixtures/subprocess-tree.mjs", import.meta.url))
+const TEST_TERMINATION_TIMINGS = {
+  graceMs: 100,
+  forceMs: 100,
+  probeIntervalMs: 5,
+  probeTimeoutMs: 10,
+}
 
 function hasErrorCode(error: unknown, code: string): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === code
@@ -128,6 +136,52 @@ function delaySubprocessTermination() {
   }
 }
 
+async function spawnTree(mode: "idle" | "ignore-term" | "leader") {
+  const child = spawn(process.execPath, [processTreeFixture, mode], {
+    detached: true,
+    stdio: ["ignore", "pipe", "inherit"],
+  })
+  if (child.pid === undefined) throw new Error("fixture process has no pid")
+  const groupPid = child.pid
+  const closed = new Promise<void>((resolve, reject) => {
+    child.once("error", reject)
+    child.once("close", () => resolve())
+  })
+  const line = await new Promise<string>((resolve, reject) => {
+    let output = ""
+    child.once("error", reject)
+    child.once("close", () => {
+      if (!output.includes("\n")) reject(new Error("fixture closed before readiness"))
+    })
+    child.stdout?.on("data", (chunk) => {
+      output += String(chunk)
+      if (output.includes("\n")) resolve(output.trim())
+    })
+  })
+  return { child, closed, groupPid, line }
+}
+
+function canConnect(baseUrl: string): Promise<boolean> {
+  const url = new URL(baseUrl)
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: url.hostname, port: Number(url.port) })
+    socket.once("connect", () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once("error", () => resolve(false))
+  })
+}
+
+async function forceKillProcessGroup(groupPid: number, kill: typeof process.kill): Promise<void> {
+  try {
+    kill(-groupPid, "SIGKILL")
+  } catch (error) {
+    if (!hasErrorCode(error, "ESRCH")) throw error
+  }
+  await waitForProcessGroupExit(-groupPid)
+}
+
 it("boots a real dawn dev subprocess and serves the AP", async () => {
   const mock = await createAimock({ fixtures: [{ match: {}, response: { content: "ok" } }] })
   const app = await createSubprocessApp({
@@ -218,3 +272,20 @@ it("waits for cleanup when readiness fails", async () => {
     await finishDelayedTerminations()
   }
 }, 120_000)
+
+it.skipIf(process.platform === "win32")(
+  "waits for a surviving descendant to release the port",
+  async () => {
+    const realKill = process.kill.bind(process)
+    const { child, closed, groupPid, line } = await spawnTree("leader")
+    const baseUrl = `http://127.0.0.1:${Number(line)}`
+    try {
+      await closed
+      expect(await canConnect(baseUrl)).toBe(true)
+      await terminateSubprocess(child, groupPid, closed, baseUrl, TEST_TERMINATION_TIMINGS)
+      expect(await canConnect(baseUrl)).toBe(false)
+    } finally {
+      await forceKillProcessGroup(groupPid, realKill)
+    }
+  },
+)
