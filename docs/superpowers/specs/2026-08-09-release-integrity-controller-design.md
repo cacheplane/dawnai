@@ -37,7 +37,7 @@ to suppress a valid release candidate.
 Two recent incidents make the failure modes concrete:
 
 - Version Packages pull request #422 merged version `0.8.20` at
-  `5bb97cfefde4833f3695a2a0dc76b75c6375aa2f`. The exact-commit CI passed, but
+  `5bb97cf3434e7c4afa95646982d510d79387ba5b`. The exact-commit CI passed, but
   `0.8.20` was never published because more changesets were already present when
   the release workflow ran. The later `0.8.21` release skipped over it.
 - Release run
