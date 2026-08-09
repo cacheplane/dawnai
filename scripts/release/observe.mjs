@@ -1,9 +1,9 @@
+import { normalizeAdapterEnvelope } from "./adapter-normalize.mjs"
 import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 const PACKAGE_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
-const ALLOWED_ENVELOPE_STATUSES = new Set(["PRESENT", "ABSENT", "AMBIGUOUS", "ERROR"])
 const DEFAULT_CANDIDATE_POLICY = Object.freeze({
   ciWorkflow: "CI",
   ciCheck: "validate",
@@ -57,7 +57,7 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
   const diagnostics = []
   const ciResult = normalizeEnvelope(
     await github.getCommitCheckRuns({ commitSha: normalizedCandidate.commitSha }),
-    "github",
+    { source: "github", operation: "commit-check-runs", payloadKey: "value" },
     diagnostics,
   )
   const ciWorkflowResult = normalizeEnvelope(
@@ -65,12 +65,12 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
       workflow: "ci.yml",
       commitSha: normalizedCandidate.commitSha,
     }),
-    "github",
+    { source: "github", operation: "workflow-runs", payloadKey: "value" },
     diagnostics,
   )
   const refResult = normalizeEnvelope(
     await github.getRef({ ref: `tags/${tagName}` }),
-    "github",
+    { source: "github", operation: "ref", payloadKey: "value" },
     diagnostics,
   )
   let localTagSha = null
@@ -92,24 +92,34 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
   }
   const releaseResult = normalizeEnvelope(
     await github.getReleaseByTag({ tag: tagName }),
-    "github",
+    { source: "github", operation: "release", payloadKey: "value" },
     diagnostics,
   )
   const artifactResult = normalizeEnvelope(
     await github.listActionsArtifacts({
       name: managedArtifactName(normalizedCandidate),
     }),
-    "github",
+    { source: "github", operation: "actions-artifacts", payloadKey: "value" },
+    diagnostics,
+  )
+  const publisherRunsResult = normalizeEnvelope(
+    await github.listWorkflowRuns({
+      workflow: "release.yml",
+      commitSha: normalizedCandidate.commitSha,
+    }),
+    { source: "github", operation: "workflow-runs", payloadKey: "value" },
     diagnostics,
   )
 
   const registryPackages = []
+  let rawNpmPresent = false
   for (const pkg of normalizedInventory.packages) {
     const result = normalizeEnvelope(
       await npm.observePackageVersion({ name: pkg.name, version: normalizedCandidate.version }),
-      "npm",
+      { source: "npm", operation: "package-version", payloadKey: "package" },
       diagnostics,
     )
+    rawNpmPresent ||= result.status === "PRESENT"
     registryPackages.push(mapRegistryPackage(result, pkg, normalizedCandidate, diagnostics))
   }
 
@@ -127,7 +137,7 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
     github,
     diagnostics,
   )
-  const published = registryPackages.some((pkg) => pkg.status === "present")
+  const published = rawNpmPresent || publicationRunStarted(publisherRunsResult, normalizedCandidate)
   const observation = {
     inventory: {
       status: normalizedInventory.status,
@@ -431,7 +441,7 @@ async function mapRelease(result, inventory, candidate, github, diagnostics) {
   }
   const assetsResult = normalizeEnvelope(
     await github.listReleaseAssets({ releaseId: release.id }),
-    "github",
+    { source: "github", operation: "release-assets", payloadKey: "value" },
     diagnostics,
   )
   if (assetsResult.status !== "PRESENT" || !Array.isArray(assetsResult.value)) {
@@ -511,27 +521,11 @@ function expectedReleaseAssets(inventory) {
   ]
 }
 
-function normalizeEnvelope(value, source, diagnostics) {
-  if (
-    !isRecord(value) ||
-    !ALLOWED_ENVELOPE_STATUSES.has(value.status) ||
-    typeof value.operation !== "string" ||
-    (value.httpStatus !== null && !Number.isInteger(value.httpStatus)) ||
-    (value.code !== null && typeof value.code !== "string")
-  ) {
-    const result = {
-      status: "ERROR",
-      operation: "malformed-envelope",
-      httpStatus: null,
-      code: "MALFORMED_ENVELOPE",
-    }
-    diagnostics.push({ source, ...result })
-    return result
-  }
-  const result = structuredClone(value)
+function normalizeEnvelope(value, options, diagnostics) {
+  const result = normalizeAdapterEnvelope(value, options)
   if (result.status !== "PRESENT" && result.status !== "ABSENT") {
     diagnostics.push({
-      source,
+      source: options.source,
       operation: result.operation,
       status: result.status,
       httpStatus: result.httpStatus,
@@ -539,6 +533,18 @@ function normalizeEnvelope(value, source, diagnostics) {
     })
   }
   return result
+}
+
+function publicationRunStarted(result, candidate) {
+  if (result.status !== "PRESENT" || !Array.isArray(result.value)) return false
+  return result.value.some(
+    (run) =>
+      isRecord(run) &&
+      isPositiveId(run.id) &&
+      isPositiveId(run.run_attempt) &&
+      run.head_sha === candidate.commitSha &&
+      (run.path === candidate.publisherWorkflow || run.name === candidate.publisherWorkflow),
+  )
 }
 
 function absentRegistryPackage(name) {

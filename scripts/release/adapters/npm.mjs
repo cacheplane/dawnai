@@ -32,6 +32,10 @@ export function createNpmReader({
   })
 
   return {
+    observePackageMetadata({ name, signal }) {
+      assertPackageName(name)
+      return observePackageMetadata({ registry, http, name, signal })
+    },
     observePackageVersion({ name, version, signal }) {
       assertPackageName(name)
       assertInputByteLength(version, MAX_VERSION_BYTES, "exact SemVer")
@@ -43,9 +47,34 @@ export function createNpmReader({
   }
 }
 
+async function observePackageMetadata({ registry, http, name, signal }) {
+  const result = await getJson({
+    http,
+    url: new URL(encodeURIComponent(name), registry),
+    operation: "package-metadata",
+    accept: "application/vnd.npm.install-v1+json",
+    signal,
+  })
+  if (result.status !== "PRESENT") return withoutBody(result)
+  if (result.body?.name !== name) {
+    return failure("ERROR", "package-metadata", result.httpStatus, "MALFORMED_SCHEMA")
+  }
+  const distTags = normalizeDistTags(result.body?.["dist-tags"])
+  if (distTags === null) {
+    return failure("ERROR", "package-metadata", result.httpStatus, "MALFORMED_SCHEMA")
+  }
+  return {
+    status: "PRESENT",
+    operation: "package-metadata",
+    httpStatus: result.httpStatus,
+    code: null,
+    metadata: { name, latest: distTags.latest ?? null },
+  }
+}
+
 export function classifyRegistryResponse({ operation, response, body }) {
   if (!OPERATIONS.has(operation)) {
-    throw new TypeError(`Unknown npm registry operation: ${String(operation)}`)
+    throw new TypeError("Unknown npm registry operation")
   }
   const httpStatus = response?.status
   if (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599) {

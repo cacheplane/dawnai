@@ -18,7 +18,7 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
   ])
   const npm = createNpmReader({ fetchImpl })
 
-  assert.deepEqual(Object.keys(npm), ["observePackageVersion"])
+  assert.deepEqual(Object.keys(npm), ["observePackageMetadata", "observePackageVersion"])
   const result = await npm.observePackageVersion({ name: NAME, version: VERSION })
 
   assert.deepEqual(
@@ -76,6 +76,42 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
     },
   })
   assert.deepEqual(JSON.parse(JSON.stringify(result)), result)
+})
+
+test("observePackageMetadata reads only bounded public dist-tags independently", async () => {
+  const { fetchImpl, calls } = recordingFetch([
+    jsonResponse({ name: NAME, "dist-tags": { next: "0.9.0-beta.1", latest: "0.8.22" } }),
+  ])
+  const result = await createNpmReader({ fetchImpl }).observePackageMetadata({ name: NAME })
+  assert.deepEqual(
+    calls.map(({ url, init }) => ({ url, method: init.method, accept: init.headers.Accept })),
+    [
+      {
+        url: `${REGISTRY}/%40dawn-ai%2Fsdk`,
+        method: "GET",
+        accept: "application/vnd.npm.install-v1+json",
+      },
+    ],
+  )
+  assert.deepEqual(result, {
+    status: "PRESENT",
+    operation: "package-metadata",
+    httpStatus: 200,
+    code: null,
+    metadata: { name: NAME, latest: "0.8.22" },
+  })
+})
+
+test("observePackageMetadata never classifies package-level 404 as exact-version absence", async () => {
+  const result = await createNpmReader({
+    fetchImpl: async () => jsonResponse({ code: "E404" }, 404),
+  }).observePackageMetadata({ name: NAME })
+  assert.deepEqual(result, {
+    status: "AMBIGUOUS",
+    operation: "package-metadata",
+    httpStatus: 404,
+    code: "E404",
+  })
 })
 
 test("classifyRegistryResponse treats only exact-version E404 as absence", () => {

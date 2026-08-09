@@ -1,5 +1,8 @@
+import { assessValidatedHistoricalFacts } from "./historical-audit.mjs"
 import { planRelease as defaultPlanRelease } from "./planner.mjs"
-import { compareSemver, isExactSemver, parseSemver } from "./semver.mjs"
+import { isExactSemver, parseSemver } from "./semver.mjs"
+
+export { renderReportJson, renderReportMarkdown } from "./report-render.mjs"
 
 const FIXTURE_FIELDS = Object.freeze({
   "managed-observation": [
@@ -87,9 +90,8 @@ const SHA1_PATTERN = /^[0-9a-f]{40}$/u
 const INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]+={0,2}$/u
 const PACKAGE_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
 const REPOSITORY_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u
-const SECRET_KEY_PATTERN = /(?:authorization|cookie|password|secret|token|private.?key)/iu
-const SECRET_VALUE_PATTERN =
-  /(?:\bBearer\s+\S+|\b(?:gh[pousr]|github_pat|npm)_[A-Za-z0-9_-]{8,}|\b(?:token|password|secret)\s*[:=]\s*\S+)/giu
+const SECRET_KEY_PATTERN =
+  /(?:authorization|cookie|password|secret|token|private.?key|^gh[pousr]_|^github_pat_|^npm_)/iu
 const MAX_FIXTURE_BYTES = 4 * 1024 * 1024
 const MAX_TEXT_BYTES = 4_096
 
@@ -121,6 +123,8 @@ export function parseReconciliationFixture(source, context = "fixture") {
     assertExactFields(value.expected, MANAGED_EXPECTED_FIELDS, `${context}.expected`)
     assertPlan(value.expected.plan, `${context}.expected.plan`)
   } else {
+    value.facts.packageNames.sort(compareText)
+    value.facts.npmPackages.sort((left, right) => compareText(left.name, right.name))
     assertCandidate(value.candidate, `${context}.candidate`, false)
     assertHistoricalFacts(value, context)
     assertHistoricalAssessment(value.expected, `${context}.expected`)
@@ -132,85 +136,7 @@ export function parseReconciliationFixture(source, context = "fixture") {
 // existed before the managed manifest/escrow topology and therefore can authorize no effects.
 export function assessHistoricalFacts(input) {
   const fixture = snapshotHistoricalFixture(input)
-  const { candidate, facts, run } = fixture
-  const controllerConflicts = controllerEvidenceConflicts(facts.controllerEvidence)
-  const ambiguous = facts.npmPackages.some((pkg) => ["AMBIGUOUS", "ERROR"].includes(pkg.status))
-  const packageSetComplete = arraysEqual(
-    facts.npmPackages.map((pkg) => pkg.name),
-    facts.packageNames,
-  )
-  const complete =
-    packageSetComplete &&
-    facts.npmPackages.length > 0 &&
-    facts.npmPackages.every((pkg) => historicalPackageComplete(pkg, candidate))
-  const superseded =
-    !complete &&
-    facts.npmPackages.length > 0 &&
-    facts.npmPackages.every(
-      (pkg) => isReleaseVersion(pkg.latest) && compareSemver(pkg.latest, candidate.version) > 0,
-    )
-
-  if (complete) {
-    return historicalAssessment({
-      lastProvenTransition: "LEGACY_NPM_REGISTRY_COMPLETE_UNCORRELATED",
-      nextSafeTransition: `Perform a manual audit for v${candidate.version} at release run ${run.workflowRunId} attempt ${run.runAttempt}; preserve public npm evidence and do not resume managed publication.`,
-      reasons: [
-        `All exact ${candidate.version} npm packages have public integrity, signatures, latest tags, and publisher provenance, but no managed tarball SHA-256 correlation exists.`,
-        "This pre-controller release has no managed manifest, release record, artifact attestations, or escrow evidence.",
-      ],
-      conflicts: controllerConflicts,
-      manualRecoveryInputs: manualInputs(candidate, run),
-    })
-  }
-
-  if (superseded) {
-    return historicalAssessment({
-      lastProvenTransition: "LEGACY_CANDIDATE_SUPERSEDED_UNCORRELATED",
-      nextSafeTransition: `Retain ${candidate.version} as skipped history and audit the failed release run ${run.workflowRunId} attempt ${run.runAttempt}; do not publish or repair it.`,
-      reasons: [
-        `Every observed package latest tag is newer than ${candidate.version}, while exact-version 404 responses do not prove registry absence.`,
-        "The failed pre-controller release has no managed manifest, release record, artifact attestations, or escrow evidence.",
-      ],
-      conflicts: ["exact-version-registry-absence-unproven", ...controllerConflicts],
-      manualRecoveryInputs: manualInputs(candidate, run),
-    })
-  }
-
-  return historicalAssessment({
-    lastProvenTransition: "LEGACY_NPM_REGISTRY_INCOMPLETE",
-    nextSafeTransition: `Collect and independently audit exact npm evidence for v${candidate.version}; do not invoke managed publication.`,
-    reasons: [
-      "Public npm facts are missing, ambiguous, or do not exactly correlate to the historical candidate.",
-      "Pre-controller facts cannot establish managed release completion.",
-    ],
-    conflicts: [
-      ...(!packageSetComplete ? ["historical-npm-package-set-mismatch"] : []),
-      ...(ambiguous ? ["historical-npm-package-ambiguous"] : ["historical-npm-package-incomplete"]),
-      ...historicalNestedFactConflicts(facts.npmPackages, candidate),
-      ...controllerConflicts,
-    ],
-    manualRecoveryInputs: manualInputs(candidate, run),
-  })
-}
-
-function historicalNestedFactConflicts(packages, candidate) {
-  const conflicts = new Set()
-  for (const pkg of packages) {
-    if (pkg.status !== "PRESENT") continue
-    if (pkg.latest !== candidate.version) conflicts.add("historical-npm-latest-incomplete")
-    if (!Number.isSafeInteger(pkg.signatureCount) || pkg.signatureCount <= 0) {
-      conflicts.add("historical-npm-signature-unverified")
-    }
-    if (pkg.provenanceStatus !== "PRESENT") {
-      conflicts.add("historical-npm-provenance-incomplete")
-    } else if (
-      pkg.provenanceWorkflow !== candidate.publisherWorkflow ||
-      pkg.provenanceCommitSha !== candidate.commitSha
-    ) {
-      conflicts.add("historical-npm-provenance-mismatch")
-    }
-  }
-  return [...conflicts].sort(compareText)
+  return assessValidatedHistoricalFacts(fixture)
 }
 
 export function reconcileFixture(fixtureInput, { planRelease = defaultPlanRelease } = {}) {
@@ -257,13 +183,31 @@ export function createReconciliationReport({
 }) {
   if (historicalFacts !== undefined) {
     const facts = snapshotHistoricalFixture(historicalFacts)
-    const assessment = snapshotHistoricalAssessment(assessmentInput)
+    const assessment = assessHistoricalFacts(facts)
+    if (!sameJson(facts.expected, assessment)) {
+      throw new TypeError("Historical assessment does not correlate with validated facts")
+    }
+    if (
+      assessmentInput !== undefined &&
+      !sameJson(snapshotHistoricalAssessment(assessmentInput), assessment)
+    ) {
+      throw new TypeError("Historical assessment does not correlate with validated facts")
+    }
+    if (candidate !== undefined && !sameJson(candidate, facts.candidate)) {
+      throw new TypeError("Historical candidate does not correlate with validated facts")
+    }
+    if (run !== undefined && !sameJson(run, facts.run)) {
+      throw new TypeError("Historical run does not correlate with validated facts")
+    }
+    if (source !== null && source !== undefined && !sameJson(source, facts.source)) {
+      throw new TypeError("Historical source does not correlate with validated facts")
+    }
     return deepFreeze({
       schemaVersion: 1,
       reportKind: "historical-audit",
       candidate: structuredClone(facts.candidate),
-      run: structuredClone(run ?? facts.run),
-      source: structuredClone(source ?? facts.source),
+      run: structuredClone(facts.run),
+      source: structuredClone(facts.source),
       historicalFacts: structuredClone(facts.facts),
       lastProvenTransition: assessment.lastProvenTransition,
       nextSafeTransition: assessment.nextSafeTransition,
@@ -299,129 +243,15 @@ export function createReconciliationReport({
   })
 }
 
-export function renderReportJson(report) {
-  assertSafeJson(report, "report", new Set())
-  assertNoSecretKeys(report, "report")
-  return `${JSON.stringify(canonicalize(report), null, 2)}\n`
-}
-
-export function renderReportMarkdown(report) {
-  assertSafeJson(report, "report", new Set())
-  assertNoSecretKeys(report, "report")
-  const historical = report.reportKind === "historical-audit"
-  const candidate = report.candidate
-  const lines = [
-    "# Release Reconciliation Report",
-    "",
-    "## Analysis boundary",
-    "",
-    `- Report kind: ${markdownValue(report.reportKind)}`,
-    `- Managed controller state: ${historical ? "Not evaluated — historical facts are audit-only" : markdownValue(report.plan.state)}`,
-    historical
-      ? "- Historical evidence is not a managed observation and cannot authorize controller mutations."
-      : "- Managed observation was evaluated in read-only shadow mode.",
-    "",
-    "## Candidate",
-    "",
-    `- Version: ${candidate === null ? "None" : markdownValue(candidate.version)}`,
-    `- Commit SHA: ${candidate === null ? "None" : markdownValue(candidate.commitSha)}`,
-    `- Repository: ${report.source === null ? "Unknown" : escapeMarkdown(report.source.repository)}`,
-    `- Requested ref: ${report.source === null ? "Unknown" : markdownValue(report.source.requestedRef)}`,
-    `- Selected ref: ${report.source === null ? "Unknown" : markdownValue(report.source.selectedRef)}`,
-    `- Resolved commit SHA: ${report.source === null ? "Unknown" : markdownValue(report.source.resolvedCommitSha)}`,
-    `- Source run: ${formatRun(report.run)}`,
-    "",
-    "## Evidence assessment",
-    "",
-    `- Disposition: ${markdownValue(historical ? report.historicalAssessment.disposition : report.plan.disposition)}`,
-    `- Last proven transition: ${markdownValue(report.lastProvenTransition)}`,
-    `- Next safe transition: ${report.nextSafeTransition === null ? "None" : escapeMarkdown(report.nextSafeTransition)}`,
-    "",
-    "### Reasons",
-    "",
-    ...markdownList(report.reasons),
-    "",
-    "### Conflicts",
-    "",
-    ...markdownList(report.conflicts),
-    "",
-    "## Public npm facts",
-    "",
-    ...npmFactsMarkdown(report),
-    "",
-    "## Manual recovery",
-    "",
-    ...manualRecoveryMarkdown(report.manualRecoveryInputs),
-    "",
-    "## Proposed mutations",
-    "",
-    ...(historical
-      ? ["None. Historical audit reports can never propose mutations."]
-      : markdownList(report.plan.proposedMutations.map((mutation) => JSON.stringify(mutation)))),
-    "",
-  ]
-  return lines.join("\n")
-}
-
 function snapshotHistoricalFixture(value) {
   assertSafeJson(value, "historical facts", new Set())
   assertNoSecretKeys(value, "historical facts")
-  return parseReconciliationFixture(JSON.stringify(value), value?.incidentId ?? "historical facts")
+  return parseReconciliationFixture(JSON.stringify(value), "historical facts")
 }
 
 function snapshotHistoricalAssessment(value) {
   assertHistoricalAssessment(value, "historicalAssessment")
   return deepFreeze(structuredClone(value))
-}
-
-function historicalAssessment({
-  lastProvenTransition,
-  nextSafeTransition,
-  reasons,
-  conflicts,
-  manualRecoveryInputs,
-}) {
-  return deepFreeze({
-    analysisKind: "historical-audit",
-    disposition: "audit-only",
-    lastProvenTransition,
-    nextSafeTransition,
-    reasons,
-    conflicts: [...new Set(conflicts)].sort(compareText),
-    manualRecoveryInputs,
-    proposedMutations: [],
-  })
-}
-
-function historicalPackageComplete(pkg, candidate) {
-  return (
-    pkg.status === "PRESENT" &&
-    pkg.code === null &&
-    pkg.version === candidate.version &&
-    typeof pkg.shasum === "string" &&
-    SHA1_PATTERN.test(pkg.shasum) &&
-    typeof pkg.integrity === "string" &&
-    INTEGRITY_PATTERN.test(pkg.integrity) &&
-    pkg.latest === candidate.version &&
-    Number.isSafeInteger(pkg.signatureCount) &&
-    pkg.signatureCount > 0 &&
-    pkg.provenanceStatus === "PRESENT" &&
-    pkg.provenanceWorkflow === candidate.publisherWorkflow &&
-    pkg.provenanceCommitSha === candidate.commitSha
-  )
-}
-
-function controllerEvidenceConflicts(value) {
-  const names = {
-    artifactAttestations: "managed-artifact-attestations-unavailable",
-    escrow: "managed-escrow-unavailable",
-    manifest: "managed-manifest-unavailable",
-    releaseRecord: "managed-release-record-unavailable",
-  }
-  return Object.keys(names)
-    .filter((key) => value[key] === "unavailable")
-    .map((key) => names[key])
-    .sort(compareText)
 }
 
 function manualInputs(candidate, run) {
@@ -601,18 +431,18 @@ function assertManualInputs(value, context) {
 function assertExactFields(value, expected, context) {
   if (!isRecord(value)) throw new TypeError(`${context} must be an object`)
   const missing = expected.find((key) => !Object.hasOwn(value, key))
-  if (missing !== undefined) throw new TypeError(`${context} missing field ${missing}`)
+  if (missing !== undefined) throw new TypeError(`${context} missing required field`)
   const unknown = Object.keys(value)
     .filter((key) => !expected.includes(key))
     .sort(compareText)[0]
-  if (unknown !== undefined) throw new TypeError(`${context} contains unknown field ${unknown}`)
+  if (unknown !== undefined) throw new TypeError(`${context} contains unknown field`)
 }
 
 function assertNoSecretKeys(value, context, path = []) {
   if (value === null || typeof value !== "object") return
   for (const [key, child] of Object.entries(value)) {
     if (SECRET_KEY_PATTERN.test(key)) {
-      throw new TypeError(`${context}: secret-like key ${[...path, key].join(".")}`)
+      throw new TypeError(`${context}: secret-like key is forbidden`)
     }
     assertNoSecretKeys(child, context, [...path, key])
   }
@@ -670,86 +500,12 @@ function assertSafeJson(value, context, ancestors) {
   ancestors.delete(value)
 }
 
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize)
-  if (typeof value === "string") return redactText(value)
-  if (!isRecord(value)) return value
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort(compareText)
-      .map((key) => [key, canonicalize(value[key])]),
-  )
-}
-
 function deepFreeze(value) {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) deepFreeze(child)
     Object.freeze(value)
   }
   return value
-}
-
-function manualRecoveryMarkdown(value) {
-  if (value === null) return ["None."]
-  return [
-    `- Version: ${markdownValue(value.version)}`,
-    `- Commit SHA: ${markdownValue(value.commitSha)}`,
-    `- Tag: ${markdownValue(value.tag)}`,
-    `- Workflow run: ${value.workflowRunId}`,
-    `- Run attempt: ${value.runAttempt}`,
-  ]
-}
-
-function npmFactsMarkdown(report) {
-  if (report.reportKind === "historical-audit") {
-    const packages = report.historicalFacts.npmPackages
-    return packages.length === 0
-      ? ["None."]
-      : packages.map(
-          (pkg) =>
-            `- ${markdownValue(pkg.name)}: status ${markdownValue(pkg.status)}; code ${markdownNullable(pkg.code)}; version ${markdownNullable(pkg.version)}; latest ${markdownNullable(pkg.latest)}; shasum ${markdownNullable(pkg.shasum)}; integrity ${markdownNullable(pkg.integrity)}; signatures ${markdownNullable(pkg.signatureCount)}; provenance ${markdownValue(pkg.provenanceStatus)} / ${markdownNullable(pkg.provenanceWorkflow)} / ${markdownNullable(pkg.provenanceCommitSha)}`,
-        )
-  }
-
-  const packages = report.observation.registry?.packages
-  if (!Array.isArray(packages) || packages.length === 0) return ["None."]
-  return packages.map((pkg) => {
-    const provenance =
-      pkg.provenance === null
-        ? "None"
-        : `${markdownValue(pkg.provenance.workflow)} / ${markdownValue(pkg.provenance.commitSha)}`
-    return `- ${markdownValue(pkg.name)}: status ${markdownValue(pkg.status)}; version ${markdownNullable(pkg.version)}; latest ${markdownValue(pkg.latest.status)} / ${markdownNullable(pkg.latest.version)}; signature ${markdownValue(pkg.signature.status)}; provenance ${provenance}`
-  })
-}
-
-function markdownNullable(value) {
-  return value === null ? "None" : markdownValue(value)
-}
-
-function markdownList(values) {
-  return values.length === 0 ? ["None."] : values.map((value) => `- ${escapeMarkdown(value)}`)
-}
-
-function markdownValue(value) {
-  return `\`${redactText(String(value)).replaceAll("`", "\\`")}\``
-}
-
-function formatRun(run) {
-  return run.workflow === null
-    ? "None"
-    : `${markdownValue(run.workflow)} / ${run.workflowRunId} / attempt ${run.runAttempt}`
-}
-
-function escapeMarkdown(value) {
-  return redactText(String(value))
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replace(/([\\`*_[\]{}()#+.!|-])/gu, "\\$1")
-}
-
-function redactText(value) {
-  return value.replace(SECRET_VALUE_PATTERN, "[REDACTED]")
 }
 
 function isReleaseVersion(value) {
@@ -761,7 +517,20 @@ function isPackageName(value) {
 }
 
 function isBoundedText(value) {
-  return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= MAX_TEXT_BYTES
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value) <= MAX_TEXT_BYTES &&
+    ![...value].some((character) => isUnsafeCodePoint(character.codePointAt(0)))
+  )
+}
+
+function isUnsafeCodePoint(codePoint) {
+  return codePoint <= 0x1f || codePoint === 0x7f || codePoint === 0x2028 || codePoint === 0x2029
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right)
 }
 
 function assertBoundedText(value, context) {
@@ -785,10 +554,6 @@ function isSortedUnique(value) {
     new Set(value).size === value.length &&
     value.every((item, index) => index === 0 || compareText(value[index - 1], item) < 0)
   )
-}
-
-function arraysEqual(left, right) {
-  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 function isPositiveInteger(value) {

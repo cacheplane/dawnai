@@ -113,6 +113,46 @@ test("historical completion fails closed when one expected package fact is missi
   assert.deepEqual(assessment.proposedMutations, [])
 })
 
+test("historical package sets canonicalize independent of input order", async () => {
+  const fixture = structuredClone(await load("0.8.21-publish-metadata-failure"))
+  fixture.facts.packageNames.reverse()
+  fixture.facts.npmPackages.reverse()
+  const parsed = parseReconciliationFixture(JSON.stringify(fixture), "shuffled")
+  const canonical = await load("0.8.21-publish-metadata-failure")
+  const assessment = assessHistoricalFacts(parsed)
+  assert.deepEqual(assessment, assessHistoricalFacts(canonical))
+  assert.equal(
+    renderReportJson(reconcileFixture(parsed)),
+    renderReportJson(reconcileFixture(canonical)),
+  )
+})
+
+test("historical reports recompute assessment and require exact self-correlation", async () => {
+  const fixture = structuredClone(await load("0.8.21-publish-metadata-failure"))
+  const assessment = assessHistoricalFacts(fixture)
+  const mismatches = [
+    {
+      historicalAssessment: {
+        ...assessment,
+        lastProvenTransition: "LEGACY_NPM_REGISTRY_INCOMPLETE",
+      },
+    },
+    { candidate: { ...fixture.candidate, commitSha: "0".repeat(40) } },
+    { run: { ...fixture.run, runAttempt: 2 } },
+    { source: { ...fixture.source, selectedRef: "other" } },
+  ]
+  for (const mismatch of mismatches) {
+    assert.throws(
+      () => createReconciliationReport({ historicalFacts: fixture, ...mismatch }),
+      /correlat|assessment/u,
+    )
+  }
+  assert.deepEqual(
+    createReconciliationReport({ historicalFacts: fixture }).historicalAssessment,
+    assessment,
+  )
+})
+
 test("exact historical package presence survives incomplete nested public facts", async () => {
   const cases = [
     {
@@ -245,12 +285,8 @@ test("fixture reconciliation snapshots own data before any field reads", async (
 
 test("Markdown escapes untrusted reason text", async () => {
   const fixture = structuredClone(await load("0.8.20-skipped"))
-  fixture.expected.reasons = ["unsafe [label](javascript:alert(1)) <tag>"]
-  const report = createReconciliationReport({
-    historicalFacts: fixture,
-    historicalAssessment: fixture.expected,
-    run: fixture.run,
-  })
+  const report = structuredClone(reconcileFixture(fixture))
+  report.reasons = ["unsafe [label](javascript:alert(1)) <tag> ``` # heading\n|table|"]
 
   const markdown = renderReportMarkdown(report)
 
@@ -261,12 +297,10 @@ test("Markdown escapes untrusted reason text", async () => {
 
 test("renderers redact secret-like values even when report callers bypass fixtures", async () => {
   const fixture = structuredClone(await load("0.8.20-skipped"))
-  fixture.expected.reasons = ["remote diagnostic Bearer ghp_123456789abcdef"]
-  const report = createReconciliationReport({
-    historicalFacts: fixture,
-    historicalAssessment: fixture.expected,
-    run: fixture.run,
-  })
+  const report = structuredClone(reconcileFixture(fixture))
+  report.reasons = [
+    "remote https://user:pass@example.test/?token=npm_123456789abcdef Authorization: Basic abc ghp_123456789abcdef github_pat_abcdefghi",
+  ]
 
   for (const rendered of [renderReportJson(report), renderReportMarkdown(report)]) {
     assert.doesNotMatch(rendered, /ghp_123456789abcdef|Bearer/iu)
@@ -293,6 +327,48 @@ test("fixture parsing rejects unknown fields, secret-like keys, and malformed hi
     () => parseReconciliationFixture(JSON.stringify(fixture), "bad package"),
     /npm package/u,
   )
+})
+
+test("fixture errors never echo rejected secret-like keys or values", async () => {
+  const fixture = structuredClone(await load("0.8.20-skipped"))
+  for (const key of ["ghp_123456789abcdef", "github_pat_abcdefghi", "npm_token_value"]) {
+    const value = `Bearer ${key}`
+    fixture[key] = value
+    assert.throws(
+      () => parseReconciliationFixture(JSON.stringify(fixture), "fixture"),
+      (error) => !error.message.includes(key) && !error.message.includes(value),
+    )
+    delete fixture[key]
+  }
+})
+
+test("identity strings reject line breaks, controls, and Unicode line separators", async () => {
+  for (const unsafe of [
+    "release\n# injected",
+    "release\rtext",
+    "release\u0000text",
+    "release\u2028text",
+    "release\u2029text",
+  ]) {
+    const fixture = structuredClone(await load("0.8.20-skipped"))
+    fixture.run.workflow = unsafe
+    assert.throws(
+      () => parseReconciliationFixture(JSON.stringify(fixture), "fixture"),
+      /run identity/u,
+    )
+  }
+})
+
+test("Markdown inline code safely contains arbitrary backtick runs", async () => {
+  const fixture = structuredClone(await load("main-2026-08-09"))
+  fixture.source.requestedRef = "main```branch"
+  const markdown = renderReportMarkdown(reconcileFixture(fixture))
+  assert.match(markdown, /````main```branch````/u)
+  assert.doesNotMatch(markdown, /\n# branch/u)
+
+  const unsafe = structuredClone(reconcileFixture(await load("main-2026-08-09")))
+  unsafe.source.requestedRef = "main\n# injected"
+  assert.throws(() => renderReportMarkdown(unsafe), /report identity/u)
 })
 
 async function load(name) {
