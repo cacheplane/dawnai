@@ -285,6 +285,7 @@ test("GitHub pagination preserves exact endpoint and fixed filters", async () =>
     `${BASE}/actions/workflows/release.yml/runs?head_sha=${"f".repeat(40)}&per_page=100&page=2`,
     `${BASE}/actions/workflows/release.yml/runs?head_sha=${SHA}&status=success&per_page=100&page=2`,
     `${BASE}/actions/workflows/other.yml/runs?head_sha=${SHA}&per_page=100&page=2`,
+    `${BASE}/actions/workflows/release.yml/runs?head_sha=${SHA}&per_page=100&after=cursor_123`,
   ]
 
   for (const next of mutations) {
@@ -306,7 +307,7 @@ test("GitHub pagination preserves exact endpoint and fixed filters", async () =>
 test("GitHub attestations paginate completely and sort independent of page order", async () => {
   const digest = `sha256:${"a".repeat(64)}`
   const endpoint = `${BASE}/attestations/${encodeURIComponent(digest)}?per_page=100`
-  const secondPage = `${endpoint}&page=2`
+  const secondPage = `${endpoint}&after=eyJhdHRlc3RhdGlvbl9pZCI6MTIzNDU2fQ`
   const first = { id: 1, bundle: { mediaType: "application/example+a" } }
   const second = { id: 2, bundle: { mediaType: "application/example+b" } }
 
@@ -336,6 +337,61 @@ test("GitHub attestations paginate completely and sort independent of page order
     forward.calls.map(({ url }) => url),
     [endpoint, secondPage],
   )
+})
+
+test("GitHub attestation pagination accepts one bounded before or after cursor only", async () => {
+  const digest = `sha256:${"a".repeat(64)}`
+  const endpoint = `${BASE}/attestations/${encodeURIComponent(digest)}?per_page=100`
+
+  for (const cursorQuery of ["before=cursor_123", "after=cursor-456_abC.789~xyz"]) {
+    const next = `${endpoint}&${cursorQuery}`
+    const recording = recordingFetch([
+      jsonResponse({ attestations: [{ id: 2 }] }, 200, linkHeader(next)),
+      jsonResponse({ attestations: [{ id: 1 }] }),
+    ])
+
+    const result = await createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: recording.fetchImpl,
+    }).getAttestations({ subjectDigest: digest })
+
+    assert.deepEqual(result.value, [{ id: 1 }, { id: 2 }])
+    assert.deepEqual(
+      recording.calls.map(({ url }) => url),
+      [endpoint, next],
+    )
+  }
+})
+
+test("GitHub attestation pagination rejects duplicate, mixed, and malformed cursors", async () => {
+  const digest = `sha256:${"a".repeat(64)}`
+  const endpoint = `${BASE}/attestations/${encodeURIComponent(digest)}?per_page=100`
+  const unsafeQueries = [
+    "after=cursor_1&after=cursor_2",
+    "before=cursor_1&before=cursor_2",
+    "before=cursor_1&after=cursor_2",
+    "page=2&after=cursor_1",
+    "after=cursor%20with%20spaces",
+    "after=cursor_1#fragment",
+    `after=${"a".repeat(513)}`,
+  ]
+
+  for (const query of unsafeQueries) {
+    const github = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: async () =>
+        jsonResponse({ attestations: [] }, 200, linkHeader(`${endpoint}&${query}`)),
+    })
+
+    assert.deepEqual(await github.getAttestations({ subjectDigest: digest }), {
+      status: "ERROR",
+      operation: "attestations",
+      httpStatus: 200,
+      code: "UNSAFE_PAGINATION_URL",
+    })
+  }
 })
 
 test("GitHub attestation pagination rejects another subject endpoint", async () => {

@@ -6,6 +6,7 @@ const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u
 const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u
 const REPOSITORY_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/u
 const SAFE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u
+const CURSOR_PATTERN = /^[A-Za-z0-9._~+/=-]{1,512}$/u
 
 // Named methods return JSON-safe envelopes with status, operation, httpStatus, and code.
 // JSON endpoints add canonicalized value; download endpoints add base64 content.
@@ -129,6 +130,7 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
         absenceAllowed: true,
         extract: objectArray("attestations"),
         compare: compareAttestations,
+        cursorPagination: true,
       })
     },
     getWorkflow({ workflow }) {
@@ -190,7 +192,7 @@ async function readObject(
 
 async function readPaginated(
   context,
-  { initialUrl, operation, extract, compare, absenceAllowed = false },
+  { initialUrl, operation, extract, compare, absenceAllowed = false, cursorPagination = false },
 ) {
   const records = []
   let url = initialUrl
@@ -214,7 +216,7 @@ async function readPaginated(
       records.sort(compare)
       return { ...publicResult(result), value: records }
     }
-    const nextUrl = normalizeNextUrl(result.nextUrl, initialUrl)
+    const nextUrl = normalizeNextUrl(result.nextUrl, initialUrl, cursorPagination)
     if (nextUrl === null) {
       return failure("ERROR", operation, result.httpStatus, "UNSAFE_PAGINATION_URL")
     }
@@ -310,7 +312,7 @@ function requestHeaders(token, accept) {
   }
 }
 
-function normalizeNextUrl(value, initialValue) {
+function normalizeNextUrl(value, initialValue, cursorPagination) {
   try {
     const url = new URL(value)
     const initial = new URL(initialValue)
@@ -319,7 +321,7 @@ function normalizeNextUrl(value, initialValue) {
       url.password === "" &&
       url.hash === "" &&
       url.pathname === initial.pathname &&
-      paginationQueryMatches(url.searchParams, initial.searchParams)
+      paginationQueryMatches(url.searchParams, initial.searchParams, cursorPagination)
       ? url.href
       : null
   } catch {
@@ -327,14 +329,19 @@ function normalizeNextUrl(value, initialValue) {
   }
 }
 
-function paginationQueryMatches(actual, initial) {
+function paginationQueryMatches(actual, initial, cursorPagination) {
   const actualValues = queryValues(actual)
   const initialValues = queryValues(initial)
   if (actualValues === null || initialValues === null) {
     return false
   }
   for (const key of actualValues.keys()) {
-    if (!initialValues.has(key) && key !== "page" && key !== "per_page") {
+    if (
+      !initialValues.has(key) &&
+      key !== "page" &&
+      key !== "per_page" &&
+      !(cursorPagination && (key === "before" || key === "after"))
+    ) {
       return false
     }
   }
@@ -344,7 +351,17 @@ function paginationQueryMatches(actual, initial) {
     }
   }
   const pages = actualValues.get("page")
-  if (pages?.length !== 1 || !isPositiveInteger(pages[0])) {
+  const before = actualValues.get("before")
+  const after = actualValues.get("after")
+  const cursor = before ?? after
+  if (before !== undefined && after !== undefined) {
+    return false
+  }
+  if (
+    cursor === undefined
+      ? pages?.length !== 1 || !isPositiveInteger(pages[0])
+      : pages !== undefined || cursor.length !== 1 || !CURSOR_PATTERN.test(cursor[0])
+  ) {
     return false
   }
   const perPage = actualValues.get("per_page")
