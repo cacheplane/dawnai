@@ -342,6 +342,98 @@ for (const status of ["missing", "failed"]) {
   })
 }
 
+test("every named required smoke lane needs one exact-version success", () => {
+  const observation = useExplicitSmokeSchema(observationFor("RELEASE_DRAFT_COMPLETE"))
+  for (const smoke of observation.smokes) {
+    smoke.status = "passed"
+  }
+
+  let plan
+  assert.doesNotThrow(() => {
+    plan = planRelease({ candidate: candidate(), observation })
+  })
+  assert.equal(plan.state, "SMOKES_COMPLETE")
+  assert.equal(plan.disposition, "would-transition")
+  assert.equal(plan.nextTransition, "publish-github-release")
+})
+
+const invalidRequiredLaneCases = [
+  {
+    name: "omitted",
+    mutate(observation) {
+      delete observation.requiredSmokeLanes
+    },
+    conflict: "required-smoke-lanes-missing",
+  },
+  {
+    name: "empty",
+    mutate(observation) {
+      observation.requiredSmokeLanes = []
+    },
+    conflict: "required-smoke-lanes-empty",
+  },
+  {
+    name: "duplicate",
+    mutate(observation) {
+      observation.requiredSmokeLanes = ["install", "install"]
+    },
+    conflict: "required-smoke-lane-duplicate",
+  },
+  {
+    name: "non-deterministic",
+    mutate(observation) {
+      observation.requiredSmokeLanes = ["runtime", "install"]
+    },
+    conflict: "required-smoke-lanes-nondeterministic",
+  },
+]
+
+for (const { name, mutate, conflict } of invalidRequiredLaneCases) {
+  test(`${name} required smoke lanes block publication`, () => {
+    const observation = useExplicitSmokeSchema(observationFor("RELEASE_DRAFT_COMPLETE"))
+    mutate(observation)
+
+    assertDesiredSchemaBlocked(observation, conflict)
+  })
+}
+
+const invalidRequiredResultCases = [
+  {
+    name: "missing",
+    mutate(observation) {
+      observation.smokes.pop()
+    },
+    conflict: "required-smoke-result-missing",
+  },
+  {
+    name: "duplicate",
+    mutate(observation) {
+      observation.smokes.push(structuredClone(observation.smokes[0]))
+    },
+    conflict: "required-smoke-result-duplicate",
+  },
+  {
+    name: "unexpected",
+    mutate(observation) {
+      observation.smokes.push({
+        name: "unlisted",
+        status: "passed",
+        version: VERSION,
+      })
+    },
+    conflict: "required-smoke-result-unexpected",
+  },
+]
+
+for (const { name, mutate, conflict } of invalidRequiredResultCases) {
+  test(`${name} required smoke results block publication`, () => {
+    const observation = useExplicitSmokeSchema(observationFor("RELEASE_DRAFT_COMPLETE"))
+    mutate(observation)
+
+    assertDesiredSchemaBlocked(observation, conflict)
+  })
+}
+
 const ambiguityCases = [
   {
     name: "registry latest",
@@ -481,6 +573,23 @@ test("an abandoned candidate later visible on npm is a hard conflict", () => {
   assertBlocked(observation, "abandoned-candidate-visible-on-npm")
 })
 
+test("recorded abandonment stays terminal after a newer release becomes public", () => {
+  const observation = observationFor("ABANDONED_PREPUBLICATION")
+  observation.registry.latest = { status: "present", version: NEWER_VERSION }
+  observation.otherCandidates.push({
+    version: NEWER_VERSION,
+    state: "RELEASE_PUBLISHED",
+  })
+
+  const plan = planRelease({ candidate: candidate(), observation })
+
+  assert.equal(plan.state, "ABANDONED_PREPUBLICATION")
+  assert.equal(plan.disposition, "noop")
+  assert.equal(plan.nextTransition, null)
+  assert.deepEqual(plan.conflicts, [])
+  assert.deepEqual(plan.proposedMutations, [])
+})
+
 test("malformed candidate identity and mode are rejected", () => {
   const observation = baseObservation()
 
@@ -510,6 +619,35 @@ test("contradictory progress observations fail closed", () => {
   assert.ok(findReleaseConflicts(candidate(), observation).includes("npm-before-escrow"))
 })
 
+const tagPrerequisiteStates = [
+  "ARTIFACTS_PREPARED",
+  "ARTIFACTS_ATTESTED",
+  "CANDIDATE_ESCROWED",
+  "NPM_PARTIAL",
+  "NPM_COMPLETE",
+  "RELEASE_DRAFT_COMPLETE",
+  "SMOKES_COMPLETE",
+  "RELEASE_PUBLISHED",
+  "AUDIT_DISPATCHED",
+  "AUDIT_COMPLETE",
+]
+
+for (const state of tagPrerequisiteStates) {
+  test(`${state} requires exact candidate tag evidence`, () => {
+    const observation = observationFor(state)
+    observation.tag = { status: "absent", commitSha: null }
+
+    assertBlocked(observation, "candidate-tag-prerequisite-missing")
+  })
+}
+
+test("a Release draft cannot advance with an expected asset explicitly absent", () => {
+  const observation = observationFor("RELEASE_DRAFT_COMPLETE")
+  observation.release.assets[0].status = "absent"
+
+  assertBlocked(observation, "github-required-asset-absent")
+})
+
 function assertBlocked(observation, expectedConflict) {
   const frozen = deepFreeze(observation)
   const before = JSON.stringify(frozen)
@@ -520,6 +658,25 @@ function assertBlocked(observation, expectedConflict) {
   assert.deepEqual(plan.proposedMutations, [])
   assert.ok(plan.conflicts.includes(expectedConflict), JSON.stringify(plan.conflicts))
   assert.equal(JSON.stringify(frozen), before)
+}
+
+function assertDesiredSchemaBlocked(observation, expectedConflict) {
+  let plan
+  assert.doesNotThrow(() => {
+    plan = planRelease({ candidate: candidate(), observation })
+  })
+  assert.equal(plan.disposition, "blocked")
+  assert.ok(plan.conflicts.includes(expectedConflict), JSON.stringify(plan.conflicts))
+}
+
+function useExplicitSmokeSchema(observation) {
+  observation.requiredSmokeLanes = ["install", "runtime"]
+  observation.smokes = observation.smokes.map(({ name, status, version }) => ({
+    name,
+    status,
+    version,
+  }))
+  return observation
 }
 
 function candidate(overrides = {}) {
@@ -565,9 +722,10 @@ function baseObservation() {
       packages: PACKAGE_IDENTITIES.map(({ name }) => absentRegistryPackage(name)),
     },
     release: releaseRecord("absent"),
+    requiredSmokeLanes: ["install", "runtime"],
     smokes: [
-      { name: "install", required: true, status: "pending", version: VERSION },
-      { name: "runtime", required: true, status: "pending", version: VERSION },
+      { name: "install", status: "pending", version: VERSION },
+      { name: "runtime", status: "pending", version: VERSION },
     ],
     audit: {
       status: "none",

@@ -36,6 +36,7 @@ const ROOT_FIELDS = [
   "escrow",
   "registry",
   "release",
+  "requiredSmokeLanes",
   "smokes",
   "audit",
   "abandonment",
@@ -71,10 +72,7 @@ function classifySnapshot(candidate, observation) {
   if (observation.release.status === "published") {
     return ReleaseState.RELEASE_PUBLISHED
   }
-  if (
-    observation.release.status === "draft" &&
-    observation.smokes.filter((smoke) => smoke.required).every((smoke) => smoke.status === "passed")
-  ) {
+  if (observation.release.status === "draft" && requiredSmokesAreComplete(candidate, observation)) {
     return ReleaseState.SMOKES_COMPLETE
   }
   if (observation.release.status === "draft") {
@@ -156,7 +154,8 @@ function findSnapshotConflicts(candidate, observation) {
     }
     if (
       comparison > 0 &&
-      (observation.abandonment.requested || observation.abandonment.recorded) &&
+      observation.abandonment.requested &&
+      !observation.abandonment.recorded &&
       stateAtLeast(other.state, ReleaseState.CANDIDATE_TAGGED)
     ) {
       conflicts.add("abandonment-newer-public-state")
@@ -201,11 +200,6 @@ function findSnapshotConflicts(candidate, observation) {
 
   if (observation.escrow.status === "ambiguous") {
     conflicts.add("candidate-escrow-ambiguous")
-  } else if (
-    observation.escrow.status === "present" &&
-    observation.artifacts.status !== "attested"
-  ) {
-    conflicts.add("escrow-before-attestation")
   }
 
   if (observation.registry.latest.status === "ambiguous") {
@@ -233,10 +227,8 @@ function findSnapshotConflicts(candidate, observation) {
       conflicts.add("npm-provenance-commitSha-mismatch")
     }
   }
-  if (presentPackages.length > 0 && observation.escrow.status !== "present") {
-    conflicts.add("npm-before-escrow")
-  }
   if (
+    !observation.abandonment.recorded &&
     observation.registry.latest.status === "present" &&
     compareSemver(observation.registry.latest.version, candidate.version) > 0 &&
     ![ReleaseState.AUDIT_COMPLETE, ReleaseState.ABANDONED_PREPUBLICATION].includes(state) &&
@@ -262,9 +254,6 @@ function findSnapshotConflicts(candidate, observation) {
     if (observation.release.commitSha !== candidate.commitSha) {
       conflicts.add("github-release-commit-mismatch")
     }
-    if (!allPackagesPresent) {
-      conflicts.add("github-release-before-npm-complete")
-    }
   }
   for (const asset of observation.release.assets) {
     if (asset.status === "different") {
@@ -274,7 +263,11 @@ function findSnapshotConflicts(candidate, observation) {
     }
   }
 
-  const requiredSmokes = observation.smokes.filter((smoke) => smoke.required)
+  const requiredSmokeAnalysis = analyzeRequiredSmokes(candidate, observation)
+  const requiredSmokes = requiredSmokeAnalysis.results
+  for (const conflict of requiredSmokeAnalysis.conflicts) {
+    conflicts.add(conflict)
+  }
   for (const smoke of requiredSmokes) {
     if (smoke.version !== candidate.version) {
       conflicts.add("required-smoke-version-mismatch")
@@ -284,29 +277,129 @@ function findSnapshotConflicts(candidate, observation) {
     } else if (smoke.status === "ambiguous") {
       conflicts.add("required-smoke-ambiguous")
     }
-    if (smoke.status === "passed" && observation.release.status === "absent") {
-      conflicts.add("smoke-before-release-draft")
-    }
-  }
-  if (
-    observation.release.status === "published" &&
-    requiredSmokes.some((smoke) => smoke.status !== "passed")
-  ) {
-    conflicts.add("github-release-published-before-smokes")
   }
 
   if (observation.audit.status === "ambiguous") {
     conflicts.add("release-audit-ambiguous")
-  } else if (
+  }
+
+  addProgressionConflicts(conflicts, observation, {
+    allPackagesPresent,
+    presentPackages,
+    requiredSmokes,
+    requiredSmokesComplete: requiredSmokeAnalysis.complete,
+  })
+  addAbandonmentConflicts(conflicts, candidate, observation, state, presentPackages)
+
+  return [...conflicts].sort()
+}
+
+function addProgressionConflicts(
+  conflicts,
+  observation,
+  { allPackagesPresent, presentPackages, requiredSmokes, requiredSmokesComplete },
+) {
+  const releaseExists = ["draft", "published"].includes(observation.release.status)
+  const publishStarted =
+    observation.registry.publishJobStarted ||
+    observation.registry.mutationStarted ||
+    presentPackages.length > 0
+  const advancedBeyondTag =
+    ["prepared", "attested"].includes(observation.artifacts.status) ||
+    observation.escrow.status === "present" ||
+    publishStarted ||
+    releaseExists ||
+    requiredSmokes.some((smoke) => smoke.status === "passed") ||
+    ["dispatched", "complete"].includes(observation.audit.status)
+
+  if (advancedBeyondTag && observation.tag.status !== "present") {
+    conflicts.add("candidate-tag-prerequisite-missing")
+  }
+  if (observation.escrow.status === "present" && observation.artifacts.status !== "attested") {
+    conflicts.add("escrow-before-attestation")
+  }
+  if (publishStarted && observation.artifacts.status !== "attested") {
+    conflicts.add("npm-before-artifacts-attested")
+  }
+  if (publishStarted && observation.escrow.status !== "present") {
+    conflicts.add("npm-before-escrow")
+  }
+  if (releaseExists && !allPackagesPresent) {
+    conflicts.add("github-release-before-npm-complete")
+  }
+  if (releaseExists && observation.release.assets.some((asset) => asset.status === "absent")) {
+    conflicts.add("github-required-asset-absent")
+  }
+  if (requiredSmokes.some((smoke) => smoke.status === "passed") && !releaseExists) {
+    conflicts.add("smoke-before-release-draft")
+  }
+  if (observation.release.status === "published" && !requiredSmokesComplete) {
+    conflicts.add("github-release-published-before-smokes")
+  }
+  if (
     ["dispatched", "complete"].includes(observation.audit.status) &&
     observation.release.status !== "published"
   ) {
     conflicts.add("audit-before-release-published")
   }
+}
 
-  addAbandonmentConflicts(conflicts, candidate, observation, state, presentPackages)
+function analyzeRequiredSmokes(candidate, observation) {
+  const conflicts = []
+  const lanes = observation.requiredSmokeLanes
+  if (lanes === undefined) {
+    return {
+      complete: false,
+      conflicts: ["required-smoke-lanes-missing"],
+      results: [],
+    }
+  }
+  if (lanes.length === 0) {
+    conflicts.push("required-smoke-lanes-empty")
+  }
+  if (new Set(lanes).size !== lanes.length) {
+    conflicts.push("required-smoke-lane-duplicate")
+  }
+  if (!arraysEqual(lanes, [...lanes].sort(compareNames))) {
+    conflicts.push("required-smoke-lanes-nondeterministic")
+  }
 
-  return [...conflicts].sort()
+  const laneSet = new Set(lanes)
+  const resultsByName = new Map()
+  for (const smoke of observation.smokes) {
+    const results = resultsByName.get(smoke.name) ?? []
+    results.push(smoke)
+    resultsByName.set(smoke.name, results)
+    if (!laneSet.has(smoke.name)) {
+      conflicts.push("required-smoke-result-unexpected")
+    }
+  }
+  for (const lane of laneSet) {
+    const results = resultsByName.get(lane) ?? []
+    if (results.length === 0) {
+      conflicts.push("required-smoke-result-missing")
+    } else if (results.length > 1) {
+      conflicts.push("required-smoke-result-duplicate")
+    }
+  }
+
+  const results = observation.smokes.filter((smoke) => laneSet.has(smoke.name))
+  const complete =
+    conflicts.length === 0 &&
+    lanes.length > 0 &&
+    lanes.every((lane) => {
+      const laneResults = resultsByName.get(lane)
+      return (
+        laneResults.length === 1 &&
+        laneResults[0].status === "passed" &&
+        laneResults[0].version === candidate.version
+      )
+    })
+  return { complete, conflicts, results }
+}
+
+function requiredSmokesAreComplete(candidate, observation) {
+  return analyzeRequiredSmokes(candidate, observation).complete
 }
 
 function addAbandonmentConflicts(conflicts, candidate, observation, state, presentPackages) {
@@ -345,6 +438,7 @@ function addAbandonmentConflicts(conflicts, candidate, observation, state, prese
     conflicts.add("abandonment-with-ambiguity")
   }
   if (
+    !observation.abandonment.recorded &&
     observation.registry.latest.status === "present" &&
     compareSemver(observation.registry.latest.version, candidate.version) > 0
   ) {
@@ -409,7 +503,7 @@ function validateCandidate(candidate) {
 
 function validateObservation(observation) {
   assertObject(observation, "observation")
-  assertExactFields(observation, ROOT_FIELDS, "observation")
+  assertExactFields(observation, ROOT_FIELDS, "observation", ["requiredSmokeLanes"])
 
   assertObject(observation.inventory, "observation.inventory")
   assertExactFields(observation.inventory, ["status", "packages"], "observation.inventory")
@@ -491,6 +585,7 @@ function validateObservation(observation) {
 
   validateRegistry(observation.registry, packageNames)
   validateRelease(observation.release)
+  validateRequiredSmokeLanes(observation.requiredSmokeLanes)
   validateSmokes(observation.smokes)
 
   assertObject(observation.audit, "observation.audit")
@@ -586,19 +681,11 @@ function validateRelease(release) {
 }
 
 function validateSmokes(smokes) {
-  assertNonEmptyArray(smokes, "smokes")
-  const names = new Set()
+  assertArray(smokes, "smokes")
   for (const smoke of smokes) {
     assertObject(smoke, "smoke")
-    assertExactFields(smoke, ["name", "required", "status", "version"], "smoke")
+    assertExactFields(smoke, ["name", "status", "version"], "smoke")
     assertNonEmptyString(smoke.name, "smoke.name")
-    if (names.has(smoke.name)) {
-      throw new TypeError(`smokes contain duplicate name ${smoke.name}`)
-    }
-    names.add(smoke.name)
-    if (typeof smoke.required !== "boolean") {
-      throw new TypeError("smoke.required must be a boolean")
-    }
     assertOneOf(
       smoke.status,
       ["pending", "passed", "missing", "failed", "ambiguous"],
@@ -607,6 +694,16 @@ function validateSmokes(smokes) {
     if (!isExactSemver(smoke.version)) {
       throw new TypeError("smoke.version must be an exact SemVer")
     }
+  }
+}
+
+function validateRequiredSmokeLanes(lanes) {
+  if (lanes === undefined) {
+    return
+  }
+  assertArray(lanes, "requiredSmokeLanes")
+  for (const lane of lanes) {
+    assertNonEmptyString(lane, "required smoke lane")
   }
 }
 
@@ -675,9 +772,11 @@ function assertObject(value, label) {
   }
 }
 
-function assertExactFields(value, fields, label) {
+function assertExactFields(value, fields, label, optionalFields = []) {
   const actual = Object.keys(value)
-  const missing = fields.find((field) => !Object.hasOwn(value, field))
+  const missing = fields.find(
+    (field) => !optionalFields.includes(field) && !Object.hasOwn(value, field),
+  )
   if (missing !== undefined) {
     throw new TypeError(`${label} is missing field ${missing}`)
   }
@@ -685,6 +784,14 @@ function assertExactFields(value, fields, label) {
   if (unknown !== undefined) {
     throw new TypeError(`${label} contains unknown field ${unknown}`)
   }
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function compareNames(left, right) {
+  return left.localeCompare(right)
 }
 
 function assertArray(value, label) {
