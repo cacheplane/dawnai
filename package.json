@@ -41,6 +41,7 @@
     "test:pack-check": "node --test scripts/pack-check.test.mjs",
     "test:published-artifacts": "node --test scripts/published-artifacts.test.mjs",
     "test:release-controller": "node --test scripts/release/test/*.test.mjs",
+    "test:release-fault-harness": "node --test scripts/release/test/fault-harness.integration.mjs",
     "test:release-publish": "node --test scripts/release-publish.test.mjs",
     "test:backfill-release-tags": "node --test scripts/backfill-release-tags.test.mjs",
     "test:upload-release-assets": "node --test scripts/upload-release-assets.test.mjs",
