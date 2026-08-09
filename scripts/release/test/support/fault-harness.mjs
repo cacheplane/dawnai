@@ -1,17 +1,21 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import {
+	access,
 	lstat,
 	mkdir,
 	mkdtemp,
 	readFile,
 	realpath,
 	rm,
+	stat,
 	writeFile,
 } from "node:fs/promises";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import {
 	basename,
+	delimiter,
 	dirname,
 	isAbsolute,
 	join,
@@ -29,11 +33,16 @@ const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const DEFAULT_STARTUP_TIMEOUT_MS = 5_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 2_000;
 const MAX_LIFECYCLE_TIMEOUT_MS = 30_000;
+const MAX_CLEANUP_ATTEMPTS = 2;
+const MIN_CLEANUP_ATTEMPT_MS = 10;
+const TOOL_VERSION =
+	/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 
 export async function createFaultHarness({
 	fixtureDirectory,
 	startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
 	cleanupTimeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
+	packageTools,
 	dependencies = {},
 }) {
 	if (typeof fixtureDirectory !== "string" || !isAbsolute(fixtureDirectory)) {
@@ -56,26 +65,34 @@ export async function createFaultHarness({
 	let git;
 	try {
 		registry = await acquireWithDeadline(
-			() => factories.startVerdaccio(),
+			({ signal }) => factories.startVerdaccio({ signal }),
 			Math.max(1, startupDeadline - Date.now()),
+			cleanupTimeoutMs,
 			"Verdaccio startup",
 		);
-		assertClosableResource(registry, "Verdaccio");
 		resources.push(resource("Verdaccio", () => registry.close()));
+		assertClosableResource(registry, "Verdaccio");
 		proxy = await acquireWithDeadline(
-			() => factories.startFaultProxy({ upstreamUrl: registry.url }),
+			({ signal }) =>
+				factories.startFaultProxy({ upstreamUrl: registry.url, signal }),
 			Math.max(1, startupDeadline - Date.now()),
+			cleanupTimeoutMs,
 			"fault proxy startup",
 		);
-		assertClosableResource(proxy, "fault proxy");
 		resources.push(resource("fault proxy", () => proxy.close()));
+		assertClosableResource(proxy, "fault proxy");
 		git = await acquireWithDeadline(
-			() => factories.createGitFixture({ sourceDirectory: fixtureDirectory }),
+			({ signal }) =>
+				factories.createGitFixture({
+					sourceDirectory: fixtureDirectory,
+					signal,
+				}),
 			Math.max(1, startupDeadline - Date.now()),
+			cleanupTimeoutMs,
 			"Git fixture startup",
 		);
-		assertClosableResource(git, "Git fixture");
 		resources.push(resource("Git fixture", () => git.close()));
+		assertClosableResource(git, "Git fixture");
 		const packsDirectory = join(runtimeDirectory, "packs");
 		const cacheDirectory = join(runtimeDirectory, "npm-cache");
 		const tempDirectory = join(runtimeDirectory, "tmp");
@@ -94,7 +111,21 @@ export async function createFaultHarness({
 		await writeFile(userConfig, npmConfiguration(registry.url), {
 			mode: 0o600,
 		});
-		const tools = await resolvePackageTools(git.workingDirectory);
+		const environment = npmEnvironment({
+			registryUrl: registry.url,
+			userConfig,
+			cacheDirectory,
+			tempDirectory,
+			homeDirectory,
+			configDirectory,
+			xdgCacheDirectory,
+		});
+		const tools = await resolvePackageTools(
+			git.workingDirectory,
+			packageTools,
+			environment,
+			startupDeadline,
+		);
 		let published = false;
 		let closePromise = null;
 		const harness = {
@@ -109,19 +140,9 @@ export async function createFaultHarness({
 					fixtureDirectory: git.workingDirectory,
 				});
 				assertNoLifecycleScripts(ordered);
-				const environment = npmEnvironment({
-					registryUrl: registry.url,
-					userConfig,
-					cacheDirectory,
-					tempDirectory,
-					homeDirectory,
-					configDirectory,
-					xdgCacheDirectory,
-				});
-				await command(
-					process.execPath,
+				await toolCommand(
+					tools.pnpm,
 					[
-						tools.pnpm,
 						"install",
 						"--offline",
 						"--ignore-scripts",
@@ -136,9 +157,9 @@ export async function createFaultHarness({
 				const publication = [];
 				for (const packageJson of ordered) {
 					const packageDirectory = packageJson.directory;
-					const packedOutput = await command(
-						process.execPath,
-						[tools.pnpm, "pack", "--pack-destination", packsDirectory],
+					const packedOutput = await toolCommand(
+						tools.pnpm,
+						["pack", "--pack-destination", packsDirectory],
 						{
 							cwd: packageDirectory,
 							env: environment,
@@ -153,10 +174,9 @@ export async function createFaultHarness({
 						throw new Error("Package manager did not report a tarball");
 					const tarballPath = join(packsDirectory, basename(tarballName));
 					const bytes = await readFile(tarballPath);
-					await command(
-						process.execPath,
+					await toolCommand(
+						tools.npm,
 						[
-							tools.npm,
 							"publish",
 							tarballPath,
 							"--registry",
@@ -261,22 +281,36 @@ async function cleanupResources(resources, timeoutMs) {
 	const pending = [...resources]
 		.reverse()
 		.filter(({ complete }) => !complete)
-		.map(async (entry) => {
-			try {
-				await withDeadline(
-					Promise.resolve().then(() => entry.close()),
-					Math.max(1, deadline - Date.now()),
-					`${entry.label} cleanup`,
-				);
-				entry.complete = true;
-				return null;
-			} catch (error) {
-				return sanitizedError(error, `${entry.label} cleanup failed`);
-			}
-		});
+		.map((entry) => cleanupResource(entry, deadline));
 	const errors = (await Promise.all(pending)).filter((error) => error !== null);
 	if (errors.length > 0)
 		throw new AggregateError(errors, "Fault harness cleanup failed");
+}
+
+async function cleanupResource(entry, deadline) {
+	let lastError = null;
+	for (let attempt = 0; attempt < MAX_CLEANUP_ATTEMPTS; attempt += 1) {
+		const remaining = deadline - Date.now();
+		if (remaining < MIN_CLEANUP_ATTEMPT_MS) break;
+		try {
+			await withDeadline(
+				Promise.resolve().then(() => entry.close()),
+				remaining,
+				`${entry.label} cleanup`,
+			);
+			entry.complete = true;
+			return null;
+		} catch (error) {
+			lastError = sanitizedError(error, `${entry.label} cleanup failed`);
+		}
+	}
+	return (
+		lastError ??
+		sanitizedError(
+			{ code: "DEADLINE_EXCEEDED" },
+			`${entry.label} cleanup failed`,
+		)
+	);
 }
 
 function withDeadline(promise, timeoutMs, label) {
@@ -295,16 +329,70 @@ function withDeadline(promise, timeoutMs, label) {
 	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function acquireWithDeadline(factory, timeoutMs, label) {
-	const pending = Promise.resolve().then(factory);
+async function acquireWithDeadline(
+	factory,
+	timeoutMs,
+	cleanupTimeoutMs,
+	label,
+) {
+	const controller = new AbortController();
+	const pending = Promise.resolve().then(() =>
+		factory({ signal: controller.signal }),
+	);
 	try {
 		return await withDeadline(pending, timeoutMs, label);
 	} catch (error) {
-		pending.then(
-			(lateResource) =>
-				Promise.resolve(lateResource?.close?.()).catch(() => {}),
-			() => {},
-		);
+		controller.abort();
+		const cleanupDeadline = Date.now() + cleanupTimeoutMs;
+		const outcome = await withDeadline(
+			pending.then(
+				(value) => ({ status: "fulfilled", value }),
+				() => ({ status: "rejected" }),
+			),
+			cleanupTimeoutMs,
+			`${label} late acquisition`,
+		).catch(() => null);
+		if (outcome?.status === "fulfilled") {
+			const lateResource = outcome.value;
+			if (
+				lateResource !== null &&
+				typeof lateResource === "object" &&
+				typeof lateResource.close === "function"
+			) {
+				try {
+					await cleanupResources(
+						[resource(`${label} late resource`, () => lateResource.close())],
+						Math.max(MIN_CLEANUP_ATTEMPT_MS, cleanupDeadline - Date.now()),
+					);
+				} catch (cleanupError) {
+					throw new AggregateError(
+						[
+							sanitizedError(error, `${label} failed`),
+							...(cleanupError instanceof AggregateError
+								? cleanupError.errors
+								: [cleanupError]),
+						],
+						`${label} rollback failed`,
+					);
+				}
+			}
+		} else if (outcome === null) {
+			pending.then(
+				(lateResource) => {
+					if (
+						lateResource !== null &&
+						typeof lateResource === "object" &&
+						typeof lateResource.close === "function"
+					) {
+						cleanupResources(
+							[resource(`${label} late resource`, () => lateResource.close())],
+							cleanupTimeoutMs,
+						).catch(() => {});
+					}
+				},
+				() => {},
+			);
+		}
 		throw error;
 	}
 }
@@ -521,7 +609,12 @@ function npmEnvironment({
 	};
 }
 
-async function resolvePackageTools(workspaceDirectory) {
+async function resolvePackageTools(
+	workspaceDirectory,
+	configured,
+	environment,
+	startupDeadline,
+) {
 	const rootManifest = parseObject(
 		await readFile(join(workspaceDirectory, "package.json"), "utf8"),
 		"root manifest",
@@ -531,26 +624,129 @@ async function resolvePackageTools(workspaceDirectory) {
 	);
 	if (match === null)
 		throw new TypeError("Fault workspace package manager is invalid");
-	const pnpm = join(
-		userInfo().homedir,
-		".cache",
-		"node",
-		"corepack",
-		"v1",
-		"pnpm",
-		match[1],
-		"bin",
-		"pnpm.cjs",
-	);
-	const npm = resolve(
-		dirname(process.execPath),
-		"../lib/node_modules/npm/bin/npm-cli.js",
-	);
-	for (const tool of [pnpm, npm]) {
-		if (!(await lstat(tool)).isFile())
-			throw new Error("Required package tool is unavailable");
+	const expectedPnpmVersion = match[1];
+	const descriptors =
+		configured === undefined
+			? await discoverPackageTools(expectedPnpmVersion)
+			: configuredPackageTools(configured, expectedPnpmVersion);
+	for (const descriptor of Object.values(descriptors)) {
+		await validateToolEntryPoint(descriptor.executable);
+		const remaining = Math.max(1, startupDeadline - Date.now());
+		const observedVersion = (
+			await command(
+				descriptor.executable,
+				[...descriptor.prefixArguments, "--version"],
+				{
+					cwd: workspaceDirectory,
+					env: environment,
+					operation: "package-tool-version",
+					timeoutMs: Math.min(COMMAND_TIMEOUT_MS, remaining),
+				},
+			)
+		).trim();
+		if (observedVersion !== descriptor.version) {
+			throw new Error("Required package tool version is unavailable");
+		}
 	}
-	return Object.freeze({ pnpm, npm });
+	return Object.freeze(descriptors);
+}
+
+async function discoverPackageTools(expectedPnpmVersion) {
+	let pnpm = await findExecutable("pnpm");
+	let pnpmPrefix = [];
+	if (pnpm === null) {
+		pnpm = await findExecutable("corepack");
+		pnpmPrefix = ["pnpm"];
+	}
+	const npm = await findExecutable("npm");
+	if (pnpm === null || npm === null)
+		throw new Error("Required package tool is unavailable");
+	return {
+		pnpm: toolDescriptor(pnpm, expectedPnpmVersion, pnpmPrefix),
+		npm: toolDescriptor(npm, await installedNpmVersion(npm), []),
+	};
+}
+
+function configuredPackageTools(value, expectedPnpmVersion) {
+	if (!isExactObject(value, ["npm", "pnpm"])) {
+		throw new TypeError("Fault harness package tools are invalid");
+	}
+	const pnpm = configuredTool(value.pnpm, "pnpm");
+	const npm = configuredTool(value.npm, "npm");
+	if (pnpm.version !== expectedPnpmVersion) {
+		throw new TypeError("Fault harness pnpm version is invalid");
+	}
+	return { pnpm, npm };
+}
+
+function configuredTool(value, name) {
+	if (
+		!isExactObject(value, ["executable", "version"]) ||
+		typeof value.executable !== "string" ||
+		!isAbsolute(value.executable) ||
+		value.executable.length > 1024 ||
+		typeof value.version !== "string" ||
+		!TOOL_VERSION.test(value.version)
+	) {
+		throw new TypeError(`Fault harness ${name} tool is invalid`);
+	}
+	return toolDescriptor(value.executable, value.version, []);
+}
+
+function toolDescriptor(executable, version, prefixArguments) {
+	return Object.freeze({
+		executable,
+		prefixArguments: Object.freeze([...prefixArguments]),
+		version,
+	});
+}
+
+async function findExecutable(name) {
+	for (const directory of requiredPath().split(delimiter)) {
+		if (!isAbsolute(directory))
+			throw new TypeError("Fault harness requires an absolute PATH");
+		const candidate = join(directory, name);
+		try {
+			await access(candidate, fsConstants.X_OK);
+			return candidate;
+		} catch {}
+	}
+	return null;
+}
+
+async function installedNpmVersion(executable) {
+	let directory = dirname(await realpath(executable));
+	for (let depth = 0; depth < 4; depth += 1) {
+		try {
+			const manifest = parseObject(
+				await readFile(join(directory, "package.json"), "utf8"),
+				"npm tool manifest",
+			);
+			if (manifest.name === "npm" && TOOL_VERSION.test(manifest.version)) {
+				return manifest.version;
+			}
+		} catch {}
+		const parent = dirname(directory);
+		if (parent === directory) break;
+		directory = parent;
+	}
+	throw new Error("Required npm tool version is unavailable");
+}
+
+async function validateToolEntryPoint(executable) {
+	const target = await realpath(executable);
+	if (!(await stat(target)).isFile()) {
+		throw new Error("Required package tool is unavailable");
+	}
+}
+
+function isExactObject(value, expectedKeys) {
+	return (
+		value !== null &&
+		!Array.isArray(value) &&
+		typeof value === "object" &&
+		hasExactKeys(value, expectedKeys)
+	);
 }
 
 function assertNoLifecycleScripts(packages) {
@@ -581,7 +777,11 @@ function requiredPath() {
 	return value;
 }
 
-function command(executable, args, { cwd, env, operation }) {
+function command(
+	executable,
+	args,
+	{ cwd, env, operation, timeoutMs = COMMAND_TIMEOUT_MS },
+) {
 	return new Promise((resolve, reject) => {
 		execFile(
 			executable,
@@ -590,7 +790,7 @@ function command(executable, args, { cwd, env, operation }) {
 				cwd,
 				env,
 				shell: false,
-				timeout: COMMAND_TIMEOUT_MS,
+				timeout: timeoutMs,
 				maxBuffer: MAX_OUTPUT_BYTES,
 				encoding: "utf8",
 				windowsHide: true,
@@ -611,6 +811,10 @@ function command(executable, args, { cwd, env, operation }) {
 			},
 		);
 	});
+}
+
+function toolCommand(tool, args, options) {
+	return command(tool.executable, [...tool.prefixArguments, ...args], options);
 }
 
 function assertDisposableRegistry(value) {

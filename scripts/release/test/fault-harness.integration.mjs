@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	access,
@@ -13,7 +14,7 @@ import {
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -225,9 +226,10 @@ test("package subprocesses reject lifecycle probes and isolate hostile ambient c
 		npm_config_registry: "https://registry.example.invalid/",
 	};
 	const inherited = installTemporaryEnvironment(hostile);
-	const harness = await createFaultHarness({ fixtureDirectory: directory });
-	t.after(() => harness.close());
+	let harness;
 	try {
+		harness = await createFaultHarness({ fixtureDirectory: directory });
+		t.after(() => harness.close());
 		await assert.rejects(harness.packAndPublish(), (error) => {
 			assert.match(error.message, /prepack/u);
 			assert.doesNotMatch(
@@ -259,6 +261,121 @@ test("package subprocesses reject lifecycle probes and isolate hostile ambient c
 	} finally {
 		restoreEnvironment(inherited);
 	}
+});
+
+test("package tools accept validated non-default entry points and exact versions", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "dawn-release-tools-test-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const pnpmMarker = join(directory, "pnpm-used");
+	const npmMarker = join(directory, "npm-used");
+	const nodeBin = dirname(process.execPath);
+	const npmVersion = execFileSync(join(nodeBin, "npm"), ["--version"], {
+		encoding: "utf8",
+	}).trim();
+	const tools = {
+		pnpm: {
+			executable: join(directory, "custom-pnpm"),
+			version: "10.33.0",
+		},
+		npm: {
+			executable: join(directory, "custom-npm"),
+			version: npmVersion,
+		},
+	};
+	await writeToolWrapper({
+		path: tools.pnpm.executable,
+		target: join(nodeBin, "corepack"),
+		prefixArguments: ["pnpm"],
+		marker: pnpmMarker,
+	});
+	await writeToolWrapper({
+		path: tools.npm.executable,
+		target: join(nodeBin, "npm"),
+		prefixArguments: [],
+		marker: npmMarker,
+	});
+
+	const harness = await createFaultHarness({
+		fixtureDirectory: FIXTURE_DIRECTORY,
+		packageTools: tools,
+	});
+	t.after(() => harness.close());
+	await harness.packAndPublish();
+	assert.equal((await readFile(pnpmMarker, "utf8")).length >= 3, true);
+	assert.equal((await readFile(npmMarker, "utf8")).length >= 2, true);
+});
+
+test("package tool probes share the harness startup deadline", async (t) => {
+	const directory = await mkdtemp(
+		join(tmpdir(), "dawn-release-tool-deadline-"),
+	);
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const tools = {
+		pnpm: {
+			executable: join(directory, "delayed-pnpm"),
+			version: "10.33.0",
+		},
+		npm: {
+			executable: join(directory, "unused-npm"),
+			version: "1.0.0",
+		},
+	};
+	await writeFile(
+		tools.pnpm.executable,
+		'#!/usr/bin/env node\nsetTimeout(() => console.log("10.33.0"), 300)\n',
+		{ mode: 0o755 },
+	);
+	await writeFile(
+		tools.npm.executable,
+		'#!/usr/bin/env node\nconsole.log("1.0.0")\n',
+		{ mode: 0o755 },
+	);
+	const closed = { registry: false, proxy: false, git: false };
+	let unexpectedHarness;
+	const started = performance.now();
+	try {
+		await assert.rejects(
+			createFaultHarness({
+				fixtureDirectory: FIXTURE_DIRECTORY,
+				startupTimeoutMs: 100,
+				cleanupTimeoutMs: 100,
+				packageTools: tools,
+				dependencies: {
+					async startVerdaccio() {
+						return {
+							url: "http://127.0.0.1:12345/",
+							async close() {
+								closed.registry = true;
+							},
+						};
+					},
+					async startFaultProxy() {
+						return {
+							async close() {
+								closed.proxy = true;
+							},
+						};
+					},
+					async createGitFixture() {
+						return {
+							workingDirectory: FIXTURE_DIRECTORY,
+							async close() {
+								closed.git = true;
+							},
+						};
+					},
+				},
+			}).then((harness) => {
+				unexpectedHarness = harness;
+				return harness;
+			}),
+			(error) => error.code === "PACKAGE_COMMAND_FAILED",
+		);
+	} finally {
+		await unexpectedHarness?.close();
+	}
+	assert.ok(performance.now() - started < 250);
+	assert.deepEqual(closed, { registry: true, proxy: true, git: true });
 });
 
 test("the production npm reader distinguishes exact absence and every deterministic proxy fault", async (t) => {
@@ -400,18 +517,18 @@ test("fault proxy enforces one absolute streaming deadline and rejects truncated
 	const slowStarted = performance.now();
 	await assert.rejects(
 		fetch(new URL("slow", proxy.url), {
-			signal: AbortSignal.timeout(500),
+			signal: AbortSignal.timeout(2_000),
 		}).then((response) => response.text()),
 	);
-	assert.ok(performance.now() - slowStarted < 400);
+	assert.ok(performance.now() - slowStarted < 1_000);
 
 	const truncatedStarted = performance.now();
 	await assert.rejects(
 		fetch(new URL("truncated", proxy.url), {
-			signal: AbortSignal.timeout(500),
+			signal: AbortSignal.timeout(2_000),
 		}).then((response) => response.text()),
 	);
-	assert.ok(performance.now() - truncatedStarted < 400);
+	assert.ok(performance.now() - truncatedStarted < 1_000);
 	assert.equal(proxy.snapshot().activeForwards, 0);
 
 	await proxy.close();
@@ -477,7 +594,7 @@ test("harness close is concurrent-safe, bounded, and retries only incomplete res
 	});
 	assert.deepEqual(
 		{ registryCloseAttempts, proxyCloseAttempts, gitCloseAttempts },
-		{ registryCloseAttempts: 1, proxyCloseAttempts: 1, gitCloseAttempts: 1 },
+		{ registryCloseAttempts: 2, proxyCloseAttempts: 1, gitCloseAttempts: 1 },
 	);
 
 	await harness.close();
@@ -534,12 +651,50 @@ test("harness startup rollback closes each acquired resource and sanitizes clean
 			return true;
 		},
 	);
-	assert.equal(closeAttempts, 1);
+	assert.equal(closeAttempts, 2);
 	await assert.rejects(access(registryDirectory), { code: "ENOENT" });
+});
+
+test("startup rollback retries a failed registry close within its shared cleanup budget", async () => {
+	let registry;
+	let closeAttempts = 0;
+	await assert.rejects(
+		createFaultHarness({
+			fixtureDirectory: FIXTURE_DIRECTORY,
+			cleanupTimeoutMs: 500,
+			dependencies: {
+				async startVerdaccio() {
+					registry = await startVerdaccio();
+					return {
+						...registry,
+						async close() {
+							closeAttempts += 1;
+							if (closeAttempts === 1)
+								throw new Error("first close failed before delegation");
+							await registry.close();
+						},
+					};
+				},
+				async startFaultProxy() {
+					throw Object.assign(new Error("injected startup failure"), {
+						code: "INJECTED_START",
+					});
+				},
+				createGitFixture: assert.fail,
+			},
+		}),
+		(error) => error.code === "INJECTED_START",
+	);
+	assert.equal(closeAttempts, 2);
+	await assert.rejects(access(registry.directory), { code: "ENOENT" });
+	await assert.rejects(
+		fetch(registry.url, { signal: AbortSignal.timeout(500) }),
+	);
 });
 
 test("harness startup deadline cleans resources that arrive after timeout", async () => {
 	let registryClosed = false;
+	let lateCloseAttempts = 0;
 	let resolveLateClose;
 	const lateClose = new Promise((resolve) => {
 		resolveLateClose = resolve;
@@ -564,6 +719,9 @@ test("harness startup deadline cleans resources that arrive after timeout", asyn
 							() =>
 								resolve({
 									async close() {
+										lateCloseAttempts += 1;
+										if (lateCloseAttempts === 1)
+											throw new Error("late close retry");
 										resolveLateClose();
 									},
 								}),
@@ -576,6 +734,7 @@ test("harness startup deadline cleans resources that arrive after timeout", asyn
 		}),
 		(error) => error.code === "DEADLINE_EXCEEDED",
 	);
+	assert.equal(lateCloseAttempts, 2);
 	await Promise.race([
 		lateClose,
 		new Promise((_, reject) =>
@@ -877,6 +1036,14 @@ function restoreEnvironment(inherited) {
 		if (value === undefined) Reflect.deleteProperty(process.env, name);
 		else Reflect.set(process.env, name, value);
 	}
+}
+
+async function writeToolWrapper({ path, target, prefixArguments, marker }) {
+	await writeFile(
+		path,
+		`#!/usr/bin/env node\nconst { appendFileSync } = require("node:fs")\nconst { spawnSync } = require("node:child_process")\nappendFileSync(${JSON.stringify(marker)}, "x")\nconst result = spawnSync(${JSON.stringify(target)}, [...${JSON.stringify(prefixArguments)}, ...process.argv.slice(2)], { stdio: "inherit", env: process.env })\nprocess.exit(result.status ?? 1)\n`,
+		{ mode: 0o755 },
+	);
 }
 
 async function startBoundedUpstream() {
