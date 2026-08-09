@@ -23,7 +23,7 @@ Internally, `dawn check` loads `dawn.config.ts`, resolves the app root, runs `di
 - A `dawn.config.ts` that fails to load.
 - Any discovered route whose `index.ts` exports more than one of `agent`, `workflow`, `graph`, `chain`.
 - Any tool file that fails to parse.
-- A stale build manifest: when `.dawn/build/modules.mjs` exists (written by `dawn build`'s `node` target), its routes are compared against the routes on disk — a mismatch (for example a route renamed after the last build) fails with the missing/extra route ids and a prompt to re-run `dawn build`.
+- A stale build manifest: when `.dawn/build/modules.mjs` exists (written by `dawn build`'s `node` target), its routes are compared against the routes on disk — a mismatch (for example a route renamed after the last build) fails with the missing/extra route ids and a prompt to re-run `dawn build`. `.dawn/build/modules.edge.mjs` is checked the same way whenever `"hono"` is a configured target: it is a separate artifact with its own copy of every route's static imports, and an app that builds for `hono` **alone** emits no `modules.mjs` at all — so this pass used to have nothing to look at for exactly the deployment shape that cannot re-walk its route tree at runtime. A manifest that is simply absent is a no-op, and the edge manifest is skipped when `hono` is not a configured target, so a leftover file from an experiment is not an error.
 - An unknown `build.targets` entry, and — when `"hono"` is one of them — every feature that target [cannot serve](/docs/deployment#what-the-edge-cannot-serve), reported together as `DAWN_E1005`. The same gate `dawn build` applies, mirrored here so you learn about all of them before building.
 
 Output is a `Dawn app is valid: N routes discovered.` line followed by a per-route `- <pathname> (<kind>)` summary. Exits non-zero on any violation with a detailed message.
@@ -117,7 +117,9 @@ Emits, per target:
 
 Restrict which targets are emitted via `build.targets` in `dawn.config.ts` (e.g. `{ build: { targets: ["node"] } }`). The list replaces the defaults rather than adding to them, so an app deploying to the edge names `{ build: { targets: ["node", "hono"] } }`.
 
-The `hono` target serves a **subset** of Dawn, and the build fails with `DAWN_E1005` — naming every offending config key and file at once — when the app uses the sandbox, `backends.filesystem`/`backends.exec`, a config-supplied store, a `workspace/` directory, route skills, or route-level long-term memory. [`dawn check`](#dawn-check) applies the identical gate whenever `hono` is a configured target. See [Edge runtimes](/docs/deployment#edge-runtimes).
+The `hono` target serves a **subset** of Dawn, and the build fails with `DAWN_E1005` — naming every offending config key and file at once — when the app uses the sandbox, `backends.filesystem`/`backends.exec`, a config-supplied store, `toolOutput`, a `workspace/` directory, route skills, or route-level long-term memory. [`dawn check`](#dawn-check) applies the identical gate whenever `hono` is a configured target. See [Edge runtimes](/docs/deployment#edge-runtimes).
+
+`toolOutput` is a recent addition to that list, and the one gated key that is plain JSON — so it used to be inlined into the bundle and then ignored, and the build went green while the deployed worker never offloaded. An app that sets both `toolOutput` and `"hono"` therefore sees a build that passed before start failing: remove the key, or drop `"hono"` from `build.targets`. See [Upgrading](/docs/upgrading#tooloutput-is-now-gated-off-the-hono-target).
 
 See [Deployment](/docs/deployment) for the full bridge.
 
