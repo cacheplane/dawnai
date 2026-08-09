@@ -169,7 +169,7 @@ function executeGit(run, args, options, maxOutputBytes) {
         return output
       },
       (error) => {
-        throw normalizeRunError(error)
+        throw normalizeRunError(error, args)
       },
     )
 }
@@ -186,7 +186,7 @@ function runCommand(command, args, options) {
   })
 }
 
-function normalizeRunError(error) {
+function normalizeRunError(error, args) {
   const exitCode = Number.isInteger(error?.exitCode)
     ? error.exitCode
     : Number.isInteger(error?.code)
@@ -201,9 +201,18 @@ function normalizeRunError(error) {
   ) {
     code = "TIMEOUT"
   } else if (exitCode !== undefined) {
-    code = "EXIT_NONZERO"
+    code = isExactMissingHistoryRef(error, args, exitCode) ? "REF_NOT_FOUND" : "EXIT_NONZERO"
   }
   return gitFailure(code, { exitCode, diagnostic: redactStderr(error?.stderr) })
+}
+
+function isExactMissingHistoryRef(error, args, exitCode) {
+  return (
+    exitCode === 128 &&
+    args[0] === "rev-list" &&
+    typeof error?.stderr === "string" &&
+    /^fatal: (?:bad revision|ambiguous argument) /u.test(error.stderr)
+  )
 }
 
 function gitFailure(code, { exitCode, diagnostic } = {}) {

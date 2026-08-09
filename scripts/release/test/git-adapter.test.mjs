@@ -78,6 +78,34 @@ test("createGitReader normalizes ancestry misses without hiding Git failures", a
   )
 })
 
+test("history reads type only an exact missing ref for safe main fallback", async () => {
+  const failures = [
+    Object.assign(new Error("missing"), {
+      code: 128,
+      stderr: "fatal: bad revision 'origin/main'\n",
+    }),
+    Object.assign(new Error("broken"), {
+      code: 128,
+      stderr: "fatal: unable to read current working directory\n",
+    }),
+  ]
+  const git = createGitReader({
+    root: "/repo",
+    run: async () => {
+      throw failures.shift()
+    },
+  })
+
+  await assert.rejects(
+    git.listFirstParentHistory({ ref: "origin/main", maxCount: 1 }),
+    (error) => error instanceof GitReadError && error.code === "REF_NOT_FOUND",
+  )
+  await assert.rejects(
+    git.listFirstParentHistory({ ref: "origin/main", maxCount: 1 }),
+    (error) => error instanceof GitReadError && error.code === "EXIT_NONZERO",
+  )
+})
+
 test("createGitReader requires exact commit identity and deterministic history output", async () => {
   const outputs = [
     "0123456789abcdef0123456789abcdef01234567\nabcdef0123456789abcdef0123456789abcdef01\n\n",

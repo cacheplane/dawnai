@@ -102,6 +102,119 @@ test("candidate discovery rejects nonuniform deltas and package-set drift", asyn
   }
 })
 
+test("current-main inventory validation fails closed for every release policy defect", async () => {
+  const categories = [
+    "structuralErrors",
+    "workspaceDuplicates",
+    "duplicates",
+    "extra",
+    "missing",
+    "privateMembers",
+    "unknownMembers",
+    "versionMismatches",
+  ]
+  for (const category of categories) {
+    let assertions = 0
+    let stderr = ""
+    const code = await runShadowReconcile({
+      argv: ["--repository", "cacheplane/dawnai", "--format", "json"],
+      env: {},
+      stdout: { write: assert.fail },
+      stderr: { write: (value) => (stderr += value) },
+      dependencies: {
+        createGitReader() {
+          return {
+            async listFirstParentHistory() {
+              return [SHA]
+            },
+          }
+        },
+        createNpmReader() {
+          return {}
+        },
+        createGitHubReader() {
+          return {}
+        },
+        async readReleaseInventory() {
+          return { category }
+        },
+        assertValidReleaseInventory(raw) {
+          assertions += 1
+          throw new Error(`inventory-${raw.category}`)
+        },
+        async discoverShadowCandidate({ ref, inventory }) {
+          await inventory.read({ ref })
+          return null
+        },
+      },
+    })
+
+    assert.equal(code, 1, category)
+    assert.equal(assertions, 1, category)
+    assert.match(stderr, new RegExp(`inventory-${category}`, "u"))
+  }
+})
+
+test("current-main fallback is limited to typed ref absence and reports exact selected identity", async () => {
+  for (const scenario of [
+    { missingOrigin: false, selectedRef: "origin/main", resolvedCommitSha: SHA },
+    { missingOrigin: true, selectedRef: "main", resolvedCommitSha: PARENT_SHA },
+  ]) {
+    const calls = []
+    let output = ""
+    const code = await runShadowReconcile({
+      argv: ["--repository", "cacheplane/dawnai", "--format", "json"],
+      env: {},
+      stdout: { write: (value) => (output += value) },
+      stderr: { write: assert.fail },
+      dependencies: currentMainDependencies({ scenario, calls }),
+    })
+
+    assert.equal(code, 0)
+    const report = JSON.parse(output)
+    assert.equal(report.source.requestedRef, "origin/main")
+    assert.equal(report.source.selectedRef, scenario.selectedRef)
+    assert.equal(report.source.resolvedCommitSha, scenario.resolvedCommitSha)
+    assert.deepEqual(
+      calls.filter(([operation]) => operation === "discover"),
+      [["discover", scenario.resolvedCommitSha]],
+    )
+  }
+})
+
+test("current-main does not fall back on policy, parse, auth, or unrelated Git failures", async () => {
+  for (const failure of [
+    Object.assign(new Error("inventory policy failed"), { code: "INVENTORY_INVALID" }),
+    Object.assign(new Error("configuration parse failed"), { code: "PARSE_FAILED" }),
+    Object.assign(new Error("authentication failed"), { code: "AUTH_FAILED" }),
+    Object.assign(new Error("Git read failed"), { code: "TIMEOUT" }),
+  ]) {
+    let mainReads = 0
+    let stderr = ""
+    const dependencies = currentMainDependencies({
+      scenario: { missingOrigin: false, selectedRef: "origin/main", resolvedCommitSha: SHA },
+      calls: [],
+    })
+    dependencies.createGitReader = () => ({
+      async listFirstParentHistory({ ref }) {
+        if (ref === "main") mainReads += 1
+        throw failure
+      },
+    })
+    const code = await runShadowReconcile({
+      argv: ["--repository", "cacheplane/dawnai", "--format", "json"],
+      env: {},
+      stdout: { write: assert.fail },
+      stderr: { write: (value) => (stderr += value) },
+      dependencies,
+    })
+
+    assert.equal(code, 1, failure.code)
+    assert.equal(mainReads, 0, failure.code)
+    assert.match(stderr, new RegExp(failure.message, "u"))
+  }
+})
+
 test("observation composition calls only named readers in inventory order and preserves ambiguity", async () => {
   const calls = []
   const inventory = managedInventory()
@@ -148,7 +261,110 @@ test("observation composition calls only named readers in inventory order and pr
   assert.doesNotMatch(JSON.stringify(result), /authorization|bearer|token|secret/iu)
 })
 
-test("present npm evidence maps exact identity without converting failures to absence", async () => {
+test("CI success requires independently correlated workflow-run and validate-check evidence", async () => {
+  const exactRun = {
+    id: 101,
+    name: "CI",
+    path: ".github/workflows/ci.yml",
+    head_sha: SHA,
+    status: "completed",
+    conclusion: "success",
+    check_suite_id: 501,
+  }
+  const exactCheck = {
+    name: "validate",
+    status: "completed",
+    conclusion: "success",
+    head_sha: SHA,
+    check_suite: { id: 501 },
+  }
+  const cases = [
+    {
+      name: "exact pair",
+      runs: [exactRun],
+      checks: [exactCheck],
+      expected: "success",
+      workflow: "CI",
+      commitSha: SHA,
+    },
+    {
+      name: "wrong workflow",
+      runs: [{ ...exactRun, name: "Release" }],
+      checks: [exactCheck],
+      expected: "ambiguous",
+      workflow: "Release",
+      commitSha: SHA,
+    },
+    {
+      name: "missing workflow",
+      runs: [],
+      checks: [exactCheck],
+      expected: "ambiguous",
+      workflow: null,
+      commitSha: SHA,
+    },
+    {
+      name: "check only",
+      runs: null,
+      checks: [exactCheck],
+      expected: "ambiguous",
+      workflow: null,
+      commitSha: SHA,
+    },
+    {
+      name: "wrong SHA",
+      runs: [{ ...exactRun, head_sha: PARENT_SHA }],
+      checks: [exactCheck],
+      expected: "ambiguous",
+      workflow: "CI",
+      commitSha: null,
+    },
+    {
+      name: "wrong run",
+      runs: [exactRun],
+      checks: [{ ...exactCheck, check_suite: { id: 999 } }],
+      expected: "ambiguous",
+      workflow: "CI",
+      commitSha: SHA,
+    },
+  ]
+
+  for (const item of cases) {
+    const github = absentGitHub()
+    github.getCommitCheckRuns = async () => presentEnvelope("commit-check-runs", item.checks)
+    github.listWorkflowRuns = async () =>
+      item.runs === null
+        ? {
+            status: "AMBIGUOUS",
+            operation: "workflow-runs",
+            httpStatus: 503,
+            code: "SERVER_ERROR",
+          }
+        : presentEnvelope("workflow-runs", item.runs)
+    const result = await observeCandidate({
+      candidate: candidate(),
+      inventory: managedInventory(),
+      git: {
+        async resolveTag() {
+          return SHA
+        },
+      },
+      npm: {
+        async observePackageVersion() {
+          return ambiguousEnvelope("package-version")
+        },
+      },
+      github,
+    })
+
+    assert.equal(result.observation.ci.status, item.expected, item.name)
+    assert.equal(result.observation.ci.workflow, item.workflow, item.name)
+    assert.equal(result.observation.ci.check, "validate", item.name)
+    assert.equal(result.observation.ci.commitSha, item.commitSha, item.name)
+  }
+})
+
+test("raw npm signature records never become cryptographically valid managed evidence", async () => {
   const inventory = managedInventory()
   const result = await observeCandidate({
     candidate: candidate(),
@@ -189,16 +405,19 @@ test("present npm evidence maps exact identity without converting failures to ab
     github: absentGitHub(),
   })
 
-  assert.ok(result.observation.registry.packages.every((pkg) => pkg.status === "present"))
-  assert.ok(result.observation.registry.packages.every((pkg) => pkg.signature.status === "valid"))
-  assert.ok(result.observation.registry.packages.every((pkg) => pkg.tarballSha256 !== null))
-  assert.deepEqual(result.diagnostics, [])
+  assert.ok(result.observation.registry.packages.every((pkg) => pkg.status === "ambiguous"))
+  assert.ok(
+    result.observation.registry.packages.every((pkg) => pkg.signature.status === "ambiguous"),
+  )
+  assert.ok(result.observation.registry.packages.every((pkg) => pkg.tarballSha256 === null))
+  assert.ok(result.diagnostics.every((item) => item.code === "NPM_SIGNATURE_UNVERIFIED"))
+  assert.ok(result.diagnostics.every((item) => item.evidenceCount === 1))
   const plan = planRelease({
     candidate: candidate(),
     observation: result.observation,
     mode: "shadow",
   })
-  assert.equal(plan.state, "NPM_COMPLETE")
+  assert.notEqual(plan.state, "NPM_COMPLETE")
   assert.ok(!plan.conflicts.includes("observation-schema-invalid"))
   assert.equal(Object.isFrozen(result), true)
 })
@@ -229,13 +448,99 @@ test("npm integrity mismatch cannot manufacture a managed tarball SHA-256", asyn
 
   assert.ok(result.observation.registry.packages.every((pkg) => pkg.status === "ambiguous"))
   assert.ok(result.observation.registry.packages.every((pkg) => pkg.tarballSha256 === null))
-  assert.ok(result.diagnostics.every((item) => item.code === "NPM_BYTES_MISMATCH"))
+  assert.ok(result.diagnostics.some((item) => item.code === "NPM_BYTES_MISMATCH"))
+  assert.ok(
+    result.diagnostics.some(
+      (item) => item.code === "NPM_SIGNATURE_UNVERIFIED" && item.evidenceCount === 1,
+    ),
+  )
   const plan = planRelease({
     candidate: candidate(),
     observation: result.observation,
     mode: "shadow",
   })
   assert.notEqual(plan.state, "NPM_COMPLETE")
+})
+
+test("Release observation preserves duplicate, extra, mismatched, and digest-ambiguous assets", async () => {
+  const inventory = {
+    ...managedInventory(),
+    releaseRecordSha256: "8".repeat(64),
+    manifestAttestationSha256: "9".repeat(64),
+  }
+  const expected = expectedReleaseAssets(inventory)
+  const rawAssets = [
+    ...expected.map((asset, index) => ({
+      id: index + 1,
+      name: asset.name,
+      digest: `sha256:${asset.sha256}`,
+    })),
+    {
+      id: 100,
+      name: "manifest.json",
+      digest: `sha256:${"a".repeat(64)}`,
+    },
+    {
+      id: 1,
+      name: "unexpected-managed.txt",
+      digest: `sha256:${"b".repeat(64)}`,
+    },
+    { id: 102, name: "missing-digest.txt" },
+  ]
+  const github = absentGitHub()
+  github.getReleaseByTag = async () =>
+    presentEnvelope("release", {
+      id: 77,
+      draft: true,
+      tag_name: "v0.8.21",
+      target_commitish: SHA,
+    })
+  github.listReleaseAssets = async () => presentEnvelope("release-assets", rawAssets)
+
+  const result = await observeCandidate({
+    candidate: candidate(),
+    inventory,
+    git: {
+      async resolveTag() {
+        return SHA
+      },
+    },
+    npm: {
+      async observePackageVersion() {
+        return ambiguousEnvelope("package-version")
+      },
+    },
+    github,
+  })
+
+  assert.equal(result.observation.release.assets.length, rawAssets.length)
+  assert.equal(
+    result.observation.release.assets.filter((asset) => asset.name === "manifest.json").length,
+    2,
+  )
+  assert.ok(
+    result.observation.release.assets.some(
+      (asset) => asset.name === "unexpected-managed.txt" && asset.status === "ambiguous",
+    ),
+  )
+  assert.deepEqual(
+    result.observation.release.assets.find((asset) => asset.name === "missing-digest.txt"),
+    { name: "missing-digest.txt", status: "ambiguous", sha256: null },
+  )
+  assert.ok(result.diagnostics.some((item) => item.code === "REMOTE_ASSET_ID_DUPLICATE"))
+  const plan = planRelease({
+    candidate: candidate(),
+    observation: result.observation,
+    mode: "shadow",
+  })
+  for (const conflict of [
+    "github-asset-duplicate",
+    "github-managed-asset-unexpected",
+    "github-asset-bytes-mismatch",
+    "github-asset-ambiguous",
+  ]) {
+    assert.ok(plan.conflicts.includes(conflict), conflict)
+  }
 })
 
 test("fixture CLI performs no Git or network work and renders twice identically", async () => {
@@ -336,14 +641,21 @@ test("live 0.8.21 reporting preserves the frozen incident run attempt", async ()
       async readReleaseInventory() {
         return {}
       },
+      assertValidReleaseInventory() {
+        assert.fail("pre-controller exact-version audit is not managed discovery")
+      },
       validateReleaseInventory() {
         return {
           packages: ["@dawn-ai/sdk"],
           version: "0.8.21",
           structuralErrors: [],
+          workspaceDuplicates: [],
+          duplicates: [],
+          privateMembers: [],
+          unknownMembers: [],
           versionMismatches: [],
-          missing: [],
           extra: [],
+          missing: ["@dawn-ai/sandbox"],
         }
       },
     },
@@ -354,6 +666,9 @@ test("live 0.8.21 reporting preserves the frozen incident run attempt", async ()
   assert.equal(report.run.workflowRunId, 31292769511)
   assert.equal(report.run.runAttempt, 1)
   assert.equal(report.manualRecoveryInputs.runAttempt, 1)
+  assert.equal(report.source.requestedRef, SHA)
+  assert.equal(report.source.selectedRef, SHA)
+  assert.equal(report.source.resolvedCommitSha, SHA)
 })
 
 test("CLI rejects duplicate, unknown, unpaired, and unsafe arguments without stacks", async () => {
@@ -431,6 +746,10 @@ function ambiguousGitHub(calls) {
       calls.push(["github.getCommitCheckRuns", input])
       return ambiguous("commit-check-runs")
     },
+    async listWorkflowRuns(input) {
+      calls.push(["github.listWorkflowRuns", input])
+      return ambiguous("workflow-runs")
+    },
     async getRef(input) {
       calls.push(["github.getRef", input])
       return ambiguous("ref")
@@ -454,8 +773,29 @@ function absentGitHub() {
         operation: "commit-check-runs",
         httpStatus: 200,
         code: null,
-        value: [{ name: "validate", status: "completed", conclusion: "success" }],
+        value: [
+          {
+            name: "validate",
+            status: "completed",
+            conclusion: "success",
+            head_sha: SHA,
+            check_suite: { id: 501 },
+          },
+        ],
       }
+    },
+    async listWorkflowRuns() {
+      return presentEnvelope("workflow-runs", [
+        {
+          id: 101,
+          name: "CI",
+          path: ".github/workflows/ci.yml",
+          head_sha: SHA,
+          status: "completed",
+          conclusion: "success",
+          check_suite_id: 501,
+        },
+      ])
     },
     async getRef() {
       return { status: "ABSENT", operation: "ref", httpStatus: 404, code: "NOT_FOUND" }
@@ -495,4 +835,59 @@ function historicalPresentPackage(name, version) {
       },
     },
   }
+}
+
+function currentMainDependencies({ scenario, calls }) {
+  return {
+    createGitReader() {
+      return {
+        async listFirstParentHistory({ ref }) {
+          calls.push(["resolve", ref])
+          if (ref === "origin/main" && scenario.missingOrigin) {
+            throw Object.assign(new Error("origin/main was not found"), {
+              code: "REF_NOT_FOUND",
+            })
+          }
+          return [scenario.resolvedCommitSha]
+        },
+      }
+    },
+    createNpmReader() {
+      return {}
+    },
+    createGitHubReader() {
+      return {}
+    },
+    async readReleaseInventory() {
+      return {}
+    },
+    assertValidReleaseInventory() {
+      return { packages: ["@dawn-ai/sdk"], version: "0.8.21" }
+    },
+    async discoverShadowCandidate({ ref }) {
+      calls.push(["discover", ref])
+      return null
+    },
+  }
+}
+
+function presentEnvelope(operation, value) {
+  return { status: "PRESENT", operation, httpStatus: 200, code: null, value }
+}
+
+function ambiguousEnvelope(operation) {
+  return { status: "AMBIGUOUS", operation, httpStatus: 503, code: "SERVER_ERROR" }
+}
+
+function expectedReleaseAssets(inventory) {
+  return [
+    { name: "release-record.json", sha256: inventory.releaseRecordSha256 },
+    { name: "manifest.json", sha256: inventory.manifestSha256 },
+    { name: "manifest.json.intoto.jsonl", sha256: inventory.manifestAttestationSha256 },
+    ...inventory.packages.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
+    ...inventory.packages.map((pkg) => ({
+      name: pkg.attestationFilename,
+      sha256: pkg.attestationSha256,
+    })),
+  ]
 }

@@ -31,7 +31,14 @@ const CANDIDATE_FIELDS = Object.freeze([
   "commitSha",
 ])
 const RUN_FIELDS = Object.freeze(["workflow", "workflowRunId", "runAttempt"])
-const SOURCE_FIELDS = Object.freeze(["repository", "ref", "observedAt", "evidence"])
+const SOURCE_FIELDS = Object.freeze([
+  "repository",
+  "requestedRef",
+  "selectedRef",
+  "resolvedCommitSha",
+  "observedAt",
+  "evidence",
+])
 const FACT_FIELDS = Object.freeze(["packageNames", "npmPackages", "controllerEvidence"])
 const CONTROLLER_EVIDENCE_FIELDS = Object.freeze([
   "artifactAttestations",
@@ -179,10 +186,31 @@ export function assessHistoricalFacts(input) {
     conflicts: [
       ...(!packageSetComplete ? ["historical-npm-package-set-mismatch"] : []),
       ...(ambiguous ? ["historical-npm-package-ambiguous"] : ["historical-npm-package-incomplete"]),
+      ...historicalNestedFactConflicts(facts.npmPackages, candidate),
       ...controllerConflicts,
     ],
     manualRecoveryInputs: manualInputs(candidate, run),
   })
+}
+
+function historicalNestedFactConflicts(packages, candidate) {
+  const conflicts = new Set()
+  for (const pkg of packages) {
+    if (pkg.status !== "PRESENT") continue
+    if (pkg.latest !== candidate.version) conflicts.add("historical-npm-latest-incomplete")
+    if (!Number.isSafeInteger(pkg.signatureCount) || pkg.signatureCount <= 0) {
+      conflicts.add("historical-npm-signature-unverified")
+    }
+    if (pkg.provenanceStatus !== "PRESENT") {
+      conflicts.add("historical-npm-provenance-incomplete")
+    } else if (
+      pkg.provenanceWorkflow !== candidate.publisherWorkflow ||
+      pkg.provenanceCommitSha !== candidate.commitSha
+    ) {
+      conflicts.add("historical-npm-provenance-mismatch")
+    }
+  }
+  return [...conflicts].sort(compareText)
 }
 
 export function reconcileFixture(fixtureInput, { planRelease = defaultPlanRelease } = {}) {
@@ -298,6 +326,9 @@ export function renderReportMarkdown(report) {
     `- Version: ${candidate === null ? "None" : markdownValue(candidate.version)}`,
     `- Commit SHA: ${candidate === null ? "None" : markdownValue(candidate.commitSha)}`,
     `- Repository: ${report.source === null ? "Unknown" : escapeMarkdown(report.source.repository)}`,
+    `- Requested ref: ${report.source === null ? "Unknown" : markdownValue(report.source.requestedRef)}`,
+    `- Selected ref: ${report.source === null ? "Unknown" : markdownValue(report.source.selectedRef)}`,
+    `- Resolved commit SHA: ${report.source === null ? "Unknown" : markdownValue(report.source.resolvedCommitSha)}`,
     `- Source run: ${formatRun(report.run)}`,
     "",
     "## Evidence assessment",
@@ -444,12 +475,13 @@ function assertHistoricalFacts(value, context) {
         !SHA1_PATTERN.test(pkg.shasum) ||
         typeof pkg.integrity !== "string" ||
         !INTEGRITY_PATTERN.test(pkg.integrity) ||
-        !isReleaseVersion(pkg.latest) ||
-        !Number.isSafeInteger(pkg.signatureCount) ||
-        pkg.signatureCount < 0 ||
-        pkg.provenanceStatus !== "PRESENT" ||
-        typeof pkg.provenanceWorkflow !== "string" ||
-        !SHA_PATTERN.test(pkg.provenanceCommitSha)
+        (pkg.latest !== null && !isReleaseVersion(pkg.latest)) ||
+        (pkg.signatureCount !== null &&
+          (!Number.isSafeInteger(pkg.signatureCount) || pkg.signatureCount < 0)) ||
+        !["PRESENT", "ABSENT", "AMBIGUOUS", "ERROR"].includes(pkg.provenanceStatus) ||
+        (pkg.provenanceStatus === "PRESENT"
+          ? typeof pkg.provenanceWorkflow !== "string" || !SHA_PATTERN.test(pkg.provenanceCommitSha)
+          : pkg.provenanceWorkflow !== null || pkg.provenanceCommitSha !== null)
       ) {
         throw new TypeError(`${context}: malformed PRESENT npm package`)
       }
@@ -541,7 +573,10 @@ function assertSource(value, context) {
   if (
     typeof value.repository !== "string" ||
     !REPOSITORY_PATTERN.test(value.repository) ||
-    !isBoundedText(value.ref) ||
+    !isBoundedText(value.requestedRef) ||
+    !isBoundedText(value.selectedRef) ||
+    typeof value.resolvedCommitSha !== "string" ||
+    !SHA_PATTERN.test(value.resolvedCommitSha) ||
     Number.isNaN(Date.parse(value.observedAt)) ||
     !stringArray(value.evidence)
   ) {

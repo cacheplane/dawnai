@@ -49,7 +49,7 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
   assertMethods(npm, ["observePackageVersion"], "npm reader")
   assertMethods(
     github,
-    ["getCommitCheckRuns", "getRef", "getReleaseByTag", "listActionsArtifacts"],
+    ["getCommitCheckRuns", "listWorkflowRuns", "getRef", "getReleaseByTag", "listActionsArtifacts"],
     "GitHub reader",
   )
 
@@ -57,6 +57,14 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
   const diagnostics = []
   const ciResult = normalizeEnvelope(
     await github.getCommitCheckRuns({ commitSha: normalizedCandidate.commitSha }),
+    "github",
+    diagnostics,
+  )
+  const ciWorkflowResult = normalizeEnvelope(
+    await github.listWorkflowRuns({
+      workflow: "ci.yml",
+      commitSha: normalizedCandidate.commitSha,
+    }),
     "github",
     diagnostics,
   )
@@ -105,7 +113,7 @@ export async function observeCandidate({ candidate, inventory, git, npm, github 
     registryPackages.push(mapRegistryPackage(result, pkg, normalizedCandidate, diagnostics))
   }
 
-  const ci = mapCi(ciResult, normalizedCandidate, diagnostics)
+  const ci = mapCi(ciResult, ciWorkflowResult, normalizedCandidate, diagnostics)
   const tag = mapTag(refResult, localTagSha, localTagAmbiguous, diagnostics)
   const artifacts = mapArtifacts(artifactResult, normalizedInventory, diagnostics)
   const escrow =
@@ -232,36 +240,75 @@ function normalizeManagedInventory(value, candidate) {
   }
 }
 
-function mapCi(result, candidate, diagnostics) {
-  if (result.status !== "PRESENT") {
-    return {
-      status: result.status === "ABSENT" ? "missing" : "ambiguous",
-      workflow: candidate.ciWorkflow,
-      check: candidate.ciCheck,
-      commitSha: candidate.commitSha,
-    }
+function mapCi(checkResult, workflowResult, candidate, diagnostics) {
+  const observed = observedCiIdentity(checkResult, workflowResult)
+  if (checkResult.status !== "PRESENT" || workflowResult.status !== "PRESENT") {
+    return ciIdentity("ambiguous", observed)
   }
-  if (!Array.isArray(result.value)) {
+  if (!Array.isArray(checkResult.value) || !Array.isArray(workflowResult.value)) {
     addDiagnostic(diagnostics, "github", "commit-check-runs", "ERROR", "MALFORMED_VALUE")
-    return ciIdentity("ambiguous", candidate)
+    return ciIdentity("ambiguous", observed)
   }
-  const matches = result.value.filter((check) => check?.name === candidate.ciCheck)
-  if (matches.length === 0) return ciIdentity("missing", candidate)
-  if (matches.length !== 1) {
-    addDiagnostic(diagnostics, "github", "commit-check-runs", "AMBIGUOUS", "CHECK_DUPLICATE")
-    return ciIdentity("ambiguous", candidate)
+  const workflows = workflowResult.value.filter(
+    (run) =>
+      run?.name === candidate.ciWorkflow &&
+      run?.path === ".github/workflows/ci.yml" &&
+      run?.head_sha === candidate.commitSha,
+  )
+  const checks = checkResult.value.filter(
+    (check) => check?.name === candidate.ciCheck && check?.head_sha === candidate.commitSha,
+  )
+  if (workflows.length !== 1 || checks.length !== 1) {
+    addDiagnostic(diagnostics, "github", "ci-correlation", "AMBIGUOUS", "CI_IDENTITY_AMBIGUOUS")
+    return ciIdentity("ambiguous", observed)
   }
-  const check = matches[0]
-  if (check.status !== "completed") return ciIdentity("ambiguous", candidate)
-  return ciIdentity(check.conclusion === "success" ? "success" : "failed", candidate)
+  const [workflow] = workflows
+  const [check] = checks
+  const workflowSuiteId = workflow.check_suite_id
+  const checkSuiteId = check.check_suite?.id
+  if (
+    (workflowSuiteId !== undefined || checkSuiteId !== undefined) &&
+    (!isPositiveId(workflowSuiteId) ||
+      !isPositiveId(checkSuiteId) ||
+      String(workflowSuiteId) !== String(checkSuiteId))
+  ) {
+    addDiagnostic(diagnostics, "github", "ci-correlation", "AMBIGUOUS", "CI_RUN_MISMATCH")
+    return ciIdentity("ambiguous", observed)
+  }
+  if (workflow.status !== "completed" || check.status !== "completed") {
+    return ciIdentity("ambiguous", observed)
+  }
+  return ciIdentity(
+    workflow.conclusion === "success" && check.conclusion === "success" ? "success" : "failed",
+    observed,
+  )
 }
 
-function ciIdentity(status, candidate) {
+function observedCiIdentity(checkResult, workflowResult) {
+  const workflows = Array.isArray(workflowResult.value) ? workflowResult.value : []
+  const checks = Array.isArray(checkResult.value) ? checkResult.value : []
+  const workflow = workflows.length === 1 ? workflows[0] : null
+  const check = checks.length === 1 ? checks[0] : null
+  const workflowSha = SHA_PATTERN.test(workflow?.head_sha) ? workflow.head_sha : null
+  const checkSha = SHA_PATTERN.test(check?.head_sha) ? check.head_sha : null
+  return {
+    workflow: typeof workflow?.name === "string" ? workflow.name : null,
+    check: typeof check?.name === "string" ? check.name : null,
+    commitSha:
+      workflowSha !== null && checkSha !== null
+        ? workflowSha === checkSha
+          ? workflowSha
+          : null
+        : (workflowSha ?? checkSha),
+  }
+}
+
+function ciIdentity(status, identity) {
   return {
     status,
-    workflow: candidate.ciWorkflow,
-    check: candidate.ciCheck,
-    commitSha: candidate.commitSha,
+    workflow: identity.workflow,
+    check: identity.check,
+    commitSha: identity.commitSha,
   }
 }
 
@@ -341,6 +388,14 @@ function mapRegistryPackage(result, expected, candidate, diagnostics) {
     addDiagnostic(diagnostics, "npm", "package-version", "ERROR", "PACKAGE_IDENTITY_MISMATCH")
     return ambiguousRegistryPackage(expected.name)
   }
+  diagnostics.push({
+    source: "npm",
+    operation: "signatures",
+    status: "AMBIGUOUS",
+    httpStatus: null,
+    code: "NPM_SIGNATURE_UNVERIFIED",
+    evidenceCount: Array.isArray(pkg.signatures) ? pkg.signatures.length : null,
+  })
   if (!isRecord(pkg.provenance) || pkg.provenance.status !== "PRESENT") {
     addDiagnostic(diagnostics, "npm", "provenance", "AMBIGUOUS", "PROVENANCE_UNAVAILABLE")
     return ambiguousRegistryPackage(expected.name)
@@ -351,29 +406,7 @@ function mapRegistryPackage(result, expected, candidate, diagnostics) {
     addDiagnostic(diagnostics, "npm", "package-version", "AMBIGUOUS", "NPM_BYTES_MISMATCH")
     return ambiguousRegistryPackage(expected.name)
   }
-  const latest =
-    typeof pkg.latest === "string" && isReleaseVersion(pkg.latest)
-      ? { status: "present", version: pkg.latest }
-      : { status: "ambiguous", version: null }
-  if (latest.status === "ambiguous") {
-    addDiagnostic(diagnostics, "npm", "package-metadata", "AMBIGUOUS", "LATEST_UNAVAILABLE")
-  }
-  return {
-    name: expected.name,
-    status: "present",
-    version: pkg.version,
-    // Exact SHA-512 equality above correlates npm's bytes to this managed SHA-256.
-    tarballSha256: expected.tarballSha256,
-    integrity: pkg.integrity,
-    latest,
-    signature: {
-      status: Array.isArray(pkg.signatures) && pkg.signatures.length > 0 ? "valid" : "missing",
-    },
-    provenance: {
-      workflow: pkg.provenance.workflow,
-      commitSha: pkg.provenance.commitSha,
-    },
-  }
+  return ambiguousRegistryPackage(expected.name)
 }
 
 async function mapRelease(result, inventory, candidate, github, diagnostics) {
@@ -414,21 +447,36 @@ async function mapRelease(result, inventory, candidate, github, diagnostics) {
     )
     return ambiguousRelease()
   }
-  const byName = new Map(assetsResult.value.map((asset) => [asset?.name, asset]))
-  const assets = expectedAssets.map((expected) => {
-    const actual = byName.get(expected.name)
+  const expectedByName = new Map(expectedAssets.map((asset) => [asset.name, asset]))
+  const rawAssets = [...assetsResult.value].sort(compareRemoteAssets)
+  const idCounts = new Map()
+  for (const asset of rawAssets) {
+    const id = String(asset?.id)
+    idCounts.set(id, (idCounts.get(id) ?? 0) + 1)
+  }
+  const duplicateIds = new Set([...idCounts].filter(([, count]) => count > 1).map(([id]) => id))
+  for (const assetId of duplicateIds) {
+    diagnostics.push({
+      source: "github",
+      operation: "release-assets",
+      status: "AMBIGUOUS",
+      httpStatus: null,
+      code: "REMOTE_ASSET_ID_DUPLICATE",
+      assetId,
+    })
+  }
+  const assets = rawAssets.map((actual) => {
+    const expected = expectedByName.get(actual?.name)
     const digest = normalizeAssetDigest(actual?.digest)
     return {
-      name: expected.name,
+      name: actual?.name,
       status:
-        actual === undefined
-          ? "absent"
-          : digest === expected.sha256
+        duplicateIds.has(String(actual?.id)) || digest === null
+          ? "ambiguous"
+          : expected !== undefined && digest === expected.sha256
             ? "matching"
-            : digest === null
-              ? "ambiguous"
-              : "different",
-      sha256: expected.sha256,
+            : "different",
+      sha256: digest,
     }
   })
   const tag = release.tag_name
@@ -559,6 +607,13 @@ function managedArtifactName(candidate) {
 
 function normalizeAssetDigest(value) {
   return typeof value === "string" && /^sha256:[0-9a-f]{64}$/u.test(value) ? value.slice(7) : null
+}
+
+function compareRemoteAssets(left, right) {
+  return compareText(
+    `${String(left?.name)}\0${String(left?.id)}\0${String(left?.digest)}`,
+    `${String(right?.name)}\0${String(right?.id)}\0${String(right?.digest)}`,
+  )
 }
 
 function validOptionalSha256(value) {

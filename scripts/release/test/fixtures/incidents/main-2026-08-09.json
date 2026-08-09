@@ -11,7 +11,9 @@
   },
   "source": {
     "repository": "cacheplane/dawnai",
-    "ref": "d159eb6d49fc8accd9f53139634b10930a4fd093",
+    "requestedRef": "main",
+    "selectedRef": "main",
+    "resolvedCommitSha": "d159eb6d49fc8accd9f53139634b10930a4fd093",
     "observedAt": "2026-08-09T13:32:08Z",
     "evidence": ["Git first-parent identity", "fixed-group manifests at commit and first parent"]
   },

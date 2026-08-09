@@ -16,7 +16,9 @@
   },
   "source": {
     "repository": "cacheplane/dawnai",
-    "ref": "5bb97cf3434e7c4afa95646982d510d79387ba5b",
+    "requestedRef": "5bb97cf3434e7c4afa95646982d510d79387ba5b",
+    "selectedRef": "5bb97cf3434e7c4afa95646982d510d79387ba5b",
+    "resolvedCommitSha": "5bb97cf3434e7c4afa95646982d510d79387ba5b",
     "observedAt": "2026-08-09T02:31:46Z",
     "evidence": [
       "public npm exact-version responses",

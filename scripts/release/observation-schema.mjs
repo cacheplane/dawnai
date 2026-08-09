@@ -341,11 +341,14 @@ function validateInventory(inventory) {
 }
 
 function validateCi(ci) {
+  if (!["missing", "failed", "success", "ambiguous"].includes(ci?.status)) return false
+  if (["failed", "success"].includes(ci.status)) {
+    return isNonEmptyString(ci.workflow) && isNonEmptyString(ci.check) && isSha(ci.commitSha)
+  }
   return (
-    ["missing", "failed", "success", "ambiguous"].includes(ci?.status) &&
-    isNonEmptyString(ci.workflow) &&
-    isNonEmptyString(ci.check) &&
-    isSha(ci.commitSha)
+    (ci.workflow === null || isNonEmptyString(ci.workflow)) &&
+    (ci.check === null || isNonEmptyString(ci.check)) &&
+    (ci.commitSha === null || isSha(ci.commitSha))
   )
 }
 
@@ -517,7 +520,7 @@ function validateManagedAsset(asset) {
   return (
     isAssetName(asset?.name) &&
     ["absent", "matching", "different", "ambiguous"].includes(asset.status) &&
-    isSha256(asset.sha256)
+    (isSha256(asset.sha256) || (asset.status === "ambiguous" && asset.sha256 === null))
   )
 }
 

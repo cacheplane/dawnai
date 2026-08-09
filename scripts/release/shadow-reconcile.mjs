@@ -8,6 +8,7 @@ import { createGitReader as defaultCreateGitReader } from "./adapters/git.mjs"
 import { createGitHubReader as defaultCreateGitHubReader } from "./adapters/github.mjs"
 import { createNpmReader as defaultCreateNpmReader } from "./adapters/npm.mjs"
 import {
+  assertValidReleaseInventory as defaultAssertValidReleaseInventory,
   readReleaseInventory as defaultReadReleaseInventory,
   validateReleaseInventory as defaultValidateReleaseInventory,
 } from "./inventory.mjs"
@@ -64,6 +65,8 @@ export async function runShadowReconcile({
     const createNpmReader = dependencies.createNpmReader ?? defaultCreateNpmReader
     const createGitHubReader = dependencies.createGitHubReader ?? defaultCreateGitHubReader
     const readReleaseInventory = dependencies.readReleaseInventory ?? defaultReadReleaseInventory
+    const assertValidReleaseInventory =
+      dependencies.assertValidReleaseInventory ?? defaultAssertValidReleaseInventory
     const validateReleaseInventory =
       dependencies.validateReleaseInventory ?? defaultValidateReleaseInventory
     const git = createGitReader({ root: cwd })
@@ -77,29 +80,50 @@ export async function runShadowReconcile({
     const inventoryReader = {
       async read({ ref }) {
         const raw = await readReleaseInventory({ root: cwd, ref, git })
-        const validated = validateReleaseInventory(raw)
-        if (validated.structuralErrors.length > 0 || validated.versionMismatches.length > 0) {
-          throw new Error("Release inventory is structurally invalid")
-        }
+        const validated = assertValidReleaseInventory(raw)
         return {
-          // Discovery asks only whether the public manifests changed uniformly. Historical
-          // fixed-group membership defects are reportable policy facts, not a reason to invent
-          // a candidate where the commit and first parent have the same package versions.
           status: "valid",
+          packages: validated.packages.map((name) => ({ name, version: validated.version })),
+        }
+      },
+    }
+    const historicalInventoryReader = {
+      async read({ ref, version }) {
+        const raw = await readReleaseInventory({ root: cwd, ref, git })
+        const validated = validateReleaseInventory(raw)
+        if (
+          validated.structuralErrors.length > 0 ||
+          validated.workspaceDuplicates.length > 0 ||
+          validated.versionMismatches.length > 0 ||
+          validated.version !== version
+        ) {
+          throw new Error("Historical public package inventory is invalid")
+        }
+        // Pre-controller audits inventory every public package manifest. Fixed-group membership
+        // defects remain historical conflicts and must not erase independently public npm facts.
+        return {
           packages: validated.packages.map((name) => ({ name, version: validated.version })),
         }
       },
     }
 
     let candidate
+    let sourceIdentity
     if (options.version !== undefined) {
       candidate = candidateIdentity(options.version, options.commitSha)
+      sourceIdentity = {
+        requestedRef: options.commitSha,
+        selectedRef: options.commitSha,
+        resolvedCommitSha: options.commitSha,
+      }
     } else {
-      candidate = await discoverFromExplicitMainRefs({
+      const discovery = await discoverFromExplicitMainRefs({
         git,
         inventory: inventoryReader,
         discover: dependencies.discoverShadowCandidate ?? discoverShadowCandidate,
       })
+      candidate = discovery.candidate
+      sourceIdentity = discovery.sourceIdentity
     }
 
     if (candidate === null) {
@@ -112,7 +136,7 @@ export async function runShadowReconcile({
         run: { workflow: null, workflowRunId: null, runAttempt: null },
         source: {
           repository: options.repository,
-          ref: "origin/main",
+          ...sourceIdentity,
           observedAt: new Date().toISOString(),
           evidence: [
             "Git first-parent identity",
@@ -129,9 +153,13 @@ export async function runShadowReconcile({
     const facts = await observeHistoricalLive({
       candidate,
       repository: options.repository,
-      inventory: await inventoryReader.read({ ref: candidate.commitSha }),
+      inventory: await historicalInventoryReader.read({
+        ref: candidate.commitSha,
+        version: candidate.version,
+      }),
       npm,
       github,
+      sourceIdentity,
     })
     const assessment = assessHistoricalFacts(facts)
     const report = createReconciliationReport({
@@ -153,16 +181,38 @@ export async function runShadowReconcile({
 
 async function discoverFromExplicitMainRefs({ git, inventory, discover }) {
   for (const ref of ["origin/main", "main"]) {
+    let resolvedCommitSha
     try {
-      return await discover({ ref, git, inventory })
+      const history = await git.listFirstParentHistory({ ref, maxCount: 1 })
+      if (!Array.isArray(history) || history.length !== 1 || !SHA_PATTERN.test(history[0])) {
+        throw new Error("Explicit main ref did not resolve to one exact commit")
+      }
+      resolvedCommitSha = history[0]
     } catch (error) {
-      if (ref === "main") throw error
+      if (ref === "origin/main" && error?.code === "REF_NOT_FOUND") continue
+      throw error
+    }
+    const candidate = await discover({ ref: resolvedCommitSha, git, inventory })
+    return {
+      candidate,
+      sourceIdentity: {
+        requestedRef: "origin/main",
+        selectedRef: ref,
+        resolvedCommitSha,
+      },
     }
   }
   throw new Error("No explicit main ref could be read")
 }
 
-async function observeHistoricalLive({ candidate, repository, inventory, npm, github }) {
+async function observeHistoricalLive({
+  candidate,
+  repository,
+  inventory,
+  npm,
+  github,
+  sourceIdentity,
+}) {
   if (!Array.isArray(inventory.packages) || inventory.packages.length === 0) {
     throw new Error("Historical inventory contains no public packages")
   }
@@ -213,7 +263,7 @@ async function observeHistoricalLive({ candidate, repository, inventory, npm, gi
     },
     source: {
       repository,
-      ref: candidate.commitSha,
+      ...sourceIdentity,
       observedAt:
         typeof runIdentity.createdAt === "string" &&
         !Number.isNaN(Date.parse(runIdentity.createdAt))

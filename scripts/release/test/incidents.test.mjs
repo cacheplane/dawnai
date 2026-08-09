@@ -113,6 +113,51 @@ test("historical completion fails closed when one expected package fact is missi
   assert.deepEqual(assessment.proposedMutations, [])
 })
 
+test("exact historical package presence survives incomplete nested public facts", async () => {
+  const cases = [
+    {
+      name: "latest missing",
+      mutate(pkg) {
+        pkg.latest = null
+      },
+      conflict: "historical-npm-latest-incomplete",
+    },
+    {
+      name: "latest mismatch",
+      mutate(pkg) {
+        pkg.latest = "0.8.20"
+      },
+      conflict: "historical-npm-latest-incomplete",
+    },
+    {
+      name: "signature unavailable",
+      mutate(pkg) {
+        pkg.signatureCount = null
+      },
+      conflict: "historical-npm-signature-unverified",
+    },
+    ...["ABSENT", "AMBIGUOUS", "ERROR"].map((status) => ({
+      name: `provenance ${status.toLowerCase()}`,
+      mutate(pkg) {
+        pkg.provenanceStatus = status
+        pkg.provenanceWorkflow = null
+        pkg.provenanceCommitSha = null
+      },
+      conflict: "historical-npm-provenance-incomplete",
+    })),
+  ]
+
+  for (const item of cases) {
+    const fixture = structuredClone(await load("0.8.21-publish-metadata-failure"))
+    item.mutate(fixture.facts.npmPackages[0])
+    const assessment = assessHistoricalFacts(fixture)
+
+    assert.equal(assessment.lastProvenTransition, "LEGACY_NPM_REGISTRY_INCOMPLETE", item.name)
+    assert.ok(assessment.conflicts.includes(item.conflict), item.name)
+    assert.deepEqual(assessment.proposedMutations, [], item.name)
+  }
+})
+
 test("post-incident main uses the managed no-candidate planner path", async () => {
   const fixture = await load("main-2026-08-09")
   let plannerInput
@@ -124,7 +169,8 @@ test("post-incident main uses the managed no-candidate planner path", async () =
   })
 
   assert.deepEqual(plannerInput, { candidate: null, observation: {}, mode: "shadow" })
-  assert.equal(fixture.source.ref, "d159eb6d49fc8accd9f53139634b10930a4fd093")
+  assert.equal(fixture.source.selectedRef, "main")
+  assert.equal(fixture.source.resolvedCommitSha, "d159eb6d49fc8accd9f53139634b10930a4fd093")
   assert.equal(report.reportKind, "managed-plan")
   assert.deepEqual(report.plan, fixture.expected.plan)
   assert.equal(report.lastProvenTransition, "NO_CANDIDATE")
@@ -149,6 +195,9 @@ test("reports render byte-stable canonical JSON and prominent deterministic Mark
     assert.match(firstMarkdown, /^# Release Reconciliation Report\n/u)
     assert.match(firstMarkdown, /## Analysis boundary\n/u)
     assert.match(firstMarkdown, /## Candidate\n/u)
+    assert.match(firstMarkdown, /- Requested ref:/u)
+    assert.match(firstMarkdown, /- Selected ref:/u)
+    assert.match(firstMarkdown, /- Resolved commit SHA:/u)
     assert.match(firstMarkdown, /## Evidence assessment\n/u)
     assert.match(firstMarkdown, /## Public npm facts\n/u)
     assert.match(firstMarkdown, /## Manual recovery\n/u)
