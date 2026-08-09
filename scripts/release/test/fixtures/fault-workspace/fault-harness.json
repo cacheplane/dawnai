@@ -1,0 +1,4 @@
+{
+	"packageDirectories": ["packages/base", "packages/middle", "packages/gate"],
+	"gateOrder": ["fault-gate"]
+}
