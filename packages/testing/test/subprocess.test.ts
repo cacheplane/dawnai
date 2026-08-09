@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from "node:child_process"
+import { ChildProcess, execFile, spawn } from "node:child_process"
 import { createConnection, createServer } from "node:net"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
@@ -13,6 +13,12 @@ const TEST_TERMINATION_TIMINGS = {
   forceMs: 100,
   probeIntervalMs: 5,
   probeTimeoutMs: 10,
+}
+const WINDOWS_TERMINATION_TIMINGS = {
+  graceMs: 1_000,
+  forceMs: 1_000,
+  probeIntervalMs: 20,
+  probeTimeoutMs: 100,
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
@@ -64,6 +70,23 @@ async function waitForChildExit(
   if (!(await Promise.race([exited.then(() => true), delay(2_000, false)]))) {
     throw new Error(`child process ${child.pid ?? "unknown"} remained after SIGKILL`)
   }
+}
+
+function taskkill(pid: number, tree: boolean): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "taskkill.exe",
+      ["/PID", String(pid), ...(tree ? ["/T"] : []), "/F"],
+      { windowsHide: true, timeout: 2_000, maxBuffer: 64 * 1024 },
+      (error) => {
+        if (error && error.code !== 128) {
+          reject(error)
+          return
+        }
+        resolve()
+      },
+    )
+  })
 }
 
 function delaySubprocessTermination() {
@@ -136,7 +159,9 @@ function delaySubprocessTermination() {
   }
 }
 
-async function spawnTree(mode: "idle" | "ignore-term" | "leader") {
+async function spawnTree(
+  mode: "idle" | "ignore-term" | "leader" | "windows-tree" | "windows-orphan",
+) {
   const child = spawn(process.execPath, [processTreeFixture, mode], {
     detached: true,
     stdio: ["ignore", "pipe", "inherit"],
@@ -242,55 +267,63 @@ it("disposes the subprocess via `await using` and leaves it unreachable", async 
   }
 }, 120_000)
 
-it("waits for process shutdown and shares one close promise", async () => {
-  let mock: Awaited<ReturnType<typeof createAimock>> | undefined
-  let app: Awaited<ReturnType<typeof createSubprocessApp>> | undefined
-  const finishDelayedTerminations = delaySubprocessTermination()
+it.skipIf(process.platform === "win32")(
+  "waits for process shutdown and shares one close promise",
+  async () => {
+    let mock: Awaited<ReturnType<typeof createAimock>> | undefined
+    let app: Awaited<ReturnType<typeof createSubprocessApp>> | undefined
+    const finishDelayedTerminations = delaySubprocessTermination()
 
-  try {
-    mock = await createAimock({ fixtures: [{ match: {}, response: { content: "ok" } }] })
-    app = await createSubprocessApp({
-      appRoot,
-      env: { OPENAI_BASE_URL: mock.baseUrl, OPENAI_API_KEY: "test-not-used" },
-    })
-    const first = app.close()
-    const second = app.close()
-    const disposed = app[Symbol.asyncDispose]()
-    expect(second).toBe(first)
-    expect(disposed).toBe(first)
-    await expect(Promise.race([first.then(() => "closed"), delay(25, "waiting")])).resolves.toBe(
-      "waiting",
-    )
-    await first
-    await expect(fetch(new URL("/healthz", app.baseUrl))).rejects.toThrow()
-  } finally {
     try {
-      if (app) await app.close()
+      mock = await createAimock({ fixtures: [{ match: {}, response: { content: "ok" } }] })
+      app = await createSubprocessApp({
+        appRoot,
+        env: { OPENAI_BASE_URL: mock.baseUrl, OPENAI_API_KEY: "test-not-used" },
+      })
+      const first = app.close()
+      const second = app.close()
+      const disposed = app[Symbol.asyncDispose]()
+      expect(second).toBe(first)
+      expect(disposed).toBe(first)
+      await expect(Promise.race([first.then(() => "closed"), delay(25, "waiting")])).resolves.toBe(
+        "waiting",
+      )
+      await first
+      await expect(fetch(new URL("/healthz", app.baseUrl))).rejects.toThrow()
     } finally {
       try {
-        await finishDelayedTerminations()
+        if (app) await app.close()
       } finally {
-        if (mock) await mock.close()
+        try {
+          await finishDelayedTerminations()
+        } finally {
+          if (mock) await mock.close()
+        }
       }
     }
-  }
-}, 120_000)
+  },
+  120_000,
+)
 
-it("waits for cleanup when readiness fails", async () => {
-  const finishDelayedTerminations = delaySubprocessTermination()
+it.skipIf(process.platform === "win32")(
+  "waits for cleanup when readiness fails",
+  async () => {
+    const finishDelayedTerminations = delaySubprocessTermination()
 
-  try {
-    const creating = createSubprocessApp({ appRoot, readyTimeoutMs: 0 })
-    const outcome = creating.then(
-      () => "created",
-      () => "rejected",
-    )
-    await expect(Promise.race([outcome, delay(25, "waiting")])).resolves.toBe("waiting")
-    await expect(creating).rejects.toThrow("within 0ms")
-  } finally {
-    await finishDelayedTerminations()
-  }
-}, 120_000)
+    try {
+      const creating = createSubprocessApp({ appRoot, readyTimeoutMs: 0 })
+      const outcome = creating.then(
+        () => "created",
+        () => "rejected",
+      )
+      await expect(Promise.race([outcome, delay(25, "waiting")])).resolves.toBe("waiting")
+      await expect(creating).rejects.toThrow("within 0ms")
+    } finally {
+      await finishDelayedTerminations()
+    }
+  },
+  120_000,
+)
 
 it.skipIf(process.platform === "win32")(
   "waits for a surviving descendant to release the port",
@@ -331,6 +364,146 @@ it.skipIf(process.platform === "win32")(
       await forceKillProcessGroup(groupPid, realKill)
     }
   },
+)
+
+it.skipIf(process.platform === "win32")(
+  "falls back to the direct child when group SIGTERM is unavailable",
+  async () => {
+    const realKill = process.kill.bind(process)
+    const realChildKill = ChildProcess.prototype.kill
+    let cleanupGroupPid: number | undefined
+    let groupKillSpy: ReturnType<typeof vi.spyOn> | undefined
+    let childKillSpy: ReturnType<typeof vi.spyOn> | undefined
+
+    try {
+      const tree = await spawnTree("idle")
+      const { child, closed, groupPid } = tree
+      cleanupGroupPid = groupPid
+      groupKillSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === -groupPid && signal === "SIGTERM") {
+          throw new Error("group signalling unavailable")
+        }
+        return realKill(pid, signal)
+      })
+      childKillSpy = vi
+        .spyOn(child, "kill")
+        .mockImplementation((signal) => realChildKill.call(child, signal))
+      await terminateSubprocess(
+        child,
+        groupPid,
+        closed,
+        await unavailableBaseUrl(),
+        TEST_TERMINATION_TIMINGS,
+      )
+      expect(childKillSpy).toHaveBeenCalledWith("SIGTERM")
+    } finally {
+      groupKillSpy?.mockRestore()
+      childKillSpy?.mockRestore()
+      if (cleanupGroupPid !== undefined) {
+        await forceKillProcessGroup(cleanupGroupPid, realKill)
+      }
+    }
+  },
+)
+
+it.skipIf(process.platform !== "win32")(
+  "terminates a live Windows process tree without directly killing its outer child",
+  async () => {
+    let child: ChildProcess | undefined
+    let outerPid: number | undefined
+    let descendantPid: number | undefined
+    let descendantBaseUrl: string | undefined
+    let stopped = false
+    let childKillSpy: ReturnType<typeof vi.spyOn> | undefined
+
+    try {
+      const tree = await spawnTree("windows-tree")
+      child = tree.child
+      outerPid = tree.groupPid
+      const topology = JSON.parse(tree.line) as { readonly pid: number; readonly port: number }
+      descendantPid = topology.pid
+      descendantBaseUrl = `http://127.0.0.1:${topology.port}`
+      expect(await canConnect(descendantBaseUrl)).toBe(true)
+      childKillSpy = vi.spyOn(child, "kill")
+
+      await terminateSubprocess(
+        child,
+        outerPid,
+        tree.closed,
+        descendantBaseUrl,
+        WINDOWS_TERMINATION_TIMINGS,
+      )
+
+      expect(childKillSpy).not.toHaveBeenCalled()
+      expect(await canConnect(descendantBaseUrl)).toBe(false)
+      stopped = true
+    } finally {
+      childKillSpy?.mockRestore()
+      try {
+        if (
+          !stopped &&
+          child &&
+          outerPid !== undefined &&
+          child.exitCode === null &&
+          child.signalCode === null
+        ) {
+          await taskkill(outerPid, true)
+        }
+      } finally {
+        if (
+          !stopped &&
+          descendantPid !== undefined &&
+          descendantBaseUrl !== undefined &&
+          (await canConnect(descendantBaseUrl))
+        ) {
+          await taskkill(descendantPid, false)
+        }
+      }
+    }
+  },
+  10_000,
+)
+
+it.skipIf(process.platform !== "win32")(
+  "does not dispatch taskkill after a Windows outer child has closed",
+  async () => {
+    let descendantPid: number | undefined
+    let descendantBaseUrl: string | undefined
+    let childKillSpy: ReturnType<typeof vi.spyOn> | undefined
+
+    try {
+      const tree = await spawnTree("windows-orphan")
+      const topology = JSON.parse(tree.line) as { readonly pid: number; readonly port: number }
+      descendantPid = topology.pid
+      descendantBaseUrl = `http://127.0.0.1:${topology.port}`
+      await tree.closed
+      expect(await canConnect(descendantBaseUrl)).toBe(true)
+      childKillSpy = vi.spyOn(tree.child, "kill")
+
+      await expect(
+        terminateSubprocess(
+          tree.child,
+          tree.groupPid,
+          tree.closed,
+          descendantBaseUrl,
+          TEST_TERMINATION_TIMINGS,
+        ),
+      ).rejects.toThrow(`subprocess group ${tree.groupPid} did not stop`)
+
+      expect(childKillSpy).not.toHaveBeenCalled()
+      expect(await canConnect(descendantBaseUrl)).toBe(true)
+    } finally {
+      childKillSpy?.mockRestore()
+      if (
+        descendantPid !== undefined &&
+        descendantBaseUrl !== undefined &&
+        (await canConnect(descendantBaseUrl))
+      ) {
+        await taskkill(descendantPid, false)
+      }
+    }
+  },
+  10_000,
 )
 
 it.skipIf(process.platform === "win32")(

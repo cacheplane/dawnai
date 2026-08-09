@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process"
+import { type ChildProcess, execFile, spawn } from "node:child_process"
 import { createConnection, createServer } from "node:net"
 import { dirname, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -122,8 +122,59 @@ async function waitUntilStopped(
   }
 }
 
+function taskkillProcessTree(pid: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "taskkill.exe",
+      ["/PID", String(pid), "/T", "/F"],
+      { windowsHide: true, timeout: Math.max(1, timeoutMs), maxBuffer: 64 * 1024 },
+      (error) => (error ? reject(error) : resolve()),
+    )
+  })
+}
+
+async function signalProcessTree(
+  child: ChildProcess,
+  childState: { readonly closed: boolean },
+  groupPid: number,
+  signal: NodeJS.Signals,
+  timeoutMs: number,
+  dispatchErrors: unknown[],
+): Promise<void> {
+  if (process.platform === "win32") {
+    if (childState.closed || child.exitCode !== null || child.signalCode !== null) return
+    const deadline = Date.now() + timeoutMs
+    try {
+      await taskkillProcessTree(groupPid, timeoutMs)
+      return
+    } catch (error) {
+      dispatchErrors.push(error)
+      if (signal !== "SIGKILL") return
+      if (Date.now() >= deadline) return
+      if (childState.closed || child.exitCode !== null || child.signalCode !== null) return
+      try {
+        child.kill(signal)
+      } catch (childError) {
+        dispatchErrors.push(childError)
+      }
+      return
+    }
+  }
+
+  try {
+    process.kill(-groupPid, signal)
+  } catch (error) {
+    dispatchErrors.push(error)
+    try {
+      child.kill(signal)
+    } catch (childError) {
+      dispatchErrors.push(childError)
+    }
+  }
+}
+
 export async function terminateSubprocess(
-  _child: ChildProcess,
+  child: ChildProcess,
   groupPid: number,
   closed: Promise<void>,
   baseUrl: string,
@@ -148,13 +199,29 @@ export async function terminateSubprocess(
   if (childState.failed) throw childState.error
   if (childState.closed && !portAccepting) return
 
-  process.kill(-groupPid, "SIGTERM")
-  if (await waitUntilStopped(childState, baseUrl, timings.graceMs, timings)) return
-  process.kill(-groupPid, "SIGKILL")
-  if (await waitUntilStopped(childState, baseUrl, timings.forceMs, timings)) return
-  throw new Error(
-    `subprocess group ${groupPid} did not stop within ${timings.graceMs + timings.forceMs}ms after SIGTERM and SIGKILL`,
-  )
+  const dispatchErrors: unknown[] = []
+  const waitForPhase = async (signal: NodeJS.Signals, phaseMs: number): Promise<boolean> => {
+    const deadline = Date.now() + phaseMs
+    await signalProcessTree(
+      child,
+      childState,
+      groupPid,
+      signal,
+      Math.max(0, deadline - Date.now()),
+      dispatchErrors,
+    )
+    return await waitUntilStopped(childState, baseUrl, Math.max(0, deadline - Date.now()), timings)
+  }
+
+  if (await waitForPhase("SIGTERM", timings.graceMs)) return
+  if (await waitForPhase("SIGKILL", timings.forceMs)) return
+  const message = `subprocess group ${groupPid} did not stop within ${timings.graceMs + timings.forceMs}ms after SIGTERM and SIGKILL`
+  if (dispatchErrors.length === 0) throw new Error(message)
+  const cause =
+    dispatchErrors.length === 1
+      ? dispatchErrors[0]
+      : new AggregateError(dispatchErrors, "subprocess termination signal dispatch failed")
+  throw new Error(message, { cause })
 }
 
 export async function createSubprocessApp(opts: {
