@@ -269,8 +269,11 @@ Call assertions have these semantics:
 - `.withArgs(partial)` requires at least one call whose arguments contain the
   supplied deep-partial object.
 - Count and argument assertions are independent when combined.
-- Arrays match exactly.
-- Multiple `.withArgs()` calls each require a matching invocation.
+- Primitive values and arrays match exactly.
+- Zero-argument tools do not expose `.withArgs()` in their call-expectation
+  type.
+- Multiple `.withArgs()` calls each require a matching invocation. The same
+  invocation may satisfy more than one compatible argument matcher.
 
 Only mocked tools can be used with `.expectTool()` in v1. Call ordering and
 return-value assertions are deferred.
