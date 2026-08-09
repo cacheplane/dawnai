@@ -1,0 +1,373 @@
+import { findObservationSchemaConflicts } from "./observation-schema.mjs"
+import { compareSemver, isExactSemver } from "./semver.mjs"
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u
+
+export function correlateReleaseEvidence(candidate, observation) {
+  const conflicts = new Set(findObservationSchemaConflicts(observation))
+  const inventoryPackages = Array.isArray(observation.inventory?.packages)
+    ? observation.inventory.packages
+    : []
+  const packageByName = new Map(inventoryPackages.map((pkg) => [pkg.name, pkg]))
+  const artifact = analyzeArtifacts(candidate, observation, inventoryPackages, conflicts)
+  const assets = analyzeAssets(candidate, observation, inventoryPackages, artifact, conflicts)
+  const npm = analyzeNpm(candidate, observation, packageByName, conflicts)
+  const smokes = analyzeSmokes(candidate, observation, artifact.manifestSha256, conflicts)
+  const audit = analyzeAudit(candidate, observation, artifact.manifestSha256, conflicts)
+
+  return Object.freeze({
+    conflicts: Object.freeze([...conflicts].sort()),
+    artifact,
+    assets,
+    npm,
+    smokes,
+    audit,
+  })
+}
+
+function analyzeArtifacts(candidate, observation, inventoryPackages, conflicts) {
+  const artifacts = observation.artifacts ?? {}
+  const files = Array.isArray(artifacts.files) ? artifacts.files : []
+  const active = artifacts.status === "prepared" || artifacts.status === "attested"
+  if (artifacts.status === "ambiguous") conflicts.add("artifacts-ambiguous")
+  if (active && artifacts.manifestVersion !== candidate.version) {
+    conflicts.add("artifact-manifest-version-mismatch")
+  }
+  if (active && artifacts.manifestCommitSha !== candidate.commitSha) {
+    conflicts.add("artifact-manifest-commit-mismatch")
+  }
+  if (active && !isSha256(artifacts.manifestSha256)) {
+    conflicts.add("artifacts-manifest-digest-missing")
+  }
+  const byName = groupByName(files)
+  for (const pkg of inventoryPackages) {
+    const matches = byName.get(pkg.name) ?? []
+    if (matches.length !== 1) conflicts.add("artifact-inventory-set-mismatch")
+    const file = matches[0]
+    if (file === undefined) continue
+    if (["missing", "corrupt", "unmanifested"].includes(file.status)) {
+      conflicts.add(`artifact-${file.status}`)
+    } else if (file.status === "ambiguous") {
+      conflicts.add("artifact-ambiguous")
+    } else if (active && file.status === "pending") {
+      conflicts.add("artifact-pending-after-preparation")
+    }
+    if (active && file.assetName !== pkg.filename) conflicts.add("artifact-filename-mismatch")
+    if (active && file.sha256 !== pkg.tarballSha256) conflicts.add("artifact-bytes-mismatch")
+    if (active && file.integrity !== pkg.integrity) conflicts.add("artifact-integrity-mismatch")
+  }
+  if (artifacts.status === "absent" && files.some((file) => file.status !== "pending")) {
+    conflicts.add("artifact-observation-contradiction")
+  }
+  const valid =
+    active &&
+    isSha256(artifacts.manifestSha256) &&
+    files.length === inventoryPackages.length &&
+    inventoryPackages.every((pkg) => {
+      const matches = byName.get(pkg.name) ?? []
+      const file = matches[0]
+      return (
+        matches.length === 1 &&
+        file.status === "valid" &&
+        file.assetName === pkg.filename &&
+        file.sha256 === pkg.tarballSha256 &&
+        file.integrity === pkg.integrity
+      )
+    })
+  return Object.freeze({
+    prepared: valid,
+    attested: valid && artifacts.status === "attested",
+    manifestSha256: artifacts.manifestSha256 ?? null,
+  })
+}
+
+function analyzeAssets(candidate, observation, inventoryPackages, artifact, conflicts) {
+  const escrow = observation.escrow ?? {}
+  const release = observation.release ?? {}
+  const expected = inventoryPackages.map((pkg) => ({
+    name: pkg.filename,
+    sha256: pkg.tarballSha256,
+  }))
+  if (expected.length === 0) conflicts.add("escrow-required-assets-empty")
+  if (escrow.status === "ambiguous") conflicts.add("candidate-escrow-ambiguous")
+  if (escrow.status === "present") {
+    if (!isSha256(escrow.manifestSha256)) conflicts.add("escrow-manifest-digest-missing")
+    else if (escrow.manifestSha256 !== artifact.manifestSha256) {
+      conflicts.add("escrow-manifest-digest-mismatch")
+    }
+  }
+  const escrowAssets = Array.isArray(escrow.assets) ? escrow.assets : []
+  if (escrow.status === "present" && escrowAssets.length === 0) {
+    conflicts.add("escrow-required-assets-empty")
+  }
+  const escrowExact =
+    escrow.status === "present" ? exactAssetSet(escrowAssets, expected, "escrow", conflicts) : false
+
+  if (release.status === "ambiguous") conflicts.add("github-release-ambiguous")
+  const releaseExists = release.status === "draft" || release.status === "published"
+  const releaseAssets = Array.isArray(release.assets) ? release.assets : []
+  if (!releaseExists && releaseAssets.length > 0) conflicts.add("github-assets-without-release")
+  if (releaseExists) {
+    if (release.tag !== `v${candidate.version}`) conflicts.add("github-release-tag-mismatch")
+    if (release.commitSha !== candidate.commitSha) conflicts.add("github-release-commit-mismatch")
+  }
+  const releaseExact = releaseExists
+    ? exactAssetSet(releaseAssets, expected, "github", conflicts)
+    : false
+  for (const asset of releaseAssets) {
+    if (asset.status === "different") conflicts.add("github-asset-bytes-mismatch")
+    if (asset.status === "ambiguous") conflicts.add("github-asset-ambiguous")
+    if (asset.status === "absent") conflicts.add("github-required-asset-absent")
+  }
+  const escrowComplete =
+    releaseExists && releaseExact && escrow.status === "present" && escrowExact && artifact.attested
+  const draftExact = release.status === "draft" && escrowComplete
+  return Object.freeze({
+    releaseExists,
+    escrowComplete,
+    draftExact,
+    metadataComplete: escrowComplete && release.metadataReconciled === true,
+    publishedExact:
+      release.status === "published" &&
+      release.metadataReconciled === true &&
+      releaseExact &&
+      escrowExact &&
+      artifact.attested,
+  })
+}
+
+function exactAssetSet(actual, expected, prefix, conflicts) {
+  const groups = groupByName(actual)
+  let exact = actual.length === expected.length && expected.length > 0
+  for (const [name, records] of groups) {
+    if (records.length > 1) {
+      conflicts.add(prefix === "github" ? "github-asset-duplicate" : "escrow-asset-duplicate")
+      exact = false
+    }
+    if (!expected.some((item) => item.name === name)) {
+      conflicts.add(
+        prefix === "github" ? "github-managed-asset-unexpected" : "escrow-asset-unexpected",
+      )
+      exact = false
+    }
+  }
+  for (const item of expected) {
+    const records = groups.get(item.name) ?? []
+    if (records.length !== 1) {
+      conflicts.add(prefix === "github" ? "github-required-asset-absent" : "escrow-asset-missing")
+      exact = false
+      continue
+    }
+    const record = records[0]
+    if (record.sha256 !== item.sha256) {
+      conflicts.add(
+        prefix === "github" ? "github-asset-bytes-mismatch" : "escrow-asset-bytes-mismatch",
+      )
+      exact = false
+    }
+    if (record.status !== undefined && record.status !== "matching") exact = false
+  }
+  return exact
+}
+
+function analyzeNpm(candidate, observation, packageByName, conflicts) {
+  const registry = observation.registry ?? {}
+  const packages = Array.isArray(registry.packages) ? registry.packages : []
+  const groups = groupByName(packages)
+  let presentCount = 0
+  let complete = packageByName.size > 0 && packages.length === packageByName.size
+  let latestNewer = false
+  let ambiguous = false
+  for (const [name, expected] of packageByName) {
+    const matches = groups.get(name) ?? []
+    if (matches.length !== 1) {
+      conflicts.add("registry-package-set-mismatch")
+      complete = false
+      continue
+    }
+    const pkg = matches[0]
+    if (pkg.status === "ambiguous") {
+      conflicts.add("registry-package-ambiguous")
+      ambiguous = true
+      complete = false
+    } else if (pkg.status === "present") {
+      presentCount += 1
+      if (pkg.version !== candidate.version) conflicts.add("npm-version-mismatch")
+      if (pkg.integrity !== expected.integrity) conflicts.add("npm-bytes-mismatch")
+      if (pkg.tarballSha256 !== expected.tarballSha256) {
+        conflicts.add("npm-tarball-digest-mismatch")
+      }
+      if (pkg.provenance === null || typeof pkg.provenance !== "object") {
+        conflicts.add("npm-provenance-missing")
+      } else {
+        if (pkg.provenance.workflow !== candidate.publisherWorkflow) {
+          conflicts.add("npm-provenance-workflow-mismatch")
+        }
+        if (pkg.provenance.commitSha !== candidate.commitSha) {
+          conflicts.add("npm-provenance-commitSha-mismatch")
+        }
+      }
+      if (pkg.signature?.status !== "valid") {
+        conflicts.add(`npm-signature-${pkg.signature?.status ?? "missing"}`)
+        if (pkg.signature?.status === "ambiguous") ambiguous = true
+      }
+      if (pkg.latest?.status === "ambiguous") {
+        conflicts.add("registry-latest-ambiguous")
+        ambiguous = true
+      } else if (pkg.latest?.status === "e404") {
+        conflicts.add("npm-package-latest-missing")
+      } else if (pkg.latest?.status !== "present") {
+        conflicts.add("npm-package-latest-invalid")
+      } else if (pkg.latest.version !== candidate.version) {
+        conflicts.add("npm-package-latest-version-mismatch")
+      }
+      complete &&=
+        pkg.version === candidate.version &&
+        pkg.integrity === expected.integrity &&
+        pkg.tarballSha256 === expected.tarballSha256 &&
+        pkg.provenance?.workflow === candidate.publisherWorkflow &&
+        pkg.provenance?.commitSha === candidate.commitSha &&
+        pkg.signature?.status === "valid" &&
+        pkg.latest?.status === "present" &&
+        pkg.latest.version === candidate.version
+    } else if (pkg.status !== "e404") {
+      conflicts.add("registry-package-status-invalid")
+      complete = false
+    } else {
+      complete = false
+    }
+    if (pkg.latest?.status === "ambiguous") {
+      conflicts.add("registry-latest-ambiguous")
+      ambiguous = true
+    } else if (!["e404", "present"].includes(pkg.latest?.status)) {
+      conflicts.add("npm-package-latest-invalid")
+    } else if (
+      pkg.latest?.status === "present" &&
+      isExactSemver(pkg.latest.version) &&
+      compareSemver(pkg.latest.version, candidate.version) > 0
+    ) {
+      latestNewer = true
+    }
+  }
+  return Object.freeze({
+    complete,
+    presentCount,
+    started: Boolean(registry.publishJobStarted || registry.mutationStarted || presentCount > 0),
+    latestNewer,
+    ambiguous,
+  })
+}
+
+function analyzeSmokes(candidate, observation, manifestSha256, conflicts) {
+  const lanes = observation.requiredSmokeLanes
+  const results = Array.isArray(observation.smokes) ? observation.smokes : []
+  if (!Array.isArray(lanes)) {
+    conflicts.add("required-smoke-lanes-missing")
+    return Object.freeze({ complete: false, anyPassed: false, ambiguous: false })
+  }
+  if (lanes.length === 0) conflicts.add("required-smoke-lanes-empty")
+  if (new Set(lanes).size !== lanes.length) conflicts.add("required-smoke-lane-duplicate")
+  if (!arraysEqual(lanes, [...lanes].sort(compareNames))) {
+    conflicts.add("required-smoke-lanes-nondeterministic")
+  }
+  const laneSet = new Set(lanes)
+  const groups = groupByName(results)
+  let complete = lanes.length > 0
+  let ambiguous = false
+  for (const result of results) {
+    if (!laneSet.has(result.name)) conflicts.add("required-smoke-result-unexpected")
+    if (result.version !== candidate.version) conflicts.add("required-smoke-version-mismatch")
+    if (result.commitSha !== candidate.commitSha) conflicts.add("required-smoke-commit-mismatch")
+    if (result.manifestSha256 !== manifestSha256) conflicts.add("required-smoke-manifest-mismatch")
+    if (!isPositiveInteger(result.workflowRunId)) {
+      conflicts.add("required-smoke-workflow-run-id-invalid")
+    }
+    if (!isPositiveInteger(result.runAttempt)) conflicts.add("required-smoke-run-attempt-invalid")
+    if (result.status === "missing" || result.status === "failed") {
+      conflicts.add(`required-smoke-${result.status}`)
+    } else if (result.status === "ambiguous") {
+      conflicts.add("required-smoke-ambiguous")
+      ambiguous = true
+    }
+  }
+  for (const lane of laneSet) {
+    const matches = groups.get(lane) ?? []
+    if (matches.length === 0) conflicts.add("required-smoke-result-missing")
+    if (matches.length > 1) conflicts.add("required-smoke-result-duplicate")
+    const result = matches[0]
+    complete &&=
+      matches.length === 1 &&
+      result.status === "passed" &&
+      result.version === candidate.version &&
+      result.commitSha === candidate.commitSha &&
+      isSha256(manifestSha256) &&
+      result.manifestSha256 === manifestSha256 &&
+      isPositiveInteger(result.workflowRunId) &&
+      isPositiveInteger(result.runAttempt)
+  }
+  return Object.freeze({
+    complete,
+    anyPassed: results.some((result) => result.status === "passed"),
+    ambiguous,
+  })
+}
+
+function analyzeAudit(candidate, observation, manifestSha256, conflicts) {
+  const audit = observation.audit ?? {}
+  const active = ["dispatched", "success", "failed", "ambiguous"].includes(audit.status)
+  let correlated = true
+  if (active && audit.version !== candidate.version) {
+    conflicts.add("release-audit-version-mismatch")
+    correlated = false
+  }
+  if (active && audit.commitSha !== candidate.commitSha) {
+    conflicts.add("release-audit-commit-mismatch")
+    correlated = false
+  }
+  if (active && (!isSha256(manifestSha256) || audit.manifestSha256 !== manifestSha256)) {
+    conflicts.add("release-audit-manifest-mismatch")
+    correlated = false
+  }
+  if (!isPositiveInteger(audit.workflowRunId)) {
+    conflicts.add("release-audit-workflow-run-id-invalid")
+    correlated = false
+  }
+  if (!isPositiveInteger(audit.runAttempt)) {
+    conflicts.add("release-audit-run-attempt-invalid")
+    correlated = false
+  }
+  if (audit.status === "ambiguous") conflicts.add("release-audit-ambiguous")
+  if (audit.status === "failed") conflicts.add("release-audit-failed")
+  return Object.freeze({
+    dispatched: audit.status === "dispatched" && correlated,
+    complete: audit.status === "success" && correlated,
+    active,
+    ambiguous: audit.status === "ambiguous",
+  })
+}
+
+function groupByName(records) {
+  const result = new Map()
+  for (const record of records) {
+    const matches = result.get(record?.name) ?? []
+    matches.push(record)
+    result.set(record?.name, matches)
+  }
+  return result
+}
+
+function isPositiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0
+}
+
+function isSha256(value) {
+  return typeof value === "string" && SHA256_PATTERN.test(value)
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function compareNames(left, right) {
+  return left === right ? 0 : left < right ? -1 : 1
+}

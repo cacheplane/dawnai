@@ -1,4 +1,5 @@
-import { classifyObservedRelease, findReleaseConflicts, ReleaseState } from "./state.mjs"
+import { snapshotPlannerInput } from "./observation-schema.mjs"
+import { analyzeReleaseSnapshot, ReleaseState } from "./state.mjs"
 
 const NEXT_TRANSITIONS = Object.freeze({
   [ReleaseState.CANDIDATE_VALIDATED]: "create-candidate-tag",
@@ -7,7 +8,7 @@ const NEXT_TRANSITIONS = Object.freeze({
   [ReleaseState.ARTIFACTS_ATTESTED]: "escrow-candidate",
   [ReleaseState.CANDIDATE_ESCROWED]: "publish-npm-packages",
   [ReleaseState.NPM_PARTIAL]: "resume-npm-publish",
-  [ReleaseState.NPM_COMPLETE]: "create-release-draft",
+  [ReleaseState.NPM_COMPLETE]: "reconcile-release-draft",
   [ReleaseState.RELEASE_DRAFT_COMPLETE]: "run-release-smokes",
   [ReleaseState.SMOKES_COMPLETE]: "publish-github-release",
   [ReleaseState.RELEASE_PUBLISHED]: "dispatch-release-audit",
@@ -22,18 +23,8 @@ const ABANDONABLE_STATES = new Set([
 ])
 
 export function planRelease(input) {
-  if (input === null || Array.isArray(input) || typeof input !== "object") {
-    throw new TypeError("release planner input must be an object")
-  }
-  const mode = input.mode === undefined ? "shadow" : input.mode
-  if (mode !== "shadow" && mode !== "controller") {
-    throw new TypeError("mode must be shadow or controller")
-  }
-
-  const candidate = input.candidate
-  const observation = input.observation
-  const state = classifyObservedRelease(candidate, observation)
-  const conflicts = findReleaseConflicts(candidate, observation)
+  const { candidate, observation } = snapshotPlannerInput(input)
+  const { state, conflicts } = analyzeReleaseSnapshot(candidate, observation)
   if (conflicts.length > 0) {
     return result({
       state,
