@@ -1036,34 +1036,35 @@ test("a factory that does not settle after abort is surfaced within the cleanup 
 });
 
 test("the late acquisition supervisor closes a real server after the cleanup window", async () => {
-	const supervisor = createLateAcquisitionSupervisor();
 	let lateResource;
-	await assert.rejects(
-		createFaultHarness({
-			fixtureDirectory: FIXTURE_DIRECTORY,
-			startupTimeoutMs: 100,
-			cleanupTimeoutMs: 100,
-			lateAcquisitionSupervisor: supervisor,
-			dependencies: {
-				async startVerdaccio() {
-					return {
-						url: "http://127.0.0.1:12345/",
-						async close() {},
-					};
+	const startupError = await captureRejection(
+		() =>
+			createFaultHarness({
+				fixtureDirectory: FIXTURE_DIRECTORY,
+				startupTimeoutMs: 100,
+				cleanupTimeoutMs: 100,
+				dependencies: {
+					async startVerdaccio() {
+						return {
+							url: "http://127.0.0.1:12345/",
+							async close() {},
+						};
+					},
+					startFaultProxy() {
+						return new Promise((resolve) => {
+							setTimeout(async () => {
+								lateResource = await startTrackedLoopbackResource();
+								resolve(lateResource);
+							}, 1_000);
+						});
+					},
+					createGitFixture: assert.fail,
 				},
-				startFaultProxy() {
-					return new Promise((resolve) => {
-						setTimeout(async () => {
-							lateResource = await startTrackedLoopbackResource();
-							resolve(lateResource);
-						}, 1_000);
-					});
-				},
-				createGitFixture: assert.fail,
-			},
-		}),
+			}),
 		(error) => error.code === "ACQUISITION_ABORT_UNSETTLED",
 	);
+	const supervisor = startupError.lateAcquisitionSupervisor;
+	assertSupervisorErrorProperty(startupError, supervisor);
 	await supervisor.waitForIdle({ timeoutMs: 2_000 });
 	assert.equal(lateResource.closeAttempts(), 1);
 	await assert.rejects(
@@ -1083,36 +1084,37 @@ test("the late acquisition supervisor closes a real server after the cleanup win
 });
 
 test("late cleanup failure is observable only as a stable sanitized supervisor report", async () => {
-	const supervisor = createLateAcquisitionSupervisor();
 	let lateResource;
-	await assert.rejects(
-		createFaultHarness({
-			fixtureDirectory: FIXTURE_DIRECTORY,
-			startupTimeoutMs: 100,
-			cleanupTimeoutMs: 100,
-			lateAcquisitionSupervisor: supervisor,
-			dependencies: {
-				async startVerdaccio() {
-					return {
-						url: "http://127.0.0.1:12345/",
-						async close() {},
-					};
+	const startupError = await captureRejection(
+		() =>
+			createFaultHarness({
+				fixtureDirectory: FIXTURE_DIRECTORY,
+				startupTimeoutMs: 100,
+				cleanupTimeoutMs: 100,
+				dependencies: {
+					async startVerdaccio() {
+						return {
+							url: "http://127.0.0.1:12345/",
+							async close() {},
+						};
+					},
+					startFaultProxy() {
+						return new Promise((resolve) => {
+							setTimeout(async () => {
+								lateResource = await startTrackedLoopbackResource({
+									failClose: true,
+								});
+								resolve(lateResource);
+							}, 1_000);
+						});
+					},
+					createGitFixture: assert.fail,
 				},
-				startFaultProxy() {
-					return new Promise((resolve) => {
-						setTimeout(async () => {
-							lateResource = await startTrackedLoopbackResource({
-								failClose: true,
-							});
-							resolve(lateResource);
-						}, 1_000);
-					});
-				},
-				createGitFixture: assert.fail,
-			},
-		}),
+			}),
 		(error) => error.code === "ACQUISITION_ABORT_UNSETTLED",
 	);
+	const supervisor = startupError.lateAcquisitionSupervisor;
+	assertSupervisorErrorProperty(startupError, supervisor);
 	await supervisor.waitForIdle({ timeoutMs: 2_000 });
 	assert.equal(lateResource.closeAttempts(), 1);
 	await assert.rejects(
@@ -1133,27 +1135,30 @@ test("late cleanup failure is observable only as a stable sanitized supervisor r
 
 test("late acquisition supervisor waits are bounded and observable", async () => {
 	const supervisor = createLateAcquisitionSupervisor();
-	await assert.rejects(
-		createFaultHarness({
-			fixtureDirectory: FIXTURE_DIRECTORY,
-			startupTimeoutMs: 25,
-			cleanupTimeoutMs: 50,
-			lateAcquisitionSupervisor: supervisor,
-			dependencies: {
-				async startVerdaccio() {
-					return {
-						url: "http://127.0.0.1:12345/",
-						async close() {},
-					};
+	const startupError = await captureRejection(
+		() =>
+			createFaultHarness({
+				fixtureDirectory: FIXTURE_DIRECTORY,
+				startupTimeoutMs: 25,
+				cleanupTimeoutMs: 50,
+				lateAcquisitionSupervisor: supervisor,
+				dependencies: {
+					async startVerdaccio() {
+						return {
+							url: "http://127.0.0.1:12345/",
+							async close() {},
+						};
+					},
+					startFaultProxy() {
+						return new Promise(() => {});
+					},
+					createGitFixture: assert.fail,
 				},
-				startFaultProxy() {
-					return new Promise(() => {});
-				},
-				createGitFixture: assert.fail,
-			},
-		}),
+			}),
 		(error) => error.code === "ACQUISITION_ABORT_UNSETTLED",
 	);
+	assert.equal(startupError.lateAcquisitionSupervisor, supervisor);
+	assertSupervisorErrorProperty(startupError, supervisor);
 	await assert.rejects(
 		supervisor.waitForIdle({ timeoutMs: 25 }),
 		(error) => error.code === "LATE_ACQUISITION_SUPERVISOR_TIMEOUT",
@@ -1624,4 +1629,33 @@ async function faultTempDirectories(prefix) {
 	return (await readdir(tmpdir()))
 		.filter((name) => name.startsWith(prefix))
 		.sort();
+}
+
+async function captureRejection(factory, predicate) {
+	try {
+		await factory();
+		assert.fail("Expected operation to reject");
+	} catch (error) {
+		assert.equal(predicate(error), true);
+		return error;
+	}
+}
+
+function assertSupervisorErrorProperty(error, supervisor) {
+	assert.equal(typeof supervisor?.waitForIdle, "function");
+	assert.equal(typeof supervisor?.snapshot, "function");
+	assert.deepEqual(
+		Object.getOwnPropertyDescriptor(error, "lateAcquisitionSupervisor"),
+		{
+			value: supervisor,
+			enumerable: false,
+			writable: false,
+			configurable: false,
+		},
+	);
+	assert.equal(Object.keys(error).includes("lateAcquisitionSupervisor"), false);
+	assert.doesNotMatch(JSON.stringify(error), /lateAcquisitionSupervisor/u);
+	assert.throws(() => {
+		error.lateAcquisitionSupervisor = null;
+	}, TypeError);
 }

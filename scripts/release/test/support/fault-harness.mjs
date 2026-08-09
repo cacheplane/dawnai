@@ -281,13 +281,29 @@ export async function createFaultHarness({
 			"Fault harness startup failed",
 		);
 		if (cleanupErrors.length > 0) {
-			throw new AggregateError(
-				[initiatingError, ...cleanupErrors],
-				"Fault harness startup rollback failed",
+			throw attachLateAcquisitionSupervisor(
+				new AggregateError(
+					[initiatingError, ...cleanupErrors],
+					"Fault harness startup rollback failed",
+				),
+				lateAcquisitionSupervisor,
 			);
 		}
-		throw initiatingError;
+		throw attachLateAcquisitionSupervisor(
+			initiatingError,
+			lateAcquisitionSupervisor,
+		);
 	}
+}
+
+function attachLateAcquisitionSupervisor(error, supervisor) {
+	Object.defineProperty(error, "lateAcquisitionSupervisor", {
+		value: supervisor,
+		enumerable: false,
+		writable: false,
+		configurable: false,
+	});
+	return error;
 }
 
 function harnessFactories(value) {
