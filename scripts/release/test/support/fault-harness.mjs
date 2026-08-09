@@ -37,12 +37,47 @@ const MAX_CLEANUP_ATTEMPTS = 2;
 const MIN_CLEANUP_ATTEMPT_MS = 10;
 const TOOL_VERSION =
 	/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
+const lateAcquisitionSupervisors = new WeakMap();
+
+export function createLateAcquisitionSupervisor() {
+	const state = { pending: new Set(), reports: [] };
+	const supervisor = Object.freeze({
+		snapshot() {
+			return supervisorSnapshot(state);
+		},
+		async waitForIdle(options) {
+			if (
+				!isExactObject(options, ["timeoutMs"]) ||
+				!Number.isSafeInteger(options.timeoutMs) ||
+				options.timeoutMs < 10 ||
+				options.timeoutMs > MAX_LIFECYCLE_TIMEOUT_MS
+			) {
+				throw new TypeError("Late acquisition supervisor timeout is invalid");
+			}
+			try {
+				await withDeadline(
+					Promise.all([...state.pending]),
+					options.timeoutMs,
+					"late acquisition supervisor",
+				);
+			} catch {
+				throw Object.assign(
+					new Error("Late acquisition supervisor wait exceeded its deadline"),
+					{ code: "LATE_ACQUISITION_SUPERVISOR_TIMEOUT" },
+				);
+			}
+		},
+	});
+	lateAcquisitionSupervisors.set(supervisor, state);
+	return supervisor;
+}
 
 export async function createFaultHarness({
 	fixtureDirectory,
 	startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
 	cleanupTimeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
 	packageTools,
+	lateAcquisitionSupervisor = createLateAcquisitionSupervisor(),
 	dependencies = {},
 }) {
 	if (typeof fixtureDirectory !== "string" || !isAbsolute(fixtureDirectory)) {
@@ -50,6 +85,7 @@ export async function createFaultHarness({
 	}
 	assertLifecycleTimeout(startupTimeoutMs, "startup");
 	assertLifecycleTimeout(cleanupTimeoutMs, "cleanup");
+	assertLateAcquisitionSupervisor(lateAcquisitionSupervisor);
 	const factories = harnessFactories(dependencies);
 	const runtimeDirectory = await mkdtemp(
 		join(tmpdir(), "dawn-release-fault-harness-"),
@@ -69,6 +105,7 @@ export async function createFaultHarness({
 			Math.max(1, startupDeadline - Date.now()),
 			cleanupTimeoutMs,
 			"Verdaccio startup",
+			lateAcquisitionSupervisor,
 		);
 		resources.push(resource("Verdaccio", () => registry.close()));
 		assertClosableResource(registry, "Verdaccio");
@@ -78,6 +115,7 @@ export async function createFaultHarness({
 			Math.max(1, startupDeadline - Date.now()),
 			cleanupTimeoutMs,
 			"fault proxy startup",
+			lateAcquisitionSupervisor,
 		);
 		resources.push(resource("fault proxy", () => proxy.close()));
 		assertClosableResource(proxy, "fault proxy");
@@ -90,6 +128,7 @@ export async function createFaultHarness({
 			Math.max(1, startupDeadline - Date.now()),
 			cleanupTimeoutMs,
 			"Git fixture startup",
+			lateAcquisitionSupervisor,
 		);
 		resources.push(resource("Git fixture", () => git.close()));
 		assertClosableResource(git, "Git fixture");
@@ -334,6 +373,7 @@ async function acquireWithDeadline(
 	timeoutMs,
 	cleanupTimeoutMs,
 	label,
+	lateAcquisitionSupervisor,
 ) {
 	const controller = new AbortController();
 	const pending = Promise.resolve().then(() =>
@@ -377,6 +417,12 @@ async function acquireWithDeadline(
 				}
 			}
 		} else if (outcome === null) {
+			superviseLateAcquisition({
+				pending,
+				cleanupTimeoutMs,
+				label,
+				supervisor: lateAcquisitionSupervisor,
+			});
 			throw Object.assign(
 				new Error(`${label} did not settle after cancellation`),
 				{ code: "ACQUISITION_ABORT_UNSETTLED" },
@@ -384,6 +430,64 @@ async function acquireWithDeadline(
 		}
 		throw error;
 	}
+}
+
+function assertLateAcquisitionSupervisor(value) {
+	if (!lateAcquisitionSupervisors.has(value)) {
+		throw new TypeError("Late acquisition supervisor is invalid");
+	}
+}
+
+function superviseLateAcquisition({
+	pending,
+	cleanupTimeoutMs,
+	label,
+	supervisor,
+}) {
+	const state = lateAcquisitionSupervisors.get(supervisor);
+	const task = pending.then(
+		async (lateResource) => {
+			let code = "LATE_RESOURCE_CLEANUP_FAILED";
+			if (
+				lateResource !== null &&
+				typeof lateResource === "object" &&
+				typeof lateResource.close === "function"
+			) {
+				try {
+					await withDeadline(
+						Promise.resolve().then(() => lateResource.close()),
+						cleanupTimeoutMs,
+						`${label} late resource cleanup`,
+					);
+					code = "LATE_RESOURCE_CLEANED";
+				} catch {
+					code = "LATE_RESOURCE_CLEANUP_FAILED";
+				}
+			}
+			const report = Object.freeze({ code, label });
+			state.reports.push(report);
+			return report;
+		},
+		() => null,
+	);
+	state.pending.add(task);
+	task.then(
+		() => state.pending.delete(task),
+		() => state.pending.delete(task),
+	);
+}
+
+function supervisorSnapshot(state) {
+	return Object.freeze({
+		pendingCount: state.pending.size,
+		reports: Object.freeze(
+			[...state.reports].sort(
+				(left, right) =>
+					left.label.localeCompare(right.label) ||
+					left.code.localeCompare(right.code),
+			),
+		),
+	});
 }
 
 function sanitizedError(error, message) {

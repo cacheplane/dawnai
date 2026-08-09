@@ -2,6 +2,11 @@ import { createServer, request as httpRequest } from "node:http";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
+import {
+	startupRollbackError,
+	validateLifecycleHooks,
+} from "./startup-lifecycle.mjs";
+
 const LOOPBACK = "127.0.0.1";
 const MAX_FORWARD_BYTES = 4 * 1024 * 1024;
 const FORWARD_TIMEOUT_MS = 5_000;
@@ -25,9 +30,15 @@ export async function startFaultProxy({
 	upstreamUrl,
 	forwardDeadlineMs = FORWARD_TIMEOUT_MS,
 	signal,
+	lifecycle = {},
 }) {
 	const cancellation = optionalAbortSignal(signal);
 	cancellation?.throwIfAborted();
+	const hooks = validateLifecycleHooks(
+		lifecycle,
+		["afterListen", "rollbackCloseServer"],
+		"Fault proxy",
+	);
 	const upstream = loopbackUrl(upstreamUrl, "fault proxy upstream");
 	if (
 		!Number.isSafeInteger(forwardDeadlineMs) ||
@@ -77,6 +88,7 @@ export async function startFaultProxy({
 		sockets.add(socket);
 		socket.once("close", () => sockets.delete(socket));
 	});
+	let identity;
 	try {
 		await abortable(
 			deadline(
@@ -90,27 +102,49 @@ export async function startFaultProxy({
 			cancellation,
 		);
 		cancellation?.throwIfAborted();
-	} catch {
-		await deadline(
-			closeServer(server, sockets),
-			SHUTDOWN_TIMEOUT_MS,
-			"fault proxy rollback",
-		).catch(() => {});
+		const address = server.address();
+		if (
+			address === null ||
+			typeof address === "string" ||
+			address.address !== LOOPBACK
+		) {
+			throw new Error("Fault proxy did not bind to loopback");
+		}
+		identity = Object.freeze({
+			url: `http://${LOOPBACK}:${address.port}/`,
+		});
+		await abortable(
+			Promise.resolve().then(() => hooks.afterListen?.(identity)),
+			cancellation,
+		);
+		cancellation?.throwIfAborted();
+	} catch (error) {
+		const cleanupResults = await Promise.allSettled([
+			deadline(
+				Promise.resolve().then(() =>
+					hooks.rollbackCloseServer === undefined
+						? closeServer(server, sockets)
+						: hooks.rollbackCloseServer(() => closeServer(server, sockets)),
+				),
+				SHUTDOWN_TIMEOUT_MS,
+				"fault proxy rollback",
+			),
+		]);
+		const rollbackError = startupRollbackError({
+			initiatingError: error,
+			cancellation,
+			cleanupResults,
+			rollbackCode: "FAULT_PROXY_ROLLBACK_FAILED",
+			cleanupCode: "FAULT_PROXY_ROLLBACK_CLEANUP_FAILED",
+			message: "Fault proxy startup rollback failed",
+		});
+		if (rollbackError !== null) throw rollbackError;
 		if (cancellation?.aborted) throw cancellation.reason;
 		throw new Error("Fault proxy startup failed");
 	}
-	const address = server.address();
-	if (
-		address === null ||
-		typeof address === "string" ||
-		address.address !== LOOPBACK
-	) {
-		await closeServer(server, sockets);
-		throw new Error("Fault proxy did not bind to loopback");
-	}
 	let closePromise = null;
 	return Object.freeze({
-		url: `http://${LOOPBACK}:${address.port}/`,
+		url: identity.url,
 		setMode(nextMode, options = {}) {
 			if (!MODES.has(nextMode)) throw new TypeError("Unknown fault mode");
 			if (nextMode === "delayed-visibility") {

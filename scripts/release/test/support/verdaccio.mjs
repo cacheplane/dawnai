@@ -4,13 +4,23 @@ import { join } from "node:path";
 
 import { runServer } from "verdaccio";
 
+import {
+	startupRollbackError,
+	validateLifecycleHooks,
+} from "./startup-lifecycle.mjs";
+
 const LOOPBACK = "127.0.0.1";
 const STARTUP_TIMEOUT_MS = 5_000;
 const SHUTDOWN_TIMEOUT_MS = 2_000;
 
-export async function startVerdaccio({ signal } = {}) {
+export async function startVerdaccio({ signal, lifecycle = {} } = {}) {
 	const cancellation = optionalAbortSignal(signal, "registry");
 	cancellation?.throwIfAborted();
+	const hooks = validateLifecycleHooks(
+		lifecycle,
+		["afterListen", "rollbackCloseServer"],
+		"Disposable registry",
+	);
 	const directory = await mkdtemp(join(tmpdir(), "dawn-release-verdaccio-"));
 	const storage = join(directory, "storage");
 	await mkdir(storage);
@@ -63,6 +73,13 @@ export async function startVerdaccio({ signal } = {}) {
 			throw new Error("Disposable registry did not bind to loopback");
 		}
 		const url = `http://${LOOPBACK}:${address.port}/`;
+		await abortable(
+			Promise.resolve().then(() =>
+				hooks.afterListen?.(Object.freeze({ directory, url })),
+			),
+			cancellation,
+		);
+		cancellation?.throwIfAborted();
 		let closePromise = null;
 		let serverClosed = false;
 		let directoryRemoved = false;
@@ -96,16 +113,29 @@ export async function startVerdaccio({ signal } = {}) {
 			},
 		});
 	} catch (error) {
-		await Promise.allSettled([
+		const cleanupResults = await Promise.allSettled([
 			server === undefined
 				? Promise.resolve()
 				: deadline(
-						closeServer(server),
+						Promise.resolve().then(() =>
+							hooks.rollbackCloseServer === undefined
+								? closeServer(server)
+								: hooks.rollbackCloseServer(() => closeServer(server)),
+						),
 						SHUTDOWN_TIMEOUT_MS,
 						"registry rollback",
 					),
 			rm(directory, { recursive: true, force: true }),
 		]);
+		const rollbackError = startupRollbackError({
+			initiatingError: error,
+			cancellation,
+			cleanupResults,
+			rollbackCode: "REGISTRY_ROLLBACK_FAILED",
+			cleanupCode: "REGISTRY_ROLLBACK_CLEANUP_FAILED",
+			message: "Disposable registry startup rollback failed",
+		});
+		if (rollbackError !== null) throw rollbackError;
 		if (cancellation?.aborted) throw cancellation.reason;
 		throw Object.assign(new Error("Disposable registry startup failed"), {
 			code: safeCode(error, "REGISTRY_START_FAILED"),

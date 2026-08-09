@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import {
+	access,
+	cp,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
@@ -13,12 +23,17 @@ const IDENTITY = Object.freeze({
 const FIRST_DATE = "2024-01-01T00:00:00Z";
 const SECOND_DATE = "2024-01-02T00:00:00Z";
 
-export async function createGitFixture({ sourceDirectory, signal }) {
+export async function createGitFixture({
+	sourceDirectory,
+	signal,
+	gitExecutable,
+}) {
 	const cancellation = optionalAbortSignal(signal);
 	cancellation?.throwIfAborted();
 	if (typeof sourceDirectory !== "string" || !isAbsolute(sourceDirectory)) {
 		throw new TypeError("Git fixture source must be an absolute path");
 	}
+	const executable = await validatedGitExecutable(gitExecutable);
 	await readFile(join(sourceDirectory, "package.json"));
 	const directory = await mkdtemp(join(tmpdir(), "dawn-release-git-"));
 	const workingDirectory = join(directory, "working");
@@ -35,6 +50,7 @@ export async function createGitFixture({ sourceDirectory, signal }) {
 			mkdir(tempDirectory),
 		]);
 		const environment = gitEnvironment({
+			executable,
 			homeDirectory,
 			configDirectory,
 			templateDirectory,
@@ -145,7 +161,7 @@ async function revParse(directory, ref, environment) {
 function git(directory, args, environment, date) {
 	return new Promise((resolve, reject) => {
 		execFile(
-			"git",
+			environment.executable,
 			args,
 			{
 				cwd: directory,
@@ -178,6 +194,7 @@ function git(directory, args, environment, date) {
 }
 
 function gitEnvironment({
+	executable,
 	homeDirectory,
 	configDirectory,
 	templateDirectory,
@@ -185,6 +202,7 @@ function gitEnvironment({
 	signal,
 }) {
 	return {
+		executable,
 		signal,
 		variables: {
 			PATH: requiredPath(),
@@ -200,6 +218,19 @@ function gitEnvironment({
 			GIT_TERMINAL_PROMPT: "0",
 		},
 	};
+}
+
+async function validatedGitExecutable(value) {
+	if (value === undefined) return "git";
+	if (typeof value !== "string" || !isAbsolute(value) || value.includes("\0")) {
+		throw new TypeError("Git fixture executable is invalid");
+	}
+	const metadata = await lstat(value);
+	if (!metadata.isFile()) {
+		throw new TypeError("Git fixture executable is invalid");
+	}
+	await access(value, fsConstants.X_OK);
+	return value;
 }
 
 function optionalAbortSignal(value) {

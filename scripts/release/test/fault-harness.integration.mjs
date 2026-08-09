@@ -6,6 +6,7 @@ import {
 	cp,
 	mkdir,
 	mkdtemp,
+	readdir,
 	readFile,
 	realpath,
 	rename,
@@ -24,6 +25,7 @@ import { planRelease } from "../planner.mjs";
 import { orderReleasePackages } from "../topology.mjs";
 import {
 	createFaultHarness,
+	createLateAcquisitionSupervisor,
 	discoverFaultWorkspace,
 } from "./support/fault-harness.mjs";
 import { startFaultProxy } from "./support/fault-proxy.mjs";
@@ -87,23 +89,172 @@ test("the Git fixture rejects a pre-aborted signal before creating a repository"
 	);
 });
 
-test("built-in acquisitions clean partial startup when cancellation races readiness", async (t) => {
-	const registry = await startVerdaccio();
-	t.after(() => registry.close());
-	const rows = [
-		(signal) => startVerdaccio({ signal }),
-		(signal) => startFaultProxy({ upstreamUrl: registry.url, signal }),
-		(signal) =>
-			createGitFixture({ sourceDirectory: FIXTURE_DIRECTORY, signal }),
-	];
-	for (const factory of rows) {
+test("Verdaccio and the proxy abort in flight after listening and clean partial resources", async (t) => {
+	const upstream = await startVerdaccio();
+	t.after(() => upstream.close());
+	for (const row of [
+		{
+			start: ({ signal, lifecycle }) => startVerdaccio({ signal, lifecycle }),
+		},
+		{
+			start: ({ signal, lifecycle }) =>
+				startFaultProxy({ upstreamUrl: upstream.url, signal, lifecycle }),
+		},
+	]) {
 		const controller = new AbortController();
-		const pending = assertFactoryRejectsWithoutLeak(
-			() => factory(controller.signal),
-			(error) => error.name === "AbortError",
+		const marker = deferred();
+		let unexpectedResource;
+		const pending = row
+			.start({
+				signal: controller.signal,
+				lifecycle: {
+					afterListen(identity) {
+						marker.resolve(identity);
+						return new Promise(() => {});
+					},
+				},
+			})
+			.then((resource) => {
+				unexpectedResource = resource;
+				return resource;
+			});
+		void pending.catch(() => {});
+		try {
+			const identity = await withTestDeadline(
+				marker.promise,
+				1_000,
+				"built-in listening marker",
+			);
+			assert.equal((await fetch(identity.url)).status, 200);
+			controller.abort();
+			await assert.rejects(pending, (error) => error.name === "AbortError");
+			await assert.rejects(
+				fetch(identity.url, { signal: AbortSignal.timeout(500) }),
+			);
+			if (identity.directory !== undefined) {
+				await assert.rejects(access(identity.directory), { code: "ENOENT" });
+			}
+		} finally {
+			controller.abort();
+			await pending.catch(() => {});
+			await unexpectedResource?.close?.();
+		}
+	}
+});
+
+test("built-in abort rollback surfaces sanitized aggregate cleanup failures", async (t) => {
+	const upstream = await startVerdaccio();
+	t.after(() => upstream.close());
+	for (const row of [
+		{
+			rollbackCode: "REGISTRY_ROLLBACK_FAILED",
+			cleanupCode: "REGISTRY_ROLLBACK_CLEANUP_FAILED",
+			start: ({ signal, lifecycle }) => startVerdaccio({ signal, lifecycle }),
+		},
+		{
+			rollbackCode: "FAULT_PROXY_ROLLBACK_FAILED",
+			cleanupCode: "FAULT_PROXY_ROLLBACK_CLEANUP_FAILED",
+			start: ({ signal, lifecycle }) =>
+				startFaultProxy({ upstreamUrl: upstream.url, signal, lifecycle }),
+		},
+	]) {
+		const controller = new AbortController();
+		const marker = deferred();
+		let unexpectedResource;
+		const pending = row
+			.start({
+				signal: controller.signal,
+				lifecycle: {
+					afterListen(identity) {
+						marker.resolve(identity);
+						return new Promise(() => {});
+					},
+					async rollbackCloseServer(close) {
+						await close();
+						throw new Error("rollback cleanup secret payload");
+					},
+				},
+			})
+			.then((resource) => {
+				unexpectedResource = resource;
+				return resource;
+			});
+		void pending.catch(() => {});
+		try {
+			const identity = await withTestDeadline(
+				marker.promise,
+				1_000,
+				"built-in rollback marker",
+			);
+			controller.abort();
+			await assert.rejects(pending, (error) => {
+				assert.equal(error instanceof AggregateError, true);
+				assert.equal(error.code, row.rollbackCode);
+				assert.deepEqual(
+					error.errors.map(({ code }) => code),
+					["ACQUISITION_ABORTED", row.cleanupCode],
+				);
+				assert.doesNotMatch(
+					`${error.message} ${error.errors.map(({ message }) => message)}`,
+					/secret/u,
+				);
+				return true;
+			});
+			await assert.rejects(
+				fetch(identity.url, { signal: AbortSignal.timeout(500) }),
+			);
+			if (identity.directory !== undefined) {
+				await assert.rejects(access(identity.directory), { code: "ENOENT" });
+			}
+		} finally {
+			controller.abort();
+			await pending.catch(() => {});
+			await unexpectedResource?.close?.();
+		}
+	}
+});
+
+test("Git fixture abort terminates an active validated Git executable", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "dawn-git-abort-test-"));
+	t.after(() => rm(directory, { recursive: true, force: true }));
+	const executable = join(directory, "git-marker");
+	const marker = join(directory, "active-pid");
+	await writeFile(
+		executable,
+		`#!${process.execPath}\nconst { writeFileSync } = require("node:fs")\nwriteFileSync(${JSON.stringify(marker)}, String(process.pid))\nsetInterval(() => {}, 1000)\n`,
+		{ mode: 0o755 },
+	);
+	const before = await faultTempDirectories("dawn-release-git-");
+	const controller = new AbortController();
+	let unexpectedResource;
+	const pending = createGitFixture({
+		sourceDirectory: FIXTURE_DIRECTORY,
+		signal: controller.signal,
+		gitExecutable: executable,
+	}).then((resource) => {
+		unexpectedResource = resource;
+		return resource;
+	});
+	void pending.catch(() => {});
+	try {
+		const pid = Number.parseInt(
+			await withTestDeadline(
+				waitForFile(marker),
+				1_000,
+				"active Git executable marker",
+			),
+			10,
 		);
+		assert.equal(Number.isSafeInteger(pid), true);
+		process.kill(pid, 0);
 		controller.abort();
-		await pending;
+		await assert.rejects(pending, (error) => error.name === "AbortError");
+		await waitForProcessExit(pid);
+		assert.deepEqual(await faultTempDirectories("dawn-release-git-"), before);
+	} finally {
+		controller.abort();
+		await pending.catch(() => {});
+		await unexpectedResource?.close?.();
 	}
 });
 
@@ -884,6 +1035,132 @@ test("a factory that does not settle after abort is surfaced within the cleanup 
 	assert.ok(performance.now() - started < 250);
 });
 
+test("the late acquisition supervisor closes a real server after the cleanup window", async () => {
+	const supervisor = createLateAcquisitionSupervisor();
+	let lateResource;
+	await assert.rejects(
+		createFaultHarness({
+			fixtureDirectory: FIXTURE_DIRECTORY,
+			startupTimeoutMs: 100,
+			cleanupTimeoutMs: 100,
+			lateAcquisitionSupervisor: supervisor,
+			dependencies: {
+				async startVerdaccio() {
+					return {
+						url: "http://127.0.0.1:12345/",
+						async close() {},
+					};
+				},
+				startFaultProxy() {
+					return new Promise((resolve) => {
+						setTimeout(async () => {
+							lateResource = await startTrackedLoopbackResource();
+							resolve(lateResource);
+						}, 1_000);
+					});
+				},
+				createGitFixture: assert.fail,
+			},
+		}),
+		(error) => error.code === "ACQUISITION_ABORT_UNSETTLED",
+	);
+	await supervisor.waitForIdle({ timeoutMs: 2_000 });
+	assert.equal(lateResource.closeAttempts(), 1);
+	await assert.rejects(
+		fetch(lateResource.url, { signal: AbortSignal.timeout(500) }),
+	);
+	assert.deepEqual(supervisor.snapshot(), {
+		pendingCount: 0,
+		reports: [
+			{
+				code: "LATE_RESOURCE_CLEANED",
+				label: "fault proxy startup",
+			},
+		],
+	});
+	assert.equal(Object.isFrozen(supervisor.snapshot()), true);
+	assert.equal(Object.isFrozen(supervisor.snapshot().reports), true);
+});
+
+test("late cleanup failure is observable only as a stable sanitized supervisor report", async () => {
+	const supervisor = createLateAcquisitionSupervisor();
+	let lateResource;
+	await assert.rejects(
+		createFaultHarness({
+			fixtureDirectory: FIXTURE_DIRECTORY,
+			startupTimeoutMs: 100,
+			cleanupTimeoutMs: 100,
+			lateAcquisitionSupervisor: supervisor,
+			dependencies: {
+				async startVerdaccio() {
+					return {
+						url: "http://127.0.0.1:12345/",
+						async close() {},
+					};
+				},
+				startFaultProxy() {
+					return new Promise((resolve) => {
+						setTimeout(async () => {
+							lateResource = await startTrackedLoopbackResource({
+								failClose: true,
+							});
+							resolve(lateResource);
+						}, 1_000);
+					});
+				},
+				createGitFixture: assert.fail,
+			},
+		}),
+		(error) => error.code === "ACQUISITION_ABORT_UNSETTLED",
+	);
+	await supervisor.waitForIdle({ timeoutMs: 2_000 });
+	assert.equal(lateResource.closeAttempts(), 1);
+	await assert.rejects(
+		fetch(lateResource.url, { signal: AbortSignal.timeout(500) }),
+	);
+	const snapshot = supervisor.snapshot();
+	assert.deepEqual(snapshot, {
+		pendingCount: 0,
+		reports: [
+			{
+				code: "LATE_RESOURCE_CLEANUP_FAILED",
+				label: "fault proxy startup",
+			},
+		],
+	});
+	assert.doesNotMatch(JSON.stringify(snapshot), /secret/u);
+});
+
+test("late acquisition supervisor waits are bounded and observable", async () => {
+	const supervisor = createLateAcquisitionSupervisor();
+	await assert.rejects(
+		createFaultHarness({
+			fixtureDirectory: FIXTURE_DIRECTORY,
+			startupTimeoutMs: 25,
+			cleanupTimeoutMs: 50,
+			lateAcquisitionSupervisor: supervisor,
+			dependencies: {
+				async startVerdaccio() {
+					return {
+						url: "http://127.0.0.1:12345/",
+						async close() {},
+					};
+				},
+				startFaultProxy() {
+					return new Promise(() => {});
+				},
+				createGitFixture: assert.fail,
+			},
+		}),
+		(error) => error.code === "ACQUISITION_ABORT_UNSETTLED",
+	);
+	await assert.rejects(
+		supervisor.waitForIdle({ timeoutMs: 25 }),
+		(error) => error.code === "LATE_ACQUISITION_SUPERVISOR_TIMEOUT",
+	);
+	assert.deepEqual(supervisor.snapshot(), { pendingCount: 1, reports: [] });
+});
+
 test("the temporary Git fixture keeps identity local and production reads the advanced annotated tag", async (t) => {
 	const hostileDirectory = await mkdtemp(join(tmpdir(), "dawn-hostile-git-"));
 	t.after(() => rm(hostileDirectory, { recursive: true, force: true }));
@@ -1258,4 +1535,93 @@ async function startBoundedUpstream() {
 			return closePromise;
 		},
 	};
+}
+
+async function startTrackedLoopbackResource({ failClose = false } = {}) {
+	const sockets = new Set();
+	const server = createServer((_request, response) => response.end("ok"));
+	server.on("connection", (socket) => {
+		sockets.add(socket);
+		socket.once("close", () => sockets.delete(socket));
+	});
+	await new Promise((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	assert.notEqual(address, null);
+	assert.equal(typeof address, "object");
+	let attempts = 0;
+	let closed = false;
+	return {
+		url: `http://127.0.0.1:${address.port}/`,
+		closeAttempts: () => attempts,
+		async close() {
+			attempts += 1;
+			if (!closed) {
+				closed = true;
+				for (const socket of sockets) socket.destroy();
+				await new Promise((resolve, reject) => {
+					server.close((error) =>
+						error === undefined ? resolve() : reject(error),
+					);
+				});
+			}
+			if (failClose) throw new Error("late cleanup secret payload");
+		},
+	};
+}
+
+function deferred() {
+	let resolve;
+	let reject;
+	const promise = new Promise((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, reject, resolve };
+}
+
+function withTestDeadline(promise, timeoutMs, label) {
+	let timer;
+	const timeout = new Promise((_, reject) => {
+		timer = setTimeout(
+			() => reject(new Error(`${label} exceeded its deadline`)),
+			timeoutMs,
+		);
+	});
+	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function waitForFile(path) {
+	const deadline = Date.now() + 1_000;
+	while (Date.now() < deadline) {
+		try {
+			return await readFile(path, "utf8");
+		} catch (error) {
+			if (error?.code !== "ENOENT") throw error;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error("Timed out waiting for file marker");
+}
+
+async function waitForProcessExit(pid) {
+	const deadline = Date.now() + 1_000;
+	while (Date.now() < deadline) {
+		try {
+			process.kill(pid, 0);
+		} catch (error) {
+			if (error?.code === "ESRCH") return;
+			throw error;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error("Active Git executable survived cancellation");
+}
+
+async function faultTempDirectories(prefix) {
+	return (await readdir(tmpdir()))
+		.filter((name) => name.startsWith(prefix))
+		.sort();
 }
