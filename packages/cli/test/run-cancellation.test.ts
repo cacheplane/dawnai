@@ -102,7 +102,7 @@ async function waitForFile(path: string, timeoutMs = 15_000): Promise<string> {
   throw new Error(`probe file never appeared: ${path}`)
 }
 
-async function setupBlockingRoute() {
+async function setupBlockingRoute(options: { readonly apSseHeartbeatIntervalMs?: number } = {}) {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-run-cancellation-"))
   cleanup.push(() => rm(appRoot, { force: true, recursive: true }))
 
@@ -123,7 +123,13 @@ async function setupBlockingRoute() {
   // after cancellation (that is the property under test), and close() now waits
   // for in-flight runs. Without a bound, afterEach cleanup would block for the
   // full 30s default on every cancellation test.
-  const handler = await createRuntimeFetchHandler({ appRoot, drainDeadlineMs: 250 })
+  const handler = await createRuntimeFetchHandler({
+    appRoot,
+    drainDeadlineMs: 250,
+    ...(options.apSseHeartbeatIntervalMs !== undefined
+      ? { apSseHeartbeatIntervalMs: options.apSseHeartbeatIntervalMs }
+      : {}),
+  })
   cleanup.push(() => handler.close())
 
   // Unique per setup() call (appRoot itself is unique per mkdtemp), so
@@ -225,6 +231,11 @@ async function drain(response: Response): Promise<void> {
 async function readSseText(response: Response): Promise<string> {
   const reader = response.body?.getReader()
   if (!reader) return ""
+  return await readSseReaderText(reader)
+}
+
+/** Drains an already-acquired SSE reader, returning its decoded text. */
+async function readSseReaderText(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
   const decoder = new TextDecoder()
   let text = ""
   for (;;) {
@@ -307,7 +318,7 @@ function resumeBlockingRoute(startedFile: string, releaseFile: string): string {
   ].join("\n")
 }
 
-async function setupResumeInterrupt() {
+async function setupResumeInterrupt(options: { readonly apSseHeartbeatIntervalMs?: number } = {}) {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-run-cancellation-resume-"))
   cleanup.push(() => rm(appRoot, { force: true, recursive: true }))
 
@@ -329,7 +340,13 @@ async function setupResumeInterrupt() {
   // after cancellation (that is the property under test), and close() now waits
   // for in-flight runs. Without a bound, afterEach cleanup would block for the
   // full 30s default on every cancellation test.
-  const handler = await createRuntimeFetchHandler({ appRoot, drainDeadlineMs: 250 })
+  const handler = await createRuntimeFetchHandler({
+    appRoot,
+    drainDeadlineMs: 250,
+    ...(options.apSseHeartbeatIntervalMs !== undefined
+      ? { apSseHeartbeatIntervalMs: options.apSseHeartbeatIntervalMs }
+      : {}),
+  })
   cleanup.push(() => handler.close())
 
   return {
@@ -355,6 +372,104 @@ function resumeRequest(threadId: string, route = "/resume-blocking#graph"): Requ
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe("AP SSE keepalives", () => {
+  it("keeps /runs/stream alive while a blocking route is active", async () => {
+    const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute({
+      apSseHeartbeatIntervalMs: 10,
+    })
+
+    const response = await handler.fetch(runStreamRequest("t-stream-heartbeat", startedFile, releaseFile))
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toBe("text/event-stream")
+    expect(response.headers.get("cache-control")).toBe("no-cache, no-transform")
+
+    await waitForFile(startedFile)
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error("expected /runs/stream response body")
+    const first = await reader.read()
+    expect(first.done).toBe(false)
+    expect(new TextDecoder().decode(first.value)).toBe(": ping\n\n")
+
+    await releaseRoute()
+    const text = await readSseReaderText(reader)
+    expect(text.replaceAll(": ping\n\n", "")).toBe('event: done\ndata: {"output":{"ok":true}}\n\n')
+    expect(handler.state.activeRequests).toBe(0)
+  }, 30_000)
+
+  it("keeps /resume alive while a blocking route is active", async () => {
+    const { handler, startedFile, releaseRoute } = await setupResumeInterrupt({
+      apSseHeartbeatIntervalMs: 10,
+    })
+
+    const response = await handler.fetch(resumeRequest("t-resume-heartbeat"))
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toBe("text/event-stream")
+    expect(response.headers.get("cache-control")).toBe("no-cache, no-transform")
+
+    await waitForFile(startedFile)
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error("expected /resume response body")
+    const first = await reader.read()
+    expect(first.done).toBe(false)
+    expect(new TextDecoder().decode(first.value)).toBe(": ping\n\n")
+
+    await releaseRoute()
+    const text = await readSseReaderText(reader)
+    expect(text.replaceAll(": ping\n\n", "")).toBe('event: done\ndata: {"output":{"ok":true}}\n\n')
+    expect(handler.state.activeRequests).toBe(0)
+  }, 30_000)
+
+  it("clears the /runs/stream heartbeat when the server cancels its viewer", async () => {
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval")
+    try {
+      const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute({
+        apSseHeartbeatIntervalMs: 60_000,
+      })
+      const threadId = "t-stream-heartbeat-server-cancel"
+
+      const response = await handler.fetch(runStreamRequest(threadId, startedFile, releaseFile))
+      await waitForFile(startedFile)
+
+      expect((await handler.fetch(cancelRequest(threadId))).status).toBe(200)
+      expect(await readSseText(response)).toBe(
+        'event: done\ndata: {"output":{"cancelled":true}}\n\n',
+      )
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1)
+
+      await releaseRoute()
+    } finally {
+      clearIntervalSpy.mockRestore()
+    }
+  }, 30_000)
+
+  it("keeps the heartbeat until a disconnected /runs/stream route ends", async () => {
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval")
+    try {
+      const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute({
+        apSseHeartbeatIntervalMs: 60_000,
+      })
+
+      const response = await handler.fetch(
+        runStreamRequest("t-stream-heartbeat-disconnect", startedFile, releaseFile),
+      )
+      await waitForFile(startedFile)
+
+      await response.body?.cancel()
+      expect(handler.state.activeRequests).toBe(0)
+      expect(clearIntervalSpy).not.toHaveBeenCalled()
+
+      await releaseRoute()
+      const deadline = Date.now() + 5_000
+      while (clearIntervalSpy.mock.calls.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      clearIntervalSpy.mockRestore()
+    }
+  }, 30_000)
+})
 
 describe("AP concurrency gate", () => {
   it("returns 409 for a second concurrent run on the same thread", async () => {
