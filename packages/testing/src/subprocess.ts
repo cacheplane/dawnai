@@ -1,5 +1,5 @@
-import { type ChildProcess, spawn } from "node:child_process"
-import { createServer } from "node:net"
+import { type ChildProcess, execFile, spawn } from "node:child_process"
+import { createConnection, createServer } from "node:net"
 import { dirname, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
@@ -8,6 +8,20 @@ export interface SubprocessApp {
   readonly baseUrl: string
   close(): Promise<void>
   [Symbol.asyncDispose](): Promise<void>
+}
+
+export interface TerminationTimings {
+  readonly graceMs: number
+  readonly forceMs: number
+  readonly probeIntervalMs: number
+  readonly probeTimeoutMs: number
+}
+
+const DEFAULT_TERMINATION_TIMINGS: TerminationTimings = {
+  graceMs: 2_000,
+  forceMs: 2_000,
+  probeIntervalMs: 25,
+  probeTimeoutMs: 100,
 }
 
 /** Bind to port 0, read the OS-assigned port, release it. */
@@ -61,6 +75,167 @@ function resolveDawnCliEntry(): string {
   return resolve(pkgRoot, "node_modules", "@dawn-ai", "cli", "dist", "index.js")
 }
 
+function childClosePromise(child: ChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    child.once("error", reject)
+    child.once("close", () => resolve())
+  })
+}
+
+function portAcceptsConnections(baseUrl: string, timeoutMs: number): Promise<boolean> {
+  const url = new URL(baseUrl)
+  return new Promise((resolve) => {
+    let settled = false
+    const socket = createConnection({ host: url.hostname, port: Number(url.port) })
+    const finish = (accepting: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      socket.destroy()
+      resolve(accepting)
+    }
+    const timer = setTimeout(() => finish(true), timeoutMs)
+    socket.once("connect", () => finish(true))
+    socket.once("error", () => finish(false))
+  })
+}
+
+async function waitUntilStopped(
+  childState: { closed: boolean; failed: boolean; error: unknown },
+  baseUrl: string,
+  timeoutMs: number,
+  timings: TerminationTimings,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (true) {
+    const remainingMs = Math.max(0, deadline - Date.now())
+    const accepting = await portAcceptsConnections(
+      baseUrl,
+      Math.min(timings.probeTimeoutMs, remainingMs),
+    )
+    if (childState.failed) throw childState.error
+    if (childState.closed && !accepting) return true
+
+    const waitMs = Math.min(timings.probeIntervalMs, deadline - Date.now())
+    if (waitMs <= 0) return false
+    await delay(waitMs)
+  }
+}
+
+function taskkillProcessTree(pid: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "taskkill.exe",
+      ["/PID", String(pid), "/T", "/F"],
+      { windowsHide: true, timeout: Math.max(1, timeoutMs), maxBuffer: 64 * 1024 },
+      (error) => (error ? reject(error) : resolve()),
+    )
+  })
+}
+
+interface TerminationDependencies {
+  readonly platform: NodeJS.Platform
+  readonly taskkillProcessTree: (pid: number, timeoutMs: number) => Promise<void>
+}
+
+async function requestProcessTreeTermination(
+  child: ChildProcess,
+  childState: { readonly closed: boolean },
+  groupPid: number,
+  signal: NodeJS.Signals,
+  timeoutMs: number,
+  dispatchErrors: unknown[],
+  dependencies: TerminationDependencies,
+): Promise<void> {
+  if (dependencies.platform === "win32") {
+    if (childState.closed || child.exitCode !== null || child.signalCode !== null) return
+    const deadline = Date.now() + timeoutMs
+    try {
+      await dependencies.taskkillProcessTree(groupPid, timeoutMs)
+      return
+    } catch (error) {
+      dispatchErrors.push(error)
+      if (signal !== "SIGKILL") return
+      if (Date.now() >= deadline) return
+      if (childState.closed || child.exitCode !== null || child.signalCode !== null) return
+      try {
+        child.kill(signal)
+      } catch (childError) {
+        dispatchErrors.push(childError)
+      }
+      return
+    }
+  }
+
+  try {
+    process.kill(-groupPid, signal)
+  } catch (error) {
+    dispatchErrors.push(error)
+    try {
+      child.kill(signal)
+    } catch (childError) {
+      dispatchErrors.push(childError)
+    }
+  }
+}
+
+export async function terminateSubprocess(
+  child: ChildProcess,
+  groupPid: number,
+  closed: Promise<void>,
+  baseUrl: string,
+  timings: TerminationTimings = DEFAULT_TERMINATION_TIMINGS,
+  injectedDependencies: Partial<TerminationDependencies> = {},
+): Promise<void> {
+  const dependencies: TerminationDependencies = {
+    platform: injectedDependencies.platform ?? process.platform,
+    taskkillProcessTree: injectedDependencies.taskkillProcessTree ?? taskkillProcessTree,
+  }
+  const childState: { closed: boolean; failed: boolean; error: unknown } = {
+    closed: false,
+    failed: false,
+    error: undefined,
+  }
+  void closed.then(
+    () => {
+      childState.closed = true
+    },
+    (error: unknown) => {
+      childState.failed = true
+      childState.error = error
+    },
+  )
+
+  const portAccepting = await portAcceptsConnections(baseUrl, timings.probeTimeoutMs)
+  if (childState.failed) throw childState.error
+  if (childState.closed && !portAccepting) return
+
+  const dispatchErrors: unknown[] = []
+  const waitForPhase = async (signal: NodeJS.Signals, phaseMs: number): Promise<boolean> => {
+    const deadline = Date.now() + phaseMs
+    await requestProcessTreeTermination(
+      child,
+      childState,
+      groupPid,
+      signal,
+      Math.max(0, deadline - Date.now()),
+      dispatchErrors,
+      dependencies,
+    )
+    return await waitUntilStopped(childState, baseUrl, Math.max(0, deadline - Date.now()), timings)
+  }
+
+  if (await waitForPhase("SIGTERM", timings.graceMs)) return
+  if (await waitForPhase("SIGKILL", timings.forceMs)) return
+  const message = `subprocess group ${groupPid} did not stop within ${timings.graceMs + timings.forceMs}ms after SIGTERM and SIGKILL`
+  if (dispatchErrors.length === 0) throw new Error(message)
+  const cause =
+    dispatchErrors.length === 1
+      ? dispatchErrors[0]
+      : new AggregateError(dispatchErrors, "subprocess termination signal dispatch failed")
+  throw new Error(message, { cause })
+}
+
 export async function createSubprocessApp(opts: {
   readonly appRoot: string
   readonly env?: Record<string, string>
@@ -76,40 +251,42 @@ export async function createSubprocessApp(opts: {
     stdio: "pipe",
     detached: true,
   })
+  const groupPid = child.pid
+  const closed = childClosePromise(child)
+  if (groupPid === undefined) {
+    await closed
+    throw new Error("dawn dev subprocess has no process id")
+  }
+
   // surface server logs for debugging on failure
   child.stdout?.on("data", (b) => process.stdout.write(`[dawn dev] ${b}`))
   child.stderr?.on("data", (b) => process.stderr.write(`[dawn dev] ${b}`))
 
   const baseUrl = `http://127.0.0.1:${port}`
+  let closePromise: Promise<void> | undefined
+  const close = (): Promise<void> => {
+    closePromise ??= terminateSubprocess(
+      child,
+      groupPid,
+      closed,
+      baseUrl,
+      DEFAULT_TERMINATION_TIMINGS,
+    )
+    return closePromise
+  }
+
   try {
     await waitReady(`${baseUrl}/healthz`, opts.readyTimeoutMs ?? 60_000)
   } catch (err) {
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, "SIGTERM")
-      } catch {
-        child.kill("SIGTERM")
-      }
-    }
+    await close()
     throw err
   }
 
-  let stopped = false
   const app: SubprocessApp = {
     baseUrl,
-    async close() {
-      if (stopped) return
-      stopped = true
-      if (child.pid) {
-        try {
-          process.kill(-child.pid, "SIGTERM")
-        } catch {
-          child.kill("SIGTERM")
-        }
-      }
-    },
+    close,
     [Symbol.asyncDispose](): Promise<void> {
-      return this.close()
+      return close()
     },
   }
   return app

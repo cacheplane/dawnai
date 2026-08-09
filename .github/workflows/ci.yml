@@ -104,6 +104,38 @@ jobs:
           path: artifacts/testing/
           retention-days: 7
 
+  testing-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build testing dependency closure
+        # The focused test starts the CLI from its built dist output. The
+        # trailing ellipsis selects @dawn-ai/testing and its dependencies.
+        run: pnpm --filter @dawn-ai/testing... build
+
+      - name: Native Windows subprocess shutdown tests
+        # Exercise the real win32 taskkill tree and the injected stale-dispatch
+        # guard without running broader Windows HMR coverage.
+        run: pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts --testNamePattern "Windows process tree|injected Windows tree kill"
+
   sandbox-docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
