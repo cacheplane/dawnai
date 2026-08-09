@@ -169,11 +169,15 @@ export interface RuntimeFetchHandler {
 
 /** How long close() waits for in-flight requests before proceeding anyway. */
 const CLOSE_DRAIN_DEADLINE_MS = 30_000
+const AP_SSE_HEARTBEAT_INTERVAL_MS = 15_000
+const AP_SSE_HEARTBEAT = new TextEncoder().encode(": ping\n\n")
 
 export async function createRuntimeFetchHandler(
   options: StartRuntimeServerOptions & {
     /** Internal/test hook: override the close() drain deadline (default 30s). */
     readonly drainDeadlineMs?: number
+    /** Internal/test hook: override AP SSE heartbeat interval (default 15s). */
+    readonly apSseHeartbeatIntervalMs?: number
   },
 ): Promise<RuntimeFetchHandler> {
   // The node filesystem fallbacks, when this runtime has any. `dawn dev` /
@@ -487,8 +491,10 @@ export async function createRuntimeFetchHandler(
     return override ? Promise.resolve(override) : getMemoryStore()
   }
 
+  const apSseHeartbeatIntervalMs = options.apSseHeartbeatIntervalMs ?? AP_SSE_HEARTBEAT_INTERVAL_MS
   const routes = buildRouteTable({
     appRoot: options.appRoot,
+    apSseHeartbeatIntervalMs,
     boot,
     getCheckpointer,
     getMemoryStoreFor,
@@ -738,6 +744,7 @@ function trackStreamSettled(
  */
 function buildRouteTable(ctx: {
   readonly appRoot: string
+  readonly apSseHeartbeatIntervalMs: number
   readonly boot: RouteBoot
   readonly getCheckpointer: (request: Request) => BaseCheckpointSaver
   readonly getMemoryStoreFor: (request: Request) => Promise<MemoryStore>
@@ -768,6 +775,7 @@ function buildRouteTable(ctx: {
 }): RouteMatcher[] {
   const {
     appRoot,
+    apSseHeartbeatIntervalMs,
     boot,
     getCheckpointer,
     getMemoryStoreFor,
@@ -925,6 +933,7 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleApStreamRequest({
           appRoot,
+          apSseHeartbeatIntervalMs,
           boot,
           checkpointer: getCheckpointer(request),
           getMemoryStore: () => getMemoryStoreFor(request),
@@ -975,7 +984,9 @@ function buildRouteTable(ctx: {
     // ------------------------------------------------------------------
     {
       handle: async (request) =>
-        handleMemoryListRequest({ memoryStore: await getMemoryStoreFor(request) }),
+        handleMemoryListRequest({
+          memoryStore: await getMemoryStoreFor(request),
+        }),
       method: "GET",
       pattern: /^\/memory\/candidates(?:\?.*)?$/,
     },
@@ -1071,6 +1082,7 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleResumeRequest({
           appRoot,
+          apSseHeartbeatIntervalMs,
           boot,
           checkpointer: getCheckpointer(request),
           getMemoryStore: () => getMemoryStoreFor(request),
@@ -1128,6 +1140,7 @@ async function dispatch(routes: RouteMatcher[], request: Request): Promise<Respo
 
 async function handleApStreamRequest(options: {
   readonly appRoot: string
+  readonly apSseHeartbeatIntervalMs: number
   readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
@@ -1145,6 +1158,7 @@ async function handleApStreamRequest(options: {
 }): Promise<Response> {
   const {
     appRoot,
+    apSseHeartbeatIntervalMs,
     boot,
     checkpointer,
     getMemoryStore,
@@ -1264,6 +1278,7 @@ async function handleApStreamRequest(options: {
   let sourceCleanup: Promise<void> | undefined
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
       try {
         try {
           const routeStream = streamResolvedRoute({
@@ -1312,6 +1327,7 @@ async function handleApStreamRequest(options: {
             .catch(() => undefined)
         }
       } finally {
+        stopHeartbeat()
         // The client's stream ends here regardless — safeClose below fires on
         // this same tick either way, so cancellation still looks instant to
         // the caller. What differs is when the run SLOT frees.
@@ -1340,7 +1356,7 @@ async function handleApStreamRequest(options: {
 
   return new Response(stream, {
     headers: {
-      "cache-control": "no-cache",
+      "cache-control": "no-cache, no-transform",
       connection: "keep-alive",
       "content-type": "text/event-stream",
     },
@@ -1583,6 +1599,7 @@ async function handleApWaitRequest(options: {
 
 async function handleResumeRequest(options: {
   readonly appRoot: string
+  readonly apSseHeartbeatIntervalMs: number
   readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
@@ -1601,6 +1618,7 @@ async function handleResumeRequest(options: {
 }): Promise<Response> {
   const {
     appRoot,
+    apSseHeartbeatIntervalMs,
     boot,
     checkpointer,
     getMemoryStore,
@@ -1730,6 +1748,7 @@ async function handleResumeRequest(options: {
     let sourceCleanup: Promise<void> | undefined
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
         try {
           try {
             const routeStream = streamResolvedRoute({
@@ -1779,6 +1798,7 @@ async function handleResumeRequest(options: {
               .catch(() => undefined)
           }
         } finally {
+          stopHeartbeat()
           // The client's stream ends here regardless — response lifetime and run
           // lifetime are deliberately different; see handleApStreamRequest.
           const releaseExecutionClaims = () => {
@@ -1894,6 +1914,16 @@ function safeEnqueue(controller: ReadableStreamDefaultController<Uint8Array>, ch
     // The consumer already canceled the stream — writes become no-ops, exactly
     // like `response.write` on a disconnected socket did.
   }
+}
+
+function startSseHeartbeat(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  intervalMs: number,
+): () => void {
+  const heartbeat = setInterval(() => {
+    safeEnqueue(controller, AP_SSE_HEARTBEAT.slice())
+  }, intervalMs)
+  return () => clearInterval(heartbeat)
 }
 
 function safeClose(controller: ReadableStreamDefaultController<Uint8Array>) {
