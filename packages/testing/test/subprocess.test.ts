@@ -1,9 +1,132 @@
+import { ChildProcess } from "node:child_process"
+import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
-import { expect, it } from "vitest"
+import { expect, it, vi } from "vitest"
 import { createAimock } from "../src/aimock-runner.js"
 import { createSubprocessApp } from "../src/subprocess.js"
 
 const appRoot = fileURLToPath(new URL("./fixtures/probe-app", import.meta.url))
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code
+}
+
+async function waitForProcessGroupExit(target: number): Promise<void> {
+  const observeExit = async (): Promise<boolean> => {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      try {
+        process.kill(target, 0)
+      } catch (error) {
+        if (hasErrorCode(error, "ESRCH")) return true
+        if (!hasErrorCode(error, "EPERM")) throw error
+      }
+      await delay(10)
+    }
+    return false
+  }
+
+  if (await observeExit()) return
+  try {
+    process.kill(target, "SIGKILL")
+  } catch (error) {
+    if (hasErrorCode(error, "ESRCH")) return
+    throw error
+  }
+  if (!(await observeExit())) {
+    throw new Error(`process group ${-target} remained after SIGKILL`)
+  }
+}
+
+function childExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise((resolve) => child.once("close", () => resolve()))
+}
+
+async function waitForChildExit(
+  child: ChildProcess,
+  exited: Promise<void>,
+  forceKill: (this: ChildProcess, signal?: NodeJS.Signals | number) => boolean,
+): Promise<void> {
+  if (await Promise.race([exited.then(() => true), delay(2_000, false)])) return
+  try {
+    forceKill.call(child, "SIGKILL")
+  } catch (error) {
+    if (!hasErrorCode(error, "ESRCH")) throw error
+  }
+  if (!(await Promise.race([exited.then(() => true), delay(2_000, false)]))) {
+    throw new Error(`child process ${child.pid ?? "unknown"} remained after SIGKILL`)
+  }
+}
+
+function delaySubprocessTermination() {
+  const realKill = process.kill.bind(process)
+  const realChildKill = ChildProcess.prototype.kill
+  const delayedGroups: Array<{ readonly target: number; readonly delivered: Promise<void> }> = []
+  const delayedChildren: Array<{
+    readonly child: ChildProcess
+    readonly delivered: Promise<void>
+    readonly exited: Promise<void>
+  }> = []
+  const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (typeof pid === "number" && pid < 0 && signal === "SIGTERM") {
+      // Windows does not support negative-PID process groups. Let the real call
+      // throw synchronously so createSubprocessApp exercises its child.kill()
+      // fallback, which the ChildProcess spy below delays instead.
+      if (process.platform === "win32") return realKill(pid, signal)
+      const delivered = delay(100).then(() => {
+        try {
+          realKill(pid, signal)
+        } catch (error) {
+          if (!hasErrorCode(error, "ESRCH")) throw error
+        }
+      })
+      delayedGroups.push({ target: pid, delivered })
+      return true
+    }
+    return realKill(pid, signal)
+  })
+  const childKillSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(function (
+    this: ChildProcess,
+    signal,
+  ) {
+    if (process.platform === "win32" && signal === "SIGTERM") {
+      const exited = childExit(this)
+      const delivered = delay(100).then(() => {
+        if (this.exitCode === null && this.signalCode === null) {
+          realChildKill.call(this, signal)
+        }
+      })
+      delayedChildren.push({ child: this, delivered, exited })
+      return true
+    }
+    return realChildKill.call(this, signal)
+  })
+
+  return async (): Promise<void> => {
+    killSpy.mockRestore()
+    childKillSpy.mockRestore()
+    await Promise.all(
+      [...new Map(delayedGroups.map((entry) => [entry.target, entry])).values()].map(
+        async ({ delivered, target }) => {
+          try {
+            await delivered
+          } finally {
+            await waitForProcessGroupExit(target)
+          }
+        },
+      ),
+    )
+    await Promise.all(
+      delayedChildren.map(async ({ child, delivered, exited }) => {
+        try {
+          await delivered
+        } finally {
+          await waitForChildExit(child, exited, realChildKill)
+        }
+      }),
+    )
+  }
+}
 
 it("boots a real dawn dev subprocess and serves the AP", async () => {
   const mock = await createAimock({ fixtures: [{ match: {}, response: { content: "ok" } }] })
@@ -43,5 +166,55 @@ it("disposes the subprocess via `await using` and leaves it unreachable", async 
     await expect(fetch(new URL("/healthz", baseUrl))).rejects.toThrow()
   } finally {
     await mock.close()
+  }
+}, 120_000)
+
+it("waits for process shutdown and shares one close promise", async () => {
+  let mock: Awaited<ReturnType<typeof createAimock>> | undefined
+  let app: Awaited<ReturnType<typeof createSubprocessApp>> | undefined
+  const finishDelayedTerminations = delaySubprocessTermination()
+
+  try {
+    mock = await createAimock({ fixtures: [{ match: {}, response: { content: "ok" } }] })
+    app = await createSubprocessApp({
+      appRoot,
+      env: { OPENAI_BASE_URL: mock.baseUrl, OPENAI_API_KEY: "test-not-used" },
+    })
+    const first = app.close()
+    const second = app.close()
+    const disposed = app[Symbol.asyncDispose]()
+    expect(second).toBe(first)
+    expect(disposed).toBe(first)
+    await expect(Promise.race([first.then(() => "closed"), delay(25, "waiting")])).resolves.toBe(
+      "waiting",
+    )
+    await first
+    await expect(fetch(new URL("/healthz", app.baseUrl))).rejects.toThrow()
+  } finally {
+    try {
+      if (app) await app.close()
+    } finally {
+      try {
+        await finishDelayedTerminations()
+      } finally {
+        if (mock) await mock.close()
+      }
+    }
+  }
+}, 120_000)
+
+it("waits for cleanup when readiness fails", async () => {
+  const finishDelayedTerminations = delaySubprocessTermination()
+
+  try {
+    const creating = createSubprocessApp({ appRoot, readyTimeoutMs: 0 })
+    const outcome = creating.then(
+      () => "created",
+      () => "rejected",
+    )
+    await expect(Promise.race([outcome, delay(25, "waiting")])).resolves.toBe("waiting")
+    await expect(creating).rejects.toThrow("within 0ms")
+  } finally {
+    await finishDelayedTerminations()
   }
 }, 120_000)
