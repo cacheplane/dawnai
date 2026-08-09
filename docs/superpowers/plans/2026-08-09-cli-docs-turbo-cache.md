@@ -25,7 +25,7 @@ website docs source, navigation file, and local Turbo binary:
 const cliRoot = join(packageRoot, "cli")
 const docsSourceRoot = join(repoRoot, "apps", "web", "content", "docs")
 const docsNavPath = join(repoRoot, "apps", "web", "app", "components", "docs", "nav.ts")
-const turboPath = join(repoRoot, "node_modules", ".bin", "turbo")
+const turboPath = join(repoRoot, "node_modules", "turbo", "bin", "turbo")
 ```
 
 Add a recursive MDX inventory helper using `readdirSync(..., { withFileTypes: true })` and a normalizer that resolves Turbo input keys relative to `cliRoot` before converting them to repository-relative POSIX paths.
@@ -37,8 +37,8 @@ Run Turbo without executing the build:
 ```js
 const dryRun = JSON.parse(
   execFileSync(
-    turboPath,
-    ["run", "build", "--filter=@dawn-ai/cli", "--dry=json"],
+    process.execPath,
+    [turboPath, "run", "build", "--filter=@dawn-ai/cli", "--dry=json"],
     { cwd: repoRoot, encoding: "utf8" },
   ),
 )
@@ -57,7 +57,7 @@ docs/**
 
 Accumulate all missing elements into the existing `errors` array. Wrap command execution and JSON parsing so failures add an actionable cache-check error instead of an unhandled stack trace.
 
-- [ ] **Step 3: Run the guard and verify RED**
+- [x] **Step 3: Run the guard and verify RED**
 
 ```bash
 pnpm check:build-cache
