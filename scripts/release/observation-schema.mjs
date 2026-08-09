@@ -84,6 +84,7 @@ export function snapshotReleaseInput(candidate, observation) {
 
 export function findObservationSchemaConflicts(observation) {
   const conflicts = new Set()
+  if (!isRecord(observation)) return ["observation-schema-invalid"]
   if (!hasExactFields(observation, OBSERVATION_FIELDS, ["requiredSmokeLanes"])) {
     conflicts.add("observation-schema-invalid")
   }
@@ -109,6 +110,7 @@ export function findObservationSchemaConflicts(observation) {
       "files",
       "manifestAsset",
       "releaseRecordAsset",
+      "manifestAttestationAsset",
       "attestations",
     ]) &&
     recordsHaveExactFields(observation.artifacts?.files, [
@@ -120,6 +122,7 @@ export function findObservationSchemaConflicts(observation) {
     ]) &&
     hasExactFields(observation.artifacts?.manifestAsset, ["name", "sha256"]) &&
     hasExactFields(observation.artifacts?.releaseRecordAsset, ["name", "sha256"]) &&
+    hasExactFields(observation.artifacts?.manifestAttestationAsset, ["name", "sha256"]) &&
     recordsHaveExactFields(observation.artifacts?.attestations, [
       "name",
       "status",
@@ -153,6 +156,7 @@ export function findObservationSchemaConflicts(observation) {
   for (const pkg of Array.isArray(observation.registry?.packages)
     ? observation.registry.packages
     : []) {
+    if (!isRecord(pkg)) continue
     if (!hasExactFields(pkg.latest, ["status", "version"])) {
       conflicts.add("observation-schema-invalid")
     }
@@ -166,6 +170,7 @@ export function findObservationSchemaConflicts(observation) {
   const smokes = Array.isArray(observation.smokes) ? observation.smokes : []
   if (!Array.isArray(observation.smokes)) conflicts.add("observation-schema-invalid")
   for (const smoke of smokes) {
+    if (!isRecord(smoke)) continue
     if (!hasExactFields(smoke, SMOKE_FIELDS)) conflicts.add("observation-schema-invalid")
     if (!Object.hasOwn(smoke, "workflowRunId") || !isPositiveInteger(smoke.workflowRunId)) {
       conflicts.add("required-smoke-workflow-run-id-invalid")
@@ -184,7 +189,9 @@ export function findObservationSchemaConflicts(observation) {
       conflicts.add("release-audit-run-attempt-invalid")
     }
   }
-  if (!semanticallyValid(observation)) conflicts.add("observation-schema-invalid")
+  if (structurallyValid && !semanticallyValid(observation)) {
+    conflicts.add("observation-schema-invalid")
+  }
   return [...conflicts].sort()
 }
 
@@ -198,6 +205,7 @@ export function observationStructureIsValid(observation) {
     observation.otherCandidates.every(isRecord) &&
     isRecord(observation.artifacts?.manifestAsset) &&
     isRecord(observation.artifacts?.releaseRecordAsset) &&
+    isRecord(observation.artifacts?.manifestAttestationAsset) &&
     Array.isArray(observation.artifacts?.files) &&
     observation.artifacts.files.every(isRecord) &&
     Array.isArray(observation.artifacts?.attestations) &&
@@ -225,8 +233,83 @@ function semanticallyValid(observation) {
     validateRelease(observation.release) &&
     validateSmokes(observation.requiredSmokeLanes, observation.smokes) &&
     validateAudit(observation.audit) &&
+    validateCanonicalObservationSets(observation) &&
     typeof observation.abandonment?.requested === "boolean" &&
     typeof observation.abandonment?.recorded === "boolean"
+  )
+}
+
+function validateCanonicalObservationSets(observation) {
+  const inventory = observation.inventory.packages
+  const packageNames = inventory.map((pkg) => pkg.name)
+  const tarballNames = inventory.map((pkg) => pkg.filename)
+  const expectedAttestationSubjects = [...tarballNames, "manifest.json"]
+  const registryNames = observation.registry.packages.map((pkg) => pkg.name)
+  const artifactPackageNames = observation.artifacts.files.map((file) => file.name)
+  const attestationSubjects = observation.artifacts.attestations.map(
+    (attestation) => attestation.subjectName,
+  )
+  const artifactIdentitiesMatch = observation.artifacts.files.every((file) => {
+    const expected = inventory.find((pkg) => pkg.name === file.name)
+    return expected !== undefined && file.assetName === expected.filename
+  })
+  const attestationIdentitiesMatch = observation.artifacts.attestations.every((attestation) => {
+    const expected = inventory.find((pkg) => pkg.filename === attestation.subjectName)
+    if (expected !== undefined) return attestation.name === expected.attestationFilename
+    return (
+      attestation.subjectName === "manifest.json" &&
+      attestation.name === observation.artifacts.manifestAttestationAsset.name
+    )
+  })
+  const expectedAssets = [
+    observation.artifacts.releaseRecordAsset,
+    observation.artifacts.manifestAsset,
+    observation.artifacts.manifestAttestationAsset,
+    ...inventory.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
+    ...inventory.map((pkg) => ({
+      name: pkg.attestationFilename,
+      sha256: pkg.attestationSha256,
+    })),
+  ]
+  const expectedAssetNames = expectedAssets.map((asset) => asset.name)
+  const modeledAssetsAreUnique = new Set(expectedAssetNames).size === expectedAssetNames.length
+  const categorizedAssetsMatch =
+    (observation.escrow.status !== "present" ||
+      hasExactAssetIdentities(observation.escrow.assets, expectedAssets)) &&
+    (!["draft", "published"].includes(observation.release.status) ||
+      hasExactAssetIdentities(observation.release.assets, expectedAssets))
+  return (
+    hasExactUniqueSet(registryNames, packageNames) &&
+    hasExactUniqueSet(artifactPackageNames, packageNames) &&
+    hasExactUniqueSet(attestationSubjects, expectedAttestationSubjects) &&
+    artifactIdentitiesMatch &&
+    attestationIdentitiesMatch &&
+    modeledAssetsAreUnique &&
+    categorizedAssetsMatch
+  )
+}
+
+function hasExactAssetIdentities(actual, expected) {
+  return (
+    hasExactUniqueSet(
+      actual.map((asset) => asset.name),
+      expected.map((asset) => asset.name),
+    ) &&
+    actual.every((asset) => {
+      const identity = expected.find((expectedAsset) => expectedAsset.name === asset.name)
+      return identity !== undefined && asset.sha256 === identity.sha256
+    })
+  )
+}
+
+function hasExactUniqueSet(actual, expected) {
+  const actualSet = new Set(actual)
+  const expectedSet = new Set(expected)
+  return (
+    actual.length === expected.length &&
+    actualSet.size === actual.length &&
+    expectedSet.size === expected.length &&
+    actual.every((value) => expectedSet.has(value))
   )
 }
 
@@ -296,14 +379,20 @@ function validateArtifacts(artifacts) {
       artifacts.manifestAsset?.name === "manifest.json" &&
       artifacts.manifestAsset.sha256 === artifacts.manifestSha256 &&
       artifacts.releaseRecordAsset?.name === "release-record.json" &&
-      isSha256(artifacts.releaseRecordAsset.sha256)
+      isSha256(artifacts.releaseRecordAsset.sha256) &&
+      artifacts.manifestAttestationAsset?.name === "manifest.json.intoto.jsonl" &&
+      (artifacts.status === "attested"
+        ? isSha256(artifacts.manifestAttestationAsset.sha256)
+        : artifacts.manifestAttestationAsset.sha256 === null)
     : artifacts.manifestVersion === null &&
       artifacts.manifestCommitSha === null &&
       artifacts.manifestSha256 === null &&
       artifacts.manifestAsset?.name === "manifest.json" &&
       artifacts.manifestAsset.sha256 === null &&
       artifacts.releaseRecordAsset?.name === "release-record.json" &&
-      artifacts.releaseRecordAsset.sha256 === null
+      artifacts.releaseRecordAsset.sha256 === null &&
+      artifacts.manifestAttestationAsset?.name === "manifest.json.intoto.jsonl" &&
+      artifacts.manifestAttestationAsset.sha256 === null
   const nestedProgressValid =
     artifacts.status === "prepared"
       ? artifacts.attestations.every((attestation) => attestation.status === "pending")

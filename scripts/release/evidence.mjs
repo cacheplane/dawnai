@@ -114,22 +114,41 @@ function analyzeArtifacts(candidate, observation, inventoryPackages, conflicts) 
   if (artifacts.status === "absent" && files.some((file) => file.status !== "pending")) {
     conflicts.add("artifact-observation-contradiction")
   }
-  const attestationBySubject = new Map(
-    attestations.map((attestation) => [attestation.subjectName, attestation]),
-  )
-  let attestationsComplete = attestations.length === inventoryPackages.length
-  for (const pkg of inventoryPackages) {
-    const attestation = attestationBySubject.get(pkg.filename)
-    if (attestation === undefined) {
-      conflicts.add("artifact-attestation-missing")
+  const expectedAttestations = [
+    ...inventoryPackages.map((pkg) => ({
+      name: pkg.attestationFilename,
+      sha256: pkg.attestationSha256,
+      subjectName: pkg.filename,
+      subjectSha256: pkg.tarballSha256,
+    })),
+    {
+      name: artifacts.manifestAttestationAsset?.name,
+      sha256: artifacts.manifestAttestationAsset?.sha256,
+      subjectName: "manifest.json",
+      subjectSha256: artifacts.manifestSha256,
+    },
+  ]
+  const attestationBySubject = groupBy(attestations, (attestation) => attestation.subjectName)
+  let attestationsComplete = attestations.length === expectedAttestations.length
+  if (!attestationsComplete) conflicts.add("artifact-attestation-subject-set-mismatch")
+  for (const expected of expectedAttestations) {
+    const matches = attestationBySubject.get(expected.subjectName) ?? []
+    if (matches.length !== 1) {
+      conflicts.add("artifact-attestation-subject-set-mismatch")
+      conflicts.add(
+        expected.subjectName === "manifest.json"
+          ? "artifact-manifest-attestation-missing"
+          : "artifact-attestation-missing",
+      )
       attestationsComplete = false
       continue
     }
-    if (attestation.name !== pkg.attestationFilename) {
+    const attestation = matches[0]
+    if (attestation.name !== expected.name) {
       conflicts.add("artifact-attestation-name-mismatch")
       attestationsComplete = false
     }
-    if (attestation.subjectSha256 !== pkg.tarballSha256) {
+    if (active && attestation.subjectSha256 !== expected.subjectSha256) {
       conflicts.add("artifact-attestation-subject-mismatch")
       attestationsComplete = false
     }
@@ -138,10 +157,16 @@ function analyzeArtifacts(candidate, observation, inventoryPackages, conflicts) 
         conflicts.add(`artifact-attestation-${attestation.status}`)
         attestationsComplete = false
       }
-      if (attestation.sha256 !== pkg.attestationSha256) {
+      if (attestation.sha256 !== expected.sha256) {
         conflicts.add("artifact-attestation-digest-mismatch")
         attestationsComplete = false
       }
+    }
+  }
+  for (const subject of attestationBySubject.keys()) {
+    if (!expectedAttestations.some((expected) => expected.subjectName === subject)) {
+      conflicts.add("artifact-attestation-subject-set-mismatch")
+      attestationsComplete = false
     }
   }
   const valid =
@@ -166,10 +191,11 @@ function analyzeArtifacts(candidate, observation, inventoryPackages, conflicts) 
     immutableAssets: Object.freeze([
       artifacts.releaseRecordAsset,
       artifacts.manifestAsset,
-      ...files.map((file) => ({ name: file.assetName, sha256: file.sha256 })),
-      ...attestations.map((attestation) => ({
-        name: attestation.name,
-        sha256: attestation.sha256,
+      artifacts.manifestAttestationAsset,
+      ...inventoryPackages.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
+      ...inventoryPackages.map((pkg) => ({
+        name: pkg.attestationFilename,
+        sha256: pkg.attestationSha256,
       })),
     ]),
   })
@@ -452,11 +478,16 @@ function analyzeAudit(candidate, observation, manifestSha256, conflicts) {
 }
 
 function groupByName(records) {
+  return groupBy(records, (record) => record?.name)
+}
+
+function groupBy(records, keyFor) {
   const result = new Map()
   for (const record of records) {
-    const matches = result.get(record?.name) ?? []
+    const key = keyFor(record)
+    const matches = result.get(key) ?? []
     matches.push(record)
-    result.set(record?.name, matches)
+    result.set(key, matches)
   }
   return result
 }

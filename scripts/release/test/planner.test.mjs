@@ -12,6 +12,8 @@ const OTHER_SHA = "abcdef0123456789abcdef0123456789abcdef01"
 const MANIFEST_SHA256 = "a".repeat(64)
 const OTHER_MANIFEST_SHA256 = "b".repeat(64)
 const RELEASE_RECORD_SHA256 = "c".repeat(64)
+const MANIFEST_ATTESTATION_NAME = "manifest.json.intoto.jsonl"
+const MANIFEST_ATTESTATION_SHA256 = "f".repeat(64)
 const CI_WORKFLOW = "CI"
 const CI_CHECK = "validate"
 const PUBLISHER_WORKFLOW = ".github/workflows/release.yml"
@@ -830,6 +832,80 @@ for (const [name, mutate] of [
   })
 }
 
+for (const [name, mutate] of [
+  ["null inventory package", (o) => (o.inventory.packages[0] = null)],
+  ["non-object inventory package", (o) => (o.inventory.packages[0] = "core")],
+  ["null registry package", (o) => (o.registry.packages[0] = null)],
+  ["non-object registry package", (o) => (o.registry.packages[0] = 1)],
+  ["null artifact file", (o) => (o.artifacts.files[0] = null)],
+  ["non-object artifact file", (o) => (o.artifacts.files[0] = "core.tgz")],
+  ["null attestation", (o) => (o.artifacts.attestations[0] = null)],
+  ["non-object attestation", (o) => (o.artifacts.attestations[0] = false)],
+]) {
+  test(`arbitrary JSON blocks without throwing: ${name}`, () => {
+    const observation = baseObservation()
+    mutate(observation)
+
+    assertDesiredSchemaBlocked(observation, "observation-schema-invalid")
+  })
+}
+
+for (const [name, mutate] of [
+  [
+    "extra registry package",
+    (o) => o.registry.packages.push(absentRegistryPackage("@dawn-ai/extra")),
+  ],
+  ["missing registry package", (o) => o.registry.packages.pop()],
+  [
+    "duplicate registry package",
+    (o) => o.registry.packages.push(structuredClone(o.registry.packages[0])),
+  ],
+  [
+    "extra artifact file",
+    (o) =>
+      o.artifacts.files.push({
+        name: "@dawn-ai/extra",
+        status: "pending",
+        assetName: `dawn-ai-extra-${VERSION}.tgz`,
+        sha256: null,
+        integrity: null,
+      }),
+  ],
+  ["missing artifact file", (o) => o.artifacts.files.pop()],
+  ["duplicate artifact file", (o) => o.artifacts.files.push(structuredClone(o.artifacts.files[0]))],
+  [
+    "extra attestation subject",
+    (o) =>
+      o.artifacts.attestations.push({
+        name: `dawn-ai-extra-${VERSION}.tgz.intoto.jsonl`,
+        status: "pending",
+        sha256: null,
+        subjectName: `dawn-ai-extra-${VERSION}.tgz`,
+        subjectSha256: "f".repeat(64),
+      }),
+  ],
+  ["missing attestation subject", (o) => o.artifacts.attestations.pop()],
+  [
+    "duplicate attestation subject",
+    (o) => o.artifacts.attestations.push(structuredClone(o.artifacts.attestations[0])),
+  ],
+  [
+    "categorized immutable asset name collision",
+    (o) => {
+      o.inventory.packages[0].filename = "release-record.json"
+      o.artifacts.files[0].assetName = "release-record.json"
+      o.artifacts.attestations[0].subjectName = "release-record.json"
+    },
+  ],
+]) {
+  test(`canonical observation sets reject ${name}`, () => {
+    const observation = baseObservation()
+    mutate(observation)
+
+    assertDesiredSchemaBlocked(observation, "observation-schema-invalid")
+  })
+}
+
 for (const [field, value, conflict] of [
   ["workflow", "Build", "candidate-ci-workflow-mismatch"],
   ["check", "unit", "candidate-ci-check-mismatch"],
@@ -1068,6 +1144,7 @@ for (const { name, conflict } of [
     name: PACKAGE_IDENTITIES[1].attestationFilename,
     conflict: "escrow-attestation-asset-missing",
   },
+  { name: MANIFEST_ATTESTATION_NAME, conflict: "escrow-attestation-asset-missing" },
 ]) {
   test(`immutable escrow rejects a missing ${name}`, () => {
     const observation = observationFor("CANDIDATE_ESCROWED")
@@ -1088,6 +1165,7 @@ for (const { name, conflict } of [
     name: PACKAGE_IDENTITIES[1].attestationFilename,
     conflict: "github-attestation-asset-missing",
   },
+  { name: MANIFEST_ATTESTATION_NAME, conflict: "github-attestation-asset-missing" },
 ]) {
   test(`immutable draft Release rejects a missing ${name}`, () => {
     const observation = observationFor("CANDIDATE_ESCROWED")
@@ -1120,6 +1198,77 @@ test("immutable escrow rejects an exact-name digest mismatch", () => {
 
   assertDesiredSchemaBlocked(observation, "escrow-asset-bytes-mismatch")
 })
+
+test("manifest provenance completes the exact attestation subject set", () => {
+  const observation = observationFor("ARTIFACTS_ATTESTED")
+
+  const plan = planRelease({ candidate: candidate(), observation })
+
+  assert.equal(plan.state, "ARTIFACTS_ATTESTED")
+  assert.equal(plan.disposition, "would-transition")
+  assert.equal(plan.nextTransition, "escrow-candidate")
+  assert.deepEqual(plan.conflicts, [])
+})
+
+test("attested artifacts reject a missing manifest provenance attestation", () => {
+  const observation = observationFor("ARTIFACTS_ATTESTED")
+  observation.artifacts.attestations = observation.artifacts.attestations.filter(
+    (attestation) => attestation.subjectName !== "manifest.json",
+  )
+
+  assertDesiredSchemaBlocked(observation, "artifact-manifest-attestation-missing")
+})
+
+test("attested artifacts reject a corrupt manifest provenance bundle", () => {
+  const observation = observationFor("ARTIFACTS_ATTESTED")
+  const attestation = observation.artifacts.attestations.find(
+    (record) => record.subjectName === "manifest.json",
+  )
+  attestation.status = "corrupt"
+  attestation.sha256 = null
+
+  assertDesiredSchemaBlocked(observation, "artifact-attestation-corrupt")
+})
+
+test("attested artifacts reject an invalid manifest provenance bundle digest", () => {
+  const observation = observationFor("ARTIFACTS_ATTESTED")
+  observation.artifacts.attestations.find(
+    (attestation) => attestation.subjectName === "manifest.json",
+  ).sha256 = OTHER_MANIFEST_SHA256
+
+  assertDesiredSchemaBlocked(observation, "artifact-attestation-digest-mismatch")
+})
+
+test("attested artifacts reject the wrong manifest provenance subject name", () => {
+  const observation = observationFor("ARTIFACTS_ATTESTED")
+  observation.artifacts.attestations.find(
+    (attestation) => attestation.subjectName === "manifest.json",
+  ).subjectName = "manifest-copy.json"
+
+  assertDesiredSchemaBlocked(observation, "artifact-attestation-subject-set-mismatch")
+})
+
+test("attested artifacts reject the wrong manifest provenance subject digest", () => {
+  const observation = observationFor("ARTIFACTS_ATTESTED")
+  observation.artifacts.attestations.find(
+    (attestation) => attestation.subjectName === "manifest.json",
+  ).subjectSha256 = OTHER_MANIFEST_SHA256
+
+  assertDesiredSchemaBlocked(observation, "artifact-attestation-subject-mismatch")
+})
+
+for (const target of ["escrow", "release"]) {
+  test(`${target} rejects a mismatched manifest provenance asset digest`, () => {
+    const observation = observationFor("CANDIDATE_ESCROWED")
+    observation[target].assets.find((asset) => asset.name === MANIFEST_ATTESTATION_NAME).sha256 =
+      OTHER_MANIFEST_SHA256
+
+    assertDesiredSchemaBlocked(
+      observation,
+      target === "escrow" ? "escrow-asset-bytes-mismatch" : "github-asset-bytes-mismatch",
+    )
+  })
+}
 
 for (const status of ["failed", "expired"]) {
   test(`a correlated ${status} audit attempt is retryable from the published Release`, () => {
@@ -1387,7 +1536,11 @@ function baseObservation() {
       files: PACKAGE_IDENTITIES.map((pkg) => artifactFile(pkg, "pending")),
       manifestAsset: { name: "manifest.json", sha256: null },
       releaseRecordAsset: { name: "release-record.json", sha256: null },
-      attestations: PACKAGE_IDENTITIES.map((pkg) => attestationRecord(pkg, "pending")),
+      manifestAttestationAsset: { name: MANIFEST_ATTESTATION_NAME, sha256: null },
+      attestations: [
+        ...PACKAGE_IDENTITIES.map((pkg) => attestationRecord(pkg, "pending")),
+        manifestAttestationRecord("pending"),
+      ],
     },
     escrow: {
       status: "absent",
@@ -1460,9 +1613,16 @@ function observationFor(state) {
     files: PACKAGE_IDENTITIES.map((pkg) => artifactFile(pkg, "valid")),
     manifestAsset: { name: "manifest.json", sha256: MANIFEST_SHA256 },
     releaseRecordAsset: { name: "release-record.json", sha256: RELEASE_RECORD_SHA256 },
-    attestations: PACKAGE_IDENTITIES.map((pkg) =>
-      attestationRecord(pkg, state === "ARTIFACTS_PREPARED" ? "pending" : "valid"),
-    ),
+    manifestAttestationAsset: {
+      name: MANIFEST_ATTESTATION_NAME,
+      sha256: state === "ARTIFACTS_PREPARED" ? null : MANIFEST_ATTESTATION_SHA256,
+    },
+    attestations: [
+      ...PACKAGE_IDENTITIES.map((pkg) =>
+        attestationRecord(pkg, state === "ARTIFACTS_PREPARED" ? "pending" : "valid"),
+      ),
+      manifestAttestationRecord(state === "ARTIFACTS_PREPARED" ? "pending" : "valid"),
+    ],
   }
   for (const smoke of observation.smokes) {
     smoke.manifestSha256 = MANIFEST_SHA256
@@ -1601,10 +1761,21 @@ function attestationRecord(pkg, status) {
   }
 }
 
+function manifestAttestationRecord(status) {
+  return {
+    name: MANIFEST_ATTESTATION_NAME,
+    status,
+    sha256: status === "valid" ? MANIFEST_ATTESTATION_SHA256 : null,
+    subjectName: "manifest.json",
+    subjectSha256: MANIFEST_SHA256,
+  }
+}
+
 function immutableAssets() {
   return [
     { name: "release-record.json", sha256: RELEASE_RECORD_SHA256 },
     { name: "manifest.json", sha256: MANIFEST_SHA256 },
+    { name: MANIFEST_ATTESTATION_NAME, sha256: MANIFEST_ATTESTATION_SHA256 },
     ...PACKAGE_IDENTITIES.map((pkg) => ({ name: pkg.filename, sha256: pkg.tarballSha256 })),
     ...PACKAGE_IDENTITIES.map((pkg) => ({
       name: pkg.attestationFilename,
