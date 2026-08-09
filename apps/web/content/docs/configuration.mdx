@@ -375,7 +375,7 @@ import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
 const checkpointer = postgresCheckpointer({ connectionString: process.env.DATABASE_URL })
 ```
 
-Reach for `/node` on Node, Bun, or Vercel functions when you want the convenience. Use the main entry with your own pool everywhere else.
+Reach for `/node` on Node, Bun, or a Vercel function running the Node.js runtime when you want the convenience. Use the main entry with your own pool everywhere else.
 
 Note that `permissions.store` receives `mode` explicitly. A custom store owns its own mode and allow/deny lists — see [`permissions.store`](#permissionsstore).
 
@@ -383,8 +383,8 @@ Note that `permissions.store` receives `mode` explicitly. A custom store owns it
 
 | Host | Works | Notes |
 |---|---|---|
-| Node, Bun | Yes | Direct TCP to Postgres. |
-| Vercel functions | Yes | Direct TCP to Postgres. |
+| Node, Bun | Yes | Direct TCP to Postgres. Exercised in CI. |
+| Vercel functions (Node.js runtime) | Should, untested | Direct TCP to Postgres — the runtime is Node, so `pg` behaves as it does above. Nothing here has been run on Vercel, so this is inference from the driver rather than a measurement. Vercel's **Edge** runtime has no raw TCP socket and needs the Cloudflare Workers row's treatment instead. |
 | Cloudflare Workers | **Not with `pg`** | `pg` opens a TCP socket, which workerd does not provide — so the `/node` entry is unusable there. Inject a [`@neondatabase/serverless`](https://github.com/neondatabase/serverless) WebSocket `Pool` into the main entry instead; it satisfies `SqlPool`, and a throwaway spike confirmed inside real workerd that the checkpointer's `BEGIN`/`COMMIT`/`ROLLBACK` are genuine session transactions on that path. That wiring is what `dawn build`'s [`hono` target](/docs/deployment#the-hono-build-target) generates, and a gated CI lane exercises it inside real workerd end to end — at the AG-UI level, [with limits worth reading](/docs/deployment#what-is-proven-and-what-is-not). Build the pool and the stores **per request** — see [why](/docs/deployment#why-the-stores-are-per-request). [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) should also work but is untested; it needs a Cloudflare account. |
 
 ### Your app owns store teardown
