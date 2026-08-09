@@ -123,11 +123,12 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
       if (typeof subjectDigest !== "string" || !DIGEST_PATTERN.test(subjectDigest)) {
         throw new TypeError(`Invalid attestation subject digest: ${String(subjectDigest)}`)
       }
-      return readObject(context, {
-        url: `${base}/attestations/${encodeURIComponent(subjectDigest)}`,
+      return readPaginated(context, {
+        initialUrl: `${base}/attestations/${encodeURIComponent(subjectDigest)}?per_page=100`,
         operation: "attestations",
         absenceAllowed: true,
-        validate: (value) => isObject(value) && Array.isArray(value.attestations),
+        extract: objectArray("attestations"),
+        compare: compareAttestations,
       })
     },
     getWorkflow({ workflow }) {
@@ -213,7 +214,7 @@ async function readPaginated(
       records.sort(compare)
       return { ...publicResult(result), value: records }
     }
-    const nextUrl = normalizeNextUrl(result.nextUrl, context.base)
+    const nextUrl = normalizeNextUrl(result.nextUrl, initialUrl)
     if (nextUrl === null) {
       return failure("ERROR", operation, result.httpStatus, "UNSAFE_PAGINATION_URL")
     }
@@ -309,20 +310,69 @@ function requestHeaders(token, accept) {
   }
 }
 
-function normalizeNextUrl(value, base) {
+function normalizeNextUrl(value, initialValue) {
   try {
     const url = new URL(value)
-    const basePath = new URL(base).pathname
+    const initial = new URL(initialValue)
     return url.origin === API_ORIGIN &&
       url.username === "" &&
       url.password === "" &&
       url.hash === "" &&
-      (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`))
+      url.pathname === initial.pathname &&
+      paginationQueryMatches(url.searchParams, initial.searchParams)
       ? url.href
       : null
   } catch {
     return null
   }
+}
+
+function paginationQueryMatches(actual, initial) {
+  const actualValues = queryValues(actual)
+  const initialValues = queryValues(initial)
+  if (actualValues === null || initialValues === null) {
+    return false
+  }
+  for (const key of actualValues.keys()) {
+    if (!initialValues.has(key) && key !== "page" && key !== "per_page") {
+      return false
+    }
+  }
+  for (const [key, values] of initialValues) {
+    if (key !== "page" && key !== "per_page" && !arraysEqual(actualValues.get(key), values)) {
+      return false
+    }
+  }
+  const pages = actualValues.get("page")
+  if (pages?.length !== 1 || !isPositiveInteger(pages[0])) {
+    return false
+  }
+  const perPage = actualValues.get("per_page")
+  return (
+    perPage === undefined ||
+    (perPage.length === 1 && isPositiveInteger(perPage[0]) && Number(perPage[0]) <= 100)
+  )
+}
+
+function queryValues(searchParams) {
+  const values = new Map()
+  for (const [key, value] of searchParams) {
+    const entries = values.get(key) ?? []
+    entries.push(value)
+    values.set(key, entries)
+    if (entries.length > 1) {
+      return null
+    }
+  }
+  return values
+}
+
+function arraysEqual(left, right) {
+  return left?.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function isPositiveInteger(value) {
+  return /^[1-9][0-9]*$/u.test(value)
 }
 
 function nextLink(value) {
@@ -384,6 +434,17 @@ function compareIdThenName(left, right) {
   return leftId === rightId
     ? String(left.name ?? "").localeCompare(String(right.name ?? ""))
     : leftId - rightId
+}
+
+function compareAttestations(left, right) {
+  if (Number.isSafeInteger(left.id) && Number.isSafeInteger(right.id) && left.id !== right.id) {
+    return left.id - right.id
+  }
+  return attestationIdentity(left).localeCompare(attestationIdentity(right))
+}
+
+function attestationIdentity(value) {
+  return JSON.stringify(value)
 }
 
 function assertCommitSha(value) {

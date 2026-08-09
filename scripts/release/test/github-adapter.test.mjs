@@ -65,7 +65,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
       `${BASE}/git/ref/tags%2Fv0.8.21`,
       `${BASE}/releases/tags/v0.8.21`,
       `${BASE}/actions/runs/9`,
-      `${BASE}/attestations/sha256%3A${"a".repeat(64)}`,
+      `${BASE}/attestations/sha256%3A${"a".repeat(64)}?per_page=100`,
       `${BASE}/actions/workflows/release.yml`,
       `${BASE}/actions/permissions`,
       `${BASE}/actions/permissions/workflow`,
@@ -264,6 +264,7 @@ test("GitHub rejects malformed JSON shapes and unsafe pagination", async () => {
     "https://evil.example/next",
     `https://user:secret@api.github.com/repos/${OWNER}/${REPO}/next`,
     `https://api.github.com/repos/${OWNER}/${REPO}-lookalike/next`,
+    `${BASE}/actions/artifacts?per_page=100&page=2`,
   ]) {
     const unsafe = createGitHubReader({
       owner: OWNER,
@@ -277,6 +278,86 @@ test("GitHub rejects malformed JSON shapes and unsafe pagination", async () => {
       code: "UNSAFE_PAGINATION_URL",
     })
   }
+})
+
+test("GitHub pagination preserves exact endpoint and fixed filters", async () => {
+  const mutations = [
+    `${BASE}/actions/workflows/release.yml/runs?head_sha=${"f".repeat(40)}&per_page=100&page=2`,
+    `${BASE}/actions/workflows/release.yml/runs?head_sha=${SHA}&status=success&per_page=100&page=2`,
+    `${BASE}/actions/workflows/other.yml/runs?head_sha=${SHA}&per_page=100&page=2`,
+  ]
+
+  for (const next of mutations) {
+    const github = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: async () => jsonResponse({ workflow_runs: [] }, 200, linkHeader(next)),
+    })
+
+    assert.deepEqual(await github.listWorkflowRuns({ workflow: "release.yml", commitSha: SHA }), {
+      status: "ERROR",
+      operation: "workflow-runs",
+      httpStatus: 200,
+      code: "UNSAFE_PAGINATION_URL",
+    })
+  }
+})
+
+test("GitHub attestations paginate completely and sort independent of page order", async () => {
+  const digest = `sha256:${"a".repeat(64)}`
+  const endpoint = `${BASE}/attestations/${encodeURIComponent(digest)}?per_page=100`
+  const secondPage = `${endpoint}&page=2`
+  const first = { id: 1, bundle: { mediaType: "application/example+a" } }
+  const second = { id: 2, bundle: { mediaType: "application/example+b" } }
+
+  const forward = recordingFetch([
+    jsonResponse({ attestations: [second] }, 200, linkHeader(secondPage)),
+    jsonResponse({ attestations: [first] }),
+  ])
+  const reversed = recordingFetch([
+    jsonResponse({ attestations: [first] }, 200, linkHeader(secondPage)),
+    jsonResponse({ attestations: [second] }),
+  ])
+
+  const forwardResult = await createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    fetchImpl: forward.fetchImpl,
+  }).getAttestations({ subjectDigest: digest })
+  const reversedResult = await createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    fetchImpl: reversed.fetchImpl,
+  }).getAttestations({ subjectDigest: digest })
+
+  assert.deepEqual(forwardResult.value, [first, second])
+  assert.deepEqual(reversedResult.value, forwardResult.value)
+  assert.deepEqual(
+    forward.calls.map(({ url }) => url),
+    [endpoint, secondPage],
+  )
+})
+
+test("GitHub attestation pagination rejects another subject endpoint", async () => {
+  const digest = `sha256:${"a".repeat(64)}`
+  const otherDigest = `sha256:${"b".repeat(64)}`
+  const github = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    fetchImpl: async () =>
+      jsonResponse(
+        { attestations: [] },
+        200,
+        linkHeader(`${BASE}/attestations/${encodeURIComponent(otherDigest)}?per_page=100&page=2`),
+      ),
+  })
+
+  assert.deepEqual(await github.getAttestations({ subjectDigest: digest }), {
+    status: "ERROR",
+    operation: "attestations",
+    httpStatus: 200,
+    code: "UNSAFE_PAGINATION_URL",
+  })
 })
 
 test("GitHub validates repository identity and every dynamic argument before fetching", () => {

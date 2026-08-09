@@ -103,10 +103,15 @@ async function observePackageVersion({ registry, fetchImpl, name, version }) {
     if (provenanceResult.status !== "PRESENT") {
       return withoutBody(provenanceResult)
     }
-    provenance = normalizeProvenance(provenanceResult.body, versionDocument.provenanceUrl)
-    if (provenance === null) {
-      return failure("ERROR", "provenance", provenanceResult.httpStatus, "MALFORMED_SCHEMA")
+    const normalized = normalizeProvenance(provenanceResult.body, versionDocument.provenanceUrl, {
+      name,
+      version,
+      integrity: versionDocument.integrity,
+    })
+    if (!normalized.ok) {
+      return failure(normalized.status, "provenance", provenanceResult.httpStatus, normalized.code)
     }
+    provenance = normalized.value
   }
 
   return {
@@ -249,38 +254,67 @@ function normalizeDistTags(value) {
   return Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right)))
 }
 
-function normalizeProvenance(value, url) {
+function normalizeProvenance(value, url, { name, version, integrity }) {
   if (!isObject(value) || !Array.isArray(value.attestations)) {
-    return null
+    return invalidProvenance("ERROR", "MALFORMED_SCHEMA")
   }
   const predicateTypes = new Set()
-  let workflow = null
-  let commitSha = null
+  const identities = []
+  const expected = {
+    subjectName: npmSubjectName(name, version),
+    subjectSha512: integritySha512(integrity),
+  }
+  if (expected.subjectSha512 === null) {
+    return invalidProvenance("ERROR", "MALFORMED_PROVENANCE_IDENTITY")
+  }
   for (const attestation of value.attestations) {
     if (!isObject(attestation) || typeof attestation.predicateType !== "string") {
-      return null
+      return invalidProvenance("ERROR", "MALFORMED_SCHEMA")
     }
     predicateTypes.add(attestation.predicateType)
     const payload = attestation.bundle?.dsseEnvelope?.payload
     if (payload === undefined) {
+      if (attestation.predicateType === "https://slsa.dev/provenance/v1") {
+        return invalidProvenance("ERROR", "MALFORMED_PROVENANCE_IDENTITY")
+      }
       continue
     }
     const statement = decodeStatement(payload)
     if (statement === null) {
-      return null
+      return invalidProvenance("ERROR", "MALFORMED_SCHEMA")
     }
-    if (typeof statement.predicateType === "string") {
-      predicateTypes.add(statement.predicateType)
+    if (
+      typeof statement.predicateType !== "string" ||
+      statement.predicateType !== attestation.predicateType
+    ) {
+      return invalidProvenance("ERROR", "MALFORMED_SCHEMA")
     }
-    workflow ??= provenanceWorkflow(statement)
-    commitSha ??= provenanceCommit(statement)
+    predicateTypes.add(statement.predicateType)
+    if (statement.predicateType !== "https://slsa.dev/provenance/v1") {
+      continue
+    }
+    const identity = provenanceIdentity(statement, expected)
+    if (identity === null) {
+      return invalidProvenance("ERROR", "MALFORMED_PROVENANCE_IDENTITY")
+    }
+    identities.push(identity)
+  }
+  if (identities.length === 0) {
+    return invalidProvenance("ERROR", "MALFORMED_PROVENANCE_IDENTITY")
+  }
+  const canonicalIdentity = JSON.stringify(identities[0])
+  if (identities.some((identity) => JSON.stringify(identity) !== canonicalIdentity)) {
+    return invalidProvenance("AMBIGUOUS", "PROVENANCE_IDENTITY_CONFLICT")
   }
   return {
-    status: "PRESENT",
-    url,
-    predicateTypes: [...predicateTypes].sort(),
-    workflow,
-    commitSha,
+    ok: true,
+    value: {
+      status: "PRESENT",
+      url,
+      predicateTypes: [...predicateTypes].sort(),
+      workflow: identities[0].workflow,
+      commitSha: identities[0].commitSha,
+    },
   }
 }
 
@@ -296,26 +330,93 @@ function decodeStatement(payload) {
   }
 }
 
-function provenanceWorkflow(statement) {
-  const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow
-  if (typeof workflow === "string") {
-    return workflow
+function provenanceIdentity(statement, expected) {
+  const subjects = statement.subject
+  if (
+    !Array.isArray(subjects) ||
+    subjects.length !== 1 ||
+    subjects[0]?.name !== expected.subjectName ||
+    subjects[0]?.digest?.sha512 !== expected.subjectSha512
+  ) {
+    return null
   }
-  return typeof workflow?.path === "string" ? workflow.path : null
-}
-
-function provenanceCommit(statement) {
+  const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow
+  if (
+    !isObject(workflow) ||
+    typeof workflow.path !== "string" ||
+    workflow.path.length === 0 ||
+    typeof workflow.repository !== "string" ||
+    !isSafeGitHubRepositoryUrl(workflow.repository) ||
+    typeof workflow.ref !== "string" ||
+    !/^refs\/(?:heads|tags)\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(workflow.ref)
+  ) {
+    return null
+  }
   const dependencies = statement.predicate?.buildDefinition?.resolvedDependencies
   if (!Array.isArray(dependencies)) {
     return null
   }
+  const expectedUri = `git+${workflow.repository}@${workflow.ref}`
+  const commits = new Set()
   for (const dependency of dependencies) {
     const commitSha = dependency?.digest?.gitCommit
-    if (typeof commitSha === "string" && SHA_PATTERN.test(commitSha)) {
-      return commitSha
+    if (
+      dependency?.uri === expectedUri &&
+      typeof commitSha === "string" &&
+      SHA_PATTERN.test(commitSha)
+    ) {
+      commits.add(commitSha)
     }
   }
-  return null
+  if (commits.size !== 1) {
+    return null
+  }
+  return {
+    workflow: workflow.path,
+    commitSha: [...commits][0],
+    repository: workflow.repository,
+    ref: workflow.ref,
+    subjectName: expected.subjectName,
+    subjectSha512: expected.subjectSha512,
+  }
+}
+
+function npmSubjectName(name, version) {
+  if (!name.startsWith("@")) {
+    return `pkg:npm/${name}@${version}`
+  }
+  const [scope, packageName] = name.split("/")
+  return `pkg:npm/${encodeURIComponent(scope)}/${packageName}@${version}`
+}
+
+function integritySha512(integrity) {
+  try {
+    const bytes = Buffer.from(integrity.slice("sha512-".length), "base64")
+    return bytes.length === 64 ? bytes.toString("hex") : null
+  } catch {
+    return null
+  }
+}
+
+function isSafeGitHubRepositoryUrl(value) {
+  try {
+    const url = new URL(value)
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "github.com" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      /^\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u.test(url.pathname)
+    )
+  } catch {
+    return false
+  }
+}
+
+function invalidProvenance(status, code) {
+  return { ok: false, status, code }
 }
 
 function normalizeRegistryUrl(value) {

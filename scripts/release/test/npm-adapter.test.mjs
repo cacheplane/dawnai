@@ -6,7 +6,9 @@ import { classifyRegistryResponse, createNpmReader } from "../adapters/npm.mjs"
 const NAME = "@dawn-ai/sdk"
 const VERSION = "0.8.21"
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
+const OTHER_COMMIT_SHA = "abcdef0123456789abcdef0123456789abcdef01"
 const REGISTRY = "https://registry.npmjs.org"
+const INTEGRITY = `sha512-${"A".repeat(86)}==`
 
 test("createNpmReader exposes only the named read operation and uses encoded GET requests", async () => {
   const { fetchImpl, calls } = recordingFetch([
@@ -49,7 +51,7 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
       version: VERSION,
       tarballUrl: `${REGISTRY}/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`,
       shasum: "a".repeat(40),
-      integrity: `sha512-${"A".repeat(86)}==`,
+      integrity: INTEGRITY,
       signatures: [
         { keyid: "SHA256:key-a", sig: "signature-a" },
         { keyid: "SHA256:key-b", sig: "signature-b" },
@@ -249,6 +251,49 @@ test("npm reports absent provenance explicitly without inventing workflow identi
   })
 })
 
+test("npm never synthesizes provenance identity across separate SLSA statements", async () => {
+  const evidence = attestationDocument([
+    provenanceStatement({ commitSha: null }),
+    provenanceStatement({ workflow: null }),
+  ])
+
+  const result = await observeWithEvidence(evidence)
+
+  assert.deepEqual(result, {
+    status: "ERROR",
+    operation: "provenance",
+    httpStatus: 200,
+    code: "MALFORMED_PROVENANCE_IDENTITY",
+  })
+})
+
+test("npm rejects conflicting complete provenance statements independent of input order", async () => {
+  const statements = [provenanceStatement(), provenanceStatement({ commitSha: OTHER_COMMIT_SHA })]
+
+  const forward = await observeWithEvidence(attestationDocument(statements))
+  const reversed = await observeWithEvidence(attestationDocument([...statements].reverse()))
+
+  assert.deepEqual(forward, {
+    status: "AMBIGUOUS",
+    operation: "provenance",
+    httpStatus: 200,
+    code: "PROVENANCE_IDENTITY_CONFLICT",
+  })
+  assert.deepEqual(reversed, forward)
+})
+
+test("npm agreeing provenance statements normalize independently of evidence order", async () => {
+  const statements = [provenanceStatement(), structuredClone(provenanceStatement())]
+
+  const forward = await observeWithEvidence(attestationDocument(statements))
+  const reversed = await observeWithEvidence(attestationDocument([...statements].reverse()))
+
+  assert.equal(forward.status, "PRESENT")
+  assert.deepEqual(reversed, forward)
+  assert.equal(forward.package.provenance.workflow, ".github/workflows/release.yml")
+  assert.equal(forward.package.provenance.commitSha, COMMIT_SHA)
+})
+
 function versionDocument() {
   return {
     name: NAME,
@@ -256,7 +301,7 @@ function versionDocument() {
     dist: {
       tarball: `${REGISTRY}/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`,
       shasum: "a".repeat(40),
-      integrity: `sha512-${"A".repeat(86)}==`,
+      integrity: INTEGRITY,
       signatures: [
         { keyid: "SHA256:key-b", sig: "signature-b" },
         { keyid: "SHA256:key-a", sig: "signature-a" },
@@ -268,30 +313,69 @@ function versionDocument() {
   }
 }
 
-function attestationDocument() {
-  const statement = {
+function provenanceStatement({
+  workflow = ".github/workflows/release.yml",
+  commitSha = COMMIT_SHA,
+  repository = "https://github.com/cacheplane/dawnai",
+  ref = "refs/heads/main",
+} = {}) {
+  return {
     predicateType: "https://slsa.dev/provenance/v1",
+    subject: [
+      {
+        name: `pkg:npm/%40dawn-ai/sdk@${VERSION}`,
+        digest: { sha512: "0".repeat(128) },
+      },
+    ],
     predicate: {
       buildDefinition: {
         externalParameters: {
-          workflow: { path: ".github/workflows/release.yml" },
+          workflow:
+            workflow === null
+              ? undefined
+              : {
+                  path: workflow,
+                  repository,
+                  ref,
+                },
         },
-        resolvedDependencies: [{ digest: { gitCommit: COMMIT_SHA } }],
+        resolvedDependencies:
+          commitSha === null
+            ? []
+            : [
+                {
+                  uri: `git+${repository}@${ref}`,
+                  digest: { gitCommit: commitSha },
+                },
+              ],
       },
     },
   }
+}
+
+function attestationDocument(statements = [provenanceStatement()]) {
   return {
-    attestations: [
-      {
-        predicateType: statement.predicateType,
-        bundle: {
-          dsseEnvelope: {
-            payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
-          },
+    attestations: statements.map((statement) => ({
+      predicateType: statement.predicateType,
+      bundle: {
+        dsseEnvelope: {
+          payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
         },
       },
-    ],
+    })),
   }
+}
+
+async function observeWithEvidence(evidence) {
+  const { fetchImpl } = recordingFetch([
+    jsonResponse(versionDocument()),
+    jsonResponse({ "dist-tags": { latest: VERSION } }),
+    jsonResponse(evidence),
+  ])
+  return createNpmReader({ fetchImpl }).observePackageVersion({
+    name: NAME,
+    version: VERSION,
+  })
 }
 
 function recordingFetch(responses) {
