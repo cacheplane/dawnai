@@ -133,19 +133,25 @@ function taskkillProcessTree(pid: number, timeoutMs: number): Promise<void> {
   })
 }
 
-async function signalProcessTree(
+interface TerminationDependencies {
+  readonly platform: NodeJS.Platform
+  readonly taskkillProcessTree: (pid: number, timeoutMs: number) => Promise<void>
+}
+
+async function requestProcessTreeTermination(
   child: ChildProcess,
   childState: { readonly closed: boolean },
   groupPid: number,
   signal: NodeJS.Signals,
   timeoutMs: number,
   dispatchErrors: unknown[],
+  dependencies: TerminationDependencies,
 ): Promise<void> {
-  if (process.platform === "win32") {
+  if (dependencies.platform === "win32") {
     if (childState.closed || child.exitCode !== null || child.signalCode !== null) return
     const deadline = Date.now() + timeoutMs
     try {
-      await taskkillProcessTree(groupPid, timeoutMs)
+      await dependencies.taskkillProcessTree(groupPid, timeoutMs)
       return
     } catch (error) {
       dispatchErrors.push(error)
@@ -179,7 +185,12 @@ export async function terminateSubprocess(
   closed: Promise<void>,
   baseUrl: string,
   timings: TerminationTimings = DEFAULT_TERMINATION_TIMINGS,
+  injectedDependencies: Partial<TerminationDependencies> = {},
 ): Promise<void> {
+  const dependencies: TerminationDependencies = {
+    platform: injectedDependencies.platform ?? process.platform,
+    taskkillProcessTree: injectedDependencies.taskkillProcessTree ?? taskkillProcessTree,
+  }
   const childState: { closed: boolean; failed: boolean; error: unknown } = {
     closed: false,
     failed: false,
@@ -202,13 +213,14 @@ export async function terminateSubprocess(
   const dispatchErrors: unknown[] = []
   const waitForPhase = async (signal: NodeJS.Signals, phaseMs: number): Promise<boolean> => {
     const deadline = Date.now() + phaseMs
-    await signalProcessTree(
+    await requestProcessTreeTermination(
       child,
       childState,
       groupPid,
       signal,
       Math.max(0, deadline - Date.now()),
       dispatchErrors,
+      dependencies,
     )
     return await waitUntilStopped(childState, baseUrl, Math.max(0, deadline - Date.now()), timings)
   }

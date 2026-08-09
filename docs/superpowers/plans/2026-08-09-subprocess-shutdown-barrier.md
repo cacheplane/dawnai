@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `createSubprocessApp().close()` and async disposal resolve only after the owned process tree has stopped and its port is unavailable.
+**Goal:** Make `createSubprocessApp().close()` and async disposal resolve only after the spawned CLI child has closed, the `baseUrl` port is unavailable, and bounded process-tree termination attempts have completed.
 
 **Architecture:** Keep the public API unchanged. Build the shutdown barrier incrementally: first await the spawned CLI's `close` event through one memoized promise, then add bounded TCP observation for surviving descendants and forced termination. On POSIX, signal the detached group and fall back to the direct child. On Windows, use bounded `taskkill.exe /PID <saved PID> /T /F` before any last-resort direct-child kill. Reuse the same closure function when readiness fails.
 
@@ -361,11 +361,11 @@ git commit -m "fix(testing): bound subprocess termination"
 
 On POSIX, spawn `idle`, make only `process.kill(-groupPid, "SIGTERM")` throw, and install a pass-through spy on `child.kill`. Await termination and assert `child.kill("SIGTERM")` was called. Restore spies and forcibly clean up the exact group in `finally`.
 
-On Windows, add platform-gated fixtures and tests for a live process tree and an orphaned descendant. The live-tree test proves `taskkill.exe /PID <saved PID> /T /F` terminates the tree without directly killing the outer child. The orphan test proves a closed outer child is never targeted by stale PID.
+On Windows, add platform-gated fixtures and tests for a live process tree and an orphaned descendant. The live-tree test proves `taskkill.exe /PID <saved PID> /T /F` terminates the tree without directly killing the outer child. A deterministic, injected-Windows-dispatch orphan test proves a closed outer child causes bounded rejection without any tree-kill dispatch; the platform-gated orphan test also guards against an unnecessary direct-child kill.
 
 - [x] **Step 2: Implement platform-specific dispatch**
 
-Extract `signalProcessTree(...)`. On POSIX, try `process.kill(-groupPid, signal)` and, on error, call `child.kill(signal)`. On Windows, first run bounded `taskkill.exe /PID <saved PID> /T /F`; charge that command's elapsed time to its grace or force phase. Only after a failed forced-phase command, while time remains and the child is still live, attempt a last-resort direct-child kill. Never target a saved PID after its child has closed.
+Extract `requestProcessTreeTermination(...)`. Its internal test seam accepts an optional platform and Windows tree-kill dispatcher; production defaults remain `process.platform` and bounded `taskkill.exe /PID <saved PID> /T /F`. On POSIX, try `process.kill(-groupPid, signal)` and, on error, call `child.kill(signal)`. On Windows, first run bounded `taskkill.exe /PID <saved PID> /T /F`; charge that command's elapsed time to its grace or force phase. Only after a failed forced-phase command, while time remains and the child is still live, attempt a last-resort direct-child kill. Never target a saved PID after its child has closed.
 
 - [x] **Step 3: Verify GREEN and commit**
 

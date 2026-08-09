@@ -56,7 +56,7 @@ async disposal, receives that promise.
 Successful resolution guarantees:
 
 1. Unless the child was already closed and the port unavailable, teardown
-   dispatched graceful termination and, after the grace deadline, forced
+   dispatched graceful termination or, after the grace deadline, forced
    termination using the platform's process-tree mechanism.
 2. The spawned CLI child's `close` event fired, which occurs after exit and
    stdio closure.
@@ -148,9 +148,11 @@ short test deadlines to verify the other new branches. POSIX-only tests cover:
   delayed termination finishes, proving readiness-failure cleanup is awaited.
 
 Windows-only tests use a live process-tree fixture to verify `taskkill.exe`
-terminates the tree without an unnecessary direct-child kill, and an orphan
-fixture to verify a closed child's saved PID is never targeted. The shared
-fixture file is `packages/testing/test/fixtures/subprocess-tree.mjs`.
+terminates the tree without an unnecessary direct-child kill. A deterministic
+cross-platform test injects the Windows platform and tree-kill dispatcher for
+an orphan fixture, then verifies bounded rejection and zero dispatcher calls
+after the outer child closes. The shared fixture file is
+`packages/testing/test/fixtures/subprocess-tree.mjs`.
 
 The focused test must be observed failing before production code changes and
 passing afterward. Package build, typecheck, lint, and tests plus the repository

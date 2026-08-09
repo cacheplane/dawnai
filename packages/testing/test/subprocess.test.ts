@@ -506,6 +506,50 @@ it.skipIf(process.platform !== "win32")(
   10_000,
 )
 
+it("does not dispatch an injected Windows tree kill after the outer child has closed", async () => {
+  const realKill = process.kill.bind(process)
+  let groupPid: number | undefined
+  let descendantPid: number | undefined
+  let descendantBaseUrl: string | undefined
+  const taskkillSpy = vi.fn(async (_pid: number, _timeoutMs: number) => {})
+
+  try {
+    const tree = await spawnTree("windows-orphan")
+    groupPid = tree.groupPid
+    const topology = JSON.parse(tree.line) as { readonly pid: number; readonly port: number }
+    descendantPid = topology.pid
+    descendantBaseUrl = `http://127.0.0.1:${topology.port}`
+    await tree.closed
+    expect(await canConnect(descendantBaseUrl)).toBe(true)
+
+    await expect(
+      terminateSubprocess(
+        tree.child,
+        tree.groupPid,
+        tree.closed,
+        descendantBaseUrl,
+        TEST_TERMINATION_TIMINGS,
+        { platform: "win32", taskkillProcessTree: taskkillSpy },
+      ),
+    ).rejects.toThrow(`subprocess group ${tree.groupPid} did not stop`)
+
+    expect(taskkillSpy).not.toHaveBeenCalled()
+    expect(await canConnect(descendantBaseUrl)).toBe(true)
+  } finally {
+    if (
+      descendantPid !== undefined &&
+      descendantBaseUrl !== undefined &&
+      (await canConnect(descendantBaseUrl))
+    ) {
+      if (process.platform === "win32") {
+        await taskkill(descendantPid, false)
+      } else if (groupPid !== undefined) {
+        await forceKillProcessGroup(groupPid, realKill)
+      }
+    }
+  }
+})
+
 it.skipIf(process.platform === "win32")(
   "rejects on bounded failure after the forced-termination deadline",
   async () => {
