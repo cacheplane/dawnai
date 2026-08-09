@@ -6,7 +6,13 @@ import { dirname, resolve } from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
-import { readFixedGroup, readReleaseInventory, validateReleaseInventory } from "../inventory.mjs"
+import {
+  assertValidReleaseInventory,
+  ReleaseInventoryError,
+  readFixedGroup,
+  readReleaseInventory,
+  validateReleaseInventory,
+} from "../inventory.mjs"
 
 test("readFixedGroup requires exactly one Changesets fixed group", () => {
   assert.deepEqual(readFixedGroup({ fixed: [["package-a", "package-b"]] }), [
@@ -54,6 +60,103 @@ test("validateReleaseInventory reports packages that do not share the canonical 
   assert.deepEqual(result.versionMismatches, ["package-c"])
 })
 
+test("validateReleaseInventory reports empty fixed and public inventories structurally", () => {
+  const result = validateReleaseInventory({ fixedGroups: [[]], workspacePackages: [] })
+
+  assert.deepEqual(result.structuralErrors, [
+    "fixed group must contain at least one package",
+    "public workspace inventory must contain at least one package",
+  ])
+  assert.throws(
+    () => assertValidReleaseInventory({ fixedGroups: [[]], workspacePackages: [] }),
+    (error) => {
+      assert.deepEqual(error.details.structuralErrors, result.structuralErrors)
+      return true
+    },
+  )
+})
+
+test("validateReleaseInventory reports missing, null, and empty fixed members", () => {
+  const result = validateReleaseInventory({
+    fixedGroups: [[undefined, null, ""]],
+    workspacePackages: [{ name: "package-a", version: "1.0.0", path: "packages/a/package.json" }],
+  })
+
+  assert.deepEqual(result.structuralErrors, [
+    "fixed member at index 0 must be a non-empty string",
+    "fixed member at index 1 must be a non-empty string",
+    "fixed member at index 2 must be a non-empty string",
+  ])
+})
+
+test("validateReleaseInventory reports missing, null, and empty package names and versions", () => {
+  const result = validateReleaseInventory({
+    fixedGroups: [["package-a"]],
+    workspacePackages: [
+      { version: "1.0.0", path: "packages/missing-name/package.json" },
+      { name: null, version: "1.0.0", path: "packages/null-name/package.json" },
+      { name: "", version: "1.0.0", path: "packages/empty-name/package.json" },
+      { name: "package-a", path: "packages/missing-version/package.json" },
+      { name: "package-b", version: null, path: "packages/null-version/package.json" },
+      { name: "package-c", version: "", path: "packages/empty-version/package.json" },
+    ],
+  })
+
+  assert.deepEqual(result.structuralErrors, [
+    "packages/empty-name/package.json: package name must be a non-empty string",
+    "packages/empty-version/package.json: package version must be a non-empty string",
+    "packages/missing-name/package.json: package name must be a non-empty string",
+    "packages/missing-version/package.json: package version must be a non-empty string",
+    "packages/null-name/package.json: package name must be a non-empty string",
+    "packages/null-version/package.json: package version must be a non-empty string",
+  ])
+  assert.equal(result.version, undefined)
+})
+
+test("validateReleaseInventory reports same-version duplicate workspace names with manifests", () => {
+  const inventory = {
+    fixedGroups: [["package-a"]],
+    workspacePackages: [
+      { name: "package-a", version: "1.0.0", path: "packages/a/package.json" },
+      { name: "package-a", version: "1.0.0", path: "plugins/a/package.json" },
+    ],
+  }
+
+  const result = validateReleaseInventory(inventory)
+
+  assert.deepEqual(result.workspaceDuplicates, [
+    {
+      name: "package-a",
+      manifests: ["packages/a/package.json", "plugins/a/package.json"],
+    },
+  ])
+  assert.throws(() => assertValidReleaseInventory(inventory))
+})
+
+test("validateReleaseInventory reports public and private workspace name collisions", () => {
+  const result = validateReleaseInventory({
+    fixedGroups: [["package-a"]],
+    workspacePackages: [
+      { name: "package-a", version: "1.0.0", path: "packages/a/package.json" },
+      {
+        name: "package-a",
+        version: "1.0.0",
+        private: true,
+        path: "fixtures/a/package.json",
+      },
+    ],
+  })
+
+  assert.deepEqual(result.workspaceDuplicates, [
+    {
+      name: "package-a",
+      manifests: ["fixtures/a/package.json", "packages/a/package.json"],
+    },
+  ])
+  assert.deepEqual(result.extra, [])
+  assert.deepEqual(result.privateMembers, [])
+})
+
 test("readReleaseInventory follows positive and negative workspace patterns at the requested ref", async () => {
   const files = new Map([
     [".changeset/config.json", JSON.stringify({ fixed: [["package-a", "plugin-b"]] })],
@@ -86,10 +189,77 @@ test("readReleaseInventory follows positive and negative workspace patterns at t
   assert.ok(calls.every((call) => call.ref === "release-ref"))
 })
 
+test("readReleaseInventory rejects unsupported brace, character-class, and question-mark globs", async () => {
+  for (const pattern of ["packages/{a,b}", "packages/[ab]", "packages/pkg-?", " "]) {
+    await assert.rejects(
+      readFixtureInventory({
+        workspaceSource: `packages:\n  - '${pattern}'\n`,
+        manifests: {
+          "packages/a/package.json": { name: "package-a", version: "1.0.0" },
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof ReleaseInventoryError)
+        assert.match(error.message, /Unsupported workspace pattern/u)
+        assert.match(
+          error.message,
+          new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+        )
+        return true
+      },
+    )
+  }
+})
+
+test("readReleaseInventory supports zero-depth and nested globstars with exclusions", async () => {
+  const inventory = await readFixtureInventory({
+    fixed: ["plugin-a", "plugin-b"],
+    workspaceSource:
+      "packages:\n  - 'plugins/**/nested/**'\n  - '!plugins/**/nested/**/excluded'\n",
+    manifests: {
+      "plugins/nested/a/package.json": { name: "plugin-a", version: "1.0.0" },
+      "plugins/group/nested/deep/b/package.json": { name: "plugin-b", version: "1.0.0" },
+      "plugins/group/nested/deep/excluded/package.json": {
+        name: "excluded-plugin",
+        version: "1.0.0",
+      },
+    },
+  })
+
+  assert.deepEqual(
+    inventory.workspacePackages.map((pkg) => pkg.name),
+    ["plugin-b", "plugin-a"],
+  )
+})
+
+test("readReleaseInventory rejects malformed workspace package lists", async () => {
+  for (const workspaceSource of [
+    "packages: packages/*\n",
+    "packages:\n  - packages/*\n  - 42\n",
+    "null\n",
+  ]) {
+    await assert.rejects(
+      readFixtureInventory({
+        workspaceSource,
+        manifests: {
+          "packages/a/package.json": { name: "package-a", version: "1.0.0" },
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof ReleaseInventoryError)
+        assert.match(error.message, /pnpm-workspace\.yaml packages must be an array of strings/u)
+        return true
+      },
+    )
+  }
+})
+
 test("the repository release inventory is an exact, uniformly versioned set", async () => {
   const inventory = await readReleaseInventory({ root: process.cwd(), ref: "HEAD" })
   const result = validateReleaseInventory(inventory)
 
+  assert.deepEqual(result.structuralErrors, [])
+  assert.deepEqual(result.workspaceDuplicates, [])
   assert.deepEqual(result.duplicates, [])
   assert.deepEqual(result.extra, [])
   assert.deepEqual(result.missing, [])
@@ -158,6 +328,114 @@ test("check-inventory prints JSON success and categorized ref-specific failures"
   }
 })
 
+test("check-inventory formats expected Git and config failures in text and JSON modes", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "dawn-release-errors-"))
+  const script = resolve(dirname(fileURLToPath(import.meta.url)), "../check-inventory.mjs")
+  try {
+    await mkdir(resolve(root, ".changeset"), { recursive: true })
+    await mkdir(resolve(root, "packages/a"), { recursive: true })
+    await writeFile(resolve(root, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n")
+    await writeFile(
+      resolve(root, "packages/a/package.json"),
+      JSON.stringify({ name: "package-a", version: "1.0.0" }),
+    )
+    await writeFile(
+      resolve(root, ".changeset/config.json"),
+      JSON.stringify({ fixed: [["package-a"]] }),
+    )
+    runGit(root, ["init", "-q"])
+    runGit(root, ["add", "."])
+    runGit(root, ["commit", "-qm", "valid fixture"])
+
+    await writeFile(resolve(root, ".changeset/config.json"), "{\n")
+    runGit(root, ["add", ".changeset/config.json"])
+    runGit(root, ["commit", "-qm", "malformed json"])
+    const malformedJsonRef = runGit(root, ["rev-parse", "HEAD"]).trim()
+
+    await writeFile(resolve(root, ".changeset/config.json"), "null\n")
+    runGit(root, ["add", ".changeset/config.json"])
+    runGit(root, ["commit", "-qm", "invalid json shape"])
+    const invalidJsonShapeRef = runGit(root, ["rev-parse", "HEAD"]).trim()
+
+    await writeFile(
+      resolve(root, ".changeset/config.json"),
+      JSON.stringify({ fixed: [["package-a"]] }),
+    )
+    await writeFile(resolve(root, "pnpm-workspace.yaml"), "packages: [unterminated\n")
+    runGit(root, ["add", ".changeset/config.json", "pnpm-workspace.yaml"])
+    runGit(root, ["commit", "-qm", "malformed yaml"])
+    const malformedYamlRef = runGit(root, ["rev-parse", "HEAD"]).trim()
+
+    await writeFile(resolve(root, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n")
+    await writeFile(resolve(root, ".changeset/config.json"), JSON.stringify({ fixed: [[]] }))
+    runGit(root, ["add", ".changeset/config.json", "pnpm-workspace.yaml"])
+    runGit(root, ["commit", "-qm", "structurally invalid inventory"])
+    const structuralErrorRef = runGit(root, ["rev-parse", "HEAD"]).trim()
+
+    for (const scenario of [
+      {
+        args: ["--ref", "--help"],
+        type: "GitInputError",
+        message: /Invalid Git ref: --help/u,
+      },
+      {
+        args: ["--ref", "does-not-exist"],
+        type: "GitReadError",
+        message: /Git read failed/u,
+      },
+      {
+        args: ["--ref", malformedJsonRef],
+        type: "ReleaseInventoryConfigError",
+        message: /Invalid \.changeset\/config\.json/u,
+      },
+      {
+        args: ["--ref", invalidJsonShapeRef],
+        type: "ReleaseInventoryConfigError",
+        message: /Invalid \.changeset\/config\.json/u,
+      },
+      {
+        args: ["--ref", malformedYamlRef],
+        type: "ReleaseInventoryConfigError",
+        message: /Invalid pnpm-workspace\.yaml/u,
+      },
+      {
+        args: ["--ref", structuralErrorRef],
+        type: "ReleaseInventoryError",
+        message: /Release inventory is invalid/u,
+        detail: /structuralErrors: fixed group must contain at least one package/u,
+      },
+    ]) {
+      const textResult = spawnSync(process.execPath, [script, ...scenario.args], {
+        cwd: root,
+        encoding: "utf8",
+      })
+      assert.equal(textResult.status, 1)
+      assert.match(textResult.stderr, scenario.message)
+      assert.doesNotMatch(textResult.stderr, /\n\s+at /u)
+      if (scenario.detail !== undefined) {
+        assert.match(textResult.stderr, scenario.detail)
+      }
+
+      const jsonResult = spawnSync(process.execPath, [script, ...scenario.args, "--json"], {
+        cwd: root,
+        encoding: "utf8",
+      })
+      assert.equal(jsonResult.status, 1)
+      const payload = JSON.parse(jsonResult.stderr)
+      assert.equal(payload.type, scenario.type)
+      assert.match(payload.error, scenario.message)
+      assert.equal(payload.stack, undefined)
+      if (scenario.detail !== undefined) {
+        assert.deepEqual(payload.differences.structuralErrors, [
+          "fixed group must contain at least one package",
+        ])
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 function runGit(root, args) {
   const result = spawnSync(
     "git",
@@ -165,4 +443,29 @@ function runGit(root, args) {
     { cwd: root, encoding: "utf8" },
   )
   assert.equal(result.status, 0, result.stderr)
+  return result.stdout
+}
+
+async function readFixtureInventory({
+  workspaceSource,
+  manifests,
+  fixed = Object.values(manifests).map((manifest) => manifest.name),
+}) {
+  const files = new Map([
+    [".changeset/config.json", JSON.stringify({ fixed: [fixed] })],
+    ["pnpm-workspace.yaml", workspaceSource],
+    ...Object.entries(manifests).map(([path, manifest]) => [path, JSON.stringify(manifest)]),
+  ])
+  return readReleaseInventory({
+    root: "/unused",
+    ref: "fixture-ref",
+    git: {
+      async showFile({ path }) {
+        return files.get(path)
+      },
+      async listTree() {
+        return [...files.keys()].join("\n")
+      },
+    },
+  })
 }

@@ -1,12 +1,18 @@
 import { fileURLToPath } from "node:url"
 
+import { GitReadError } from "./adapters/git.mjs"
 import {
   assertValidReleaseInventory,
   ReleaseInventoryError,
   readReleaseInventory,
 } from "./inventory.mjs"
 
-class UsageError extends Error {}
+class UsageError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = "UsageError"
+  }
+}
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
@@ -15,10 +21,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const result = assertValidReleaseInventory(inventory)
     printSuccess(result, options.json)
   } catch (error) {
-    if (error instanceof ReleaseInventoryError || error instanceof UsageError) {
-      printExpectedError(error, process.argv.includes("--json"))
+    const json = process.argv.includes("--json")
+    if (
+      error instanceof ReleaseInventoryError ||
+      error instanceof GitReadError ||
+      error instanceof UsageError
+    ) {
+      printExpectedError(error, json)
     } else {
-      console.error(error)
+      printUnexpectedError(error, json)
     }
     process.exitCode = 1
   }
@@ -66,6 +77,7 @@ function printExpectedError(error, json) {
   if (json) {
     console.error(
       JSON.stringify({
+        type: error.name,
         error: error.message,
         ...(error.details !== undefined ? { differences: error.details } : {}),
       }),
@@ -78,6 +90,8 @@ function printExpectedError(error, json) {
     return
   }
   for (const category of [
+    "structuralErrors",
+    "workspaceDuplicates",
     "duplicates",
     "extra",
     "missing",
@@ -86,7 +100,29 @@ function printExpectedError(error, json) {
     "versionMismatches",
   ]) {
     if (error.details[category].length > 0) {
-      console.error(`${category}: ${error.details[category].join(", ")}`)
+      console.error(`${category}: ${formatCategory(error.details[category])}`)
     }
   }
+}
+
+function formatCategory(values) {
+  return values
+    .map((value) =>
+      typeof value === "string" ? value : `${value.name} (${value.manifests.join(", ")})`,
+    )
+    .join(", ")
+}
+
+function printUnexpectedError(error, json) {
+  if (json) {
+    console.error(
+      JSON.stringify({
+        type: error instanceof Error ? error.name : "UnknownError",
+        error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof Error && error.stack !== undefined ? { stack: error.stack } : {}),
+      }),
+    )
+    return
+  }
+  console.error(error)
 }

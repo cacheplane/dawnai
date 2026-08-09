@@ -1,5 +1,22 @@
 import { spawn } from "node:child_process"
 
+export class GitReadError extends Error {
+  constructor(message, options) {
+    super(message)
+    this.name = "GitReadError"
+    if (options?.cause !== undefined) {
+      this.cause = options.cause
+    }
+  }
+}
+
+export class GitInputError extends GitReadError {
+  constructor(message) {
+    super(message)
+    this.name = "GitInputError"
+  }
+}
+
 export function createGitReader({ root, run = runCommand }) {
   return {
     showFile({ ref, path }) {
@@ -27,7 +44,7 @@ function assertValidRef(ref) {
     ref.includes("..") ||
     ref.includes("//")
   ) {
-    throw new TypeError(`Invalid Git ref: ${String(ref)}`)
+    throw new GitInputError(`Invalid Git ref: ${String(ref)}`)
   }
 }
 
@@ -39,7 +56,7 @@ function assertValidPath(path) {
     path.includes("\\") ||
     path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
   ) {
-    throw new TypeError(`Invalid repository path: ${String(path)}`)
+    throw new GitInputError(`Invalid repository path: ${String(path)}`)
   }
 }
 
@@ -59,13 +76,19 @@ function runCommand(command, args, options = {}) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk
     })
-    child.on("error", reject)
+    child.on("error", (error) => {
+      reject(new GitReadError(`Git read failed: ${error.message}`, { cause: error }))
+    })
     child.on("close", (code) => {
       if (code === 0) {
         resolve(stdout)
         return
       }
-      reject(new Error(`git command failed with exit code ${code}: ${stderr.trim()}`))
+      reject(
+        new GitReadError(
+          `Git read failed with exit code ${code}: ${stderr.trim() || "no error output"}`,
+        ),
+      )
     })
   })
 }
