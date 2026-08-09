@@ -491,8 +491,7 @@ export async function createRuntimeFetchHandler(
     return override ? Promise.resolve(override) : getMemoryStore()
   }
 
-  const apSseHeartbeatIntervalMs =
-    options.apSseHeartbeatIntervalMs ?? AP_SSE_HEARTBEAT_INTERVAL_MS
+  const apSseHeartbeatIntervalMs = options.apSseHeartbeatIntervalMs ?? AP_SSE_HEARTBEAT_INTERVAL_MS
   const routes = buildRouteTable({
     appRoot: options.appRoot,
     apSseHeartbeatIntervalMs,
@@ -985,7 +984,9 @@ function buildRouteTable(ctx: {
     // ------------------------------------------------------------------
     {
       handle: async (request) =>
-        handleMemoryListRequest({ memoryStore: await getMemoryStoreFor(request) }),
+        handleMemoryListRequest({
+          memoryStore: await getMemoryStoreFor(request),
+        }),
       method: "GET",
       pattern: /^\/memory\/candidates(?:\?.*)?$/,
     },
@@ -1920,7 +1921,7 @@ function startSseHeartbeat(
   intervalMs: number,
 ): () => void {
   const heartbeat = setInterval(() => {
-    safeEnqueue(controller, AP_SSE_HEARTBEAT)
+    safeEnqueue(controller, AP_SSE_HEARTBEAT.slice())
   }, intervalMs)
   return () => clearInterval(heartbeat)
 }

@@ -171,7 +171,10 @@ async function setupFaultyThreadsStore() {
   // after cancellation (that is the property under test), and close() now waits
   // for in-flight runs. Without a bound, afterEach cleanup would block for the
   // full 30s default on every cancellation test.
-  const handler = await createRuntimeFetchHandler({ appRoot, drainDeadlineMs: 250 })
+  const handler = await createRuntimeFetchHandler({
+    appRoot,
+    drainDeadlineMs: 250,
+  })
   cleanup.push(() => handler.close())
 
   return { appRoot, handler }
@@ -246,7 +249,9 @@ async function readSseReaderText(reader: ReadableStreamDefaultReader<Uint8Array>
 }
 
 function cancelRequest(threadId: string): Request {
-  return new Request(`http://localhost/threads/${threadId}/cancel`, { method: "POST" })
+  return new Request(`http://localhost/threads/${threadId}/cancel`, {
+    method: "POST",
+  })
 }
 
 function runWaitRequest(
@@ -361,7 +366,13 @@ async function setupResumeInterrupt(options: { readonly apSseHeartbeatIntervalMs
 function resumeRequest(threadId: string, route = "/resume-blocking#graph"): Request {
   return new Request(`http://localhost/threads/${threadId}/resume`, {
     body: JSON.stringify({
-      resume: [{ interruptId: RESUME_INTERRUPT_ID, payload: "once", status: "resolved" }],
+      resume: [
+        {
+          interruptId: RESUME_INTERRUPT_ID,
+          payload: "once",
+          status: "resolved",
+        },
+      ],
       route,
     }),
     headers: { "content-type": "application/json" },
@@ -374,12 +385,40 @@ function resumeRequest(threadId: string, route = "/resume-blocking#graph"): Requ
 // ---------------------------------------------------------------------------
 
 describe("AP SSE keepalives", () => {
+  it("does not share mutable heartbeat bytes between /runs/stream ticks", async () => {
+    const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute({
+      apSseHeartbeatIntervalMs: 10,
+    })
+    const response = await handler.fetch(
+      runStreamRequest("t-stream-heartbeat-mutable-bytes", startedFile, releaseFile),
+    )
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error("expected /runs/stream response body")
+
+    try {
+      await waitForFile(startedFile)
+      const first = await reader.read()
+      if (first.done) throw new Error("expected first heartbeat")
+      expect(new TextDecoder().decode(first.value)).toBe(": ping\n\n")
+      first.value[0] = 0
+
+      const second = await reader.read()
+      if (second.done) throw new Error("expected second heartbeat")
+      expect(new TextDecoder().decode(second.value)).toBe(": ping\n\n")
+    } finally {
+      await releaseRoute()
+      await readSseReaderText(reader)
+    }
+  }, 30_000)
+
   it("keeps /runs/stream alive while a blocking route is active", async () => {
     const { handler, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute({
       apSseHeartbeatIntervalMs: 10,
     })
 
-    const response = await handler.fetch(runStreamRequest("t-stream-heartbeat", startedFile, releaseFile))
+    const response = await handler.fetch(
+      runStreamRequest("t-stream-heartbeat", startedFile, releaseFile),
+    )
     expect(response.status).toBe(200)
     expect(response.headers.get("content-type")).toBe("text/event-stream")
     expect(response.headers.get("cache-control")).toBe("no-cache, no-transform")
@@ -440,6 +479,46 @@ describe("AP SSE keepalives", () => {
       expect(clearIntervalSpy).toHaveBeenCalledTimes(1)
 
       await releaseRoute()
+    } finally {
+      clearIntervalSpy.mockRestore()
+    }
+  }, 30_000)
+
+  it("clears the /resume heartbeat when the server cancels its viewer", async () => {
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval")
+    try {
+      const { handler, startedFile, releaseRoute } = await setupResumeInterrupt({
+        apSseHeartbeatIntervalMs: 60_000,
+      })
+      const threadId = "t-resume-heartbeat-server-cancel"
+
+      const response = await handler.fetch(resumeRequest(threadId))
+      await waitForFile(startedFile)
+
+      expect((await handler.fetch(cancelRequest(threadId))).status).toBe(200)
+      expect(await readSseText(response)).toBe(
+        'event: done\ndata: {"output":{"cancelled":true}}\n\n',
+      )
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1)
+
+      await releaseRoute()
+    } finally {
+      clearIntervalSpy.mockRestore()
+    }
+  }, 30_000)
+
+  it("clears the /runs/stream heartbeat when its route errors", async () => {
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval")
+    try {
+      const { handler, startedFile, releaseFile } = await setupBlockingRoute({
+        apSseHeartbeatIntervalMs: 60_000,
+      })
+
+      const response = await handler.fetch(
+        runStreamRequest("t-stream-heartbeat-error", startedFile, releaseFile, "/boom#graph"),
+      )
+      expect(await readSseText(response)).toBe('event: done\ndata: {"output":{"error":"boom"}}\n\n')
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1)
     } finally {
       clearIntervalSpy.mockRestore()
     }
@@ -532,7 +611,9 @@ describe("AP concurrency gate", () => {
 
     const threadResponse = await handler.fetch(new Request(`http://localhost/threads/${threadId}`))
     expect(threadResponse.status).toBe(200)
-    const thread = (await threadResponse.json()) as { metadata: Record<string, unknown> }
+    const thread = (await threadResponse.json()) as {
+      metadata: Record<string, unknown>
+    }
     expect(thread.metadata.route).toBe("/blocking#graph")
 
     await releaseRoute()
@@ -577,7 +658,9 @@ describe("AP concurrency gate", () => {
     // the persisted status column, or this thread would be bricked forever.
     const { handler, appRoot, startedFile, releaseFile, releaseRoute } = await setupBlockingRoute()
 
-    const store = createThreadsStore({ path: join(appRoot, ".dawn/threads.sqlite") })
+    const store = createThreadsStore({
+      path: join(appRoot, ".dawn/threads.sqlite"),
+    })
     await store.createThread({ thread_id: "stale-thread" })
     await store.updateStatus("stale-thread", "busy")
 
@@ -596,7 +679,9 @@ describe("POST /threads/:id/cancel", () => {
     // Never referenced by any run or POST /threads call in this test.
     const response = await handler.fetch(cancelRequest("never-seen-thread"))
     expect(response.status).toBe(404)
-    const body = (await response.json()) as { error: { details?: { code?: string } } }
+    const body = (await response.json()) as {
+      error: { details?: { code?: string } }
+    }
     expect(body.error.details?.code).toBe("thread_not_found")
   }, 30_000)
 
@@ -611,7 +696,9 @@ describe("POST /threads/:id/cancel", () => {
 
     const response = await handler.fetch(cancelRequest(thread.thread_id))
     expect(response.status).toBe(409)
-    const body = (await response.json()) as { error: { details?: { code?: string } } }
+    const body = (await response.json()) as {
+      error: { details?: { code?: string } }
+    }
     expect(body.error.details?.code).toBe("no_run_in_flight")
   }, 30_000)
 
@@ -801,14 +888,18 @@ describe("run slot release on setup failure", () => {
     // on this thread for the rest of the process's life).
     const cancelResponse = await handler.fetch(cancelRequest(threadId))
     expect(cancelResponse.status).toBe(409)
-    const cancelBody = (await cancelResponse.json()) as { error: { details?: { code?: string } } }
+    const cancelBody = (await cancelResponse.json()) as {
+      error: { details?: { code?: string } }
+    }
     expect(cancelBody.error.details?.code).toBe("no_run_in_flight")
 
     // A second run attempt must fail for the same setup reason, not because
     // the concurrency gate still thinks a run is in flight.
     const response2 = await handler.fetch(otherRunRequest(threadId))
     expect(response2.status).toBe(500)
-    const body2 = (await response2.json()) as { error: { details?: { code?: string } } }
+    const body2 = (await response2.json()) as {
+      error: { details?: { code?: string } }
+    }
     expect(body2.error.details?.code).not.toBe("run_in_flight")
   }, 10_000)
 })
