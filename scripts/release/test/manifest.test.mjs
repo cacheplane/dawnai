@@ -47,6 +47,34 @@ test("parseReleaseManifest fatally rejects malformed UTF-8 bytes", () => {
   }
 })
 
+test("validateReleaseManifest validates and returns one snapshot of changing accessors", () => {
+  const manifest = validManifest()
+  let reads = 0
+  Object.defineProperty(manifest, "schemaVersion", {
+    enumerable: true,
+    get() {
+      reads += 1
+      return reads === 1 ? RELEASE_MANIFEST_SCHEMA_VERSION : 2
+    },
+  })
+
+  const validated = validateReleaseManifest(manifest, context)
+
+  assert.equal(validated.schemaVersion, RELEASE_MANIFEST_SCHEMA_VERSION)
+  assert.equal(reads, 1)
+  assertRecursivelyFrozen(validated)
+})
+
+test("validateReleaseManifest rejects required fields lost while snapshotting", () => {
+  const manifest = validManifest()
+  Object.defineProperty(manifest, "schemaVersion", { enumerable: false })
+
+  assert.throws(
+    () => validateReleaseManifest(manifest, context),
+    /release manifest is missing field schemaVersion/u,
+  )
+})
+
 const invalidManifestCases = [
   {
     invariant: "schema version",
@@ -68,6 +96,27 @@ const invalidManifestCases = [
       manifest.version = "^1.2.3"
     },
     error: /version must be an exact SemVer/u,
+  },
+  {
+    invariant: "artifact name with a different version",
+    mutate(manifest) {
+      manifest.artifact.name = `release-v1.2.4-${COMMIT_SHA.slice(0, 12)}`
+    },
+    error: /artifact.name must match candidate identity/u,
+  },
+  {
+    invariant: "artifact name with a different commit SHA",
+    mutate(manifest) {
+      manifest.artifact.name = `release-v${VERSION}-deadbeefdead`
+    },
+    error: /artifact.name must match candidate identity/u,
+  },
+  {
+    invariant: "non-canonical artifact name",
+    mutate(manifest) {
+      manifest.artifact.name = "release-artifact"
+    },
+    error: /artifact.name must match candidate identity/u,
   },
   {
     invariant: "matching package version",
@@ -204,6 +253,14 @@ test("canonicalManifestBytes recursively sorts keys, preserves arrays, and ends 
       2,
     )}\n`,
   )
+})
+
+test("canonicalManifestBytes rejects sparse arrays", () => {
+  const packages = []
+  packages.length = 2
+  packages[1] = { name: "present" }
+
+  assert.throws(() => canonicalManifestBytes({ packages }), /Manifest arrays must not be sparse/u)
 })
 
 test("manifestSha256 hashes the canonical manifest bytes", () => {

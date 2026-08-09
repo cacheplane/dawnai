@@ -55,21 +55,31 @@ export function parseReleaseManifest(raw, context) {
 }
 
 export function validateReleaseManifest(value, context) {
-  assertObject(value, "release manifest")
-  assertExactFields(value, ROOT_FIELDS, "release manifest")
+  let manifest
+  try {
+    manifest = structuredClone(value)
+  } catch (error) {
+    throw new TypeError(`Release manifest snapshot failed: ${formatCause(error)}`, { cause: error })
+  }
 
-  if (value.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION) {
+  assertObject(manifest, "release manifest")
+  assertExactFields(manifest, ROOT_FIELDS, "release manifest")
+
+  if (manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION) {
     throw new Error(`schemaVersion must be ${RELEASE_MANIFEST_SCHEMA_VERSION}`)
   }
-  if (!isExactSemver(value.version)) {
+  if (!isExactSemver(manifest.version)) {
     throw new Error("version must be an exact SemVer")
   }
-  if (typeof value.commitSha !== "string" || !/^[0-9a-f]{40}$/u.test(value.commitSha)) {
+  if (typeof manifest.commitSha !== "string" || !/^[0-9a-f]{40}$/u.test(manifest.commitSha)) {
     throw new Error("commitSha must be a 40-character lowercase hexadecimal SHA")
   }
 
-  validateCi(value.ci)
-  validateArtifact(value.artifact)
+  validateCi(manifest.ci)
+  validateArtifact(manifest.artifact, {
+    commitSha: manifest.commitSha,
+    version: manifest.version,
+  })
 
   const contextPackages = context?.packages
   const gateOrder = context?.gateOrder
@@ -80,18 +90,18 @@ export function validateReleaseManifest(value, context) {
   const expectedOrder = orderedPackages.map((packageJson) => packageJson.name)
   const inventoryNames = [...expectedOrder].sort(compareNames)
 
-  validatePackageOrder(value.packageOrder, inventoryNames)
-  validatePackages(value.packages, {
+  validatePackageOrder(manifest.packageOrder, inventoryNames)
+  validatePackages(manifest.packages, {
     inventoryNames,
-    packageOrder: value.packageOrder,
-    version: value.version,
+    packageOrder: manifest.packageOrder,
+    version: manifest.version,
   })
 
-  if (!arraysEqual(value.packageOrder, expectedOrder)) {
+  if (!arraysEqual(manifest.packageOrder, expectedOrder)) {
     throw new Error("packageOrder must be the canonical dependency order")
   }
 
-  return deepFreeze(structuredClone(value))
+  return deepFreeze(manifest)
 }
 
 export function canonicalManifestBytes(manifest) {
@@ -112,11 +122,12 @@ function validateCi(value) {
   assertPositiveInteger(value.runAttempt, "ci.runAttempt")
 }
 
-function validateArtifact(value) {
+function validateArtifact(value, { commitSha, version }) {
   assertObject(value, "artifact")
   assertExactFields(value, ARTIFACT_FIELDS, "artifact")
-  if (typeof value.name !== "string" || value.name.length === 0) {
-    throw new Error("artifact.name must be a non-empty string")
+  const expectedName = `release-v${version}-${commitSha.slice(0, 12)}`
+  if (value.name !== expectedName) {
+    throw new Error(`artifact.name must match candidate identity: ${expectedName}`)
   }
   assertPositiveInteger(value.prepareRunId, "artifact.prepareRunId")
   assertPositiveInteger(value.prepareRunAttempt, "artifact.prepareRunAttempt")
@@ -252,7 +263,14 @@ function canonicalize(value, ancestors = new Set()) {
   }
   const nextAncestors = new Set(ancestors).add(value)
   if (Array.isArray(value)) {
-    return value.map((entry) => canonicalize(entry, nextAncestors))
+    const entries = []
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index)) {
+        throw new TypeError("Manifest arrays must not be sparse")
+      }
+      entries.push(canonicalize(value[index], nextAncestors))
+    }
+    return entries
   }
   const prototype = Object.getPrototypeOf(value)
   if (prototype !== Object.prototype && prototype !== null) {
