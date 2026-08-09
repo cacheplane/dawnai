@@ -1,5 +1,23 @@
 # @dawn-ai/inspector
 
+## 0.8.21
+
+### Patch Changes
+
+- 23c5f55: Memory Inspector: pick up the pretable 0.0.8 header theme fixes.
+
+  Grid header labels were rendering in the body-cell colour, and the header's
+  column dividers in a fixed colour rather than the grid's own rule token — both
+  because inline styles on the header button beat the skin regardless of how it is
+  layered. Headers are dimmer than cell text again, and their dividers match the
+  body gridlines.
+
+- Updated dependencies [c2c19da]
+- Updated dependencies [c2c19da]
+- Updated dependencies [c2c19da]
+  - @dawn-ai/core@0.8.21
+  - @dawn-ai/memory@0.8.21
+
 ## 0.8.20
 
 ### Patch Changes
