@@ -1,5 +1,11 @@
 # @dawn-ai/evals
 
+## 0.8.21
+
+### Patch Changes
+
+- @dawn-ai/testing@0.8.21
+
 ## 0.8.20
 
 ### Patch Changes
