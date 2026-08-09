@@ -23,16 +23,24 @@
 
 The default shell may resolve Node 22, while this repository requires Node 24
 or newer. Every Node or pnpm command below is prefixed with the bundled Node 24
-runtime path so the requirement holds across separate shell calls:
+runtime path so the requirement holds across separate shell calls. Use Corepack
+to select the repository's pinned `pnpm@10.33.0`; do not put the bundled
+fallback pnpm on `PATH`, because it is a different major version.
 
 ```bash
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
   node -e 'const major = Number(process.versions.node.split(".")[0]); if (major < 24) process.exit(1); console.log(process.version)'
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --version
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm build
 ```
 
-Expected: prints a version beginning with `v24` or newer. If the bundled path
-changes, call the workspace dependency loader again and substitute the returned
-Node and fallback-bin paths before continuing.
+Expected: prints a Node version beginning with `v24` or newer, prints pnpm
+`10.33.0`, and completes a fresh full workspace build. The build is required
+before the red contract test because workspace packages resolve gitignored
+`dist/` output. If the bundled Node path changes, call the workspace dependency
+loader again and substitute the returned Node path before continuing.
 
 ### Task 1: Remove the unsupported harness option
 
@@ -71,8 +79,8 @@ The existing `packages/testing/tsconfig.contracts.json` already includes
 Run:
 
 ```bash
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm --filter @dawn-ai/testing typecheck
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --filter @dawn-ai/testing typecheck
 ```
 
 Expected: FAIL with TypeScript `TS2578` on the unused `@ts-expect-error`, proving
@@ -104,10 +112,10 @@ or wiring to the two standalone factories.
 Run:
 
 ```bash
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm --filter @dawn-ai/testing typecheck
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm --filter @dawn-ai/testing test harness-construct
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --filter @dawn-ai/testing typecheck
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --filter @dawn-ai/testing test harness-construct
 ```
 
 Expected: both commands PASS. The type lane consumes the `@ts-expect-error`, and
@@ -196,12 +204,12 @@ First rerun the stale-claim search from Step 1. Expected: no matches.
 Run:
 
 ```bash
-rg -n 'three execution modes|mode.*http-inject|mode.*subprocess|default.*in-process|not yet implemented' \
+! rg -n 'three execution modes|mode.*http-inject|mode.*subprocess|default.*in-process|not yet implemented' \
   packages/testing/README.md apps/web/content/docs/testing-agents.mdx
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm --filter @dawn-ai/cli build
-rg -n 'Choose the execution boundary|does not accept a `mode` option' \
-  packages/cli/docs/testing-agents.md
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --filter @dawn-ai/cli build
+rg -n 'Choose the execution boundary' packages/cli/docs/testing-agents.md
+rg -n 'does not accept a `mode` option' packages/cli/docs/testing-agents.md
 git check-ignore packages/cli/docs/testing-agents.md
 git status --short
 ```
@@ -209,17 +217,15 @@ git status --short
 Expected: the generated guide contains the new section, `git check-ignore`
 prints the path, and `git status` does not list `packages/cli/docs/`.
 
-- [ ] **Step 6: Run documentation and release checks**
+- [ ] **Step 6: Run documentation checks**
 
 Run:
 
 ```bash
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm --filter @dawn-ai/cli test docs-bundle
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --filter @dawn-ai/cli test docs-bundle
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
   node scripts/check-docs.mjs
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  node scripts/check-changesets.mjs
 ```
 
 Expected: all commands PASS.
@@ -231,6 +237,18 @@ git add packages/testing/README.md apps/web/content/docs/testing-agents.mdx \
   .changeset/testing-harness-mode-cleanup.md
 git commit -m "docs(testing): clarify harness execution boundaries"
 ```
+
+- [ ] **Step 8: Verify the committed changeset**
+
+Run after Step 7 because `check-changesets.mjs` compares committed changes to
+`origin/main`:
+
+```bash
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  node scripts/check-changesets.mjs
+```
+
+Expected: PASS and report the committed patch changeset.
 
 ### Task 3: Complete verification
 
@@ -246,14 +264,14 @@ Rerun the execution-prerequisite version check before final verification.
 Run:
 
 ```bash
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm --filter @dawn-ai/testing build
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm --filter @dawn-ai/testing typecheck
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm --filter @dawn-ai/testing lint
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm --filter @dawn-ai/testing test
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --filter @dawn-ai/testing build
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --filter @dawn-ai/testing typecheck
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --filter @dawn-ai/testing lint
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm --filter @dawn-ai/testing test
 ```
 
 Expected: all commands PASS.
@@ -263,8 +281,8 @@ Expected: all commands PASS.
 Run:
 
 ```bash
-PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH" \
-  pnpm ci:validate
+PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" \
+  corepack pnpm ci:validate
 ```
 
 Expected: lint, build-cache, build, typecheck, tests, documentation, package,
