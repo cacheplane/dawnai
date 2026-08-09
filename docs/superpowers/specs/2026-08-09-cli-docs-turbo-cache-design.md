@@ -97,7 +97,8 @@ Parse the effective `@dawn-ai/cli#build` task and require:
   effective inputs;
 - `apps/web/app/components/docs/nav.ts` appears;
 - ordinary CLI package inputs remain present, detecting accidental loss of
-  `$TURBO_DEFAULT$`;
+  `$TURBO_DEFAULT$`; use `packages/cli/src/index.ts` as a representative source
+  input rather than a metadata file;
 - `dist/**` and `docs/**` both appear in effective outputs.
 
 The check fails with a focused list of missing cache-contract elements. Running
@@ -124,7 +125,9 @@ test; adding the task override turns it green.
    inputs, and both output trees are present.
 4. Build the CLI dependency closure and verify `packages/cli/docs/**` is
    generated.
-5. Run lint, build-cache, build, typecheck, tests, docs check, pack check, and
+5. Remove the generated docs, rerun the unchanged CLI build as a cache hit, and
+   verify the complete `packages/cli/docs/**` tree is restored.
+6. Run lint, build-cache, build, typecheck, tests, docs check, pack check, and
    the repository Definition of Done.
 
 ## Files
