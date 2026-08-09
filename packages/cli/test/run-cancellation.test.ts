@@ -383,6 +383,7 @@ describe("AP SSE keepalives", () => {
     expect(response.status).toBe(200)
     expect(response.headers.get("content-type")).toBe("text/event-stream")
     expect(response.headers.get("cache-control")).toBe("no-cache, no-transform")
+    expect(response.headers.get("connection")).toBe("keep-alive")
 
     await waitForFile(startedFile)
     const reader = response.body?.getReader()
@@ -406,6 +407,7 @@ describe("AP SSE keepalives", () => {
     expect(response.status).toBe(200)
     expect(response.headers.get("content-type")).toBe("text/event-stream")
     expect(response.headers.get("cache-control")).toBe("no-cache, no-transform")
+    expect(response.headers.get("connection")).toBe("keep-alive")
 
     await waitForFile(startedFile)
     const reader = response.body?.getReader()
