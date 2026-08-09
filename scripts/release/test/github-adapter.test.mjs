@@ -1,0 +1,341 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+
+import { createGitHubReader } from "../adapters/github.mjs"
+
+const OWNER = "dawn-ai"
+const REPO = "dawn"
+const TOKEN = "github_secret_token"
+const SHA = "0123456789abcdef0123456789abcdef01234567"
+const BASE = "https://api.github.com/repos/dawn-ai/dawn"
+const ALLOWED_METHODS = [
+  "downloadActionsArtifact",
+  "downloadReleaseAsset",
+  "getActionsPermissions",
+  "getActionsRun",
+  "getAttestations",
+  "getBranchProtection",
+  "getCommitCheckRuns",
+  "getRef",
+  "getReleaseByTag",
+  "getWorkflow",
+  "getWorkflowPermissions",
+  "listActionsArtifacts",
+  "listEnvironments",
+  "listReleaseAssets",
+  "listTagRefs",
+  "listWorkflowRuns",
+]
+
+test("createGitHubReader exposes only named read operations and exact GET endpoints", async () => {
+  const { fetchImpl, calls } = recordingFetch([
+    jsonResponse({ check_runs: [] }),
+    jsonResponse({ ref: "refs/tags/v0.8.21", object: { sha: SHA } }),
+    jsonResponse({ id: 7, tag_name: "v0.8.21" }),
+    jsonResponse({ id: 9, head_sha: SHA }),
+    jsonResponse({ attestations: [] }),
+    jsonResponse({ id: 12, path: ".github/workflows/release.yml" }),
+    jsonResponse({ enabled_repositories: "all" }),
+    jsonResponse({ default_workflow_permissions: "read", can_approve_pull_request_reviews: false }),
+    jsonResponse({ required_status_checks: {} }),
+  ])
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, token: TOKEN, fetchImpl })
+
+  assert.deepEqual(Object.keys(github).sort(), ALLOWED_METHODS)
+  await github.getCommitCheckRuns({ commitSha: SHA })
+  await github.getRef({ ref: "tags/v0.8.21" })
+  await github.getReleaseByTag({ tag: "v0.8.21" })
+  await github.getActionsRun({ runId: 9 })
+  await github.getAttestations({ subjectDigest: `sha256:${"a".repeat(64)}` })
+  await github.getWorkflow({ workflow: "release.yml" })
+  await github.getActionsPermissions()
+  await github.getWorkflowPermissions()
+  await github.getBranchProtection({ branch: "release/0.8" })
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => ({
+      url,
+      method: init.method,
+      accept: init.headers.Accept,
+      version: init.headers["X-GitHub-Api-Version"],
+      authorization: init.headers.Authorization,
+    })),
+    [
+      `${BASE}/commits/${SHA}/check-runs?per_page=100`,
+      `${BASE}/git/ref/tags%2Fv0.8.21`,
+      `${BASE}/releases/tags/v0.8.21`,
+      `${BASE}/actions/runs/9`,
+      `${BASE}/attestations/sha256%3A${"a".repeat(64)}`,
+      `${BASE}/actions/workflows/release.yml`,
+      `${BASE}/actions/permissions`,
+      `${BASE}/actions/permissions/workflow`,
+      `${BASE}/branches/release%2F0.8/protection`,
+    ].map((url) => ({
+      url,
+      method: "GET",
+      accept: "application/vnd.github+json",
+      version: "2022-11-28",
+      authorization: `Bearer ${TOKEN}`,
+    })),
+  )
+})
+
+test("GitHub list methods follow same-origin pagination and return stable records", async () => {
+  const nextTags = `${BASE}/git/matching-refs/tags/?per_page=100&page=2`
+  const nextArtifacts = `${BASE}/actions/artifacts?per_page=100&name=release-evidence&page=2`
+  const { fetchImpl, calls } = recordingFetch([
+    jsonResponse([{ ref: "refs/tags/v2" }], 200, linkHeader(nextTags)),
+    jsonResponse([{ ref: "refs/tags/v1" }]),
+    jsonResponse({ artifacts: [{ id: 20, name: "z" }] }, 200, linkHeader(nextArtifacts)),
+    jsonResponse({ artifacts: [{ id: 10, name: "a" }] }),
+    jsonResponse([
+      { id: 2, name: "z.tgz" },
+      { id: 1, name: "a.tgz" },
+    ]),
+    jsonResponse({ workflow_runs: [{ id: 4 }, { id: 3 }] }),
+    jsonResponse({ environments: [{ name: "release" }, { name: "audit" }] }),
+  ])
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, fetchImpl })
+
+  assert.deepEqual((await github.listTagRefs()).value, [
+    { ref: "refs/tags/v1" },
+    { ref: "refs/tags/v2" },
+  ])
+  assert.deepEqual((await github.listActionsArtifacts({ name: "release-evidence" })).value, [
+    { id: 10, name: "a" },
+    { id: 20, name: "z" },
+  ])
+  assert.deepEqual((await github.listReleaseAssets({ releaseId: 7 })).value, [
+    { id: 1, name: "a.tgz" },
+    { id: 2, name: "z.tgz" },
+  ])
+  assert.deepEqual(
+    (await github.listWorkflowRuns({ workflow: "release.yml", commitSha: SHA })).value,
+    [{ id: 3 }, { id: 4 }],
+  )
+  assert.deepEqual((await github.listEnvironments()).value, [
+    { name: "audit" },
+    { name: "release" },
+  ])
+  assert.deepEqual(
+    calls.map(({ url, init }) => [url, init.method]),
+    [
+      [`${BASE}/git/matching-refs/tags/?per_page=100`, "GET"],
+      [nextTags, "GET"],
+      [`${BASE}/actions/artifacts?per_page=100&name=release-evidence`, "GET"],
+      [nextArtifacts, "GET"],
+      [`${BASE}/releases/7/assets?per_page=100`, "GET"],
+      [`${BASE}/actions/workflows/release.yml/runs?head_sha=${SHA}&per_page=100`, "GET"],
+      [`${BASE}/environments?per_page=100`, "GET"],
+    ],
+  )
+})
+
+test("GitHub download methods return JSON-safe base64 without exposing response clients", async () => {
+  const { fetchImpl, calls } = recordingFetch([
+    binaryResponse(new Uint8Array([0, 255])),
+    binaryResponse(new Uint8Array([1, 2, 3])),
+  ])
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, token: TOKEN, fetchImpl })
+
+  assert.deepEqual(await github.downloadReleaseAsset({ assetId: 7 }), {
+    status: "PRESENT",
+    operation: "release-asset-download",
+    httpStatus: 200,
+    code: null,
+    contentBase64: "AP8=",
+  })
+  assert.deepEqual(await github.downloadActionsArtifact({ artifactId: 8 }), {
+    status: "PRESENT",
+    operation: "actions-artifact-download",
+    httpStatus: 200,
+    code: null,
+    contentBase64: "AQID",
+  })
+  assert.deepEqual(
+    calls.map(({ url, init }) => [url, init.method, init.headers.Accept]),
+    [
+      [`${BASE}/releases/assets/7`, "GET", "application/octet-stream"],
+      [`${BASE}/actions/artifacts/8/zip`, "GET", "application/octet-stream"],
+    ],
+  )
+})
+
+test("GitHub distinguishes exact absence from auth, rate, network, parse, and server failures", async () => {
+  const cases = [
+    {
+      response: jsonResponse({ message: "not found" }, 404),
+      status: "ABSENT",
+      code: "NOT_FOUND",
+      httpStatus: 404,
+    },
+    {
+      response: jsonResponse({ message: TOKEN }, 401),
+      status: "AMBIGUOUS",
+      code: "UNAUTHORIZED",
+      httpStatus: 401,
+    },
+    {
+      response: jsonResponse({ message: TOKEN }, 403),
+      status: "AMBIGUOUS",
+      code: "FORBIDDEN",
+      httpStatus: 403,
+    },
+    {
+      response: jsonResponse({ message: TOKEN }, 403, { "x-ratelimit-remaining": "0" }),
+      status: "AMBIGUOUS",
+      code: "RATE_LIMITED",
+      httpStatus: 403,
+    },
+    {
+      response: jsonResponse({ message: TOKEN }, 429),
+      status: "AMBIGUOUS",
+      code: "RATE_LIMITED",
+      httpStatus: 429,
+    },
+    {
+      response: jsonResponse({ message: TOKEN }, 503),
+      status: "AMBIGUOUS",
+      code: "SERVER_ERROR",
+      httpStatus: 503,
+    },
+    {
+      response: new Response("{", { headers: { "content-type": "application/json" } }),
+      status: "ERROR",
+      code: "MALFORMED_JSON",
+      httpStatus: 200,
+    },
+    {
+      response: new Response("{}", { headers: { "content-type": "text/html" } }),
+      status: "ERROR",
+      code: "UNEXPECTED_CONTENT_TYPE",
+      httpStatus: 200,
+    },
+  ]
+
+  for (const row of cases) {
+    const github = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      token: TOKEN,
+      fetchImpl: async () => row.response,
+    })
+    const result = await github.getRef({ ref: "tags/v0.8.21" })
+    assert.deepEqual(result, {
+      status: row.status,
+      operation: "ref",
+      httpStatus: row.httpStatus,
+      code: row.code,
+    })
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(TOKEN, "u"))
+  }
+
+  for (const error of [new DOMException(TOKEN, "AbortError"), new Error(`Bearer ${TOKEN}`)]) {
+    const github = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      token: TOKEN,
+      fetchImpl: async () => {
+        throw error
+      },
+    })
+    const result = await github.getRef({ ref: "tags/v0.8.21" })
+    assert.equal(result.status, "AMBIGUOUS")
+    assert.equal(result.httpStatus, null)
+    assert.equal(result.code, error.name === "AbortError" ? "ABORTED" : "NETWORK_ERROR")
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(TOKEN, "u"))
+  }
+})
+
+test("GitHub rejects malformed JSON shapes and unsafe pagination", async () => {
+  const malformed = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    fetchImpl: async () => jsonResponse({ check_runs: "not-an-array" }),
+  })
+  assert.deepEqual(await malformed.getCommitCheckRuns({ commitSha: SHA }), {
+    status: "ERROR",
+    operation: "commit-check-runs",
+    httpStatus: 200,
+    code: "MALFORMED_SCHEMA",
+  })
+
+  for (const unsafeUrl of [
+    "https://evil.example/next",
+    `https://user:secret@api.github.com/repos/${OWNER}/${REPO}/next`,
+    `https://api.github.com/repos/${OWNER}/${REPO}-lookalike/next`,
+  ]) {
+    const unsafe = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: async () => jsonResponse([], 200, linkHeader(unsafeUrl)),
+    })
+    assert.deepEqual(await unsafe.listTagRefs(), {
+      status: "ERROR",
+      operation: "tag-refs",
+      httpStatus: 200,
+      code: "UNSAFE_PAGINATION_URL",
+    })
+  }
+})
+
+test("GitHub validates repository identity and every dynamic argument before fetching", () => {
+  for (const identity of [
+    { owner: "", repo: REPO },
+    { owner: "../dawn-ai", repo: REPO },
+    { owner: OWNER, repo: "dawn/repo" },
+    { owner: OWNER, repo: "--help" },
+  ]) {
+    assert.throws(
+      () => createGitHubReader({ ...identity, fetchImpl: assert.fail }),
+      /owner|repository/u,
+    )
+  }
+  assert.throws(
+    () =>
+      createGitHubReader({ owner: OWNER, repo: REPO, token: "bad\ntoken", fetchImpl: assert.fail }),
+    /token/u,
+  )
+
+  const github = createGitHubReader({ owner: OWNER, repo: REPO, fetchImpl: assert.fail })
+  assert.throws(() => github.getCommitCheckRuns({ commitSha: "main" }), /commit SHA/u)
+  assert.throws(() => github.getRef({ ref: "--help" }), /ref/u)
+  assert.throws(() => github.getReleaseByTag({ tag: "refs/tags/v1" }), /tag/u)
+  assert.throws(() => github.getActionsRun({ runId: 0 }), /ID/u)
+  assert.throws(() => github.listReleaseAssets({ releaseId: 1.5 }), /ID/u)
+  assert.throws(() => github.listActionsArtifacts({ name: "release evidence" }), /name/u)
+  assert.throws(() => github.getWorkflow({ workflow: "../release.yml" }), /workflow/u)
+  assert.throws(() => github.getAttestations({ subjectDigest: "sha256:nope" }), /digest/u)
+  assert.throws(() => github.getBranchProtection({ branch: "../main" }), /branch/u)
+})
+
+function recordingFetch(responses) {
+  const calls = []
+  return {
+    calls,
+    async fetchImpl(url, init) {
+      calls.push({ url: String(url), init })
+      const response = responses.shift()
+      assert.ok(response, `Unexpected request for ${String(url)}`)
+      return response
+    },
+  }
+}
+
+function jsonResponse(body, status = 200, headers = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...headers },
+  })
+}
+
+function binaryResponse(bytes, status = 200) {
+  return new Response(bytes, {
+    status,
+    headers: { "content-type": "application/octet-stream" },
+  })
+}
+
+function linkHeader(next) {
+  return { link: `<${next}>; rel="next"` }
+}
