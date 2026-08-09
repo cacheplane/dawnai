@@ -820,7 +820,63 @@ test("live skipped history uses independent latest metadata for audit-only super
   assert.deepEqual(report.historicalAssessment.proposedMutations, [])
 })
 
+test("historical package facts reject mismatched or missing exact package identity", async () => {
+  const base = historicalPresentPackage("@dawn-ai/sdk", "0.8.19")
+  for (const item of [
+    { name: "name mismatch", package: { ...base.package, name: "@dawn-ai/core" } },
+    { name: "version mismatch", package: { ...base.package, version: "0.8.18" } },
+    { name: "name missing", package: withoutFields(base.package, ["name"]) },
+    { name: "version missing", package: withoutFields(base.package, ["version"]) },
+    { name: "name malformed", package: { ...base.package, name: 42 } },
+  ]) {
+    let output = ""
+    const code = await runShadowReconcile({
+      argv: ["--version", "0.8.19", "--commit-sha", PARENT_SHA, "--format", "json"],
+      env: {},
+      stdout: { write: (value) => (output += value) },
+      stderr: { write: assert.fail },
+      dependencies: historicalLiveDependencies({
+        version: "0.8.19",
+        commitSha: PARENT_SHA,
+        versionResult: { ...base, package: item.package },
+        latest: "0.8.19",
+      }),
+    })
+    assert.equal(code, 0, item.name)
+    const report = JSON.parse(output)
+    assert.deepEqual(
+      report.historicalFacts.npmPackages[0],
+      {
+        name: "@dawn-ai/sdk",
+        status: "ERROR",
+        code: "PACKAGE_IDENTITY_MISMATCH",
+        version: null,
+        shasum: null,
+        integrity: null,
+        latest: null,
+        signatureCount: null,
+        provenanceStatus: null,
+        provenanceWorkflow: null,
+        provenanceCommitSha: null,
+      },
+      item.name,
+    )
+    assert.equal(
+      report.historicalAssessment.lastProvenTransition,
+      "LEGACY_NPM_REGISTRY_INCOMPLETE",
+      item.name,
+    )
+  }
+})
+
 test("historical workflow selection requires the exact frozen run or one unique generic run", async () => {
+  const exactPinned = {
+    id: 31292769511,
+    run_attempt: 1,
+    head_sha: SHA,
+    name: "Release",
+    path: ".github/workflows/release.yml",
+  }
   for (const item of [
     {
       name: "frozen attempt mismatch",
@@ -848,6 +904,24 @@ test("historical workflow selection requires the exact frozen run or one unique 
         path: ".github/workflows/release.yml",
       })),
     },
+    {
+      name: "display name with wrong path",
+      version: "0.8.21",
+      commitSha: SHA,
+      runs: [{ ...exactPinned, path: ".github/workflows/ci.yml" }],
+    },
+    {
+      name: "duplicate identical pinned run",
+      version: "0.8.21",
+      commitSha: SHA,
+      runs: [exactPinned, structuredClone(exactPinned)],
+    },
+    {
+      name: "duplicate conflicting pinned run",
+      version: "0.8.21",
+      commitSha: SHA,
+      runs: [exactPinned, { ...exactPinned, head_sha: PARENT_SHA }],
+    },
   ]) {
     let stderr = ""
     const code = await runShadowReconcile({
@@ -864,6 +938,21 @@ test("historical workflow selection requires the exact frozen run or one unique 
     assert.equal(code, 1, item.name)
     assert.match(stderr, /missing or mismatched|ambiguous/u, item.name)
   }
+
+  let output = ""
+  const exactCode = await runShadowReconcile({
+    argv: ["--version", "0.8.21", "--commit-sha", SHA, "--format", "json"],
+    env: {},
+    stdout: { write: (value) => (output += value) },
+    stderr: { write: assert.fail },
+    dependencies: historicalLiveDependencies({
+      version: "0.8.21",
+      commitSha: SHA,
+      runs: [{ ...exactPinned, id: 17, head_sha: PARENT_SHA }, exactPinned],
+    }),
+  })
+  assert.equal(exactCode, 0)
+  assert.equal(JSON.parse(output).run.workflowRunId, exactPinned.id)
 })
 
 test("CLI rejects duplicate, unknown, unpaired, and unsafe arguments without stacks", async () => {

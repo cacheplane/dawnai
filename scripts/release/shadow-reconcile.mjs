@@ -226,7 +226,7 @@ async function observeHistoricalLive({
       operation: "package-metadata",
       payloadKey: "metadata",
     })
-    npmPackages.push(historicalNpmFact(name, versionResult, metadataResult))
+    npmPackages.push(historicalNpmFact(name, candidate.version, versionResult, metadataResult))
   }
   const runs = normalizeAdapterEnvelope(
     await github.listWorkflowRuns({
@@ -246,22 +246,30 @@ async function observeHistoricalLive({
       run.id > 0 &&
       Number.isSafeInteger(run.run_attempt) &&
       run.run_attempt > 0 &&
-      (run.path === ".github/workflows/release.yml" || run.name === "Release"),
+      run.path === candidate.publisherWorkflow,
   )
-  const matching =
+  const pinned =
     frozenRun === undefined
-      ? correlated.length === 1
-        ? correlated[0]
-        : null
-      : correlated.find(
-          (run) => run.id === frozenRun.id && run.run_attempt === frozenRun.runAttempt,
+      ? []
+      : runs.value.filter(
+          (run) => run?.id === frozenRun.id && run.run_attempt === frozenRun.runAttempt,
         )
+  const matching =
+    frozenRun === undefined ? (correlated.length === 1 ? correlated[0] : null) : pinned[0]
   if (matching === null || matching === undefined) {
     throw new Error(
       frozenRun === undefined
         ? "Release workflow run evidence is ambiguous"
         : "Frozen incident workflow run is missing or mismatched",
     )
+  }
+  if (
+    frozenRun !== undefined &&
+    (pinned.length !== 1 ||
+      matching.head_sha !== candidate.commitSha ||
+      matching.path !== candidate.publisherWorkflow)
+  ) {
+    throw new Error("Frozen incident workflow run is missing or mismatched")
   }
   const runIdentity = {
     id: matching.id,
@@ -309,13 +317,16 @@ async function observeHistoricalLive({
   }
 }
 
-function historicalNpmFact(name, versionResult, metadataResult) {
+function historicalNpmFact(name, candidateVersion, versionResult, metadataResult) {
   const latest =
     metadataResult.status === "PRESENT" && metadataResult.metadata?.name === name
       ? metadataResult.metadata.latest
       : null
   if (versionResult.status === "PRESENT") {
     const pkg = versionResult.package
+    if (pkg?.name !== name || pkg.version !== candidateVersion) {
+      return unavailableHistoricalNpmFact(name, "ERROR", "PACKAGE_IDENTITY_MISMATCH", null)
+    }
     return {
       name,
       status: "PRESENT",
@@ -330,12 +341,21 @@ function historicalNpmFact(name, versionResult, metadataResult) {
       provenanceCommitSha: pkg.provenance?.status === "PRESENT" ? pkg.provenance.commitSha : null,
     }
   }
-  return {
+  return unavailableHistoricalNpmFact(
     name,
-    status: ["ABSENT", "AMBIGUOUS", "ERROR"].includes(versionResult.status)
+    ["ABSENT", "AMBIGUOUS", "ERROR"].includes(versionResult.status)
       ? versionResult.status
       : "ERROR",
-    code: safeCode(versionResult.code),
+    safeCode(versionResult.code),
+    latest,
+  )
+}
+
+function unavailableHistoricalNpmFact(name, status, code, latest) {
+  return {
+    name,
+    status,
+    code,
     version: null,
     shasum: null,
     integrity: null,
