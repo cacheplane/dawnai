@@ -47,7 +47,6 @@ export interface AgentHarnessOptions {
   readonly appRoot: string
   readonly route: string
   readonly fixtures?: FixtureSet
-  readonly mode?: "in-process" | "http-inject" | "subprocess"
   /**
    * When true, proxy all LLM requests through a real upstream (OPENAI_API_KEY
    * must be set). Requires OPENAI_API_KEY to be present in the environment.
@@ -74,11 +73,6 @@ export interface AgentHarness {
 }
 
 export async function createAgentHarness(options: AgentHarnessOptions): Promise<AgentHarness> {
-  const mode = options.mode ?? "in-process"
-  if (mode !== "in-process") {
-    throw new Error(`createAgentHarness: mode "${mode}" not yet implemented`)
-  }
-
   const live = options.live ?? false
   const record = options.record ?? false
 
