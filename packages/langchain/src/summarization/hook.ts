@@ -1,3 +1,4 @@
+import { readRuntimeEnv } from "@dawn-ai/core"
 import { type BaseMessage, SystemMessage } from "@langchain/core/messages"
 import { splitForSummary } from "./split.js"
 import { countMessagesTokens } from "./token-counter.js"
@@ -63,7 +64,7 @@ export function buildSummarizationHook(cfg: ResolvedSummarizationConfig) {
         // return {}), otherwise a stale condensed view from a prior turn would
         // remain in the channel and the model would answer without the latest
         // turn's messages.
-        if (process.env.DAWN_DEBUG_SUMMARIZATION === "1") {
+        if (readRuntimeEnv("DAWN_DEBUG_SUMMARIZATION") === "1") {
           console.warn(
             "[dawn] summarization failed — falling back to full history this turn:",
             error instanceof Error ? error.message : String(error),

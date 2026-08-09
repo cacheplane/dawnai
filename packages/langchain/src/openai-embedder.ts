@@ -1,4 +1,5 @@
 import type { Embedder } from "@dawn-ai/core"
+import { readRuntimeEnv } from "@dawn-ai/core"
 
 const DIMS: Record<string, number> = {
   "text-embedding-3-small": 1536,
@@ -21,7 +22,11 @@ export function openaiEmbedder(opts?: {
         ) => {
           embedDocuments(t: string[]): Promise<number[][]>
         }
-        const baseURL = process.env.OPENAI_BASE_URL
+        // Same load-bearing knob as `createChatModel`. This module is not on
+        // the `@dawn-ai/cli/fetch` graph today (vector recall pulls it in only
+        // when configured), so the gate below would not have caught it — but it
+        // is the same latent edge crash, fixed the same way.
+        const baseURL = readRuntimeEnv("OPENAI_BASE_URL")
         return new Ctor({
           model,
           // Request float arrays explicitly. The OpenAI SDK defaults to base64

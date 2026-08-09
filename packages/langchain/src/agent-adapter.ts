@@ -1,4 +1,5 @@
 import type { PromptFragment, StreamTransformer } from "@dawn-ai/core"
+import { readRuntimeEnv } from "@dawn-ai/core"
 import type { DawnAgent, RetryConfig } from "@dawn-ai/sdk"
 import { isDawnAgent } from "@dawn-ai/sdk"
 import { type BaseMessageLike, HumanMessage } from "@langchain/core/messages"
@@ -40,7 +41,32 @@ function assertAgentLike(entry: unknown): asserts entry is AgentLike {
   }
 }
 
-let materializedAgents = new WeakMap<DawnAgent, AgentLike>()
+/**
+ * Compiled-graph cache, keyed by BOTH the agent descriptor and the checkpointer
+ * instance the graph was compiled against.
+ *
+ * `createReactAgent` EMBEDS the checkpointer in the graph it returns, so a cache
+ * keyed on the descriptor alone hands request N+1 a graph wired to request N's
+ * checkpointer. On node that is invisible (one boot-resolved checkpointer lives
+ * for the process). On an edge runtime it is the whole bug the per-request store
+ * seam exists to prevent: Cloudflare workerd binds a Postgres connection to the
+ * I/O context of the request that opened it, so request N+1 writing through
+ * request N's — by then disposed — pool hangs for ~30s and fails.
+ *
+ * Keying on the checkpointer makes the cache a function of everything the
+ * compile actually closes over, because the checkpointer's identity tracks the
+ * identity of the whole per-request store bag: `RequestStores` builds
+ * checkpointer, threads, permissions and memory stores together and disposes
+ * them together, and the converted tools close over the permissions/memory
+ * stores from that same bag. One bag ⇒ one graph; a new bag ⇒ a new graph with
+ * freshly bound tools.
+ *
+ * Both levels are weak, so nothing outlives its owner: the outer entry dies with
+ * the descriptor, and the inner entry dies with the request's checkpointer. (V8's
+ * WeakMap is ephemeron-based, so the graph→checkpointer reference held by the
+ * VALUE does not keep its own KEY alive.)
+ */
+let materializedAgents = new WeakMap<DawnAgent, WeakMap<BaseCheckpointSaver, AgentLike>>()
 
 /**
  * Test-only escape hatch: reset the materialized-agents cache so the next
@@ -87,13 +113,16 @@ async function materializeAgent(
   } = {},
 ): Promise<AgentLike> {
   const bypassCache =
-    checkpointer === undefined ||
     opts.subagentResolver !== undefined ||
     opts.bypassCache === true ||
     (opts.streamTransformers?.length ?? 0) > 0
 
-  if (!bypassCache) {
-    const cached = materializedAgents.get(descriptor)
+  // Without a checkpointer there is no cache key at all (the graph carries no
+  // per-request resource either), so those calls simply always compile.
+  const cacheKey = bypassCache ? undefined : checkpointer
+
+  if (cacheKey) {
+    const cached = materializedAgents.get(descriptor)?.get(cacheKey)
     if (cached) return cached
   }
 
@@ -156,8 +185,13 @@ async function materializeAgent(
   // biome-ignore lint/suspicious/noExplicitAny: dynamically-built options don't satisfy strict StateDefinition type
   const compiled = createReactAgent(agentOptions as any)
 
-  if (!bypassCache) {
-    materializedAgents.set(descriptor, compiled as unknown as AgentLike)
+  if (cacheKey) {
+    let byCheckpointer = materializedAgents.get(descriptor)
+    if (byCheckpointer === undefined) {
+      byCheckpointer = new WeakMap()
+      materializedAgents.set(descriptor, byCheckpointer)
+    }
+    byCheckpointer.set(cacheKey, compiled as unknown as AgentLike)
   }
   return compiled as unknown as AgentLike
 }
@@ -894,7 +928,7 @@ async function* streamFromRunnable(
             if (entry.id && emittedInterruptIds.has(entry.id)) continue
             if (entry.id) emittedInterruptIds.add(entry.id)
             hasYielded = true
-            if (process.env.DAWN_DEBUG_INTERRUPTS === "1") {
+            if (readRuntimeEnv("DAWN_DEBUG_INTERRUPTS") === "1") {
               if (!isRecord(entry.value) || typeof entry.value.interruptId !== "string") {
                 console.warn(
                   "[dawn] interrupt entry.value missing interruptId — capability bug:",

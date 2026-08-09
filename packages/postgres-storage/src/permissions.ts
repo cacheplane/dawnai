@@ -1,6 +1,6 @@
 import type { PermissionMode, PermissionsFile, PermissionsStore } from "@dawn-ai/permissions"
 import { matchPermission } from "@dawn-ai/permissions"
-import { type PostgresStoreOptions, resolvePool } from "./options.js"
+import type { PostgresStoreOptions } from "./options.js"
 import {
   assertIdentifier,
   DEFAULT_SCHEMA,
@@ -9,6 +9,7 @@ import {
   qualify,
   runMigrations,
 } from "./schema.js"
+import { throwNoPool } from "./sql.js"
 
 export interface PostgresPermissionsStoreOptions extends PostgresStoreOptions {
   /**
@@ -25,7 +26,7 @@ export interface PostgresPermissionsStoreOptions extends PostgresStoreOptions {
 export interface PostgresPermissionsStore extends PermissionsStore {
   /** Apply migrations. Idempotent and memoized; call at boot to migrate eagerly. */
   ready(): Promise<void>
-  /** Close the underlying pool. No-op if an external pool was injected. */
+  /** Close the pool if this store owns it (`ownsPool`); otherwise a no-op. */
   close(): Promise<void>
 }
 
@@ -67,20 +68,28 @@ export function createPostgresPermissionsStore(
   assertIdentifier("tablePrefix", prefix)
   const table = qualify({ schema, prefix }, "permissions")
   const mode: PermissionMode = options.mode ?? "interactive"
-  const { ownsPool, pool } = resolvePool(options)
+  const ownsPool = options.ownsPool ?? false
+  const pool = options.pool ?? throwNoPool()
 
   const configAllow = cloneMap(options.config?.allow ?? {})
   const configDeny = cloneMap(options.config?.deny ?? {})
   let runtimeAllow: MutableMap = {}
   let runtimeDeny: MutableMap = {}
 
+  const assumeMigrated = options.assumeMigrated ?? false
+
   let initP: Promise<void> | undefined
   const ready = (): Promise<void> => {
-    initP ??= runMigrations(pool, PERMISSIONS_MIGRATIONS, {
-      schema,
-      prefix,
-      component: "permissions",
-    })
+    // See `assumeMigrated` in options.ts: a resolved promise, not a cheaper
+    // migration — `runMigrations` costs a transaction plus an advisory lock
+    // even when there is nothing left to apply.
+    initP ??= assumeMigrated
+      ? Promise.resolve()
+      : runMigrations(pool, PERMISSIONS_MIGRATIONS, {
+          schema,
+          prefix,
+          component: "permissions",
+        })
     return initP
   }
 

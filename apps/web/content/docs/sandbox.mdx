@@ -355,7 +355,7 @@ Two gated CI lanes prove the whole deployment path composes — a real Dawn app,
 
 Both are deterministic (the agent turn is driven by a mocked model, no API key) and assert on the **real in-sandbox command output** — that `runBash` ran as the hardened non-root user (`id -u` = `1000`) inside the sandbox workload (not the app), and that the sandbox Pod/container and its volume are removed on thread delete. They're gated behind `DAWN_TEST_SMOKE_E2E=1` and run on demand, the same way the provider conformance lanes do.
 
-The distinction they lock in: only the **Dawn runtime** server (`dawn dev`, `dawn start`, or the node target's `server.mjs`) engages the sandbox. An image built via the LangSmith/`langgraphjs` platform path never runs the Dawn runtime and never touches the sandbox — see [Deploying to production](/docs/deployment).
+The distinction they lock in: only the **Dawn runtime** server (`dawn dev`, `dawn start`, or the node target's `server.mjs`) engages the sandbox. An image built via the LangSmith/`langgraphjs` platform path never runs the Dawn runtime and never touches the sandbox — see [Deploying to production](/docs/deployment). The [`hono` target](/docs/deployment#edge-runtimes) does run the Dawn runtime, but an edge runtime can neither start a container nor talk to a container daemon, so that build fails with `DAWN_E1005` when `sandbox` is configured rather than deploying an app whose isolation silently does nothing.
 
 ## What it is — and isn't
 

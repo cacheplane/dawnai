@@ -37,7 +37,7 @@ import {
   createStaticRuntimeRegistry,
   type RuntimeRegistry,
 } from "./runtime-registry-core.js"
-import type { StartRuntimeServerOptions } from "./runtime-server.js"
+import type { RequestStores, StartRuntimeServerOptions } from "./runtime-server.js"
 import {
   createExecutionErrorBody,
   createRequestErrorBody,
@@ -74,10 +74,82 @@ function requireBoot(
   )
 }
 
+/**
+ * The same failure `requireBoot` reports, raised at first USE rather than at
+ * boot. Reached only when `requestStores` is supplied on a runtime with no
+ * filesystem fallback and the factory did not return the store this request
+ * needs — the one case where boot cannot decide whether a store is missing.
+ *
+ * Its own class because `fetch`'s catch-all would otherwise flatten it into a
+ * generic 500 with no message: before this seam existed the same
+ * misconfiguration rejected `createRuntimeFetchHandler` at boot with the store's
+ * name in it, and an operator whose generated `stores.mjs` omits a store must
+ * still be told WHICH one.
+ */
+class MissingStoreError extends Error {
+  /** Registry code, read back by `dawnErrorCodeOf`. */
+  readonly code = "DAWN_E5301"
+  constructor(readonly store: string) {
+    super(
+      `${store}: no instance provided and this runtime has no filesystem fallback — pass one via options (see the edge deployment docs).`,
+    )
+    this.name = "MissingStoreError"
+  }
+}
+
+function requireStore<T>(store: T | undefined, what: string): T {
+  if (store) return store
+  throw new MissingStoreError(what)
+}
+
+/**
+ * True for `text/event-stream` with or without parameters (`; charset=utf-8`).
+ *
+ * Deliberately not an exact compare: this predicate decides whether the
+ * response is still producing bytes after `fetch` resolves, and a producer that
+ * one day appends a charset would otherwise silently downgrade a live stream to
+ * "settled" — releasing sandboxes and disposing per-request stores mid-stream,
+ * the exact failure the tracking exists to prevent.
+ *
+ * Exported for the tests: no route produces a parameterized content-type today,
+ * so the guard is only reachable directly.
+ */
+export function isEventStream(contentType: string | null): boolean {
+  return contentType?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream"
+}
+
 interface RouteMatcher {
   readonly method: string
   readonly pattern: RegExp
   readonly handle: RouteHandler
+}
+
+/**
+ * What one request keeps alive: the stores built for it, and the two lifetimes
+ * that must BOTH end before those stores may be disposed — the response body,
+ * and any run slot the request's route work still holds.
+ */
+interface RequestLifetime {
+  readonly stores: RequestStores
+  /** The response, including a streaming body, has fully settled. */
+  bodySettled: boolean
+  /** Run slots this request claimed that have not been released yet. */
+  pendingRuns: number
+  /** Body settled AND every run released: nothing more can reference this. */
+  settled: boolean
+  /**
+   * This request's own shutdown signal source, created on first use.
+   *
+   * Per request rather than per handler because an AbortController is an I/O
+   * object on workerd: one created while serving request A throws
+   * "Cannot perform I/O on behalf of a different request" the moment request B
+   * touches it — and since a worker builds its handler inside the FIRST
+   * request (global scope refuses to construct an AbortController at all), a
+   * handler-scoped one made every request after the first fail. Dropped in
+   * `maybeSettle`, which is what keeps the live set from growing once per
+   * request forever.
+   */
+  shutdownController?: AbortController
 }
 
 // ---------------------------------------------------------------------------
@@ -155,12 +227,23 @@ export async function createRuntimeFetchHandler(
     // Middleware is optional by contract, so a runtime with no filesystem
     // fallback resolves "none" rather than failing the boot.
     (await fallbacks?.loadMiddleware(options.appRoot))
+  // `requestStores` makes the boot resolution below OPTIONAL, but only on a
+  // runtime that has no filesystem to fall back to. Every node caller keeps
+  // resolving exactly as before (it has `fallbacks`); an edge caller that
+  // supplies stores per request would otherwise throw at boot, before its
+  // factory ever ran. Anything neither layer supplies still fails loudly, just
+  // at first use — see `requireStore`.
+  const bootStoresOptional = Boolean(options.requestStores) && !fallbacks
   const threadsStore =
     options.threadsStore ??
-    (await requireBoot(fallbacks, "threadsStore").resolveThreadsStore(options.appRoot))
+    (bootStoresOptional
+      ? undefined
+      : await requireBoot(fallbacks, "threadsStore").resolveThreadsStore(options.appRoot))
   const checkpointer =
     options.checkpointer ??
-    (await requireBoot(fallbacks, "checkpointer").resolveCheckpointer(options.appRoot))
+    (bootStoresOptional
+      ? undefined
+      : await requireBoot(fallbacks, "checkpointer").resolveCheckpointer(options.appRoot))
   // Degrades rather than throws: sandboxing is opt-in, so no fallbacks means
   // no sandbox provider — the same result as an app with no `sandbox` config.
   const sandboxManager =
@@ -176,9 +259,16 @@ export async function createRuntimeFetchHandler(
   // store satisfies the memory-candidate HTTP routes directly.
   let memoryStorePromise: Promise<MemoryStore> | undefined
   const getMemoryStore = (): Promise<MemoryStore> => {
+    // `requireStore`, not `requireBoot`: memoryStore is the one slot with no
+    // `requireStore` call site of its own, and it is reachable on a deployed
+    // worker — the `/memory/candidates*` routes are registered unconditionally.
+    // A plain Error here carries no `.code`, so `fetch`'s catch-all flattened
+    // the documented DAWN_E5301 into an anonymous 500; the edge docs and
+    // `edge-capabilities.ts` both promise the code, so raise the error that
+    // actually has it.
     memoryStorePromise ??= options.memoryStore
       ? options.memoryStore()
-      : (requireBoot(fallbacks, "memoryStore").resolveMemoryStore(
+      : (requireStore(fallbacks, "memoryStore").resolveMemoryStore(
           options.appRoot,
         ) as Promise<MemoryStore>)
     return memoryStorePromise
@@ -194,9 +284,13 @@ export async function createRuntimeFetchHandler(
   // deliberate per-request read kept.
   const resolvePermissions = (): Promise<PermissionsStore> =>
     requireBoot(fallbacks, "permissionsStore").resolvePermissionsStore(options.appRoot)
-  const permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>) =
+  const permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>) | undefined =
     options.permissionsStore ??
-    (options.permissionsMode === "boot" ? await resolvePermissions() : resolvePermissions)
+    (bootStoresOptional
+      ? undefined
+      : options.permissionsMode === "boot"
+        ? await resolvePermissions()
+        : resolvePermissions)
 
   let sandboxReaper: ReturnType<typeof setInterval> | undefined
   if (sandboxManager) {
@@ -211,7 +305,22 @@ export async function createRuntimeFetchHandler(
     activeRequests: 0,
     closed: false,
   }
+  // Shutdown is represented twice, and the split is the whole fix for workerd.
+  //
+  //  • `shutdownReason` is a PLAIN VALUE. Every "are we shutting down?" test
+  //    reads this, so no request has to touch an AbortSignal that belongs to
+  //    another request's I/O context;
+  //  • the signal itself is minted PER REQUEST by `getShutdownSignal` below and
+  //    registered here, so `close()` can still abort all of them at once.
+  //
+  // `shutdownController` survives only as the handler's public handle (nothing
+  // in the request path reads it any more). It stays because it is part of the
+  // exported RuntimeFetchHandler shape; on workerd it is constructed inside the
+  // first request and then never touched again, which is harmless.
   const shutdownController = new AbortController()
+  let shutdownReason: Error | undefined
+  /** Per-request shutdown sources that may still have listeners attached. */
+  const liveShutdownControllers = new Set<AbortController>()
 
   // Process-local in-flight run tracking: enables the concurrency gate, the
   // per-run abort signal, and POST /threads/:id/cancel. Scoped to this handler
@@ -225,22 +334,175 @@ export async function createRuntimeFetchHandler(
   const runRegistry = createRunRegistry()
   const resumeClaims = createPendingResumeClaims()
 
+  // Request-scoped store overrides. Keyed on the Request object rather than
+  // carried in AsyncLocalStorage, which would require nodejs_compat on workerd
+  // — the whole point of PR2a was that the bundle needs no such flag. Every
+  // route handler already receives its own `request`, so a WeakMap lookup is
+  // all the scoping this needs, and entries collect with the Request.
+  const perRequest = new WeakMap<Request, RequestLifetime>()
+
+  // Disposals that have started but not finished. close() drains on these as
+  // well, so "close() returned" genuinely implies "every per-request pool is
+  // closed" — an edge host awaiting shutdown has no other signal.
+  const pendingDisposals = new Set<Promise<void>>()
+
+  // Store names already reported by the fail-loud path below, so one
+  // misconfiguration logs once rather than once per request.
+  const loggedMissingStores = new Set<string>()
+  // …and the same for everything else that reaches the catch-all. Keyed by the
+  // message so a repeated misconfiguration logs once, while a genuinely new
+  // failure still gets a line.
+  const loggedFailures = new Set<string>()
+
+  /**
+   * Dispose a request's stores once — and only once BOTH of its lifetimes have
+   * ended.
+   *
+   * Response lifetime is not run lifetime. Three paths keep executing after the
+   * response body settles: an aborted AG-UI stream (whose route unwinds behind
+   * `sourceCleanup`), an abandoned `/runs/wait` (whose 409 is sent while
+   * `invokeResolvedRoute` runs on), and a cancelled AP stream. All three keep
+   * writing checkpoints through the very stores this would tear down. `close()`
+   * already draws exactly this distinction by draining on the run registry as
+   * well as on activeRequests; disposal adopts the same rule.
+   */
+  const maybeSettle = (lifetime: RequestLifetime): void => {
+    if (lifetime.settled || !lifetime.bodySettled || lifetime.pendingRuns > 0) return
+    lifetime.settled = true
+    // Both halves fire under the SAME condition, and that is deliberate: the
+    // request's shutdown signal must stay abortable for exactly as long as its
+    // stores must stay open — until the body has settled and every run it
+    // started has released. Dropping it earlier would leave a detached run that
+    // `close()` can no longer stop, so the drain would sit on it until the
+    // deadline instead of unwinding promptly.
+    if (lifetime.shutdownController) liveShutdownControllers.delete(lifetime.shutdownController)
+    const dispose = lifetime.stores.dispose
+    if (!dispose) return
+    const running = (async () => {
+      try {
+        await dispose()
+      } catch {
+        // Teardown must never turn a served response into a failure.
+      }
+    })()
+    pendingDisposals.add(running)
+    void running.finally(() => pendingDisposals.delete(running))
+  }
+
+  const settleBody = (lifetime: RequestLifetime | undefined): void => {
+    if (!lifetime) return
+    lifetime.bodySettled = true
+    maybeSettle(lifetime)
+  }
+
+  /**
+   * This request's shutdown signal — the one to hand `runRegistry.begin`.
+   *
+   * Memoized on the lifetime so a request that starts several runs composes
+   * them all off one controller, exactly as the single handler-scoped
+   * controller used to. Already-aborted when the handler is closing, which is
+   * what `begin` checks synchronously, so a request that slips past the
+   * `acceptingRequests` gate still gets a dead run rather than a live one.
+   *
+   * A request with no lifetime cannot happen from `fetch` (one is always
+   * installed before dispatch); the fallback keeps this total for any caller
+   * that reaches a route table by another path.
+   */
+  const getShutdownSignal = (request: Request): AbortSignal => {
+    const lifetime = perRequest.get(request)
+    if (!lifetime) {
+      const orphan = new AbortController()
+      if (shutdownReason) orphan.abort(shutdownReason)
+      return orphan.signal
+    }
+    let controller = lifetime.shutdownController
+    if (!controller) {
+      controller = new AbortController()
+      lifetime.shutdownController = controller
+      if (shutdownReason) controller.abort(shutdownReason)
+      else if (!lifetime.settled) liveShutdownControllers.add(controller)
+    }
+    return controller.signal
+  }
+
+  /**
+   * The run registry a request's route work claims its slot from.
+   *
+   * The wrapper counts the slots THIS request holds, so `maybeSettle` can wait
+   * for route work that outlives the response before it disposes the request's
+   * stores or drops its shutdown signal.
+   *
+   * It wraps for every request, not only for requests with stores to dispose:
+   * the shutdown-signal half applies to node callers too, and the counting is
+   * transparent — same handle, same idempotent release, same `activeCount`,
+   * `cancel` and `has` straight through to the shared registry.
+   */
+  const getRunRegistry = (request: Request): RunRegistry => {
+    const lifetime = perRequest.get(request)
+    if (!lifetime) return runRegistry
+    return {
+      activeCount: () => runRegistry.activeCount(),
+      begin: (threadId, shutdownSignal) => {
+        const handle = runRegistry.begin(threadId, shutdownSignal)
+        if (!handle) return undefined
+        lifetime.pendingRuns++
+        let released = false
+        return {
+          get cancelled() {
+            return handle.cancelled
+          },
+          release: () => {
+            handle.release()
+            // Idempotent, exactly like the handle it wraps: callers release
+            // from a finally that a cleanup path may reach twice.
+            if (released) return
+            released = true
+            lifetime.pendingRuns--
+            maybeSettle(lifetime)
+          },
+          signal: handle.signal,
+        }
+      },
+      cancel: (threadId, reason) =>
+        reason === undefined ? runRegistry.cancel(threadId) : runRegistry.cancel(threadId, reason),
+      has: (threadId) => runRegistry.has(threadId),
+    }
+  }
+
+  const getCheckpointer = (request: Request): BaseCheckpointSaver =>
+    requireStore(perRequest.get(request)?.stores.checkpointer ?? checkpointer, "checkpointer")
+  const getThreadsStore = (request: Request): ThreadsStore =>
+    requireStore(perRequest.get(request)?.stores.threadsStore ?? threadsStore, "threadsStore")
+  const getPermissionsStore = (
+    request: Request,
+  ): PermissionsStore | (() => Promise<PermissionsStore>) =>
+    requireStore(
+      perRequest.get(request)?.stores.permissionsStore ?? permissionsStore,
+      "permissionsStore",
+    )
+  const getMemoryStoreFor = (request: Request): Promise<MemoryStore> => {
+    const override = perRequest.get(request)?.stores.memoryStore
+    // Only the boot path memoizes: a per-request store must not outlive its
+    // request, and re-memoizing it would reintroduce the dead-context hang.
+    return override ? Promise.resolve(override) : getMemoryStore()
+  }
+
   const routes = buildRouteTable({
     appRoot: options.appRoot,
     boot,
-    checkpointer,
-    getMemoryStore,
+    getCheckpointer,
+    getMemoryStoreFor,
+    getPermissionsStore,
+    getRunRegistry,
+    getThreadsStore,
     middleware,
-    permissionsStore,
     registry,
     resumeClaims,
-    runRegistry,
     ...(sandboxManager ? { sandboxManager } : {}),
-    signal: shutdownController.signal,
+    getShutdownSignal,
     // Boot manifest → route execution derives the subagents descriptor maps
     // from it with zero entry-file imports.
     ...(options.modules ? { staticModules: options.modules } : {}),
-    threadsStore,
   })
 
   const fetch = async (request: Request): Promise<Response> => {
@@ -252,17 +514,39 @@ export async function createRuntimeFetchHandler(
 
     state.activeRequests++
     let transferredToStream = false
+    let lifetime: RequestLifetime | undefined
     try {
-      const response = await dispatch(routes, request, shutdownController.signal)
+      // Inside the try on purpose: a factory that throws (a pool that cannot
+      // connect) must become a 500 through the handler below, not leak the
+      // in-flight slot and wedge close()'s drain.
+      lifetime = {
+        bodySettled: false,
+        pendingRuns: 0,
+        settled: false,
+        // `{}` for a caller with no per-request stores — every field then falls
+        // through to the boot-resolved instance exactly as before. Installed
+        // UNCONDITIONALLY now because the lifetime also carries this request's
+        // shutdown controller, which every caller needs.
+        stores: options.requestStores ? await options.requestStores(request) : {},
+      }
+      perRequest.set(request, lifetime)
+      const response = await dispatch(routes, request)
       const body = response.body
-      if (body && response.headers.get("content-type") === "text/event-stream") {
+      if (body && isEventStream(response.headers.get("content-type"))) {
         // The Response exists but its SSE body is still streaming. Hold the
         // in-flight slot until the stream settles (fully read, canceled, or
         // errored) so close() cannot release sandboxes mid-stream. The flag
         // flips only after the tracked Response has been constructed — if
         // construction throws, the finally below must still decrement.
+        // Disposal chains onto the SAME settle hook, never onto `fetch`
+        // resolving: an SSE turn is still streaming at that point, and ending
+        // a pool mid-stream breaks the tail of every streaming turn. Settling
+        // the body only ARMS disposal — see maybeSettle for the run half.
         const tracked = new Response(
-          trackStreamSettled(body, () => state.activeRequests--),
+          trackStreamSettled(body, () => {
+            state.activeRequests--
+            settleBody(lifetime)
+          }),
           {
             headers: response.headers,
             status: response.status,
@@ -273,7 +557,7 @@ export async function createRuntimeFetchHandler(
       }
       return response
     } catch (error) {
-      if (shutdownController.signal.aborted) {
+      if (shutdownReason) {
         return Response.json(
           createRequestErrorBody("Request canceled during server shutdown", {
             error: error instanceof Error ? error.message : String(error),
@@ -282,7 +566,40 @@ export async function createRuntimeFetchHandler(
         )
       }
 
+      if (error instanceof MissingStoreError) {
+        // A misconfiguration, not a request failure: every request will fail
+        // the same way until the deployment supplies the store. The generic
+        // 500 below would name neither the store nor the cause, so this one
+        // carries the message and logs it — once per store, so a busy edge
+        // host is not flooded with the same line.
+        if (!loggedMissingStores.has(error.store)) {
+          loggedMissingStores.add(error.store)
+          console.error(`Dawn runtime misconfigured — ${error.message}`)
+        }
+        return Response.json(
+          createExecutionErrorBody(error.message, { store: error.store }, { code: error.code }),
+          { status: 500 },
+        )
+      }
+
+      // Everything else. The BODY stays deliberately opaque — it is served to
+      // whoever made the request, and an internal message is not theirs to
+      // read — but the operator gets the real cause on stderr. Without this
+      // line the three failures most likely to greet an edge deploy
+      // (`DATABASE_URL` unset, no Workers env bound to the Request, a store the
+      // generated `stores.mjs` omits) were a bare "Unexpected runtime server
+      // failure" with nothing anywhere saying why. Deduped by message, for the
+      // same reason the MissingStoreError branch above dedupes by store: a
+      // misconfiguration fails every request identically.
       const code = dawnErrorCodeOf(error)
+      const cause = error instanceof Error ? error.message : String(error)
+      if (!loggedFailures.has(cause)) {
+        loggedFailures.add(cause)
+        console.error(
+          `Dawn runtime failure — ${cause}${code ? ` (${code})` : ""}`,
+          error instanceof Error && error.stack ? `\n${error.stack}` : "",
+        )
+      }
       return Response.json(
         createExecutionErrorBody(
           "Unexpected runtime server failure",
@@ -292,7 +609,10 @@ export async function createRuntimeFetchHandler(
         { status: 500 },
       )
     } finally {
-      if (!transferredToStream) state.activeRequests--
+      if (!transferredToStream) {
+        state.activeRequests--
+        settleBody(lifetime)
+      }
     }
   }
 
@@ -303,7 +623,13 @@ export async function createRuntimeFetchHandler(
 
     state.acceptingRequests = false
     state.closed = true
-    shutdownController.abort(new Error("Runtime server shutting down"))
+    shutdownReason = new Error("Runtime server shutting down")
+    // The public handle, plus every request whose work may still be listening.
+    // Draining below is unchanged; aborting here is only what makes in-flight
+    // runs unwind promptly instead of sitting until the deadline.
+    shutdownController.abort(shutdownReason)
+    for (const controller of liveShutdownControllers) controller.abort(shutdownReason)
+    liveShutdownControllers.clear()
 
     if (sandboxReaper) clearInterval(sandboxReaper)
 
@@ -318,18 +644,23 @@ export async function createRuntimeFetchHandler(
     // fetch wrapper (which only holds the slot for text/event-stream bodies)
     // has already decremented — draining on activeRequests alone would release
     // sandboxes out from under work still using them.
+    //
+    // Per-request store disposals count too: they start only once both of the
+    // above have finished for their request, and a caller that awaits close()
+    // is entitled to assume the pools are actually shut.
     const drainDeadlineMs = options.drainDeadlineMs ?? CLOSE_DRAIN_DEADLINE_MS
     await new Promise<void>((resolve) => {
       const startedAt = Date.now()
       const check = () => {
         const activeRuns = runRegistry.activeCount()
-        if (state.activeRequests === 0 && activeRuns === 0) {
+        if (state.activeRequests === 0 && activeRuns === 0 && pendingDisposals.size === 0) {
           resolve()
           return
         }
         if (Date.now() - startedAt >= drainDeadlineMs) {
           console.warn(
-            `close(): ${state.activeRequests} request(s) and ${activeRuns} run(s) still ` +
+            `close(): ${state.activeRequests} request(s), ` +
+              `${pendingDisposals.size} store disposal(s) and ${activeRuns} run(s) still ` +
               `active after ${Math.round(drainDeadlineMs / 1000)}s — proceeding with shutdown`,
           )
           resolve()
@@ -398,35 +729,57 @@ function trackStreamSettled(
 // Route table builder
 // ---------------------------------------------------------------------------
 
+/**
+ * The store bindings arrive as request-aware ACCESSORS rather than instances:
+ * a request may carry its own stores (see `requestStores`), and a handler is
+ * the first place that knows which request it is serving. Each handler resolves
+ * them once, up front, and hands the resolved values to the sub-handlers below
+ * — whose signatures are unchanged.
+ */
 function buildRouteTable(ctx: {
   readonly appRoot: string
   readonly boot: RouteBoot
-  readonly checkpointer: BaseCheckpointSaver
-  readonly getMemoryStore: () => Promise<MemoryStore>
+  readonly getCheckpointer: (request: Request) => BaseCheckpointSaver
+  readonly getMemoryStoreFor: (request: Request) => Promise<MemoryStore>
+  readonly getPermissionsStore: (
+    request: Request,
+  ) => PermissionsStore | (() => Promise<PermissionsStore>)
+  /**
+   * Also request-aware, and for the same reason: a request whose stores are
+   * disposed on completion must know when the run it started actually ends,
+   * which is not when its response does.
+   */
+  readonly getRunRegistry: (request: Request) => RunRegistry
+  readonly getThreadsStore: (request: Request) => ThreadsStore
   readonly middleware: DawnMiddleware | undefined
-  readonly permissionsStore: PermissionsStore | (() => Promise<PermissionsStore>)
   readonly registry: RuntimeRegistry
   readonly resumeClaims: PendingResumeClaims
-  readonly runRegistry: RunRegistry
   readonly sandboxManager?: SandboxManager
-  readonly signal: AbortSignal
+  /**
+   * This request's shutdown signal, minted per request rather than shared.
+   *
+   * A single handler-scoped AbortSignal cannot work here: on workerd it is an
+   * I/O object bound to whichever request constructed it, so every later
+   * request throws on touching it. Route handlers call this with their own
+   * `request` and forward the result exactly as they forwarded the old one.
+   */
+  readonly getShutdownSignal: (request: Request) => AbortSignal
   readonly staticModules?: DawnStaticModules
-  readonly threadsStore: ThreadsStore
 }): RouteMatcher[] {
   const {
     appRoot,
     boot,
-    checkpointer,
-    getMemoryStore,
+    getCheckpointer,
+    getMemoryStoreFor,
+    getPermissionsStore,
+    getRunRegistry,
+    getThreadsStore,
     middleware,
-    permissionsStore,
     registry,
+    getShutdownSignal,
     resumeClaims,
-    runRegistry,
     sandboxManager,
-    signal,
     staticModules,
-    threadsStore,
   } = ctx
 
   // Server-scoped map: thread_id → last routeKey used for that thread.
@@ -466,7 +819,9 @@ function buildRouteTable(ctx: {
             metadata = bodyMetadata
           }
         }
-        const thread = await threadsStore.createThread(metadata !== undefined ? { metadata } : {})
+        const thread = await getThreadsStore(request).createThread(
+          metadata !== undefined ? { metadata } : {},
+        )
         return Response.json(thread, { status: 200 })
       },
       method: "POST",
@@ -477,8 +832,8 @@ function buildRouteTable(ctx: {
     // GET /threads/:thread_id — fetch a thread
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) => {
-        const thread = await threadsStore.getThread(params.thread_id ?? "")
+      handle: async (request, params) => {
+        const thread = await getThreadsStore(request).getThread(params.thread_id ?? "")
         if (!thread) {
           return Response.json(createRequestErrorBody("Thread not found"), {
             status: 404,
@@ -494,9 +849,10 @@ function buildRouteTable(ctx: {
     // DELETE /threads/:thread_id — delete thread + checkpoints
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) => {
+      handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
-        await threadsStore.deleteThread(threadId)
+        const checkpointer = getCheckpointer(request)
+        await getThreadsStore(request).deleteThread(threadId)
         // Best-effort: delete checkpoints if the saver supports it.
         if (
           typeof (checkpointer as unknown as { deleteThread?: unknown }).deleteThread === "function"
@@ -522,7 +878,7 @@ function buildRouteTable(ctx: {
     // unambiguous stand-in. Semantics match LangGraph's action=interrupt —
     // stop the run, keep checkpointed state. Rollback is not supported.
     {
-      handle: async (_request, params) => {
+      handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
         // Cancel first: it is synchronous, so nothing can interleave between
         // observing the slot and aborting it. Awaiting getThread beforehand
@@ -537,10 +893,10 @@ function buildRouteTable(ctx: {
         // single DB write wide and corrupts nothing — the streaming client has
         // already received the real output. Closing it would require tracking a
         // settled state per run, which is not worth the complexity.
-        if (runRegistry.cancel(threadId)) {
+        if (getRunRegistry(request).cancel(threadId)) {
           return Response.json({ status: "interrupted", thread_id: threadId }, { status: 200 })
         }
-        const thread = await threadsStore.getThread(threadId)
+        const thread = await getThreadsStore(request).getThread(threadId)
         if (!thread) {
           return Response.json(
             createRequestErrorBody("Thread not found", {
@@ -570,19 +926,19 @@ function buildRouteTable(ctx: {
         handleApStreamRequest({
           appRoot,
           boot,
-          checkpointer,
-          getMemoryStore,
+          checkpointer: getCheckpointer(request),
+          getMemoryStore: () => getMemoryStoreFor(request),
           middleware,
-          permissionsStore,
+          permissionsStore: getPermissionsStore(request),
           registry,
           request,
           ...(sandboxManager ? { sandboxManager } : {}),
-          runRegistry,
-          signal,
+          runRegistry: getRunRegistry(request),
+          signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
-          threadsStore,
+          threadsStore: getThreadsStore(request),
         }),
       method: "POST",
       pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/stream(?:\?.*)?$/,
@@ -596,16 +952,16 @@ function buildRouteTable(ctx: {
         handleAgUiFetchRequest({
           appRoot,
           boot,
-          checkpointer,
-          getMemoryStore,
+          checkpointer: getCheckpointer(request),
+          getMemoryStore: () => getMemoryStoreFor(request),
           middleware,
-          permissionsStore,
+          permissionsStore: getPermissionsStore(request),
           registry,
           resumeClaims,
-          runRegistry,
-          threadsStore,
+          runRegistry: getRunRegistry(request),
+          threadsStore: getThreadsStore(request),
           ...(sandboxManager ? { sandboxManager } : {}),
-          signal,
+          signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
           request,
           routeKey: params.routeId ?? "",
@@ -618,7 +974,8 @@ function buildRouteTable(ctx: {
     // GET /memory/candidates — list memory candidates (all namespaces)
     // ------------------------------------------------------------------
     {
-      handle: async () => handleMemoryListRequest({ memoryStore: await getMemoryStore() }),
+      handle: async (request) =>
+        handleMemoryListRequest({ memoryStore: await getMemoryStoreFor(request) }),
       method: "GET",
       pattern: /^\/memory\/candidates(?:\?.*)?$/,
     },
@@ -627,14 +984,14 @@ function buildRouteTable(ctx: {
     // POST /memory/candidates/:id/approve — approve with reconciliation
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) =>
+      handle: async (request, params) =>
         handleMemoryApproveRequest({
           appRoot,
           ...(boot.bootFallbacks
             ? { resolveIdentityKeys: boot.bootFallbacks.resolveIdentityKeys }
             : {}),
           id: params.id ?? "",
-          memoryStore: await getMemoryStore(),
+          memoryStore: await getMemoryStoreFor(request),
         }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/approve(?:\?.*)?$/,
@@ -644,10 +1001,10 @@ function buildRouteTable(ctx: {
     // POST /memory/candidates/:id/reject — delete the record
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) =>
+      handle: async (request, params) =>
         handleMemoryRejectRequest({
           id: params.id ?? "",
-          memoryStore: await getMemoryStore(),
+          memoryStore: await getMemoryStoreFor(request),
         }),
       method: "POST",
       pattern: /^\/memory\/candidates\/(?<id>[^/?#]+)\/reject(?:\?.*)?$/,
@@ -661,19 +1018,19 @@ function buildRouteTable(ctx: {
         handleApWaitRequest({
           appRoot,
           boot,
-          checkpointer,
-          getMemoryStore,
+          checkpointer: getCheckpointer(request),
+          getMemoryStore: () => getMemoryStoreFor(request),
           middleware,
-          permissionsStore,
+          permissionsStore: getPermissionsStore(request),
           registry,
           request,
-          runRegistry,
+          runRegistry: getRunRegistry(request),
           ...(sandboxManager ? { sandboxManager } : {}),
-          signal,
+          signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
-          threadsStore,
+          threadsStore: getThreadsStore(request),
         }),
       method: "POST",
       pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/runs\/wait(?:\?.*)?$/,
@@ -683,9 +1040,9 @@ function buildRouteTable(ctx: {
     // GET /threads/:thread_id/state — latest checkpoint state
     // ------------------------------------------------------------------
     {
-      handle: async (_request, params) => {
+      handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
-        const tuple = await checkpointer.getTuple({
+        const tuple = await getCheckpointer(request).getTuple({
           configurable: { thread_id: threadId, checkpoint_ns: "" },
         })
         if (!tuple) {
@@ -715,20 +1072,20 @@ function buildRouteTable(ctx: {
         handleResumeRequest({
           appRoot,
           boot,
-          checkpointer,
-          getMemoryStore,
+          checkpointer: getCheckpointer(request),
+          getMemoryStore: () => getMemoryStoreFor(request),
           middleware,
-          permissionsStore,
+          permissionsStore: getPermissionsStore(request),
           registry,
           resumeClaims,
           request,
-          runRegistry,
+          runRegistry: getRunRegistry(request),
           ...(sandboxManager ? { sandboxManager } : {}),
-          signal,
+          signal: getShutdownSignal(request),
           ...(staticModules ? { staticModules } : {}),
           threadId: params.thread_id ?? "",
           threadRouteMap,
-          threadsStore,
+          threadsStore: getThreadsStore(request),
         }),
       method: "POST",
       pattern: /^\/threads\/(?<thread_id>[^/?#]+)\/resume(?:\?.*)?$/,
@@ -740,11 +1097,7 @@ function buildRouteTable(ctx: {
 // Dispatcher
 // ---------------------------------------------------------------------------
 
-async function dispatch(
-  routes: RouteMatcher[],
-  request: Request,
-  _signal: AbortSignal,
-): Promise<Response> {
+async function dispatch(routes: RouteMatcher[], request: Request): Promise<Response> {
   const method = request.method
   const pathname = new URL(request.url).pathname
 

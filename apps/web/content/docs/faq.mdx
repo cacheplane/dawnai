@@ -28,7 +28,7 @@ No. Dawn is TypeScript-only and the type inference is the whole point — tool p
 
 ### Is Dawn production-ready?
 
-Dawn produces deployment artifacts; the framework itself is pre-1.0 and the API surface is still moving. `dawn build` emits a runnable `node` target (`server.mjs` plus a hardened `Dockerfile`) and a `langsmith` target (`langgraph.json`) by default; `dawn start` serves the `node` target in production on `0.0.0.0`. Lock to a pinned version and read release notes between upgrades. See [Deployment](/docs/deployment).
+Dawn produces deployment artifacts; the framework itself is pre-1.0 and the API surface is still moving. `dawn build` emits a runnable `node` target (`server.mjs` plus a hardened `Dockerfile`) and a `langsmith` target (`langgraph.json`) by default, plus an opt-in `hono` target for Cloudflare Workers and other edge runtimes; `dawn start` serves the `node` target in production on `0.0.0.0`. Lock to a pinned version and read release notes between upgrades. See [Deployment](/docs/deployment).
 
 ## Working in Dawn
 
@@ -38,7 +38,7 @@ Yes — that is the point. A route's `index.ts` can default-export an `agent()` 
 
 ### What does `dawn build` actually do?
 
-It walks your routes, runs typegen, then writes deployment artifacts for each configured `build.targets` (both by default). The `node` target emits `.dawn/build/server.mjs` — which boots the real Dawn runtime (Agent Protocol, AG-UI, and the sandbox if configured) — plus a hardened `Dockerfile`; run it with `dawn start` or `docker build`/`docker run`. The `langsmith` target emits `.dawn/build/langgraph.json` plus a per-route entry file under `.dawn/build/<routeSlug>.ts`; each agent route's entry imports your default `agent()` descriptor, materializes it as a LangGraph graph, and wires in discovered tools. Each `assistant_id` is `<routeId>#<kind>` — for example `/research#agent`. See [Deployment](/docs/deployment).
+It walks your routes, runs typegen, then writes deployment artifacts for each configured `build.targets` (`node` and `langsmith` by default). The `node` target emits `.dawn/build/server.mjs` — which boots the real Dawn runtime (Agent Protocol, AG-UI, and the sandbox if configured) — plus a hardened `Dockerfile`; run it with `dawn start` or `docker build`/`docker run`. The `langsmith` target emits `.dawn/build/langgraph.json` plus a per-route entry file under `.dawn/build/<routeSlug>.ts`; each agent route's entry imports your default `agent()` descriptor, materializes it as a LangGraph graph, and wires in discovered tools. Each `assistant_id` is `<routeId>#<kind>` — for example `/research#agent`. The opt-in `hono` target emits `.dawn/build/app.mjs` plus a `wrangler.toml`, for edge runtimes. See [Deployment](/docs/deployment).
 
 ### Why a meta-framework instead of a library?
 
@@ -49,6 +49,12 @@ A library is something you call. A meta-framework is something you write inside.
 ### Can I deploy outside LangSmith?
 
 Yes. `dawn build`'s `node` target emits a `server.mjs` that boots the real Dawn runtime plus a hardened `Dockerfile` — build the image and run it wherever you run containers, or serve it directly with `dawn start`. This is the only deployment path that engages the execution sandbox. If you'd rather containerize the `langgraph.json` output instead, `dawn build`'s `langsmith` target still emits it; feed `.dawn/build/` to any container that runs the LangGraph runtime, but note that path does not run the Dawn runtime or the sandbox. See [Deployment](/docs/deployment).
+
+### Can Dawn run on Cloudflare Workers?
+
+Yes, for apps that fit the edge subset. Add `"hono"` to `build.targets` and `dawn build` emits an `app.mjs` plus a `wrangler.toml` you deploy with `wrangler deploy`; durable state goes to Postgres over a `@neondatabase/serverless` WebSocket pool, set through a `DATABASE_URL` binding. No `nodejs_compat` flag is needed. The sandbox, workspace file and shell tools, skills, and long-term memory are unavailable there, and the build fails naming them rather than degrading quietly.
+
+Read [Edge runtimes](/docs/deployment#edge-runtimes) before you commit to this path. The evidence behind that "yes" is a gated CI lane serving real AG-UI turns under **local** workerd — the same binary Cloudflare runs — and not a deploy to Cloudflare itself, which nobody has performed yet. [What is proven, and what is not](/docs/deployment#what-is-proven-and-what-is-not) lists the gaps that leaves, bundle size and production connection limits among them.
 
 ### Can Dawn use Postgres for long-term memory?
 

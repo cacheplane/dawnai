@@ -273,8 +273,9 @@ build?: {
 `targets` selects which deployment artifacts `dawn build` emits. Known targets:
 - `"node"` — a runnable Node server entry (`.dawn/build/server.mjs`, which boots `serveRuntime`) plus a hardened `Dockerfile`. This is the only target that engages the sandbox in production. Run it with `dawn start` or `docker build`/`docker run`.
 - `"langsmith"` — the LangSmith deploy config (`.dawn/build/langgraph.json` and the per-route materialized graph entry files).
+- `"hono"` — an edge entry point (`.dawn/build/app.mjs`), its module manifest and per-request Postgres store factory, and a `wrangler.toml` scaffold, for Cloudflare Workers and other web-standard runtimes. **Not emitted by default**, and it serves a [subset of Dawn](/docs/deployment#what-the-edge-cannot-serve) — the build fails with `DAWN_E1005` when the app uses something the edge cannot run.
 
-Both are emitted by default. Restrict to one target — e.g. `{ build: { targets: ["node"] } }` — if you only deploy that way. See [Deployment](/docs/deployment) for the full bridge.
+`node` and `langsmith` are emitted by default. Naming `targets` **replaces** that list rather than adding to it: restrict to one — e.g. `{ build: { targets: ["node"] } }` — if you only deploy that way, and name every target you want otherwise (`{ build: { targets: ["node", "hono"] } }`). See [Deployment](/docs/deployment) for the full bridge.
 
 ---
 
@@ -339,6 +340,16 @@ import { Pool } from "pg"
 // and three owned pools burn three times the budget for no benefit.
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
+// Required, not optional. `pg` emits 'error' on the POOL when an IDLE client
+// fails, and an EventEmitter 'error' with no listener is an uncaught exception
+// that ends the process. Idle connections drop routinely — server restart,
+// failover, `idle_session_timeout` — so without this a normal Postgres blip
+// takes your app down instead of the pool replacing one connection. A pool you
+// build is yours to handle; the stores never attach a listener to it.
+pool.on("error", (error) => {
+  console.error("postgres pool client error (connection dropped):", error)
+})
+
 export default config({
   checkpointer: postgresCheckpointer({ pool }),
   threadsStore: createPostgresThreadsStore({ pool }),
@@ -351,6 +362,21 @@ export default config({
 
 Any Postgres 14+ database works; no extensions are required. Each store migrates lazily on first use under a `pg_advisory_xact_lock`, so N instances cold-starting against a virgin database converge instead of racing. Call `ready()` on a store to migrate at boot instead.
 
+#### Two entry points
+
+`pool` is **required** on the main entry, which imports `pg` for types only so that it links on a runtime where a raw TCP driver cannot be bundled at all. The pool is typed structurally (`{ query, connect, end }`), so a `pg.Pool` and a `@neondatabase/serverless` WebSocket pool both satisfy it.
+
+`@dawn-ai/postgres-storage/node` is the same three factories with a `connectionString` convenience layered on, and it does import `pg` as a value:
+
+```ts
+import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
+
+// Builds and owns a pg pool; close() ends it.
+const checkpointer = postgresCheckpointer({ connectionString: process.env.DATABASE_URL })
+```
+
+Reach for `/node` on Node, Bun, or Vercel functions when you want the convenience. Use the main entry with your own pool everywhere else.
+
 Note that `permissions.store` receives `mode` explicitly. A custom store owns its own mode and allow/deny lists — see [`permissions.store`](#permissionsstore).
 
 ### What this does and does not run on
@@ -359,13 +385,13 @@ Note that `permissions.store` receives `mode` explicitly. A custom store owns it
 |---|---|---|
 | Node, Bun | Yes | Direct TCP to Postgres. |
 | Vercel functions | Yes | Direct TCP to Postgres. |
-| Cloudflare Workers | **Not with a raw connection** | `pg` opens a TCP socket, which workerd does not provide. A Workers deploy needs [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) or an HTTP-based driver in front of the database. Dawn does not currently ship a verified Workers configuration for these stores. |
+| Cloudflare Workers | **Not with `pg`** | `pg` opens a TCP socket, which workerd does not provide — so the `/node` entry is unusable there. Inject a [`@neondatabase/serverless`](https://github.com/neondatabase/serverless) WebSocket `Pool` into the main entry instead; it satisfies `SqlPool`, and a throwaway spike confirmed inside real workerd that the checkpointer's `BEGIN`/`COMMIT`/`ROLLBACK` are genuine session transactions on that path. That wiring is what `dawn build`'s [`hono` target](/docs/deployment#the-hono-build-target) generates, and a gated CI lane exercises it inside real workerd end to end — at the AG-UI level, [with limits worth reading](/docs/deployment#what-is-proven-and-what-is-not). Build the pool and the stores **per request** — see [why](/docs/deployment#why-the-stores-are-per-request). [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) should also work but is untested; it needs a Cloudflare account. |
 
 ### Your app owns store teardown
 
 `handler.close()` on the web-standard runtime handler stops accepting requests, aborts the shutdown controller, drains in-flight requests, and releases sandboxes. It does **not** touch the stores — the runtime never created them, so it does not own their lifetime.
 
-Each store exposes `close()`. A store built from `connectionString` owns its pool and `close()` ends it; a store built from an injected `pool` deliberately leaves that pool alone, so the shared-pool config above must end the pool itself:
+Each store exposes `close()`. A store built from `connectionString` (via the `/node` entry) owns its pool and `close()` ends it; a store built from an injected `pool` deliberately leaves that pool alone, so the shared-pool config above must end the pool itself:
 
 ```ts
 await handler.close()

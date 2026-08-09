@@ -7,9 +7,8 @@ import type {
   CheckpointTuple,
 } from "@langchain/langgraph-checkpoint"
 import { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
-import type { Pool } from "pg"
 import { withTransaction } from "./internal/tx.js"
-import { type PostgresStoreOptions, resolvePool } from "./options.js"
+import type { PostgresStoreOptions } from "./options.js"
 import {
   assertIdentifier,
   CHECKPOINTER_MIGRATIONS,
@@ -18,6 +17,7 @@ import {
   qualify,
   runMigrations,
 } from "./schema.js"
+import { type SqlPool, throwNoPool } from "./sql.js"
 
 const CHECKPOINT_COLUMNS =
   "thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata"
@@ -125,12 +125,13 @@ export type PostgresCheckpointerOptions = PostgresStoreOptions
  * `JsonPlusSerializer` round-trip losslessly, matching the SQLite saver.
  */
 export class DawnPostgresSaver extends BaseCheckpointSaver {
-  private readonly pool: Pool
+  private readonly pool: SqlPool
   private readonly ownsPool: boolean
   private readonly schema: string
   private readonly prefix: string
   private readonly checkpointsTable: string
   private readonly writesTable: string
+  private readonly assumeMigrated: boolean
   private initP: Promise<void> | undefined
 
   constructor(options: PostgresCheckpointerOptions = {}) {
@@ -143,9 +144,9 @@ export class DawnPostgresSaver extends BaseCheckpointSaver {
     this.prefix = prefix
     this.checkpointsTable = qualify({ schema, prefix }, "checkpoints")
     this.writesTable = qualify({ schema, prefix }, "writes")
-    const { ownsPool, pool } = resolvePool(options)
-    this.ownsPool = ownsPool
-    this.pool = pool
+    this.ownsPool = options.ownsPool ?? false
+    this.assumeMigrated = options.assumeMigrated ?? false
+    this.pool = options.pool ?? throwNoPool()
   }
 
   /**
@@ -155,15 +156,20 @@ export class DawnPostgresSaver extends BaseCheckpointSaver {
    * is handled by the advisory lock inside `runMigrations`.
    */
   ready(): Promise<void> {
-    this.initP ??= runMigrations(this.pool, CHECKPOINTER_MIGRATIONS, {
-      schema: this.schema,
-      prefix: this.prefix,
-      component: "checkpointer",
-    })
+    // See `assumeMigrated` in options.ts: a resolved promise, not a cheaper
+    // migration — `runMigrations` costs a transaction plus an advisory lock
+    // even when there is nothing left to apply.
+    this.initP ??= this.assumeMigrated
+      ? Promise.resolve()
+      : runMigrations(this.pool, CHECKPOINTER_MIGRATIONS, {
+          schema: this.schema,
+          prefix: this.prefix,
+          component: "checkpointer",
+        })
     return this.initP
   }
 
-  /** Close the underlying pool. No-op if an external pool was injected. */
+  /** Close the pool if this store owns it (`ownsPool`); otherwise a no-op. */
   async close(): Promise<void> {
     if (this.ownsPool) await this.pool.end()
   }

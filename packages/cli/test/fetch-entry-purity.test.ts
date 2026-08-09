@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { MemorySaver } from "@langchain/langgraph"
-import { build, type Metafile } from "esbuild"
+import { build, type Metafile, type Plugin } from "esbuild"
 import { afterEach, describe, expect, it } from "vitest"
 
 import type { createRuntimeFetchHandler as createFetchHandler } from "../src/lib/dev/runtime-fetch-core.js"
@@ -106,6 +106,176 @@ async function bundleForBrowser(entry: string): Promise<void> {
   })
 }
 
+// ---------------------------------------------------------------------------
+// The Node-only GLOBAL gate.
+//
+// Everything above inspects IMPORT EDGES. A bare `process.env.X` has no import
+// edge at all, so the whole suite passed while six unguarded reads sat on this
+// graph — including `OPENAI_BASE_URL` in the openai model constructor, i.e. the
+// first turn of the canonical app this target scaffolds. On workerd without
+// `nodejs_compat` (what the emitted `wrangler.toml` deliberately asks for)
+// `process` is not defined, so those lines are a ReferenceError, not a quiet
+// `undefined`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Globals that Node defines and a bare workerd/browser realm does not. A
+ * reference to any of them is a hard crash the moment the line evaluates.
+ */
+const NODE_ONLY_GLOBALS = [
+  "process",
+  "Buffer",
+  "global",
+  "__dirname",
+  "__filename",
+  "require",
+] as const
+
+function sentinelFor(name: string): string {
+  return `__DAWN_NODE_GLOBAL_${name}__`
+}
+
+/**
+ * The mechanism that makes this gate trustworthy. Grepping the bundle for
+ * `process` is hopeless — a 4 MB bundle is full of the token inside string
+ * literals (a tokenizer vocabulary, `"in-process"`), in comments, as a property
+ * name, and as esbuild-renamed locals (`process2`) that shadow nothing.
+ *
+ * esbuild's `define` substitution is SCOPE-AWARE: it rewrites only genuine
+ * references to the global binding, never a string, a comment, a property key,
+ * or an identifier shadowed by a local declaration. Bundling with each global
+ * mapped to a unique sentinel therefore turns "find the real global reads" into
+ * an exact substring search with no false positives.
+ */
+const GLOBAL_SENTINEL_DEFINES: Record<string, string> = Object.fromEntries(
+  NODE_ONLY_GLOBALS.map((name) => [name, sentinelFor(name)]),
+)
+
+/**
+ * Externalize every non-Dawn package so the bundle holds ONLY code this repo
+ * owns. Third-party code legitimately uses short-circuit guards we cannot
+ * refactor, so the zero-tolerance rule can only be applied to our own sources.
+ */
+const externalizeNonDawn: Plugin = {
+  name: "externalize-non-dawn",
+  setup(pluginBuild) {
+    // Bare specifiers only — relative and absolute paths must still resolve.
+    pluginBuild.onResolve({ filter: /^[^./]/ }, (args) =>
+      args.path.startsWith("@dawn-ai/") ? null : { external: true, path: args.path },
+    )
+  },
+}
+
+/**
+ * Link for the browser with every Node-only global replaced by its sentinel,
+ * and hand back the code so the assertions can read it.
+ */
+async function bundleWithGlobalSentinels(source: {
+  readonly dawnOnly?: boolean
+  readonly entry?: string
+  readonly extraExternals?: readonly string[]
+  readonly stdin?: string
+}): Promise<string> {
+  const result = await build({
+    absWorkingDir: pkgRoot,
+    bundle: true,
+    conditions: ["import"],
+    define: GLOBAL_SENTINEL_DEFINES,
+    ...(source.entry ? { entryPoints: [join(pkgRoot, "src", source.entry)] } : {}),
+    external: [...MODEL_LAYER_EXTERNALS, ...(source.extraExternals ?? [])],
+    format: "esm",
+    logLevel: "silent",
+    mainFields: ["module", "main"],
+    outfile: join(pkgRoot, "fetch-entry-purity.sentinel.bundle.mjs"),
+    platform: "browser",
+    ...(source.dawnOnly ? { plugins: [externalizeNonDawn] } : {}),
+    ...(source.stdin
+      ? { stdin: { contents: source.stdin, loader: "js" as const, resolveDir: pkgRoot } }
+      : {}),
+    write: false,
+  })
+  const output = result.outputFiles?.[0]
+  if (!output) throw new Error("esbuild produced no output")
+  return output.text
+}
+
+interface GlobalReference {
+  readonly global: string
+  readonly guarded: boolean
+  readonly line: number
+  readonly text: string
+}
+
+/**
+ * Is this reference protected by a `typeof` check in the SAME statement?
+ *
+ * This is the one heuristic in the gate, and it exists to admit the real
+ * short-circuit form third-party code uses:
+ *
+ *   typeof process != "object" || process.env.BUF_BIGINT_DISABLE !== "1"
+ *
+ * The second read there is genuinely safe, and no amount of import-edge
+ * inspection can tell us so. We look backwards from the reference to the
+ * nearest statement boundary (`;`, `{`, `}`, or start of line — esbuild's
+ * un-minified output keeps one statement per line) and ask whether a `typeof`
+ * of the SAME global appears in that window. It cannot be fooled by a guard in
+ * a neighbouring statement, because the boundary scan cuts it off.
+ *
+ * Where it is imprecise it is deliberately imprecise in the SAFE direction for
+ * Dawn's own code, because Dawn's code is held to the stricter rule below that
+ * ignores this function entirely.
+ */
+function isTypeofGuarded(line: string, at: number, sentinel: string): boolean {
+  const statementStart = Math.max(
+    line.lastIndexOf(";", at),
+    line.lastIndexOf("{", at),
+    line.lastIndexOf("}", at),
+  )
+  const statement = line.slice(statementStart + 1, at + sentinel.length)
+  return new RegExp(`typeof\\s+${sentinel}`).test(statement)
+}
+
+/** Every real reference to a Node-only global in a sentinel-defined bundle. */
+function findNodeGlobalReferences(code: string): GlobalReference[] {
+  const found: GlobalReference[] = []
+  code.split("\n").forEach((text, index) => {
+    for (const name of NODE_ONLY_GLOBALS) {
+      const sentinel = sentinelFor(name)
+      for (
+        let at = text.indexOf(sentinel);
+        at !== -1;
+        at = text.indexOf(sentinel, at + sentinel.length)
+      ) {
+        found.push({
+          global: name,
+          guarded: isTypeofGuarded(text, at, sentinel),
+          line: index + 1,
+          text: text.trim().slice(0, 200),
+        })
+      }
+    }
+  })
+  return found
+}
+
+/** Readable failure output — the assertion prints the offending lines. */
+function describeReferences(refs: readonly GlobalReference[]): string[] {
+  return refs.map((ref) => `${ref.global} @ line ${ref.line}: ${ref.text}`)
+}
+
+/**
+ * A deliberately dirty entry, used as the negative control. It must produce
+ * BOTH classifications, so a green result proves the scanner discriminates
+ * rather than simply reporting everything (or nothing).
+ */
+const DIRTY_GLOBALS_FIXTURE = [
+  // The exact shape of the shipped defect: unguarded, load-bearing config read.
+  'export const unguardedEnv = process.env.DAWN_FIXTURE_BASE_URL ?? ""',
+  "export const unguardedDirname = __dirname",
+  'export const guardedEnv = typeof process === "undefined" ? "" : process.env.DAWN_FIXTURE_FLAG',
+  'export const guardedBuffer = typeof Buffer === "undefined" ? 0 : Buffer.byteLength("x")',
+].join("\n")
+
 /** Every `node:` / bare-builtin / loader import in the graph, as `spec <- file`. */
 function nodeImportEdges(metafile: Metafile): string[] {
   const edges = new Set<string>()
@@ -181,6 +351,30 @@ describe("@dawn-ai/cli/fetch graph purity", () => {
     await expect(bundleForBrowser("fetch-exports.ts")).resolves.toBeUndefined()
   }, 120_000)
 
+  it("contains no UNGUARDED Node-only global anywhere in the graph", async () => {
+    const code = await bundleWithGlobalSentinels({ entry: "fetch-exports.ts" })
+    const refs = findNodeGlobalReferences(code)
+    expect(describeReferences(refs.filter((ref) => !ref.guarded))).toEqual([])
+    // Non-vacuity: the scan must actually be looking at a real bundle. Third-
+    // party code in this graph carries the guarded `typeof process` form, so a
+    // zero total would mean the sentinels never landed.
+    expect(refs.length).toBeGreaterThan(0)
+  }, 120_000)
+
+  it("references no Node-only global AT ALL from Dawn-owned code", async () => {
+    // The strict rule, and the one that holds the line. Dawn code has a seam
+    // for this — `readRuntimeEnv` from `@dawn-ai/core`, which reads
+    // `globalThis.process?.env` (a property access off a global every runtime
+    // defines) and falls back to whatever `seedRuntimeEnv` supplied. Because
+    // that seam exists, our own sources need no `typeof` guard anywhere, so
+    // this assertion does not have to trust the heuristic above at all.
+    const code = await bundleWithGlobalSentinels({ dawnOnly: true, entry: "fetch-exports.ts" })
+    expect(describeReferences(findNodeGlobalReferences(code))).toEqual([])
+    // Non-vacuity: prove the Dawn graph really is in this bundle, and that the
+    // sanctioned accessor is what replaced the bare reads.
+    expect(code).toContain("globalThis.process")
+  }, 120_000)
+
   // Negative control: the same gate applied to the node runtime entry MUST
   // fail every check above, proving the assertions can actually detect a
   // violation (and are not passing because the metafile is empty or the
@@ -192,6 +386,37 @@ describe("@dawn-ai/cli/fetch graph purity", () => {
     expect(nodeImportEdges(metafile).length).toBeGreaterThan(0)
     expect(loaderImportEdges(metafile).length).toBeGreaterThan(0)
     await expect(bundleForBrowser("runtime-exports.ts")).rejects.toThrow(/Could not resolve/)
+  }, 120_000)
+
+  // Negative control for the GLOBAL gate, in two parts.
+  it("detects violations — a dirty fixture is flagged, and guarded reads are not", async () => {
+    const code = await bundleWithGlobalSentinels({ stdin: DIRTY_GLOBALS_FIXTURE })
+    const refs = findNodeGlobalReferences(code)
+    const unguarded = refs.filter((ref) => !ref.guarded).map((ref) => ref.global)
+    const guarded = refs.filter((ref) => ref.guarded).map((ref) => ref.global)
+
+    // The class that shipped: an unguarded `process.env` read, plus a second
+    // Node-only global to prove the list is not `process`-only.
+    expect(unguarded).toContain("process")
+    expect(unguarded).toContain("__dirname")
+
+    // …and the other half, which is what keeps this gate from being disabled:
+    // genuinely guarded reads are NOT reported as violations.
+    expect(guarded).toContain("process")
+    expect(guarded).toContain("Buffer")
+    expect(unguarded).not.toContain("Buffer")
+  }, 120_000)
+
+  it("detects violations — the node ./runtime entry is full of unguarded globals", async () => {
+    // The same control against real code rather than a fixture. `node:*` has to
+    // be external here (this entry cannot link for the browser at all, which is
+    // the assertion two blocks up); the global scan is unaffected by that.
+    const code = await bundleWithGlobalSentinels({
+      entry: "runtime-exports.ts",
+      extraExternals: ["node:*", ...LOADER_EXTERNALS],
+    })
+    const unguarded = findNodeGlobalReferences(code).filter((ref) => !ref.guarded)
+    expect(unguarded.length).toBeGreaterThan(0)
   }, 120_000)
 
   // …and the commander check against the CLI bin, the one entry that has it.

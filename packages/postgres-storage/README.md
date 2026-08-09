@@ -20,11 +20,18 @@ pnpm add @dawn-ai/postgres-storage pg
 
 ## Postgres Requirements
 
-Any Postgres 14+ database works; no extensions are required. The stores talk to
-Postgres over the standard `pg` driver, which opens a TCP connection — so this
-package runs on Node, Bun, and Vercel functions. Cloudflare Workers has no raw
-TCP socket for `pg` to use; a Workers deploy needs Hyperdrive or an HTTP-based
-driver in front of the database.
+Any Postgres 14+ database works; no extensions are required. How the stores
+reach it depends on which entry point you use — see
+[Two entry points](#two-entry-points).
+
+The `/node` entry talks to Postgres over the standard `pg` driver, which opens a
+raw TCP connection: Node, Bun, and Vercel functions. workerd has no raw TCP
+socket for `pg` to use, so an edge deploy uses the **main** entry and injects a
+pool built by a driver that speaks something workerd does have.
+`@neondatabase/serverless` over WebSocket is that driver — it is what Dawn's
+`hono` build target emits, and the only combination that has actually been run
+(see [Limitations](#limitations)). Hyperdrive should work the same way; it is
+untested here.
 
 For local development:
 
@@ -50,6 +57,16 @@ import { Pool } from "pg"
 // owned pools burn three times the budget for no benefit.
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
+// Required, not optional. `pg` emits 'error' on the POOL when an IDLE client
+// fails, and an EventEmitter 'error' with no listener is an uncaught exception
+// that ends the process. Idle connections drop routinely — server restart,
+// failover, `idle_session_timeout` — so without this a normal Postgres blip
+// takes your app down instead of the pool replacing one connection. A pool you
+// build is yours to handle; the stores never attach a listener to it.
+pool.on("error", (error) => {
+  console.error("postgres pool client error (connection dropped):", error)
+})
+
 export default config({
   checkpointer: postgresCheckpointer({ pool }),
   threadsStore: createPostgresThreadsStore({ pool }),
@@ -63,16 +80,36 @@ export default config({
 Adopt them one at a time if you prefer — each store migrates and operates
 independently.
 
+### Two entry points
+
+The main entry does not import `pg` at all — not even for types — so it links on
+an edge runtime, where a raw TCP driver cannot be bundled at all. `pool` is
+therefore required there; the stores throw if it is missing.
+
+`@dawn-ai/postgres-storage/node` is the same three factories with a
+`connectionString` convenience layered on, and it does import `pg`:
+
+```ts
+import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
+
+// Builds and owns a pg pool; close() ends it.
+const checkpointer = postgresCheckpointer({ connectionString: process.env.DATABASE_URL })
+```
+
+Use the `/node` entry on Node, Bun, and Vercel functions when you want the
+convenience. Use the main entry — passing your own pool — everywhere else,
+including any edge deploy.
+
 ### Your app owns teardown
 
 The Dawn runtime handler's `close()` stops accepting requests, drains in-flight
 work, and releases sandboxes. It does **not** close these stores: the runtime
 never created them, so it does not own their lifetime.
 
-Each store exposes `close()`. A store built from `connectionString` owns its
-pool and `close()` ends it; a store built from an injected `pool` deliberately
-leaves that pool alone. With the shared-pool config above, end the pool
-yourself:
+Each store exposes `close()`. A store built from `connectionString` (via the
+`/node` entry) owns its pool and `close()` ends it; a store built from an
+injected `pool` deliberately leaves that pool alone. With the shared-pool config
+above, end the pool yourself:
 
 ```ts
 await handler.close()
@@ -85,25 +122,40 @@ await pool.end()
 
 Connection and table-naming options shared by all three stores:
 
-- `connectionString` — builds a pool this store owns and `close()` ends.
-- `pool` — an existing `pg` pool to use instead. Share one pool across every
-  Dawn store to stay inside a managed Postgres connection cap; `close()` leaves
-  an injected pool alone.
+- `pool` — **required.** The pool every store call goes through, typed
+  structurally as `SqlPool` (`{ query, connect, end }`) so a `pg.Pool` and a
+  `@neondatabase/serverless` WebSocket pool both satisfy it. Share one pool
+  across every Dawn store to stay inside a managed Postgres connection cap.
+- `ownsPool` (default `false`) — whether `close()` should `end()` the pool. An
+  injected pool is the caller's to close; the `/node` entry sets this when it
+  builds the pool itself.
 - `schema` (default `public`) and `tablePrefix` (default `dawn`).
 
 `PostgresCheckpointerOptions` and `PostgresThreadsStoreOptions` are aliases of
 this type; `PostgresPermissionsStoreOptions` extends it with `mode` and
-`config`.
+`config`. The `/node` entry's `NodePostgresStoreOptions` adds
+`connectionString`.
+
+`SqlPool`, `SqlClient`, and `SqlResult` are exported for anyone wiring a driver
+that is neither `pg` nor Neon. The type is deliberately narrow: `neon()`'s HTTP
+query function has no `connect()`, so it fails to satisfy `SqlPool` at compile
+time — correctly, because it has no session and cannot run the checkpointer's
+`BEGIN`/`COMMIT`.
 
 ### `postgresCheckpointer(options)`
 
 A LangGraph `BaseCheckpointSaver` backed by Postgres, for
 `DawnConfig.checkpointer`.
 
-Migrations run lazily on first use and are memoized per process. Call
-`checkpointer.ready()` to migrate at boot instead. Migrations take a
+Migrations run lazily on first use and are memoized **on the store instance**.
+Call `checkpointer.ready()` to migrate at boot instead. Migrations take a
 `pg_advisory_xact_lock`, so N instances cold-starting against a virgin database
 converge rather than racing.
+
+The memo being per instance rather than per process is why `assumeMigrated`
+exists: a store built once per process migrates once, but an edge deploy builds
+its stores per request, and without the opt-out every request would pay a
+migration pass and serialize on the advisory lock.
 
 The serialized checkpoint, its metadata, and pending-write values are stored as
 opaque `bytea`, matching the SQLite backend's BLOB. `jsonb` is deliberately not
@@ -175,10 +227,17 @@ database.
 
 ## Limitations
 
-- **No Cloudflare Workers deploy is verified.** `pg` opens a raw TCP socket,
-  which workerd does not provide, so Workers needs Hyperdrive or an HTTP-based
-  driver in front of the database. Node, Bun, and Vercel functions connect
-  directly. This package makes no Workers claim.
+- **Run under workerd; never deployed to Cloudflare.** The main entry links and
+  keeps durable state inside real workerd: Dawn's gated `edge-workerd` lane
+  builds an app on the `hono` target and drives four sequential AG-UI turns
+  through all three of these stores against a real Postgres, over an injected
+  `@neondatabase/serverless` pool. That lane is `wrangler dev --local`, which
+  runs the same workerd binary the platform runs — so what it does **not**
+  settle is everything only `wrangler deploy` and a live account exercise:
+  bundle-size and startup-CPU limits, Cloudflare's ~6-simultaneous-outbound-
+  connection cap, and the 1000-subrequest limit (in production each pooled
+  connection is a subrequest). Hyperdrive is untested for the same reason — it
+  needs an account.
 - **Unchanged channel values repeat per checkpoint.** Each checkpoint stores its
   channel values as one payload rather than deduplicating across checkpoints.
   The SQLite backend has the same property and Dawn has lived with it; the same

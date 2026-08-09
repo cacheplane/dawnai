@@ -80,8 +80,14 @@ export interface DawnConfig {
      *   which boots {@link serveRuntime}) plus a hardened `Dockerfile`.
      * - `"langsmith"` — the LangSmith deploy config (`.dawn/build/langgraph.json`
      *   and the per-route materialized graph entry files).
+     * - `"hono"` — an edge entry point: `.dawn/build/app.mjs` (a Hono app over
+     *   the web-standard fetch handler), the node-builtin-free static manifest
+     *   `modules.edge.mjs`, a per-request `stores.mjs` factory, and a
+     *   `wrangler.toml` scaffold. Opt-in only, and never emitted by default:
+     *   the edge serves a subset of Dawn (no sandbox, no workspace tooling) and
+     *   requires durable stores to be configured.
      *
-     * Defaults to both (`["node", "langsmith"]`) when omitted.
+     * Defaults to `["node", "langsmith"]` when omitted.
      */
     readonly targets?: readonly string[]
   }

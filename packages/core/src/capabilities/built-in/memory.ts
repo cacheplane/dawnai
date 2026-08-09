@@ -1,5 +1,6 @@
 import { sha1Hex } from "@dawn-ai/sdk/pure"
 import { z } from "zod"
+import { readRuntimeEnv } from "../../runtime-env.js"
 import { gateMemorySupersede } from "../permission-gate.js"
 import type {
   CapabilityMarker,
@@ -147,7 +148,7 @@ export function createMemoryMarker(): CapabilityMarker {
               // Gated: silent embed failures are an ops footgun (user thinks
               // vector recall works while every embed errors). Mirrors the
               // summarization hook's DAWN_DEBUG_SUMMARIZATION convention.
-              if (process.env.DAWN_DEBUG_MEMORY === "1") {
+              if (readRuntimeEnv("DAWN_DEBUG_MEMORY") === "1") {
                 console.warn(
                   `[dawn:memory] recall embed failed, falling back to keyword-only: ${String(err)}`,
                 )
@@ -267,7 +268,7 @@ export function createMemoryMarker(): CapabilityMarker {
             } catch (err) {
               // Gated warn — see the recall catch above. The write still lands
               // keyword-only (putOpts undefined); we never lose the memory.
-              if (process.env.DAWN_DEBUG_MEMORY === "1") {
+              if (readRuntimeEnv("DAWN_DEBUG_MEMORY") === "1") {
                 console.warn(
                   `[dawn:memory] remember embed failed, storing keyword-only: ${String(err)}`,
                 )

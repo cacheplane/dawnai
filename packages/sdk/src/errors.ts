@@ -48,6 +48,11 @@ export const DAWN_ERRORS = {
     title: "Invalid delegation policy",
     docsPath: "/docs/subagents#delegation-policy",
   },
+  DAWN_E1005: {
+    code: "DAWN_E1005",
+    title: "Feature unsupported by the build target",
+    docsPath: "/docs/deployment",
+  },
   DAWN_E2001: {
     code: "DAWN_E2001",
     title: "Sandbox unavailable",
@@ -100,6 +105,11 @@ export const DAWN_ERRORS = {
     code: "DAWN_E5201",
     title: "Inspector server failed",
     docsPath: "/docs/inspector",
+  },
+  DAWN_E5301: {
+    code: "DAWN_E5301",
+    title: "Runtime store not provided",
+    docsPath: "/docs/deployment",
   },
 } as const satisfies Record<string, DawnErrorDescriptor>
 

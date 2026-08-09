@@ -7,6 +7,7 @@ export type {
 } from "./permissions.js"
 export { createPostgresPermissionsStore } from "./permissions.js"
 export { assertIdentifier, DEFAULT_SCHEMA, DEFAULT_TABLE_PREFIX } from "./schema.js"
+export type { SqlClient, SqlPool, SqlResult } from "./sql.js"
 export type {
   CreateThreadInput,
   PostgresThreadsStore,

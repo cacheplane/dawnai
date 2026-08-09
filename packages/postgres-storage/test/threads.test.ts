@@ -2,7 +2,7 @@ import { runThreadsStoreConformance } from "@dawn-ai/testing"
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql"
 import { Pool } from "pg"
 import { afterAll, beforeAll, describe, expect, test } from "vitest"
-import { createPostgresThreadsStore, type PostgresThreadsStore } from "../src/index.js"
+import { createPostgresThreadsStore, type PostgresThreadsStore } from "../src/node.js"
 
 const enabled = process.env.DAWN_TEST_PGSTORAGE === "1"
 let container: StartedPostgreSqlContainer
@@ -39,8 +39,10 @@ describe.skipIf(!enabled)("postgres threads store against real Postgres", () => 
     // servers restart, fail over, and reap idle sessions as a matter of course, so an
     // unhandled pool error is a production crash rather than a dropped connection.
     //
-    // Covers the shared `resolvePool` used by the checkpointer, threads and
-    // permissions stores alike.
+    // Covers the shared `poolFor` in the `/node` entry — the only place the
+    // package builds a pool — used by the checkpointer, threads and permissions
+    // stores alike. (Was `resolvePool` in options.ts before the main entry
+    // dropped its value import of `pg` to stay edge-linkable.)
     const store = createPostgresThreadsStore({ connectionString: url, tablePrefix: freshPrefix() })
     const uncaught: unknown[] = []
     const onUncaught = (error: unknown) => uncaught.push(error)

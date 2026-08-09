@@ -1,5 +1,17 @@
 import type { JsonSchemaProperty, StreamTransformer } from "@dawn-ai/core"
-import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch"
+// `/web`, not the default entry, and the difference is a hard runtime
+// constraint rather than a style preference. The default entry statically
+// imports `node:async_hooks` — it exists to INFER the config off
+// AsyncLocalStorage when a caller omits one — and that single specifier is what
+// stopped a Dawn app from linking on Cloudflare workerd without `nodejs_compat`
+// (caught by the gated workerd lane; `fetch-entry-purity` externalizes
+// `@langchain/*` and structurally cannot see it). Every call in this file
+// passes an explicit config, which is exactly what `/web` requires, so nothing
+// is inferred either way and the dispatched events are identical. The global
+// AsyncLocalStorage instance the default entry installs as a side effect is
+// still installed on Node: `@langchain/langgraph`'s main entry does it, and
+// Dawn always loads that.
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch/web"
 import { ToolMessage } from "@langchain/core/messages"
 import { patchConfig } from "@langchain/core/runnables"
 import { DynamicStructuredTool } from "@langchain/core/tools"

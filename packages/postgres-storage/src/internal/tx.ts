@@ -1,7 +1,7 @@
-import type { Pool, PoolClient } from "pg"
+import type { SqlClient, SqlPool } from "../sql.js"
 
 /** Roll back best-effort — a failing ROLLBACK must not mask the original error. */
-export async function rollbackQuietly(client: PoolClient): Promise<void> {
+export async function rollbackQuietly(client: SqlClient): Promise<void> {
   try {
     await client.query("ROLLBACK")
   } catch {
@@ -11,8 +11,8 @@ export async function rollbackQuietly(client: PoolClient): Promise<void> {
 
 /** Run `fn` on a pooled client inside BEGIN/COMMIT, rolling back on any throw. */
 export async function withTransaction<T>(
-  pool: Pool,
-  fn: (client: PoolClient) => Promise<T>,
+  pool: SqlPool,
+  fn: (client: SqlClient) => Promise<T>,
 ): Promise<T> {
   const client = await pool.connect()
   try {

@@ -175,7 +175,7 @@ The `#agent` suffix is required — it selects the agent entry on the route. The
 dawn build
 ```
 
-Discovers routes from the app directory (`appDir`, defaulting to `src/app`), runs typegen, and writes deployment artifacts for both default `build.targets`: a `node` target (`.dawn/build/server.mjs` plus a hardened `Dockerfile`) and a `langsmith` target (`.dawn/build/langgraph.json` plus per-route entry files). The generated `assistant_id`s match the local ids, such as `/research#agent`.
+Discovers routes from the app directory (`appDir`, defaulting to `src/app`), runs typegen, and writes deployment artifacts for the default `build.targets`: a `node` target (`.dawn/build/server.mjs` plus a hardened `Dockerfile`) and a `langsmith` target (`.dawn/build/langgraph.json` plus per-route entry files). The generated `assistant_id`s match the local ids, such as `/research#agent`. An opt-in `hono` target emits an edge entry point for Cloudflare Workers — see [Deployment](/docs/deployment#edge-runtimes).
 
 ### Serve it in production
 

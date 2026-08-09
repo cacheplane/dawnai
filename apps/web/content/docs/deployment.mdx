@@ -1,9 +1,10 @@
 # Deployment
 
-Dawn is not a managed hosting platform — there's no Dawn-operated cloud you push to. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). `dawn build` emits up to two targets, selected via `build.targets` (default: both):
+Dawn is not a managed hosting platform — there's no Dawn-operated cloud you push to. It owns local development (`dawn dev`, `dawn run`, `dawn test`) **and** the build step that produces deployable artifacts (`dawn build`). `dawn build` emits up to three targets, selected via `build.targets` (default: `["node", "langsmith"]`):
 
-- **`node`** — a `server.mjs` entry that boots the real Dawn runtime, plus a hardened `Dockerfile`. This is the only target that runs Agent Protocol *and* AG-UI *and* engages the [execution sandbox](/docs/sandbox) in production. See [Deploying to production (Node/Docker)](#deploying-to-production-nodedocker) below.
+- **`node`** — a `server.mjs` entry that boots the real Dawn runtime, plus a hardened `Dockerfile`. This is the only target that engages the [execution sandbox](/docs/sandbox) and the workspace tools in production. See [Deploying to production (Node/Docker)](#deploying-to-production-nodedocker) below.
 - **`langsmith`** — `langgraph.json` plus per-route entry files, for **LangSmith** or another runtime that consumes the generated LangGraph entry files directly. This target does not run the Dawn runtime and does not engage the sandbox. See [The LangSmith / LangGraph Platform path](#the-langsmith--langgraph-platform-path) below.
+- **`hono`** — an edge entry point (`app.mjs`) plus a `wrangler.toml`, for Cloudflare Workers and other web-standard runtimes. Runs the real Dawn runtime — Agent Protocol and AG-UI — over an honest **subset** of Dawn: no sandbox, no filesystem, no shell. **Opt-in**, not a default. See [Edge runtimes](#edge-runtimes) below.
 
 Use live-server scenario tests to catch protocol-shape issues before deploying either target.
 
@@ -34,7 +35,7 @@ dawn start --host 127.0.0.1 --port 3000
   `server.mjs` imports `@dawn-ai/cli` at runtime. If it's listed under `devDependencies`, `npm ci --omit=dev` — which the generated Dockerfile runs — strips it from the production image, and the container fails to boot. Move `@dawn-ai/cli` to `dependencies` before building a deployable image.
 </Callout>
 
-Because it runs the actual Dawn runtime, this is the only deployment path that engages the [execution sandbox](/docs/sandbox), [tool scoping](/docs/tools), and [permissions](/docs/permissions) exactly as configured in `dawn.config.ts`. The `langsmith` target does not run the Dawn runtime and does not engage any of the three.
+Because it runs the actual Dawn runtime, this is the only deployment path that engages the [execution sandbox](/docs/sandbox), [tool scoping](/docs/tools), and [permissions](/docs/permissions) exactly as configured in `dawn.config.ts`. The `langsmith` target does not run the Dawn runtime and does not engage any of the three. The `hono` target does run the Dawn runtime — so tool scoping and permissions apply — but the sandbox is unavailable there and `dawn build` [rejects it by name](#what-the-edge-cannot-serve).
 
 The built runtime and `dawn start` serve the same Agent Protocol and AG-UI routes as `dawn dev`; generated server entrypoints call the exported `serveRuntime()` function directly. In both modes, `src/middleware.ts` gates Agent Protocol run, wait, and resume execution plus AG-UI route execution, but not thread create, read, delete, or state endpoints. Allowed middleware context reaches tools as `ctx.middleware`.
 
@@ -47,6 +48,8 @@ export default config({
   build: { targets: ["node"] }, // omit "langsmith" if you don't deploy there
 })
 ```
+
+Setting `targets` replaces the default list rather than adding to it — name `"hono"` alongside the others if you want the [edge artifacts](#edge-runtimes) too.
 
 To run the built image on Kubernetes — as a Deployment + Service with optional Ingress, autoscaling, and a PodDisruptionBudget, wired to the sandbox provider's orchestrator ServiceAccount — see [Deploying a Dawn app (Helm)](/docs/sandbox#deploying-a-dawn-app-helm), or the orientation section below.
 
@@ -126,9 +129,16 @@ This path targets LangSmith or another runtime that consumes `langgraph.json` an
   </Step>
 </Steps>
 
-## Edge runtimes (preview)
+## Edge runtimes
 
-`@dawn-ai/cli/fetch` is a node-free entry point for the Dawn runtime: it exports `createRuntimeFetchHandler` with a module graph that contains no filesystem, SQLite, or CLI code of Dawn's own. Instead of discovering your app on disk, you hand it everything at construction time — the build-time module manifest, a `DawnConfig` object, and store instances:
+Dawn deploys to runtimes that have no filesystem, no child processes, and no TCP sockets — Cloudflare Workers above all. Two pieces make that work, and you can use either on its own:
+
+- **`@dawn-ai/cli/fetch`**, a node-free entry point you wire up yourself;
+- **the `hono` build target**, which generates a deployable app around that entry point — an edge module manifest, a per-request store factory, a Hono entry, and a `wrangler.toml`.
+
+### The `@dawn-ai/cli/fetch` entry point
+
+`@dawn-ai/cli/fetch` exports `createRuntimeFetchHandler` with a module graph that contains no filesystem, SQLite, or CLI code of Dawn's own. Instead of discovering your app on disk, you hand it everything at construction time — the build-time module manifest, a `DawnConfig` object, and store instances:
 
 ```ts
 import { createRuntimeFetchHandler } from "@dawn-ai/cli/fetch"
@@ -149,23 +159,148 @@ export default { fetch: (request: Request) => handler.fetch(request) }
 
 Anything you do not supply has no filesystem to fall back to, so the handler fails loudly at boot naming the missing piece rather than silently degrading. A few inputs are optional by contract and simply switch their feature off when absent: middleware, the sandbox provider, and the capability markers that read `workspace/AGENTS.md`, `memory.md`, `plan.md`, and `skills/`.
 
+Store *instances* are one option; the other is `requestStores`, a factory called once per request:
+
+```ts
+readonly requestStores?: (request: Request) => RequestStores | Promise<RequestStores>
+
+interface RequestStores {
+  checkpointer?: BaseCheckpointSaver
+  threadsStore?: ThreadsStore
+  permissionsStore?: PermissionsStore
+  memoryStore?: MemoryStore
+  dispose?: () => Promise<void>
+}
+```
+
+Every field is optional and falls through to the boot-resolved instance when omitted, so this is a *layer* over the instance form rather than a replacement for it. `dispose` runs once **both** the response body has settled **and** any run that request started has released its slot — never mid-stream, and never while route work that outlived its response (an aborted AG-UI stream, an abandoned `/runs/wait`) is still writing. The factory owns cleanup of a partial allocation: `dispose` is only ever called on a `RequestStores` the factory returned, so a factory that opens a pool and then throws must close that pool itself.
+
+Reaching a store no layer supplied answers with a 500 carrying `DAWN_E5301`, naming the store, rather than a generic failure.
+
 <Callout type="info" title="No Node built-in shims required">
-  A bundle built from this entry links **zero** `node:` specifiers — not from Dawn's runtime, and not from any `@dawn-ai/*` package it pulls in. A purity test bundles the entry with esbuild on both the `neutral` and `browser` platforms, with no `node:` externals, and asserts the graph is clean; a negative control proves the check still fails against the CLI entry. So the same artifact runs on Cloudflare Workers, Vercel, Deno, Bun, or Node, and `nodejs_compat` is no longer a prerequisite.
+  A bundle built from this entry links **zero** `node:` specifiers — not from Dawn's runtime, and not from any `@dawn-ai/*` package it pulls in. A purity test bundles the entry with esbuild on both the `neutral` and `browser` platforms, with no `node:` externals, and asserts the graph is clean; a negative control proves the check still fails against the CLI entry. A second test bundles the `hono` target's emitted `app.mjs` the way `wrangler` does — Workers export conditions, nothing external but `node:` itself — and requires the same. So the same artifact **links for** Cloudflare Workers, Vercel, Deno, Bun and Node, and `nodejs_compat` is not a prerequisite.
+
+  Linking is necessary and not sufficient, and this target's own history is the proof: the bundle linked clean and still died twice at runtime — once on a bare `process` global, once on an `AbortController` shared across requests. Of those five runtimes, two have actually been **run**: workerd, by the gated `edge-workerd` lane, and Node, by an `@hono/node-server` round-trip that drives real AG-UI turns on every CI run. Vercel, Deno and Bun are inference from the same web-standard surface, not observation.
 
   The node-only pieces still exist — they just live behind explicit subpaths (`@dawn-ai/core/node`, `@dawn-ai/permissions/node`, `@dawn-ai/workspace/node`) that the edge entry never imports.
 </Callout>
 
-Node-only capabilities are unavailable on this path regardless of runtime: the execution sandbox, workspace file and shell tools, skills, and the SQLite-backed default stores. Supply Postgres-backed or in-memory implementations for state you want to keep. The build target that generates a ready-to-deploy edge entry point (`hono`, covering Workers, Vercel, and Node hosts) lands in a following release.
+### The `hono` build target
+
+The `hono` target generates the wiring above for you: a Hono app around `createRuntimeFetchHandler`, a per-request Postgres store factory, and a `wrangler.toml`. It is **opt-in** — naming `build.targets` replaces the default list, so include the other targets you want:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+
+export default config({
+  build: { targets: ["node", "hono"] },
+})
+```
+
+`dawn build` then writes four artifacts:
+
+| Artifact | What it is |
+|---|---|
+| `.dawn/build/modules.edge.mjs` | The static module manifest — every route, tool, state definition and middleware module imported statically, schemas inlined. The edge flavor of the `node` target's `modules.mjs`, produced by the same discovery run so the two cannot drift. |
+| `.dawn/build/stores.mjs` | A **per-request** store factory: a `@neondatabase/serverless` WebSocket pool plus the three `@dawn-ai/postgres-storage` stores, torn down when the request settles. See [Why the stores are per-request](#why-the-stores-are-per-request). |
+| `.dawn/build/app.mjs` | The entry point: a Hono app with one catch-all handing every request to the fetch handler, `export default`ed — the shape Workers, Vercel and Bun all accept. Import the pieces yourself to compose it into a larger Hono app. |
+| `wrangler.toml` | A scaffold at the app root: `name`, `main`, `compatibility_date`. Written **only when you have none**, and never overwritten once it exists — a `wrangler.toml` accretes bindings, vars and routes that only you know about. If you already have one, Dawn writes its copy to `.dawn/build/wrangler.toml` and says so on stderr. |
+
+The generated files import four packages by bare specifier, and none of them is a dependency of `@dawn-ai/cli` — the CLI does not import them, the app it generates does:
+
+```
+npm install @dawn-ai/cli @dawn-ai/postgres-storage @neondatabase/serverless hono
+```
+
+`dawn build` prints a `⚠` on stderr naming any of the four your `package.json` does not declare. It is a notice and not a failure: a bundler alias or a vendored copy resolves fine while leaving `dependencies` untouched.
+
+<Steps>
+  <Step title="Point it at a Postgres database">
+    The emitted `stores.mjs` reads `DATABASE_URL` and nothing else. The three stores migrate themselves on first use under a `pg_advisory_xact_lock`, so concurrent cold starts converge instead of racing — see [the Postgres backend](/docs/configuration#postgres-backend).
+
+    ```
+    wrangler secret put DATABASE_URL
+    ```
+
+    A `[vars]` entry works too. On a host that passes no bindings at all — `@hono/node-server`, Bun — the same value is read from the process environment instead; every knob goes through one accessor that prefers `process.env` and falls back to what `app.mjs` seeded from the first request's bindings.
+  </Step>
+  <Step title="Deploy">
+    ```
+    dawn build
+    wrangler deploy
+    ```
+
+    `wrangler` bundles `.dawn/build/app.mjs` from your source tree, so the module manifest, the inlined config and the provider import map all have to be current — rebuild whenever a route, tool, model or provider changes.
+  </Step>
+</Steps>
+
+<Callout type="info" title="No nodejs_compat flag">
+  The emitted `wrangler.toml` carries a bare `name` / `main` / `compatibility_date` and nothing else, deliberately. The bundle contains no `node:` specifiers, so the flag would buy nothing — and adding it would mask a regression in the work that made the bundle node-free. The gated workerd lane boots the scaffold exactly as written; if the target ever *needs* the flag, that lane goes red rather than quietly compensating.
+</Callout>
+
+#### Why the stores are per-request
+
+This is the one piece of the design that looks like ceremony and is not.
+
+A pool created at module scope and reused across requests — the obvious shape, and the shape a naive generated entry would emit — **fails on workerd, silently**. The pool returns a client to the idle set at the end of request 1; request 2 picks up that idle WebSocket, which belongs to request 1's now-dead I/O context, and waits forever. The request hangs for ~30s until the runtime cancels it. Because the hang also kills that client, request 3 opens a fresh one and succeeds — so the failures **alternate**, and roughly half of all requests fail. Nothing throws, and a single-request smoke test cannot see it.
+
+So `stores.mjs` builds the pool and all three stores inside `createRequestStores(env)`, and `dispose` ends the pool. Two consequences worth knowing:
+
+- **Migrations run once per isolate, not once per request.** A store memoizes its migration on the *instance*, and instances are per request here, so without a guard every request would pay three migration transactions — and the three advisory locks would serialize concurrent requests on the same component key. A module-scope boolean records that this isolate has migrated, and the stores are then built with `assumeMigrated`. A boolean is safe at module scope in a way a pool is not: it holds no I/O. It is set only after a migration actually succeeds, so a failed cold start does not convince the next request the schema is there.
+- **The compiled agent graph is keyed by checkpointer.** `createReactAgent` embeds the checkpointer in the graph it returns, so a cache keyed on the agent descriptor alone would run every later request against the first request's disposed checkpointer. The key is the pair, which on the edge means **one graph compile per request**. On Node, where one checkpointer is resolved at boot, each agent still compiles once per process.
+
+If you compose the generated app into a larger Hono app, mount it with `app.route(path, dawnApp)`. Hono's `mount()` constructs a *new* `Request`, which is a different key than the one `app.mjs` bound the env to — the entry throws by name rather than building a pool with no connection string.
+
+#### What the edge cannot serve
+
+The edge runs an honest subset of Dawn. `dawn build` fails with `DAWN_E1005`, naming the config key or file that introduced each one, and reports **all** of them at once rather than one build at a time. `dawn check` applies the identical gate whenever `hono` is a configured target, so you find out before you build.
+
+| Gated off | Detected from | Why |
+|---|---|---|
+| [Execution sandbox](/docs/sandbox) | `sandbox` | An edge runtime can neither start a container nor talk to a container daemon. |
+| `backends.filesystem` / `backends.exec` | `backends.*` | A backend is a live object, and only the JSON-serializable half of your config crosses the build boundary. |
+| A custom `checkpointer`, `threadsStore`, or `permissions.store` | the config key | Same reason — and the failure would be silent: the handle is stripped and the generated Postgres store takes its place with nothing said. |
+| A custom `memory.store` | `memory.store` | Stripped, and nothing replaces it. |
+| [Workspace tooling](/docs/workspace) — `readFile`, `writeFile`, `listDir`, `runBash`, tool-output offloading, `workspace/AGENTS.md` | a `workspace/` directory at the app root | No filesystem, no shell. Without the gate the tools would be offered to the model and then fail at the first call. |
+| [Skills](/docs/skills) | `skills/<name>/SKILL.md` under a route | Skill bodies are read from disk when the route loads; on the edge they would vanish from the prompt with no error at all. |
+| [Long-term memory](/docs/memory) | a route's `memory.ts` | The emitted `stores.mjs` supplies no memory store, so the first `recall`/`remember` would fail with `DAWN_E5301`. |
+
+The last three *Why* entries describe what the runtime **would** do — tools failing at the first call, skill bodies missing from the prompt — and that is analysis of the code paths rather than something anyone has watched happen: the gate makes such an app unbuildable for this target, so no skills- or workspace-bearing app has ever run on workerd. They are here to make the gate legible, not to report a measurement.
+
+Nothing else is gated: the rest of the runtime is on this path — Agent Protocol and AG-UI, route tools, [subagents](/docs/subagents), [tool scoping](/docs/tools), [permissions](/docs/permissions) against the Postgres store, [middleware](/docs/middleware), and durable thread state. What the workerd lane actually exercises is narrower than that list, though: one agent route, an AG-UI conversation, no tools. Treat the rest as ungated rather than as proven under workerd.
+
+Two more build-time failures, both about the provider import map. A bundler cannot follow a variable import specifier, so `app.mjs` emits a static `switch` over exactly the model packages your app can reach — and whatever is missing from that map is missing from the bundle. The build therefore fails rather than narrowing it when a route cannot be imported, or when an agent's model id maps to no known provider (set `provider` explicitly). `summarization.model` is included, so an app with OpenAI routes and an Anthropic summarization model no longer builds green and fails at request time on a package that was never bundled.
+
+<Callout type="warn" title="Your config is baked into the artifact">
+  Unlike the `node` target, which loads `dawn.config.ts` at runtime, the `hono` target **inlines** the serializable half of your config into `app.mjs` at build time. Anything secret-ish in `dawn.config.ts` is therefore sitting in a build artifact. Keep secrets in bindings, environment variables, or `wrangler secret` — not in config.
+</Callout>
+
+#### What is proven, and what is not
+
+A gated CI lane (`edge-workerd`) builds a real Dawn app with this target and serves **four sequential AG-UI turns** with durable Postgres state inside real Cloudflare workerd — `wrangler dev --local` runs the same workerd binary the platform runs, against local `postgres` and `wsproxy` containers, with the emitted `wrangler.toml` untouched and no Cloudflare account involved. The turn count is deliberate: the failure it exists to catch is invisible to a single request. It found three defects nothing else did, including a handler-scoped `AbortController` that made a Dawn app serve exactly one request per isolate.
+
+It does not settle everything, and the docs should not pretend otherwise:
+
+- **No deploy to Cloudflare has actually happened.** `wrangler dev --local` runs the same workerd binary, which is why the lane is worth having — but nothing on this path has been through `wrangler deploy`, the platform's upload and validation, or a live account. Most of what follows is downstream of that one gap.
+- **Bundle size and startup CPU are unpinned.** `wrangler dev --local` enforces neither; `wrangler deploy` enforces both. A representative edge graph — `@dawn-ai/cli/fetch`, `@dawn-ai/postgres-storage`, `@neondatabase/serverless`, `hono` and `@langchain/openai`, bundled with esbuild on `platform: browser` under Workers export conditions, minified — measures **4.45 MiB raw, 1.51 MiB gzip, 1.15 MiB brotli**. That fits the free plan's 3 MiB compressed limit with roughly 2× headroom. Nothing asserts it, though, and each additional provider package your import map reaches grows it, so treat the headroom as a measurement taken once rather than a guarantee.
+- **Hyperdrive is untested.** It needs a Cloudflare account. The `@neondatabase/serverless` WebSocket path is what has been run.
+- **Connection behavior in production is unsettled.** miniflare enforces neither Cloudflare's ~6-simultaneous-outbound-connection cap nor the 1000-subrequest limit, and in production each pooled connection is a subrequest. Only a real-Cloudflare smoke test settles that; the CI lane cannot.
+- **Query latency is hidden.** The wsproxy runs on the same machine, which matters because `putWrites` issues one `INSERT` per write inside its transaction.
+- **Cold starts across isolates are unexercised.** One isolate serves the whole lane, so the migrate-once flag's cross-isolate behavior in particular is not covered by it — the advisory lock is, since it is the same lock the [Postgres backend](/docs/configuration#postgres-backend) takes and eight concurrent cold starts converge in its own suite.
+- **The per-request graph compile is unmeasured.** Keying the graph cache by checkpointer is correct on a per-request checkpointer; its cost on real workerd has not been measured.
+- **Long-term memory is unreachable, not proven safe.** The build gate keeps it off this target, so the handler's memoized memory-store promise is never constructed. If that gate is relaxed, it is the next thing to check.
 
 ## What Dawn does not do
 
 <Callout type="warn" title="Not a hosted platform">
-  Dawn does not provision infrastructure or manage secrets, on either deployment path. If you want a managed hosted runtime, use LangSmith, which also provides the observability layer (tracing, evaluations). If you'd rather self-host, the `node` target above gives you a runnable server and Dockerfile to run wherever you run containers.
+  Dawn does not provision infrastructure or manage secrets, on any of the three deployment paths. If you want a managed hosted runtime, use LangSmith, which also provides the observability layer (tracing, evaluations). If you'd rather self-host, the `node` target above gives you a runnable server and Dockerfile to run wherever you run containers, and the `hono` target gives you an edge entry point to `wrangler deploy`.
 </Callout>
 
 ## Self-hosting
 
 If you can't or won't use LangSmith, use the `node` target: [Deploying to production (Node/Docker)](#deploying-to-production-nodedocker) above builds a `server.mjs` and `Dockerfile` that run the real Dawn runtime — Agent Protocol, AG-UI, `/healthz`, and the execution sandbox if configured. That's the self-hosting path.
+
+If your app fits [the edge subset](#what-the-edge-cannot-serve) and you would rather not run a container at all, the [`hono` target](#the-hono-build-target) deploys the same runtime to Cloudflare Workers with Postgres for durable state.
 
 The `langsmith` target's `langgraph.json` and per-route entry files can also be containerized independently with `@langchain/langgraph-cli`'s `langgraphjs dockerfile` command, if you specifically want a LangGraph-Platform-compatible container rather than the Dawn runtime — but that image does not run Dawn's runtime and will not engage the sandbox, tool scoping, or permissions even if `dawn.config.ts` configures them.
 
@@ -174,6 +309,10 @@ The `langsmith` target's `langgraph.json` and per-route entry files can also be 
 - **Tests pass in-process but fail live-server** — a tool or route isn't serializing cleanly. Check that inputs, outputs, and state are JSON-serializable (no Dates, Maps, classes).
 - **Assistant id not found** — the `route` in the request body doesn't match a `<routeId>#<kind>` key in `.dawn/build/langgraph.json`. Inspect that file directly (`cat .dawn/build/langgraph.json`) or run `dawn verify --json` to confirm what was discovered.
 - **Type inference drifted** — run `dawn typegen` locally and inspect `.dawn/dawn.generated.d.ts`. The generated file is ignored by the starter template, so regenerate it in CI/build steps unless your project chooses to commit `.dawn/`.
+- **`dawn build` fails with `DAWN_E1005`** — the app uses something [the edge cannot serve](#what-the-edge-cannot-serve). The message names every offending config key and file at once. Fix them, or drop `"hono"` from `build.targets`.
+- **Roughly every other Workers request hangs for ~30s** — a store or its pool is being reused across requests. Build both inside the per-request factory; see [Why the stores are per-request](#why-the-stores-are-per-request).
+- **A Workers deploy 500s with `DAWN_E5301`** — the runtime reached a store nothing supplied. The generated `stores.mjs` deliberately supplies no memory store; long-term memory is not available on this target.
+- **`wrangler deploy` cannot resolve `hono` or `@neondatabase/serverless`** — the generated entry imports them, so they belong in your app's `dependencies`. `dawn build` warns about this on stderr.
 
 ## Related
 

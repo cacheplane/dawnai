@@ -5,6 +5,11 @@ import { pathToFileURL } from "node:url"
 import type { DawnConfig, RouteManifest } from "@dawn-ai/core"
 import { discoverRoutes } from "@dawn-ai/core/node"
 import type { Command } from "commander"
+import {
+  assertEdgeCapabilities,
+  collectEdgeDependencyNotice,
+  type EdgeCapabilityInput,
+} from "../lib/build/targets/edge-capabilities.js"
 import { knownTargetNames } from "../lib/build/targets/index.js"
 import { loadDawnConfig } from "../lib/node-config.js"
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
@@ -73,7 +78,15 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
       })
     }
 
-    let loadedConfig: Pick<DawnConfig, "sandbox" | "build"> = {}
+    // Everything this command reads off dawn.config.ts. The edge half is spelled
+    // as the GATE'S OWN input type rather than re-listed here, so the two cannot
+    // drift: a hand-written `Pick` omitted all four store keys the gate reads
+    // (`checkpointer`, `threadsStore`, `permissions.store`, `memory.store`), and
+    // nothing objected — every DawnConfig field is optional, so a config typed
+    // without them still satisfies `assertEdgeCapabilities`. The tests below the
+    // gate are what actually catch a narrowed argument; this is what stops the
+    // TYPE from claiming the command loads less than the gate inspects.
+    let loadedConfig: EdgeCapabilityInput["config"] & Pick<DawnConfig, "build"> = {}
     try {
       const loaded = await loadDawnConfig({ appRoot: manifest.appRoot })
       loadedConfig = loaded.config
@@ -91,6 +104,16 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
           1,
           { code: "DAWN_E1003" },
         )
+      }
+
+      // The same gate the hono target applies at emit time, mirrored here so a
+      // user finds out from `dawn check` rather than from a failed build — and
+      // finds out about EVERY unsupported feature at once. Only when `hono` is
+      // actually configured: an app on the node target may use all of this.
+      if (buildTargets.includes("hono")) {
+        const notice = await collectEdgeDependencyNotice(manifest.appRoot)
+        if (notice) writeLine(io.stdout, `\n${notice}`)
+        assertEdgeCapabilities({ appRoot: manifest.appRoot, config: loadedConfig, manifest })
       }
     }
 

@@ -1,4 +1,4 @@
-import { type PostgresStoreOptions, resolvePool } from "./options.js"
+import type { PostgresStoreOptions } from "./options.js"
 import {
   assertIdentifier,
   DEFAULT_SCHEMA,
@@ -7,6 +7,7 @@ import {
   runMigrations,
   THREADS_MIGRATIONS,
 } from "./schema.js"
+import { throwNoPool } from "./sql.js"
 
 export type ThreadStatus = "idle" | "busy" | "interrupted"
 
@@ -46,7 +47,7 @@ export interface ThreadsStore {
 export interface PostgresThreadsStore extends ThreadsStore {
   /** Apply migrations. Idempotent and memoized; call at boot to migrate eagerly. */
   ready(): Promise<void>
-  /** Close the underlying pool. No-op if an external pool was injected. */
+  /** Close the pool if this store owns it (`ownsPool`); otherwise a no-op. */
   close(): Promise<void>
 }
 
@@ -101,11 +102,19 @@ export function createPostgresThreadsStore(
   assertIdentifier("schema", schema)
   assertIdentifier("tablePrefix", prefix)
   const table = qualify({ schema, prefix }, "threads")
-  const { ownsPool, pool } = resolvePool(options)
+  const ownsPool = options.ownsPool ?? false
+  const pool = options.pool ?? throwNoPool()
+
+  const assumeMigrated = options.assumeMigrated ?? false
 
   let initP: Promise<void> | undefined
   const ready = (): Promise<void> => {
-    initP ??= runMigrations(pool, THREADS_MIGRATIONS, { schema, prefix, component: "threads" })
+    // `assumeMigrated` short-circuits to a resolved promise rather than a
+    // cheaper migration: `runMigrations` has no up-to-date fast path, so even a
+    // no-op pass costs a transaction and an advisory lock.
+    initP ??= assumeMigrated
+      ? Promise.resolve()
+      : runMigrations(pool, THREADS_MIGRATIONS, { schema, prefix, component: "threads" })
     return initP
   }
 

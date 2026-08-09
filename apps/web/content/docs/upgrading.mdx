@@ -50,6 +50,56 @@ Each release is built from the changeset entries merged since the previous one �
 
 Pin exact versions (no `^` or `~` ranges) for `@dawn-ai/*` packages until the project reaches 1.0 — a floating range means an unreviewed minor bump can land in CI or production without the deliberate read-the-notes step above.
 
+## `@dawn-ai/postgres-storage` now requires a `pool` on its main entry
+
+`connectionString` has moved to a new `@dawn-ai/postgres-storage/node` subpath.
+In `0.8.19` the main entry accepted either and built its own `pg` pool from a
+connection string; it no longer does, because it now imports `pg` for **types
+only** so that the package links on a runtime with no TCP sockets — which is
+what makes the [`hono` edge target](/docs/deployment#the-hono-build-target)
+possible at all.
+
+`connectionString` is gone from the main entry's option type, so passing it
+there is a type error, and the factory throws at construction naming the missing
+pool. Nothing fails silently. Two ways to migrate:
+
+```ts
+// 1. Change the import — same factories, connectionString still works, and the
+//    store still builds and owns its pool.
+import { postgresCheckpointer } from "@dawn-ai/postgres-storage/node"
+
+// 2. Or build the pool yourself and keep the main entry. This is what you want
+//    anyway when one pool serves all three stores.
+import { Pool } from "pg"
+const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+// Do not skip this — see below.
+pool.on("error", (error) => {
+  console.error("postgres pool client error (connection dropped):", error)
+})
+postgresCheckpointer({ pool })
+```
+
+<Callout type="warn">
+  If you take option 2, **attach an `'error'` listener to the pool you build.**
+  `pg` emits that event on the pool when an *idle* client fails, and an
+  EventEmitter `'error'` with no listener is an uncaught exception — the process
+  exits. Idle connections are dropped as a matter of course (server restart,
+  failover, `idle_session_timeout`), so a routine Postgres blip becomes an
+  outage. Earlier versions built the pool for you and attached this listener
+  themselves; once you own the pool, you own its error handling, and the stores
+  deliberately will not attach one to a pool you passed in. The `/node` entry in
+  option 1 still attaches it to pools it builds.
+</Callout>
+
+The `/node` entry re-exports everything the main entry does, so option 1 is
+usually one line. Pool ownership is unchanged in both shapes: a pool the store
+built is ended by `close()`, an injected pool is left alone (`ownsPool`,
+defaulting to `false`). This shipped as a **patch** despite being breaking: under
+[fixed-group versioning](#fixed-group-versioning) a minor bump would move every
+`@dawn-ai/*` package to `1.0.0`, which is not what a pre-1.0 project wants to say
+about one entry-point split. It is also why the advice at the top of this page —
+pin exact versions and read the notes — is not boilerplate.
+
 ## `kind: "reflection"` is now accepted
 
 [Memory distillation](/docs/memory#distillation) wired the `reflection` kind.
@@ -135,6 +185,6 @@ against a custom store to verify the contract.
 <RelatedCards items={[
   { href: "/docs/cli", title: "CLI", subtitle: "dawn verify and dawn typegen for post-upgrade checks" },
   { href: "/docs/testing", title: "Testing", subtitle: "scenario coverage to re-run after an upgrade" },
-  { href: "/docs/deployment", title: "Deployment", subtitle: "the node and langsmith build targets, and the Helm charts' own versioning" },
+  { href: "/docs/deployment", title: "Deployment", subtitle: "the node, langsmith, and hono build targets, and the Helm charts' own versioning" },
   { href: "/docs/faq", title: "FAQ", subtitle: "the pre-1.0 stability note this page backs" },
 ]} />

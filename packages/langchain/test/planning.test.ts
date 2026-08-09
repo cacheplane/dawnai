@@ -9,7 +9,7 @@ import { convertToolToLangChain } from "../src/tool-converter.ts"
 
 const dispatchCustomEvent = vi.hoisted(() => vi.fn())
 
-vi.mock("@langchain/core/callbacks/dispatch", () => ({ dispatchCustomEvent }))
+vi.mock("@langchain/core/callbacks/dispatch/web", () => ({ dispatchCustomEvent }))
 
 beforeEach(() => {
   dispatchCustomEvent.mockReset()

@@ -2,6 +2,7 @@ import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DelegationContext } from "@dawn-ai/sdk"
 
 import { gateSubagentOp } from "../capabilities/permission-gate.js"
+import { readRuntimeEnv } from "../runtime-env.js"
 import type { ResolvedSubagent } from "./types.js"
 
 const CONSTRAINT_FAILED_REASON =
@@ -66,7 +67,10 @@ function debugConstraintFailure(
   subagentName: string,
   detail: unknown,
 ): void {
-  if (typeof process === "undefined" || process.env.DAWN_DEBUG_CONSTRAINTS !== "1") return
+  // Was a hand-rolled `typeof process === "undefined"` guard — the only one in
+  // the codebase, and the reason this site alone survived the edge bundle. It
+  // now shares the one seam so the purity gate can stay zero-tolerance.
+  if (readRuntimeEnv("DAWN_DEBUG_CONSTRAINTS") !== "1") return
   try {
     console.warn(
       `[dawn:constraints] parent ${parentRouteId} subagent ${subagentName} constraint failed:`,

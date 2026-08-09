@@ -11,7 +11,7 @@ export {
   streamAgent,
 } from "./agent-adapter.js"
 export { chainAdapter } from "./chain-adapter.js"
-export { createChatModel } from "./chat-model-factory.js"
+export { createChatModel, providerPackages, seedModelImporter } from "./chat-model-factory.js"
 export { inferProvider, resolveProvider } from "./model-provider-resolver.js"
 export type { OffloadStoreOptions } from "./offload/offload-store.js"
 export { buildOffloadFileName, OffloadStore } from "./offload/offload-store.js"

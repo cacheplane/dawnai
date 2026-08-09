@@ -65,6 +65,14 @@ jobs:
         run: pnpm typecheck
 
       - name: Source Tests
+        # `hono-node-roundtrip` needs a Docker daemon — the first suite in
+        # `pnpm test` ever to, since previously only the `*-docker` jobs did. It
+        # SKIPS without one so a contributor with no Docker can still run the
+        # suite, and this flag is the other half of that bargain: on a runner,
+        # which always has Docker, a skip means the coverage was lost silently,
+        # so the flag turns it into a hard failure instead.
+        env:
+          DAWN_REQUIRE_DOCKER: "1"
         run: pnpm test
 
       - name: Docs Check
@@ -197,6 +205,86 @@ jobs:
 
       - name: Real-Postgres storage tests
         run: DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/postgres-storage test
+
+  edge-workerd:
+    runs-on: ubuntu-latest
+    # Postgres + a wsproxy container, plus `wrangler dev` booting real workerd.
+    # 30 minutes leaves headroom for a cold image pull and the workerd binary
+    # download without masking a hung startup.
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          # Node 24 — Dawn's floor is the active LTS line (node:sqlite
+          # unflagged, npm >= 11 bundled). Matches release.yml and engines.
+          node-version: 24.17.0
+          cache: pnpm
+
+      - name: Install
+        # The workerd binary arrives through wrangler's postinstall, which pnpm
+        # 10 blocks unless the package is in `onlyBuiltDependencies` — it is, in
+        # pnpm-workspace.yaml. Without that the lane fails with no binary to exec.
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        # Full topological build, not a filtered one: the lane builds a fixture
+        # app with `dawn build` and then resolves @dawn-ai/* from dist exactly as
+        # a deployed bundle does, so every workspace package must be compiled
+        # first (same #320 lesson as inspector-e2e below).
+        run: pnpm build
+
+      - name: Real-workerd edge lane
+        # The JSON report is this job's receipt, read by the step below.
+        run: |
+          DAWN_TEST_WORKERD=1 pnpm --filter @dawn-ai/cli test workerd-lane \
+            --reporter=default --reporter=json \
+            --outputFile.json="${{ runner.temp }}/workerd-lane-report.json"
+
+      - name: Assert the workerd lane did not skip
+        # `workerd-lane.test.ts` gates itself on DAWN_TEST_WORKERD, and the step
+        # above is the ONLY place that flag is set. So any drift between the two
+        # strings — a rename on either side — turns this merge gate into a no-op
+        # THAT STILL REPORTS GREEN: every test skips and vitest exits 0.
+        # (Verified: with the flag unset, "1 skipped", exit 0, success: true.)
+        #
+        # Same bargain `DAWN_REQUIRE_DOCKER=1` strikes on validate's Source
+        # Tests: the escape hatch that lets a contributor run the suite without
+        # Docker and a workerd binary must not become a way to lose the coverage
+        # on a runner that has both.
+        #
+        # Deliberately NOT `if: always()` — a lane that genuinely FAILED has
+        # already reddened the job and reported a better message than this one.
+        # The case this exists for is the lane exiting 0 having run nothing.
+        run: |
+          node -e '
+            const fs = require("node:fs")
+            const path = process.argv[1]
+            if (!fs.existsSync(path)) {
+              throw new Error("no vitest report at " + path + " — the lane produced no run at all.")
+            }
+            const report = JSON.parse(fs.readFileSync(path, "utf8"))
+            const passed = report.numPassedTests ?? 0
+            const skipped = report.numPendingTests ?? 0
+            if (passed === 0 || skipped > 0) {
+              throw new Error(
+                "the workerd lane reported " + passed + " passed and " + skipped + " skipped. " +
+                  "This job is the only place DAWN_TEST_WORKERD=1 is set, so a skip here means the " +
+                  "merge gate ran nothing while still exiting 0. Check that the flag name in " +
+                  "packages/cli/test/workerd-lane.test.ts still matches the one this job exports.",
+              )
+            }
+            console.log("workerd lane ran: " + passed + " passed, 0 skipped.")
+          ' "${{ runner.temp }}/workerd-lane-report.json"
 
   inspector-e2e:
     runs-on: ubuntu-latest

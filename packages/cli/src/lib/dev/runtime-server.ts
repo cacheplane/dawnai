@@ -19,6 +19,26 @@ export interface RuntimeServer {
   readonly url: string
 }
 
+/**
+ * Per-request store overrides, plus the teardown for whatever they hold open.
+ *
+ * Every field is optional: whatever a factory omits falls through to the
+ * boot-resolved store (or fails loudly, if this runtime has neither).
+ */
+export interface RequestStores {
+  readonly checkpointer?: BaseCheckpointSaver
+  readonly threadsStore?: ThreadsStore
+  readonly permissionsStore?: PermissionsStore
+  readonly memoryStore?: MemoryStore
+  /**
+   * Called once BOTH the response body has settled and any run the request
+   * started has released its slot — never mid-stream, and never while route
+   * work that outlived the response (an aborted stream, an abandoned
+   * `/runs/wait`) is still writing through these stores.
+   */
+  readonly dispose?: () => Promise<void>
+}
+
 export interface StartRuntimeServerOptions {
   readonly appRoot: string
   readonly host?: string
@@ -75,6 +95,25 @@ export interface StartRuntimeServerOptions {
    * reaching for a disk or sqlite file that is not there.
    */
   readonly bootFallbacks?: RuntimeBootFallbacks
+  /**
+   * Stores built fresh for each request, then disposed when that request's
+   * response (including a streaming SSE body) has fully settled.
+   *
+   * Exists for edge runtimes whose connections are bound to a request's I/O
+   * context: on workerd a module-scope Postgres pool hands request N+1 an idle
+   * WebSocket belonging to request N's dead context, which hangs for ~30s until
+   * the runtime cancels - alternating, so half of all requests fail. Supplying
+   * this replaces the boot-resolved stores for the matching keys, and makes the
+   * boot resolution of the others optional on a runtime with no filesystem
+   * fallback (they then fail loudly on first use, as an omitted store already
+   * does).
+   *
+   * The factory owns cleanup of a PARTIAL allocation: `dispose` is only ever
+   * called on a `RequestStores` this returned, so a factory that opens a pool
+   * and then throws must close it itself — the runtime has nothing to dispose
+   * in that case and will answer the request with a 500.
+   */
+  readonly requestStores?: (request: Request) => RequestStores | Promise<RequestStores>
 }
 
 // ---------------------------------------------------------------------------
