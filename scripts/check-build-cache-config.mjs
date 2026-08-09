@@ -8,7 +8,7 @@ const packageRoot = join(repoRoot, "packages")
 const cliRoot = join(repoRoot, "packages/cli")
 const docsSourceRoot = join(repoRoot, "apps/web/content/docs")
 const docsNavPath = join(repoRoot, "apps/web/app/components/docs/nav.ts")
-const turboPath = join(repoRoot, "node_modules/.bin/turbo")
+const turboPath = join(repoRoot, "node_modules/turbo/bin/turbo")
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"))
 const toPosix = (path) => path.split(/[/\\]+/).join(posix.sep)
@@ -81,10 +81,14 @@ if (!buildOutputs.includes("dist/**")) {
 
 try {
   const dryRun = JSON.parse(
-    execFileSync(turboPath, ["run", "build", "--filter=@dawn-ai/cli", "--dry=json"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    }),
+    execFileSync(
+      process.execPath,
+      [turboPath, "run", "build", "--filter=@dawn-ai/cli", "--dry=json"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+      },
+    ),
   )
   const cliBuildTask = dryRun.tasks?.find((task) => task.taskId === "@dawn-ai/cli#build")
 
@@ -117,7 +121,7 @@ try {
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error)
   errors.push(
-    `Unable to inspect @dawn-ai/cli#build with Turbo dry run; run \`${turboPath} run build --filter=@dawn-ai/cli --dry=json\` from the repository root. (${message})`,
+    `Unable to inspect @dawn-ai/cli#build with Turbo dry run; run \`${process.execPath} ${turboPath} run build --filter=@dawn-ai/cli --dry=json\` from the repository root. (${message})`,
   )
 }
 
@@ -133,5 +137,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `Build cache config check passed (${checkedConfigs.length} emitting tsconfig file(s), dist/** cached).`,
+  `Build cache config check passed (${checkedConfigs.length} emitting tsconfig file(s), generic dist/** cache and CLI bundled-docs contract checked).`,
 )
