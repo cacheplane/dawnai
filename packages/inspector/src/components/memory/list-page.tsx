@@ -300,6 +300,9 @@ export function ListPage() {
               records={pageRecords}
               onSelect={setSelectedId}
               onTickedChange={setTicked}
+              // Only while looking at everything: scoped to one namespace by the
+              // rail, every row would sit under a single group header.
+              groupByNamespace={namespace === undefined}
             />
           ) : (
             <p className="py-8 text-center text-sm text-zinc-400">

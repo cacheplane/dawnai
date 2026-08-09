@@ -77,6 +77,12 @@ function statusClass(status: MemoryStatus): string {
   return ""
 }
 
+/** Module-level so their identities are stable — the grid reapplies controlled
+ *  state on every render, and fresh objects each time would churn it. Both
+ *  modes stay controlled so switching to a namespace facet clears grouping. */
+const GROUP_BY_NAMESPACE = { rowGroups: ["namespace"] }
+const FLAT_ROWS = { rowGroups: [] }
+
 /** Module-level so its identity is stable — `usePretable` keys the grid on it. */
 function rowIdOf(row: GridRow): string {
   return row.id
@@ -98,6 +104,7 @@ export function MemoryGrid({
   records,
   onSelect,
   onTickedChange,
+  groupByNamespace = false,
 }: {
   records: readonly MemoryRecord[]
   onSelect: (id: string) => void
@@ -105,6 +112,10 @@ export function MemoryGrid({
    *  rendered order, for bulk actions. Omitted where bulk actions make no
    *  sense (the grouped search results). */
   onTickedChange?: (ids: string[]) => void
+  /** Nest rows under one expandable header per namespace. Worth it only when
+   *  looking at every namespace at once — scoped to one, every row would sit
+   *  under a single group. */
+  groupByNamespace?: boolean
 }) {
   const rows = useMemo(() => records.map(toRow), [records])
 
@@ -128,6 +139,7 @@ export function MemoryGrid({
       rows={rows}
       getRowId={rowIdOf}
       viewportHeight={viewportHeight}
+      state={groupByNamespace ? GROUP_BY_NAMESPACE : FLAT_ROWS}
       {...(onTickedChange
         ? {
             rowSelectionColumn: { enabled: true, headerCheckbox: true } as const,
