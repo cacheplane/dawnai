@@ -379,6 +379,7 @@ git commit -m "fix(testing): fall back to direct process signals"
 
 **Files:**
 - Create: `.changeset/quiet-process-close.md`
+- Modify: `.github/workflows/ci.yml`
 - Verify: `packages/testing/src/subprocess.ts`
 - Verify: `packages/testing/test/subprocess.test.ts`
 
@@ -403,7 +404,23 @@ pnpm --filter @dawn-ai/testing test
 
 Expected: all commands pass.
 
-- [x] **Step 3: Run repository validation**
+- [x] **Step 3: Add focused native Windows CI coverage**
+
+Add the `testing-windows` job to `.github/workflows/ci.yml`. Run it on
+`windows-latest` with a 20-minute timeout. Use the repository's pinned
+checkout, pnpm setup, and Node 24.17.0 setup actions; install with a frozen
+lockfile; then build `@dawn-ai/testing...` so the testing dependency closure
+includes the CLI `dist` output. Run only the package-configured subprocess
+suite:
+
+```bash
+pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts
+```
+
+This job executes the two real Windows `taskkill.exe` process-tree and orphan
+tests. It is intentionally not a claim of broader Windows coverage.
+
+- [x] **Step 4: Run repository validation**
 
 ```bash
 pnpm ci:validate
@@ -411,7 +428,7 @@ pnpm ci:validate
 
 Expected: all Definition of Done lanes pass. Environment-gated Docker/Kubernetes lanes remain PR CI responsibilities.
 
-- [x] **Step 4: Review tracked and uncommitted changes**
+- [x] **Step 5: Review tracked and uncommitted changes**
 
 ```bash
 git diff --check main...HEAD
@@ -422,7 +439,7 @@ git status --short
 
 Expected: no whitespace errors; only the approved spec/plan, testing source/tests/fixture, and exact changeset are changed.
 
-- [x] **Step 5: Commit release metadata and plan progress**
+- [x] **Step 6: Commit release metadata and plan progress**
 
 ```bash
 git add .changeset/quiet-process-close.md docs/superpowers/plans/2026-08-09-subprocess-shutdown-barrier.md docs/superpowers/specs/2026-08-09-subprocess-shutdown-barrier-design.md

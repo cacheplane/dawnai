@@ -154,9 +154,16 @@ an orphan fixture, then verifies bounded rejection and zero dispatcher calls
 after the outer child closes. The shared fixture file is
 `packages/testing/test/fixtures/subprocess-tree.mjs`.
 
+A focused native Windows CI job builds the `@dawn-ai/testing` dependency
+closure, including the CLI distribution the test starts, then runs only
+`packages/testing/test/subprocess.test.ts` through that package's Vitest
+configuration. This validates the two real Windows `taskkill.exe` tree and
+orphan cases; it does not claim broader Windows test coverage.
+
 The focused test must be observed failing before production code changes and
 passing afterward. Package build, typecheck, lint, and tests plus the repository
-Definition of Done complete verification.
+Definition of Done complete verification. The native Windows CI job is the
+platform-specific verification for the real `taskkill.exe` cases.
 
 ## Files
 
@@ -166,6 +173,8 @@ Definition of Done complete verification.
   concurrency, and reachability assertions.
 - Add `packages/testing/test/fixtures/subprocess-tree.mjs` for real process
   tree and orphan scenarios.
+- Modify `.github/workflows/ci.yml` for the focused native Windows subprocess
+  shutdown test job.
 - Add a patch changeset for `@dawn-ai/testing`.
 
 ## Release
