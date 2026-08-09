@@ -38,6 +38,75 @@ const NEXT_VERSION = "1.2.4";
 const FIXTURE_WORKSPACE = await readFixtureWorkspace(FIXTURE_DIRECTORY);
 const PACKAGE_NAMES = FIXTURE_WORKSPACE.packages.map(({ name }) => name);
 
+test("Verdaccio rejects a pre-aborted signal before acquiring resources", async () => {
+	const controller = new AbortController();
+	controller.abort();
+	await assertFactoryRejectsWithoutLeak(
+		() => startVerdaccio({ signal: controller.signal }),
+		(error) => error.name === "AbortError",
+	);
+	await assertFactoryRejectsWithoutLeak(
+		() => startVerdaccio({ signal: {} }),
+		(error) => error instanceof TypeError,
+	);
+});
+
+test("the fault proxy rejects a pre-aborted signal before listening", async (t) => {
+	const registry = await startVerdaccio();
+	t.after(() => registry.close());
+	const controller = new AbortController();
+	controller.abort();
+	await assertFactoryRejectsWithoutLeak(
+		() =>
+			startFaultProxy({
+				upstreamUrl: registry.url,
+				signal: controller.signal,
+			}),
+		(error) => error.name === "AbortError",
+	);
+	await assertFactoryRejectsWithoutLeak(
+		() => startFaultProxy({ upstreamUrl: registry.url, signal: {} }),
+		(error) => error instanceof TypeError,
+	);
+});
+
+test("the Git fixture rejects a pre-aborted signal before creating a repository", async () => {
+	const controller = new AbortController();
+	controller.abort();
+	await assertFactoryRejectsWithoutLeak(
+		() =>
+			createGitFixture({
+				sourceDirectory: FIXTURE_DIRECTORY,
+				signal: controller.signal,
+			}),
+		(error) => error.name === "AbortError",
+	);
+	await assertFactoryRejectsWithoutLeak(
+		() => createGitFixture({ sourceDirectory: FIXTURE_DIRECTORY, signal: {} }),
+		(error) => error instanceof TypeError,
+	);
+});
+
+test("built-in acquisitions clean partial startup when cancellation races readiness", async (t) => {
+	const registry = await startVerdaccio();
+	t.after(() => registry.close());
+	const rows = [
+		(signal) => startVerdaccio({ signal }),
+		(signal) => startFaultProxy({ upstreamUrl: registry.url, signal }),
+		(signal) =>
+			createGitFixture({ sourceDirectory: FIXTURE_DIRECTORY, signal }),
+	];
+	for (const factory of rows) {
+		const controller = new AbortController();
+		const pending = assertFactoryRejectsWithoutLeak(
+			() => factory(controller.signal),
+			(error) => error.name === "AbortError",
+		);
+		controller.abort();
+		await pending;
+	}
+});
+
 test("Verdaccio uses disposable loopback storage and releases its random port on failure cleanup", async () => {
 	let registry;
 	try {
@@ -480,11 +549,12 @@ test("the production npm reader distinguishes exact absence and every determinis
 
 test("the fault proxy is loopback-only, has no network control endpoint, and resets in process", async (t) => {
 	const registry = await startVerdaccio();
-	const proxy = await startFaultProxy({ upstreamUrl: registry.url });
+	let proxy;
 	t.after(async () => {
-		await proxy.close();
+		await proxy?.close();
 		await registry.close();
 	});
+	proxy = await startFaultProxy({ upstreamUrl: registry.url });
 	assert.match(proxy.url, /^http:\/\/127\.0\.0\.1:\d+\/$/u);
 	proxy.setMode("unauthorized");
 	assert.equal(
@@ -505,13 +575,14 @@ test("the fault proxy is loopback-only, has no network control endpoint, and res
 
 test("fault proxy enforces one absolute streaming deadline and rejects truncated upstream bodies", async (t) => {
 	const upstream = await startBoundedUpstream();
-	const proxy = await startFaultProxy({
+	let proxy;
+	t.after(async () => {
+		await proxy?.close();
+		await upstream.close();
+	});
+	proxy = await startFaultProxy({
 		upstreamUrl: upstream.url,
 		forwardDeadlineMs: 75,
-	});
-	t.after(async () => {
-		await proxy.close();
-		await upstream.close();
 	});
 
 	const slowStarted = performance.now();
@@ -545,7 +616,7 @@ test("harness close is concurrent-safe, bounded, and retries only incomplete res
 	let gitDirectory;
 	const harness = await createFaultHarness({
 		fixtureDirectory: FIXTURE_DIRECTORY,
-		cleanupTimeoutMs: 75,
+		cleanupTimeoutMs: 250,
 		dependencies: {
 			async startVerdaccio() {
 				const resource = await startVerdaccio();
@@ -745,6 +816,72 @@ test("harness startup deadline cleans resources that arrive after timeout", asyn
 		),
 	]);
 	assert.equal(registryClosed, true);
+});
+
+test("startup cancellation prevents a factory from resolving beyond the cleanup window", async () => {
+	let abortObserved = false;
+	let resourceCreated = false;
+	await assert.rejects(
+		createFaultHarness({
+			fixtureDirectory: FIXTURE_DIRECTORY,
+			startupTimeoutMs: 25,
+			cleanupTimeoutMs: 50,
+			dependencies: {
+				async startVerdaccio() {
+					return {
+						url: "http://127.0.0.1:12345/",
+						async close() {},
+					};
+				},
+				startFaultProxy({ signal }) {
+					return new Promise((resolve, reject) => {
+						const timer = setTimeout(() => {
+							resourceCreated = true;
+							resolve({ async close() {} });
+						}, 500);
+						signal.addEventListener(
+							"abort",
+							() => {
+								abortObserved = true;
+								clearTimeout(timer);
+								reject(signal.reason);
+							},
+							{ once: true },
+						);
+					});
+				},
+				createGitFixture: assert.fail,
+			},
+		}),
+		(error) => error.code === "DEADLINE_EXCEEDED",
+	);
+	assert.equal(abortObserved, true);
+	assert.equal(resourceCreated, false);
+});
+
+test("a factory that does not settle after abort is surfaced within the cleanup budget", async () => {
+	const started = performance.now();
+	await assert.rejects(
+		createFaultHarness({
+			fixtureDirectory: FIXTURE_DIRECTORY,
+			startupTimeoutMs: 25,
+			cleanupTimeoutMs: 50,
+			dependencies: {
+				async startVerdaccio() {
+					return {
+						url: "http://127.0.0.1:12345/",
+						async close() {},
+					};
+				},
+				startFaultProxy() {
+					return new Promise(() => {});
+				},
+				createGitFixture: assert.fail,
+			},
+		}),
+		(error) => error.code === "ACQUISITION_ABORT_UNSETTLED",
+	);
+	assert.ok(performance.now() - started < 250);
 });
 
 test("the temporary Git fixture keeps identity local and production reads the advanced annotated tag", async (t) => {
@@ -1044,6 +1181,23 @@ async function writeToolWrapper({ path, target, prefixArguments, marker }) {
 		`#!/usr/bin/env node\nconst { appendFileSync } = require("node:fs")\nconst { spawnSync } = require("node:child_process")\nappendFileSync(${JSON.stringify(marker)}, "x")\nconst result = spawnSync(${JSON.stringify(target)}, [...${JSON.stringify(prefixArguments)}, ...process.argv.slice(2)], { stdio: "inherit", env: process.env })\nprocess.exit(result.status ?? 1)\n`,
 		{ mode: 0o755 },
 	);
+}
+
+async function assertFactoryRejectsWithoutLeak(factory, predicate) {
+	let unexpectedResource;
+	try {
+		await assert.rejects(
+			Promise.resolve()
+				.then(factory)
+				.then((resource) => {
+					unexpectedResource = resource;
+					throw new Error("Factory resolved after cancellation");
+				}),
+			predicate,
+		);
+	} finally {
+		await unexpectedResource?.close?.();
+	}
 }
 
 async function startBoundedUpstream() {

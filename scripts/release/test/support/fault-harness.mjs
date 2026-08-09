@@ -30,7 +30,7 @@ import { startVerdaccio } from "./verdaccio.mjs";
 
 const COMMAND_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
-const DEFAULT_STARTUP_TIMEOUT_MS = 5_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = 20_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 2_000;
 const MAX_LIFECYCLE_TIMEOUT_MS = 30_000;
 const MAX_CLEANUP_ATTEMPTS = 2;
@@ -377,20 +377,9 @@ async function acquireWithDeadline(
 				}
 			}
 		} else if (outcome === null) {
-			pending.then(
-				(lateResource) => {
-					if (
-						lateResource !== null &&
-						typeof lateResource === "object" &&
-						typeof lateResource.close === "function"
-					) {
-						cleanupResources(
-							[resource(`${label} late resource`, () => lateResource.close())],
-							cleanupTimeoutMs,
-						).catch(() => {});
-					}
-				},
-				() => {},
+			throw Object.assign(
+				new Error(`${label} did not settle after cancellation`),
+				{ code: "ACQUISITION_ABORT_UNSETTLED" },
 			);
 		}
 		throw error;

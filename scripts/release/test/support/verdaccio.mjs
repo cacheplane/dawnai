@@ -8,7 +8,9 @@ const LOOPBACK = "127.0.0.1";
 const STARTUP_TIMEOUT_MS = 5_000;
 const SHUTDOWN_TIMEOUT_MS = 2_000;
 
-export async function startVerdaccio() {
+export async function startVerdaccio({ signal } = {}) {
+	const cancellation = optionalAbortSignal(signal, "registry");
+	cancellation?.throwIfAborted();
 	const directory = await mkdtemp(join(tmpdir(), "dawn-release-verdaccio-"));
 	const storage = join(directory, "storage");
 	await mkdir(storage);
@@ -30,21 +32,28 @@ export async function startVerdaccio() {
 	let server;
 	try {
 		const startupDeadline = Date.now() + STARTUP_TIMEOUT_MS;
-		const application = await deadline(
-			runServer(config),
-			Math.max(1, startupDeadline - Date.now()),
-			"registry startup",
+		const application = await abortable(
+			deadline(
+				runServer(config),
+				Math.max(1, startupDeadline - Date.now()),
+				"registry startup",
+			),
+			cancellation,
 		);
 		const listening = application.listen(0, LOOPBACK);
 		server = listening;
-		await deadline(
-			new Promise((resolve, reject) => {
-				listening.once("listening", resolve);
-				listening.once("error", reject);
-			}),
-			Math.max(1, startupDeadline - Date.now()),
-			"registry readiness",
+		await abortable(
+			deadline(
+				new Promise((resolve, reject) => {
+					listening.once("listening", resolve);
+					listening.once("error", reject);
+				}),
+				Math.max(1, startupDeadline - Date.now()),
+				"registry readiness",
+			),
+			cancellation,
 		);
+		cancellation?.throwIfAborted();
 		const address = server.address();
 		if (
 			address === null ||
@@ -97,10 +106,32 @@ export async function startVerdaccio() {
 					),
 			rm(directory, { recursive: true, force: true }),
 		]);
+		if (cancellation?.aborted) throw cancellation.reason;
 		throw Object.assign(new Error("Disposable registry startup failed"), {
 			code: safeCode(error, "REGISTRY_START_FAILED"),
 		});
 	}
+}
+
+function optionalAbortSignal(value, label) {
+	if (value === undefined) return null;
+	if (!(value instanceof AbortSignal)) {
+		throw new TypeError(`Disposable ${label} signal is invalid`);
+	}
+	return value;
+}
+
+function abortable(promise, signal) {
+	if (signal === null) return promise;
+	signal.throwIfAborted();
+	let onAbort;
+	const aborted = new Promise((_, reject) => {
+		onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	return Promise.race([promise, aborted]).finally(() => {
+		signal.removeEventListener("abort", onAbort);
+	});
 }
 
 async function closeServer(server) {

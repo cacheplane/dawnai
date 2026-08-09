@@ -13,7 +13,9 @@ const IDENTITY = Object.freeze({
 const FIRST_DATE = "2024-01-01T00:00:00Z";
 const SECOND_DATE = "2024-01-02T00:00:00Z";
 
-export async function createGitFixture({ sourceDirectory }) {
+export async function createGitFixture({ sourceDirectory, signal }) {
+	const cancellation = optionalAbortSignal(signal);
+	cancellation?.throwIfAborted();
 	if (typeof sourceDirectory !== "string" || !isAbsolute(sourceDirectory)) {
 		throw new TypeError("Git fixture source must be an absolute path");
 	}
@@ -37,11 +39,13 @@ export async function createGitFixture({ sourceDirectory }) {
 			configDirectory,
 			templateDirectory,
 			tempDirectory,
+			signal: cancellation,
 		});
 		await cp(sourceDirectory, workingDirectory, {
 			recursive: true,
 			errorOnExist: true,
 		});
+		cancellation?.throwIfAborted();
 		await git(
 			directory,
 			["init", "--object-format=sha1", "--bare", bareRemoteDirectory],
@@ -104,6 +108,7 @@ export async function createGitFixture({ sourceDirectory }) {
 			["push", "origin", "refs/tags/v1.2.3"],
 			environment,
 		);
+		cancellation?.throwIfAborted();
 		let closePromise = null;
 		return Object.freeze({
 			directory,
@@ -126,6 +131,7 @@ export async function createGitFixture({ sourceDirectory }) {
 		});
 	} catch (error) {
 		await rm(directory, { recursive: true, force: true });
+		if (cancellation?.aborted) throw cancellation.reason;
 		throw error;
 	}
 }
@@ -148,8 +154,9 @@ function git(directory, args, environment, date) {
 				maxBuffer: MAX_OUTPUT_BYTES,
 				encoding: "utf8",
 				windowsHide: true,
+				signal: environment.signal ?? undefined,
 				env: {
-					...environment,
+					...environment.variables,
 					...(date === undefined
 						? {}
 						: { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date }),
@@ -175,20 +182,32 @@ function gitEnvironment({
 	configDirectory,
 	templateDirectory,
 	tempDirectory,
+	signal,
 }) {
 	return {
-		PATH: requiredPath(),
-		HOME: homeDirectory,
-		TMPDIR: tempDirectory,
-		XDG_CONFIG_HOME: configDirectory,
-		LANG: "C",
-		LC_ALL: "C",
-		GIT_CONFIG_GLOBAL: "/dev/null",
-		GIT_CONFIG_NOSYSTEM: "1",
-		GIT_CONFIG_COUNT: "0",
-		GIT_TEMPLATE_DIR: templateDirectory,
-		GIT_TERMINAL_PROMPT: "0",
+		signal,
+		variables: {
+			PATH: requiredPath(),
+			HOME: homeDirectory,
+			TMPDIR: tempDirectory,
+			XDG_CONFIG_HOME: configDirectory,
+			LANG: "C",
+			LC_ALL: "C",
+			GIT_CONFIG_GLOBAL: "/dev/null",
+			GIT_CONFIG_NOSYSTEM: "1",
+			GIT_CONFIG_COUNT: "0",
+			GIT_TEMPLATE_DIR: templateDirectory,
+			GIT_TERMINAL_PROMPT: "0",
+		},
 	};
+}
+
+function optionalAbortSignal(value) {
+	if (value === undefined) return null;
+	if (!(value instanceof AbortSignal)) {
+		throw new TypeError("Git fixture signal is invalid");
+	}
+	return value;
 }
 
 function requiredPath() {

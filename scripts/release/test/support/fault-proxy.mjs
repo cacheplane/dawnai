@@ -24,7 +24,10 @@ const MODES = new Set([
 export async function startFaultProxy({
 	upstreamUrl,
 	forwardDeadlineMs = FORWARD_TIMEOUT_MS,
+	signal,
 }) {
+	const cancellation = optionalAbortSignal(signal);
+	cancellation?.throwIfAborted();
 	const upstream = loopbackUrl(upstreamUrl, "fault proxy upstream");
 	if (
 		!Number.isSafeInteger(forwardDeadlineMs) ||
@@ -75,20 +78,25 @@ export async function startFaultProxy({
 		socket.once("close", () => sockets.delete(socket));
 	});
 	try {
-		await deadline(
-			new Promise((resolve, reject) => {
-				server.once("error", reject);
-				server.listen(0, LOOPBACK, resolve);
-			}),
-			STARTUP_TIMEOUT_MS,
-			"fault proxy readiness",
+		await abortable(
+			deadline(
+				new Promise((resolve, reject) => {
+					server.once("error", reject);
+					server.listen(0, LOOPBACK, resolve);
+				}),
+				STARTUP_TIMEOUT_MS,
+				"fault proxy readiness",
+			),
+			cancellation,
 		);
+		cancellation?.throwIfAborted();
 	} catch {
 		await deadline(
 			closeServer(server, sockets),
 			SHUTDOWN_TIMEOUT_MS,
 			"fault proxy rollback",
 		).catch(() => {});
+		if (cancellation?.aborted) throw cancellation.reason;
 		throw new Error("Fault proxy startup failed");
 	}
 	const address = server.address();
@@ -160,6 +168,27 @@ export async function startFaultProxy({
 			});
 			return closePromise;
 		},
+	});
+}
+
+function optionalAbortSignal(value) {
+	if (value === undefined) return null;
+	if (!(value instanceof AbortSignal)) {
+		throw new TypeError("Fault proxy signal is invalid");
+	}
+	return value;
+}
+
+function abortable(promise, signal) {
+	if (signal === null) return promise;
+	signal.throwIfAborted();
+	let onAbort;
+	const aborted = new Promise((_, reject) => {
+		onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	return Promise.race([promise, aborted]).finally(() => {
+		signal.removeEventListener("abort", onAbort);
 	});
 }
 
