@@ -55,8 +55,9 @@ async disposal, receives that promise.
 
 Successful resolution guarantees:
 
-1. The detached process group received graceful termination or forced
-   termination after the grace deadline.
+1. Unless the child was already closed and the port unavailable, the detached
+   process group received graceful termination or forced termination after the
+   grace deadline.
 2. The spawned CLI child's `close` event fired, which occurs after exit and
    stdio closure.
 3. A bounded TCP probe confirms that the `baseUrl` port no longer accepts
