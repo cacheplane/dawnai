@@ -1,4 +1,5 @@
 import { isExactSemver } from "../semver.mjs"
+import { createHttpGet } from "./http.mjs"
 
 // Every observation is a JSON-safe envelope with status, operation, httpStatus, and code.
 // PRESENT package observations additionally include the exact registry identity and evidence.
@@ -6,24 +7,27 @@ const OPERATIONS = new Set(["package-version", "package-metadata", "provenance"]
 const PACKAGE_NAME_PATTERN =
   /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
-const INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]+={0,2}$/u
 
 export function createNpmReader({
   registryUrl = "https://registry.npmjs.org",
   fetchImpl = fetch,
+  timeoutMs,
+  maxResponseBytes,
 } = {}) {
   const registry = normalizeRegistryUrl(registryUrl)
-  if (typeof fetchImpl !== "function") {
-    throw new TypeError("npm fetch implementation must be a function")
-  }
+  const http = createHttpGet({
+    fetchImpl,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
+  })
 
   return {
-    observePackageVersion({ name, version }) {
+    observePackageVersion({ name, version, signal }) {
       assertPackageName(name)
       if (!isExactSemver(version)) {
         throw new TypeError(`Invalid exact SemVer: ${String(version)}`)
       }
-      return observePackageVersion({ registry, fetchImpl, name, version })
+      return observePackageVersion({ registry, http, name, version, signal })
     },
   }
 }
@@ -36,7 +40,7 @@ export function classifyRegistryResponse({ operation, response, body }) {
   if (!Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599) {
     return failure("ERROR", operation, null, "MALFORMED_RESPONSE")
   }
-  if (response.ok === true || (httpStatus >= 200 && httpStatus < 300)) {
+  if (httpStatus >= 200 && httpStatus < 300) {
     return failure("PRESENT", operation, httpStatus, null)
   }
 
@@ -47,14 +51,15 @@ export function classifyRegistryResponse({ operation, response, body }) {
   return failure("AMBIGUOUS", operation, httpStatus, registryCode)
 }
 
-async function observePackageVersion({ registry, fetchImpl, name, version }) {
+async function observePackageVersion({ registry, http, name, version, signal }) {
   const encodedName = encodeURIComponent(name)
   const encodedVersion = encodeURIComponent(version)
   const versionResult = await getJson({
-    fetchImpl,
+    http,
     url: new URL(`${encodedName}/${encodedVersion}`, registry),
     operation: "package-version",
     accept: "application/json",
+    signal,
   })
   if (versionResult.status !== "PRESENT") {
     return versionResult
@@ -73,10 +78,11 @@ async function observePackageVersion({ registry, fetchImpl, name, version }) {
   }
 
   const metadataResult = await getJson({
-    fetchImpl,
+    http,
     url: new URL(encodedName, registry),
     operation: "package-metadata",
     accept: "application/vnd.npm.install-v1+json",
+    signal,
   })
   if (metadataResult.status !== "PRESENT") {
     return withoutBody(metadataResult)
@@ -95,10 +101,11 @@ async function observePackageVersion({ registry, fetchImpl, name, version }) {
   }
   if (versionDocument.provenanceUrl !== null) {
     const provenanceResult = await getJson({
-      fetchImpl,
-      url: new URL(versionDocument.provenanceUrl),
+      http,
+      url: versionDocument.provenanceUrl,
       operation: "provenance",
       accept: "application/json",
+      signal,
     })
     if (provenanceResult.status !== "PRESENT") {
       return withoutBody(provenanceResult)
@@ -133,50 +140,25 @@ async function observePackageVersion({ registry, fetchImpl, name, version }) {
   }
 }
 
-async function getJson({ fetchImpl, url, operation, accept }) {
-  let response
-  try {
-    response = await fetchImpl(url.href, {
-      method: "GET",
-      headers: { Accept: accept },
-    })
-  } catch (error) {
-    return failure(
-      "AMBIGUOUS",
-      operation,
-      null,
-      error?.name === "AbortError" ? "ABORTED" : "NETWORK_ERROR",
-    )
+async function getJson({ http, url, operation, accept, signal }) {
+  const response = await http.getJson({
+    url,
+    headers: { Accept: accept },
+    ...(signal === undefined ? {} : { signal }),
+  })
+  if (response.status !== "OK" && response.status !== "HTTP_ERROR") {
+    return failure(transportFailureStatus(response), operation, response.httpStatus, response.code)
   }
 
-  if (
-    response === null ||
-    typeof response !== "object" ||
-    !Number.isInteger(response.status) ||
-    typeof response.json !== "function"
-  ) {
-    return failure("ERROR", operation, null, "MALFORMED_RESPONSE")
-  }
-
-  const httpClassification = classifyRegistryResponse({ operation, response, body: null })
+  const httpClassification = classifyRegistryResponse({
+    operation,
+    response: { status: response.httpStatus },
+    body: response.body,
+  })
   if (httpClassification.status !== "PRESENT") {
-    let body = null
-    try {
-      body = await response.json()
-    } catch {
-      // The status code remains ambiguous; an error page must never become absence.
-    }
-    return classifyRegistryResponse({ operation, response, body })
+    return httpClassification
   }
-
-  if (!isJsonContentType(response.headers?.get?.("content-type"))) {
-    return failure("ERROR", operation, response.status, "UNEXPECTED_CONTENT_TYPE")
-  }
-  try {
-    return { ...httpClassification, body: await response.json() }
-  } catch {
-    return failure("ERROR", operation, response.status, "MALFORMED_JSON")
-  }
+  return { ...httpClassification, body: response.body }
 }
 
 function normalizeVersionDocument(value, { registry, name, version }) {
@@ -196,8 +178,7 @@ function normalizeVersionDocument(value, { registry, name, version }) {
   if (
     typeof shasum !== "string" ||
     !SHA_PATTERN.test(shasum) ||
-    typeof integrity !== "string" ||
-    !INTEGRITY_PATTERN.test(integrity)
+    canonicalIntegritySha512(integrity) === null
   ) {
     return null
   }
@@ -211,7 +192,8 @@ function normalizeVersionDocument(value, { registry, name, version }) {
     if (!isObject(value.dist.attestations)) {
       return null
     }
-    provenanceUrl = sameOriginUrl(value.dist.attestations.url, registry)
+    const expectedUrl = exactProvenanceUrl(registry, name, version)
+    provenanceUrl = exactUrl(value.dist.attestations.url, expectedUrl)
     if (provenanceUrl === null) {
       return { unsafeUrl: true }
     }
@@ -235,8 +217,8 @@ function normalizeSignatures(value) {
   }
   return signatures.sort((left, right) =>
     left.keyid === right.keyid
-      ? left.sig.localeCompare(right.sig)
-      : left.keyid.localeCompare(right.keyid),
+      ? compareStrings(left.sig, right.sig)
+      : compareStrings(left.keyid, right.keyid),
   )
 }
 
@@ -251,7 +233,7 @@ function normalizeDistTags(value) {
     }
     entries.push([tag, version])
   }
-  return Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right)))
+  return Object.fromEntries(entries.sort(([left], [right]) => compareStrings(left, right)))
 }
 
 function normalizeProvenance(value, url, { name, version, integrity }) {
@@ -390,12 +372,7 @@ function npmSubjectName(name, version) {
 }
 
 function integritySha512(integrity) {
-  try {
-    const bytes = Buffer.from(integrity.slice("sha512-".length), "base64")
-    return bytes.length === 64 ? bytes.toString("hex") : null
-  } catch {
-    return null
-  }
+  return canonicalIntegritySha512(integrity)?.toString("hex") ?? null
 }
 
 function isSafeGitHubRepositoryUrl(value) {
@@ -459,6 +436,47 @@ function sameOriginUrl(value, registry) {
   }
 }
 
+function exactProvenanceUrl(registry, name, version) {
+  return new URL(
+    `/-/npm/v1/attestations/${npmAttestationName(name)}@${encodeURIComponent(version)}`,
+    `${registry.origin}/`,
+  ).href
+}
+
+function npmAttestationName(name) {
+  const slash = name.indexOf("/")
+  return slash === -1
+    ? encodeURIComponent(name)
+    : `${name.slice(0, slash)}%2f${name.slice(slash + 1)}`
+}
+
+function exactUrl(value, expected) {
+  if (typeof value !== "string") {
+    return null
+  }
+  try {
+    const url = new URL(value)
+    return url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      url.href === expected
+      ? url.href
+      : null
+  } catch {
+    return null
+  }
+}
+
+function canonicalIntegritySha512(value) {
+  if (typeof value !== "string" || !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(value)) {
+    return null
+  }
+  const encoded = value.slice("sha512-".length)
+  const bytes = Buffer.from(encoded, "base64")
+  return bytes.length === 64 && bytes.toString("base64") === encoded ? bytes : null
+}
+
 function assertPackageName(value) {
   if (typeof value !== "string" || !PACKAGE_NAME_PATTERN.test(value)) {
     throw new TypeError(`Invalid npm package name: ${String(value)}`)
@@ -469,12 +487,25 @@ function safeRegistryCode(value) {
   return typeof value === "string" && /^[A-Z][A-Z0-9_-]{0,63}$/u.test(value) ? value : null
 }
 
-function isJsonContentType(value) {
-  return typeof value === "string" && /(?:\/json|\+json)(?:;|$)/iu.test(value)
-}
-
 function failure(status, operation, httpStatus, code) {
   return { status, operation, httpStatus, code }
+}
+
+function transportFailureStatus(result) {
+  if (result.code === "MALFORMED_RESPONSE") {
+    return "ERROR"
+  }
+  if (["ABORTED", "NETWORK_ERROR", "TIMEOUT"].includes(result.code)) {
+    return "AMBIGUOUS"
+  }
+  if (
+    result.code !== "REDIRECT" &&
+    result.httpStatus !== null &&
+    (result.httpStatus < 200 || result.httpStatus >= 300)
+  ) {
+    return "AMBIGUOUS"
+  }
+  return "ERROR"
 }
 
 function withoutBody(result) {
@@ -483,4 +514,8 @@ function withoutBody(result) {
 
 function isObject(value) {
   return value !== null && !Array.isArray(value) && typeof value === "object"
+}
+
+function compareStrings(left, right) {
+  return left === right ? 0 : left < right ? -1 : 1
 }

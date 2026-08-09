@@ -393,7 +393,7 @@ test("check-inventory formats expected Git and config failures in text and JSON 
       {
         args: ["--ref", "--help"],
         type: "GitInputError",
-        message: /Invalid Git ref: --help/u,
+        message: /^Invalid Git ref\n?$/u,
       },
       {
         args: ["--ref", "does-not-exist"],

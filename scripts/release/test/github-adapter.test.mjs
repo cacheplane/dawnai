@@ -56,6 +56,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
     calls.map(({ url, init }) => ({
       url,
       method: init.method,
+      redirect: init.redirect,
       accept: init.headers.Accept,
       version: init.headers["X-GitHub-Api-Version"],
       authorization: init.headers.Authorization,
@@ -73,6 +74,7 @@ test("createGitHubReader exposes only named read operations and exact GET endpoi
     ].map((url) => ({
       url,
       method: "GET",
+      redirect: "manual",
       accept: "application/vnd.github+json",
       version: "2022-11-28",
       authorization: `Bearer ${TOKEN}`,
@@ -165,8 +167,8 @@ test("GitHub distinguishes exact absence from auth, rate, network, parse, and se
   const cases = [
     {
       response: jsonResponse({ message: "not found" }, 404),
-      status: "ABSENT",
-      code: "NOT_FOUND",
+      status: "AMBIGUOUS",
+      code: "NOT_FOUND_OR_HIDDEN",
       httpStatus: 404,
     },
     {
@@ -247,6 +249,37 @@ test("GitHub distinguishes exact absence from auth, rate, network, parse, and se
   }
 })
 
+test("GitHub raw 404 stays ambiguous for every named resource family", async () => {
+  const calls = [
+    (github) => github.getRef({ ref: "tags/v0.8.21" }),
+    (github) => github.getReleaseByTag({ tag: "v0.8.21" }),
+    (github) => github.listReleaseAssets({ releaseId: 7 }),
+    (github) => github.downloadReleaseAsset({ assetId: 7 }),
+    (github) => github.getWorkflow({ workflow: "release.yml" }),
+    (github) => github.getActionsRun({ runId: 9 }),
+    (github) => github.getActionsPermissions(),
+    (github) => github.getWorkflowPermissions(),
+    (github) => github.getBranchProtection({ branch: "main" }),
+  ]
+
+  for (const call of calls) {
+    const github = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      token: TOKEN,
+      fetchImpl: async () => jsonResponse({ message: "resource hidden by authorization" }, 404),
+    })
+    const result = await call(github)
+    assert.equal(result.status, "AMBIGUOUS")
+    assert.equal(result.httpStatus, 404)
+    assert.equal(result.code, "NOT_FOUND_OR_HIDDEN")
+    assert.doesNotMatch(
+      JSON.stringify(result),
+      /resource hidden by authorization|github_secret_token/iu,
+    )
+  }
+})
+
 test("GitHub rejects malformed JSON shapes and unsafe pagination", async () => {
   const malformed = createGitHubReader({
     owner: OWNER,
@@ -278,6 +311,46 @@ test("GitHub rejects malformed JSON shapes and unsafe pagination", async () => {
       code: "UNSAFE_PAGINATION_URL",
     })
   }
+})
+
+test("GitHub rejects malformed or ambiguous Link headers instead of truncating lists", async () => {
+  const next = `${BASE}/git/matching-refs/tags/?per_page=100&page=2`
+  const malformedLinks = [
+    `<${next}>; rel="next`,
+    `<${next}>; rel="next"; broken`,
+    `<${next}>; rel="next"; rel="prev"`,
+    `<${next}>; rel="next next"`,
+    `<${next}>; rel="next prev"`,
+    `<${next}>; rel="next", <${next}>; rel="next"`,
+    `garbage, <${next}>; rel="next"`,
+  ]
+
+  for (const link of malformedLinks) {
+    const recording = recordingFetch([jsonResponse([{ ref: "refs/tags/v1" }], 200, { link })])
+    const result = await createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: recording.fetchImpl,
+    }).listTagRefs()
+
+    assert.deepEqual(result, {
+      status: "ERROR",
+      operation: "tag-refs",
+      httpStatus: 200,
+      code: "MALFORMED_LINK_HEADER",
+    })
+    assert.equal(recording.calls.length, 1)
+  }
+
+  const previousOnly = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    fetchImpl: async () =>
+      jsonResponse([{ ref: "refs/tags/v1" }], 200, {
+        link: `<${next}>; rel="prev"; type="application/json"`,
+      }),
+  })
+  assert.deepEqual((await previousOnly.listTagRefs()).value, [{ ref: "refs/tags/v1" }])
 })
 
 test("GitHub pagination preserves exact endpoint and fixed filters", async () => {
@@ -446,6 +519,146 @@ test("GitHub validates repository identity and every dynamic argument before fet
   assert.throws(() => github.getBranchProtection({ branch: "../main" }), /branch/u)
 })
 
+test("GitHub applies bounded deadlines, response limits, and numeric status validation", async () => {
+  const timeout = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    timeoutMs: 5,
+    fetchImpl: async (_url, init) => {
+      if (!(init.signal instanceof AbortSignal)) {
+        throw new Error("missing bounded signal")
+      }
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("github_secret_token", "AbortError")),
+          { once: true },
+        )
+      })
+    },
+  })
+  assert.deepEqual(await timeout.getRef({ ref: "tags/v0.8.21" }), {
+    status: "AMBIGUOUS",
+    operation: "ref",
+    httpStatus: null,
+    code: "TIMEOUT",
+  })
+
+  const oversized = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    maxResponseBytes: 4,
+    fetchImpl: async () => jsonResponse({ ref: "refs/tags/v0.8.21" }),
+  })
+  assert.deepEqual(await oversized.getRef({ ref: "tags/v0.8.21" }), {
+    status: "ERROR",
+    operation: "ref",
+    httpStatus: 200,
+    code: "RESPONSE_TOO_LARGE",
+  })
+
+  for (const response of [
+    responseLike({ status: 99, ok: true, body: "{}" }),
+    responseLike({ status: 600, ok: true, body: "{}" }),
+  ]) {
+    const result = await createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: async () => response,
+    }).getRef({ ref: "tags/v0.8.21" })
+    assert.equal(result.status, "ERROR")
+    assert.equal(result.code, "MALFORMED_RESPONSE")
+  }
+
+  const concealed = createGitHubReader({
+    owner: OWNER,
+    repo: REPO,
+    fetchImpl: async () =>
+      responseLike({
+        status: 404,
+        ok: true,
+        body: "{}",
+        headers: { "content-type": "application/json" },
+      }),
+  })
+  assert.equal((await concealed.getRef({ ref: "tags/v0.8.21" })).status, "AMBIGUOUS")
+})
+
+test("GitHub normalized lists have a canonical total order after primary-key ties", async () => {
+  const pairs = [
+    [
+      (github) => github.getCommitCheckRuns({ commitSha: SHA }),
+      (items) => ({ check_runs: items }),
+      [
+        { id: 1, name: "ci", conclusion: "success" },
+        { id: 1, name: "ci", conclusion: "failure" },
+      ],
+    ],
+    [
+      (github) => github.listTagRefs(),
+      (items) => items,
+      [
+        { ref: "refs/tags/v1", object: { sha: "b" } },
+        { ref: "refs/tags/v1", object: { sha: "a" } },
+      ],
+    ],
+    [
+      (github) => github.listReleaseAssets({ releaseId: 7 }),
+      (items) => items,
+      [
+        { id: 1, name: "asset", size: 2 },
+        { id: 1, name: "asset", size: 1 },
+      ],
+    ],
+    [
+      (github) => github.listActionsArtifacts({ name: "evidence" }),
+      (items) => ({ artifacts: items }),
+      [
+        { id: 1, name: "evidence", size_in_bytes: 2 },
+        { id: 1, name: "evidence", size_in_bytes: 1 },
+      ],
+    ],
+    [
+      (github) => github.listWorkflowRuns({ workflow: "release.yml", commitSha: SHA }),
+      (items) => ({ workflow_runs: items }),
+      [
+        { id: 1, name: "release", run_attempt: 2 },
+        { id: 1, name: "release", run_attempt: 1 },
+      ],
+    ],
+    [
+      (github) => github.getAttestations({ subjectDigest: `sha256:${"a".repeat(64)}` }),
+      (items) => ({ attestations: items }),
+      [
+        { id: 1, bundle: { mediaType: "z" } },
+        { id: 1, bundle: { mediaType: "a" } },
+      ],
+    ],
+    [
+      (github) => github.listEnvironments(),
+      (items) => ({ environments: items }),
+      [
+        { name: "release", protection_rules: [{ type: "z" }] },
+        { name: "release", protection_rules: [{ type: "a" }] },
+      ],
+    ],
+  ]
+
+  for (const [observe, responseBody, items] of pairs) {
+    const forward = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: async () => jsonResponse(responseBody(items)),
+    })
+    const reversed = createGitHubReader({
+      owner: OWNER,
+      repo: REPO,
+      fetchImpl: async () => jsonResponse(responseBody([...items].reverse())),
+    })
+    assert.equal(JSON.stringify(await observe(forward)), JSON.stringify(await observe(reversed)))
+  }
+})
+
 function recordingFetch(responses) {
   const calls = []
   return {
@@ -475,4 +688,19 @@ function binaryResponse(bytes, status = 200) {
 
 function linkHeader(next) {
   return { link: `<${next}>; rel="next"` }
+}
+
+function responseLike({ status, ok, body, headers = { "content-type": "application/json" } }) {
+  const bytes = new TextEncoder().encode(body)
+  return {
+    status,
+    ok,
+    headers: new Headers(headers),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes)
+        controller.close()
+      },
+    }),
+  }
 }

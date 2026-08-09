@@ -22,21 +22,29 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
   const result = await npm.observePackageVersion({ name: NAME, version: VERSION })
 
   assert.deepEqual(
-    calls.map(({ url, init }) => ({ url, method: init.method, accept: init.headers.Accept })),
+    calls.map(({ url, init }) => ({
+      url,
+      method: init.method,
+      redirect: init.redirect,
+      accept: init.headers.Accept,
+    })),
     [
       {
         url: `${REGISTRY}/%40dawn-ai%2Fsdk/0.8.21`,
         method: "GET",
+        redirect: "manual",
         accept: "application/json",
       },
       {
         url: `${REGISTRY}/%40dawn-ai%2Fsdk`,
         method: "GET",
+        redirect: "manual",
         accept: "application/vnd.npm.install-v1+json",
       },
       {
-        url: `${REGISTRY}/-/npm/v1/attestations/%40dawn-ai%2Fsdk@0.8.21`,
+        url: `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`,
         method: "GET",
+        redirect: "manual",
         accept: "application/json",
       },
     ],
@@ -60,7 +68,7 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
       latest: VERSION,
       provenance: {
         status: "PRESENT",
-        url: `${REGISTRY}/-/npm/v1/attestations/%40dawn-ai%2Fsdk@0.8.21`,
+        url: `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`,
         predicateTypes: ["https://slsa.dev/provenance/v1"],
         workflow: ".github/workflows/release.yml",
         commitSha: COMMIT_SHA,
@@ -110,6 +118,28 @@ test("classifyRegistryResponse treats only exact-version E404 as absence", () =>
       row.name,
     )
   }
+
+  assert.deepEqual(
+    classifyRegistryResponse({
+      operation: "package-version",
+      response: { status: 404, ok: true },
+      body: { code: "E404" },
+    }),
+    {
+      status: "ABSENT",
+      operation: "package-version",
+      httpStatus: 404,
+      code: "E404",
+    },
+  )
+  assert.equal(
+    classifyRegistryResponse({
+      operation: "package-version",
+      response: { status: 200, ok: false },
+      body: {},
+    }).status,
+    "PRESENT",
+  )
 })
 
 test("npm network, timeout, parse, content-type, and schema failures never become absence", async () => {
@@ -214,6 +244,15 @@ test("npm refuses malformed or cross-origin tarball and provenance URLs", async 
     (document) => {
       document.dist.attestations.url = "https://evil.example/provenance"
     },
+    (document) => {
+      document.dist.attestations.url = `${REGISTRY}/-/npm/v1/admin/users`
+    },
+    (document) => {
+      document.dist.attestations.url = `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21?admin=true`
+    },
+    (document) => {
+      document.dist.attestations.url = `https://user:secret@registry.npmjs.org/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`
+    },
   ]) {
     const document = versionDocument()
     mutate(document)
@@ -227,6 +266,146 @@ test("npm refuses malformed or cross-origin tarball and provenance URLs", async 
     assert.equal(result.code, "UNSAFE_REGISTRY_URL")
     assert.equal(calls.length, 1)
   }
+})
+
+test("npm binds custom-registry provenance to the exact origin endpoint", async () => {
+  const customRegistry = "https://registry.example.test/npm/"
+  const document = versionDocument()
+  document.dist.tarball = `https://registry.example.test/@dawn-ai/sdk/-/sdk-${VERSION}.tgz`
+  document.dist.attestations.url =
+    "https://registry.example.test/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21"
+  const recording = recordingFetch([
+    jsonResponse(document),
+    jsonResponse({ "dist-tags": { latest: VERSION } }),
+    jsonResponse(attestationDocument()),
+  ])
+
+  const result = await createNpmReader({
+    registryUrl: customRegistry,
+    fetchImpl: recording.fetchImpl,
+  }).observePackageVersion({ name: NAME, version: VERSION })
+
+  assert.equal(result.status, "PRESENT")
+  assert.equal(
+    recording.calls[2].url,
+    "https://registry.example.test/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21",
+  )
+})
+
+test("npm rejects provenance redirects without following them", async () => {
+  const recording = recordingFetch([
+    jsonResponse(versionDocument()),
+    jsonResponse({ "dist-tags": { latest: VERSION } }),
+    new Response(null, {
+      status: 302,
+      headers: { location: `${REGISTRY}/-/npm/v1/admin/users` },
+    }),
+  ])
+
+  const result = await createNpmReader({ fetchImpl: recording.fetchImpl }).observePackageVersion({
+    name: NAME,
+    version: VERSION,
+  })
+
+  assert.deepEqual(result, {
+    status: "ERROR",
+    operation: "provenance",
+    httpStatus: 302,
+    code: "REDIRECT",
+  })
+  assert.equal(recording.calls.length, 3)
+})
+
+test("npm requires a canonical padded base64 encoding of exactly 64 integrity bytes", async () => {
+  for (const integrity of [
+    "sha512-A",
+    "sha512-AA==",
+    `sha512-${"A".repeat(86)}`,
+    `sha512-${"A".repeat(85)}B==`,
+  ]) {
+    const document = versionDocument()
+    document.dist.integrity = integrity
+    const recording = recordingFetch([jsonResponse(document)])
+
+    assert.deepEqual(
+      await createNpmReader({ fetchImpl: recording.fetchImpl }).observePackageVersion({
+        name: NAME,
+        version: VERSION,
+      }),
+      {
+        status: "ERROR",
+        operation: "package-version",
+        httpStatus: 200,
+        code: "MALFORMED_SCHEMA",
+      },
+    )
+    assert.equal(recording.calls.length, 1)
+  }
+})
+
+test("npm applies bounded deadlines and response limits through the named observer", async () => {
+  const timeout = createNpmReader({
+    timeoutMs: 5,
+    fetchImpl: async (_url, init) => {
+      if (!(init.signal instanceof AbortSignal)) {
+        throw new Error("missing bounded signal")
+      }
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("deadline", "AbortError")),
+          { once: true },
+        )
+      })
+    },
+  })
+  assert.deepEqual(await timeout.observePackageVersion({ name: NAME, version: VERSION }), {
+    status: "AMBIGUOUS",
+    operation: "package-version",
+    httpStatus: null,
+    code: "TIMEOUT",
+  })
+
+  const oversized = createNpmReader({
+    maxResponseBytes: 4,
+    fetchImpl: async () => jsonResponse(versionDocument()),
+  })
+  assert.deepEqual(await oversized.observePackageVersion({ name: NAME, version: VERSION }), {
+    status: "ERROR",
+    operation: "package-version",
+    httpStatus: 200,
+    code: "RESPONSE_TOO_LARGE",
+  })
+})
+
+test("npm rejects malformed injected status and does not trust response ok", async () => {
+  for (const response of [
+    responseLike({ status: 99, ok: true, body: "{}" }),
+    responseLike({ status: 600, ok: true, body: "{}" }),
+  ]) {
+    const result = await createNpmReader({ fetchImpl: async () => response }).observePackageVersion(
+      {
+        name: NAME,
+        version: VERSION,
+      },
+    )
+    assert.equal(result.status, "ERROR")
+    assert.equal(result.code, "MALFORMED_RESPONSE")
+  }
+
+  const concealed = createNpmReader({
+    fetchImpl: async () =>
+      responseLike({
+        status: 404,
+        ok: true,
+        body: JSON.stringify({ code: "E404" }),
+        headers: { "content-type": "application/json" },
+      }),
+  })
+  assert.equal(
+    (await concealed.observePackageVersion({ name: NAME, version: VERSION })).status,
+    "ABSENT",
+  )
 })
 
 test("npm reports absent provenance explicitly without inventing workflow identity", async () => {
@@ -307,7 +486,7 @@ function versionDocument() {
         { keyid: "SHA256:key-a", sig: "signature-a" },
       ],
       attestations: {
-        url: `${REGISTRY}/-/npm/v1/attestations/%40dawn-ai%2Fsdk@0.8.21`,
+        url: `${REGISTRY}/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21`,
       },
     },
   }
@@ -398,4 +577,19 @@ function jsonResponse(body, status = 200) {
 
 function responseMeta(status) {
   return { status, ok: status >= 200 && status < 300 }
+}
+
+function responseLike({ status, ok, body, headers = { "content-type": "application/json" } }) {
+  const bytes = new TextEncoder().encode(body)
+  return {
+    status,
+    ok,
+    headers: new Headers(headers),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes)
+        controller.close()
+      },
+    }),
+  }
 }

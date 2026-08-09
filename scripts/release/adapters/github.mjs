@@ -1,3 +1,5 @@
+import { createHttpGet } from "./http.mjs"
+
 const API_ORIGIN = "https://api.github.com"
 const API_VERSION = "2022-11-28"
 const JSON_ACCEPT = "application/vnd.github+json"
@@ -10,7 +12,14 @@ const CURSOR_PATTERN = /^[A-Za-z0-9._~+/=-]{1,512}$/u
 
 // Named methods return JSON-safe envelopes with status, operation, httpStatus, and code.
 // JSON endpoints add canonicalized value; download endpoints add base64 content.
-export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
+export function createGitHubReader({
+  owner,
+  repo,
+  token,
+  fetchImpl = fetch,
+  timeoutMs,
+  maxResponseBytes,
+}) {
   assertIdentity(owner, OWNER_PATTERN, "GitHub owner")
   assertIdentity(repo, REPOSITORY_PATTERN, "GitHub repository")
   if (
@@ -19,12 +28,13 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
   ) {
     throw new TypeError("Invalid GitHub token")
   }
-  if (typeof fetchImpl !== "function") {
-    throw new TypeError("GitHub fetch implementation must be a function")
-  }
-
   const base = `${API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
-  const context = { base, fetchImpl, token: token ?? null }
+  const http = createHttpGet({
+    fetchImpl,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
+  })
+  const context = { base, http, token: token ?? null }
 
   return {
     getCommitCheckRuns({ commitSha }) {
@@ -41,7 +51,6 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
       return readObject(context, {
         url: `${base}/git/ref/${encodeURIComponent(ref)}`,
         operation: "ref",
-        absenceAllowed: true,
       })
     },
     listTagRefs() {
@@ -49,7 +58,7 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
         initialUrl: `${base}/git/matching-refs/tags/?per_page=100`,
         operation: "tag-refs",
         extract: arrayBody,
-        compare: (left, right) => String(left.ref).localeCompare(String(right.ref)),
+        compare: compareStringFieldThenCanonical("ref"),
       })
     },
     getReleaseByTag({ tag }) {
@@ -57,7 +66,6 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
       return readObject(context, {
         url: `${base}/releases/tags/${encodeURIComponent(tag)}`,
         operation: "release",
-        absenceAllowed: true,
       })
     },
     listReleaseAssets({ releaseId }) {
@@ -67,7 +75,6 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
         operation: "release-assets",
         extract: arrayBody,
         compare: compareIdThenName,
-        absenceAllowed: true,
       })
     },
     downloadReleaseAsset({ assetId }) {
@@ -75,7 +82,6 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
       return readBinary(context, {
         url: `${base}/releases/assets/${id}`,
         operation: "release-asset-download",
-        absenceAllowed: true,
       })
     },
     listActionsArtifacts({ name } = {}) {
@@ -98,7 +104,6 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
       return readObject(context, {
         url: `${base}/actions/runs/${id}`,
         operation: "actions-run",
-        absenceAllowed: true,
       })
     },
     listWorkflowRuns({ workflow, commitSha }) {
@@ -117,7 +122,6 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
       return readBinary(context, {
         url: `${base}/actions/artifacts/${id}/zip`,
         operation: "actions-artifact-download",
-        absenceAllowed: true,
       })
     },
     getAttestations({ subjectDigest }) {
@@ -127,7 +131,6 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
       return readPaginated(context, {
         initialUrl: `${base}/attestations/${encodeURIComponent(subjectDigest)}?per_page=100`,
         operation: "attestations",
-        absenceAllowed: true,
         extract: objectArray("attestations"),
         compare: compareAttestations,
         cursorPagination: true,
@@ -138,7 +141,6 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
       return readObject(context, {
         url: `${base}/actions/workflows/${encodeURIComponent(workflow)}`,
         operation: "workflow",
-        absenceAllowed: true,
       })
     },
     getActionsPermissions() {
@@ -158,7 +160,7 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
         initialUrl: `${base}/environments?per_page=100`,
         operation: "environments",
         extract: objectArray("environments"),
-        compare: (left, right) => String(left.name).localeCompare(String(right.name)),
+        compare: compareStringFieldThenCanonical("name"),
       })
     },
     getBranchProtection({ branch }) {
@@ -166,17 +168,13 @@ export function createGitHubReader({ owner, repo, token, fetchImpl = fetch }) {
       return readObject(context, {
         url: `${base}/branches/${encodeURIComponent(branch)}/protection`,
         operation: "branch-protection",
-        absenceAllowed: true,
       })
     },
   }
 }
 
-async function readObject(
-  context,
-  { url, operation, absenceAllowed = false, validate = isObject },
-) {
-  const result = await readJson(context, { url, operation, absenceAllowed })
+async function readObject(context, { url, operation, validate = isObject }) {
+  const result = await readJson(context, { url, operation })
   if (result.status !== "PRESENT") {
     return publicResult(result)
   }
@@ -192,12 +190,12 @@ async function readObject(
 
 async function readPaginated(
   context,
-  { initialUrl, operation, extract, compare, absenceAllowed = false, cursorPagination = false },
+  { initialUrl, operation, extract, compare, cursorPagination = false },
 ) {
   const records = []
   let url = initialUrl
   for (let page = 0; page < 100; page += 1) {
-    const result = await readJson(context, { url, operation, absenceAllowed })
+    const result = await readJson(context, { url, operation })
     if (result.status !== "PRESENT") {
       return publicResult(result)
     }
@@ -225,74 +223,45 @@ async function readPaginated(
   return failure("ERROR", operation, null, "PAGINATION_LIMIT_EXCEEDED")
 }
 
-async function readJson(context, { url, operation, absenceAllowed }) {
-  const response = await request(context, { url, operation, accept: JSON_ACCEPT, absenceAllowed })
-  if (response.status !== "PRESENT") {
-    return response
-  }
-  if (!isJsonContentType(response.response.headers?.get?.("content-type"))) {
-    return failure("ERROR", operation, response.httpStatus, "UNEXPECTED_CONTENT_TYPE")
-  }
-  let body
-  try {
-    body = await response.response.json()
-  } catch {
-    return failure("ERROR", operation, response.httpStatus, "MALFORMED_JSON")
-  }
-  const nextUrl = nextLink(response.response.headers?.get?.("link"))
-  return { ...publicResult(response), body, nextUrl, absenceAllowed }
-}
-
-async function readBinary(context, { url, operation, absenceAllowed }) {
-  const result = await request(context, {
+async function readJson(context, { url, operation }) {
+  const response = await context.http.getJson({
     url,
-    operation,
-    accept: "application/octet-stream",
-    absenceAllowed,
+    headers: requestHeaders(context.token, JSON_ACCEPT),
   })
-  if (result.status !== "PRESENT") {
-    return publicResult(result)
+  const classification = classifyGitHubResponse(response, operation)
+  if (classification.status !== "PRESENT") {
+    return classification
   }
-  if (typeof result.response.arrayBuffer !== "function") {
-    return failure("ERROR", operation, result.httpStatus, "MALFORMED_RESPONSE")
+  const link = parseNextLink(response.headers.link)
+  if (link.status === "ERROR") {
+    return failure("ERROR", operation, response.httpStatus, "MALFORMED_LINK_HEADER")
   }
-  try {
-    const content = Buffer.from(await result.response.arrayBuffer()).toString("base64")
-    return { ...publicResult(result), contentBase64: content }
-  } catch {
-    return failure("ERROR", operation, result.httpStatus, "MALFORMED_RESPONSE")
-  }
+  return { ...classification, body: response.body, nextUrl: link.nextUrl }
 }
 
-async function request(context, { url, operation, accept, absenceAllowed = false }) {
-  let response
-  try {
-    response = await context.fetchImpl(url, {
-      method: "GET",
-      headers: requestHeaders(context.token, accept),
-    })
-  } catch (error) {
-    return failure(
-      "AMBIGUOUS",
-      operation,
-      null,
-      error?.name === "AbortError" ? "ABORTED" : "NETWORK_ERROR",
-    )
+async function readBinary(context, { url, operation }) {
+  const result = await context.http.getBinary({
+    url,
+    headers: requestHeaders(context.token, "application/octet-stream"),
+  })
+  const classification = classifyGitHubResponse(result, operation)
+  return classification.status === "PRESENT"
+    ? { ...classification, contentBase64: result.contentBase64 }
+    : classification
+}
+
+function classifyGitHubResponse(result, operation) {
+  const httpStatus = result.httpStatus
+  if (result.code === "MALFORMED_RESPONSE") {
+    return failure("ERROR", operation, httpStatus, result.code)
   }
-  if (response === null || typeof response !== "object" || !Number.isInteger(response.status)) {
-    return failure("ERROR", operation, null, "MALFORMED_RESPONSE")
-  }
-  const httpStatus = response.status
-  if (response.ok === true || (httpStatus >= 200 && httpStatus < 300)) {
-    return { status: "PRESENT", operation, httpStatus, code: null, response }
-  }
-  if (httpStatus === 404 && absenceAllowed) {
-    return failure("ABSENT", operation, httpStatus, "NOT_FOUND")
+  if (httpStatus === 404) {
+    return failure("AMBIGUOUS", operation, httpStatus, "NOT_FOUND_OR_HIDDEN")
   }
   if (httpStatus === 401) {
     return failure("AMBIGUOUS", operation, httpStatus, "UNAUTHORIZED")
   }
-  if (httpStatus === 429 || response.headers?.get?.("x-ratelimit-remaining") === "0") {
+  if (httpStatus === 429 || result.headers?.rateLimitRemaining === "0") {
     return failure("AMBIGUOUS", operation, httpStatus, "RATE_LIMITED")
   }
   if (httpStatus === 403) {
@@ -301,7 +270,20 @@ async function request(context, { url, operation, accept, absenceAllowed = false
   if (httpStatus >= 500) {
     return failure("AMBIGUOUS", operation, httpStatus, "SERVER_ERROR")
   }
-  return failure("AMBIGUOUS", operation, httpStatus, `HTTP_${httpStatus}`)
+  if (httpStatus !== null && (httpStatus < 200 || httpStatus >= 300)) {
+    return result.code === "REDIRECT"
+      ? failure("ERROR", operation, httpStatus, "REDIRECT")
+      : failure("AMBIGUOUS", operation, httpStatus, `HTTP_${httpStatus}`)
+  }
+  if (result.status !== "OK") {
+    return failure(
+      ["ABORTED", "NETWORK_ERROR", "TIMEOUT"].includes(result.code) ? "AMBIGUOUS" : "ERROR",
+      operation,
+      httpStatus,
+      result.code,
+    )
+  }
+  return failure("PRESENT", operation, httpStatus, null)
 }
 
 function requestHeaders(token, accept) {
@@ -392,17 +374,56 @@ function isPositiveInteger(value) {
   return /^[1-9][0-9]*$/u.test(value)
 }
 
-function nextLink(value) {
-  if (typeof value !== "string" || value.length === 0) {
-    return null
+function parseNextLink(value) {
+  if (value === null) {
+    return { status: "NONE", nextUrl: null }
   }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return { status: "ERROR", nextUrl: null }
+  }
+  const nextUrls = []
   for (const part of value.split(",")) {
-    const match = /^\s*<([^>]+)>;\s*rel="([^"]+)"\s*$/u.exec(part)
-    if (match?.[2].split(/\s+/u).includes("next")) {
-      return match[1]
+    const match = /^\s*<([^<>\s]+)>((?:\s*;[^;]*)+)\s*$/u.exec(part)
+    if (match === null) {
+      return { status: "ERROR", nextUrl: null }
+    }
+    const parameters = parseLinkParameters(match[2])
+    if (parameters === null || !parameters.has("rel")) {
+      return { status: "ERROR", nextUrl: null }
+    }
+    const relations = parameters.get("rel").split(/\s+/u)
+    if (
+      relations.length === 0 ||
+      new Set(relations).size !== relations.length ||
+      (relations.includes("next") && relations.includes("prev")) ||
+      relations.some((relation) => !/^[A-Za-z][A-Za-z0-9._-]*$/u.test(relation))
+    ) {
+      return { status: "ERROR", nextUrl: null }
+    }
+    if (relations.includes("next")) {
+      nextUrls.push(match[1])
     }
   }
-  return null
+  return nextUrls.length > 1
+    ? { status: "ERROR", nextUrl: null }
+    : { status: nextUrls.length === 1 ? "NEXT" : "NONE", nextUrl: nextUrls[0] ?? null }
+}
+
+function parseLinkParameters(value) {
+  const parameters = new Map()
+  let remaining = value
+  while (remaining.length > 0) {
+    const match =
+      /^\s*;\s*([!#$%&'*+.^_`|~0-9A-Za-z-]+)=(?:"([^"\\]*)"|([!#$%&'*+.^_`|~0-9A-Za-z-]+))/u.exec(
+        remaining,
+      )
+    if (match === null || parameters.has(match[1].toLowerCase())) {
+      return null
+    }
+    parameters.set(match[1].toLowerCase(), match[2] ?? match[3])
+    remaining = remaining.slice(match[0].length)
+  }
+  return parameters
 }
 
 function canonicalJson(value, token) {
@@ -448,20 +469,33 @@ function arrayBody(value) {
 function compareIdThenName(left, right) {
   const leftId = typeof left.id === "number" ? left.id : Number.MAX_SAFE_INTEGER
   const rightId = typeof right.id === "number" ? right.id : Number.MAX_SAFE_INTEGER
-  return leftId === rightId
-    ? String(left.name ?? "").localeCompare(String(right.name ?? ""))
-    : leftId - rightId
+  if (leftId !== rightId) {
+    return leftId < rightId ? -1 : 1
+  }
+  const nameComparison = compareStrings(String(left.name ?? ""), String(right.name ?? ""))
+  return nameComparison === 0 ? compareCanonicalJson(left, right) : nameComparison
 }
 
 function compareAttestations(left, right) {
   if (Number.isSafeInteger(left.id) && Number.isSafeInteger(right.id) && left.id !== right.id) {
     return left.id - right.id
   }
-  return attestationIdentity(left).localeCompare(attestationIdentity(right))
+  return compareCanonicalJson(left, right)
 }
 
-function attestationIdentity(value) {
-  return JSON.stringify(value)
+function compareStringFieldThenCanonical(field) {
+  return (left, right) => {
+    const comparison = compareStrings(String(left[field] ?? ""), String(right[field] ?? ""))
+    return comparison === 0 ? compareCanonicalJson(left, right) : comparison
+  }
+}
+
+function compareCanonicalJson(left, right) {
+  return compareStrings(JSON.stringify(left), JSON.stringify(right))
+}
+
+function compareStrings(left, right) {
+  return left === right ? 0 : left < right ? -1 : 1
 }
 
 function assertCommitSha(value) {
@@ -518,10 +552,6 @@ function assertIdentity(value, pattern, label) {
   if (typeof value !== "string" || !pattern.test(value)) {
     throw new TypeError(`Invalid ${label}: ${String(value)}`)
   }
-}
-
-function isJsonContentType(value) {
-  return typeof value === "string" && /(?:\/json|\+json)(?:;|$)/iu.test(value)
 }
 
 function isObject(value) {
