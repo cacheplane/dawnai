@@ -35,6 +35,18 @@ test("parseReleaseManifest rejects malformed JSON and non-object roots", () => {
   assert.throws(() => parseReleaseManifest("[]", context), /manifest must be an object/u)
 })
 
+test("parseReleaseManifest fatally rejects malformed UTF-8 bytes", () => {
+  const raw = Buffer.from(JSON.stringify(validManifest()), "utf8")
+  raw[raw.indexOf(Buffer.from("CI"))] = 0xff
+
+  for (const bytes of [raw, new Uint8Array(raw)]) {
+    assert.throws(
+      () => parseReleaseManifest(bytes, context),
+      /Invalid release manifest JSON: manifest bytes must be valid UTF-8/u,
+    )
+  }
+})
+
 const invalidManifestCases = [
   {
     invariant: "schema version",

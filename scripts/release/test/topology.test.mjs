@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
+import { readReleaseInventory } from "../inventory.mjs"
 import { internalDependencies, orderReleasePackages } from "../topology.mjs"
 
 test("internalDependencies returns sorted runtime and peer workspace dependencies", () => {
@@ -28,14 +29,22 @@ test("internalDependencies rejects workspace dependencies outside the canonical 
   )
 })
 
-test("orderReleasePackages is dependency-first and puts create-dawn-ai-app final", () => {
+test("orderReleasePackages returns the original packages dependency-first with create final", () => {
   const packages = [
     { name: "create-dawn-ai-app", dependencies: { middle: "workspace:*" } },
     { name: "middle", dependencies: { base: "workspace:*" } },
     { name: "base" },
   ]
 
-  assert.deepEqual(orderReleasePackages(packages), ["base", "middle", "create-dawn-ai-app"])
+  const ordered = orderReleasePackages(packages)
+
+  assert.deepEqual(
+    ordered.map((packageJson) => packageJson.name),
+    ["base", "middle", "create-dawn-ai-app"],
+  )
+  assert.equal(ordered[0], packages[2])
+  assert.equal(ordered[1], packages[1])
+  assert.equal(ordered[2], packages[0])
 })
 
 test("orderReleasePackages breaks ready-package ties alphabetically", () => {
@@ -45,7 +54,10 @@ test("orderReleasePackages breaks ready-package ties alphabetically", () => {
     { name: "middle", dependencies: { alpha: "workspace:*" } },
   ]
 
-  assert.deepEqual(orderReleasePackages(packages, { gateOrder: [] }), ["alpha", "middle", "zeta"])
+  assert.deepEqual(
+    orderReleasePackages(packages, { gateOrder: [] }).map((packageJson) => packageJson.name),
+    ["alpha", "middle", "zeta"],
+  )
 })
 
 test("orderReleasePackages delays gate packages while preserving dependencies", () => {
@@ -56,12 +68,23 @@ test("orderReleasePackages delays gate packages while preserving dependencies", 
     { name: "unrelated" },
   ]
 
-  assert.deepEqual(orderReleasePackages(packages, { gateOrder: ["create-dawn-ai-app"] }), [
-    "base",
-    "middle",
-    "unrelated",
-    "create-dawn-ai-app",
-  ])
+  assert.deepEqual(
+    orderReleasePackages(packages, { gateOrder: ["create-dawn-ai-app"] }).map(
+      (packageJson) => packageJson.name,
+    ),
+    ["base", "middle", "unrelated", "create-dawn-ai-app"],
+  )
+})
+
+test("orderReleasePackages orders the real canonical inventory with create final", async () => {
+  const inventory = await readReleaseInventory({ root: process.cwd() })
+  const packages = inventory.workspacePackages.filter((packageJson) => packageJson.private !== true)
+
+  const ordered = orderReleasePackages(packages)
+
+  assert.equal(ordered.length, packages.length)
+  assert.equal(ordered.at(-1)?.name, "create-dawn-ai-app")
+  assert.ok(ordered.every((packageJson) => packages.includes(packageJson)))
 })
 
 test("orderReleasePackages rejects cycles", () => {

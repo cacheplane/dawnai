@@ -27,14 +27,27 @@ const PACKAGE_FIELDS = [
   "npmIntegrity",
   "access",
 ]
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true })
 
 export function parseReleaseManifest(raw, context) {
+  let source
+  if (typeof raw === "string") {
+    source = raw
+  } else if (raw instanceof Uint8Array) {
+    try {
+      source = UTF8_DECODER.decode(raw)
+    } catch (error) {
+      throw new TypeError("Invalid release manifest JSON: manifest bytes must be valid UTF-8", {
+        cause: error,
+      })
+    }
+  } else {
+    throw new TypeError("Invalid release manifest JSON: expected UTF-8 JSON bytes")
+  }
+
   let value
   try {
-    if (typeof raw !== "string" && !Buffer.isBuffer(raw)) {
-      throw new TypeError("expected UTF-8 JSON bytes")
-    }
-    value = JSON.parse(Buffer.isBuffer(raw) ? raw.toString("utf8") : raw)
+    value = JSON.parse(source)
   } catch (error) {
     throw new TypeError(`Invalid release manifest JSON: ${formatCause(error)}`, { cause: error })
   }
@@ -60,10 +73,11 @@ export function validateReleaseManifest(value, context) {
 
   const contextPackages = context?.packages
   const gateOrder = context?.gateOrder
-  const expectedOrder =
+  const orderedPackages =
     gateOrder === undefined
       ? orderReleasePackages(contextPackages)
       : orderReleasePackages(contextPackages, { gateOrder })
+  const expectedOrder = orderedPackages.map((packageJson) => packageJson.name)
   const inventoryNames = [...expectedOrder].sort(compareNames)
 
   validatePackageOrder(value.packageOrder, inventoryNames)

@@ -79,7 +79,7 @@ export function orderReleasePackages(packages, { gateOrder = ["create-dawn-ai-ap
     ordered.push(next)
   }
 
-  return ordered
+  return ordered.map((name) => packagesByName.get(name))
 }
 
 function canonicalInventoryNames(inventoryNames) {

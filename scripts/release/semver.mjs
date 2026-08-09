@@ -14,16 +14,16 @@ export function parseSemver(value) {
     throw new TypeError(`Invalid exact SemVer: ${value}`)
   }
 
-  const major = parseNumericIdentifier(match[1], value)
-  const minor = parseNumericIdentifier(match[2], value)
-  const patch = parseNumericIdentifier(match[3], value)
+  const major = parseNumericIdentifier(match[1])
+  const minor = parseNumericIdentifier(match[2])
+  const patch = parseNumericIdentifier(match[3])
 
   return {
     major,
     minor,
     patch,
     prerelease: prerelease.map((identifier) =>
-      /^[0-9]+$/u.test(identifier) ? parseNumericIdentifier(identifier, value) : identifier,
+      /^[0-9]+$/u.test(identifier) ? parseNumericIdentifier(identifier) : identifier,
     ),
     build: match[5]?.split(".") ?? [],
   }
@@ -54,10 +54,10 @@ export function compareSemver(left, right) {
     if (leftIdentifier === rightIdentifier) {
       continue
     }
-    if (typeof leftIdentifier === "number" && typeof rightIdentifier === "string") {
+    if (typeof leftIdentifier !== "string" && typeof rightIdentifier === "string") {
       return -1
     }
-    if (typeof leftIdentifier === "string" && typeof rightIdentifier === "number") {
+    if (typeof leftIdentifier === "string" && typeof rightIdentifier !== "string") {
       return 1
     }
     return leftIdentifier < rightIdentifier ? -1 : 1
@@ -74,12 +74,9 @@ export function isExactSemver(value) {
   }
 }
 
-function parseNumericIdentifier(identifier, value) {
+function parseNumericIdentifier(identifier) {
   const parsed = Number(identifier)
-  if (!Number.isSafeInteger(parsed)) {
-    throw new TypeError(`Invalid exact SemVer: ${value}`)
-  }
-  return parsed
+  return Number.isSafeInteger(parsed) ? parsed : BigInt(identifier)
 }
 
 function compareNumbers(left, right) {

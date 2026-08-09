@@ -56,3 +56,24 @@ test("compareSemver ignores build metadata for precedence", () => {
   assert.equal(compareSemver("1.0.0+build.1", "1.0.0+build.2"), 0)
   assert.equal(compareSemver("1.0.0-beta+build.9", "1.0.0-beta+build.1"), 0)
 })
+
+test("SemVer accepts and exactly compares core identifiers above MAX_SAFE_INTEGER", () => {
+  const lower = "9007199254740992.0.0"
+  const higher = "9007199254740993.0.0"
+
+  assert.equal(isExactSemver(lower), true)
+  assert.equal(isExactSemver(higher), true)
+  assert.equal(parseSemver(higher).major, 9007199254740993n)
+  assert.equal(compareSemver(lower, higher), -1)
+  assert.equal(compareSemver(higher, lower), 1)
+})
+
+test("SemVer exactly compares very large prereleases while rejecting leading zeroes", () => {
+  const lower = "1.0.0-beta.90071992547409920000000000000000000000"
+  const higher = "1.0.0-beta.90071992547409930000000000000000000000"
+
+  assert.equal(isExactSemver(lower), true)
+  assert.equal(isExactSemver(higher), true)
+  assert.equal(compareSemver(lower, higher), -1)
+  assert.equal(isExactSemver("1.0.0-beta.090071992547409920000000000000000000000"), false)
+})
