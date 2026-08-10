@@ -574,31 +574,28 @@ test("GitHub pagination shares one cumulative byte and wall-clock budget", async
   assert.equal(bytes.calls.length, 2)
 
   let calls = 0
+  let now = 1_000
   const timeout = createGitHubReader({
     owner: OWNER,
     repo: REPO,
     timeoutMs: 12,
-    fetchImpl: async (_url, init) => {
+    now: () => now,
+    fetchImpl: async () => {
       calls += 1
       if (calls === 1) {
-        await new Promise((resolve) => setTimeout(resolve, 8))
+        now += 12
         return jsonResponse([{ ref: "refs/tags/v1" }], 200, linkHeader(next))
       }
-      return new Promise((_resolve, reject) => {
-        init.signal.addEventListener("abort", () => reject(new DOMException("", "AbortError")), {
-          once: true,
-        })
-      })
+      return jsonResponse([{ ref: "refs/tags/v2" }])
     },
   })
-  const started = Date.now()
   assert.deepEqual(await timeout.listTagRefs(), {
     status: "AMBIGUOUS",
     operation: "tag-refs",
     httpStatus: null,
     code: "TIMEOUT",
   })
-  assert.ok(Date.now() - started < 19, "pagination must not reset the deadline per page")
+  assert.equal(calls, 1, "an expired operation deadline must prevent the next page request")
 })
 
 test("GitHub attestations paginate completely and sort independent of page order", async () => {

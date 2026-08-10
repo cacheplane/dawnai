@@ -41,6 +41,7 @@ export function createGitHubReader({
   maxResponseBytes,
   maxPages = DEFAULT_GITHUB_MAX_PAGES,
   maxRecords = DEFAULT_GITHUB_MAX_RECORDS,
+  now = Date.now,
 }) {
   assertIdentity(owner, OWNER_PATTERN, "GitHub owner", MAX_GITHUB_OWNER_BYTES)
   assertIdentity(repo, REPOSITORY_PATTERN, "GitHub repository", MAX_GITHUB_REPOSITORY_BYTES)
@@ -53,6 +54,7 @@ export function createGitHubReader({
   }
   assertBoundedInteger(maxPages, 1, MAX_GITHUB_PAGES, "GitHub maximum pages")
   assertBoundedInteger(maxRecords, 1, MAX_GITHUB_RECORDS, "GitHub maximum records")
+  if (typeof now !== "function") throw new TypeError("Invalid GitHub clock")
   const base = `${API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
   const http = createHttpGet({
     fetchImpl,
@@ -67,6 +69,7 @@ export function createGitHubReader({
     maxResponseBytes: maxResponseBytes ?? DEFAULT_HTTP_MAX_RESPONSE_BYTES,
     maxPages,
     maxRecords,
+    now,
   }
 
   return {
@@ -240,7 +243,7 @@ async function readPaginated(
   const budget = createOperationBudget(context)
   let url = initialUrl
   for (let page = 0; page < context.maxPages; page += 1) {
-    if (budget.deadline <= Date.now()) {
+    if (budget.deadline <= budget.now()) {
       return failure("AMBIGUOUS", operation, null, "TIMEOUT")
     }
     if (budget.remainingBytes < 1) {
@@ -371,13 +374,14 @@ async function readBinary(context, { url, operation }) {
 
 function createOperationBudget(context) {
   return {
-    deadline: Date.now() + context.timeoutMs,
+    deadline: context.now() + context.timeoutMs,
     remainingBytes: context.maxResponseBytes,
+    now: context.now,
   }
 }
 
 function remainingRequestBudget(budget) {
-  const timeoutMs = budget.deadline - Date.now()
+  const timeoutMs = budget.deadline - budget.now()
   return timeoutMs > 0
     ? { timeoutMs: Math.min(timeoutMs, 300_000), maxResponseBytes: budget.remainingBytes }
     : null
