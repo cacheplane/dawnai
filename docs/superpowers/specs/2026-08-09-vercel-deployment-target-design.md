@@ -514,9 +514,11 @@ safe-integer Unix-millisecond lower time bound, and `spawnStarted: true` before
 process creation. A harness-level retry uses a new logical-attempt index,
 marker, and manifest entry; source and prebuilt attempts never reuse a marker.
 
-The deploy command includes `--meta dawnVercelRun=<marker>`,
+The deploy command includes `--target preview`,
+`--meta dawnVercelRun=<marker>`,
 `--scope <expected-org-id>`, `--non-interactive`, `--yes`, `--no-wait`, and
-`--json`. The metadata behavior and the `/v6/deployments` `meta-<key>`
+`--json`. Preview intent is explicit rather than inferred from the CI branch or
+project defaults. The metadata behavior and the `/v6/deployments` `meta-<key>`
 reconciliation filter are compatibility contracts of pinned CLI `58.9.0`, not
 generic current-OpenAPI claims. Pinned CLI `58.9.0` has exactly two accepted
 JSON receipt shapes: a top-level object with own `id` and `url` fields and no

@@ -2855,6 +2855,8 @@ export async function createNativePinnedVercelBoundary(
       const args = [
         "deploy",
         ...(kind === "prebuilt" ? ["--prebuilt"] : []),
+        "--target",
+        "preview",
         "--meta",
         `dawnVercelRun=${marker}`,
         "--scope",

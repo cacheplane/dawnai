@@ -1615,6 +1615,8 @@ describe("pinned vercel boundary", () => {
     expect(deploy.cwd).toBe(sourceRoot)
     expect(deploy.args).toEqual([
       "deploy",
+      "--target",
+      "preview",
       "--meta",
       `dawnVercelRun=vclrun_${"a".repeat(32)}`,
       "--scope",
@@ -1650,6 +1652,8 @@ describe("pinned vercel boundary", () => {
     expect(prebuilt.args).toEqual([
       "deploy",
       "--prebuilt",
+      "--target",
+      "preview",
       "--meta",
       `dawnVercelRun=vclrun_${"b".repeat(32)}`,
       "--scope",
