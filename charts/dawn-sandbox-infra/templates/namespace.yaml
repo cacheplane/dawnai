@@ -2,7 +2,6 @@
   "helm.sh/chart" true
   "app.kubernetes.io/name" true
   "app.kubernetes.io/instance" true
-  "app.kubernetes.io/version" true
   "app.kubernetes.io/managed-by" true
 -}}
 {{- range $key, $_ := .Values.namespace.extraLabels }}

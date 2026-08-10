@@ -30,6 +30,10 @@ EXTRA_LABEL_NAMESPACE="$(tmpl --show-only templates/namespace.yaml \
   --set-string 'namespace.extraLabels.example\.com/team=platform')"
 printf '%s\n' "$EXTRA_LABEL_NAMESPACE" | assert "unrelated extra label" 'example\.com/team: platform'
 
+VERSION_LABEL_NAMESPACE="$(tmpl --show-only templates/namespace.yaml \
+  --set-string 'namespace.extraLabels.app\.kubernetes\.io/version=1.2.3')"
+printf '%s\n' "$VERSION_LABEL_NAMESPACE" | assert "version extra label" 'app\.kubernetes\.io/version: 1\.2\.3'
+
 assert_extra_label_rejected "Pod Security labels" \
   'namespace.extraLabels.pod-security\.kubernetes\.io/enforce=privileged'
 assert_extra_label_rejected "helm.sh/chart" \
@@ -38,8 +42,6 @@ assert_extra_label_rejected "app.kubernetes.io/name" \
   'namespace.extraLabels.app\.kubernetes\.io/name=override'
 assert_extra_label_rejected "app.kubernetes.io/instance" \
   'namespace.extraLabels.app\.kubernetes\.io/instance=override'
-assert_extra_label_rejected "app.kubernetes.io/version" \
-  'namespace.extraLabels.app\.kubernetes\.io/version=override'
 assert_extra_label_rejected "app.kubernetes.io/managed-by" \
   'namespace.extraLabels.app\.kubernetes\.io/managed-by=override'
 
