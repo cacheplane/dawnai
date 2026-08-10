@@ -220,6 +220,82 @@ describe.skipIf(!enabled)("pgvector integration", () => {
     }
   })
 
+  test("browse reads records and total from one snapshot when a writer commits between them", async () => {
+    const prefix = "browse_snapshot"
+    const pool = new Pool({ connectionString: url })
+    // The store treats an injected pool as someone else's to manage, and pg turns a
+    // listener-less pool 'error' into an uncaught exception.
+    pool.on("error", () => {})
+    const writer = new Pool({ connectionString: url })
+    let armed = false
+    let committedMidBrowse = 0
+
+    // Wrapping the client is the only way to commit INSIDE the window between
+    // browse's two statements: the gap is one event-loop turn wide, so no
+    // wall-clock race can be aimed at it. Without the transaction the two
+    // statements take a READ COMMITTED snapshot each, and that is exactly the skew
+    // under test — a mutant that drops the BEGIN passes every other test here.
+    const hooked = new Proxy(pool, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop)
+        // Bound to the real pool, not to the proxy: pg's internals must never see a
+        // proxied `this`.
+        if (prop !== "connect") return typeof value === "function" ? value.bind(target) : value
+        // Unwrapped unless armed, and returned without an extra turn: schema init
+        // fires an un-awaited registerTypes from the pool's 'connect' handler, and
+        // any delay here lets that collide with initSchema on the same client.
+        return () =>
+          armed
+            ? target.connect().then(
+                (client) =>
+                  new Proxy(client, {
+                    get(c, p) {
+                      const inner = Reflect.get(c, p)
+                      if (p !== "query") return typeof inner === "function" ? inner.bind(c) : inner
+                      return async (...args: unknown[]) => {
+                        const query = inner as (...a: unknown[]) => Promise<unknown>
+                        const result = await query.apply(c, args)
+                        const sql = typeof args[0] === "string" ? args[0] : ""
+                        // The ordered window is the statement that takes the
+                        // snapshot; the COUNT runs after this delete has committed.
+                        if (sql.includes("ORDER BY") && sql.includes("OFFSET")) {
+                          committedMidBrowse += 1
+                          await writer.query(
+                            `DELETE FROM public.${prefix}_memories WHERE id = $1`,
+                            ["r0"],
+                          )
+                        }
+                        return result
+                      }
+                    },
+                  }),
+              )
+            : target.connect()
+      },
+    })
+    const store = pgvectorMemoryStore({ pool: hooked, dimensions: 3, tablePrefix: prefix })
+
+    try {
+      for (const id of ["r0", "r1", "r2", "r3", "r4"]) await store.put(rec(id, "ns", `row ${id}`))
+      armed = true
+      const page = await store.browse({ limit: 100 })
+      armed = false
+
+      // Positive control: a browse that stopped issuing the ordered statement would
+      // satisfy the equality below by never having raced at all.
+      expect(committedMidBrowse).toBe(1)
+      expect(page.records.length).toBe(page.total)
+      expect(page.total).toBe(5)
+      // And the delete really did commit, so the agreement above came from the
+      // snapshot rather than from nothing having happened.
+      expect((await store.browse({ limit: 100 })).total).toBe(4)
+    } finally {
+      await store.close()
+      await pool.end()
+      await writer.end()
+    }
+  })
+
   test("concurrency: 10 parallel puts + a search all resolve", async () => {
     const store = pgvectorMemoryStore({
       connectionString: url,
