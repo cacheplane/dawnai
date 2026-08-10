@@ -860,9 +860,35 @@ function buildRouteTable(ctx: {
     {
       handle: async (request, params) => {
         const threadId = params.thread_id ?? ""
+        // Refused while a turn is executing, for the same reason a second run
+        // is: deleting a thread out from under its own in-flight turn is
+        // incoherent whoever asks. The turn keeps running against state that no
+        // longer exists, and every write it has left to make — status, metadata,
+        // the parked-route gate — targets a row that is gone. Those writes do
+        // not fail, they NO-OP (`updateMetadata` returns early on a missing
+        // row), so the turn parks durably while its gate records nothing, and
+        // the next run to touch the thread recreates the row with its own route.
+        // The run registry already owns the "one turn at a time on a thread"
+        // invariant, so it is the natural place to answer from, and its slot is
+        // held across every settle — including the /runs/wait arms that defer
+        // their release until an abandoned route unwinds.
+        if (getRunRegistry(request).has(threadId)) {
+          return Response.json(
+            createRequestErrorBody(`A run is already in flight for thread "${threadId}"`, {
+              code: "run_in_flight",
+            }),
+            { status: 409 },
+          )
+        }
         const checkpointer = getCheckpointer(request)
-        await getThreadsStore(request).deleteThread(threadId)
-        // Best-effort: delete checkpoints if the saver supports it.
+        // Checkpoints BEFORE the row, and deliberately not the other way round:
+        // the two deletes are not atomic, so one of them has to be the one that
+        // can be left undone. Losing the row first would strand a live payload
+        // behind a thread the endpoint 404s for — until any run recreates the
+        // row and serves it under the new route. Losing the payload first
+        // strands nothing: the row still carries the recorded parking route, so
+        // whatever remains stays gated exactly as it was, and the caller sees
+        // the failure and can retry.
         if (
           typeof (checkpointer as unknown as { deleteThread?: unknown }).deleteThread === "function"
         ) {
@@ -872,6 +898,7 @@ function buildRouteTable(ctx: {
             }
           ).deleteThread(threadId)
         }
+        await getThreadsStore(request).deleteThread(threadId)
         if (sandboxManager) await sandboxManager.destroyThread(threadId)
         return new Response(null, { status: 204 })
       },
@@ -1811,13 +1838,21 @@ async function handleApPendingInterruptsRequest(options: {
   // anything, so a caller a routeId-scoped policy allows on some cheaper route
   // could park-swap their way in: start a run on the route they are allowed,
   // and the same GET that was refused now answers with the parked prompt's
-  // `interruptId`, `resumeKey`, tool name and args preview. POST /resume
-  // resolving identity the same way is not a precedent for it: /resume only
-  // chooses which route to re-invoke and never returns the payload. This
-  // endpoint is what makes route identity control read access, so it is what
-  // has to be bound to the parking route.
+  // `interruptId` and `resumeKey`. POST /resume resolving identity the same way
+  // is not a precedent for it: /resume only chooses which route to re-invoke
+  // and never returns the payload. This endpoint is what makes route identity
+  // control read access, so it is what has to be bound to the parking route.
   //
-  // What that leak is and is not, stated precisely because it is easy to get
+  // WHAT THIS GATE ACTUALLY PROTECTS is narrower than it looks, and worth being
+  // exact about so nobody defends the wrong thing. The prompt's semantic
+  // content — the tool name, its argument preview, the fact that a decision is
+  // pending — is ALREADY readable without passing this gate: ungated
+  // GET /threads/:id/state returns the messages carrying the tool call and its
+  // arguments verbatim, plus `next: ["__interrupt__"]`. The ADDRESSING PAIR is
+  // what is genuinely gated here and nowhere else. (Gating /state is tracked
+  // separately; this endpoint is not the place to compensate for it.)
+  //
+  // And what that leak is, stated precisely because it is easy to get
   // backwards: it is DISCLOSURE, not approval. It is NOT bounded by /resume
   // gating on an identity the attacker cannot forge — /resume resolves
   // `threadRouteMap ?? metadata.route ?? body.route`, every term of which a
@@ -1828,9 +1863,9 @@ async function handleApPendingInterruptsRequest(options: {
   // stays unanswered — which makes this a confidentiality fix, and means the
   // secrecy of `resumeKey` is not what the permission decision rests on.
   //
-  // RESIDUALS, deliberately accepted. Every endpoint that can park records it —
-  // /runs/stream, /runs/wait (on all four of its exit arms), /resume and /agui —
-  // so what is left is the cases where no record was ever written to find:
+  // RESIDUALS, deliberately accepted. Every HTTP endpoint that can park records
+  // it — /runs/stream, /runs/wait (on all four of its exit arms), /resume and
+  // /agui — so what is left is the cases where no record was ever written:
   //   1. a thread parked by a build that predates this key;
   //   2. a park whose metadata write itself failed, on one of the arms that
   //      swallow that error rather than mask the failure that brought them
@@ -1843,6 +1878,22 @@ async function handleApPendingInterruptsRequest(options: {
   // inferring an owner for interrupts nobody recorded — and the only inferable
   // owner is the last-run route, which is exactly the value an attacker
   // controls.
+  //
+  // A fourth path parks without recording, and is called out separately because
+  // it is not an HTTP endpoint at all: `createAgentHarness`
+  // (packages/testing/src/harness.ts) drives `streamResolvedRoute` directly,
+  // taking no run slot and settling nothing. It is fail-closed by accident
+  // rather than design — a harness run writes no threads-store row, so this
+  // endpoint 404s on it before middleware is ever consulted — and it is
+  // test-only. Worth knowing before someone gives the harness a threads store.
+  //
+  // What is NOT on this list any more: deleting the thread row mid-turn. Every
+  // settle ends in `updateMetadata`, which no-ops rather than fails on a missing
+  // row, so a delete landing between turn start and the interrupt write used to
+  // produce a durable park with no record. DELETE now refuses while a run is in
+  // flight (see the route above), which closes that window rather than narrowing
+  // it: before the turn starts nothing is parked, and after it settles the row
+  // and the payload go together.
   const parkedRoute = readParkedRoute(thread)
   const persistedRoute = thread.metadata.route
   const routeKey =

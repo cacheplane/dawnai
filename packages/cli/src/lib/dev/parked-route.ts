@@ -21,6 +21,15 @@ import { readPendingInterrupts } from "./pending-interrupts.js"
  * that module already imports the AG-UI handler — sharing it the other way would
  * close an import cycle.
  *
+ * NOT SECRET. This is thread metadata, and `GET /threads/:id` is ungated and
+ * echoes metadata verbatim, so anyone who can name a thread id can read which
+ * route parked it. That is deliberate and harmless: the key is an ACCESS-CONTROL
+ * INPUT, not a credential — knowing the answer to "which route must you satisfy"
+ * does not help satisfy it, because the middleware still runs against that route
+ * with the caller's own headers. Do not start storing anything here that would
+ * matter if it were read, and do not build a check that relies on this being
+ * private.
+ *
  * ONE OWNER PER PENDING SET. A single scalar can gate the whole pending list
  * only because that list always belongs to exactly one turn, and therefore one
  * route: `readPendingInterrupts` calls `getTuple` with no `checkpoint_id`, which

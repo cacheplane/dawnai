@@ -809,6 +809,64 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     expect(await afterSwap.json()).toEqual({ routeId: "/park" })
   }, 60_000)
 
+  it("refuses to delete a thread mid-turn, so the park stays recordable", async () => {
+    const appRoot = await fixtureApp({
+      "src/app/park/tools/slowPing.ts": SLOW_PING_TOOL,
+      "src/middleware.ts": ADMIN_PARK_MIDDLEWARE,
+    })
+    const startedFile = join(appRoot, "delete-race-started.json")
+    const releaseFile = join(appRoot, "delete-race-release.json")
+    // The ungated tool runs FIRST, so there is a long stretch where the thread
+    // is busy and nothing is parked yet — the window the delete has to land in.
+    await withAimock(
+      script()
+        .user("deploy to staging")
+        .callsTool("slowPing", { releaseFile, startedFile })
+        .callsTool("deployProd", { env: "staging" })
+        .build(),
+    )
+    const handler = await createHandler(appRoot)
+    const threadId = "t-delete-midturn"
+
+    const streamPromise = handler.fetch(
+      parkRunRequest(threadId, "deploy to staging", { "x-admin": "1" }),
+    )
+    await waitForFile(startedFile)
+
+    // Every settle path ends in updateMetadata, which is a documented NO-OP for
+    // a missing row — not an error. So deleting the row here used to let the
+    // turn park durably while its gate write silently wrote nothing, and the
+    // attacker then recreated the row with a route of their own.
+    const deleted = await handler.fetch(deleteThreadRequest(threadId))
+    expect(deleted.status).toBe(409)
+    const deleteBody = (await deleted.json()) as ErrorBody
+    expect(deleteBody.error.details?.code).toBe("run_in_flight")
+
+    await writeFile(releaseFile, "release")
+    const streamText = await readSseText(await streamPromise)
+    expect(streamText).toContain("event: interrupt")
+
+    const swap = await handler.fetch(runStreamRequest(threadId, "/echo#graph"))
+    expect(swap.status).toBe(200)
+    await drain(swap)
+
+    const afterSwap = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(afterSwap.status).toBe(403)
+    expect(await afterSwap.json()).toEqual({ routeId: "/park" })
+  }, 60_000)
+
+  it("deletes a thread once its turn has finished", async () => {
+    const handler = await createHandler(await fixtureApp())
+    const threadId = "t-delete-idle"
+    await drain(await handler.fetch(runStreamRequest(threadId, "/echo#graph")))
+
+    // The refusal above is scoped to an IN-FLIGHT run, not to threads in
+    // general: a settled thread still deletes, and its row and its payload go
+    // together. Without this the 409 could be over-broad and nothing would say.
+    expect((await handler.fetch(deleteThreadRequest(threadId))).status).toBe(204)
+    expect((await handler.fetch(pendingInterruptsRequest(threadId))).status).toBe(404)
+  }, 30_000)
+
   it("stops gating on the parking route once the parked prompt is answered", async () => {
     await withAimock(
       script()
@@ -845,6 +903,10 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     expect(await after.json()).toEqual({ interrupts: [] })
   }, 60_000)
 })
+
+function deleteThreadRequest(threadId: string): Request {
+  return new Request(`http://localhost/threads/${threadId}`, { method: "DELETE" })
+}
 
 function cancelRequest(threadId: string): Request {
   return new Request(`http://localhost/threads/${threadId}/cancel`, { method: "POST" })
