@@ -1,51 +1,42 @@
-import { expectMeta, expectOutput } from "@dawn-ai/sdk/testing"
+import { expectMeta, expectOutput, scenarios } from "@dawn-ai/sdk/testing"
 
-export default [
-  {
-    name: "handwritten in-process scenario",
-
-    input: {
-      tenant: "handwritten-tenant",
-    },
-    expect: {
-      status: "passed",
-      output: {
+export default scenarios("/hello/[tenant]")
+  .scenario("handwritten in-process scenario", (s) =>
+    s
+      .input({
+        tenant: "handwritten-tenant",
+      })
+      .expectPassed()
+      .expectOutput({
         greeting: "Hello, handwritten-tenant!",
         tenant: "handwritten-tenant",
-      },
-      meta: {
+      })
+      .expectMeta({
         executionSource: "in-process",
         mode: "graph",
         routeId: "/hello/[tenant]",
         routePath: "src/app/(public)/hello/[tenant]/index.ts",
-      },
-    },
-  },
-  {
-    name: "handwritten server scenario",
-
-    input: {
-      tenant: "handwritten-tenant",
-    },
-    run: {
-      url: "__SERVER_URL__",
-    },
-    expect: {
-      status: "passed",
-      output: {
+      }),
+  )
+  .scenario("handwritten server scenario", (s) =>
+    s
+      .input({
+        tenant: "handwritten-tenant",
+      })
+      .server("__SERVER_URL__")
+      .expectPassed()
+      .expectOutput({
         greeting: "Hello, handwritten-tenant!",
         tenant: "handwritten-tenant",
-      },
-      meta: {
+      })
+      .expectMeta({
         executionSource: "server",
         mode: "graph",
         routeId: "/hello/[tenant]",
         routePath: "src/app/(public)/hello/[tenant]/index.ts",
-      },
-    },
-    assert(result) {
-      expectMeta(result, { executionSource: "server", mode: "graph" })
-      expectOutput(result, { tenant: "handwritten-tenant" })
-    },
-  },
-]
+      })
+      .assert((result) => {
+        expectMeta(result, { executionSource: "server", mode: "graph" })
+        expectOutput(result, { tenant: "handwritten-tenant" })
+      }),
+  )
