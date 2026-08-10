@@ -630,11 +630,11 @@ The read default is 404 so a denial cannot be told apart from a miss, which is w
 
 `deny({ status, body })` overrides both. `status` accepts only `403` or `404` — a policy cannot mint a 200, a 500 or a redirect — and anything else falls back to the per-action default.
 
-<Callout type="warning">
+<Callout type="warn">
 **A `read` handler that returns 403 tells the caller the thread exists.** `deny({ status: 403 })` on a read is legal, and it reopens the enumeration channel the 404 default closes: `GET /threads/<guessed>` becomes an existence oracle over a 32-bit id space. Dawn does not forbid it — an app that authenticates every caller and wants honest diagnostics is entitled to it — but make it a choice, not something you reach by copying the `update` branch.
 </Callout>
 
-<Callout type="warning">
+<Callout type="warn">
 **Your `delete` handler must deny when `thread` is `undefined`.** `DELETE /threads/:thread_id` returns 204 today even for a thread that never existed, so a 403 would ordinarily mean "this exists and is not yours" — a bit DELETE does not leak. Dawn keeps it that way by invoking the policy with `thread: undefined` instead of short-circuiting, so an ownership policy denies both cases identically. A policy that allows deleting unknown threads puts the oracle back.
 </Callout>
 
