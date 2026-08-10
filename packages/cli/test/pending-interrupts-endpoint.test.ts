@@ -358,4 +358,33 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     expect(allowed.status).toBe(200)
     expect(await allowed.json()).toEqual({ interrupts: [] })
   }, 30_000)
+
+  it("gates on the route persisted in thread metadata when nothing ran in-process", async () => {
+    const handler = await createHandler(await fixtureApp({ "src/middleware.ts": ECHO_MIDDLEWARE }))
+
+    // Pins the restart path: the in-memory threadRouteMap is populated by a run
+    // in THIS process, so it is empty for a thread created with metadata and
+    // never run. Only the durable `thread.metadata.route` arm can supply the
+    // identity here — the arm a server restart leaves as the sole survivor.
+    const created = await handler.fetch(
+      new Request("http://localhost/threads", {
+        body: JSON.stringify({ metadata: { route: "/echo#graph" } }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+    )
+    expect(created.status).toBe(200)
+    const { thread_id: threadId } = (await created.json()) as { thread_id: string }
+
+    const rejected = await handler.fetch(pendingInterruptsRequest(threadId))
+
+    // A 409 here would mean the metadata arm never ran; a 200 would mean the
+    // gate was skipped entirely.
+    expect(rejected.status).toBe(403)
+    expect(await rejected.json()).toEqual({ method: "GET", routeId: "/echo" })
+
+    const allowed = await handler.fetch(pendingInterruptsRequest(threadId, { "x-allow": "1" }))
+    expect(allowed.status).toBe(200)
+    expect(await allowed.json()).toEqual({ interrupts: [] })
+  }, 30_000)
 })

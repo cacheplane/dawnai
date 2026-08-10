@@ -1646,15 +1646,22 @@ async function handleApPendingInterruptsRequest(options: {
   // order POST /resume uses: the in-memory map is the fast path for this server
   // session, thread metadata survives a restart. There is no client-supplied
   // fallback — a GET has no body to carry one.
+  //
+  // The identity gated on is the thread's LAST-RUN route, not the route that
+  // parked these interrupts. Both are recorded per thread, so a thread that
+  // parked on one route and then ran another is gated by the newer route —
+  // under a routeId-scoped policy that can be weaker than the gate the parked
+  // payload passed through. POST /resume resolves identity the same way (and
+  // additionally honours a client-supplied `route`), so this is the existing
+  // AP behaviour rather than something introduced here.
   const persistedRoute = thread.metadata.route
   const routeKey =
     threadRouteMap.get(threadId) ??
     (typeof persistedRoute === "string" ? persistedRoute : undefined)
   if (!routeKey) {
-    // Fail closed. This endpoint exposes interrupt payloads, so it must be
-    // gated exactly like the run endpoints that produced them; with no route
-    // there is no identity to gate on and route-scoped middleware would
-    // silently fall through. Deliberately a different code from /resume's
+    // Fail closed: with no route there is no identity at all to gate on, and
+    // route-scoped middleware would silently fall through on an endpoint that
+    // serves interrupt payloads. Deliberately a different code from /resume's
     // route_not_found: that one is fixable by passing `route` in the body.
     return Response.json(
       createRequestErrorBody(
@@ -1668,16 +1675,31 @@ async function handleApPendingInterruptsRequest(options: {
 
   const route = registry.lookup(routeKey)
   if (!route) {
-    return Response.json(createRequestErrorBody(`Unknown route: ${routeKey}`), { status: 404 })
+    // Same code and status as the branch above: both mean "this thread has no
+    // usable route identity", and the caller is still ungated here, so the
+    // server-derived route key is deliberately NOT echoed — it would tell
+    // anyone who can name a thread id which route that thread ran. The other
+    // `Unknown route` sites can echo safely because there the key came from
+    // the caller's own request body.
+    return Response.json(
+      createRequestErrorBody(
+        `The route recorded for thread "${threadId}" is no longer registered.`,
+        { code: "thread_route_unknown" },
+      ),
+      { status: 409 },
+    )
   }
 
   const requestUrl = new URL(request.url)
   const mwRequest: MiddlewareRequest = {
     assistantId: route.assistantId,
     headers: headersToRecord(request.headers),
-    // "GET" here — the first AP endpoint where a middleware sees anything
-    // other than "POST".
-    method: request.method,
+    // The first AP endpoint where middleware sees a method other than POST.
+    method: "GET",
+    // Always empty: run endpoints derive params from the request input via
+    // extractRouteParams, and a checkpoint has no input to reconstruct them
+    // from. Middleware gating on req.params.orgId for an `[orgId]` route sees
+    // {} here — as it does on /resume.
     params: {},
     routeId: route.routeId,
     url: `${requestUrl.pathname}${requestUrl.search}`,
