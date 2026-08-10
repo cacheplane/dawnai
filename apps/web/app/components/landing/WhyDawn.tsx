@@ -24,16 +24,17 @@ export function WhyDawn() {
           </p>
           <p>
             Dawn is a meta-framework for LangGraph in the same shape Next.js is for React.
-            File-system routes for agents, route-local tools with inferred argument types,
-            end-to-end generated types from your state schema, and an HMR dev server that doesn't
-            lose graph state between edits.
+            File-system routes for agents, shared and route-local tools with inferred argument
+            types, end-to-end generated types from your state schema, and a dev server that keeps
+            persisted state available across child-runtime restarts.
           </p>
           <p>
             <strong className="text-ink font-medium">
-              Dawn is not a runtime, an LLM router, or a hosting product.
+              Dawn includes Node and Hono HTTP runtimes, but it is not an LLM router or hosted
+              cloud.
             </strong>{" "}
-            Your graphs stay valid LangGraph code. Your model calls stay your model calls. Your
-            deployment target stays yours. Dawn is the scaffolding between you and the runtime.
+            The LangSmith target emits graph entries, and raw graph and chain exports stay portable.
+            Your model calls and deployment target stay yours.
           </p>
         </div>
       </div>

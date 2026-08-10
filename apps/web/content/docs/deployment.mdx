@@ -43,7 +43,11 @@ dawn start --host 127.0.0.1 --port 3000
 
 Because it runs the full Dawn HTTP runtime, this is the deployment path that can engage the [execution sandbox](/docs/sandbox) alongside [tool scoping](/docs/tools), capabilities, and [permissions](/docs/permissions) as configured in `dawn.config.ts`. The `hono` target also runs the Dawn HTTP runtime, so its supported tool scoping, capabilities, permissions, and middleware apply, but the sandbox and filesystem-backed capabilities are unavailable there. Generated LangSmith agent entries use the policy-aware materialization path for tool scope, capabilities, and permission gates, but do not include Dawn's sandbox manager or HTTP middleware.
 
-The built runtime and `dawn start` serve the same Agent Protocol and AG-UI routes as `dawn dev`; generated server entrypoints call the exported `serveRuntime()` function directly. In both modes, `src/middleware.ts` gates Agent Protocol run, wait, and resume execution plus AG-UI route execution, but not thread create, read, delete, or state endpoints. Allowed middleware context reaches tools as `ctx.middleware`.
+The built runtime and `dawn start` serve the same Agent Protocol and AG-UI routes as `dawn dev`; generated server entrypoints call the exported `serveRuntime()` function directly. In both modes, `src/middleware.ts` gates Agent Protocol run, wait, and resume execution plus AG-UI route execution. Allowed middleware context reaches tools as `ctx.middleware`.
+
+<Callout type="warn" title="Authenticate the whole service">
+  App middleware gates execution routes; it is not blanket server authentication. Thread create, read, delete, state, and `/threads/:thread_id/cancel` bypass it, as do `/memory/candidates` and its approve/reject routes. Candidate listing spans namespaces, while approve and reject mutate records. `/healthz` also bypasses middleware so an intended platform probe can reach it. Any non-local exposure requires reverse-proxy or platform authentication plus network restrictions covering the entire service, with only the intended health probe exempted at that external layer.
+</Callout>
 
 Select targets explicitly in `dawn.config.ts` if you only want one:
 

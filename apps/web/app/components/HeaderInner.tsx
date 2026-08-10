@@ -54,7 +54,7 @@ export function HeaderInner({ repoUrl }: HeaderInnerProps) {
           >
             <GitHubIcon />
           </a>
-          <CopyCommand command="pnpm create dawn-ai-app" />
+          <CopyCommand command="npm create dawn-ai-app@latest my-agent" />
         </nav>
         <MobileMenu />
       </div>

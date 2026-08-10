@@ -5,13 +5,13 @@ export function FeatureDevLoop() {
   return (
     <FeatureBlock
       eyebrow="Dev loop"
-      heading="Edit, save, reload — without restarting the graph."
-      paragraph="Dawn's dev server keeps your graph state across edits. Change a prompt, save, and the next conversation continues from where you left off. Tool handlers, system prompts, route files, and Zod schemas all hot-reload — only schema-incompatible state changes cost a graph restart."
+      heading="Edit, save, continue on the same listener."
+      paragraph="Any meaningful route, tool, state, config, or middleware change restarts the child runtime. The parent listener stays up, and persisted thread/checkpoint state remains available when the fresh child is ready."
       bullets={[
-        "HMR for routes, tools, and prompts",
-        "Graph state preserved across compatible edits",
+        "Fresh child runtime for meaningful application changes",
+        "Stable parent listener across child restarts",
+        "Persisted thread state remains available",
         "Type errors surface in the terminal and in your editor",
-        "First compile in ~400ms; incremental in tens of ms",
       ]}
       link={{ href: "/docs/dev-server", label: "See dev server docs" }}
       imageSide="left"

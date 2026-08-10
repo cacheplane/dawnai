@@ -11,6 +11,7 @@ When present, `state.ts` default-exports a Zod schema or Standard Schema value. 
 import { z } from "zod"
 
 export default z.object({
+  tenant: z.string(),
   /** Accumulated context from tool call results */
   context: z.string().default(""),
 })
@@ -20,15 +21,19 @@ export default z.object({
 // workflow form
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { z } from "zod"
-import type state from "./state.js"
+import state from "./state.js"
 
 type HelloState = z.infer<typeof state>
 
-export async function workflow(state: HelloState, ctx: RuntimeContext) {
-  // state.context is string (Zod-parsed default `""` is applied when caller omits it)
+export async function workflow(input: unknown, ctx: RuntimeContext): Promise<HelloState> {
+  const parsed = state.parse(input)
+  ctx.signal.throwIfAborted()
+  return { ...parsed, context: parsed.context }
 }
 ```
 </CodeGroup>
+
+Agent routes apply a discovered `state.ts` schema automatically. Plain workflows must parse their unknown input explicitly, as above; schema defaults appear only after `state.parse(input)` succeeds.
 
 <Callout type="info" title="Zod or any Standard Schema">
   State discovery accepts either a Zod schema (matched by `.parse({})`) or any value that implements [Standard Schema](https://standardschema.dev/) (matched by the `~standard.validate({})` slot). The scaffold uses Zod; either works at runtime.

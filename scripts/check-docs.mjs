@@ -91,24 +91,143 @@ const accuracyContracts = [
     forbidden: ["payload.content"],
   },
   {
+    file: "apps/web/content/docs/state.mdx",
+    required: [
+      "tenant: z.string()",
+      'import state from "./state.js"',
+      "input: unknown",
+      "state.parse(input)",
+      "Plain workflows must parse",
+    ],
+    forbidden: ["Zod-parsed default `\"\"` is applied when caller omits it"],
+  },
+  {
+    file: "apps/web/content/docs/testing-agents.mdx",
+    required: ['title="test/agent.test.ts"', 'new URL("..", import.meta.url)'],
+    forbidden: ['title="src/app/chat/agent.test.ts"', 'new URL("../..", import.meta.url)'],
+  },
+  {
     file: "apps/web/content/docs/tools.mdx",
-    required: ["src/tools/", "capability tools"],
-    forbidden: ["only its own route-local `tools/*.ts`"],
+    required: [
+      "src/tools/",
+      "capability tools",
+      "callable `graph` function",
+      "precompiled raw LangGraph object",
+      "RunnableConfig",
+      "imports its own tools",
+    ],
+    forbidden: [
+      "only its own route-local `tools/*.ts`",
+      "inside `workflow`/`graph` route entries",
+      "Inside a `workflow` or `graph` route",
+    ],
   },
   {
     file: "apps/web/content/docs/deployment.mdx",
-    required: ["node:24-slim", 'node_version: "22"'],
+    required: [
+      "node:24-slim",
+      'node_version: "22"',
+      "not blanket server authentication",
+      "/threads/:thread_id/cancel",
+      "/memory/candidates",
+      "spans namespaces",
+      "entire service",
+    ],
     forbidden: ["Nothing else is gated"],
   },
   {
+    file: "apps/web/content/docs/dev-server.mdx",
+    required: [
+      "not blanket server authentication",
+      "/threads/:thread_id/cancel",
+      "/memory/candidates",
+      "spans namespaces",
+      "entire service",
+    ],
+    forbidden: [],
+  },
+  {
     file: "apps/web/content/prompts/index.ts",
-    required: ["dawn start", 'targets: ["node"]', "scenarios(", ".server("],
-    forbidden: ["Dawn itself is not a production runtime"],
+    required: [
+      "dawn start",
+      'targets: ["node"]',
+      "scenarios(",
+      ".server(",
+      "topic: z.string()",
+      'import state from "./state.js"',
+      "input: unknown",
+      "state.parse(input)",
+      "callable \\`graph\\` function",
+      "precompiled raw LangGraph object",
+      "RunnableConfig",
+    ],
+    forbidden: [
+      "Dawn itself is not a production runtime",
+      "For a \\`workflow\\` or \\`graph\\` route",
+    ],
   },
   {
     file: "apps/web/app/llms.txt/route.ts",
-    required: ["dawn start", "dawn inspect", "/threads/:thread_id/cancel"],
+    required: [
+      "dawn start",
+      "dawn inspect",
+      "/threads/:thread_id/cancel",
+      "fetch and print an integration blueprint",
+      "five phases",
+      "runtime readiness",
+      "middleware-bypassing management routes",
+      "entire service",
+    ],
     forbidden: ["Production runs on LangSmith or another runtime"],
+  },
+  {
+    file: "apps/web/content/blueprints/retrieval/pgvector.md",
+    required: ["callable `graph` function", "precompiled raw LangGraph object", "RunnableConfig"],
+    forbidden: ["workflow and `graph` routes can call it through `ctx.tools`"],
+  },
+  {
+    file: "apps/web/content/blueprints/retrieval/pinecone.md",
+    required: ["callable `graph` function", "precompiled raw LangGraph object", "RunnableConfig"],
+    forbidden: ["workflow and `graph` routes can call it through `ctx.tools`"],
+  },
+  {
+    file: "apps/web/content/docs/migrating-from-langgraph.mdx",
+    required: [
+      "configurable.thread_id",
+      "does not translate",
+      "wrapper or configuration adaptation",
+      "validate that target boundary",
+    ],
+    forbidden: [
+      "the checkpointer, LangSmith — none of it changes",
+      "LangSmith, the checkpointer, model providers, every LangChain package — unchanged",
+      "Whatever you pass to `.compile({ checkpointer })` keeps working",
+    ],
+  },
+  {
+    file: "apps/web/app/components/landing/KeepTheRuntime.tsx",
+    required: [
+      "Node and Hono targets are Dawn HTTP runtimes",
+      "LangSmith target emits graph",
+      "Agent routes materialize LangGraph graphs",
+      "raw graph and chain exports remain portable",
+    ],
+    forbidden: ["Dawn is not a runtime", "Dawn compiles to LangGraph constructs", "Routes become nodes"],
+  },
+  {
+    file: "apps/web/app/components/landing/WhyDawn.tsx",
+    required: ["Node and Hono HTTP runtimes", "raw graph and chain exports stay portable"],
+    forbidden: ["Dawn is not a runtime"],
+  },
+  {
+    file: "apps/web/app/components/landing/FeatureRouting.tsx",
+    required: ["Agent routes materialize as LangGraph graphs", "keep their authored entry form"],
+    forbidden: ["Dawn wires it into the graph", "routes compile to plain LangGraph"],
+  },
+  {
+    file: "apps/web/app/components/landing/FeatureDevLoop.tsx",
+    required: ["restarts the child runtime", "parent listener", "persisted thread/checkpoint state"],
+    forbidden: ["only schema-incompatible", "First compile in ~400ms", "incremental in tens of ms"],
   },
   {
     file: "apps/web/content/blueprints/deploy/docker.md",
@@ -135,6 +254,29 @@ for (const contract of accuracyContracts) {
     if (source.includes(forbidden)) {
       failures.push(`${contract.file} retains forbidden accuracy text: ${forbidden}`)
     }
+  }
+}
+
+// Current scaffold CTAs must include both the package tag and a target directory.
+// Keep this scoped to active website surfaces so historical snapshots remain intact.
+const targetBearingCtaFiles = [
+  "apps/web/app/components/HeaderInner.tsx",
+  "apps/web/app/components/MobileMenu.tsx",
+  "apps/web/app/components/landing/Hero.tsx",
+  "apps/web/app/components/landing/FinalCta.tsx",
+  "apps/web/app/components/landing/Quickstart.tsx",
+  "apps/web/app/opengraph-image.tsx",
+]
+const canonicalScaffoldCommand = "npm create dawn-ai-app@latest my-agent"
+const targetlessScaffoldCommand = /\b(?:npm|pnpm) create dawn-ai-app(?!@latest my-agent)\b/
+
+for (const file of targetBearingCtaFiles) {
+  const source = readFileSync(resolve(repoRoot, file), "utf8")
+  if (!source.includes(canonicalScaffoldCommand)) {
+    failures.push(`${file} is missing the canonical target-bearing scaffold command`)
+  }
+  if (targetlessScaffoldCommand.test(source)) {
+    failures.push(`${file} retains a targetless scaffold command`)
   }
 }
 

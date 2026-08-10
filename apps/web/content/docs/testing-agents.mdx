@@ -14,12 +14,12 @@ pnpm add -D @dawn-ai/testing vitest
 
 This is the full shape you'll use for most agent tests.
 
-```ts title="src/app/chat/agent.test.ts"
+```ts title="test/agent.test.ts"
 import { fileURLToPath } from "node:url"
 import { afterAll, it } from "vitest"
 import { createAgentHarness, expectFinalMessage, expectToolCalled, script } from "@dawn-ai/testing"
 
-const appRoot = fileURLToPath(new URL("../..", import.meta.url))
+const appRoot = fileURLToPath(new URL("..", import.meta.url))
 const h = await createAgentHarness({ appRoot, route: "/chat#agent" })
 afterAll(async () => {
   await h.close()
@@ -254,7 +254,7 @@ import {
   loadFixtures,
 } from "@dawn-ai/testing"
 
-const appRoot = fileURLToPath(new URL("../..", import.meta.url))
+const appRoot = fileURLToPath(new URL("..", import.meta.url))
 const fixturesPath = fileURLToPath(new URL("fixtures/filter-open.fixture.json", import.meta.url))
 
 // Fixture at harness level — used for every run unless overridden.
@@ -300,7 +300,7 @@ import {
   expectToolSequence,
 } from "@dawn-ai/testing"
 
-const appRoot = fileURLToPath(new URL("../..", import.meta.url))
+const appRoot = fileURLToPath(new URL("..", import.meta.url))
 const h = await createAgentHarness({ appRoot, route: "/chat#agent", live: true })
 afterAll(async () => {
   await h.close()
