@@ -63,6 +63,18 @@ const PARK_ROUTE = [
   "",
 ].join("\n")
 
+/** Agent route that cannot resolve its model, so the turn fails BEFORE its
+ * graph executes — no checkpoint written, nothing consumed. Agent-kind, so it
+ * gets past the `canPark` short-circuit that a plain graph stops at. */
+const BROKEN_AGENT_ROUTE = [
+  'import { agent } from "@dawn-ai/sdk"',
+  "export default agent({",
+  '  model: "definitely-not-a-real-model-id",',
+  '  systemPrompt: "You are a test agent.",',
+  "})",
+  "",
+].join("\n")
+
 const DEPLOY_TOOL = [
   "/** Deploy to an environment. */",
   "export default async function deployProd(input: { env: string }): Promise<string> {",
@@ -169,6 +181,27 @@ function parkWaitRequest(
     body: JSON.stringify({
       input: { messages: [{ content: message, role: "user" }] },
       route: "/park#agent",
+    }),
+    headers: { "content-type": "application/json", ...headers },
+    method: "POST",
+  })
+}
+
+/** The same park, driven through the endpoint the CopilotKit UIs actually use. */
+function aguiParkRequest(
+  threadId: string,
+  message: string,
+  headers: Record<string, string> = {},
+): Request {
+  return new Request(`http://localhost/agui/${encodeURIComponent("/park#agent")}`, {
+    body: JSON.stringify({
+      context: [],
+      forwardedProps: {},
+      messages: [{ content: message, id: "m1", role: "user" }],
+      runId: "r1",
+      state: {},
+      threadId,
+      tools: [],
     }),
     headers: { "content-type": "application/json", ...headers },
     method: "POST",
@@ -522,6 +555,78 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     const swap = await handler.fetch(runStreamRequest(threadId, "/echo#graph"))
     expect(swap.status).toBe(200)
     await drain(swap)
+
+    const afterSwap = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(afterSwap.status).toBe(403)
+    expect(await afterSwap.json()).toEqual({ routeId: "/park" })
+
+    const allowed = await handler.fetch(pendingInterruptsRequest(threadId, { "x-admin": "1" }))
+    expect(allowed.status).toBe(200)
+    expect(((await allowed.json()) as PendingInterruptsBody).interrupts).toHaveLength(1)
+  }, 60_000)
+
+  it("keeps gating on the parking route when the park happened over AG-UI", async () => {
+    await withAimock(
+      script().user("deploy to staging").callsTool("deployProd", { env: "staging" }).build(),
+    )
+    const handler = await createHandler(
+      await fixtureApp({ "src/middleware.ts": ADMIN_PARK_MIDDLEWARE }),
+    )
+    const threadId = "t-route-swap-agui"
+
+    // /agui is where most parks are actually born — it is what the CopilotKit
+    // chat and research UIs drive — so a park it fails to record is the common
+    // case, not a corner one.
+    const parkedRun = await handler.fetch(
+      aguiParkRequest(threadId, "deploy to staging", { "x-admin": "1" }),
+    )
+    expect(parkedRun.status).toBe(200)
+    await drain(parkedRun)
+
+    const beforeSwap = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(beforeSwap.status).toBe(403)
+
+    const swap = await handler.fetch(runStreamRequest(threadId, "/echo#graph"))
+    expect(swap.status).toBe(200)
+    await drain(swap)
+
+    const afterSwap = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(afterSwap.status).toBe(403)
+    expect(await afterSwap.json()).toEqual({ routeId: "/park" })
+
+    const allowed = await handler.fetch(pendingInterruptsRequest(threadId, { "x-admin": "1" }))
+    expect(allowed.status).toBe(200)
+    expect(((await allowed.json()) as PendingInterruptsBody).interrupts).toHaveLength(1)
+  }, 60_000)
+
+  it("keeps gating when a weaker AGENT route fails before its graph runs", async () => {
+    await withAimock(
+      script().user("deploy to staging").callsTool("deployProd", { env: "staging" }).build(),
+    )
+    const handler = await createHandler(
+      await fixtureApp({
+        "src/app/broken/index.ts": BROKEN_AGENT_ROUTE,
+        "src/middleware.ts": ADMIN_PARK_MIDDLEWARE,
+      }),
+    )
+    const threadId = "t-route-swap-broken-agent"
+
+    await drain(
+      await handler.fetch(parkRunRequest(threadId, "deploy to staging", { "x-admin": "1" })),
+    )
+    expect((await handler.fetch(pendingInterruptsRequest(threadId))).status).toBe(403)
+
+    // Direct cover for settleParkedRoute's `pending.size > 0` guard, which every
+    // other case here reaches only to skip: `/echo` short-circuits on !canPark
+    // before the read, so deleting the guard leaves them all passing. An AGENT
+    // route gets past that short-circuit, and one that dies at model resolution
+    // never runs its graph — so the admin's interrupt is still the checkpoint's
+    // latest pending write when this turn asks to retire the gate.
+    const swap = await handler.fetch(runStreamRequest(threadId, "/broken#agent", {}))
+    expect(swap.status).toBe(200)
+    // Pins the premise rather than assuming it: the turn has to have FAILED, and
+    // failed early. A route that merely completed would prove nothing here.
+    expect(await readSseText(swap)).toContain("error")
 
     const afterSwap = await handler.fetch(pendingInterruptsRequest(threadId))
     expect(afterSwap.status).toBe(403)
