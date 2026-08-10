@@ -1,15 +1,19 @@
-// Reproducible baselines for docs/superpowers/specs/2026-08-09-server-controlled-exploration-design.md §5.5.
+// Reproducible baselines for §5.5 of the server-controlled-exploration design. That
+// document lives in the cacheplane/pretable repo, NOT here:
+// docs/superpowers/specs/2026-08-09-server-controlled-exploration-design.md.
 //
 // pnpm --filter @dawn-ai/memory build
 // node packages/memory/bench/browse-plans.mts [rowCount]
 //
 // Seeds rows with a direct bulk insert (the store's put() also tokenizes, which is
 // irrelevant here and 50x slower), then times the query shapes the design measured and
-// prints the SQLite plan for the guarded vs unguarded keyset.
+// prints the SQLite plans that prove which index each one rides.
 //
-// Every timing is a WHOLE browse() call: window + COUNT(*) in one transaction, plus
-// JSON decode of 200 records. §5.5's figures are per-statement, so these run higher
-// (e.g. 1.4 ms here for a window whose SQL alone is 0.05 ms against a 0.54 ms count).
+// Every timing is a WHOLE browse() call — window + COUNT(*) in one transaction, plus
+// JSON decode of 200 records — EXCEPT the two indented `statement` rows. §5.5's figures
+// are per-statement, so those two are the only ones that compare with its table
+// directly. All of them move with machine load (a busy machine doubles them), so the
+// PLAN lines below, not the milliseconds, are the stable evidence about indexes.
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -17,6 +21,11 @@ import { DatabaseSync } from "node:sqlite"
 import { sqliteMemoryStore } from "../dist/index.js"
 
 const rowCount = Number(process.argv[2] ?? 100_000)
+// Checked before the temp dir exists, so a typo cannot leave one behind: `abc` used to
+// seed NaN rows and then fail four statements later on a null cursor.
+if (!Number.isInteger(rowCount) || rowCount < 1) {
+  throw new Error(`rowCount must be a positive integer, got ${JSON.stringify(process.argv[2])}`)
+}
 const dir = mkdtempSync(join(tmpdir(), "dawn-bench-"))
 const path = join(dir, "bench.sqlite")
 
@@ -57,6 +66,21 @@ async function time(label: string, run: () => Promise<unknown>): Promise<void> {
   console.log(`${label.padEnd(44)} ${((performance.now() - started) / 5).toFixed(2)} ms`)
 }
 
+// One statement on its own connection, prepared once — the per-statement shape §5.5's
+// table reports, without browse()'s transaction, second statement and JSON decode.
+function timeSql(label: string, sql: string, params: string[]): void {
+  const db = new DatabaseSync(path)
+  try {
+    const statement = db.prepare(sql)
+    statement.all(...params) // warm
+    const started = performance.now()
+    for (let i = 0; i < 5; i += 1) statement.all(...params)
+    console.log(`${label.padEnd(44)} ${((performance.now() - started) / 5).toFixed(2)} ms`)
+  } finally {
+    db.close()
+  }
+}
+
 function plan(label: string, sql: string, params: string[]): void {
   const db = new DatabaseSync(path)
   try {
@@ -67,6 +91,14 @@ function plan(label: string, sql: string, params: string[]): void {
   }
 }
 
+// The two statements browse({ limit: 200 }) issues, verbatim — copied, not derived, so
+// the plan printed below is the plan the store gets. The column list is the store's
+// (everything rowToRecord reads, minus the embedding BLOB).
+const windowSql = `SELECT id, kind, namespace, content, data, source, confidence, tags, status,
+        supersedes, created_at, updated_at, effective_at, expires_at
+ FROM memories ORDER BY updated_at DESC, id ASC LIMIT 200`
+const countSql = "SELECT COUNT(*) AS n FROM memories"
+
 try {
   const store = sqliteMemoryStore({ path })
   seed()
@@ -74,9 +106,19 @@ try {
 
   const first = await store.browse({ limit: 200 })
   await time("default order, limit 200", () => store.browse({ limit: 200 }))
-  await time("keyset continuation, limit 200", () =>
-    store.browse({ limit: 200, cursor: first.continuation as string }),
-  )
+  // The decomposition of the row above. §5.5 budgets 0.54 ms for the window statement
+  // and reports the COUNT separately; the browse() figure is their sum plus decode, so
+  // reading it against 0.54 ms alone looks like a 3x miss and is not one.
+  timeSql("  window statement (§5.5: 0.54 ms)", windowSql, [])
+  timeSql("  unfiltered COUNT(*) statement", countSql, [])
+  // Hoisted so the narrowing survives into the closure. Null below one full window:
+  // browse() only issues a continuation when the window FILLED.
+  const cursor = first.continuation
+  if (cursor) {
+    await time("keyset continuation, limit 200", () => store.browse({ limit: 200, cursor }))
+  } else {
+    console.log(`${"keyset continuation, limit 200".padEnd(44)} skipped (< 200 rows)`)
+  }
   await time("status IN + default order", () =>
     store.browse({ limit: 200, filters: [{ field: "status", op: "in", values: ["active"] }] }),
   )
@@ -102,6 +144,11 @@ try {
   await time("namespace exact", () => store.browse({ limit: 200, namespace: "route=/ns1" }))
 
   console.log("")
+  // The tripwire §5.5 actually rests on. `SCAN … USING INDEX idx_mem_updated_id` is the
+  // HEALTHY reading: an ordered traversal of the index that LIMIT exits early, which is
+  // why the timing is flat from 100k to 1M. `USE TEMP B-TREE FOR ORDER BY` here means
+  // the index is gone or unusable — go back to Task 10 before trusting any number above.
+  plan("default order window", windowSql, [])
   const stamp = "2026-01-02T00:00:00.000Z"
   plan(
     "keyset WITH the leading guard",
@@ -114,5 +161,13 @@ try {
     [stamp, stamp, "r000000001"],
   )
 } finally {
-  rmSync(dir, { recursive: true, force: true })
+  // The store's connection (and its -wal/-shm) is still open here: MemoryStore exposes
+  // no close(), and sqliteMemoryStore keeps its DatabaseSync private, so there is
+  // nothing to close from out here. POSIX unlinks open files; Windows refuses, so this
+  // must not be allowed to throw over the results that were just printed.
+  try {
+    rmSync(dir, { recursive: true, force: true })
+  } catch (err) {
+    console.log(`\ncould not remove ${dir}: ${(err as Error).message}`)
+  }
 }
