@@ -10,9 +10,11 @@ import { getTestRegistryUrl } from "../harness/local-registry.ts"
 import {
   cleanupTrackedTempDirs,
   createTrackedTempDir,
+  GENERATED_APP_UNSET_ENV,
   installRegistryScaffolderWithNpm,
   markTrackedTempDirForPreserve,
-  runPackagedCommand,
+  runGeneratedAppNpmCommand,
+  runPackagedNpmCommand,
   type TrackedTempDir,
 } from "../harness/packaged-app.ts"
 import { writeRegistryNpmrc } from "../harness/scaffold-packaging.ts"
@@ -42,6 +44,15 @@ test("activates the default research scaffold through the complete npm lifecycle
   let scenarioError: unknown
   let scenarioFailed = false
   let cleanupError: unknown
+  const inheritedRuntimeEnv = GENERATED_APP_UNSET_ENV.map((name) => ({
+    hadOwnProperty: Object.hasOwn(process.env, name),
+    name,
+    value: Reflect.get(process.env, name),
+  }))
+
+  Reflect.set(process.env, "DAWN_DEMO_DOCKER_SANDBOX", "1")
+  Reflect.set(process.env, "OPENAI_BASE_URL", "http://127.0.0.1:1/v1")
+  Reflect.set(process.env, "OPENAI_API_KEY", "ambient-secret")
 
   try {
     const artifactRoot = await createArtifactRoot({
@@ -54,15 +65,10 @@ test("activates the default research scaffold through the complete npm lifecycle
     await writeFile(agUiTranscriptPath, "", "utf8")
 
     aimock = await createAimock({ fixtures: [] })
-    const npmLaunch = {
-      command: "npm",
-      shell: process.platform === "win32",
-    } as const
 
-    const npmVersion = await runPackagedCommand({
+    const npmVersion = await runPackagedNpmCommand({
       args: ["--version"],
       cwd: tempRoot,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
     })
     expect(Number(process.versions.node.split(".")[0])).toBe(24)
@@ -73,10 +79,9 @@ test("activates the default research scaffold through the complete npm lifecycle
       transcriptPath: commandsTranscriptPath,
     })
     expect(installerDir).toBe(installerRoot)
-    const creatorResult = await runPackagedCommand({
+    const creatorResult = await runPackagedNpmCommand({
       args: ["exec", "--", "create-dawn-ai-app", appRoot],
       cwd: installerDir,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
     })
 
@@ -101,63 +106,58 @@ test("activates the default research scaffold through the complete npm lifecycle
     const envContent = `OPENAI_BASE_URL=${aimock.baseUrl}\nOPENAI_API_KEY=test-not-used\n`
     await writeFile(join(appRoot, ".env"), envContent, "utf8")
 
-    await runPackagedCommand({
+    await runGeneratedAppNpmCommand({
       args: ["install"],
       cwd: appRoot,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
     })
-    const typegenResult = await runPackagedCommand({
+    const typegenResult = await runGeneratedAppNpmCommand({
       args: ["run", "typegen"],
       cwd: appRoot,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
     })
     expect(typegenResult.stdout).toContain("Wrote types for")
     const generatedTypesPath = join(appRoot, ".dawn/dawn.generated.d.ts")
     await expect(access(generatedTypesPath, constants.F_OK)).resolves.toBeUndefined()
-    const generatedTypesAfterTypegen = await readFile(generatedTypesPath, "utf8")
+    const generatedTypes = await readFile(generatedTypesPath, "utf8")
+    const checkSentinel = "// sentinel: dawn check must not generate types\n"
+    await writeFile(generatedTypesPath, checkSentinel, "utf8")
 
-    const checkResult = await runPackagedCommand({
+    const checkResult = await runGeneratedAppNpmCommand({
       args: ["run", "check"],
       cwd: appRoot,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
     })
     expect(checkResult.stdout).toContain("Dawn app is valid:")
     expect(checkResult.stdout).not.toContain("Wrote types for")
-    await expect(readFile(generatedTypesPath, "utf8")).resolves.toBe(generatedTypesAfterTypegen)
+    await expect(readFile(generatedTypesPath, "utf8")).resolves.toBe(checkSentinel)
+    await writeFile(generatedTypesPath, generatedTypes, "utf8")
+    await expect(readFile(generatedTypesPath, "utf8")).resolves.toBe(generatedTypes)
 
-    await runPackagedCommand({
+    await runGeneratedAppNpmCommand({
       args: ["run", "typecheck"],
       cwd: appRoot,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
     })
-    await runPackagedCommand({
+    await runGeneratedAppNpmCommand({
       args: ["test"],
       cwd: appRoot,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
     })
-    await runPackagedCommand({
+    await runGeneratedAppNpmCommand({
       args: ["run", "eval"],
       cwd: appRoot,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
     })
-    const verifyResult = await runPackagedCommand({
+    const verifyResult = await runGeneratedAppNpmCommand({
       args: ["run", "verify"],
       cwd: appRoot,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
-      unsetEnv: ["OPENAI_BASE_URL", "OPENAI_API_KEY"],
     })
     expect(verifyResult.stdout).not.toContain("Missing environment variables")
-    await runPackagedCommand({
+    await runGeneratedAppNpmCommand({
       args: ["run", "build"],
       cwd: appRoot,
-      ...npmLaunch,
       transcriptPath: commandsTranscriptPath,
     })
 
@@ -204,6 +204,13 @@ test("activates the default research scaffold through the complete npm lifecycle
         cleanupErrors.length === 1
           ? cleanupErrors[0]
           : new AggregateError(cleanupErrors, "Generated research activation cleanup failed")
+    }
+    for (const inherited of inheritedRuntimeEnv) {
+      if (inherited.hadOwnProperty) {
+        Reflect.set(process.env, inherited.name, inherited.value)
+      } else {
+        Reflect.deleteProperty(process.env, inherited.name)
+      }
     }
   }
 
