@@ -5,6 +5,10 @@ import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import {
+  collectRuntimeCapabilityGaps,
+  formatRuntimeCapabilityViolations,
+} from "../runtime/edge-capability-report.js"
+import {
   type BootResolvedInstances,
   invokeResolvedRoute,
   type PreparedRouteModules,
@@ -103,6 +107,33 @@ function requireStore<T>(store: T | undefined, what: string): T {
 }
 
 /**
+ * A gated feature this app is configured for that this runtime cannot serve —
+ * the REQUEST-time half of the `hono` target's build gate, raising the same
+ * `DAWN_E1005`.
+ *
+ * Detected once at boot (`collectRuntimeCapabilityGaps`) and raised from
+ * `fetch` rather than rejecting the handler's construction, for two reasons:
+ * the emitted `app.mjs` builds its handler inside the first request, so a boot
+ * rejection surfaces as an unattributed 500 with no dedupe; and going through
+ * `fetch`'s catch-all gives this the identical operator experience as
+ * `MissingStoreError` — the cause on stderr exactly once, the code and the
+ * docs URL in the body.
+ *
+ * Raised for EVERY request, health checks included. That is the point: this is
+ * a deployment mistake, not a request mistake, and a rollout that keeps passing
+ * its health check while silently ignoring the `sandbox` block is the exact
+ * failure the spec forbids.
+ */
+class RuntimeCapabilityError extends Error {
+  /** Registry code, read back by `dawnErrorCodeOf`. Same code the build gate throws. */
+  readonly code = "DAWN_E1005"
+  constructor(message: string) {
+    super(message)
+    this.name = "RuntimeCapabilityError"
+  }
+}
+
+/**
  * True for `text/event-stream` with or without parameters (`; charset=utf-8`).
  *
  * Deliberately not an exact compare: this predicate decides whether the
@@ -164,6 +195,18 @@ export interface RuntimeFetchHandler {
     activeRequests: number
     closed: boolean
   }
+  /**
+   * @deprecated Vestigial, and kept only because this interface is published
+   * API. Nothing in the request path reads it: shutdown is tested through the
+   * plain `shutdownReason` value, and the abortable signal every run listens to
+   * is minted PER REQUEST by `getShutdownSignal` (a single handler-scoped
+   * AbortController cannot work on workerd — it is an I/O object bound to
+   * whichever request constructed it). `close()` still aborts this one, but no
+   * listener is ever attached, so subscribing to it observes nothing.
+   *
+   * To be notified of shutdown, await `close()`. Slated for removal in the next
+   * major; removing it now would be a breaking change for a published package.
+   */
   readonly shutdownController: AbortController
 }
 
@@ -248,10 +291,29 @@ export async function createRuntimeFetchHandler(
     (bootStoresOptional
       ? undefined
       : await requireBoot(fallbacks, "checkpointer").resolveCheckpointer(options.appRoot))
-  // Degrades rather than throws: sandboxing is opt-in, so no fallbacks means
-  // no sandbox provider — the same result as an app with no `sandbox` config.
+  // Degrades rather than throws HERE: sandboxing is opt-in, so no fallbacks
+  // means no sandbox provider — the same result as an app with no `sandbox`
+  // config, and the right answer for every node app. What was missing is the
+  // other half: a runtime with no fallbacks that IS configured for a sandbox
+  // was degrading silently too. `capabilityGaps` below draws that line.
   const sandboxManager =
     options.sandboxManager ?? (await fallbacks?.resolveSandboxManager(options.appRoot))
+
+  // The request-time half of `assertEdgeCapabilities`. One pass at boot, raised
+  // per request (see RuntimeCapabilityError). `hasFilesystemFallback` is what
+  // keeps this off every node path: `runtime-fetch-handler.ts` applies
+  // `nodeBootFallbacks` unconditionally, so `fallbacks` is always set there and
+  // the collector returns empty before reading a single config key.
+  const capabilityGaps = collectRuntimeCapabilityGaps({
+    config: options.config,
+    hasFilesystemFallback: Boolean(fallbacks),
+    hasSandboxManager: Boolean(sandboxManager),
+    routes: options.modules?.routes ?? [],
+  })
+  const capabilityError =
+    capabilityGaps.length > 0
+      ? new RuntimeCapabilityError(formatRuntimeCapabilityViolations(capabilityGaps))
+      : undefined
   // Lazy, memoized, shared: resolveMemoryStore (and the sqlite it opens) runs
   // at most once per process, on the FIRST request that actually needs
   // memory — not unconditionally at boot for apps with no memory routes, and
@@ -522,6 +584,11 @@ export async function createRuntimeFetchHandler(
     let transferredToStream = false
     let lifetime: RequestLifetime | undefined
     try {
+      // Before anything else, including store construction: this app asks for a
+      // feature this runtime cannot serve, so every request fails identically
+      // until the deployment changes. Inside the try so it travels the same
+      // catch-all — logged once, coded, with a docs URL.
+      if (capabilityError) throw capabilityError
       // Inside the try on purpose: a factory that throws (a pool that cannot
       // connect) must become a 500 through the handler below, not leak the
       // in-flight slot and wedge close()'s drain.
@@ -569,6 +636,21 @@ export async function createRuntimeFetchHandler(
             error: error instanceof Error ? error.message : String(error),
           }),
           { status: 503 },
+        )
+      }
+
+      if (error instanceof RuntimeCapabilityError) {
+        // Same posture as MissingStoreError below: a deployment mistake, so the
+        // full report goes to the caller AND to stderr — but only once, however
+        // many requests hit it. Unlike a store, the report already names every
+        // feature and its config key, so there are no extra details to attach.
+        if (!loggedFailures.has(error.message)) {
+          loggedFailures.add(error.message)
+          console.error(`Dawn runtime misconfigured — ${error.message}`)
+        }
+        return Response.json(
+          createExecutionErrorBody(error.message, undefined, { code: error.code }),
+          { status: 500 },
         )
       }
 

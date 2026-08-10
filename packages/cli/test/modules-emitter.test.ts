@@ -435,6 +435,84 @@ describe("emitModulesFile — functional round-trip", () => {
 })
 
 // ---------------------------------------------------------------------------
+// Skills: the one build fact the runtime cannot re-derive.
+//
+// Skill bodies are read off disk when a route loads, so on a runtime with no
+// filesystem the skills capability's `detect` returns false and they vanish
+// from the prompt with nothing to report — "this route had skills" and "it had
+// none" are indistinguishable at request time. The manifest carries the names
+// SOLELY so `collectRuntimeCapabilityGaps` can raise DAWN_E1005 instead.
+// ---------------------------------------------------------------------------
+
+describe("emitModulesFile — route skills", () => {
+  async function skillsFixtureApp(): Promise<string> {
+    const appRoot = await realpath(await mkdtemp(join(tmpdir(), "dawn-emitter-skills-")))
+    cleanup.push(() =>
+      rm(appRoot, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 }),
+    )
+    const files: Record<string, string> = {
+      "dawn.config.ts": "export default {}\n",
+      "package.json": '{ "name": "skills-fixture", "type": "module" }\n',
+      // Two valid skills, plus two entries the shared walker must reject: a
+      // directory with no SKILL.md, and a dotfile-shaped name.
+      "src/app/research/index.ts":
+        'import { agent } from "@dawn-ai/sdk"\n' +
+        'export default agent({ model: "gpt-5-mini", systemPrompt: "Research." })\n',
+      "src/app/research/skills/cite-sources/SKILL.md": "---\nname: cite-sources\n---\nCite.\n",
+      "src/app/research/skills/synthesize/SKILL.md": "---\nname: synthesize\n---\nSynthesize.\n",
+      "src/app/research/skills/not-a-skill/README.md": "no SKILL.md here\n",
+      // A second route with no skills at all — the common case.
+      "src/app/zeta/index.ts":
+        'import { agent } from "@dawn-ai/sdk"\n' +
+        'export default agent({ model: "gpt-5-mini", systemPrompt: "Zeta." })\n',
+    }
+    for (const [rel, body] of Object.entries(files)) {
+      const filePath = join(appRoot, rel)
+      await mkdir(join(filePath, ".."), { recursive: true })
+      await writeFile(filePath, body, "utf8")
+    }
+    return appRoot
+  }
+
+  it("records skill names at build time and surfaces them on the loaded manifest", async () => {
+    const appRoot = await skillsFixtureApp()
+    await mkdir(join(appRoot, "node_modules", "@dawn-ai"), { recursive: true })
+    await symlink(
+      join(repoRoot, "packages", "cli"),
+      join(appRoot, "node_modules", "@dawn-ai", "cli"),
+      "dir",
+    )
+
+    const discoveries = await collectFixtureDiscoveries(appRoot)
+    const research = discoveries.find((entry) => entry.routeId === "/research")
+    const zeta = discoveries.find((entry) => entry.routeId === "/zeta")
+
+    // Discovery: only identifier-shaped dirs containing a SKILL.md count —
+    // the SAME rule the build gate applies, because it is the same function.
+    expect(research?.skills).toEqual(["cite-sources", "synthesize"])
+    // A route with no skills carries no field, which is what keeps every
+    // skill-less app's manifest unchanged by this field's existence.
+    expect(zeta?.skills).toBeUndefined()
+
+    const buildDir = join(appRoot, ".dawn", "build")
+    await mkdir(buildDir, { recursive: true })
+    const text = emitModulesFile({ appRoot, buildDir, discoveries })
+    expect(text).toContain('skills: ["cite-sources","synthesize"]')
+    // Emitted once, for the one route that has them.
+    expect(text.match(/skills:/g)).toHaveLength(1)
+
+    // And it survives the round trip into the shape the guard reads.
+    const modulesPath = join(buildDir, "modules.mjs")
+    await writeFile(modulesPath, text, "utf8")
+    const modules = await loadStaticModules(pathToFileURL(modulesPath))
+    const loadedResearch = modules.routes.find((route) => route.routeId === "/research")
+    const loadedZeta = modules.routes.find((route) => route.routeId === "/zeta")
+    expect(loadedResearch?.skills).toEqual(["cite-sources", "synthesize"])
+    expect(loadedZeta?.skills).toBeUndefined()
+  }, 30_000)
+})
+
+// ---------------------------------------------------------------------------
 // Node target wiring: emit() writes modules.mjs, lists it in artifacts, and
 // server.mjs boots from it via loadStaticModules.
 // ---------------------------------------------------------------------------

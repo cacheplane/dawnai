@@ -193,7 +193,11 @@ export interface RuntimeBootFallbacks {
  *   - `hasWorkspaceDir`       → false ⇒ tool-output offloading stays off; it
  *                               is an optimization, not a capability the route
  *                               asked for (this also makes the offload store's
- *                               `defaultFilesystem` unreachable)
+ *                               `defaultFilesystem` unreachable). Degrades only
+ *                               when nothing ASKED for it: an app that set
+ *                               `toolOutput` on a fallback-less runtime is
+ *                               rejected at boot with DAWN_E1005 instead — see
+ *                               `collectRuntimeCapabilityGaps`
  *   - `defaultFilesystem`/`defaultExec` AS `backendFactories` → omitted from
  *                               `applyCapabilities`; the workspace capability
  *                               then throws at TOOL-INVOCATION time unless a
@@ -203,7 +207,15 @@ export interface RuntimeBootFallbacks {
  *                               constructed unconditionally but resolves its
  *                               backend, or throws, at first USE.)
  *   - `loadMiddleware`        → no middleware (fetch-core)
- *   - `resolveSandboxManager` → no sandbox provider (fetch-core)
+ *   - `resolveSandboxManager` → no sandbox provider (fetch-core). Again only
+ *                               when nothing asked: a `sandbox` block on a
+ *                               fallback-less runtime with no injected
+ *                               `sandboxManager` is DAWN_E1005 at boot
+ *   - route `skills/`         → contribute nothing without a `markerFs`. A
+ *                               route the BUILD recorded skills for is
+ *                               DAWN_E1005 at boot (the manifest carries the
+ *                               names precisely because nothing else at request
+ *                               time can tell "had skills" from "had none")
  *   - `resolveIdentityKeys`   → the default semantic identity for memory
  *                               approve (memory-handler)
  */
@@ -1889,6 +1901,12 @@ function buildOffload(
   // No filesystem fallback and no explicit backend means there is nowhere to
   // spill large tool output to — offloading stays off rather than throwing,
   // since it is an optimization, not a capability the route asked for.
+  //
+  // Still the right answer here, and deliberately unchanged: an app that never
+  // configured `toolOutput` asked for nothing, on node or anywhere else. An app
+  // that DID configure it on a filesystem-less runtime is a different case —
+  // that one is a dead config key, and it is raised as DAWN_E1005 at boot by
+  // `collectRuntimeCapabilityGaps`, before any request reaches this function.
   if (!fallbacks?.hasWorkspaceDir(root)) return undefined
   // `fallbacks` is non-null from here — the probe above returns otherwise.
   const workspaceRoot = pureJoin(root, "workspace")
