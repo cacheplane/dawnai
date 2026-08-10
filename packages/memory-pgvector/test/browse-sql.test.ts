@@ -98,13 +98,16 @@ describe("appendPgBrowseFilter — namespace", () => {
 })
 
 describe("appendPgBrowseFilter — confidence", () => {
-  it("casts every parameter to ::real so float4 comparisons are exact", () => {
-    // confidence is float4, and 0.9::real <> 0.9 once promoted to float8 — the cast
-    // pins the comparison at float4 rather than inheriting it from the column.
+  it("maps each comparison op and casts every parameter to ::real", () => {
     expect(build({ field: "confidence", op: "eq", value: 0.9 })).toEqual({
       sql: "confidence = $1::real",
       params: [0.9],
     })
+    expect(build({ field: "confidence", op: "neq", value: 0.5 }).sql).toBe("confidence <> $1::real")
+    expect(build({ field: "confidence", op: "gt", value: 0.5 }).sql).toBe("confidence > $1::real")
+    expect(build({ field: "confidence", op: "gte", value: 0.5 }).sql).toBe("confidence >= $1::real")
+    expect(build({ field: "confidence", op: "lt", value: 0.5 }).sql).toBe("confidence < $1::real")
+    expect(build({ field: "confidence", op: "lte", value: 0.5 }).sql).toBe("confidence <= $1::real")
     expect(build({ field: "confidence", op: "between", min: 0.2, max: 0.8 })).toEqual({
       sql: "confidence >= $1::real AND confidence <= $2::real",
       params: [0.2, 0.8],
@@ -118,9 +121,32 @@ describe("appendPgBrowseFilter — updatedAt", () => {
       sql: "updated_at >= $1 AND updated_at < $2",
       params: ["2026-08-09T00:00:00.000Z", "2026-08-10T00:00:00.000Z"],
     })
+    expect(build({ field: "updatedAt", op: "beforeDay", day: "2026-08-09" })).toEqual({
+      sql: "updated_at < $1",
+      params: ["2026-08-09T00:00:00.000Z"],
+    })
     expect(build({ field: "updatedAt", op: "afterDay", day: "2026-08-09" })).toEqual({
       sql: "updated_at >= $1",
       params: ["2026-08-10T00:00:00.000Z"],
     })
+    expect(
+      build({ field: "updatedAt", op: "betweenDays", fromDay: "2026-08-01", untilDay: "2026-08-09" }),
+    ).toEqual({
+      sql: "updated_at >= $1 AND updated_at < $2",
+      params: ["2026-08-01T00:00:00.000Z", "2026-08-10T00:00:00.000Z"],
+    })
+  })
+})
+
+describe("appendPgBrowseFilter — two-parameter arms", () => {
+  it("numbers both bounds from the caller's current parameter count", () => {
+    // Both bounds are read off params.length after a single push of the pair, so an
+    // off-by-one binds the lower bound to someone else's parameter.
+    expect(build({ field: "confidence", op: "between", min: 0.2, max: 0.8 }, 3).sql).toBe(
+      "confidence >= $4::real AND confidence <= $5::real",
+    )
+    expect(build({ field: "updatedAt", op: "onDay", day: "2026-08-09" }, 3).sql).toBe(
+      "updated_at >= $4 AND updated_at < $5",
+    )
   })
 })

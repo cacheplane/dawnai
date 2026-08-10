@@ -446,8 +446,9 @@ export function sqliteMemoryStore(opts: {
       validateBrowseQuery(q)
       // TODO(Tasks 13/14): `q.orderBy` and `q.cursor` are read NOWHERE below.
       // Setting one of them is silently a no-op, not an error; the JSDoc on
-      // BrowseQuery marks each as not-yet-applied. `q.filters` IS applied, but only
-      // its status/kind/content/namespace arms — the rest throw (Task 12).
+      // BrowseQuery marks each as not-yet-applied. `q.filters` IS fully applied:
+      // every arm has a clause, and an unmapped field throws rather than passing
+      // through unfiltered.
       const where: string[] = []
       const params: SQLInputValue[] = []
       if (q.namespace) {

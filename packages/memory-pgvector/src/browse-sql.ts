@@ -86,14 +86,12 @@ export function appendPgBrowseFilter(
       return
     }
     case "confidence": {
-      // confidence is float4, and the comparison must resolve THERE: promoted to
-      // float8 it reads 0.9::real <> 0.9, so equality against a stored value is
-      // false. Uncast, that resolution is inherited from the column's context; the
-      // cast states it, so wrapping the column can never silently promote it.
+      // confidence is float4 and the comparison must resolve THERE: promoted to
+      // float8 it reads 0.9::real <> 0.9, so equality against a stored value is false.
       if (filter.op === "between") {
         params.push(filter.min, filter.max)
-        const max = params.length
-        where.push(`confidence >= $${max - 1}::real AND confidence <= $${max}::real`)
+        const second = params.length
+        where.push(`confidence >= $${second - 1}::real AND confidence <= $${second}::real`)
         return
       }
       const operators = { eq: "=", neq: "<>", gt: ">", gte: ">=", lt: "<", lte: "<=" } as const
@@ -103,10 +101,12 @@ export function appendPgBrowseFilter(
     }
     case "updatedAt": {
       switch (filter.op) {
-        case "onDay":
+        case "onDay": {
           params.push(utcDayStart(filter.day), utcDayAfter(filter.day))
-          where.push(`updated_at >= $${params.length - 1} AND updated_at < $${params.length}`)
+          const second = params.length
+          where.push(`updated_at >= $${second - 1} AND updated_at < $${second}`)
           return
+        }
         case "beforeDay":
           params.push(utcDayStart(filter.day))
           where.push(`updated_at < $${params.length}`)
@@ -115,11 +115,19 @@ export function appendPgBrowseFilter(
           params.push(utcDayAfter(filter.day))
           where.push(`updated_at >= $${params.length}`)
           return
-        default:
-          // Inclusive of BOTH days: the upper bound is the day AFTER untilDay.
+        case "betweenDays": {
+          // Inclusive of BOTH days.
           params.push(utcDayStart(filter.fromDay), utcDayAfter(filter.untilDay))
-          where.push(`updated_at >= $${params.length - 1} AND updated_at < $${params.length}`)
+          const second = params.length
+          where.push(`updated_at >= $${second - 1} AND updated_at < $${second}`)
           return
+        }
+        default: {
+          const unmapped: never = filter
+          throw new BrowseQueryError(
+            `unhandled updatedAt filter op: ${JSON.stringify((unmapped as BrowseFilter).op)}`,
+          )
+        }
       }
     }
     default: {

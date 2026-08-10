@@ -101,6 +101,12 @@ export function appendSqliteBrowseFilter(
       return
     }
     case "updatedAt": {
+      // Bounds are the fixed-width `YYYY-MM-DDT00:00:00.000Z` form and the comparison
+      // is lexicographic, so a row buckets to the right UTC day only while its stored
+      // updated_at is that same form. Nothing enforces that — MemoryRecord types
+      // updatedAt as a bare string — so `2026-08-02T20:00:00-05:00` lands in the day it
+      // READS as, not the day it is. Both schemas flag the unnormalized column for
+      // ORDER BY; here it decides membership, not just order.
       switch (filter.op) {
         case "onDay":
           where.push("updated_at >= ? AND updated_at < ?")
@@ -114,11 +120,17 @@ export function appendSqliteBrowseFilter(
           where.push("updated_at >= ?")
           params.push(utcDayAfter(filter.day))
           return
-        default:
-          // Inclusive of BOTH days: the upper bound is the day AFTER untilDay.
+        case "betweenDays":
+          // Inclusive of BOTH days.
           where.push("updated_at >= ? AND updated_at < ?")
           params.push(utcDayStart(filter.fromDay), utcDayAfter(filter.untilDay))
           return
+        default: {
+          const unmapped: never = filter
+          throw new BrowseQueryError(
+            `unhandled updatedAt filter op: ${JSON.stringify((unmapped as BrowseFilter).op)}`,
+          )
+        }
       }
     }
     default: {

@@ -659,20 +659,22 @@ export function runMemoryStoreConformance(opts: {
             await s.browse({ filters: [{ field: "confidence", op: "gt", value: 0.5 }] })
           ).records.map((r) => r.id),
         ).toEqual(["high"])
-        expect(
-          (await s.browse({ filters: [{ field: "confidence", op: "gte", value: 0.5 }] })).total,
-        ).toBe(2)
+        // Ids, not counts: at this spread `gte 0.5` and `lte 0.5` both match two rows,
+        // so a count-only assertion passes with the two operators transposed.
+        const gte = await s.browse({ filters: [{ field: "confidence", op: "gte", value: 0.5 }] })
+        expect(gte.records.map((r) => r.id).sort()).toEqual(["high", "mid"])
+        expect(gte.total).toBe(2)
         expect(
           (
             await s.browse({ filters: [{ field: "confidence", op: "lt", value: 0.5 }] })
           ).records.map((r) => r.id),
         ).toEqual(["low"])
-        expect(
-          (await s.browse({ filters: [{ field: "confidence", op: "lte", value: 0.5 }] })).total,
-        ).toBe(2)
-        expect(
-          (await s.browse({ filters: [{ field: "confidence", op: "neq", value: 0.5 }] })).total,
-        ).toBe(2)
+        const lte = await s.browse({ filters: [{ field: "confidence", op: "lte", value: 0.5 }] })
+        expect(lte.records.map((r) => r.id).sort()).toEqual(["low", "mid"])
+        expect(lte.total).toBe(2)
+        const neq = await s.browse({ filters: [{ field: "confidence", op: "neq", value: 0.5 }] })
+        expect(neq.records.map((r) => r.id).sort()).toEqual(["high", "low"])
+        expect(neq.total).toBe(2)
         const between = await s.browse({
           filters: [{ field: "confidence", op: "between", min: 0.2, max: 0.5 }],
         })
