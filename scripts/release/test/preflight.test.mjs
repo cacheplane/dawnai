@@ -23,13 +23,31 @@ permissions:
   contents: read
 jobs:
   release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
       id-token: write
       attestations: write
+    env:
+      NPM_CONFIG_PROVENANCE: "true"
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.17.0
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
       - name: Validate Release Candidate
         run: pnpm ci:validate
       - name: Create Release Pull Request or Publish
@@ -166,6 +184,12 @@ test("preflight accepts only one unconditional exact validate command", async (t
     ["step condition", "if: false\n        run: pnpm ci:validate"],
     ["continue on error", "continue-on-error: true\n        run: pnpm ci:validate"],
     ["custom shell", "shell: echo {0}\n        run: pnpm ci:validate"],
+    [
+      "step environment",
+      "env:\n          BASH_ENV: scripts/bypass.sh\n        run: pnpm ci:validate",
+    ],
+    ["working directory", "working-directory: scripts\n        run: pnpm ci:validate"],
+    ["step timeout", "timeout-minutes: 1\n        run: pnpm ci:validate"],
   ]
   for (const [name, replacement] of cases) {
     await t.test(name, async () => {
@@ -190,6 +214,98 @@ test("preflight accepts only one unconditional exact validate command", async (t
           "    permissions:\n",
           `${property}    permissions:\n`,
         ),
+        npm: npmReader([]),
+        github: githubReader([]),
+      })
+      assert.equal(check(report, "workflow-required-validation").status, "FAIL")
+    })
+  }
+
+  for (const [name, source] of [
+    [
+      "workflow run defaults",
+      WORKFLOW_SOURCE.replace(
+        "permissions:\n",
+        "defaults:\n  run:\n    shell: bash -c {0}\npermissions:\n",
+      ),
+    ],
+    [
+      "workflow environment",
+      WORKFLOW_SOURCE.replace(
+        "permissions:\n",
+        "env:\n  BASH_ENV: scripts/bypass.sh\npermissions:\n",
+      ),
+    ],
+    [
+      "malformed workflow defaults",
+      WORKFLOW_SOURCE.replace("permissions:\n", "defaults: unsafe\npermissions:\n"),
+    ],
+    [
+      "job run defaults",
+      WORKFLOW_SOURCE.replace(
+        "    permissions:\n",
+        "    defaults:\n      run:\n        shell: bash -c {0}\n    permissions:\n",
+      ),
+    ],
+    [
+      "job run working directory",
+      WORKFLOW_SOURCE.replace(
+        "    permissions:\n",
+        "    defaults:\n      run:\n        working-directory: scripts\n    permissions:\n",
+      ),
+    ],
+    [
+      "job environment",
+      WORKFLOW_SOURCE.replace(
+        '      NPM_CONFIG_PROVENANCE: "true"\n',
+        '      NPM_CONFIG_PROVENANCE: "true"\n      BASH_ENV: scripts/bypass.sh\n',
+      ),
+    ],
+    ["untrusted runner", WORKFLOW_SOURCE.replace("runs-on: ubuntu-latest", "runs-on: self-hosted")],
+    [
+      "job container",
+      WORKFLOW_SOURCE.replace(
+        "    runs-on: ubuntu-latest\n",
+        "    runs-on: ubuntu-latest\n    container: node:24\n",
+      ),
+    ],
+    [
+      "dynamic job dependency",
+      WORKFLOW_SOURCE.replace(
+        "    runs-on: ubuntu-latest\n",
+        `    runs-on: ubuntu-latest\n    needs: \${{ inputs.job }}\n`,
+      ),
+    ],
+    [
+      "prevalidation environment",
+      WORKFLOW_SOURCE.replace(
+        "      - name: Install\n        run: pnpm install --frozen-lockfile\n",
+        "      - name: Install\n        env:\n          BASH_ENV: scripts/bypass.sh\n        run: pnpm install --frozen-lockfile\n",
+      ),
+    ],
+    [
+      "prevalidation checkout source",
+      WORKFLOW_SOURCE.replace(
+        "          fetch-depth: 0\n",
+        "          fetch-depth: 0\n          repository: attacker/lookalike\n",
+      ),
+    ],
+    [
+      "publication before validation",
+      `${WORKFLOW_SOURCE.replace(
+        "      - name: Validate Release Candidate\n        run: pnpm ci:validate\n",
+        "",
+      )}      - name: Late Validation\n        run: pnpm ci:validate\n`,
+    ],
+    [
+      "parallel publication job",
+      `${WORKFLOW_SOURCE}  publish:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d\n`,
+    ],
+  ]) {
+    await t.test(name, async () => {
+      const report = await collectReleasePreflight({
+        inventory: releaseInventory(),
+        workflowSource: source,
         npm: npmReader([]),
         github: githubReader([]),
       })

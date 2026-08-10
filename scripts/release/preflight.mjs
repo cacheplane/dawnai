@@ -295,20 +295,22 @@ function requiredValidationCheck(workflow) {
   const job = workflow?.jobs?.release
   const steps = job?.steps
   const matches = Array.isArray(steps)
-    ? steps.filter(
-        (step) =>
-          isRecord(step) &&
-          step.run === "pnpm ci:validate" &&
-          step.if === undefined &&
-          step["continue-on-error"] === undefined &&
-          step.shell === undefined,
-      )
+    ? steps.flatMap((step, index) => (isExactValidateStep(step) ? [index] : []))
     : []
-  const enforcing =
+  const validateIndex = matches[0]
+  const trustedContext =
+    isRecord(workflow) &&
+    exactKeys(workflow.jobs, ["release"]) &&
+    workflow.env === undefined &&
+    workflow.defaults === undefined &&
     isRecord(job) &&
-    job.if === undefined &&
-    job["continue-on-error"] === undefined &&
-    matches.length === 1
+    exactKeys(job, ["env", "permissions", "runs-on", "steps", "timeout-minutes"]) &&
+    job["runs-on"] === "ubuntu-latest" &&
+    job["timeout-minutes"] === 30 &&
+    exactRecord(job.env, { NPM_CONFIG_PROVENANCE: "true" })
+  const trustedPrevalidation =
+    validateIndex !== undefined && steps.slice(0, validateIndex).every(isTrustedPrevalidationStep)
+  const enforcing = trustedContext && matches.length === 1 && trustedPrevalidation
   return enforcing
     ? result(
         "workflow-required-validation",
@@ -320,6 +322,41 @@ function requiredValidationCheck(workflow) {
         "FAIL",
         "Legacy publication does not run the required validation command exactly once.",
       )
+}
+
+function isExactValidateStep(step) {
+  return (
+    isRecord(step) &&
+    step.run === "pnpm ci:validate" &&
+    step.env === undefined &&
+    step.if === undefined &&
+    step["continue-on-error"] === undefined &&
+    step["working-directory"] === undefined &&
+    step.shell === undefined &&
+    step["timeout-minutes"] === undefined
+  )
+}
+
+function isTrustedPrevalidationStep(step) {
+  if (!isRecord(step)) return false
+  if (exactKeys(step, ["name", "run"]))
+    return step.name === "Install" && step.run === "pnpm install --frozen-lockfile"
+  if (!exactKeys(step, ["name", "uses", "with"])) return false
+  if (step.name === "Checkout")
+    return (
+      step.uses === "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" &&
+      exactRecord(step.with, { "fetch-depth": 0 })
+    )
+  if (step.name === "Setup pnpm")
+    return (
+      step.uses === "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271" &&
+      exactRecord(step.with, { version: "10.33.0" })
+    )
+  return (
+    step.name === "Setup Node.js" &&
+    step.uses === "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" &&
+    exactRecord(step.with, { cache: "pnpm", "node-version": "24.17.0" })
+  )
 }
 
 async function npmProvenanceCheck(inventory, reader) {
@@ -514,6 +551,13 @@ function exactRecord(value, expected) {
     keys.length === expectedKeys.length &&
     keys.every((key, index) => key === expectedKeys[index] && value[key] === expected[key])
   )
+}
+
+function exactKeys(value, expectedKeys) {
+  if (!isRecord(value)) return false
+  const keys = Object.keys(value).sort(compareText)
+  const expected = [...expectedKeys].sort(compareText)
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index])
 }
 
 function inlineCode(value) {

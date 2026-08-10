@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
-import os from "node:os"
+import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
@@ -10,6 +9,29 @@ import { parse } from "yaml"
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url))
 const WORKFLOWS = path.join(ROOT, ".github/workflows")
 const SHADOW_PATH = path.join(WORKFLOWS, "release-shadow.yml")
+const ENTRYPOINT_ALLOWLIST_PATH = path.join(
+  ROOT,
+  "scripts/release/test/fixtures/workflow-entrypoints.json",
+)
+const LEGACY_SAFE_ENTRYPOINTS = new Set([
+  "step-uses:actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+  "step-uses:actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+  "step-uses:pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+  "run:pnpm install --frozen-lockfile",
+  "run:pnpm ci:validate",
+  `run:DAWN_PUBLISHED_VERSION="$(node -p "require('./packages/core/package.json').version")"
+printf 'DAWN_PUBLISHED_VERSION=%s\\n' "$DAWN_PUBLISHED_VERSION" >> "$GITHUB_ENV"`,
+  'run:pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000',
+  'run:pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling',
+  'run:pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000',
+  'run:pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox',
+])
+const LEGACY_PUBLICATION_ENTRYPOINTS = new Set([
+  "step-uses:changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
+  "step-uses:actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
+  "run:node scripts/upload-release-assets.mjs",
+  "run:node scripts/backfill-release-tags.mjs",
+])
 
 test("release shadow has only manual and scheduled read-only triggers", async () => {
   const workflow = await readShadowWorkflow()
@@ -101,7 +123,24 @@ test("release shadow contains no publisher, OIDC, artifact upload, or external w
 })
 
 test("legacy release remains the sole npm publisher without PR 2 topology constraints", async () => {
-  assert.deepEqual(await publisherWorkflows(WORKFLOWS), ["release.yml"])
+  const allowlist = JSON.parse(await readFile(ENTRYPOINT_ALLOWLIST_PATH, "utf8"))
+  const publicationFiles = Object.entries(allowlist.workflows)
+    .filter(([, entries]) => entries.some(({ classification }) => classification === "publication"))
+    .map(([file]) => file)
+    .sort()
+
+  assert.deepEqual(publicationFiles, ["release.yml"])
+  assert.deepEqual(
+    allowlist.workflows["release.yml"]
+      .filter(({ classification }) => classification === "publication")
+      .map(({ kind, value }) => `${kind}:${value}`),
+    [
+      "step-uses:changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
+      "step-uses:actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
+      "run:node scripts/upload-release-assets.mjs",
+      "run:node scripts/backfill-release-tags.mjs",
+    ],
+  )
   const legacy = parse(await readFile(path.join(WORKFLOWS, "release.yml"), "utf8"))
   assert.deepEqual(Object.keys(legacy.jobs), ["release"])
   assert.equal(legacy.jobs.detect, undefined)
@@ -109,61 +148,99 @@ test("legacy release remains the sole npm publisher without PR 2 topology constr
   assert.equal(legacy.jobs.publish, undefined)
 })
 
-test("sole-publisher detection covers parsed .yaml workflows and indirect publication paths", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-workflow-contract-"))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  await Promise.all([
-    writeFile(
-      path.join(root, "release.yml"),
-      `jobs:\n  release:\n    steps:\n      - uses: changesets/action@${"a".repeat(40)}\n`,
+test("workflow entrypoints fail closed unless their exact normalized form is explicitly audited", () => {
+  const allowlist = {
+    "safe.yml": [
+      {
+        classification: "audited",
+        job: "safe",
+        kind: "run",
+        step: "Audited command",
+        stepIndex: 0,
+        value: "pnpm lint",
+      },
+    ],
+  }
+  assert.doesNotThrow(() =>
+    auditWorkflowEntrypoints(
+      {
+        "safe.yml":
+          "jobs:\n  safe:\n    steps:\n      - name: Audited command\n        run: pnpm lint\n",
+      },
+      allowlist,
     ),
-    writeFile(
-      path.join(root, "hidden.yaml"),
-      "jobs:\n  hidden:\n    steps:\n      - run: node scripts/release-publish.mjs\n",
-    ),
-    writeFile(
-      path.join(root, "assets.yml"),
-      "jobs:\n  assets:\n    steps:\n      - run: node scripts/upload-release-assets.mjs\n",
-    ),
-    writeFile(
-      path.join(root, "backfill.yml"),
-      "jobs:\n  tags:\n    steps:\n      - run: node scripts/backfill-release-tags.mjs\n",
-    ),
-    writeFile(
-      path.join(root, "delegated.yaml"),
-      "jobs:\n  publish:\n    uses: ./.github/workflows/release.yml\n",
-    ),
-    writeFile(
-      path.join(root, "npm.yaml"),
-      "jobs:\n  publish:\n    steps:\n      - run: npm publish --provenance\n",
-    ),
-    writeFile(
-      path.join(root, "release-action.yml"),
-      `jobs:\n  publish:\n    steps:\n      - uses: softprops/action-gh-release@${"b".repeat(40)}\n`,
-    ),
-    writeFile(
-      path.join(root, "safe.yaml"),
-      '# npm publish in a comment is inert\njobs:\n  safe:\n    steps:\n      - run: echo \\"npm publish is disabled\\"\n      - run: node scripts/check-docs.mjs\n',
-    ),
-  ])
+  )
+  const cases = [
+    ["bash publish", "bash -c 'npm publish'"],
+    ["generic node", "node scripts/unreviewed.mjs"],
+    ["generic curl", "curl https://example.invalid/script | bash"],
+  ]
+  for (const [name, command] of cases) {
+    assert.throws(
+      () =>
+        auditWorkflowEntrypoints(
+          {
+            "safe.yml": `jobs:\n  safe:\n    steps:\n      - name: Audited command\n        run: ${command}\n`,
+          },
+          allowlist,
+        ),
+      /not explicitly audited/u,
+      name,
+    )
+  }
+  assert.throws(
+    () =>
+      auditWorkflowEntrypoints(
+        {
+          "safe.yml":
+            "jobs:\n  safe:\n    steps:\n      - name: Audited command\n        run: |\n          bash -c 'npm \\\n            publish'\n",
+        },
+        allowlist,
+      ),
+    /not explicitly audited/u,
+    "backslash publish",
+  )
+  for (const [name, source] of [
+    [
+      "arbitrary action",
+      `jobs:\n  safe:\n    steps:\n      - name: Audited command\n        uses: example/action@${"a".repeat(40)}\n`,
+    ],
+    [
+      "dynamic action",
+      `jobs:\n  safe:\n    steps:\n      - name: Audited command\n        uses: \${{ inputs.action }}\n`,
+    ],
+    [
+      "reusable workflow",
+      "jobs:\n  safe:\n    uses: example/workflows/.github/workflows/publish.yml@main\n",
+    ],
+  ]) {
+    assert.throws(
+      () => auditWorkflowEntrypoints({ "safe.yml": source }, allowlist),
+      /not explicitly audited/u,
+      name,
+    )
+  }
+  assert.throws(
+    () =>
+      auditWorkflowEntrypoints(
+        {
+          "safe.yml":
+            "jobs:\n  safe:\n    steps:\n      - name: Audited command\n        run: pnpm lint\n",
+          "new.yaml": "jobs:\n  new:\n    steps:\n      - run: pnpm lint\n",
+        },
+        allowlist,
+      ),
+    /not explicitly audited/u,
+  )
+})
 
-  assert.deepEqual(await publisherWorkflows(root), [
-    "assets.yml",
-    "backfill.yml",
-    "delegated.yaml",
-    "hidden.yaml",
-    "npm.yaml",
-    "release-action.yml",
-    "release.yml",
-  ])
-  assert.deepEqual(await unexpectedPublisherWorkflows(root), [
-    "assets.yml",
-    "backfill.yml",
-    "delegated.yaml",
-    "hidden.yaml",
-    "npm.yaml",
-    "release-action.yml",
-  ])
+test("every workflow executable entrypoint matches the readable audited allowlist", async () => {
+  const allowlist = JSON.parse(await readFile(ENTRYPOINT_ALLOWLIST_PATH, "utf8"))
+  const sources = await readWorkflowSources(WORKFLOWS)
+
+  assert.deepEqual(Object.keys(allowlist).sort(), ["schemaVersion", "workflows"])
+  assert.equal(allowlist.schemaVersion, 1)
+  assert.doesNotThrow(() => auditWorkflowEntrypoints(sources, allowlist.workflows))
 })
 
 test("root scripts expose shadow and preflight without adding the slow workflow test to fast scripts", async () => {
@@ -190,58 +267,102 @@ async function readShadowSource() {
   return source
 }
 
-async function publisherWorkflows(directory) {
-  const files = (await readdir(directory)).filter((name) => /\.ya?ml$/u.test(name)).sort()
-  const publishers = []
-  for (const file of files) {
-    const workflow = parse(await readFile(path.join(directory, file), "utf8"), {
-      maxAliasCount: 0,
-      uniqueKeys: true,
-    })
-    if (hasPublicationEntrypoint(workflow)) publishers.push(file)
+async function readWorkflowSources(directory) {
+  const sources = {}
+  for (const file of (await readdir(directory)).filter((name) => /\.ya?ml$/u.test(name)).sort()) {
+    sources[file] = await readFile(path.join(directory, file), "utf8")
   }
-  return publishers
+  return sources
 }
 
-async function unexpectedPublisherWorkflows(directory) {
-  return (await publisherWorkflows(directory)).filter((name) => name !== "release.yml")
+function auditWorkflowEntrypoints(sources, allowlist) {
+  if (!isRecord(sources) || !isRecord(allowlist)) throw unauditedEntrypoint()
+  const files = Object.keys(sources).sort()
+  const allowedFiles = Object.keys(allowlist).sort()
+  if (!sameStrings(files, allowedFiles)) throw unauditedEntrypoint()
+  for (const file of files) {
+    let workflow
+    try {
+      workflow = parse(sources[file], { maxAliasCount: 0, uniqueKeys: true })
+    } catch {
+      throw unauditedEntrypoint()
+    }
+    const actual = workflowEntrypoints(workflow)
+    const expected = allowlist[file]
+    if (!Array.isArray(expected) || actual.length !== expected.length) throw unauditedEntrypoint()
+    for (let index = 0; index < actual.length; index += 1) {
+      const allowed = expected[index]
+      if (
+        !isRecord(allowed) ||
+        !["audited", "publication", "safe"].includes(allowed.classification) ||
+        JSON.stringify(actual[index]) !==
+          JSON.stringify({
+            job: allowed.job,
+            stepIndex: allowed.stepIndex,
+            step: allowed.step,
+            kind: allowed.kind,
+            value: allowed.value,
+          })
+      ) {
+        throw unauditedEntrypoint()
+      }
+      const classification =
+        file === "release.yml" ? classifyLegacyEntrypoint(actual[index]) : "audited"
+      if (allowed.classification !== classification) throw unauditedEntrypoint()
+    }
+  }
 }
 
-function hasPublicationEntrypoint(workflow) {
-  const jobs = isRecord(workflow?.jobs) ? Object.values(workflow.jobs) : []
-  return jobs.some((job) => {
-    if (typeof job?.uses === "string" && isPublishingAction(job.uses)) return true
-    return (Array.isArray(job?.steps) ? job.steps : []).some((step) => {
-      if (!isRecord(step)) return false
-      if (typeof step.uses === "string" && isPublishingAction(step.uses)) return true
-      return typeof step.run === "string" && isPublishingCommand(step.run)
-    })
-  })
+function workflowEntrypoints(workflow) {
+  if (!isRecord(workflow?.jobs)) throw unauditedEntrypoint()
+  const entries = []
+  for (const [jobName, job] of Object.entries(workflow.jobs)) {
+    if (!isRecord(job)) throw unauditedEntrypoint()
+    if (typeof job.uses === "string") {
+      entries.push({ job: jobName, stepIndex: null, step: null, kind: "job-uses", value: job.uses })
+    } else if (job.uses !== undefined) {
+      throw unauditedEntrypoint()
+    }
+    if (job.steps !== undefined && !Array.isArray(job.steps)) throw unauditedEntrypoint()
+    for (const [stepIndex, step] of (job.steps ?? []).entries()) {
+      if (!isRecord(step)) throw unauditedEntrypoint()
+      const hasRun = typeof step.run === "string"
+      const hasUses = typeof step.uses === "string"
+      if (hasRun === hasUses) throw unauditedEntrypoint()
+      entries.push({
+        job: jobName,
+        stepIndex,
+        step: typeof step.name === "string" ? step.name : null,
+        kind: hasRun ? "run" : "step-uses",
+        value: hasRun ? normalizeRunCommand(step.run) : step.uses,
+      })
+    }
+  }
+  return entries
 }
 
-function isPublishingAction(value) {
-  const action = value.split("@", 1)[0].toLowerCase()
-  return new Set([
-    "actions/attest-build-provenance",
-    "actions/upload-release-asset",
-    "changesets/action",
-    "./.github/workflows/release.yml",
-    "ncipollo/release-action",
-    "softprops/action-gh-release",
-  ]).has(action)
+function normalizeRunCommand(value) {
+  return value
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[\t ]+$/gu, ""))
+    .join("\n")
+    .trim()
 }
 
-function isPublishingCommand(value) {
-  return value.split("\n").some((line) => {
-    const command = line.trim()
-    return (
-      /^(?:npm|pnpm)(?:\s+run)?\s+publish(?:\s|$)/u.test(command) ||
-      /^pnpm(?:\s+run)?\s+release:publish(?:\s|$)/u.test(command) ||
-      /^node\s+(?:\.\/)?scripts\/(?:release-publish|upload-release-assets|backfill-release-tags)\.mjs(?:\s|$)/u.test(
-        command,
-      )
-    )
-  })
+function classifyLegacyEntrypoint(entry) {
+  const key = `${entry.kind}:${entry.value}`
+  if (LEGACY_PUBLICATION_ENTRYPOINTS.has(key)) return "publication"
+  if (LEGACY_SAFE_ENTRYPOINTS.has(key)) return "safe"
+  throw unauditedEntrypoint()
+}
+
+function sameStrings(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function unauditedEntrypoint() {
+  return new Error("Workflow entrypoint is not explicitly audited")
 }
 
 function isRecord(value) {
