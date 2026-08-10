@@ -50,11 +50,15 @@ The built-in workspace has two more guards. Paths resolve against the app's work
 
 The optional sandbox moves each thread's filesystem and shell work behind a provider boundary. Dawn ships Docker and Kubernetes providers. The Docker provider drops Linux capabilities, prevents privilege escalation, runs as a non-root user, and uses a read-only root filesystem by default. Its deny-network mode provides the strong egress setting; its allow-mode denylist is best-effort. On Kubernetes, network policy depends on a policy-capable CNI, so the provider warns rather than claiming enforcement it cannot verify.
 
+`release()`, including idle reap, drops warm compute but keeps the per-thread volume and workspace; `destroy()` removes both compute and persisted workspace data.
+
 These layers answer different questions: which tool is available, whether this call should run, and what the allowed call can touch. Use the layers the application needs, and keep their boundaries visible in review. The [Access Control](/docs/access-control) and [Sandbox](/docs/sandbox) guides cover the concrete configuration and provider limits.
 
 ## Make delegation explicit
 
 The 0.4 preview treated subagents as a useful route boundary. The current API closes that preview story with a keyed `subagents` map and a policy owned by the parent:
+
+The migration from 0.4 is breaking: array-form registration must move to keyed `subagents`, and scalar resume bodies must move to the complete, ID-addressed resume shape.
 
 ```ts
 export default agent({
