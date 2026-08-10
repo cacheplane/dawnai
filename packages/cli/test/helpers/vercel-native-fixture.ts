@@ -2829,7 +2829,8 @@ export async function createNativePinnedVercelBoundary(
         cwd: options.jobRoot,
         env: baseEnv,
       })
-      if (result.stderr !== "" || result.stdout.trim() !== "58.9.0") {
+      const expectedStderr = `Vercel CLI 58.9.0 (Node.js ${process.versions.node})\n`
+      if (result.stderr !== expectedStderr || result.stdout !== "58.9.0\n") {
         throw new Error('native Vercel CLI version must be exactly "58.9.0"')
       }
       versionVerified = true

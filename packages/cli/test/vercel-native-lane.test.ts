@@ -101,6 +101,7 @@ import {
 const tempDirs: string[] = []
 const cliPackageRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
 const repoRoot = join(cliPackageRoot, "..", "..")
+const pinnedVercelVersionStderr = `Vercel CLI 58.9.0 (Node.js ${process.versions.node})\n`
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((path) => rm(path, { force: true, recursive: true })))
@@ -1506,7 +1507,11 @@ describe("pinned vercel boundary", () => {
       runChild: async (request) => {
         requests.push(request)
         if (request.args[0] === "--version") {
-          return { exitCode: 0, stderr: "", stdout: "58.9.0\n" }
+          return {
+            exitCode: 0,
+            stderr: pinnedVercelVersionStderr,
+            stdout: "58.9.0\n",
+          }
         }
         if (request.args[0] === "inspect") {
           return {
@@ -1728,7 +1733,11 @@ describe("pinned vercel boundary", () => {
     const prebuiltRoot = join(jobRoot, "prebuilt")
     await mkdir(sourceRoot)
     await mkdir(prebuiltRoot)
-    const makeBoundary = (globalConfigDir: string, stdout = "58.9.1\n") =>
+    const makeBoundary = (
+      globalConfigDir: string,
+      stdout = "58.9.1\n",
+      stderr = pinnedVercelVersionStderr,
+    ) =>
       createNativePinnedVercelBoundary({
         cliPackageRoot,
         databaseUrl: "postgres://native-secret",
@@ -1739,7 +1748,7 @@ describe("pinned vercel boundary", () => {
         parentEnv: process.env,
         projectId: "prj_Test456",
         releaseCredential: "private-release-value",
-        runChild: async () => ({ exitCode: 0, stderr: "", stdout }),
+        runChild: async () => ({ exitCode: 0, stderr, stdout }),
         token: "vercel-token-secret",
       })
 
@@ -1775,6 +1784,13 @@ describe("pinned vercel boundary", () => {
     const boundary = await makeBoundary(globalConfigDir)
     await expect(boundary.assertVersion()).rejects.toThrow(/58\.9\.0/)
 
+    const unexpectedBanner = await makeBoundary(
+      globalConfigDir,
+      "58.9.0\n",
+      `${pinnedVercelVersionStderr}unexpected warning\n`,
+    )
+    await expect(unexpectedBanner.assertVersion()).rejects.toThrow(/58\.9\.0/)
+
     const linkedJobRoot = join(await realpath(await makeTempDir()), "linked-job")
     await symlink(jobRoot, linkedJobRoot, "dir")
     await expect(
@@ -1788,7 +1804,11 @@ describe("pinned vercel boundary", () => {
         parentEnv: process.env,
         projectId: "prj_Test456",
         releaseCredential: "private-release-value",
-        runChild: async () => ({ exitCode: 0, stderr: "", stdout: "58.9.0\n" }),
+        runChild: async () => ({
+          exitCode: 0,
+          stderr: pinnedVercelVersionStderr,
+          stdout: "58.9.0\n",
+        }),
         token: "vercel-token-secret",
       }),
     ).rejects.toThrow(/job root|symlink/i)
@@ -6315,7 +6335,7 @@ describe("native orchestration and evidence closure", () => {
       runChild: async (request) => {
         requests.push(request)
         if (request.args[0] === "--version") {
-          return { exitCode: 0, stderr: "", stdout: "58.9.0\n" }
+          return { exitCode: 0, stderr: pinnedVercelVersionStderr, stdout: "58.9.0\n" }
         }
         if (request.args.includes("--logs")) {
           return { exitCode: 0, stderr: buildLogStderr, stdout: buildLogStdout }
