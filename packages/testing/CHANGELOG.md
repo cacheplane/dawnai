@@ -1,43 +1,5 @@
 # @dawn-ai/testing
 
-## 0.8.22
-
-### Patch Changes
-
-- fc0ec4f: `BrowseQuery.status` and `.kind` now accept a set, not just one value.
-
-  `browse({ status: ["candidate", "superseded"] })` matches any of them. A bare
-  value behaves exactly as before, so every existing caller is unaffected.
-
-  An **empty** set matches nothing rather than everything: "any of none" is false,
-  and reading it as "unfiltered" would show every row to a caller that had just
-  narrowed its filter to zero. Both backends implement it — sqlite via `IN (…)`,
-  Postgres via `= ANY($n::text[])`, where an empty array is already false — and
-  five new contract tests in `runMemoryStoreConformance` hold them to the same
-  reading, including that `total` counts the whole matching set.
-
-  The Inspector's list route accepts the filter repeated (`?status=a&status=b`).
-  One bad value rejects the request rather than being silently dropped. A param
-  that appears zero times is absent, not an empty set, so the empty-set rule is
-  unreachable over HTTP.
-
-- 9f60cfc: Wait for subprocess applications to finish terminating before `close()` or async disposal resolves.
-- 7a9889f: Remove the unsupported `mode` property from `createAgentHarness()` options. The
-  harness remains the in-process testing API; use the existing
-  `createAgentProtocolInjector()` or `createSubprocessApp()` factory when testing
-  those execution boundaries.
-- Updated dependencies [0b1bf7c]
-- Updated dependencies [c8b8489]
-- Updated dependencies [fc0ec4f]
-- Updated dependencies [ba612fd]
-- Updated dependencies [97084c0]
-- Updated dependencies [ba612fd]
-  - @dawn-ai/cli@0.8.22
-  - @dawn-ai/memory@0.8.22
-  - @dawn-ai/core@0.8.22
-  - @dawn-ai/sdk@0.8.22
-  - @dawn-ai/workspace@0.8.22
-
 ## 0.8.21
 
 ### Patch Changes

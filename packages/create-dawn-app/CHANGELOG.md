@@ -1,11 +1,5 @@
 # create-dawn-ai-app
 
-## 0.8.22
-
-### Patch Changes
-
-- @dawn-ai/devkit@0.8.22
-
 ## 0.8.21
 
 ### Patch Changes
