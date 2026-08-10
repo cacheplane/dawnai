@@ -172,14 +172,19 @@ export async function collectReleasePreflight({ inventory, workflowSource, npm, 
       method: "getActionsPermissions",
       operation: "actions-permissions",
       evaluate(value) {
-        if (value?.enabled_actions === "all")
-          return result("github-actions-permissions", "PASS", "Repository Actions are enabled.")
-        if (["selected", "local_only"].includes(value?.enabled_actions))
+        if (
+          !isRecord(value) ||
+          !Object.hasOwn(value, "enabled") ||
+          typeof value.enabled !== "boolean" ||
+          Object.hasOwn(value, "enabled_actions")
+        )
           return result(
             "github-actions-permissions",
-            "WARN",
-            "Repository Actions use a restricted allowlist that requires manual review.",
+            "FAIL",
+            "Repository Actions permissions evidence is malformed or contradictory.",
           )
+        if (value.enabled)
+          return result("github-actions-permissions", "PASS", "Repository Actions are enabled.")
         return result("github-actions-permissions", "FAIL", "Repository Actions are disabled.")
       },
     }),

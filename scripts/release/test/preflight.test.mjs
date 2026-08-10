@@ -223,6 +223,40 @@ test("preflight reports remote ambiguity as unprovable without promoting 404 or 
   }
 })
 
+test("preflight uses the exact normalized repository Actions enabled field", async (t) => {
+  const cases = [
+    ["enabled", { enabled: true }, "PASS"],
+    [
+      "enabled live shape",
+      {
+        enabled: true,
+        allowed_actions: "all",
+        selected_actions_url:
+          "https://api.github.com/repositories/1/actions/permissions/selected-actions",
+      },
+      "PASS",
+    ],
+    ["disabled", { enabled: false }, "FAIL"],
+    ["missing", {}, "FAIL"],
+    ["wrong type", { enabled: "true" }, "FAIL"],
+    ["unsupported alias", { enabled_actions: "all" }, "FAIL"],
+    ["contradictory alias", { enabled: true, enabled_actions: "none" }, "FAIL"],
+  ]
+  for (const [name, value, expected] of cases) {
+    await t.test(name, async () => {
+      const github = githubReader([])
+      github.getActionsPermissions = async () => present("actions-permissions", "value", value)
+      const report = await collectReleasePreflight({
+        inventory: releaseInventory(),
+        workflowSource: WORKFLOW_SOURCE,
+        npm: npmReader([]),
+        github,
+      })
+      assert.equal(check(report, "github-actions-permissions").status, expected)
+    })
+  }
+})
+
 test("preflight accepts only one unconditional exact validate command", async (t) => {
   const cases = [
     ["echo", "run: echo pnpm ci:validate"],
@@ -570,7 +604,7 @@ function githubReader(calls) {
     },
     async getActionsPermissions(input) {
       calls.push(["github.getActionsPermissions", input])
-      return present("actions-permissions", "value", { enabled_actions: "all" })
+      return present("actions-permissions", "value", { enabled: true })
     },
     async getWorkflowPermissions(input) {
       calls.push(["github.getWorkflowPermissions", input])
