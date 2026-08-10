@@ -9,7 +9,8 @@ operating, and deploying Dawn apps
 Rebuild the Dawn documentation around the work an application developer is
 trying to complete. The result should make the shortest path obvious, give
 production decisions a clear home, and replace the largest mixed-purpose pages
-with focused guides that are easier to scan and maintain.
+in the application journey with focused guides that are easier to scan and
+maintain.
 
 The preceding website accuracy sweep corrected the current claims and examples.
 This pull request changes how that accurate material is organized and fills the
@@ -66,12 +67,25 @@ quickstart. A bare `/docs` request will redirect to `/docs/getting-started`, whi
 the header, footer, breadcrumbs, and landing-page calls to action continue to
 use that shortest path directly.
 
-### 2. Keep the navigation data flat
+### 2. Keep the navigation data flat and the visible list task-focused
 
 `DOCS_NAV` will retain its current section-and-item shape. Nested URLs do not
 require a nested navigation model. This keeps the desktop sidebar, mobile menu,
 breadcrumbs, previous/next links, search index, sitemap, generated LLM content,
 and CLI documentation bundle on one shared ordered list.
+
+This pull request will not add package-by-package API leaves to that global
+list. The application-journey pages below bring the total to roughly 60 entries;
+adding the proposed API split would push it to roughly 74 and make Reference a
+22-item package catalogue. API Reference remains one global entry in this pull
+request. A later API-focused change can split it after deciding whether to add
+child navigation or separate the exhaustive page registry from the visible
+sidebar.
+
+The desktop sidebar may continue to scroll the flat list. On mobile, the eight
+top-level sections will become collapsible, with the current section expanded,
+so the menu does not eagerly expose every page in one sheet. This is section
+collapsing over the existing data shape, not a new hierarchy of page items.
 
 The source literals will retain `label` before `href` on the same line because
 the CLI documentation bundler currently parses that shape. Tests will make this
@@ -121,15 +135,16 @@ Existing paths are retained unless marked **new**.
 - **Tools** — `/docs/tools`
 - **State** — `/docs/state`
 - **Workspace Filesystem** — `/docs/workspace`
-- **Memory** — `/docs/memory`: a short chooser for workspace memory, runtime
-  state, and typed long-term memory.
+- **Memory** — `/docs/memory`: the chooser for app-wide `workspace/AGENTS.md`,
+  route-local `memory.md`, and typed long-term `memory.ts`; it retains the
+  concise route-memory setup and links app-wide prompt memory to Workspace.
 - **Long-term Memory** — `/docs/memory/long-term` **new**: define, write,
-  inspect, delete, and choose a store.
-- **Recall and Retrieval** — `/docs/memory/retrieval` **new**: deterministic
-  browse/filter behavior, semantic recall, ranking, and backend differences.
+  govern, delete, and choose a store.
+- **Recall and Retrieval** — `/docs/memory/retrieval` **new**: agent-facing
+  keyword and semantic recall, ranking, time windows, and backend differences.
 - **Episodes** — `/docs/memory/episodes` **new**: episodic extraction and review.
-- **Distillation** — `/docs/memory/distillation` **new**: candidate generation,
-  approval, and lifecycle.
+- **Distillation** — `/docs/memory/distillation` **new**: explicitly invoked
+  consolidation and reflection, their outputs, cost controls, and lifecycle.
 - **Planning** — `/docs/planning`
 - **Skills** — `/docs/skills`
 - **Subagents** — `/docs/subagents`
@@ -160,20 +175,23 @@ Existing paths are retained unless marked **new**.
 
 ### Operate
 
-- **Production Topology** — `/docs/production-topology` **new**: single process,
-  shared stores, replica routing, cancellation, health, and shutdown.
 - **Persistence and Tenancy** — `/docs/persistence` **new**: stored data,
   ownership, deletion, backup, retention, and tenant boundaries.
-- **Security Architecture** — `/docs/security-architecture` **new**: service
-  authentication, middleware coverage, tool and sandbox boundaries, and a
+- **Production Topology** — `/docs/production-topology` **new**: single process,
+  shared stores, replica routing, cancellation, health, and shutdown.
+- **Security Architecture** — `/docs/security-architecture` **new**: outer
+  service authentication, tenant authorization, endpoint coverage, and a
   deployment-target threat matrix.
-- **Access Control** — `/docs/access-control`: verified identity and
-  application policy at the execution boundary.
+- **Access Control** — `/docs/access-control`: the inner control-plane overview
+  for tool scope, human approval, sandboxing, and subagent delegation.
 - **Permissions** — `/docs/permissions`: human-in-the-loop tool and resource
   grants, matching, and persistence.
 - **Retry** — `/docs/retry`
 - **Observability** — `/docs/observability`
 - **Inspector** — `/docs/inspector`
+- **Browse and Manage Memory** — `/docs/memory/browse` **new**: build an
+  inspection or administration surface with deterministic filters, sorting,
+  pagination, totals, and backend parity.
 - **Upgrading** — `/docs/upgrading`
 
 ### Deploy
@@ -202,45 +220,37 @@ value.
 
 ### Recipes
 
-The current recipe paths remain. Navigation labels and page H1s will be made
-consistent, especially the current retry and research-web-UI mismatches. The
-recipe index will group tasks by build, integrate, test, and deploy without
-turning each recipe into a second conceptual guide.
+The exact recipe order is:
+
+- **Recipes Overview** — `/docs/recipes`
+- **Add a Tool** — `/docs/recipes/add-a-tool`
+- **Typed State** — `/docs/recipes/typed-state`
+- **Auth Middleware** — `/docs/recipes/auth-middleware`
+- **Stream Output** — `/docs/recipes/stream-output`
+- **Retry Transient Model Calls** — `/docs/recipes/retry-flaky-tools`
+- **Dispatch from a Route** — `/docs/recipes/dispatch-from-route`
+- **Research Assistant Web UI** — `/docs/recipes/research-web-ui`
+
+Navigation labels and page H1s will use those same names. The index will group
+tasks by build, integrate, test, and deploy without turning each recipe into a
+second conceptual guide.
 
 ### Reference
 
 - **Configuration Reference** — `/docs/configuration`
 - **CLI Reference** — `/docs/cli`
-- **API Reference** — `/docs/api`: app-facing package inventory, package
-  chooser, and API conventions.
-- **SDK API** — `/docs/api/sdk` **new**
-- **Core API** — `/docs/api/core` **new**
-- **CLI Runtime API** — `/docs/api/cli` **new**
-- **LangGraph Adapter API** — `/docs/api/langgraph` **new**
-- **LangChain Adapter API** — `/docs/api/langchain` **new**
-- **AG-UI API** — `/docs/api/ag-ui` **new**
-- **Permissions API** — `/docs/api/permissions` **new**
-- **Workspace API** — `/docs/api/workspace` **new**
-- **Sandbox API** — `/docs/api/sandbox` **new**
-- **Memory API** — `/docs/api/memory` **new**
-- **pgvector Memory API** — `/docs/api/memory-pgvector` **new**
-- **SQLite Storage API** — `/docs/api/sqlite-storage` **new**
-- **Postgres Storage API** — `/docs/api/postgres-storage` **new**
-- **Testing API** — `/docs/api/testing` **new**
-- **Evals API** — `/docs/api/evals` **new**
-- **Vite Plugin API** — `/docs/api/vite-plugin` **new**
-- **Generated Route Types** — `/docs/api/routes` **new**
+- **API Reference** — `/docs/api`: current app-facing package contracts and API
+  conventions, with a package table of contents.
 - **Error Codes** — `/docs/errors`
 - **FAQ** — `/docs/faq`
 
-The API split follows app-facing import surfaces rather than concepts.
-Conceptual behavior stays in Build, Integrate, Test, Operate, and Deploy; these
-pages own signatures, return values, and minimal examples. The API overview
-will also inventory published command, application, scaffold, and internal
-toolchain packages that do not need an import-reference page and point readers
-to CLI Reference, Inspector, Getting Started, or contributor documentation as
-appropriate. That makes exclusions visible instead of silently implying that
-the current partial package list is exhaustive.
+API Reference remains one page for this pull request. It will remove tutorial
+duplication, add a clear package table of contents, and document the stable
+programmatic surfaces required by the new guides—especially the root and
+`/fetch` CLI runtime entries and the memory browse contract. It will distinguish
+those from integration-level or internal packages instead of treating every
+published workspace package as an application-developer API. A package-by-
+package split and full public-package parity are a separately reviewed follow-up.
 
 ## Missing-guide content contracts
 
@@ -263,24 +273,6 @@ The overview will lead with a target matrix:
 Specifying build targets replaces the defaults rather than adding to them. The
 page will give a recommendation first, then link to one focused target guide.
 
-### Production Topology
-
-This guide will start with the safe default: one Dawn process and local SQLite.
-It will then explain that Postgres can share checkpoints, thread metadata, and
-permission decisions, while long-term memory uses its own configured store.
-
-The run gate and cancellation registry are process-local. Multiple replicas
-therefore need shared durable stores plus thread-aware routing or distributed
-serialization and cancellation routing; Dawn does not supply a distributed run
-coordinator. Ordinary path-based load balancing is insufficient for every
-AG-UI request because the thread identifier may be in the request body.
-
-`/healthz` proves only that the process is serving, not that databases, models,
-or sandboxes are ready. The generated Node server does not currently opt into
-the signal handlers used by `dawn start`, so the guide must not claim graceful
-container termination. Agent Protocol disconnects and AG-UI disconnects retain
-their separately documented behavior.
-
 ### Persistence and Tenancy
 
 This guide will inventory checkpoints, thread metadata, permissions, typed
@@ -298,6 +290,25 @@ does not automatically remove global permission decisions or long-term memory.
 Route and thread identifiers are caller input, not proof of identity or tenant
 ownership.
 
+### Production Topology
+
+This guide will start with the safe default: one Dawn process and local SQLite.
+It will then apply the storage distinctions defined in Persistence and Tenancy:
+Postgres can share checkpoints, thread metadata, and permission decisions,
+while long-term memory uses its own configured store.
+
+The run gate and cancellation registry are process-local. Multiple replicas
+therefore need shared durable stores plus thread-aware routing or distributed
+serialization and cancellation routing; Dawn does not supply a distributed run
+coordinator. Ordinary path-based load balancing is insufficient for every
+AG-UI request because the thread identifier may be in the request body.
+
+`/healthz` proves only that the process is serving, not that databases, models,
+or sandboxes are ready. The generated Node server does not currently opt into
+the signal handlers used by `dawn start`, so the guide must not claim graceful
+container termination. Agent Protocol disconnects and AG-UI disconnects retain
+their separately documented behavior.
+
 ### Security Architecture
 
 This guide will state the outer service boundary before the inner controls.
@@ -307,14 +318,36 @@ cancel routes, memory-candidate review routes, and health checks require
 reverse-proxy or platform authentication and network restriction when exposed.
 
 Verified identity must be compared with caller-supplied route, thread, tenant,
-and namespace values. Tool scope, human-in-the-loop permissions, sandboxing,
-and subagent delegation are defense layers, not substitutes for service
-authentication. The sandbox redirects the four workspace-backed tools; authored
-tools continue to execute in the application process unless they implement
-their own isolation. The guide will also call out target differences: generated
-LangSmith entries skip Dawn middleware, Hono build artifacts do not carry
-secrets, and current Postgres-backed records are not application-level
+and namespace values. The guide will summarize where the inner controls stop,
+then link to Access Control for tool scope, human approval, sandboxing, and
+subagent delegation. Those are defense layers, not substitutes for service
+authentication. It will also call out target differences: generated LangSmith
+entries skip Dawn middleware; Hono serializes the configuration into its build
+artifact, so secret values belong in bindings or environment rather than
+`dawn.config.ts`; and current Postgres-backed records are not application-level
 encrypted by Dawn.
+
+### Browse and Manage Memory
+
+This guide will distinguish administrative store browsing from the agent's
+`recall` tool. `MemoryStore.search(MemoryQuery)` powers scoped agent recall and
+ranking. `MemoryStore.browse(BrowseQuery)` powers cross-namespace and
+cross-status inspection or administration surfaces without semantic ranking.
+Because browse is intentionally administrative and can span namespaces, the
+guide will require outer authentication and a server-derived tenant namespace
+constraint; it will not present the store or Dawn's memory-management routes as
+a caller-facing authorization boundary.
+
+The browse contract will cover its closed filter and sort grammar,
+deterministic `id` tie-break, exact namespace versus namespace-prefix matching,
+backend parity, and offset versus cursor pagination. Cursors are opaque and
+bound to the normalized query; callers must hold one `now` value across a
+paginated walk because it affects expiry and the query fingerprint. A page's
+`total` is the whole matching-set count from the same transaction snapshot as
+its records. A continuation is issued when a page fills, so an exact multiple
+of the limit may end with one empty final page. Exact types, validators, cursor
+helpers, limits, and error codes remain in API Reference, including the pure
+`@dawn-ai/memory/browse` subpath that does not load SQLite.
 
 ### Embed the Runtime
 
@@ -356,11 +389,14 @@ moves to the Kubernetes deployment page.
 
 ### Memory
 
-The overview becomes a chooser among runtime state, workspace prompt memory,
-and typed long-term memory, with the shortest L1-to-L3 setup. Storage,
-retrieval, episodes, and distillation move to their focused pages. The current
-public memory browse/query contract must be included
-when the focused reference and retrieval material is extracted.
+The overview remains the three-mechanism chooser: app-wide
+`workspace/AGENTS.md`, route-local `memory.md`, and typed long-term `memory.ts`.
+It retains the complete, concise route-memory setup; app-wide prompt-memory
+details remain canonical in Workspace. Long-term storage and governance,
+agent-facing recall, episodes, and explicitly invoked distillation move to
+their focused pages. Administrative `browse(BrowseQuery)` is kept separate from
+agent recall and moves to Browse and Manage Memory, with its exact types and
+helpers also represented in API Reference.
 
 ### Agent testing
 
@@ -378,11 +414,12 @@ duplicating those guides.
 
 ### API
 
-The monolith becomes an app-facing package index and shared conventions page.
-Each existing top-level package section moves to its corresponding package
-page. Missing app-facing packages receive focused pages based on their public
-exports and package tests rather than inferred behavior. Generated
-`dawn:routes` types move to Generated Route Types.
+The monolith remains at `/docs/api` with all existing headings and fragments.
+It gets a package table of contents, sheds tutorial prose now owned by focused
+guides, and adds the stable CLI embedding and memory browse contracts needed by
+this redesign. It will explicitly label integration-level and internal
+surfaces. A package-page split is deferred rather than adding dozens of visible
+Reference entries or a 97-heading fragment redirect table to this pull request.
 
 ## Canonical ownership and cross-links
 
@@ -393,14 +430,17 @@ Each recurring topic has one canonical owner:
 | Deployment target choice | Deployment Options | State target-specific limits and link back |
 | Replica behavior and shutdown | Production Topology | Include only the local implication |
 | Stored data and deletion | Persistence and Tenancy | Name the store and link to the lifecycle matrix |
-| Service authentication boundary | Security Architecture | Show task-specific policy examples |
-| Execution middleware | Middleware and Access Control | Link to the outer security boundary |
+| Service authentication and tenant authorization | Security Architecture | Link to the outer boundary from exposed surfaces |
+| Inner agent action controls | Access Control | Tool scope, Permissions, Sandbox, and Subagents own their mechanics |
+| Execution middleware mechanics | Middleware | Access Control summarizes; Security states its coverage limit |
 | Human approval decisions | Permissions | Mention the gate, not re-explain matching/persistence |
 | Sandbox isolation | Execution Sandbox | Deployment pages cover installation only |
 | Kubernetes sandbox operations | Kubernetes Sandbox | Chart README owns exhaustive values |
-| Memory mechanism choice | Memory | Focused pages own detailed lifecycle and retrieval |
+| Memory mechanism choice and route-local prompt memory | Memory | Workspace owns app-wide prompt memory; focused pages own L3 detail |
+| Agent memory recall and ranking | Recall and Retrieval | Other pages show only the relevant call |
+| Administrative memory browse | Browse and Manage Memory | Inspector and API Reference link to its contract |
 | Agent Protocol wire contract | Agent Protocol | Dev Server shows only a first invocation |
-| Exact exported types/functions | Package API pages | Concept guides use the smallest relevant signature |
+| Exact exported types/functions | API Reference | Concept guides use the smallest relevant signature |
 
 Every moved section will be edited at both ends: the old page gets a concise
 summary and link, and the new canonical page gets the full explanation. Related
@@ -410,9 +450,10 @@ links will be checked for loops and renamed labels.
 
 ### Existing page paths
 
-All existing paths remain valid. There are no page renames or path redirects in
-this pull request. New nested paths receive explicit Next.js page wrappers,
-metadata, and copy/edit source mappings just like current pages.
+No existing page path is removed or renamed. The only route-level redirect is
+the new bare `/docs` convenience route to `/docs/getting-started`. New nested
+paths receive explicit Next.js page wrappers, metadata, and copy/edit source
+mappings just like current pages.
 
 ### Moved non-API headings
 
@@ -430,17 +471,11 @@ service-account headings.
 
 ### API fragments
 
-Keeping dozens of empty API headings would defeat the split. `/docs/api` will
-therefore include a small legacy-fragment redirect map. On initial load and
-hash changes it will replace old package and member fragments with their new
-package-page destination. The API overview remains usable without JavaScript
-through visible package links; JavaScript supplies backward compatibility for
-historical deep links.
-
-Tests will enumerate every heading removed from the old API page and require a
-destination whose page and fragment exist. Existing inbound anchors such as
-`#definememorydef`, `#modelproviderid`, and `#dawn-aipostgres-storage` are part
-of that contract.
+The API page is not split in this pull request, so its current package and
+member fragments remain on the same path. Editorial pruning must retain their
+headings, including inbound anchors such as `#definememorydef`,
+`#modelproviderid`, and `#dawn-aipostgres-storage`. The later API-split design
+must solve all legacy fragments before moving any section.
 
 ### Search, sitemap, LLM output, and CLI bundle
 
@@ -480,6 +515,11 @@ screens. The implementation will fix inline-code wrapping in the shared MDX
 style at narrow widths instead of inserting content-specific line breaks.
 Block code and wide tables keep intentional horizontal scrolling.
 
+The mobile docs menu will render the eight top-level sections as accessible
+collapsible groups and expand the active section. This reduces the initial menu
+height without changing page hierarchy or hiding pages from search, sitemap,
+generated docs, or direct navigation.
+
 Visual review will cover at least 1440-by-1000 desktop and 390-by-844 mobile
 layouts, including the sidebar or mobile menu, long navigation labels, code,
 tables, inline commands, breadcrumbs, search results, and previous/next links.
@@ -496,9 +536,10 @@ structure and highest-risk claims. The completed change must verify:
 - two-way coverage between navigation, MDX content, and route wrappers;
 - breadcrumbs and previous/next behavior for new nested paths;
 - every internal page and fragment link;
-- every removed API fragment's redirect destination;
+- retention of every existing API fragment while the monolith remains;
 - nested-page inclusion in search, sitemap, `llms-full.txt`, and the CLI docs
   bundle;
+- mobile section expansion, active-section behavior, and keyboard semantics;
 - current target, health, shutdown, persistence, authentication, sandbox, and
   embedding limitations described above;
 - absence of duplicate canonical sections left behind by the splits;
@@ -517,13 +558,14 @@ pages.
 The later implementation plan will divide the pull request into reviewable
 stages:
 
-1. Add reusable structural coverage for the current tree and the shared
-   responsive fix.
-2. Add the missing production, persistence, security, embedding, and deployment
+1. Add reusable structural coverage for the current tree, mobile section
+   collapsing, and the shared responsive fix.
+2. Add the missing persistence, production, security, embedding, and deployment
    target guides together with their route wrappers and navigation entries.
 3. Split Dev Server, Sandbox, Memory, Agent Testing, and Configuration while
    preserving compatibility headings.
-4. Split API reference pages and add the complete legacy-fragment redirect map.
+4. Tighten the API monolith, retain its fragments, and add the embedding and
+   memory-browse contracts required by the new guides.
 5. Reconcile cross-links, generated discovery surfaces, and final editorial
    duplication.
 6. Run independent content review, browser review, and the full validation
@@ -541,6 +583,9 @@ content.
 - Renaming or removing existing documentation URLs.
 - A new hierarchical or collapsible navigation data model.
 - A separate landing page for every journey section.
+- Package-by-package API pages, a legacy API-fragment redirect map, and full
+  public-package reference parity. Those require a separate sidebar/registry
+  decision and focused compatibility review.
 - A generated TypeScript API-doc system or a generated configuration-schema
   reference.
 - Splitting every `dawn.config.ts` option into its own page.
@@ -553,9 +598,9 @@ content.
 
 The redesign is complete when an application developer can follow the sidebar
 from first app through production deployment, each production concern has one
-discoverable canonical guide, the largest mixed-purpose pages have focused
-successors, and all existing page URLs and important deep links continue to
-work.
+discoverable canonical guide, the largest mixed-purpose journey pages have
+focused successors, and all existing page URLs and important deep links
+continue to work.
 
 No guide may overstate Dawn's current production guarantees. Navigation,
 search, sitemap, machine-readable docs, and the CLI bundle must agree on the
