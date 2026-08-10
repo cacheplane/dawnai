@@ -38,6 +38,15 @@ function openDb(path: string): DatabaseSync {
   return db
 }
 
+// Roll back best-effort — a failing ROLLBACK must not mask the original error.
+function rollbackQuietly(db: DatabaseSync): void {
+  try {
+    db.exec("ROLLBACK")
+  } catch {
+    // Swallow: propagate the root-cause error from the caller's catch instead.
+  }
+}
+
 interface Migration {
   readonly version: number
   readonly up: string
@@ -523,22 +532,36 @@ export function sqliteMemoryStore(opts: {
       // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
       const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
-      // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
-      // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.
-      const rows = db
-        .prepare(
-          `SELECT id, kind, namespace, content, data, source, confidence, tags, status,
-                  supersedes, created_at, updated_at, effective_at, expires_at
-           FROM memories ${rowsClause} ORDER BY ${orderSql} LIMIT ? OFFSET ?`,
-        )
-        .all(...params, limit, offset) as Record<string, unknown>[]
-      // Rows and total are two separate unwrapped statements; a concurrent write
-      // between them can momentarily skew total vs records. One snapshot: Task 15.
-      const total = (
-        db
-          .prepare(`SELECT COUNT(*) AS n FROM memories ${countClause}`)
-          .get(...params.slice(0, filterParamCount)) as { n: number }
-      ).n
+      // One WAL read snapshot across both statements, so `records` and `total` can
+      // never describe different versions of the table. Cost is ~0 — there is no
+      // write here — and nothing awaits between the two, so no other caller can
+      // interleave on this single connection.
+      // COUNT(*) OVER () would collapse the pair to one statement and was measured and
+      // rejected: the window aggregate materializes the entire filtered set (439 ms vs
+      // 5.3 ms at 1M rows) and destroys the lazy top-k path for the rows themselves.
+      db.exec("BEGIN DEFERRED")
+      let rows: Record<string, unknown>[]
+      let total: number
+      try {
+        // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
+        // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.
+        rows = db
+          .prepare(
+            `SELECT id, kind, namespace, content, data, source, confidence, tags, status,
+                    supersedes, created_at, updated_at, effective_at, expires_at
+             FROM memories ${rowsClause} ORDER BY ${orderSql} LIMIT ? OFFSET ?`,
+          )
+          .all(...params, limit, offset) as Record<string, unknown>[]
+        total = (
+          db
+            .prepare(`SELECT COUNT(*) AS n FROM memories ${countClause}`)
+            .get(...params.slice(0, filterParamCount)) as { n: number }
+        ).n
+        db.exec("COMMIT")
+      } catch (err) {
+        rollbackQuietly(db)
+        throw err
+      }
       const records = rows.map(rowToRecord)
       const last = records.at(-1)
       // Issued whenever the window FILLED, rather than over-fetching `limit + 1` to

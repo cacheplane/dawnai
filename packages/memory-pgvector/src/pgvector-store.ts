@@ -19,7 +19,7 @@ import {
   type VectorRankingOptions,
   validateBrowseQuery,
 } from "@dawn-ai/memory"
-import { Pool, type PoolClient } from "pg"
+import { Pool, type PoolClient, type QueryResult } from "pg"
 import pgvector from "pgvector/pg"
 import { appendPgBrowseFilter, pgKeysetWhere } from "./browse-sql.js"
 import {
@@ -543,18 +543,34 @@ export function pgvectorMemoryStore(opts: {
       // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
       const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
-      // Rows and total are two separate round-trips; a concurrent write between
-      // them can momentarily skew total vs records — acceptable for a dev
-      // inspection tool (no transaction needed). One snapshot: Task 15.
-      const rowsRes = await pool.query(
-        `SELECT ${RECORD_COLUMNS} FROM ${T} ${rowsClause}
-         ORDER BY ${orderSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-        [...params, limit, offset],
-      )
-      const totalRes = await pool.query(
-        `SELECT COUNT(*)::int AS n FROM ${T} ${countClause}`,
-        params.slice(0, filterParamCount),
-      )
+      // READ COMMITTED takes a fresh snapshot per STATEMENT, which is exactly the skew
+      // we are removing — so this pair runs on one client at REPEATABLE READ.
+      // COUNT(*) OVER () would collapse the pair to one statement and was measured and
+      // rejected: the window aggregate materializes the entire filtered set (439 ms vs
+      // 5.3 ms at 1M rows) and destroys the lazy top-k path for the rows themselves.
+      const client = await pool.connect()
+      // Named QueryResult, not ReturnType<typeof client.query>: query's last overload
+      // is the callback form, which returns void.
+      let rowsRes: QueryResult
+      let totalRes: QueryResult
+      try {
+        await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ")
+        rowsRes = await client.query(
+          `SELECT ${RECORD_COLUMNS} FROM ${T} ${rowsClause}
+           ORDER BY ${orderSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+          [...params, limit, offset],
+        )
+        totalRes = await client.query(
+          `SELECT COUNT(*)::int AS n FROM ${T} ${countClause}`,
+          params.slice(0, filterParamCount),
+        )
+        await client.query("COMMIT")
+      } catch (err) {
+        await rollbackQuietly(client)
+        throw err
+      } finally {
+        client.release()
+      }
       const records = (rowsRes.rows as Record<string, unknown>[]).map(rowToRecord)
       const last = records.at(-1)
       // Issued whenever the window FILLED, rather than over-fetching `limit + 1` to

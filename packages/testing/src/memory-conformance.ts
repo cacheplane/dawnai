@@ -1336,5 +1336,31 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("browse reads records and total from ONE snapshot, even under concurrent writes", async () => {
+      const s = await makeStore()
+      try {
+        for (let i = 0; i < 60; i += 1) {
+          await s.put(
+            rec({ id: `r${String(i).padStart(2, "0")}`, namespace: "ns", content: `r${i}` }),
+          )
+        }
+        // Two non-transactional statements can count 30 and return 60 (or the
+        // reverse) when a delete lands between them, and the UI then renders
+        // "60 loaded of 30 matching". Inside one snapshot that is unrepresentable.
+        const [page] = await Promise.all([
+          s.browse({ limit: 1000 }),
+          (async () => {
+            for (let i = 0; i < 30; i += 1) await s.delete(`r${String(i).padStart(2, "0")}`)
+          })(),
+        ])
+        expect(page.records.length).toBe(page.total)
+        // And the model converges on the next read.
+        const after = await s.browse({ limit: 1000 })
+        expect(after.total).toBe(30)
+        expect(after.records.length).toBe(30)
+      } finally {
+        await close?.(s)
+      }
+    })
   })
 }
