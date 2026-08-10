@@ -1079,8 +1079,7 @@ function buildRouteTable(ctx: {
     // GET /threads/:thread_id/pending_interrupts — durable HITL prompts
     // ------------------------------------------------------------------
     // Not a collision with GET /threads/:thread_id: that pattern's
-    // [^/?#]+ capture cannot span a slash. Dispatch filters on method first,
-    // so sharing a path prefix with the POST endpoints is safe too.
+    // [^/?#]+ capture cannot span a slash.
     {
       handle: async (request, params) =>
         handleApPendingInterruptsRequest({
@@ -1625,8 +1624,8 @@ async function handleApPendingInterruptsRequest(options: {
   // unknown thread, so a client branches on one code across the AP surface.
   // Thread existence is therefore observable BEFORE any middleware runs — the
   // same as POST /resume, which answers 404 long before it calls
-  // runMiddleware. Deliberate, and fixed by §1 of the spec; the interrupt
-  // payloads themselves stay behind the gate added in the next task.
+  // runMiddleware. Deliberate, and mandated by §1 of the spec; the interrupt
+  // payloads themselves stay behind the middleware gate below.
   const thread = await threadsStore.getThread(threadId)
   if (!thread) {
     return Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {

@@ -3,7 +3,12 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { RunnableConfig } from "@langchain/core/runnables"
 import { MemorySaver } from "@langchain/langgraph"
-import type { BaseCheckpointSaver, CheckpointTuple } from "@langchain/langgraph-checkpoint"
+import {
+  type BaseCheckpointSaver,
+  type CheckpointPendingWrite,
+  type CheckpointTuple,
+  emptyCheckpoint,
+} from "@langchain/langgraph-checkpoint"
 import { afterEach, describe, expect, it } from "vitest"
 import { createAimock } from "../../testing/dist/aimock-runner.js"
 import { script } from "../../testing/dist/fixture-builder.js"
@@ -188,15 +193,17 @@ async function readPendingInterruptsBody(
 }
 
 // ---------------------------------------------------------------------------
-// A checkpointer whose pending writes are unaddressable: the outer id is not a
-// 32-hex resume key, so the parse yields the interrupt AND sets `malformed`.
-// Scoped to one thread id, and armed only after the seeding run, so nothing
-// the run itself reads is ever handed a synthetic tuple.
+// A checkpointer that reports one unaddressable pending write: the outer id is
+// not a 32-hex resume key, so the parse yields the interrupt AND sets
+// `malformed`. The seeding route is a plain graph, which never checkpoints, so
+// the base tuple here is genuinely absent — the write is grafted onto an empty
+// checkpoint rather than onto a real one. That is enough for this endpoint,
+// which reads only `pendingWrites`.
 // ---------------------------------------------------------------------------
 
 const MALFORMED_THREAD_ID = "t-malformed"
 
-const MALFORMED_WRITE = [
+const MALFORMED_WRITE: CheckpointPendingWrite = [
   "33a12321-3ec2-56a7-b4d7-0337886c4386",
   "__interrupt__",
   { id: "not-a-resume-key", value: { interruptId: "perm-malformed" } },
@@ -210,7 +217,12 @@ class MalformedPendingWritesSaver extends MemorySaver {
   override async getTuple(config: RunnableConfig): Promise<CheckpointTuple | undefined> {
     const tuple = await super.getTuple(config)
     if (!this.armed || config.configurable?.thread_id !== MALFORMED_THREAD_ID) return tuple
-    return { ...tuple, config, pendingWrites: [MALFORMED_WRITE] } as unknown as CheckpointTuple
+    return {
+      checkpoint: tuple?.checkpoint ?? emptyCheckpoint(),
+      config,
+      ...(tuple?.metadata ? { metadata: tuple.metadata } : {}),
+      pendingWrites: [MALFORMED_WRITE],
+    }
   }
 }
 
@@ -233,8 +245,8 @@ describe("GET /threads/:thread_id/pending_interrupts", () => {
     const response = await handler.fetch(pendingInterruptsRequest(threadId))
 
     expect(response.status).toBe(200)
-    // Checkpoint state changes under the client; a cached answer would show a
-    // prompt that has already been resolved.
+    // Pinned on the success path specifically: this is where a cache would be
+    // tempting and where a stale answer would be wrong.
     expect(response.headers.get("cache-control")).toBe("no-store")
     expect(await response.json()).toEqual({ interrupts: [] })
   }, 30_000)
