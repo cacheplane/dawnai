@@ -26,6 +26,87 @@ function writeToolFile(directory: string, name: string, source: string): void {
   writeFileSync(join(toolsDirectory, `${name}.ts`), source)
 }
 
+function compileScenarioDeclaration(options: {
+  readonly routeDir: string
+  readonly pathname: string
+  readonly tools: RouteToolTypes["tools"]
+  readonly consumerSource?: string
+}): {
+  readonly diagnostics: ReadonlyArray<{
+    readonly mode: string
+    readonly code: number
+    readonly message: string
+  }>
+} {
+  const scenarioTypesFile = join(tempDir, ".dawn", SCENARIO_TYPES_FILE)
+  const manifest: RouteManifest = {
+    appRoot: tempDir,
+    routes: [
+      {
+        id: options.pathname,
+        pathname: options.pathname,
+        kind: "workflow",
+        entryFile: join(options.routeDir, "index.ts"),
+        routeDir: options.routeDir,
+        segments: [{ kind: "static", value: options.pathname.slice(1) }],
+      },
+    ],
+  }
+  const routeTools: RouteToolTypes[] = [{ pathname: options.pathname, tools: options.tools }]
+  const content = renderScenarioTypes(manifest, routeTools)
+
+  mkdirSync(join(tempDir, ".dawn"), { recursive: true })
+  writeFileSync(join(tempDir, "package.json"), '{"type":"module"}\n')
+  writeFileSync(scenarioTypesFile, content)
+  const sdkTestingStub = join(tempDir, "sdk-testing.d.ts")
+  writeFileSync(
+    sdkTestingStub,
+    'declare module "@dawn-ai/sdk/testing" { interface RouteScenarioMap {} }\n',
+  )
+
+  const rootNames = [scenarioTypesFile, sdkTestingStub]
+  if (options.consumerSource !== undefined) {
+    const consumerFile = join(tempDir, "consumer.ts")
+    writeFileSync(consumerFile, options.consumerSource)
+    rootNames.push(consumerFile)
+  }
+
+  const modes: ReadonlyArray<{ readonly name: string; readonly options: ts.CompilerOptions }> = [
+    {
+      name: "Bundler",
+      options: {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        strict: true,
+        noEmit: true,
+        lib: ["lib.es2022.d.ts"],
+      },
+    },
+    {
+      name: "NodeNext",
+      options: {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.NodeNext,
+        moduleResolution: ts.ModuleResolutionKind.NodeNext,
+        strict: true,
+        noEmit: true,
+        lib: ["lib.es2022.d.ts"],
+      },
+    },
+  ]
+
+  const diagnostics = modes.flatMap((mode) =>
+    ts.getPreEmitDiagnostics(ts.createProgram(rootNames, mode.options)).map((diagnostic) => ({
+      mode: mode.name,
+      code: diagnostic.code,
+      message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+    })),
+  )
+
+  return { diagnostics }
+}
+
 describe("analyzeRouteTools", () => {
   test("analyzes the effective sorted tool set with one compiler program", () => {
     const routeDir = join(tempDir, "route")
@@ -206,41 +287,11 @@ export default async function search(input: ImportedInput): Promise<ImportedOutp
       sharedToolsDir: undefined,
       typeReferenceFileName: scenarioTypesFile,
     })
-    const manifest: RouteManifest = {
-      appRoot: tempDir,
-      routes: [
-        {
-          id: "/search",
-          pathname: "/search",
-          kind: "workflow",
-          entryFile: join(routeDir, "index.ts"),
-          routeDir,
-          segments: [{ kind: "static", value: "search" }],
-        },
-      ],
-    }
-    const routeTools: RouteToolTypes[] = [{ pathname: "/search", tools }]
-
-    mkdirSync(join(tempDir, ".dawn"), { recursive: true })
-    writeFileSync(scenarioTypesFile, renderScenarioTypes(manifest, routeTools))
-    const sdkTestingStub = join(tempDir, "sdk-testing.d.ts")
-    writeFileSync(
-      sdkTestingStub,
-      'declare module "@dawn-ai/sdk/testing" { interface RouteScenarioMap {} }\n',
-    )
-
-    const program = ts.createProgram([scenarioTypesFile, sdkTestingStub], {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      strict: true,
-      noEmit: true,
-      lib: ["lib.es2022.d.ts"],
+    const { diagnostics } = compileScenarioDeclaration({
+      routeDir,
+      pathname: "/search",
+      tools,
     })
-    const diagnostics = ts.getPreEmitDiagnostics(program).map((diagnostic) => ({
-      code: diagnostic.code,
-      message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
-    }))
 
     expect({
       name: tools[0]?.name,
@@ -252,8 +303,8 @@ export default async function search(input: ImportedInput): Promise<ImportedOutp
       diagnostics,
     }).toEqual({
       name: "search",
-      inputType: 'import("../src/app/search/types").ImportedInput',
-      outputType: 'import("../src/app/search/types").ImportedOutput',
+      inputType: 'Parameters<typeof import("../src/app/search/tools/search.js").default>[0]',
+      outputType: 'Awaited<ReturnType<typeof import("../src/app/search/tools/search.js").default>>',
       parameter: {
         kind: "object",
         properties: [{ name: "query", type: { kind: "string" }, optional: false }],
@@ -261,5 +312,109 @@ export default async function search(input: ImportedInput): Promise<ImportedOutp
       containsAbsolutePath: false,
       diagnostics: [],
     })
+  })
+
+  test("keeps private local types reachable through the source module", () => {
+    const routeDir = join(tempDir, "src", "app", "local")
+    writeToolFile(
+      routeDir,
+      "local",
+      `
+interface LocalInput { query: string; child?: LocalInput }
+interface LocalOutput { matches: number; child?: LocalOutput }
+export default async function local(input: LocalInput): Promise<LocalOutput> {
+  return { matches: input.query.length }
+}
+`,
+    )
+
+    const scenarioTypesFile = join(tempDir, ".dawn", SCENARIO_TYPES_FILE)
+    const tools = analyzeRouteToolsProduction({
+      routeDir,
+      sharedToolsDir: undefined,
+      typeReferenceFileName: scenarioTypesFile,
+    })
+    const { diagnostics } = compileScenarioDeclaration({
+      routeDir,
+      pathname: "/local",
+      tools,
+    })
+
+    expect({
+      inputType: tools[0]?.inputType,
+      outputType: tools[0]?.outputType,
+      containsAbsolutePath:
+        tools[0]?.inputType.includes(tempDir) || tools[0]?.outputType.includes(tempDir),
+      diagnostics,
+    }).toEqual({
+      inputType: 'Parameters<typeof import("../src/app/local/tools/local.js").default>[0]',
+      outputType: 'Awaited<ReturnType<typeof import("../src/app/local/tools/local.js").default>>',
+      containsAbsolutePath: false,
+      diagnostics: [],
+    })
+  })
+
+  test("keeps zero-argument portable tool inputs void", () => {
+    const routeDir = join(tempDir, "src", "app", "ping")
+    writeToolFile(
+      routeDir,
+      "ping",
+      'export default async function ping(): Promise<string> { return "pong" }',
+    )
+
+    const tools = analyzeRouteToolsProduction({
+      routeDir,
+      sharedToolsDir: undefined,
+      typeReferenceFileName: join(tempDir, ".dawn", SCENARIO_TYPES_FILE),
+    })
+    const { diagnostics } = compileScenarioDeclaration({
+      routeDir,
+      pathname: "/ping",
+      tools,
+      consumerSource: `
+import type { RouteScenarioMap } from "@dawn-ai/sdk/testing"
+declare const ping: RouteScenarioMap["/ping"]["tools"]["ping"]
+const result: Promise<string> = ping()
+void result
+`,
+    })
+
+    expect(tools[0]?.inputType).toBe("void")
+    expect(diagnostics).toEqual([])
+  })
+
+  test("keeps the first overload as the portable tool signature", () => {
+    const routeDir = join(tempDir, "src", "app", "overloaded")
+    writeToolFile(
+      routeDir,
+      "lookup",
+      `
+function lookup(input: string): Promise<number>
+function lookup(input: number): Promise<string>
+async function lookup(input: string | number): Promise<string | number> {
+  return typeof input === "string" ? input.length : String(input)
+}
+export default lookup
+`,
+    )
+
+    const tools = analyzeRouteToolsProduction({
+      routeDir,
+      sharedToolsDir: undefined,
+      typeReferenceFileName: join(tempDir, ".dawn", SCENARIO_TYPES_FILE),
+    })
+    const { diagnostics } = compileScenarioDeclaration({
+      routeDir,
+      pathname: "/overloaded",
+      tools,
+      consumerSource: `
+import type { RouteScenarioMap } from "@dawn-ai/sdk/testing"
+declare const lookup: RouteScenarioMap["/overloaded"]["tools"]["lookup"]
+const result: Promise<number> = lookup("query")
+void result
+`,
+    })
+
+    expect(diagnostics).toEqual([])
   })
 })
