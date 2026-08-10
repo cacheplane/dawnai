@@ -108,7 +108,7 @@ Dockerfile placement is marker-aware:
 - If the root file still contains Dawn's generated marker, the next build refreshes it in place.
 - If the root file is user-authored or the marker was removed, Dawn preserves it and writes the generated file to `.dawn/build/Dockerfile`.
 
-Do not add an older blueprint marker or manually recreate the generated contents. Dawn's marker above is the only marker that controls refresh behavior.
+Do not add the legacy `# dawn-blueprint: docker@2` marker or manually recreate the generated contents. Dawn's generated-file marker above is the only marker that controls refresh behavior.
 
 ## Keep the build artifact in the Docker context
 
