@@ -48,7 +48,7 @@
       },
       {
         "name": "typegen",
-        "renderedBytes": 415,
+        "renderedBytes": 468,
         "status": "passed"
       },
       {
@@ -101,5 +101,6 @@
       }
     ]
   },
-  "typegenOutput": "declare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/hello/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/hello/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {\n    \"/hello/[tenant]\": {\n      readonly greet: (input: { readonly tenant: string; }) => Promise<{ name: string; plan: string; }>;\n    };\n  }\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n\n  export interface DawnRouteState {\n    \"/hello/[tenant]\": {\n      readonly context: string;\n    };\n  }\n\n  export type RouteState<P extends DawnRoutePath> = DawnRouteState[P];\n}\n"
+  "scenarioTypegenOutput": "import \"@dawn-ai/sdk/testing\"\n\ndeclare module \"@dawn-ai/sdk/testing\" {\n  interface RouteScenarioMap {\n    \"/hello/[tenant]\": {\n      readonly tools: {\n        readonly \"greet\": (input: Parameters<typeof import(\"../src/app/(public)/hello/[tenant]/tools/greet.js\").default>[0]) => Promise<Awaited<ReturnType<typeof import(\"../src/app/(public)/hello/[tenant]/tools/greet.js\").default>>>\n      }\n    }\n  }\n}\n",
+  "typegenOutput": "/// <reference path=\"./scenarios.generated.d.ts\" />\n\ndeclare module \"dawn:routes\" {\n  export type DawnRoutePath = \"/hello/[tenant]\";\n\n  export interface DawnRouteParams {\n  \"/hello/[tenant]\": { tenant: string };\n  }\n\n  export interface DawnRouteTools {\n    \"/hello/[tenant]\": {\n      readonly greet: (input: Parameters<typeof import(\"../src/app/(public)/hello/[tenant]/tools/greet.js\").default>[0]) => Promise<Awaited<ReturnType<typeof import(\"../src/app/(public)/hello/[tenant]/tools/greet.js\").default>>>;\n    };\n  }\n\n  export type RouteTools<P extends DawnRoutePath> = DawnRouteTools[P];\n\n  export interface DawnRouteState {\n    \"/hello/[tenant]\": {\n      readonly context: string;\n    };\n  }\n\n  export type RouteState<P extends DawnRoutePath> = DawnRouteState[P];\n}\n"
 }

@@ -20,7 +20,11 @@ import { MemorySaver } from "@langchain/langgraph"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { __resetMaterializedAgentsForTests, materializeAgentGraph } from "../src/agent-adapter.js"
+import {
+  __resetMaterializedAgentsForTests,
+  materializeAgentGraph,
+  streamAgent,
+} from "../src/agent-adapter.js"
 
 /** Installs the mocks and returns the compile counter. */
 function countCompilations(): { calls: () => number } {
@@ -108,6 +112,96 @@ describe("compiled-graph cache keying", () => {
 
     // A sandboxed graph closes over ONE thread's fs/exec backends; sharing it
     // across threads is the one leak a sandbox must never allow.
+    expect(counter.calls()).toBe(2)
+  })
+
+  it("does not reuse an ordinary cached graph for bypassed tools", async () => {
+    const counter = countCompilations()
+    const descriptor = agent({ model: "gpt-5-mini", systemPrompt: "You are helpful." })
+    const checkpointer = new MemorySaver()
+    const ordinaryTool = { name: "search", run: async () => "ordinary" }
+    const overriddenTool = { name: "search", run: async () => "overridden" }
+
+    const ordinary = await materializeAgentGraph({
+      checkpointer,
+      descriptor,
+      tools: [ordinaryTool],
+    })
+    const overridden = await materializeAgentGraph({
+      bypassCache: true,
+      checkpointer,
+      descriptor,
+      tools: [overriddenTool],
+    })
+    const ordinaryAgain = await materializeAgentGraph({
+      checkpointer,
+      descriptor,
+      tools: [ordinaryTool],
+    })
+
+    expect(counter.calls()).toBe(2)
+    expect(overridden).not.toBe(ordinary)
+    expect(ordinaryAgain).toBe(ordinary)
+  })
+
+  it("does not seed the ordinary cache from a bypassed tool set", async () => {
+    const counter = countCompilations()
+    const descriptor = agent({ model: "gpt-5-mini", systemPrompt: "You are helpful." })
+    const checkpointer = new MemorySaver()
+    const ordinaryTool = { name: "search", run: async () => "ordinary" }
+    const overriddenTool = { name: "search", run: async () => "overridden" }
+
+    const overridden = await materializeAgentGraph({
+      bypassCache: true,
+      checkpointer,
+      descriptor,
+      tools: [overriddenTool],
+    })
+    const ordinary = await materializeAgentGraph({
+      checkpointer,
+      descriptor,
+      tools: [ordinaryTool],
+    })
+    const ordinaryAgain = await materializeAgentGraph({
+      checkpointer,
+      descriptor,
+      tools: [ordinaryTool],
+    })
+
+    expect(counter.calls()).toBe(2)
+    expect(ordinary).not.toBe(overridden)
+    expect(ordinaryAgain).toBe(ordinary)
+  })
+
+  it("threads explicit cache bypass through streamAgent", async () => {
+    const counter = countCompilations()
+    const descriptor = agent({ model: "gpt-5-mini", systemPrompt: "You are helpful." })
+    const checkpointer = new MemorySaver()
+    const signal = new AbortController().signal
+    const ordinaryTool = { name: "search", run: async () => "ordinary" }
+    const overriddenTool = { name: "search", run: async () => "overridden" }
+    const base = {
+      checkpointer,
+      entry: descriptor,
+      input: { messages: [] },
+      routeParamNames: [],
+      signal,
+    }
+
+    for await (const _chunk of streamAgent({ ...base, tools: [ordinaryTool] })) {
+      // Drain the fallback invoke stream.
+    }
+    for await (const _chunk of streamAgent({
+      ...base,
+      bypassCache: true,
+      tools: [overriddenTool],
+    })) {
+      // Drain the fallback invoke stream.
+    }
+    for await (const _chunk of streamAgent({ ...base, tools: [ordinaryTool] })) {
+      // Drain the fallback invoke stream.
+    }
+
     expect(counter.calls()).toBe(2)
   })
 })

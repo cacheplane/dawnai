@@ -168,7 +168,7 @@ dawn test src/app/(public)/hello
 Flags:
 - `--cwd <path>` — operate on a different app root.
 
-The optional positional `[path]` argument narrows the discovered scenario set to a subdirectory. To target a live dev server, set `run: { url }` per-scenario inside `run.test.ts` (there is no command-level `--url` flag on `dawn test`). Exits non-zero on any failure with a diff per mismatched scenario. See [Testing](/docs/testing) for scenario authoring.
+The optional positional `[path]` argument narrows the discovered scenario set to a subdirectory. To target a live dev server, add `.server(url)` to that scenario's builder chain inside `run.test.ts` (there is no command-level `--url` flag on `dawn test`). Exits non-zero on any failure with a diff per mismatched scenario. See [Testing](/docs/testing) for scenario authoring.
 
 ## `dawn eval`
 

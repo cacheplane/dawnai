@@ -190,31 +190,30 @@ const WRITE_A_TEST = `Help me write tests for a Dawn route. Pick the right style
 2. For deterministic \`workflow\`, \`graph\`, or \`chain\` routes, use a colocated \`run.test.ts\` scenario file:
 
    \`\`\`ts
-   export default [
-     {
-       name: "returns a greeting",
-       input: { tenant: "acme" },
-       expect: {
-         status: "passed",
-         output: { tenant: "acme", greeting: "Hello, acme!" },
-       },
-     },
-   ]
+   import { scenarios } from "@dawn-ai/sdk/testing"
+
+   export default scenarios("/hello/[tenant]")
+     .scenario("returns a greeting", (s) =>
+       s
+         .input({ tenant: "acme" })
+         .expectPassed()
+         .expectOutput({ tenant: "acme", greeting: "Hello, acme!" }),
+     )
    \`\`\`
 
-3. In scenario records, \`input\` is the route state and \`expect.output\` is the returned state. Keep these for deterministic route-output assertions, not LLM text exact matches.
+3. In the route-scoped builder, \`.input()\` sets the route state and \`.expectOutput()\` matches the returned state. Set \`.expectPassed()\` or \`.expectFailed()\` explicitly. Keep output expectations for deterministic route results, not LLM text exact matches.
 
-4. Run agent Vitest files with the package's test runner (for the scaffold, \`npm test\`). Run declarative scenario records with:
+4. Run agent Vitest files with the package's test runner (for the scaffold, \`npm test\`). Run route scenario suites with:
    \`\`\`
    dawn test
    \`\`\`
 
-5. To run a scenario record against a live \`dawn dev\` server, set \`run: { url: "http://127.0.0.1:3001" }\` on that scenario. There is no command-level \`--url\` flag on \`dawn test\`.
+5. To run a scenario against a live \`dawn dev\` server, add \`.server("http://127.0.0.1:3001")\` before its status expectation. There is no command-level \`--url\` flag on \`dawn test\`.
 
 Constraints:
-- Agent tests should use fixtures or live mode; do not exact-match raw assistant message arrays with \`expect.output\`.
-- \`run.test.ts\` must live in the deterministic route's directory, default-export an array, and avoid \`describe()\` / \`test()\` wrappers.
-- Per-scenario tool mocking is not supported today; stub external dependencies inside the tool implementation or use the agent harness fixture tools.
+- Agent tests should use fixtures or live mode; do not exact-match raw assistant message arrays with \`.expectOutput()\`.
+- \`run.test.ts\` must live in the deterministic route's directory, default-export \`scenarios("/route").scenario(...)\`, and avoid \`describe()\` / \`test()\` wrappers.
+- In-process scenarios can replace selected application tools with \`.mockTool()\` and assert calls with \`.expectTool()\`; server-backed scenarios cannot use tool mocks.
 
 Reference: https://dawnai.org/llms.txt
 `;
@@ -226,9 +225,9 @@ const DEPLOY = `Help me deploy a Dawn app. Dawn itself is not a production runti
    dawn verify
    dawn test
    \`\`\`
-   Both must pass. \`dawn verify\` covers the app contract, route discovery, typegen, and dependency/env advisories; \`dawn test\` runs scenario tests against the in-process runtime.
+   Both must pass. \`dawn verify\` covers the app contract, route discovery, typegen, and dependency/env advisories; \`dawn test\` runs scenarios in-process by default and follows any explicit \`.server()\` selection.
 
-2. Optionally catch protocol-shape issues by running selected scenarios against a live dev server. Add \`run: { url: "http://127.0.0.1:3001" }\` to those scenarios, then run:
+2. Optionally catch protocol-shape issues by running selected scenarios against a live dev server. Add \`.server("http://127.0.0.1:3001")\` to those scenario builder chains, then run:
    \`\`\`
    dawn dev --port 3001 &
    dawn test

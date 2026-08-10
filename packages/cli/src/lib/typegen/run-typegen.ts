@@ -9,7 +9,12 @@ import type {
   RouteStateFields,
   RouteToolTypes,
 } from "@dawn-ai/core"
-import { renderDawnTypes, resolveStateFields } from "@dawn-ai/core"
+import {
+  renderDawnTypes,
+  renderScenarioTypes,
+  resolveStateFields,
+  SCENARIO_TYPES_FILE,
+} from "@dawn-ai/core"
 import { extractToolArtifactsForRoute } from "@dawn-ai/core/internal/compiler"
 
 import { discoverStateDefinition } from "../runtime/state-discovery.js"
@@ -155,6 +160,7 @@ export async function runTypegen(options: {
   const sharedToolsDir = join(appRoot, "src")
 
   const routeToolTypes: RouteToolTypes[] = []
+  const scenarioToolTypes: RouteToolTypes[] = []
   const routeStateFields: RouteStateFields[] = []
   let toolSchemaCount = 0
 
@@ -162,7 +168,10 @@ export async function runTypegen(options: {
     const { types: tools, schemas } = extractToolArtifactsForRoute({
       routeDir: route.routeDir,
       sharedToolsDir,
+      typeReferenceFileName: join(dawnDir, SCENARIO_TYPES_FILE),
     })
+
+    scenarioToolTypes.push({ pathname: route.pathname, tools })
 
     // Capability-contributed tools: include them in the generated type surface
     // so user code can reference them type-safely. Currently hard-coded to the
@@ -215,11 +224,15 @@ export async function runTypegen(options: {
     }
   }
 
-  // Write .dawn/dawn.generated.d.ts
   const dtsContent = renderDawnTypes(manifest, routeToolTypes, routeStateFields)
+  const scenarioDtsContent = renderScenarioTypes(manifest, scenarioToolTypes)
   const dtsPath = join(dawnDir, "dawn.generated.d.ts")
+  const scenarioDtsPath = join(dawnDir, SCENARIO_TYPES_FILE)
   await mkdir(dawnDir, { recursive: true })
-  await writeFile(dtsPath, dtsContent, "utf8")
+  await Promise.all([
+    writeFile(dtsPath, dtsContent, "utf8"),
+    writeFile(scenarioDtsPath, scenarioDtsContent, "utf8"),
+  ])
 
   return {
     routeCount: manifest.routes.length,

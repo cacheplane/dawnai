@@ -1,25 +1,48 @@
 /**
- * Assertion helpers for `dawn test` scenario `assert(result)` callbacks.
+ * Route-scoped scenario authoring and assertion helpers for `dawn test`.
  *
  * @example
  * ```ts
- * import { expectError, expectMeta, expectOutput } from "@dawn-ai/sdk/testing"
+ * import { scenarios } from "@dawn-ai/sdk/testing"
  *
- * export default [
- *   {
- *     name: "greets",
- *     input: { tenant: "acme" },
- *     run: { url: "http://localhost:3000" },
- *     assert: (result) => {
- *       expectMeta(result, { mode: "agent", routeId: "/hello/[tenant]" })
- *       expectOutput(result, { greeting: "Hello, acme!" })
- *     },
- *   },
- * ]
+ * export default scenarios("/hello/[tenant]").scenario("greets", (s) =>
+ *   s
+ *     .input({ tenant: "acme" })
+ *     .expectPassed()
+ *     .expectOutput({ greeting: "Hello, acme!" })
+ *     .expectMeta({ mode: "agent", routeId: "/hello/[tenant]" }),
+ * )
  * ```
  */
 
 import type { RuntimeExecutionResult } from "../runtime-result.js"
+import { createScenarioSuiteBuilder } from "./scenario-builder.js"
+import type { ScenarioSuiteBuilder } from "./scenario-types.js"
+
+// biome-ignore lint/suspicious/noEmptyInterface: generated route declarations augment this interface.
+export interface RouteScenarioMap {}
+
+type RouteScenarioTools<TRoute extends keyof RouteScenarioMap> = RouteScenarioMap[TRoute] extends {
+  readonly tools: infer TTools
+}
+  ? TTools
+  : Record<never, never>
+
+export function scenarios<TRoute extends Extract<keyof RouteScenarioMap, string>>(
+  route: TRoute,
+): ScenarioSuiteBuilder<RouteScenarioTools<TRoute>> {
+  return createScenarioSuiteBuilder(route) as ScenarioSuiteBuilder<RouteScenarioTools<TRoute>>
+}
+
+export { isScenarioSuite, readScenarioSuite } from "./scenario-builder.js"
+export type {
+  ScenarioDescriptor,
+  ScenarioSuiteBuilder,
+  ScenarioSuiteDescriptor,
+  ScenarioToolCallExpectationDescriptor,
+  ScenarioToolCallRecord,
+  ScenarioToolMockDescriptor,
+} from "./scenario-types.js"
 
 export interface RuntimeMetaExpectation {
   readonly executionSource?: "in-process" | "server"
