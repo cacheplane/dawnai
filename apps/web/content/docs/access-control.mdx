@@ -68,7 +68,7 @@ export default agent({
 ```
 
 <Callout type="info" title="Each plane answers a separate question">
-  Tool scoping without a sandbox still lets an allowed `runBash` touch the whole host filesystem. A sandbox without scoping still exposes every available tool to the model, just from inside an isolated box. Permissions without a sandbox still pause for approval, but an approved call runs on the host. Guarded delegation controls whether a child receives input, not what that child can call or access after it starts.
+  Tool scoping without a sandbox still lets an allowed `runBash` touch the whole host filesystem. A sandbox redirects only Dawn's built-in workspace tools — `readFile`, `writeFile`, `listDir`, and `runBash` — into the isolated environment. Authored tools such as `deployProd` still execute in the app process and need their own least-privilege and isolation design. Permissions without a sandbox still pause for approval, but an approved workspace call runs on the host. Guarded delegation controls whether a child receives input, not what that child can call or access after it starts.
 </Callout>
 
 ## Related

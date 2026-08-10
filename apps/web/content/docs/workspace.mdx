@@ -206,9 +206,9 @@ The agent uses `listDir` and `readFile` to explore and read corpus documents. It
 Agent memory lives at `workspace/AGENTS.md` and is automatically injected into the system prompt. See [Memory](/docs/memory) for details.
 
 <Callout type="warn" title="Treat AGENTS.md as shared prompt input">
-  Dawn re-reads `workspace/AGENTS.md` into prompt context on every turn for every consuming `agent()` route and subagent. A route with `writeFile` can persist instructions that affect later requests and other consuming agents sharing that workspace. Raw graph, workflow, and chain routes do not consume this prompt file.
+  Dawn re-reads the host app root's `workspace/AGENTS.md` into prompt context on every turn for every consuming `agent()` route and subagent. With the default local app-root filesystem, `writeFile({ path: "AGENTS.md", ... })` targets that same file, so a route can persist instructions that affect later requests and other consuming agents sharing the app root. A sandbox or custom filesystem backend may send `writeFile` to a different filesystem and does not automatically change the host file this prompt marker reads. Raw graph, workflow, and chain routes do not consume this prompt file.
 
-  Use separate workspaces for different tenants or trust zones. Constrain or deny writes for untrusted agents, review seeded content, and never copy raw untrusted text into `workspace/AGENTS.md`.
+  Use separate app roots or prompt-memory trust domains for different tenants. A per-thread sandbox alone does not isolate this host prompt source. Constrain or deny writes from untrusted agents when they can reach it, review seeded content, and never copy raw untrusted text into `workspace/AGENTS.md`.
 </Callout>
 
 ## Tool-output offloading
