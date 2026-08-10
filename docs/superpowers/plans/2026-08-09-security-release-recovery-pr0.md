@@ -157,7 +157,9 @@ Run:
 set -euo pipefail
 generated_paths=$(git diff-tree --no-commit-id --name-only -r 3f4e3f9f62a3b48030a385bd0e7d720b8b26afdb | sort)
 test "$(printf '%s\n' "$generated_paths" | wc -l | tr -d ' ')" = "61"
-later_main_paths=$(git diff --name-only 3f4e3f9f62a3b48030a385bd0e7d720b8b26afdb..origin/main | sort)
+later_main_paths=$(git log --format= --name-only 3f4e3f9f62a3b48030a385bd0e7d720b8b26afdb..origin/main \
+  | sed '/^$/d' \
+  | LC_ALL=C sort -u)
 overlap=$(comm -12 <(printf '%s\n' "$generated_paths") <(printf '%s\n' "$later_main_paths"))
 if test -n "$overlap"; then
   printf 'later main commits overlap generated recovery paths:\n%s\n' "$overlap" >&2
@@ -406,7 +408,9 @@ test "$(gh pr view <PR_NUMBER> --json baseRefOid --jq .baseRefOid)" = "$(git rev
 test "$(git rev-list --count HEAD..origin/main)" = "0"
 generated_paths=$(git diff-tree --no-commit-id --name-only -r 3f4e3f9f62a3b48030a385bd0e7d720b8b26afdb | sort)
 test "$(printf '%s\n' "$generated_paths" | wc -l | tr -d ' ')" = "61"
-later_main_paths=$(git diff --name-only 3f4e3f9f62a3b48030a385bd0e7d720b8b26afdb..origin/main | sort)
+later_main_paths=$(git log --format= --name-only 3f4e3f9f62a3b48030a385bd0e7d720b8b26afdb..origin/main \
+  | sed '/^$/d' \
+  | LC_ALL=C sort -u)
 overlap=$(comm -12 <(printf '%s\n' "$generated_paths") <(printf '%s\n' "$later_main_paths"))
 if test -n "$overlap"; then
   printf 'later main commits overlap generated recovery paths:\n%s\n' "$overlap" >&2
@@ -418,15 +422,23 @@ gh api --paginate 'repos/cacheplane/dawnai/actions/workflows/260503756/runs?per_
   | jq -s -e '[.[].workflow_runs[] | select(.status != "completed")] | length == 0'
 gh api --paginate 'repos/cacheplane/dawnai/actions/workflows/309127405/runs?per_page=100' \
   | jq -s -e '[.[].workflow_runs[] | select(.status != "completed")] | length == 0'
-gh pr merge <PR_NUMBER> --squash --match-head-commit "$reviewed_head"
+gh pr merge <PR_NUMBER> --merge --match-head-commit "$reviewed_head"
+merge_sha=$(gh pr view <PR_NUMBER> --json mergeCommit --jq .mergeCommit.oid)
+test "$merge_sha" != ""
+git fetch origin main
+git cat-file -e "$merge_sha^{commit}"
+git merge-base --is-ancestor "$reviewed_head" "$merge_sha"
+git merge-base --is-ancestor 3c6880012cc940911ba090bd47c3f49469616050 "$merge_sha"
+printf 'Reviewed recovery merge: %s\n' "$merge_sha"
 ```
 
 Expected: every assertion succeeds, the overlap is empty, and the PR state
-becomes `MERGED`. If main moved, do not merge: rebase, repeat the exact-revert
-proof and all affected checks, push, and wait for the new PR head to become
-green. A non-required external review service that cannot run for
-billing/credential reasons is recorded separately and is not misreported as a
-technical pass.
+becomes `MERGED` through a merge commit that preserves both the reviewed head
+and exact recovery commit as ancestors. If main moved, do not merge: rebase,
+repeat the exact-revert proof and all affected checks, push, and wait for the new
+PR head to become green. A non-required external review service that cannot run
+for billing/credential reasons is recorded separately and is not misreported as
+a technical pass.
 
 - [ ] **Step 3: Verify exact post-merge repository state**
 
@@ -437,11 +449,16 @@ set -euo pipefail
 export PATH="/Users/blove/.nvm/versions/node/v24.19.0/bin:$PATH"
 test "$(node --version)" = "v24.19.0"
 git fetch origin main
-git show --check --stat --oneline origin/main
+merge_sha=$(gh pr view <PR_NUMBER> --json mergeCommit --jq .mergeCommit.oid)
+test "$merge_sha" != ""
+git cat-file -e "$merge_sha^{commit}"
+git merge-base --is-ancestor 3c6880012cc940911ba090bd47c3f49469616050 "$merge_sha"
+git show --check --stat --oneline "$merge_sha"
+export RELEASE_MERGE_SHA="$merge_sha"
 node --input-type=module <<'NODE'
 import { assertValidReleaseInventory, readReleaseInventory } from "./scripts/release/inventory.mjs"
 const result = assertValidReleaseInventory(
-  await readReleaseInventory({ root: process.cwd(), ref: "origin/main" }),
+  await readReleaseInventory({ root: process.cwd(), ref: process.env.RELEASE_MERGE_SHA }),
 )
 if (result.packages.length !== 21 || result.version !== "0.8.21") {
   throw new Error(`unexpected recovered inventory: ${result.packages.length}/${result.version}`)
@@ -452,7 +469,7 @@ NODE
 generated_paths=$(git diff-tree --no-commit-id --name-only -r 3f4e3f9f62a3b48030a385bd0e7d720b8b26afdb | sort)
 test "$(printf '%s\n' "$generated_paths" | wc -l | tr -d ' ')" = "61"
 while IFS= read -r generated_path; do
-  git diff --quiet 95768c3f8f9042ee156da50c043901062591a9d5 origin/main -- "$generated_path" || {
+  git diff --quiet 95768c3f8f9042ee156da50c043901062591a9d5 "$merge_sha" -- "$generated_path" || {
     printf 'post-merge recovered path differs from version parent: %s\n' "$generated_path" >&2
     exit 1
   }
@@ -460,19 +477,19 @@ done < <(printf '%s\n' "$generated_paths")
 restored_changesets=$(printf '%s\n' "$generated_paths" | rg '^\.changeset/')
 test "$(printf '%s\n' "$restored_changesets" | wc -l | tr -d ' ')" = "11"
 while IFS= read -r generated_path; do
-  git cat-file -e "origin/main:$generated_path"
+  git cat-file -e "$merge_sha:$generated_path"
 done < <(printf '%s\n' "$restored_changesets")
 ```
 
-Expected: the exact 21-package inventory reports `0.8.21`; all 61 recovered
-paths match the original version parent byte-for-byte; every restored changeset
-exists on merged main.
+Expected: the exact merge SHA contains the 21-package inventory at `0.8.21`;
+all 61 recovered paths match the original version parent byte-for-byte; every
+restored changeset exists; the exact recovery commit remains its ancestor.
 
 - [ ] **Step 4: Verify no publication path restarted**
 
 Repeat Task 1 Step 3, then repeat Task 1 Step 4 with
-`RELEASE_INVENTORY_REF=origin/main` so the inventory is read from the exact
-merged ref rather than the local branch.
+`RELEASE_INVENTORY_REF=<MERGE_SHA>` so the inventory is read from the immutable
+merge commit recorded by the PR rather than a moving local or remote branch.
 
 Expected: Release and Publish Chart remain `disabled_manually`; neither has an
 active run; npm and GitHub remain at `0.8.21` with exact `0.8.22` absent.
