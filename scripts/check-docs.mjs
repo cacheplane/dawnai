@@ -107,10 +107,7 @@ const accuracyContracts = [
       "rejects `{}`",
       "is skipped",
     ],
-    forbidden: [
-      "tenant: z.string(),",
-      "Zod-parsed default `\"\"` is applied when caller omits it",
-    ],
+    forbidden: ["tenant: z.string(),", 'Zod-parsed default `""` is applied when caller omits it'],
   },
   {
     file: "apps/web/content/docs/testing-agents.mdx",
@@ -254,7 +251,11 @@ const accuracyContracts = [
       "Agent routes materialize LangGraph graphs",
       "raw graph and chain exports remain portable",
     ],
-    forbidden: ["Dawn is not a runtime", "Dawn compiles to LangGraph constructs", "Routes become nodes"],
+    forbidden: [
+      "Dawn is not a runtime",
+      "Dawn compiles to LangGraph constructs",
+      "Routes become nodes",
+    ],
   },
   {
     file: "apps/web/app/components/landing/WhyDawn.tsx",
