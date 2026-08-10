@@ -382,6 +382,14 @@
       },
       {
         "classification": "safe",
+        "job": "postgres-storage-docker",
+        "stepIndex": 6,
+        "step": "Real-Postgres Agent Protocol pending-interrupts tests",
+        "kind": "run",
+        "value": "DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/cli test pending-interrupts-endpoint"
+      },
+      {
+        "classification": "safe",
         "job": "edge-workerd",
         "stepIndex": 0,
         "step": "Checkout",
