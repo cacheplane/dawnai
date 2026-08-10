@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .dawn/
+.vercel/
 
 # Runtime workspace outputs (the agent writes these at run time).
 workspace/reports/
