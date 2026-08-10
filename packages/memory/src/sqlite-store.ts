@@ -2,9 +2,19 @@ import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import type { SQLInputValue } from "node:sqlite"
 import { DatabaseSync } from "node:sqlite"
+import {
+  browseCursorKey,
+  browseQueryFingerprint,
+  decodeBrowseCursor,
+  encodeBrowseCursor,
+} from "./browse-cursor.js"
 import { normalizeSetFilter } from "./browse-filter.js"
+import { resolveBrowseOrder } from "./browse-order.js"
+import { namespacePrefixUpperBound } from "./browse-range.js"
+import { BROWSE_DEFAULT_LIMIT, validateBrowseQuery } from "./browse-validate.js"
 import { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
 import { DEFAULT_CANDIDATE_POOL, type RecallRankingOptions, type RecallWeights } from "./score.js"
+import { appendSqliteBrowseFilter, sqliteKeysetWhere } from "./sqlite-browse-sql.js"
 import { tokenize } from "./tokenize.js"
 import type { MemoryQuery, MemoryRecord, MemoryStore, VectorRankingOptions } from "./types.js"
 import { cosineSimilarity, DEFAULT_VECTOR_K } from "./vector.js"
@@ -28,6 +38,15 @@ function openDb(path: string): DatabaseSync {
   return db
 }
 
+// Roll back best-effort — a failing ROLLBACK must not mask the original error.
+function rollbackQuietly(db: DatabaseSync): void {
+  try {
+    db.exec("ROLLBACK")
+  } catch {
+    // Swallow: propagate the root-cause error from the caller's catch instead.
+  }
+}
+
 interface Migration {
   readonly version: number
   readonly up: string
@@ -48,7 +67,7 @@ function runMigrations(db: DatabaseSync, migrations: readonly Migration[]): void
       db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(m.version)
       db.exec("COMMIT")
     } catch (err) {
-      db.exec("ROLLBACK")
+      rollbackQuietly(db)
       throw err
     }
   }
@@ -90,6 +109,15 @@ const MIGRATIONS: Migration[] = [
     version: 3,
     up: `
       CREATE INDEX IF NOT EXISTS idx_mem_ns_kind_effective ON memories (namespace, kind, effective_at DESC);
+    `,
+  },
+  {
+    // The global browse order — every poll tick's hot path, and the index the keyset
+    // guard seeks on. Directions are declared: a plain-ASC composite scanned backward
+    // reverses the id tie-break, which would make windows non-deterministic.
+    version: 4,
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_mem_updated_id ON memories (updated_at DESC, id ASC);
     `,
   },
 ]
@@ -429,13 +457,25 @@ export function sqliteMemoryStore(opts: {
       return rows.map(rowToRecord)
     },
     async browse(q = {}) {
+      // Defence in depth: whatever the caller checked, a store that accepts nonsense
+      // returns an empty page that looks like an answer.
+      validateBrowseQuery(q)
       const where: string[] = []
       const params: SQLInputValue[] = []
+      if (q.namespace) {
+        where.push("namespace = ?")
+        params.push(q.namespace)
+      }
       if (q.namespacePrefix) {
-        // Byte-exact, case-sensitive prefix match — deliberately NOT LIKE, so
-        // %/_/\ in the prefix are literal and both backends agree byte-for-byte.
-        where.push("substr(namespace, 1, length(?)) = ?")
-        params.push(q.namespacePrefix, q.namespacePrefix)
+        // Byte-exact, case-sensitive prefix as a half-open range — deliberately NOT
+        // LIKE, so %/_/\ stay literal. Sargable, but the ORDER BY picks the plan, so
+        // it is a trade: at 100k a selective prefix seeks (6.5 -> 0.13 ms) while a
+        // BROAD one gives up idx_mem_updated_id's ordered early exit for a temp
+        // B-tree sort (0.05 -> 41 ms). The COUNT(*) below seeks either way.
+        const upper = namespacePrefixUpperBound(q.namespacePrefix)
+        where.push(upper === undefined ? "namespace >= ?" : "namespace >= ? AND namespace < ?")
+        params.push(q.namespacePrefix)
+        if (upper !== undefined) params.push(upper)
       }
       // A set becomes IN (?,?,…); an EMPTY set becomes a clause that matches
       // nothing, which is the contract — not an absent filter.
@@ -465,27 +505,81 @@ export function sqliteMemoryStore(opts: {
         where.push("(expires_at IS NULL OR expires_at > ?)")
         params.push(q.now)
       }
-      const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
-      // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
-      // negatives — clamping to ≥0 integers unifies backend behavior.
-      const limit = Math.max(0, Math.trunc(q.limit ?? 50))
+      for (const filter of q.filters ?? []) appendSqliteBrowseFilter(filter, where, params)
+      // The COUNT must see the FILTERS ONLY: `total` is the size of the whole matching
+      // set, not of what is left after the cursor.
+      const filterParamCount = params.length
+      const countClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
+
+      const order = resolveBrowseOrder(q.orderBy)
+      // Every order terminates with `id ASC` so the total order is deterministic and
+      // a keyset window can never skip or repeat a row.
+      const orderSql = [
+        ...order.map((entry) => `${entry.column} ${entry.dir === "desc" ? "DESC" : "ASC"}`),
+        "id ASC",
+      ].join(", ")
+
+      const fingerprint = browseQueryFingerprint(q)
+      const rowWhere = [...where]
+      if (q.cursor) {
+        const payload = decodeBrowseCursor(q.cursor, fingerprint, order)
+        rowWhere.push(sqliteKeysetWhere(order, payload, params))
+      }
+      const rowsClause = rowWhere.length > 0 ? `WHERE ${rowWhere.join(" AND ")}` : ""
+
+      // A no-op since validateBrowseQuery rejects non-integers, limit < 1 and offset < 0.
+      // Kept as a floor because the two backends fail asymmetrically if one ever slips
+      // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
+      const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
-      // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
-      // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.
-      const rows = db
-        .prepare(
-          `SELECT id, kind, namespace, content, data, source, confidence, tags, status,
-                  supersedes, created_at, updated_at, effective_at, expires_at
-           FROM memories ${clause} ORDER BY updated_at DESC, id ASC LIMIT ? OFFSET ?`,
-        )
-        .all(...params, limit, offset) as Record<string, unknown>[]
-      const total = (
-        db.prepare(`SELECT COUNT(*) AS n FROM memories ${clause}`).get(...params) as { n: number }
-      ).n
-      return { records: rows.map(rowToRecord), total }
+      // One read snapshot across both statements, so `records` and `total` can never
+      // describe different versions of the table. The writer this defends against is
+      // always on ANOTHER connection — a second process against the same file — because
+      // these two statements are synchronous: no caller on this thread can run
+      // between them.
+      // COUNT(*) OVER () would collapse the pair to one statement and was measured on
+      // sqlite and rejected: the window aggregate materializes the entire filtered set
+      // (439 ms vs 5.3 ms at 1M rows) and destroys the lazy top-k path for the rows.
+      let rows: Record<string, unknown>[]
+      let total: number
+      // BEGIN sits outside the try: if it fails because a transaction is already open
+      // on this long-lived handle, the catch below would send its ROLLBACK into the
+      // CALLER's transaction and silently discard their uncommitted work.
+      db.exec("BEGIN DEFERRED")
+      try {
+        // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
+        // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.
+        rows = db
+          .prepare(
+            `SELECT id, kind, namespace, content, data, source, confidence, tags, status,
+                    supersedes, created_at, updated_at, effective_at, expires_at
+             FROM memories ${rowsClause} ORDER BY ${orderSql} LIMIT ? OFFSET ?`,
+          )
+          .all(...params, limit, offset) as Record<string, unknown>[]
+        total = (
+          db
+            .prepare(`SELECT COUNT(*) AS n FROM memories ${countClause}`)
+            .get(...params.slice(0, filterParamCount)) as { n: number }
+        ).n
+        db.exec("COMMIT")
+      } catch (err) {
+        rollbackQuietly(db)
+        throw err
+      }
+      const records = rows.map(rowToRecord)
+      const last = records.at(-1)
+      // Issued whenever the window FILLED, rather than over-fetching `limit + 1` to
+      // learn whether a further row exists: a walk over an exact multiple of `limit`
+      // therefore ends in one empty window.
+      const continuation =
+        last && records.length === limit
+          ? encodeBrowseCursor(fingerprint, { key: browseCursorKey(last, order), id: last.id })
+          : null
+      return { records, total, continuation }
     },
     async stats(opts = {}) {
-      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      // Byte-exact prefix match — substr(), not LIKE, so %/_/\ stay literal. This is
+      // NOT browse's half-open range: it cannot seek, and no task owns moving it.
       const clause = opts.namespacePrefix ? "WHERE substr(namespace, 1, length(?)) = ?" : ""
       const params: SQLInputValue[] = opts.namespacePrefix
         ? [opts.namespacePrefix, opts.namespacePrefix]
@@ -510,7 +604,8 @@ export function sqliteMemoryStore(opts: {
       }
     },
     async prune(opts) {
-      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      // Byte-exact prefix match — substr(), not LIKE, so %/_/\ stay literal. This is
+      // NOT browse's half-open range: it cannot seek, and no task owns moving it.
       const prefixParams: SQLInputValue[] = opts.namespacePrefix
         ? [opts.namespacePrefix, opts.namespacePrefix]
         : []

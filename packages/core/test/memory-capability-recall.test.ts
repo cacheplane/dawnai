@@ -23,7 +23,7 @@ function makeContext(captured: { query?: Record<string, unknown> }): CapabilityM
         return []
       },
       async browse() {
-        return { records: [], total: 0 }
+        return { records: [], total: 0, continuation: null }
       },
       async stats() {
         return { total: 0, byStatus: {}, byKind: {}, byNamespace: {}, bySourceType: {} }

@@ -146,6 +146,49 @@ describe.skipIf(!enabled)("pgvector integration", () => {
     }
   })
 
+  test("initSchema creates the browse ordering and C-collated namespace indexes", async () => {
+    const prefix = "browse_idx"
+    const pool = new Pool({ connectionString: url })
+    try {
+      const client = await pool.connect()
+      try {
+        await initSchema(client, {
+          prefix,
+          schema: "public",
+          dimensions: 3,
+          m: 16,
+          efConstruction: 64,
+        })
+        const res = await client.query<{ indexname: string; indexdef: string }>(
+          "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1",
+          [`${prefix}_memories`],
+        )
+        const byName = new Map(res.rows.map((r) => [r.indexname, r.indexdef]))
+        expect(byName.has(`${prefix}_updated_id`)).toBe(true)
+        expect(byName.get(`${prefix}_updated_id`)).toContain("updated_at DESC")
+        // Which column carries the collation is the whole point: `id` must be
+        // C-collated to match SQLite's BINARY tie-break, `updated_at` must not be
+        // or the store's uncollated ORDER BY stops matching this index.
+        expect(byName.get(`${prefix}_updated_id`)).toContain('id COLLATE "C"')
+        expect(byName.get(`${prefix}_updated_id`)).not.toContain("updated_at COLLATE")
+        expect(byName.has(`${prefix}_ns_c`)).toBe(true)
+        expect(byName.get(`${prefix}_ns_c`)).toContain('namespace COLLATE "C"')
+        // Idempotent: a second init must not throw.
+        await initSchema(client, {
+          prefix,
+          schema: "public",
+          dimensions: 3,
+          m: 16,
+          efConstruction: 64,
+        })
+      } finally {
+        client.release()
+      }
+    } finally {
+      await pool.end()
+    }
+  })
+
   test("halfvec update round-trip: an embedding survives update() on a 3072-dim store", async () => {
     const store = pgvectorMemoryStore({
       connectionString: url,
@@ -174,6 +217,82 @@ describe.skipIf(!enabled)("pgvector integration", () => {
       expect((await store.get("h"))?.confidence).toBe(0.5)
     } finally {
       await store.close()
+    }
+  })
+
+  test("browse reads records and total from one snapshot when a writer commits between them", async () => {
+    const prefix = "browse_snapshot"
+    const pool = new Pool({ connectionString: url })
+    // The store treats an injected pool as someone else's to manage, and pg turns a
+    // listener-less pool 'error' into an uncaught exception.
+    pool.on("error", () => {})
+    const writer = new Pool({ connectionString: url })
+    let armed = false
+    let committedMidBrowse = 0
+
+    // Wrapping the client is the only way to commit INSIDE the window between
+    // browse's two statements: the gap is one event-loop turn wide, so no
+    // wall-clock race can be aimed at it. Without the transaction the two
+    // statements take a READ COMMITTED snapshot each, and that is exactly the skew
+    // under test — a mutant that drops the BEGIN passes every other test here.
+    const hooked = new Proxy(pool, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop)
+        // Bound to the real pool, not to the proxy: pg's internals must never see a
+        // proxied `this`.
+        if (prop !== "connect") return typeof value === "function" ? value.bind(target) : value
+        // Unwrapped unless armed, and returned without an extra turn: schema init
+        // fires an un-awaited registerTypes from the pool's 'connect' handler, and
+        // any delay here lets that collide with initSchema on the same client.
+        return () =>
+          armed
+            ? target.connect().then(
+                (client) =>
+                  new Proxy(client, {
+                    get(c, p) {
+                      const inner = Reflect.get(c, p)
+                      if (p !== "query") return typeof inner === "function" ? inner.bind(c) : inner
+                      return async (...args: unknown[]) => {
+                        const query = inner as (...a: unknown[]) => Promise<unknown>
+                        const result = await query.apply(c, args)
+                        const sql = typeof args[0] === "string" ? args[0] : ""
+                        // The ordered window is the statement that takes the
+                        // snapshot; the COUNT runs after this delete has committed.
+                        if (sql.includes("ORDER BY") && sql.includes("OFFSET")) {
+                          committedMidBrowse += 1
+                          await writer.query(
+                            `DELETE FROM public.${prefix}_memories WHERE id = $1`,
+                            ["r0"],
+                          )
+                        }
+                        return result
+                      }
+                    },
+                  }),
+              )
+            : target.connect()
+      },
+    })
+    const store = pgvectorMemoryStore({ pool: hooked, dimensions: 3, tablePrefix: prefix })
+
+    try {
+      for (const id of ["r0", "r1", "r2", "r3", "r4"]) await store.put(rec(id, "ns", `row ${id}`))
+      armed = true
+      const page = await store.browse({ limit: 100 })
+      armed = false
+
+      // Positive control: a browse that stopped issuing the ordered statement would
+      // satisfy the equality below by never having raced at all.
+      expect(committedMidBrowse).toBe(1)
+      expect(page.records.length).toBe(page.total)
+      expect(page.total).toBe(5)
+      // And the delete really did commit, so the agreement above came from the
+      // snapshot rather than from nothing having happened.
+      expect((await store.browse({ limit: 100 })).total).toBe(4)
+    } finally {
+      await store.close()
+      await pool.end()
+      await writer.end()
     }
   })
 

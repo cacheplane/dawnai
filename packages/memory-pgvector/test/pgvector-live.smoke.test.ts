@@ -51,11 +51,13 @@ describe.skipIf(!enabled)("pgvector live real-embedder paraphrase smoke", () => 
 
     // Embed + store the memory with a REAL 1536-dim OpenAI vector.
     const [embedding] = await embedder.embed([content])
-    expect(embedding).toBeDefined()
+    // Thrown rather than asserted: `put` below takes an exact-optional embedding, so
+    // an absent vector has to be ruled out here rather than flow on as `undefined`.
+    if (embedding === undefined) throw new Error("embedder returned no vector for the content")
     // Validates the encodingFormat:"float" fix against real OpenAI. A base64
     // interop regression would surface as the wrong dimensionality (e.g. 384),
     // which would fail here or throw on put against the vector(1536) column.
-    expect(embedding?.length).toBe(1536)
+    expect(embedding.length).toBe(1536)
 
     await store.put(rec({ id: "ship", namespace, content }), {
       embedding,
@@ -65,7 +67,8 @@ describe.skipIf(!enabled)("pgvector live real-embedder paraphrase smoke", () => 
     // Embed the paraphrase query — ZERO lexical overlap with the stored content.
     const query = "expedite delivery options"
     const [queryEmbedding] = await embedder.embed([query])
-    expect(queryEmbedding?.length).toBe(1536)
+    if (queryEmbedding === undefined) throw new Error("embedder returned no vector for the query")
+    expect(queryEmbedding.length).toBe(1536)
 
     const out = await store.search({
       namespace,

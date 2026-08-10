@@ -1,18 +1,27 @@
 import {
+  BROWSE_DEFAULT_LIMIT,
+  browseCursorKey,
+  browseQueryFingerprint,
   DEFAULT_CANDIDATE_POOL,
   DEFAULT_VECTOR_K,
+  decodeBrowseCursor,
+  encodeBrowseCursor,
   fuseHybrid,
   type MemoryQuery,
   type MemoryRecord,
   type MemoryStore,
+  namespacePrefixUpperBound,
   normalizeSetFilter,
   type RecallRankingOptions,
   rankKeywordCandidates,
+  resolveBrowseOrder,
   tokenize,
   type VectorRankingOptions,
+  validateBrowseQuery,
 } from "@dawn-ai/memory"
-import { Pool, type PoolClient } from "pg"
+import { Pool, type PoolClient, type QueryResult } from "pg"
 import pgvector from "pgvector/pg"
+import { appendPgBrowseFilter, pgKeysetWhere } from "./browse-sql.js"
 import {
   pageAndTagFilter,
   RECORD_COLUMNS,
@@ -329,7 +338,7 @@ export function pgvectorMemoryStore(opts: {
         const order =
           q.since || q.until
             ? `COALESCE(m.effective_at, m.created_at) DESC, m.id COLLATE "C" ASC`
-            : "m.updated_at DESC, m.id ASC"
+            : `m.updated_at DESC, m.id COLLATE "C" ASC`
         const res = await pool.query(
           `SELECT ${recordColumns("m")} FROM ${T} m WHERE ${baseSql} ORDER BY ${order} LIMIT $${baseParams.length + 1}`,
           [...baseParams, limit],
@@ -443,14 +452,36 @@ export function pgvectorMemoryStore(opts: {
     },
 
     async browse(q = {}) {
+      // Before ready(): a malformed query never pays for a connection.
+      validateBrowseQuery(q)
       await ready()
       const where: string[] = []
       const params: unknown[] = []
+      if (q.namespace) {
+        // COLLATE "C" even for equality, because the documented contract is BYTE-exact
+        // and a column under a nondeterministic collation equates strings that differ
+        // byte-wise. The cost is the default-collation _ns_status_updated composite;
+        // what it buys is _ns_c, the index the prefix range below already needs.
+        params.push(q.namespace)
+        where.push(`namespace COLLATE "C" = $${params.length}`)
+      }
       if (q.namespacePrefix) {
-        // Byte-exact, case-sensitive prefix match — deliberately NOT LIKE, so
-        // %/_/\ in the prefix are literal and both backends agree byte-for-byte.
-        params.push(q.namespacePrefix, q.namespacePrefix)
-        where.push(`left(namespace, length($${params.length - 1})) = $${params.length}`)
+        // Byte-exact, case-sensitive prefix as a half-open range — deliberately NOT
+        // LIKE, so %/_/\ stay literal. COLLATE "C" on both bounds or the database's
+        // own collation orders them differently to SQLite. Sargable on _ns_c, but the
+        // same trade SQLite measures: the ORDER BY picks the plan, so a broad prefix
+        // gives up _updated_id's ordered scan for a sort and only a selective one wins.
+        const upper = namespacePrefixUpperBound(q.namespacePrefix)
+        params.push(q.namespacePrefix)
+        const lower = params.length
+        if (upper === undefined) {
+          where.push(`namespace COLLATE "C" >= $${lower}`)
+        } else {
+          params.push(upper)
+          where.push(
+            `namespace COLLATE "C" >= $${lower} AND namespace COLLATE "C" < $${params.length}`,
+          )
+        }
       }
       // `= ANY($n)` over a text[] rather than expanded placeholders: it keeps
       // one bind per filter, and an EMPTY array is already false, which is the
@@ -481,30 +512,80 @@ export function pgvectorMemoryStore(opts: {
         params.push(q.now)
         where.push(`(expires_at IS NULL OR expires_at > $${params.length})`)
       }
-      const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
-      // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
-      // negatives — clamping to ≥0 integers unifies backend behavior.
-      const limit = Math.max(0, Math.trunc(q.limit ?? 50))
-      const offset = Math.max(0, Math.trunc(q.offset ?? 0))
-      // Rows and total are two separate round-trips; a concurrent write between
-      // them can momentarily skew total vs records — acceptable for a dev
-      // inspection tool (no transaction needed). COLLATE "C" pins the id ASC
-      // tiebreak to codepoint order, matching sqlite's BINARY collation.
-      const rowsRes = await pool.query(
-        `SELECT ${RECORD_COLUMNS} FROM ${T} ${clause}
-         ORDER BY updated_at DESC, id COLLATE "C" ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-        [...params, limit, offset],
-      )
-      const totalRes = await pool.query(`SELECT COUNT(*)::int AS n FROM ${T} ${clause}`, params)
-      return {
-        records: (rowsRes.rows as Record<string, unknown>[]).map(rowToRecord),
-        total: (totalRes.rows[0] as { n: number }).n,
+      for (const filter of q.filters ?? []) appendPgBrowseFilter(filter, where, params)
+      // The COUNT must see the FILTERS ONLY: `total` is the size of the whole matching
+      // set, not of what is left after the cursor.
+      const filterParamCount = params.length
+      const countClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
+
+      const order = resolveBrowseOrder(q.orderBy)
+      // COLLATE "C" only where SQLite's BINARY order would otherwise differ (namespace,
+      // id). Timestamps stay uncollated so the (updated_at DESC, id COLLATE "C" ASC)
+      // index keeps serving the hot path.
+      const orderSql = [
+        ...order.map(
+          (entry) =>
+            `${entry.collateC ? `${entry.column} COLLATE "C"` : entry.column} ${entry.dir === "desc" ? "DESC" : "ASC"}`,
+        ),
+        'id COLLATE "C" ASC',
+      ].join(", ")
+
+      const fingerprint = browseQueryFingerprint(q)
+      const rowWhere = [...where]
+      if (q.cursor) {
+        const payload = decodeBrowseCursor(q.cursor, fingerprint, order)
+        rowWhere.push(pgKeysetWhere(order, payload, params))
       }
+      const rowsClause = rowWhere.length > 0 ? `WHERE ${rowWhere.join(" AND ")}` : ""
+
+      // A no-op since validateBrowseQuery rejects non-integers, limit < 1 and offset < 0.
+      // Kept as a floor because the two backends fail asymmetrically if one ever slips
+      // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
+      const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
+      const offset = Math.max(0, Math.trunc(q.offset ?? 0))
+      // READ COMMITTED takes a fresh snapshot per STATEMENT, which is exactly the skew
+      // we are removing — so this pair runs on one client at REPEATABLE READ. READ ONLY
+      // makes "no writes here" enforced rather than asserted, and lets Postgres skip
+      // assigning a transaction id.
+      const client = await pool.connect()
+      // Named QueryResult, not ReturnType<typeof client.query>: query's last overload
+      // is the callback form, which returns void.
+      let rowsRes: QueryResult
+      let totalRes: QueryResult
+      try {
+        await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        rowsRes = await client.query(
+          `SELECT ${RECORD_COLUMNS} FROM ${T} ${rowsClause}
+           ORDER BY ${orderSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+          [...params, limit, offset],
+        )
+        totalRes = await client.query(
+          `SELECT COUNT(*)::int AS n FROM ${T} ${countClause}`,
+          params.slice(0, filterParamCount),
+        )
+        await client.query("COMMIT")
+      } catch (err) {
+        await rollbackQuietly(client)
+        throw err
+      } finally {
+        client.release()
+      }
+      const records = (rowsRes.rows as Record<string, unknown>[]).map(rowToRecord)
+      const last = records.at(-1)
+      // Issued whenever the window FILLED, rather than over-fetching `limit + 1` to
+      // learn whether a further row exists: a walk over an exact multiple of `limit`
+      // therefore ends in one empty window.
+      const continuation =
+        last && records.length === limit
+          ? encodeBrowseCursor(fingerprint, { key: browseCursorKey(last, order), id: last.id })
+          : null
+      return { records, total: (totalRes.rows[0] as { n: number }).n, continuation }
     },
 
     async stats(statsOpts = {}) {
       await ready()
-      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      // Byte-exact prefix match — left(), not LIKE, so %/_/\ stay literal. This is
+      // NOT browse's half-open range: it cannot seek _ns_c, and no task owns moving it.
       const clause = statsOpts.namespacePrefix ? "WHERE left(namespace, length($1)) = $2" : ""
       const params: unknown[] = statsOpts.namespacePrefix
         ? [statsOpts.namespacePrefix, statsOpts.namespacePrefix]
@@ -534,7 +615,8 @@ export function pgvectorMemoryStore(opts: {
 
     async prune(pruneOpts) {
       await ready()
-      // Byte-exact prefix match (see browse) — LIKE metachars stay literal.
+      // Byte-exact prefix match — left(), not LIKE, so %/_/\ stay literal. This is
+      // NOT browse's half-open range: it cannot seek _ns_c, and no task owns moving it.
       // Two explicit SQL strings per pass (with/without prefix) — no clause
       // splicing, each statement readable on its own.
       // Two passes are separate autocommit statements (possibly different pool

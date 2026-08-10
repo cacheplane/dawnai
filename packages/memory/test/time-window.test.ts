@@ -91,7 +91,12 @@ describe("expiry exclusion", () => {
       rec({ id: "expired", content: "deploy failed on prod", effectiveAt: D(2), expiresAt: D(3) }),
     )
     await s.put(rec({ id: "outside", content: "deploy failed early", effectiveAt: D(1) }))
-    const out = await s.search({ namespace: "route=/n", query: "deploy failed", since: D(2), now: D(5) })
+    const out = await s.search({
+      namespace: "route=/n",
+      query: "deploy failed",
+      since: D(2),
+      now: D(5),
+    })
     expect(out.map((r) => r.id)).toEqual(["hit"])
   })
 })

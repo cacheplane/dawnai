@@ -41,6 +41,119 @@ export interface Embedder {
   embed(texts: readonly string[]): Promise<Float32Array[]>
 }
 
+/** Mirror of @dawn-ai/memory's `BrowseSortField`. */
+export type BrowseSortFieldLike =
+  | "updatedAt"
+  | "createdAt"
+  | "confidence"
+  | "namespace"
+  | "kind"
+  | "status"
+
+/** Mirror of @dawn-ai/memory's `BrowseSortEntry`. */
+export interface BrowseSortEntryLike {
+  readonly field: BrowseSortFieldLike
+  readonly dir: "asc" | "desc"
+}
+
+/** Mirror of @dawn-ai/memory's `BrowseFilter`. */
+export type BrowseFilterLike =
+  // Split per field, mirroring `BrowseFilter`: a shared `field: "status" | "kind"` arm
+  // with `values: readonly string[]` would compile a typo'd value.
+  | {
+      readonly field: "status"
+      readonly op: "in" | "notIn"
+      readonly values: readonly MemoryStatusLike[]
+    }
+  | {
+      readonly field: "kind"
+      readonly op: "in" | "notIn"
+      readonly values: readonly MemoryKindLike[]
+    }
+  | {
+      readonly field: "content"
+      readonly op: "contains" | "notContains" | "equals" | "notEquals" | "startsWith" | "endsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "namespace"
+      readonly op: "equals" | "startsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte"
+      readonly value: number
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "between"
+      readonly min: number
+      readonly max: number
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "onDay" | "beforeDay" | "afterDay"
+      readonly day: string
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "betweenDays"
+      readonly fromDay: string
+      readonly untilDay: string
+    }
+
+/**
+ * Structural mirror of @dawn-ai/memory's `BrowseQuery`. Named (not inlined on
+ * `MemoryStoreLike.browse`) so drift is a one-line diff instead of an invisible
+ * parameter tweak, and so the parity tripwire can compare it directly — see
+ * packages/testing/test/memory-contract-parity.contract.ts for why comparing the
+ * STORE types is not enough. Keep in lockstep with packages/memory/src/types.ts.
+ */
+export interface BrowseQueryLike {
+  readonly namespacePrefix?: string
+  /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive, no
+   *  prefix semantics. ANDed with everything else, `namespacePrefix` included. */
+  readonly namespace?: string
+  /** One status, or a set matching any of them. An EMPTY set matches NOTHING —
+   *  "any of none" is false; reading it as "unfiltered" would show every row to a
+   *  caller that had just narrowed to zero. */
+  readonly status?: MemoryStatusLike | readonly MemoryStatusLike[]
+  /** One kind, or a set matching any of them; an empty set matches nothing. */
+  readonly kind?: MemoryKindLike | readonly MemoryKindLike[]
+  readonly sourceType?: MemorySourceTypeLike
+  readonly limit?: number
+  readonly offset?: number
+  /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
+  readonly since?: string
+  /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
+  readonly until?: string
+  /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
+  readonly now?: string
+  /** AND-combined normalized predicates: at most one per `field`, at most 8 in total,
+   *  both enforced. The `status`/`kind`/`content`/`namespace` arms are evaluated;
+   *  `confidence` and `updatedAt` are rejected rather than ignored. */
+  readonly filters?: readonly BrowseFilterLike[]
+  /** Applied in order, always terminated store-side by an `id ASC` tie-break so every
+   *  window is deterministic. Absent or empty = `updatedAt DESC`. */
+  readonly orderBy?: readonly BrowseSortEntryLike[]
+  /** Opaque continuation from a prior `BrowsePageLike`. It belongs to the query that
+   *  produced it: the store recomputes the fingerprint and rejects a mismatch — `now`
+   *  included, so a caller walking pages must hold ONE `now` for the whole walk. */
+  readonly cursor?: string
+}
+
+/** Structural mirror of @dawn-ai/memory's `BrowsePage`. See `BrowseQueryLike`. */
+export interface BrowsePageLike {
+  readonly records: readonly MemoryRecordLike[]
+  /** Exact count of the whole matching set. Rows and total are two separate statements
+   *  in both in-repo stores today, so a concurrent write can momentarily skew them. */
+  readonly total: number
+  /** Opaque keyset continuation, or null when this window did not fill `limit`. Issued
+   *  whenever the page filled, so the last one may return zero rows. */
+  readonly continuation: string | null
+}
+
 export interface MemoryStoreLike {
   put(
     rec: MemoryRecordLike,
@@ -73,23 +186,7 @@ export interface MemoryStoreLike {
   delete(id: string): Promise<void>
   listCandidates(namespacePrefix: string): Promise<readonly MemoryRecordLike[]>
   /** Cross-namespace/status listing for inspection UIs. Ordered updated_at DESC, id ASC. */
-  browse(q?: {
-    readonly namespacePrefix?: string
-    readonly status?: MemoryStatusLike
-    readonly kind?: MemoryKindLike
-    readonly sourceType?: MemorySourceTypeLike
-    readonly limit?: number
-    readonly offset?: number
-    /** ISO lower bound (inclusive) on COALESCE(effectiveAt, createdAt). */
-    readonly since?: string
-    /** ISO upper bound (exclusive) on COALESCE(effectiveAt, createdAt). */
-    readonly until?: string
-    /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
-    readonly now?: string
-  }): Promise<{
-    readonly records: readonly MemoryRecordLike[]
-    readonly total: number
-  }>
+  browse(q?: BrowseQueryLike): Promise<BrowsePageLike>
   /** Aggregate counts for facet UIs. */
   stats(opts?: { readonly namespacePrefix?: string }): Promise<{
     readonly total: number

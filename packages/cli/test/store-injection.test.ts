@@ -189,7 +189,7 @@ function fakePermissionsStore(): PermissionsStore {
 
 function fakeMemoryStore(): MemoryStore {
   return {
-    browse: async () => ({ records: [], total: 0 }),
+    browse: async () => ({ records: [], total: 0, continuation: null }),
     delete: async () => {},
     get: async () => null,
     listCandidates: async () => [],
