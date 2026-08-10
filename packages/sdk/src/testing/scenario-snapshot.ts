@@ -1,6 +1,28 @@
-import * as nodeTypeChecks from "node:util/types"
+import {
+  isAnyArrayBuffer,
+  isArgumentsObject,
+  isArrayBufferView,
+  isBoxedPrimitive,
+  isCryptoKey,
+  isDate,
+  isExternal,
+  isGeneratorObject,
+  isKeyObject,
+  isMap,
+  isMapIterator,
+  isModuleNamespaceObject,
+  isNativeError,
+  isPromise,
+  isProxy,
+  isRegExp,
+  isSet,
+  isSetIterator,
+  isWeakMap,
+  isWeakSet,
+} from "node:util/types"
 
 const SNAPSHOT_DATA = Symbol.for("dawn.scenario-readonly-snapshot-data.v1")
+const NODE_INSPECT = Symbol.for("nodejs.util.inspect.custom")
 const DATE_MUTATORS = new Set<PropertyKey>([
   "setDate",
   "setFullYear",
@@ -40,9 +62,31 @@ const TYPED_ARRAY_CONSTRUCTORS = {
   Uint8ClampedArray,
 } as const
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype) as object
-const NODE_INTRINSIC_OBJECT_CHECKS = Object.values(nodeTypeChecks).filter(
-  (value): value is (candidate: unknown) => boolean => typeof value === "function",
-)
+const RECORD_PROTOTYPE = Object.freeze({ kind: "record" as const })
+const PROTOTYPE_CLASSIFICATIONS = new WeakMap<object, GenericPrototypeClassification>([
+  [Object.prototype, RECORD_PROTOTYPE],
+])
+const UNSUPPORTED_INTRINSIC_CHECKS: readonly IntrinsicCheck[] = [
+  { name: "Arguments", test: isArgumentsObject },
+  { name: "ArrayBuffer", test: isAnyArrayBuffer },
+  { name: "ArrayBuffer view", test: isArrayBufferView },
+  { name: "Boxed primitive", test: isBoxedPrimitive },
+  { name: "CryptoKey", test: isCryptoKey },
+  { name: "Date", test: isDate },
+  { name: "External", test: isExternal },
+  { name: "Generator", test: isGeneratorObject },
+  { name: "KeyObject", test: isKeyObject },
+  { name: "Map", test: isMap },
+  { name: "Map Iterator", test: isMapIterator },
+  { name: "Module namespace", test: isModuleNamespaceObject },
+  { name: "Error", test: isNativeError },
+  { name: "Promise", test: isPromise },
+  { name: "RegExp", test: isRegExp },
+  { name: "Set", test: isSet },
+  { name: "Set Iterator", test: isSetIterator },
+  { name: "WeakMap", test: isWeakMap },
+  { name: "WeakSet", test: isWeakSet },
+]
 
 type BinaryBuffer = ArrayBuffer | SharedArrayBuffer
 type BinaryBufferKind = "ArrayBuffer" | "SharedArrayBuffer"
@@ -50,6 +94,15 @@ type SupportedTypedArray = InstanceType<
   (typeof TYPED_ARRAY_CONSTRUCTORS)[keyof typeof TYPED_ARRAY_CONSTRUCTORS]
 >
 type TypedArrayName = keyof typeof TYPED_ARRAY_CONSTRUCTORS
+
+interface IntrinsicCheck {
+  readonly name: string
+  readonly test: (value: unknown) => boolean
+}
+
+type GenericPrototypeClassification =
+  | typeof RECORD_PROTOTYPE
+  | { readonly kind: "unsupported"; readonly message: string }
 
 interface BinaryBufferSnapshotData {
   readonly bytes: Uint8Array
@@ -281,7 +334,7 @@ export function createScenarioSnapshotter(): (value: unknown) => unknown {
         "size",
         "type",
       ])
-      const shell = Object.create(Object.getPrototypeOf(value)) as File
+      const shell = createFileSnapshotShell(value, target)
       const proxy = createReadOnlyFileSnapshot(shell, target, state)
       remember(value, proxy)
       snapshotOwnProperties(value, shell, snapshot, (key) => intrinsicKeys.has(key))
@@ -331,9 +384,9 @@ export function createScenarioSnapshotter(): (value: unknown) => unknown {
       return Object.freeze(target)
     }
 
-    assertGenericCloneEligible(value)
+    const prototype = assertGenericCloneEligible(value)
 
-    const copy = Object.create(Object.getPrototypeOf(value)) as object
+    const copy = Object.create(prototype) as object
     remember(value, copy)
     snapshotOwnProperties(value, copy, snapshot)
     return Object.freeze(copy)
@@ -423,9 +476,32 @@ function createReadOnlyFileSnapshot(shell: File, target: File, state: FileState)
         return state.lastModified
       }
 
-      return readBlobProxyProperty(file, target, state, property, receiver)
+      return readFileProxyProperty(file, target, state, property, receiver)
     },
   })
+}
+
+function createFileSnapshotShell(source: File, target: File): File {
+  const inspectDescriptor = Object.getOwnPropertyDescriptor(File.prototype, NODE_INSPECT)
+  const sourcePrototype = Object.getPrototypeOf(source) as object
+
+  if (
+    !inspectDescriptor ||
+    !("value" in inspectDescriptor) ||
+    typeof inspectDescriptor.value !== "function"
+  ) {
+    return Object.create(sourcePrototype) as File
+  }
+
+  const bridge = Object.create(sourcePrototype) as object
+  Object.defineProperty(bridge, NODE_INSPECT, {
+    configurable: false,
+    enumerable: false,
+    value: inspectDescriptor.value.bind(target),
+    writable: false,
+  })
+  Object.freeze(bridge)
+  return Object.create(bridge) as File
 }
 
 function createBlobProxyHandler<TBlob extends Blob>(
@@ -464,6 +540,29 @@ function readBlobProxyProperty(
 
   const result = Reflect.get(shell, property, receiver)
   const descriptor = Object.getOwnPropertyDescriptor(Blob.prototype, property)
+
+  if (
+    typeof result === "function" &&
+    property !== "constructor" &&
+    descriptor &&
+    "value" in descriptor &&
+    result === descriptor.value
+  ) {
+    return result.bind(target)
+  }
+
+  return result
+}
+
+function readFileProxyProperty(
+  shell: File,
+  target: File,
+  state: FileState,
+  property: PropertyKey,
+  receiver: object,
+): unknown {
+  const result = readBlobProxyProperty(shell, target, state, property, receiver)
+  const descriptor = Object.getOwnPropertyDescriptor(File.prototype, property)
 
   if (
     typeof result === "function" &&
@@ -1212,98 +1311,144 @@ function readBoxedBigInt(value: object): bigint | undefined {
   }
 }
 
-function assertGenericCloneEligible(value: object): void {
-  if (nodeTypeChecks.isPromise(value)) {
-    throw new TypeError("Promise snapshot values are not supported")
+function assertGenericCloneEligible(value: object): object | null {
+  if (isProxy(value)) {
+    throw new TypeError("Proxy snapshot values are not supported")
   }
 
-  if (nodeTypeChecks.isWeakMap(value)) {
-    throw new TypeError("WeakMap snapshot values are not supported")
+  const prototype = Object.getPrototypeOf(value) as object | null
+  const classification = classifyGenericPrototype(prototype)
+
+  if (classification.kind === "unsupported") {
+    throw new TypeError(classification.message)
   }
 
-  if (nodeTypeChecks.isWeakSet(value)) {
-    throw new TypeError("WeakSet snapshot values are not supported")
+  const intrinsicName = readUnsupportedIntrinsicName(value)
+
+  if (intrinsicName) {
+    throw new TypeError(`${intrinsicName} snapshot values are not supported`)
   }
 
-  const seen = new Set<object>()
-  let current: object | null = value
-  let isRoot = true
+  assertNoSnapshotTag(value)
+  return prototype
+}
 
-  while (current && !seen.has(current)) {
-    seen.add(current)
+function classifyGenericPrototype(prototype: object | null): GenericPrototypeClassification {
+  if (prototype === null) {
+    return RECORD_PROTOTYPE
+  }
 
-    if (isNodeIntrinsicObject(current)) {
-      throw new TypeError("Intrinsic snapshot values are not supported by generic cloning")
+  const cached = PROTOTYPE_CLASSIFICATIONS.get(prototype)
+
+  if (cached) {
+    return cached
+  }
+
+  const tagDescriptor = Object.getOwnPropertyDescriptor(prototype, Symbol.toStringTag)
+  let message: string
+
+  if (tagDescriptor) {
+    message = readUnsupportedTagMessage(tagDescriptor)
+  } else {
+    const constructorDescriptor = Object.getOwnPropertyDescriptor(prototype, "constructor")
+    const constructorValue =
+      constructorDescriptor && "value" in constructorDescriptor
+        ? constructorDescriptor.value
+        : undefined
+    const typeName =
+      typeof constructorValue === "function" ? readFunctionName(constructorValue) : undefined
+
+    if (typeof constructorValue === "function" && isNativeFunction(constructorValue)) {
+      message = `${typeName ?? "Intrinsic"} snapshot values are not supported`
+    } else {
+      message = `Unsupported snapshot value: custom instance ${typeName ?? "with a custom prototype"}`
     }
+  }
 
-    const tagDescriptor = Object.getOwnPropertyDescriptor(current, Symbol.toStringTag)
+  const classification = Object.freeze({ kind: "unsupported" as const, message })
+  PROTOTYPE_CLASSIFICATIONS.set(prototype, classification)
+  return classification
+}
 
-    if (tagDescriptor) {
-      if (!("value" in tagDescriptor)) {
-        throw new TypeError(
-          `Snapshot accessor property ${String(Symbol.toStringTag)} is not supported`,
-        )
-      }
-
-      const typeName =
-        typeof tagDescriptor.value === "string" && tagDescriptor.value.length > 0
-          ? tagDescriptor.value
-          : "Symbol.toStringTag"
-      throw new TypeError(`${typeName} snapshot values are not supported`)
+function readUnsupportedIntrinsicName(value: object): string | undefined {
+  for (const check of UNSUPPORTED_INTRINSIC_CHECKS) {
+    if (check.test(value)) {
+      return check.name
     }
+  }
 
-    if (current === Object.prototype) {
-      return
-    }
+  if (isWeakRefObject(value)) {
+    return "WeakRef"
+  }
 
-    if (!isRoot && hasNativePrototypeMember(current)) {
-      throw new TypeError("Intrinsic snapshot values are not supported by generic cloning")
-    }
+  if (isWebAssemblyModule(value)) {
+    return "WebAssembly.Module"
+  }
 
-    current = Object.getPrototypeOf(current) as object | null
-    isRoot = false
+  return undefined
+}
+
+function isWeakRefObject(value: object): boolean {
+  if (typeof WeakRef !== "function") {
+    return false
+  }
+
+  try {
+    Reflect.apply(WeakRef.prototype.deref, value, [])
+    return true
+  } catch {
+    return false
   }
 }
 
-function isNodeIntrinsicObject(value: object): boolean {
-  for (const check of NODE_INTRINSIC_OBJECT_CHECKS) {
-    try {
-      if (check(value)) {
-        return true
-      }
-    } catch {
-      return true
-    }
+function isWebAssemblyModule(value: object): boolean {
+  const webAssembly = Reflect.get(globalThis, "WebAssembly")
+
+  if (!isRecord(webAssembly)) {
+    return false
   }
 
-  return false
+  const moduleConstructor = Reflect.get(webAssembly, "Module")
+  const exportsMethod =
+    typeof moduleConstructor === "function" ? Reflect.get(moduleConstructor, "exports") : undefined
+
+  if (typeof exportsMethod !== "function") {
+    return false
+  }
+
+  try {
+    Reflect.apply(exportsMethod, moduleConstructor, [value])
+    return true
+  } catch {
+    return false
+  }
 }
 
-function hasNativePrototypeMember(prototype: object): boolean {
-  for (const key of Reflect.ownKeys(prototype)) {
-    const descriptor = Object.getOwnPropertyDescriptor(prototype, key)
+function assertNoSnapshotTag(value: object): void {
+  const descriptor = Object.getOwnPropertyDescriptor(value, Symbol.toStringTag)
 
-    if (!descriptor) {
-      return true
-    }
+  if (descriptor) {
+    throw new TypeError(readUnsupportedTagMessage(descriptor))
+  }
+}
 
-    if ("value" in descriptor && typeof descriptor.value === "function") {
-      if (isNativeFunction(descriptor.value)) {
-        return true
-      }
-
-      continue
-    }
-
-    if (
-      (!("value" in descriptor) && descriptor.get && isNativeFunction(descriptor.get)) ||
-      (!("value" in descriptor) && descriptor.set && isNativeFunction(descriptor.set))
-    ) {
-      return true
-    }
+function readUnsupportedTagMessage(descriptor: PropertyDescriptor): string {
+  if (!("value" in descriptor)) {
+    return `Snapshot accessor property ${String(Symbol.toStringTag)} is not supported`
   }
 
-  return false
+  const typeName =
+    typeof descriptor.value === "string" && descriptor.value.length > 0
+      ? descriptor.value
+      : "Symbol.toStringTag"
+  return `${typeName} snapshot values are not supported`
+}
+
+function readFunctionName(value: (...args: never[]) => unknown): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(value, "name")
+  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined
 }
 
 function isNativeFunction(value: (...args: never[]) => unknown): boolean {

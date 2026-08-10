@@ -357,6 +357,35 @@ describe("scenarios", () => {
     ).toThrow(/function snapshot values are not supported/i)
   })
 
+  test("reports unsupported custom instances at the branded suite boundary", () => {
+    class PrivateInput {
+      #value = "secret"
+
+      read(): string {
+        return this.#value
+      }
+    }
+
+    const suite = scenarios("/research").scenario("valid", (s) => s.input({}).expectPassed())
+    const descriptor = readScenarioSuite(suite)
+    const scenario = descriptor.scenarios[0]
+    const [brand] = Object.getOwnPropertySymbols(suite)
+    if (!brand || !scenario) throw new Error("Expected a branded scenario descriptor")
+
+    const forged = {
+      scenario: () => undefined,
+      [brand]: {
+        ...descriptor,
+        scenarios: [{ ...scenario, input: new PrivateInput() }],
+      },
+    }
+
+    expect(isScenarioSuite(forged)).toBe(false)
+    expect(() => readScenarioSuite(forged)).toThrow(
+      /malformed scenario suite: .*unsupported snapshot value: custom instance PrivateInput/i,
+    )
+  })
+
   test("preserves array own data properties and cycles", () => {
     const marker = Symbol("marker")
     type RichArray = unknown[] & {
@@ -425,24 +454,10 @@ describe("scenarios", () => {
     expect(() => readScenarioSuite(forged)).toThrow(/malformed scenario suite: .*scenario.*method/i)
   })
 
-  test("recursively snapshots mutable opaque values", async () => {
-    class MutableBox {
-      label: string
-      nested: { count: number }
-
-      constructor(label: string, count: number) {
-        this.label = label
-        this.nested = { count }
-      }
-
-      rename(label: string): void {
-        this.label = label
-      }
-    }
-
+  test("recursively snapshots mutable records and supported built-ins", async () => {
     const authoredDate = new Date("2026-08-09T12:00:00.000Z")
     const authoredMap = new Map([["entry", { count: 1 }]])
-    const authoredBox = new MutableBox("original", 1)
+    const authoredRecord = { label: "original", nested: { count: 1 } }
     const authoredCycle = new Map<string, unknown>()
     authoredCycle.set("self", authoredCycle)
     const mock = async ({ query }: { readonly query: string }) => ({ results: [query] })
@@ -450,10 +465,10 @@ describe("scenarios", () => {
     const suite = scenarios("/research").scenario("snapshots", (s) =>
       s
         .input({
-          box: authoredBox,
           cycle: authoredCycle,
           date: authoredDate,
           map: authoredMap,
+          record: authoredRecord,
         })
         .mockTool("searchWeb", mock)
         .expectPassed()
@@ -463,10 +478,10 @@ describe("scenarios", () => {
     const scenario = descriptor.scenarios[0]
     if (!scenario) throw new Error("Expected a scenario descriptor")
     const snapshot = scenario.input as {
-      box: MutableBox
       cycle: Map<string, unknown>
       date: Date
       map: Map<string, { count: number }>
+      record: { label: string; nested: { count: number } }
     }
 
     authoredDate.setUTCFullYear(2030)
@@ -474,26 +489,27 @@ describe("scenarios", () => {
     if (!authoredEntry) throw new Error("Expected the authored map entry")
     authoredEntry.count = 2
     authoredMap.set("later", { count: 3 })
-    authoredBox.rename("changed")
-    authoredBox.nested.count = 2
+    authoredRecord.label = "changed"
+    authoredRecord.nested.count = 2
 
     expect(snapshot.date).toBeInstanceOf(Date)
     expect(snapshot.date.toISOString()).toBe("2026-08-09T12:00:00.000Z")
     expect(snapshot.map).toBeInstanceOf(Map)
     expect(snapshot.map.get("entry")).toEqual({ count: 1 })
     expect(snapshot.map.has("later")).toBe(false)
-    expect(snapshot.box).toBeInstanceOf(MutableBox)
-    expect(snapshot.box).toMatchObject({ label: "original", nested: { count: 1 } })
+    expect(snapshot.record).toEqual({ label: "original", nested: { count: 1 } })
     expect(snapshot.cycle.get("self")).toBe(snapshot.cycle)
 
     expect(Object.isFrozen(snapshot.date)).toBe(true)
     expect(Object.isFrozen(snapshot.map)).toBe(true)
     expect(Object.isFrozen(snapshot.map.get("entry"))).toBe(true)
-    expect(Object.isFrozen(snapshot.box)).toBe(true)
-    expect(Object.isFrozen(snapshot.box.nested)).toBe(true)
+    expect(Object.isFrozen(snapshot.record)).toBe(true)
+    expect(Object.isFrozen(snapshot.record.nested)).toBe(true)
     expect(() => snapshot.date.setTime(0)).toThrow(/read-only snapshot/i)
     expect(() => snapshot.map.set("mutated", { count: 4 })).toThrow(/read-only snapshot/i)
-    expect(() => snapshot.box.rename("mutated")).toThrow()
+    expect(() => {
+      snapshot.record.label = "mutated"
+    }).toThrow()
 
     const toolMock = scenario.toolMocks[0]
     if (!toolMock) throw new Error("Expected a tool mock")

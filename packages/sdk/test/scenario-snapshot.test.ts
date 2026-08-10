@@ -1,3 +1,5 @@
+import { inspect } from "node:util"
+
 import { describe, expect, test, vi } from "vitest"
 
 import { createScenarioSnapshotter } from "../src/testing/scenario-snapshot.js"
@@ -123,27 +125,73 @@ describe("createScenarioSnapshotter", () => {
     expect(() => snapshot(inheritedTag)).toThrow(/snapshot.*not supported/i)
   })
 
-  test("keeps ordinary user-defined data classes cloneable", () => {
-    class DataBox {
-      constructor(
-        readonly label: string,
-        readonly nested: { count: number },
-      ) {}
+  test("rejects prototype-stripped internal-slot objects", () => {
+    const snapshot = createScenarioSnapshotter()
+    const values: { readonly label: string; readonly value: object }[] = []
 
-      describe(): string {
-        return `${this.label}:${this.nested.count}`
-      }
+    if (typeof WeakRef === "function") {
+      const referent = {}
+      const weakRef = new WeakRef(referent)
+      Object.setPrototypeOf(weakRef, Object.prototype)
+      values.push({ label: "WeakRef", value: weakRef })
     }
 
-    const authored = new DataBox("Dawn", { count: 1 })
-    const snapshot = createScenarioSnapshotter()(authored) as DataBox
-    authored.nested.count = 2
+    if (typeof WebAssembly === "object" && typeof WebAssembly.Module === "function") {
+      const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]))
+      Object.setPrototypeOf(module, Object.prototype)
+      values.push({ label: "WebAssembly.Module", value: module })
+    }
 
-    expect(snapshot).toBeInstanceOf(DataBox)
-    expect(snapshot).not.toBe(authored)
-    expect(snapshot.describe()).toBe("Dawn:1")
-    expect(Object.isFrozen(snapshot)).toBe(true)
-    expect(Object.isFrozen(snapshot.nested)).toBe(true)
+    for (const { label, value } of values) {
+      expect(Object.getOwnPropertyDescriptor(value, Symbol.toStringTag), label).toBeUndefined()
+      expect(() => snapshot(value), label).toThrow(
+        new RegExp(`${label.replace(".", "\\.")} snapshot values are not supported`, "i"),
+      )
+    }
+  })
+
+  test("rejects custom instances with private or inherited state", () => {
+    class PrivateBox {
+      #value = "secret"
+
+      read(): string {
+        return this.#value
+      }
+    }
+    class InheritedBox {}
+    Object.defineProperty(InheritedBox.prototype, "state", {
+      value: { count: 1 },
+    })
+
+    for (const value of [new PrivateBox(), new InheritedBox()]) {
+      expect(() => createScenarioSnapshotter()(value)).toThrow(
+        new RegExp(`unsupported snapshot value: custom instance ${value.constructor.name}`, "i"),
+      )
+    }
+  })
+
+  test("detaches plain and null-prototype records", () => {
+    const nullRecord = Object.assign(Object.create(null) as Record<string, unknown>, {
+      label: "null",
+      nested: { count: 1 },
+    })
+    const authored = {
+      nullRecord,
+      plain: { label: "plain", nested: { count: 1 } },
+    }
+    const snapshot = createScenarioSnapshotter()(authored) as typeof authored
+
+    authored.plain.nested.count = 2
+    ;(nullRecord.nested as { count: number }).count = 2
+
+    expect(Object.getPrototypeOf(snapshot.plain)).toBe(Object.prototype)
+    expect(snapshot.plain).toEqual({ label: "plain", nested: { count: 1 } })
+    expect(Object.getPrototypeOf(snapshot.nullRecord)).toBeNull()
+    expect(snapshot.nullRecord).toEqual({ label: "null", nested: { count: 1 } })
+    expect(Object.isFrozen(snapshot.plain)).toBe(true)
+    expect(Object.isFrozen(snapshot.plain.nested)).toBe(true)
+    expect(Object.isFrozen(snapshot.nullRecord)).toBe(true)
+    expect(Object.isFrozen(snapshot.nullRecord.nested)).toBe(true)
   })
 
   test("materializes detached read-only Error and DOMException stacks", () => {
@@ -232,6 +280,9 @@ describe("createScenarioSnapshotter", () => {
 
     await expect(snapshot.blob.text()).resolves.toBe("Dawn")
     await expect(snapshot.file.text()).resolves.toBe("Dawn")
+    expect(inspect(snapshot.file)).toBe(
+      "File { size: 4, type: 'text/plain', name: 'dawn.txt', lastModified: 123 }",
+    )
   })
 
   test("preserves Blob and File reads across slices, snapshots, and module copies", async () => {
@@ -259,5 +310,38 @@ describe("createScenarioSnapshotter", () => {
     await expect(crossCopy.file.slice(2).text()).resolves.toBe("wn")
     expect(crossCopy.file.name).toBe("dawn.txt")
     expect(crossCopy.file.lastModified).toBe(123)
+  })
+
+  test("uses a fixed intrinsic predicate set for plain records", async () => {
+    vi.resetModules()
+    const actual = await vi.importActual<typeof import("node:util/types")>("node:util/types")
+    const calls = new Map<string, number>()
+    const mockedTypeChecks: Record<string, unknown> = {}
+
+    for (const [name, value] of Object.entries(actual)) {
+      mockedTypeChecks[name] =
+        typeof value === "function"
+          ? (candidate: unknown) => {
+              calls.set(name, (calls.get(name) ?? 0) + 1)
+              return (value as (input: unknown) => boolean)(candidate)
+            }
+          : value
+    }
+
+    mockedTypeChecks.futureIntrinsicPredicate = () => {
+      calls.set("futureIntrinsicPredicate", (calls.get("futureIntrinsicPredicate") ?? 0) + 1)
+      return true
+    }
+    vi.doMock("node:util/types", () => mockedTypeChecks)
+
+    try {
+      const isolated = await import("../src/testing/scenario-snapshot.js")
+      expect(isolated.createScenarioSnapshotter()({ stable: true })).toEqual({ stable: true })
+      expect(calls.get("futureIntrinsicPredicate") ?? 0).toBe(0)
+      expect([...calls.values()].reduce((total, count) => total + count, 0)).toBeLessThanOrEqual(20)
+    } finally {
+      vi.doUnmock("node:util/types")
+      vi.resetModules()
+    }
   })
 })
