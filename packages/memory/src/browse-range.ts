@@ -1,7 +1,24 @@
+import { BrowseQueryError } from "./browse-validate.js"
+
 const DAY_MS = 86_400_000
+const DAY = /^\d{4}-\d{2}-\d{2}$/
+
+/** Defence in depth, the same posture as browse-order: validateBrowseQuery already
+ *  rejected this, but an unchecked day becomes a bound no stored row can sit at —
+ *  a silently empty window instead of a 400. */
+function checkDay(day: string): void {
+  if (!DAY.test(day))
+    throw new BrowseQueryError(`day must be a "YYYY-MM-DD" UTC day, got ${JSON.stringify(day)}`)
+  // Out-of-range components ROLL OVER rather than fail to parse: "2026-02-31" reads as
+  // March 3, so only a day that round-trips names the date it spells.
+  const parsed = Date.parse(`${day}T00:00:00.000Z`)
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== day)
+    throw new BrowseQueryError(`day ${JSON.stringify(day)} is not a real calendar day`)
+}
 
 /** Inclusive lower bound of a UTC day, in the stored full-ISO-Z form. */
 export function utcDayStart(day: string): string {
+  checkDay(day)
   return `${day}T00:00:00.000Z`
 }
 

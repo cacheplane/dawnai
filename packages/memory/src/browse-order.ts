@@ -31,10 +31,12 @@ const COLUMNS: Readonly<
   status: { column: "status", numeric: false, collateC: false },
 }
 
-/** The documented reset state: newest first, `id ASC` appended by the stores. */
-export const DEFAULT_BROWSE_ORDER: readonly ResolvedBrowseSort[] = [
-  { field: "updatedAt", column: "updated_at", dir: "desc", numeric: false, collateC: false },
-]
+/** The documented reset state: newest first. `resolveBrowseOrder` hands out THIS array,
+ *  so it is frozen — the stores' `id ASC` tie-break goes into a new list, and a store
+ *  that appends in place fails loudly instead of rewriting the default process-wide. */
+export const DEFAULT_BROWSE_ORDER: readonly ResolvedBrowseSort[] = Object.freeze([
+  Object.freeze<ResolvedBrowseSort>({ field: "updatedAt", ...COLUMNS.updatedAt, dir: "desc" }),
+])
 
 export function resolveBrowseOrder(
   orderBy?: readonly BrowseSortEntry[],
@@ -45,6 +47,12 @@ export function resolveBrowseOrder(
     // Defence in depth: validateBrowseQuery already rejected this, but a store
     // must never interpolate an unmapped name.
     if (!meta) throw new BrowseQueryError(`unknown sort field ${JSON.stringify(entry.field)}`)
+    // Checked HERE rather than trusted to each dialect's `dir === "desc" ? … : …`, so the
+    // whitelist is the single gate every part of an ORDER BY passes through.
+    if (entry.dir !== "asc" && entry.dir !== "desc")
+      throw new BrowseQueryError(
+        `sort direction must be "asc" or "desc", got ${JSON.stringify(entry.dir)}`,
+      )
     return {
       field: entry.field,
       column: meta.column,
