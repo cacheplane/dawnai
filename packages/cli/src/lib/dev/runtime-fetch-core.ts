@@ -1894,6 +1894,10 @@ async function handleResumeRequest(options: {
     // resumed run. Explicit cancellation uses POST /threads/:id/cancel.
     const encoder = new TextEncoder()
     let sourceCleanup: Promise<void> | undefined
+    // A resumed turn can park again (an "once" decision authorizes one call,
+    // not the tool). Same reasoning as handleApStreamRequest: the adapter's
+    // `done` follows the interrupt chunk, so a drained loop is not completion.
+    let sawInterrupt = false
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
@@ -1926,9 +1930,13 @@ async function handleResumeRequest(options: {
             for await (const chunk of abortableAsyncIterable(routeStream, run.signal, (p) => {
               sourceCleanup = p
             })) {
+              if (chunk.type === "interrupt") sawInterrupt = true
               safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
             }
-            await threadsStore.updateStatus(threadId, "idle")
+            await threadsStore.updateStatus(
+              threadId,
+              terminalStatus({ cancelled: false, sawInterrupt }),
+            )
           } catch (error) {
             // A cancelled run is not a failure: clients must be able to tell the
             // two apart without inferring it from a truncated stream.
@@ -1942,7 +1950,7 @@ async function handleResumeRequest(options: {
                 }
             safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
             await threadsStore
-              .updateStatus(threadId, run.cancelled ? "interrupted" : "idle")
+              .updateStatus(threadId, terminalStatus({ cancelled: run.cancelled, sawInterrupt }))
               .catch(() => undefined)
           }
         } finally {

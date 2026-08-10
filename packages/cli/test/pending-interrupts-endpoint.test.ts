@@ -489,3 +489,68 @@ describe("terminalStatus", () => {
     expect(terminalStatus({ cancelled: true, sawInterrupt: true })).toBe("interrupted")
   })
 })
+
+function resumeRequest(threadId: string, interruptId: string): Request {
+  return new Request(`http://localhost/threads/${threadId}/resume`, {
+    body: JSON.stringify({
+      resume: [{ interruptId, payload: "once", status: "resolved" }],
+      route: "/park#agent",
+    }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  })
+}
+
+describe("thread status after a resumed turn", () => {
+  it("marks the thread interrupted when the resumed turn parks again", async () => {
+    // "once" authorizes exactly one call, so the second call to the same tool
+    // re-prompts and the resumed turn parks again.
+    await withAimock(
+      script()
+        .user("deploy to staging")
+        .callsTool("deployProd", { env: "staging" })
+        .callsTool("deployProd", { env: "prod" })
+        .build(),
+    )
+    const handler = await createHandler(await fixtureApp())
+    const threadId = "t-resume-parks-again"
+
+    await drain(await handler.fetch(parkRunRequest(threadId, "deploy to staging")))
+    const first = await readPendingInterruptsBody(handler, threadId)
+    const interruptId = first.interrupts[0]?.interruptId ?? ""
+    expect(interruptId).not.toBe("")
+
+    const resumeText = await readSseText(await handler.fetch(resumeRequest(threadId, interruptId)))
+    expect(resumeText).toContain("event: interrupt")
+
+    expect(await threadStatus(handler, threadId)).toBe("interrupted")
+    const second = await readPendingInterruptsBody(handler, threadId)
+    expect(second.interrupts).toHaveLength(1)
+    // A NEW park, not an echo of the answered one.
+    expect(second.interrupts[0]?.interruptId).not.toBe(interruptId)
+  }, 60_000)
+
+  it("returns the thread to idle when the resumed turn completes", async () => {
+    await withAimock(
+      script()
+        .user("deploy to staging")
+        .callsTool("deployProd", { env: "staging" })
+        .replies("Deployed.")
+        .build(),
+    )
+    const handler = await createHandler(await fixtureApp())
+    const threadId = "t-resume-completes"
+
+    await drain(await handler.fetch(parkRunRequest(threadId, "deploy to staging")))
+    const parked = await readPendingInterruptsBody(handler, threadId)
+    const interruptId = parked.interrupts[0]?.interruptId ?? ""
+
+    await drain(await handler.fetch(resumeRequest(threadId, interruptId)))
+
+    expect(await threadStatus(handler, threadId)).toBe("idle")
+    // The answered prompt is gone from durable state, so a reconnecting client
+    // does not re-render a decision the human already made.
+    const after = await readPendingInterruptsBody(handler, threadId)
+    expect(after.interrupts).toEqual([])
+  }, 60_000)
+})
