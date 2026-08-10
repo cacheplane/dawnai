@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest"
 import { createAnalyzeRouteTools } from "../src/compiler/analyze-route-tools.ts"
 import { analyzeRouteTools as analyzeRouteToolsProduction } from "../src/compiler/index.ts"
 import { createAnalyzeToolFiles } from "../src/compiler/typescript-backend.ts"
+import { renderScenarioTypes, SCENARIO_TYPES_FILE } from "../src/typegen/render-scenario-types.ts"
+import type { RouteManifest, RouteToolTypes } from "../src/types.ts"
 
 let tempDir: string
 
@@ -177,8 +179,8 @@ export default async function ping(): Promise<{ pong: boolean }> {
     ).toEqual(["valid"])
   })
 
-  test("resolves imported route-tool input and output types", () => {
-    const routeDir = join(tempDir, "route")
+  test("emits portable imported types that compile in the generated scenario declaration", () => {
+    const routeDir = join(tempDir, "src", "app", "search")
     mkdirSync(routeDir, { recursive: true })
     writeFileSync(
       join(routeDir, "types.ts"),
@@ -198,16 +200,66 @@ export default async function search(input: ImportedInput): Promise<ImportedOutp
 `,
     )
 
-    const result = analyzeRouteToolsProduction({ routeDir, sharedToolsDir: undefined })
+    const scenarioTypesFile = join(tempDir, ".dawn", SCENARIO_TYPES_FILE)
+    const tools = analyzeRouteToolsProduction({
+      routeDir,
+      sharedToolsDir: undefined,
+      typeReferenceFileName: scenarioTypesFile,
+    })
+    const manifest: RouteManifest = {
+      appRoot: tempDir,
+      routes: [
+        {
+          id: "/search",
+          pathname: "/search",
+          kind: "workflow",
+          entryFile: join(routeDir, "index.ts"),
+          routeDir,
+          segments: [{ kind: "static", value: "search" }],
+        },
+      ],
+    }
+    const routeTools: RouteToolTypes[] = [{ pathname: "/search", tools }]
 
-    expect(result[0]).toMatchObject({
+    mkdirSync(join(tempDir, ".dawn"), { recursive: true })
+    writeFileSync(scenarioTypesFile, renderScenarioTypes(manifest, routeTools))
+    const sdkTestingStub = join(tempDir, "sdk-testing.d.ts")
+    writeFileSync(
+      sdkTestingStub,
+      'declare module "@dawn-ai/sdk/testing" { interface RouteScenarioMap {} }\n',
+    )
+
+    const program = ts.createProgram([scenarioTypesFile, sdkTestingStub], {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      strict: true,
+      noEmit: true,
+      lib: ["lib.es2022.d.ts"],
+    })
+    const diagnostics = ts.getPreEmitDiagnostics(program).map((diagnostic) => ({
+      code: diagnostic.code,
+      message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+    }))
+
+    expect({
+      name: tools[0]?.name,
+      inputType: tools[0]?.inputType,
+      outputType: tools[0]?.outputType,
+      parameter: tools[0]?.parameter,
+      containsAbsolutePath:
+        tools[0]?.inputType.includes(tempDir) || tools[0]?.outputType.includes(tempDir),
+      diagnostics,
+    }).toEqual({
       name: "search",
-      inputType: "ImportedInput",
-      outputType: "ImportedOutput",
+      inputType: 'import("../src/app/search/types").ImportedInput',
+      outputType: 'import("../src/app/search/types").ImportedOutput',
       parameter: {
         kind: "object",
         properties: [{ name: "query", type: { kind: "string" }, optional: false }],
       },
+      containsAbsolutePath: false,
+      diagnostics: [],
     })
   })
 })

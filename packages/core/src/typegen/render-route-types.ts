@@ -1,4 +1,5 @@
 import type { RouteManifest, RouteSegment, RouteToolTypes } from "../types.js"
+import { SCENARIO_TYPES_FILE } from "./render-scenario-types.js"
 import { type RouteStateFields, renderStateTypes } from "./render-state-types.js"
 import { renderToolTypes } from "./render-tool-types.js"
 
@@ -25,7 +26,7 @@ export function renderDawnTypes(
   const toolBlock = renderToolTypes(toolTypes).trimEnd()
 
   const parts: string[] = [
-    '/// <reference path="./scenarios.generated.d.ts" />',
+    `/// <reference path="./${SCENARIO_TYPES_FILE}" />`,
     "",
     'declare module "dawn:routes" {',
     `  export type DawnRoutePath = ${pathUnion};`,

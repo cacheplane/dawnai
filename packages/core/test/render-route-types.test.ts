@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, test } from "vitest"
 
 import { renderDawnTypes, renderRouteTypes } from "../src/typegen/render-route-types"
-import { renderScenarioTypes } from "../src/typegen/render-scenario-types"
+import { renderScenarioTypes, SCENARIO_TYPES_FILE } from "../src/typegen/render-scenario-types.ts"
 import type { RouteStateFields } from "../src/typegen/render-state-types"
 import type { RouteManifest, RouteSegment, RouteToolTypes } from "../src/types"
 
@@ -70,7 +70,7 @@ describe("renderDawnTypes", () => {
 
     const output = renderDawnTypes(manifest, toolTypes)
 
-    expect(output.startsWith('/// <reference path="./scenarios.generated.d.ts" />\n\n')).toBe(true)
+    expect(output.startsWith(`/// <reference path="./${SCENARIO_TYPES_FILE}" />\n\n`)).toBe(true)
     expect(output).toMatchInlineSnapshot(`
       "/// <reference path="./scenarios.generated.d.ts" />
 

@@ -1,4 +1,4 @@
-import { basename, extname } from "node:path"
+import { basename, extname, resolve } from "node:path"
 
 // TypeScript 7.0 has no stable compiler API, so Core pins the TypeScript 6 compatibility
 // wrapper and implementation behind this boundary. Revisit a native port for TS 7.1.
@@ -45,15 +45,27 @@ export function analyzeToolSource(source: string, fileName: string): AnalyzedToo
 
 export function createAnalyzeToolFiles(
   createProgram: CreateProgram = ts.createProgram,
-): (toolFiles: ReadonlyMap<string, string>) => readonly AnalyzedTool[] {
-  return (toolFiles) => {
+): (
+  toolFiles: ReadonlyMap<string, string>,
+  typeReferenceFileName?: string,
+) => readonly AnalyzedTool[] {
+  return (toolFiles, typeReferenceFileName) => {
     if (toolFiles.size === 0) return []
 
     const program = createProgram([...toolFiles.values()], compilerOptions())
+    const typeReferenceSourceFile = typeReferenceFileName
+      ? ts.createSourceFile(
+          resolve(typeReferenceFileName),
+          "",
+          ts.ScriptTarget.ES2022,
+          false,
+          ts.ScriptKind.TS,
+        )
+      : undefined
     const results: AnalyzedTool[] = []
 
     for (const [name, fileName] of toolFiles) {
-      const analyzed = analyzeProgramSource(program, fileName, name)
+      const analyzed = analyzeProgramSource(program, fileName, name, typeReferenceSourceFile)
       if (analyzed) results.push(analyzed)
     }
 
@@ -63,14 +75,18 @@ export function createAnalyzeToolFiles(
 
 const analyzeToolFilesWithProgram = createAnalyzeToolFiles()
 
-export function analyzeToolFiles(toolFiles: ReadonlyMap<string, string>): readonly AnalyzedTool[] {
-  return analyzeToolFilesWithProgram(toolFiles)
+export function analyzeToolFiles(
+  toolFiles: ReadonlyMap<string, string>,
+  typeReferenceFileName?: string,
+): readonly AnalyzedTool[] {
+  return analyzeToolFilesWithProgram(toolFiles, typeReferenceFileName)
 }
 
 function analyzeProgramSource(
   program: ts.Program,
   fileName: string,
   name: string,
+  typeReferenceSourceFile?: ts.SourceFile,
 ): AnalyzedTool | null {
   const checker = program.getTypeChecker()
   const sourceFile = program.getSourceFile(fileName)
@@ -114,6 +130,9 @@ function analyzeProgramSource(
   )
   const targetDescription = ts.displayPartsToString(callableTarget.getDocumentationComment(checker))
   const description = exportedDescription || targetDescription || leadingJsDoc.description
+  const typeFormatFlags =
+    ts.TypeFormatFlags.NoTruncation |
+    (typeReferenceSourceFile ? ts.TypeFormatFlags.UseFullyQualifiedType : 0)
 
   return {
     name,
@@ -123,9 +142,9 @@ function analyzeProgramSource(
       schema: hasRuntimeModuleExport(moduleExports, "schema", checker, sourceFile),
     },
     inputType: parameterType
-      ? checker.typeToString(parameterType, undefined, ts.TypeFormatFlags.NoTruncation)
+      ? checker.typeToString(parameterType, typeReferenceSourceFile, typeFormatFlags)
       : "void",
-    outputType: checker.typeToString(returnType, undefined, ts.TypeFormatFlags.NoTruncation),
+    outputType: checker.typeToString(returnType, typeReferenceSourceFile, typeFormatFlags),
     parameter: parameterType
       ? resolveParameterType(parameterType, checker, sourceFile, isSourceFileDefaultLibrary)
       : null,
