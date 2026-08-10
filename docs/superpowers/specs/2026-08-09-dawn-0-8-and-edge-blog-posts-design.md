@@ -7,7 +7,7 @@
 
 ## Goal
 
-Publish two complementary posts that close the public-blog gap between the Dawn 0.4 post and the
+Draft two complementary posts that close the public-blog gap between the Dawn 0.4 post and the
 current 0.8.21 release:
 
 1. a broad release story explaining how Dawn grew from route conventions into the fuller
@@ -59,6 +59,7 @@ or imitate catchphrases so aggressively that the voice becomes a caricature.
 - **Version:** `0.8.21`
 - **Tags:** `[typescript, agents]` (`releases` is added automatically)
 - **Author:** `brian`
+- **Frontmatter date:** `2026-08-09`
 - **Draft state:** `draft: true` until editorial approval and a publication date are confirmed
 - **Target length:** roughly 1,500–1,900 words
 
@@ -133,8 +134,9 @@ package changelog. The minimum release anchors are:
 
 Features from other 0.8.x releases may appear after checking the relevant package changelog. Do
 not fold the currently unreleased changesets on `main` into the shipped roundup. Do not present
-0.8.20 as a public release: npm and GitHub jump from 0.8.19 to 0.8.21 even though generated
-changelogs contain an empty 0.8.20 section.
+0.8.20 as a public release: npm, tags, and GitHub Releases jump from 0.8.19 to 0.8.21. Some
+generated package changelogs contain 0.8.20 headings or substantive entries, but no corresponding
+public artifact exists; exclude that unpublished material from the post.
 
 Accuracy notes for the prose:
 
@@ -162,6 +164,7 @@ Accuracy notes for the prose:
 - **Type:** `post`
 - **Tags:** `[typescript, agents, patterns]`
 - **Author:** `brian`
+- **Frontmatter date:** `2026-08-09`
 - **Draft state:** `draft: true` until editorial approval and a publication date are confirmed
 - **Target length:** roughly 1,300–1,700 words
 
@@ -182,8 +185,9 @@ cannot safely serve.
 2. **What ships in 0.8.21.** State the supported workflow and the opt-in nature of
    the `hono` target. Show `build.targets: ["node", "langsmith", "hono"]` and explain that setting
    the list replaces the defaults, so readers must retain every output they still need. Name
-   Cloudflare Workers as the verified host while explaining that the default-exported Hono app has
-   a web-standard shape other hosts may be able to consume.
+   Cloudflare Workers as the target host and local real workerd as the verified runtime, while
+   explaining that the default-exported Hono app has a web-standard shape other hosts may be able
+   to consume.
 3. **The build output.** Show one configuration block and the generated files:
    `.dawn/build/app.mjs`, `modules.edge.mjs`, `stores.mjs`, and the root `wrangler.toml`. Explain
    the job of each artifact rather than listing filenames alone. State that Dawn emits analyzable
@@ -205,12 +209,12 @@ cannot safely serve.
    instead of being silently dropped. Distinguish those errors from `memory.md` and `plan.md`,
    whose filesystem-backed markers currently detect false and remain inactive. Do not describe a
    feature as workerd-verified merely because the build does not gate it.
-7. **What the tests prove.** State that CI bundles the emitted graph without Node specifiers and
-   drives four sequential AG-UI turns plus `/healthz` through local workerd against Postgres. Then
-   state what it does not prove: Agent Protocol/tool/subagent/HITL execution inside workerd, other
-   model providers, a real Cloudflare deployment, Hyperdrive or Neon Cloud, production
-   connection/subrequest limits, WAN query latency, cross-isolate cold starts, or platform
-   bundle/startup quotas.
+7. **What the tests prove.** Name the gated `edge-workerd` CI lane: it bundles the emitted graph
+   without Node specifiers and drives four sequential AG-UI turns plus `/healthz` through local
+   workerd against Postgres. Then state what it does not prove: Agent Protocol, tool, subagent, or
+   HITL execution inside workerd; other model providers; a real Cloudflare deployment; Hyperdrive
+   or Neon Cloud; production connection/subrequest limits; WAN query latency; cross-isolate cold
+   starts; or platform bundle/startup quotas.
 8. **Try it.** Show the dependency/config/build/wrangler path, link the deployment docs, and invite
    feedback from readers trying the target against real workloads. Do not call it generally
    production-proven.
