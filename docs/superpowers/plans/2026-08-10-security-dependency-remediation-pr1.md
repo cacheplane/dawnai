@@ -323,7 +323,8 @@ final evidence report.
 ### Task 2: Add graph and Hono compatibility regressions first
 
 **Files:**
-- Read: `test/security-dependencies/vitest.config.ts`
+- Modify: `test/security-dependencies/vitest.config.ts`
+- Modify: `test/security-dependencies/tsconfig.json`
 - Create: `test/security-dependencies/dependency-resolution.test.ts`
 - Create: `test/security-dependencies/hono-node-server.test.ts`
 - Read: `vitest.workspace.ts`
@@ -339,9 +340,10 @@ project, not a new workspace package, and the repo-level TypeScript test files
 must not be pulled into a publishable package's `rootDir`.
 
 Confirm Task 1's `test/security-dependencies/tsconfig.json` extends the repository's Node
-configuration with DOM libs, `noEmit`, explicit `jsx: "react-jsx"`, and explicit
-path mappings to the chat example's React, ReactDOM, and React Core types used by
-the browser entry.
+configuration with DOM libs, `noEmit`, and explicit `jsx: "react-jsx"`. Add the
+missing explicit path mappings to the chat example's React, ReactDOM, and React
+Core types used by the browser entry; do not fall back to root or publishable
+package resolution.
 Include only this test directory's `.ts`/`.tsx` sources and its Vitest and
 Playwright configs. Prove it is independent of every publishable package
 `rootDir`:
@@ -364,7 +366,12 @@ unexpected lockfile structure. Assert:
 - node-server has exactly one resolved 2.1.0 snapshot across the CLI,
   CopilotKit, and MCP roots;
 - provider-utils 3.0.28 remains only on the exact Google Vertex/CopilotKit
-  private-example path and is not rewritten to an incompatible major;
+  private-example path and is not rewritten to an incompatible major. Prove
+  the complete four-snapshot reverse-parent set inside that one Vertex subtree,
+  while retaining the parallel safe provider-utils 4.x snapshot;
+- complete safe side-lines such as js-yaml 5.x, brace-expansion 5.x, and
+  body-parser 2.x remain present rather than being discarded by an
+  over-specific vulnerable-version filter;
 - the expected package names, versions, importers, and parent identities are
   unique and deterministic.
 
@@ -382,6 +389,17 @@ map; `@hono/node-server/package.json` is not exported. Require the actual
 the CJS file through `import()` is not ESM coverage. Resolve MCP's Streamable
 HTTP module the same way. Never resolve through `packages/cli`, which is already
 on 2.x and would produce a false green.
+
+pnpm exposes the app-facing CopilotKit package through a symlink. After finding
+its package manifest from each app anchor, canonicalize that manifest with
+`realpathSync()` before creating the nested `createRequire()` or locating
+node-server/MCP; repeat that canonicalization for MCP. A nested lookup from the
+logical symlink path is an expected false RED, while resolving from the root or
+CLI is an expected false green. The export-map resolver accepts the current 1.x
+string `require`/`import` branches and the target 2.x nested `default` branches,
+rejecting arrays, types-only branches, and unknown shapes. MCP is loaded through
+the exact `@modelcontextprotocol/sdk/server/streamableHttp.js` subpath, not its
+currently unusable package root.
 
 Cover:
 

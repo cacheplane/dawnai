@@ -17,7 +17,10 @@ export default defineConfig({
 		},
 		fileParallelism: false,
 		hookTimeout: 30_000,
-		include: ["test/security-dependencies/**/*.test.ts"],
+		include: [
+			"test/security-dependencies/**/*.test.ts",
+			"test/security-dependencies/**/*.test.tsx",
+		],
 		testTimeout: 30_000,
 	},
 });

@@ -1,17 +1,33 @@
 {
-  "$schema": "https://json.schemastore.org/tsconfig",
-  "extends": "../../packages/config-typescript/node.json",
-  "compilerOptions": {
-    "allowJs": false,
-    "checkJs": false,
-    "composite": false,
-    "jsx": "react-jsx",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "noEmit": true,
-    "noImplicitAny": false,
-    "types": ["node", "vitest/globals"]
-  },
-  "include": ["./**/*.ts", "./**/*.tsx"]
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"extends": "../../packages/config-typescript/node.json",
+	"compilerOptions": {
+		"allowJs": false,
+		"allowImportingTsExtensions": true,
+		"checkJs": false,
+		"composite": false,
+		"jsx": "react-jsx",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"noEmit": true,
+		"noImplicitAny": false,
+		"paths": {
+			"@copilotkit/react-core/v2": [
+				"../../examples/chat/web/node_modules/@copilotkit/react-core/dist/v2/index.d.mts"
+			],
+			"react": ["../../examples/chat/web/node_modules/@types/react/index.d.ts"],
+			"react/jsx-runtime": [
+				"../../examples/chat/web/node_modules/@types/react/jsx-runtime.d.ts"
+			],
+			"react-dom": [
+				"../../examples/chat/web/node_modules/@types/react-dom/index.d.ts"
+			],
+			"react-dom/client": [
+				"../../examples/chat/web/node_modules/@types/react-dom/client.d.ts"
+			]
+		},
+		"types": ["node", "vitest/globals"]
+	},
+	"include": ["./**/*.ts", "./**/*.tsx"]
 }
