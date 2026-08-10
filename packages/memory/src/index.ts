@@ -43,8 +43,11 @@ export {
 export { sqliteMemoryStore } from "./sqlite-store.js"
 export { tokenize } from "./tokenize.js"
 export type {
+  BrowseFilter,
   BrowsePage,
   BrowseQuery,
+  BrowseSortEntry,
+  BrowseSortField,
   MemoryKind,
   MemoryQuery,
   MemoryRecord,

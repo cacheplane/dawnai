@@ -51,6 +51,65 @@ export interface VectorRankingOptions {
   readonly confidenceWeight?: number
   readonly recencyHalfLifeMs?: number
 }
+/** Sortable browse fields. A CLOSED whitelist: these are the only names that ever
+ *  reach a SQL identifier position (see browse-order.ts). */
+export type BrowseSortField =
+  | "updatedAt"
+  | "createdAt"
+  | "confidence"
+  | "namespace"
+  | "kind"
+  | "status"
+
+export interface BrowseSortEntry {
+  readonly field: BrowseSortField
+  readonly dir: "asc" | "desc"
+}
+
+/** One normalized predicate. AND-combined with the other filters and with the
+ *  top-level shorthand fields. At most ONE filter per `field` (mirrors the
+ *  one-filter-per-column model of the grid that drives this API); within-field
+ *  multi-value exists only through `in`/`notIn`. */
+export type BrowseFilter =
+  | {
+      readonly field: "status" | "kind"
+      readonly op: "in" | "notIn"
+      readonly values: readonly string[]
+    }
+  | {
+      readonly field: "content"
+      readonly op: "contains" | "notContains" | "equals" | "notEquals" | "startsWith" | "endsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "namespace"
+      readonly op: "equals" | "startsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte"
+      readonly value: number
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "between"
+      readonly min: number
+      readonly max: number
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "onDay" | "beforeDay" | "afterDay"
+      /** "YYYY-MM-DD", interpreted as a UTC day. */
+      readonly day: string
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "betweenDays"
+      /** Inclusive of both UTC days. */
+      readonly fromDay: string
+      readonly untilDay: string
+    }
 export interface BrowseQuery {
   readonly namespacePrefix?: string
   /** One status, or a set matching any of them. An EMPTY set matches nothing —
@@ -68,10 +127,27 @@ export interface BrowseQuery {
   readonly until?: string
   /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
   readonly now?: string
+  /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive,
+   *  no prefix semantics. ANDed with everything else. */
+  readonly namespace?: string
+  /** AND-combined normalized predicates; at most one per field, at most 8 total. */
+  readonly filters?: readonly BrowseFilter[]
+  /** Applied in order, always terminated server-side by an `id ASC` tie-break so
+   *  every window is deterministic. Absent or empty = `updatedAt DESC`. */
+  readonly orderBy?: readonly BrowseSortEntry[]
+  /** Opaque continuation from a prior `BrowsePage`. Belongs to the query that
+   *  produced it: the store recomputes the fingerprint and rejects a mismatch. */
+  readonly cursor?: string
 }
 export interface BrowsePage {
   readonly records: readonly MemoryRecord[]
+  /** Exact count of the whole matching set — NOT of this window, and NOT reduced by
+   *  a `cursor`. Read from the same transaction snapshot as `records`. */
   readonly total: number
+  /** Opaque keyset continuation, or null when this window did not fill `limit`.
+   *  A continuation is issued whenever the page filled, so following the last one
+   *  may legitimately return zero rows. */
+  readonly continuation: string | null
 }
 export interface MemoryStats {
   readonly total: number

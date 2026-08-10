@@ -482,7 +482,7 @@ export function sqliteMemoryStore(opts: {
       const total = (
         db.prepare(`SELECT COUNT(*) AS n FROM memories ${clause}`).get(...params) as { n: number }
       ).n
-      return { records: rows.map(rowToRecord), total }
+      return { records: rows.map(rowToRecord), total, continuation: null }
     },
     async stats(opts = {}) {
       // Byte-exact prefix match (see browse) — LIKE metachars stay literal.

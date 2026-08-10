@@ -41,6 +41,61 @@ export interface Embedder {
   embed(texts: readonly string[]): Promise<Float32Array[]>
 }
 
+/** Mirror of @dawn-ai/memory's `BrowseSortField`. */
+export type BrowseSortFieldLike =
+  | "updatedAt"
+  | "createdAt"
+  | "confidence"
+  | "namespace"
+  | "kind"
+  | "status"
+
+/** Mirror of @dawn-ai/memory's `BrowseSortEntry`. */
+export interface BrowseSortEntryLike {
+  readonly field: BrowseSortFieldLike
+  readonly dir: "asc" | "desc"
+}
+
+/** Mirror of @dawn-ai/memory's `BrowseFilter`. */
+export type BrowseFilterLike =
+  | {
+      readonly field: "status" | "kind"
+      readonly op: "in" | "notIn"
+      readonly values: readonly string[]
+    }
+  | {
+      readonly field: "content"
+      readonly op: "contains" | "notContains" | "equals" | "notEquals" | "startsWith" | "endsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "namespace"
+      readonly op: "equals" | "startsWith"
+      readonly value: string
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte"
+      readonly value: number
+    }
+  | {
+      readonly field: "confidence"
+      readonly op: "between"
+      readonly min: number
+      readonly max: number
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "onDay" | "beforeDay" | "afterDay"
+      readonly day: string
+    }
+  | {
+      readonly field: "updatedAt"
+      readonly op: "betweenDays"
+      readonly fromDay: string
+      readonly untilDay: string
+    }
+
 /**
  * Structural mirror of @dawn-ai/memory's `BrowseQuery`. Named (not inlined on
  * `MemoryStoreLike.browse`) so drift is a one-line diff instead of an invisible
@@ -59,12 +114,17 @@ export interface BrowseQueryLike {
   readonly since?: string
   readonly until?: string
   readonly now?: string
+  readonly namespace?: string
+  readonly filters?: readonly BrowseFilterLike[]
+  readonly orderBy?: readonly BrowseSortEntryLike[]
+  readonly cursor?: string
 }
 
 /** Structural mirror of @dawn-ai/memory's `BrowsePage`. See `BrowseQueryLike`. */
 export interface BrowsePageLike {
   readonly records: readonly MemoryRecordLike[]
   readonly total: number
+  readonly continuation: string | null
 }
 
 export interface MemoryStoreLike {

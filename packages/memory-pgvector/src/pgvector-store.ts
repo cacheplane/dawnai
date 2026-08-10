@@ -499,6 +499,7 @@ export function pgvectorMemoryStore(opts: {
       return {
         records: (rowsRes.rows as Record<string, unknown>[]).map(rowToRecord),
         total: (totalRes.rows[0] as { n: number }).n,
+        continuation: null,
       }
     },
 

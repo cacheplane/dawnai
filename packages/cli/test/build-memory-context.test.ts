@@ -10,7 +10,7 @@ const fakeStore: MemoryStoreLike = {
   supersede: async () => {},
   delete: async () => {},
   listCandidates: async () => [],
-  browse: async () => ({ records: [], total: 0 }),
+  browse: async () => ({ records: [], total: 0, continuation: null }),
   stats: async () => ({ total: 0, byStatus: {}, byKind: {}, byNamespace: {}, bySourceType: {} }),
   prune: async () => ({ deletedExpired: 0, deletedOverCap: 0 }),
 }

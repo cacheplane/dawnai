@@ -347,7 +347,7 @@ export function runMemoryStoreConformance(opts: {
     test("browse returns an empty page on an empty store", async () => {
       const s = await makeStore()
       try {
-        expect(await s.browse()).toEqual({ records: [], total: 0 })
+        expect(await s.browse()).toEqual({ records: [], total: 0, continuation: null })
       } finally {
         await close?.(s)
       }
@@ -392,7 +392,11 @@ export function runMemoryStoreConformance(opts: {
       const s = await makeStore()
       try {
         await s.put(rec({ id: "a", namespace: "route=/x", content: "a" }))
-        expect(await s.browse({ namespacePrefix: "Route=/X" })).toEqual({ records: [], total: 0 })
+        expect(await s.browse({ namespacePrefix: "Route=/X" })).toEqual({
+          records: [],
+          total: 0,
+          continuation: null,
+        })
         expect((await s.stats({ namespacePrefix: "Route=/X" })).total).toBe(0)
       } finally {
         await close?.(s)

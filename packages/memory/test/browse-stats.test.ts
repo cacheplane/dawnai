@@ -82,7 +82,7 @@ describe("browse", () => {
   })
   it("returns an empty page on an empty store", async () => {
     const s = makeStore()
-    expect(await s.browse()).toEqual({ records: [], total: 0 })
+    expect(await s.browse()).toEqual({ records: [], total: 0, continuation: null })
   })
   it("returns empty records but full total when offset exceeds total", async () => {
     const s = makeStore()
