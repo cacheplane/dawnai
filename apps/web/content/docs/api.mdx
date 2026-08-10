@@ -350,7 +350,15 @@ export interface RouteConfig {
 }
 ```
 
-Optional metadata that a route's `index.ts` may export alongside its entry. `runtime` pins the route to a specific execution environment. `streaming` enables token-streaming responses. `tags` are arbitrary labels exposed by the Dev Server UI.
+Optional metadata that a route's `index.ts` may export as `config` alongside its entry.
+
+<Callout type="warn" title="Reserved — Dawn reads none of these fields today">
+  All three are accepted, type-checked, normalized onto the route module and carried into the static build manifest, and then nothing branches on them. Exporting a `config` is inert.
+
+  In particular: `runtime` does **not** pin a route to an execution environment — the node/edge split comes from `build.targets` in `dawn.config.ts` and is never decided per route. `streaming` does not switch anything on; whether a run streams depends on the endpoint the caller hits (`/threads/:id/runs/stream` versus `/threads/:id/runs/wait`). `tags` are not displayed anywhere, including the Dev Server UI.
+
+  The interface is kept rather than removed because deleting a published field breaks every app that set one for no gain. If these gain behavior it will be additive and announced.
+</Callout>
 
 See [Routes](/docs/routes).
 
@@ -562,7 +570,7 @@ export function validateModelId(opts: {
 }): ModelIdValidation
 ```
 
-Advisory check of a model id against the curated per-provider lists ([`CURATED_MODEL_IDS`](#curated_model_ids)). When `provider` is omitted it is inferred via `inferProvider`. Returns `{ ok: true }` for curated ids — and silently for uncurated or unresolvable providers — so consumers warn rather than hard-fail. On a miss it returns the resolved `provider` plus up to three nearest curated id `suggestions`.
+Advisory check of a model id against the curated per-provider lists ([`CURATED_MODEL_IDS`](#model-id-constants)). When `provider` is omitted it is inferred via `inferProvider`. Returns `{ ok: true }` for curated ids — and silently for uncurated or unresolvable providers — so consumers warn rather than hard-fail. On a miss it returns the resolved `provider` plus up to three nearest curated id `suggestions`.
 
 ### `ModelIdValidation`
 

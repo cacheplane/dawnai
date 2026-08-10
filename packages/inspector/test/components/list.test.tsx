@@ -83,7 +83,8 @@ describe("ListPage", () => {
   it("clicking a namespace facet scopes the next list fetch", async () => {
     const mock = stubApi()
     render(<ListPage />)
-    const facet = await screen.findByRole("button", { name: /route=\/notes/ })
+    const rail = await screen.findByRole("navigation")
+    const facet = within(rail).getByRole("button", { name: /route=\/notes/ })
     fireEvent.click(facet)
     await vi.waitFor(() => {
       const scoped = callsTo(mock, "/api/memory/list").filter(

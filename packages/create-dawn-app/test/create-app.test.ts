@@ -3,7 +3,7 @@ import { constants } from "node:fs"
 import { access, readFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { afterEach, describe, expect, test } from "vitest"
+import { afterEach, describe, expect, test, vi } from "vitest"
 
 import {
   cleanupTrackedTempDirs,
@@ -15,7 +15,23 @@ import { run } from "../src/index.js"
 
 const tempDirs: TrackedTempDir[] = []
 
+const RESEARCH_SCRIPTS = {
+  dev: "dawn dev --port 3000",
+  verify: "dawn verify",
+  typegen: "dawn typegen",
+  check: "dawn check",
+  typecheck: "tsc --noEmit",
+  test: "vitest run",
+  eval: "dawn eval",
+  build: "dawn build",
+  start: "node --env-file-if-exists=.env .dawn/build/server.mjs",
+  "test:sandbox:docker": "DAWN_DEMO_DOCKER_SANDBOX=1 vitest run test/sandbox-docker.test.ts",
+  "memory:list": "dawn memory list",
+  "memory:approve": "dawn memory approve",
+} as const
+
 afterEach(async () => {
+  vi.restoreAllMocks()
   await cleanupTrackedTempDirs(tempDirs)
 })
 
@@ -59,6 +75,27 @@ async function runCommand(command: string, args: readonly string[], cwd: string)
   })
 }
 
+async function withMockedPlatform<T>(
+  platform: NodeJS.Platform,
+  action: () => Promise<T>,
+): Promise<T> {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")
+
+  if (!platformDescriptor?.configurable) {
+    throw new Error("process.platform must be configurable for this test")
+  }
+
+  try {
+    Object.defineProperty(process, "platform", {
+      ...platformDescriptor,
+      value: platform,
+    })
+    return await action()
+  } finally {
+    Object.defineProperty(process, "platform", platformDescriptor)
+  }
+}
+
 function resolveFileSpecifier(specifier: string): string {
   return specifier.startsWith("file://")
     ? fileURLToPath(specifier)
@@ -84,6 +121,7 @@ describe("create-dawn-ai-app", () => {
     await assertExists(join(targetDir, "package.json"))
     await assertExists(join(targetDir, "dawn.config.ts"))
     await assertExists(join(targetDir, "pnpm-workspace.yaml"))
+    await assertExists(join(targetDir, ".env.example"))
     await assertExists(join(targetDir, "README.md"))
     await assertExists(join(targetDir, "src/app/research/index.ts"))
     await assertExists(join(targetDir, "src/app/research/state.ts"))
@@ -105,14 +143,11 @@ describe("create-dawn-ai-app", () => {
       readonly scripts: Record<string, string>
     }
 
+    const researchRoute = await readFile(join(targetDir, "src/app/research/index.ts"), "utf8")
+
     expect(packageJson.name).toBe("hello-dawn")
-    expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
-    expect(packageJson.scripts.test).toBe("vitest run")
-    expect(packageJson.scripts["test:sandbox:docker"]).toContain("DAWN_DEMO_DOCKER_SANDBOX=1")
-    expect(packageJson.scripts.eval).toBe("dawn eval")
-    expect(packageJson.scripts["memory:list"]).toBe("dawn memory list")
-    expect(packageJson.scripts["memory:approve"]).toBe("dawn memory approve")
-    expect(packageJson.scripts.typecheck).toBe("tsc --noEmit")
+    expect(packageJson.scripts).toEqual(RESEARCH_SCRIPTS)
+    expect(researchRoute).toContain("recursionLimit: 100")
     expect(packageJson.dependencies["@dawn-ai/cli"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/langchain"]).not.toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/sandbox"]).not.toMatch(/^file:/)
@@ -128,6 +163,73 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.devDependencies["@dawn-ai/evals"]).toBe("next")
     expect(packageJson.devDependencies["@dawn-ai/inspector"]).toBe("next")
     await expect(access(join(targetDir, ".npmrc"), constants.F_OK)).rejects.toThrow()
+
+    expect(scaffoldResult.stdout).toContain(
+      [
+        `  cd '${targetDir}'`,
+        "  npm install",
+        "  cp .env.example .env",
+        "  # add OPENAI_API_KEY",
+        "  npm run verify",
+        "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+      ].join("\n"),
+    )
+    expect(scaffoldResult.stdout).not.toContain("npm run check")
+    expect(scaffoldResult.stdout).not.toContain("npm test")
+    expect(scaffoldResult.stdout).not.toContain("export OPENAI_API_KEY")
+  })
+
+  test("shell-quotes POSIX research target paths with metacharacters", async () => {
+    const tempRoot = await createTrackedTempDir("create-dawn-app-internal-", tempDirs)
+    const targetDir = join(tempRoot, "hello dawn's $HOME $(touch pwned); `whoami`")
+    const targetLiteral = `'${targetDir.replaceAll("'", "'\\''")}'`
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true)
+
+    const exitCode = await withMockedPlatform("linux", () => run([targetDir, "--mode", "internal"]))
+    const stdout = stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("")
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain(
+      [
+        "Next steps:",
+        `  cd ${targetLiteral}`,
+        "  npm install",
+        "  cp .env.example .env",
+        "  # add OPENAI_API_KEY",
+        "  npm run verify",
+        "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+      ].join("\n"),
+    )
+    expect(stdout).not.toContain("npm run check")
+    expect(stdout).not.toContain("npm test")
+    expect(stdout).not.toContain("export OPENAI_API_KEY")
+  })
+
+  test("prints safe PowerShell research activation steps on Windows", async () => {
+    const tempRoot = await createTrackedTempDir("create-dawn-app-internal-", tempDirs)
+    const targetDir = join(tempRoot, "hello dawn's $HOME $(noop); `noop`")
+    const targetLiteral = `'${targetDir.replaceAll("'", "''")}'`
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true)
+
+    const exitCode = await withMockedPlatform("win32", () => run([targetDir, "--mode", "internal"]))
+    const stdout = stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("")
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain(
+      [
+        "Next steps (PowerShell):",
+        `  Set-Location -LiteralPath ${targetLiteral}`,
+        "  npm install",
+        "  Copy-Item -LiteralPath .env.example -Destination .env",
+        "  # add OPENAI_API_KEY",
+        "  npm run verify",
+        "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+      ].join("\n"),
+    )
+    expect(stdout).not.toContain("  cp .env.example .env")
+    expect(stdout).not.toContain("npm run check")
+    expect(stdout).not.toContain("npm test")
+    expect(stdout).not.toContain("export OPENAI_API_KEY")
   })
 
   test("rejects packaged internal mode outside a Dawn monorepo checkout", {
@@ -163,12 +265,7 @@ describe("create-dawn-ai-app", () => {
       readonly scripts: Record<string, string>
     }
 
-    expect(packageJson.scripts.build).toBe("tsc -p tsconfig.json")
-    expect(packageJson.scripts.test).toBe("vitest run")
-    expect(packageJson.scripts["test:sandbox:docker"]).toContain("DAWN_DEMO_DOCKER_SANDBOX=1")
-    expect(packageJson.scripts.eval).toBe("dawn eval")
-    expect(packageJson.scripts["memory:list"]).toBe("dawn memory list")
-    expect(packageJson.scripts["memory:approve"]).toBe("dawn memory approve")
+    expect(packageJson.scripts).toEqual(RESEARCH_SCRIPTS)
     expect(packageJson.dependencies["@dawn-ai/cli"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/langchain"]).toMatch(/^file:/)
     expect(packageJson.dependencies["@dawn-ai/sandbox"]).toMatch(/^file:/)
@@ -176,6 +273,7 @@ describe("create-dawn-ai-app", () => {
     expect(packageJson.devDependencies["@dawn-ai/testing"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/evals"]).toMatch(/^file:/)
     expect(packageJson.devDependencies["@dawn-ai/inspector"]).toMatch(/^file:/)
+    await assertExists(join(targetDir, ".env.example"))
     await assertExists(join(targetDir, "README.md"))
     await assertExists(join(targetDir, "src/app/research/index.ts"))
     await assertExists(join(targetDir, "src/app/research/state.ts"))
@@ -197,10 +295,28 @@ describe("create-dawn-ai-app", () => {
     const tempRoot = await createTrackedTempDir("create-dawn-app-internal-", tempDirs)
 
     const targetDir = join(tempRoot, "hello-dawn")
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true)
 
     const exitCode = await run([targetDir, "--mode", "internal", "--template", "basic"])
+    const stdout = stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("")
 
     expect(exitCode).toBe(0)
+    expect(stdout).toContain(
+      [
+        "Next steps:",
+        `  cd '${targetDir}'`,
+        "  npm install",
+        "  npm run check     # validate the app",
+        "  npm test          # offline tests — no API key needed",
+        "",
+        "Run it live (needs an OpenAI key):",
+        "  export OPENAI_API_KEY=sk-...",
+        "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+      ].join("\n"),
+    )
+    expect(stdout).not.toContain("generate route + tool types")
+    expect(stdout).not.toContain(".env.example")
+    expect(stdout).not.toContain("npm run verify")
 
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/index.ts"))
     await assertExists(join(targetDir, "src/app/(public)/hello/[tenant]/tools/greet.ts"))
@@ -208,6 +324,37 @@ describe("create-dawn-ai-app", () => {
     await expect(
       access(join(targetDir, "src/app/research/index.ts"), constants.F_OK),
     ).rejects.toThrow()
+  })
+
+  test("prints safe PowerShell basic steps on Windows", async () => {
+    const tempRoot = await createTrackedTempDir("create-dawn-app-internal-", tempDirs)
+    const targetDir = join(tempRoot, "hello dawn's basic")
+    const targetLiteral = `'${targetDir.replaceAll("'", "''")}'`
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true)
+
+    const exitCode = await withMockedPlatform("win32", () =>
+      run([targetDir, "--mode", "internal", "--template", "basic"]),
+    )
+    const stdout = stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("")
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain(
+      [
+        "Next steps (PowerShell):",
+        `  Set-Location -LiteralPath ${targetLiteral}`,
+        "  npm install",
+        "  npm run check     # validate the app",
+        "  npm test          # offline tests — no API key needed",
+        "",
+        "Run it live (needs an OpenAI key):",
+        "  $env:OPENAI_API_KEY = 'sk-...'",
+        "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+      ].join("\n"),
+    )
+    expect(stdout).not.toContain("export OPENAI_API_KEY")
+    expect(stdout).not.toContain(".env.example")
+    expect(stdout).not.toContain("Copy-Item")
+    expect(stdout).not.toContain("npm run verify")
   })
 
   test("writes contributor-local package specifiers and overrides as stable repo-local paths", async () => {

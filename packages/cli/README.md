@@ -4,7 +4,7 @@
 
 # @dawn-ai/cli
 
-The `dawn` CLI for Dawn, the TypeScript meta-framework for LangGraph that lets you build LangGraph agents like Next.js apps — a local HMR development runtime with durable threads, route execution, validation and typegen, and the build step that produces LangSmith deployment artifacts. It is the primary tool for working on a Dawn agent app from first scaffold through deploy.
+The `dawn` CLI for Dawn, the TypeScript meta-framework for LangGraph that lets you build LangGraph agents like Next.js apps — a local HMR development runtime with durable threads, route execution, validation and typegen, and a build step that produces the configured deployment artifacts. It is the primary tool for working on a Dawn agent app from first scaffold through deploy.
 
 ## Install
 
@@ -24,16 +24,16 @@ npm install -g @dawn-ai/cli
 pnpm add -g @dawn-ai/cli
 ```
 
-Installs a `dawn` binary on your `PATH`. Requires Node.js 22.12+.
+Installs a `dawn` binary on your `PATH`. Requires Node.js 24 or later.
 
 ## Commands
 
 | Command        | Description                                                  |
 |----------------|--------------------------------------------------------------|
 | `dawn dev`     | Start the Dawn local development runtime                     |
-| `dawn check`   | Validate a Dawn app (route discovery, tool definitions)      |
+| `dawn check`   | Validate a Dawn app without writing files                     |
 | `dawn verify`  | Verify dependencies and generated types are in sync          |
-| `dawn build`   | Generate deployment artifacts for LangSmith                  |
+| `dawn build`   | Generate the configured deployment artifacts                  |
 | `dawn run`     | Execute one Dawn route invocation                            |
 | `dawn test`    | Run route test scenarios                                     |
 | `dawn routes`  | List discovered Dawn routes (use `--json` for machine output)|
@@ -45,11 +45,13 @@ Installs a `dawn` binary on your `PATH`. Requires Node.js 22.12+.
 # Start the local dev runtime
 pnpm dawn dev
 
-# Validate the app and regenerate types
+# Validate the app without writing generated files
 pnpm dawn check
+
+# Write route and tool types into .dawn/
 pnpm dawn typegen
 
-# Produce LangSmith deployment artifacts
+# Produce the configured deployment artifacts
 pnpm dawn build
 ```
 

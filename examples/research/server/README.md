@@ -1,19 +1,18 @@
 # Research demo — server
 
-The flagship [Dawn](https://github.com/cacheplane/dawn) example: a deep-research
+The flagship [Dawn](https://github.com/cacheplane/dawnai) example: a deep-research
 assistant that plans sub-questions, researches a bundled local corpus with a
-specialist subagent, and writes a cited report. It runs **offline and
-deterministically** out of the box, and against a real model when you opt in.
-
-> This is Slice 1 (the server). A polished web UI with a no-key demo mode lands
-> in a later slice; today you exercise the app through its tests, `dawn run`, and
-> `dawn dev`.
+specialist subagent, and writes a cited report. Live research uses a real model
+and API key; the included tests and evals use deterministic fixtures and run
+offline.
 
 ## Run it
 
 ```bash
 pnpm install                 # from the repo root
-pnpm --filter @dawn-example/research-server check   # generate route + tool types
+pnpm build                   # build Dawn packages before commands that use dist
+pnpm --filter @dawn-example/research-server exec dawn typegen  # write generated types
+pnpm --filter @dawn-example/research-server check   # validate routes, tools, and config
 pnpm --filter @dawn-example/research-server test    # harness tests, offline (replay fixtures)
 pnpm --filter @dawn-example/research-server eval     # quality evals, offline (replay fixtures)
 pnpm --filter @dawn-example/research-server memory:list
@@ -23,6 +22,21 @@ To run against a real model, set `OPENAI_API_KEY` and add `--live`
 (e.g. `pnpm --filter @dawn-example/research-server eval -- --live`). The offline
 path uses recorded fixtures, so tests and evals are deterministic and need no
 API key.
+
+## Run the live web client
+
+The current Next.js/CopilotKit client streams cited research, renders generic
+tool calls, handles standard permission interrupts, offers suggestion prompts,
+and reviews memory candidates. After the root install and build above, run from
+`examples/research`:
+
+```bash
+cp server/.env.example server/.env   # add a real OPENAI_API_KEY
+pnpm dev                             # Dawn server on :3002, web client on :3010
+```
+
+Open `http://localhost:3010`. The key stays on the Dawn server; see
+[`../web/README.md`](../web/README.md) for the architecture and smoke checklist.
 
 To dogfood the Docker sandbox, start Docker and run:
 
@@ -39,7 +53,7 @@ the sandbox test seeds a corpus document there before running the same tools.
 | Capability | File | What it shows |
 |---|---|---|
 | Agent route | `src/app/research/index.ts` | the research coordinator |
-| Tools + typegen | `src/tools/` | shared `searchCorpus`, `readDoc`; `dawn check` types them |
+| Tools + typegen | `src/tools/` | shared `searchCorpus`, `readDoc`; `dawn typegen` writes their generated types |
 | Subagents | `src/app/research/subagents/researcher/` | dispatched via `task({ subagent, input })` |
 | Planning | `src/app/research/plan.md` | seeded checklist becomes the thread's todos |
 | Offloading | `dawn.config.ts` + a large `readDoc` | big results spill to the workspace, stubbed in-context |

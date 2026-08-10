@@ -59,9 +59,14 @@ const CATEGORIES: readonly Category[] = [
     ],
   },
   {
+    // Every entry here is a target Dawn actually emits for and CI actually
+    // runs. Vercel used to sit at the top of this list and did not clear that
+    // bar: it appeared nowhere in the repo but prose comments — no target, no
+    // fixture, no lane. The `hono` target's output is web-standard and very
+    // likely runs there, but "likely" belongs in the deployment docs, which say
+    // so and say why, not on a landing-page card with no room to hedge.
     label: "Deploy targets",
     items: [
-      { name: "Vercel", href: "https://vercel.com" },
       { name: "Cloudflare Workers", href: "https://workers.cloudflare.com" },
       { name: "Node", href: "https://nodejs.org" },
       { name: "Docker", href: "https://www.docker.com" },

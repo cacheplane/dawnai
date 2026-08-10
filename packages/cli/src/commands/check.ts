@@ -129,7 +129,9 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
       })
     }
 
-    await checkStaticModuleManifest(manifest)
+    await checkStaticModuleManifests(manifest, {
+      includeEdge: Boolean(buildTargets?.includes("hono")),
+    })
   } catch (error) {
     if (error instanceof CliError) throw error
     throw new CliError(`Validation failed: ${formatErrorMessage(error)}`)
@@ -137,20 +139,44 @@ export async function runCheckCommand(options: CheckOptions, io: CommandIo): Pro
 }
 
 /**
- * Stale-manifest pass: when a build-generated `.dawn/build/modules.mjs`
- * exists, load it through the same `loadStaticModules` path server.mjs uses
- * and compare its routes' assistantId set against the discovered set. A
- * mismatch (route added/renamed/removed since the last `dawn build`) or a
- * manifest that fails to load (corrupt file, stale static imports after a
- * rename) is a check ERROR advising a rebuild. Absent file → no-op.
+ * Stale-manifest pass: for each manifest this app's targets can produce, load
+ * it through the same `loadStaticModules` path the generated entry uses and
+ * compare its routes' assistantId set against the discovered set. A mismatch
+ * (route added/renamed/removed since the last `dawn build`) or a manifest that
+ * fails to load (corrupt file, stale static imports after a rename) is a check
+ * ERROR advising a rebuild. Absent file → no-op for that manifest.
+ *
+ * BOTH manifests, not just the node one. `modules.edge.mjs` is a separate
+ * artifact with its own copy of every route's static imports, and an app built
+ * for `hono` ALONE never emits `modules.mjs` at all — so keying the pass on the
+ * node path made the whole check a silent no-op for exactly the deployment
+ * shape that cannot re-discover routes at runtime. A stale edge bundle is the
+ * more expensive of the two to ship: the node server would at least have
+ * re-walked the route tree.
+ *
+ * The edge manifest is checked only when `hono` is a configured target, for the
+ * same reason the capability gate is: an app on the node target may have a
+ * leftover `modules.edge.mjs` from an experiment, and failing `dawn check` over
+ * an artifact nothing deploys would be noise.
  *
  * No DAWN_E code: the error-code registry (@dawn-ai/sdk) has no entry for a
- * stale build artifact — the E1xxx config/check family stops at E1003
- * (unknown build target) and producers cannot invent codes. Follow-up: add a
+ * stale build artifact — the E1xxx config/check family stops at E1005 (edge
+ * capability gate) and producers cannot invent codes. Follow-up: add a
  * registry code (e.g. "Stale static module manifest") in an sdk change.
  */
-async function checkStaticModuleManifest(manifest: RouteManifest): Promise<void> {
-  const modulesPath = join(manifest.appRoot, ".dawn", "build", "modules.mjs")
+async function checkStaticModuleManifests(
+  manifest: RouteManifest,
+  options: { readonly includeEdge: boolean },
+): Promise<void> {
+  await checkStaticModuleManifest(manifest, "modules.mjs")
+  if (options.includeEdge) {
+    await checkStaticModuleManifest(manifest, "modules.edge.mjs")
+  }
+}
+
+/** One manifest file, compared against the discovered route set. */
+async function checkStaticModuleManifest(manifest: RouteManifest, fileName: string): Promise<void> {
+  const modulesPath = join(manifest.appRoot, ".dawn", "build", fileName)
   if (!existsSync(modulesPath)) return
 
   let manifestIds: readonly string[]

@@ -1,3 +1,7 @@
+import { readFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+
 import { describe, expect, it } from "vitest"
 
 import { createProgram } from "../src/index.js"
@@ -92,5 +96,28 @@ describe("dawn memory --help", () => {
     ]) {
       expect(help).toContain(expected)
     }
+  })
+})
+
+describe("dawn memory help text covers the real dispatch table", () => {
+  it("lists every subcommand the command actually handles", async () => {
+    // `--help` renders a hand-written USAGE string while dispatch happens in a
+    // `switch`. Nothing ties them together, so a subcommand added to the switch is
+    // invisible in help — which is the bug fixed for `consolidate`/`reflect`, able to
+    // return through a different door. Reading the source keeps the two honest.
+    const source = await readFile(
+      join(dirname(fileURLToPath(import.meta.url)), "../src/commands/memory.ts"),
+      "utf8",
+    )
+
+    const dispatched = [...source.matchAll(/^\s+case "([a-z-]+)":/gm)].flatMap((m) =>
+      m[1] ? [m[1]] : [],
+    )
+    expect(dispatched.length).toBeGreaterThan(0)
+
+    const usage = source.slice(source.indexOf("const USAGE"), source.indexOf("export function"))
+    const missing = dispatched.filter((name) => !usage.includes(name))
+
+    expect(missing).toEqual([])
   })
 })

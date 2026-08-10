@@ -101,6 +101,20 @@ describe.skipIf(!gated)("memory JSON API", () => {
     expect(badBody.error).toContain('invalid status "bogus"')
   })
 
+  it("browse narrows to any of several statuses when the param repeats", async () => {
+    const res = await fetch(`${server.base}/api/memory/list?status=candidate&status=active`)
+    const page = (await res.json()) as { records: MemoryRecord[]; total: number }
+    expect(page.records.map((r) => r.id).sort()).toEqual(["active1", "cand1", "cand2", "other1"])
+    expect(page.total).toBe(4)
+  })
+
+  it("browse rejects the whole request when one repeated value is bogus", async () => {
+    // Dropping the bad value silently would answer a question nobody asked.
+    const res = await fetch(`${server.base}/api/memory/list?status=candidate&status=bogus`)
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain('invalid status "bogus"')
+  })
+
   it("browse filters by namespacePrefix across namespaces", async () => {
     const params = new URLSearchParams({ namespacePrefix: "route=/notes" })
     const res = await fetch(`${server.base}/api/memory/list?${params}`)

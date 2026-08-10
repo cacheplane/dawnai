@@ -67,6 +67,18 @@ export interface StaticRouteModule {
   readonly stateFields: readonly ResolvedStateField[] | undefined
   /** The route's memory.ts descriptor, or null when none exists. */
   readonly memory: LoadedRouteMemory | null
+  /**
+   * Skill directory names this route had at BUILD time; absent when it had
+   * none.
+   *
+   * Carried for one consumer only — `collectRuntimeCapabilityGaps`, which uses
+   * it to raise DAWN_E1005 on a runtime with no filesystem. Nothing loads a
+   * skill from this: bodies still come off disk through the skills capability's
+   * MarkerFs on node, and on a filesystem-less runtime there is nothing to load,
+   * which is precisely what the guard exists to report. Deliberately NOT part
+   * of `PreparedRouteModules` — the per-route execution cache has no use for it.
+   */
+  readonly skills?: readonly string[]
 }
 
 /**
@@ -116,6 +128,11 @@ export interface StaticRouteModuleInput {
   readonly routeModule: unknown
   /** Route entry file path relative to appRoot, forward-slash separated. */
   readonly routePath: string
+  /**
+   * Skill directory names found under `<routeDir>/skills` at build time.
+   * Omitted by the generator when the route has none.
+   */
+  readonly skills?: readonly string[]
   /**
    * `state.ts` defaults extracted at build time (the same values
    * `discoverStateDefinition` derives), as entries. Present exactly when the
@@ -185,6 +202,10 @@ export function buildStaticRouteModule(input: StaticRouteModuleInput): StaticRou
     routeFile: input.routeFile,
     routeId: input.routeId,
     routePath: input.routePath,
+    // Conditional spread, not `skills: input.skills`: under
+    // exactOptionalPropertyTypes an explicit `undefined` is not assignable to
+    // an optional field, and an absent key is what "no skills" means here.
+    ...(input.skills && input.skills.length > 0 ? { skills: input.skills } : {}),
     stateFields,
     tools,
   }

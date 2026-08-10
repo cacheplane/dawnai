@@ -5,32 +5,33 @@ import { join, relative, resolve, sep } from "node:path"
 import type { DawnConfig, RouteManifest } from "@dawn-ai/core"
 
 import { CliError } from "../../output.js"
+import {
+  EDGE_TARGET,
+  type EdgeCapabilityViolation,
+  formatEdgeCapabilityViolations,
+} from "../../runtime/edge-capability-report.js"
 
-/**
- * One feature this app uses that an edge runtime cannot serve.
- *
- * `capability` and `source` are both required because a message that names only
- * one of them is unactionable: "sandbox is not supported" leaves a user hunting
- * for what turned it on, and a bare file path leaves them guessing why it
- * matters.
- */
-export interface EdgeCapabilityViolation {
-  /** The feature, in the words the docs use for it (`sandbox`, `skills`, …). */
-  readonly capability: string
-  /** The config key or file that introduced it — a `dawn.config.ts` key, or an app-relative path. */
-  readonly source: string
-  /** Why the edge cannot serve it. */
-  readonly reason: string
-  /** What to do about it, other than "use the node target" (which is said once, globally). */
-  readonly remedy: string
-}
+// The violation shape and the report text live in `edge-capability-report.ts`
+// — a `node:`-free module — because the REQUEST-time half of this gate
+// (`collectRuntimeCapabilityGaps`, reached from `@dawn-ai/cli/fetch`) must
+// raise the same DAWN_E1005 in the same words, and cannot import a module that
+// touches `node:fs`. Deliberately NOT re-exported from here: this file reads
+// the filesystem, so re-exporting would let a runtime consumer reach the whole
+// build-side gate through it and quietly pull `node:fs` back into that graph.
+// Import them from `edge-capability-report.js` directly.
 
 /** Everything the gate inspects. All of it is available before any emit. */
 export interface EdgeCapabilityInput {
   readonly appRoot: string
   readonly config: Pick<
     DawnConfig,
-    "backends" | "checkpointer" | "memory" | "permissions" | "sandbox" | "threadsStore"
+    | "backends"
+    | "checkpointer"
+    | "memory"
+    | "permissions"
+    | "sandbox"
+    | "threadsStore"
+    | "toolOutput"
   >
   readonly manifest: RouteManifest
 }
@@ -104,6 +105,21 @@ export function collectEdgeCapabilityViolations(
       reason:
         "a sandbox isolates tool execution in a container or pod, and an edge runtime can neither start one nor talk to a container daemon",
       remedy: "Remove the `sandbox` block",
+    })
+  }
+
+  // Offloading is the one gated feature with a config key that survives the
+  // build boundary intact, so without this the build went green and the
+  // REQUEST-time guard rejected the deployed worker instead — a green build and
+  // a dead deploy is worse than either check alone. Both halves now agree.
+  // An empty object expresses no intent (and `toSerializableConfig` drops it).
+  if (config.toolOutput && Object.keys(config.toolOutput).length > 0) {
+    violations.push({
+      capability: "tool-output offloading",
+      source: "`toolOutput` in dawn.config.ts",
+      reason:
+        "offloading spills oversized tool output to a file under workspace/ and hands the model a pointer to it, and an edge runtime has no filesystem to spill to — every one of these settings would be inlined into the bundle and then ignored",
+      remedy: "Remove `toolOutput`",
     })
   }
 
@@ -194,28 +210,23 @@ export function assertEdgeCapabilities(
 ): void {
   const violations = collectEdgeCapabilityViolations(input)
   if (violations.length === 0) return
-  throw new CliError(formatEdgeCapabilityViolations(violations, targetName), 1, {
+  throw new CliError(formatEdgeCapabilityViolationsForTarget(violations, targetName), 1, {
     code: "DAWN_E1005",
   })
 }
 
-/** The user-facing report. Shared verbatim by `dawn build` and `dawn check`. */
-export function formatEdgeCapabilityViolations(
+/**
+ * Preserve the shared build/runtime wording while naming the target that is
+ * actually being built. The shared report deliberately owns the canonical
+ * Hono text; Vercel changes only the two quoted target references.
+ */
+function formatEdgeCapabilityViolationsForTarget(
   violations: readonly EdgeCapabilityViolation[],
-  targetName: "hono" | "vercel" = "hono",
+  targetName: "hono" | "vercel",
 ): string {
-  const lines = violations.map(
-    (violation) =>
-      `  • ${violation.capability}\n` +
-      `      from: ${violation.source}\n` +
-      `      why:  ${violation.reason}.\n` +
-      `      fix:  ${violation.remedy}.`,
-  )
-  return (
-    `The "${targetName}" build target cannot serve ${violations.length} feature(s) this app uses:\n\n` +
-    `${lines.join("\n\n")}\n\n` +
-    `The edge deliberately serves a SUBSET of Dawn — no filesystem, no processes, no containers. ` +
-    `Fix the features above, or drop "${targetName}" from \`build.targets\` in dawn.config.ts and deploy with the "node" target instead.`
+  return formatEdgeCapabilityViolations(violations).replaceAll(
+    `"${EDGE_TARGET}"`,
+    `"${targetName}"`,
   )
 }
 
@@ -309,10 +320,15 @@ export async function collectEdgeDependencyNotice(
  * an identifier-shaped directory name containing a `SKILL.md`. Duplicated here
  * rather than imported because that walker takes a `MarkerFs`, which is the
  * runtime's seam, not the build's.
+ *
+ * Exported because the static-module emitter records the same names into the
+ * manifest (see `RouteStaticDiscovery.skills`), and the request-time guard
+ * reads them back. A second copy of this rule is how the build gate and the
+ * runtime guard would start disagreeing about what counts as a skill.
  */
 const VALID_SKILL_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 
-function discoverSkillDirs(skillsDir: string): readonly string[] {
+export function discoverSkillDirs(skillsDir: string): readonly string[] {
   if (!existsSync(skillsDir)) return []
   let entries: string[]
   try {

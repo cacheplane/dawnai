@@ -5,6 +5,7 @@ import {
   type MemoryQuery,
   type MemoryRecord,
   type MemoryStore,
+  normalizeSetFilter,
   type RecallRankingOptions,
   rankKeywordCandidates,
   tokenize,
@@ -451,13 +452,18 @@ export function pgvectorMemoryStore(opts: {
         params.push(q.namespacePrefix, q.namespacePrefix)
         where.push(`left(namespace, length($${params.length - 1})) = $${params.length}`)
       }
-      if (q.status) {
-        params.push(q.status)
-        where.push(`status = $${params.length}`)
+      // `= ANY($n)` over a text[] rather than expanded placeholders: it keeps
+      // one bind per filter, and an EMPTY array is already false, which is the
+      // contract's "a set of nothing matches nothing" without a special case.
+      const statuses = normalizeSetFilter(q.status)
+      if (statuses) {
+        params.push(statuses)
+        where.push(`status = ANY($${params.length}::text[])`)
       }
-      if (q.kind) {
-        params.push(q.kind)
-        where.push(`kind = $${params.length}`)
+      const kinds = normalizeSetFilter(q.kind)
+      if (kinds) {
+        params.push(kinds)
+        where.push(`kind = ANY($${params.length}::text[])`)
       }
       if (q.sourceType) {
         params.push(q.sourceType)
