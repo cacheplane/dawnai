@@ -7,7 +7,7 @@ Permissions are Dawn's human-in-the-loop gate. The runtime gates two workspace o
 
 Three further gates build on the same interrupt machinery and are covered below: opt-in **per-tool approval** (`kind: "tool"`), parent-owned **subagent approval** (`kind: "subagent"`), and **memory-write approval** (`kind: "memory"`).
 
-Unknown operations pause the run and ask the human rather than failing or silently proceeding.
+In an interactive agent run, unknown operations pause and ask the human. Other modes are covered below.
 
 ## Configuration
 
@@ -23,7 +23,9 @@ export default {
 }
 ```
 
-`allow` and `deny` each map a tool name (`bash`) to an array of pattern strings. The research scaffold, for example, allows safe read-only commands and denies destructive ones — but leaves the network-fetch script off the allow list so the first run surfaces a prompt.
+`allow` and `deny` each map a gate key (`bash`, `readFile`, `memory`, and so on) to an array of pattern strings. The research scaffold, for example, allows safe read-only commands and denies destructive ones — but leaves the network-fetch script off the allow list so the first run surfaces a prompt.
+
+Static entries remain in `dawn.config.ts` as configuration; they are evaluated alongside runtime decisions and are not copied or seeded into the runtime permission store. Only an `always` decision adds an allow entry to that store. The default Node store persists runtime entries in `.dawn/permissions.json`, while custom stores and the Postgres store may persist them elsewhere.
 
 ## How matching works
 
@@ -33,7 +35,17 @@ For every `runBash` call the runtime runs this sequence:
 2. **Then allow** — if any allow pattern is a prefix of the command string, the call proceeds.
 3. **No match → "unknown"** — the outcome depends on the mode.
 
-Prefix matching means `"ls"` covers `ls`, `ls -la`, and `ls workspace/corpus`. Use longer patterns to be more specific.
+Matching depends on the gate:
+
+| Gate | Stored key and `suggestedPattern` granularity | Matching |
+|---|---|---|
+| Bash command | `bash`; the first two command tokens, such as `node scripts/fetch-source.mjs` | Prefix |
+| Filesystem path | The operation (`readFile`, `writeFile`, or `listDir`); canonical parent directory with a trailing slash | Prefix |
+| Memory write | `memory`; workspace-and-route namespace with a trailing `|` | Prefix |
+| Authored or capability tool approval | Reserved `tool`; tool name | Exact |
+| Subagent approval | Reserved `subagent`; serialized parent route id and parent-local child name | Exact |
+
+Thus `"ls"` covers `ls`, `ls -la`, and `ls workspace/corpus`. Use longer bash, path, and memory prefixes to be more specific. Reserved `tool` and `subagent` entries never prefix-match.
 
 ## Modes
 
@@ -92,8 +104,8 @@ Resuming a `kind: "tool"` interrupt uses the same `once` / `always` / `deny` dec
 | Decision | Effect |
 |---|---|
 | `once` | This call runs. The next call to the same tool prompts again. |
-| `always` | Persists the tool **name** under the reserved `tool` key in `.dawn/permissions.json` — `{ "allow": { "tool": ["deployProd"] } }`. Matching against this key is **exact-name**, not prefix — unlike `bash` and path patterns. |
-| `deny` | The call is blocked. Unlike the workspace gates (which surface a thrown error), the denial reason is **returned as the tool result** — the model sees it as a normal tool response and can adapt. |
+| `always` | Adds the tool **name** under the reserved `tool` key in the configured permission store. Matching is **exact-name**, not prefix. |
+| `deny` | The call is blocked and nothing is persisted. Unlike the workspace gates (which surface a thrown error), the denial reason is **returned as the tool result** — the model sees it as a normal tool response and can adapt. |
 
 ### Pre-approval in config
 
@@ -231,8 +243,8 @@ Send a `POST /threads/:thread_id/resume` request with a `resume` entry for every
 | Decision | Effect |
 |---|---|
 | `once` | Allow this operation for this invocation only |
-| `always` | Allow and persist the gate's exact `suggestedPattern` to `.dawn/permissions.json` |
-| `deny` | Reject the operation; the run continues with an error result |
+| `always` | Allow and add the gate's exact `suggestedPattern` to the configured permissions store |
+| `deny` | Reject the operation without persisting a decision; the run continues with an error result |
 
 The ordinary HTTP endpoint accepts one strict envelope:
 
@@ -282,7 +294,7 @@ curl -X POST http://127.0.0.1:2024/threads/$THREAD/resume \
 # The response streams the continuation as SSE
 ```
 
-Choosing `"always"` persists the allow entry to `.dawn/permissions.json`. On subsequent runs the command is matched by the allow list and proceeds without prompting.
+Choosing `"always"` is the only decision that persists: it adds the allow entry to the configured permissions store. `once` and `deny` are not persisted. With the default Node store, runtime entries live in `.dawn/permissions.json`; a custom or Postgres store uses its configured backend. On subsequent runs the command is matched by the allow list and proceeds without prompting.
 
 ## Testing
 

@@ -34,6 +34,15 @@ src/
 
 Both sets are merged into the route's `ctx.tools`. When the same tool name exists in both, **the route-local tool shadows the shared one** — in the tree above, `/support` sees its own `escalate` and the shared `lookupOrder`. Put a tool in `src/tools/` when more than one route needs it; keep it in the route's `tools/` when it's specific to that route or you want to override a shared one.
 
+The same discovery rules apply when the route is a subagent:
+
+| Tool source | Top-level agent route | Subagent route |
+|---|---|---|
+| Shared authored `src/tools/*` | Available by default | Available by default |
+| The route's own local `tools/*` | Available by default | Available by default |
+| A parent route's local `tools/*` | Not applicable | Not inherited |
+| Active capability tools | Available by default | Withheld unless named in `tools.allow` |
+
 ## Scoping a route's tools
 
 By default a top route's agent sees every public tool available to it — its own `tools/*.ts`, the shared `src/tools/`, and capability-contributed tools such as `writeFile`, `runBash`, `writeTodos`, `readSkill`, and `remember`/`recall`. You can narrow that surface per route by passing `tools: { allow, deny }` to `agent()`:
@@ -41,7 +50,7 @@ By default a top route's agent sees every public tool available to it — its ow
 - **`deny`** revokes a tool — it is never offered to the model.
 - **`allow`** grants a withheld capability tool back into the set.
 - **`deny` wins** when a name appears in both.
-- Omitting `tools` entirely keeps the current behavior (all available tools).
+- Omitting `tools` entirely keeps the route's default set shown above.
 
 ```ts title="src/app/research/index.ts"
 // src/app/research/index.ts — top route: everything except shell
@@ -50,14 +59,19 @@ export default agent({ model: "gpt-5", systemPrompt: "…", tools: { deny: ["run
 
 Scope is enforced at composition time: a withheld tool is never wired into the generated entry, so the model cannot call it. `dawn check` validates the names you reference — an unknown tool name (absent from the route's available set) is a build-time error, so typos fail loud.
 
-### Subagents are least-privilege by default
+### Subagents and capability tools
 
-A subagent does **not** inherit the parent's capability tools. By default it gets only its own route-local `tools/*.ts`; ambient capability tools such as `writeFile`, `runBash`, `writeTodos`, and `remember`/`recall` are withheld unless you name them in `allow`. Grant back exactly what the worker needs:
+A subagent keeps its authored tools: shared `src/tools/*` plus its own route-local `tools/*.ts`. It does not inherit the parent route's local tools. Capability tools such as `writeFile`, `runBash`, `writeTodos`, and `remember`/`recall` are withheld unless you name them in `allow`.
+
+Because shared authored tools are available to children by default, explicitly deny any sensitive one a child should not receive:
 
 ```ts title="src/app/research/subagents/researcher/index.ts"
-// src/app/research/subagents/researcher/index.ts — read-only worker
-// keeps its own tools/*.ts; writeFile/runBash withheld by default; grant readFile:
-export default agent({ model: "gpt-5-mini", systemPrompt: "…", tools: { allow: ["readFile"] } })
+// deployProd is authored in src/tools/, so deny it explicitly for this child.
+export default agent({
+  model: "gpt-5-mini",
+  systemPrompt: "…",
+  tools: { allow: ["readFile"], deny: ["deployProd"] },
+})
 ```
 
 ### The internal task mechanism
@@ -85,7 +99,7 @@ export default agent({
 The prompt shows the call's arguments (a display-only JSON preview), but the decision itself is name-level:
 
 - **Once** — this call runs; the next call to the same tool prompts again.
-- **Always** — persists the tool name to `.dawn/permissions.json`, so future calls to that exact tool name proceed without prompting.
+- **Always** — adds the exact tool name to the configured permissions store, so future calls proceed without prompting. The default Node store is `.dawn/permissions.json`; custom stores, including Postgres, may persist it elsewhere.
 - **Deny** — the call is blocked; the model receives the denial reason as the tool result.
 
 See [Permissions](/docs/permissions#per-tool-approval) for the full interrupt payload and resume flow.
