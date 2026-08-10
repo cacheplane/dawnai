@@ -79,6 +79,65 @@ for (const check of checks) {
   }
 }
 
+const accuracyContracts = [
+  {
+    file: "apps/web/content/docs/recipes/typed-state.mdx",
+    required: ["tenant: z.string()"],
+    forbidden: ["[tenant] is injected from the pathname"],
+  },
+  {
+    file: "apps/web/content/docs/recipes/stream-output.mdx",
+    required: ['input: { messages: [{ role: "user"', 'typeof payload === "string"'],
+    forbidden: ["payload.content"],
+  },
+  {
+    file: "apps/web/content/docs/tools.mdx",
+    required: ["src/tools/", "capability tools"],
+    forbidden: ["only its own route-local `tools/*.ts`"],
+  },
+  {
+    file: "apps/web/content/docs/deployment.mdx",
+    required: ["node:24-slim", 'node_version: "22"'],
+    forbidden: ["Nothing else is gated"],
+  },
+  {
+    file: "apps/web/content/prompts/index.ts",
+    required: ["dawn start", 'targets: ["node"]'],
+    forbidden: ["Dawn itself is not a production runtime"],
+  },
+  {
+    file: "apps/web/app/llms.txt/route.ts",
+    required: ["dawn start", "dawn inspect", "/threads/:thread_id/cancel"],
+    forbidden: ["Production runs on LangSmith or another runtime"],
+  },
+  {
+    file: "apps/web/content/blueprints/deploy/docker.md",
+    required: [".dawn/build/server.mjs", "node:24-slim"],
+    forbidden: ["Dawn has no standalone server", "Dawn's default deploy target"],
+  },
+  {
+    file: "apps/web/app/llms-full.txt/route.ts",
+    required: ["historical", "non-normative"],
+    forbidden: [],
+  },
+]
+
+for (const contract of accuracyContracts) {
+  const source = readFileSync(resolve(repoRoot, contract.file), "utf8")
+
+  for (const required of contract.required) {
+    if (!source.includes(required)) {
+      failures.push(`${contract.file} is missing required accuracy text: ${required}`)
+    }
+  }
+
+  for (const forbidden of contract.forbidden) {
+    if (source.includes(forbidden)) {
+      failures.push(`${contract.file} retains forbidden accuracy text: ${forbidden}`)
+    }
+  }
+}
+
 // Docs topology check — every docs page in nav must have a content file and
 // a matching app wrapper, and every internal docs link must point to a known
 // docs page. This catches stale links when docs pages are split or moved.
@@ -261,16 +320,16 @@ for (const manifestPath of packageManifests()) {
 }
 
 // Dev-server endpoint coverage check. Keep explicit endpoint docs in step with
-// runtime-server route additions that expose new client-facing protocols.
-const runtimeServerSource = readFileSync(
-  resolve(repoRoot, "packages/cli/src/lib/dev/runtime-server.ts"),
+// runtime-fetch-core route additions that expose new client-facing protocols.
+const runtimeFetchCoreSource = readFileSync(
+  resolve(repoRoot, "packages/cli/src/lib/dev/runtime-fetch-core.ts"),
   "utf8",
 )
 const devServerDocs = readFileSync(
   resolve(repoRoot, "apps/web/content/docs/dev-server.mdx"),
   "utf8",
 )
-if (runtimeServerSource.includes("/agui/:routeId")) {
+if (runtimeFetchCoreSource.includes("/agui/:routeId")) {
   for (const required of [
     "POST /agui/{routeId}",
     "%2Fchat%23agent",
@@ -282,6 +341,17 @@ if (runtimeServerSource.includes("/agui/:routeId")) {
         `apps/web/content/docs/dev-server.mdx is missing AG-UI endpoint text: ${required}`,
       )
     }
+  }
+}
+
+for (const endpoint of [
+  "POST /threads/:thread_id/cancel",
+  "GET /memory/candidates",
+  "POST /memory/candidates/:id/approve",
+  "POST /memory/candidates/:id/reject",
+]) {
+  if (runtimeFetchCoreSource.includes(endpoint) && !devServerDocs.includes(endpoint)) {
+    failures.push(`apps/web/content/docs/dev-server.mdx is missing endpoint text: ${endpoint}`)
   }
 }
 
