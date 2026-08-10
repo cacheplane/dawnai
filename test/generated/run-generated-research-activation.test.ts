@@ -26,6 +26,14 @@ const ACTIVATION_TIMEOUT_MS = 600_000
 const ACTIVATION_CLEANUP_RESERVE_MS = 30_000
 const SAFE_PROMPT = "What are common agent architectures? Write a short cited report."
 const SUBQUESTION = "Identify common agent architectures and cite the corpus."
+const GATED_PROMPT =
+  "The corpus has nothing on quantum computing — run the external fetch script for it with runBash."
+const FETCH_COMMAND = "node scripts/fetch-source.mjs quantum computing"
+const BUILT_PROMPT = "Built artifact environment smoke."
+const GATED_REPLY = "Fetched external context after approval."
+const BUILT_REPLY = "built-env-smoke-ok"
+const FETCH_STDOUT =
+  'No external source configured for "quantum computing". Edit workspace/scripts/fetch-source.mjs to fetch real content.\n'
 const todos = [
   { content: "Restate the question and list the sub-questions to research", status: "completed" },
   { content: "Search the corpus for each sub-question", status: "in_progress" },
@@ -76,6 +84,17 @@ function createSafeResearchFixtures() {
     )
     .build()
   return [...root, ...child]
+}
+
+function createGatedAndBuiltFixtures() {
+  return [
+    ...script()
+      .user(GATED_PROMPT)
+      .callsTool("runBash", { command: FETCH_COMMAND })
+      .replies(GATED_REPLY)
+      .build(),
+    ...script().user(BUILT_PROMPT).replies(BUILT_REPLY).build(),
+  ]
 }
 
 function correlateRootToolCalls(events: readonly AgUiEvent[]): Map<string, unknown> {
@@ -238,6 +257,14 @@ function createAgUiTranscriptRecorder(options: {
           }
           return [key, sanitizeString(entry)]
         }
+        if (typeof entry === "string") {
+          try {
+            const decoded = JSON.parse(entry) as unknown
+            if (decoded !== null && typeof decoded === "object") sanitize(decoded, key)
+          } catch {
+            // Most transcript strings are prose; parse only embedded JSON envelopes.
+          }
+        }
         let kind: AgUiIdKind | undefined
         if (key === "threadId" || key === "thread_id") kind = "thread"
         else if (
@@ -397,7 +424,7 @@ async function postAgui(options: {
   return { events, rawSse, status: response.status }
 }
 
-function assertSafeResearchJourney(
+function assertSuccessfulTerminal(
   events: readonly AgUiEvent[],
   ids: { readonly runId: string; readonly threadId: string },
 ): void {
@@ -415,6 +442,13 @@ function assertSafeResearchJourney(
   })
   expect(finished[0]?.outcome).toEqual({ type: "success" })
   expect(events.at(-1)).toEqual(finished[0])
+}
+
+function assertSafeResearchJourney(
+  events: readonly AgUiEvent[],
+  ids: { readonly runId: string; readonly threadId: string },
+): void {
+  assertSuccessfulTerminal(events, ids)
 
   const parsedArgsByName = correlateRootToolCalls(events)
   expect(parsedArgsByName.get("task")).toEqual({
@@ -422,6 +456,194 @@ function assertSafeResearchJourney(
     input: SUBQUESTION,
   })
   expect(reconstructAssistantText(events)).toContain("[corpus/agent-architectures.md]")
+}
+
+function assertGatedResearchInterrupt(
+  events: readonly AgUiEvent[],
+  ids: { readonly runId: string; readonly threadId: string },
+): { readonly interruptId: string } {
+  expect(events[0]).toMatchObject({
+    type: "RUN_STARTED",
+    runId: ids.runId,
+    threadId: ids.threadId,
+  })
+  expect(events.filter((event) => event.type === "RUN_ERROR")).toEqual([])
+  const finished = events.filter((event) => event.type === "RUN_FINISHED")
+  expect(finished).toHaveLength(1)
+  expect(finished[0]).toMatchObject({
+    outcome: { type: "interrupt" },
+    runId: ids.runId,
+    threadId: ids.threadId,
+  })
+  expect(finished[0]).not.toHaveProperty("result")
+  expect(events.at(-1)).toEqual(finished[0])
+
+  const outcome = finished[0]?.outcome as
+    | { readonly interrupts?: readonly unknown[]; readonly type?: unknown }
+    | undefined
+  expect(outcome?.type).toBe("interrupt")
+  expect(outcome?.interrupts).toHaveLength(1)
+  const interrupt = outcome?.interrupts?.[0]
+  if (interrupt === null || typeof interrupt !== "object" || Array.isArray(interrupt)) {
+    throw new Error("Gated AG-UI journey omitted its permission interrupt")
+  }
+  const interruptRecord = interrupt as Record<string, unknown>
+  const interruptId = interruptRecord.id
+  const metadata = interruptRecord.metadata
+  if (
+    typeof interruptId !== "string" ||
+    metadata === null ||
+    typeof metadata !== "object" ||
+    Array.isArray(metadata)
+  ) {
+    throw new Error("Gated AG-UI permission interrupt omitted its id or metadata")
+  }
+  expect(interruptRecord.reason).toBe("command")
+  expect(metadata).toMatchObject({
+    interruptId,
+    type: "permission-request",
+    kind: "command",
+    detail: { command: FETCH_COMMAND },
+  })
+
+  const starts = events.filter((event) => event.type === "TOOL_CALL_START")
+  expect(starts.map((event) => event.toolCallName)).toEqual(["runBash"])
+  const toolCallId = starts[0]?.toolCallId
+  if (typeof toolCallId !== "string") {
+    throw new Error("Gated runBash start omitted its tool-call id")
+  }
+  const correlated = events.filter((event) => event.toolCallId === toolCallId)
+  const argEvents = correlated.filter((event) => event.type === "TOOL_CALL_ARGS")
+  expect(argEvents.length).toBeGreaterThan(0)
+  expect(correlated.map((event) => event.type)).toEqual([
+    "TOOL_CALL_START",
+    ...argEvents.map(() => "TOOL_CALL_ARGS"),
+    "TOOL_CALL_END",
+  ])
+  const encodedArgs = argEvents
+    .map((event) => {
+      if (typeof event.delta !== "string") {
+        throw new Error("Gated runBash args delta was not a string")
+      }
+      return event.delta
+    })
+    .join("")
+  const outerArgs = JSON.parse(encodedArgs) as { readonly input?: unknown }
+  expect(Object.keys(outerArgs)).toEqual(["input"])
+  expect(typeof outerArgs.input).toBe("string")
+  expect(JSON.parse(String(outerArgs.input))).toEqual({ command: FETCH_COMMAND })
+  expect(events.filter((event) => event.type === "TOOL_CALL_RESULT")).toEqual([])
+  expect(
+    events.filter(
+      (event) => event.type === "TOOL_CALL_START" && event.toolCallName === "writeFile",
+    ),
+  ).toEqual([])
+  expect(events.filter((event) => event.type === "TEXT_MESSAGE_CONTENT")).toEqual([])
+
+  return { interruptId }
+}
+
+function assertResumedGatedJourney(
+  events: readonly AgUiEvent[],
+  ids: { readonly runId: string; readonly threadId: string },
+): void {
+  assertSuccessfulTerminal(events, ids)
+
+  const starts = events.filter((event) => event.type === "TOOL_CALL_START")
+  expect(starts.map((event) => event.toolCallName)).toEqual(["runBash"])
+  const toolCallId = starts[0]?.toolCallId
+  if (typeof toolCallId !== "string") {
+    throw new Error("Resumed runBash start omitted its tool-call id")
+  }
+  const correlated = events.filter((event) => event.toolCallId === toolCallId)
+  const argEvents = correlated.filter((event) => event.type === "TOOL_CALL_ARGS")
+  expect(argEvents.length).toBeGreaterThan(0)
+  expect(correlated.map((event) => event.type)).toEqual([
+    "TOOL_CALL_START",
+    ...argEvents.map(() => "TOOL_CALL_ARGS"),
+    "TOOL_CALL_END",
+    "TOOL_CALL_RESULT",
+  ])
+  const encodedArgs = argEvents
+    .map((event) => {
+      if (typeof event.delta !== "string") {
+        throw new Error("Resumed runBash args delta was not a string")
+      }
+      return event.delta
+    })
+    .join("")
+  const outerArgs = JSON.parse(encodedArgs) as { readonly input?: unknown }
+  expect(Object.keys(outerArgs)).toEqual(["input"])
+  expect(typeof outerArgs.input).toBe("string")
+  expect(JSON.parse(String(outerArgs.input))).toEqual({ command: FETCH_COMMAND })
+
+  const toolResult = correlated.find((event) => event.type === "TOOL_CALL_RESULT")
+  if (toolResult === undefined || typeof toolResult.content !== "string") {
+    throw new Error("Resumed runBash omitted its string tool result")
+  }
+  const serializedToolMessage = JSON.parse(toolResult.content) as unknown
+  if (
+    serializedToolMessage === null ||
+    typeof serializedToolMessage !== "object" ||
+    Array.isArray(serializedToolMessage)
+  ) {
+    throw new Error("Resumed runBash result was not a serialized ToolMessage")
+  }
+  const toolMessage = serializedToolMessage as Record<string, unknown>
+  expect(toolMessage).toMatchObject({ lc: 1, type: "constructor" })
+  expect(toolMessage.id).toEqual(expect.arrayContaining(["langchain_core", "messages"]))
+  expect(Array.isArray(toolMessage.id) ? toolMessage.id.at(-1) : undefined).toBe("ToolMessage")
+  const kwargs = toolMessage.kwargs
+  if (kwargs === null || typeof kwargs !== "object" || Array.isArray(kwargs)) {
+    throw new Error("Serialized runBash ToolMessage omitted its kwargs")
+  }
+  expect(kwargs).toMatchObject({ status: "success", name: "runBash" })
+  const commandResult = Reflect.get(kwargs, "content")
+  if (typeof commandResult !== "string") {
+    throw new Error("Serialized runBash ToolMessage omitted its string content")
+  }
+  expect(JSON.parse(commandResult)).toEqual({
+    stdout: FETCH_STDOUT,
+    stderr: "",
+    exitCode: 0,
+  })
+  const resultIndex = events.indexOf(toolResult)
+  const firstTextIndex = events.findIndex((event) => event.type === "TEXT_MESSAGE_CONTENT")
+  expect(resultIndex).toBeGreaterThanOrEqual(0)
+  expect(firstTextIndex).toBeGreaterThan(resultIndex)
+  expect(reconstructAssistantText(events)).toBe(GATED_REPLY)
+}
+
+function assertBuiltArtifactJourney(
+  events: readonly AgUiEvent[],
+  ids: { readonly runId: string; readonly threadId: string },
+): void {
+  assertSuccessfulTerminal(events, ids)
+  expect(events.filter((event) => event.type === "TOOL_CALL_START")).toEqual([])
+  expect(reconstructAssistantText(events)).toBe(BUILT_REPLY)
+}
+
+function assertRecordedServerExit(
+  transcript: string,
+  options: { readonly appRoot: string; readonly script: "dev" | "start" },
+): void {
+  const commandPrefix = `$ (cd ${options.appRoot} && npm run ${options.script}`
+  const commandIndex = transcript.lastIndexOf(commandPrefix)
+  expect(commandIndex).toBeGreaterThanOrEqual(0)
+  if (commandIndex < 0) throw new Error(`Missing ${options.script} server transcript`)
+  const commandBlock = transcript.slice(commandIndex)
+  expect(commandBlock).not.toContain("[exit pending")
+  expect(commandBlock).not.toContain("[exit unavailable")
+  expect(commandBlock).toMatch(/\[exit (?:-?\d+|null) signal (?:[A-Z0-9]+|none)\]/)
+}
+
+async function assertReadyHealth(baseUrl: string, signal: AbortSignal): Promise<void> {
+  const healthSignal = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+  const response = await fetch(new URL("/healthz", baseUrl), { signal: healthSignal })
+  const body = (await response.json()) as unknown
+  healthSignal.throwIfAborted()
+  expect(response.status).toBe(200)
+  expect(body).toEqual({ status: "ready" })
 }
 
 afterEach(async () => {
@@ -482,7 +704,7 @@ test("activates the default research scaffold through the complete npm lifecycle
     await writeFile(agUiTranscriptPath, "", "utf8")
 
     aimock = await createAimock({ fixtures: [] })
-    aimock.addFixtures(createSafeResearchFixtures())
+    aimock.addFixtures([...createSafeResearchFixtures(), ...createGatedAndBuiltFixtures()])
     const activeAimock = aimock
     const agUiRecorder = createAgUiTranscriptRecorder({
       aimockUrl: activeAimock.baseUrl,
@@ -623,8 +845,15 @@ test("activates the default research scaffold through the complete npm lifecycle
     const safeThreadId = `safe-thread-${randomUUID()}`
     const safeRunId = `safe-run-${randomUUID()}`
     const safeMessageId = `safe-message-${randomUUID()}`
+    const gatedThreadId = `gated-thread-${randomUUID()}`
+    const gatedRunId = `gated-run-${randomUUID()}`
+    const gatedMessageId = `gated-message-${randomUUID()}`
+    const resumeRunId = `resume-run-${randomUUID()}`
+    const builtThreadId = `built-thread-${randomUUID()}`
+    const builtRunId = `built-run-${randomUUID()}`
+    const builtMessageId = `built-message-${randomUUID()}`
     let devServerUrl: string | undefined
-    const safeJourney = await withPackagedNpmServer(
+    const devResult = await withPackagedNpmServer(
       {
         appRoot,
         script: "dev",
@@ -637,7 +866,7 @@ test("activates the default research scaffold through the complete npm lifecycle
       async ({ url }) => {
         devServerUrl = url
         agUiRecorder.registerServerUrl(url)
-        return await postAgui({
+        const safeJourney = await postAgui({
           baseUrl: url,
           messages: [{ id: safeMessageId, role: "user", content: SAFE_PROMPT }],
           recorder: agUiRecorder,
@@ -645,15 +874,92 @@ test("activates the default research scaffold through the complete npm lifecycle
           signal: lifecycleSignal,
           threadId: safeThreadId,
         })
+        expect(safeJourney.status).toBe(200)
+        assertSafeResearchJourney(safeJourney.events, {
+          runId: safeRunId,
+          threadId: safeThreadId,
+        })
+
+        const gatedJournalStart = activeAimock.getRequests().length
+        const gatedJourney = await postAgui({
+          baseUrl: url,
+          messages: [{ id: gatedMessageId, role: "user", content: GATED_PROMPT }],
+          recorder: agUiRecorder,
+          runId: gatedRunId,
+          signal: lifecycleSignal,
+          threadId: gatedThreadId,
+        })
+        expect(gatedJourney.status).toBe(200)
+        expect(activeAimock.getRequests()).toHaveLength(gatedJournalStart + 1)
+        const { interruptId } = assertGatedResearchInterrupt(gatedJourney.events, {
+          runId: gatedRunId,
+          threadId: gatedThreadId,
+        })
+
+        const resumeJournalStart = activeAimock.getRequests().length
+        const resumedJourney = await postAgui({
+          baseUrl: url,
+          messages: [],
+          recorder: agUiRecorder,
+          resumeFields: {
+            resume: [{ interruptId, status: "resolved", payload: "once" }],
+          },
+          runId: resumeRunId,
+          signal: lifecycleSignal,
+          threadId: gatedThreadId,
+        })
+        expect(resumedJourney.status).toBe(200)
+        expect(activeAimock.getRequests()).toHaveLength(resumeJournalStart + 1)
+        expect(resumeRunId).not.toBe(gatedRunId)
+        assertResumedGatedJourney(resumedJourney.events, {
+          runId: resumeRunId,
+          threadId: gatedThreadId,
+        })
+        return { interruptId }
       },
     )
     if (devServerUrl === undefined) throw new Error("Generated dev server did not start")
 
-    expect(safeJourney.status).toBe(200)
-    assertSafeResearchJourney(safeJourney.events, {
-      runId: safeRunId,
-      threadId: safeThreadId,
+    const transcriptAfterDev = await readFile(commandsTranscriptPath, "utf8")
+    assertRecordedServerExit(transcriptAfterDev, { appRoot, script: "dev" })
+    expect(transcriptAfterDev).not.toContain(`$ (cd ${appRoot} && npm run start`)
+
+    let builtServerUrl: string | undefined
+    const builtJourney = await withPackagedNpmServer(
+      {
+        appRoot,
+        script: "start",
+        env: { HOST: "127.0.0.1" },
+        unsetEnv: ["OPENAI_BASE_URL", "OPENAI_API_KEY"],
+        transcriptPath: commandsTranscriptPath,
+      },
+      async ({ url }) => {
+        builtServerUrl = url
+        agUiRecorder.registerServerUrl(url)
+        await assertReadyHealth(url, lifecycleSignal)
+
+        const builtJournalStart = activeAimock.getRequests().length
+        const journey = await postAgui({
+          baseUrl: url,
+          messages: [{ id: builtMessageId, role: "user", content: BUILT_PROMPT }],
+          recorder: agUiRecorder,
+          runId: builtRunId,
+          signal: lifecycleSignal,
+          threadId: builtThreadId,
+        })
+        expect(activeAimock.getRequests()).toHaveLength(builtJournalStart + 1)
+        return journey
+      },
+    )
+    if (builtServerUrl === undefined) throw new Error("Generated built server did not start")
+    expect(builtJourney.status).toBe(200)
+    assertBuiltArtifactJourney(builtJourney.events, {
+      runId: builtRunId,
+      threadId: builtThreadId,
     })
+
+    const transcriptAfterStart = await readFile(commandsTranscriptPath, "utf8")
+    assertRecordedServerExit(transcriptAfterStart, { appRoot, script: "start" })
     const reportPath = join(appRoot, "workspace/reports/agent-architectures.md")
     await expect(access(reportPath, constants.F_OK)).resolves.toBeUndefined()
     await expect(readFile(reportPath, "utf8")).resolves.toContain("[corpus/agent-architectures.md]")
@@ -662,20 +968,41 @@ test("activates the default research scaffold through the complete npm lifecycle
     expect(() => JSON.parse(sanitizedAgUiTranscript)).not.toThrow()
     expect(sanitizedAgUiTranscript).toContain("<temp-root>")
     expect(sanitizedAgUiTranscript).toContain("<server-url-1>")
+    if (builtServerUrl !== devServerUrl) {
+      expect(sanitizedAgUiTranscript).toContain("<server-url-2>")
+    }
     expect(sanitizedAgUiTranscript).toContain("<aimock-url>")
     expect(sanitizedAgUiTranscript).toContain("<aimock-origin>")
     expect(sanitizedAgUiTranscript).toContain("<thread-1>")
     expect(sanitizedAgUiTranscript).toContain("<run-1>")
     expect(sanitizedAgUiTranscript).toContain("<message-1>")
     expect(sanitizedAgUiTranscript).toContain("<tool-call-1>")
+    expect(sanitizedAgUiTranscript).toContain("<interrupt-1>")
     for (const unsanitized of [
       tempRoot,
       `/private${tempRoot}`,
       devServerUrl,
+      builtServerUrl,
       activeAimock.baseUrl,
+      new URL(activeAimock.baseUrl).origin,
       safeThreadId,
       safeRunId,
       safeMessageId,
+      gatedThreadId,
+      gatedRunId,
+      gatedMessageId,
+      resumeRunId,
+      devResult.interruptId,
+      builtThreadId,
+      builtRunId,
+      builtMessageId,
+      "call_recall_0_0",
+      "call_writeTodos_0_1",
+      "call_task_0_2",
+      "call_searchCorpus_0_3",
+      "call_readDoc_0_4",
+      "call_writeFile_0_5",
+      "call_runBash_0_0",
       "test-not-used",
       "ambient-secret",
     ]) {
