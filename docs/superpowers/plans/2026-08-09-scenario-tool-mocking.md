@@ -51,9 +51,9 @@ separate shells or fresh subagents. Use Corepack's repository-pinned
 `pnpm@10.33.0`:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" node -e 'const major = Number(process.versions.node.split(".")[0]); if (major < 24) process.exit(1); console.log(process.version)'
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --version
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm build
+node -e 'const major = Number(process.versions.node.split(".")[0]); if (major < 24) process.exit(1); console.log(process.version)'
+corepack pnpm --version
+corepack pnpm build
 ```
 
 Expected: Node prints `v24` or newer, pnpm prints `10.33.0`, and the workspace
@@ -395,9 +395,9 @@ scenarios("/without-tools").scenario("none", (s) => {
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk build
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk test scenario-builder
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk typecheck
+corepack pnpm --filter @dawn-ai/sdk build
+corepack pnpm --filter @dawn-ai/sdk test scenario-builder
+corepack pnpm --filter @dawn-ai/sdk typecheck
 ```
 
 Expected: FAIL because `scenarios`, the descriptor guard, and the fluent type
@@ -583,9 +583,9 @@ builder. Update the file's JSDoc example to the fluent API.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk test scenario-builder
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk typecheck
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk lint
+corepack pnpm --filter @dawn-ai/sdk test scenario-builder
+corepack pnpm --filter @dawn-ai/sdk typecheck
+corepack pnpm --filter @dawn-ai/sdk lint
 ```
 
 Expected: PASS. Every `@ts-expect-error` is consumed, and runtime tests see a
@@ -655,7 +655,7 @@ and hide exports such as `scenarios`.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/core test render-route-types
+corepack pnpm --filter @dawn-ai/core test render-route-types
 ```
 
 Expected: FAIL because the scenario renderer and sibling-file reference do not
@@ -724,9 +724,9 @@ Export `SCENARIO_TYPES_FILE` and `renderScenarioTypes` from
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/core test render-route-types
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/core typecheck
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/core lint
+corepack pnpm --filter @dawn-ai/core test render-route-types
+corepack pnpm --filter @dawn-ai/core typecheck
+corepack pnpm --filter @dawn-ai/core lint
 ```
 
 Expected: PASS. Snapshots include every route, use
@@ -816,8 +816,8 @@ temporary directory, and do not export a production-only test hook.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test run-typegen scenario-typegen-contract
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/vite-plugin test plugin
+corepack pnpm --filter @dawn-ai/cli test run-typegen scenario-typegen-contract
+corepack pnpm --filter @dawn-ai/vite-plugin test plugin
 ```
 
 Expected: FAIL because neither typegen path writes the scenario declaration,
@@ -885,14 +885,14 @@ contain the routes and application tools actually present in that template.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm build
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test run-typegen scenario-typegen-contract
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/vite-plugin test plugin
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm exec vitest --run --config test/generated/vitest.config.ts \
+corepack pnpm build
+corepack pnpm --filter @dawn-ai/cli test run-typegen scenario-typegen-contract
+corepack pnpm --filter @dawn-ai/vite-plugin test plugin
+corepack pnpm exec vitest --run --config test/generated/vitest.config.ts \
   test/generated/run-generated-app.test.ts
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/devkit test generated-app
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli typecheck
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/vite-plugin typecheck
+corepack pnpm --filter @dawn-ai/devkit test generated-app
+corepack pnpm --filter @dawn-ai/cli typecheck
+corepack pnpm --filter @dawn-ai/vite-plugin typecheck
 ```
 
 Expected: PASS, with the same application-only map emitted by both typegen
@@ -986,7 +986,7 @@ test helpers.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test test-command
+corepack pnpm --filter @dawn-ai/cli test test-command
 ```
 
 Expected: FAIL because the loader still requires an array and does not know
@@ -1026,8 +1026,8 @@ validators instead of retaining dead compatibility code.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test test-command
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli typecheck
+corepack pnpm --filter @dawn-ai/cli test test-command
+corepack pnpm --filter @dawn-ai/cli typecheck
 ```
 
 Expected: PASS for all existing discovery, narrowing, in-process, server,
@@ -1086,7 +1086,7 @@ expect(searchTool.run).toBe(realSearchRun)
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test scenario-tool-overrides
+corepack pnpm --filter @dawn-ai/cli test scenario-tool-overrides
 ```
 
 Expected: FAIL because `applyScenarioToolOverrides` does not exist.
@@ -1157,8 +1157,8 @@ later calls.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test scenario-tool-overrides route-load-cache
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli typecheck
+corepack pnpm --filter @dawn-ai/cli test scenario-tool-overrides route-load-cache
+corepack pnpm --filter @dawn-ai/cli typecheck
 ```
 
 Expected: PASS with no mutation of cached `PreparedRouteModules`.
@@ -1217,7 +1217,7 @@ Add separate scenarios/tests for:
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test test-command
+corepack pnpm --filter @dawn-ai/cli test test-command
 ```
 
 Expected: FAIL because command execution does not pass overrides or inspect a
@@ -1281,9 +1281,9 @@ tool calls. If route expectations pass but a call expectation fails, return an
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test test-command scenario-tool-overrides
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli typecheck
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli lint
+corepack pnpm --filter @dawn-ai/cli test test-command scenario-tool-overrides
+corepack pnpm --filter @dawn-ai/cli typecheck
+corepack pnpm --filter @dawn-ai/cli lint
 ```
 
 Expected: PASS and failure output remains `FAIL <name> [assertion] <detail>`.
@@ -1333,7 +1333,7 @@ threaded into child route preparation even when names collide.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test scenario-tool-mocking-agent
+corepack pnpm --filter @dawn-ai/cli test scenario-tool-mocking-agent
 ```
 
 Expected: the first test should pass after Tasks 5-6. If the subagent test
@@ -1345,7 +1345,7 @@ argument threading; do not add name-based exceptions.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test \
+corepack pnpm --filter @dawn-ai/cli test \
   scenario-tool-mocking-agent subagent-runtime subagent-registry-runtime
 ```
 
@@ -1389,7 +1389,7 @@ and does not contain `export default [`.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm exec vitest --run --config test/generated/vitest.config.ts \
+corepack pnpm exec vitest --run --config test/generated/vitest.config.ts \
   test/generated/run-generated-runtime-contract.test.ts
 ```
 
@@ -1433,10 +1433,10 @@ not a default-exported array.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm build
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm exec vitest --run --config test/generated/vitest.config.ts \
+corepack pnpm build
+corepack pnpm exec vitest --run --config test/generated/vitest.config.ts \
   test/generated/run-generated-runtime-contract.test.ts
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" node scripts/check-docs.mjs
+node scripts/check-docs.mjs
 ```
 
 Expected: PASS. Rebuilding first ensures the packaged runtime fixture consumes
@@ -1515,7 +1515,7 @@ Do not use a minor changeset because Dawn's fixed 0.x group would advance to
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli build
+corepack pnpm --filter @dawn-ai/cli build
 rg -n 'mockTool|expectTool|server-backed scenario' packages/cli/docs/testing.md
 git check-ignore packages/cli/docs/testing.md
 ```
@@ -1528,9 +1528,9 @@ appear in `git status`.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test docs-bundle
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" node scripts/check-docs.mjs
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" node scripts/check-changesets.mjs
+corepack pnpm --filter @dawn-ai/cli test docs-bundle
+node scripts/check-docs.mjs
+node scripts/check-changesets.mjs
 ```
 
 Expected: PASS. The changeset check runs after the changeset is staged or
@@ -1551,7 +1551,7 @@ git commit -m "docs(testing): document fluent tool mocks"
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" node scripts/check-changesets.mjs
+node scripts/check-changesets.mjs
 ```
 
 Expected: PASS against `origin/main`.
@@ -1566,7 +1566,7 @@ Expected: PASS against `origin/main`.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm build
+corepack pnpm build
 ```
 
 Expected: PASS. This refreshes every `dist/` consumer before final tests.
@@ -1576,30 +1576,30 @@ Expected: PASS. This refreshes every `dist/` consumer before final tests.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk build
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk typecheck
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk lint
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/sdk test
+corepack pnpm --filter @dawn-ai/sdk build
+corepack pnpm --filter @dawn-ai/sdk typecheck
+corepack pnpm --filter @dawn-ai/sdk lint
+corepack pnpm --filter @dawn-ai/sdk test
 
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/core build
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/core typecheck
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/core lint
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/core test
+corepack pnpm --filter @dawn-ai/core build
+corepack pnpm --filter @dawn-ai/core typecheck
+corepack pnpm --filter @dawn-ai/core lint
+corepack pnpm --filter @dawn-ai/core test
 
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli build
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli typecheck
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli lint
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/cli test
+corepack pnpm --filter @dawn-ai/cli build
+corepack pnpm --filter @dawn-ai/cli typecheck
+corepack pnpm --filter @dawn-ai/cli lint
+corepack pnpm --filter @dawn-ai/cli test
 
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/vite-plugin build
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/vite-plugin typecheck
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/vite-plugin lint
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/vite-plugin test
+corepack pnpm --filter @dawn-ai/vite-plugin build
+corepack pnpm --filter @dawn-ai/vite-plugin typecheck
+corepack pnpm --filter @dawn-ai/vite-plugin lint
+corepack pnpm --filter @dawn-ai/vite-plugin test
 
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/devkit build
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/devkit typecheck
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/devkit lint
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm --filter @dawn-ai/devkit test
+corepack pnpm --filter @dawn-ai/devkit build
+corepack pnpm --filter @dawn-ai/devkit typecheck
+corepack pnpm --filter @dawn-ai/devkit lint
+corepack pnpm --filter @dawn-ai/devkit test
 ```
 
 Expected: all commands PASS.
@@ -1609,7 +1609,7 @@ Expected: all commands PASS.
 Run:
 
 ```bash
-env PATH="/Users/blove/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH" corepack pnpm ci:validate
+corepack pnpm ci:validate
 ```
 
 Expected: lint, build-cache, build, typecheck, source tests, docs checks,
