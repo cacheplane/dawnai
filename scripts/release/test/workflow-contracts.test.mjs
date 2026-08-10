@@ -1,5 +1,15 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -15,6 +25,13 @@ const SHADOW_PATH = path.join(WORKFLOWS, "release-shadow.yml")
 const ENTRYPOINT_ALLOWLIST_PATH = path.join(
   ROOT,
   "scripts/release/test/fixtures/workflow-entrypoints.json",
+)
+const EXECUTABLE_ALLOWLIST_PATH = path.join(
+  ROOT,
+  "scripts/release/test/fixtures/workflow-safe-executables.json",
+)
+const EXECUTABLE_ALLOWLIST = JSON.parse(
+  await readBoundedFixture(EXECUTABLE_ALLOWLIST_PATH, { root: ROOT }),
 )
 const LEGACY_SAFE_ENTRYPOINTS = new Set([
   "step-uses:actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
@@ -186,6 +203,18 @@ test("workflow entrypoints fail closed unless their exact normalized form is exp
           "jobs:\n  safe:\n    steps:\n      - name: Audited command\n        run: pnpm lint\n",
       },
       allowlist,
+      {
+        "safe.yml": [
+          {
+            classification: "safe",
+            job: "safe",
+            stepIndex: 0,
+            step: "Audited command",
+            kind: "run",
+            value: "pnpm lint",
+          },
+        ],
+      },
     ),
   )
   const cases = [
@@ -254,7 +283,7 @@ test("workflow entrypoints fail closed unless their exact normalized form is exp
 
 test("every workflow executable entrypoint matches the readable audited allowlist", async () => {
   const allowlist = JSON.parse(await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }))
-  const sources = await readWorkflowSources(WORKFLOWS)
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
 
   assert.deepEqual(Object.keys(allowlist).sort(), ["schemaVersion", "workflows"])
   assert.equal(allowlist.schemaVersion, 2)
@@ -263,7 +292,7 @@ test("every workflow executable entrypoint matches the readable audited allowlis
 
 test("workflow audit binds complete execution descriptors and byte-exact run strings", async (t) => {
   const allowlist = JSON.parse(await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }))
-  const sources = await readWorkflowSources(WORKFLOWS)
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
   const cases = [
     [
       "workflow permissions",
@@ -349,6 +378,44 @@ test("workflow classifications are explicit safe or release-only publication", a
   const allowlist = JSON.parse(await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }))
 
   assert.doesNotMatch(JSON.stringify(allowlist), /"audited"/u)
+  assert.deepEqual(Object.keys(EXECUTABLE_ALLOWLIST).sort(), ["schemaVersion", "workflows"])
+  assert.equal(EXECUTABLE_ALLOWLIST.schemaVersion, 1)
+  assert.doesNotMatch(JSON.stringify(EXECUTABLE_ALLOWLIST), /"audited"/u)
+  assert.equal(
+    Object.values(EXECUTABLE_ALLOWLIST.workflows)
+      .flat()
+      .filter(({ classification }) => classification === "publication").length,
+    4,
+  )
+})
+
+test("matching descriptor inventory cannot classify a new executable as safe", () => {
+  const cases = [
+    ["npm publish", "jobs:\n  new:\n    steps:\n      - run: npm publish\n"],
+    ["bash wrapper", "jobs:\n  new:\n    steps:\n      - run: bash -c 'npm publish'\n"],
+    [
+      "publishing action",
+      `jobs:\n  new:\n    steps:\n      - uses: example/publish@${"a".repeat(40)}\n`,
+    ],
+    [
+      "local release reusable workflow",
+      "jobs:\n  new:\n    uses: ./.github/workflows/release.yml\n",
+    ],
+  ]
+  for (const [name, source] of cases) {
+    const workflow = parse(source)
+    const classifications = new Map(
+      workflowExecutables(workflow).map((entry) => [executableIdentity(entry), "safe"]),
+    )
+    const inventory = {
+      "new.yaml": workflowDescriptor(workflow, classifications),
+    }
+    assert.throws(
+      () => auditWorkflowEntrypoints({ "new.yaml": source }, inventory),
+      /not explicitly audited/u,
+      name,
+    )
+  }
 })
 
 test("workflow parsing rejects duplicate keys, aliases, accessors, sparse data, and unknown fields", () => {
@@ -399,17 +466,49 @@ test("workflow reads are bounded, contained, regular, and no-follow", async (t) 
       rm(outside, { recursive: true, force: true }),
     ]),
   )
+  const workflows = path.join(root, ".github", "workflows")
+  await mkdir(workflows, { recursive: true })
   await writeFile(path.join(outside, "outside.yml"), "jobs: {}\n")
-  await symlink(path.join(outside, "outside.yml"), path.join(root, "unsafe.yml"))
-  await assert.rejects(() => readWorkflowSources(root), /fixture file/u)
+  await symlink(path.join(outside, "outside.yml"), path.join(workflows, "unsafe.yml"))
+  await assert.rejects(() => readWorkflowSourcesFromRoot(root), /fixture file/u)
 
-  await rm(path.join(root, "unsafe.yml"))
-  await mkdir(path.join(root, "directory.yaml"))
-  await assert.rejects(() => readWorkflowSources(root), /fixture file/u)
+  await rm(path.join(workflows, "unsafe.yml"))
+  await mkdir(path.join(workflows, "directory.yaml"))
+  await assert.rejects(() => readWorkflowSourcesFromRoot(root), /fixture file/u)
 
-  await rm(path.join(root, "directory.yaml"), { recursive: true })
-  await writeFile(path.join(root, "oversize.yml"), "x".repeat(1024 * 1024 + 1))
-  await assert.rejects(() => readWorkflowSources(root), /fixture file/u)
+  await rm(path.join(workflows, "directory.yaml"), { recursive: true })
+  await writeFile(path.join(workflows, "oversize.yml"), "x".repeat(1024 * 1024 + 1))
+  await assert.rejects(() => readWorkflowSourcesFromRoot(root), /fixture file/u)
+})
+
+test("workflow directory traversal is anchored at regular repository components", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-workflow-root-"))
+  const outside = await mkdtemp(path.join(os.tmpdir(), "dawn-workflow-external-"))
+  t.after(() =>
+    Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(outside, { recursive: true, force: true }),
+    ]),
+  )
+  await mkdir(path.join(outside, "workflows"))
+  await writeFile(path.join(outside, "workflows", "safe.yml"), "jobs: {}\n")
+
+  await symlink(outside, path.join(root, ".github"))
+  await assert.rejects(() => readWorkflowSourcesFromRoot(root), /workflow directory/u)
+
+  await rm(path.join(root, ".github"))
+  await writeFile(path.join(root, ".github"), "not a directory\n")
+  await assert.rejects(() => readWorkflowSourcesFromRoot(root), /workflow directory/u)
+
+  await rm(path.join(root, ".github"))
+  await mkdir(path.join(root, ".github"))
+  await symlink(path.join(outside, "workflows"), path.join(root, ".github", "workflows"))
+  await assert.rejects(() => readWorkflowSourcesFromRoot(root), /workflow directory/u)
+
+  await rm(path.join(root, ".github", "workflows"))
+  await mkdir(path.join(root, ".github", "workflows"))
+  await writeFile(path.join(root, ".github", "workflows", "safe.yml"), "jobs: {}\n")
+  assert.deepEqual(Object.keys(await readWorkflowSourcesFromRoot(root)), ["safe.yml"])
 })
 
 test("legacy publication indirection is bound to exact root scripts and regular files", async (t) => {
@@ -466,7 +565,22 @@ async function readShadowSource() {
   return source
 }
 
-async function readWorkflowSources(directory) {
+async function readWorkflowSourcesFromRoot(root) {
+  const resolvedRoot = path.resolve(root)
+  const githubDirectory = path.join(resolvedRoot, ".github")
+  const directory = path.join(githubDirectory, "workflows")
+  try {
+    const canonicalRoot = await realpath(resolvedRoot)
+    for (const component of [githubDirectory, directory]) {
+      const status = await lstat(component)
+      if (!status.isDirectory() || status.isSymbolicLink()) throw new TypeError("unsafe")
+      const canonicalComponent = await realpath(component)
+      const relative = path.relative(canonicalRoot, canonicalComponent)
+      if (relative.startsWith("..") || path.isAbsolute(relative)) throw new TypeError("unsafe")
+    }
+  } catch {
+    throw new TypeError("Invalid workflow directory")
+  }
   const sources = Object.create(null)
   for (const file of (await readdir(directory)).filter((name) => /\.ya?ml$/u.test(name)).sort()) {
     Object.defineProperty(sources, file, {
@@ -474,7 +588,7 @@ async function readWorkflowSources(directory) {
       enumerable: true,
       writable: false,
       value: await readBoundedFixture(path.join(directory, file), {
-        root: directory,
+        root: resolvedRoot,
         maxBytes: 1024 * 1024,
       }),
     })
@@ -509,13 +623,21 @@ async function assertReleaseIndirection(root) {
   }
 }
 
-function auditWorkflowEntrypoints(sources, allowlist) {
+function auditWorkflowEntrypoints(
+  sources,
+  allowlist,
+  executableAllowlist = EXECUTABLE_ALLOWLIST.workflows,
+) {
   const sourceSnapshot = snapshotDescriptor(sources)
   const allowlistSnapshot = snapshotDescriptor(allowlist)
-  if (!isRecord(sourceSnapshot) || !isRecord(allowlistSnapshot)) throw unauditedEntrypoint()
+  const executableSnapshot = snapshotDescriptor(executableAllowlist)
+  if (!isRecord(sourceSnapshot) || !isRecord(allowlistSnapshot) || !isRecord(executableSnapshot))
+    throw unauditedEntrypoint()
   const files = Object.keys(sourceSnapshot).sort()
   const allowedFiles = Object.keys(allowlistSnapshot).sort()
-  if (!sameStrings(files, allowedFiles)) throw unauditedEntrypoint()
+  const executableFiles = Object.keys(executableSnapshot).sort()
+  if (!sameStrings(files, allowedFiles) || !sameStrings(files, executableFiles))
+    throw unauditedEntrypoint()
   for (const file of files) {
     let workflow
     try {
@@ -524,10 +646,88 @@ function auditWorkflowEntrypoints(sources, allowlist) {
     } catch {
       throw unauditedEntrypoint()
     }
-    const actual = workflowDescriptor(workflow, file)
+    const classifications = classifyExecutables(
+      file,
+      workflowExecutables(workflow),
+      executableSnapshot[file],
+    )
+    const actual = workflowDescriptor(workflow, classifications)
     const expected = allowlistSnapshot[file]
     if (canonicalJson(actual) !== canonicalJson(expected)) throw unauditedEntrypoint()
   }
+}
+
+function workflowExecutables(workflow) {
+  if (!isRecord(workflow?.jobs)) throw unauditedEntrypoint()
+  const entries = []
+  for (const [job, descriptor] of Object.entries(workflow.jobs)) {
+    if (!isRecord(descriptor)) throw unauditedEntrypoint()
+    if (descriptor.uses !== undefined) {
+      if (typeof descriptor.uses !== "string") throw unauditedEntrypoint()
+      entries.push({
+        job,
+        stepIndex: null,
+        step: null,
+        kind: "job-uses",
+        value: descriptor.uses,
+      })
+    }
+    if (descriptor.steps !== undefined && !Array.isArray(descriptor.steps))
+      throw unauditedEntrypoint()
+    for (const [stepIndex, step] of (descriptor.steps ?? []).entries()) {
+      if (!isRecord(step)) throw unauditedEntrypoint()
+      const hasRun = typeof step.run === "string"
+      const hasUses = typeof step.uses === "string"
+      if (hasRun === hasUses) throw unauditedEntrypoint()
+      entries.push({
+        job,
+        stepIndex,
+        step: typeof step.name === "string" ? step.name : null,
+        kind: hasRun ? "run" : "step-uses",
+        value: hasRun ? step.run : step.uses,
+      })
+    }
+  }
+  return entries
+}
+
+function classifyExecutables(file, actual, expected) {
+  if (!Array.isArray(expected) || actual.length !== expected.length) throw unauditedEntrypoint()
+  const classifications = new Map()
+  for (let index = 0; index < actual.length; index += 1) {
+    const allowed = expected[index]
+    if (!isRecord(allowed) || !["safe", "publication"].includes(allowed.classification))
+      throw unauditedEntrypoint()
+    const identity = {
+      job: allowed.job,
+      stepIndex: allowed.stepIndex,
+      step: allowed.step,
+      kind: allowed.kind,
+      value: allowed.value,
+    }
+    if (canonicalJson(actual[index]) !== canonicalJson(identity)) throw unauditedEntrypoint()
+    const executableKey = `${actual[index].kind}:${actual[index].value}`
+    if (allowed.classification === "publication") {
+      if (file !== "release.yml" || !LEGACY_PUBLICATION_ENTRYPOINTS.has(executableKey))
+        throw unauditedEntrypoint()
+    } else if (
+      LEGACY_PUBLICATION_ENTRYPOINTS.has(executableKey) ||
+      (file === "release.yml" && !LEGACY_SAFE_ENTRYPOINTS.has(executableKey))
+    ) {
+      throw unauditedEntrypoint()
+    }
+    classifications.set(executableIdentity(actual[index]), allowed.classification)
+  }
+  return classifications
+}
+
+function executableIdentity(entry) {
+  return canonicalJson({
+    job: entry.job,
+    stepIndex: entry.stepIndex,
+    kind: entry.kind,
+    value: entry.value,
+  })
 }
 
 const WORKFLOW_KEYS = new Set([
@@ -574,7 +774,7 @@ const STEP_KEYS = new Set([
   "working-directory",
 ])
 
-function workflowDescriptor(workflow, file) {
+function workflowDescriptor(workflow, classifications) {
   assertAllowedRecord(workflow, WORKFLOW_KEYS)
   if (!isRecord(workflow.jobs)) throw unauditedEntrypoint()
   const descriptor = omitField(workflow, "jobs")
@@ -586,13 +786,21 @@ function workflowDescriptor(workflow, file) {
       const hasUses = typeof job.uses === "string"
       if (hasSteps === hasUses) throw unauditedEntrypoint()
       const steps = hasSteps
-        ? job.steps.map((step) => {
+        ? job.steps.map((step, stepIndex) => {
             assertAllowedRecord(step, STEP_KEYS)
             const hasRun = typeof step.run === "string"
             const hasStepUses = typeof step.uses === "string"
             if (hasRun === hasStepUses) throw unauditedEntrypoint()
+            const executable = {
+              job: id,
+              stepIndex,
+              kind: hasRun ? "run" : "step-uses",
+              value: hasRun ? step.run : step.uses,
+            }
+            const classification = classifications.get(executableIdentity(executable))
+            if (!["safe", "publication"].includes(classification)) throw unauditedEntrypoint()
             return {
-              classification: classifyStep(file, step),
+              classification,
               descriptor: snapshotDescriptor(step),
             }
           })
@@ -605,18 +813,6 @@ function workflowDescriptor(workflow, file) {
       }
     })
   return { classification: "safe", descriptor, jobs }
-}
-
-function classifyStep(file, step) {
-  const kind = typeof step.run === "string" ? "run" : "step-uses"
-  const value = step.run ?? step.uses
-  const key = `${kind}:${value}`
-  if (LEGACY_PUBLICATION_ENTRYPOINTS.has(key)) {
-    if (file !== "release.yml") throw unauditedEntrypoint()
-    return "publication"
-  }
-  if (file === "release.yml" && !LEGACY_SAFE_ENTRYPOINTS.has(key)) throw unauditedEntrypoint()
-  return "safe"
 }
 
 function omitField(value, omitted) {
