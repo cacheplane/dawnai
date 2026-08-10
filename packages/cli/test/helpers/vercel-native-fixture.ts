@@ -1010,6 +1010,7 @@ function parsePnpmPeerContext(value: string, start: number): number | undefined 
     index += 1
   }
   if (index === versionStart) return undefined
+  if (/[:/\\]/.test(value.slice(versionStart, index))) return undefined
 
   while (value[index] === "(") {
     const nestedEnd = parsePnpmPeerContext(value, index)
@@ -1030,12 +1031,14 @@ function hasCompletePnpmPeerSuffix(value: string): boolean {
   return true
 }
 
-function matchesVendoredIdentity(value: string, packageName: string, ref: string): boolean {
-  const identity = `${packageName}@${ref}`
+function matchesVendoredReference(value: string, ref: string): boolean {
   return (
-    value === identity ||
-    (value.startsWith(identity) && hasCompletePnpmPeerSuffix(value.slice(identity.length)))
+    value === ref || (value.startsWith(ref) && hasCompletePnpmPeerSuffix(value.slice(ref.length)))
   )
+}
+
+function matchesVendoredIdentity(value: string, packageName: string, ref: string): boolean {
+  return matchesVendoredReference(value, `${packageName}@${ref}`)
 }
 
 export function validateNativeFixtureLockfile(
@@ -1101,7 +1104,7 @@ export function validateNativeFixtureLockfile(
     }
     if (item.includes("file:")) {
       const recognized = [...expected].some(([name, { ref }]) => {
-        return item === ref || matchesVendoredIdentity(item, name, ref)
+        return matchesVendoredReference(item, ref) || matchesVendoredIdentity(item, name, ref)
       })
       if (!recognized) {
         throw new Error("native fixture lockfile contains an unexpected file reference")
@@ -1131,7 +1134,8 @@ export function validateNativeFixtureLockfile(
         const dependency = lockfileRecord(dependencyValue, `native fixture importer ${name}`)
         if (
           dependency.specifier !== expectedEntry.ref ||
-          dependency.version !== expectedEntry.ref
+          typeof dependency.version !== "string" ||
+          !matchesVendoredReference(dependency.version, expectedEntry.ref)
         ) {
           throw new Error(`native fixture importer does not use the matching tarball for ${name}`)
         }

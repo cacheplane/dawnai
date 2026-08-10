@@ -1049,7 +1049,7 @@ describe("fixture package closure", () => {
 
     const duplicate = structuredClone(validNativeLockfile(artifacts))
     duplicate.packages[
-      `@dawn-ai/root@file:vendor/${artifacts[0]?.tarballName as string}(duplicate)`
+      `@dawn-ai/root@file:vendor/${artifacts[0]?.tarballName as string}(peer@1.0.0)`
     ] = {}
     expect(() => validateNativeFixtureLockfile(duplicate, artifacts)).toThrow(/root/)
 
@@ -1073,17 +1073,51 @@ describe("fixture package closure", () => {
     expect(() => validateNativeFixtureLockfile(truncatedPeerContext, artifacts)).toThrow(/root/)
 
     const registryCopy = structuredClone(validNativeLockfile(artifacts))
-    registryCopy.packages["@dawn-ai/root@0.0.0-test"] = {
+    registryCopy.packages["@dawn-ai/root@0.0.0-test(peer@1.0.0)"] = {
       resolution: { integrity: "sha512-not-the-vendored-tarball" },
       version: "0.0.0-test",
     }
-    registryCopy.snapshots["@dawn-ai/root@0.0.0-test"] = {}
+    registryCopy.snapshots["@dawn-ai/root@0.0.0-test(peer@1.0.0)"] = {}
     expect(() => validateNativeFixtureLockfile(registryCopy, artifacts)).toThrow(/root/)
 
     const unexpected = structuredClone(validNativeLockfile(artifacts))
     unexpected.packages["@dawn-ai/unexpected@file:vendor/unexpected.tgz"] = {}
     unexpected.snapshots["@dawn-ai/unexpected@file:vendor/unexpected.tgz"] = {}
     expect(() => validateNativeFixtureLockfile(unexpected, artifacts)).toThrow(/unexpected/)
+  })
+
+  test("accepts only complete nested pnpm peer contexts on vendored importer versions", () => {
+    const artifacts = [packedArtifact("@dawn-ai/root")]
+    const lockfile = structuredClone(validNativeLockfile(artifacts))
+    const artifact = artifacts[0] as NativePackedArtifact
+    const reference = `file:vendor/${artifact.tarballName}`
+    const identity = `${artifact.packageName}@${reference}`
+    const peerContext =
+      "(@langchain/core@1.2.5(openai@6.49.0(zod@4.4.3)))" +
+      "(@langchain/langgraph-checkpoint@1.1.3(@langchain/core@1.2.5(openai@6.49.0(zod@4.4.3))))" +
+      "(zod@4.4.3)"
+    const snapshotEntry = lockfile.snapshots[identity]
+    const importerDependency = lockfile.importers["."].dependencies[artifact.packageName] as {
+      version: string
+    }
+    delete lockfile.snapshots[identity]
+    lockfile.snapshots[`${identity}${peerContext}`] = snapshotEntry
+    importerDependency.version = `${reference}${peerContext}`
+
+    expect(() => validateNativeFixtureLockfile(lockfile, artifacts)).not.toThrow()
+
+    importerDependency.version = `${reference}${peerContext.slice(0, -1)}`
+    expect(() => validateNativeFixtureLockfile(lockfile, artifacts)).toThrow(/file reference/)
+
+    importerDependency.version = `${reference}${peerContext}#foreign`
+    expect(() => validateNativeFixtureLockfile(lockfile, artifacts)).toThrow(/file reference/)
+
+    for (const hiddenReference of ["file:vendor/foreign.tgz", "workspace:*", "link:foreign"]) {
+      importerDependency.version = `${reference}(peer@${hiddenReference})`
+      expect(() => validateNativeFixtureLockfile(lockfile, artifacts), hiddenReference).toThrow(
+        /file reference/,
+      )
+    }
   })
 
   test("rejects every nonlocal, ambiguous, or mismatched Dawn lockfile reference", () => {
@@ -1105,6 +1139,16 @@ describe("fixture package closure", () => {
       lockfile.overrides["@dawn-ai/root"] = reference
       expect(() => validateNativeFixtureLockfile(lockfile, artifacts), reference).toThrow()
     }
+
+    const mismatchedPeerVersion = structuredClone(validNativeLockfile(artifacts))
+    const dependencyReference = `file:vendor/${artifacts[1]?.tarballName as string}`
+    const rootImporter = mismatchedPeerVersion.importers["."].dependencies["@dawn-ai/root"] as {
+      version: string
+    }
+    rootImporter.version = `${dependencyReference}(peer@1.0.0)`
+    expect(() => validateNativeFixtureLockfile(mismatchedPeerVersion, artifacts)).toThrow(
+      /matching tarball/,
+    )
 
     const foreignSuffix = structuredClone(validNativeLockfile(artifacts))
     foreignSuffix.packages["foreign@1.0.0"] = {
