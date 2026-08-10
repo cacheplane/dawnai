@@ -1,6 +1,6 @@
 # {{appName}}
 
-A deep-research assistant built with [Dawn](https://github.com/cacheplane/dawn).
+A deep-research assistant built with [Dawn](https://github.com/cacheplane/dawnai).
 Ask a question; it plans sub-questions, researches a bundled local corpus,
 and writes a cited report. Live research uses a real OpenAI model and API key;
 the included tests and evals use deterministic fixtures and run offline.
@@ -27,7 +27,7 @@ curl -N "http://127.0.0.1:3000/agui/%2Fresearch%23agent" \
        "messages":[{"id":"1","role":"user","content":"What are common agent architectures?"}]}'
 ```
 
-That's the [AG-UI](https://github.com/cacheplane/dawn) endpoint (`/agui/<route>`).
+That's the [AG-UI](https://github.com/ag-ui-protocol/ag-ui) endpoint (`/agui/<route>`).
 For a **web UI**, follow the *Research assistant web UI* recipe in the Dawn
 docs. Its CopilotKit client adds streaming chat and cited reports, generic tool
 cards, suggestion prompts, standard permission handling, and memory-candidate

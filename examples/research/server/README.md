@@ -1,6 +1,6 @@
 # Research demo — server
 
-The flagship [Dawn](https://github.com/cacheplane/dawn) example: a deep-research
+The flagship [Dawn](https://github.com/cacheplane/dawnai) example: a deep-research
 assistant that plans sub-questions, researches a bundled local corpus with a
 specialist subagent, and writes a cited report. Live research uses a real model
 and API key; the included tests and evals use deterministic fixtures and run

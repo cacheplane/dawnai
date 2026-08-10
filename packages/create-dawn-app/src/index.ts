@@ -82,7 +82,7 @@ function printNextSteps(options: CliOptions): void {
     isWindows ? "Next steps (PowerShell):" : "Next steps:",
     ...(options.template === "research" ? researchSteps : basicSteps),
     "",
-    "See README.md for the full tour, or https://github.com/cacheplane/dawn",
+    "See README.md for the full tour, or https://github.com/cacheplane/dawnai",
     "",
   ]
   process.stdout.write(`${lines.join("\n")}\n`)
