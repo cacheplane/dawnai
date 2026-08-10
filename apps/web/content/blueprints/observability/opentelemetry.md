@@ -8,7 +8,7 @@ source: official
 
 # Add OpenTelemetry to your Dawn app
 
-You are an AI coding agent adding OpenTelemetry tracing to a Dawn app. It initializes the OTel Node SDK and exports spans to an OTLP endpoint so you can trace runs in your own observability backend. It does NOT replace LangSmith tracing (Dawn's deploy target has its own), stand up a collector, or auto-instrument your tools beyond what the Node SDK's auto-instrumentations provide.
+You are an AI coding agent adding OpenTelemetry tracing to a Dawn app running in a Node process you control. It initializes the OTel Node SDK and exports spans to an OTLP endpoint so you can trace runs in your own observability backend. It does not replace tracing supplied by a chosen hosting platform, stand up a collector, or auto-instrument tools beyond what the Node SDK's auto-instrumentations provide.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ Before proceeding, confirm the following is true:
 
 **OTLP-compatible backend reachable from this environment** — you need a collector or observability backend that accepts OTLP/HTTP traces (e.g. an OTel Collector, Jaeger, Honeycomb, Grafana Tempo). You must know its OTLP endpoint URL.
 
-> **Note:** OpenTelemetry instrumentation is most valuable for self-hosted Dawn runtimes where you control the server process. If you only deploy to LangSmith, LangSmith already provides first-class LangChain/LangGraph tracing — you may not need OTel. Confirm this is a self-hosted deployment before proceeding.
+> **Note:** This Node SDK blueprint fits the Dawn `node` target or another Node host where you control process startup. For the `hono` edge target, use instrumentation supported by that edge platform. For generated `langsmith` entries, evaluate the platform's tracing before adding a second exporter. Confirm that the selected target exposes a controllable Node startup path before proceeding.
 
 If no OTLP backend is available or configured, stop and tell the user what needs to be set up before continuing.
 
@@ -219,7 +219,7 @@ OTEL_SERVICE_NAME=
 
 If the project uses a different env-loading convention (e.g. a vault, a platform-injected secret, or an `env.ts` file), follow that convention instead of `.env`.
 
-> **LangSmith tracing is separate.** `dawn dev` automatically enables LangSmith tracing when `LANGSMITH_API_KEY` is present (setting `LANGCHAIN_TRACING_V2=true`). OpenTelemetry tracing is independent — both can be active at the same time. They export to different backends via different mechanisms.
+> **Dawn and platform tracing are independent.** `dawn dev` enables LangSmith tracing when `LANGSMITH_API_KEY` is present (setting `LANGCHAIN_TRACING_V2=true`). OpenTelemetry can run at the same time and exports through a separate mechanism to the configured OTLP backend.
 
 ## Verify
 
