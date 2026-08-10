@@ -147,7 +147,9 @@ describe.skipIf(!gated)("memory JSON API", () => {
       records: MemoryRecord[]
       continuation: string | null
     }
-    expect(orderedPage.records).toHaveLength(2)
+    // Pinned to the ids namespace-asc puts first, which the default updatedAt-desc order
+    // does NOT (that leads with cand2) — otherwise a dropped `orderBy` would still pass.
+    expect(orderedPage.records.map((r) => r.id)).toEqual(["active1", "cand1"])
     expect(orderedPage.continuation).not.toBeNull()
 
     const next = await fetch(
@@ -155,8 +157,26 @@ describe.skipIf(!gated)("memory JSON API", () => {
     )
     expect(next.status).toBe(200)
     const nextPage = (await next.json()) as { records: MemoryRecord[] }
-    const firstIds = orderedPage.records.map((r) => r.id)
-    expect(nextPage.records.every((r) => !firstIds.includes(r.id))).toBe(true)
+    expect(nextPage.records.map((r) => r.id)).toEqual(["cand2", "other1"])
+  })
+
+  it("browse cannot walk a continuation unless the caller pins `now`", async () => {
+    // The route's per-request stamp is a first-page default only: `now` is part of the
+    // cursor fingerprint, so an unpinned walk rejects the continuation it was just handed.
+    const orderBy = encodeURIComponent(JSON.stringify([{ field: "namespace", dir: "asc" }]))
+    const first = await fetch(`${server.base}/api/memory/list?orderBy=${orderBy}&limit=2`)
+    expect(first.status).toBe(200)
+    const { continuation } = (await first.json()) as { continuation: string | null }
+    expect(typeof continuation).toBe("string")
+    // Far enough apart that the next request's stamp cannot land in the same millisecond.
+    await new Promise((done) => setTimeout(done, 5))
+    const next = await fetch(
+      `${server.base}/api/memory/list?orderBy=${orderBy}&limit=2&cursor=${encodeURIComponent(continuation as string)}`,
+    )
+    expect(next.status).toBe(400)
+    expect((await next.json()) as { error: string; code: string }).toMatchObject({
+      code: "continuation-invalid",
+    })
   })
 
   it("browse narrows to an exact namespace", async () => {

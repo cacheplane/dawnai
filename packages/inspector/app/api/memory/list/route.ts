@@ -1,3 +1,4 @@
+import type { BrowseQuery } from "@dawn-ai/memory/browse"
 import { isBrowseQueryError, parseBrowseQuery } from "../../../../src/store/browse-params"
 import { assertLocalRequest } from "../../../../src/store/guard"
 import { storeOr500 } from "../../../../src/store/resolve"
@@ -14,18 +15,17 @@ export const dynamic = "force-dynamic"
  * a bare "@dawn-ai/memory" import here would drag node:sqlite into the Next bundle
  * (see src/store/runtime-imports.ts).
  *
- * Every 400 carries the validator's `code` beside its prose, because the prose is the
- * only thing that varies across the several ways one continuation can be wrong —
- * "continuation-invalid" is the stable name for all of them.
+ * A 400 body carries `code` beside `error`. Clients match on the code: the prose is the
+ * only part that varies across the several ways one continuation can be wrong.
  */
 export async function GET(req: Request): Promise<Response> {
   const denied = assertLocalRequest(req)
   if (denied) return denied
   const sp = new URL(req.url).searchParams
-  let query: ReturnType<typeof parseBrowseQuery>
+  let query: BrowseQuery
   try {
-    // Only a DEFAULT: a caller walking a continuation pins `now` itself, because a
-    // per-request stamp changes the cursor's fingerprint between pages.
+    // Only a DEFAULT, and one that cannot walk: `now` is part of the cursor fingerprint,
+    // so a caller paging through continuations pins its own.
     query = parseBrowseQuery(sp, { now: new Date().toISOString() })
   } catch (error) {
     if (isBrowseQueryError(error))

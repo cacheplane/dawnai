@@ -54,6 +54,12 @@ describe("parseBrowseQuery", () => {
   it("omits offset entirely when a cursor is supplied", () => {
     expect(parse("cursor=abc").offset).toBeUndefined()
   })
+  it("dedupes a repeated enum value so one narrowing has one spelling", () => {
+    expect(parse("status=active&status=active&status=candidate").status).toEqual([
+      "active",
+      "candidate",
+    ])
+  })
 })
 
 describe("parseBrowseQuery — rejections", () => {
@@ -72,6 +78,13 @@ describe("parseBrowseQuery — rejections", () => {
   it("rejects an unparseable pinned now", () => rejects("now=notadate", /invalid now "notadate"/))
   it("rejects malformed JSON params", () =>
     rejects("filters=%7Bnot-json", /filters must be valid JSON/))
+  it("hands a falsy JSON param to the validator rather than dropping it", () => {
+    rejects("filters=0", /filters must be an array/)
+    rejects("filters=null", /filters must be an array/)
+    rejects("orderBy=false", /orderBy must be an array/)
+  })
+  it("rejects a cursor sent with a non-zero offset instead of ignoring the offset", () =>
+    rejects("cursor=abc&offset=50", /cursor and a non-zero offset cannot be combined/))
   it("rejects a non-numeric limit", () => rejects("limit=abc", /limit must be a number/))
   it("enforces the 1000 ceiling that in-process callers are exempt from", () =>
     rejects("limit=5000", /limit must be at most 1000/))

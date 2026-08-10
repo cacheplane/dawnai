@@ -46,6 +46,13 @@ function parseCount(value: string | null, name: string, fallback: number): numbe
   return parsed
 }
 
+/** A repeated param is a SET, so a duplicate is not a second narrowing. The cursor
+ *  fingerprint is taken over this list, so leaving one in would give a single dataset
+ *  two fingerprints and reject its own continuation. */
+function uniqueValues(values: readonly string[]): string[] {
+  return [...new Set(values)]
+}
+
 /**
  * `URLSearchParams` → a validated `BrowseQuery`. Throws `BrowseQueryError`; the route
  * maps that to 400. Pure, so it is unit-tested without booting Next.
@@ -54,56 +61,45 @@ export function parseBrowseQuery(
   sp: URLSearchParams,
   opts: { readonly now?: string },
 ): BrowseQuery {
-  const statuses = sp.getAll("status")
-  const kinds = sp.getAll("kind")
+  const statuses = uniqueValues(sp.getAll("status"))
+  const kinds = uniqueValues(sp.getAll("kind"))
   const namespace = sp.get("namespace")
   const namespacePrefix = sp.get("namespacePrefix")
   const sourceType = sp.get("sourceType")
   const cursor = sp.get("cursor")
-  // includeExpired=1 reveals expired-but-unpruned rows; this is a debugging surface.
+  const rawOffset = sp.get("offset")
+  // includeExpired=1 drops the expiry cutoff; a caller-pinned past `now` moves it. Both
+  // reveal expired-but-unpruned rows to this local-only caller, the flag strictly more.
   const includeExpired = sp.get("includeExpired") === "1"
+  const since = parseInstant(sp.get("since"), "since")
+  const until = parseInstant(sp.get("until"), "until")
+  // Pinned by the caller, not stamped per request: `now` is part of the cursor
+  // fingerprint, so a fresh stamp on each page rejects the continuation the page before
+  // it issued.
+  const now = parseInstant(sp.get("now"), "now") ?? opts.now
+  // Passed on even when falsy, so `filters=0` is the validator's "must be an array"
+  // rather than a silently unfiltered 200.
+  const filters = parseJsonParam<readonly BrowseFilter[]>(sp.get("filters"), "filters")
+  const orderBy = parseJsonParam<readonly BrowseSortEntry[]>(sp.get("orderBy"), "orderBy")
   const query: BrowseQuery = {
     ...(namespace ? { namespace } : {}),
     ...(namespacePrefix ? { namespacePrefix } : {}),
     // A param that appears zero times is ABSENT, not an empty set — the store's
-    // "empty matches nothing" rule is deliberately unreachable over HTTP. The casts are
-    // `NonNullable`, not the bare indexed access: under exactOptionalPropertyTypes an
-    // optional property's type carries `undefined`, which would then land in a key that
-    // is only ever written when it has a value.
+    // "empty matches nothing" rule is deliberately unreachable over HTTP.
     ...(statuses.length > 0 ? { status: statuses as NonNullable<BrowseQuery["status"]> } : {}),
     ...(kinds.length > 0 ? { kind: kinds as NonNullable<BrowseQuery["kind"]> } : {}),
     ...(sourceType ? { sourceType: sourceType as NonNullable<BrowseQuery["sourceType"]> } : {}),
-    ...(() => {
-      const since = parseInstant(sp.get("since"), "since")
-      return since ? { since } : {}
-    })(),
-    ...(() => {
-      const until = parseInstant(sp.get("until"), "until")
-      return until ? { until } : {}
-    })(),
-    // A request-supplied `now` outranks the route's fresh stamp. `now` is part of the
-    // cursor fingerprint, so a walk whose every page re-stamps it rejects each
-    // continuation the page before it issued; pinning it is how a caller holds one
-    // reading of "expired" for the whole walk.
-    ...(() => {
-      const now = parseInstant(sp.get("now"), "now") ?? opts.now
-      return includeExpired || !now ? {} : { now }
-    })(),
-    ...(() => {
-      const filters = parseJsonParam<readonly BrowseFilter[]>(sp.get("filters"), "filters")
-      return filters ? { filters } : {}
-    })(),
-    ...(() => {
-      const orderBy = parseJsonParam<readonly BrowseSortEntry[]>(sp.get("orderBy"), "orderBy")
-      return orderBy ? { orderBy } : {}
-    })(),
+    ...(since === undefined ? {} : { since }),
+    ...(until === undefined ? {} : { until }),
+    ...(includeExpired || now === undefined ? {} : { now }),
+    ...(filters === undefined ? {} : { filters }),
+    ...(orderBy === undefined ? {} : { orderBy }),
     ...(cursor ? { cursor } : {}),
     limit: parseCount(sp.get("limit"), "limit", BROWSE_DEFAULT_LIMIT),
-    // A cursor already carries the position; sending both is a caller bug the
-    // validator rejects, so do not default `offset` alongside one.
-    ...(cursor ? {} : { offset: parseCount(sp.get("offset"), "offset", 0) }),
+    // Only the DEFAULT is conditional. An offset the caller actually sent alongside a
+    // cursor has to reach the validator, which is the one place that pair is named.
+    ...(cursor && rawOffset === null ? {} : { offset: parseCount(rawOffset, "offset", 0) }),
   }
-  // The untrusted boundary is where the 1..1000 ceiling applies.
   validateBrowseQuery(query, { maxLimit: BROWSE_MAX_LIMIT })
   return query
 }
