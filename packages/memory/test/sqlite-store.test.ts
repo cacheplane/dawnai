@@ -721,10 +721,10 @@ describe("browse against a concurrently written database file", () => {
     })
 
     const skews: string[] = []
-    let reads = 0
+    let sawPartial = false
     while (writing) {
       const page = await s.browse({ limit: 1000 })
-      reads += 1
+      if (page.total > 0 && page.total < ids.length) sawPartial = true
       if (page.records.length !== page.total) skews.push(`${page.records.length} of ${page.total}`)
       // setImmediate, not the bare await above: browse resolves synchronously, so
       // awaiting it drains only microtasks and the worker's `exit` — a macrotask —
@@ -734,9 +734,11 @@ describe("browse against a concurrently written database file", () => {
     await finished
 
     expect(skews).toEqual([])
-    // Pin the race window open: an empty `skews` proves nothing if this run only
-    // managed a handful of reads before the writer was done. Observed ~90-97.
-    expect(reads).toBeGreaterThan(20)
+    // Pin the race window open: an empty `skews` proves nothing if every read landed
+    // after the writer was already done. A read that saw a PARTIALLY deleted table is
+    // direct evidence the two overlapped, and unlike a raw read COUNT it does not fail
+    // on a loaded machine that simply got fewer turns between the writer's deletes.
+    expect(sawPartial).toBe(true)
     expect((await s.browse({ limit: 1000 })).total).toBe(0)
   })
 })

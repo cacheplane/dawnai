@@ -68,9 +68,9 @@ export interface BrowseSortEntry {
 
 /** One normalized predicate. AND-combined with the other filters and with the
  *  top-level shorthand fields. At most ONE filter per `field` (mirrors the
- *  one-filter-per-column model of the grid that drives this API); within-field
- *  multi-value exists only through `in`/`notIn`. That cap is unenforced today —
- *  see `BrowseQuery.filters`. */
+ *  one-filter-per-column model of the grid that drives this API), rejected by
+ *  `validateBrowseQuery` rather than last-one-wins; within-field multi-value exists
+ *  only through `in`/`notIn`. */
 export type BrowseFilter =
   // The enum arms are split PER FIELD, not shared as `field: "status" | "kind"` with
   // `values: readonly string[]` — a shared arm compiles
@@ -164,9 +164,9 @@ export interface BrowseQuery {
 export interface BrowsePage {
   readonly records: readonly MemoryRecord[]
   /** Exact count of the whole matching set — NOT of this window, and NOT reduced by
-   *  a `cursor`. TODAY rows and total are two separate statements in both stores, so a
-   *  concurrent write landing between them can momentarily skew `total` against
-   *  `records`; reading both from one transaction snapshot is Task 15. */
+   *  a `cursor`. Rows and total are two separate statements, so a store must read them
+   *  inside ONE transaction snapshot: both in-repo stores do, and a store that does not
+   *  can hand back a `total` that no version of the table ever agreed with `records` on. */
   readonly total: number
   /** Opaque keyset continuation, or null when this window did not fill `limit`.
    *  Issued whenever the page FILLED rather than over-fetching `limit + 1` to learn

@@ -147,7 +147,8 @@ try {
   // The tripwire §5.5 actually rests on. `SCAN … USING INDEX idx_mem_updated_id` is the
   // HEALTHY reading: an ordered traversal of the index that LIMIT exits early, which is
   // why the timing is flat from 100k to 1M. `USE TEMP B-TREE FOR ORDER BY` here means
-  // the index is gone or unusable — go back to Task 10 before trusting any number above.
+  // the index is gone or unusable — repair `idx_mem_updated_id` before trusting any
+  // number above, because every timing here would then be measuring a sort.
   plan("default order window", windowSql, [])
   const stamp = "2026-01-02T00:00:00.000Z"
   plan(
