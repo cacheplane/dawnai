@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join, resolve, win32 as win32Path } from "node:path"
@@ -38,6 +38,28 @@ async function expectProcessStopped(pid: number): Promise<void> {
     await delay(25)
   }
   expect(processIsRunning(pid)).toBe(false)
+}
+
+async function waitForTopology(path: string): Promise<{
+  readonly descendantPid: number
+  readonly leaderPid: number
+}> {
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    try {
+      return JSON.parse(await readFile(path, "utf8")) as {
+        readonly descendantPid: number
+        readonly leaderPid: number
+      }
+    } catch (error) {
+      const retryable =
+        error instanceof SyntaxError ||
+        (error !== null && typeof error === "object" && Reflect.get(error, "code") === "ENOENT")
+      if (!retryable) throw error
+      await delay(25)
+    }
+  }
+  throw new Error(`Hanging process fixture did not become ready at ${path}`)
 }
 
 function setTestEnvironmentVariable(name: string, value: string): () => void {
@@ -234,6 +256,69 @@ describe("resolveNpmLaunch", () => {
 })
 
 describe("runPackagedCommand", () => {
+  it("records an asynchronous spawn failure before rethrowing it", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dawn-packaged-spawn-error-"))
+    const transcriptPath = join(tempRoot, "spawn-error.log")
+    const missingCommand = join(tempRoot, "missing-command")
+    let thrown: unknown
+
+    try {
+      try {
+        await runPackagedCommand({
+          args: ["--partial-argument"],
+          command: missingCommand,
+          cwd: tempRoot,
+          transcriptPath,
+        })
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBeInstanceOf(Error)
+      expect(thrown).toMatchObject({ code: "ENOENT" })
+      const spawnCause = (thrown as Error).cause
+      expect(spawnCause).toMatchObject({ code: "ENOENT" })
+      expect((thrown as { result: { spawnError: unknown } }).result.spawnError).toBe(spawnCause)
+      const transcript = await readFile(transcriptPath, "utf8")
+      expect(transcript).toContain(`$ (cd ${tempRoot} && ${missingCommand} --partial-argument)`)
+      expect(transcript).toContain("[spawn error")
+      expect(transcript).toContain("ENOENT")
+      expect(transcript).toContain("[exit unavailable signal none]")
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true })
+    }
+  })
+
+  it("aggregates command and transcript failures", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dawn-packaged-transcript-error-"))
+    const transcriptPath = join(tempRoot, "transcript-directory")
+    await mkdir(transcriptPath)
+
+    try {
+      let thrown: unknown
+      try {
+        await runPackagedCommand({
+          args: ["-e", 'process.stderr.write("partial stderr"); process.exit(7)'],
+          command: process.execPath,
+          cwd: tempRoot,
+          transcriptPath,
+        })
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBeInstanceOf(AggregateError)
+      const errors = (thrown as AggregateError).errors
+      expect(errors).toHaveLength(2)
+      expect((thrown as AggregateError).cause).toBe(errors[0])
+      expect(errors[0]).toBeInstanceOf(Error)
+      expect((errors[0] as Error).message).toContain("partial stderr")
+      expect(errors[1]).toMatchObject({ code: expect.stringMatching(/^(EISDIR|EPERM)$/) })
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true })
+    }
+  })
+
   it("can remove selected inherited environment variables", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "dawn-packaged-command-"))
     const restoreEnv = setTestEnvironmentVariable("DAWN_TEST_PACKAGED_UNSET_ENV", "inherited")
@@ -286,42 +371,96 @@ describe("runPackagedCommand", () => {
 
   it("records timeout diagnostics only after the process tree has stopped", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "dawn-packaged-timeout-"))
+    const readyPath = join(tempRoot, "ready.json")
     const transcriptPath = join(tempRoot, "timeout.log")
     const startedAt = Date.now()
+    let topology: Awaited<ReturnType<typeof waitForTopology>> | undefined
     let thrown: unknown
 
     try {
+      const commandResult = runPackagedCommand({
+        args: [HANGING_PROCESS_TREE_FIXTURE, "6000", readyPath],
+        command: process.execPath,
+        cwd: tempRoot,
+        timeoutMs: 1_500,
+        transcriptPath,
+      })
+      topology = await waitForTopology(readyPath)
       try {
-        await runPackagedCommand({
-          args: [HANGING_PROCESS_TREE_FIXTURE, "4000"],
-          command: process.execPath,
-          cwd: tempRoot,
-          timeoutMs: 100,
-          transcriptPath,
-        })
+        await commandResult
       } catch (error) {
         thrown = error
       }
 
-      expect(Date.now() - startedAt).toBeLessThan(3_000)
+      expect(Date.now() - startedAt).toBeLessThan(4_000)
       expect(thrown).toBeInstanceOf(Error)
-      expect((thrown as Error).message).toContain("timed out after 100ms")
+      expect((thrown as Error).message).toContain("timed out after 1500ms")
 
       const transcript = await readFile(transcriptPath, "utf8")
-      const topologyLine = transcript.split("\n").find((line) => line.startsWith("{"))
-      expect(topologyLine).toBeDefined()
-      if (topologyLine === undefined) throw new Error("Timeout transcript omitted process topology")
-      const topology = JSON.parse(topologyLine) as {
-        readonly descendantPid: number
-        readonly leaderPid: number
-      }
-      expect(transcript).toContain("[timed out after 100ms]")
+      expect(transcript).toContain(JSON.stringify(topology))
+      expect(transcript).toContain("[timed out after 1500ms]")
       await expectProcessStopped(topology.leaderPid)
       await expectProcessStopped(topology.descendantPid)
     } finally {
+      if (topology !== undefined) {
+        await expectProcessStopped(topology.leaderPid)
+        await expectProcessStopped(topology.descendantPid)
+      }
       await rm(tempRoot, { force: true, recursive: true })
     }
   })
+
+  it.runIf(process.platform !== "win32")(
+    "records partial output when timed-out tree termination fails",
+    async () => {
+      const tempRoot = await mkdtemp(join(tmpdir(), "dawn-packaged-termination-error-"))
+      const readyPath = join(tempRoot, "ready.json")
+      const transcriptPath = join(tempRoot, "termination-error.log")
+      const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")
+      let topology: Awaited<ReturnType<typeof waitForTopology>> | undefined
+      let thrown: unknown
+
+      Object.defineProperty(process, "platform", { configurable: true, value: "win32" })
+      try {
+        const commandResult = runPackagedCommand({
+          args: [HANGING_PROCESS_TREE_FIXTURE, "3000", readyPath],
+          command: process.execPath,
+          cwd: tempRoot,
+          timeoutMs: 1_000,
+          transcriptPath,
+        })
+        topology = await waitForTopology(readyPath)
+        try {
+          await commandResult
+        } catch (error) {
+          thrown = error
+        }
+
+        expect(thrown).toBeInstanceOf(Error)
+        expect(thrown).toMatchObject({ code: "ENOENT" })
+        const terminationCause = (thrown as Error).cause
+        expect(terminationCause).toMatchObject({ code: "ENOENT" })
+        expect((thrown as { result: { terminationError: unknown } }).result.terminationError).toBe(
+          terminationCause,
+        )
+        const transcript = await readFile(transcriptPath, "utf8")
+        expect(transcript).toContain(JSON.stringify(topology))
+        expect(transcript).toContain("[timed out after 1000ms]")
+        expect(transcript).toContain("[termination error")
+        expect(transcript).toContain("spawn taskkill.exe ENOENT")
+        expect(transcript).toContain("[exit pending signal pending]")
+      } finally {
+        if (platformDescriptor !== undefined) {
+          Object.defineProperty(process, "platform", platformDescriptor)
+        }
+        if (topology !== undefined) {
+          await expectProcessStopped(topology.leaderPid)
+          await expectProcessStopped(topology.descendantPid)
+        }
+        await rm(tempRoot, { force: true, recursive: true })
+      }
+    },
+  )
 
   it.skipIf(process.platform === "win32")(
     "forwards an explicitly requested shell to the process launcher",
@@ -385,6 +524,61 @@ describe("runGeneratedAppNpmCommand", () => {
       restoreApiKey()
       restoreBaseUrl()
       restoreDockerSandbox()
+      await rm(tempRoot, { force: true, recursive: true })
+    }
+  })
+
+  it("propagates abort through npm and records it after the process tree stops", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "dawn-generated-app-abort-"))
+    const readyPath = join(tempRoot, "ready.json")
+    const transcriptPath = join(tempRoot, "abort.log")
+    const controller = new AbortController()
+    const abortReason = new Error("cancel generated npm command")
+    let commandResult: ReturnType<typeof runGeneratedAppNpmCommand> | undefined
+    let topology: Awaited<ReturnType<typeof waitForTopology>> | undefined
+
+    try {
+      await copyFile(HANGING_PROCESS_TREE_FIXTURE, join(tempRoot, "hang.mjs"))
+      await writeFile(
+        join(tempRoot, "package.json"),
+        `${JSON.stringify({
+          name: "generated-app-abort-fixture",
+          private: true,
+          scripts: { hang: "node hang.mjs 4000 ready.json" },
+        })}\n`,
+        "utf8",
+      )
+
+      commandResult = runGeneratedAppNpmCommand({
+        args: ["run", "hang"],
+        cwd: tempRoot,
+        signal: controller.signal,
+        transcriptPath,
+      })
+      topology = await waitForTopology(readyPath)
+      controller.abort(abortReason)
+
+      let thrown: unknown
+      try {
+        await commandResult
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBeInstanceOf(Error)
+      expect((thrown as Error).message).toContain("Command aborted: npm run hang")
+      expect((thrown as Error).cause).toBe(abortReason)
+      const transcript = await readFile(transcriptPath, "utf8")
+      expect(transcript).toContain("[aborted: Error: cancel generated npm command]")
+      await expectProcessStopped(topology.leaderPid)
+      await expectProcessStopped(topology.descendantPid)
+    } finally {
+      controller.abort(abortReason)
+      await commandResult?.catch(() => undefined)
+      if (topology !== undefined) {
+        await expectProcessStopped(topology.leaderPid)
+        await expectProcessStopped(topology.descendantPid)
+      }
       await rm(tempRoot, { force: true, recursive: true })
     }
   })

@@ -10,23 +10,58 @@ export interface SpawnProcessOptions {
   readonly cwd?: string
   readonly env?: NodeJS.ProcessEnv
   readonly shell?: boolean | string
+  readonly signal?: AbortSignal
   readonly stdin?: string
   readonly timeoutMs?: number
   readonly unsetEnv?: readonly string[]
 }
 
 export interface SpawnProcessResult {
+  readonly aborted?: true
+  readonly abortReason?: unknown
   readonly args: readonly string[]
   readonly command: string
   readonly cwd: string
   readonly exitCode: number | null
   readonly ok: boolean
   readonly signal: NodeJS.Signals | null
+  readonly spawnError?: unknown
+  readonly spawnFailed?: true
   readonly stderr: string
   readonly stdout: string
+  readonly terminationError?: unknown
+  readonly terminationFailed?: true
   readonly timedOut?: true
   readonly timeoutMs?: number
 }
+
+export type SpawnProcessErrorPhase = "spawn" | "termination"
+
+export class SpawnProcessError extends Error {
+  readonly code?: string
+  readonly phase: SpawnProcessErrorPhase
+  readonly result: SpawnProcessResult
+
+  constructor(
+    message: string,
+    options: {
+      readonly cause: unknown
+      readonly code?: string
+      readonly phase: SpawnProcessErrorPhase
+      readonly result: SpawnProcessResult
+    },
+  ) {
+    super(message, { cause: options.cause })
+    this.name = "SpawnProcessError"
+    this.phase = options.phase
+    this.result = options.result
+    if (options.code !== undefined) this.code = options.code
+  }
+}
+
+type SpawnProcessInterruption =
+  | { readonly reason: unknown; readonly type: "aborted" }
+  | { readonly timeoutMs: number; readonly type: "timeout" }
 
 export function removeEnvironmentVariables(
   env: NodeJS.ProcessEnv,
@@ -59,7 +94,7 @@ export async function spawnProcess(options: SpawnProcessOptions): Promise<SpawnP
 
   const child = spawn(options.command, [...args], {
     cwd: options.cwd,
-    ...(timeoutMs !== undefined ? { detached: true } : {}),
+    ...(timeoutMs !== undefined || options.signal !== undefined ? { detached: true } : {}),
     env,
     ...(options.shell !== undefined ? { shell: options.shell } : {}),
     stdio: ["pipe", "pipe", "pipe"],
@@ -93,42 +128,116 @@ export async function spawnProcess(options: SpawnProcessOptions): Promise<SpawnP
     })
   })
 
-  if (timeoutMs === undefined) {
-    const close = await closedPromise
+  if (timeoutMs === undefined && options.signal === undefined) {
+    let close: Awaited<typeof closedPromise>
+    try {
+      close = await closedPromise
+    } catch (error) {
+      throw createSpawnProcessError(options, args, child, stderr, stdout, "spawn", error)
+    }
     return createSpawnProcessResult(options, args, close, stderr, stdout)
   }
 
   let timeoutHandle: NodeJS.Timeout | undefined
+  let abortListener: (() => void) | undefined
   let outcome:
     | {
         readonly close: { readonly exitCode: number | null; readonly signal: NodeJS.Signals | null }
         readonly type: "closed"
       }
     | { readonly type: "timeout" }
+    | { readonly reason: unknown; readonly type: "aborted" }
   try {
-    outcome = await Promise.race([
+    const outcomes: Array<Promise<typeof outcome>> = [
       closedPromise.then((close) => ({ close, type: "closed" as const })),
-      new Promise<{ readonly type: "timeout" }>((resolve) => {
-        timeoutHandle = setTimeout(() => resolve({ type: "timeout" }), timeoutMs)
-      }),
-    ])
+    ]
+    if (timeoutMs !== undefined) {
+      outcomes.push(
+        new Promise<{ readonly type: "timeout" }>((resolve) => {
+          timeoutHandle = setTimeout(() => resolve({ type: "timeout" }), timeoutMs)
+        }),
+      )
+    }
+    if (options.signal !== undefined) {
+      outcomes.push(
+        new Promise<{ readonly reason: unknown; readonly type: "aborted" }>((resolve) => {
+          const resolveAborted = () => resolve({ reason: options.signal?.reason, type: "aborted" })
+          if (options.signal?.aborted) {
+            resolveAborted()
+          } else {
+            abortListener = resolveAborted
+            options.signal?.addEventListener("abort", abortListener, { once: true })
+          }
+        }),
+      )
+    }
+    outcome = await Promise.race(outcomes)
+  } catch (error) {
+    throw createSpawnProcessError(options, args, child, stderr, stdout, "spawn", error)
   } finally {
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle)
+    if (abortListener !== undefined) options.signal?.removeEventListener("abort", abortListener)
   }
 
   if (outcome.type === "closed") {
     return createSpawnProcessResult(options, args, outcome.close, stderr, stdout)
   }
 
-  const groupPid = child.pid
-  if (groupPid === undefined) {
-    await closedPromise
-    throw new Error(`Timed-out subprocess ${options.command} has no process id`)
+  let interruption: SpawnProcessInterruption
+  if (outcome.type === "timeout") {
+    if (timeoutMs === undefined) {
+      throw new Error("Subprocess timeout resolved without a configured timeout")
+    }
+    interruption = { timeoutMs, type: "timeout" }
+  } else {
+    interruption = { reason: outcome.reason, type: "aborted" }
   }
 
-  await terminateTimedOutProcessTree(child, groupPid, closedPromise, () => closed)
-  const close = await closedPromise
-  return createSpawnProcessResult(options, args, close, stderr, stdout, timeoutMs)
+  const groupPid = child.pid
+  if (groupPid === undefined) {
+    const error = new Error(`Interrupted subprocess ${options.command} has no process id`)
+    throw createSpawnProcessError(
+      options,
+      args,
+      child,
+      stderr,
+      stdout,
+      "termination",
+      error,
+      interruption,
+    )
+  }
+
+  try {
+    await terminateTimedOutProcessTree(child, groupPid, closedPromise, () => closed)
+  } catch (error) {
+    throw createSpawnProcessError(
+      options,
+      args,
+      child,
+      stderr,
+      stdout,
+      "termination",
+      error,
+      interruption,
+    )
+  }
+  let close: Awaited<typeof closedPromise>
+  try {
+    close = await closedPromise
+  } catch (error) {
+    throw createSpawnProcessError(
+      options,
+      args,
+      child,
+      stderr,
+      stdout,
+      "spawn",
+      error,
+      interruption,
+    )
+  }
+  return createSpawnProcessResult(options, args, close, stderr, stdout, interruption)
 }
 
 function createSpawnProcessResult(
@@ -137,19 +246,70 @@ function createSpawnProcessResult(
   close: { readonly exitCode: number | null; readonly signal: NodeJS.Signals | null },
   stderr: string,
   stdout: string,
-  timeoutMs?: number,
+  interruption?: SpawnProcessInterruption,
+  failure?: { readonly error: unknown; readonly phase: SpawnProcessErrorPhase },
 ): SpawnProcessResult {
   return {
     args,
     command: options.command,
     cwd: options.cwd ?? process.cwd(),
     exitCode: close.exitCode,
-    ok: timeoutMs === undefined && close.exitCode === 0,
+    ok: failure === undefined && interruption === undefined && close.exitCode === 0,
     signal: close.signal,
     stderr,
     stdout,
-    ...(timeoutMs !== undefined ? { timedOut: true, timeoutMs } : {}),
+    ...(interruption?.type === "timeout"
+      ? { timedOut: true, timeoutMs: interruption.timeoutMs }
+      : {}),
+    ...(interruption?.type === "aborted"
+      ? { aborted: true, abortReason: interruption.reason }
+      : {}),
+    ...(failure?.phase === "spawn" ? { spawnError: failure.error, spawnFailed: true } : {}),
+    ...(failure?.phase === "termination"
+      ? { terminationError: failure.error, terminationFailed: true }
+      : {}),
   }
+}
+
+function createSpawnProcessError(
+  options: SpawnProcessOptions,
+  args: readonly string[],
+  child: ReturnType<typeof spawn>,
+  stderr: string,
+  stdout: string,
+  phase: SpawnProcessErrorPhase,
+  error: unknown,
+  interruption?: SpawnProcessInterruption,
+): SpawnProcessError {
+  const result = createSpawnProcessResult(
+    options,
+    args,
+    { exitCode: child.exitCode, signal: child.signalCode },
+    stderr,
+    stdout,
+    interruption,
+    { error, phase },
+  )
+  const cause =
+    phase === "termination" && interruption?.type === "aborted"
+      ? new AggregateError(
+          [interruption.reason, error],
+          "Subprocess abort and tree termination both failed",
+        )
+      : error
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  const code = readErrorCode(error)
+  return new SpawnProcessError(
+    phase === "spawn"
+      ? `Failed to spawn subprocess ${options.command}: ${detail}`
+      : `Failed to terminate interrupted subprocess ${options.command}: ${detail}`,
+    {
+      cause,
+      ...(code !== undefined ? { code } : {}),
+      phase,
+      result,
+    },
+  )
 }
 
 async function terminateTimedOutProcessTree(
@@ -209,8 +369,12 @@ async function waitForProcessGroupExit(
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (isClosed() && !processGroupIsRunning(groupPid)) return true
-    await Promise.race([closed.catch(() => undefined), delay(PROCESS_TIMEOUT_POLL_MS)])
+    if (isClosed()) {
+      if (!processGroupIsRunning(groupPid)) return true
+      await delay(PROCESS_TIMEOUT_POLL_MS)
+    } else {
+      await Promise.race([closed.catch(() => undefined), delay(PROCESS_TIMEOUT_POLL_MS)])
+    }
   }
   return isClosed() && !processGroupIsRunning(groupPid)
 }
@@ -266,5 +430,11 @@ function delay(ms: number): Promise<void> {
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
-  return Boolean(error && typeof error === "object" && Reflect.get(error, "code") === code)
+  return readErrorCode(error) === code
+}
+
+function readErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined
+  const code = Reflect.get(error, "code")
+  return typeof code === "string" ? code : undefined
 }

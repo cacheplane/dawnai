@@ -20,14 +20,16 @@ import {
 import { writeRegistryNpmrc } from "../harness/scaffold-packaging.ts"
 
 const tempDirs: TrackedTempDir[] = []
+const ACTIVATION_TIMEOUT_MS = 600_000
+const ACTIVATION_CLEANUP_RESERVE_MS = 30_000
 
 afterEach(async () => {
   await cleanupTrackedTempDirs(tempDirs)
 })
 
 test("activates the default research scaffold through the complete npm lifecycle", {
-  timeout: 600_000,
-}, async () => {
+  timeout: ACTIVATION_TIMEOUT_MS,
+}, async ({ signal: testSignal }) => {
   const tempRoot = await createTrackedTempDir("dawn-generated-research-activation-", tempDirs)
   const appRoot = join(tempRoot, "app")
   const installerRoot = join(tempRoot, "installer")
@@ -44,17 +46,31 @@ test("activates the default research scaffold through the complete npm lifecycle
   let scenarioError: unknown
   let scenarioFailed = false
   let cleanupError: unknown
+  let lifecycleDeadline: NodeJS.Timeout | undefined
   const inheritedRuntimeEnv = GENERATED_APP_UNSET_ENV.map((name) => ({
     hadOwnProperty: Object.hasOwn(process.env, name),
     name,
     value: Reflect.get(process.env, name),
   }))
 
-  Reflect.set(process.env, "DAWN_DEMO_DOCKER_SANDBOX", "1")
-  Reflect.set(process.env, "OPENAI_BASE_URL", "http://127.0.0.1:1/v1")
-  Reflect.set(process.env, "OPENAI_API_KEY", "ambient-secret")
-
   try {
+    const lifecycleController = new AbortController()
+    lifecycleDeadline = setTimeout(
+      () =>
+        lifecycleController.abort(
+          new Error(
+            `Generated research activation reached its command deadline with ${ACTIVATION_CLEANUP_RESERVE_MS}ms reserved for cleanup`,
+          ),
+        ),
+      ACTIVATION_TIMEOUT_MS - ACTIVATION_CLEANUP_RESERVE_MS,
+    )
+    lifecycleDeadline.unref()
+    const lifecycleSignal = AbortSignal.any([testSignal, lifecycleController.signal])
+
+    Reflect.set(process.env, "DAWN_DEMO_DOCKER_SANDBOX", "1")
+    Reflect.set(process.env, "OPENAI_BASE_URL", "http://127.0.0.1:1/v1")
+    Reflect.set(process.env, "OPENAI_API_KEY", "ambient-secret")
+
     const artifactRoot = await createArtifactRoot({
       baseDir: tempRoot,
       runId: "generated-research-activation",
@@ -69,12 +85,14 @@ test("activates the default research scaffold through the complete npm lifecycle
     const npmVersion = await runPackagedNpmCommand({
       args: ["--version"],
       cwd: tempRoot,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
     expect(Number(process.versions.node.split(".")[0])).toBe(24)
     expect(Number(npmVersion.stdout.trim().split(".")[0])).toBe(11)
 
     const { installerDir } = await installRegistryScaffolderWithNpm({
+      signal: lifecycleSignal,
       tempRoot,
       transcriptPath: commandsTranscriptPath,
     })
@@ -82,6 +100,7 @@ test("activates the default research scaffold through the complete npm lifecycle
     const creatorResult = await runPackagedNpmCommand({
       args: ["exec", "--", "create-dawn-ai-app", appRoot],
       cwd: installerDir,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
 
@@ -109,11 +128,13 @@ test("activates the default research scaffold through the complete npm lifecycle
     await runGeneratedAppNpmCommand({
       args: ["install"],
       cwd: appRoot,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
     const typegenResult = await runGeneratedAppNpmCommand({
       args: ["run", "typegen"],
       cwd: appRoot,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
     expect(typegenResult.stdout).toContain("Wrote types for")
@@ -126,6 +147,7 @@ test("activates the default research scaffold through the complete npm lifecycle
     const checkResult = await runGeneratedAppNpmCommand({
       args: ["run", "check"],
       cwd: appRoot,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
     expect(checkResult.stdout).toContain("Dawn app is valid:")
@@ -137,27 +159,32 @@ test("activates the default research scaffold through the complete npm lifecycle
     await runGeneratedAppNpmCommand({
       args: ["run", "typecheck"],
       cwd: appRoot,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
     await runGeneratedAppNpmCommand({
       args: ["test"],
       cwd: appRoot,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
     await runGeneratedAppNpmCommand({
       args: ["run", "eval"],
       cwd: appRoot,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
     const verifyResult = await runGeneratedAppNpmCommand({
       args: ["run", "verify"],
       cwd: appRoot,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
     expect(verifyResult.stdout).not.toContain("Missing environment variables")
     await runGeneratedAppNpmCommand({
       args: ["run", "build"],
       cwd: appRoot,
+      signal: lifecycleSignal,
       transcriptPath: commandsTranscriptPath,
     })
 
@@ -188,6 +215,7 @@ test("activates the default research scaffold through the complete npm lifecycle
     scenarioFailed = true
     scenarioError = error
   } finally {
+    if (lifecycleDeadline !== undefined) clearTimeout(lifecycleDeadline)
     const cleanupErrors: unknown[] = []
     try {
       await childServer.active?.stop()

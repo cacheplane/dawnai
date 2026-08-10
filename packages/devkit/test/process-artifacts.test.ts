@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { access, mkdtemp, rm } from "node:fs/promises"
+import { access, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -27,6 +27,28 @@ async function expectProcessStopped(pid: number): Promise<void> {
     await delay(25)
   }
   expect(processIsRunning(pid)).toBe(false)
+}
+
+async function waitForTopology(path: string): Promise<{
+  readonly descendantPid: number
+  readonly leaderPid: number
+}> {
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    try {
+      return JSON.parse(await readFile(path, "utf8")) as {
+        readonly descendantPid: number
+        readonly leaderPid: number
+      }
+    } catch (error) {
+      const retryable =
+        error instanceof SyntaxError ||
+        (error !== null && typeof error === "object" && Reflect.get(error, "code") === "ENOENT")
+      if (!retryable) throw error
+      await delay(25)
+    }
+  }
+  throw new Error(`Hanging process fixture did not become ready at ${path}`)
 }
 
 describe("removeEnvironmentVariables", () => {
@@ -107,22 +129,88 @@ describe("spawnProcess", () => {
   })
 
   it("terminates a timed-out process tree before returning", async () => {
-    const startedAt = Date.now()
-    const result = await spawnProcess({
-      args: [hangingProcessTreeFixture, "4000"],
-      command: process.execPath,
-      timeoutMs: 100,
-    })
-    const elapsedMs = Date.now() - startedAt
-    const topology = JSON.parse(result.stdout.trim()) as {
-      readonly descendantPid: number
-      readonly leaderPid: number
-    }
+    const tempRoot = await mkdtemp(resolve(tmpdir(), "dawn-timed-out-process-tree-"))
+    const readyPath = resolve(tempRoot, "ready.json")
 
-    expect(result).toMatchObject({ ok: false, timedOut: true, timeoutMs: 100 })
-    expect(elapsedMs).toBeLessThan(3_000)
-    await expectProcessStopped(topology.leaderPid)
-    await expectProcessStopped(topology.descendantPid)
+    try {
+      const startedAt = Date.now()
+      const processResult = spawnProcess({
+        args: [hangingProcessTreeFixture, "6000", readyPath],
+        command: process.execPath,
+        timeoutMs: 1_500,
+      })
+      const topology = await waitForTopology(readyPath)
+      const result = await processResult
+      const elapsedMs = Date.now() - startedAt
+
+      expect(result).toMatchObject({ ok: false, timedOut: true, timeoutMs: 1_500 })
+      expect(result.stdout).toContain(JSON.stringify(topology))
+      expect(elapsedMs).toBeLessThan(4_000)
+      await expectProcessStopped(topology.leaderPid)
+      await expectProcessStopped(topology.descendantPid)
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true })
+    }
+  })
+
+  it.skipIf(process.platform === "win32")(
+    "polls at a bounded cadence while force-stopping a TERM-resistant descendant",
+    async () => {
+      const tempRoot = await mkdtemp(resolve(tmpdir(), "dawn-force-escalation-"))
+      const readyPath = resolve(tempRoot, "ready.json")
+      let maximumTimerGapMs = 0
+      let lastTimerAt = performance.now()
+      const heartbeat = setInterval(() => {
+        const now = performance.now()
+        maximumTimerGapMs = Math.max(maximumTimerGapMs, now - lastTimerAt)
+        lastTimerAt = now
+      }, 10)
+
+      try {
+        const processResult = spawnProcess({
+          args: [hangingProcessTreeFixture, "8000", readyPath, "ignore-term"],
+          command: process.execPath,
+          timeoutMs: 3_000,
+        })
+        const topology = await waitForTopology(readyPath)
+        const result = await processResult
+        await delay(20)
+
+        expect(result).toMatchObject({ ok: false, timedOut: true, timeoutMs: 3_000 })
+        expect(maximumTimerGapMs).toBeLessThan(400)
+        await expectProcessStopped(topology.leaderPid)
+        await expectProcessStopped(topology.descendantPid)
+      } finally {
+        clearInterval(heartbeat)
+        await rm(tempRoot, { force: true, recursive: true })
+      }
+    },
+  )
+
+  it("terminates an aborted process tree before returning", async () => {
+    const tempRoot = await mkdtemp(resolve(tmpdir(), "dawn-aborted-process-tree-"))
+    const readyPath = resolve(tempRoot, "ready.json")
+    const controller = new AbortController()
+    const abortReason = new Error("cancel generated lifecycle")
+
+    try {
+      const processResult = spawnProcess({
+        args: [hangingProcessTreeFixture, "4000", readyPath],
+        command: process.execPath,
+        signal: controller.signal,
+      })
+      const topology = await waitForTopology(readyPath)
+      const abortedAt = Date.now()
+      controller.abort(abortReason)
+      const result = await processResult
+
+      expect(result).toMatchObject({ aborted: true, abortReason, ok: false })
+      expect(Date.now() - abortedAt).toBeLessThan(2_000)
+      await expectProcessStopped(topology.leaderPid)
+      await expectProcessStopped(topology.descendantPid)
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true })
+    }
   })
 
   it("clears the deadline when spawning fails asynchronously", async () => {
@@ -143,27 +231,28 @@ describe("spawnProcess", () => {
     "awaits a bounded close race when Windows tree termination loses to child exit",
     async () => {
       const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")
+      const tempRoot = await mkdtemp(resolve(tmpdir(), "dawn-windows-close-race-"))
+      const readyPath = resolve(tempRoot, "ready.json")
       Object.defineProperty(process, "platform", { configurable: true, value: "win32" })
       try {
         const startedAt = Date.now()
-        const result = await spawnProcess({
-          args: [hangingProcessTreeFixture, "250"],
+        const processResult = spawnProcess({
+          args: [hangingProcessTreeFixture, "1500", readyPath],
           command: process.execPath,
-          timeoutMs: 50,
+          timeoutMs: 1_000,
         })
-        const topology = JSON.parse(result.stdout.trim()) as {
-          readonly descendantPid: number
-          readonly leaderPid: number
-        }
+        const topology = await waitForTopology(readyPath)
+        const result = await processResult
 
-        expect(result).toMatchObject({ ok: false, timedOut: true, timeoutMs: 50 })
-        expect(Date.now() - startedAt).toBeLessThan(2_000)
+        expect(result).toMatchObject({ ok: false, timedOut: true, timeoutMs: 1_000 })
+        expect(Date.now() - startedAt).toBeLessThan(3_000)
         await expectProcessStopped(topology.leaderPid)
         await expectProcessStopped(topology.descendantPid)
       } finally {
         if (platformDescriptor !== undefined) {
           Object.defineProperty(process, "platform", platformDescriptor)
         }
+        await rm(tempRoot, { force: true, recursive: true })
       }
     },
   )

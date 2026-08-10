@@ -4,8 +4,11 @@ import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, dirname, join, posix, resolve, win32 } from "node:path"
 
-import { spawnProcess } from "../../packages/devkit/src/testing/index.ts"
-import { removeEnvironmentVariables } from "../../packages/devkit/src/testing/process.ts"
+import { type SpawnProcessResult, spawnProcess } from "../../packages/devkit/src/testing/index.ts"
+import {
+  removeEnvironmentVariables,
+  SpawnProcessError,
+} from "../../packages/devkit/src/testing/process.ts"
 import { terminateSubprocess } from "../../packages/testing/src/subprocess.ts"
 import {
   allocatePort,
@@ -166,6 +169,7 @@ export async function installPackagedScaffolder(
 }
 
 export async function installRegistryScaffolderWithNpm(options: {
+  readonly signal?: AbortSignal
   readonly tempRoot: string
   readonly transcriptPath: string
 }): Promise<{ readonly installerDir: string }> {
@@ -181,6 +185,7 @@ export async function installRegistryScaffolderWithNpm(options: {
   await runPackagedNpmCommand({
     args: ["install", "--no-save", "create-dawn-ai-app@latest"],
     cwd: installerDir,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
     transcriptPath: options.transcriptPath,
   })
 
@@ -223,6 +228,7 @@ export async function runPackagedCommand(options: {
   readonly displayCommand?: string
   readonly env?: NodeJS.ProcessEnv
   readonly shell?: boolean | string
+  readonly signal?: AbortSignal
   readonly stdin?: string
   readonly timeoutMs?: number
   readonly transcriptPath?: string
@@ -230,53 +236,109 @@ export async function runPackagedCommand(options: {
 }) {
   const displayArgs = options.displayArgs ?? options.args
   const displayCommand = options.displayCommand ?? options.command
-  const result = await spawnProcess({
-    args: options.args,
-    command: options.command,
-    cwd: options.cwd,
-    env: {
-      // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
-      // so the harness does not treat non-empty stderr as a failure.
-      NODE_NO_WARNINGS: "1",
-      ...options.env,
-    },
-    ...(options.shell !== undefined ? { shell: options.shell } : {}),
-    ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
-    timeoutMs: options.timeoutMs ?? PACKAGED_COMMAND_TIMEOUT_MS,
-    ...(options.unsetEnv ? { unsetEnv: options.unsetEnv } : {}),
-  })
+  let result: SpawnProcessResult
+  let commandError: unknown
+  try {
+    result = await spawnProcess({
+      args: options.args,
+      command: options.command,
+      cwd: options.cwd,
+      env: {
+        // Suppress Node.js experimental-feature warnings (e.g. node:sqlite)
+        // so the harness does not treat non-empty stderr as a failure.
+        NODE_NO_WARNINGS: "1",
+        ...options.env,
+      },
+      ...(options.shell !== undefined ? { shell: options.shell } : {}),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
+      timeoutMs: options.timeoutMs ?? PACKAGED_COMMAND_TIMEOUT_MS,
+      ...(options.unsetEnv ? { unsetEnv: options.unsetEnv } : {}),
+    })
+  } catch (error) {
+    if (!(error instanceof SpawnProcessError)) throw error
+    result = error.result
+    commandError = error
+  }
 
+  if (!result.ok && commandError === undefined) {
+    const failure = result.aborted
+      ? `Command aborted: ${displayCommand} ${displayArgs.join(" ")}`
+      : result.timedOut
+        ? `Command timed out after ${result.timeoutMs}ms: ${displayCommand} ${displayArgs.join(" ")}`
+        : `Command failed: ${displayCommand} ${displayArgs.join(" ")}`
+    const message = [failure, result.stdout, result.stderr].filter(Boolean).join("\n")
+    commandError = result.aborted
+      ? new Error(message, { cause: result.abortReason })
+      : new Error(message)
+  }
+
+  let transcriptError: unknown
   if (options.transcriptPath) {
-    await appendFile(
-      options.transcriptPath,
-      [
-        `$ (cd ${result.cwd} && ${displayCommand} ${displayArgs.join(" ")})`,
-        result.stdout.trimEnd(),
-        result.stderr.trimEnd(),
-        result.timedOut ? `[timed out after ${result.timeoutMs}ms]` : "",
-        `[exit ${result.exitCode}]`,
-        "",
-      ]
-        .filter((chunk, index, chunks) => chunk.length > 0 || index === chunks.length - 1)
-        .join("\n"),
-      "utf8",
+    try {
+      await appendPackagedCommandTranscript({
+        displayArgs,
+        displayCommand,
+        result,
+        transcriptPath: options.transcriptPath,
+      })
+    } catch (error) {
+      transcriptError = error
+    }
+  }
+
+  if (commandError !== undefined && transcriptError !== undefined) {
+    throw new AggregateError(
+      [commandError, transcriptError],
+      "Packaged command failed and transcript recording also failed",
+      { cause: commandError },
     )
   }
-
-  if (!result.ok) {
-    const failure = result.timedOut
-      ? `Command timed out after ${result.timeoutMs}ms: ${displayCommand} ${displayArgs.join(" ")}`
-      : `Command failed: ${displayCommand} ${displayArgs.join(" ")}`
-    throw new Error([failure, result.stdout, result.stderr].filter(Boolean).join("\n"))
-  }
-
+  if (commandError !== undefined) throw commandError
+  if (transcriptError !== undefined) throw transcriptError
   return result
+}
+
+async function appendPackagedCommandTranscript(options: {
+  readonly displayArgs: readonly string[]
+  readonly displayCommand: string
+  readonly result: SpawnProcessResult
+  readonly transcriptPath: string
+}): Promise<void> {
+  const exitState = options.result.spawnFailed
+    ? "[exit unavailable signal none]"
+    : options.result.terminationFailed &&
+        options.result.exitCode === null &&
+        options.result.signal === null
+      ? "[exit pending signal pending]"
+      : `[exit ${options.result.exitCode}]`
+
+  await appendFile(
+    options.transcriptPath,
+    [
+      `$ (cd ${options.result.cwd} && ${options.displayCommand} ${options.displayArgs.join(" ")})`,
+      options.result.stdout.trimEnd(),
+      options.result.stderr.trimEnd(),
+      options.result.aborted ? `[aborted: ${formatError(options.result.abortReason)}]` : "",
+      options.result.timedOut ? `[timed out after ${options.result.timeoutMs}ms]` : "",
+      options.result.spawnFailed ? `[spawn error ${formatError(options.result.spawnError)}]` : "",
+      options.result.terminationFailed
+        ? `[termination error ${formatError(options.result.terminationError)}]`
+        : "",
+      exitState,
+      "",
+    ]
+      .filter((chunk, index, chunks) => chunk.length > 0 || index === chunks.length - 1)
+      .join("\n"),
+    "utf8",
+  )
 }
 
 export async function runPackagedNpmCommand(options: {
   readonly args: readonly string[]
   readonly cwd: string
   readonly env?: NodeJS.ProcessEnv
+  readonly signal?: AbortSignal
   readonly stdin?: string
   readonly timeoutMs?: number
   readonly transcriptPath?: string
@@ -290,6 +352,7 @@ export async function runPackagedNpmCommand(options: {
     displayArgs: options.args,
     displayCommand: launch.displayCommand,
     ...(options.env ? { env: options.env } : {}),
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     ...(options.transcriptPath ? { transcriptPath: options.transcriptPath } : {}),
@@ -300,12 +363,14 @@ export async function runPackagedNpmCommand(options: {
 export async function runGeneratedAppNpmCommand(options: {
   readonly args: readonly string[]
   readonly cwd: string
+  readonly signal?: AbortSignal
   readonly timeoutMs?: number
   readonly transcriptPath?: string
 }) {
   return await runPackagedNpmCommand({
     args: options.args,
     cwd: options.cwd,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     ...(options.transcriptPath ? { transcriptPath: options.transcriptPath } : {}),
     unsetEnv: GENERATED_APP_UNSET_ENV,
