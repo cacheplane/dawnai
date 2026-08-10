@@ -1075,5 +1075,68 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("browse applies orderBy in order and always terminates with the id tie-break", async () => {
+      const s = await makeStore()
+      try {
+        // Deliberately tied on the leading key so the tie-break is the ONLY thing
+        // deciding the order — and mixed-case ids so a locale collation would
+        // disagree with byte order if the tie-break were not pinned.
+        await s.put(
+          rec({ id: "B", namespace: "ns", content: "B", confidence: 0.5, updatedAt: D(1) }),
+        )
+        await s.put(
+          rec({ id: "a", namespace: "ns", content: "a", confidence: 0.5, updatedAt: D(1) }),
+        )
+        await s.put(
+          rec({ id: "C", namespace: "ns", content: "C", confidence: 0.5, updatedAt: D(1) }),
+        )
+        await s.put(
+          rec({ id: "z", namespace: "ns", content: "z", confidence: 0.9, updatedAt: D(2) }),
+        )
+        expect(
+          (await s.browse({ orderBy: [{ field: "confidence", dir: "desc" }] })).records.map(
+            (r) => r.id,
+          ),
+        ).toEqual(["z", "B", "C", "a"])
+        expect(
+          (await s.browse({ orderBy: [{ field: "confidence", dir: "asc" }] })).records.map(
+            (r) => r.id,
+          ),
+        ).toEqual(["B", "C", "a", "z"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse honors a multi-key orderBy with mixed directions", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "1", namespace: "ns=b", content: "1", confidence: 0.1 }))
+        await s.put(rec({ id: "2", namespace: "ns=a", content: "2", confidence: 0.9 }))
+        await s.put(rec({ id: "3", namespace: "ns=a", content: "3", confidence: 0.1 }))
+        expect(
+          (
+            await s.browse({
+              orderBy: [
+                { field: "namespace", dir: "asc" },
+                { field: "confidence", dir: "desc" },
+              ],
+            })
+          ).records.map((r) => r.id),
+        ).toEqual(["2", "3", "1"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse with an empty orderBy is the documented default order", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "old", namespace: "ns", content: "old", updatedAt: D(1) }))
+        await s.put(rec({ id: "new", namespace: "ns", content: "new", updatedAt: D(2) }))
+        expect((await s.browse({ orderBy: [] })).records.map((r) => r.id)).toEqual(["new", "old"])
+        expect((await s.browse()).records.map((r) => r.id)).toEqual(["new", "old"])
+      } finally {
+        await close?.(s)
+      }
+    })
   })
 }

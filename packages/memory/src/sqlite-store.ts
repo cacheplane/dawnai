@@ -3,6 +3,7 @@ import { dirname } from "node:path"
 import type { SQLInputValue } from "node:sqlite"
 import { DatabaseSync } from "node:sqlite"
 import { normalizeSetFilter } from "./browse-filter.js"
+import { resolveBrowseOrder } from "./browse-order.js"
 import { namespacePrefixUpperBound } from "./browse-range.js"
 import { BROWSE_DEFAULT_LIMIT, validateBrowseQuery } from "./browse-validate.js"
 import { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
@@ -444,11 +445,10 @@ export function sqliteMemoryStore(opts: {
       // Defence in depth: whatever the caller checked, a store that accepts nonsense
       // returns an empty page that looks like an answer.
       validateBrowseQuery(q)
-      // TODO(Tasks 13/14): `q.orderBy` and `q.cursor` are read NOWHERE below.
-      // Setting one of them is silently a no-op, not an error; the JSDoc on
-      // BrowseQuery marks each as not-yet-applied. `q.filters` IS fully applied:
-      // every arm has a clause, and an unmapped field throws rather than passing
-      // through unfiltered.
+      // TODO(Task 14): `q.cursor` is read NOWHERE below. Setting it is silently a
+      // no-op, not an error; the JSDoc on BrowseQuery marks it not-yet-applied.
+      // `q.filters` IS fully applied: every arm has a clause, and an unmapped
+      // field throws rather than passing through unfiltered.
       const where: string[] = []
       const params: SQLInputValue[] = []
       if (q.namespace) {
@@ -501,13 +501,20 @@ export function sqliteMemoryStore(opts: {
       // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
       const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
+      const order = resolveBrowseOrder(q.orderBy)
+      // Every order terminates with `id ASC` so the total order is deterministic and
+      // a keyset window can never skip or repeat a row.
+      const orderSql = [
+        ...order.map((entry) => `${entry.column} ${entry.dir === "desc" ? "DESC" : "ASC"}`),
+        "id ASC",
+      ].join(", ")
       // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
       // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.
       const rows = db
         .prepare(
           `SELECT id, kind, namespace, content, data, source, confidence, tags, status,
                   supersedes, created_at, updated_at, effective_at, expires_at
-           FROM memories ${clause} ORDER BY updated_at DESC, id ASC LIMIT ? OFFSET ?`,
+           FROM memories ${clause} ORDER BY ${orderSql} LIMIT ? OFFSET ?`,
         )
         .all(...params, limit, offset) as Record<string, unknown>[]
       // Rows and total are two separate unwrapped statements; a concurrent write

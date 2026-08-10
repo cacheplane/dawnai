@@ -10,6 +10,7 @@ import {
   normalizeSetFilter,
   type RecallRankingOptions,
   rankKeywordCandidates,
+  resolveBrowseOrder,
   tokenize,
   type VectorRankingOptions,
   validateBrowseQuery,
@@ -450,11 +451,10 @@ export function pgvectorMemoryStore(opts: {
       // Before ready(): a malformed query never pays for a connection.
       validateBrowseQuery(q)
       await ready()
-      // TODO(Tasks 13/14): `q.orderBy` and `q.cursor` are read NOWHERE below.
-      // Setting one of them is silently a no-op, not an error; the JSDoc on
-      // BrowseQuery marks each as not-yet-applied. `q.filters` IS fully applied:
-      // every arm has a clause, and an unmapped field throws rather than passing
-      // through unfiltered.
+      // TODO(Task 14): `q.cursor` is read NOWHERE below. Setting it is silently a
+      // no-op, not an error; the JSDoc on BrowseQuery marks it not-yet-applied.
+      // `q.filters` IS fully applied: every arm has a clause, and an unmapped
+      // field throws rather than passing through unfiltered.
       const where: string[] = []
       const params: unknown[] = []
       if (q.namespace) {
@@ -519,14 +519,23 @@ export function pgvectorMemoryStore(opts: {
       // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
       const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
+      const order = resolveBrowseOrder(q.orderBy)
+      // COLLATE "C" only where SQLite's BINARY order would otherwise differ (namespace,
+      // id). Timestamps stay uncollated so the (updated_at DESC, id COLLATE "C" ASC)
+      // index keeps serving the hot path.
+      const orderSql = [
+        ...order.map(
+          (entry) =>
+            `${entry.collateC ? `${entry.column} COLLATE "C"` : entry.column} ${entry.dir === "desc" ? "DESC" : "ASC"}`,
+        ),
+        'id COLLATE "C" ASC',
+      ].join(", ")
       // Rows and total are two separate round-trips; a concurrent write between
       // them can momentarily skew total vs records — acceptable for a dev
-      // inspection tool (no transaction needed). One snapshot: Task 15. COLLATE "C"
-      // pins the id ASC tiebreak to codepoint order, matching sqlite's BINARY
-      // collation.
+      // inspection tool (no transaction needed). One snapshot: Task 15.
       const rowsRes = await pool.query(
         `SELECT ${RECORD_COLUMNS} FROM ${T} ${clause}
-         ORDER BY updated_at DESC, id COLLATE "C" ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+         ORDER BY ${orderSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, limit, offset],
       )
       const totalRes = await pool.query(`SELECT COUNT(*)::int AS n FROM ${T} ${clause}`, params)
