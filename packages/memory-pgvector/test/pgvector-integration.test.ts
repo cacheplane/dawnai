@@ -146,6 +146,49 @@ describe.skipIf(!enabled)("pgvector integration", () => {
     }
   })
 
+  test("initSchema creates the browse ordering and C-collated namespace indexes", async () => {
+    const prefix = "browse_idx"
+    const pool = new Pool({ connectionString: url })
+    try {
+      const client = await pool.connect()
+      try {
+        await initSchema(client, {
+          prefix,
+          schema: "public",
+          dimensions: 3,
+          m: 16,
+          efConstruction: 64,
+        })
+        const res = await client.query<{ indexname: string; indexdef: string }>(
+          "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1",
+          [`${prefix}_memories`],
+        )
+        const byName = new Map(res.rows.map((r) => [r.indexname, r.indexdef]))
+        expect(byName.has(`${prefix}_updated_id`)).toBe(true)
+        expect(byName.get(`${prefix}_updated_id`)).toContain("updated_at DESC")
+        // Which column carries the collation is the whole point: `id` must be
+        // C-collated to match SQLite's BINARY tie-break, `updated_at` must not be
+        // or the store's uncollated ORDER BY stops matching this index.
+        expect(byName.get(`${prefix}_updated_id`)).toContain('id COLLATE "C"')
+        expect(byName.get(`${prefix}_updated_id`)).not.toContain("updated_at COLLATE")
+        expect(byName.has(`${prefix}_ns_c`)).toBe(true)
+        expect(byName.get(`${prefix}_ns_c`)).toContain('namespace COLLATE "C"')
+        // Idempotent: a second init must not throw.
+        await initSchema(client, {
+          prefix,
+          schema: "public",
+          dimensions: 3,
+          m: 16,
+          efConstruction: 64,
+        })
+      } finally {
+        client.release()
+      }
+    } finally {
+      await pool.end()
+    }
+  })
+
   test("halfvec update round-trip: an embedding survives update() on a 3072-dim store", async () => {
     const store = pgvectorMemoryStore({
       connectionString: url,

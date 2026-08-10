@@ -666,11 +666,12 @@ describe("schema migrations", () => {
     const idx = db
       .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?")
       .get("idx_mem_ns_kind_effective") as { name?: string } | undefined
-    const version = db.prepare("SELECT max(version) AS v FROM schema_version").get() as {
-      v: number
-    }
+    // Existence, not max(version): opening a stale db runs every pending migration, so
+    // a max() would read the head version and move with each one added.
+    const appliedV3 =
+      db.prepare("SELECT 1 AS ok FROM schema_version WHERE version = 3").get() !== undefined
     db.close()
     expect(idx?.name).toBe("idx_mem_ns_kind_effective")
-    expect(version.v).toBe(3)
+    expect(appliedV3).toBe(true)
   })
 })

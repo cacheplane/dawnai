@@ -94,6 +94,15 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_mem_ns_kind_effective ON memories (namespace, kind, effective_at DESC);
     `,
   },
+  {
+    // The global browse order — every poll tick's hot path, and the index the keyset
+    // guard seeks on. Directions are declared: a plain-ASC composite scanned backward
+    // reverses the id tie-break, which would make windows non-deterministic.
+    version: 4,
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_mem_updated_id ON memories (updated_at DESC, id ASC);
+    `,
+  },
 ]
 
 // ---------------------------------------------------------------------------
