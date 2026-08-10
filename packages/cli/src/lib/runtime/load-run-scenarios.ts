@@ -11,6 +11,8 @@ import {
   readScenarioSuite,
   type ScenarioDescriptor,
   type ScenarioSuiteDescriptor,
+  type ScenarioToolCallExpectationDescriptor,
+  type ScenarioToolMockDescriptor,
 } from "@dawn-ai/sdk/testing"
 import { loadRouteKind } from "./load-route-kind.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
@@ -43,6 +45,8 @@ export interface LoadedRunScenario {
   readonly routePath: string
   readonly run?: RunScenarioRunOptions
   readonly scenarioFile: string
+  readonly toolCallExpectations: readonly ScenarioToolCallExpectationDescriptor[]
+  readonly toolMocks: readonly ScenarioToolMockDescriptor[]
 }
 
 export interface LoadRunScenariosOptions {
@@ -267,6 +271,8 @@ function loadScenarioDescriptor(options: {
       ? {}
       : { run: { url: options.scenario.execution.serverUrl } }),
     scenarioFile: options.scenarioFile,
+    toolCallExpectations: [...options.scenario.toolCallExpectations],
+    toolMocks: [...options.scenario.toolMocks],
   }
 }
 

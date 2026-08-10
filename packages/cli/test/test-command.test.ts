@@ -90,6 +90,263 @@ export const workflow = async (
     expect(result.stdout).toContain("Summary: 1 passed, 0 failed")
   })
 
+  test("executes a route-local tool mock while retaining a real shared tool", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "mocked lookup passes",
+        `s
+          .input({ tenant: "acme" })
+          .mockTool("lookup", async ({ tenant }: { tenant: string }) => ({
+            plan: "mock:" + tenant,
+          }))
+          .expectPassed()
+          .expectOutput({
+            greeting: { source: "real-shared" },
+            plan: "mock:acme",
+          })
+          .expectTool("lookup", (call) =>
+            call.calledOnce().withArgs({ tenant: "acme" }),
+          )`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("PASS mocked lookup passes")
+    expect(result.stdout).toContain("Summary: 1 passed, 0 failed")
+  })
+
+  test("passes an exact two-call tool expectation", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "lookup called twice",
+        `s
+          .input({
+            tenant: "acme",
+            lookupArgs: [{ tenant: "acme" }, { tenant: "beta" }],
+          })
+          .mockTool("lookup", async ({ tenant }: { tenant: string }) => ({
+            plan: "mock:" + tenant,
+          }))
+          .expectPassed()
+          .expectOutput({ plan: "mock:acme" })
+          .expectTool("lookup", (call) => call.calledTimes(2))`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("PASS lookup called twice")
+  })
+
+  test("passes a not-called tool expectation", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "lookup is not called",
+        `s
+          .input({ tenant: "acme", lookupArgs: [] })
+          .mockTool("lookup", async () => ({ plan: "mock:unused" }))
+          .expectPassed()
+          .expectOutput({ greeting: { source: "real-shared" } })
+          .expectTool("lookup", (call) => call.notCalled())`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("PASS lookup is not called")
+  })
+
+  test("reports tool count mismatches before running the custom assertion", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "lookup count mismatch",
+        `s
+          .input({ tenant: "acme" })
+          .mockTool("lookup", async ({ tenant }: { tenant: string }) => ({
+            plan: "mock:" + tenant,
+          }))
+          .expectPassed()
+          .expectTool("lookup", (call) => call.calledTimes(2))
+          .assert(() => {
+            globalThis.__dawnAssertCalls = (globalThis.__dawnAssertCalls ?? 0) + 1
+            throw new Error("custom assertion should not run")
+          })`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toContain(
+      'FAIL lookup count mismatch [assertion] Expected tool "lookup" call count to equal 2 but received 1',
+    )
+    expect(result.stdout).not.toContain("custom assertion should not run")
+    expect((globalThis as Record<string, unknown>).__dawnAssertCalls ?? 0).toBe(0)
+  })
+
+  test("matches primitive tool arguments exactly", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "primitive lookup args match",
+        `s
+          .input({ tenant: "acme", lookupArgs: ["acme"] })
+          .mockTool("lookup", async (tenant: unknown) => ({
+            plan: "mock:" + String(tenant),
+          }))
+          .expectPassed()
+          .expectOutput({ plan: "mock:acme" })
+          .expectTool("lookup", (call) => call.withArgs("acme"))`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("PASS primitive lookup args match")
+  })
+
+  test("matches nested object subsets while requiring exact arrays", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "nested lookup args match",
+        `s
+          .input({
+            tenant: "acme",
+            lookupArgs: [{
+              request: {
+                filters: [{ field: "status", values: ["active", "queued"] }],
+                options: { locale: "en", timezone: "UTC" },
+                trace: true,
+              },
+              tenant: "acme",
+            }],
+          })
+          .mockTool("lookup", async () => ({ plan: "mock:acme" }))
+          .expectPassed()
+          .expectOutput({ plan: "mock:acme" })
+          .expectTool("lookup", (call) =>
+            call.withArgs({
+              request: {
+                filters: [{ field: "status", values: ["active", "queued"] }],
+                options: { locale: "en" },
+              },
+            }),
+          )`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("PASS nested lookup args match")
+  })
+
+  test("lets one call satisfy multiple compatible argument matchers", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "compatible lookup args match",
+        `s
+          .input({
+            tenant: "acme",
+            lookupArgs: [{ region: "us-west", tenant: "acme" }],
+          })
+          .mockTool("lookup", async () => ({ plan: "mock:acme" }))
+          .expectPassed()
+          .expectOutput({ plan: "mock:acme" })
+          .expectTool("lookup", (call) =>
+            call
+              .withArgs({ tenant: "acme" })
+              .withArgs({ region: "us-west" }),
+          )`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("PASS compatible lookup args match")
+  })
+
+  test("reports expected and observed arguments for a tool mismatch", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "lookup args mismatch",
+        `s
+          .input({
+            tenant: "acme",
+            lookupArgs: [{
+              tenant: "acme",
+              filters: [{ field: "status", ignored: true, value: "active" }],
+            }],
+          })
+          .mockTool("lookup", async () => ({ plan: "mock:acme" }))
+          .expectPassed()
+          .expectTool("lookup", (call) =>
+            call.withArgs({
+              tenant: "acme",
+              filters: [{ field: "status", value: "active" }],
+            }),
+          )`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toContain(
+      'FAIL lookup args mismatch [assertion] Expected tool "lookup" arguments to match {"filters":[{"field":"status","value":"active"}],"tenant":"acme"} but observed [{"filters":[{"field":"status","ignored":true,"value":"active"}],"tenant":"acme"}]',
+    )
+  })
+
+  test("treats a throwing tool mock as an ordinary modeled route failure", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "mocked lookup failure passes",
+        `s
+          .input({ tenant: "acme" })
+          .mockTool("lookup", async () => {
+            throw new Error("mock lookup failed")
+          })
+          .expectFailed()
+          .expectError({ kind: "execution_error", message: "mock lookup failed" })
+          .expectTool("lookup", (call) => call.calledOnce())`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("PASS mocked lookup failure passes")
+  })
+
+  test("reports an unexpected mock failure before a secondary call-count mismatch", async () => {
+    const appRoot = await createScenarioToolMockFixture(
+      toolMockScenarioModule(
+        "unexpected mocked lookup failure",
+        `s
+          .input({ tenant: "acme" })
+          .mockTool("lookup", async () => {
+            throw new Error("unexpected mock lookup failure")
+          })
+          .expectPassed()
+          .expectTool("lookup", (call) => call.calledTimes(2))`,
+      ),
+    )
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toContain(
+      "FAIL unexpected mocked lookup failure [execution] unexpected mock lookup failure",
+    )
+    expect(result.stdout).not.toContain("call count")
+  })
+
   test("discovers all run.test.ts files under the configured routes root", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
@@ -956,6 +1213,47 @@ async function createFixtureApp(files: Readonly<Record<string, string>>) {
   return appRoot
 }
 
+async function createScenarioToolMockFixture(runTestSource: string): Promise<string> {
+  return await createFixtureApp({
+    "package.json": "{}\n",
+    "dawn.config.ts": "export default {};\n",
+    "src/tools/greet.ts": `export default async (input: { tenant: string }) => ({
+  source: "real-shared",
+  tenant: input.tenant,
+});
+`,
+    "src/app/plans/index.ts": `import type { RuntimeContext } from "@dawn-ai/sdk"
+
+export const workflow = async (
+  input: { tenant: string; lookupArgs?: readonly unknown[] },
+  context: RuntimeContext,
+) => {
+  const greeting = await context.tools.greet({ tenant: input.tenant })
+  const lookupArgs = input.lookupArgs ?? [{ tenant: input.tenant }]
+  const results: Array<{ plan: string }> = []
+
+  for (const args of lookupArgs) {
+    results.push(await context.tools.lookup(args) as { plan: string })
+  }
+
+  return {
+    greeting,
+    ...(results[0] ? { plan: results[0].plan } : {}),
+    plans: results.map((result) => result.plan),
+  }
+}
+`,
+    "src/app/plans/tools/lookup.ts": `export default async (input: unknown) => {
+  const tenant = typeof input === "string"
+    ? input
+    : (input as { tenant?: string }).tenant ?? "unknown"
+  return { plan: "real:" + tenant }
+}
+`,
+    "src/app/plans/run.test.ts": runTestSource,
+  })
+}
+
 async function replaceInFile(filePath: string, search: string, replacement: string): Promise<void> {
   const source = await readFile(filePath, "utf8")
   await writeFile(filePath, source.replace(search, replacement), "utf8")
@@ -1025,6 +1323,17 @@ function scenarioModule(route: string, scenarios: readonly BuilderScenarioFixtur
 
 function scenarioModuleSource(source: string): string {
   return `${source.trim()}\n`
+}
+
+function toolMockScenarioModule(name: string, fluentScenario: string): string {
+  return scenarioModuleSource(`
+    import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+    export default scenarios("/plans").scenario(
+      ${JSON.stringify(name)},
+      (s) => ${fluentScenario},
+    )
+  `)
 }
 
 async function startFakeAgentServer(

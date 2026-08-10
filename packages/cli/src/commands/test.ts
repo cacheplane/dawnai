@@ -1,4 +1,9 @@
-import { expectError, expectMeta, expectOutput } from "@dawn-ai/sdk/testing"
+import {
+  expectError,
+  expectMeta,
+  expectOutput,
+  type ScenarioToolCallRecord,
+} from "@dawn-ai/sdk/testing"
 import { type Command, CommanderError } from "commander"
 
 import { CliError, type CommandIo, formatErrorMessage, writeLine } from "../lib/output.js"
@@ -10,6 +15,7 @@ import {
   RunScenarioLoadError,
 } from "../lib/runtime/load-run-scenarios.js"
 import type { RuntimeExecutionResult } from "../lib/runtime/result.js"
+import { evaluateScenarioToolExpectations } from "../lib/runtime/scenario-tool-expectations.js"
 
 interface TestOptions {
   readonly cwd?: string
@@ -92,6 +98,7 @@ export async function runTestCommand(
 
 async function runScenario(scenario: LoadedRunScenario): Promise<ScenarioOutcome> {
   let result: RuntimeExecutionResult
+  const toolCalls: ScenarioToolCallRecord[] = []
 
   try {
     result = scenario.run?.url
@@ -107,6 +114,9 @@ async function runScenario(scenario: LoadedRunScenario): Promise<ScenarioOutcome
           appRoot: scenario.appRoot,
           input: scenario.input,
           routeFile: scenario.routeFile,
+          ...(scenario.toolMocks.length > 0
+            ? { toolCallJournal: toolCalls, toolOverrides: scenario.toolMocks }
+            : {}),
         })
   } catch (error) {
     return {
@@ -115,12 +125,13 @@ async function runScenario(scenario: LoadedRunScenario): Promise<ScenarioOutcome
     }
   }
 
-  return await evaluateScenario(scenario, result)
+  return await evaluateScenario(scenario, result, toolCalls)
 }
 
 async function evaluateScenario(
   scenario: LoadedRunScenario,
   result: RuntimeExecutionResult,
+  toolCalls: readonly ScenarioToolCallRecord[],
 ): Promise<ScenarioOutcome> {
   const declarativeMismatch = scenario.expect
     ? evaluateDeclarativeExpectation(scenario.expect, result)
@@ -130,6 +141,18 @@ async function evaluateScenario(
     return {
       kind: declarativeMismatch.kind,
       message: declarativeMismatch.message,
+    }
+  }
+
+  const toolCallMismatch = evaluateScenarioToolExpectations(
+    scenario.toolCallExpectations,
+    toolCalls,
+  )
+
+  if (toolCallMismatch) {
+    return {
+      kind: "assertion",
+      message: toolCallMismatch,
     }
   }
 
