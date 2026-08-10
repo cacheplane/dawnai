@@ -125,6 +125,33 @@ function toNetworkPolicyManifest(s: KubeNetworkPolicySpec): V1NetworkPolicy {
   }
 }
 
+/** @internal Validates that a live policy is the Dawn-owned object we intend to
+ * replace, then carries only its optimistic-concurrency token into the desired body. */
+export function prepareNetworkPolicyReplacement(
+  existing: V1NetworkPolicy,
+  desired: V1NetworkPolicy,
+  threadLabelValue: string,
+): V1NetworkPolicy {
+  const desiredName = desired.metadata?.name
+  if (!desiredName || existing.metadata?.name !== desiredName) {
+    throw new Error("Cannot replace NetworkPolicy: existing name does not match desired name.")
+  }
+  if (existing.metadata.labels?.["app.kubernetes.io/managed-by"] !== "dawn") {
+    throw new Error("Cannot replace NetworkPolicy: existing object is not Dawn-owned.")
+  }
+  if (existing.metadata.labels?.["dawn.sh/thread"] !== threadLabelValue) {
+    throw new Error("Cannot replace NetworkPolicy: existing thread label does not match.")
+  }
+  const resourceVersion = existing.metadata.resourceVersion
+  if (!resourceVersion) {
+    throw new Error("Cannot replace NetworkPolicy: live resourceVersion is missing or empty.")
+  }
+  return {
+    ...desired,
+    metadata: { ...desired.metadata, resourceVersion },
+  }
+}
+
 /** Parses the exec status callback's V1Status into an exit code. Success -> 0;
  * Failure with an ExitCode cause -> that code; anything else -> 1 (best-effort). */
 function exitCodeFromStatus(status: V1Status | undefined): number {
@@ -212,7 +239,16 @@ export function createDefaultKubeClient(): KubeClient {
         await networking.createNamespacedNetworkPolicy({ namespace: ns, body })
       } catch (error) {
         if (statusCode(error) === 409) {
-          await networking.replaceNamespacedNetworkPolicy({ name: spec.name, namespace: ns, body })
+          const existing = await networking.readNamespacedNetworkPolicy({
+            name: spec.name,
+            namespace: ns,
+          })
+          const replacement = prepareNetworkPolicyReplacement(existing, body, spec.threadLabelValue)
+          await networking.replaceNamespacedNetworkPolicy({
+            name: spec.name,
+            namespace: ns,
+            body: replacement,
+          })
           return
         }
         throw error
