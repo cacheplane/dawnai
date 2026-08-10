@@ -11,8 +11,7 @@ import type {
 const SCENARIO_SUITE = Symbol.for("dawn.scenario-suite")
 const SCENARIO_DRAFT = Symbol("dawn.scenario-draft")
 const TOOL_CALL_EXPECTATION_DRAFT = Symbol("dawn.tool-call-expectation-draft")
-const SNAPSHOT_PROXY_TARGETS_KEY = Symbol.for("dawn.scenario-snapshot-proxy-targets")
-const SNAPSHOT_PROXY_TARGETS = getSnapshotProxyTargets()
+const SNAPSHOT_DATA = Symbol.for("dawn.scenario-readonly-snapshot-data.v1")
 
 const DATE_MUTATORS = new Set<PropertyKey>([
   "setDate",
@@ -32,6 +31,56 @@ const DATE_MUTATORS = new Set<PropertyKey>([
   "setUTCSeconds",
   "setYear",
 ])
+
+const MAP_MUTATORS = new Set<PropertyKey>(["clear", "delete", "set"])
+const SET_MUTATORS = new Set<PropertyKey>(["add", "clear", "delete"])
+const ARRAY_BUFFER_MUTATORS = new Set<PropertyKey>(["resize", "transfer", "transferToFixedLength"])
+const SHARED_ARRAY_BUFFER_MUTATORS = new Set<PropertyKey>(["grow"])
+const TYPED_ARRAY_MUTATORS = new Set<PropertyKey>(["copyWithin", "fill", "reverse", "set", "sort"])
+
+const TYPED_ARRAY_CONSTRUCTORS = {
+  BigInt64Array,
+  BigUint64Array,
+  Float32Array,
+  Float64Array,
+  Int16Array,
+  Int32Array,
+  Int8Array,
+  Uint16Array,
+  Uint32Array,
+  Uint8Array,
+  Uint8ClampedArray,
+} as const
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype) as object
+
+type BinaryBuffer = ArrayBuffer | SharedArrayBuffer
+type BinaryBufferKind = "ArrayBuffer" | "SharedArrayBuffer"
+type SupportedTypedArray = InstanceType<
+  (typeof TYPED_ARRAY_CONSTRUCTORS)[keyof typeof TYPED_ARRAY_CONSTRUCTORS]
+>
+type TypedArrayName = keyof typeof TYPED_ARRAY_CONSTRUCTORS
+
+interface BinaryBufferSnapshotData {
+  readonly bytes: Uint8Array
+  readonly kind: BinaryBufferKind
+  readonly maxByteLength: number
+  readonly resizable: boolean
+}
+
+interface DataViewSnapshotData {
+  readonly buffer: BinaryBuffer
+  readonly byteLength: number
+  readonly byteOffset: number
+  readonly kind: "DataView"
+}
+
+interface TypedArraySnapshotData {
+  readonly buffer: BinaryBuffer
+  readonly byteOffset: number
+  readonly kind: "TypedArray"
+  readonly length: number
+  readonly name: TypedArrayName
+}
 
 type ScenarioStatus = ScenarioDescriptor["expectedStatus"]
 type ToolCallCount = NonNullable<ScenarioToolCallExpectationDescriptor["count"]>
@@ -835,6 +884,7 @@ function parseRuntimeErrorExpectation(value: unknown, label: string): RuntimeErr
 
 function createUnknownSnapshotter(): (value: unknown) => unknown {
   const seen = new WeakMap<object, unknown>()
+  const binaryBackings = new WeakMap<object, BinaryBuffer>()
 
   function snapshot(value: unknown): unknown {
     if (typeof value !== "object" || value === null) {
@@ -845,114 +895,283 @@ function createUnknownSnapshotter(): (value: unknown) => unknown {
       return seen.get(value)
     }
 
-    const source = SNAPSHOT_PROXY_TARGETS.get(value) ?? value
-
-    if (Array.isArray(source)) {
+    if (Array.isArray(value)) {
       const copy: unknown[] = []
-      copy.length = source.length
-      remember(value, source, copy)
+      copy.length = value.length
+      remember(value, copy)
 
-      for (let index = 0; index < source.length; index += 1) {
-        if (Object.hasOwn(source, index)) {
-          copy[index] = snapshot(source[index])
+      for (let index = 0; index < value.length; index += 1) {
+        if (Object.hasOwn(value, index)) {
+          copy[index] = snapshot(value[index])
         }
       }
 
       return Object.freeze(copy)
     }
 
-    if (source instanceof Date) {
-      const target = new Date(Date.prototype.getTime.call(source))
-      Object.setPrototypeOf(target, Object.getPrototypeOf(source))
+    if (value instanceof Date) {
+      const target = new Date(readDateTime(value))
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
       const proxy = createReadOnlyDateSnapshot(target)
-      remember(value, source, proxy)
-      snapshotOwnProperties(source, target, snapshot)
+      remember(value, proxy)
+      snapshotOwnProperties(value, target, snapshot)
       Object.freeze(target)
       return proxy
     }
 
-    if (source instanceof Map) {
+    if (value instanceof Map) {
       const target = new Map<unknown, unknown>()
-      Object.setPrototypeOf(target, Object.getPrototypeOf(source))
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
       const proxy = createReadOnlyMapSnapshot(target)
-      remember(value, source, proxy)
+      remember(value, proxy)
 
-      for (const [key, item] of Map.prototype.entries.call(source)) {
+      for (const [key, item] of readMapEntries(value)) {
         Map.prototype.set.call(target, snapshot(key), snapshot(item))
       }
 
-      snapshotOwnProperties(source, target, snapshot)
+      snapshotOwnProperties(value, target, snapshot)
       Object.freeze(target)
       return proxy
     }
 
-    const copy = Object.create(Object.getPrototypeOf(source)) as object
-    remember(value, source, copy)
-    snapshotOwnProperties(source, copy, snapshot)
+    if (value instanceof Set) {
+      const target = new Set<unknown>()
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
+      const proxy = createReadOnlySetSnapshot(target)
+      remember(value, proxy)
+
+      for (const item of readSetValues(value)) {
+        Set.prototype.add.call(target, snapshot(item))
+      }
+
+      snapshotOwnProperties(value, target, snapshot)
+      Object.freeze(target)
+      return proxy
+    }
+
+    if (value instanceof RegExp) {
+      const state = readRegExpState(value)
+      const target = new RegExp(state.source, state.flags)
+      target.lastIndex = state.lastIndex
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
+      const proxy = createReadOnlyRegExpSnapshot(target)
+      remember(value, proxy)
+      snapshotOwnProperties(value, target, snapshot, (key) => key === "lastIndex")
+      Object.freeze(target)
+      return proxy
+    }
+
+    if (value instanceof ArrayBuffer) {
+      return snapshotBinaryBuffer(value, "ArrayBuffer")
+    }
+
+    if (value instanceof SharedArrayBuffer) {
+      return snapshotBinaryBuffer(value, "SharedArrayBuffer")
+    }
+
+    if (value instanceof DataView) {
+      const state = readDataViewState(value)
+      const buffer = snapshot(state.buffer)
+      const cycleSnapshot = seen.get(value)
+
+      if (cycleSnapshot) {
+        return cycleSnapshot
+      }
+
+      const backing = isRecord(buffer) ? binaryBackings.get(buffer) : undefined
+
+      if (!backing) {
+        throw new TypeError("DataView snapshot buffer is malformed")
+      }
+
+      const target = new DataView(backing, state.byteOffset, state.byteLength)
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
+      const proxy = createReadOnlyDataViewSnapshot(target, buffer as BinaryBuffer)
+      remember(value, proxy)
+      snapshotOwnProperties(value, target, snapshot)
+      Object.freeze(target)
+      return proxy
+    }
+
+    const typedArrayName = getTypedArrayName(value)
+
+    if (typedArrayName) {
+      const typedArray = value as SupportedTypedArray
+      const state = readTypedArrayState(typedArray, typedArrayName)
+      const buffer = snapshot(state.buffer)
+      const cycleSnapshot = seen.get(typedArray)
+
+      if (cycleSnapshot) {
+        return cycleSnapshot
+      }
+
+      const backing = isRecord(buffer) ? binaryBackings.get(buffer) : undefined
+
+      if (!backing) {
+        throw new TypeError(`${typedArrayName} snapshot buffer is malformed`)
+      }
+
+      const target = createTypedArrayTarget(typedArrayName, backing, state.byteOffset, state.length)
+      Object.setPrototypeOf(target, Object.getPrototypeOf(typedArray))
+      const proxy = createReadOnlyTypedArraySnapshot(target, typedArrayName, buffer as BinaryBuffer)
+      remember(typedArray, proxy)
+      snapshotOwnProperties(typedArray, target, snapshot, isTypedArrayElementKey)
+      Object.preventExtensions(target)
+      return proxy
+    }
+
+    if (value instanceof Number) {
+      return snapshotBoxedPrimitive(
+        value,
+        new Number(Number.prototype.valueOf.call(value)),
+        snapshot,
+      )
+    }
+
+    if (value instanceof String) {
+      return snapshotBoxedPrimitive(
+        value,
+        new String(String.prototype.valueOf.call(value)),
+        snapshot,
+        (key) => key === "length" || isCanonicalArrayIndex(key),
+      )
+    }
+
+    if (value instanceof Boolean) {
+      return snapshotBoxedPrimitive(
+        value,
+        new Boolean(Boolean.prototype.valueOf.call(value)),
+        snapshot,
+      )
+    }
+
+    if (Object.prototype.toString.call(value) === "[object BigInt]") {
+      const primitive = Reflect.apply(BigInt.prototype.valueOf, value, []) as bigint
+      return snapshotBoxedPrimitive(value, Object(primitive), snapshot)
+    }
+
+    if (typeof File !== "undefined" && value instanceof File) {
+      const target = new File([value], value.name, {
+        lastModified: value.lastModified,
+        type: value.type,
+      })
+      const intrinsicKeys = new Set<PropertyKey>(Reflect.ownKeys(target))
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
+      remember(value, target)
+      snapshotOwnProperties(value, target, snapshot, (key) => intrinsicKeys.has(key))
+      return Object.freeze(target)
+    }
+
+    if (typeof Blob !== "undefined" && value instanceof Blob) {
+      const target = Blob.prototype.slice.call(value, 0, value.size, value.type) as Blob
+      const intrinsicKeys = new Set<PropertyKey>(Reflect.ownKeys(target))
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
+      remember(value, target)
+      snapshotOwnProperties(value, target, snapshot, (key) => intrinsicKeys.has(key))
+      return Object.freeze(target)
+    }
+
+    if (typeof DOMException !== "undefined" && value instanceof DOMException) {
+      const target = new DOMException(value.message, value.name)
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
+      remember(value, target)
+      snapshotOwnProperties(value, target, snapshot)
+      return Object.freeze(target)
+    }
+
+    if (value instanceof Error) {
+      const target = new Error()
+      Object.setPrototypeOf(target, Object.getPrototypeOf(value))
+      remember(value, target)
+      snapshotOwnProperties(value, target, snapshot)
+      return Object.freeze(target)
+    }
+
+    const tag = Object.prototype.toString.call(value)
+
+    if (tag !== "[object Object]") {
+      throw new TypeError(`${readSnapshotTypeName(tag)} snapshot values are not supported`)
+    }
+
+    const copy = Object.create(Object.getPrototypeOf(value)) as object
+    remember(value, copy)
+    snapshotOwnProperties(value, copy, snapshot)
     return Object.freeze(copy)
   }
 
-  function remember(original: object, source: object, copy: object): void {
-    seen.set(original, copy)
+  function snapshotBinaryBuffer(source: BinaryBuffer, kind: BinaryBufferKind): BinaryBuffer {
+    const data = readBinaryBufferState(source, kind)
+    const target = createBinaryBufferTarget(data)
+    Object.setPrototypeOf(target, Object.getPrototypeOf(source))
+    const proxy = createReadOnlyBinaryBufferSnapshot(target, kind)
+    remember(source, proxy)
+    binaryBackings.set(proxy, target)
+    snapshotOwnProperties(source, target, snapshot)
+    Object.freeze(target)
+    return proxy
+  }
 
-    if (source !== original) {
-      seen.set(source, copy)
-    }
+  function snapshotBoxedPrimitive(
+    source: object,
+    target: object,
+    snapshotValue: (value: unknown) => unknown,
+    skip?: (key: PropertyKey) => boolean,
+  ): object {
+    Object.setPrototypeOf(target, Object.getPrototypeOf(source))
+    remember(source, target)
+    snapshotOwnProperties(source, target, snapshotValue, skip)
+    return Object.freeze(target)
+  }
+
+  function remember(original: object, copy: object): void {
+    seen.set(original, copy)
   }
 
   return snapshot
 }
 
-function getSnapshotProxyTargets(): WeakMap<object, object> {
-  const existing = Reflect.get(globalThis, SNAPSHOT_PROXY_TARGETS_KEY)
-
-  if (existing !== undefined) {
-    if (!(existing instanceof WeakMap)) {
-      throw new TypeError("Scenario snapshot proxy registry is malformed")
-    }
-
-    return existing as WeakMap<object, object>
-  }
-
-  const registry = new WeakMap<object, object>()
-  Object.defineProperty(globalThis, SNAPSHOT_PROXY_TARGETS_KEY, {
-    configurable: false,
-    enumerable: false,
-    value: registry,
-    writable: false,
-  })
-  return registry
-}
-
 function createReadOnlyDateSnapshot(target: Date): Date {
-  const proxy = new Proxy(target, {
+  return new Proxy(target, {
     get(date, property, receiver) {
+      if (property === SNAPSHOT_DATA) {
+        return Object.freeze({ kind: "Date", time: Date.prototype.getTime.call(date) })
+      }
+
       if (DATE_MUTATORS.has(property)) {
         return rejectSnapshotMutation
       }
 
       const result = Reflect.get(date, property, receiver)
+      const descriptor = Object.getOwnPropertyDescriptor(Date.prototype, property)
 
       if (
         typeof result === "function" &&
         property !== "constructor" &&
-        Object.hasOwn(Date.prototype, property)
+        descriptor &&
+        "value" in descriptor &&
+        result === descriptor.value
       ) {
         return result.bind(date)
       }
 
       return result
     },
+    defineProperty: rejectSnapshotMutation,
+    deleteProperty: rejectSnapshotMutation,
+    set: rejectSnapshotMutation,
+    setPrototypeOf: rejectSnapshotMutation,
   })
-  SNAPSHOT_PROXY_TARGETS.set(proxy, target)
-  return proxy
 }
 
 function createReadOnlyMapSnapshot(target: Map<unknown, unknown>): Map<unknown, unknown> {
   let proxy: Map<unknown, unknown>
   proxy = new Proxy(target, {
     get(map, property, receiver) {
-      if (property === "set" || property === "delete" || property === "clear") {
+      if (property === SNAPSHOT_DATA) {
+        return createMapSnapshotData(map)
+      }
+
+      if (MAP_MUTATORS.has(property)) {
         return rejectSnapshotMutation
       }
 
@@ -972,28 +1191,638 @@ function createReadOnlyMapSnapshot(target: Map<unknown, unknown>): Map<unknown, 
       }
 
       const result = Reflect.get(map, property, receiver)
+      const descriptor = Object.getOwnPropertyDescriptor(Map.prototype, property)
 
       if (
         typeof result === "function" &&
         property !== "constructor" &&
-        Object.hasOwn(Map.prototype, property)
+        descriptor &&
+        "value" in descriptor &&
+        result === descriptor.value
       ) {
         return result.bind(map)
       }
 
       return result
     },
+    defineProperty: rejectSnapshotMutation,
+    deleteProperty: rejectSnapshotMutation,
+    set: rejectSnapshotMutation,
+    setPrototypeOf: rejectSnapshotMutation,
   })
-  SNAPSHOT_PROXY_TARGETS.set(proxy, target)
   return proxy
+}
+
+function createReadOnlySetSnapshot(target: Set<unknown>): Set<unknown> {
+  let proxy: Set<unknown>
+  proxy = new Proxy(target, {
+    get(set, property, receiver) {
+      if (property === SNAPSHOT_DATA) {
+        return createSetSnapshotData(set)
+      }
+
+      if (SET_MUTATORS.has(property)) {
+        return rejectSnapshotMutation
+      }
+
+      if (property === "size") {
+        return Reflect.get(set, property, set)
+      }
+
+      if (property === "forEach") {
+        return (
+          callback: (value: unknown, key: unknown, set: Set<unknown>) => void,
+          thisArg?: unknown,
+        ): void => {
+          Set.prototype.forEach.call(set, (value) => {
+            callback.call(thisArg, value, value, proxy)
+          })
+        }
+      }
+
+      const result = Reflect.get(set, property, receiver)
+      const descriptor = Object.getOwnPropertyDescriptor(Set.prototype, property)
+
+      if (
+        typeof result === "function" &&
+        property !== "constructor" &&
+        descriptor &&
+        "value" in descriptor &&
+        result === descriptor.value
+      ) {
+        return result.bind(set)
+      }
+
+      return result
+    },
+    defineProperty: rejectSnapshotMutation,
+    deleteProperty: rejectSnapshotMutation,
+    set: rejectSnapshotMutation,
+    setPrototypeOf: rejectSnapshotMutation,
+  })
+  return proxy
+}
+
+function createReadOnlyRegExpSnapshot(target: RegExp): RegExp {
+  return new Proxy(target, {
+    get(regexp, property, receiver) {
+      if (property === SNAPSHOT_DATA) {
+        return createRegExpSnapshotData(regexp)
+      }
+
+      if (property === "compile") {
+        return rejectSnapshotMutation
+      }
+
+      const result = readProxyProperty(regexp, property, receiver)
+
+      if (typeof result !== "function" || property === "constructor") {
+        return result
+      }
+
+      return (...args: unknown[]): unknown => {
+        const working = new RegExp(regexp.source, regexp.flags)
+        working.lastIndex = regexp.lastIndex
+        Object.setPrototypeOf(working, Object.getPrototypeOf(regexp))
+        return Reflect.apply(result, working, args)
+      }
+    },
+    defineProperty: rejectSnapshotMutation,
+    deleteProperty: rejectSnapshotMutation,
+    set: rejectSnapshotMutation,
+    setPrototypeOf: rejectSnapshotMutation,
+  })
+}
+
+function createReadOnlyBinaryBufferSnapshot(
+  target: BinaryBuffer,
+  kind: BinaryBufferKind,
+): BinaryBuffer {
+  const prototype = kind === "ArrayBuffer" ? ArrayBuffer.prototype : SharedArrayBuffer.prototype
+  const mutators = kind === "ArrayBuffer" ? ARRAY_BUFFER_MUTATORS : SHARED_ARRAY_BUFFER_MUTATORS
+
+  return new Proxy(target, {
+    get(buffer, property, receiver) {
+      if (property === SNAPSHOT_DATA) {
+        return Object.freeze(readBinaryBufferState(buffer, kind))
+      }
+
+      if (mutators.has(property)) {
+        return rejectSnapshotMutation
+      }
+
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, property)
+
+      if (descriptor?.get) {
+        return Reflect.apply(descriptor.get, buffer, [])
+      }
+
+      const result = Reflect.get(buffer, property, receiver)
+
+      if (
+        typeof result === "function" &&
+        property !== "constructor" &&
+        descriptor &&
+        "value" in descriptor &&
+        result === descriptor.value
+      ) {
+        return result.bind(buffer)
+      }
+
+      return result
+    },
+    defineProperty: rejectSnapshotMutation,
+    deleteProperty: rejectSnapshotMutation,
+    set: rejectSnapshotMutation,
+    setPrototypeOf: rejectSnapshotMutation,
+  })
+}
+
+function createReadOnlyDataViewSnapshot(target: DataView, buffer: BinaryBuffer): DataView {
+  return new Proxy(target, {
+    get(view, property, receiver) {
+      if (property === SNAPSHOT_DATA) {
+        return Object.freeze({
+          buffer,
+          byteLength: view.byteLength,
+          byteOffset: view.byteOffset,
+          kind: "DataView",
+        } satisfies DataViewSnapshotData)
+      }
+
+      if (property === "buffer") {
+        return buffer
+      }
+
+      if (typeof property === "string" && property.startsWith("set")) {
+        return rejectSnapshotMutation
+      }
+
+      const descriptor = Object.getOwnPropertyDescriptor(DataView.prototype, property)
+
+      if (descriptor?.get) {
+        return Reflect.apply(descriptor.get, view, [])
+      }
+
+      const result = Reflect.get(view, property, receiver)
+
+      if (
+        typeof result === "function" &&
+        property !== "constructor" &&
+        descriptor &&
+        "value" in descriptor &&
+        result === descriptor.value
+      ) {
+        return result.bind(view)
+      }
+
+      return result
+    },
+    defineProperty: rejectSnapshotMutation,
+    deleteProperty: rejectSnapshotMutation,
+    set: rejectSnapshotMutation,
+    setPrototypeOf: rejectSnapshotMutation,
+  })
+}
+
+function createReadOnlyTypedArraySnapshot(
+  target: SupportedTypedArray,
+  name: TypedArrayName,
+  buffer: BinaryBuffer,
+): SupportedTypedArray {
+  return new Proxy(target, {
+    get(typedArray, property, receiver) {
+      if (property === SNAPSHOT_DATA) {
+        return Object.freeze({
+          buffer,
+          byteOffset: readTypedArrayNumber(typedArray, "byteOffset"),
+          kind: "TypedArray",
+          length: readTypedArrayNumber(typedArray, "length"),
+          name,
+        } satisfies TypedArraySnapshotData)
+      }
+
+      if (property === "buffer") {
+        return buffer
+      }
+
+      if (TYPED_ARRAY_MUTATORS.has(property)) {
+        return rejectSnapshotMutation
+      }
+
+      const result = readProxyProperty(typedArray, property, receiver)
+
+      if (typeof result !== "function" || property === "constructor") {
+        return result
+      }
+
+      return (...args: unknown[]): unknown => {
+        const working = cloneTypedArrayTarget(typedArray, name)
+        const method = Reflect.get(working, property, working)
+
+        if (typeof method !== "function") {
+          throw new TypeError(`${String(property)} is not callable on ${name}`)
+        }
+
+        return Reflect.apply(method, working, args)
+      }
+    },
+    defineProperty: rejectSnapshotMutation,
+    deleteProperty: rejectSnapshotMutation,
+    set: rejectSnapshotMutation,
+    setPrototypeOf: rejectSnapshotMutation,
+  })
+}
+
+function readDateTime(source: Date): number {
+  try {
+    return Date.prototype.getTime.call(source)
+  } catch {
+    const data = readSnapshotData(source, "Date")
+
+    if (typeof data.time !== "number") {
+      throw new TypeError("Date snapshot data is malformed")
+    }
+
+    return data.time
+  }
+}
+
+function readMapEntries(source: Map<unknown, unknown>): readonly (readonly [unknown, unknown])[] {
+  try {
+    const entries: (readonly [unknown, unknown])[] = []
+
+    for (const [key, value] of Map.prototype.entries.call(source)) {
+      entries.push([key, value])
+    }
+
+    return entries
+  } catch {
+    const data = readSnapshotData(source, "Map")
+    const entries = assertDenseArray(data.entries, "Map snapshot entries")
+    const parsed: (readonly [unknown, unknown])[] = []
+
+    for (let index = 0; index < entries.length; index += 1) {
+      const pair = assertDenseArray(entries[index], `Map snapshot entry at index ${index}`)
+
+      if (pair.length !== 2) {
+        throw new TypeError(`Map snapshot entry at index ${index} must contain two values`)
+      }
+
+      parsed.push([pair[0], pair[1]])
+    }
+
+    return parsed
+  }
+}
+
+function readSetValues(source: Set<unknown>): readonly unknown[] {
+  try {
+    const values: unknown[] = []
+
+    for (const value of Set.prototype.values.call(source)) {
+      values.push(value)
+    }
+
+    return values
+  } catch {
+    const data = readSnapshotData(source, "Set")
+    const values = assertDenseArray(data.values, "Set snapshot values")
+    const parsed: unknown[] = []
+
+    for (let index = 0; index < values.length; index += 1) {
+      parsed.push(values[index])
+    }
+
+    return parsed
+  }
+}
+
+function readRegExpState(source: RegExp): {
+  readonly flags: string
+  readonly lastIndex: number
+  readonly source: string
+} {
+  try {
+    const pattern = readBuiltInAccessor(RegExp.prototype, "source", source)
+    const flags = readBuiltInAccessor(RegExp.prototype, "flags", source)
+
+    if (typeof pattern !== "string" || typeof flags !== "string") {
+      throw new TypeError("RegExp state is malformed")
+    }
+
+    return { flags, lastIndex: source.lastIndex, source: pattern }
+  } catch {
+    const data = readSnapshotData(source, "RegExp")
+
+    if (
+      typeof data.source !== "string" ||
+      typeof data.flags !== "string" ||
+      typeof data.lastIndex !== "number"
+    ) {
+      throw new TypeError("RegExp snapshot data is malformed")
+    }
+
+    return { flags: data.flags, lastIndex: data.lastIndex, source: data.source }
+  }
+}
+
+function readBinaryBufferState(
+  source: BinaryBuffer,
+  kind: BinaryBufferKind,
+): BinaryBufferSnapshotData {
+  try {
+    const prototype = kind === "ArrayBuffer" ? ArrayBuffer.prototype : SharedArrayBuffer.prototype
+    const byteLength = readBuiltInAccessor(prototype, "byteLength", source)
+    const maxByteLength = readBuiltInAccessor(prototype, "maxByteLength", source)
+    const resizable = readBuiltInAccessor(
+      prototype,
+      kind === "ArrayBuffer" ? "resizable" : "growable",
+      source,
+    )
+
+    if (
+      typeof byteLength !== "number" ||
+      typeof maxByteLength !== "number" ||
+      typeof resizable !== "boolean"
+    ) {
+      throw new TypeError(`${kind} state is malformed`)
+    }
+
+    const bytes = new Uint8Array(byteLength)
+    bytes.set(new Uint8Array(source))
+    return { bytes, kind, maxByteLength, resizable }
+  } catch {
+    return parseBinaryBufferSnapshotData(readSnapshotData(source, kind), kind)
+  }
+}
+
+function parseBinaryBufferSnapshotData(
+  data: Record<PropertyKey, unknown>,
+  kind: BinaryBufferKind,
+): BinaryBufferSnapshotData {
+  if (
+    !(data.bytes instanceof Uint8Array) ||
+    typeof data.maxByteLength !== "number" ||
+    !Number.isSafeInteger(data.maxByteLength) ||
+    data.maxByteLength < data.bytes.byteLength ||
+    typeof data.resizable !== "boolean"
+  ) {
+    throw new TypeError(`${kind} snapshot data is malformed`)
+  }
+
+  let bytes: Uint8Array
+
+  try {
+    bytes = Uint8Array.prototype.slice.call(data.bytes) as Uint8Array
+  } catch {
+    throw new TypeError(`${kind} snapshot bytes are malformed`)
+  }
+
+  return {
+    bytes,
+    kind,
+    maxByteLength: data.maxByteLength,
+    resizable: data.resizable,
+  }
+}
+
+function createBinaryBufferTarget(data: BinaryBufferSnapshotData): BinaryBuffer {
+  const BufferConstructor = data.kind === "ArrayBuffer" ? ArrayBuffer : SharedArrayBuffer
+  const args = data.resizable
+    ? [data.bytes.byteLength, { maxByteLength: data.maxByteLength }]
+    : [data.bytes.byteLength]
+  const target = Reflect.construct(BufferConstructor, args) as BinaryBuffer
+  new Uint8Array(target).set(data.bytes)
+  return target
+}
+
+function readDataViewState(source: DataView): DataViewSnapshotData {
+  try {
+    const buffer = readBuiltInAccessor(DataView.prototype, "buffer", source)
+    const byteLength = readBuiltInAccessor(DataView.prototype, "byteLength", source)
+    const byteOffset = readBuiltInAccessor(DataView.prototype, "byteOffset", source)
+
+    if (
+      !(buffer instanceof ArrayBuffer || buffer instanceof SharedArrayBuffer) ||
+      typeof byteLength !== "number" ||
+      typeof byteOffset !== "number"
+    ) {
+      throw new TypeError("DataView state is malformed")
+    }
+
+    return { buffer, byteLength, byteOffset, kind: "DataView" }
+  } catch {
+    const data = readSnapshotData(source, "DataView")
+
+    if (
+      !(data.buffer instanceof ArrayBuffer || data.buffer instanceof SharedArrayBuffer) ||
+      typeof data.byteLength !== "number" ||
+      !Number.isSafeInteger(data.byteLength) ||
+      data.byteLength < 0 ||
+      typeof data.byteOffset !== "number" ||
+      !Number.isSafeInteger(data.byteOffset) ||
+      data.byteOffset < 0
+    ) {
+      throw new TypeError("DataView snapshot data is malformed")
+    }
+
+    return {
+      buffer: data.buffer,
+      byteLength: data.byteLength,
+      byteOffset: data.byteOffset,
+      kind: "DataView",
+    }
+  }
+}
+
+function getTypedArrayName(value: object): TypedArrayName | undefined {
+  for (const name of Object.keys(TYPED_ARRAY_CONSTRUCTORS) as TypedArrayName[]) {
+    if (value instanceof TYPED_ARRAY_CONSTRUCTORS[name]) {
+      return name
+    }
+  }
+
+  return undefined
+}
+
+function readTypedArrayState(
+  source: SupportedTypedArray,
+  name: TypedArrayName,
+): TypedArraySnapshotData {
+  try {
+    const buffer = readBuiltInAccessor(TYPED_ARRAY_PROTOTYPE, "buffer", source)
+    const byteOffset = readBuiltInAccessor(TYPED_ARRAY_PROTOTYPE, "byteOffset", source)
+    const length = readBuiltInAccessor(TYPED_ARRAY_PROTOTYPE, "length", source)
+
+    if (
+      !(buffer instanceof ArrayBuffer || buffer instanceof SharedArrayBuffer) ||
+      typeof byteOffset !== "number" ||
+      typeof length !== "number"
+    ) {
+      throw new TypeError(`${name} state is malformed`)
+    }
+
+    return { buffer, byteOffset, kind: "TypedArray", length, name }
+  } catch {
+    const data = readSnapshotData(source, "TypedArray")
+
+    if (
+      data.name !== name ||
+      !(data.buffer instanceof ArrayBuffer || data.buffer instanceof SharedArrayBuffer) ||
+      typeof data.byteOffset !== "number" ||
+      !Number.isSafeInteger(data.byteOffset) ||
+      data.byteOffset < 0 ||
+      typeof data.length !== "number" ||
+      !Number.isSafeInteger(data.length) ||
+      data.length < 0
+    ) {
+      throw new TypeError(`${name} snapshot data is malformed`)
+    }
+
+    return {
+      buffer: data.buffer,
+      byteOffset: data.byteOffset,
+      kind: "TypedArray",
+      length: data.length,
+      name,
+    }
+  }
+}
+
+function createTypedArrayTarget(
+  name: TypedArrayName,
+  buffer: BinaryBuffer,
+  byteOffset: number,
+  length: number,
+): SupportedTypedArray {
+  const Constructor = TYPED_ARRAY_CONSTRUCTORS[name] as unknown as new (
+    buffer: BinaryBuffer,
+    byteOffset?: number,
+    length?: number,
+  ) => SupportedTypedArray
+  return new Constructor(buffer, byteOffset, length)
+}
+
+function cloneTypedArrayTarget(
+  source: SupportedTypedArray,
+  name: TypedArrayName,
+): SupportedTypedArray {
+  const state = readTypedArrayState(source, name)
+  const buffer = createBinaryBufferTarget(
+    readBinaryBufferState(state.buffer, getBufferKind(state.buffer)),
+  )
+  const target = createTypedArrayTarget(name, buffer, state.byteOffset, state.length)
+  Object.setPrototypeOf(target, Object.getPrototypeOf(source))
+  return target
+}
+
+function readTypedArrayNumber(
+  source: SupportedTypedArray,
+  property: "byteOffset" | "length",
+): number {
+  const value = readBuiltInAccessor(TYPED_ARRAY_PROTOTYPE, property, source)
+
+  if (typeof value !== "number") {
+    throw new TypeError(`Typed array ${property} is malformed`)
+  }
+
+  return value
+}
+
+function getBufferKind(value: BinaryBuffer): BinaryBufferKind {
+  return value instanceof ArrayBuffer ? "ArrayBuffer" : "SharedArrayBuffer"
+}
+
+function readBuiltInAccessor(prototype: object, property: PropertyKey, receiver: object): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, property)
+
+  if (!descriptor?.get) {
+    throw new TypeError(`${String(property)} accessor is unavailable`)
+  }
+
+  return Reflect.apply(descriptor.get, receiver, [])
+}
+
+function readProxyProperty(target: object, property: PropertyKey, receiver: object): unknown {
+  try {
+    return Reflect.get(target, property, receiver)
+  } catch (error) {
+    if (!(error instanceof TypeError)) {
+      throw error
+    }
+
+    return Reflect.get(target, property, target)
+  }
+}
+
+function readSnapshotData(value: object, kind: string): Record<PropertyKey, unknown> {
+  const data = Reflect.get(value, SNAPSHOT_DATA)
+
+  if (!isRecord(data) || data.kind !== kind) {
+    throw new TypeError(`${kind} snapshot data is malformed`)
+  }
+
+  return data
+}
+
+function createMapSnapshotData(target: Map<unknown, unknown>): Readonly<Record<string, unknown>> {
+  const entries: (readonly [unknown, unknown])[] = []
+
+  for (const [key, value] of Map.prototype.entries.call(target)) {
+    entries.push(Object.freeze([key, value]))
+  }
+
+  return Object.freeze({ entries: Object.freeze(entries), kind: "Map" })
+}
+
+function createSetSnapshotData(target: Set<unknown>): Readonly<Record<string, unknown>> {
+  const values: unknown[] = []
+
+  for (const value of Set.prototype.values.call(target)) {
+    values.push(value)
+  }
+
+  return Object.freeze({ kind: "Set", values: Object.freeze(values) })
+}
+
+function createRegExpSnapshotData(target: RegExp): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    flags: target.flags,
+    kind: "RegExp",
+    lastIndex: target.lastIndex,
+    source: target.source,
+  })
+}
+
+function isCanonicalArrayIndex(key: PropertyKey): boolean {
+  if (typeof key !== "string" || key.length === 0) {
+    return false
+  }
+
+  const index = Number(key)
+  return Number.isSafeInteger(index) && index >= 0 && String(index) === key
+}
+
+function isTypedArrayElementKey(key: PropertyKey): boolean {
+  return isCanonicalArrayIndex(key)
+}
+
+function readSnapshotTypeName(tag: string): string {
+  return tag.startsWith("[object ") && tag.endsWith("]") ? tag.slice(8, -1) : tag
 }
 
 function snapshotOwnProperties(
   source: object,
   target: object,
   snapshot: (value: unknown) => unknown,
+  skip: ((key: PropertyKey) => boolean) | undefined = undefined,
 ): void {
   for (const key of Reflect.ownKeys(source)) {
+    if (skip?.(key)) {
+      continue
+    }
+
     const descriptor = Object.getOwnPropertyDescriptor(source, key)
 
     if (!descriptor) {

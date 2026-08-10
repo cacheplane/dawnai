@@ -360,14 +360,279 @@ describe("scenarios", () => {
     expect(await scenario.assert?.({} as never)).toBe("asserted")
   })
 
+  test("faithfully snapshots structured-clone objects with internal slots", async () => {
+    const setEntry = { count: 1 }
+    const authoredSet = new Set<unknown>([setEntry])
+    authoredSet.add(authoredSet)
+    const authoredPattern = /dawn/gi
+    authoredPattern.lastIndex = 2
+    const authoredNumber = Object.assign(new Number(42), { metadata: { stable: true } })
+    const authoredError = new TypeError("invalid", { cause: { code: "authored" } })
+    const authoredDomException = Object.assign(new DOMException("cancelled", "AbortError"), {
+      metadata: { stable: true },
+    })
+    const authoredBlob = Object.assign(new Blob(["Dawn"], { type: "text/plain" }), {
+      metadata: { stable: true },
+    })
+    const authoredFile = Object.assign(
+      new File(["Dawn"], "dawn.txt", { lastModified: 1, type: "text/plain" }),
+      { metadata: { stable: true } },
+    )
+    const suite = scenarios("/research").scenario("internal slots", (s) =>
+      s
+        .input({
+          blob: authoredBlob,
+          domException: authoredDomException,
+          error: authoredError,
+          file: authoredFile,
+          number: authoredNumber,
+          pattern: authoredPattern,
+          set: authoredSet,
+        })
+        .expectPassed(),
+    )
+
+    setEntry.count = 2
+    authoredSet.add("later")
+    authoredPattern.lastIndex = 0
+    authoredNumber.metadata.stable = false
+    authoredDomException.metadata.stable = false
+    authoredBlob.metadata.stable = false
+    authoredFile.metadata.stable = false
+    ;(authoredError.cause as { code: string }).code = "changed"
+
+    const scenario = readScenarioSuite(suite).scenarios[0]
+    if (!scenario) throw new Error("Expected a scenario descriptor")
+    const snapshot = scenario.input as {
+      blob: Blob & { metadata: { stable: boolean } }
+      domException: DOMException & { metadata: { stable: boolean } }
+      error: TypeError & { cause: { code: string } }
+      file: File & { metadata: { stable: boolean } }
+      number: { metadata: { stable: boolean }; valueOf(): number }
+      pattern: RegExp
+      set: Set<unknown>
+    }
+
+    expect(snapshot.set).toBeInstanceOf(Set)
+    expect([...snapshot.set]).toEqual([{ count: 1 }, snapshot.set])
+    expect(snapshot.set.has("later")).toBe(false)
+    expect(() => snapshot.set.add("mutated")).toThrow(/read-only snapshot/i)
+    expect(() => Set.prototype.add.call(snapshot.set, "mutated")).toThrow()
+    expect(() =>
+      snapshot.set.forEach((_value, _key, collection) => {
+        collection.add("mutated")
+      }),
+    ).toThrow(/read-only snapshot/i)
+
+    expect(snapshot.pattern).toBeInstanceOf(RegExp)
+    expect(snapshot.pattern.source).toBe("dawn")
+    expect(snapshot.pattern.flags).toBe("gi")
+    expect(snapshot.pattern.lastIndex).toBe(2)
+    expect(snapshot.pattern.test("xxDawn")).toBe(true)
+    expect(snapshot.pattern.lastIndex).toBe(2)
+    expect(() => snapshot.pattern.compile("changed")).toThrow(/read-only snapshot/i)
+    expect(() => RegExp.prototype.compile.call(snapshot.pattern, "changed")).toThrow()
+    expect(() => {
+      snapshot.pattern.lastIndex = 0
+    }).toThrow()
+
+    expect(snapshot.number).toBeInstanceOf(Number)
+    expect(snapshot.number.valueOf()).toBe(42)
+    expect(snapshot.number.metadata).toEqual({ stable: true })
+    expect(Object.isFrozen(snapshot.number)).toBe(true)
+    expect(Object.isFrozen(snapshot.number.metadata)).toBe(true)
+
+    expect(snapshot.blob).toBeInstanceOf(Blob)
+    expect(snapshot.blob.type).toBe("text/plain")
+    expect(await snapshot.blob.text()).toBe("Dawn")
+    expect(snapshot.blob.metadata).toEqual({ stable: true })
+    expect(Object.isFrozen(snapshot.blob)).toBe(true)
+
+    expect(snapshot.file).toBeInstanceOf(File)
+    expect(snapshot.file.name).toBe("dawn.txt")
+    expect(snapshot.file.lastModified).toBe(1)
+    expect(await snapshot.file.text()).toBe("Dawn")
+    expect(snapshot.file.metadata).toEqual({ stable: true })
+    expect(Object.isFrozen(snapshot.file)).toBe(true)
+
+    expect(snapshot.domException).toBeInstanceOf(DOMException)
+    expect(snapshot.domException.name).toBe("AbortError")
+    expect(snapshot.domException.message).toBe("cancelled")
+    expect(snapshot.domException.toString()).toBe("AbortError: cancelled")
+    expect(snapshot.domException.metadata).toEqual({ stable: true })
+    expect(Object.isFrozen(snapshot.domException)).toBe(true)
+
+    expect(snapshot.error).toBeInstanceOf(TypeError)
+    expect(snapshot.error.toString()).toBe("TypeError: invalid")
+    expect(snapshot.error.cause).toEqual({ code: "authored" })
+    expect(Object.isFrozen(snapshot.error)).toBe(true)
+    expect(Object.isFrozen(snapshot.error.cause)).toBe(true)
+  })
+
+  test("faithfully snapshots binary buffers and views", () => {
+    type LinkedBuffer = ArrayBuffer & {
+      readonly maxByteLength: number
+      readonly resizable: boolean
+      resize(byteLength: number): void
+      view?: LinkedView
+    }
+    type LinkedView = DataView & { owner?: LinkedBuffer }
+    type GrowableSharedBuffer = SharedArrayBuffer & {
+      grow(byteLength: number): void
+      readonly growable: boolean
+      readonly maxByteLength: number
+    }
+
+    const authoredBuffer = Reflect.construct(ArrayBuffer, [
+      6,
+      { maxByteLength: 10 },
+    ]) as LinkedBuffer
+    new Uint8Array(authoredBuffer).set([1, 2, 3, 4, 5, 6])
+    const authoredView = new DataView(authoredBuffer, 1, 4) as LinkedView
+    authoredBuffer.view = authoredView
+    authoredView.owner = authoredBuffer
+    const authoredTyped = new Uint16Array([10, 20])
+    const authoredBigInts = new BigInt64Array([30n, 40n])
+    const authoredShared = Reflect.construct(SharedArrayBuffer, [
+      4,
+      { maxByteLength: 8 },
+    ]) as GrowableSharedBuffer
+    new Uint8Array(authoredShared).set([7, 8, 9, 10])
+    const suite = scenarios("/research").scenario("binary", (s) =>
+      s
+        .input({
+          bigInts: authoredBigInts,
+          shared: authoredShared,
+          typed: authoredTyped,
+          view: authoredView,
+          buffer: authoredBuffer,
+        })
+        .expectPassed(),
+    )
+
+    authoredBuffer.resize(8)
+    new Uint8Array(authoredBuffer).fill(99)
+    authoredTyped.fill(99)
+    authoredBigInts.fill(99n)
+    authoredShared.grow(8)
+    new Uint8Array(authoredShared).fill(99)
+
+    const scenario = readScenarioSuite(suite).scenarios[0]
+    if (!scenario) throw new Error("Expected a scenario descriptor")
+    const snapshot = scenario.input as {
+      bigInts: BigInt64Array
+      buffer: LinkedBuffer
+      shared: GrowableSharedBuffer
+      typed: Uint16Array
+      view: LinkedView
+    }
+
+    expect(snapshot.buffer).toBeInstanceOf(ArrayBuffer)
+    expect(snapshot.buffer.byteLength).toBe(6)
+    expect(snapshot.buffer.maxByteLength).toBe(10)
+    expect(snapshot.buffer.resizable).toBe(true)
+    expect([...new Uint8Array(snapshot.buffer.slice(0))]).toEqual([1, 2, 3, 4, 5, 6])
+    expect(() => snapshot.buffer.resize(8)).toThrow(/read-only snapshot/i)
+    expect(() =>
+      Reflect.apply(Reflect.get(ArrayBuffer.prototype, "resize"), snapshot.buffer, [8]),
+    ).toThrow()
+    const attemptedBufferView = new Uint8Array(snapshot.buffer)
+    attemptedBufferView[0] = 0
+    expect([...new Uint8Array(snapshot.buffer.slice(0))]).toEqual([1, 2, 3, 4, 5, 6])
+
+    expect(snapshot.shared).toBeInstanceOf(SharedArrayBuffer)
+    expect(snapshot.shared.byteLength).toBe(4)
+    expect(snapshot.shared.maxByteLength).toBe(8)
+    expect(snapshot.shared.growable).toBe(true)
+    expect([...new Uint8Array(snapshot.shared.slice(0))]).toEqual([7, 8, 9, 10])
+    expect(() => snapshot.shared.grow(8)).toThrow(/read-only snapshot/i)
+    expect(() =>
+      Reflect.apply(Reflect.get(SharedArrayBuffer.prototype, "grow"), snapshot.shared, [8]),
+    ).toThrow()
+    const attemptedSharedView = new Uint8Array(snapshot.shared)
+    attemptedSharedView[0] = 0
+    expect([...new Uint8Array(snapshot.shared.slice(0))]).toEqual([7, 8, 9, 10])
+
+    expect(snapshot.view).toBeInstanceOf(DataView)
+    expect(snapshot.view.byteOffset).toBe(1)
+    expect(snapshot.view.byteLength).toBe(4)
+    expect(snapshot.view.getUint16(0)).toBe(0x0203)
+    expect(snapshot.view.buffer).toBe(snapshot.buffer)
+    expect(snapshot.view.owner).toBe(snapshot.buffer)
+    expect(snapshot.buffer.view).toBe(snapshot.view)
+    expect(() => snapshot.view.setUint8(0, 0)).toThrow(/read-only snapshot/i)
+    expect(() => DataView.prototype.setUint8.call(snapshot.view, 0, 0)).toThrow()
+    expect([...new Uint8Array(snapshot.view.buffer.slice(0))]).toEqual([1, 2, 3, 4, 5, 6])
+
+    expect(snapshot.typed).toBeInstanceOf(Uint16Array)
+    expect(Array.from(snapshot.typed)).toEqual([10, 20])
+    expect(snapshot.typed.join(":")).toBe("10:20")
+    expect(() => {
+      snapshot.typed[0] = 0
+    }).toThrow(/read-only snapshot/i)
+    expect(() => snapshot.typed.fill(0)).toThrow(/read-only snapshot/i)
+    expect(() => Uint16Array.prototype.set.call(snapshot.typed, [0])).toThrow()
+    const detachedSubarray = snapshot.typed.subarray(0, 1)
+    detachedSubarray[0] = 0
+    expect(Array.from(snapshot.typed)).toEqual([10, 20])
+
+    expect(snapshot.bigInts).toBeInstanceOf(BigInt64Array)
+    expect(Array.from(snapshot.bigInts)).toEqual([30n, 40n])
+    expect(() => snapshot.bigInts.reverse()).toThrow(/read-only snapshot/i)
+  })
+
+  test("rejects unsupported internal-slot objects instead of forging instances", () => {
+    const suite = scenarios("/research").scenario("valid", (s) => s.input({}).expectPassed())
+    const [brand] = Object.getOwnPropertySymbols(suite)
+    if (!brand) throw new Error("Expected a scenario suite brand")
+
+    const values = [
+      { label: "Promise", value: Promise.resolve("value") },
+      { label: "WeakMap", value: new WeakMap<object, unknown>() },
+      { label: "URL", value: new URL("https://example.com") },
+    ]
+
+    for (const { label, value } of values) {
+      const forged = {
+        [brand]: {
+          route: "/research",
+          scenarios: [
+            {
+              execution: "in-process",
+              expectedStatus: "passed",
+              input: value,
+              name: label,
+              toolCallExpectations: [],
+              toolMocks: [],
+            },
+          ],
+        },
+      }
+
+      expect(isScenarioSuite(forged), label).toBe(false)
+      expect(() => readScenarioSuite(forged), label).toThrow(
+        new RegExp(`malformed scenario suite: .*${label}.*not supported`, "i"),
+      )
+    }
+  })
+
   test("reads immutable snapshots across SDK module instances", async () => {
     const authoredDate = new Date("2026-08-09T12:00:00.000Z")
     const authoredMap = new Map([["entry", { count: 1 }]])
+    const authoredSet = new Set(["entry"])
+    const authoredPattern = /dawn/gi
+    const authoredTyped = new Uint8Array([1, 2, 3])
     const mock = async ({ query }: { readonly query: string }) => ({ results: [query] })
     const assertion = () => "asserted"
     const suite = scenarios("/research").scenario("cross-copy", (s) =>
       s
-        .input({ date: authoredDate, map: authoredMap })
+        .input({
+          date: authoredDate,
+          map: authoredMap,
+          pattern: authoredPattern,
+          set: authoredSet,
+          typed: authoredTyped,
+        })
         .mockTool("searchWeb", mock)
         .expectPassed()
         .assert(assertion),
@@ -375,6 +640,13 @@ describe("scenarios", () => {
 
     authoredDate.setUTCFullYear(2030)
     authoredMap.set("later", { count: 2 })
+    authoredSet.add("later")
+    authoredPattern.compile("changed")
+    authoredTyped.fill(9)
+
+    expect(
+      Reflect.get(globalThis, Symbol.for("dawn.scenario-snapshot-proxy-targets")),
+    ).toBeUndefined()
 
     vi.resetModules()
     const secondSdk = await import("../src/testing/index.js")
@@ -385,15 +657,23 @@ describe("scenarios", () => {
     const snapshot = scenario.input as {
       date: Date
       map: Map<string, { count: number }>
+      pattern: RegExp
+      set: Set<string>
+      typed: Uint8Array
     }
 
     expect(snapshot.date.toISOString()).toBe("2026-08-09T12:00:00.000Z")
     expect(snapshot.map.get("entry")).toEqual({ count: 1 })
     expect(snapshot.map.has("later")).toBe(false)
+    expect([...snapshot.set]).toEqual(["entry"])
+    expect(snapshot.pattern.source).toBe("dawn")
+    expect(Array.from(snapshot.typed)).toEqual([1, 2, 3])
     expect(() => snapshot.date.setTime(0)).toThrow(/read-only snapshot/i)
     expect(() => Date.prototype.setTime.call(snapshot.date, 0)).toThrow()
     expect(() => snapshot.map.set("mutated", { count: 3 })).toThrow(/read-only snapshot/i)
     expect(() => Map.prototype.set.call(snapshot.map, "mutated", { count: 3 })).toThrow()
+    expect(() => snapshot.set.add("mutated")).toThrow(/read-only snapshot/i)
+    expect(() => snapshot.typed.fill(0)).toThrow(/read-only snapshot/i)
 
     const toolMock = scenario.toolMocks[0]
     if (!toolMock) throw new Error("Expected a tool mock")
