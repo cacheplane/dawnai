@@ -1,10 +1,13 @@
 import assert from "node:assert/strict"
-import { readdir, readFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { parse } from "yaml"
+
+import { readBoundedFixture } from "../fixture-io.mjs"
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url))
 const WORKFLOWS = path.join(ROOT, ".github/workflows")
@@ -20,7 +23,8 @@ const LEGACY_SAFE_ENTRYPOINTS = new Set([
   "run:pnpm install --frozen-lockfile",
   "run:pnpm ci:validate",
   `run:DAWN_PUBLISHED_VERSION="$(node -p "require('./packages/core/package.json').version")"
-printf 'DAWN_PUBLISHED_VERSION=%s\\n' "$DAWN_PUBLISHED_VERSION" >> "$GITHUB_ENV"`,
+printf 'DAWN_PUBLISHED_VERSION=%s\\n' "$DAWN_PUBLISHED_VERSION" >> "$GITHUB_ENV"
+`,
   'run:pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000',
   'run:pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling',
   'run:pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000',
@@ -123,17 +127,24 @@ test("release shadow contains no publisher, OIDC, artifact upload, or external w
 })
 
 test("legacy release remains the sole npm publisher without PR 2 topology constraints", async () => {
-  const allowlist = JSON.parse(await readFile(ENTRYPOINT_ALLOWLIST_PATH, "utf8"))
+  const allowlist = JSON.parse(await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }))
   const publicationFiles = Object.entries(allowlist.workflows)
-    .filter(([, entries]) => entries.some(({ classification }) => classification === "publication"))
+    .filter(([, workflow]) =>
+      workflow.jobs.some((job) =>
+        job.steps.some(({ classification }) => classification === "publication"),
+      ),
+    )
     .map(([file]) => file)
     .sort()
 
   assert.deepEqual(publicationFiles, ["release.yml"])
   assert.deepEqual(
-    allowlist.workflows["release.yml"]
+    allowlist.workflows["release.yml"].jobs
+      .flatMap((job) => job.steps)
       .filter(({ classification }) => classification === "publication")
-      .map(({ kind, value }) => `${kind}:${value}`),
+      .map(({ descriptor }) =>
+        descriptor.uses === undefined ? `run:${descriptor.run}` : `step-uses:${descriptor.uses}`,
+      ),
     [
       "step-uses:changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
       "step-uses:actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
@@ -150,16 +161,23 @@ test("legacy release remains the sole npm publisher without PR 2 topology constr
 
 test("workflow entrypoints fail closed unless their exact normalized form is explicitly audited", () => {
   const allowlist = {
-    "safe.yml": [
-      {
-        classification: "audited",
-        job: "safe",
-        kind: "run",
-        step: "Audited command",
-        stepIndex: 0,
-        value: "pnpm lint",
-      },
-    ],
+    "safe.yml": {
+      classification: "safe",
+      descriptor: {},
+      jobs: [
+        {
+          classification: "safe",
+          id: "safe",
+          descriptor: {},
+          steps: [
+            {
+              classification: "safe",
+              descriptor: { name: "Audited command", run: "pnpm lint" },
+            },
+          ],
+        },
+      ],
+    },
   }
   assert.doesNotThrow(() =>
     auditWorkflowEntrypoints(
@@ -235,12 +253,193 @@ test("workflow entrypoints fail closed unless their exact normalized form is exp
 })
 
 test("every workflow executable entrypoint matches the readable audited allowlist", async () => {
-  const allowlist = JSON.parse(await readFile(ENTRYPOINT_ALLOWLIST_PATH, "utf8"))
+  const allowlist = JSON.parse(await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }))
   const sources = await readWorkflowSources(WORKFLOWS)
 
   assert.deepEqual(Object.keys(allowlist).sort(), ["schemaVersion", "workflows"])
-  assert.equal(allowlist.schemaVersion, 1)
+  assert.equal(allowlist.schemaVersion, 2)
   assert.doesNotThrow(() => auditWorkflowEntrypoints(sources, allowlist.workflows))
+})
+
+test("workflow audit binds complete execution descriptors and byte-exact run strings", async (t) => {
+  const allowlist = JSON.parse(await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }))
+  const sources = await readWorkflowSources(WORKFLOWS)
+  const cases = [
+    [
+      "workflow permissions",
+      "release-shadow.yml",
+      (source) => source.replace("actions: read", "actions: write"),
+    ],
+    [
+      "job runner",
+      "release-shadow.yml",
+      (source) => source.replace("ubuntu-latest", "self-hosted"),
+    ],
+    [
+      "checkout inputs",
+      "release-shadow.yml",
+      (source) => source.replace("fetch-depth: 0", "fetch-depth: 1"),
+    ],
+    [
+      "action inputs",
+      "release-shadow.yml",
+      (source) => source.replace("version: 10.33.0", "version: 10.32.0"),
+    ],
+    [
+      "action environment",
+      "release-shadow.yml",
+      (source) =>
+        source.replace(
+          "      - name: Setup pnpm\n",
+          "      - name: Setup pnpm\n        env:\n          BASH_ENV: scripts/bypass.sh\n",
+        ),
+    ],
+    [
+      "action condition",
+      "release-shadow.yml",
+      (source) =>
+        source.replace(
+          "      - name: Setup pnpm\n",
+          "      - name: Setup pnpm\n        if: always()\n",
+        ),
+    ],
+    [
+      "unknown step key",
+      "release-shadow.yml",
+      (source) =>
+        source.replace(
+          "      - name: Setup pnpm\n",
+          "      - name: Setup pnpm\n        unexpected: true\n",
+        ),
+    ],
+  ]
+  for (const [name, file, mutate] of cases) {
+    await t.test(name, () => {
+      assert.throws(
+        () =>
+          auditWorkflowEntrypoints(
+            { ...sources, [file]: mutate(sources[file]) },
+            allowlist.workflows,
+          ),
+        /not explicitly audited/u,
+      )
+    })
+  }
+
+  const backslash = "\\"
+  const line = `DAWN_TEST_WORKERD=1 pnpm --filter @dawn-ai/cli test workerd-lane ${backslash}\n`
+  assert.ok(sources["ci.yml"].includes(line))
+  assert.throws(
+    () =>
+      auditWorkflowEntrypoints(
+        {
+          ...sources,
+          "ci.yml": sources["ci.yml"].replace(
+            line,
+            line.replace(`${backslash}\n`, `${backslash}  \n`),
+          ),
+        },
+        allowlist.workflows,
+      ),
+    /not explicitly audited/u,
+  )
+})
+
+test("workflow classifications are explicit safe or release-only publication", async () => {
+  const allowlist = JSON.parse(await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }))
+
+  assert.doesNotMatch(JSON.stringify(allowlist), /"audited"/u)
+})
+
+test("workflow parsing rejects duplicate keys, aliases, accessors, sparse data, and unknown fields", () => {
+  const descriptor = {
+    "safe.yml": {
+      classification: "safe",
+      descriptor: {},
+      jobs: [
+        {
+          classification: "safe",
+          id: "safe",
+          descriptor: {},
+          steps: [{ classification: "safe", descriptor: { name: "Safe", run: "pnpm lint" } }],
+        },
+      ],
+    },
+  }
+  for (const source of [
+    "jobs:\n  safe:\n    steps:\n      - name: Safe\n        run: pnpm lint\n        run: pnpm test\n",
+    "shared: &shared\n  run: pnpm lint\njobs:\n  safe:\n    steps:\n      - name: Safe\n        <<: *shared\n",
+    "unexpected: true\njobs:\n  safe:\n    steps:\n      - name: Safe\n        run: pnpm lint\n",
+    "jobs:\n  safe:\n    unexpected: true\n    steps:\n      - name: Safe\n        run: pnpm lint\n",
+  ]) {
+    assert.throws(() => auditWorkflowEntrypoints({ "safe.yml": source }, descriptor))
+  }
+
+  const accessorSources = {}
+  Object.defineProperty(accessorSources, "safe.yml", {
+    enumerable: true,
+    get() {
+      return "jobs: {}\n"
+    },
+  })
+  assert.throws(() => auditWorkflowEntrypoints(accessorSources, descriptor))
+
+  const sparse = structuredClone(descriptor)
+  sparse["safe.yml"].jobs.length = 2
+  assert.throws(() => auditWorkflowEntrypoints({ "safe.yml": "jobs: {}\n" }, sparse))
+  assert.equal(Object.getPrototypeOf({}), Object.prototype)
+})
+
+test("workflow reads are bounded, contained, regular, and no-follow", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-workflow-read-"))
+  const outside = await mkdtemp(path.join(os.tmpdir(), "dawn-workflow-outside-"))
+  t.after(() =>
+    Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(outside, { recursive: true, force: true }),
+    ]),
+  )
+  await writeFile(path.join(outside, "outside.yml"), "jobs: {}\n")
+  await symlink(path.join(outside, "outside.yml"), path.join(root, "unsafe.yml"))
+  await assert.rejects(() => readWorkflowSources(root), /fixture file/u)
+
+  await rm(path.join(root, "unsafe.yml"))
+  await mkdir(path.join(root, "directory.yaml"))
+  await assert.rejects(() => readWorkflowSources(root), /fixture file/u)
+
+  await rm(path.join(root, "directory.yaml"), { recursive: true })
+  await writeFile(path.join(root, "oversize.yml"), "x".repeat(1024 * 1024 + 1))
+  await assert.rejects(() => readWorkflowSources(root), /fixture file/u)
+})
+
+test("legacy publication indirection is bound to exact root scripts and regular files", async (t) => {
+  await assertReleaseIndirection(ROOT)
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-release-indirection-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(path.join(root, "scripts"))
+  await writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ scripts: { "release:publish": "node scripts/other.mjs" } }),
+  )
+  for (const file of [
+    "release-publish.mjs",
+    "upload-release-assets.mjs",
+    "backfill-release-tags.mjs",
+  ])
+    await writeFile(path.join(root, "scripts", file), "export {}\n")
+  await assert.rejects(() => assertReleaseIndirection(root), /not explicitly audited/u)
+
+  await writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ scripts: { "release:publish": "node scripts/release-publish.mjs" } }),
+  )
+  await rm(path.join(root, "scripts", "upload-release-assets.mjs"))
+  await symlink(
+    path.join(root, "scripts", "release-publish.mjs"),
+    path.join(root, "scripts", "upload-release-assets.mjs"),
+  )
+  await assert.rejects(() => assertReleaseIndirection(root), /not explicitly audited/u)
 })
 
 test("root scripts expose shadow and preflight without adding the slow workflow test to fast scripts", async () => {
@@ -268,93 +467,214 @@ async function readShadowSource() {
 }
 
 async function readWorkflowSources(directory) {
-  const sources = {}
+  const sources = Object.create(null)
   for (const file of (await readdir(directory)).filter((name) => /\.ya?ml$/u.test(name)).sort()) {
-    sources[file] = await readFile(path.join(directory, file), "utf8")
+    Object.defineProperty(sources, file, {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: await readBoundedFixture(path.join(directory, file), {
+        root: directory,
+        maxBytes: 1024 * 1024,
+      }),
+    })
   }
   return sources
 }
 
+async function assertReleaseIndirection(root) {
+  try {
+    const packageJson = JSON.parse(
+      await readBoundedFixture(path.join(root, "package.json"), {
+        root,
+        maxBytes: 1024 * 1024,
+      }),
+    )
+    if (
+      !isRecord(packageJson) ||
+      !isRecord(packageJson.scripts) ||
+      packageJson.scripts["release:publish"] !== "node scripts/release-publish.mjs"
+    ) {
+      throw unauditedEntrypoint()
+    }
+    for (const file of [
+      "scripts/release-publish.mjs",
+      "scripts/upload-release-assets.mjs",
+      "scripts/backfill-release-tags.mjs",
+    ]) {
+      await readBoundedFixture(path.join(root, file), { root, maxBytes: 1024 * 1024 })
+    }
+  } catch {
+    throw unauditedEntrypoint()
+  }
+}
+
 function auditWorkflowEntrypoints(sources, allowlist) {
-  if (!isRecord(sources) || !isRecord(allowlist)) throw unauditedEntrypoint()
-  const files = Object.keys(sources).sort()
-  const allowedFiles = Object.keys(allowlist).sort()
+  const sourceSnapshot = snapshotDescriptor(sources)
+  const allowlistSnapshot = snapshotDescriptor(allowlist)
+  if (!isRecord(sourceSnapshot) || !isRecord(allowlistSnapshot)) throw unauditedEntrypoint()
+  const files = Object.keys(sourceSnapshot).sort()
+  const allowedFiles = Object.keys(allowlistSnapshot).sort()
   if (!sameStrings(files, allowedFiles)) throw unauditedEntrypoint()
   for (const file of files) {
     let workflow
     try {
-      workflow = parse(sources[file], { maxAliasCount: 0, uniqueKeys: true })
+      if (typeof sourceSnapshot[file] !== "string") throw new TypeError("invalid source")
+      workflow = parse(sourceSnapshot[file], { maxAliasCount: 0, uniqueKeys: true })
     } catch {
       throw unauditedEntrypoint()
     }
-    const actual = workflowEntrypoints(workflow)
-    const expected = allowlist[file]
-    if (!Array.isArray(expected) || actual.length !== expected.length) throw unauditedEntrypoint()
-    for (let index = 0; index < actual.length; index += 1) {
-      const allowed = expected[index]
-      if (
-        !isRecord(allowed) ||
-        !["audited", "publication", "safe"].includes(allowed.classification) ||
-        JSON.stringify(actual[index]) !==
-          JSON.stringify({
-            job: allowed.job,
-            stepIndex: allowed.stepIndex,
-            step: allowed.step,
-            kind: allowed.kind,
-            value: allowed.value,
-          })
-      ) {
-        throw unauditedEntrypoint()
-      }
-      const classification =
-        file === "release.yml" ? classifyLegacyEntrypoint(actual[index]) : "audited"
-      if (allowed.classification !== classification) throw unauditedEntrypoint()
-    }
+    const actual = workflowDescriptor(workflow, file)
+    const expected = allowlistSnapshot[file]
+    if (canonicalJson(actual) !== canonicalJson(expected)) throw unauditedEntrypoint()
   }
 }
 
-function workflowEntrypoints(workflow) {
-  if (!isRecord(workflow?.jobs)) throw unauditedEntrypoint()
-  const entries = []
-  for (const [jobName, job] of Object.entries(workflow.jobs)) {
-    if (!isRecord(job)) throw unauditedEntrypoint()
-    if (typeof job.uses === "string") {
-      entries.push({ job: jobName, stepIndex: null, step: null, kind: "job-uses", value: job.uses })
-    } else if (job.uses !== undefined) {
-      throw unauditedEntrypoint()
-    }
-    if (job.steps !== undefined && !Array.isArray(job.steps)) throw unauditedEntrypoint()
-    for (const [stepIndex, step] of (job.steps ?? []).entries()) {
-      if (!isRecord(step)) throw unauditedEntrypoint()
-      const hasRun = typeof step.run === "string"
-      const hasUses = typeof step.uses === "string"
-      if (hasRun === hasUses) throw unauditedEntrypoint()
-      entries.push({
-        job: jobName,
-        stepIndex,
-        step: typeof step.name === "string" ? step.name : null,
-        kind: hasRun ? "run" : "step-uses",
-        value: hasRun ? normalizeRunCommand(step.run) : step.uses,
+const WORKFLOW_KEYS = new Set([
+  "concurrency",
+  "defaults",
+  "env",
+  "jobs",
+  "name",
+  "on",
+  "permissions",
+  "run-name",
+])
+const JOB_KEYS = new Set([
+  "concurrency",
+  "container",
+  "continue-on-error",
+  "defaults",
+  "env",
+  "environment",
+  "if",
+  "name",
+  "needs",
+  "permissions",
+  "runs-on",
+  "secrets",
+  "services",
+  "steps",
+  "strategy",
+  "timeout-minutes",
+  "uses",
+  "with",
+])
+const STEP_KEYS = new Set([
+  "continue-on-error",
+  "env",
+  "id",
+  "if",
+  "name",
+  "run",
+  "shell",
+  "timeout-minutes",
+  "uses",
+  "with",
+  "working-directory",
+])
+
+function workflowDescriptor(workflow, file) {
+  assertAllowedRecord(workflow, WORKFLOW_KEYS)
+  if (!isRecord(workflow.jobs)) throw unauditedEntrypoint()
+  const descriptor = omitField(workflow, "jobs")
+  const jobs = Object.entries(workflow.jobs)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, job]) => {
+      assertAllowedRecord(job, JOB_KEYS)
+      const hasSteps = Array.isArray(job.steps)
+      const hasUses = typeof job.uses === "string"
+      if (hasSteps === hasUses) throw unauditedEntrypoint()
+      const steps = hasSteps
+        ? job.steps.map((step) => {
+            assertAllowedRecord(step, STEP_KEYS)
+            const hasRun = typeof step.run === "string"
+            const hasStepUses = typeof step.uses === "string"
+            if (hasRun === hasStepUses) throw unauditedEntrypoint()
+            return {
+              classification: classifyStep(file, step),
+              descriptor: snapshotDescriptor(step),
+            }
+          })
+        : []
+      return {
+        classification: "safe",
+        id,
+        descriptor: omitField(job, "steps"),
+        steps,
+      }
+    })
+  return { classification: "safe", descriptor, jobs }
+}
+
+function classifyStep(file, step) {
+  const kind = typeof step.run === "string" ? "run" : "step-uses"
+  const value = step.run ?? step.uses
+  const key = `${kind}:${value}`
+  if (LEGACY_PUBLICATION_ENTRYPOINTS.has(key)) {
+    if (file !== "release.yml") throw unauditedEntrypoint()
+    return "publication"
+  }
+  if (file === "release.yml" && !LEGACY_SAFE_ENTRYPOINTS.has(key)) throw unauditedEntrypoint()
+  return "safe"
+}
+
+function omitField(value, omitted) {
+  const result = Object.create(null)
+  for (const key of Object.keys(value).sort()) {
+    if (key === omitted) continue
+    Object.defineProperty(result, key, {
+      enumerable: true,
+      value: snapshotDescriptor(value[key]),
+    })
+  }
+  return result
+}
+
+function assertAllowedRecord(value, allowed) {
+  if (!isRecord(value)) throw unauditedEntrypoint()
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !allowed.has(key)) throw unauditedEntrypoint()
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw unauditedEntrypoint()
+  }
+}
+
+function snapshotDescriptor(value, ancestors = new Set()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value !== "object" || ancestors.has(value)) throw unauditedEntrypoint()
+  ancestors.add(value)
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) throw unauditedEntrypoint()
+      if (Reflect.ownKeys(value).length !== value.length + 1) throw unauditedEntrypoint()
+      return value.map((_entry, index) => {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+        if (!descriptor?.enumerable || !("value" in descriptor)) throw unauditedEntrypoint()
+        return snapshotDescriptor(descriptor.value, ancestors)
       })
     }
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) throw unauditedEntrypoint()
+    const result = Object.create(null)
+    for (const key of Reflect.ownKeys(value).sort()) {
+      if (typeof key !== "string") throw unauditedEntrypoint()
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor?.enumerable || !("value" in descriptor)) throw unauditedEntrypoint()
+      Object.defineProperty(result, key, {
+        enumerable: true,
+        value: snapshotDescriptor(descriptor.value, ancestors),
+      })
+    }
+    return result
+  } finally {
+    ancestors.delete(value)
   }
-  return entries
 }
 
-function normalizeRunCommand(value) {
-  return value
-    .replace(/\r\n?/gu, "\n")
-    .split("\n")
-    .map((line) => line.replace(/[\t ]+$/gu, ""))
-    .join("\n")
-    .trim()
-}
-
-function classifyLegacyEntrypoint(entry) {
-  const key = `${entry.kind}:${entry.value}`
-  if (LEGACY_PUBLICATION_ENTRYPOINTS.has(key)) return "publication"
-  if (LEGACY_SAFE_ENTRYPOINTS.has(key)) return "safe"
-  throw unauditedEntrypoint()
+function canonicalJson(value) {
+  return JSON.stringify(snapshotDescriptor(value))
 }
 
 function sameStrings(left, right) {

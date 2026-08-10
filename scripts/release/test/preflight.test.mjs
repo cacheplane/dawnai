@@ -19,6 +19,7 @@ name: Release
 on:
   push:
     branches: [main]
+concurrency: \${{ github.workflow }}-\${{ github.ref }}
 permissions:
   contents: read
 jobs:
@@ -50,10 +51,56 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Validate Release Candidate
         run: pnpm ci:validate
+      - name: Setup Node.js for publishing
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.17.0
+          registry-url: https://registry.npmjs.org
       - name: Create Release Pull Request or Publish
+        id: changesets
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d
         with:
+          version: pnpm run version
           publish: pnpm release:publish
+          title: Version Packages
+          commit: Version Packages
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: \${{ secrets.RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Attest release tarballs
+        id: attest
+        if: \${{ hashFiles('release-artifacts/*.tgz') != '' }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-path: "release-artifacts/*.tgz"
+      - name: Upload signed release assets
+        if: \${{ steps.attest.outputs.bundle-path != '' }}
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          ATTESTATION_BUNDLE: \${{ steps.attest.outputs.bundle-path }}
+        run: node scripts/upload-release-assets.mjs
+      - name: Backfill tags/releases for bootstrapped packages
+        if: \${{ steps.changesets.outputs.published == 'true' }}
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/backfill-release-tags.mjs
+      - name: Read published version
+        if: \${{ steps.changesets.outputs.published == 'true' }}
+        run: |
+          DAWN_PUBLISHED_VERSION="$(node -p "require('./packages/core/package.json').version")"
+          printf 'DAWN_PUBLISHED_VERSION=%s\\n' "$DAWN_PUBLISHED_VERSION" >> "$GITHUB_ENV"
+      - name: Verify published TypeScript tooling
+        if: \${{ steps.changesets.outputs.published == 'true' }}
+        run: pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000
+      - name: Smoke published TypeScript tooling
+        if: \${{ steps.changesets.outputs.published == 'true' }}
+        run: pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling
+      - name: Verify published Docker sandbox
+        if: \${{ steps.changesets.outputs.published == 'true' }}
+        run: pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000
+      - name: Smoke published Docker sandbox PID recovery
+        if: \${{ steps.changesets.outputs.published == 'true' }}
+        run: pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox
 `
 
 test("preflight exposes the collector and deterministic report renderer", async () => {
@@ -288,6 +335,38 @@ test("preflight accepts only one unconditional exact validate command", async (t
       WORKFLOW_SOURCE.replace(
         "          fetch-depth: 0\n",
         "          fetch-depth: 0\n          repository: attacker/lookalike\n",
+      ),
+    ],
+    [
+      "renamed validation",
+      WORKFLOW_SOURCE.replace("name: Validate Release Candidate", "name: Validation Lookalike"),
+    ],
+    [
+      "validation extra execution field",
+      WORKFLOW_SOURCE.replace(
+        "      - name: Validate Release Candidate\n        run: pnpm ci:validate\n",
+        "      - name: Validate Release Candidate\n        id: bypassable\n        run: pnpm ci:validate\n",
+      ),
+    ],
+    [
+      "extra validation",
+      WORKFLOW_SOURCE.replace(
+        "      - name: Setup Node.js for publishing\n",
+        "      - name: Extra Validation\n        run: pnpm ci:validate\n      - name: Setup Node.js for publishing\n",
+      ),
+    ],
+    ...["always()", "failure()", "cancelled()"].map((condition) => [
+      `publication condition ${condition}`,
+      WORKFLOW_SOURCE.replace(
+        "      - name: Create Release Pull Request or Publish\n",
+        `      - name: Create Release Pull Request or Publish\n        if: ${condition}\n`,
+      ),
+    ]),
+    [
+      "postvalidation condition bypass",
+      WORKFLOW_SOURCE.replace(
+        `if: \${{ steps.attest.outputs.bundle-path != '' }}`,
+        `if: \${{ always() && steps.attest.outputs.bundle-path != '' }}`,
       ),
     ],
     [

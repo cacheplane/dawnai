@@ -22,6 +22,115 @@ const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const WORKFLOW_PATH = ".github/workflows/release.yml"
 const DEFAULT_REPOSITORY = "cacheplane/dawnai"
 const MAX_WORKFLOW_BYTES = 1024 * 1024
+const RELEASE_SUCCESS_CONDITION = `\${{ steps.changesets.outputs.published == 'true' }}`
+const EXPECTED_RELEASE_WORKFLOW = {
+  name: "Release",
+  on: { push: { branches: ["main"] } },
+  concurrency: `\${{ github.workflow }}-\${{ github.ref }}`,
+  permissions: { contents: "read" },
+  jobs: {
+    release: {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 30,
+      permissions: {
+        contents: "write",
+        "pull-requests": "write",
+        "id-token": "write",
+        attestations: "write",
+      },
+      env: { NPM_CONFIG_PROVENANCE: "true" },
+      steps: [
+        {
+          name: "Checkout",
+          uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+          with: { "fetch-depth": 0 },
+        },
+        {
+          name: "Setup pnpm",
+          uses: "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+          with: { version: "10.33.0" },
+        },
+        {
+          name: "Setup Node.js",
+          uses: "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+          with: { "node-version": "24.17.0", cache: "pnpm" },
+        },
+        { name: "Install", run: "pnpm install --frozen-lockfile" },
+        { name: "Validate Release Candidate", run: "pnpm ci:validate" },
+        {
+          name: "Setup Node.js for publishing",
+          uses: "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+          with: {
+            "node-version": "24.17.0",
+            "registry-url": "https://registry.npmjs.org",
+          },
+        },
+        {
+          name: "Create Release Pull Request or Publish",
+          id: "changesets",
+          uses: "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
+          with: {
+            version: "pnpm run version",
+            publish: "pnpm release:publish",
+            title: "Version Packages",
+            commit: "Version Packages",
+            createGithubReleases: true,
+          },
+          env: {
+            GITHUB_TOKEN: `\${{ secrets.RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}`,
+          },
+        },
+        {
+          name: "Attest release tarballs",
+          id: "attest",
+          if: `\${{ hashFiles('release-artifacts/*.tgz') != '' }}`,
+          uses: "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
+          with: { "subject-path": "release-artifacts/*.tgz" },
+        },
+        {
+          name: "Upload signed release assets",
+          if: `\${{ steps.attest.outputs.bundle-path != '' }}`,
+          env: {
+            GH_TOKEN: `\${{ secrets.GITHUB_TOKEN }}`,
+            ATTESTATION_BUNDLE: `\${{ steps.attest.outputs.bundle-path }}`,
+          },
+          run: "node scripts/upload-release-assets.mjs",
+        },
+        {
+          name: "Backfill tags/releases for bootstrapped packages",
+          if: RELEASE_SUCCESS_CONDITION,
+          env: { GH_TOKEN: `\${{ secrets.GITHUB_TOKEN }}` },
+          run: "node scripts/backfill-release-tags.mjs",
+        },
+        {
+          name: "Read published version",
+          if: RELEASE_SUCCESS_CONDITION,
+          run: 'DAWN_PUBLISHED_VERSION="$(node -p "require(\'./packages/core/package.json\').version")"\nprintf \'DAWN_PUBLISHED_VERSION=%s\\n\' "$DAWN_PUBLISHED_VERSION" >> "$GITHUB_ENV"\n',
+        },
+        {
+          name: "Verify published TypeScript tooling",
+          if: RELEASE_SUCCESS_CONDITION,
+          run: 'pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling --wait-attempts 18 --wait-delay-ms 10000',
+        },
+        {
+          name: "Smoke published TypeScript tooling",
+          if: RELEASE_SUCCESS_CONDITION,
+          run: 'pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set typescript-tooling',
+        },
+        {
+          name: "Verify published Docker sandbox",
+          if: RELEASE_SUCCESS_CONDITION,
+          run: 'pnpm published:verify -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox --wait-attempts 18 --wait-delay-ms 10000',
+        },
+        {
+          name: "Smoke published Docker sandbox PID recovery",
+          if: RELEASE_SUCCESS_CONDITION,
+          run: 'pnpm published:smoke -- --version "$DAWN_PUBLISHED_VERSION" --package-set docker-sandbox',
+        },
+      ],
+    },
+  },
+}
 
 export async function collectReleasePreflight({ inventory, workflowSource, npm, github }) {
   const checks = []
@@ -292,25 +401,14 @@ function staticPermissionsCheck(workflow) {
 }
 
 function requiredValidationCheck(workflow) {
-  const job = workflow?.jobs?.release
-  const steps = job?.steps
-  const matches = Array.isArray(steps)
-    ? steps.flatMap((step, index) => (isExactValidateStep(step) ? [index] : []))
-    : []
-  const validateIndex = matches[0]
-  const trustedContext =
-    isRecord(workflow) &&
-    exactKeys(workflow.jobs, ["release"]) &&
-    workflow.env === undefined &&
-    workflow.defaults === undefined &&
-    isRecord(job) &&
-    exactKeys(job, ["env", "permissions", "runs-on", "steps", "timeout-minutes"]) &&
-    job["runs-on"] === "ubuntu-latest" &&
-    job["timeout-minutes"] === 30 &&
-    exactRecord(job.env, { NPM_CONFIG_PROVENANCE: "true" })
-  const trustedPrevalidation =
-    validateIndex !== undefined && steps.slice(0, validateIndex).every(isTrustedPrevalidationStep)
-  const enforcing = trustedContext && matches.length === 1 && trustedPrevalidation
+  const steps = workflow?.jobs?.release?.steps
+  const validateIndex = Array.isArray(steps)
+    ? steps.findIndex((step) => isExactValidateStep(step))
+    : -1
+  const enforcing =
+    exactJson(workflow, EXPECTED_RELEASE_WORKFLOW) &&
+    validateIndex === 4 &&
+    steps.slice(validateIndex + 1).every(hasImplicitSuccessGate)
   return enforcing
     ? result(
         "workflow-required-validation",
@@ -325,38 +423,23 @@ function requiredValidationCheck(workflow) {
 }
 
 function isExactValidateStep(step) {
+  return exactJson(step, { name: "Validate Release Candidate", run: "pnpm ci:validate" })
+}
+
+function hasImplicitSuccessGate(step) {
+  if (!isRecord(step)) return false
+  if (step.if === undefined) return true
   return (
-    isRecord(step) &&
-    step.run === "pnpm ci:validate" &&
-    step.env === undefined &&
-    step.if === undefined &&
-    step["continue-on-error"] === undefined &&
-    step["working-directory"] === undefined &&
-    step.shell === undefined &&
-    step["timeout-minutes"] === undefined
+    typeof step.if === "string" && !/(?:^|[^A-Za-z])(always|failure|cancelled)\s*\(/iu.test(step.if)
   )
 }
 
-function isTrustedPrevalidationStep(step) {
-  if (!isRecord(step)) return false
-  if (exactKeys(step, ["name", "run"]))
-    return step.name === "Install" && step.run === "pnpm install --frozen-lockfile"
-  if (!exactKeys(step, ["name", "uses", "with"])) return false
-  if (step.name === "Checkout")
-    return (
-      step.uses === "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" &&
-      exactRecord(step.with, { "fetch-depth": 0 })
-    )
-  if (step.name === "Setup pnpm")
-    return (
-      step.uses === "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271" &&
-      exactRecord(step.with, { version: "10.33.0" })
-    )
-  return (
-    step.name === "Setup Node.js" &&
-    step.uses === "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" &&
-    exactRecord(step.with, { cache: "pnpm", "node-version": "24.17.0" })
-  )
+function exactJson(value, expected) {
+  try {
+    return JSON.stringify(canonicalize(value)) === JSON.stringify(canonicalize(expected))
+  } catch {
+    return false
+  }
 }
 
 async function npmProvenanceCheck(inventory, reader) {
@@ -551,13 +634,6 @@ function exactRecord(value, expected) {
     keys.length === expectedKeys.length &&
     keys.every((key, index) => key === expectedKeys[index] && value[key] === expected[key])
   )
-}
-
-function exactKeys(value, expectedKeys) {
-  if (!isRecord(value)) return false
-  const keys = Object.keys(value).sort(compareText)
-  const expected = [...expectedKeys].sort(compareText)
-  return keys.length === expected.length && keys.every((key, index) => key === expected[index])
 }
 
 function inlineCode(value) {
