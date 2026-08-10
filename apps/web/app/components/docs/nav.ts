@@ -34,6 +34,7 @@ export const DOCS_NAV: readonly DocsNavSection[] = [
       { label: "Workspace Filesystem", href: "/docs/workspace" },
       { label: "Context Management", href: "/docs/context-management" },
       { label: "Access Control", href: "/docs/access-control" },
+      { label: "Thread Access", href: "/docs/thread-access" },
       { label: "Permissions", href: "/docs/permissions" },
       { label: "Sandbox", href: "/docs/sandbox" },
       { label: "Retry", href: "/docs/retry" },
