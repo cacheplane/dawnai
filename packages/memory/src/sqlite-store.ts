@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import type { SQLInputValue } from "node:sqlite"
 import { DatabaseSync } from "node:sqlite"
+import { normalizeSetFilter } from "./browse-filter.js"
 import { fuseHybrid, rankKeywordCandidates } from "./hybrid.js"
 import { DEFAULT_CANDIDATE_POOL, type RecallRankingOptions, type RecallWeights } from "./score.js"
 import { tokenize } from "./tokenize.js"
@@ -436,13 +437,17 @@ export function sqliteMemoryStore(opts: {
         where.push("substr(namespace, 1, length(?)) = ?")
         params.push(q.namespacePrefix, q.namespacePrefix)
       }
-      if (q.status) {
-        where.push("status = ?")
-        params.push(q.status)
+      // A set becomes IN (?,?,…); an EMPTY set becomes a clause that matches
+      // nothing, which is the contract — not an absent filter.
+      const statuses = normalizeSetFilter(q.status)
+      if (statuses) {
+        where.push(statuses.length > 0 ? `status IN (${statuses.map(() => "?").join(",")})` : "0")
+        params.push(...statuses)
       }
-      if (q.kind) {
-        where.push("kind = ?")
-        params.push(q.kind)
+      const kinds = normalizeSetFilter(q.kind)
+      if (kinds) {
+        where.push(kinds.length > 0 ? `kind IN (${kinds.map(() => "?").join(",")})` : "0")
+        params.push(...kinds)
       }
       if (q.sourceType) {
         where.push("json_extract(source, '$.type') = ?")

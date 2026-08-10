@@ -1,5 +1,238 @@
 # @dawn-ai/cli
 
+## 0.8.21
+
+### Patch Changes
+
+- c2c19da: **Edge runtime: `process.env` reads no longer crash a worker.**
+
+  `@dawn-ai/cli/fetch` links for Cloudflare workerd with no `node:` specifiers,
+  which is why the emitted `wrangler.toml` omits `nodejs_compat` — and without
+  that flag `process` is not defined, so a bare `process.env.X` is a
+  `ReferenceError` rather than a quiet `undefined`. Six such reads were on the
+  fetch graph. The worst sat in the openai model constructor, so it fired on the
+  first turn of the app this target scaffolds.
+
+  - New in `@dawn-ai/core`: `readRuntimeEnv(name)` and `seedRuntimeEnv(env)`.
+    `readRuntimeEnv` consults `process.env` first and falls back to whatever an
+    edge entry point seeded, so behavior under Node is unchanged. `seedRuntimeEnv`
+    is re-exported from `@dawn-ai/cli/fetch` alongside `seedModelImporter`.
+  - `OPENAI_BASE_URL` (in `createChatModel` and `openaiEmbedder`) reads through the
+    seam rather than being guarded away. It is configuration, not debug output: a
+    guard would have replaced a crash with a deployment whose base URL could not
+    be set at all.
+  - The `DAWN_DEBUG_MEMORY`, `DAWN_DEBUG_SUMMARIZATION`, `DAWN_DEBUG_INTERRUPTS`
+    and `DAWN_DEBUG_CONSTRAINTS` reads use the same seam, so they stay off by
+    default where there is no `process` and can still be switched on by seeding.
+  - `test/fetch-entry-purity.test.ts` now gates Node-only globals, not just
+    `node:` import edges — a bare global leaves no edge, which is why this class
+    shipped past a green suite. The bundle is linked with each of `process`,
+    `Buffer`, `global`, `__dirname`, `__filename` and `require` rewritten to a
+    sentinel by esbuild's scope-aware `define`, so string literals, comments,
+    property names and shadowed locals cannot produce a false hit. Dawn-owned code
+    must reference none of them at all; the wider graph must contain no reference
+    that lacks a `typeof` guard in the same statement.
+
+- c2c19da: **A Dawn app now serves more than one request per isolate on Cloudflare
+  workerd.** Three defects, each found only by running the whole thing inside real
+  workerd, and none of them fixed by reaching for `nodejs_compat`.
+
+  - **The bundle did not link**, from one specifier and it was Dawn's own.
+    `@dawn-ai/langchain` imported `dispatchCustomEvent` from
+    `@langchain/core/callbacks/dispatch`, whose entry statically imports
+    `node:async_hooks` in order to infer the config off `AsyncLocalStorage` when a
+    caller omits one. Both Dawn call sites already pass an explicit config, which
+    is exactly what upstream's `.../dispatch/web` entry requires, so the swap
+    changes no behavior — and on Node the same `AsyncLocalStorage` instance is
+    still installed by `@langchain/langgraph`'s main entry.
+  - **Every request after the first threw** `Cannot perform I/O on behalf of a
+different request`. On workerd an `AbortController` is an I/O object owned by
+    the request that constructed it, and the runtime handler is necessarily
+    constructed inside request one because global scope refuses to construct one at
+    all — so a handler-scoped shutdown controller limited an isolate to exactly one
+    request. The shutdown signal is now minted per request, with `close()` aborting
+    the live set and every "are we shutting down?" check reading a plain value.
+    Node semantics are unchanged: the same abort, and the same drain across
+    in-flight requests, the run registry, and pending store disposals.
+  - **The model had no credential.** A turn returned HTTP 200 carrying a
+    well-formed stream whose only content was a missing-credentials run error:
+    `OPENAI_BASE_URL` already went through the runtime-env seam, but each provider
+    package reads its API key off `process.env`, and there is no `process` on
+    workerd. `createChatModel` now resolves each provider's key through the same
+    seam — a no-op on Node, where the seam prefers `process.env`.
+
+  Two tests come with them. The gated `edge-workerd` lane drives four sequential
+  AG-UI turns through the emitted artifacts under `wrangler dev --local` against
+  Postgres, asserting on the reply text rather than the status, because a dead
+  model wiring still answers 200. Its cheap ungated counterpart bundles the emitted
+  `app.mjs` the way `wrangler` does — Workers export conditions, nothing external
+  but `node:` itself — and requires zero `node:` specifiers; the existing purity
+  gate externalizes `@langchain/*`, which is precisely why the first defect above
+  reached the runtime unseen.
+
+- c2c19da: **New `hono` build target — a Dawn app that deploys to Cloudflare Workers.**
+
+  `build: { targets: ["node", "hono"] }` makes `dawn build` emit an edge deploy
+  alongside the usual ones: `.dawn/build/app.mjs` (a Hono app whose single
+  catch-all hands every request to Dawn's web-standard fetch handler,
+  `export default`ed — the shape Workers, Vercel and Bun all accept),
+  `modules.edge.mjs` (the static module manifest, free of node builtins),
+  `stores.mjs` (a per-request Postgres store factory), and a `wrangler.toml`
+  scaffold at the app root. `wrangler deploy` is how you ship it; a gated CI lane
+  boots those same artifacts under local workerd and shows them serving Agent
+  Protocol and AG-UI with durable state in Postgres. No deploy to Cloudflare's
+  platform has been exercised — see the caveats at the end of this note.
+
+  The scaffold carries a bare `name` / `main` / `compatibility_date` and **no
+  `nodejs_compat`**: the bundle links zero `node:` specifiers, so the flag would
+  buy nothing, and setting it would mask a regression in the work that made the
+  bundle node-free. A gated `edge-workerd` CI lane boots the emitted artifacts
+  under real workerd — the same binary Cloudflare runs — with that `wrangler.toml`
+  untouched, and drives four sequential AG-UI turns against Postgres over a
+  `@neondatabase/serverless` WebSocket pool.
+
+  The target is **opt-in and never a default**, because the edge serves a subset
+  of Dawn rather than all of it.
+
+  - **The stores are built per request, and that is not stylistic.** A pool held at
+    module scope hands request N+1 an idle WebSocket bound to request N's dead I/O
+    context; the request then hangs until workerd cancels it, in an alternating
+    pattern that fails about half of all requests with nothing thrown. So
+    `stores.mjs` builds the pool and all three stores inside the factory and ends
+    the pool on dispose, with a module-scope flag recording that this isolate has
+    already migrated so per-request instances do not re-run three migration
+    transactions each time. That pool also gets an `'error'` listener:
+    `@neondatabase/serverless` vendors `pg-pool` _and_ the `events` polyfill, so an
+    idle client's failure re-emits on the pool and the shim throws when nothing is
+    listening — the same uncaught-exception hazard node `pg` has, and one that
+    `nodejs_compat` being off does nothing to remove. A per-request pool is still
+    exposed: a client sits idle between every pair of store queries, and pg-pool's
+    idle listener outlives `end()`.
+  - **`requestStores`**, a new option on `createRuntimeFetchHandler`, is the seam
+    that makes that possible: a `(request) => RequestStores` factory whose every
+    field is optional and falls through to the boot-resolved store when omitted.
+    `RequestStores` is exported from `@dawn-ai/cli/fetch`.
+  - **The build fails, by name, on anything the edge cannot serve** — with the new
+    `DAWN_E1005`, and reporting every offending feature at once rather than one
+    build at a time: `sandbox`, `backends.filesystem`/`backends.exec`, a
+    config-supplied `checkpointer` / `threadsStore` / `permissions.store` /
+    `memory.store`, a `workspace/` directory, route skills, and route-level
+    long-term memory. The store cases matter most: those handles cannot cross a
+    build boundary, so before the gate the generated Postgres store quietly took
+    their place. `dawn check` applies the identical gate whenever `hono` is a
+    configured target.
+  - **The provider import map is exhaustive or the build fails.** A bundler cannot
+    follow a variable import specifier, so `app.mjs` emits a static `switch` over
+    the model packages the app can reach; whatever is missing from it is missing
+    from the bundle. A route that will not import, or an agent whose provider
+    cannot be inferred, is therefore an error rather than a silently narrower map,
+    and `summarization.model` is included.
+  - **`dawn build` warns on stderr** when `@dawn-ai/cli`, `@dawn-ai/postgres-storage`,
+    `@neondatabase/serverless` or `hono` is missing from the app's `package.json`.
+    None of them is a dependency of `@dawn-ai/cli`, deliberately: the CLI does not
+    import them, the app it generates does.
+  - **Your config is inlined into `app.mjs` at build time**, minus every field that
+    cannot survive a build boundary, rather than loaded from `dawn.config.ts` at
+    runtime as the `node` target does. Keep secrets in bindings, not in config.
+
+  Also new, both in service of the emitted entry: `seedModelImporter` and
+  `providerPackages` from `@dawn-ai/langchain` (re-exported from
+  `@dawn-ai/cli/fetch`), and `DAWN_E5301` on a runtime that reaches a store no
+  layer supplied.
+
+  Full walkthrough, the supported subset, and an explicit list of what the CI lane
+  does **not** settle — no real Cloudflare deploy, Hyperdrive, production
+  connection limits, per-query latency, cross-isolate cold starts, and the bundle
+  size and startup CPU that `wrangler deploy` enforces and `wrangler dev --local`
+  does not — are in the Deployment docs under Edge runtimes.
+
+- c2c19da: **`@dawn-ai/postgres-storage`: `assumeMigrated`** — a new opt-out on every store
+  option type. `ready()` resolves immediately instead of opening a transaction,
+  taking `pg_advisory_xact_lock` and re-running the `CREATE … IF NOT EXISTS` pass.
+  Set it only when the same process has already migrated that database to the
+  store's current version. It exists for per-request store lifetimes: a store
+  memoizes its migration on the instance, so a factory that rebuilds stores every
+  request paid three migration transactions per request — and the three advisory
+  locks serialized concurrent requests on the same component key. The lock itself
+  is unchanged; what is skipped is a pass already known to have completed.
+
+  **`hono` build target fixes.**
+
+  - The generated `stores.mjs` now migrates once per isolate behind a module-scope
+    flag and passes `assumeMigrated` thereafter.
+  - `wrangler.toml`: the generated marker is read back, so a rebuild recognizes
+    its own scaffold instead of warning about it, writing a duplicate into
+    `.dawn/build/`, and reporting that duplicate as the artifact. A marked file is
+    still never overwritten.
+  - The build now fails, naming the config key, when `checkpointer`,
+    `threadsStore`, `permissions.store` or `memory.store` is configured: the
+    handle cannot cross the build boundary, and the emitted Postgres store was
+    taking its place with nothing said.
+  - The provider import map is exhaustive or the build fails. A route that cannot
+    be imported, or an agent whose provider cannot be inferred, is an error rather
+    than a silently narrower map; `summarization.model` is included, so an app
+    with openai routes and an anthropic summarization model no longer builds green
+    and fails at request time on a package that was never bundled.
+  - All validation now runs before the first artifact is written.
+  - The emitted entry throws, naming the cause, when no Workers env is bound to a
+    request or `DATABASE_URL` is unset, rather than building a pool with no
+    connection string.
+  - Worker names generated from a package name now start with a letter, which
+    Cloudflare requires.
+  - `hono` is no longer a dependency of `@dawn-ai/cli`, which does not import it.
+    The generated app does, and the build's dependency notice names it along with
+    `@dawn-ai/postgres-storage` and `@neondatabase/serverless`.
+
+- c2c19da: fix(edge): resolve the `ctx.fs` filesystem backend at first use, not at route preparation
+
+  `prepareRouteExecution` built the author-facing workspace handle (`ctx.fs`) for
+  every route execution, and constructing it resolved a filesystem backend
+  eagerly. On a runtime with no boot fallbacks and no `backends.filesystem` in
+  config — i.e. every deployed `hono`-target worker — that threw during
+  preparation, so every agent turn returned a 500 over a handle the turn never
+  touched. A worker could not opt out: the emitted entry inlines only the
+  serializable half of `dawn.config.ts`, and the edge capability gate rejects
+  `backends.filesystem` because a live object cannot cross a build boundary.
+
+  `createWorkspaceFs` now accepts a thunk for `backend` and resolves (and
+  memoizes) it on the first filesystem operation, and the CLI runtime hands it
+  one when — and only when — the runtime has no fallback to construct from. The
+  failure is deferred, not defused: a route that genuinely reads the workspace
+  still throws by name, at the operation that needed a filesystem, with the same
+  message it raised before. The node lane is unchanged, backend included: it
+  still resolves its process-shared `localFilesystem()` at preparation, since
+  there the call cannot fail.
+
+  The `workspaceRoot` guard in `createWorkspaceFs` stays eager — the root is
+  known at construction time, so a host that passes a relative one hears about it
+  immediately rather than on some later file operation.
+
+- c2c19da: Per-request stores are now disposed only after BOTH the response body has
+  settled and the run that request started has released its slot. Route work
+  outlives its response on three paths — an aborted AG-UI stream, an abandoned
+  `/runs/wait`, a cancelled AP stream — and all three keep writing through the
+  stores a response-triggered teardown would have closed. `close()` also waits
+  for in-flight disposals, so a host awaiting shutdown knows the pools are shut.
+
+  A runtime that reaches a store no layer supplied now answers with a 500 that
+  names the missing store and carries the new `DAWN_E5301` code, instead of a
+  generic failure with nothing to diagnose.
+
+- Updated dependencies [c2c19da]
+- Updated dependencies [c2c19da]
+- Updated dependencies [c2c19da]
+- Updated dependencies [c2c19da]
+- Updated dependencies [c2c19da]
+- Updated dependencies [c2c19da]
+  - @dawn-ai/core@0.8.21
+  - @dawn-ai/langchain@0.8.21
+  - @dawn-ai/sdk@0.8.21
+  - @dawn-ai/langgraph@0.8.21
+  - @dawn-ai/permissions@0.8.21
+  - @dawn-ai/ag-ui@0.8.21
+  - @dawn-ai/memory@0.8.21
+  - @dawn-ai/sqlite-storage@0.8.21
+
 ## 0.8.20
 
 ### Patch Changes

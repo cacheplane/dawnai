@@ -113,12 +113,15 @@ The exact gates a change must pass are the `validate` job in
 3. `pnpm build`
 4. `pnpm typecheck`
 5. `pnpm test`
-6. `node scripts/check-docs.mjs`
-7. `pnpm pack:check`
-8. `pnpm verify:harness:self-test`
-9. `pnpm verify:harness:framework`
-10. `pnpm verify:harness:runtime`
-11. `pnpm verify:harness:smoke`
+6. `pnpm check:release-inventory`
+7. `pnpm test:release-controller`
+8. `node scripts/check-docs.mjs`
+9. `pnpm pack:check`
+10. `pnpm verify:typescript-tooling-pack`
+11. `pnpm verify:harness:self-test`
+12. `pnpm verify:harness:framework`
+13. `pnpm verify:harness:runtime`
+14. `pnpm verify:harness:smoke`
 
 On pull requests, a separate `changesets` job also runs
 `node scripts/check-changesets.mjs` to require a changeset for user-facing
@@ -126,10 +129,12 @@ package changes.
 
 Run `pnpm ci:validate` locally to approximate this lane (it exists as a
 script in the root `package.json`). It runs the same lint → build-cache →
-build → typecheck → test → docs-check → pack-check → harness sequence, plus a
-few extra local-only release-script unit tests
+build → typecheck → source-test → release-inventory → release-controller-test →
+docs-check → pack-check → TypeScript-tooling-pack → harness sequence, plus
+extra local-only release-script unit tests
 (`test:release-publish`, `test:upload-release-assets`,
-`test:backfill-release-tags`) that aren't separate CI steps.
+`test:backfill-release-tags`, `test:sync-chart-appversion`) that aren't separate
+CI steps.
 
 **Gated lanes** — these run as separate CI jobs behind env flags or dedicated
 infrastructure, not part of `validate`, and aren't required for most PRs:

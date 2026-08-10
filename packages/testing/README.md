@@ -76,10 +76,11 @@ Supporting types include `InterruptInfo`, `SubagentEvent`, `SubagentRun`, and
 - Types include `ToolHarness`, `WorkspaceHarness`, `MiddlewareHarness`,
   `AgentProtocolInjector`, `InjectResult`, and `SubprocessApp`.
 
-The default `createAgentHarness` mode is in-process. The exported protocol and
-subprocess helpers are available for custom orchestration; the harness mode
-options for those paths are intentionally limited until their integrations are
-fully wired.
+`createAgentHarness()` is the deterministic in-process agent harness.
+`createAgentProtocolInjector()` drives the Agent Protocol fetch boundary without
+opening a port, and `createSubprocessApp()` starts a real `dawn dev` process.
+Each factory has its own options, result, and lifecycle contract; select the
+factory for the boundary the test needs.
 
 ### Memory
 

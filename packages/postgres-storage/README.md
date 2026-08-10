@@ -25,7 +25,8 @@ reach it depends on which entry point you use — see
 [Two entry points](#two-entry-points).
 
 The `/node` entry talks to Postgres over the standard `pg` driver, which opens a
-raw TCP connection: Node, Bun, and Vercel functions. workerd has no raw TCP
+raw TCP connection: Node, Bun, and Vercel functions on the Node.js runtime (not
+Vercel's Edge runtime, which has no raw TCP either). workerd has no raw TCP
 socket for `pg` to use, so an edge deploy uses the **main** entry and injects a
 pool built by a driver that speaks something workerd does have.
 `@neondatabase/serverless` over WebSocket is that driver — it is what Dawn's

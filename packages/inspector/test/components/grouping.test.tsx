@@ -1,6 +1,7 @@
-import type { MemoryRecord } from "@dawn-ai/memory"
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import type { MemoryRecord, MemoryStats } from "@dawn-ai/memory"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { ListPage } from "../../src/components/memory/list-page"
 import { MemoryGrid } from "../../src/components/memory/memory-grid"
 
 /**
@@ -116,5 +117,55 @@ describe("grouping by namespace", () => {
 
     expect(groupLabels(container)).toHaveLength(0)
     expect(container.querySelectorAll("[data-pretable-row]")).toHaveLength(3)
+  })
+})
+
+describe("grouping is gated on a complete page", () => {
+  const stats: MemoryStats = {
+    total: 3,
+    byStatus: { active: 3 },
+    byKind: { semantic: 3 },
+    byNamespace: { "route=/notes": 2, "route=/chat": 1 },
+    bySourceType: { tool: 3 },
+  }
+
+  function stubApi(total: number) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const u = String(url)
+        const body = u.includes("/api/memory/stats")
+          ? stats
+          : u.includes("/api/memory/list")
+            ? { records, total }
+            : { groups: [] }
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }),
+    )
+  }
+
+  it("groups when the page holds every matching row", async () => {
+    stubApi(records.length)
+    const { container } = render(<ListPage />)
+    await screen.findByText("content n1")
+
+    await waitFor(() => {
+      expect(container.querySelectorAll("[data-pretable-group-row]").length).toBe(2)
+    })
+  })
+
+  it("stays flat when the page is truncated, so no count contradicts the rail", async () => {
+    // Group headers count the rows the grid HOLDS. On a truncated page that is
+    // an artifact of where the cap fell — it read "(197)" beside a rail saying
+    // 250 — so the structure is withheld rather than shown with a false number.
+    stubApi(records.length + 40)
+    const { container } = render(<ListPage />)
+    await screen.findByText("content n1")
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(container.querySelectorAll("[data-pretable-group-row]").length).toBe(0)
   })
 })

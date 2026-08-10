@@ -5,6 +5,10 @@ import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
 import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import {
+  collectRuntimeCapabilityGaps,
+  formatRuntimeCapabilityViolations,
+} from "../runtime/edge-capability-report.js"
+import {
   type BootResolvedInstances,
   invokeResolvedRoute,
   type PreparedRouteModules,
@@ -103,6 +107,33 @@ function requireStore<T>(store: T | undefined, what: string): T {
 }
 
 /**
+ * A gated feature this app is configured for that this runtime cannot serve —
+ * the REQUEST-time half of the `hono` target's build gate, raising the same
+ * `DAWN_E1005`.
+ *
+ * Detected once at boot (`collectRuntimeCapabilityGaps`) and raised from
+ * `fetch` rather than rejecting the handler's construction, for two reasons:
+ * the emitted `app.mjs` builds its handler inside the first request, so a boot
+ * rejection surfaces as an unattributed 500 with no dedupe; and going through
+ * `fetch`'s catch-all gives this the identical operator experience as
+ * `MissingStoreError` — the cause on stderr exactly once, the code and the
+ * docs URL in the body.
+ *
+ * Raised for EVERY request, health checks included. That is the point: this is
+ * a deployment mistake, not a request mistake, and a rollout that keeps passing
+ * its health check while silently ignoring the `sandbox` block is the exact
+ * failure the spec forbids.
+ */
+class RuntimeCapabilityError extends Error {
+  /** Registry code, read back by `dawnErrorCodeOf`. Same code the build gate throws. */
+  readonly code = "DAWN_E1005"
+  constructor(message: string) {
+    super(message)
+    this.name = "RuntimeCapabilityError"
+  }
+}
+
+/**
  * True for `text/event-stream` with or without parameters (`; charset=utf-8`).
  *
  * Deliberately not an exact compare: this predicate decides whether the
@@ -164,16 +195,32 @@ export interface RuntimeFetchHandler {
     activeRequests: number
     closed: boolean
   }
+  /**
+   * @deprecated Vestigial, and kept only because this interface is published
+   * API. Nothing in the request path reads it: shutdown is tested through the
+   * plain `shutdownReason` value, and the abortable signal every run listens to
+   * is minted PER REQUEST by `getShutdownSignal` (a single handler-scoped
+   * AbortController cannot work on workerd — it is an I/O object bound to
+   * whichever request constructed it). `close()` still aborts this one, but no
+   * listener is ever attached, so subscribing to it observes nothing.
+   *
+   * To be notified of shutdown, await `close()`. Slated for removal in the next
+   * major; removing it now would be a breaking change for a published package.
+   */
   readonly shutdownController: AbortController
 }
 
 /** How long close() waits for in-flight requests before proceeding anyway. */
 const CLOSE_DRAIN_DEADLINE_MS = 30_000
+const AP_SSE_HEARTBEAT_INTERVAL_MS = 15_000
+const AP_SSE_HEARTBEAT = new TextEncoder().encode(": ping\n\n")
 
 export async function createRuntimeFetchHandler(
   options: StartRuntimeServerOptions & {
     /** Internal/test hook: override the close() drain deadline (default 30s). */
     readonly drainDeadlineMs?: number
+    /** Internal/test hook: override AP SSE heartbeat interval (default 15s). */
+    readonly apSseHeartbeatIntervalMs?: number
   },
 ): Promise<RuntimeFetchHandler> {
   // The node filesystem fallbacks, when this runtime has any. `dawn dev` /
@@ -244,10 +291,29 @@ export async function createRuntimeFetchHandler(
     (bootStoresOptional
       ? undefined
       : await requireBoot(fallbacks, "checkpointer").resolveCheckpointer(options.appRoot))
-  // Degrades rather than throws: sandboxing is opt-in, so no fallbacks means
-  // no sandbox provider — the same result as an app with no `sandbox` config.
+  // Degrades rather than throws HERE: sandboxing is opt-in, so no fallbacks
+  // means no sandbox provider — the same result as an app with no `sandbox`
+  // config, and the right answer for every node app. What was missing is the
+  // other half: a runtime with no fallbacks that IS configured for a sandbox
+  // was degrading silently too. `capabilityGaps` below draws that line.
   const sandboxManager =
     options.sandboxManager ?? (await fallbacks?.resolveSandboxManager(options.appRoot))
+
+  // The request-time half of `assertEdgeCapabilities`. One pass at boot, raised
+  // per request (see RuntimeCapabilityError). `hasFilesystemFallback` is what
+  // keeps this off every node path: `runtime-fetch-handler.ts` applies
+  // `nodeBootFallbacks` unconditionally, so `fallbacks` is always set there and
+  // the collector returns empty before reading a single config key.
+  const capabilityGaps = collectRuntimeCapabilityGaps({
+    config: options.config,
+    hasFilesystemFallback: Boolean(fallbacks),
+    hasSandboxManager: Boolean(sandboxManager),
+    routes: options.modules?.routes ?? [],
+  })
+  const capabilityError =
+    capabilityGaps.length > 0
+      ? new RuntimeCapabilityError(formatRuntimeCapabilityViolations(capabilityGaps))
+      : undefined
   // Lazy, memoized, shared: resolveMemoryStore (and the sqlite it opens) runs
   // at most once per process, on the FIRST request that actually needs
   // memory — not unconditionally at boot for apps with no memory routes, and
@@ -487,8 +553,10 @@ export async function createRuntimeFetchHandler(
     return override ? Promise.resolve(override) : getMemoryStore()
   }
 
+  const apSseHeartbeatIntervalMs = options.apSseHeartbeatIntervalMs ?? AP_SSE_HEARTBEAT_INTERVAL_MS
   const routes = buildRouteTable({
     appRoot: options.appRoot,
+    apSseHeartbeatIntervalMs,
     boot,
     getCheckpointer,
     getMemoryStoreFor,
@@ -516,6 +584,11 @@ export async function createRuntimeFetchHandler(
     let transferredToStream = false
     let lifetime: RequestLifetime | undefined
     try {
+      // Before anything else, including store construction: this app asks for a
+      // feature this runtime cannot serve, so every request fails identically
+      // until the deployment changes. Inside the try so it travels the same
+      // catch-all — logged once, coded, with a docs URL.
+      if (capabilityError) throw capabilityError
       // Inside the try on purpose: a factory that throws (a pool that cannot
       // connect) must become a 500 through the handler below, not leak the
       // in-flight slot and wedge close()'s drain.
@@ -563,6 +636,21 @@ export async function createRuntimeFetchHandler(
             error: error instanceof Error ? error.message : String(error),
           }),
           { status: 503 },
+        )
+      }
+
+      if (error instanceof RuntimeCapabilityError) {
+        // Same posture as MissingStoreError below: a deployment mistake, so the
+        // full report goes to the caller AND to stderr — but only once, however
+        // many requests hit it. Unlike a store, the report already names every
+        // feature and its config key, so there are no extra details to attach.
+        if (!loggedFailures.has(error.message)) {
+          loggedFailures.add(error.message)
+          console.error(`Dawn runtime misconfigured — ${error.message}`)
+        }
+        return Response.json(
+          createExecutionErrorBody(error.message, undefined, { code: error.code }),
+          { status: 500 },
         )
       }
 
@@ -738,6 +826,7 @@ function trackStreamSettled(
  */
 function buildRouteTable(ctx: {
   readonly appRoot: string
+  readonly apSseHeartbeatIntervalMs: number
   readonly boot: RouteBoot
   readonly getCheckpointer: (request: Request) => BaseCheckpointSaver
   readonly getMemoryStoreFor: (request: Request) => Promise<MemoryStore>
@@ -768,6 +857,7 @@ function buildRouteTable(ctx: {
 }): RouteMatcher[] {
   const {
     appRoot,
+    apSseHeartbeatIntervalMs,
     boot,
     getCheckpointer,
     getMemoryStoreFor,
@@ -925,6 +1015,7 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleApStreamRequest({
           appRoot,
+          apSseHeartbeatIntervalMs,
           boot,
           checkpointer: getCheckpointer(request),
           getMemoryStore: () => getMemoryStoreFor(request),
@@ -975,7 +1066,9 @@ function buildRouteTable(ctx: {
     // ------------------------------------------------------------------
     {
       handle: async (request) =>
-        handleMemoryListRequest({ memoryStore: await getMemoryStoreFor(request) }),
+        handleMemoryListRequest({
+          memoryStore: await getMemoryStoreFor(request),
+        }),
       method: "GET",
       pattern: /^\/memory\/candidates(?:\?.*)?$/,
     },
@@ -1071,6 +1164,7 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleResumeRequest({
           appRoot,
+          apSseHeartbeatIntervalMs,
           boot,
           checkpointer: getCheckpointer(request),
           getMemoryStore: () => getMemoryStoreFor(request),
@@ -1128,6 +1222,7 @@ async function dispatch(routes: RouteMatcher[], request: Request): Promise<Respo
 
 async function handleApStreamRequest(options: {
   readonly appRoot: string
+  readonly apSseHeartbeatIntervalMs: number
   readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
@@ -1145,6 +1240,7 @@ async function handleApStreamRequest(options: {
 }): Promise<Response> {
   const {
     appRoot,
+    apSseHeartbeatIntervalMs,
     boot,
     checkpointer,
     getMemoryStore,
@@ -1264,6 +1360,7 @@ async function handleApStreamRequest(options: {
   let sourceCleanup: Promise<void> | undefined
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
       try {
         try {
           const routeStream = streamResolvedRoute({
@@ -1312,6 +1409,7 @@ async function handleApStreamRequest(options: {
             .catch(() => undefined)
         }
       } finally {
+        stopHeartbeat()
         // The client's stream ends here regardless — safeClose below fires on
         // this same tick either way, so cancellation still looks instant to
         // the caller. What differs is when the run SLOT frees.
@@ -1340,7 +1438,7 @@ async function handleApStreamRequest(options: {
 
   return new Response(stream, {
     headers: {
-      "cache-control": "no-cache",
+      "cache-control": "no-cache, no-transform",
       connection: "keep-alive",
       "content-type": "text/event-stream",
     },
@@ -1583,6 +1681,7 @@ async function handleApWaitRequest(options: {
 
 async function handleResumeRequest(options: {
   readonly appRoot: string
+  readonly apSseHeartbeatIntervalMs: number
   readonly boot: RouteBoot
   readonly checkpointer: BaseCheckpointSaver
   readonly getMemoryStore: () => Promise<MemoryStore>
@@ -1601,6 +1700,7 @@ async function handleResumeRequest(options: {
 }): Promise<Response> {
   const {
     appRoot,
+    apSseHeartbeatIntervalMs,
     boot,
     checkpointer,
     getMemoryStore,
@@ -1730,6 +1830,7 @@ async function handleResumeRequest(options: {
     let sourceCleanup: Promise<void> | undefined
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        const stopHeartbeat = startSseHeartbeat(controller, apSseHeartbeatIntervalMs)
         try {
           try {
             const routeStream = streamResolvedRoute({
@@ -1779,6 +1880,7 @@ async function handleResumeRequest(options: {
               .catch(() => undefined)
           }
         } finally {
+          stopHeartbeat()
           // The client's stream ends here regardless — response lifetime and run
           // lifetime are deliberately different; see handleApStreamRequest.
           const releaseExecutionClaims = () => {
@@ -1894,6 +1996,16 @@ function safeEnqueue(controller: ReadableStreamDefaultController<Uint8Array>, ch
     // The consumer already canceled the stream — writes become no-ops, exactly
     // like `response.write` on a disconnected socket did.
   }
+}
+
+function startSseHeartbeat(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  intervalMs: number,
+): () => void {
+  const heartbeat = setInterval(() => {
+    safeEnqueue(controller, AP_SSE_HEARTBEAT.slice())
+  }, intervalMs)
+  return () => clearInterval(heartbeat)
 }
 
 function safeClose(controller: ReadableStreamDefaultController<Uint8Array>) {

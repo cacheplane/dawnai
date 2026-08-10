@@ -1,3 +1,4 @@
+export { normalizeSetFilter } from "./browse-filter.js"
 export {
   buildConsolidationPrompt,
   buildReflectionPrompt,

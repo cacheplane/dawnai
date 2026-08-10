@@ -1,0 +1,186 @@
+# Subprocess Shutdown Barrier Design
+
+**Status:** Approved 2026-08-09
+
+## Summary
+
+`createSubprocessApp()` exposes `close()` and async disposal as asynchronous
+teardown APIs, but the current implementation resolves immediately after
+sending `SIGTERM`. Signal delivery and Dawn's HTTP/process shutdown happen
+later, so callers can observe a live server after `await app.close()`.
+
+Make successful closure a completion barrier: the owned CLI process has
+closed, its process group has been signalled, its stdio has closed, and its
+`baseUrl` no longer serves. Preserve graceful shutdown first, add bounded
+`SIGKILL` escalation, and make repeated or concurrent closure share one result.
+
+## Goals
+
+- Make `await app.close()` mean that subprocess teardown completed.
+- Give `[Symbol.asyncDispose]()` the same completion guarantee.
+- Preserve graceful `SIGTERM` shutdown when Dawn exits promptly.
+- Prevent teardown from hanging forever when a subprocess wedges.
+- Make repeated and concurrent `close()` calls idempotent.
+- Apply the same bounded teardown to readiness-failure cleanup.
+
+## Non-Goals
+
+- Changing Dawn's production `dawn dev` signal handling.
+- Adding a public process ID, signal, or timeout API.
+- Polling the health endpoint as the primary lifecycle signal.
+- Changing how ports are selected or readiness is detected.
+- Refactoring unrelated testing harness factories.
+
+## Root Cause
+
+`packages/testing/src/subprocess.ts` marks the app stopped, sends `SIGTERM` to
+the detached process group, and returns without awaiting a child lifecycle
+event. `process.kill()` requests signal delivery; it does not wait for the
+target to handle the signal or exit.
+
+The outer Dawn CLI handles `SIGTERM` by asynchronously closing its dev session.
+That session in turn stops its dev child and drains the HTTP runtime. The
+testing helper therefore reports completion before the asynchronous work it
+initiated has completed.
+
+The existing disposal test is timing-sensitive. Repeated execution reproduced
+the failure: `/healthz` still returned `200 OK` after disposal. Timing probes
+showed `close()` resolving in less than 0.11 ms while connection rejection
+followed roughly 0.7–3.5 ms later.
+
+## Lifecycle Contract
+
+`SubprocessApp.close()` returns a single memoized promise. Every call, including
+async disposal, receives that promise.
+
+Successful resolution guarantees:
+
+1. Unless the child was already closed and the port unavailable, teardown
+   dispatched graceful termination or, after the grace deadline, forced
+   termination using the platform's process-tree mechanism.
+2. The spawned CLI child's `close` event fired, which occurs after exit and
+   stdio closure.
+3. A bounded TCP probe confirms that the `baseUrl` port no longer accepts
+   connections, covering a descendant that might briefly outlive the outer CLI.
+
+If the outer process has already closed, that satisfies only the child-closure
+half of the barrier. `close()` still probes the port. If a descendant continues
+serving, POSIX can still target the saved process group; Windows never targets
+a saved PID after its child has closed. If bounded graceful and forced
+termination fail to produce child closure and port unavailability, `close()`
+rejects with the saved process identifier and termination context instead of
+falsely reporting success.
+
+## Termination Algorithm
+
+Create the child-closure promise immediately after spawning the CLI, before any
+signal can be sent or exit can be missed.
+
+The shared termination helper:
+
+1. Checks child closure and port availability independently. It resolves
+   immediately only when the child is closed and the port is unavailable.
+2. Otherwise dispatches the first phase by platform:
+   - On POSIX, sends `SIGTERM` to the saved negative PID so the detached
+     process group is targeted; if group signalling is unavailable, falls back
+     to `child.kill()`.
+   - On Windows, runs `taskkill.exe /PID <saved PID> /T /F` with the phase's
+     remaining time as its command timeout. A closed child is not targeted.
+3. Waits up to a 2,000 ms internal grace deadline for both the child `close`
+   event and the `baseUrl` port to stop accepting TCP connections.
+4. On expiry, runs the forced phase. POSIX sends `SIGKILL` through the same
+   group-then-direct-child dispatch. Windows again uses bounded `taskkill.exe`
+   for the saved live child, then may make a last-resort direct-child kill only
+   if that command failed and the phase still has time remaining.
+5. Waits up to a final 2,000 ms for both observations and rejects if the child
+   still cannot be reaped or the port still accepts connections.
+
+The TCP observation uses `node:net`, a 100 ms connection-attempt timeout, and a
+25 ms polling interval. A connection timeout is treated as still potentially
+available; only connection refusal or another socket error establishes
+unavailability. The termination deadlines and probe timings are internal
+defaults, not public API. The internal termination helper accepts shorter
+deadlines for deterministic unit tests.
+
+Time spent running a Windows `taskkill.exe` command is charged to its grace or
+forced phase; it cannot extend either deadline. The helper is also used when
+readiness fails so a failed constructor does not leave the same process tree
+running in the background.
+
+## Error Handling
+
+- A dispatch race with an already-exited process is treated as successful once
+  the closure promise resolves and the port is unavailable.
+- On POSIX, group-signal failure falls back to signalling the direct child.
+- A wedged POSIX process escalates from `SIGTERM` to `SIGKILL`; Windows uses
+  bounded tree termination for both phases.
+- Failure to observe closure after forced termination rejects rather than
+  hanging indefinitely.
+- Dispatch failures are retained as the final termination error's cause.
+- Readiness errors are rethrown after bounded cleanup; a teardown failure is
+  surfaced when cleanup itself cannot complete.
+
+## Testing
+
+Use the real `createSubprocessApp()` path and make the existing race
+deterministic by temporarily delaying the real negative-PID `SIGTERM` call.
+
+The regression test will:
+
+1. Start a healthy subprocess.
+2. Delay actual group signal delivery for about 100 ms.
+3. Call `close()` twice before termination completes.
+4. Race closure against a shorter timer and prove the timer wins. The current
+   implementation fails because both closure promises resolve immediately.
+5. Await both calls and prove `/healthz` is unreachable.
+
+Focused internal-helper tests will use disposable real child processes and
+short test deadlines to verify the other new branches. POSIX-only tests cover:
+
+- a child that ignores `SIGTERM` receives `SIGKILL` and is reaped;
+- a scoped signal stub that leaves a child alive causes the final deadline to
+  reject, after which the test forcibly cleans up the child;
+- a negative-PID signal failure falls back to `child.kill()`;
+- a detached group leader that has already exited while a descendant retains
+  the listening port is not treated as closed; the saved process group is
+  terminated and port unavailability is observed;
+- a constructor with an immediate readiness timeout does not reject until its
+  delayed termination finishes, proving readiness-failure cleanup is awaited.
+
+One Windows-only live process-tree test verifies `taskkill.exe` terminates the
+tree without an unnecessary direct-child kill. One deterministic cross-platform
+test closes an idle child while an independent TCP server stays live, injects
+the Windows platform and tree-kill dispatcher, then verifies bounded rejection
+and zero dispatcher calls. The shared fixture file is
+`packages/testing/test/fixtures/subprocess-tree.mjs`.
+
+A focused native Windows CI job builds the `@dawn-ai/testing` dependency
+closure, including the CLI distribution the test starts, then runs only the
+live Windows process-tree test and injected stale-dispatch guard from
+`packages/testing/test/subprocess.test.ts`. The first covers real
+`taskkill.exe` process-tree shutdown; the second proves the closed-child guard
+without relying on a surviving orphan fixture. It does not claim broader
+Windows test coverage.
+
+The focused test must be observed failing before production code changes and
+passing afterward. Package build, typecheck, lint, and tests plus the repository
+Definition of Done complete verification. The native Windows CI job selects the
+one real `taskkill.exe` live-tree test and the injected cross-platform guard.
+
+## Files
+
+- Modify `packages/testing/src/subprocess.ts` for the memoized completion
+  barrier and bounded process-tree termination helper.
+- Modify `packages/testing/test/subprocess.test.ts` for deterministic closure,
+  concurrency, and reachability assertions.
+- Add `packages/testing/test/fixtures/subprocess-tree.mjs` for the real
+  process-tree scenario.
+- Modify `.github/workflows/ci.yml` for the focused native Windows subprocess
+  shutdown test job.
+- Add a patch changeset for `@dawn-ai/testing`.
+
+## Release
+
+This is a patch fix to the documented testing lifecycle. The release note will
+state that subprocess closure and async disposal now wait for actual process
+termination instead of returning after signal dispatch.

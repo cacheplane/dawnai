@@ -217,6 +217,90 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("browse accepts a set of statuses or kinds, matching any of them", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "act", namespace: "route=/x", content: "act" }))
+        await s.put(
+          rec({ id: "cand", namespace: "route=/x", content: "cand", status: "candidate" }),
+        )
+        await s.put(rec({ id: "sup", namespace: "route=/x", content: "sup", status: "superseded" }))
+        await s.put(rec({ id: "ep", namespace: "route=/x", content: "ep", kind: "episodic" }))
+        await s.put(rec({ id: "proc", namespace: "route=/x", content: "proc", kind: "procedural" }))
+
+        expect(
+          (await s.browse({ status: ["candidate", "superseded"] })).records.map((r) => r.id).sort(),
+        ).toEqual(["cand", "sup"])
+        expect(
+          (await s.browse({ kind: ["episodic", "procedural"] })).records.map((r) => r.id).sort(),
+        ).toEqual(["ep", "proc"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse treats a one-element set exactly like the bare value", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "a", namespace: "route=/x", content: "a" }))
+        await s.put(rec({ id: "b", namespace: "route=/x", content: "b", status: "candidate" }))
+        const bare = await s.browse({ status: "candidate" })
+        const set = await s.browse({ status: ["candidate"] })
+        expect(set.records.map((r) => r.id)).toEqual(bare.records.map((r) => r.id))
+        expect(set.total).toBe(bare.total)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse matches nothing for an empty set — not everything", async () => {
+      const s = await makeStore()
+      try {
+        // "none of these" is an OR over zero options, which is false. Reading it
+        // as "no filter" would silently show every row to a UI that had just
+        // unticked its last box.
+        await s.put(rec({ id: "a", namespace: "route=/x", content: "a" }))
+        await s.put(rec({ id: "b", namespace: "route=/x", content: "b", status: "candidate" }))
+        const page = await s.browse({ status: [] })
+        expect(page.records).toEqual([])
+        expect(page.total).toBe(0)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse counts a set with the same clause it selects with", async () => {
+      const s = await makeStore()
+      try {
+        for (let i = 0; i < 5; i += 1) {
+          await s.put(
+            rec({ id: `c${i}`, namespace: "route=/x", content: `c${i}`, status: "candidate" }),
+          )
+        }
+        await s.put(rec({ id: "keep", namespace: "route=/x", content: "keep" }))
+        const page = await s.browse({ status: ["candidate", "superseded"], limit: 2 })
+        expect(page.records).toHaveLength(2)
+        // total reflects the whole matching set, not the page.
+        expect(page.total).toBe(5)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse ANDs a status set with the other filters", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(rec({ id: "hit", namespace: "route=/x", content: "hit", status: "candidate" }))
+        await s.put(
+          rec({ id: "wrongNs", namespace: "route=/y", content: "n", status: "candidate" }),
+        )
+        await s.put(rec({ id: "wrongStatus", namespace: "route=/x", content: "s" }))
+        const page = await s.browse({
+          namespacePrefix: "route=/x",
+          status: ["candidate", "superseded"],
+        })
+        expect(page.records.map((r) => r.id)).toEqual(["hit"])
+        expect(page.total).toBe(1)
+      } finally {
+        await close?.(s)
+      }
+    })
     test("browse combines multiple filters with AND (COUNT shares the clause)", async () => {
       const s = await makeStore()
       try {
