@@ -1,5 +1,5 @@
 import type { SQLInputValue } from "node:sqlite"
-import { namespacePrefixUpperBound } from "./browse-range.js"
+import { namespacePrefixUpperBound, utcDayAfter, utcDayStart } from "./browse-range.js"
 import { BrowseQueryError } from "./browse-validate.js"
 import type { BrowseFilter } from "./types.js"
 
@@ -88,10 +88,49 @@ export function appendSqliteBrowseFilter(
       if (upper !== undefined) params.push(upper)
       return
     }
-    default:
-      // Reachable today: validateBrowseQuery accepts confidence/updatedAt, whose
-      // clauses are not built yet. BrowseQueryError rather than Error — the HTTP
-      // boundary maps a rejection by NAME, so a plain Error 500s where this must 400.
-      throw new BrowseQueryError(`unhandled browse filter field: ${filter.field}`)
+    case "confidence": {
+      if (filter.op === "between") {
+        // Inclusive on both ends, matching the grid's local `between`.
+        where.push("confidence >= ? AND confidence <= ?")
+        params.push(filter.min, filter.max)
+        return
+      }
+      const operators = { eq: "=", neq: "<>", gt: ">", gte: ">=", lt: "<", lte: "<=" } as const
+      where.push(`confidence ${operators[filter.op]} ?`)
+      params.push(filter.value)
+      return
+    }
+    case "updatedAt": {
+      switch (filter.op) {
+        case "onDay":
+          where.push("updated_at >= ? AND updated_at < ?")
+          params.push(utcDayStart(filter.day), utcDayAfter(filter.day))
+          return
+        case "beforeDay":
+          where.push("updated_at < ?")
+          params.push(utcDayStart(filter.day))
+          return
+        case "afterDay":
+          where.push("updated_at >= ?")
+          params.push(utcDayAfter(filter.day))
+          return
+        default:
+          // Inclusive of BOTH days: the upper bound is the day AFTER untilDay.
+          where.push("updated_at >= ? AND updated_at < ?")
+          params.push(utcDayStart(filter.fromDay), utcDayAfter(filter.untilDay))
+          return
+      }
+    }
+    default: {
+      // Every field has its own case above, so this binding is `never`: a field added
+      // to the union stops the BUILD here rather than reaching a caller unfiltered.
+      // Still throws at runtime — the untyped HTTP caller reaches this too, and
+      // BrowseQueryError rather than Error because that boundary maps a rejection by
+      // NAME: a plain Error 500s where this must 400.
+      const unmapped: never = filter
+      throw new BrowseQueryError(
+        `unhandled browse filter field: ${(unmapped as BrowseFilter).field}`,
+      )
+    }
   }
 }

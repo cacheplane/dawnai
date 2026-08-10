@@ -1,4 +1,10 @@
-import { type BrowseFilter, BrowseQueryError, namespacePrefixUpperBound } from "@dawn-ai/memory"
+import {
+  type BrowseFilter,
+  BrowseQueryError,
+  namespacePrefixUpperBound,
+  utcDayAfter,
+  utcDayStart,
+} from "@dawn-ai/memory"
 
 /**
  * Append one normalized filter to a Postgres WHERE list, numbering `$n` from the
@@ -79,10 +85,53 @@ export function appendPgBrowseFilter(
       where.push(`namespace COLLATE "C" >= $${lower} AND namespace COLLATE "C" < $${params.length}`)
       return
     }
-    default:
-      // Reachable today: validateBrowseQuery accepts confidence/updatedAt, whose
-      // clauses are not built yet. BrowseQueryError rather than Error — the HTTP
-      // boundary maps a rejection by NAME, so a plain Error 500s where this must 400.
-      throw new BrowseQueryError(`unhandled browse filter field: ${filter.field}`)
+    case "confidence": {
+      // confidence is float4, and the comparison must resolve THERE: promoted to
+      // float8 it reads 0.9::real <> 0.9, so equality against a stored value is
+      // false. Uncast, that resolution is inherited from the column's context; the
+      // cast states it, so wrapping the column can never silently promote it.
+      if (filter.op === "between") {
+        params.push(filter.min, filter.max)
+        const max = params.length
+        where.push(`confidence >= $${max - 1}::real AND confidence <= $${max}::real`)
+        return
+      }
+      const operators = { eq: "=", neq: "<>", gt: ">", gte: ">=", lt: "<", lte: "<=" } as const
+      params.push(filter.value)
+      where.push(`confidence ${operators[filter.op]} $${params.length}::real`)
+      return
+    }
+    case "updatedAt": {
+      switch (filter.op) {
+        case "onDay":
+          params.push(utcDayStart(filter.day), utcDayAfter(filter.day))
+          where.push(`updated_at >= $${params.length - 1} AND updated_at < $${params.length}`)
+          return
+        case "beforeDay":
+          params.push(utcDayStart(filter.day))
+          where.push(`updated_at < $${params.length}`)
+          return
+        case "afterDay":
+          params.push(utcDayAfter(filter.day))
+          where.push(`updated_at >= $${params.length}`)
+          return
+        default:
+          // Inclusive of BOTH days: the upper bound is the day AFTER untilDay.
+          params.push(utcDayStart(filter.fromDay), utcDayAfter(filter.untilDay))
+          where.push(`updated_at >= $${params.length - 1} AND updated_at < $${params.length}`)
+          return
+      }
+    }
+    default: {
+      // Every field has its own case above, so this binding is `never`: a field added
+      // to the union stops the BUILD here rather than reaching a caller unfiltered.
+      // Still throws at runtime — the untyped HTTP caller reaches this too, and
+      // BrowseQueryError rather than Error because that boundary maps a rejection by
+      // NAME: a plain Error 500s where this must 400.
+      const unmapped: never = filter
+      throw new BrowseQueryError(
+        `unhandled browse filter field: ${(unmapped as BrowseFilter).field}`,
+      )
+    }
   }
 }

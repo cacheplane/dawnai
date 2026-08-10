@@ -639,6 +639,94 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("browse filters by confidence, with between inclusive on both ends", async () => {
+      const s = await makeStore()
+      try {
+        // 0.9 is chosen deliberately: it is not representable in float4, so `eq`
+        // is asserted against the value READ BACK, which is the only one a backend
+        // that narrows on write can still match.
+        await s.put(rec({ id: "low", namespace: "ns", content: "low", confidence: 0.2 }))
+        await s.put(rec({ id: "mid", namespace: "ns", content: "mid", confidence: 0.5 }))
+        await s.put(rec({ id: "high", namespace: "ns", content: "high", confidence: 0.9 }))
+        const stored = (await s.get("high"))?.confidence as number
+        expect(
+          (
+            await s.browse({ filters: [{ field: "confidence", op: "eq", value: stored }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["high"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "confidence", op: "gt", value: 0.5 }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["high"])
+        expect(
+          (await s.browse({ filters: [{ field: "confidence", op: "gte", value: 0.5 }] })).total,
+        ).toBe(2)
+        expect(
+          (
+            await s.browse({ filters: [{ field: "confidence", op: "lt", value: 0.5 }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["low"])
+        expect(
+          (await s.browse({ filters: [{ field: "confidence", op: "lte", value: 0.5 }] })).total,
+        ).toBe(2)
+        expect(
+          (await s.browse({ filters: [{ field: "confidence", op: "neq", value: 0.5 }] })).total,
+        ).toBe(2)
+        const between = await s.browse({
+          filters: [{ field: "confidence", op: "between", min: 0.2, max: 0.5 }],
+        })
+        expect(between.records.map((r) => r.id).sort()).toEqual(["low", "mid"])
+        expect(between.total).toBe(2)
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse filters updatedAt by UTC day buckets", async () => {
+      const s = await makeStore()
+      try {
+        await s.put(
+          rec({ id: "d1", namespace: "ns", content: "d1", updatedAt: "2026-08-01T23:59:59.999Z" }),
+        )
+        await s.put(
+          rec({ id: "d2", namespace: "ns", content: "d2", updatedAt: "2026-08-02T00:00:00.000Z" }),
+        )
+        await s.put(
+          rec({ id: "d3", namespace: "ns", content: "d3", updatedAt: "2026-08-03T12:00:00.000Z" }),
+        )
+        const onDay = await s.browse({
+          filters: [{ field: "updatedAt", op: "onDay", day: "2026-08-02" }],
+        })
+        expect(onDay.records.map((r) => r.id)).toEqual(["d2"])
+        expect(onDay.total).toBe(1)
+        expect(
+          (
+            await s.browse({
+              filters: [{ field: "updatedAt", op: "beforeDay", day: "2026-08-02" }],
+            })
+          ).records.map((r) => r.id),
+        ).toEqual(["d1"])
+        expect(
+          (
+            await s.browse({ filters: [{ field: "updatedAt", op: "afterDay", day: "2026-08-02" }] })
+          ).records.map((r) => r.id),
+        ).toEqual(["d3"])
+        const span = await s.browse({
+          filters: [
+            {
+              field: "updatedAt",
+              op: "betweenDays",
+              fromDay: "2026-08-01",
+              untilDay: "2026-08-02",
+            },
+          ],
+        })
+        expect(span.records.map((r) => r.id).sort()).toEqual(["d1", "d2"])
+        expect(span.total).toBe(2)
+      } finally {
+        await close?.(s)
+      }
+    })
     test("stats returns count maps by status/kind/namespace/sourceType plus total", async () => {
       const s = await makeStore()
       try {

@@ -84,3 +84,44 @@ describe("appendSqliteBrowseFilter — namespace", () => {
     })
   })
 })
+
+describe("appendSqliteBrowseFilter — confidence", () => {
+  it("maps each comparison op and makes between inclusive", () => {
+    expect(build({ field: "confidence", op: "eq", value: 0.5 })).toEqual({
+      sql: "confidence = ?",
+      params: [0.5],
+    })
+    expect(build({ field: "confidence", op: "neq", value: 0.5 }).sql).toBe("confidence <> ?")
+    expect(build({ field: "confidence", op: "gt", value: 0.5 }).sql).toBe("confidence > ?")
+    expect(build({ field: "confidence", op: "gte", value: 0.5 }).sql).toBe("confidence >= ?")
+    expect(build({ field: "confidence", op: "lt", value: 0.5 }).sql).toBe("confidence < ?")
+    expect(build({ field: "confidence", op: "lte", value: 0.5 }).sql).toBe("confidence <= ?")
+    expect(build({ field: "confidence", op: "between", min: 0.2, max: 0.8 })).toEqual({
+      sql: "confidence >= ? AND confidence <= ?",
+      params: [0.2, 0.8],
+    })
+  })
+})
+
+describe("appendSqliteBrowseFilter — updatedAt", () => {
+  it("brackets UTC days against the stored full-ISO-Z text", () => {
+    expect(build({ field: "updatedAt", op: "onDay", day: "2026-08-09" })).toEqual({
+      sql: "updated_at >= ? AND updated_at < ?",
+      params: ["2026-08-09T00:00:00.000Z", "2026-08-10T00:00:00.000Z"],
+    })
+    expect(build({ field: "updatedAt", op: "beforeDay", day: "2026-08-09" })).toEqual({
+      sql: "updated_at < ?",
+      params: ["2026-08-09T00:00:00.000Z"],
+    })
+    expect(build({ field: "updatedAt", op: "afterDay", day: "2026-08-09" })).toEqual({
+      sql: "updated_at >= ?",
+      params: ["2026-08-10T00:00:00.000Z"],
+    })
+    expect(
+      build({ field: "updatedAt", op: "betweenDays", fromDay: "2026-08-01", untilDay: "2026-08-09" }),
+    ).toEqual({
+      sql: "updated_at >= ? AND updated_at < ?",
+      params: ["2026-08-01T00:00:00.000Z", "2026-08-10T00:00:00.000Z"],
+    })
+  })
+})

@@ -141,10 +141,9 @@ export interface BrowseQuery {
   /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
   readonly now?: string
   /** AND-combined normalized predicates: at most one per `field` and at most 8 in
-   *  total, both enforced by `validateBrowseQuery`. Both in-repo stores evaluate the
-   *  `status`/`kind`/`content`/`namespace` arms; `confidence` and `updatedAt` are
-   *  REJECTED as a `BrowseQueryError` rather than ignored, until Task 12 builds their
-   *  clauses. */
+   *  total, both enforced by `validateBrowseQuery`. Both in-repo stores evaluate
+   *  every arm; a field with no clause is REJECTED as a `BrowseQueryError` rather
+   *  than ignored. */
   readonly filters?: readonly BrowseFilter[]
   // ─ The two fields below are DECLARED BUT NOT YET HONORED. Both in-repo stores
   //   (`sqliteMemoryStore`, `pgvectorMemoryStore`) drop them on the floor today: a
