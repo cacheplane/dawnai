@@ -4,24 +4,25 @@ import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { discoverRoutes, findDawnApp } from "@dawn-ai/core/node"
+import {
+  isScenarioSuite,
+  type RuntimeErrorExpectation,
+  type RuntimeMetaExpectation,
+  readScenarioSuite,
+  type ScenarioDescriptor,
+  type ScenarioSuiteDescriptor,
+} from "@dawn-ai/sdk/testing"
 import { loadRouteKind } from "./load-route-kind.js"
 import { registerTsxLoader } from "./register-tsx-loader.js"
 import type { RuntimeExecutionResult } from "./result.js"
 import { deriveRouteIdentity } from "./route-identity-node.js"
+import { discoverToolDefinitions } from "./tool-discovery.js"
 
 const RUN_TEST_FILE = "run.test.ts"
 
 export interface RunScenarioExpectation {
-  readonly error?: {
-    readonly kind?: string
-    readonly message?: string | { readonly includes: string }
-  }
-  readonly meta?: {
-    readonly executionSource?: "in-process" | "server"
-    readonly mode?: "graph" | "workflow"
-    readonly routeId?: string
-    readonly routePath?: string
-  }
+  readonly error?: RuntimeErrorExpectation
+  readonly meta?: RuntimeMetaExpectation
   readonly output?: unknown
   readonly status: "failed" | "passed"
 }
@@ -144,16 +145,15 @@ async function loadScenarioFile(options: {
   readonly routesDir: string
   readonly scenarioFile: string
 }): Promise<readonly LoadedRunScenario[]> {
-  const scenarioModule = (await import(pathToFileURL(options.scenarioFile).href)) as {
-    readonly default?: unknown
-  }
+  const defaultExport = await importScenarioDefault(options.scenarioFile)
 
-  if (!Array.isArray(scenarioModule.default)) {
+  if (!isScenarioSuite(defaultExport)) {
     throw new RunScenarioLoadError(
-      `Scenario file ${options.scenarioFile} must default export an array of scenario objects`,
+      `Scenario file ${options.scenarioFile} must default export scenarios("<route>").scenario(...) from "@dawn-ai/sdk/testing".\nPlain scenario arrays are not supported.`,
     )
   }
 
+  const suite = readScenarioSuite(defaultExport)
   const indexFile = resolve(dirname(options.scenarioFile), "index.ts")
 
   if (!(await pathExists(indexFile))) {
@@ -176,6 +176,19 @@ async function loadScenarioFile(options: {
     )
   }
 
+  if (suite.route !== routeIdentity.routeId) {
+    throw new RunScenarioLoadError(
+      `Scenario file ${options.scenarioFile} declares route "${suite.route}" but is colocated with route "${routeIdentity.routeId}"`,
+    )
+  }
+
+  await validateScenarioToolMocks({
+    appRoot: options.appRoot,
+    routeDir: dirname(indexFile),
+    scenarioFile: options.scenarioFile,
+    suite,
+  })
+
   const routeContext = {
     appRoot: options.appRoot,
     mode,
@@ -184,17 +197,25 @@ async function loadScenarioFile(options: {
     routePath: routeIdentity.routePath,
   }
 
-  return await Promise.all(
-    scenarioModule.default.map(
-      async (rawScenario, index) =>
-        await validateScenario({
-          rawScenario,
-          routeContext,
-          scenarioFile: options.scenarioFile,
-          scenarioIndex: index,
-        }),
-    ),
+  return suite.scenarios.map((scenario) =>
+    loadScenarioDescriptor({
+      routeContext,
+      scenario,
+      scenarioFile: options.scenarioFile,
+    }),
   )
+}
+
+async function importScenarioDefault(scenarioFile: string): Promise<unknown> {
+  try {
+    const scenarioModule = (await import(pathToFileURL(scenarioFile).href)) as {
+      readonly default?: unknown
+    }
+    return scenarioModule.default
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new RunScenarioLoadError(`Scenario file ${scenarioFile} failed to load: ${detail}`)
+  }
 }
 
 async function loadRouteKindSafe(
@@ -210,8 +231,7 @@ async function loadRouteKindSafe(
   }
 }
 
-async function validateScenario(options: {
-  readonly rawScenario: unknown
+function loadScenarioDescriptor(options: {
   readonly routeContext: {
     readonly appRoot: string
     readonly mode: "agent" | "chain" | "graph" | "workflow"
@@ -219,145 +239,77 @@ async function validateScenario(options: {
     readonly routeId: string
     readonly routePath: string
   }
+  readonly scenario: ScenarioDescriptor
   readonly scenarioFile: string
-  readonly scenarioIndex: number
-}): Promise<LoadedRunScenario> {
-  if (!isRecord(options.rawScenario)) {
-    throw new RunScenarioLoadError(
-      `Scenario file ${options.scenarioFile} contains a non-object scenario at index ${options.scenarioIndex}`,
-    )
-  }
-
-  const name = options.rawScenario.name
-  const hasInput = Object.hasOwn(options.rawScenario, "input")
-  const input = options.rawScenario.input
-  const expectation = options.rawScenario.expect
-  const expectationRecord = isRecord(expectation) ? expectation : null
-  const assert = options.rawScenario.assert
-  const runOptions = options.rawScenario.run
-
-  if (typeof name !== "string" || name.length === 0) {
-    throw new RunScenarioLoadError(
-      `Scenario file ${options.scenarioFile} contains a scenario with a missing name at index ${options.scenarioIndex}`,
-    )
-  }
-
-  if (!hasInput) {
-    throw new RunScenarioLoadError(`Scenario "${name}" must define input`)
-  }
-
-  if (typeof expectation !== "undefined" && !expectationRecord) {
-    throw new RunScenarioLoadError(`Scenario "${name}" expect must be an object when provided`)
-  }
-
-  if (!expectationRecord && typeof assert !== "function") {
-    throw new RunScenarioLoadError(
-      `Scenario "${name}" must define at least one of expect or assert`,
-    )
-  }
-
-  if (expectationRecord && !isRunScenarioStatus(expectationRecord.status)) {
-    throw new RunScenarioLoadError(
-      `Scenario "${name}" must define expect.status as "passed" or "failed"`,
-    )
-  }
-
-  if (typeof assert !== "undefined" && !isScenarioAssert(assert)) {
-    throw new RunScenarioLoadError(`Scenario "${name}" assert must be a function when provided`)
-  }
-
-  if (typeof runOptions !== "undefined" && !isRecord(runOptions)) {
-    throw new RunScenarioLoadError(`Scenario "${name}" run must be an object when provided`)
-  }
-
-  if (
-    isRecord(runOptions) &&
-    typeof runOptions.url !== "undefined" &&
-    typeof runOptions.url !== "string"
-  ) {
-    throw new RunScenarioLoadError(`Scenario "${name}" run.url must be a string when provided`)
-  }
-
-  if (isRecord(expectationRecord?.error) && !isValidErrorExpectation(expectationRecord.error)) {
-    throw new RunScenarioLoadError(
-      `Scenario "${name}" expect.error must use kind and message strings or { includes: string }`,
-    )
-  }
-
-  if (
-    typeof expectationRecord?.meta !== "undefined" &&
-    !isValidMetaExpectation(expectationRecord.meta)
-  ) {
-    throw new RunScenarioLoadError(
-      `Scenario "${name}" expect.meta must use string fields for mode, routeId, routePath, and executionSource`,
-    )
-  }
-
+}): LoadedRunScenario {
   return {
     appRoot: options.routeContext.appRoot,
-    ...(isScenarioAssert(assert) ? { assert } : {}),
-    ...(expectationRecord
-      ? {
-          expect: {
-            ...(isRecord(expectationRecord.error) ? { error: expectationRecord.error } : {}),
-            ...(isRecord(expectationRecord.meta) ? { meta: expectationRecord.meta } : {}),
-            ...(Object.hasOwn(expectationRecord, "output")
-              ? { output: expectationRecord.output }
-              : {}),
-            status: expectationRecord.status as RunScenarioExpectation["status"],
-          },
-        }
-      : {}),
-    input,
+    ...(options.scenario.assert ? { assert: options.scenario.assert } : {}),
+    expect: {
+      ...(options.scenario.expectedError !== undefined
+        ? { error: options.scenario.expectedError }
+        : {}),
+      ...(options.scenario.expectedMeta !== undefined
+        ? { meta: options.scenario.expectedMeta }
+        : {}),
+      ...(Object.hasOwn(options.scenario, "expectedOutput")
+        ? { output: options.scenario.expectedOutput }
+        : {}),
+      status: options.scenario.expectedStatus,
+    },
+    input: options.scenario.input,
     mode: options.routeContext.mode,
-    name,
+    name: options.scenario.name,
     routeId: options.routeContext.routeId,
     routeFile: options.routeContext.routeFile,
     routePath: options.routeContext.routePath,
-    ...(isRecord(runOptions) && typeof runOptions.url === "string"
-      ? { run: { url: runOptions.url } }
-      : {}),
+    ...(options.scenario.execution === "in-process"
+      ? {}
+      : { run: { url: options.scenario.execution.serverUrl } }),
     scenarioFile: options.scenarioFile,
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
-}
-
-function isRunScenarioStatus(value: unknown): value is RunScenarioExpectation["status"] {
-  return value === "passed" || value === "failed"
-}
-
-function isScenarioAssert(value: unknown): value is NonNullable<LoadedRunScenario["assert"]> {
-  return typeof value === "function"
-}
-
-function isValidErrorExpectation(value: Record<string, unknown>): boolean {
-  if (typeof value.kind !== "undefined" && typeof value.kind !== "string") {
-    return false
+async function validateScenarioToolMocks(options: {
+  readonly appRoot: string
+  readonly routeDir: string
+  readonly scenarioFile: string
+  readonly suite: ScenarioSuiteDescriptor
+}): Promise<void> {
+  if (!options.suite.scenarios.some((scenario) => scenario.toolMocks.length > 0)) {
+    return
   }
 
-  if (typeof value.message === "undefined") {
-    return true
-  }
-
-  return (
-    typeof value.message === "string" ||
-    (isRecord(value.message) && typeof value.message.includes === "string")
+  const availableToolNames = (
+    await discoverToolDefinitions({
+      appRoot: options.appRoot,
+      routeDir: options.routeDir,
+    })
   )
-}
+    .map((tool) => tool.name)
+    .sort((left, right) => left.localeCompare(right))
+  const availableTools = new Set(availableToolNames)
 
-function isValidMetaExpectation(
-  value: unknown,
-): value is NonNullable<RunScenarioExpectation["meta"]> {
-  if (!isRecord(value)) {
-    return false
+  for (const scenario of options.suite.scenarios) {
+    const unknownToolNames = scenario.toolMocks
+      .map((mock) => mock.name)
+      .filter((name) => !availableTools.has(name))
+      .sort((left, right) => left.localeCompare(right))
+
+    if (unknownToolNames.length === 0) {
+      continue
+    }
+
+    const unknownTools =
+      unknownToolNames.length === 1
+        ? `tool "${unknownToolNames[0]}"`
+        : `tools ${unknownToolNames.map((name) => `"${name}"`).join(", ")}`
+    const availableNames = availableToolNames.length > 0 ? availableToolNames.join(", ") : "(none)"
+
+    throw new RunScenarioLoadError(
+      `Scenario "${scenario.name}" mocks unknown application ${unknownTools}. Available tools: ${availableNames}. Scenario file: ${options.scenarioFile}`,
+    )
   }
-
-  return ["executionSource", "mode", "routeId", "routePath"].every((key) => {
-    return typeof value[key] === "undefined" || typeof value[key] === "string"
-  })
 }
 
 async function pathExists(path: string): Promise<boolean> {

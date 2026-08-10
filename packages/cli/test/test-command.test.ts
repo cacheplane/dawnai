@@ -2,11 +2,28 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 
 import { afterEach, describe, expect, test } from "vitest"
 
 import { run } from "../src/index.js"
+
+const SDK_TESTING_URL = pathToFileURL(
+  resolve(import.meta.dirname, "../../sdk/dist/testing/index.js"),
+).href
+
+interface BuilderScenarioFixture {
+  readonly expect: {
+    readonly error?: unknown
+    readonly meta?: unknown
+    readonly output?: unknown
+    readonly status: "failed" | "passed"
+  }
+  readonly input: unknown
+  readonly name: string
+  readonly run?: { readonly url: string }
+}
 
 const tempDirs: string[] = []
 const servers: Array<{ close: () => Promise<void> }> = []
@@ -35,7 +52,7 @@ export const workflow = async (
 `,
       "src/app/hello/[tenant]/tools/tenant-greet.ts": `export default async (input: { tenant: string }) => ({ scope: "route-local", tenant: input.tenant });
 `,
-      "src/app/hello/[tenant]/run.test.ts": scenarioModule([
+      "src/app/hello/[tenant]/run.test.ts": scenarioModule("/hello/[tenant]", [
         {
           expect: {
             meta: {
@@ -77,7 +94,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/alpha/index.ts": "export const graph = async () => ({ route: 'alpha' });\n",
-      "src/app/alpha/run.test.ts": scenarioModule([
+      "src/app/alpha/run.test.ts": scenarioModule("/alpha", [
         {
           expect: {
             output: {
@@ -90,7 +107,7 @@ export const workflow = async (
         },
       ]),
       "src/app/beta/index.ts": "export const workflow = async () => ({ route: 'beta' });\n",
-      "src/app/beta/run.test.ts": scenarioModule([
+      "src/app/beta/run.test.ts": scenarioModule("/beta", [
         {
           expect: {
             output: {
@@ -118,7 +135,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/alpha/index.ts": "export const graph = async () => ({ route: 'alpha' });\n",
-      "src/app/alpha/run.test.ts": scenarioModule([
+      "src/app/alpha/run.test.ts": scenarioModule("/alpha", [
         {
           expect: { output: { route: "alpha" }, status: "passed" },
           input: {},
@@ -126,7 +143,7 @@ export const workflow = async (
         },
       ]),
       "src/app/beta/index.ts": "export const workflow = async () => ({ route: 'beta' });\n",
-      "src/app/beta/run.test.ts": scenarioModule([
+      "src/app/beta/run.test.ts": scenarioModule("/beta", [
         {
           expect: { output: { route: "beta" }, status: "passed" },
           input: {},
@@ -150,7 +167,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/docs/index.ts": "export const graph = async () => ({ section: 'docs' });\n",
-      "src/app/docs/run.test.ts": scenarioModule([
+      "src/app/docs/run.test.ts": scenarioModule("/docs", [
         {
           expect: { output: { section: "docs" }, status: "passed" },
           input: {},
@@ -159,7 +176,7 @@ export const workflow = async (
       ]),
       "src/app/docs/guides/index.ts":
         "export const workflow = async () => ({ section: 'guides' });\n",
-      "src/app/docs/guides/run.test.ts": scenarioModule([
+      "src/app/docs/guides/run.test.ts": scenarioModule("/docs/guides", [
         {
           expect: { output: { section: "guides" }, status: "passed" },
           input: {},
@@ -168,7 +185,7 @@ export const workflow = async (
       ]),
       "src/app/marketing/index.ts":
         "export const graph = async () => ({ section: 'marketing' });\n",
-      "src/app/marketing/run.test.ts": scenarioModule([
+      "src/app/marketing/run.test.ts": scenarioModule("/marketing", [
         {
           expect: { output: { section: "marketing" }, status: "passed" },
           input: {},
@@ -190,7 +207,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/docs/index.ts": "export const graph = async () => ({ section: 'docs' });\n",
-      "src/app/docs/run.test.ts": scenarioModule([
+      "src/app/docs/run.test.ts": scenarioModule("/docs", [
         {
           expect: { output: { section: "docs" }, status: "passed" },
           input: {},
@@ -205,11 +222,156 @@ export const workflow = async (
     expect(result.stdout).toContain("PASS docs graph passes")
   })
 
+  test("loads a branded suite whose declared route matches its directory", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/run.test.ts": scenarioModule("/support", [
+        {
+          expect: { output: { ok: true }, status: "passed" },
+          input: {},
+          name: "matching branded suite passes",
+        },
+      ]),
+    })
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("PASS matching branded suite passes")
+  })
+
+  test("rejects plain default-exported scenario arrays with the builder hint", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/run.test.ts": scenarioModuleSource(`
+        export default [
+          {
+            name: "legacy array scenario",
+            input: {},
+            expect: { status: "passed" },
+          },
+        ]
+      `),
+    })
+    const scenarioFile = join(appRoot, "src/app/support/run.test.ts")
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain(
+      `Scenario file ${scenarioFile} must default export scenarios("<route>").scenario(...) from "@dawn-ai/sdk/testing".\nPlain scenario arrays are not supported.`,
+    )
+  })
+
+  test("rejects a suite whose declared route does not match its directory", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/billing/index.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/run.test.ts": scenarioModule("/billing", [
+        {
+          expect: { status: "passed" },
+          input: {},
+          name: "mismatched route suite",
+        },
+      ]),
+    })
+    const scenarioFile = join(appRoot, "src/app/support/run.test.ts")
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain(
+      `Scenario file ${scenarioFile} declares route "/billing" but is colocated with route "/support"`,
+    )
+  })
+
+  test("wraps duplicate scenario names as a scenario-load failure", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/run.test.ts": scenarioModuleSource(`
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        export default scenarios("/support")
+          .scenario("duplicate", (s) => s.input({}).expectPassed())
+          .scenario("duplicate", (s) => s.input({}).expectPassed())
+      `),
+    })
+    const scenarioFile = join(appRoot, "src/app/support/run.test.ts")
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain(`Scenario file ${scenarioFile} failed to load`)
+    expect(result.stderr).toMatch(/duplicate scenario name/i)
+  })
+
+  test("wraps server scenarios with tool mocks as a scenario-load failure", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/run.test.ts": scenarioModuleSource(`
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        export default scenarios("/support").scenario("server mock", (s) =>
+          s
+            .input({})
+            .server("http://localhost:3000")
+            .mockTool("search", async () => ({ results: [] }))
+            .expectPassed(),
+        )
+      `),
+    })
+    const scenarioFile = join(appRoot, "src/app/support/run.test.ts")
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain(`Scenario file ${scenarioFile} failed to load`)
+    expect(result.stderr).toMatch(/server scenarios cannot use tool mocks/i)
+  })
+
+  test("rejects unknown application tool mocks with sorted available names", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/tools/zeta.ts": "export default async () => 'zeta';\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/tools/alpha.ts": "export default async () => 'alpha';\n",
+      "src/app/support/run.test.ts": scenarioModuleSource(`
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        export default scenarios("/support").scenario("unknown application tool", (s) =>
+          s
+            .input({})
+            .mockTool("missing", async () => "mocked")
+            .expectPassed(),
+        )
+      `),
+    })
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain(
+      'Scenario "unknown application tool" mocks unknown application tool "missing". Available tools: alpha, zeta',
+    )
+  })
+
   test("rejects scenarios when sibling index.ts is missing", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: { status: "passed" },
           input: {},
@@ -232,7 +394,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": "export const handler = async () => ({ ok: true });\n",
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: { status: "passed" },
           input: {},
@@ -255,7 +417,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": `export const graph = async () => { throw new Error("expected route failure"); };\n`,
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: {
             error: {
@@ -282,7 +444,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: { status: "failed" },
           input: {},
@@ -304,7 +466,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": "export const graph = async () => ({ greeting: 'hello' });\n",
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: {
             output: {
@@ -331,7 +493,7 @@ export const workflow = async (
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts":
         "export const graph = async () => ({ profile: { tenant: 'acme', region: 'us-west' }, tags: ['alpha', 'beta'] });\n",
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: {
             output: {
@@ -359,7 +521,7 @@ export const workflow = async (
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts":
         "export const graph = async () => ({ tags: ['alpha', 'beta'] });\n",
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: {
             output: {
@@ -388,7 +550,7 @@ export const workflow = async (
       "dawn.config.ts": "export default {};\n",
       "src/app/support/[tenant]/index.ts":
         "export const workflow = async (input: { tenant: string }) => ({ tenant: input.tenant });\n",
-      "src/app/support/[tenant]/run.test.ts": scenarioModule([
+      "src/app/support/[tenant]/run.test.ts": scenarioModule("/support/[tenant]", [
         {
           expect: {
             meta: {
@@ -422,7 +584,7 @@ export const workflow = async (
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts":
         "export const graph = async () => { throw new Error('tenant acme exploded while rendering'); };\n",
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: {
             error: {
@@ -450,7 +612,7 @@ export const workflow = async (
       "dawn.config.ts": "export default {};\n",
       "src/app/support/[tenant]/index.ts":
         "export const graph = async (input: { tenant: string }) => ({ tenant: input.tenant, source: 'local' });\n",
-      "src/app/support/[tenant]/run.test.ts": scenarioModule([
+      "src/app/support/[tenant]/run.test.ts": scenarioModule("/support/[tenant]", [
         {
           expect: {
             meta: {
@@ -501,21 +663,19 @@ export const workflow = async (
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
       "src/app/support/run.test.ts": scenarioModuleSource(`
-        export default [
-          {
-            name: "assert runs after declarative expect",
-            input: {},
-            expect: {
-              status: "passed",
-              output: {
-                ok: true,
-              },
-            },
-            assert() {
-              throw new Error("assert hook ran")
-            },
-          },
-        ]
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        export default scenarios("/support").scenario(
+          "assert runs after declarative expect",
+          (s) =>
+            s
+              .input({})
+              .expectPassed()
+              .expectOutput({ ok: true })
+              .assert(() => {
+                throw new Error("assert hook ran")
+              }),
+        )
       `),
     })
 
@@ -533,22 +693,20 @@ export const workflow = async (
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": "export const graph = async () => ({ greeting: 'hello' });\n",
       "src/app/support/run.test.ts": scenarioModuleSource(`
-        export default [
-          {
-            name: "assert is skipped after declarative failure",
-            input: {},
-            expect: {
-              status: "passed",
-              output: {
-                greeting: "goodbye",
-              },
-            },
-            assert() {
-              globalThis.__dawnAssertCalls = (globalThis.__dawnAssertCalls ?? 0) + 1
-              throw new Error("assert should not run")
-            },
-          },
-        ]
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        export default scenarios("/support").scenario(
+          "assert is skipped after declarative failure",
+          (s) =>
+            s
+              .input({})
+              .expectPassed()
+              .expectOutput({ greeting: "goodbye" })
+              .assert(() => {
+                globalThis.__dawnAssertCalls = (globalThis.__dawnAssertCalls ?? 0) + 1
+                throw new Error("assert should not run")
+              }),
+        )
       `),
     })
 
@@ -565,7 +723,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": `export const graph = async () => { throw new Error("kind mismatch"); };\n`,
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: {
             error: {
@@ -593,7 +751,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": `export const graph = async () => { throw new Error("actual message"); };\n`,
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: {
             error: {
@@ -621,7 +779,7 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": `export const graph = async () => { throw new Error("unexpected execution failure"); };\n`,
-      "src/app/support/run.test.ts": scenarioModule([
+      "src/app/support/run.test.ts": scenarioModule("/support", [
         {
           expect: { status: "passed" },
           input: {},
@@ -651,52 +809,69 @@ export const workflow = async (
     expect(result.stderr).toContain("No run.test.ts scenarios found")
   })
 
-  test("rejects scenarios that define neither expect nor assert", async () => {
-    const appRoot = await createFixtureApp({
-      "package.json": "{}\n",
-      "dawn.config.ts": "export default {};\n",
-      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
-      "src/app/support/run.test.ts": scenarioModule([
-        {
-          input: {},
-          name: "missing expect and assert",
-        },
-      ]),
-    })
-
-    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
-
-    expect(result.exitCode).toBe(2)
-    expect(result.stderr).toContain(
-      'Scenario "missing expect and assert" must define at least one of expect or assert',
-    )
-  })
-
-  test("rejects malformed expect values even when assert(result) is present", async () => {
+  test("rejects scenarios that omit an expected status", async () => {
     const appRoot = await createFixtureApp({
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
       "src/app/support/run.test.ts": scenarioModuleSource(`
-        export default [
-          {
-            name: "malformed expect with assert",
-            input: {},
-            expect: "passed",
-            assert() {
-              return undefined
-            },
-          },
-        ]
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        interface MissingStatusBuilder {
+          input(value: unknown): unknown
+        }
+        const suite = scenarios("/support") as unknown as {
+          scenario(
+            name: string,
+            configure: (builder: MissingStatusBuilder) => unknown,
+          ): unknown
+        }
+
+        export default suite.scenario("missing expected status", (s) => s.input({}))
       `),
     })
 
     const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
 
     expect(result.exitCode).toBe(2)
-    expect(result.stderr).toContain(
-      'Scenario "malformed expect with assert" expect must be an object when provided',
-    )
+    expect(result.stderr).toContain("Scenario missing expected status requires an expected status")
+  })
+
+  test("rejects malformed builder expectations even when assert(result) is present", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/run.test.ts": scenarioModuleSource(`
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        interface MalformedExpectationBuilder {
+          assert(callback: () => unknown): MalformedExpectationBuilder
+          expectMeta(expectation: unknown): MalformedExpectationBuilder
+          expectPassed(): MalformedExpectationBuilder
+          input(value: unknown): MalformedExpectationBuilder
+        }
+        const suite = scenarios("/support") as unknown as {
+          scenario(
+            name: string,
+            configure: (builder: MalformedExpectationBuilder) => unknown,
+          ): unknown
+        }
+
+        export default suite.scenario("malformed expect with assert", (s) =>
+          s
+            .input({})
+            .expectPassed()
+            .assert(() => undefined)
+            .expectMeta("passed"),
+        )
+      `),
+    })
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain("Metadata expectation must be an object")
   })
 
   test("rejects scenarios that omit input", async () => {
@@ -704,20 +879,27 @@ export const workflow = async (
       "package.json": "{}\n",
       "dawn.config.ts": "export default {};\n",
       "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
-      "src/app/support/run.test.ts": scenarioModule([
-        {
-          expect: {
-            status: "passed",
-          },
-          name: "missing input",
-        },
-      ]),
+      "src/app/support/run.test.ts": scenarioModuleSource(`
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        interface MissingInputBuilder {
+          expectPassed(): unknown
+        }
+        const suite = scenarios("/support") as unknown as {
+          scenario(
+            name: string,
+            configure: (builder: MissingInputBuilder) => unknown,
+          ): unknown
+        }
+
+        export default suite.scenario("missing input", (s) => s.expectPassed())
+      `),
     })
 
     const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
 
     expect(result.exitCode).toBe(2)
-    expect(result.stderr).toContain('Scenario "missing input" must define input')
+    expect(result.stderr).toContain("Scenario missing input requires input to be set exactly once")
   })
 })
 
@@ -772,8 +954,35 @@ async function invoke(
   }
 }
 
-function scenarioModule(scenarios: readonly unknown[]): string {
-  return `export default ${JSON.stringify(scenarios, null, 2)};\n`
+function scenarioModule(route: string, scenarios: readonly BuilderScenarioFixture[]): string {
+  let source = `import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}\n\n`
+  source += `export default scenarios(${JSON.stringify(route)})`
+
+  for (const scenario of scenarios) {
+    let chain = `s.input(${JSON.stringify(scenario.input)})`
+
+    if (scenario.run?.url) {
+      chain += `.server(${JSON.stringify(scenario.run.url)})`
+    }
+
+    chain += scenario.expect.status === "passed" ? ".expectPassed()" : ".expectFailed()"
+
+    if (Object.hasOwn(scenario.expect, "output")) {
+      chain += `.expectOutput(${JSON.stringify(scenario.expect.output)})`
+    }
+
+    if (scenario.expect.meta) {
+      chain += `.expectMeta(${JSON.stringify(scenario.expect.meta)})`
+    }
+
+    if (scenario.expect.error) {
+      chain += `.expectError(${JSON.stringify(scenario.expect.error)})`
+    }
+
+    source += `.scenario(${JSON.stringify(scenario.name)}, (s) => ${chain})`
+  }
+
+  return `${source}\n`
 }
 
 function scenarioModuleSource(source: string): string {
