@@ -426,6 +426,14 @@ export function runMemoryStoreConformance(opts: {
       try {
         // A store that quietly returns [] for a malformed filter teaches the caller
         // that its query was fine and the data was empty. Both are lies.
+        // Identity, not wording: the HTTP boundary maps a rejection to 400 by `name`, so
+        // a store that caught and rethrew a plain Error satisfies every regex below and
+        // still 500s. Asserted by name rather than `instanceof`, which is false across the
+        // two module copies a bundled route and a node_modules store resolve to.
+        await expect(s.browse({ status: "bogus" as never })).rejects.toMatchObject({
+          name: "BrowseQueryError",
+          code: "invalid-query",
+        })
         await expect(s.browse({ status: "bogus" as never })).rejects.toThrow(/invalid status/)
         await expect(
           s.browse({ filters: [{ field: "tags", op: "in", values: ["x"] }] as never }),
@@ -445,8 +453,9 @@ export function runMemoryStoreConformance(opts: {
     test("browse does NOT impose the HTTP limit ceiling on in-process callers", async () => {
       const s = await makeStore()
       try {
-        // The CLI's consolidation scan browses with limit 10_000 and does offset
-        // arithmetic against `total`; a store-side clamp would silently truncate it.
+        // The CLI's consolidation scan browses with limit 10_000, so no store may pass
+        // `maxLimit` into the validator. Only that rejection is visible here: with one row
+        // seeded, a store that also clamped 10_000 down to the ceiling reads identically.
         await s.put(rec({ id: "a", namespace: "ns", content: "a" }))
         const page = await s.browse({ limit: 10_000 })
         expect(page.total).toBe(1)

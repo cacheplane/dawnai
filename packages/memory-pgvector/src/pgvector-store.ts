@@ -490,8 +490,9 @@ export function pgvectorMemoryStore(opts: {
         where.push(`(expires_at IS NULL OR expires_at > $${params.length})`)
       }
       const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
-      // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
-      // negatives — clamping to ≥0 integers unifies backend behavior.
+      // A no-op since validateBrowseQuery rejects non-integers, limit < 1 and offset < 0.
+      // Kept as a floor because the two backends fail asymmetrically if one ever slips
+      // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
       const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
       // Rows and total are two separate round-trips; a concurrent write between

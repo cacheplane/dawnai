@@ -430,8 +430,8 @@ export function sqliteMemoryStore(opts: {
       return rows.map(rowToRecord)
     },
     async browse(q = {}) {
-      // Defence in depth: the HTTP boundary validates too, but a store that accepts
-      // nonsense returns an empty page that looks like an answer.
+      // Defence in depth: whatever the caller checked, a store that accepts nonsense
+      // returns an empty page that looks like an answer.
       validateBrowseQuery(q)
       // TODO(Tasks 9/11/12/13/14): `q.namespace`, `q.filters`, `q.orderBy` and
       // `q.cursor` are read NOWHERE below — this store still answers only the
@@ -474,8 +474,9 @@ export function sqliteMemoryStore(opts: {
         params.push(q.now)
       }
       const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
-      // Clamp: sqlite treats LIMIT -1 as unlimited while Postgres throws on
-      // negatives — clamping to ≥0 integers unifies backend behavior.
+      // A no-op since validateBrowseQuery rejects non-integers, limit < 1 and offset < 0.
+      // Kept as a floor because the two backends fail asymmetrically if one ever slips
+      // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
       const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
       // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
