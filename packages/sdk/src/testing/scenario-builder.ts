@@ -11,7 +11,8 @@ import type {
 const SCENARIO_SUITE = Symbol.for("dawn.scenario-suite")
 const SCENARIO_DRAFT = Symbol("dawn.scenario-draft")
 const TOOL_CALL_EXPECTATION_DRAFT = Symbol("dawn.tool-call-expectation-draft")
-const SNAPSHOT_PROXY_TARGETS = new WeakMap<object, object>()
+const SNAPSHOT_PROXY_TARGETS_KEY = Symbol.for("dawn.scenario-snapshot-proxy-targets")
+const SNAPSHOT_PROXY_TARGETS = getSnapshotProxyTargets()
 
 const DATE_MUTATORS = new Set<PropertyKey>([
   "setDate",
@@ -514,23 +515,22 @@ function parseBrandedSuite(value: unknown): ScenarioSuiteDescriptor {
 function parseSuiteDescriptor(value: unknown): ScenarioSuiteDescriptor {
   const suite = assertRecord(value, "suite descriptor")
   const route = assertNonEmptyString(readRequired(suite, "route", "Suite route"), "Suite route")
-  const scenariosValue = assertDenseArray(
+  const names = new Set<string>()
+  const snapshot = createUnknownSnapshotter()
+  const scenarios = mapDenseArray(
     readRequired(suite, "scenarios", "Suite scenarios"),
     "Suite scenarios",
+    (scenario, index) => {
+      const parsed = parseScenarioDescriptor(scenario, index, snapshot)
+
+      if (names.has(parsed.name)) {
+        throw new Error(`duplicate scenario name: ${parsed.name}`)
+      }
+
+      names.add(parsed.name)
+      return parsed
+    },
   )
-
-  const snapshot = createUnknownSnapshotter()
-  const names = new Set<string>()
-  const scenarios = scenariosValue.map((scenario, index) => {
-    const parsed = parseScenarioDescriptor(scenario, index, snapshot)
-
-    if (names.has(parsed.name)) {
-      throw new Error(`duplicate scenario name: ${parsed.name}`)
-    }
-
-    names.add(parsed.name)
-    return parsed
-  })
 
   return Object.freeze({ route, scenarios: Object.freeze(scenarios) })
 }
@@ -637,20 +637,12 @@ function parseToolMocks(
   value: unknown,
   scenarioName: string,
 ): readonly ScenarioToolMockDescriptor[] {
-  const mockValues = assertDenseArray(value, `Scenario ${scenarioName} tool mocks`)
-
   const names = new Set<string>()
-  const mocks = mockValues.map((mockValue, index) => {
-    const mock = assertRecord(mockValue, `Scenario ${scenarioName} tool mock at index ${index}`)
-    const name = assertNonEmptyString(
-      readRequired(mock, "name", `Scenario ${scenarioName} tool mock name`),
-      `Scenario ${scenarioName} tool mock name`,
-    )
-    const implementation = readRequired(
-      mock,
-      "implementation",
-      `Scenario ${scenarioName} tool mock ${name} implementation`,
-    )
+  const mocks = mapDenseArray(value, `Scenario ${scenarioName} tool mocks`, (mockValue, index) => {
+    const label = `Scenario ${scenarioName} tool mock at index ${index}`
+    const mock = assertRecord(mockValue, label)
+    const name = assertNonEmptyString(readRequired(mock, "name", `${label} name`), `${label} name`)
+    const implementation = readRequired(mock, "implementation", `${label} implementation`)
 
     if (names.has(name)) {
       throw new Error(`Scenario ${scenarioName} has duplicate tool mock ${name}`)
@@ -678,46 +670,46 @@ function parseToolCallExpectations(
   mockedNames: ReadonlySet<string>,
   snapshot: (value: unknown) => unknown,
 ): readonly ScenarioToolCallExpectationDescriptor[] {
-  const expectationValues = assertDenseArray(
+  const expectations = mapDenseArray(
     value,
     `Scenario ${scenarioName} tool call expectations`,
+    (expectationValue, index) => {
+      const label = `Scenario ${scenarioName} tool expectation at index ${index}`
+      const expectation = assertRecord(expectationValue, label)
+      const name = assertNonEmptyString(
+        readRequired(expectation, "name", `${label} name`),
+        `${label} name`,
+      )
+
+      if (!mockedNames.has(name)) {
+        throw new Error(`Scenario ${scenarioName} must mock tool ${name} before expecting it`)
+      }
+
+      const argumentMatchers = mapDenseArray(
+        readRequired(expectation, "argumentMatchers", `${label} argument matchers`),
+        `${label} argument matchers`,
+        snapshot,
+      )
+
+      const count = Object.hasOwn(expectation, "count")
+        ? parseToolCallCount(expectation.count, label)
+        : undefined
+
+      if (!count && argumentMatchers.length === 0) {
+        throw new Error(`${label} must contain at least one assertion`)
+      }
+
+      if (count?.kind === "exact" && count.value === 0 && argumentMatchers.length > 0) {
+        throw new Error(`${label} exact zero count cannot be combined with argument matchers`)
+      }
+
+      return Object.freeze({
+        argumentMatchers: Object.freeze(argumentMatchers),
+        ...(count ? { count } : {}),
+        name,
+      })
+    },
   )
-
-  const expectations = expectationValues.map((expectationValue, index) => {
-    const label = `Scenario ${scenarioName} tool expectation at index ${index}`
-    const expectation = assertRecord(expectationValue, label)
-    const name = assertNonEmptyString(
-      readRequired(expectation, "name", `${label} name`),
-      `${label} name`,
-    )
-
-    if (!mockedNames.has(name)) {
-      throw new Error(`Scenario ${scenarioName} must mock tool ${name} before expecting it`)
-    }
-
-    const argumentMatchersValue = assertDenseArray(
-      readRequired(expectation, "argumentMatchers", `${label} argument matchers`),
-      `${label} argument matchers`,
-    )
-
-    const count = Object.hasOwn(expectation, "count")
-      ? parseToolCallCount(expectation.count, label)
-      : undefined
-
-    if (!count && argumentMatchersValue.length === 0) {
-      throw new Error(`${label} must contain at least one assertion`)
-    }
-
-    if (count?.kind === "exact" && count.value === 0 && argumentMatchersValue.length > 0) {
-      throw new Error(`${label} exact zero count cannot be combined with argument matchers`)
-    }
-
-    return Object.freeze({
-      argumentMatchers: Object.freeze(argumentMatchersValue.map(snapshot)),
-      ...(count ? { count } : {}),
-      name,
-    })
-  })
 
   return Object.freeze(expectations)
 }
@@ -911,6 +903,27 @@ function createUnknownSnapshotter(): (value: unknown) => unknown {
   return snapshot
 }
 
+function getSnapshotProxyTargets(): WeakMap<object, object> {
+  const existing = Reflect.get(globalThis, SNAPSHOT_PROXY_TARGETS_KEY)
+
+  if (existing !== undefined) {
+    if (!(existing instanceof WeakMap)) {
+      throw new TypeError("Scenario snapshot proxy registry is malformed")
+    }
+
+    return existing as WeakMap<object, object>
+  }
+
+  const registry = new WeakMap<object, object>()
+  Object.defineProperty(globalThis, SNAPSHOT_PROXY_TARGETS_KEY, {
+    configurable: false,
+    enumerable: false,
+    value: registry,
+    writable: false,
+  })
+  return registry
+}
+
 function createReadOnlyDateSnapshot(target: Date): Date {
   const proxy = new Proxy(target, {
     get(date, property, receiver) {
@@ -1039,6 +1052,25 @@ function assertDenseArray(value: unknown, label: string): readonly unknown[] {
   }
 
   return value
+}
+
+function mapDenseArray<T>(
+  value: unknown,
+  label: string,
+  transform: (value: unknown, index: number) => T,
+): T[] {
+  const values = assertDenseArray(value, label)
+  const transformed: T[] = []
+
+  for (let index = 0; index < values.length; index += 1) {
+    if (!Object.hasOwn(values, index)) {
+      throw new Error(`${label} must not contain a hole at index ${index}`)
+    }
+
+    transformed.push(transform(values[index], index))
+  }
+
+  return transformed
 }
 
 function assertNonEmptyString(value: unknown, label: string): string {

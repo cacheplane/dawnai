@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest"
+import { describe, expect, test, vi } from "vitest"
 
 import { isScenarioSuite, readScenarioSuite, scenarios } from "../src/testing/index.js"
 
@@ -202,6 +202,86 @@ describe("scenarios", () => {
     }
   })
 
+  test("does not call overridden map methods on forged descriptor arrays", () => {
+    const suite = scenarios("/research").scenario("valid", (s) => s.input({}).expectPassed())
+    const [brand] = Object.getOwnPropertySymbols(suite)
+    if (!brand) throw new Error("Expected a scenario suite brand")
+
+    const overrideMap = <T>(values: T[]): T[] => {
+      Object.defineProperty(values, "map", {
+        value: () => {
+          throw new Error("Called an untrusted map method")
+        },
+      })
+      return values
+    }
+    const toolMock = {
+      implementation: async () => ({ results: [] }),
+      name: "searchWeb",
+    }
+    const toolExpectation = {
+      argumentMatchers: [{ query: "Dawn" }],
+      count: { kind: "exact", value: 1 },
+      name: "searchWeb",
+    }
+    const validScenario = {
+      execution: "in-process",
+      expectedStatus: "passed",
+      input: {},
+      name: "valid",
+      toolCallExpectations: [toolExpectation],
+      toolMocks: [toolMock],
+    }
+    const cases = [
+      {
+        label: "scenarios",
+        payload: { route: "/research", scenarios: overrideMap([validScenario]) },
+      },
+      {
+        label: "tool mocks",
+        payload: {
+          route: "/research",
+          scenarios: [{ ...validScenario, toolMocks: overrideMap([toolMock]) }],
+        },
+      },
+      {
+        label: "tool call expectations",
+        payload: {
+          route: "/research",
+          scenarios: [
+            {
+              ...validScenario,
+              toolCallExpectations: overrideMap([toolExpectation]),
+            },
+          ],
+        },
+      },
+      {
+        label: "argument matchers",
+        payload: {
+          route: "/research",
+          scenarios: [
+            {
+              ...validScenario,
+              toolCallExpectations: [
+                {
+                  ...toolExpectation,
+                  argumentMatchers: overrideMap([{ query: "Dawn" }]),
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+
+    for (const { label, payload } of cases) {
+      const forged = { [brand]: payload }
+      expect(isScenarioSuite(forged), label).toBe(true)
+      expect(readScenarioSuite(forged).scenarios, label).toHaveLength(1)
+    }
+  })
+
   test("recursively snapshots mutable opaque values", async () => {
     class MutableBox {
       label: string
@@ -271,6 +351,49 @@ describe("scenarios", () => {
     expect(() => snapshot.date.setTime(0)).toThrow(/read-only snapshot/i)
     expect(() => snapshot.map.set("mutated", { count: 4 })).toThrow(/read-only snapshot/i)
     expect(() => snapshot.box.rename("mutated")).toThrow()
+
+    const toolMock = scenario.toolMocks[0]
+    if (!toolMock) throw new Error("Expected a tool mock")
+    await expect(toolMock.implementation({ query: "Dawn" })).resolves.toEqual({
+      results: ["Dawn"],
+    })
+    expect(await scenario.assert?.({} as never)).toBe("asserted")
+  })
+
+  test("reads immutable snapshots across SDK module instances", async () => {
+    const authoredDate = new Date("2026-08-09T12:00:00.000Z")
+    const authoredMap = new Map([["entry", { count: 1 }]])
+    const mock = async ({ query }: { readonly query: string }) => ({ results: [query] })
+    const assertion = () => "asserted"
+    const suite = scenarios("/research").scenario("cross-copy", (s) =>
+      s
+        .input({ date: authoredDate, map: authoredMap })
+        .mockTool("searchWeb", mock)
+        .expectPassed()
+        .assert(assertion),
+    )
+
+    authoredDate.setUTCFullYear(2030)
+    authoredMap.set("later", { count: 2 })
+
+    vi.resetModules()
+    const secondSdk = await import("../src/testing/index.js")
+
+    expect(secondSdk.isScenarioSuite(suite)).toBe(true)
+    const scenario = secondSdk.readScenarioSuite(suite).scenarios[0]
+    if (!scenario) throw new Error("Expected a scenario descriptor")
+    const snapshot = scenario.input as {
+      date: Date
+      map: Map<string, { count: number }>
+    }
+
+    expect(snapshot.date.toISOString()).toBe("2026-08-09T12:00:00.000Z")
+    expect(snapshot.map.get("entry")).toEqual({ count: 1 })
+    expect(snapshot.map.has("later")).toBe(false)
+    expect(() => snapshot.date.setTime(0)).toThrow(/read-only snapshot/i)
+    expect(() => Date.prototype.setTime.call(snapshot.date, 0)).toThrow()
+    expect(() => snapshot.map.set("mutated", { count: 3 })).toThrow(/read-only snapshot/i)
+    expect(() => Map.prototype.set.call(snapshot.map, "mutated", { count: 3 })).toThrow()
 
     const toolMock = scenario.toolMocks[0]
     if (!toolMock) throw new Error("Expected a tool mock")
