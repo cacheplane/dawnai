@@ -88,6 +88,91 @@ describe("createScenarioSnapshotter", () => {
     expect(tagGetterCalls).toBe(0)
   })
 
+  test("rejects Array and Error proxies before specialized dispatch", () => {
+    const snapshot = createScenarioSnapshotter()
+
+    for (const [label, value] of [
+      ["Array", []],
+      ["Error", new Error("invalid")],
+    ] as const) {
+      let protocolReads = 0
+      let otherTrapCalls = 0
+      const proxy = new Proxy(value, {
+        get(target, property, receiver) {
+          if (
+            typeof property === "symbol" &&
+            Symbol.keyFor(property) === "dawn.scenario-readonly-snapshot-data.v1"
+          ) {
+            protocolReads += 1
+            return undefined
+          }
+
+          otherTrapCalls += 1
+          return Reflect.get(target, property, receiver)
+        },
+        getOwnPropertyDescriptor(target, property) {
+          otherTrapCalls += 1
+          return Reflect.getOwnPropertyDescriptor(target, property)
+        },
+        getPrototypeOf(target) {
+          otherTrapCalls += 1
+          return Reflect.getPrototypeOf(target)
+        },
+        ownKeys(target) {
+          otherTrapCalls += 1
+          return Reflect.ownKeys(target)
+        },
+      })
+
+      expect(() => snapshot(proxy), label).toThrow(/Proxy snapshot values are not supported/i)
+      expect(protocolReads, label).toBe(1)
+      expect(otherTrapCalls, label).toBe(0)
+    }
+  })
+
+  test("rejects custom built-in subclasses before specialized dispatch", () => {
+    class PrivateDate extends Date {
+      #secret = "date"
+
+      readSecret(): string {
+        return this.#secret
+      }
+    }
+    class PrivateMap extends Map<string, string> {
+      #secret = "map"
+
+      readSecret(): string {
+        return this.#secret
+      }
+    }
+
+    for (const value of [new PrivateDate(0), new PrivateMap()]) {
+      expect(() => createScenarioSnapshotter()(value)).toThrow(
+        new RegExp(`unsupported snapshot value: custom instance ${value.constructor.name}`, "i"),
+      )
+    }
+  })
+
+  test("preserves explicitly supported native Error subclasses", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "SuppressedError")
+    const constructorValue = descriptor && "value" in descriptor ? descriptor.value : undefined
+
+    if (typeof constructorValue !== "function") {
+      return
+    }
+
+    const authored = Reflect.construct(constructorValue, [
+      new Error("primary"),
+      new Error("suppressed"),
+      "combined",
+    ]) as Error
+    const snapshot = createScenarioSnapshotter()(authored) as Error
+
+    expect(Object.getPrototypeOf(snapshot)).toBe(Object.getPrototypeOf(authored))
+    expect(snapshot.message).toBe("combined")
+    expect(Object.isFrozen(snapshot)).toBe(true)
+  })
+
   test("rejects unrecognized intrinsic objects from generic cloning", () => {
     const snapshot = createScenarioSnapshotter()
     const messageChannel = typeof MessageChannel === "function" ? new MessageChannel() : undefined
@@ -143,6 +228,45 @@ describe("createScenarioSnapshotter", () => {
     }
 
     for (const { label, value } of values) {
+      expect(Object.getOwnPropertyDescriptor(value, Symbol.toStringTag), label).toBeUndefined()
+      expect(() => snapshot(value), label).toThrow(
+        new RegExp(`${label.replace(".", "\\.")} snapshot values are not supported`, "i"),
+      )
+    }
+  })
+
+  test("rejects centrally classified prototype-stripped intrinsic families", () => {
+    const snapshot = createScenarioSnapshotter()
+    const values: { readonly label: string; readonly value: object }[] = [
+      {
+        label: "FinalizationRegistry",
+        value: new FinalizationRegistry(() => undefined),
+      },
+      { label: "Intl.Collator", value: new Intl.Collator("en") },
+      { label: "Intl.DateTimeFormat", value: new Intl.DateTimeFormat("en") },
+      { label: "URL", value: new URL("https://dawnai.org/research") },
+      { label: "URLSearchParams", value: new URLSearchParams("query=Dawn") },
+    ]
+
+    if (typeof WebAssembly === "object") {
+      values.push(
+        {
+          label: "WebAssembly.Memory",
+          value: new WebAssembly.Memory({ initial: 1 }),
+        },
+        {
+          label: "WebAssembly.Table",
+          value: new WebAssembly.Table({ element: "anyfunc", initial: 1 }),
+        },
+        {
+          label: "WebAssembly.Global",
+          value: new WebAssembly.Global({ mutable: true, value: "i32" }, 1),
+        },
+      )
+    }
+
+    for (const { label, value } of values) {
+      Object.setPrototypeOf(value, Object.prototype)
       expect(Object.getOwnPropertyDescriptor(value, Symbol.toStringTag), label).toBeUndefined()
       expect(() => snapshot(value), label).toThrow(
         new RegExp(`${label.replace(".", "\\.")} snapshot values are not supported`, "i"),
@@ -268,7 +392,12 @@ describe("createScenarioSnapshotter", () => {
     expect(snapshot.file.lastModified).toBe(123)
     expect(findFileState(snapshot.file)).toBeUndefined()
     expect(Object.getOwnPropertySymbols(snapshot.blob)).toEqual([])
-    expect(Object.getOwnPropertySymbols(snapshot.file)).toEqual([])
+    expect(Object.getOwnPropertySymbols(snapshot.file)).toEqual([inspect.custom])
+    expect(Object.getOwnPropertyDescriptor(snapshot.file, inspect.custom)).toMatchObject({
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    })
     expect(Object.isFrozen(snapshot.blob)).toBe(true)
     expect(Object.isFrozen(snapshot.file)).toBe(true)
     expect(() => {
@@ -302,6 +431,9 @@ describe("createScenarioSnapshotter", () => {
     await expect(second.file.text()).resolves.toBe("Dawn")
     expect(second.file.name).toBe("dawn.txt")
     expect(second.file.lastModified).toBe(123)
+    expect(Object.getPrototypeOf(first.file)).toBe(File.prototype)
+    expect(Object.getPrototypeOf(second.file)).toBe(File.prototype)
+    expect(inspect(second.file)).toContain("name: 'dawn.txt'")
 
     vi.resetModules()
     const secondModule = await import("../src/testing/scenario-snapshot.js")
@@ -310,11 +442,15 @@ describe("createScenarioSnapshotter", () => {
     await expect(crossCopy.file.slice(2).text()).resolves.toBe("wn")
     expect(crossCopy.file.name).toBe("dawn.txt")
     expect(crossCopy.file.lastModified).toBe(123)
+    expect(Object.getPrototypeOf(crossCopy.file)).toBe(File.prototype)
+    expect(inspect(crossCopy.file)).toContain("name: 'dawn.txt'")
   })
 
   test("uses a fixed intrinsic predicate set for plain records", async () => {
     vi.resetModules()
     const actual = await vi.importActual<typeof import("node:util/types")>("node:util/types")
+    const weakRefDeref = vi.spyOn(WeakRef.prototype, "deref")
+    const webAssemblyModuleExports = vi.spyOn(WebAssembly.Module, "exports")
     const calls = new Map<string, number>()
     const mockedTypeChecks: Record<string, unknown> = {}
 
@@ -339,7 +475,11 @@ describe("createScenarioSnapshotter", () => {
       expect(isolated.createScenarioSnapshotter()({ stable: true })).toEqual({ stable: true })
       expect(calls.get("futureIntrinsicPredicate") ?? 0).toBe(0)
       expect([...calls.values()].reduce((total, count) => total + count, 0)).toBeLessThanOrEqual(20)
+      expect(weakRefDeref).not.toHaveBeenCalled()
+      expect(webAssemblyModuleExports).not.toHaveBeenCalled()
     } finally {
+      weakRefDeref.mockRestore()
+      webAssemblyModuleExports.mockRestore()
       vi.doUnmock("node:util/types")
       vi.resetModules()
     }
