@@ -206,7 +206,7 @@ set -euo pipefail
 test "$(node -p "require('./packages/sdk/package.json').version")" = "0.8.21"
 test "$(node -p "require('./packages/core/package.json').version")" = "0.8.21"
 test -f .changeset/inspector-namespace-groups.md
-rg -n '^appVersion: 0\.8\.21$' charts/dawn-app/Chart.yaml charts/dawn-sandbox-infra/Chart.yaml
+rg -n '^appVersion: "0\.8\.21"$' charts/dawn-app/Chart.yaml charts/dawn-sandbox-infra/Chart.yaml
 ```
 
 Expected: all assertions succeed; each chart reports `appVersion: 0.8.21`.
