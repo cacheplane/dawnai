@@ -36,6 +36,7 @@
 - `packages/cli/src/lib/build/targets/vercel-config.ts` — owns the recommended `vercel.json`, parsing/preservation rules, `fluid` validation, reference-file emission, and warnings.
 - `packages/cli/src/lib/build/targets/vercel-output.ts` — owns Build Output API metadata validation and the backup/rename/rollback publisher for `.vercel/output`.
 - `packages/cli/src/lib/build/targets/vercel.ts` — coordinates staging, shared runtime generation, esbuild bundling, metadata creation, validation, root-config reconciliation, transactional publication, and artifact reporting.
+- `packages/langchain/src/default-model-importer.ts` and `packages/langchain/src/static-model-importer.ts` — separate the ordinary Node dynamic fallback from the loader-free static-deployment fallback selected by the Vercel bundle.
 
 ### New test and CI files
 
@@ -488,6 +489,14 @@
 - Modify: `packages/cli/src/lib/build/targets/vercel-output.ts`
 - Modify: `packages/cli/test/vercel-target.test.ts`
 - Modify: `packages/cli/test/build-targets.test.ts`
+- Create: `packages/langchain/src/default-model-importer.ts`
+- Create: `packages/langchain/src/static-model-importer.ts`
+- Create: `packages/langchain/test/default-model-importer.test.ts`
+- Modify: `packages/langchain/src/chat-model-factory.ts`
+- Modify: `packages/langchain/package.json`
+- Modify: `packages/cli/package.json`
+- Modify: `scripts/lib/pack-check.mjs`
+- Modify: `pnpm-lock.yaml`
 
 - [ ] **Step 1: Add failing complete-target assertions**
 
@@ -517,6 +526,13 @@
 
   Expected: FAIL because the target shell throws.
 
+  Also add a focused LangChain test for the wished-for Node and static loader
+  modules. Prove the Node module can import a data URL and the static module
+  throws targeted pre-seeding guidance. Run it before creating the modules and
+  observe the missing-module RED. Add an esbuild-metafile regression that
+  proves ordinary conditions select only `default-model-importer.js` while the
+  Vercel conditions select only `static-model-importer.js`.
+
 - [ ] **Step 3: Preflight before creating invocation-scoped staging, then bundle**
 
   In `vercel.ts`, compute (but do not create) `.vercel/.dawn-vercel-<randomUUID>/runtime` and `.../output`. Call the shared emitter first:
@@ -534,7 +550,9 @@
 
   ```ts
   await build({
+    absWorkingDir: ctx.appRoot,
     bundle: true,
+    conditions: ["dawn-static-provider-imports", "module"],
     entryPoints: [runtime.appPath],
     format: "esm",
     minify: false,
@@ -544,6 +562,16 @@
     target: "node24",
   })
   ```
+
+  The custom condition selects `@dawn-ai/langchain`'s loader-free static
+  fallback; retaining `module` preserves esbuild's automatic resolution
+  behavior after explicit conditions are supplied. The generated entry still
+  calls `seedModelImporter(providerImporter)`. Ordinary Node selects a separate
+  default module containing `(specifier) => import(specifier)`. The static
+  fallback throws targeted guidance if application module initialization tries
+  to construct a model before the generated entry seeds its provider map.
+  `absWorkingDir` prevents build-machine fixture paths from entering esbuild's
+  source-boundary comments.
 
   Do not externalize Dawn, Hono, Postgres, Neon, application, or discovered provider packages. Catch esbuild resolution failures and throw a `CliError` naming the missing specifier and explaining the function-directory boundary.
 
@@ -558,7 +586,16 @@
   await publishVercelOutput({ stagedOutput, vercelDir })
   ```
 
-  Always remove only the invocation directory in `finally`. Return artifacts under the final `.vercel/output` paths plus the root or reference config path; never report staging paths.
+  Always attempt to remove only the invocation directory in `finally`. Track
+  primary failure with an explicit boolean and retained error value. If cleanup
+  alone fails after successful publication, throw a targeted `CliError` whose
+  cause is the cleanup error, states that final output remains valid, and leaves
+  the invocation directory inspectable. If the target and cleanup both fail,
+  throw `AggregateError([primaryError, cleanupError], ..., { cause:
+  primaryError })` so cleanup cannot mask bundle, validation, config,
+  publication, or rollback details. Return artifacts under the final
+  `.vercel/output` paths plus the root or reference config path; never report
+  staging paths.
 
 - [ ] **Step 5: Implement atomic backup/rename/rollback**
 
@@ -582,6 +619,13 @@
   - backup removal after successful publication: new output remains valid and error names cleanup;
   - rollback rename: error preserves both causes and leaves paths inspectable.
 
+  Also inject invocation-directory cleanup failure through a target-internal
+  `rm` seam. Cover cleanup-only failure after a valid publication and combined
+  target-plus-cleanup failure. The former leaves valid final output and names
+  the inspectable invocation directory; the latter retains the target failure
+  as aggregate cause and first error while retaining cleanup as the second
+  error.
+
   In every case seed `.vercel/project.json` and `.vercel/.env.preview.local`, then assert both remain byte-identical. Add a pre-publication bundle failure and prove the prior output is untouched.
 
 - [ ] **Step 7: Run focused target tests**
@@ -600,6 +644,10 @@
 
   ```bash
   corepack pnpm --filter @dawn-ai/cli typecheck
+  corepack pnpm --filter @dawn-ai/langchain exec tsc -b tsconfig.json --clean
+  corepack pnpm --filter @dawn-ai/langchain exec tsc -b tsconfig.json --force
+  corepack pnpm --filter @dawn-ai/langchain test default-model-importer.test.ts
+  corepack pnpm --filter @dawn-ai/langchain typecheck
   corepack pnpm biome check --config-path packages/config-biome/biome.json \
     packages/cli/src/lib/build/targets/vercel.ts \
     packages/cli/src/lib/build/targets/vercel-output.ts \
@@ -608,7 +656,19 @@
   git diff --check
   ```
 
-  Expected: PASS.
+  Move `esbuild` from the CLI's development dependencies to runtime
+  dependencies without changing its range, refresh and frozen-validate the
+  lockfile, and require both loader modules' JavaScript and declarations in the
+  pack-check inventory. For the Task 5 manual smoke, pack the built CLI and
+  LangChain packages into a temporary consumer, override every transitive
+  LangChain resolution to the local tarball, and exercise packed CLI help, the
+  Vercel target import, and the static-conditioned LangChain import. Because the
+  fixed workspace version may not yet exist on the registry, verification-only
+  links may supply other unchanged Dawn packages; this consumer is not the
+  fully self-contained deployment proof. Its lockfile must still contain zero
+  registry LangChain copies. Task 8 supplies the fully vendored closure proof.
+  Run the repository pack check and `publint`; every package-import target must
+  exist in the tarball. Expected: PASS.
 
 - [ ] **Step 9: Commit**
 
@@ -616,7 +676,13 @@
   git add packages/cli/src/lib/build/targets/vercel.ts \
     packages/cli/src/lib/build/targets/vercel-output.ts \
     packages/cli/test/vercel-target.test.ts \
-    packages/cli/test/build-targets.test.ts
+    packages/cli/test/build-targets.test.ts \
+    packages/cli/package.json packages/langchain/package.json \
+    packages/langchain/src/chat-model-factory.ts \
+    packages/langchain/src/default-model-importer.ts \
+    packages/langchain/src/static-model-importer.ts \
+    packages/langchain/test/default-model-importer.test.ts \
+    scripts/lib/pack-check.mjs pnpm-lock.yaml
   git commit -m "feat(cli): emit vercel function output"
   ```
 
@@ -800,15 +866,15 @@
 
   In the helper:
 
-  1. Create `const fixtureAssets = join(runRoot, "assets")`, then run `pnpm --filter @dawn-ai/cli pack --pack-destination fixtureAssets` after the repository build, so source deployment uses the branch's built CLI rather than a published older CLI.
+  1. Create `const fixtureAssets = join(runRoot, "assets")`. Starting from the CLI plus every direct Dawn dependency in the fixture manifest (including `@dawn-ai/postgres-storage` and `@dawn-ai/sdk`), recursively derive the local `@dawn-ai/*` runtime dependency closure from package manifests. After the repository build, pack exactly that derived closure into `fixtureAssets`. Do not hard-code an incomplete pair or an unrelated all-workspace list; every tarball must come from the branch under test.
   2. Create two separate temp roots, each with its own `.vercel/project.json` containing only `orgId` and `projectId` from the environment.
-  3. Copy the exact packed CLI tarball into `vendor/` inside each fixture root. In each fixture's `package.json`, reference it only by the upload-safe relative specifier `"@dawn-ai/cli": "file:vendor/<exact-tarball-name>.tgz"`; do not retain the `runRoot/assets` path anywhere in the fixture.
-  4. Write the same remaining package manifest, `dawn.config.ts`, routes, and committed recommendation-shaped `vercel.json` (`fluid: true`) into each fixture. Run `pnpm install --lockfile-only` separately in each root, then parse each `pnpm-lock.yaml` and require the CLI resolution to point at that fixture's relative `vendor/` tarball. Run `pnpm install --frozen-lockfile` for the local prebuilt fixture; the source fixture uploads its manifest, lockfile, and tarball for Vercel's clean remote install.
+  3. Copy every exact closure tarball into `vendor/` inside each fixture root. In each fixture's `package.json`, reference direct Dawn dependencies only by upload-safe relative `file:vendor/<exact-tarball-name>.tgz` specifiers. Add a fixture-local `pnpm-workspace.yaml` override for every vendored Dawn package so all transitive resolutions point to that package's exact relative tarball; do not retain the `runRoot/assets` path anywhere in the fixture.
+  4. Write the same remaining package manifest, `dawn.config.ts`, routes, and committed recommendation-shaped `vercel.json` (`fluid: true`) into each fixture. Run `pnpm install --lockfile-only` separately in each root, then parse each `pnpm-lock.yaml` and require every `@dawn-ai/*` resolution to point at the matching relative `vendor/` tarball. Reject any registry copy of any Dawn package. Run `pnpm install --frozen-lockfile` for the local prebuilt fixture; the source fixture uploads its manifest, workspace override, lockfile, and complete derived tarball closure for Vercel's clean remote install.
   5. Before deployment, recursively inspect the source fixture and reject any symlink or dependency path that resolves outside its root, ensuring the uploaded source is self-contained.
   6. Assert the source root has neither `.dawn` nor `.vercel/output` immediately before source deploy.
   7. Build only the prebuilt root locally and assert its bundle does not contain the database URL.
 
-  The fixture's runtime dependencies must include the packed CLI, published fixed-version Dawn dependencies reached by the fixture route, `hono`, `@dawn-ai/postgres-storage`, and `@neondatabase/serverless`. Never symlink workspace paths into a directory uploaded to Vercel.
+  The fixture's runtime dependencies must include the packed CLI, every Dawn package in the derived override-pinned closure, `hono`, `@dawn-ai/postgres-storage`, and `@neondatabase/serverless`. Never symlink workspace paths into a directory uploaded to Vercel.
 
 - [ ] **Step 4: Add deterministic model-free fixture routes**
 

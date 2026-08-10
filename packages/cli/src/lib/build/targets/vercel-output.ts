@@ -1,7 +1,10 @@
-import { lstat, mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
 import { isBuiltin } from "node:module"
 import { isAbsolute, join, relative, sep } from "node:path"
 import { build } from "esbuild"
+
+import { CliError, formatErrorMessage } from "../../output.js"
 
 export const VERCEL_BUILD_OUTPUT_CONFIG = {
   routes: [{ dest: "/index", src: "/(.*)" }],
@@ -62,6 +65,66 @@ export async function validateVercelOutput(outputDir: string): Promise<void> {
   )
   await validateFunctionTree(functionDir, realFunctionDir)
   await validateRuntimeDependencies(entryPath, functionDir, realFunctionDir)
+}
+
+/** Atomically replace `.vercel/output` with one fully validated staged tree. */
+export async function publishVercelOutput(input: {
+  readonly stagedOutput: string
+  readonly vercelDir: string
+  readonly fileOps?: Pick<typeof import("node:fs/promises"), "rename" | "rm">
+}): Promise<void> {
+  const fileOps = input.fileOps ?? { rename, rm }
+  const outputDir = join(input.vercelDir, "output")
+  const backupPath = join(input.vercelDir, `.dawn-vercel-output-backup-${randomUUID()}`)
+  let backupCreated = false
+
+  try {
+    await fileOps.rename(outputDir, backupPath)
+    backupCreated = true
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      throw new CliError(
+        `Could not preserve the existing Vercel output at ${outputDir}: ${formatErrorMessage(error)}`,
+        1,
+        { cause: error },
+      )
+    }
+  }
+
+  try {
+    await fileOps.rename(input.stagedOutput, outputDir)
+  } catch (publicationError) {
+    if (backupCreated) {
+      try {
+        await fileOps.rename(backupPath, outputDir)
+        backupCreated = false
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [publicationError, rollbackError],
+          `Could not publish Vercel output and could not restore the prior output. The recoverable backup remains at ${backupPath}. Publication failed: ${formatErrorMessage(publicationError)}. Rollback failed: ${formatErrorMessage(rollbackError)}.`,
+          { cause: publicationError },
+        )
+      }
+    }
+
+    throw new CliError(
+      `Could not publish the staged Vercel output at ${outputDir}: ${formatErrorMessage(publicationError)}`,
+      1,
+      { cause: publicationError },
+    )
+  }
+
+  if (!backupCreated) return
+
+  try {
+    await fileOps.rm(backupPath, { force: true, recursive: true })
+  } catch (cleanupError) {
+    throw new CliError(
+      `Published the new Vercel output at ${outputDir}, but could not remove its prior-output backup at ${backupPath}. The new output remains valid; inspect or remove the backup manually. Cleanup failed: ${formatErrorMessage(cleanupError)}`,
+      1,
+      { cause: cleanupError },
+    )
+  }
 }
 
 function stringifyJson(value: unknown): string {
@@ -265,4 +328,8 @@ function errorMessage(error: unknown): string {
 
 function errorWithCause(message: string, cause: unknown): Error {
   return new Error(`${message}: ${errorMessage(cause)}`, { cause })
+}
+
+function isMissingFile(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
 }

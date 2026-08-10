@@ -371,6 +371,9 @@ importers:
       commander:
         specifier: 15.0.0
         version: 15.0.0
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.1
       tsx:
         specifier: ^4.23.5
         version: 4.23.10
@@ -408,9 +411,6 @@ importers:
       '@types/pg':
         specifier: ^8.20.4
         version: 8.20.4
-      esbuild:
-        specifier: ^0.28.1
-        version: 0.28.1
       hono:
         specifier: ^4.12.28
         version: 4.12.28

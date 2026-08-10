@@ -1,8 +1,23 @@
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, win32 } from "node:path"
+import { basename, dirname, join, win32 } from "node:path"
+import { fileURLToPath } from "node:url"
+import { build as buildBundle } from "esbuild"
 import { afterEach, describe, expect, test } from "vitest"
 
+import { runBuildCommand } from "../src/commands/build.js"
+import { setVercelTargetCleanupFileOpsForTesting } from "../src/lib/build/targets/vercel.js"
 import {
   RECOMMENDED_VERCEL_CONFIG,
   reconcileVercelConfig,
@@ -10,6 +25,7 @@ import {
 } from "../src/lib/build/targets/vercel-config.js"
 import {
   isVercelPathWithin,
+  publishVercelOutput,
   VERCEL_BUILD_OUTPUT_CONFIG,
   VERCEL_FUNCTION_CONFIG,
   validateVercelOutput,
@@ -18,6 +34,10 @@ import {
 import { CliError, type CommandIo } from "../src/lib/output.js"
 
 const tempDirs: string[] = []
+const cliPackageRoot = join(dirname(fileURLToPath(import.meta.url)), "..")
+const DATABASE_URL_SENTINEL = "postgres://build-secret.invalid/never-bundle-this"
+const PROJECT_FILE_CONTENTS = '{ "projectId": "preserved-project" }\n'
+const ENV_FILE_CONTENTS = "PRESERVE_ME=yes\n"
 const EXPECTED_RECOMMENDED_VERCEL_CONFIG = {
   $schema: "https://openapi.vercel.sh/vercel.json",
   buildCommand: "node node_modules/@dawn-ai/cli/dist/index.js build",
@@ -37,6 +57,113 @@ async function createOutputDir(): Promise<string> {
   const outputDir = await mkdtemp(join(tmpdir(), "dawn-vercel-output-"))
   tempDirs.push(outputDir)
   return outputDir
+}
+
+async function createTargetFixture(files: Readonly<Record<string, string>> = {}): Promise<string> {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-vercel-target-"))
+  tempDirs.push(appRoot)
+  const appFiles = {
+    "dawn.config.ts": 'export default { build: { targets: ["vercel"] } }\n',
+    "package.json": `${JSON.stringify({
+      dependencies: {
+        "@dawn-ai/cli": "workspace:*",
+        "@dawn-ai/postgres-storage": "workspace:*",
+        "@neondatabase/serverless": "^1.1.0",
+        hono: "^4.12.28",
+      },
+      name: "vercel-fixture",
+    })}\n`,
+    "src/app/probe/index.ts":
+      'export async function workflow() { return { message: "deterministic" } }\n',
+    ...files,
+  }
+
+  await Promise.all(
+    Object.entries(appFiles).map(async ([relativePath, source]) => {
+      const filePath = join(appRoot, relativePath)
+      await mkdir(dirname(filePath), { recursive: true })
+      await writeFile(filePath, source, "utf8")
+    }),
+  )
+  await linkTargetFixtureDependencies(appRoot)
+  return appRoot
+}
+
+async function linkTargetFixtureDependencies(appRoot: string): Promise<void> {
+  const dependencies = {
+    "@dawn-ai/cli": cliPackageRoot,
+    "@dawn-ai/postgres-storage": join(cliPackageRoot, "..", "postgres-storage"),
+    "@neondatabase/serverless": join(cliPackageRoot, "node_modules", "@neondatabase", "serverless"),
+    hono: join(cliPackageRoot, "node_modules", "hono"),
+  } as const
+
+  await Promise.all(
+    Object.entries(dependencies).map(async ([specifier, target]) => {
+      const dependencyPath = join(appRoot, "node_modules", specifier)
+      await mkdir(dirname(dependencyPath), { recursive: true })
+      await symlink(target, dependencyPath, "junction")
+    }),
+  )
+}
+
+async function runTargetBuild(appRoot: string): Promise<{ stderr: string[]; stdout: string[] }> {
+  const stdout: string[] = []
+  const stderr: string[] = []
+  await runBuildCommand(
+    { clean: true, cwd: appRoot },
+    {
+      stderr: (message) => stderr.push(message),
+      stdout: (message) => stdout.push(message),
+    },
+  )
+  return { stderr, stdout }
+}
+
+async function listTree(root: string): Promise<string[]> {
+  const paths: string[] = []
+  async function visit(directory: string, prefix = ""): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const relativePath = prefix ? join(prefix, entry.name) : entry.name
+      if (entry.isDirectory()) await visit(join(directory, entry.name), relativePath)
+      else paths.push(relativePath)
+    }
+  }
+  await visit(root)
+  return paths.sort()
+}
+
+async function createPublicationFixture(): Promise<{
+  stagedOutput: string
+  vercelDir: string
+}> {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-vercel-publish-"))
+  tempDirs.push(appRoot)
+  const vercelDir = join(appRoot, ".vercel")
+  const stagedOutput = join(vercelDir, ".dawn-vercel-invocation", "output")
+  await validOutput(stagedOutput)
+  await seedUnrelatedVercelFiles(vercelDir)
+  return { stagedOutput, vercelDir }
+}
+
+async function seedUnrelatedVercelFiles(vercelDir: string): Promise<void> {
+  await mkdir(vercelDir, { recursive: true })
+  await Promise.all([
+    writeFile(join(vercelDir, "project.json"), PROJECT_FILE_CONTENTS),
+    writeFile(join(vercelDir, ".env.preview.local"), ENV_FILE_CONTENTS),
+  ])
+}
+
+async function expectUnrelatedVercelFilesPreserved(vercelDir: string): Promise<void> {
+  await expect(readFile(join(vercelDir, "project.json"), "utf8")).resolves.toBe(
+    PROJECT_FILE_CONTENTS,
+  )
+  await expect(readFile(join(vercelDir, ".env.preview.local"), "utf8")).resolves.toBe(
+    ENV_FILE_CONTENTS,
+  )
+}
+
+function isBackupPath(path: string): boolean {
+  return path.includes(".dawn-vercel-output-backup-")
 }
 
 async function createVercelConfigDirs(): Promise<{ appRoot: string; buildDir: string }> {
@@ -76,6 +203,14 @@ function filesystemError(code: string): NodeJS.ErrnoException {
   return error
 }
 
+function createBarrier(): { promise: Promise<void>; release: () => void } {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { promise, release }
+}
+
 function functionDir(outputDir: string): string {
   return join(outputDir, "functions", "index.func")
 }
@@ -92,6 +227,461 @@ async function validOutput(outputDir: string): Promise<void> {
   await writeVercelMetadata(outputDir)
   await writeFile(entryPath(outputDir), 'import "node:fs"\nexport default {}\n', "utf8")
 }
+
+describe("complete Vercel target", () => {
+  test("publishes the exact final tree and reports only final artifacts", async () => {
+    const appRoot = await createTargetFixture()
+    const priorDatabaseUrl = process.env.DATABASE_URL
+    process.env.DATABASE_URL = DATABASE_URL_SENTINEL
+
+    let stdout: string[]
+    let stderr: string[]
+    try {
+      ;({ stderr, stdout } = await runTargetBuild(appRoot))
+    } finally {
+      if (priorDatabaseUrl === undefined) delete process.env.DATABASE_URL
+      else process.env.DATABASE_URL = priorDatabaseUrl
+    }
+
+    const outputDir = join(appRoot, ".vercel", "output")
+    expect(stderr.join("")).toBe("")
+    expect(await listTree(outputDir)).toEqual([
+      "config.json",
+      join("functions", "index.func", ".vc-config.json"),
+      join("functions", "index.func", "index.mjs"),
+    ])
+    const report = stdout.join("")
+    for (const finalPath of [
+      join(".vercel", "output", "config.json"),
+      join(".vercel", "output", "functions", "index.func", ".vc-config.json"),
+      join(".vercel", "output", "functions", "index.func", "index.mjs"),
+      "vercel.json",
+    ]) {
+      expect(report).toContain(finalPath)
+    }
+    expect(report).not.toContain(".dawn-vercel-")
+    expect(report).not.toContain("output-backup")
+    expect(existsSync(join(appRoot, "wrangler.toml"))).toBe(false)
+
+    const bundle = await readFile(entryPath(outputDir), "utf8")
+    expect(bundle).not.toContain(appRoot)
+    expect(bundle).not.toContain(DATABASE_URL_SENTINEL)
+  })
+
+  test("preflights forbidden edge capabilities before creating .vercel", async () => {
+    const appRoot = await createTargetFixture({
+      "dawn.config.ts": `export default {
+  build: { targets: ["vercel"] },
+  sandbox: { provider: { name: "docker" } },
+}
+`,
+    })
+
+    await expect(runTargetBuild(appRoot)).rejects.toThrow(/"vercel".*sandbox/is)
+    expect(existsSync(join(appRoot, ".vercel"))).toBe(false)
+  })
+
+  test("bundle resolution failure preserves prior output and unrelated Vercel files", async () => {
+    const appRoot = await createTargetFixture({
+      "src/app/probe/index.ts": `export async function workflow() {
+  await import("missing-vercel-runtime-package")
+  return { ok: true }
+}
+`,
+    })
+    const vercelDir = join(appRoot, ".vercel")
+    const outputDir = join(vercelDir, "output")
+    const priorEntry = "prior output bytes\n"
+    const project = '{ "projectId": "project-1" }\n'
+    const environment = "PRESERVE_ME=yes\n"
+    await mkdir(outputDir, { recursive: true })
+    await writeFile(join(outputDir, "prior.txt"), priorEntry)
+    await writeFile(join(vercelDir, "project.json"), project)
+    await writeFile(join(vercelDir, ".env.preview.local"), environment)
+
+    await expect(runTargetBuild(appRoot)).rejects.toThrow(
+      /missing-vercel-runtime-package.*function directory/is,
+    )
+
+    expect(await listTree(outputDir)).toEqual(["prior.txt"])
+    await expect(readFile(join(outputDir, "prior.txt"), "utf8")).resolves.toBe(priorEntry)
+    await expect(readFile(join(vercelDir, "project.json"), "utf8")).resolves.toBe(project)
+    await expect(readFile(join(vercelDir, ".env.preview.local"), "utf8")).resolves.toBe(environment)
+    expect((await readdir(vercelDir)).some((name) => name.startsWith(".dawn-vercel-"))).toBe(false)
+  })
+
+  test("invalid root config after staged validation preserves prior output and cleans staging", async () => {
+    const appRoot = await createTargetFixture({
+      "vercel.json": '{ "fluid": false }\n',
+    })
+    const vercelDir = join(appRoot, ".vercel")
+    const outputDir = join(vercelDir, "output")
+    const priorEntry = "prior output before config failure\n"
+    await mkdir(outputDir, { recursive: true })
+    await writeFile(join(outputDir, "prior.txt"), priorEntry)
+
+    await expect(runTargetBuild(appRoot)).rejects.toThrow(/fluid: false.*fluid: true/i)
+
+    expect(await listTree(outputDir)).toEqual(["prior.txt"])
+    await expect(readFile(join(outputDir, "prior.txt"), "utf8")).resolves.toBe(priorEntry)
+    expect((await readdir(vercelDir)).some((name) => name.startsWith(".dawn-vercel-"))).toBe(false)
+  })
+
+  test("reports invocation cleanup failure after publishing valid final output", async () => {
+    const appRoot = await createTargetFixture()
+    const vercelDir = join(appRoot, ".vercel")
+    const cleanupError = filesystemError("EPERM")
+    let invocationDir: string | undefined
+    await seedUnrelatedVercelFiles(vercelDir)
+    const restoreFileOps = setVercelTargetCleanupFileOpsForTesting({
+      rm: async (path) => {
+        invocationDir = String(path)
+        throw cleanupError
+      },
+    })
+
+    let error: unknown
+    try {
+      error = await runTargetBuild(appRoot).catch((caught: unknown) => caught)
+    } finally {
+      restoreFileOps()
+    }
+
+    expect(error).toBeInstanceOf(CliError)
+    expect(error).toMatchObject({ cause: cleanupError })
+    expect(String(error)).toMatch(/final output remains valid/i)
+    expect(invocationDir).toBeDefined()
+    expect(String(error)).toContain(invocationDir)
+    expect(existsSync(invocationDir as string)).toBe(true)
+    await expect(validateVercelOutput(join(vercelDir, "output"))).resolves.toBeUndefined()
+    await expectUnrelatedVercelFilesPreserved(vercelDir)
+  })
+
+  test("preserves primary build failure when invocation cleanup also fails", async () => {
+    const appRoot = await createTargetFixture({
+      "src/app/probe/index.ts": `export async function workflow() {
+  await import("missing-vercel-cleanup-package")
+  return { ok: true }
+}
+`,
+    })
+    const vercelDir = join(appRoot, ".vercel")
+    const cleanupError = filesystemError("EIO")
+    let invocationDir: string | undefined
+    await seedUnrelatedVercelFiles(vercelDir)
+    const restoreFileOps = setVercelTargetCleanupFileOpsForTesting({
+      rm: async (path) => {
+        invocationDir = String(path)
+        throw cleanupError
+      },
+    })
+
+    let error: unknown
+    try {
+      error = await runTargetBuild(appRoot).catch((caught: unknown) => caught)
+    } finally {
+      restoreFileOps()
+    }
+
+    expect(error).toBeInstanceOf(AggregateError)
+    const aggregate = error as AggregateError
+    const [primaryError, retainedCleanupError] = aggregate.errors
+    expect(primaryError).toBeInstanceOf(CliError)
+    expect(String(primaryError)).toMatch(/missing-vercel-cleanup-package.*function directory/is)
+    expect(retainedCleanupError).toBe(cleanupError)
+    expect(aggregate.cause).toBe(primaryError)
+    expect(String(aggregate)).toContain("missing-vercel-cleanup-package")
+    expect(invocationDir).toBeDefined()
+    expect(String(aggregate)).toContain(invocationDir)
+    expect(existsSync(invocationDir as string)).toBe(true)
+    await expectUnrelatedVercelFilesPreserved(vercelDir)
+  })
+
+  test("declares esbuild as a production dependency", async () => {
+    const manifest = JSON.parse(await readFile(join(cliPackageRoot, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+    }
+
+    expect(manifest.dependencies?.esbuild).toBe("^0.28.1")
+    expect(manifest.devDependencies).not.toHaveProperty("esbuild")
+  })
+
+  test("selects only the Node or static default model importer for each bundle condition", async () => {
+    const entry = join(cliPackageRoot, "..", "langchain", "dist", "chat-model-factory.js")
+    const common = {
+      bundle: true,
+      entryPoints: [entry],
+      format: "esm" as const,
+      metafile: true,
+      platform: "node" as const,
+      write: false,
+    }
+
+    const nodeBundle = await buildBundle(common)
+    const staticBundle = await buildBundle({
+      ...common,
+      conditions: ["dawn-static-provider-imports", "module"],
+    })
+    const selectedLoaders = (result: typeof nodeBundle) =>
+      Object.keys(result.metafile?.inputs ?? {})
+        .filter((path) => path.endsWith("model-importer.js"))
+        .map((path) => basename(path))
+        .sort()
+
+    expect(selectedLoaders(nodeBundle)).toEqual(["default-model-importer.js"])
+    expect(selectedLoaders(staticBundle)).toEqual(["static-model-importer.js"])
+  })
+})
+
+describe("transactional Vercel output publication", () => {
+  test("publishes the first output when no prior output exists", async () => {
+    const fixture = await createPublicationFixture()
+
+    await publishVercelOutput(fixture)
+
+    expect(existsSync(fixture.stagedOutput)).toBe(false)
+    await expect(validateVercelOutput(join(fixture.vercelDir, "output"))).resolves.toBeUndefined()
+    await expectUnrelatedVercelFilesPreserved(fixture.vercelDir)
+  })
+
+  test("replaces prior output, removes its backup, and preserves unrelated files", async () => {
+    const fixture = await createPublicationFixture()
+    const outputDir = join(fixture.vercelDir, "output")
+    await mkdir(outputDir, { recursive: true })
+    await writeFile(join(outputDir, "old.txt"), "old bytes\n")
+
+    await publishVercelOutput(fixture)
+
+    await expect(validateVercelOutput(outputDir)).resolves.toBeUndefined()
+    await expectUnrelatedVercelFilesPreserved(fixture.vercelDir)
+    expect((await readdir(fixture.vercelDir)).some(isBackupPath)).toBe(false)
+  })
+
+  test("an initial backup rename failure leaves the prior output untouched", async () => {
+    const fixture = await createPublicationFixture()
+    const outputDir = join(fixture.vercelDir, "output")
+    const prior = "old exact bytes\n"
+    const backupError = filesystemError("EACCES")
+    await mkdir(outputDir, { recursive: true })
+    await writeFile(join(outputDir, "old.txt"), prior)
+
+    await expect(
+      publishVercelOutput({
+        ...fixture,
+        fileOps: {
+          rename: async (source, destination) => {
+            if (source === outputDir && isBackupPath(String(destination))) throw backupError
+            await rename(source, destination)
+          },
+          rm,
+        },
+      }),
+    ).rejects.toMatchObject({ cause: backupError })
+    await expect(readFile(join(outputDir, "old.txt"), "utf8")).resolves.toBe(prior)
+    expect(existsSync(fixture.stagedOutput)).toBe(true)
+    await expectUnrelatedVercelFilesPreserved(fixture.vercelDir)
+  })
+
+  test("a staged publication failure restores the exact prior output", async () => {
+    const fixture = await createPublicationFixture()
+    const outputDir = join(fixture.vercelDir, "output")
+    const prior = "old exact bytes\n"
+    const publicationError = filesystemError("EIO")
+    await mkdir(outputDir, { recursive: true })
+    await writeFile(join(outputDir, "old.txt"), prior)
+
+    await expect(
+      publishVercelOutput({
+        ...fixture,
+        fileOps: {
+          rename: async (source, destination) => {
+            if (source === fixture.stagedOutput && destination === outputDir) throw publicationError
+            await rename(source, destination)
+          },
+          rm,
+        },
+      }),
+    ).rejects.toMatchObject({ cause: publicationError })
+
+    expect(await listTree(outputDir)).toEqual(["old.txt"])
+    await expect(readFile(join(outputDir, "old.txt"), "utf8")).resolves.toBe(prior)
+    expect((await readdir(fixture.vercelDir)).some(isBackupPath)).toBe(false)
+    await expectUnrelatedVercelFilesPreserved(fixture.vercelDir)
+  })
+
+  test("a publication failure with no prior output leaves output absent", async () => {
+    const fixture = await createPublicationFixture()
+    const outputDir = join(fixture.vercelDir, "output")
+    const publicationError = filesystemError("EIO")
+
+    await expect(
+      publishVercelOutput({
+        ...fixture,
+        fileOps: {
+          rename: async (source, destination) => {
+            if (source === fixture.stagedOutput && destination === outputDir) throw publicationError
+            await rename(source, destination)
+          },
+          rm,
+        },
+      }),
+    ).rejects.toMatchObject({ cause: publicationError })
+    expect(existsSync(outputDir)).toBe(false)
+    await expectUnrelatedVercelFilesPreserved(fixture.vercelDir)
+  })
+
+  test("backup cleanup failure keeps new output valid and the backup inspectable", async () => {
+    const fixture = await createPublicationFixture()
+    const outputDir = join(fixture.vercelDir, "output")
+    const cleanupError = filesystemError("EIO")
+    let backupPath: string | undefined
+    await mkdir(outputDir, { recursive: true })
+    await writeFile(join(outputDir, "old.txt"), "recoverable old bytes\n")
+
+    await expect(
+      publishVercelOutput({
+        ...fixture,
+        fileOps: {
+          rename: async (source, destination) => {
+            if (source === outputDir) backupPath = String(destination)
+            await rename(source, destination)
+          },
+          rm: async (path, options) => {
+            if (path === backupPath) throw cleanupError
+            await rm(path, options)
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      cause: cleanupError,
+      message: expect.stringMatching(/cleanup|remove.*backup/i),
+    })
+
+    await expect(validateVercelOutput(outputDir)).resolves.toBeUndefined()
+    expect(backupPath).toBeDefined()
+    await expect(readFile(join(backupPath as string, "old.txt"), "utf8")).resolves.toBe(
+      "recoverable old bytes\n",
+    )
+    await expectUnrelatedVercelFilesPreserved(fixture.vercelDir)
+  })
+
+  test("rollback failure preserves the primary cause, both errors, and backup path", async () => {
+    const fixture = await createPublicationFixture()
+    const outputDir = join(fixture.vercelDir, "output")
+    const publicationError = filesystemError("EIO")
+    const rollbackError = filesystemError("EPERM")
+    let backupPath: string | undefined
+    await mkdir(outputDir, { recursive: true })
+    await writeFile(join(outputDir, "old.txt"), "recoverable old bytes\n")
+
+    const error = await publishVercelOutput({
+      ...fixture,
+      fileOps: {
+        rename: async (source, destination) => {
+          if (source === outputDir) {
+            backupPath = String(destination)
+            await rename(source, destination)
+            return
+          }
+          if (source === fixture.stagedOutput && destination === outputDir) throw publicationError
+          if (source === backupPath && destination === outputDir) throw rollbackError
+          await rename(source, destination)
+        },
+        rm,
+      },
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(AggregateError)
+    expect(error).toMatchObject({ cause: publicationError })
+    expect((error as AggregateError).errors).toEqual([publicationError, rollbackError])
+    expect(String(error)).toContain(backupPath)
+    await expect(readFile(join(backupPath as string, "old.txt"), "utf8")).resolves.toBe(
+      "recoverable old bytes\n",
+    )
+    expect(existsSync(outputDir)).toBe(false)
+    await expectUnrelatedVercelFilesPreserved(fixture.vercelDir)
+  })
+
+  test("overlapping publications clean only their own backups", async () => {
+    const first = await createPublicationFixture()
+    const outputDir = join(first.vercelDir, "output")
+    const cleanupStarted = createBarrier()
+    const releaseCleanup = createBarrier()
+    const cleanupError = filesystemError("EIO")
+    let firstBackup: string | undefined
+    let secondBackup: string | undefined
+    await mkdir(outputDir, { recursive: true })
+    await writeFile(join(outputDir, "old.txt"), "first old bytes\n")
+    await writeFile(
+      entryPath(first.stagedOutput),
+      'import "node:fs"\nexport const publication = "first"\nexport default {}\n',
+      "utf8",
+    )
+
+    const firstPublication = publishVercelOutput({
+      ...first,
+      fileOps: {
+        rename: async (source, destination) => {
+          if (source === outputDir) firstBackup = String(destination)
+          await rename(source, destination)
+        },
+        rm: async (path, options) => {
+          if (path === firstBackup) {
+            cleanupStarted.release()
+            await releaseCleanup.promise
+            throw cleanupError
+          }
+          await rm(path, options)
+        },
+      },
+    }).catch((caught: unknown) => caught)
+
+    await cleanupStarted.promise
+    await expect(readFile(entryPath(outputDir), "utf8")).resolves.toContain('"first"')
+
+    const secondStagedOutput = join(first.vercelDir, ".dawn-vercel-second", "output")
+    await validOutput(secondStagedOutput)
+    await writeFile(
+      entryPath(secondStagedOutput),
+      'import "node:fs"\nexport const publication = "second"\nexport default {}\n',
+      "utf8",
+    )
+    try {
+      await publishVercelOutput({
+        stagedOutput: secondStagedOutput,
+        vercelDir: first.vercelDir,
+        fileOps: {
+          rename: async (source, destination) => {
+            if (source === outputDir) secondBackup = String(destination)
+            await rename(source, destination)
+          },
+          rm,
+        },
+      })
+    } finally {
+      releaseCleanup.release()
+    }
+
+    const firstError = await firstPublication
+
+    expect(firstError).toMatchObject({ cause: cleanupError })
+    expect(firstBackup).toBeDefined()
+    expect(secondBackup).toBeDefined()
+    expect(secondBackup).not.toBe(firstBackup)
+    await expect(readFile(join(firstBackup as string, "old.txt"), "utf8")).resolves.toBe(
+      "first old bytes\n",
+    )
+    const backupPaths = (await readdir(first.vercelDir)).filter(isBackupPath)
+    expect(backupPaths).toEqual([firstBackup ? basename(firstBackup) : undefined])
+    await expect(validateVercelOutput(outputDir)).resolves.toBeUndefined()
+    await expect(readFile(entryPath(outputDir), "utf8")).resolves.toContain('"second"')
+    expect(existsSync(first.stagedOutput)).toBe(false)
+    expect(existsSync(secondStagedOutput)).toBe(false)
+    expect(existsSync(secondBackup as string)).toBe(false)
+    await expectUnrelatedVercelFilesPreserved(first.vercelDir)
+  })
+})
 
 describe("Build Output contract", () => {
   test("writes the exact Build Output API v3 metadata without an entry module", async () => {

@@ -174,6 +174,17 @@ Hono, the Postgres stores, the Neon driver, and statically identified model
 provider packages. It must not rely on files above `index.func`, because the
 Build Output API packages a function directory as its filesystem boundary.
 
+`@dawn-ai/langchain` keeps its ordinary Node variable-import fallback behind a
+package-internal `#default-model-importer` condition. The Vercel bundle selects
+`dawn-static-provider-imports` (and preserves esbuild's `module` condition), so
+only a loader-free fallback enters the function while the generated entry
+continues seeding its statically discovered provider map. Ordinary Node imports
+still select the dynamic default. If application code constructs a model at
+module scope before the generated entry can seed the static map, the function
+fails with targeted guidance instead of retaining an unresolved runtime import.
+Every condition target is a packed `dist` artifact; the published import map
+never points at unshipped source.
+
 `.vercel/output/config.json` uses Build Output API version 3 and routes every
 request path and method to the single `index` function. Agent Protocol paths
 must remain unchanged; there is no `/api` prefix or application rewrite visible
@@ -205,6 +216,13 @@ Any failure before publication leaves the previous output untouched. Cleanup
 may remove only staging and backup paths created by the current invocation.
 This prevents a failed bundle from leaving a directory that looks deployable
 but is missing code, configuration, or routing.
+
+Invocation-directory cleanup is part of the reported result, but never replaces
+the target's primary failure. A cleanup-only failure after publication reports
+that final output remains valid and leaves the invocation directory for
+inspection. When target execution and cleanup both fail, the target failure is
+the `AggregateError` cause and first contained error; the cleanup error is the
+second contained error, and the message names the retained invocation path.
 
 ## Root Vercel Configuration
 
@@ -308,9 +326,16 @@ The environment supplies:
 - `DAWN_VERCEL_PROJECT_ID`; and
 - `DAWN_VERCEL_DATABASE_URL`.
 
-The job assembles two isolated fixture copies from built workspace packages.
-The fixture exports a deterministic graph/workflow route that produces
-multiple observable stream chunks without a model call.
+The job derives the recursive local `@dawn-ai/*` runtime dependency closure
+from the fixture's direct Dawn dependencies, packs that closure from the branch
+under test, and assembles two isolated fixture copies using only relative
+vendored tarballs. A fixture-local package-manager override pins every vendored
+Dawn package to its matching tarball, and lockfile validation rejects any
+registry-resolved `@dawn-ai/*` copy. This is required because the workspace's
+fixed development version can be ahead of the registry; uploaded source cannot
+use an external workspace link. The fixture exports a deterministic
+graph/workflow route that produces multiple observable stream chunks without a
+model call.
 
 The Vercel CLI is pinned to one exact version in the repository lockfile and
 invoked from the workspace, not installed from `latest` during CI. The dedicated
@@ -404,6 +429,11 @@ never written to the receipt or command output.
 - A source preview that finds prebuilt output fails before deployment.
 - A prebuilt preview that performs a remote source build fails its receipt
   assertion.
+- Local invocation cleanup failure after successful publication reports that
+  final output remains valid and leaves the exact staging path inspectable.
+- Local invocation cleanup never masks a primary bundle, validation, config,
+  publication, or rollback failure; both errors are retained with the primary
+  failure as aggregate cause.
 - Preview cleanup failures are reported separately and do not hide the primary
   build or runtime failure.
 
