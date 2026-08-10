@@ -41,9 +41,9 @@
 ### New test and CI files
 
 - `packages/cli/test/vercel-target.test.ts` — registry, output shape, bundle isolation/execution, configuration ownership, validation negative controls, and transactional publication tests.
-- `packages/cli/test/helpers/vercel-native-fixture.ts` — packages the built CLI, assembles two isolated fixture apps, deploys them, drives black-box checks, collects logs/receipts, and cleans exact deployment IDs.
-- `packages/cli/test/helpers/vercel-native-cleanup.mjs` — validates an incrementally persisted exact-ID manifest and provides the idempotent cleanup command shared by test `finally` and workflow `always()` fallback.
-- `packages/cli/test/vercel-native-lane.test.ts` — guarded `DAWN_TEST_VERCEL=1` native source/prebuilt preview test.
+- `packages/cli/test/helpers/vercel-native-fixture.ts` — derives and packs the fixture's local Dawn dependency closure, assembles two upload-isolated apps, runs the pinned Vercel CLI through a sanitized boundary, drives the causal Agent Protocol client and log scan, and writes redacted partial evidence.
+- `packages/cli/test/helpers/vercel-native-cleanup.mjs` — owns closed manifest/receipt validation, marker-based `/v6` recovery, authenticated exact-ID `/v13` deletion/absence checks, scoped Postgres cleanup, and the idempotent command shared by test `finally` and workflow `always()`.
+- `packages/cli/test/vercel-native-lane.test.ts` — credential-free unit coverage for every native-harness trust boundary plus the guarded `DAWN_TEST_VERCEL=1` source/prebuilt preview test.
 
 ### Existing files to modify
 
@@ -827,9 +827,9 @@
 - Create: `packages/cli/test/helpers/vercel-native-cleanup.mjs`
 - Create: `packages/cli/test/vercel-native-lane.test.ts`
 
-- [ ] **Step 1: Add a guarded test that fails on missing required inputs**
+- [ ] **Step 1: Add the guarded lane and fail closed on inputs**
 
-  Gate external execution only on `DAWN_TEST_VERCEL === "1"`. When enabled, validate these names and throw one error listing all missing values:
+  Gate only the external case on `DAWN_TEST_VERCEL === "1"`; all pure helper tests below run without credentials. With the flag absent, use an explicit `test.skip`. With it present, require Node 24, an absolute artifact directory, and all four values below in one error; never skip because one is missing:
 
   ```ts
   const REQUIRED_ENV = [
@@ -840,131 +840,274 @@
   ] as const
   ```
 
-  With the flag absent, use `test.skip`; never silently skip after the flag is set.
+  Validate `DAWN_VERCEL_ORG_ID` against `^team_[A-Za-z0-9]+$` and `DAWN_VERCEL_PROJECT_ID` against `^prj_[A-Za-z0-9]+$`; this lane supports only a team-owned, rootless, dedicated preview project.
 
-- [ ] **Step 2: Add pure receipt and SSE-parser unit tests**
+- [ ] **Step 2: Write RED tests for the harness trust boundary**
 
-  Test the helper without credentials:
+  Add credential-free tests for:
 
-  - receipt validation rejects when source or prebuilt evidence is absent;
-  - completed SSE frames are parsed across arbitrary transport chunks;
-  - a first token plus terminal frame in the same pre-release buffer is rejected;
-  - EOF before release is rejected;
-  - a completed first meaningful token frame with no terminal/EOF is accepted;
-  - logs and receipts redact all four secret values.
-  - cleanup rejects any persisted value that is not an exact `dpl_...` ID, skips entries already marked cleaned, and never constructs a project-wide removal command.
+  - exact grammars `^dpl_[A-Za-z0-9]+$`, `^vclrun_[a-f0-9]{32}$`, `^t-vcl-[a-f0-9]{32}$`, `^b-vcl-[a-f0-9]{32}$`, and `^log-vcl-[a-f0-9]{32}$` before constructing any command, URL, or SQL query;
+  - canonical HTTPS origins rejecting credentials, ports, paths, queries, fragments, non-HTTPS schemes, and malformed hosts while accepting either an absolute deployment URL or a bare Vercel hostname;
+  - a redactor that scans raw and URL-encoded forms across messages, stacks, argument metadata, captured stdout/stderr, API metadata/error bodies, generated bundles, and diagnostic files;
+  - sanitized child environments that remove every inherited `DAWN_VERCEL_*`, `VERCEL_*`, and `NOW_*` name, `DATABASE_URL`, and all release-token aliases before adding an operation allowlist;
+  - atomic JSON replacement and closed JSON parsing that reject missing keys, additional keys, invalid literals, and malformed arrays.
 
   Run:
 
   ```bash
-  corepack pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts
+  corepack pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts \
+    -t "native harness trust boundary"
   ```
 
-  Expected: RED until helper functions exist, then PASS with the native test skipped.
+  Expected: FAIL because the validators and safe persistence functions do not exist.
 
-- [ ] **Step 3: Assemble isolated source and prebuilt fixture apps**
+- [ ] **Step 3: Implement the minimal validators, redactor, and evidence schemas**
 
-  In the helper:
+  Keep all serializers allowlist-based. `receipt.partial.json` is the only incremental evidence file and can never satisfy a final validator. `receipt.json` is created atomically only after both deployments and every database/deployment cleanup postcondition pass. Implement the exact closed `VercelNativeReceiptV1` and `VercelDeploymentReceiptV1` shapes from the approved design, including:
 
-  1. Create `const fixtureAssets = join(runRoot, "assets")`. Starting from the CLI plus every direct Dawn dependency in the fixture manifest (including `@dawn-ai/postgres-storage` and `@dawn-ai/sdk`), recursively derive the local `@dawn-ai/*` runtime dependency closure from package manifests. After the repository build, pack exactly that derived closure into `fixtureAssets`. Do not hard-code an incomplete pair or an unrelated all-workspace list; every tarball must come from the branch under test.
-  2. Create two separate temp roots, each with its own `.vercel/project.json` containing only `orgId` and `projectId` from the environment.
-  3. Copy every exact closure tarball into `vendor/` inside each fixture root. In each fixture's `package.json`, reference direct Dawn dependencies only by upload-safe relative `file:vendor/<exact-tarball-name>.tgz` specifiers. Add a fixture-local `pnpm-workspace.yaml` override for every vendored Dawn package so all transitive resolutions point to that package's exact relative tarball; do not retain the `runRoot/assets` path anywhere in the fixture.
-  4. Write the same remaining package manifest, `dawn.config.ts`, routes, and committed recommendation-shaped `vercel.json` (`fluid: true`) into each fixture. Run `pnpm install --lockfile-only` separately in each root, then parse each `pnpm-lock.yaml` and require every `@dawn-ai/*` resolution to point at the matching relative `vendor/` tarball. Reject any registry copy of any Dawn package. Run `pnpm install --frozen-lockfile` for the local prebuilt fixture; the source fixture uploads its manifest, workspace override, lockfile, and complete derived tarball closure for Vercel's clean remote install.
-  5. Before deployment, recursively inspect the source fixture and reject any symlink or dependency path that resolves outside its root, ensuring the uploaded source is self-contained.
-  6. Assert the source root has neither `.dawn` nor `.vercel/output` immediately before source deploy.
-  7. Build only the prebuilt root locally and assert its bundle does not contain the database URL.
+  - top-level `schemaVersion: 1`, `cliVersion: "58.9.0"`, `projectBindingVerified: true`, `kinds: ["source", "prebuilt"]`, and the tuple in that order;
+  - exact route, state, middleware, causal-stream, later-request, log, reconciliation, cleanup, config/hash/readiness, and kind-specific provenance objects;
+  - `beforeFrameIndex < afterFrameIndex < doneFrameIndex`, finite nonnegative indexes, positive log-row counts, valid ISO bounds, strict ID/origin/SHA-256 grammars, and every literal exactly as designed;
+  - no raw organization/project value, authorization header, database URL, release credential, or complete Vercel API response.
 
-  The fixture's runtime dependencies must include the packed CLI, every Dawn package in the derived override-pinned closure, `hono`, `@dawn-ai/postgres-storage`, and `@neondatabase/serverless`. Never symlink workspace paths into a directory uploaded to Vercel.
+  Re-run the Step 2 command. Expected: PASS.
 
-- [ ] **Step 4: Add deterministic model-free fixture routes**
+- [ ] **Step 4: Commit the fail-closed native primitives**
 
-  Generate three test-only routes:
-
-  - `/state#graph` — deterministic state update/readback, exercised twice on one Agent Protocol thread so a checkpoint written by request one is observable in request two and `GET /threads/:id/state`; generate `state.ts` with `{ visits: 0, markers: [] }`, `reducers/visits.ts` that sums, `reducers/markers.ts` that appends, and a graph that returns `{ visits: 1, markers: [input.marker] }`;
-  - `/stream#agent` — a raw legacy Runnable with `invoke` and `streamEvents`; it emits one `on_chat_model_stream` token, polls the barrier table keyed by a cryptographically unique `barrierId`, emits a second token, then emits root `on_chain_end` named `LangGraph`;
-  - `/release#graph` — updates only the exact barrier row requested by the client and returns `{ released: true, barrierId }`.
-
-  The streaming route's event shape must match the existing LangChain adapter contract:
-
-  ```ts
-  yield {
-    data: { chunk: { content: "before-release" } },
-    event: "on_chat_model_stream",
-    name: "vercel-fixture",
-    parent_ids: [],
-    run_id: barrierId,
-  }
-  // Poll SELECT released FROM dawn_vercel_test_barriers WHERE barrier_id = $1.
-  yield {
-    data: { output: { barrierId, released: true } },
-    event: "on_chain_end",
-    name: "LangGraph",
-    parent_ids: [],
-    run_id: barrierId,
-  }
+  ```bash
+  git add packages/cli/test/helpers/vercel-native-fixture.ts \
+    packages/cli/test/helpers/vercel-native-cleanup.mjs \
+    packages/cli/test/vercel-native-lane.test.ts
+  git commit -m "test(cli): define native vercel evidence contract"
   ```
 
-  Use parameterized SQL, a run-specific ID, a finite polling deadline, and cleanup scoped to the ID. The release call goes through the fixture's `/release#graph` Agent Protocol route, so it does not depend on the streaming request and release request sharing a Fluid instance.
+- [ ] **Step 5: Write RED package-closure and upload-isolation tests**
 
-  Also generate fixture-only `src/middleware.ts`. It allows normal fixture requests, but for `/release` requires an unguessable per-run header value supplied only by the black-box helper. This keeps the release behavior test-only and proves the statically emitted middleware path is present in both previews; never write the header value to logs or receipts.
+  Build small fake package graphs in the unit test and require the closure walker to start at the fixture's direct Dawn dependencies, follow `dependencies`, `optionalDependencies`, and only non-optional `peerDependencies`, reject missing local packages, and pack no unrelated Dawn workspace package. Add lockfile fixtures proving each expected `@dawn-ai/*` package appears exactly once from its matching `file:vendor/<tarball>` and that unexpected Dawn packages, registry/semver copies, `workspace:`, `link:`, absolute paths, repository paths, or shared-asset paths fail.
 
-- [ ] **Step 5: Implement exact Vercel commands and deployment capture**
+  Add filesystem tests for the asymmetric upload rules:
 
-  Invoke the workspace-pinned binary with `execFile`, never a shell and never `npx`:
+  - source: remove or never create `node_modules`, then reject every symlink recursively across the exact fixture/upload tree;
+  - prebuilt: allow pnpm's normal `node_modules` symlinks, but reject every symlink recursively under `vendor/` and `.vercel/output/`;
+  - both: require a regular, non-symlink `.vercel/project.json` with exactly the expected `orgId` and `projectId`, and no ambient/mismatched project link.
 
-  ```ts
-  const vercelBin = join(repoRoot, "packages/cli/node_modules/.bin/vercel")
-  const common = [
-    "--yes",
-    "--token", token,
-    "--scope", orgId,
-    "--env", `DATABASE_URL=${databaseUrl}`,
-    "--debug",
-    "--no-color",
-  ]
+  Run:
+
+  ```bash
+  corepack pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts \
+    -t "fixture package closure|upload isolation"
   ```
 
-  Source: `vercel deploy <sourceRoot> ...common`. Prebuilt: `vercel deploy <prebuiltRoot> --prebuilt ...common`. Capture stdout (deployment URL) and stderr (debug/build log) separately without echoing the command/environment. Resolve and retain the exact `dpl_...` ID with `vercel inspect <url> --wait --json` or the Vercel deployment API. Assert the prebuilt logs do not show a remote source build.
+  Expected: FAIL on the first missing closure/fixture helper.
 
-- [ ] **Step 6: Implement the shared bounded black-box sequence**
+- [ ] **Step 6: Assemble two fully vendored fixtures**
 
-  Run the identical function for both URLs:
+  After `pnpm build`, run `pnpm pack` for exactly the derived local Dawn closure from the branch under test. Copy every tarball independently into each fixture's `vendor/`; never refer back to a run-level asset directory. Give both manifests `"packageManager": "pnpm@10.33.0"`, direct relative tarball dependencies for the Dawn packages they import (`@dawn-ai/cli`, `@dawn-ai/postgres-storage`, and `@dawn-ai/sdk`), and these exact direct imports/required peers:
 
-  1. Bound readiness and reject protection/login HTML, build failure, or boot failure.
-  2. `POST /assistants/search` and require the deterministic route IDs.
-  3. `POST /threads`, run `/state#graph` twice on the same thread, and read `GET /threads/:id/state`; require the second result/state to include the first update.
-  4. Insert a unique unreleased barrier through the dedicated database using a parameterized query.
-  5. Start `POST /threads/:id/runs/stream` for `/stream#agent` and acquire a raw reader.
-  6. Before releasing, race reads against a finite timeout and require a completed meaningful token frame containing `before-release`, with no terminal frame and no EOF.
-  7. Call `/release#graph` for that exact barrier ID only after the first frame is observed.
-  8. Drain and require the second token, terminal event, successful result, and EOF in order.
-  9. Send a new deterministic request with a distinct thread/run ID and require success.
-  10. Query runtime error logs for the exact deployment and fail on uncaught exceptions, connection leaks, or handler errors.
-
-  This ordering is the anti-buffering proof: if Vercel buffers the response, the release is never sent before the bounded read timeout and the lane fails.
-
-- [ ] **Step 7: Persist exact deployment IDs immediately and write a secret-free JSON receipt**
-
-  After each deploy resolves its `dpl_...` ID, atomically rewrite `${DAWN_VERCEL_ARTIFACT_DIR}/cleanup.json` with the exact captured IDs before beginning readiness or black-box checks. Validate every entry against the exact deployment-ID format; never persist a project name, wildcard, or query. After successful removal, atomically mark that ID cleaned without deleting the history. This incremental file is the interruption-safe input to the workflow's unconditional cleanup fallback.
-
-  The receipt schema must include:
-
-  ```ts
-  interface VercelNativeReceipt {
-    readonly cliVersion: "58.9.0"
-    readonly deployments: readonly [DeploymentReceipt, DeploymentReceipt]
-    readonly fluidConfigVerified: true
-    readonly kinds: readonly ["source", "prebuilt"]
+  ```json
+  {
+    "@langchain/core": "1.2.5",
+    "@langchain/langgraph": "1.4.9",
+    "@langchain/langgraph-checkpoint": "1.1.3",
+    "pg": "8.22.0",
+    "zod": "4.4.3"
   }
   ```
 
-  Each deployment receipt names its exact deployment ID/URL, readiness status, discovery/state statuses, pre-release frame index, release status, terminal frame index, subsequent-request status, prebuilt/source evidence, and cleanup status. It must contain no database URL, token, org ID, or project ID. Validate the receipt at the end so a renamed flag or skipped half cannot pass.
+  Write a fixture-local `pnpm-workspace.yaml` override for every vendored Dawn package to its matching relative tarball. Generate separate frozen lockfiles, parse and validate them as in Step 5, and install only the prebuilt fixture. Both fixtures get the recommendation-shaped `vercel.json`, `build.targets: ["vercel"]`, and an exact local project link. Keep `.vercel/project.json` out of diagnostic uploads.
 
-- [ ] **Step 8: Implement exact cleanup and diagnostics**
+  Re-run the Step 5 command. Expected: PASS.
 
-  Implement `vercel-native-cleanup.mjs` so it reads `cleanup.json`, validates each persisted `dpl_...` value again, and removes only those exact IDs with `vercel remove <exact-id> --yes ...auth`. Treat an already-absent exact deployment as success. Export the cleanup function and invoke that same function from the test's `finally`; the workflow will invoke the file directly in `always()`. Never pass a project name, URL glob, list-derived target, or wildcard. Delete only run-specific barrier rows. Preserve build logs, runtime logs, parsed SSE frames, cleanup history, and receipt under the artifact directory, redacted before write.
+- [ ] **Step 7: Write RED tests for the exact model-free routes and release secret**
 
-- [ ] **Step 9: Run credential-free native-helper tests and static checks**
+  Generate a fixture and use Dawn discovery/build output rather than comments as the assertion surface. Require exactly `/state#agent`, `/stream#agent`, and `/release#graph`; explicitly assert there is no `/state#graph` and no model/provider dependency. Require all state/stream run bodies to be exactly:
+
+  ```ts
+  { input: { messages: [{ content: markerOrBarrierId, role: "user" }] }, route }
+  ```
+
+  Add tests that generate a 32-byte random release value, expose only its SHA-256 digest to fixture generation, retain the raw base64url value in a private black-box-client closure, and prove the raw value and its URL-encoded form are absent from source, bundle, manifests, environment snapshots, receipts, logs, thrown errors, and artifacts. The 64-character digest must not be accepted as the header credential.
+
+  Run:
+
+  ```bash
+  corepack pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts \
+    -t "model-free native fixture"
+  ```
+
+  Expected: FAIL because the fixture source generator is incomplete.
+
+- [ ] **Step 8: Generate the raw graph, stream, release, and middleware**
+
+  Generate one module-lifetime `pg.Pool` with `connectionString: process.env.DATABASE_URL`, `max: 2`, `connectionTimeoutMillis: 10_000`, `idleTimeoutMillis: 30_000`, and an explicit `error` listener that logs only a fixed pool-error label plus allowlisted `name`/`code` fields—never the error message, stack, pool config, or connection string. Pool construction must tolerate an absent build-time value and must not query or migrate; connections and saver migrations remain lazy at runtime. The pool is not closed per request—Vercel instance teardown owns it.
+
+  `/state#agent` must export the named `agent` as a raw compiled `StateGraph`. Define inline `messages`, `visits`, and `markers` annotations: messages and markers append, visits sum, and defaults are empty/zero. Compile with `new DawnPostgresSaver({ pool })`, its default `public.dawn_checkpoints`/`public.dawn_writes` names, empty checkpoint namespace, and default serializer. The record node reads only the latest `HumanMessage` string content, returns one visit plus that marker, and recognizes `^log-vcl-[a-f0-9]{32}$` by emitting exactly one `console.info("dawn-vercel-fixture-log", marker)` line.
+
+  `/stream#agent` must be a raw legacy Runnable whose `streamEvents` reads the barrier ID only from the latest user message, emits public-adapter input for `"before-release"`, waits with parameterized SQL and a finite deadline on `public.dawn_vercel_test_barriers`, emits `"after-release"`, and ends with root `on_chain_end` output `{ barrierId, released: true }`. `/release#graph` performs one parameterized `UPDATE ... WHERE barrier_id = $1 AND released = false RETURNING barrier_id` and succeeds only for exactly one returned row equal to the requested target.
+
+  Generate `src/middleware.ts` with only the SHA-256 digest embedded. When `req.routeId === "/release"`, require a well-formed base64url `x-dawn-vercel-release` header, hash it, and compare equal-length bytes with Node `timingSafeEqual`; missing, malformed, wrong, and digest-as-credential requests return `401`. Allow every other route. Do not put the raw credential in any environment variable or serializable object.
+
+  Re-run the Step 7 command. Expected: PASS.
+
+- [ ] **Step 9: Commit the isolated fixture assembly**
+
+  ```bash
+  git add packages/cli/test/helpers/vercel-native-fixture.ts \
+    packages/cli/test/vercel-native-lane.test.ts
+  git commit -m "test(cli): assemble isolated vercel fixtures"
+  ```
+
+- [ ] **Step 10: Write RED tests for CLI/API isolation and strict deploy receipts**
+
+  Inject fake child/API transports and assert:
+
+  - every Vercel call addresses the absolute `packages/cli/node_modules/.bin/vercel`, uses a direct argument array, and includes an absolute owner-only `--global-config` directory whose job-owned path chain is regular, non-symlink, and outside both fixtures;
+  - before any external operation, `--version` runs under Node 24 and must return exactly `58.9.0`; root `pnpm exec`, `npx`, shell execution, ambient binary lookup, and cached auth are impossible;
+  - version and local Dawn-build children have no credential; credentialed deploy/inspect/log children receive only child-local `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID`; deploy alone also receives `DATABASE_URL` and the valueless argument pair `--env`, `DATABASE_URL`;
+  - every credentialed deploy/inspect/log call has `--scope <orgId>`, explicitly sets `VERCEL_TELEMETRY_DISABLED=1` and `NO_UPDATE_NOTIFIER=1`, and forbids debug; token, database URL, and release credential never enter argv, while the organization scope and the log command's project scope are the only protected values permitted there; deploy runs at the fixture `cwd`, has no positional project path, and passes `--local-config <absolute-fixture-vercel.json>`;
+  - stdout accepts exactly one JSON document in only the two pinned `58.9.0` shapes: own top-level `id`/`url` with no `deployment`, or `{ status: "ok", deployment: { own id, own url } }` with no top-level `id`/`url`; prefixes, suffixes, conflicting candidates, unknown nesting, regex/URL fallback, malformed IDs, and malformed origins fail;
+  - in-process API calls use only `https://api.vercel.com`, `redirect: "manual"`, finite timeouts, token only in `Authorization`, and selective response parsing.
+
+  Run:
+
+  ```bash
+  corepack pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts \
+    -t "pinned vercel boundary|deployment receipt"
+  ```
+
+  Expected: FAIL because the command/API adapters do not exist.
+
+- [ ] **Step 11: Implement project/config/deployment binding**
+
+  Before each deploy and again before cleanup, call authenticated `GET /v9/projects/<projectId>?teamId=<orgId>` and require exact `id`, exact `accountId`, and `rootDirectory` absent or exactly `null` (normalize both to `null`; reject empty string and every other value). Before each deploy, parse the exact fixture `vercel.json`, require `fluid: true`, and record its SHA-256.
+
+  Before spawning a logical deploy attempt, validate the GitHub coordinates as nonempty strings, `kind` as the exact literal union, and `logicalAttemptIndex` as a canonical nonnegative decimal string, then derive the marker from the SHA-256 of the UTF-8 bytes of this exact JSON array:
+
+  ```ts
+  const preimage = [
+    "dawn-vercel-marker-v1",
+    GITHUB_REPOSITORY_ID,
+    GITHUB_RUN_ID,
+    GITHUB_RUN_ATTEMPT,
+    GITHUB_JOB,
+    kind,
+    logicalAttemptIndex,
+  ] as const
+  const marker = `vclrun_${sha256(JSON.stringify(preimage)).slice(0, 32)}`
+  ```
+
+  Atomically persist that exact preimage, kind, marker, the safe-integer lower bound `attemptStartMs - 300_000`, and `spawnStarted: true` before process creation. A retry gets a new index/marker. Deploy with `--meta dawnVercelRun=<marker> --scope <orgId> --non-interactive --yes --no-wait --json --global-config <dir> --local-config <file>`; add `--prebuilt` only for the prebuilt kind and never add `--build-env`. Parse only the strict receipt shapes, atomically persist the exact ID/canonical origin, and make authoritative `GET /v13/deployments/<id>?teamId=<orgId>` match ID, origin, project, owner, marker, bounded creation time, and non-production target before inspect/readiness/log/client traffic. Persist only safe fields plus project/owner-match booleans.
+
+  Then run `inspect <id> --scope <orgId> --wait --json --non-interactive --global-config <dir>`, require exact ID/origin and `readyState: "READY"`, and reject protection/build/boot failures. Canonicalize bare and absolute inspect URLs identically. Re-run the Step 10 command. Expected: PASS.
+
+- [ ] **Step 12: Write RED marker-reconciliation and cleanup-authorization tests**
+
+  With a fake Vercel API and clock, cover empty first polls, late appearance, duplicate IDs, deleted tombstones, 101-page overflow, repeated/non-integer/non-decreasing cursors, cursor cycles, changing poll upper bounds, and one final boundary query. Require the first page to use all fixed filters:
+
+  ```text
+  GET /v6/deployments
+    ?teamId=<orgId>
+    &projectId=<projectId>
+    &meta-dawnVercelRun=<marker>
+    &since=<persisted-lower-bound-ms>
+    &until=<poll-start-plus-five-minutes-ms>
+    &limit=100
+  ```
+
+  Later pages retain every filter and replace only `until` with the safe-integer `pagination.next`. Quiet begins only after a fully paginated poll, lasts 30 seconds, resets for each newly observed live ID, and ends with one final fully paginated query; poll every two seconds with a 180-second total deadline. One empty poll is not proof.
+
+  Require `/v6` rows to use `uid`, bare `url`, safe-integer `created`, the exact marker and attempt window. Each candidate must pass its own authenticated `/v13` read with exact ID/origin/project/owner/marker/time/non-production binding before entering cleanup. More than one live deployment for one marker fails cardinality but still schedules every authenticated ID for cleanup.
+
+  Run:
+
+  ```bash
+  corepack pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts \
+    -t "marker reconciliation|authenticated cleanup"
+  ```
+
+  Expected: FAIL because pagination/reconciliation is not implemented.
+
+- [ ] **Step 13: Implement recoverable marker reconciliation and exact-ID deletion**
+
+  Reconcile after every deploy attempt, including nonzero exit or invalid stdout, and again from workflow cleanup. The cleanup workset is the union of manifest IDs and marker-recovered IDs; every ID needs prior matching `/v13` owner validation unless a persisted successful-delete receipt already establishes it.
+
+  Delete only with authenticated `DELETE /v13/deployments/<id>?teamId=<orgId>` and no `url` query parameter. Never call `vercel remove`, and never delete a list row directly. Success is only HTTP `200` with exact `uid` and `state: "DELETED"`; persist only those fields. Poll the same exact `/v13` GET every two seconds for at most 60 seconds and require genuine `404`. A pre-delete/DELETE `404` is idempotent success only after prior authenticated ownership (or persisted successful deletion) and a follow-up exact GET also returns `404`; never treat `401`, `403`, `410`, rate limits, malformed responses, network, or generic failures as absence.
+
+  Re-run the Step 12 command. Expected: PASS.
+
+- [ ] **Step 14: Write RED causal-SSE and complete-log-scan tests**
+
+  Split CRLF delimiters and UTF-8 bytes across arbitrary chunks. Require the parser to preserve incomplete tails, parse only completed SSE frames, ignore heartbeat comments, join every `data:` line with `\n`, and JSON-parse public frames. Test that one pending `nextMeaningfulFrame()` may consume heartbeats/partial bytes, survives a one-second timeout without cancellation, and is the same promise later yielding the post-release frame. Reject early `after-release`, `done`, or EOF, and reject raw internal `on_chain_end` as a public event.
+
+  Feed log JSONL with repeated request IDs and changed nested content. Require nonempty row `id`, exact `deploymentId`, exact synthetic `projectId` scope echo, no malformed/truthy top-level or nested `messageTruncated`, no 5xx, no top-level/nested `error` or `fatal`, and no uncaught/unhandled/handler/pool/connection/leak/lifecycle error. Canonically fingerprint every normalized top-level field and complete nested `logs[]` entry; a changed version rescans and resets quiet. Exactly 1,000 rows fails.
+
+  Run:
+
+  ```bash
+  corepack pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts \
+    -t "causal SSE|runtime log scan"
+  ```
+
+  Expected: FAIL because the transport and log scanners do not exist.
+
+- [ ] **Step 15: Implement the identical bounded black-box client**
+
+  For each deployment, record log-scan start before traffic, then:
+
+  1. Persist a cleanup-valid thread ID before sending an unknown route through an existing run endpoint; the client-chosen path idempotently creates the thread, and the response must be `404`. Never call `/assistants/search` and never add discovery probes.
+  2. Persist a new thread ID, call `/state#agent` twice on that client-chosen thread path with distinct sole user-message markers, and require visits `[1, 2]`, ordered accumulated markers, the same second state from `GET /threads/:id/state`, and at least one parameterized `public.dawn_checkpoints` row for that exact thread. Mark state dispatch only after all pass.
+  3. Persist distinct target and sentinel barrier IDs before creating/inserting both unreleased rows in `public.dawn_vercel_test_barriers` with parameterized SQL. Call `/release#graph` with `{ input: { barrierId: target }, route: "/release#graph" }`, first with a missing and then an incorrect header; require `401` and both SQL rows still false.
+  4. Start `/stream#agent` with the target as its sole user message and `redirect: "manual"`. Before acquiring `response.body.getReader()`, require `200`, `response.redirected === false`, the requested canonical origin, and parsed MIME essence `text/event-stream`.
+  5. Require public `event: chunk` data exactly `"before-release"`, no later meaningful frame/EOF, and SQL target still false. Start one pending next-meaningful-frame operation and race it against a full one-second timer without cancelling it; the timer must win.
+  6. Only then send the private raw header to `/release#graph`; require exactly one returned target ID, SQL target true, and sentinel false. Mark release dispatch only now.
+  7. Await the preserved pending operation for exact `event: chunk` data `"after-release"`, then exact public `event: done` data `{ "output": { "barrierId": target, "released": true } }`, then EOF. Record ordered indexes and mark stream dispatch only after EOF.
+  8. Persist another thread plus unique `log-vcl-[a-f0-9]{32}` marker, send it as the sole user message to `/state#agent`, and require success. This is the later request and unique log anchor; it proves a later request, not same-instance reuse.
+
+  Poll logs every two seconds, overall 180 seconds, with the exact package-local command:
+
+  ```text
+  logs --project <projectId> --deployment <deploymentId> --json
+       --since <absolute-ISO-start> --until <absolute-ISO-end> --limit 1000
+       --scope <orgId> --non-interactive --global-config <absolute-dir>
+  ```
+
+  Require exactly one occurrence of the benign marker, then 30 consecutive seconds with no new row version and a final boundary query. Treat the CLI-synthesized `projectId` only as a scope echo—ownership came from `/v9` and `/v13`. Scan all versions through that query. Empty, cross-deployment, malformed, truncated, saturated, error-bearing, or never-quiet logs fail.
+
+  Re-run the Step 14 command. Expected: PASS.
+
+- [ ] **Step 16: Write RED database-cleanup and aggregate-error tests**
+
+  Use a query recorder to require bound `to_regclass($1)` checks against only this allowlist:
+
+  ```text
+  public.dawn_vercel_test_barriers
+  public.dawn_writes
+  public.dawn_checkpoints
+  public.dawn_threads
+  ```
+
+  A null result is a verified zero-resource postcondition. For existing tables, require parameterized deletion of every persisted target/sentinel barrier, then each persisted thread from writes, checkpoints, and threads in that order, followed by zero-row verification before marking that resource cleaned. Test partial migrations, repeated cleanup, independent resource attempts, and multiple failures. With a primary failure, it remains `AggregateError.cause` and the first contained error; cleanup failures follow.
+
+  Run:
+
+  ```bash
+  corepack pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts \
+    -t "database cleanup|native failure aggregation"
+  ```
+
+  Expected: FAIL because scoped database cleanup is incomplete.
+
+- [ ] **Step 17: Complete orchestration, cleanup, and provenance evidence**
+
+  Build the prebuilt fixture locally with the built Dawn CLI under a sanitized credential-free environment, validate `.vercel/output`, scan `index.mjs` for protected values, and deploy it with `--prebuilt`. For source, remove `node_modules`, assert `.dawn` and `.vercel/output` absent immediately before deploy, and perform a normal source deploy. No deploy has a positional path; each uses its fixture as `cwd`. Capture and redact all stdout/stderr. Collect build evidence with a separate bounded package-local `inspect <id> --logs --scope <orgId> --non-interactive --global-config <dir>` call: require the source preview to show its committed Dawn build ran remotely and require the prebuilt preview to show no remote source build. Set provenance booleans only from those command/log facts. Give every child, API request, SQL operation, body read, and polling loop a finite timeout.
+
+  The test `finally` and `vercel-native-cleanup.mjs` must invoke the same idempotent reconciliation, exact `/v13` cleanup, and `to_regclass` database cleanup. Persist every attempt/thread/barrier and its own cleaned flag without deleting history. Attempt all resources and aggregate failures without masking the primary test error. This closes the CLI-spawn-to-receipt gap when `finally`/workflow `always()` runs; do not claim cleanup after total runner loss.
+
+  Write redacted build logs, runtime JSONL, parsed SSE events, cleanup history, and `receipt.partial.json` incrementally. Scan raw and URL-encoded protected values before every diagnostic write and again before artifact readiness. Atomically create strict `receipt.json` only after both kinds have complete functional/provenance evidence and all deployment/database absence checks pass. Workflow fallback cleanup may close a fully populated partial receipt after proving those postconditions, but must never manufacture missing functional evidence.
+
+  Re-run the Step 16 command. Expected: PASS.
+
+- [ ] **Step 18: Run all credential-free helper checks**
 
   Run:
 
@@ -975,105 +1118,133 @@
     packages/cli/test/helpers/vercel-native-fixture.ts \
     packages/cli/test/helpers/vercel-native-cleanup.mjs \
     packages/cli/test/vercel-native-lane.test.ts
+  git diff --check
   ```
 
-  Expected: helper unit tests PASS and external native test is explicitly skipped because `DAWN_TEST_VERCEL` is unset.
+  Expected: all pure tests PASS and the external case reports one explicit skip because `DAWN_TEST_VERCEL` is unset.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 19: Commit the bounded native client and cleanup**
 
   ```bash
   git add packages/cli/test/helpers/vercel-native-fixture.ts \
     packages/cli/test/helpers/vercel-native-cleanup.mjs \
     packages/cli/test/vercel-native-lane.test.ts
-  git commit -m "test(cli): add native vercel deployment lane"
+  git commit -m "test(cli): prove native vercel execution"
   ```
 
 ### Task 9: Add the protected native Vercel CI job
 
 **Files:**
 - Modify: `.github/workflows/ci.yml`
+- Modify: `packages/sandbox/test/ci-workflow-pins.test.ts`
 
-- [ ] **Step 1: Add a failing workflow-structure check if an existing checker exists**
+- [ ] **Step 1: Add a RED parsed-workflow contract test**
 
-  Search first:
+  Extend the existing YAML-parsing test rather than adding string matching. Require a `vercel-native` job whose guard admits only `main` pushes and same-repository pull requests, whose environment is `vercel-preview`, and whose setup pins pnpm `10.33.0` and Node `24.17.0`. Assert checkout/install/full-build precede the native test.
+
+  Parse every job/step `env` object and require protected values only in these process scopes:
+
+  - native test: all four `DAWN_VERCEL_*` secrets plus artifact directory and `DAWN_TEST_VERCEL=1`;
+  - `always()` cleanup: token, organization, project, database URL, and artifact directory;
+  - diagnostic sanitization: the same four protected values only long enough to scan/redact failure artifacts;
+  - receipt assertion and upload: no secrets.
+
+  Require cleanup to precede the final receipt assertion, use `if: always()`, and invoke the checked-in cleanup module. Require failure artifacts to upload only a sanitizer-produced directory, never `.vercel/project.json`, the fixture roots, or an unsanitized runner directory.
+
+  Run:
 
   ```bash
-  rg -n "edge-workerd|workflow.*check|ci.yml" test scripts packages -g '*test*'
+  corepack pnpm --filter @dawn-ai/sandbox test ci-workflow-pins.test.ts \
+    -t "native Vercel job"
   ```
 
-  If the repository has a workflow structure test, require `vercel-native`, all four env names, the `vercel-preview` environment, native receipt assertion, artifact upload, and an `always()` cleanup path. If no such checker exists, do not create a general YAML test framework for this one job; validate by parsing the YAML in Step 4.
+  Expected: FAIL because `jobs.vercel-native` is absent.
 
-- [ ] **Step 2: Add the same-repository/main job guard and protected environment**
+- [ ] **Step 2: Add the guarded protected job and pinned toolchain**
 
-  Add `vercel-native` after `edge-workerd` with:
+  Add `vercel-native` after the existing workerd lane:
 
   ```yaml
-  if: >-
-    (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-    (github.event_name == 'pull_request' &&
-     github.event.pull_request.head.repo.full_name == github.repository)
-  runs-on: ubuntu-latest
-  timeout-minutes: 30
-  environment: vercel-preview
+  vercel-native:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: vercel-preview
   ```
 
-  Use the repository-pinned checkout, pnpm setup `10.33.0`, and Node `24.17.0` actions already used by adjacent jobs. Install with `--frozen-lockfile` and run the full workspace build because the fixture packages real `dist` output.
+  Reuse the repository-pinned checkout/setup actions, pnpm `10.33.0`, and Node `24.17.0`. Run `pnpm install --frozen-lockfile` then `pnpm build`; the fixtures pack branch-local `dist` output. Do not place any protected value at workflow or job scope. Fork pull requests rely on the credential-free Task 8 tests in `validate` and cannot enter this environment.
 
-- [ ] **Step 3: Wire protected values and test/receipt steps**
+- [ ] **Step 3: Run the native test with step-local secrets**
 
-  Map secrets only at the test step:
+  Create `${{ runner.temp }}/vercel-native` with owner-only permissions before the credentialed step. Give only the test process all four secrets and write the Vitest JSON inside the artifact directory:
 
   ```yaml
-  env:
-    DAWN_TEST_VERCEL: "1"
-    DAWN_VERCEL_TOKEN: ${{ secrets.DAWN_VERCEL_TOKEN }}
-    DAWN_VERCEL_ORG_ID: ${{ secrets.DAWN_VERCEL_ORG_ID }}
-    DAWN_VERCEL_PROJECT_ID: ${{ secrets.DAWN_VERCEL_PROJECT_ID }}
-    DAWN_VERCEL_DATABASE_URL: ${{ secrets.DAWN_VERCEL_DATABASE_URL }}
-    DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
-  run: >-
-    pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts
-    --reporter=json
-    --outputFile.json=${{ runner.temp }}/vercel-native-vitest.json
+  - name: Run native Vercel previews
+    id: native-vercel
+    env:
+      DAWN_TEST_VERCEL: "1"
+      DAWN_VERCEL_TOKEN: ${{ secrets.DAWN_VERCEL_TOKEN }}
+      DAWN_VERCEL_ORG_ID: ${{ secrets.DAWN_VERCEL_ORG_ID }}
+      DAWN_VERCEL_PROJECT_ID: ${{ secrets.DAWN_VERCEL_PROJECT_ID }}
+      DAWN_VERCEL_DATABASE_URL: ${{ secrets.DAWN_VERCEL_DATABASE_URL }}
+      DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
+    run: >-
+      pnpm --filter @dawn-ai/cli test vercel-native-lane.test.ts
+      --reporter=json
+      --outputFile.json=${{ runner.temp }}/vercel-native/vitest.json
   ```
 
-  Add a subsequent Node JSON assertion that requires one passed native test and a valid receipt with exactly the `source` and `prebuilt` kinds. Add an unconditional fallback immediately after the test:
+  Missing secrets must make a same-repository run fail with all missing names; never conditionally skip this step.
+
+- [ ] **Step 4: Add unconditional reconciliation and cleanup**
+
+  Immediately after the native step, invoke the idempotent cleanup entry point even when the test failed:
 
   ```yaml
-  - name: Remove exact Vercel previews
+  - name: Reconcile and remove native Vercel resources
+    id: native-vercel-cleanup
     if: always()
     env:
       DAWN_VERCEL_TOKEN: ${{ secrets.DAWN_VERCEL_TOKEN }}
       DAWN_VERCEL_ORG_ID: ${{ secrets.DAWN_VERCEL_ORG_ID }}
+      DAWN_VERCEL_PROJECT_ID: ${{ secrets.DAWN_VERCEL_PROJECT_ID }}
+      DAWN_VERCEL_DATABASE_URL: ${{ secrets.DAWN_VERCEL_DATABASE_URL }}
       DAWN_VERCEL_ARTIFACT_DIR: ${{ runner.temp }}/vercel-native
-    run: node packages/cli/test/helpers/vercel-native-cleanup.mjs
+    run: node packages/cli/test/helpers/vercel-native-cleanup.mjs --cleanup
   ```
 
-  The script reads the incrementally persisted exact IDs and is idempotent after the test's own `finally`. Add `actions/upload-artifact` with `if: failure()` for the redacted diagnostic directory and test JSON. This fallback is required, not optional: it covers assertion failures after deploy and runner-controlled interruption between test phases.
+  This process receives secrets only in its environment, rechecks `/v9` project/root binding, reconciles every persisted marker through fully paginated `/v6`, validates candidates through `/v13`, deletes exact IDs through `/v13`, proves exact GET `404`, and removes/verifies only persisted database rows through `to_regclass`. It must aggregate cleanup failures and never use a project-wide target.
 
-- [ ] **Step 4: Validate YAML structure and fork behavior**
+- [ ] **Step 5: Assert only the closed final receipt**
 
-  Parse `.github/workflows/ci.yml` with the repository's installed YAML parser (or Ruby/Python standard tooling already present) and inspect the job object. Confirm:
+  After successful test and cleanup steps, run `node packages/cli/test/helpers/vercel-native-cleanup.mjs --assert-receipt` with only `DAWN_VERCEL_ARTIFACT_DIR` set. It must require exactly one passed native Vitest case and the strict `receipt.json` described in Task 8; `receipt.partial.json`, a missing half, additional key, uncleared resource, or reordered kind tuple fails. This step receives no secret.
 
-  - pull requests from forks cannot enter the job;
-  - same-repository pull requests and `main` pushes can;
-  - secrets are absent from global/job-wide logging steps;
-  - the job sets Node 24 and pnpm 10.33;
-  - failure diagnostics and exact cleanup remain reachable after a test failure.
+- [ ] **Step 6: Sanitize and upload failure diagnostics**
 
-  Also run:
+  Add an `if: always()` preparation step with `id: native_vercel_diagnostics` and the four secrets scoped only to that process. Invoke `node packages/cli/test/helpers/vercel-native-cleanup.mjs --prepare-artifacts`. It must combine the already-redacted source-build logs, exact-deployment runtime logs, parsed client events, Vitest JSON, incremental cleanup history, and partial/final receipt into a separate `upload/` directory; exclude fixture roots and `.vercel/project.json`; reject raw and URL-encoded protected values before declaring the directory uploadable. The Task 8 harness must already have scanned the client-only release value while it was in memory.
+
+  Upload only `upload/` with pinned `actions/upload-artifact`, `if: failure() && steps.native_vercel_diagnostics.outcome == 'success'`, and a short retention (three days). If sanitization fails, fail closed and do not upload possibly sensitive files. The upload step itself receives no secret.
+
+- [ ] **Step 7: Run the workflow test and repository checks**
+
+  Run:
 
   ```bash
+  corepack pnpm --filter @dawn-ai/sandbox test ci-workflow-pins.test.ts
   corepack pnpm lint
+  node scripts/check-docs.mjs
   git diff --check
   ```
 
-  Expected: PASS, with only documented pre-existing warnings if any.
+  Expected: PASS; the parsed test proves the fork guard, toolchain, secret scopes, `always()` cleanup, closed receipt assertion, and sanitized artifact path.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
   ```bash
-  git add .github/workflows/ci.yml
+  git add .github/workflows/ci.yml packages/sandbox/test/ci-workflow-pins.test.ts
   git commit -m "ci: verify source and prebuilt vercel previews"
   ```
 
@@ -1082,9 +1253,10 @@
 **Files:**
 - Verify: `.github/workflows/ci.yml`
 - Verify: `packages/cli/test/vercel-native-lane.test.ts`
-- Verify: `${DAWN_VERCEL_ARTIFACT_DIR}/receipt.json` from CI artifacts
+- Verify: the protected job's strict `${DAWN_VERCEL_ARTIFACT_DIR}/receipt.json` assertion
+- Verify: `${DAWN_VERCEL_ARTIFACT_DIR}/cleanup.json` from CI artifacts on failure
 
-- [ ] **Step 1: Run the complete local prerequisite suite before pushing**
+- [ ] **Step 1: Run the complete credential-free prerequisite suite before pushing**
 
   Run:
 
@@ -1098,27 +1270,33 @@
   git diff --check
   ```
 
-  Expected: PASS; the external native case is explicitly skipped locally while parser/receipt/cleanup controls run.
+  Expected: PASS; exactly the external case is skipped, while package-closure, upload-symlink, environment/argv, strict deploy JSON, project/API binding, SSE, log, marker-pagination, exact-delete/404, database-cleanup, redaction, partial/final receipt, and workflow-structure controls all run.
 
 - [ ] **Step 2: Push the implementation/CI branch and open or update the draft pull request**
 
   Use `@github:yeet` only after confirming the staged scope. The draft pull request intentionally retains the old documentation statement that Vercel is not yet observed. Do not add the support claim or changeset in this checkpoint commit.
 
-- [ ] **Step 3: Require native source and prebuilt receipts**
+- [ ] **Step 3: Require one strict final native receipt**
 
-  Wait for `vercel-native` in the protected `vercel-preview` environment. Inspect its receipt and require:
+  Wait for `vercel-native` in the protected `vercel-preview` environment. Accept only `receipt.json`; `receipt.partial.json` is diagnostic evidence and cannot pass. Run the same strict validator as CI and require:
 
-  - exactly one source and one prebuilt deployment;
-  - `fluid: true` verified from each local config;
-  - no local source build output before source deploy;
-  - no remote source build during prebuilt deploy;
-  - state persisted, the first meaningful SSE frame arrived before release, completion arrived after release, and a subsequent request succeeded on both;
-  - exact deployment IDs were cleaned by the test and/or the unconditional fallback;
-  - runtime logs contain no uncaught or leaked error.
+  - schema version `1`, CLI `58.9.0`, verified project binding, and exactly the ordered `source`/`prebuilt` tuple with no unknown keys;
+  - each fixture's explicit config has `fluid: true` and the recorded SHA-256, and each deployment reached authoritative `READY` under the expected project/owner/marker/origin binding;
+  - unknown-route `404` plus successful functional dispatch of exactly `/state#agent`, `/stream#agent`, and `/release#graph`; no `/assistants/search` evidence;
+  - visits `[1, 2]`, markers in order, the generated state read matching the second run, and a physical checkpoint for each deployment;
+  - missing/wrong release-header `401`, exact target-only release, and the sentinel still unreleased at assertion time;
+  - `200` non-redirected `text/event-stream`, first chunk before the preserved one-second quiet read, authorized release only afterward, exact second chunk then exact `done`, and EOF after done with ordered finite indexes;
+  - a later request whose unique canonical marker is present in complete exact-deployment logs, followed by the 30-second quiet/final-query scan with no truncation, 5xx, fatal/error level, or lifecycle error;
+  - source provenance proves no local prebuilt output and an observed remote build; prebuilt provenance proves validated local output, `--prebuilt`, and no remote source build;
+  - reconciliation cardinality/binding evidence and cleanup postconditions showing every authenticated deployment absent by exact `/v13` GET `404` and every persisted database row absent.
 
   If native evidence fails, use `@superpowers:systematic-debugging`, fix the root cause, re-run focused local tests, push, and repeat this checkpoint. Documentation support claims remain unchanged until the receipt passes.
 
-- [ ] **Step 4: Commit any evidence-driven fixes and record the green run**
+- [ ] **Step 4: Audit cleanup and failure diagnostics before accepting the run**
+
+  Inspect the job structure/run summary to confirm the `always()` cleanup executed after the native test, including on a deliberately observed test failure during development. For any failed attempt, inspect only the sanitized short-lived artifact and require the persisted marker coordinates to reconcile to every attempted deployment, exact `/v13` deletion/404 evidence or an explicit cleanup failure, scoped `to_regclass` database evidence, and no raw or URL-encoded protected values. Do not describe this as cleanup after total runner loss.
+
+- [ ] **Step 5: Commit any evidence-driven fixes and record the green run**
 
   Keep CI URLs/run IDs in the pull-request evidence, not in source files. Once green, proceed to Task 11; the next push will cause the lane to re-run against the documentation commit as a final regression.
 
@@ -1227,7 +1405,7 @@
   corepack pnpm --filter @dawn-ai/devkit test
   ```
 
-  Expected: PASS; the credentialed native case is explicitly skipped when the flag is absent, while its parser/receipt tests run.
+  Expected: PASS; the credentialed native case is explicitly skipped when the flag is absent, while its closure, command/API, transport, log, reconciliation, cleanup, redaction, and closed-receipt tests run.
 
 - [ ] **Step 3: Run Docker-backed Node execution and Hono regression**
 
@@ -1259,9 +1437,9 @@
   - both used `fluid: true` from the fixture config;
   - the source fixture had no local build output;
   - the prebuilt preview performed no remote source build;
-  - each preview persisted state, exposed the first SSE frame before release, completed after release, and served a subsequent request;
-  - both exact deployment IDs were removed;
-  - no runtime error log contains an uncaught/leaked error.
+  - each preview persisted state, kept the sentinel unreleased, exposed the first SSE frame and a preserved quiet read before the authorized target release, completed in exact public-frame order, and served the canonical later log-marker request;
+  - marker reconciliation found the expected cardinality, every authenticated exact-ID workset member reached `/v13` `404`, and `to_regclass`-aware cleanup proved every persisted thread/barrier row absent;
+  - the complete exact-deployment log scan reached its final quiet-boundary query with no truncation, 5xx, fatal/error level, or lifecycle error.
 
   If native evidence fails, use `@superpowers:systematic-debugging`; fix the root cause and repeat the focused and native lanes. Do not revise documentation to claim native support before this passes.
 
