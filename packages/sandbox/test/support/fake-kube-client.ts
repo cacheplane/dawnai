@@ -1,9 +1,11 @@
-import type {
-  KubeClient,
-  KubeNetworkPolicySpec,
-  KubePodSpec,
-  KubePvcSpec,
-  PodPhase,
+import {
+  KubeAuthorizationReviewError,
+  type KubeClient,
+  type KubeNetworkPolicySpec,
+  type KubePermission,
+  type KubePodSpec,
+  type KubePvcSpec,
+  type PodPhase,
 } from "../../src/kubernetes/kube-client.ts"
 
 interface FakePod {
@@ -15,12 +17,21 @@ interface FakePod {
   pendingReads: number
 }
 
+const permissionKey = (permission: KubePermission): string =>
+  JSON.stringify({
+    apiGroup: permission.apiGroup,
+    resource: permission.resource,
+    ...(permission.subresource !== undefined ? { subresource: permission.subresource } : {}),
+    verb: permission.verb,
+  })
+
 /** In-memory KubeClient. Models pods, PVCs (as a filestore that survives pod
  * deletion), and network policies. exec() is a tiny sh interpreter covering the
  * commands kubeFilesystem/kubeExec emit (cat/tee/ls/mkdir/rm/true/id/echo). */
 export function fakeKubeClient(
   opts: {
-    readonly canICreate?: boolean
+    readonly deniedPermissions?: readonly KubePermission[]
+    readonly permissionErrors?: ReadonlyMap<string, Error>
     readonly cniEnforced?: boolean | "unknown"
     readonly startPhase?: PodPhase // phase newly-created pods report (default "Running")
     readonly pendingReads?: number // reads a fresh pod reports "Pending" before startPhase
@@ -32,10 +43,13 @@ export function fakeKubeClient(
   readonly pods: Map<string, FakePod>
   readonly pvcs: Map<string, { spec: KubePvcSpec; files: Map<string, string> }>
   readonly netpols: Map<string, KubeNetworkPolicySpec>
+  readonly permissionChecks: KubePermission[]
 } {
   const pods = new Map<string, FakePod>()
   const pvcs = new Map<string, { spec: KubePvcSpec; files: Map<string, string> }>()
   const netpols = new Map<string, KubeNetworkPolicySpec>()
+  const permissionChecks: KubePermission[] = []
+  const deniedPermissionKeys = new Set(opts.deniedPermissions?.map(permissionKey) ?? [])
   // Separate from `pvcs` so pvcExists can report lingering-true even though the
   // entry is removed from `pvcs` immediately (tests assert on `.pvcs.has(...)`).
   const lingering = new Map<string, number>()
@@ -90,6 +104,7 @@ export function fakeKubeClient(
     pods,
     pvcs,
     netpols,
+    permissionChecks,
     async readNamespacedPodPhase(_ns, name) {
       const pod = pods.get(name)
       if (!pod) return null
@@ -142,8 +157,15 @@ export function fakeKubeClient(
       const script = argv[sh + 2] ?? ""
       return runSh(p, script, execOpts?.stdin)
     },
-    async canI() {
-      return opts.canICreate ?? true
+    async canI(_ns, permission) {
+      permissionChecks.push(permission)
+      const key = permissionKey(permission)
+      const error = opts.permissionErrors?.get(key)
+      if (error instanceof KubeAuthorizationReviewError) throw error
+      if (error !== undefined) {
+        throw new KubeAuthorizationReviewError("api", error.message, { cause: error })
+      }
+      return !deniedPermissionKeys.has(key)
     },
     async networkPolicyEnforced() {
       return opts.cniEnforced ?? true

@@ -178,11 +178,16 @@ test("network:deny with an allowlist emits a deny NetworkPolicy carrying the all
   expect(np?.allowlist).toEqual(["10.0.0.0/8"])
 })
 
-test("preflight fails when create is denied", async () => {
-  const k = fakeKubeClient({ canICreate: false })
+test("preflight reports a denied required permission", async () => {
+  const k = fakeKubeClient({
+    deniedPermissions: [{ apiGroup: "", resource: "pods", verb: "create" }],
+  })
   const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
   const r = await p.preflight?.()
-  expect(r?.ok).toBe(false)
+  expect(r).toEqual({
+    ok: false,
+    detail: 'Missing Kubernetes permissions in namespace "ns": create core/pods.',
+  })
 })
 
 test("preflight warns when the CNI won't enforce NetworkPolicy", async () => {
@@ -193,10 +198,12 @@ test("preflight warns when the CNI won't enforce NetworkPolicy", async () => {
   expect(r?.warnings?.join(" ")).toMatch(/NetworkPolicy/i)
 })
 
-test("preflight passes clean when create allowed and CNI enforces", async () => {
-  const k = fakeKubeClient({ canICreate: true, cniEnforced: true })
+test("preflight passes clean when required permissions are granted and CNI enforces", async () => {
+  const k = fakeKubeClient({ cniEnforced: true })
   const p = kubernetesSandbox({ image: "i", client: k, namespace: "ns" })
   const r = await p.preflight?.()
-  expect(r?.ok).toBe(true)
-  expect(r?.warnings ?? []).toHaveLength(0)
+  expect(r).toEqual({
+    ok: true,
+    detail: 'Kubernetes reachable; required permissions granted in "ns".',
+  })
 })

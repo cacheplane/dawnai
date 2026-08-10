@@ -17,12 +17,13 @@ import {
   type V1SecurityContext,
   type V1Status,
 } from "@kubernetes/client-node"
-import type {
-  KubeClient,
-  KubeNetworkPolicySpec,
-  KubePodSpec,
-  KubePvcSpec,
-  PodPhase,
+import {
+  KubeAuthorizationReviewError,
+  type KubeClient,
+  type KubeNetworkPolicySpec,
+  type KubePodSpec,
+  type KubePvcSpec,
+  type PodPhase,
 } from "./kube-client.js"
 
 const CONTAINER_NAME = "sandbox"
@@ -300,15 +301,31 @@ export function createDefaultKubeClient(): KubeClient {
       }
     },
 
-    async canI(ns, verb, resource): Promise<boolean> {
-      const review = await authorization.createSelfSubjectAccessReview({
-        body: {
-          spec: {
-            resourceAttributes: { namespace: ns, verb, resource },
+    async canI(ns, permission): Promise<boolean> {
+      try {
+        const review = await authorization.createSelfSubjectAccessReview({
+          body: {
+            spec: {
+              resourceAttributes: {
+                group: permission.apiGroup,
+                namespace: ns,
+                resource: permission.resource,
+                ...(permission.subresource !== undefined
+                  ? { subresource: permission.subresource }
+                  : {}),
+                verb: permission.verb,
+              },
+            },
           },
-        },
-      })
-      return review.status?.allowed === true
+        })
+        return review.status?.allowed === true
+      } catch (error) {
+        throw new KubeAuthorizationReviewError(
+          error instanceof ApiException ? "api" : "transport",
+          error instanceof Error ? error.message : String(error),
+          { cause: error },
+        )
+      }
     },
 
     async networkPolicyEnforced(ns): Promise<boolean | "unknown"> {

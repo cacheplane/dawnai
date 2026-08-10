@@ -2,7 +2,13 @@ import { createHash } from "node:crypto"
 import type { SandboxHandle, SandboxPolicy, SandboxProvider } from "@dawn-ai/workspace"
 import { sandboxUnavailable } from "../errors.js"
 import { createDefaultKubeClient } from "./default-kube-client.js"
-import type { KubeClient, KubePodSpec } from "./kube-client.js"
+import {
+  KubeAuthorizationReviewError,
+  type KubeClient,
+  type KubePermission,
+  type KubePodSpec,
+  REQUIRED_KUBE_PERMISSIONS,
+} from "./kube-client.js"
 import { kubeExec } from "./kube-exec.js"
 import { kubeFilesystem } from "./kube-filesystem.js"
 
@@ -30,6 +36,10 @@ const sanitize = (s: string) => {
 const podName = (t: string) => `dawn-sbx-${sanitize(t)}`
 const pvcName = (t: string) => `dawn-sbx-vol-${sanitize(t)}`
 const netpolName = (t: string) => `dawn-sbx-net-${sanitize(t)}`
+const permissionLabel = (permission: KubePermission): string =>
+  `${permission.verb} ${permission.apiGroup || "core"}/${permission.resource}${
+    permission.subresource === undefined ? "" : `/${permission.subresource}`
+  }`
 
 export interface KubernetesSandboxOptions {
   readonly image: string
@@ -200,18 +210,51 @@ export function kubernetesSandbox(opts: KubernetesSandboxOptions): SandboxProvid
     },
     async preflight() {
       const warnings: string[] = []
-      let canCreate: boolean
-      try {
-        canCreate = await client.canI(ns, "create", "pods")
-      } catch (error) {
-        return {
-          ok: false,
-          detail: `Kubernetes API not reachable: ${error instanceof Error ? error.message : String(error)}.`,
+      const denied: string[] = []
+      const apiFailures: string[] = []
+      const transportFailures: string[] = []
+      const labels = REQUIRED_KUBE_PERMISSIONS.map(permissionLabel)
+      const reviews = await Promise.allSettled(
+        REQUIRED_KUBE_PERMISSIONS.map((permission) => client.canI(ns, permission)),
+      )
+
+      for (const [index, review] of reviews.entries()) {
+        const label = labels[index]
+        if (label === undefined) continue
+        if (review.status === "fulfilled") {
+          if (!review.value) denied.push(label)
+        } else if (
+          review.reason instanceof KubeAuthorizationReviewError &&
+          review.reason.kind === "api"
+        ) {
+          apiFailures.push(label)
+        } else {
+          transportFailures.push(label)
         }
       }
-      if (!canCreate) {
-        return { ok: false, detail: `No permission to create pods in namespace "${ns}".` }
+
+      denied.sort()
+      apiFailures.sort()
+      transportFailures.sort()
+      const failureDetails = [
+        ...(transportFailures.length > 0
+          ? [
+              `Kubernetes API not reachable while reviewing permissions in namespace "${ns}": ${transportFailures.join(", ")}.`,
+            ]
+          : []),
+        ...(apiFailures.length > 0
+          ? [
+              `Kubernetes authorization review failed in namespace "${ns}": ${apiFailures.join(", ")}.`,
+            ]
+          : []),
+        ...(denied.length > 0
+          ? [`Missing Kubernetes permissions in namespace "${ns}": ${denied.join(", ")}.`]
+          : []),
+      ]
+      if (failureDetails.length > 0) {
+        return { ok: false, detail: failureDetails.join(" ") }
       }
+
       const enforced = await client.networkPolicyEnforced(ns).catch(() => "unknown" as const)
       if (enforced !== true) {
         warnings.push(
@@ -220,7 +263,7 @@ export function kubernetesSandbox(opts: KubernetesSandboxOptions): SandboxProvid
       }
       return {
         ok: true,
-        detail: `Kubernetes reachable; can create pods in "${ns}".`,
+        detail: `Kubernetes reachable; required permissions granted in "${ns}".`,
         ...(warnings.length > 0 ? { warnings } : {}),
       }
     },
