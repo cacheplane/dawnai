@@ -1,0 +1,134 @@
+---
+title: Dawn 0.8 — The framework around the agent
+description: Evals, typed memory, safer tools, isolated execution, standard clients, and production builds from Node and Docker to an opt-in edge target.
+date: 2026-08-09
+tags: [typescript, agents]
+type: release
+version: 0.8.21
+author: brian
+draft: true
+---
+
+The route tree was the beginning of Dawn, not the finished application.
+
+Routes gave agent code a place to live. Tools could sit next to the route that used them, types could follow the source, and the build could turn that tree into a runnable LangGraph.js application.
+
+The releases since then have filled in more of the work around that route: measuring behavior, limiting what tools can do, delegating to specialists, retaining useful memory, connecting a web client, and running the Dawn runtime outside the local dev server.
+
+This post catches up from 0.5 through the current published 0.8.21 release. It is a roundup, not a claim that 0.8.21 introduced every feature below. Several parts landed earlier and have been tightened in later 0.8 releases.
+
+## The short version
+
+The route tree still holds the application together. The practical change is how much more of the application now has an explicit place around it:
+
+- **Measure** agent behavior across a dataset with deterministic eval replay.
+- **Constrain and isolate** tools with scoped access, argument rules, approvals, and an optional sandbox.
+- **Delegate** work through named subagents with parent-owned rules.
+- **Remember** typed facts and episodes across threads, with review before recall by default.
+- **Connect** standard web clients through AG-UI while retaining the thread-scoped Agent Protocol.
+- **Deploy** the Dawn runtime through Node and Docker, or opt into a narrower edge target.
+
+Dawn still builds around LangGraph.js. It does not replace the graph runtime. The goal is to give the rest of the agent application a shape that the editor, tests, clients, operators, and deployment artifact can agree on.
+
+## Measure what the agent does
+
+Evals arrived in 0.5.0 because a passing unit test and a useful agent answer are different claims.
+
+A Dawn eval lives beside its route under `evals/*.eval.ts`. It runs the route over a dataset, scores each result, and can turn the aggregate into a gate. Exact matches, required text, tool calls, token budgets, custom scorers, and model judges cover different kinds of quality without turning the eval file into a second runtime.
+
+The default is deterministic fixture replay. The model response is replaced, while the route's tools, prompts, capabilities, and state still run. That makes a quality gate repeatable enough for CI. `dawn eval --live` calls a real model for local measurement, and `dawn eval --record` calls a real model to capture fixtures for later replay. Both spend real model calls and neither belongs in CI.
+
+The testing package has become more focused at the same time. `createAgentHarness` covers agent behavior. Separate harnesses exercise a route tool, middleware layer, workspace filesystem, or Agent Protocol boundary without starting more of the application than the test needs. Co-located `run.test.ts` scenarios remain useful for route input and output. The result is not one grand test API; it is a set of small boundaries you can choose deliberately. See [Evals](/docs/evals) and [Testing agents](/docs/testing-agents).
+
+## Put a boundary around execution
+
+An agent that can call tools needs more than a prompt asking it to be careful.
+
+Dawn now treats access control as layers. Tool scoping decides which tools reach the model: `allow` can grant a withheld capability tool, `deny` removes one, and deny wins. Argument constraints then inspect a specific call and can allow it, reject it with a reason, or escalate it for approval. Named approval rules pause a run before the tool executes.
+
+The built-in workspace has two more guards. Paths resolve against the app's workspace root, and shell commands plus paths outside that workspace pass through the permission gate. Those controls matter, but a path jail and an approval prompt are not container isolation. Once an operation is approved, it still runs wherever the runtime is running unless you configure a sandbox.
+
+The optional sandbox moves each thread's filesystem and shell work behind a provider boundary. Dawn ships Docker and Kubernetes providers. The Docker provider drops Linux capabilities, prevents privilege escalation, runs as a non-root user, and uses a read-only root filesystem by default. Its deny-network mode provides the strong egress setting; its allow-mode denylist is best-effort. On Kubernetes, network policy depends on a policy-capable CNI, so the provider warns rather than claiming enforcement it cannot verify.
+
+These layers answer different questions: which tool is available, whether this call should run, and what the allowed call can touch. Use the layers the application needs, and keep their boundaries visible in review. The [Access Control](/docs/access-control) and [Sandbox](/docs/sandbox) guides cover the concrete configuration and provider limits.
+
+## Make delegation explicit
+
+The 0.4 preview treated subagents as a useful route boundary. The current API closes that preview story with a keyed `subagents` map and a policy owned by the parent:
+
+```ts
+export default agent({
+  model: "gpt-5-mini",
+  subagents: { researcher, writer },
+  delegation: {
+    default: "deny",
+    rules: {
+      researcher: { action: "allow" },
+      writer: { action: "approve", reason: "Review outbound drafts." },
+    },
+  },
+})
+```
+
+The key is the name the parent sees and the identity its policy governs. A rule can allow, deny, require approval, or run a constraint against the proposed input. Each parent owns only its direct outbound edge, so approval does not silently authorize another parent or a deeper child.
+
+Delegated runs execute as resumable LangGraph subgraphs under the root thread's checkpointer. Nested and parallel calls keep separate checkpoint namespaces, while an interrupt from a child returns to the root stream and resumes through the root thread. That preserves the useful route boundary without hiding delegation authority in a helper function. See [Subagents](/docs/subagents).
+
+## Memory you can review
+
+Dawn's long-term memory is a typed collection, not a longer system prompt. A route declares a Zod schema in `memory.ts`; type generation carries that schema into the `remember` tool, and runtime validation checks model-authored writes again.
+
+The default path is intentionally local and reviewable. Records live in SQLite. Recall uses deterministic keyword relevance blended with recency and confidence, with no embedding call required. Agent-authored writes land as candidates by default, hidden from recall until a human approves them through the CLI or the local Memory Inspector. Contradictions preserve the superseded record instead of erasing history.
+
+You can opt into hybrid recall when keyword overlap is not enough. Dawn fuses the keyword list with vector results instead of replacing exact-token search. The SQLite store can hold vectors for a local application; `@dawn-ai/memory-pgvector` moves the long-term collection and indexed vector search to shared Postgres with pgvector when the corpus or deployment calls for it.
+
+Episodic memory records what happened rather than what the agent believes. The runtime recorder is opt-in, append-only, and subject to time-to-live and per-namespace caps. Distillation is also explicit: `dawn memory consolidate` compacts older episodes, while `dawn memory reflect` derives reviewable insights. Neither command runs automatically; invoke it yourself or schedule it when the cost and review workflow make sense.
+
+The Memory Inspector is a localhost development tool for browsing, searching, approving, rejecting, and following episodic records. It reads the configured memory store, but it is not a general production tracing console. For the full model and its limits, see [Memory](/docs/memory) and [Inspector](/docs/inspector).
+
+## Connect a real client
+
+AG-UI is now Dawn's standard bridge to browser clients. The runtime maps agent text, tool calls, tool results, interrupts, and terminal outcomes into AG-UI events while preserving upstream tool-call ids so a client can correlate each result with the call that produced it. The reference chat application uses this path with CopilotKit.
+
+Agent Protocol remains the direct runtime contract, and its run endpoints are thread-scoped: create a thread, then run, stream, read state, cancel, or resume under that thread id. Interrupts use one canonical, ID-addressed resume shape. A resume must answer the complete pending set, including interruptions raised inside a child; clients resume the root thread rather than inventing a separate child conversation.
+
+Both protocols reach the same route code, thread store, and checkpointer. AG-UI makes a real web client practical without turning the browser adapter into another agent runtime. See [AG-UI and Web Clients](/docs/ag-ui) and the [Dev Server](/docs/dev-server) reference.
+
+## Run the runtime in production
+
+`dawn build` can emit a Node server and hardened Dockerfile, and `dawn start` runs the same Dawn runtime without a container. This path serves Agent Protocol, AG-UI, health checks, middleware, tool policy, permissions, and the configured execution sandbox. It is the direct production path when those Dawn runtime features matter.
+
+For multi-instance deployments or hosts with an ephemeral filesystem, `@dawn-ai/postgres-storage` shares three runtime concerns: LangGraph checkpoints, Agent Protocol threads, and permission grants. It is not the long-term-memory store; that is the separate memory store described above. Cancellation and the one-run-per-thread guard also remain process-local today, even when those durable records are in Postgres, so replica coordination is still an application concern.
+
+The transport-independent fetch core opened the same runtime to another host adapter. The new Hono build target emits a web-standard entry and Postgres wiring for an opt-in edge subset rather than pretending every Node capability works everywhere.
+
+That edge target omits the sandbox, filesystem, shell, skills loaded from disk, and long-term memory, and it has been exercised under local workerd rather than a live Cloudflare deployment. The companion post, [Dawn at the edge](/blog/dawn-at-the-edge), covers the architecture and evidence in detail. The broader production choices remain in [Deployment](/docs/deployment).
+
+## Upgrade deliberately
+
+Dawn is pre-1.0. From 0.8.0 onward, the public packages share one fixed version, so keep every Dawn dependency on the same exact release. Dawn packages require Node 24, and the Node/Docker production target runs on Node 24 as well.
+
+Breaking changes have shipped in 0.8.x patch releases. That is unusual, but a minor bump in this fixed 0.x group would move the whole package set to 1.0.0. Pin exact versions and read every intervening release note rather than only the latest one.
+
+For this release:
+
+```bash
+pnpm add @dawn-ai/cli@0.8.21 @dawn-ai/sdk@0.8.21
+pnpm exec dawn verify
+```
+
+Then run your route tests and evals, and exercise the production target you actually deploy. The [Upgrading](/docs/upgrading) guide calls out the current migrations and the checks worth keeping in that loop.
+
+## The framework around the agent
+
+The route tree is still the organizing idea. Recent releases have made the application around it more explicit: evidence for behavior, boundaries for execution, named delegation, reviewable memory, standard clients, and production runtime choices.
+
+That is the framework around the agent. It is ordinary application work, which is exactly why it belongs in the framework rather than in a private pile of glue.
+
+Start with a runnable scaffold, or take one pinned upgrade step in an existing app:
+
+```bash
+pnpm create dawn-ai-app my-agents
+cd my-agents
+pnpm dev
+```
