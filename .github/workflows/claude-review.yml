@@ -100,7 +100,7 @@ jobs:
       - name: Claude review
         id: claude
         if: steps.preflight.outputs.skip != 'true'
-        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342 # v1
+        uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79 # v1
         with:
           # Pass GITHUB_TOKEN explicitly (maps to OVERRIDE_GITHUB_TOKEN) so the
           # action skips OIDC token exchange — that path needs `id-token: write`
