@@ -1,14 +1,5 @@
 # @dawn-ai/sandbox
 
-## 0.8.22
-
-### Patch Changes
-
-- Updated dependencies [97084c0]
-- Updated dependencies [ba612fd]
-  - @dawn-ai/sdk@0.8.22
-  - @dawn-ai/workspace@0.8.22
-
 ## 0.8.21
 
 ### Patch Changes

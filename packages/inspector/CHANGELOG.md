@@ -1,57 +1,5 @@
 # @dawn-ai/inspector
 
-## 0.8.22
-
-### Patch Changes
-
-- fc0ec4f: `BrowseQuery.status` and `.kind` now accept a set, not just one value.
-
-  `browse({ status: ["candidate", "superseded"] })` matches any of them. A bare
-  value behaves exactly as before, so every existing caller is unaffected.
-
-  An **empty** set matches nothing rather than everything: "any of none" is false,
-  and reading it as "unfiltered" would show every row to a caller that had just
-  narrowed its filter to zero. Both backends implement it — sqlite via `IN (…)`,
-  Postgres via `= ANY($n::text[])`, where an empty array is already false — and
-  five new contract tests in `runMemoryStoreConformance` hold them to the same
-  reading, including that `total` counts the whole matching set.
-
-  The Inspector's list route accepts the filter repeated (`?status=a&status=b`).
-  One bad value rejects the request rather than being silently dropped. A param
-  that appears zero times is absent, not an empty set, so the empty-set rule is
-  unreachable over HTTP.
-
-- ff73de5: Memory Inspector: filter status and kind from the grid's column funnels.
-
-  The two header selects are gone. Each funnel is a checklist of that column's
-  values, so you can ask for "candidate or superseded" — which the selects, being
-  single-choice, could not express.
-
-  Filtering stays server-side: the funnels only decide the query, which sends the
-  filter repeated (`?status=candidate&status=superseded`). Narrowing only the rows
-  already loaded would quietly answer a different question, since the list is one
-  page of a larger store. For the same reason only status and kind carry funnels —
-  the other columns are not translated into the query, and a control that filtered
-  the current page would mislead. Content is what search is for; namespace is what
-  the facet rail scopes, with real counts.
-
-  `is none of` is resolved against the column's options rather than needing
-  negation downstream, and a filter that matches nothing now says "No memories
-  match these filters" instead of claiming nothing has been stored yet.
-
-- 95768c3: Group the Memory Inspector list by namespace when viewing all namespaces.
-
-  Namespace-scoped views stay flat — every row would sit under one header — and so
-  do truncated pages. Group headers count the rows the grid holds, so on a page
-  capped below the store's size that number is an artifact of where the cap fell:
-  it read "route=/notes (197)" beside a facet rail saying 250. The rail remains
-  the honest navigator for anything larger than a page.
-
-- Updated dependencies [fc0ec4f]
-- Updated dependencies [ba612fd]
-  - @dawn-ai/memory@0.8.22
-  - @dawn-ai/core@0.8.22
-
 ## 0.8.21
 
 ### Patch Changes
