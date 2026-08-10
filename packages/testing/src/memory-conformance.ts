@@ -81,6 +81,20 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    test("query-less search equal updated_at rows order by codepoint id (C collation)", async () => {
+      const s = await makeStore()
+      try {
+        // Same updatedAt on every row: id ASC is the sole tiebreak, and both backends
+        // must agree byte-for-byte. Mixed case separates codepoint order ("B10" < "a9")
+        // from a locale collation, which folds case and puts "a9" first.
+        for (const id of ["b2", "B10", "a9"]) {
+          await s.put(rec({ id, namespace: "ns", content: id, updatedAt: D(2) }))
+        }
+        expect((await s.search({ namespace: "ns" })).map((r) => r.id)).toEqual(["B10", "a9", "b2"])
+      } finally {
+        await close?.(s)
+      }
+    })
     test("supersede: old→superseded, new active, link recorded", async () => {
       const s = await makeStore()
       try {

@@ -334,7 +334,7 @@ export function pgvectorMemoryStore(opts: {
         const order =
           q.since || q.until
             ? `COALESCE(m.effective_at, m.created_at) DESC, m.id COLLATE "C" ASC`
-            : "m.updated_at DESC, m.id ASC"
+            : `m.updated_at DESC, m.id COLLATE "C" ASC`
         const res = await pool.query(
           `SELECT ${recordColumns("m")} FROM ${T} m WHERE ${baseSql} ORDER BY ${order} LIMIT $${baseParams.length + 1}`,
           [...baseParams, limit],
