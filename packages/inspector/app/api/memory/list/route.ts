@@ -22,6 +22,34 @@ function parseEnum<T extends string>(
   )
 }
 
+/**
+ * Repeatable enum param: `?status=a&status=b` narrows to either, one value
+ * behaves exactly as before, and absent means unfiltered. Every value is
+ * validated, so one bad entry rejects the request rather than being dropped.
+ *
+ * Note the empty-array case cannot arise here — a param that appears zero
+ * times is absent, not an empty set — so the store's "empty matches nothing"
+ * rule is unreachable over HTTP and callers cannot accidentally blank a list.
+ */
+function parseEnumList<T extends string>(
+  values: readonly string[],
+  allowed: readonly T[],
+  name: string,
+): readonly T[] | undefined | Response {
+  if (values.length === 0) return undefined
+  const seen: T[] = []
+  for (const value of values) {
+    if (!(allowed as readonly string[]).includes(value)) {
+      return Response.json(
+        { error: `invalid ${name} "${value}" (expected one of: ${allowed.join(", ")})` },
+        { status: 400 },
+      )
+    }
+    if (!seen.includes(value as T)) seen.push(value as T)
+  }
+  return seen
+}
+
 /** undefined when absent, the value normalized to full-ISO-Z when Date.parse-able,
  *  a 400 Response otherwise. Normalization matters: the store compares these
  *  lexicographically against stored full-ISO-Z strings, so raw offset-ISO
@@ -40,9 +68,9 @@ export async function GET(req: Request): Promise<Response> {
   const denied = assertLocalRequest(req)
   if (denied) return denied
   const sp = new URL(req.url).searchParams
-  const status = parseEnum(sp.get("status"), STATUSES, "status")
+  const status = parseEnumList(sp.getAll("status"), STATUSES, "status")
   if (status instanceof Response) return status
-  const kind = parseEnum(sp.get("kind"), KINDS, "kind")
+  const kind = parseEnumList(sp.getAll("kind"), KINDS, "kind")
   if (kind instanceof Response) return kind
   const sourceType = parseEnum(sp.get("sourceType"), SOURCE_TYPES, "sourceType")
   if (sourceType instanceof Response) return sourceType
