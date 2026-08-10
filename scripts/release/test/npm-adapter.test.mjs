@@ -72,6 +72,8 @@ test("createNpmReader exposes only the named read operation and uses encoded GET
         predicateTypes: ["https://slsa.dev/provenance/v1"],
         workflow: ".github/workflows/release.yml",
         commitSha: COMMIT_SHA,
+        repository: "https://github.com/cacheplane/dawnai",
+        ref: "refs/heads/main",
       },
     },
   })
@@ -520,6 +522,8 @@ test("npm reports absent provenance explicitly without inventing workflow identi
     predicateTypes: [],
     workflow: null,
     commitSha: null,
+    repository: null,
+    ref: null,
   })
 })
 
@@ -564,6 +568,8 @@ test("npm agreeing provenance statements normalize independently of evidence ord
   assert.deepEqual(reversed, forward)
   assert.equal(forward.package.provenance.workflow, ".github/workflows/release.yml")
   assert.equal(forward.package.provenance.commitSha, COMMIT_SHA)
+  assert.equal(forward.package.provenance.repository, "https://github.com/cacheplane/dawnai")
+  assert.equal(forward.package.provenance.ref, "refs/heads/main")
 })
 
 function versionDocument() {

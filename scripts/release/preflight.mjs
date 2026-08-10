@@ -203,6 +203,7 @@ export async function runReleasePreflight({
     const inventory = {
       packages: validated.packages,
       version: options.version ?? validated.version,
+      repository: options.repository,
     }
     const workflowSource = await readWorkflowSource(options.workflow, {
       root: cwd,
@@ -237,12 +238,18 @@ function normalizeInventory(value) {
       !Array.isArray(snapshot.packages) ||
       snapshot.packages.length === 0 ||
       !isReleaseVersion(snapshot.version) ||
+      typeof snapshot.repository !== "string" ||
+      !REPOSITORY_PATTERN.test(snapshot.repository) ||
       !snapshot.packages.every((name) => typeof name === "string" && PACKAGE_PATTERN.test(name)) ||
       new Set(snapshot.packages).size !== snapshot.packages.length
     ) {
       return null
     }
-    return { packages: [...snapshot.packages].sort(compareText), version: snapshot.version }
+    return {
+      packages: [...snapshot.packages].sort(compareText),
+      version: snapshot.version,
+      repository: snapshot.repository,
+    }
   } catch {
     return null
   }
@@ -285,14 +292,24 @@ function staticPermissionsCheck(workflow) {
 }
 
 function requiredValidationCheck(workflow) {
-  const steps = workflow?.jobs?.release?.steps
+  const job = workflow?.jobs?.release
+  const steps = job?.steps
   const matches = Array.isArray(steps)
     ? steps.filter(
         (step) =>
-          typeof step?.run === "string" && /(?:^|\s)pnpm ci:validate(?:\s|$)/u.test(step.run),
+          isRecord(step) &&
+          step.run === "pnpm ci:validate" &&
+          step.if === undefined &&
+          step["continue-on-error"] === undefined &&
+          step.shell === undefined,
       )
     : []
-  return matches.length === 1
+  const enforcing =
+    isRecord(job) &&
+    job.if === undefined &&
+    job["continue-on-error"] === undefined &&
+    matches.length === 1
+  return enforcing
     ? result(
         "workflow-required-validation",
         "PASS",
@@ -315,6 +332,8 @@ async function npmProvenanceCheck(inventory, reader) {
   if (!isRecord(reader) || typeof reader.observePackageVersion !== "function")
     return result("npm-current-provenance", "UNPROVABLE", "The npm reader is unavailable.")
   let unprovable = false
+  const commits = new Set()
+  const expectedRepository = `https://github.com/${inventory.repository}`
   for (const name of inventory.packages) {
     const envelope = await safeEnvelope(
       () => reader.observePackageVersion({ name, version: inventory.version }),
@@ -336,6 +355,8 @@ async function npmProvenanceCheck(inventory, reader) {
       pkg.version !== inventory.version ||
       pkg.provenance?.status !== "PRESENT" ||
       pkg.provenance.workflow !== WORKFLOW_PATH ||
+      pkg.provenance.repository !== expectedRepository ||
+      pkg.provenance.ref !== "refs/heads/main" ||
       typeof pkg.provenance.commitSha !== "string" ||
       !SHA_PATTERN.test(pkg.provenance.commitSha)
     ) {
@@ -345,7 +366,14 @@ async function npmProvenanceCheck(inventory, reader) {
         "Current npm provenance is missing or does not match the legacy publisher workflow.",
       )
     }
+    commits.add(pkg.provenance.commitSha)
   }
+  if (commits.size > 1)
+    return result(
+      "npm-current-provenance",
+      "FAIL",
+      "Current npm provenance does not identify one common release commit.",
+    )
   return unprovable
     ? result(
         "npm-current-provenance",

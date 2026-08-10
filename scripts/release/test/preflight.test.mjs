@@ -11,6 +11,9 @@ const VERSION = "0.8.21"
 const SHA = "341678ea7932832ec860bdd915371669440bef7c"
 const PACKAGES = ["@dawn-ai/core", "@dawn-ai/sdk"]
 const WORKFLOW_PATH = ".github/workflows/release.yml"
+const REPOSITORY = "cacheplane/dawnai"
+const PROVENANCE_REPOSITORY = `https://github.com/${REPOSITORY}`
+const PROVENANCE_REF = "refs/heads/main"
 const WORKFLOW_SOURCE = `
 name: Release
 on:
@@ -45,7 +48,7 @@ test("preflight exposes the collector and deterministic report renderer", async 
 test("preflight proves observable release prerequisites and preserves unprovable trust boundaries", async () => {
   const calls = []
   const report = await collectReleasePreflight({
-    inventory: { packages: PACKAGES, version: VERSION },
+    inventory: releaseInventory(),
     workflowSource: WORKFLOW_SOURCE,
     npm: npmReader(calls),
     github: githubReader(calls),
@@ -104,7 +107,7 @@ test("preflight fails closed on malformed static policy and exact public evidenc
     present("branch-protection", "value", { required_status_checks: { contexts: [] } })
 
   const report = await collectReleasePreflight({
-    inventory: { packages: PACKAGES, version: VERSION },
+    inventory: releaseInventory(),
     workflowSource: "name: Release\njobs: {}\n",
     npm,
     github,
@@ -137,7 +140,7 @@ test("preflight reports remote ambiguity as unprovable without promoting 404 or 
   }
 
   const report = await collectReleasePreflight({
-    inventory: { packages: PACKAGES, version: VERSION },
+    inventory: releaseInventory(),
     workflowSource: WORKFLOW_SOURCE,
     npm,
     github,
@@ -152,6 +155,84 @@ test("preflight reports remote ambiguity as unprovable without promoting 404 or 
     "github-required-validate",
   ]) {
     assert.equal(check(report, id).status, "UNPROVABLE", id)
+  }
+})
+
+test("preflight accepts only one unconditional exact validate command", async (t) => {
+  const cases = [
+    ["echo", "run: echo pnpm ci:validate"],
+    ["ignored failure", "run: pnpm ci:validate || true"],
+    ["shell composition", "run: pnpm ci:validate && echo complete"],
+    ["step condition", "if: false\n        run: pnpm ci:validate"],
+    ["continue on error", "continue-on-error: true\n        run: pnpm ci:validate"],
+    ["custom shell", "shell: echo {0}\n        run: pnpm ci:validate"],
+  ]
+  for (const [name, replacement] of cases) {
+    await t.test(name, async () => {
+      const report = await collectReleasePreflight({
+        inventory: releaseInventory(),
+        workflowSource: WORKFLOW_SOURCE.replace("run: pnpm ci:validate", replacement),
+        npm: npmReader([]),
+        github: githubReader([]),
+      })
+      assert.equal(check(report, "workflow-required-validation").status, "FAIL")
+    })
+  }
+
+  for (const [name, property] of [
+    ["conditional job", "    if: false\n"],
+    ["fallible job", "    continue-on-error: true\n"],
+  ]) {
+    await t.test(name, async () => {
+      const report = await collectReleasePreflight({
+        inventory: releaseInventory(),
+        workflowSource: WORKFLOW_SOURCE.replace(
+          "    permissions:\n",
+          `${property}    permissions:\n`,
+        ),
+        npm: npmReader([]),
+        github: githubReader([]),
+      })
+      assert.equal(check(report, "workflow-required-validation").status, "FAIL")
+    })
+  }
+})
+
+test("preflight binds complete package provenance to one repository and commit", async (t) => {
+  const mutations = [
+    ["mixed commits", (_pkg, index) => ({ commitSha: index === 0 ? SHA : "b".repeat(40) })],
+    [
+      "mixed repository",
+      (_pkg, index) => (index === 0 ? {} : { repository: "https://github.com/example/lookalike" }),
+    ],
+    [
+      "mixed workflow path",
+      (_pkg, index) => (index === 0 ? {} : { workflow: ".github/workflows/lookalike.yml" }),
+    ],
+    ["mixed source ref", (_pkg, index) => (index === 0 ? {} : { ref: "refs/tags/v0.8.21" })],
+    ["missing repository", () => ({ repository: undefined })],
+    ["missing ref", () => ({ ref: undefined })],
+  ]
+  for (const [name, mutation] of mutations) {
+    await t.test(name, async () => {
+      let index = 0
+      const report = await collectReleasePreflight({
+        inventory: releaseInventory(),
+        workflowSource: WORKFLOW_SOURCE,
+        npm: {
+          async observePackageVersion({ name, version }) {
+            const pkg = publishedPackage(name, version)
+            for (const [key, value] of Object.entries(mutation(pkg, index++))) {
+              if (value === undefined) delete pkg.provenance[key]
+              else pkg.provenance[key] = value
+            }
+            return present("package-version", "package", pkg)
+          },
+        },
+        github: githubReader([]),
+      })
+      assert.equal(check(report, "npm-current-provenance").status, "FAIL")
+    })
   }
 })
 
@@ -330,8 +411,14 @@ function publishedPackage(name, version) {
       status: "PRESENT",
       workflow: WORKFLOW_PATH,
       commitSha: SHA,
+      repository: PROVENANCE_REPOSITORY,
+      ref: PROVENANCE_REF,
     },
   }
+}
+
+function releaseInventory() {
+  return { packages: PACKAGES, version: VERSION, repository: REPOSITORY }
 }
 
 function present(operation, payloadKey, payload) {

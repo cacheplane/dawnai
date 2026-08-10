@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { readdir, readFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
@@ -30,12 +31,34 @@ test("release shadow pins setup actions and installs only root tooling on Node 2
   }
   assert.equal(actionSteps[0].uses.split("@")[0], "actions/checkout")
   assert.equal(actionSteps[0].with["fetch-depth"], 0)
+  assert.equal(actionSteps[0].with.ref, "main")
+  assert.equal(actionSteps[0].with["persist-credentials"], false)
+  assert.doesNotMatch(JSON.stringify(actionSteps[0].with), /inputs|github\.event|github\.ref/iu)
   assert.equal(actionSteps[1].uses.split("@")[0], "pnpm/action-setup")
   assert.equal(actionSteps[2].uses.split("@")[0], "actions/setup-node")
   assert.equal(actionSteps[2].with["node-version"], "24.17.0")
   assert.ok(
     steps.some((step) => step.run === "pnpm install --filter . --frozen-lockfile --ignore-scripts"),
   )
+})
+
+test("release shadow scopes the GitHub token only to exact API reader steps", async () => {
+  const workflow = await readShadowWorkflow()
+  const job = workflow.jobs.shadow
+
+  assert.equal(job.env, undefined)
+  assert.equal(JSON.stringify(workflow).match(/\$\{\{ github\.token \}\}/gu)?.length, 2)
+  for (const step of job.steps) {
+    if (
+      ["Reconcile release state in shadow mode", "Collect release preflight evidence"].includes(
+        step.name,
+      )
+    ) {
+      assert.deepEqual(step.env?.GITHUB_TOKEN, `\${{ github.token }}`)
+    } else {
+      assert.equal(step.env?.GITHUB_TOKEN, undefined, step.name)
+    }
+  }
 })
 
 test("release shadow accepts only paired optional identities and appends read-only reports", async () => {
@@ -78,19 +101,69 @@ test("release shadow contains no publisher, OIDC, artifact upload, or external w
 })
 
 test("legacy release remains the sole npm publisher without PR 2 topology constraints", async () => {
-  const files = (await readdir(WORKFLOWS)).filter((name) => name.endsWith(".yml")).sort()
-  const publishers = []
-  for (const file of files) {
-    const source = await readFile(path.join(WORKFLOWS, file), "utf8")
-    if (/release:publish|(?:npm|pnpm)\s+(?:run\s+)?publish\b/iu.test(source)) publishers.push(file)
-  }
-
-  assert.deepEqual(publishers, ["release.yml"])
+  assert.deepEqual(await publisherWorkflows(WORKFLOWS), ["release.yml"])
   const legacy = parse(await readFile(path.join(WORKFLOWS, "release.yml"), "utf8"))
   assert.deepEqual(Object.keys(legacy.jobs), ["release"])
   assert.equal(legacy.jobs.detect, undefined)
   assert.equal(legacy.jobs.prepare, undefined)
   assert.equal(legacy.jobs.publish, undefined)
+})
+
+test("sole-publisher detection covers parsed .yaml workflows and indirect publication paths", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dawn-workflow-contract-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await Promise.all([
+    writeFile(
+      path.join(root, "release.yml"),
+      `jobs:\n  release:\n    steps:\n      - uses: changesets/action@${"a".repeat(40)}\n`,
+    ),
+    writeFile(
+      path.join(root, "hidden.yaml"),
+      "jobs:\n  hidden:\n    steps:\n      - run: node scripts/release-publish.mjs\n",
+    ),
+    writeFile(
+      path.join(root, "assets.yml"),
+      "jobs:\n  assets:\n    steps:\n      - run: node scripts/upload-release-assets.mjs\n",
+    ),
+    writeFile(
+      path.join(root, "backfill.yml"),
+      "jobs:\n  tags:\n    steps:\n      - run: node scripts/backfill-release-tags.mjs\n",
+    ),
+    writeFile(
+      path.join(root, "delegated.yaml"),
+      "jobs:\n  publish:\n    uses: ./.github/workflows/release.yml\n",
+    ),
+    writeFile(
+      path.join(root, "npm.yaml"),
+      "jobs:\n  publish:\n    steps:\n      - run: npm publish --provenance\n",
+    ),
+    writeFile(
+      path.join(root, "release-action.yml"),
+      `jobs:\n  publish:\n    steps:\n      - uses: softprops/action-gh-release@${"b".repeat(40)}\n`,
+    ),
+    writeFile(
+      path.join(root, "safe.yaml"),
+      '# npm publish in a comment is inert\njobs:\n  safe:\n    steps:\n      - run: echo \\"npm publish is disabled\\"\n      - run: node scripts/check-docs.mjs\n',
+    ),
+  ])
+
+  assert.deepEqual(await publisherWorkflows(root), [
+    "assets.yml",
+    "backfill.yml",
+    "delegated.yaml",
+    "hidden.yaml",
+    "npm.yaml",
+    "release-action.yml",
+    "release.yml",
+  ])
+  assert.deepEqual(await unexpectedPublisherWorkflows(root), [
+    "assets.yml",
+    "backfill.yml",
+    "delegated.yaml",
+    "hidden.yaml",
+    "npm.yaml",
+    "release-action.yml",
+  ])
 })
 
 test("root scripts expose shadow and preflight without adding the slow workflow test to fast scripts", async () => {
@@ -115,4 +188,62 @@ async function readShadowSource() {
   } catch {}
   assert.notEqual(source, null, "release-shadow.yml must exist")
   return source
+}
+
+async function publisherWorkflows(directory) {
+  const files = (await readdir(directory)).filter((name) => /\.ya?ml$/u.test(name)).sort()
+  const publishers = []
+  for (const file of files) {
+    const workflow = parse(await readFile(path.join(directory, file), "utf8"), {
+      maxAliasCount: 0,
+      uniqueKeys: true,
+    })
+    if (hasPublicationEntrypoint(workflow)) publishers.push(file)
+  }
+  return publishers
+}
+
+async function unexpectedPublisherWorkflows(directory) {
+  return (await publisherWorkflows(directory)).filter((name) => name !== "release.yml")
+}
+
+function hasPublicationEntrypoint(workflow) {
+  const jobs = isRecord(workflow?.jobs) ? Object.values(workflow.jobs) : []
+  return jobs.some((job) => {
+    if (typeof job?.uses === "string" && isPublishingAction(job.uses)) return true
+    return (Array.isArray(job?.steps) ? job.steps : []).some((step) => {
+      if (!isRecord(step)) return false
+      if (typeof step.uses === "string" && isPublishingAction(step.uses)) return true
+      return typeof step.run === "string" && isPublishingCommand(step.run)
+    })
+  })
+}
+
+function isPublishingAction(value) {
+  const action = value.split("@", 1)[0].toLowerCase()
+  return new Set([
+    "actions/attest-build-provenance",
+    "actions/upload-release-asset",
+    "changesets/action",
+    "./.github/workflows/release.yml",
+    "ncipollo/release-action",
+    "softprops/action-gh-release",
+  ]).has(action)
+}
+
+function isPublishingCommand(value) {
+  return value.split("\n").some((line) => {
+    const command = line.trim()
+    return (
+      /^(?:npm|pnpm)(?:\s+run)?\s+publish(?:\s|$)/u.test(command) ||
+      /^pnpm(?:\s+run)?\s+release:publish(?:\s|$)/u.test(command) ||
+      /^node\s+(?:\.\/)?scripts\/(?:release-publish|upload-release-assets|backfill-release-tags)\.mjs(?:\s|$)/u.test(
+        command,
+      )
+    )
+  })
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
 }

@@ -22,13 +22,13 @@ jobs:
   shadow:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           fetch-depth: 0
+          ref: main
+          persist-credentials: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271
@@ -51,6 +51,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version || '' }}
           COMMIT_SHA: ${{ inputs.commitSha || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           if [[ -n "$VERSION" && -z "$COMMIT_SHA" ]] || [[ -z "$VERSION" && -n "$COMMIT_SHA" ]]; then
             echo "version and commitSha must be supplied together" >&2
@@ -65,6 +66,7 @@ jobs:
       - name: Collect release preflight evidence
         env:
           VERSION: ${{ inputs.version || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           args=(--repository cacheplane/dawnai --workflow .github/workflows/release.yml --format markdown)
           if [[ -n "$VERSION" ]]; then

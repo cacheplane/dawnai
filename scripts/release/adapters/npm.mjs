@@ -138,6 +138,8 @@ async function observePackageVersion({ registry, http, name, version, signal }) 
     predicateTypes: [],
     workflow: null,
     commitSha: null,
+    repository: null,
+    ref: null,
   }
   if (versionDocument.provenanceUrl !== null) {
     const provenanceResult = await getJson({
@@ -336,6 +338,8 @@ function normalizeProvenance(value, url, { name, version, integrity }) {
       predicateTypes: [...predicateTypes].sort(),
       workflow: identities[0].workflow,
       commitSha: identities[0].commitSha,
+      repository: identities[0].repository,
+      ref: identities[0].ref,
     },
   }
 }
