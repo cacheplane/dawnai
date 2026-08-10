@@ -93,6 +93,11 @@ import {
 import type { LoadedRouteMemory } from "./route-memory-shape.js"
 import type { NormalizedRouteModule } from "./route-module-shape.js"
 import type { SandboxManager } from "./sandbox-manager.js"
+import {
+  applyScenarioToolOverrides,
+  type ScenarioToolCallJournal,
+  type ScenarioToolOverride,
+} from "./scenario-tool-overrides.js"
 import type { DawnStaticModules } from "./static-modules-core.js"
 import type { StreamChunk } from "./stream-types.js"
 import type { DiscoveredToolDefinition } from "./tool-shape.js"
@@ -343,6 +348,8 @@ export type PrepareRouteExecutionOptions = Omit<BootResolvedInstances, "checkpoi
    */
   readonly sandboxThreadId?: string
   readonly subagentDepth?: number
+  readonly toolCallJournal?: ScenarioToolCallJournal
+  readonly toolOverrides?: readonly ScenarioToolOverride[]
 }
 
 export async function executeResolvedRoute(
@@ -764,6 +771,15 @@ export async function prepareRouteExecution(
   )
   const normalized = prepared.module
   let tools = prepared.tools
+  if (options.toolOverrides && options.toolOverrides.length > 0) {
+    const applied = applyScenarioToolOverrides({
+      journal: options.toolCallJournal ?? [],
+      overrides: options.toolOverrides,
+      tools,
+    })
+    if (!applied.ok) return { message: applied.message, ok: false }
+    tools = applied.tools
+  }
   let stateFields = prepared.stateFields
 
   // Apply capability markers (planning, etc.). Only for agent routes.
@@ -1361,6 +1377,8 @@ export async function executeRouteAtResolvedPath(
     readonly signal?: AbortSignal
     readonly startedAt: number
     readonly threadId?: string
+    readonly toolCallJournal?: ScenarioToolCallJournal
+    readonly toolOverrides?: readonly ScenarioToolOverride[]
   },
 ): Promise<RuntimeExecutionResult> {
   let mode: RuntimeExecutionMode | null = null
