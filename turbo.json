@@ -32,10 +32,10 @@
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/config-biome/biome.json"]
     },
     "test": {
-      "dependsOn": ["^test"]
+      "dependsOn": ["build", "^test"]
     },
     "@dawn-ai/cli#test": {
-      "dependsOn": ["^test"],
+      "dependsOn": ["build", "^test", "@dawn-ai/testing#build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/apps/web/content/docs/**",
@@ -51,7 +51,7 @@
       ]
     },
     "@dawn-ai/core#test": {
-      "dependsOn": ["^test"],
+      "dependsOn": ["build", "^test"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/package.json",
@@ -60,7 +60,7 @@
       ]
     },
     "@dawn-ai/inspector#test": {
-      "dependsOn": ["^test"],
+      "dependsOn": ["build", "^test"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/apps/web/next.config.ts",
@@ -73,7 +73,7 @@
       ]
     },
     "@dawn-ai/sandbox#test": {
-      "dependsOn": ["^test"],
+      "dependsOn": ["build", "^test"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/.github/workflows/ci.yml",
@@ -81,7 +81,7 @@
       ]
     },
     "@dawn-ai/testing#test": {
-      "dependsOn": ["^test"],
+      "dependsOn": ["build", "^test"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/examples/memory/server/dawn.config.ts",
@@ -94,7 +94,7 @@
       ]
     },
     "create-dawn-ai-app#test": {
-      "dependsOn": ["^test"],
+      "dependsOn": ["build", "^test"],
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/test/harness/**"]
     },
     "typecheck": {
