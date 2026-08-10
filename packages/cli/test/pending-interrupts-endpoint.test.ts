@@ -75,6 +75,29 @@ const BROKEN_AGENT_ROUTE = [
   "",
 ].join("\n")
 
+/** Ordinary ungated tool that simply takes a while. Paired with the approve-gated
+ * deployProd in ONE assistant turn, it keeps the superstep alive after the
+ * permission interrupt has already been written — the window in which a parked
+ * /runs/wait turn is durably parked but has not returned yet. Routine app code:
+ * a slow sibling tool call is what any real agent turn looks like. */
+const SLOW_PING_TOOL = [
+  'import { readFile, writeFile } from "node:fs/promises"',
+  "/** Ping a host, slowly. */",
+  "export default async function slowPing(input: {",
+  "  startedFile: string",
+  "  releaseFile: string",
+  "}): Promise<string> {",
+  "  await writeFile(input.startedFile, 'started')",
+  "  const deadline = Date.now() + 15000",
+  "  while (Date.now() < deadline) {",
+  "    try { await readFile(input.releaseFile, 'utf8'); break } catch {}",
+  "    await new Promise((r) => setTimeout(r, 25))",
+  "  }",
+  "  return 'pong'",
+  "}",
+  "",
+].join("\n")
+
 const DEPLOY_TOOL = [
   "/** Deploy to an environment. */",
   "export default async function deployProd(input: { env: string }): Promise<string> {",
@@ -240,6 +263,36 @@ async function drain(response: Response): Promise<void> {
   await readSseText(response)
 }
 
+/** Retry `assertion` until it stops throwing, or give up and rethrow. For state
+ * that settles behind work the request already returned without waiting for. */
+async function waitFor(assertion: () => Promise<void>, timeoutMs = 15_000): Promise<void> {
+  const startedAt = Date.now()
+  for (;;) {
+    try {
+      await assertion()
+      return
+    } catch (error) {
+      if (Date.now() - startedAt >= timeoutMs) throw error
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
+}
+
+/** Block until the thread's checkpoint durably holds a parked interrupt. */
+async function waitForParkedWrite(
+  checkpointer: BaseCheckpointSaver,
+  threadId: string,
+  timeoutMs = 15_000,
+): Promise<void> {
+  await waitFor(async () => {
+    const tuple = await checkpointer.getTuple({
+      configurable: { checkpoint_ns: "", thread_id: threadId },
+    })
+    const channels = tuple?.pendingWrites?.map(([, channel]) => channel) ?? []
+    expect(channels).toContain("__interrupt__")
+  }, timeoutMs)
+}
+
 async function readPendingInterruptsBody(
   handler: Handler,
   threadId: string,
@@ -279,6 +332,29 @@ class MalformedPendingWritesSaver extends MemorySaver {
       config,
       ...(tuple?.metadata ? { metadata: tuple.metadata } : {}),
       pendingWrites: [MALFORMED_WRITE],
+    }
+  }
+}
+
+/**
+ * Saver that lets a turn park and then breaks the very next checkpoint write,
+ * so `invokeResolvedRoute` returns `failed` with the `__interrupt__` write
+ * already durable. That combination is real — the write lands before whatever
+ * kills the turn, including a cancel that settles in the same tick — but it
+ * cannot be produced by driving routes alone, so the fault is injected at the
+ * one seam the handler treats as fallible.
+ */
+class BreakAfterParkSaver extends MemorySaver {
+  override async putWrites(
+    ...args: Parameters<MemorySaver["putWrites"]>
+  ): ReturnType<MemorySaver["putWrites"]> {
+    const [, writes] = args
+    // Stored FIRST, so the interrupt is genuinely durable — the endpoint will
+    // serve it — and only then does the turn die. Throwing before the write
+    // would model nothing: there would be no parked prompt to protect.
+    await super.putWrites(...args)
+    if (writes.some(([channel]) => channel === "__interrupt__")) {
+      throw new Error("checkpoint write failed after the turn parked")
     }
   }
 }
@@ -635,6 +711,102 @@ describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
     const allowed = await handler.fetch(pendingInterruptsRequest(threadId, { "x-admin": "1" }))
     expect(allowed.status).toBe(200)
     expect(((await allowed.json()) as PendingInterruptsBody).interrupts).toHaveLength(1)
+  }, 60_000)
+
+  it("keeps gating when a parked /runs/wait turn is cancelled mid-flight", async () => {
+    const appRoot = await fixtureApp({
+      "src/app/park/tools/slowPing.ts": SLOW_PING_TOOL,
+      "src/middleware.ts": ADMIN_PARK_MIDDLEWARE,
+    })
+    const startedFile = join(appRoot, "slow-started.json")
+    const releaseFile = join(appRoot, "slow-release.json")
+    // One assistant turn, two tool calls: the approve-gated one parks, the
+    // ordinary one keeps the superstep from ending. Built as a literal because
+    // script().callsTool emits one call per turn.
+    await withAimock([
+      {
+        match: { hasToolResult: false, turnIndex: 0, userMessage: "deploy to staging" },
+        response: {
+          toolCalls: [
+            { arguments: { env: "staging" }, id: "call_deployProd_0_0", name: "deployProd" },
+            { arguments: { releaseFile, startedFile }, id: "call_slowPing_0_0", name: "slowPing" },
+          ],
+        },
+      },
+    ])
+    const saver = new MemorySaver()
+    const handler = await createHandler(appRoot, saver)
+    const threadId = "t-wait-cancel-park"
+
+    // Deliberately not awaited: the whole point is to act while it is in flight.
+    const waitPromise = handler.fetch(
+      parkWaitRequest(threadId, "deploy to staging", { "x-admin": "1" }),
+    )
+
+    // Both preconditions, proven rather than slept for: the ordinary tool is
+    // running, and the permission interrupt is already DURABLE in the
+    // checkpoint. The second is the attacker's oracle — everything the endpoint
+    // would hand over already exists at this instant.
+    await waitForFile(startedFile)
+    await waitForParkedWrite(saver, threadId)
+
+    // Both of these are ungated today, which is what makes the window
+    // reachable without credentials. Gating them is tracked separately; this
+    // test only pins that reaching it wins the attacker nothing.
+    expect((await handler.fetch(cancelRequest(threadId))).status).toBe(200)
+    const waitResponse = await waitPromise
+    expect(waitResponse.status).toBe(409)
+    expect(((await waitResponse.json()) as ErrorBody).error.details?.code).toBe("run_cancelled")
+
+    // The cancelled arm returns while the route is STILL EXECUTING, so the
+    // settle cannot happen at return time — it has to wait for the abandoned
+    // route to unwind. Releasing the tool is what lets that finally happen.
+    await writeFile(releaseFile, "release")
+
+    const swap = await handler.fetch(runStreamRequest(threadId, "/echo#graph"))
+    expect(swap.status).toBe(200)
+    await drain(swap)
+
+    // Polled, not read once: the settle is deferred behind the abandoned
+    // route's own unwind, so "eventually" is the honest contract here.
+    await waitFor(async () => {
+      const refused = await handler.fetch(pendingInterruptsRequest(threadId))
+      expect(refused.status).toBe(403)
+      expect(await refused.json()).toEqual({ routeId: "/park" })
+    })
+
+    const allowed = await handler.fetch(pendingInterruptsRequest(threadId, { "x-admin": "1" }))
+    expect(allowed.status).toBe(200)
+    expect(((await allowed.json()) as PendingInterruptsBody).interrupts).toHaveLength(1)
+  }, 60_000)
+
+  it("keeps gating when a parked /runs/wait turn then fails", async () => {
+    await withAimock(
+      script().user("deploy to staging").callsTool("deployProd", { env: "staging" }).build(),
+    )
+    const saver = new BreakAfterParkSaver()
+    const handler = await createHandler(
+      await fixtureApp({ "src/middleware.ts": ADMIN_PARK_MIDDLEWARE }),
+      saver,
+    )
+    const threadId = "t-wait-failed-park"
+
+    // Covers /runs/wait's THIRD exit arm. A turn that parked and then failed is
+    // still parked: the interrupt write is durable, so the arm that reports the
+    // failure has to record the gate exactly like the arm that reports output.
+    const failed = await handler.fetch(
+      parkWaitRequest(threadId, "deploy to staging", { "x-admin": "1" }),
+    )
+    expect(failed.status).toBe(500)
+    await waitForParkedWrite(saver, threadId)
+
+    const swap = await handler.fetch(runStreamRequest(threadId, "/echo#graph"))
+    expect(swap.status).toBe(200)
+    await drain(swap)
+
+    const afterSwap = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(afterSwap.status).toBe(403)
+    expect(await afterSwap.json()).toEqual({ routeId: "/park" })
   }, 60_000)
 
   it("stops gating on the parking route once the parked prompt is answered", async () => {

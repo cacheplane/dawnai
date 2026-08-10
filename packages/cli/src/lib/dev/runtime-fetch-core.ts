@@ -1595,9 +1595,47 @@ async function handleApWaitRequest(options: {
     )
   }
 
+  /**
+   * Bind this turn's gate to the route that parked, whatever way the turn ended.
+   *
+   * Every arm has to call it, not just the one that returns output. A turn that
+   * parked and was then cancelled is still parked — its `__interrupt__` write is
+   * durable and the endpoint will serve it — so an arm that returns without
+   * settling leaves `parked_route` unset on a thread's first park, and the
+   * endpoint falls through to the `threadRouteMap ?? metadata.route` chain that
+   * any allowed run can repoint. "Leaving the recorded value alone
+   * over-restricts" is only true once a value is recorded; on the first park
+   * there is nothing to leave alone.
+   *
+   * Always a post-hoc diff, never "is anything pending now": interrupts this
+   * turn did not park belong to whichever route did.
+   */
+  const settleParkedRouteForTurn = async (): Promise<void> => {
+    const interruptIdsAfter = canPark
+      ? await readParkedInterruptIds(checkpointer, threadId).catch(() => undefined)
+      : undefined
+    await settleParkedRoute({
+      canPark,
+      checkpointer,
+      parked: interruptIdsAfter
+        ? [...interruptIdsAfter].some((id) => !interruptIdsBefore.has(id))
+        : false,
+      ...(interruptIdsAfter ? { pendingAfter: interruptIdsAfter } : {}),
+      previousParkedRoute,
+      routeKey,
+      threadId,
+      threadsStore,
+    }).catch(() => undefined)
+  }
+
   // Set only when the route is abandoned (detached, not stopped) rather than
   // genuinely settled — see the finally below.
   let abandoned = false
+  // Set when the route is STILL EXECUTING as this handler returns. The settle
+  // then cannot happen at return time: the route may not have written its
+  // interrupt yet, and reading the checkpoint now would miss a park that lands
+  // a moment later. It has to hang off resultPromise instead — see the finally.
+  let settleAfterRouteUnwinds = false
   let resultPromise: ReturnType<typeof invokeResolvedRoute> | undefined
   try {
     resultPromise = invokeResolvedRoute({
@@ -1622,6 +1660,11 @@ async function handleApWaitRequest(options: {
     const result = await raceRequestAgainstShutdown(resultPromise, run.signal)
 
     if (result === SHUTDOWN_ABORTED) {
+      // Neither arm below has a settled route: raceRequestAgainstShutdown stops
+      // WAITING for resultPromise, it never stops the route. So both defer the
+      // gate write until the route genuinely unwinds.
+      settleAfterRouteUnwinds = true
+
       // A cancelled run is not server shutdown: the caller asked to wait for
       // a result that no longer exists because someone cancelled the run —
       // that is a conflict, not a 503.
@@ -1643,6 +1686,12 @@ async function handleApWaitRequest(options: {
     }
 
     if (result.status === "failed") {
+      // Settled inline, unlike the two arms above: resultPromise has resolved,
+      // so the route is done writing and the slot is still held. Once, before
+      // the sub-branching, so all three exits below are covered — a turn that
+      // parked and THEN failed is still parked.
+      await settleParkedRouteForTurn()
+
       // Defensive re-check, not dead code: resultPromise can settle in the
       // same tick the abort fires, so the Promise.race above can resolve to
       // the settled promise rather than the abort — SHUTDOWN_ABORTED is not
@@ -1683,27 +1732,7 @@ async function handleApWaitRequest(options: {
     // recorded nowhere is a park whose prompt stays gated on the last-run route,
     // which any run the caller is allowed to start can repoint. The status
     // contract below is untouched — a parked /runs/wait turn still reads "idle".
-    //
-    // The failure and cancellation arms above return without settling: they have
-    // no trustworthy answer either way, and leaving the recorded value alone
-    // over-restricts rather than under-restricts. Errors here are swallowed for
-    // the same reason the status write below swallows its own — there is no
-    // second chance to retry, and a 500 would not un-park the thread.
-    const interruptIdsAfter = canPark
-      ? await readParkedInterruptIds(checkpointer, threadId).catch(() => undefined)
-      : undefined
-    await settleParkedRoute({
-      canPark,
-      checkpointer,
-      parked: interruptIdsAfter
-        ? [...interruptIdsAfter].some((id) => !interruptIdsBefore.has(id))
-        : false,
-      ...(interruptIdsAfter ? { pendingAfter: interruptIdsAfter } : {}),
-      previousParkedRoute,
-      routeKey,
-      threadId,
-      threadsStore,
-    }).catch(() => undefined)
+    await settleParkedRouteForTurn()
 
     // Deliberately unconditional, unlike the streaming handlers' terminalStatus:
     // the spec scopes parked-status honesty to the streaming endpoints, so a
@@ -1712,13 +1741,30 @@ async function handleApWaitRequest(options: {
     await threadsStore.updateStatus(threadId, "idle").catch(() => undefined)
     return Response.json(result.output, { status: 200 })
   } finally {
-    if (abandoned && resultPromise) {
-      // Hold the slot until the abandoned route genuinely finishes rather
-      // than freeing it the instant the 409 is decided (see the comment
-      // above). The outcome is discarded — nobody is waiting on it anymore —
-      // and any rejection is swallowed so it never surfaces as an unhandled
-      // rejection.
-      void resultPromise.finally(() => run.release()).catch(() => undefined)
+    if (settleAfterRouteUnwinds && resultPromise) {
+      // The route outlived this response. Its park — if it parks at all — may
+      // land AFTER the 409 was sent, so the gate write chases the route rather
+      // than the response: settle once resultPromise has genuinely unwound.
+      // `.catch` first so a rejected route still reaches the settle; the
+      // outcome itself is discarded, since nobody is waiting on it anymore.
+      //
+      // Best-effort on the shutdown arm specifically, which (as before this
+      // change) frees the slot without waiting: another run could in principle
+      // be admitted before this settles. Not tightened here because holding a
+      // slot open across shutdown would delay process exit, and the arm that
+      // an unauthenticated caller can actually drive — cancel — is the one
+      // that keeps its slot.
+      void resultPromise
+        .catch(() => undefined)
+        .then(settleParkedRouteForTurn)
+        .catch(() => undefined)
+        .finally(() => {
+          // Hold the slot until the abandoned route genuinely finishes rather
+          // than freeing it the instant the 409 is decided, or a newly admitted
+          // run would interleave checkpoint writes with it.
+          if (abandoned) run.release()
+        })
+      if (!abandoned) run.release()
     } else {
       run.release()
     }
@@ -1761,27 +1807,42 @@ async function handleApPendingInterruptsRequest(options: {
   // There is no client-supplied fallback; a GET has no body to carry one.
   //
   // Gating on the last-run route ALONE is a hole, not an inherited convention.
-  // Both endpoints that start a turn overwrite that identity before executing
+  // Every endpoint that starts a turn overwrites that identity before executing
   // anything, so a caller a routeId-scoped policy allows on some cheaper route
   // could park-swap their way in: start a run on the route they are allowed,
   // and the same GET that was refused now answers with the parked prompt's
-  // `interruptId`/`resumeKey` — the pair POST /resume needs to ANSWER someone
-  // else's permission prompt. POST /resume resolving identity the same way is
-  // not a precedent for it: /resume only chooses which route to re-invoke and
-  // never returns the payload. This endpoint is what makes route identity
-  // control read access, so it is what has to be bound to the parking route.
+  // `interruptId`, `resumeKey`, tool name and args preview. POST /resume
+  // resolving identity the same way is not a precedent for it: /resume only
+  // chooses which route to re-invoke and never returns the payload. This
+  // endpoint is what makes route identity control read access, so it is what
+  // has to be bound to the parking route.
   //
-  // RESIDUALS, deliberately accepted. Every endpoint that can park now records
-  // it — /runs/stream, /runs/wait, /resume and /agui — so what is left is the
-  // cases where no record exists to find:
+  // What that leak is and is not, stated precisely because it is easy to get
+  // backwards: it is DISCLOSURE, not approval. It is NOT bounded by /resume
+  // gating on an identity the attacker cannot forge — /resume resolves
+  // `threadRouteMap ?? metadata.route ?? body.route`, every term of which a
+  // park-swap controls. What actually stops them is that resuming the route
+  // they swapped in does not answer the prompt the other route parked: a plain
+  // graph route ignores `resume` entirely, and an agent route replays its own
+  // graph, destroying the pending set rather than resolving it. So the prompt
+  // stays unanswered — which makes this a confidentiality fix, and means the
+  // secrecy of `resumeKey` is not what the permission decision rests on.
+  //
+  // RESIDUALS, deliberately accepted. Every endpoint that can park records it —
+  // /runs/stream, /runs/wait (on all four of its exit arms), /resume and /agui —
+  // so what is left is the cases where no record was ever written to find:
   //   1. a thread parked by a build that predates this key;
   //   2. a park whose metadata write itself failed, on one of the arms that
   //      swallow that error rather than mask the failure that brought them
-  //      there (the streaming catch paths, /agui's finally).
-  // Both fall through to the chain below and stay swappable until the thread's
-  // next turn settles. Detecting them from the checkpoint would mean inferring
-  // an owner for interrupts nobody recorded — and the only inferable owner is
-  // the last-run route, which is exactly the value an attacker controls.
+  //      there (the streaming catch paths, /agui's finally);
+  //   3. a /runs/wait park whose settle was deferred behind an abandoned route
+  //      — cancelled or shut down — that had still not unwound when the process
+  //      exited.
+  // All three fall through to the chain below and stay swappable until the
+  // thread's next turn settles. Detecting them from the checkpoint would mean
+  // inferring an owner for interrupts nobody recorded — and the only inferable
+  // owner is the last-run route, which is exactly the value an attacker
+  // controls.
   const parkedRoute = readParkedRoute(thread)
   const persistedRoute = thread.metadata.route
   const routeKey =
