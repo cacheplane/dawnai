@@ -1,0 +1,116 @@
+---
+title: Dawn at the edge — The Hono target
+description: Dawn now emits a Node-free runtime entry for Cloudflare Workers. Here is the static wiring, per-request Postgres lifecycle, workerd evidence, and honest subset behind it.
+date: 2026-08-09
+tags: [typescript, agents, patterns]
+type: post
+author: brian
+draft: true
+---
+
+One request worked. The second hung.
+
+That was the useful failure. Once Dawn had a `(Request) => Promise<Response>` core, putting Hono around it looked simple. Then workerd exposed everything a clean, single-request bundle did not: I/O owned by one request, bare Node globals, imports a bundler could not analyze, and storage lifetimes that were safe in a long-running server but wrong in an isolate.
+
+## The short version
+
+Dawn 0.8.21 adds an opt-in `hono` build target. Cloudflare Workers is the target host, and local real workerd is the executed proof. We have not deployed this path to a live Cloudflare account.
+
+The generated entry and the Dawn runtime graph it reaches link without `nodejs_compat`. Runtime stores are Postgres-backed and scoped to each request. The target is also a deliberate subset: when an app asks for a capability the edge cannot serve, Dawn names the failure during `dawn check` or `dawn build` instead of shipping a partial application.
+
+This post is about that wiring and its evidence boundary. For the broader 0.8 release, see [Dawn 0.8 — The framework around the agent](/blog/dawn-0-8-framework-around-the-agent).
+
+## What Dawn builds
+
+The target is not part of Dawn's defaults. Naming `build.targets` replaces the default list, so keep every output you still want:
+
+```ts title="dawn.config.ts"
+import { config } from "@dawn-ai/cli"
+
+export default config({
+  build: { targets: ["node", "langsmith", "hono"] },
+})
+```
+
+One discovery pass then produces four edge artifacts:
+
+| Artifact | Purpose |
+| --- | --- |
+| `.dawn/build/modules.edge.mjs` | A static manifest of route, tool, state, and middleware modules, with schemas inlined. |
+| `.dawn/build/stores.mjs` | A per-request Neon WebSocket pool shared by the Postgres checkpoint, thread, and permission stores. |
+| `.dawn/build/app.mjs` | A default-exported Hono app whose catch-all passes requests to Dawn's fetch handler. |
+| `wrangler.toml` | A root scaffold written only when the file is absent. Dawn never overwrites an existing one. |
+
+Dawn emits analyzable source. Wrangler still creates the final deployment bundle. Rebuild after changing a route, tool, model, provider, middleware module, or any inlined configuration. The serializable part of `dawn.config.ts` is baked into `app.mjs`, so secrets belong in host bindings, not in that file.
+
+The generated app is a useful default, not a closed wrapper. You can import the same pieces into a larger Hono application when you need your own routes or middleware around Dawn.
+
+## Node-free on purpose
+
+There are two separate checks behind the Node-free entry. One gates the generated/runtime module graph at zero `node:` specifiers. Another scans Dawn-owned code for bare Node-only globals such as `process`, `Buffer`, and `require`. This is why the emitted Wrangler config deliberately leaves out `nodejs_compat`.
+
+This is not a claim that all of Dawn runs without Node. The CLI, local discovery, filesystem tools, and Node deployment target still use it. The narrower claim is that the graph reachable from the edge entry does not depend on Node built-ins or Dawn-owned bare Node globals.
+
+Environment access had to change too. `readRuntimeEnv` reads from `globalThis.process?.env` on Node and from bindings seeded by the generated entry on workerd. The model layer uses the same seam for provider credentials and settings such as `OPENAI_BASE_URL`, rather than assuming `process.env` exists.
+
+Provider loading is static at the edge. The build scans the models the application can reach and emits a literal switch of provider package imports. If a route cannot be inspected or a model cannot be mapped to a provider, the build fails; a variable dynamic import would leave Wrangler unable to know what belongs in the bundle.
+
+This gate covers Dawn's generated code and runtime graph. It does not police arbitrary imports inside your routes or tools. A route can still import a Node-only package and fail when Wrangler bundles it. Passing Dawn's gate means the framework did not introduce the edge dependency, not that every user dependency has been verified.
+
+## One request, one store lifetime
+
+The first storage design put a Neon WebSocket pool at module scope. Request one returned its client to the idle pool. Request two received that same client, but the socket belonged to the completed request's workerd I/O context. It waited until workerd cancelled it. The next request opened a fresh client and worked, producing the alternating hang that a one-request smoke test could never reveal.
+
+The generated target now creates one pool per request. The Postgres checkpointer, Agent Protocol thread store, and permission store share that pool, then Dawn disposes it only after both the response body and any run started by the request have settled. That second condition matters for streaming and for bookkeeping that finishes after the HTTP response resolves.
+
+Migrations run once per isolate. A module-scope boolean is safe because it owns no I/O; after the first successful pass, request-scoped stores use `assumeMigrated`. Across concurrent instances, the stores still take Postgres advisory locks, so cold starts converge on the same schema instead of racing it.
+
+The verified database path is specific: `@neondatabase/serverless` provides a WebSocket `Pool`, connected to local Postgres through a local WebSocket proxy. It is not the `neon()` HTTP function, and it is not raw TCP through `pg`. Neon Cloud and Cloudflare Hyperdrive have not been tested. These three runtime stores also do not include Dawn's typed long-term memory store.
+
+## The target refuses what it cannot run
+
+An edge build should not quietly drop half an application's behavior. Error `DAWN_E1005` rejects the shapes Dawn knows it cannot preserve:
+
+- an execution sandbox;
+- filesystem or shell backends;
+- an app-level `workspace/` directory;
+- route skills loaded from disk;
+- typed long-term memory declared with `memory.ts`;
+- custom live checkpointer, thread, permission, or memory store instances.
+
+The reasons differ, but the result is the same: these capabilities need a filesystem, process, container, or live object that cannot cross the static build boundary. Dawn reports all detected violations together and points back to the config key or file that introduced each one.
+
+The filesystem markers `memory.md` and `plan.md` may remain in the route shape, but their marker readers are inactive without a filesystem. Do not treat that as supported edge memory or planning. More generally, “not gated” means only that the build does not reject a shape. It does not mean the behavior has been verified in workerd.
+
+## What the tests prove
+
+The gated `edge-workerd` CI lane builds an emitted OpenAI fixture, starts it with `wrangler dev --local`, and runs it inside real Cloudflare workerd. It uses the generated Wrangler file unchanged, with no `nodejs_compat`, no Cloudflare account, and local Postgres behind the WebSocket proxy.
+
+| Build-supported shape | Executed in the workerd lane |
+| --- | --- |
+| Static route, tool, state, middleware, and provider wiring | The emitted OpenAI agent fixture loaded and called the local model fixture. |
+| Dawn fetch runtime, including Agent Protocol and AG-UI routes | `/healthz` and four sequential AG-UI turns completed. Agent Protocol was not exercised there. |
+| Postgres checkpoint, thread, and permission stores | Conversation state reloaded between requests, and thread, checkpoint, and write rows were checked out of band through a separate database connection. |
+| Other ungated runtime features | Tools, subagents, permissions/HITL, and their combinations were not exercised inside workerd. |
+
+Four turns are intentional. They repeatedly enter the same isolate from fresh request contexts and retain the conversation from the first turn through the fourth. The lane has already caught failures that static bundle checks missed, including a provider import that reached `node:async_hooks`, a request-owned `AbortController`, and a credential lookup that assumed `process.env`.
+
+There is still a substantial unverified list: a live Cloudflare deployment and its upload limits; Agent Protocol, tools, subagents, and human-in-the-loop flows inside workerd; providers other than OpenAI; production connection and subrequest limits; WAN database latency; cross-isolate cold starts; startup CPU and bundle-size enforcement; Hyperdrive; Neon Cloud; and the same output on Vercel, Deno, or Bun.
+
+That list is not a disclaimer pasted on at the end. It is the map for the next useful tests and for deciding whether this target fits a real workload today.
+
+## Try it
+
+If your Dawn app fits the subset, pin the current release, check the capability boundary, build a clean artifact, and deploy with your database URL in a binding:
+
+```bash
+pnpm add @dawn-ai/cli@0.8.21 @dawn-ai/postgres-storage@0.8.21 @neondatabase/serverless hono
+pnpm exec dawn check
+pnpm exec dawn build --clean
+wrangler secret put DATABASE_URL
+wrangler deploy
+```
+
+Read [Deployment](/docs/deployment) for the complete target setup and [Postgres backend](/docs/configuration#postgres-backend) for schema and operational details. Then try it with the traffic shape, route tools, provider, and database you actually intend to run.
+
+I would especially like feedback from those real workloads: where the subset is too narrow, where request-scoped connections become expensive, and what Cloudflare's production limits reveal. The local workerd evidence is strong enough to make the target useful and inspectable. It is not a claim that the path is already production-proven.
