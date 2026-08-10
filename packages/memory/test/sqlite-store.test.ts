@@ -755,7 +755,6 @@ describe("browse against a concurrently written database file", () => {
 
     const skews: string[] = []
     const settled: number[] = []
-    let reads = 0
     const deadline = Date.now() + 20_000
     try {
       for (let c = 0; c < chunks; c += 1) {
@@ -764,7 +763,6 @@ describe("browse against a concurrently written database file", () => {
         // do/while, not while: one read is issued per chunk however the two threads
         // are scheduled, so "the loops overlapped" is not left to chance.
         do {
-          reads += 1
           const page = await s.browse({ limit: 1000 })
           if (page.records.length !== page.total)
             skews.push(`${page.records.length} of ${page.total}`)
@@ -793,6 +791,5 @@ describe("browse against a concurrently written database file", () => {
     // empty was observed, in order, which no scheduling can change: the writer cannot
     // run ahead of the reader's releases.
     expect(settled).toEqual(Array.from({ length: chunks }, (_, c) => ids.length - chunk * (c + 1)))
-    expect(reads).toBeGreaterThanOrEqual(chunks)
   }, 60_000)
 })
