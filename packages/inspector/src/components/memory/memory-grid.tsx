@@ -1,6 +1,11 @@
 "use client"
 import type { MemoryKind, MemoryRecord, MemoryStatus } from "@dawn-ai/memory"
-import { type PretableColumn, PretableSurface, type PretableTelemetry } from "@pretable/react"
+import {
+  type ColumnFilter,
+  type PretableColumn,
+  PretableSurface,
+  type PretableTelemetry,
+} from "@pretable/react"
 import { getDensityHeights } from "@pretable/ui"
 import { useCallback, useMemo, useState } from "react"
 import { Badge } from "../ui/badge"
@@ -19,6 +24,11 @@ interface GridRow extends Record<string, unknown> {
   updatedAt: string
 }
 
+/** The closed sets the funnels offer, and what `isNoneOf` is complemented
+ *  against. Kept here beside the columns that use them. */
+export const STATUSES: readonly MemoryStatus[] = ["candidate", "active", "superseded"]
+export const KINDS: readonly MemoryKind[] = ["semantic", "episodic", "procedural", "reflection"]
+
 /** Tallest the grid grows before it scrolls internally; below this it shrinks to
  *  fit so a two-hit search group doesn't reserve a screenful of empty rows. */
 const MAX_VIEWPORT_PX = 560
@@ -32,12 +42,20 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     id: "status",
     header: "status",
     widthPx: 104,
+    type: "enum",
+    filterable: true,
+    options: STATUSES.map((value) => ({ value })),
     value: (row) => row.status,
     render: ({ row }) => <Badge variant={row.status}>{row.status}</Badge>,
   },
   {
     id: "content",
     header: "content",
+    // Only status and kind are translated into the server query, and this list
+    // is one page of a larger store — a funnel here would filter the rows that
+    // happen to be loaded and quietly answer a different question. Search does
+    // content, across everything.
+    filterable: false,
     flex: 1,
     minWidthPx: 240,
     value: (row) => row.content,
@@ -46,12 +64,28 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     // text width; without it the flex item refuses to and the text just clips.
     render: ({ formattedValue }) => <span className="min-w-0 truncate">{formattedValue}</span>,
   },
-  { id: "namespace", header: "namespace", widthPx: 190, value: (row) => row.namespace },
-  { id: "kind", header: "kind", widthPx: 100, value: (row) => row.kind },
+  {
+    id: "namespace",
+    header: "namespace",
+    widthPx: 190,
+    // The facet rail already scopes namespace server-side, with real counts.
+    filterable: false,
+    value: (row) => row.namespace,
+  },
+  {
+    id: "kind",
+    header: "kind",
+    widthPx: 100,
+    type: "enum",
+    filterable: true,
+    options: KINDS.map((value) => ({ value })),
+    value: (row) => row.kind,
+  },
   {
     id: "confidence",
     header: "confidence",
     widthPx: 100,
+    filterable: false,
     value: (row) => row.confidence,
     format: ({ value }) => Number(value).toFixed(2),
   },
@@ -59,6 +93,7 @@ const COLUMNS: PretableColumn<GridRow>[] = [
     id: "updated",
     header: "updated",
     widthPx: 180,
+    filterable: false,
     value: (row) => row.updatedAt,
     format: ({ value }) => new Date(String(value)).toLocaleString(),
   },
@@ -98,6 +133,8 @@ export function MemoryGrid({
   records,
   onSelect,
   onTickedChange,
+  filters,
+  onFiltersChange,
 }: {
   records: readonly MemoryRecord[]
   onSelect: (id: string) => void
@@ -105,6 +142,10 @@ export function MemoryGrid({
    *  rendered order, for bulk actions. Omitted where bulk actions make no
    *  sense (the grouped search results). */
   onTickedChange?: (ids: string[]) => void
+  /** Funnel state to display, and where changes go. Omit both to render without
+   *  column filtering — the grouped search results filter nothing. */
+  filters?: Record<string, ColumnFilter>
+  onFiltersChange?: (next: Record<string, ColumnFilter>) => void
 }) {
   const rows = useMemo(() => records.map(toRow), [records])
 
@@ -134,6 +175,8 @@ export function MemoryGrid({
             onRowSelectionChange: onTickedChange,
           }
         : {})}
+      {...(filters ? { state: { filters } } : {})}
+      {...(onFiltersChange ? { onFiltersChange } : {})}
       // Strict ARIA grid tabbing — the default wraps Tab inside the grid, which
       // traps keyboard focus on a page that has a search box and a detail sheet.
       tabBehavior="exit"

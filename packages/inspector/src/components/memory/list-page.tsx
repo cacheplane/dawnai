@@ -1,13 +1,15 @@
 "use client"
-import type { MemoryRecord, MemoryStats } from "@dawn-ai/memory"
-import { useCallback, useEffect, useState } from "react"
+import type { MemoryKind, MemoryRecord, MemoryStats, MemoryStatus } from "@dawn-ai/memory"
+import type { ColumnFilter } from "@pretable/react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Badge } from "../ui/badge"
 import { Input } from "../ui/input"
 import { usePolling } from "../use-polling"
 import { BulkBar } from "./bulk-bar"
+import { resolveFilter, toFilter, type ValueSet } from "./column-filters"
 import { DetailSheet } from "./detail-sheet"
 import { FacetRail } from "./facet-rail"
-import { MemoryGrid } from "./memory-grid"
+import { KINDS, MemoryGrid, STATUSES } from "./memory-grid"
 import { TimelineView } from "./timeline-view"
 
 interface ListResponse {
@@ -26,9 +28,6 @@ interface SearchResponse {
  *  search failure's banner (they poll on independent cadences). */
 type ErrorSource = "stats" | "list" | "search"
 
-const KINDS = ["semantic", "episodic", "procedural", "reflection"] as const
-const STATUSES = ["candidate", "active", "superseded"] as const
-
 /** Timeline window presets → milliseconds back from now ("all" = unbounded). */
 const WINDOWS = {
   "24h": 24 * 60 * 60 * 1000,
@@ -42,8 +41,10 @@ const selectClass =
 
 export function ListPage() {
   const [namespace, setNamespace] = useState<string>()
-  const [status, setStatus] = useState("")
-  const [kind, setKind] = useState("")
+  // undefined = unfiltered, [] = matches nothing — the same distinction the
+  // store's BrowseQuery draws, so an emptied funnel cannot read as "show all".
+  const [status, setStatus] = useState<ValueSet<MemoryStatus>>(undefined)
+  const [kind, setKind] = useState<ValueSet<MemoryKind>>(undefined)
   const [query, setQuery] = useState("")
   const [view, setView] = useState<"list" | "timeline">("list")
   const [timelineWindow, setTimelineWindow] = useState<TimelineWindow>("all")
@@ -97,16 +98,36 @@ export function ListPage() {
     void refreshKey
     const params = new URLSearchParams({ limit: "200" })
     if (namespace) params.set("namespacePrefix", namespace)
-    if (status) params.set("status", status)
+    for (const value of status ?? []) params.append("status", value)
     // Timeline is an episode view — default the kind filter to episodic there
-    // (the kind select still overrides), and thread the client-computed window.
-    const effectiveKind = kind || (view === "timeline" ? "episodic" : "")
-    if (effectiveKind) params.set("kind", effectiveKind)
+    // (the kind funnel still overrides), and thread the client-computed window.
+    const effectiveKind = kind ?? (view === "timeline" ? (["episodic"] as const) : undefined)
+    for (const value of effectiveKind ?? []) params.append("kind", value)
     if (view === "timeline" && timelineWindow !== "all") {
       params.set("since", new Date(Date.now() - WINDOWS[timelineWindow]).toISOString())
     }
+    // A set narrowed to nothing matches nothing. Over HTTP a param that appears
+    // zero times is *absent*, so the request would come back unfiltered —
+    // answer it here instead of asking a question that means the opposite.
+    if (status?.length === 0 || effectiveKind?.length === 0) {
+      return Promise.resolve<ListResponse>({ records: [], total: 0 })
+    }
     return fetchJson<ListResponse>("list", `/api/memory/list?${params}`)
   }, [fetchJson, namespace, status, kind, view, timelineWindow, refreshKey])
+
+  const filters = useMemo(() => {
+    const next: Record<string, ColumnFilter> = {}
+    const statusFilter = toFilter(status, STATUSES)
+    if (statusFilter) next.status = statusFilter
+    const kindFilter = toFilter(kind, KINDS)
+    if (kindFilter) next.kind = kindFilter
+    return next
+  }, [status, kind])
+
+  const handleFiltersChange = useCallback((next: Record<string, ColumnFilter>) => {
+    setStatus(resolveFilter(next.status, STATUSES))
+    setKind(resolveFilter(next.kind, KINDS))
+  }, [])
 
   const stats = usePolling(statsFn, 2000, live)
   const page = usePolling(pageFn, 2000, live && !query)
@@ -231,32 +252,6 @@ export function ListPage() {
             onChange={(e) => setQuery(e.target.value)}
             className="w-64"
           />
-          <select
-            aria-label="Status"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className={selectClass}
-          >
-            <option value="">any status</option>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label="Kind"
-            value={kind}
-            onChange={(e) => setKind(e.target.value)}
-            className={selectClass}
-          >
-            <option value="">any kind</option>
-            {KINDS.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
-          </select>
           <label className="flex items-center gap-1.5 text-sm text-zinc-600">
             <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
             live
@@ -300,7 +295,17 @@ export function ListPage() {
               records={pageRecords}
               onSelect={setSelectedId}
               onTickedChange={setTicked}
+              // Filtering is server-side: the funnels only decide the query.
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
             />
+          ) : status !== undefined || kind !== undefined || namespace !== undefined ? (
+            // "Nothing stored" and "nothing matches what you asked for" are
+            // different answers; telling a filtered view to go run its agent
+            // sends you looking for a bug that isn't there.
+            <p className="py-8 text-center text-sm text-zinc-400" data-testid="no-matches">
+              No memories match these filters.
+            </p>
           ) : (
             <p className="py-8 text-center text-sm text-zinc-400">
               No memories yet — run your agent and watch them appear.
