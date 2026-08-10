@@ -303,6 +303,86 @@ export const workflow = async (
     )
   })
 
+  test("reports cyclic tool argument mismatches as scenario assertions", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/cycles/index.ts": `import type { RuntimeContext } from "@dawn-ai/sdk"
+
+export const workflow = async (_input: unknown, context: RuntimeContext) => {
+  const args: Record<string, unknown> = {}
+  args.self = args
+  args.kind = "actual"
+  return await context.tools.lookup(args)
+}
+`,
+      "src/app/cycles/tools/lookup.ts":
+        "export default async (input: unknown) => ({ source: 'real', input });\n",
+      "src/app/cycles/run.test.ts": scenarioModuleSource(`
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        const expected: Record<string, unknown> = {}
+        expected.self = expected
+        expected.kind = "expected"
+
+        export default scenarios("/cycles").scenario("cyclic lookup args mismatch", (s) =>
+          s
+            .input({})
+            .mockTool("lookup", async () => ({ source: "mock" }))
+            .expectPassed()
+            .expectTool("lookup", (call) => call.withArgs(expected)),
+        )
+      `),
+    })
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain(
+      'FAIL cyclic lookup args mismatch [assertion] Expected tool "lookup" arguments to match {"kind":"expected","self":[Circular]} but observed [{"kind":"actual","self":[Circular]}]',
+    )
+    expect(result.stdout).toContain("Summary: 0 passed, 1 failed")
+  })
+
+  test("reports unexpected tool expectation evaluation failures as assertions", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/app/evaluator/index.ts": `import type { RuntimeContext } from "@dawn-ai/sdk"
+
+export const workflow = async (_input: unknown, context: RuntimeContext) => {
+  const args = new Proxy<Record<string, unknown>>({}, {
+    getOwnPropertyDescriptor() {
+      throw new Error("tool args cannot be inspected")
+    },
+  })
+  return await context.tools.lookup(args)
+}
+`,
+      "src/app/evaluator/tools/lookup.ts":
+        "export default async (input: unknown) => ({ source: 'real', input });\n",
+      "src/app/evaluator/run.test.ts": toolMockScenarioModule(
+        "tool evaluator failure",
+        `s
+          .input({})
+          .mockTool("lookup", async () => ({ source: "mock" }))
+          .expectPassed()
+          .expectTool("lookup", (call) => call.withArgs({ tenant: "acme" }))`,
+        "/evaluator",
+      ),
+    })
+
+    const result = await invoke(["test", "--cwd", appRoot], { cwd: appRoot })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain(
+      "FAIL tool evaluator failure [assertion] Tool call expectation evaluation failed: tool args cannot be inspected",
+    )
+    expect(result.stdout).toContain("Summary: 0 passed, 1 failed")
+  })
+
   test("treats a throwing tool mock as an ordinary modeled route failure", async () => {
     const appRoot = await createScenarioToolMockFixture(
       toolMockScenarioModule(
@@ -1325,11 +1405,11 @@ function scenarioModuleSource(source: string): string {
   return `${source.trim()}\n`
 }
 
-function toolMockScenarioModule(name: string, fluentScenario: string): string {
+function toolMockScenarioModule(name: string, fluentScenario: string, route = "/plans"): string {
   return scenarioModuleSource(`
     import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
 
-    export default scenarios("/plans").scenario(
+    export default scenarios(${JSON.stringify(route)}).scenario(
       ${JSON.stringify(name)},
       (s) => ${fluentScenario},
     )

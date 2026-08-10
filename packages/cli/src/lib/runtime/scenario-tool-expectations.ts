@@ -3,6 +3,14 @@ import type {
   ScenarioToolCallRecord,
 } from "@dawn-ai/sdk/testing"
 
+type ComparisonMode = "exact" | "subset"
+type ComparedPairs = WeakMap<object, WeakSet<object>>
+
+interface ComparisonState {
+  readonly exact: ComparedPairs
+  readonly subset: ComparedPairs
+}
+
 export function evaluateScenarioToolExpectations(
   expectations: readonly ScenarioToolCallExpectationDescriptor[],
   calls: readonly ScenarioToolCallRecord[],
@@ -47,26 +55,40 @@ function evaluateCount(
 }
 
 function matchesSubset(expected: unknown, actual: unknown): boolean {
+  return valuesMatch(expected, actual, "subset", {
+    exact: new WeakMap(),
+    subset: new WeakMap(),
+  })
+}
+
+function valuesMatch(
+  expected: unknown,
+  actual: unknown,
+  mode: ComparisonMode,
+  state: ComparisonState,
+): boolean {
   if (Array.isArray(expected)) {
-    return arraysEqual(expected, actual)
+    return arraysEqual(expected, actual, state)
   }
 
   if (isObject(expected)) {
-    if (!isObject(actual)) {
-      return false
-    }
-
-    return Object.entries(expected).every(
-      ([key, value]) => Object.hasOwn(actual, key) && matchesSubset(value, actual[key]),
-    )
+    return objectsMatch(expected, actual, mode, state)
   }
 
   return Object.is(expected, actual)
 }
 
-function arraysEqual(expected: readonly unknown[], actual: unknown): boolean {
+function arraysEqual(
+  expected: readonly unknown[],
+  actual: unknown,
+  state: ComparisonState,
+): boolean {
   if (!Array.isArray(actual) || actual.length !== expected.length) {
     return false
+  }
+
+  if (markComparedPair(state.exact, expected, actual)) {
+    return true
   }
 
   for (let index = 0; index < expected.length; index += 1) {
@@ -74,7 +96,10 @@ function arraysEqual(expected: readonly unknown[], actual: unknown): boolean {
       return false
     }
 
-    if (Object.hasOwn(expected, index) && !valuesEqual(expected[index], actual[index])) {
+    if (
+      Object.hasOwn(expected, index) &&
+      !valuesMatch(expected[index], actual[index], "exact", state)
+    ) {
       return false
     }
   }
@@ -82,35 +107,56 @@ function arraysEqual(expected: readonly unknown[], actual: unknown): boolean {
   return true
 }
 
-function valuesEqual(expected: unknown, actual: unknown): boolean {
-  if (Array.isArray(expected)) {
-    return arraysEqual(expected, actual)
+function objectsMatch(
+  expected: Record<string, unknown>,
+  actual: unknown,
+  mode: ComparisonMode,
+  state: ComparisonState,
+): boolean {
+  if (!isObject(actual)) {
+    return false
   }
 
-  if (isObject(expected)) {
-    if (!isObject(actual)) {
-      return false
-    }
+  const expectedKeys = Object.keys(expected)
 
-    const expectedKeys = Object.keys(expected)
-
-    if (expectedKeys.length !== Object.keys(actual).length) {
-      return false
-    }
-
-    return expectedKeys.every(
-      (key) => Object.hasOwn(actual, key) && valuesEqual(expected[key], actual[key]),
-    )
+  if (mode === "exact" && expectedKeys.length !== Object.keys(actual).length) {
+    return false
   }
 
-  return Object.is(expected, actual)
+  for (const key of expectedKeys) {
+    if (!Object.hasOwn(actual, key)) {
+      return false
+    }
+  }
+
+  if (markComparedPair(state[mode], expected, actual)) {
+    return true
+  }
+
+  return expectedKeys.every((key) => valuesMatch(expected[key], actual[key], mode, state))
+}
+
+function markComparedPair(pairs: ComparedPairs, expected: object, actual: object): boolean {
+  const actualValues = pairs.get(expected)
+
+  if (actualValues?.has(actual)) {
+    return true
+  }
+
+  if (actualValues) {
+    actualValues.add(actual)
+  } else {
+    pairs.set(expected, new WeakSet([actual]))
+  }
+
+  return false
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function formatValue(value: unknown): string {
+function formatValue(value: unknown, ancestors: WeakSet<object> = new WeakSet()): string {
   if (value === null) {
     return "null"
   }
@@ -142,10 +188,19 @@ function formatValue(value: unknown): string {
   }
 
   if (Array.isArray(value)) {
+    if (ancestors.has(value)) {
+      return "[Circular]"
+    }
+
+    ancestors.add(value)
     const entries: string[] = []
 
-    for (let index = 0; index < value.length; index += 1) {
-      entries.push(Object.hasOwn(value, index) ? formatValue(value[index]) : "<empty>")
+    try {
+      for (let index = 0; index < value.length; index += 1) {
+        entries.push(Object.hasOwn(value, index) ? formatValue(value[index], ancestors) : "<empty>")
+      }
+    } finally {
+      ancestors.delete(value)
     }
 
     return `[${entries.join(",")}]`
@@ -153,8 +208,18 @@ function formatValue(value: unknown): string {
 
   const objectValue = value as Record<string, unknown>
 
-  return `{${Object.keys(objectValue)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${formatValue(objectValue[key])}`)
-    .join(",")}}`
+  if (ancestors.has(objectValue)) {
+    return "[Circular]"
+  }
+
+  ancestors.add(objectValue)
+
+  try {
+    return `{${Object.keys(objectValue)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${formatValue(objectValue[key], ancestors)}`)
+      .join(",")}}`
+  } finally {
+    ancestors.delete(objectValue)
+  }
 }

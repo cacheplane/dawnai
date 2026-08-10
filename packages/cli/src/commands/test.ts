@@ -144,15 +144,22 @@ async function evaluateScenario(
     }
   }
 
-  const toolCallMismatch = evaluateScenarioToolExpectations(
-    scenario.toolCallExpectations,
-    toolCalls,
-  )
+  try {
+    const toolCallMismatch = evaluateScenarioToolExpectations(
+      scenario.toolCallExpectations,
+      toolCalls,
+    )
 
-  if (toolCallMismatch) {
+    if (toolCallMismatch) {
+      return {
+        kind: "assertion",
+        message: toolCallMismatch,
+      }
+    }
+  } catch (error) {
     return {
       kind: "assertion",
-      message: toolCallMismatch,
+      message: `Tool call expectation evaluation failed: ${formatErrorMessage(error)}`,
     }
   }
 
