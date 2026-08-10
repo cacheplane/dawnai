@@ -8,12 +8,18 @@ export interface ResolvedBrowseSort {
   readonly column: string
   readonly dir: "asc" | "desc"
   /** Postgres binds JS numbers as float8; a float4 column needs a `::real` cast on
-   *  the parameter or equality against a stored value is false. */
+   *  the parameter or equality against a stored value is false. Postgres also STORES
+   *  confidence as float4, so two confidences that differ only below float4 precision
+   *  are equal at rest there and still distinct on SQLite — ordering by confidence
+   *  then falls to the id tie-break on one backend and not the other. */
   readonly numeric: boolean
   /** Postgres needs COLLATE "C" here to match SQLite's BINARY order. Deliberately
    *  FALSE for updated_at/created_at: they are uniform ASCII (so every collation
    *  agrees) AND the (updated_at DESC, id ASC) index is uncollated — a collated
-   *  ORDER BY would stop matching it and turn the hot path into a sort. */
+   *  ORDER BY would stop matching it and turn the hot path into a sort. FALSE for
+   *  kind/status on unrelated grounds: they are closed lowercase-ASCII enums, so no
+   *  collation can reorder them. Nothing but TypeScript holds that — neither schema
+   *  has a CHECK — and a member outside `[a-z]+` would need this flipped to true. */
   readonly collateC: boolean
 }
 

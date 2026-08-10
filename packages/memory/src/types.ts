@@ -145,16 +145,16 @@ export interface BrowseQuery {
    *  every arm; a field with no clause is REJECTED as a `BrowseQueryError` rather
    *  than ignored. */
   readonly filters?: readonly BrowseFilter[]
-  // ─ The two fields below are DECLARED BUT NOT YET HONORED. Both in-repo stores
-  //   (`sqliteMemoryStore`, `pgvectorMemoryStore`) drop them on the floor today: a
-  //   caller that sets one gets a default-ordered, uncursored page and no error. Each
-  //   doc states the intended contract and names the task delivering it — do NOT write
-  //   a consumer against the guarantee before that task lands.
-  /** Applied in order, always terminated server-side by an `id ASC` tie-break so
-   *  every window is deterministic. Absent or empty = `updatedAt DESC`.
-   *  NOT YET APPLIED — every store still orders `updatedAt DESC, id ASC`
-   *  unconditionally until Task 13 (orderBy with the id tie-break). */
+  /** Applied in order, always terminated store-side by an `id ASC` tie-break so every
+   *  window is deterministic. Absent or empty = `updatedAt DESC`. Both in-repo stores
+   *  break that tie on BYTES, so they return the same sequence for tied rows whatever
+   *  the database's default collation. */
   readonly orderBy?: readonly BrowseSortEntry[]
+  // ─ The field below is DECLARED BUT NOT YET HONORED. Both in-repo stores
+  //   (`sqliteMemoryStore`, `pgvectorMemoryStore`) drop it on the floor today: a caller
+  //   that sets it gets an uncursored page and no error. The doc states the intended
+  //   contract and names the task delivering it — do NOT write a consumer against the
+  //   guarantee before that task lands.
   /** Opaque continuation from a prior `BrowsePage`. It will belong to the query that
    *  produced it: the store recomputes the fingerprint and rejects a mismatch.
    *  NOT YET APPLIED — ignored, and no store computes or checks a fingerprint, until

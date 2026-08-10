@@ -1126,6 +1126,10 @@ export function runMemoryStoreConformance(opts: {
       try {
         await s.put(rec({ id: "1", namespace: "ns=b", content: "1", confidence: 0.1 }))
         await s.put(rec({ id: "2", namespace: "ns=a", content: "2", confidence: 0.9 }))
+        // "4" and "3" tie on BOTH keys, so the appended tie-break is the only thing
+        // separating them — and they go in reverse id order so insertion order alone
+        // cannot produce the expected sequence.
+        await s.put(rec({ id: "4", namespace: "ns=a", content: "4", confidence: 0.1 }))
         await s.put(rec({ id: "3", namespace: "ns=a", content: "3", confidence: 0.1 }))
         expect(
           (
@@ -1136,7 +1140,35 @@ export function runMemoryStoreConformance(opts: {
               ],
             })
           ).records.map((r) => r.id),
-        ).toEqual(["2", "3", "1"])
+        ).toEqual(["2", "3", "4", "1"])
+      } finally {
+        await close?.(s)
+      }
+    })
+    test("browse orders by the enum columns kind and status, uncollated on both backends", async () => {
+      const s = await makeStore()
+      try {
+        // kind/status are the only sort columns Postgres resolves WITHOUT COLLATE "C",
+        // safe only because both are closed lowercase-ASCII enums. Ids are deliberately
+        // NOT in enum order, so a store that ignored the key and fell through to the
+        // default `updated_at DESC, id ASC` would return "1","2","3","4" and fail.
+        const ids = async (field: "kind" | "status", dir: "asc" | "desc") =>
+          (await s.browse({ orderBy: [{ field, dir }] })).records.map((r) => r.id)
+        await s.put(
+          rec({ id: "1", namespace: "ns", content: "1", kind: "semantic", status: "candidate" }),
+        )
+        await s.put(
+          rec({ id: "2", namespace: "ns", content: "2", kind: "episodic", status: "superseded" }),
+        )
+        await s.put(
+          rec({ id: "3", namespace: "ns", content: "3", kind: "reflection", status: "active" }),
+        )
+        await s.put(
+          rec({ id: "4", namespace: "ns", content: "4", kind: "procedural", status: "active" }),
+        )
+        expect(await ids("kind", "asc")).toEqual(["2", "4", "3", "1"])
+        expect(await ids("kind", "desc")).toEqual(["1", "3", "4", "2"])
+        expect(await ids("status", "asc")).toEqual(["3", "4", "1", "2"])
       } finally {
         await close?.(s)
       }

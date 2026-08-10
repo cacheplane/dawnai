@@ -134,13 +134,12 @@ export interface BrowseQueryLike {
    *  both enforced. The `status`/`kind`/`content`/`namespace` arms are evaluated;
    *  `confidence` and `updatedAt` are rejected rather than ignored. */
   readonly filters?: readonly BrowseFilterLike[]
-  // ─ The two fields below are DECLARED BUT NOT YET HONORED by any in-repo store:
-  //   they are ignored, silently, with no error. See packages/memory/src/types.ts for
-  //   the per-field intended contract and the task that delivers it.
   /** Applied in order, always terminated store-side by an `id ASC` tie-break so every
-   *  window is deterministic. Absent or empty = `updatedAt DESC`. NOT YET APPLIED —
-   *  every store still orders `updatedAt DESC, id ASC` unconditionally. */
+   *  window is deterministic. Absent or empty = `updatedAt DESC`. */
   readonly orderBy?: readonly BrowseSortEntryLike[]
+  // ─ The field below is DECLARED BUT NOT YET HONORED by any in-repo store: it is
+  //   ignored, silently, with no error. See packages/memory/src/types.ts for the
+  //   intended contract and the task that delivers it.
   /** Opaque continuation from a prior `BrowsePageLike`. It will belong to the query
    *  that produced it: the store recomputes the fingerprint and rejects a mismatch.
    *  NOT YET APPLIED — ignored, and no store computes or checks a fingerprint. */
