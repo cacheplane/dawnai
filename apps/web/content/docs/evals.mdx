@@ -276,6 +276,7 @@ const harness = await createAgentHarness({ appRoot, route: "/chat#agent" })
 try {
   const report = await runEval(myEval, {
     runCase: async (testCase) => {
+      harness.reset()
       if (typeof testCase.input !== "string") {
         throw new TypeError("Agent eval input must be a string")
       }
@@ -293,7 +294,7 @@ try {
 }
 ```
 
-`runEval(def, options)` accepts a `RunEvalOptions` with two fields: `runCase` (required — executes one case and returns an `AgentRunResult`) and `baseDir` (optional — base directory for resolving a string dataset path). It returns a `Promise<EvalReport>` containing `{ name, cases, byScorer, mean, gated, passed, reason? }`.
+The reset starts every dataset case on a fresh thread with a clean fixture set. `runEval(def, options)` accepts a `RunEvalOptions` with two fields: `runCase` (required — executes one case and returns an `AgentRunResult`) and `baseDir` (optional — base directory for resolving a string dataset path). It returns a `Promise<EvalReport>` containing `{ name, cases, byScorer, mean, gated, passed, reason? }`.
 
 ## Related
 
