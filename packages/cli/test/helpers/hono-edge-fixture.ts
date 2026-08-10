@@ -439,8 +439,18 @@ async function buildLinkedDists(): Promise<void> {
 /**
  * Create a one-route Dawn app configured for the `hono` target, with every
  * runtime package linked in. Returns its root; the caller disposes it.
+ *
+ * `targets` overrides the configured build targets. It exists for
+ * `docs-edge-entry-snippet.test.ts`, whose negative control needs the `node`
+ * target's `modules.mjs` sitting beside the edge one in a single build dir —
+ * that is what makes "the docs named the wrong manifest" reproducible rather
+ * than merely a missing file. Everything else wants the default and should
+ * keep passing the prefix alone.
  */
-export async function createFixtureApp(prefix: string): Promise<string> {
+export async function createFixtureApp(
+  prefix: string,
+  targets: readonly string[] = ["hono"],
+): Promise<string> {
   // Before anything is linked: make the `dist` about to be linked current.
   await ensureLinkedDistsFresh()
 
@@ -449,7 +459,7 @@ export async function createFixtureApp(prefix: string): Promise<string> {
   const appRoot = await realpath(await mkdtemp(join(tmpdir(), prefix)))
 
   const files: Record<string, string> = {
-    "dawn.config.ts": 'export default { build: { targets: ["hono"] } }\n',
+    "dawn.config.ts": `export default { build: { targets: ${JSON.stringify(targets)} } }\n`,
     "package.json": `${JSON.stringify({
       dependencies: {
         "@dawn-ai/cli": "workspace:*",

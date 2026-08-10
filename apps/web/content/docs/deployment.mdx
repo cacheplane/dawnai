@@ -131,10 +131,12 @@ This path targets LangSmith or another runtime that consumes `langgraph.json` an
 
 ## Edge runtimes
 
-Dawn deploys to runtimes that have no filesystem, no child processes, and no TCP sockets — Cloudflare Workers above all. Two pieces make that work, and you can use either on its own:
+Dawn deploys to runtimes that have no filesystem, no child processes, and no TCP sockets — Cloudflare Workers above all. Two pieces make that work, and they are layered rather than alternatives:
 
 - **`@dawn-ai/cli/fetch`**, a node-free entry point you wire up yourself;
 - **the `hono` build target**, which generates a deployable app around that entry point — an edge module manifest, a per-request store factory, a Hono entry, and a `wrangler.toml`.
+
+The `hono` target is the only thing that emits `modules.edge.mjs`, and that manifest is the one input the fetch entry cannot synthesize for itself. So "wire it up yourself" means composing the generated pieces differently — your own Hono app, your own store lifetimes, your own entry shape — rather than skipping the build target: enable `hono`, then import what it wrote. Building the manifest by hand is possible (`buildStaticRouteModule` and the `DawnStaticModules` type are exported for it) but it is a per-route, per-tool, per-state-definition job that `dawn build` already does from the same discovery run.
 
 ### The `@dawn-ai/cli/fetch` entry point
 
@@ -142,7 +144,7 @@ Dawn deploys to runtimes that have no filesystem, no child processes, and no TCP
 
 ```ts
 import { createRuntimeFetchHandler } from "@dawn-ai/cli/fetch"
-import modules from "./.dawn/build/modules.mjs"
+import modules from "./.dawn/build/modules.edge.mjs"
 
 const handler = await createRuntimeFetchHandler({
   appRoot: "my-app", // an opaque namespace id when there is no filesystem
@@ -156,6 +158,8 @@ const handler = await createRuntimeFetchHandler({
 
 export default { fetch: (request: Request) => handler.fetch(request) }
 ```
+
+`modules.edge.mjs` and not `modules.mjs`: the `node` target's manifest reaches `node:path`, `node:url` and `@dawn-ai/cli/runtime` (which pulls in tsx and esbuild), and bundling it for Workers fails on fourteen unresolved builtins — several of them bare, so `nodejs_compat` does not rescue it either. Run `dawn build` with `hono` among your `build.targets` to get the edge flavor. A test bundles this very snippet, read out of this page, to keep the two from drifting.
 
 Anything you do not supply has no filesystem to fall back to, so the handler fails loudly at boot naming the missing piece rather than silently degrading. A few inputs are optional by contract and simply switch their feature off when absent: middleware, the sandbox provider, and the capability markers that read `workspace/AGENTS.md`, `memory.md`, `plan.md`, and `skills/`.
 
