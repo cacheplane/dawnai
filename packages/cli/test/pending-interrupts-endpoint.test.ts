@@ -12,6 +12,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest"
 import { createAimock } from "../../testing/dist/aimock-runner.js"
 import { script } from "../../testing/dist/fixture-builder.js"
+import { terminalStatus } from "../src/lib/dev/runtime-fetch-core.js"
 import { createRuntimeFetchHandler } from "../src/lib/dev/runtime-fetch-handler.js"
 
 const cleanup: Array<() => Promise<void> | void> = []
@@ -460,4 +461,31 @@ describe("thread status after a parked or cancelled turn", () => {
 
     expect(await threadStatus(handler, threadId)).toBe("idle")
   }, 30_000)
+})
+
+// ---------------------------------------------------------------------------
+// Direct cover for the decision rule the handlers share. The parked-turn half
+// of it is unreachable on the FAILURE path over HTTP: nothing throws once the
+// adapter has yielded the interrupt chunk, and a route cannot emit raw chunks
+// of its own (a non-agent route is awaited and yields a single `done`). These
+// cases are therefore the only coverage that combination gets — they pin the
+// rule, not the wiring that feeds it.
+// ---------------------------------------------------------------------------
+
+describe("terminalStatus", () => {
+  it("reports idle for a turn that neither parked nor was cancelled", () => {
+    expect(terminalStatus({ cancelled: false, sawInterrupt: false })).toBe("idle")
+  })
+
+  it("reports interrupted for a parked turn", () => {
+    expect(terminalStatus({ cancelled: false, sawInterrupt: true })).toBe("interrupted")
+  })
+
+  it("reports interrupted for a cancelled turn", () => {
+    expect(terminalStatus({ cancelled: true, sawInterrupt: false })).toBe("interrupted")
+  })
+
+  it("reports interrupted for a turn that parked and was then cancelled", () => {
+    expect(terminalStatus({ cancelled: true, sawInterrupt: true })).toBe("interrupted")
+  })
 })

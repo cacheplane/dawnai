@@ -2,7 +2,7 @@ import { seedDawnConfig } from "@dawn-ai/core"
 import type { MemoryStore } from "@dawn-ai/memory"
 import type { PermissionsStore } from "@dawn-ai/permissions"
 import type { DawnMiddleware, MiddlewareRequest } from "@dawn-ai/sdk"
-import type { Thread, ThreadsStore } from "@dawn-ai/sqlite-storage"
+import type { Thread, ThreadStatus, ThreadsStore } from "@dawn-ai/sqlite-storage"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import {
   type BootResolvedInstances,
@@ -1337,7 +1337,10 @@ async function handleApStreamRequest(options: {
             if (chunk.type === "interrupt") sawInterrupt = true
             safeEnqueue(controller, encoder.encode(toSseEvent(chunk)))
           }
-          await threadsStore.updateStatus(threadId, sawInterrupt ? "interrupted" : "idle")
+          await threadsStore.updateStatus(
+            threadId,
+            terminalStatus({ cancelled: false, sawInterrupt }),
+          )
         } catch (error) {
           // A cancelled run is not a failure: clients must be able to tell the
           // two apart without inferring it from a truncated stream.
@@ -1350,11 +1353,8 @@ async function handleApStreamRequest(options: {
                 type: "done",
               }
           safeEnqueue(controller, encoder.encode(toSseEvent(terminalChunk)))
-          // A turn that parked and then failed is still parked: the pending
-          // interrupt survives in the checkpoint, so "interrupted" wins here
-          // too rather than reporting the thread as finished.
           await threadsStore
-            .updateStatus(threadId, run.cancelled || sawInterrupt ? "interrupted" : "idle")
+            .updateStatus(threadId, terminalStatus({ cancelled: run.cancelled, sawInterrupt }))
             .catch(() => undefined)
         }
       } finally {
@@ -2007,6 +2007,26 @@ function validateApRunBody(
     ok: true,
     routeKey: body.route,
   }
+}
+
+/**
+ * The status a turn's thread is left in once it stops producing chunks.
+ *
+ * What the call sites cannot show: a parked turn takes the NORMAL completion
+ * path — the agent adapter yields the interrupt chunk and then `done` — so a
+ * drained stream is not evidence that the turn finished; and a turn that parked
+ * before failing is still parked, its pending interrupt intact in the
+ * checkpoint. Module scope rather than inline because more than one AP handler
+ * has to end turns by this rule, and the two must not drift apart.
+ *
+ * Exported for the tests: the parked-and-failed combination is unreachable over
+ * HTTP, since nothing throws after the adapter has yielded the interrupt.
+ */
+export function terminalStatus(options: {
+  readonly cancelled: boolean
+  readonly sawInterrupt: boolean
+}): ThreadStatus {
+  return options.cancelled || options.sawInterrupt ? "interrupted" : "idle"
 }
 
 // ---------------------------------------------------------------------------
