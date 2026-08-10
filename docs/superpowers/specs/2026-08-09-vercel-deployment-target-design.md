@@ -390,13 +390,15 @@ The fixture exports three deterministic, model-free routes:
   named `agent` entry. It defines inline `messages`, `visits`, and `markers`
   annotations with summing/appending reducers and compiles against a
   module-lifetime `DawnPostgresSaver`. The fixture owns a small Node `pg.Pool`
-  (`max: 2`, finite connection and idle timeouts, and an explicit pool error
-  listener) and passes it to the saver. Construction performs no query or
-  migration at module evaluation, so Vercel's source-build discovery does not
-  require `DATABASE_URL`; connections and migrations remain lazy at runtime.
+  (`max: 2`, 10-second connection, 30-second idle, 5-second query and statement
+  timeouts, and an explicit pool error listener) and passes it to the saver.
+  Construction performs no query or migration at module evaluation, so
+  Vercel's source-build discovery does not require `DATABASE_URL`; connections
+  and migrations remain lazy at runtime.
 - `/stream#agent` is a raw legacy Runnable that emits one meaningful token,
-  waits on a run-specific Postgres barrier, emits a second token, then supplies
-  a root `on_chain_end` result that Dawn exposes as the public `done` event.
+  waits on a run-specific Postgres barrier with a finite overall deadline and a
+  per-query deadline race, emits a second token, then supplies a root
+  `on_chain_end` result that Dawn exposes as the public `done` event.
 - `/release#graph` performs a parameterized update constrained by the exact
   barrier identifier and `released = false`, returns the identifier through
   `RETURNING`, and succeeds only when exactly one returned row matches the
@@ -417,11 +419,12 @@ request credential.
 Raw agent inputs are normalized to `{ messages: HumanMessage[] }`. The state
 markers and stream barrier identifier are therefore carried as the sole user
 message content and read from the latest message; arbitrary top-level input
-fields are not treated as evidence. The fixture declares its direct imports
-and required peers explicitly: `@langchain/core` `1.2.5`,
-`@langchain/langgraph` `1.4.9`, `@langchain/langgraph-checkpoint` `1.1.3`, `pg`
-`8.22.0`, and `zod` `4.4.3`. It does not rely on dependencies hoisted from the
-repository CLI install.
+fields are not treated as evidence. The fixture declares its generated-runtime
+imports, direct imports, and required peers explicitly: `@langchain/core`
+`1.2.5`, `@langchain/langgraph` `1.4.9`, `@langchain/langgraph-checkpoint`
+`1.1.3`, `@neondatabase/serverless` `1.1.0`, `hono` `4.12.28`, `pg` `8.22.0`,
+and `zod` `4.4.3`. It does not rely on dependencies hoisted from the repository
+CLI install.
 
 The route-owned saver writes the same default `public.dawn_checkpoints` and
 `public.dawn_writes` tables, empty checkpoint namespace, and serialization

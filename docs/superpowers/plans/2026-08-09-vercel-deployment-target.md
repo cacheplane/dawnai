@@ -907,13 +907,15 @@
 
 - [ ] **Step 6: Assemble two fully vendored fixtures**
 
-  After `pnpm build`, run `pnpm pack` for exactly the derived local Dawn closure from the branch under test. Copy every tarball independently into each fixture's `vendor/`; never refer back to a run-level asset directory. Give both manifests `"packageManager": "pnpm@10.33.0"`, direct relative tarball dependencies for the Dawn packages they import (`@dawn-ai/cli`, `@dawn-ai/postgres-storage`, and `@dawn-ai/sdk`), and these exact direct imports/required peers:
+  After `pnpm build`, run `pnpm pack` for exactly the derived local Dawn closure from the branch under test. Copy every tarball independently into each fixture's `vendor/`; never refer back to a run-level asset directory. Give both manifests `"packageManager": "pnpm@10.33.0"`, direct relative tarball dependencies for the Dawn packages they import (`@dawn-ai/cli`, `@dawn-ai/postgres-storage`, and `@dawn-ai/sdk`), and these exact generated-runtime imports, direct imports, and required peers:
 
   ```json
   {
     "@langchain/core": "1.2.5",
     "@langchain/langgraph": "1.4.9",
     "@langchain/langgraph-checkpoint": "1.1.3",
+    "@neondatabase/serverless": "1.1.0",
+    "hono": "4.12.28",
     "pg": "8.22.0",
     "zod": "4.4.3"
   }
@@ -1028,11 +1030,11 @@
   production bridge; it must not patch `pg`, vendor `pg-native`, or weaken Build
   Output validation locally.
 
-  Generate one module-lifetime `pg.Pool` with `connectionString: process.env.DATABASE_URL`, `max: 2`, `connectionTimeoutMillis: 10_000`, `idleTimeoutMillis: 30_000`, and an explicit `error` listener that logs only a fixed pool-error label plus allowlisted `name`/`code` fields—never the error message, stack, pool config, or connection string. Pool construction must tolerate an absent build-time value and must not query or migrate; connections and saver migrations remain lazy at runtime. The pool is not closed per request—Vercel instance teardown owns it.
+  Generate one module-lifetime `pg.Pool` with `connectionString: process.env.DATABASE_URL`, `max: 2`, `connectionTimeoutMillis: 10_000`, `idleTimeoutMillis: 30_000`, `query_timeout: 5_000`, `statement_timeout: 5_000`, and an explicit `error` listener that logs only a fixed pool-error label plus allowlisted `name`/`code` fields—never the error message, stack, pool config, or connection string. Pool construction must tolerate an absent build-time value and must not query or migrate; connections and saver migrations remain lazy at runtime. The pool is not closed per request—Vercel instance teardown owns it.
 
   `/state#agent` must export the named `agent` as a raw compiled `StateGraph`. Define inline `messages`, `visits`, and `markers` annotations: messages and markers append, visits sum, and defaults are empty/zero. Compile with `new DawnPostgresSaver({ pool })`, its default `public.dawn_checkpoints`/`public.dawn_writes` names, empty checkpoint namespace, and default serializer. The record node reads only the latest `HumanMessage` string content, returns one visit plus that marker, and recognizes `^log-vcl-[a-f0-9]{32}$` by emitting exactly one `console.info("dawn-vercel-fixture-log", marker)` line.
 
-  `/stream#agent` must be a raw legacy Runnable whose `streamEvents` reads the barrier ID only from the latest user message, emits public-adapter input for `"before-release"`, waits with parameterized SQL and a finite deadline on `public.dawn_vercel_test_barriers`, emits `"after-release"`, and ends with root `on_chain_end` output `{ barrierId, released: true }`. `/release#graph` performs one parameterized `UPDATE ... WHERE barrier_id = $1 AND released = false RETURNING barrier_id` and succeeds only for exactly one returned row equal to the requested target.
+  `/stream#agent` must be a raw legacy Runnable whose `streamEvents` reads the barrier ID only from the latest user message, emits public-adapter input for `"before-release"`, waits with parameterized SQL, a finite overall deadline, and a per-query deadline race on `public.dawn_vercel_test_barriers`, emits `"after-release"`, and ends with root `on_chain_end` output `{ barrierId, released: true }`. `/release#graph` performs one parameterized `UPDATE ... WHERE barrier_id = $1 AND released = false RETURNING barrier_id` and succeeds only for exactly one returned row equal to the requested target.
 
   Generate `src/middleware.ts` with only the SHA-256 digest embedded. When `req.routeId === "/release"`, require a well-formed base64url `x-dawn-vercel-release` header, hash it, and compare equal-length bytes with Node `timingSafeEqual`; missing, malformed, wrong, and digest-as-credential requests return `401`. Allow every other route. Do not put the raw credential in any environment variable or serializable object.
 
