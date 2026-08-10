@@ -186,17 +186,15 @@ Inside a `workflow`, tools are invoked through `ctx.tools.<name>(...)`:
 // workflow form
 import type { RuntimeContext } from "@dawn-ai/sdk"
 import type { RouteTools } from "dawn:routes"
-import type { z } from "zod"
-import type state from "./state.js"
-
-type HelloState = z.infer<typeof state>
+import state from "./state.js"
 
 export async function workflow(
-  state: HelloState,
+  input: unknown,
   ctx: RuntimeContext<RouteTools<"/hello/[tenant]">>,
 ) {
-  const result = await ctx.tools.greet({ tenant: state.tenant })
-  return { ...state, greeting: result.greeting }
+  const parsed = state.parse(input)
+  const result = await ctx.tools.greet({ tenant: parsed.tenant })
+  return { ...parsed, greeting: result.greeting }
 }
 ```
 

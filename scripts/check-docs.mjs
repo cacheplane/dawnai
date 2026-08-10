@@ -115,11 +115,18 @@ const accuracyContracts = [
       "precompiled raw LangGraph object",
       "RunnableConfig",
       "imports its own tools",
+      'import state from "./state.js"',
+      "export async function workflow(\n  input: unknown,",
+      "const parsed = state.parse(input)",
+      "tenant: parsed.tenant",
+      "return { ...parsed, greeting:",
     ],
     forbidden: [
       "only its own route-local `tools/*.ts`",
       "inside `workflow`/`graph` route entries",
       "Inside a `workflow` or `graph` route",
+      'import type state from "./state.js"',
+      "state: HelloState",
     ],
   },
   {
