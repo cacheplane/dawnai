@@ -348,8 +348,11 @@ export type PrepareRouteExecutionOptions = Omit<BootResolvedInstances, "checkpoi
    */
   readonly sandboxThreadId?: string
   readonly subagentDepth?: number
-  readonly toolCallJournal?: ScenarioToolCallJournal
-  readonly toolOverrides?: readonly ScenarioToolOverride[]
+}
+
+interface ScenarioRouteInvocation {
+  readonly journal: ScenarioToolCallJournal
+  readonly overrides: readonly ScenarioToolOverride[]
 }
 
 export async function executeResolvedRoute(
@@ -484,6 +487,7 @@ export async function* streamResolvedRoute(
     summarization,
     workspaceFs,
     sandboxed,
+    bypassCache,
   } = prepared
 
   if (normalized.kind !== "agent") {
@@ -541,6 +545,7 @@ export async function* streamResolvedRoute(
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
       ...(subagentResolver ? { subagentResolver } : {}),
       ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(bypassCache ? { bypassCache: true } : {}),
       ...(sandboxed ? { sandboxed: true } : {}),
     })) {
       switch (chunk.type) {
@@ -653,6 +658,8 @@ export interface PreparedRoute {
   >
   readonly subagentResolver?: SubagentResolver
   readonly workspaceFs: WorkspaceFs
+  /** Bypass compiled-agent caches when tools close over invocation-local state. */
+  readonly bypassCache?: boolean
   /** The store the route's permission gates consult this request (provided, factory-produced, or freshly constructed). */
   readonly permissionsStore: PermissionsStore
   /** The memory context built for this route (agent routes with a memory.ts).
@@ -752,6 +759,13 @@ export function __resetPreparedRouteModulesForTests(): void {
 export async function prepareRouteExecution(
   options: PrepareRouteExecutionOptions,
 ): Promise<PreparedRoute | PreparedRouteError> {
+  return await prepareRouteExecutionForInvocation(options)
+}
+
+async function prepareRouteExecutionForInvocation(
+  options: PrepareRouteExecutionOptions,
+  scenarioInvocation?: ScenarioRouteInvocation,
+): Promise<PreparedRoute | PreparedRouteError> {
   const { isSubagent = false } = options
   const fallbacks = options.bootFallbacks
   const routeDir = pureDirname(options.routeFile)
@@ -771,14 +785,16 @@ export async function prepareRouteExecution(
   )
   const normalized = prepared.module
   let tools = prepared.tools
-  if (options.toolOverrides && options.toolOverrides.length > 0) {
+  let bypassCache = false
+  if (scenarioInvocation && scenarioInvocation.overrides.length > 0) {
     const applied = applyScenarioToolOverrides({
-      journal: options.toolCallJournal ?? [],
-      overrides: options.toolOverrides,
+      journal: scenarioInvocation.journal,
+      overrides: scenarioInvocation.overrides,
       tools,
     })
     if (!applied.ok) return { message: applied.message, ok: false }
     tools = applied.tools
+    bypassCache = true
   }
   let stateFields = prepared.stateFields
 
@@ -1300,6 +1316,7 @@ export async function prepareRouteExecution(
     ...(sandboxBackends !== undefined ? { sandboxed: true } : {}),
     ...(memoryContext ? { memoryContext } : {}),
     ...(episodes ? { episodes } : {}),
+    ...(bypassCache ? { bypassCache: true } : {}),
   }
 }
 
@@ -1377,9 +1394,8 @@ export async function executeRouteAtResolvedPath(
     readonly signal?: AbortSignal
     readonly startedAt: number
     readonly threadId?: string
-    readonly toolCallJournal?: ScenarioToolCallJournal
-    readonly toolOverrides?: readonly ScenarioToolOverride[]
   },
+  scenarioInvocation?: ScenarioRouteInvocation,
 ): Promise<RuntimeExecutionResult> {
   let mode: RuntimeExecutionMode | null = null
   // Episode-recorder context, captured once prepare succeeds so the catch
@@ -1389,10 +1405,13 @@ export async function executeRouteAtResolvedPath(
   let epThreadId: string | undefined
 
   try {
-    const prepared = await prepareRouteExecution({
-      ...options,
-      isSubagent: options.isSubagent ?? false,
-    })
+    const prepared = await prepareRouteExecutionForInvocation(
+      {
+        ...options,
+        isSubagent: options.isSubagent ?? false,
+      },
+      scenarioInvocation,
+    )
 
     if (!prepared.ok) {
       return createRuntimeFailureResult({
@@ -1419,6 +1438,7 @@ export async function executeRouteAtResolvedPath(
       summarization,
       workspaceFs,
       sandboxed,
+      bypassCache,
     } = prepared
     mode = normalized.kind
     const threadId =
@@ -1450,6 +1470,7 @@ export async function executeRouteAtResolvedPath(
       ...(streamTransformers && streamTransformers.length > 0 ? { streamTransformers } : {}),
       ...(subagentResolver ? { subagentResolver } : {}),
       ...(threadId ? { threadId } : {}),
+      ...(bypassCache ? { bypassCache: true } : {}),
       ...(sandboxed ? { sandboxed: true } : {}),
     })
 
@@ -1506,6 +1527,7 @@ async function invokeEntry(
   input: unknown,
   context: unknown,
   agentContext?: {
+    readonly bypassCache?: boolean
     readonly checkpointer?: BaseCheckpointSaver
     readonly middlewareContext?: Readonly<Record<string, unknown>>
     readonly offload?: OffloadFn
@@ -1564,6 +1586,7 @@ async function invokeEntry(
         ? { subagentResolver: agentContext.subagentResolver }
         : {}),
       ...(agentContext?.threadId ? { threadId: agentContext.threadId } : {}),
+      ...(agentContext?.bypassCache ? { bypassCache: true } : {}),
       ...(agentContext?.sandboxed ? { sandboxed: true } : {}),
     })
   }
@@ -1780,6 +1803,7 @@ async function materializePreparedAgentGraph(
     )
   }
   return materializeAgentGraph({
+    ...(prepared.bypassCache ? { bypassCache: true } : {}),
     ...(prepared.checkpointer ? { checkpointer: prepared.checkpointer } : {}),
     descriptor: prepared.normalized.entry,
     ...(middlewareContext ? { middlewareContext } : {}),

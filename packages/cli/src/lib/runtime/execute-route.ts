@@ -505,10 +505,15 @@ export async function executeRoute(options: ExecuteRouteOptions): Promise<Runtim
     routePath: identity.routePath,
     ...(options.signal ? { signal: options.signal } : {}),
     startedAt,
-    ...(options.toolCallJournal ? { toolCallJournal: options.toolCallJournal } : {}),
-    ...(options.toolOverrides ? { toolOverrides: options.toolOverrides } : {}),
   }
-  return await executeRouteAtResolvedPath(withNodeFallbacks(resolved))
+  const scenarioInvocation =
+    options.toolOverrides && options.toolOverrides.length > 0
+      ? {
+          journal: options.toolCallJournal ?? [],
+          overrides: options.toolOverrides,
+        }
+      : undefined
+  return await executeRouteAtResolvedPath(withNodeFallbacks(resolved), scenarioInvocation)
 }
 
 function resolveRouteFile(options: {

@@ -115,6 +115,33 @@ describe("applyScenarioToolOverrides", () => {
     expect(searchTool.run).toBe(realSearchRun)
   })
 
+  it("preserves the identity of an asynchronous mock rejection", async () => {
+    const journal: ScenarioToolCallRecord[] = []
+    const input = { query: "async failure" }
+    const rejected = new Error("async mock search failed")
+    const result = applyScenarioToolOverrides({
+      journal,
+      overrides: [
+        {
+          implementation: async () => {
+            await Promise.resolve()
+            throw rejected
+          },
+          name: "search",
+        },
+      ],
+      tools: [searchTool],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.message)
+    const mockedSearch = result.tools[0]
+    if (!mockedSearch) throw new Error("Expected the search tool")
+
+    await expect(Promise.resolve(mockedSearch.run(input, context))).rejects.toBe(rejected)
+    expect(journal).toEqual([{ args: input, name: "search", sequence: 0 }])
+  })
+
   it("assigns increasing sequence values across all mocked tools", async () => {
     const journal: ScenarioToolCallRecord[] = []
     const result = applyScenarioToolOverrides({
@@ -140,6 +167,42 @@ describe("applyScenarioToolOverrides", () => {
       { args: { path: "first.md" }, name: "save", sequence: 0 },
       { args: { query: "Dawn" }, name: "search", sequence: 1 },
       { args: { path: "second.md" }, name: "save", sequence: 2 },
+    ])
+  })
+
+  it("sequences concurrent calls by wrapper entry rather than completion", async () => {
+    const journal: ScenarioToolCallRecord[] = []
+    const searchCompletion = deferred<string>()
+    const saveCompletion = deferred<string>()
+    const result = applyScenarioToolOverrides({
+      journal,
+      overrides: [
+        { implementation: () => searchCompletion.promise, name: "search" },
+        { implementation: () => saveCompletion.promise, name: "save" },
+      ],
+      tools: [searchTool, saveTool],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.message)
+    const mockedSearch = result.tools.find((tool) => tool.name === "search")
+    const mockedSave = result.tools.find((tool) => tool.name === "save")
+    if (!mockedSearch || !mockedSave) throw new Error("Expected both mocked tools")
+
+    const searchResult = mockedSearch.run({ query: "first entry" }, context)
+    const saveResult = mockedSave.run({ path: "second-entry.md" }, context)
+    expect(journal).toEqual([
+      { args: { query: "first entry" }, name: "search", sequence: 0 },
+      { args: { path: "second-entry.md" }, name: "save", sequence: 1 },
+    ])
+
+    saveCompletion.resolve("save completed first")
+    await expect(Promise.resolve(saveResult)).resolves.toBe("save completed first")
+    searchCompletion.resolve("search completed second")
+    await expect(Promise.resolve(searchResult)).resolves.toBe("search completed second")
+    expect(journal).toEqual([
+      { args: { query: "first entry" }, name: "search", sequence: 0 },
+      { args: { path: "second-entry.md" }, name: "save", sequence: 1 },
     ])
   })
 
@@ -235,4 +298,21 @@ async function createFixtureApp(): Promise<string> {
     "utf8",
   )
   return appRoot
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T) => void
+} {
+  let resolve: ((value: T) => void) | undefined
+  const promise = new Promise<T>((settle) => {
+    resolve = settle
+  })
+  return {
+    promise,
+    resolve: (value) => {
+      if (!resolve) throw new Error("Deferred promise was not initialized")
+      resolve(value)
+    },
+  }
 }
