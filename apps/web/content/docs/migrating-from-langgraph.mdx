@@ -4,7 +4,7 @@ This page is for teams with a working LangGraph project who want to know what a 
 
 Dawn does not replace LangGraph. The graph runtime, the channels, the checkpointer, LangSmith — none of it changes.
 
-What changes is the code around the graph: project layout and deploy config. Dawn's tool and state conventions apply when you choose its agent or workflow route surfaces; a raw graph keeps its own definitions.
+What changes is the code around the graph: project layout and deploy config. Dawn's co-located tool convention applies to agent and workflow routes, while sibling `state.ts` is agent-only; a raw graph keeps its own definitions.
 
 The migration is mostly *moving code*, not rewriting it.
 
