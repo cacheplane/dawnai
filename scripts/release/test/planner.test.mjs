@@ -285,7 +285,7 @@ test("a newer registry latest conflicts with partial candidate progress", () => 
 
 test("registry bytes must exactly match the prepared package", () => {
   const observation = observationFor("NPM_PARTIAL")
-  observation.registry.packages[0].integrity = "sha512-other-bytes"
+  observation.registry.packages[0].integrity = "sha512-otherbytes"
 
   assertBlocked(observation, "npm-bytes-mismatch")
 })
@@ -536,6 +536,10 @@ const invalidRequiredResultCases = [
         name: "unlisted",
         status: "passed",
         version: VERSION,
+        commitSha: COMMIT_SHA,
+        manifestSha256: MANIFEST_SHA256,
+        workflowRunId: 999,
+        runAttempt: 1,
       })
     },
     conflict: "required-smoke-result-unexpected",
@@ -848,6 +852,63 @@ for (const [name, mutate] of [
 
     assertDesiredSchemaBlocked(observation, "observation-schema-invalid")
   })
+}
+
+const malformedImmutableIdentityCases = [
+  ...["manifestAsset", "releaseRecordAsset", "manifestAttestationAsset"].flatMap(
+    (recordName) =>
+      ["name", "sha256"].flatMap((field) => [
+        [`missing artifacts.${recordName}.${field}`, (o) => delete o.artifacts[recordName][field]],
+        [`null artifacts.${recordName}.${field}`, (o) => (o.artifacts[recordName][field] = null)],
+        [
+          `wrong-type artifacts.${recordName}.${field}`,
+          (o) => (o.artifacts[recordName][field] = 1),
+        ],
+      ]),
+  ),
+  ...[
+    "name",
+    "version",
+    "filename",
+    "tarballSha256",
+    "attestationFilename",
+    "attestationSha256",
+    "integrity",
+  ].flatMap((field) => [
+    [`missing inventory package ${field}`, (o) => delete o.inventory.packages[0][field]],
+    [`null inventory package ${field}`, (o) => (o.inventory.packages[0][field] = null)],
+    [`wrong-type inventory package ${field}`, (o) => (o.inventory.packages[0][field] = 1)],
+  ]),
+]
+
+const activeManagedAssetVariants = [
+  [
+    "escrow",
+    () => {
+      const observation = observationFor("CANDIDATE_ESCROWED")
+      observation.release = releaseRecord("absent")
+      return observation
+    },
+  ],
+  [
+    "Release",
+    () => {
+      const observation = observationFor("CANDIDATE_ESCROWED")
+      observation.escrow = { status: "absent", manifestSha256: null, assets: [] }
+      return observation
+    },
+  ],
+]
+
+for (const [variant, createObservation] of activeManagedAssetVariants) {
+  for (const [name, mutate] of malformedImmutableIdentityCases) {
+    test(`container-shaped malformed ${name} blocks with active ${variant}`, () => {
+      const observation = createObservation()
+      mutate(observation)
+
+      assertMalformedObservationBlocked(observation)
+    })
+  }
 }
 
 for (const [name, mutate] of [
@@ -1449,6 +1510,25 @@ function assertDesiredSchemaBlocked(observation, expectedConflict, releaseCandid
   })
   assert.equal(plan.disposition, "blocked")
   assert.ok(plan.conflicts.includes(expectedConflict), JSON.stringify(plan.conflicts))
+}
+
+function assertMalformedObservationBlocked(observation) {
+  const input = deepFreeze({ candidate: candidate(), observation, mode: "shadow" })
+  const before = JSON.stringify(input)
+  let first
+  let second
+
+  assert.doesNotThrow(() => {
+    first = planRelease(input)
+    second = planRelease(input)
+  })
+  assert.deepEqual(second, first)
+  assert.equal(first.state, "CANDIDATE_VALIDATED")
+  assert.equal(first.disposition, "blocked")
+  assert.equal(first.nextTransition, null)
+  assert.ok(first.conflicts.includes("observation-schema-invalid"), JSON.stringify(first.conflicts))
+  assert.deepEqual(first.proposedMutations, [])
+  assert.equal(JSON.stringify(input), before)
 }
 
 function usePerPackageRegistryEvidence(observation) {

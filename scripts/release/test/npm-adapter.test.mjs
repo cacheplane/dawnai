@@ -13,7 +13,7 @@ const INTEGRITY = `sha512-${"A".repeat(86)}==`
 test("createNpmReader exposes only the named read operation and uses encoded GET requests", async () => {
   const { fetchImpl, calls } = recordingFetch([
     jsonResponse(versionDocument()),
-    jsonResponse({ "dist-tags": { next: "0.9.0-beta.1", latest: VERSION } }),
+    jsonResponse({ name: NAME, "dist-tags": { next: "0.9.0-beta.1", latest: VERSION } }),
     jsonResponse(attestationDocument()),
   ])
   const npm = createNpmReader({ fetchImpl })
@@ -101,6 +101,55 @@ test("observePackageMetadata reads only bounded public dist-tags independently",
     httpStatus: 200,
     code: null,
     metadata: { name: NAME, latest: "0.8.22" },
+  })
+})
+
+test("npm packuments require an exact own package name before retaining dist-tags", async (t) => {
+  const cases = [
+    ["missing", { "dist-tags": { latest: VERSION } }],
+    ["wrong", { name: "npm_secret-package-name", "dist-tags": { latest: VERSION } }],
+    ["number", { name: 7, "dist-tags": { latest: VERSION } }],
+    ["object", { name: { value: NAME }, "dist-tags": { latest: VERSION } }],
+    ["array", { name: [NAME], "dist-tags": { latest: VERSION } }],
+    ["null", { name: null, "dist-tags": { latest: VERSION } }],
+  ]
+  for (const [label, packument] of cases) {
+    await t.test(label, async () => {
+      const metadata = await createNpmReader({
+        fetchImpl: async () => jsonResponse(packument),
+      }).observePackageMetadata({ name: NAME })
+      assert.deepEqual(metadata, {
+        status: "ERROR",
+        operation: "package-metadata",
+        httpStatus: 200,
+        code: "MALFORMED_SCHEMA",
+      })
+      assert.doesNotMatch(JSON.stringify(metadata), /latest|distTags|npm_secret/u)
+
+      const recording = recordingFetch([jsonResponse(versionDocument()), jsonResponse(packument)])
+      const version = await createNpmReader({
+        fetchImpl: recording.fetchImpl,
+      }).observePackageVersion({ name: NAME, version: VERSION })
+      assert.deepEqual(version, {
+        status: "ERROR",
+        operation: "package-metadata",
+        httpStatus: 200,
+        code: "MALFORMED_SCHEMA",
+      })
+      assert.equal(recording.calls.length, 2)
+      assert.doesNotMatch(JSON.stringify(version), /latest|distTags|npm_secret/u)
+    })
+  }
+
+  const inheritedName = await createNpmReader({
+    fetchImpl: async () =>
+      rawJsonResponse(`{"__proto__":{"name":"${NAME}"},"dist-tags":{"latest":"${VERSION}"}}`),
+  }).observePackageMetadata({ name: NAME })
+  assert.deepEqual(inheritedName, {
+    status: "ERROR",
+    operation: "package-metadata",
+    httpStatus: 200,
+    code: "MALFORMED_SCHEMA",
   })
 })
 
@@ -370,7 +419,7 @@ test("npm binds custom-registry provenance to the exact origin endpoint", async 
     "https://registry.example.test/-/npm/v1/attestations/@dawn-ai%2fsdk@0.8.21"
   const recording = recordingFetch([
     jsonResponse(document),
-    jsonResponse({ "dist-tags": { latest: VERSION } }),
+    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
     jsonResponse(attestationDocument()),
   ])
 
@@ -390,7 +439,7 @@ test("npm binds custom-registry provenance to the exact origin endpoint", async 
 test("npm rejects provenance redirects without following them", async () => {
   const recording = recordingFetch([
     jsonResponse(versionDocument()),
-    jsonResponse({ "dist-tags": { latest: VERSION } }),
+    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
     new Response(null, {
       status: 302,
       headers: { location: `${REGISTRY}/-/npm/v1/admin/users` },
@@ -508,7 +557,7 @@ test("npm reports absent provenance explicitly without inventing workflow identi
   delete document.dist.attestations
   const { fetchImpl } = recordingFetch([
     jsonResponse(document),
-    jsonResponse({ "dist-tags": { latest: VERSION } }),
+    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
   ])
 
   const result = await createNpmReader({ fetchImpl }).observePackageVersion({
@@ -647,7 +696,7 @@ function attestationDocument(statements = [provenanceStatement()]) {
 async function observeWithEvidence(evidence) {
   const { fetchImpl } = recordingFetch([
     jsonResponse(versionDocument()),
-    jsonResponse({ "dist-tags": { latest: VERSION } }),
+    jsonResponse({ name: NAME, "dist-tags": { latest: VERSION } }),
     jsonResponse(evidence),
   ])
   return createNpmReader({ fetchImpl }).observePackageVersion({
@@ -669,6 +718,13 @@ function recordingFetch(responses) {
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  })
+}
+
+function rawJsonResponse(body, status = 200) {
+  return new Response(body, {
     status,
     headers: { "content-type": "application/json" },
   })

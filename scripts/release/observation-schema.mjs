@@ -189,10 +189,84 @@ export function findObservationSchemaConflicts(observation) {
       conflicts.add("release-audit-run-attempt-invalid")
     }
   }
+  if (structurallyValid) addStatusDependentConflicts(observation, conflicts)
   if (structurallyValid && !semanticallyValid(observation)) {
     conflicts.add("observation-schema-invalid")
   }
   return [...conflicts].sort()
+}
+
+function addStatusDependentConflicts(observation, conflicts) {
+  if (
+    ["prepared", "attested"].includes(observation.artifacts.status) &&
+    !isSha256(observation.artifacts.manifestSha256)
+  ) {
+    conflicts.add("artifacts-manifest-digest-missing")
+  }
+  if (observation.escrow.status === "present") {
+    if (!isSha256(observation.escrow.manifestSha256)) {
+      conflicts.add("escrow-manifest-digest-missing")
+    }
+    if (observation.escrow.assets.length === 0) {
+      conflicts.add("escrow-required-assets-empty")
+    }
+  }
+  if (!Object.hasOwn(observation, "requiredSmokeLanes")) {
+    conflicts.add("required-smoke-lanes-missing")
+  }
+  if (
+    observation.registry.packages.some((pkg) => pkg.status === "present") &&
+    observation.escrow.status !== "present"
+  ) {
+    conflicts.add("npm-before-escrow")
+  }
+  if (
+    observation.registry.packages.some((pkg) => pkg.status === "present" && pkg.provenance === null)
+  ) {
+    conflicts.add("npm-provenance-missing")
+  }
+  if (observation.release.status === "absent" && observation.release.assets.length > 0) {
+    conflicts.add("github-assets-without-release")
+  }
+  if (["draft", "published"].includes(observation.release.status)) {
+    const expectedAssets = [
+      observation.artifacts.releaseRecordAsset,
+      observation.artifacts.manifestAsset,
+      observation.artifacts.manifestAttestationAsset,
+      ...observation.inventory.packages.map((pkg) => ({
+        name: pkg.filename,
+        sha256: pkg.tarballSha256,
+      })),
+      ...observation.inventory.packages.map((pkg) => ({
+        name: pkg.attestationFilename,
+        sha256: pkg.attestationSha256,
+      })),
+    ]
+    const expectedByName = new Map(expectedAssets.map((asset) => [asset.name, asset]))
+    const seen = new Set()
+    for (const asset of observation.release.assets) {
+      if (seen.has(asset.name)) conflicts.add("github-asset-duplicate")
+      seen.add(asset.name)
+      const expected = expectedByName.get(asset.name)
+      if (expected === undefined) conflicts.add("github-managed-asset-unexpected")
+      else if (asset.sha256 !== expected.sha256) conflicts.add("github-asset-bytes-mismatch")
+      if (asset.status === "ambiguous") conflicts.add("github-asset-ambiguous")
+    }
+  }
+  const manifestAttestations = observation.artifacts.attestations.filter(
+    (attestation) => attestation.subjectName === "manifest.json",
+  )
+  if (manifestAttestations.length === 0) {
+    conflicts.add("artifact-manifest-attestation-missing")
+    conflicts.add("artifact-attestation-subject-set-mismatch")
+  }
+  if (
+    observation.otherCandidates.some(
+      (other) => isExactSemver(other.version) && parseSemver(other.version).build.length > 0,
+    )
+  ) {
+    conflicts.add("competing-version-build-metadata")
+  }
 }
 
 export function observationStructureIsValid(observation) {
@@ -273,32 +347,13 @@ function validateCanonicalObservationSets(observation) {
   ]
   const expectedAssetNames = expectedAssets.map((asset) => asset.name)
   const modeledAssetsAreUnique = new Set(expectedAssetNames).size === expectedAssetNames.length
-  const categorizedAssetsMatch =
-    (observation.escrow.status !== "present" ||
-      hasExactAssetIdentities(observation.escrow.assets, expectedAssets)) &&
-    (!["draft", "published"].includes(observation.release.status) ||
-      hasExactAssetIdentities(observation.release.assets, expectedAssets))
   return (
     hasExactUniqueSet(registryNames, packageNames) &&
     hasExactUniqueSet(artifactPackageNames, packageNames) &&
     hasExactUniqueSet(attestationSubjects, expectedAttestationSubjects) &&
     artifactIdentitiesMatch &&
     attestationIdentitiesMatch &&
-    modeledAssetsAreUnique &&
-    categorizedAssetsMatch
-  )
-}
-
-function hasExactAssetIdentities(actual, expected) {
-  return (
-    hasExactUniqueSet(
-      actual.map((asset) => asset.name),
-      expected.map((asset) => asset.name),
-    ) &&
-    actual.every((asset) => {
-      const identity = expected.find((expectedAsset) => expectedAsset.name === asset.name)
-      return identity !== undefined && asset.sha256 === identity.sha256
-    })
+    modeledAssetsAreUnique
   )
 }
 

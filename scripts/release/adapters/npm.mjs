@@ -1,3 +1,4 @@
+import { snapshotJson } from "../adapter-normalize.mjs"
 import { isExactSemver } from "../semver.mjs"
 import { createHttpGet } from "./http.mjs"
 
@@ -56,10 +57,11 @@ async function observePackageMetadata({ registry, http, name, signal }) {
     signal,
   })
   if (result.status !== "PRESENT") return withoutBody(result)
-  if (result.body?.name !== name) {
+  const packument = normalizePackument(result.body, name)
+  if (packument === null) {
     return failure("ERROR", "package-metadata", result.httpStatus, "MALFORMED_SCHEMA")
   }
-  const distTags = normalizeDistTags(result.body?.["dist-tags"])
+  const distTags = normalizeDistTags(packument["dist-tags"])
   if (distTags === null) {
     return failure("ERROR", "package-metadata", result.httpStatus, "MALFORMED_SCHEMA")
   }
@@ -127,7 +129,11 @@ async function observePackageVersion({ registry, http, name, version, signal }) 
   if (metadataResult.status !== "PRESENT") {
     return withoutBody(metadataResult)
   }
-  const distTags = normalizeDistTags(metadataResult.body?.["dist-tags"])
+  const packument = normalizePackument(metadataResult.body, name)
+  if (packument === null) {
+    return failure("ERROR", "package-metadata", metadataResult.httpStatus, "MALFORMED_SCHEMA")
+  }
+  const distTags = normalizeDistTags(packument["dist-tags"])
   if (distTags === null) {
     return failure("ERROR", "package-metadata", metadataResult.httpStatus, "MALFORMED_SCHEMA")
   }
@@ -276,6 +282,20 @@ function normalizeDistTags(value) {
     entries.push([tag, version])
   }
   return Object.fromEntries(entries.sort(([left], [right]) => compareStrings(left, right)))
+}
+
+function normalizePackument(value, expectedName) {
+  let snapshot
+  try {
+    snapshot = snapshotJson(value)
+  } catch {
+    return null
+  }
+  if (!isObject(snapshot)) return null
+  const name = Object.getOwnPropertyDescriptor(snapshot, "name")
+  return name?.enumerable === true && "value" in name && name.value === expectedName
+    ? snapshot
+    : null
 }
 
 function normalizeProvenance(value, url, { name, version, integrity }) {

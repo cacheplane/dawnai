@@ -8,7 +8,12 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/u
 
 export function correlateReleaseEvidence(candidate, observation) {
   const conflicts = new Set(findObservationSchemaConflicts(observation))
-  if (!observationStructureIsValid(observation)) return invalidEvidence(conflicts)
+  if (
+    conflicts.has("observation-schema-invalid") ||
+    !observationStructureIsValid(observation)
+  ) {
+    return invalidEvidence(conflicts)
+  }
   const inventoryPackages = Array.isArray(observation.inventory?.packages)
     ? observation.inventory.packages
     : []
@@ -254,6 +259,29 @@ function analyzeAssets(candidate, observation, artifact, conflicts) {
 }
 
 function exactAssetSet(actual, expected, prefix, conflicts) {
+  if (
+    !Array.isArray(actual) ||
+    !Array.isArray(expected) ||
+    actual.some(
+      (item) =>
+        item === null ||
+        typeof item !== "object" ||
+        Array.isArray(item) ||
+        typeof item.name !== "string" ||
+        (item.sha256 !== null && !isSha256(item.sha256)),
+    ) ||
+    expected.some(
+      (item) =>
+        item === null ||
+        typeof item !== "object" ||
+        Array.isArray(item) ||
+        typeof item.name !== "string" ||
+        !isSha256(item.sha256),
+    )
+  ) {
+    conflicts.add("observation-schema-invalid")
+    return false
+  }
   const groups = groupByName(actual)
   let exact = actual.length === expected.length && expected.length > 0
   for (const [name, records] of groups) {
