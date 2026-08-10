@@ -9,7 +9,9 @@ import {
   type CheckpointTuple,
   emptyCheckpoint,
 } from "@langchain/langgraph-checkpoint"
-import { afterEach, describe, expect, it } from "vitest"
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql"
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
+import { type DawnPostgresSaver, postgresCheckpointer } from "../../postgres-storage/dist/node.js"
 import { createAimock } from "../../testing/dist/aimock-runner.js"
 import { script } from "../../testing/dist/fixture-builder.js"
 import { terminalStatus } from "../src/lib/dev/runtime-fetch-core.js"
@@ -560,3 +562,83 @@ describe("terminalStatus", () => {
     expect(terminalStatus({ cancelled: true, sawInterrupt: true })).toBe("interrupted")
   })
 })
+
+// ---------------------------------------------------------------------------
+// The endpoint reads nothing but the checkpointer's pending writes, so the
+// saver is the one dependency that can change the answer. Everything above
+// runs on sqlite; this runs the same park → list → resume → empty arc against
+// real Postgres. Gated on DAWN_TEST_PGSTORAGE=1 (needs Docker), matching
+// packages/postgres-storage/test/*.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(process.env.DAWN_TEST_PGSTORAGE !== "1")(
+  "pending_interrupts against a real Postgres checkpointer",
+  () => {
+    let container: StartedPostgreSqlContainer
+    let connectionString: string
+    // handler.close() does NOT close an injected checkpointer, so the pool is
+    // this suite's to end — otherwise vitest hangs on an open pg pool.
+    const savers: DawnPostgresSaver[] = []
+
+    beforeAll(async () => {
+      // A loaded CI runner can take minutes to pull postgres:16 and accept the
+      // first connection; Testcontainers' 60s default is the honest lever.
+      container = await new PostgreSqlContainer("postgres:16").withStartupTimeout(180_000).start()
+      connectionString = container.getConnectionUri()
+    }, 240_000)
+
+    afterAll(async () => {
+      // try/finally, not allSettled: a close() that rejects is still worth
+      // surfacing, but it must never strand a running container.
+      try {
+        await Promise.all(savers.splice(0).map((saver) => saver.close()))
+      } finally {
+        await container?.stop()
+      }
+    })
+
+    it("parks, lists the payload, and clears after a resume", async () => {
+      await withAimock(
+        script()
+          .user("deploy to staging")
+          .callsTool("deployProd", { env: "staging" })
+          .replies("Deployed.")
+          .build(),
+      )
+      const checkpointer = postgresCheckpointer({
+        connectionString,
+        // Fresh, never-migrated table set per test — no truncation, no teardown.
+        tablePrefix: `t_${Math.random().toString(36).slice(2)}`,
+      })
+      // Registered before ready(), so a migration that throws still gets its
+      // pool ended rather than leaking one and hanging the run.
+      savers.push(checkpointer)
+      await checkpointer.ready()
+      const handler = await createHandler(await fixtureApp(), checkpointer)
+      const threadId = "t-pg-parked"
+
+      await drain(await handler.fetch(parkRunRequest(threadId, "deploy to staging")))
+
+      // Proof this lane is worth its container: the assertion goes through the
+      // saver instance directly, against a table prefix that exists only for
+      // this test. If the handler ignored the injected checkpointer and used
+      // the sqlite fallback, Postgres would hold nothing here — and every
+      // assertion below would still pass, making the whole lane a no-op.
+      const tuple = await checkpointer.getTuple({
+        configurable: { checkpoint_ns: "", thread_id: threadId },
+      })
+      expect(tuple?.pendingWrites?.map(([, channel]) => channel)).toContain("__interrupt__")
+
+      expect(await threadStatus(handler, threadId)).toBe("interrupted")
+      const parked = await readPendingInterruptsBody(handler, threadId)
+      expect(parked.interrupts).toHaveLength(1)
+      expect(parked.interrupts[0]?.value).toMatchObject({ type: "permission-request" })
+
+      const interruptId = parked.interrupts[0]?.interruptId ?? ""
+      await drain(await handler.fetch(resumeRequest(threadId, interruptId)))
+
+      expect(await threadStatus(handler, threadId)).toBe("idle")
+      expect((await readPendingInterruptsBody(handler, threadId)).interrupts).toEqual([])
+    }, 120_000)
+  },
+)

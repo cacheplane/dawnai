@@ -204,7 +204,7 @@ jobs:
 
   postgres-storage-docker:
     runs-on: ubuntu-latest
-    # Three test files each start their own postgres:16 container, and a cold
+    # Four test files each start their own postgres:16 container, and a cold
     # runner also pulls the image. 30 minutes leaves headroom for a slow pull
     # plus the per-container startup timeout without masking a hung suite.
     timeout-minutes: 30
@@ -237,6 +237,15 @@ jobs:
 
       - name: Real-Postgres storage tests
         run: DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/postgres-storage test
+
+      - name: Real-Postgres Agent Protocol pending-interrupts tests
+        # GET /threads/:id/pending_interrupts is purely checkpoint-backed, so the
+        # spec asks for it against both checkpointer fixtures. This job already
+        # has Docker and a built workspace, so the gated @dawn-ai/cli lane rides
+        # here rather than paying for a fourth Postgres job.
+        run: >-
+          DAWN_TEST_PGSTORAGE=1 pnpm --filter @dawn-ai/cli exec vitest --run
+          --config vitest.config.ts test/pending-interrupts-endpoint.test.ts
 
   edge-workerd:
     runs-on: ubuntu-latest
