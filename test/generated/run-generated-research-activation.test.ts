@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
 import { access, mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -5,7 +6,7 @@ import { dirname, join } from "node:path"
 import { afterEach, expect, test } from "vitest"
 
 import { createArtifactRoot } from "../../packages/devkit/src/testing/index.ts"
-import { createAimock } from "../../packages/testing/dist/index.js"
+import { createAimock, script } from "../../packages/testing/dist/index.js"
 import { getTestRegistryUrl } from "../harness/local-registry.ts"
 import {
   cleanupTrackedTempDirs,
@@ -16,12 +17,412 @@ import {
   runGeneratedAppNpmCommand,
   runPackagedNpmCommand,
   type TrackedTempDir,
+  withPackagedNpmServer,
 } from "../harness/packaged-app.ts"
 import { writeRegistryNpmrc } from "../harness/scaffold-packaging.ts"
 
 const tempDirs: TrackedTempDir[] = []
 const ACTIVATION_TIMEOUT_MS = 600_000
 const ACTIVATION_CLEANUP_RESERVE_MS = 30_000
+const SAFE_PROMPT = "What are common agent architectures? Write a short cited report."
+const SUBQUESTION = "Identify common agent architectures and cite the corpus."
+const todos = [
+  { content: "Restate the question and list the sub-questions to research", status: "completed" },
+  { content: "Search the corpus for each sub-question", status: "in_progress" },
+  { content: "Read the most relevant documents in full", status: "pending" },
+  { content: "Synthesize a cited report and write it to the workspace", status: "pending" },
+]
+const report = `# Common agent architectures
+
+- ReAct interleaves reasoning with tool use.
+- Plan-and-execute separates planning from execution.
+
+[corpus/agent-architectures.md]
+`
+
+type AgUiEvent = Record<string, unknown>
+type AgUiIdKind = "interrupt" | "message" | "run" | "thread" | "tool-call"
+
+interface AgUiExchange {
+  readonly events: readonly AgUiEvent[]
+  readonly rawSse: string
+  readonly status: number
+}
+
+interface AgUiTranscriptRecorder {
+  append(entry: unknown): Promise<void>
+  registerServerUrl(url: string): void
+}
+
+function createSafeResearchFixtures() {
+  const root = script()
+    .user(SAFE_PROMPT)
+    .callsTool("recall", { query: "agent architectures report preferences" })
+    .callsTool("writeTodos", { todos })
+    .callsTool("task", { subagent: "researcher", input: SUBQUESTION })
+    .callsTool("searchCorpus", { query: "agent architectures" })
+    .callsTool("readDoc", { path: "corpus/agent-architectures.md" })
+    .callsTool("writeFile", { path: "reports/agent-architectures.md", content: report })
+    .replies(
+      "I wrote a short report covering ReAct and plan-and-execute architectures. [corpus/agent-architectures.md]",
+    )
+    .build()
+  const child = script()
+    .user(SUBQUESTION)
+    .callsTool("searchCorpus", { query: "agent architectures" })
+    .callsTool("readDoc", { path: "corpus/agent-architectures.md" })
+    .replies(
+      "ReAct and plan-and-execute are common agent architectures. [corpus/agent-architectures.md]",
+    )
+    .build()
+  return [...root, ...child]
+}
+
+function correlateRootToolCalls(events: readonly AgUiEvent[]): Map<string, unknown> {
+  const toolEvents = events.filter((event) =>
+    ["TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "TOOL_CALL_RESULT"].includes(
+      String(event.type),
+    ),
+  )
+  const starts = events.flatMap((event, index) =>
+    event.type === "TOOL_CALL_START" ? [{ event, index }] : [],
+  )
+  expect(starts.map(({ event }) => event.toolCallName)).toEqual([
+    "recall",
+    "writeTodos",
+    "task",
+    "searchCorpus",
+    "readDoc",
+    "writeFile",
+  ])
+
+  const startIds = starts.map(({ event }) => event.toolCallId)
+  expect(startIds.every((id) => typeof id === "string")).toBe(true)
+  expect(new Set(startIds).size).toBe(startIds.length)
+  const knownIds = new Set(startIds)
+  for (const event of toolEvents) {
+    expect(typeof event.toolCallId).toBe("string")
+    expect(knownIds.has(event.toolCallId)).toBe(true)
+  }
+
+  const parsedArgsByName = new Map<string, unknown>()
+  for (const { event: start } of starts) {
+    const toolCallId = start.toolCallId
+    const toolCallName = start.toolCallName
+    if (typeof toolCallId !== "string" || typeof toolCallName !== "string") {
+      throw new Error("AG-UI tool start omitted its string id or name")
+    }
+    const correlated = events.filter((event) => event.toolCallId === toolCallId)
+    const argEvents = correlated.filter((event) => event.type === "TOOL_CALL_ARGS")
+    expect(argEvents.length).toBeGreaterThan(0)
+    expect(correlated.map((event) => event.type)).toEqual([
+      "TOOL_CALL_START",
+      ...argEvents.map(() => "TOOL_CALL_ARGS"),
+      "TOOL_CALL_END",
+      "TOOL_CALL_RESULT",
+    ])
+    const encodedArgs = argEvents
+      .map((event) => {
+        if (typeof event.delta !== "string") {
+          throw new Error(`AG-UI ${toolCallName} args delta was not a string`)
+        }
+        return event.delta
+      })
+      .join("")
+    const outerArgs = JSON.parse(encodedArgs) as unknown
+    const parsedArgs =
+      outerArgs !== null &&
+      typeof outerArgs === "object" &&
+      !Array.isArray(outerArgs) &&
+      Object.keys(outerArgs).length === 1 &&
+      typeof Reflect.get(outerArgs, "input") === "string"
+        ? (JSON.parse(Reflect.get(outerArgs, "input") as string) as unknown)
+        : outerArgs
+    parsedArgsByName.set(toolCallName, parsedArgs)
+  }
+  return parsedArgsByName
+}
+
+function reconstructAssistantText(events: readonly AgUiEvent[]): string {
+  return events
+    .filter((event) => event.type === "TEXT_MESSAGE_CONTENT")
+    .map((event) => {
+      if (typeof event.delta !== "string") {
+        throw new Error("AG-UI text delta was not a string")
+      }
+      return event.delta
+    })
+    .join("")
+}
+
+function parseAgUiSse(rawSse: string): AgUiEvent[] {
+  return rawSse.split(/\r?\n\r?\n/).flatMap((frame) =>
+    frame.split(/\r?\n/).flatMap((line) => {
+      if (!line.startsWith("data: ")) return []
+      const decoded = JSON.parse(line.slice("data: ".length)) as unknown
+      if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+        throw new Error("AG-UI SSE data was not a JSON object")
+      }
+      return [decoded as AgUiEvent]
+    }),
+  )
+}
+
+function createAgUiTranscriptRecorder(options: {
+  readonly aimockUrl: string
+  readonly path: string
+  readonly tempRoot: string
+}): AgUiTranscriptRecorder {
+  const ids: Record<AgUiIdKind, Map<string, string>> = {
+    interrupt: new Map(),
+    message: new Map(),
+    run: new Map(),
+    thread: new Map(),
+    "tool-call": new Map(),
+  }
+  const replacements: Array<readonly [literal: string, marker: string]> = []
+  const addReplacement = (literal: string, marker: string): void => {
+    if (literal.length === 0 || replacements.some(([existing]) => existing === literal)) return
+    replacements.push([literal, marker])
+    replacements.sort(([left], [right]) => right.length - left.length)
+  }
+  if (options.tempRoot.startsWith("/var/")) {
+    addReplacement(`/private${options.tempRoot}`, "<temp-root>")
+  }
+  addReplacement(options.tempRoot, "<temp-root>")
+  addReplacement(options.aimockUrl, "<aimock-url>")
+  addReplacement(new URL(options.aimockUrl).origin, "<aimock-origin>")
+
+  const mappedId = (kind: AgUiIdKind, value: string): string => {
+    const existing = ids[kind].get(value)
+    if (existing !== undefined) return existing
+    const mapped = `<${kind}-${ids[kind].size + 1}>`
+    ids[kind].set(value, mapped)
+    return mapped
+  }
+  const sanitizeString = (value: string): string => {
+    let sanitized = value
+    for (const [literal, marker] of replacements) {
+      sanitized = sanitized.split(literal).join(marker)
+    }
+    for (const mapping of Object.values(ids)) {
+      for (const [literal, marker] of mapping) {
+        sanitized = sanitized.split(literal).join(marker)
+      }
+    }
+    return sanitized
+  }
+  const sanitize = (value: unknown, parentKey?: string): unknown => {
+    if (typeof value === "string") return sanitizeString(value)
+    if (Array.isArray(value)) return value.map((entry) => sanitize(entry, parentKey))
+    if (value === null || typeof value !== "object") return value
+
+    const record = value as Record<string, unknown>
+    const isMessage =
+      (parentKey === "messages" || parentKey === "kwargs") && typeof record.id === "string"
+    const isToolCall =
+      (parentKey === "tool_calls" || parentKey === "tool_call_chunks") &&
+      typeof record.id === "string"
+    const isInterrupt =
+      (parentKey === "interrupts" || parentKey === "resume") && typeof record.id === "string"
+    return Object.fromEntries(
+      Object.entries(record).map(([key, entry]) => {
+        if (key === "rawSse" && typeof entry === "string") {
+          for (const line of entry.split(/\r?\n/)) {
+            if (!line.startsWith("data: ")) continue
+            try {
+              sanitize(JSON.parse(line.slice("data: ".length)) as unknown)
+            } catch {
+              // Cancellation can leave a partial frame; earlier complete frames still map.
+            }
+          }
+          return [key, sanitizeString(entry)]
+        }
+        let kind: AgUiIdKind | undefined
+        if (key === "threadId" || key === "thread_id") kind = "thread"
+        else if (
+          key === "runId" ||
+          key === "run_id" ||
+          key === "parentRunId" ||
+          key === "parent_run_id"
+        ) {
+          kind = "run"
+        } else if (
+          key === "messageId" ||
+          key === "message_id" ||
+          key === "parentMessageId" ||
+          key === "parent_message_id"
+        ) {
+          kind = "message"
+        } else if (
+          key === "toolCallId" ||
+          key === "tool_call_id" ||
+          key === "callId" ||
+          key === "call_id"
+        ) {
+          kind = "tool-call"
+        } else if (key === "interruptId" || key === "interrupt_id") kind = "interrupt"
+        else if (key === "id" && isMessage) kind = "message"
+        else if (key === "id" && isToolCall) kind = "tool-call"
+        else if (key === "id" && isInterrupt) kind = "interrupt"
+        return [
+          key,
+          kind !== undefined && typeof entry === "string"
+            ? mappedId(kind, entry)
+            : sanitize(entry, key),
+        ]
+      }),
+    )
+  }
+
+  const transcript: unknown[] = [
+    sanitize({
+      type: "context",
+      tempRoot: options.tempRoot,
+      aimockUrl: options.aimockUrl,
+      aimockOrigin: new URL(options.aimockUrl).origin,
+    }),
+  ]
+  return {
+    async append(entry) {
+      transcript.push(sanitize(entry))
+      await writeFile(options.path, `${JSON.stringify(transcript, null, 2)}\n`, "utf8")
+    },
+    registerServerUrl(url) {
+      const sequence =
+        replacements.filter(([, marker]) => marker.startsWith("<server-url-")).length + 1
+      addReplacement(url, `<server-url-${sequence}>`)
+    },
+  }
+}
+
+async function appendAgUiFailure(
+  recorder: AgUiTranscriptRecorder,
+  entry: unknown,
+  originalError: unknown,
+): Promise<never> {
+  try {
+    await recorder.append(entry)
+  } catch (transcriptError) {
+    throw new AggregateError(
+      [originalError, transcriptError],
+      "AG-UI request and transcript recording both failed",
+      { cause: originalError },
+    )
+  }
+  throw originalError
+}
+
+async function postAgui(options: {
+  readonly baseUrl: string
+  readonly messages: readonly {
+    readonly content: string
+    readonly id: string
+    readonly role: string
+  }[]
+  readonly recorder: AgUiTranscriptRecorder
+  readonly resumeFields?: Readonly<Record<string, unknown>>
+  readonly runId: string
+  readonly signal: AbortSignal
+  readonly threadId: string
+}): Promise<AgUiExchange> {
+  const body = {
+    threadId: options.threadId,
+    runId: options.runId,
+    messages: options.messages,
+    state: {},
+    tools: [],
+    context: [],
+    forwardedProps: {},
+    ...options.resumeFields,
+  }
+  const routeKey = encodeURIComponent("/research#agent")
+  const endpoint = new URL(`/agui/${routeKey}`, options.baseUrl)
+  const requestSignal = AbortSignal.any([options.signal, AbortSignal.timeout(60_000)])
+  await options.recorder.append({ type: "request", endpoint: endpoint.href, body })
+
+  let response: Response | undefined
+  let rawSse = ""
+  let events: AgUiEvent[] = []
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        accept: "text/event-stream",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: requestSignal,
+    })
+    if (response.body === null) throw new Error("AG-UI response omitted its SSE body")
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    try {
+      while (true) {
+        requestSignal.throwIfAborted()
+        const chunk = await reader.read()
+        if (chunk.done) break
+        rawSse += decoder.decode(chunk.value, { stream: true })
+      }
+      rawSse += decoder.decode()
+      requestSignal.throwIfAborted()
+    } finally {
+      reader.releaseLock()
+    }
+    events = parseAgUiSse(rawSse)
+  } catch (error) {
+    return await appendAgUiFailure(
+      options.recorder,
+      {
+        type: "response-error",
+        ...(response !== undefined ? { status: response.status } : {}),
+        ...(rawSse.length > 0 ? { rawSse } : {}),
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      },
+      error,
+    )
+  }
+
+  const transcriptEntry = {
+    type: "response",
+    status: response.status,
+    events,
+    rawSse,
+  }
+  if (!response.ok) {
+    const error = new Error(`AG-UI request failed with HTTP ${response.status}`)
+    return await appendAgUiFailure(options.recorder, transcriptEntry, error)
+  }
+  await options.recorder.append(transcriptEntry)
+  return { events, rawSse, status: response.status }
+}
+
+function assertSafeResearchJourney(
+  events: readonly AgUiEvent[],
+  ids: { readonly runId: string; readonly threadId: string },
+): void {
+  expect(events[0]).toMatchObject({
+    type: "RUN_STARTED",
+    runId: ids.runId,
+    threadId: ids.threadId,
+  })
+  expect(events.filter((event) => event.type === "RUN_ERROR")).toEqual([])
+  const finished = events.filter((event) => event.type === "RUN_FINISHED")
+  expect(finished).toHaveLength(1)
+  expect(finished[0]).toMatchObject({
+    runId: ids.runId,
+    threadId: ids.threadId,
+  })
+  expect(finished[0]?.outcome).toEqual({ type: "success" })
+  expect(events.at(-1)).toEqual(finished[0])
+
+  const parsedArgsByName = correlateRootToolCalls(events)
+  expect(parsedArgsByName.get("task")).toEqual({
+    subagent: "researcher",
+    input: SUBQUESTION,
+  })
+  expect(reconstructAssistantText(events)).toContain("[corpus/agent-architectures.md]")
+}
 
 afterEach(async () => {
   await cleanupTrackedTempDirs(tempDirs)
@@ -81,6 +482,13 @@ test("activates the default research scaffold through the complete npm lifecycle
     await writeFile(agUiTranscriptPath, "", "utf8")
 
     aimock = await createAimock({ fixtures: [] })
+    aimock.addFixtures(createSafeResearchFixtures())
+    const activeAimock = aimock
+    const agUiRecorder = createAgUiTranscriptRecorder({
+      aimockUrl: activeAimock.baseUrl,
+      path: agUiTranscriptPath,
+      tempRoot,
+    })
 
     const npmVersion = await runPackagedNpmCommand({
       args: ["--version"],
@@ -211,6 +619,70 @@ test("activates the default research scaffold through the complete npm lifecycle
     await expect(readFile(join(appRoot, "src/app/research/index.ts"), "utf8")).resolves.toContain(
       "recursionLimit: 100",
     )
+
+    const safeThreadId = `safe-thread-${randomUUID()}`
+    const safeRunId = `safe-run-${randomUUID()}`
+    const safeMessageId = `safe-message-${randomUUID()}`
+    let devServerUrl: string | undefined
+    const safeJourney = await withPackagedNpmServer(
+      {
+        appRoot,
+        script: "dev",
+        env: {
+          OPENAI_BASE_URL: activeAimock.baseUrl,
+          OPENAI_API_KEY: "test-not-used",
+        },
+        transcriptPath: commandsTranscriptPath,
+      },
+      async ({ url }) => {
+        devServerUrl = url
+        agUiRecorder.registerServerUrl(url)
+        return await postAgui({
+          baseUrl: url,
+          messages: [{ id: safeMessageId, role: "user", content: SAFE_PROMPT }],
+          recorder: agUiRecorder,
+          runId: safeRunId,
+          signal: lifecycleSignal,
+          threadId: safeThreadId,
+        })
+      },
+    )
+    if (devServerUrl === undefined) throw new Error("Generated dev server did not start")
+
+    expect(safeJourney.status).toBe(200)
+    assertSafeResearchJourney(safeJourney.events, {
+      runId: safeRunId,
+      threadId: safeThreadId,
+    })
+    const reportPath = join(appRoot, "workspace/reports/agent-architectures.md")
+    await expect(access(reportPath, constants.F_OK)).resolves.toBeUndefined()
+    await expect(readFile(reportPath, "utf8")).resolves.toContain("[corpus/agent-architectures.md]")
+
+    const sanitizedAgUiTranscript = await readFile(agUiTranscriptPath, "utf8")
+    expect(() => JSON.parse(sanitizedAgUiTranscript)).not.toThrow()
+    expect(sanitizedAgUiTranscript).toContain("<temp-root>")
+    expect(sanitizedAgUiTranscript).toContain("<server-url-1>")
+    expect(sanitizedAgUiTranscript).toContain("<aimock-url>")
+    expect(sanitizedAgUiTranscript).toContain("<aimock-origin>")
+    expect(sanitizedAgUiTranscript).toContain("<thread-1>")
+    expect(sanitizedAgUiTranscript).toContain("<run-1>")
+    expect(sanitizedAgUiTranscript).toContain("<message-1>")
+    expect(sanitizedAgUiTranscript).toContain("<tool-call-1>")
+    for (const unsanitized of [
+      tempRoot,
+      `/private${tempRoot}`,
+      devServerUrl,
+      activeAimock.baseUrl,
+      safeThreadId,
+      safeRunId,
+      safeMessageId,
+      "test-not-used",
+      "ambient-secret",
+    ]) {
+      expect(sanitizedAgUiTranscript).not.toContain(unsanitized)
+    }
+    expect(sanitizedAgUiTranscript).not.toContain("OPENAI_API_KEY")
+    expect(sanitizedAgUiTranscript).not.toContain("OPENAI_BASE_URL")
   } catch (error) {
     scenarioFailed = true
     scenarioError = error
