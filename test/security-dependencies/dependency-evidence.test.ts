@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmod,
@@ -12,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
 import {
@@ -34,12 +36,85 @@ const providerOnlyPath = resolve(
 	testDir,
 	"fixtures/audit-provider-utils-only.json",
 );
+const dependencyEvidenceCliPath = resolve(
+	repositoryRoot,
+	"scripts/security/dependency-evidence.mjs",
+);
+const execFileAsync = promisify(execFile);
+
+const expectedFullAuditTuples = [
+	["@ai-sdk/provider-utils", "3.0.28", "GHSA-866g-f22w-33x8", "low"],
+	["@hono/node-server", "1.19.14", "GHSA-frvp-7c67-39w9", "moderate"],
+	["body-parser", "1.20.5", "GHSA-v422-hmwv-36x6", "low"],
+	["brace-expansion", "2.1.1", "GHSA-3jxr-9vmj-r5cp", "high"],
+	["brace-expansion", "2.1.1", "GHSA-mh99-v99m-4gvg", "high"],
+	["brace-expansion", "2.1.1", "GHSA-rgw5-rvv9-x895", "high"],
+	["dompurify", "3.4.11", "GHSA-55q2-fjhq-7xh7", "moderate"],
+	["dompurify", "3.4.11", "GHSA-c2j3-45gr-mqc4", "low"],
+	["fast-uri", "3.1.3", "GHSA-7p8r-x3mc-p8w7", "high"],
+	["fast-uri", "3.1.3", "GHSA-v2hh-gcrm-f6hx", "high"],
+	["hono", "4.12.28", "GHSA-54fx-42gc-7vw4", "moderate"],
+	["hono", "4.12.28", "GHSA-79qm-7rj5-m7r9", "low"],
+	["hono", "4.12.28", "GHSA-8j4g-w8fx-2239", "moderate"],
+	["hono", "4.12.28", "GHSA-f23p-vx2j-j53r", "moderate"],
+	["ip-address", "10.2.0", "GHSA-22jq-vg5j-6vgg", "moderate"],
+	["ip-address", "10.2.0", "GHSA-4xrf-jv44-h6hh", "moderate"],
+	["ip-address", "10.2.0", "GHSA-mwp4-54f8-5fhr", "high"],
+	["js-yaml", "3.15.0", "GHSA-5p4m-2wfm-xmqj", "high"],
+	["js-yaml", "4.2.0", "GHSA-52cp-r559-cp3m", "high"],
+	["js-yaml", "4.2.0", "GHSA-5p4m-2wfm-xmqj", "high"],
+	["mermaid", "11.16.0", "GHSA-2v8p-3f2j-5mp7", "moderate"],
+	["mermaid", "11.16.0", "GHSA-3rrr-jr9j-h3q3", "moderate"],
+	["mermaid", "11.16.0", "GHSA-6x64-9x62-f2gx", "moderate"],
+	["mermaid", "11.16.0", "GHSA-c4c3-pg64-4m4v", "low"],
+	["mermaid", "11.16.0", "GHSA-rhh3-jpg6-66xh", "moderate"],
+	["nanoid", "3.3.15", "GHSA-28wg-ghj8-5hjv", "high"],
+	["nanoid", "3.3.15", "GHSA-2v37-7h3g-55p8", "high"],
+	["postcss", "8.5.10", "GHSA-6g55-p6wh-862q", "high"],
+	["postcss", "8.5.10", "GHSA-fxqj-rqcc-2cmp", "moderate"],
+	["postcss", "8.5.10", "GHSA-r28c-9q8g-f849", "high"],
+] as const;
+
+const expectedProductionAuditTuples = [
+	["@ai-sdk/provider-utils", "3.0.28", "GHSA-866g-f22w-33x8", "low"],
+	["@hono/node-server", "1.19.14", "GHSA-frvp-7c67-39w9", "moderate"],
+	["body-parser", "1.20.5", "GHSA-v422-hmwv-36x6", "low"],
+	["dompurify", "3.4.11", "GHSA-55q2-fjhq-7xh7", "moderate"],
+	["dompurify", "3.4.11", "GHSA-c2j3-45gr-mqc4", "low"],
+	["fast-uri", "3.1.3", "GHSA-7p8r-x3mc-p8w7", "high"],
+	["fast-uri", "3.1.3", "GHSA-v2hh-gcrm-f6hx", "high"],
+	["hono", "4.12.28", "GHSA-54fx-42gc-7vw4", "moderate"],
+	["hono", "4.12.28", "GHSA-79qm-7rj5-m7r9", "low"],
+	["hono", "4.12.28", "GHSA-8j4g-w8fx-2239", "moderate"],
+	["hono", "4.12.28", "GHSA-f23p-vx2j-j53r", "moderate"],
+	["ip-address", "10.2.0", "GHSA-22jq-vg5j-6vgg", "moderate"],
+	["ip-address", "10.2.0", "GHSA-4xrf-jv44-h6hh", "moderate"],
+	["ip-address", "10.2.0", "GHSA-mwp4-54f8-5fhr", "high"],
+	["js-yaml", "3.15.0", "GHSA-5p4m-2wfm-xmqj", "high"],
+	["js-yaml", "4.2.0", "GHSA-52cp-r559-cp3m", "high"],
+	["js-yaml", "4.2.0", "GHSA-5p4m-2wfm-xmqj", "high"],
+	["mermaid", "11.16.0", "GHSA-2v8p-3f2j-5mp7", "moderate"],
+	["mermaid", "11.16.0", "GHSA-3rrr-jr9j-h3q3", "moderate"],
+	["mermaid", "11.16.0", "GHSA-6x64-9x62-f2gx", "moderate"],
+	["mermaid", "11.16.0", "GHSA-c4c3-pg64-4m4v", "low"],
+	["mermaid", "11.16.0", "GHSA-rhh3-jpg6-66xh", "moderate"],
+	["nanoid", "3.3.15", "GHSA-28wg-ghj8-5hjv", "high"],
+	["nanoid", "3.3.15", "GHSA-2v37-7h3g-55p8", "high"],
+	["postcss", "8.5.10", "GHSA-6g55-p6wh-862q", "high"],
+	["postcss", "8.5.10", "GHSA-fxqj-rqcc-2cmp", "moderate"],
+	["postcss", "8.5.10", "GHSA-r28c-9q8g-f849", "high"],
+] as const;
 
 describe("audit expectation fixtures", () => {
 	it("binds the exact reviewed full and production multisets", async () => {
 		const expectation = await loadAuditExpectation(baselinePath, {
 			root: repositoryRoot,
 		});
+		assertExactAuditTuples(expectation.full.records, expectedFullAuditTuples);
+		assertExactAuditTuples(
+			expectation.production.records,
+			expectedProductionAuditTuples,
+		);
 		expect(expectation.full.records).toHaveLength(30);
 		expect(expectation.production.records).toHaveLength(27);
 		expect(expectation.full.muted).toEqual([]);
@@ -60,6 +135,21 @@ describe("audit expectation fixtures", () => {
 		});
 	});
 
+	it("detects tuple drift even when counts and severity totals are unchanged", async () => {
+		const expectation = await loadAuditExpectation(baselinePath, {
+			root: repositoryRoot,
+		});
+		const mutated = structuredClone(expectation.full.records);
+		mutated[0].version = "10.2.1";
+		expect(mutated).toHaveLength(expectedFullAuditTuples.length);
+		expect(countSeverity(mutated)).toEqual(
+			countSeverity(expectation.full.records),
+		);
+		expect(() =>
+			assertExactAuditTuples(mutated, expectedFullAuditTuples),
+		).toThrow();
+	});
+
 	it("pins the after-state to provider-utils only in both modes", async () => {
 		const expectation = await loadAuditExpectation(providerOnlyPath, {
 			root: repositoryRoot,
@@ -73,6 +163,52 @@ describe("audit expectation fixtures", () => {
 				version: "3.0.28",
 			},
 		]);
+	});
+
+	it.each([
+		[
+			"the wrong package",
+			(document: any) => {
+				const changed = structuredClone(document);
+				changed.advisories["1"].module_name = "@ai-sdk/provider";
+				return changed;
+			},
+		],
+		[
+			"the wrong version",
+			(document: any) => {
+				const changed = structuredClone(document);
+				changed.advisories["1"].findings[0].version = "3.0.29";
+				return changed;
+			},
+		],
+		[
+			"a distinct extra advisory",
+			(document: any) => {
+				const changed = structuredClone(document);
+				changed.advisories["2"] = {
+					findings: [{ paths: ["root>hono"], version: "4.12.28" }],
+					github_advisory_id: "GHSA-54fx-42gc-7vw4",
+					module_name: "hono",
+					severity: "moderate",
+				};
+				changed.metadata.vulnerabilities.moderate = 1;
+				return changed;
+			},
+		],
+	])("rejects a provider-only after-state with %s", async (_name, mutate) => {
+		const expectation = await loadAuditExpectation(providerOnlyPath, {
+			root: repositoryRoot,
+		});
+		for (const expectedMode of [expectation.full, expectation.production]) {
+			expect(() =>
+				normalizeAuditDocument(
+					mutate(auditDocument(expectedMode)),
+					expectedMode,
+					1,
+				),
+			).toThrow(/UNPROVABLE: AUDIT_IDENTITY_MISMATCH/u);
+		}
 	});
 
 	it.each([
@@ -699,6 +835,62 @@ describe("dependency evidence CLI", () => {
 		}
 	});
 
+	it("pins a baseline inventory read to the resolved source when symbolic HEAD moves", async () => {
+		const temporary = await mkdtemp(
+			resolve(testDir, ".dependency-baseline-inventory-pin-"),
+		);
+		try {
+			const sourceSha = "a".repeat(40);
+			const movedHeadSha = "b".repeat(40);
+			let symbolicHead = sourceSha;
+			let observedRef: string | undefined;
+			let observedResolvedRef: string | undefined;
+			await expect(
+				runDependencyEvidenceCli({
+					argv: [
+						"baseline",
+						"--repo",
+						"cacheplane/dawnai",
+						"--inventory-ref",
+						"HEAD",
+						"--source-sha",
+						sourceSha,
+						"--expected-default-sha",
+						"3887079d400bdf019d3ff90bc89599c1899fa422",
+						"--current-version",
+						"0.8.21",
+						"--target-version",
+						"0.8.22",
+						"--expected-identities",
+						resolve(testDir, "fixtures/dependabot-baseline.json"),
+						"--expected-open",
+						"122,123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201",
+						"--output",
+						resolve(temporary, "baseline.json"),
+					],
+					cwd: repositoryRoot,
+					gitProcess: async () => {
+						symbolicHead = movedHeadSha;
+						return { exitCode: 0, stderr: "", stdout: `${sourceSha}\n` };
+					},
+					githubTransport: async () => {
+						throw new Error("transport must remain unreachable");
+					},
+					readInventory: async ({ ref }: { ref: string }) => {
+						observedRef = ref;
+						observedResolvedRef = ref === "HEAD" ? symbolicHead : ref;
+						throw new Error("stop after inventory identity");
+					},
+					writeStdout: () => {},
+				}),
+			).rejects.toThrow(/UNPROVABLE/u);
+			expect(observedRef).toBe(sourceSha);
+			expect(observedResolvedRef).toBe(sourceSha);
+		} finally {
+			await rm(temporary, { force: true, recursive: true });
+		}
+	});
+
 	it("dispatches reconcile with exact typed identities and bounded file bytes", async () => {
 		const temporary = await mkdtemp(
 			resolve(testDir, ".dependency-reconcile-cli-"),
@@ -719,6 +911,7 @@ describe("dependency evidence CLI", () => {
 			const mergeSha = "c".repeat(40);
 			const observationHeadSha = "d".repeat(40);
 			let request: any;
+			let inventoryRef: string | undefined;
 			const stdout: string[] = [];
 			const receipt = {
 				dependabot: { fixed: [{ number: 2 }], open: [{ number: 1 }] },
@@ -778,6 +971,10 @@ describe("dependency evidence CLI", () => {
 					throw new Error("transport must remain lazy");
 				},
 				now: () => Date.parse("2026-08-10T18:01:00Z"),
+				readInventory: async ({ ref }: { ref: string }) => {
+					inventoryRef = ref;
+					return { packages: [...INVENTORY_PACKAGES], version: "0.8.21" };
+				},
 				reconcile: async (value: unknown) => {
 					request = value;
 					return receipt;
@@ -798,6 +995,7 @@ describe("dependency evidence CLI", () => {
 				repo: "cacheplane/dawnai",
 				timeoutMs: 900_000,
 			});
+			expect(inventoryRef).toBe(observationHeadSha);
 			expect(request.auditExpectationFixtureBytes).toEqual(
 				await readFile(auditExpectation),
 			);
@@ -883,6 +1081,10 @@ describe("dependency evidence CLI", () => {
 							stderr: "",
 							stdout: `${"d".repeat(40)}\n`,
 						}),
+						readInventory: async () => ({
+							packages: [...INVENTORY_PACKAGES],
+							version: "0.8.21",
+						}),
 						reconcile: async () => {
 							reconcileCalls += 1;
 							return {};
@@ -931,6 +1133,10 @@ describe("dependency evidence CLI", () => {
 					exitCode: 0,
 					stderr: "",
 					stdout: `${"d".repeat(40)}\n`,
+				}),
+				readInventory: async () => ({
+					packages: [...INVENTORY_PACKAGES],
+					version: "0.8.21",
 				}),
 				reconcile: async (value: any) => {
 					observed = value.auditReceiptBytes;
@@ -1010,10 +1216,95 @@ describe("dependency evidence CLI", () => {
 			await rm(outputRoot, { force: true, recursive: true });
 		}
 	});
+
+	it("reaches seal dispatch when every external package import is blocked", async () => {
+		const loaderSource = `
+			export async function resolve(specifier, context, nextResolve) {
+				if (!specifier.startsWith("node:") && !specifier.startsWith("file:") && !specifier.startsWith(".") && !specifier.startsWith("/")) {
+					throw new Error("EXTERNAL_IMPORT_BLOCKED");
+				}
+				return nextResolve(specifier, context);
+			}
+		`;
+		const loaderUrl = `data:text/javascript,${encodeURIComponent(loaderSource)}`;
+		const outputRoot = resolve(tmpdir(), "dawn-unused-seal-root");
+		let stderr = "";
+		try {
+			await execFileAsync(
+				process.execPath,
+				[
+					"--no-warnings",
+					"--experimental-loader",
+					loaderUrl,
+					dependencyEvidenceCliPath,
+					"seal-receipt",
+					"--expected-main-sha",
+					"a".repeat(40),
+					"--expected-pr-number",
+					"42",
+					"--expected-reviewed-base-sha",
+					"b".repeat(40),
+					"--expected-reviewed-head-sha",
+					"c".repeat(40),
+					"--expected-merge-sha",
+					"d".repeat(40),
+					"--receipt-base64",
+					"not-canonical-base64",
+					"--receipt-sha256",
+					"e".repeat(64),
+					"--output-root",
+					outputRoot,
+					"--output-directory",
+					resolve(outputRoot, "sealed"),
+				],
+				{
+					cwd: repositoryRoot,
+					env: {
+						PATH: process.env.PATH,
+						GITHUB_RUN_ATTEMPT: "1",
+						GITHUB_RUN_ID: "31360000000",
+					},
+				},
+			);
+			throw new Error("seal subprocess unexpectedly succeeded");
+		} catch (error) {
+			if (
+				typeof error === "object" &&
+				error !== null &&
+				"stderr" in error &&
+				typeof error.stderr === "string"
+			) {
+				stderr = error.stderr;
+			}
+		}
+		expect(stderr).toContain("UNPROVABLE: INVALID_RECEIPT_BASE64");
+		expect(stderr).not.toContain("EXTERNAL_IMPORT_BLOCKED");
+	});
 });
 
 function mode(records: Array<Record<string, string>>) {
 	return { muted: [], records };
+}
+
+function assertExactAuditTuples(
+	records: Array<Record<string, string>>,
+	expected: ReadonlyArray<readonly [string, string, string, string]>,
+) {
+	expect(
+		records
+			.map(
+				(record) =>
+					[
+						record.package,
+						record.version,
+						record.ghsa,
+						record.severity,
+					] as const,
+			)
+			.sort((left, right) =>
+				JSON.stringify(left).localeCompare(JSON.stringify(right)),
+			),
+	).toEqual(expected);
 }
 
 function auditDocument(expectation: ReturnType<typeof mode>) {

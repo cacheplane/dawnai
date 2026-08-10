@@ -2,10 +2,6 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import {
-	assertValidReleaseInventory,
-	readReleaseInventory,
-} from "../release/inventory.mjs";
-import {
 	loadDependabotExpectation,
 	readDependabotOpen,
 	reconcileDependabot,
@@ -104,6 +100,7 @@ export async function runDependencyEvidenceCli({
 	githubTransport = createGhApiTransport(),
 	now = Date.now,
 	npmRequest,
+	readInventory = readReleaseInventoryAtCommit,
 	reconcile = reconcileDependabot,
 	runProcess = runBoundedProcess,
 	writeStdout = (value) => process.stdout.write(value),
@@ -142,6 +139,7 @@ export async function runDependencyEvidenceCli({
 			now,
 			npmRequest,
 			options,
+			readInventory,
 		});
 		const output = await writeCanonicalEvidenceFile(
 			options.output,
@@ -161,6 +159,7 @@ export async function runDependencyEvidenceCli({
 			now,
 			npmRequest,
 			options,
+			readInventory,
 			reconcile,
 		});
 		const output = await writeCanonicalEvidenceFile(
@@ -214,6 +213,7 @@ async function collectLiveBaseline({
 	now,
 	npmRequest,
 	options,
+	readInventory,
 }) {
 	if (
 		options.repo !== "cacheplane/dawnai" ||
@@ -224,7 +224,8 @@ async function collectLiveBaseline({
 		!isSha(options["expected-default-sha"]) ||
 		typeof githubTransport !== "function" ||
 		typeof gitProcess !== "function" ||
-		typeof now !== "function"
+		typeof now !== "function" ||
+		typeof readInventory !== "function"
 	) {
 		fail("INVALID_BASELINE_REQUEST");
 	}
@@ -232,9 +233,7 @@ async function collectLiveBaseline({
 	if (sourceSha !== options["source-sha"]) fail("INVENTORY_SOURCE_MISMATCH");
 	let inventory;
 	try {
-		inventory = assertValidReleaseInventory(
-			await readReleaseInventory({ root: cwd, ref: options["inventory-ref"] }),
-		);
+		inventory = await readInventory({ root: cwd, ref: sourceSha });
 	} catch {
 		fail("INVENTORY_UNPROVABLE");
 	}
@@ -314,6 +313,7 @@ async function runReconciliationCliOperation({
 	now,
 	npmRequest,
 	options,
+	readInventory,
 	reconcile,
 }) {
 	if (
@@ -327,7 +327,8 @@ async function runReconciliationCliOperation({
 		!isSha(options["observation-head-sha"]) ||
 		typeof githubTransport !== "function" ||
 		typeof gitProcess !== "function" ||
-		typeof now !== "function"
+		typeof now !== "function" ||
+		typeof readInventory !== "function"
 	) {
 		fail("INVALID_RECONCILIATION_CLI_REQUEST");
 	}
@@ -357,9 +358,7 @@ async function runReconciliationCliOperation({
 		fail("INVENTORY_SOURCE_MISMATCH");
 	let inventory;
 	try {
-		inventory = assertValidReleaseInventory(
-			await readReleaseInventory({ root: cwd, ref: options["inventory-ref"] }),
-		);
+		inventory = await readInventory({ root: cwd, ref: sourceSha });
 	} catch {
 		fail("INVENTORY_UNPROVABLE");
 	}
@@ -440,6 +439,13 @@ async function runReconciliationCliOperation({
 		timeoutMs,
 	});
 	return { receipt };
+}
+
+async function readReleaseInventoryAtCommit({ root, ref }) {
+	const { assertValidReleaseInventory, readReleaseInventory } = await import(
+		"../release/inventory.mjs"
+	);
+	return assertValidReleaseInventory(await readReleaseInventory({ root, ref }));
 }
 
 async function readExactHead({ cwd, gitProcess }) {
