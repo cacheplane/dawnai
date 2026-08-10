@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { Worker } from "node:worker_threads"
 import { afterEach, describe, expect, it } from "vitest"
 import { sqliteMemoryStore } from "../src/sqlite-store.js"
 import type { MemoryRecord } from "../src/types.js"
@@ -673,5 +674,69 @@ describe("schema migrations", () => {
     db.close()
     expect(idx?.name).toBe("idx_mem_ns_kind_effective")
     expect(appliedV3).toBe(true)
+  })
+})
+
+describe("browse against a concurrently written database file", () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+
+  it("reads records and total from one snapshot while a second connection deletes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dawn-snapshot-"))
+    dirs.push(dir)
+    const path = join(dir, "m.sqlite")
+    const s = sqliteMemoryStore({ path })
+    const ids = Array.from({ length: 400 }, (_, i) => `r${String(i).padStart(3, "0")}`)
+    for (const id of ids) await s.put(rec({ id, namespace: "ns", content: id }))
+
+    // A worker thread, because nothing on THIS thread can expose the skew: browse's
+    // two statements are synchronous, so no same-thread writer can land between
+    // them. A second connection on the shared WAL file can, and that writer — a
+    // second process in production — is the only thing the transaction defends
+    // against.
+    const worker = new Worker(
+      `const { DatabaseSync } = require("node:sqlite")
+       const { workerData } = require("node:worker_threads")
+       const db = new DatabaseSync(workerData.path)
+       db.exec("PRAGMA foreign_keys = ON")
+       const del = db.prepare("DELETE FROM memories WHERE id = ?")
+       for (const id of workerData.ids) {
+         // Retry past SQLITE_BUSY instead of abandoning the write run mid-way.
+         for (let a = 0; a < 500; a += 1) {
+           try { del.run(id); break } catch { /* busy: the reader holds the file */ }
+         }
+       }`,
+      { eval: true, workerData: { path, ids } },
+    )
+    let writing = true
+    const finished = new Promise<void>((resolve, reject) => {
+      worker.on("error", reject)
+      worker.on("exit", (code) => {
+        writing = false
+        if (code === 0) resolve()
+        else reject(new Error(`writer thread exited with ${code}`))
+      })
+    })
+
+    const skews: string[] = []
+    let reads = 0
+    while (writing) {
+      const page = await s.browse({ limit: 1000 })
+      reads += 1
+      if (page.records.length !== page.total) skews.push(`${page.records.length} of ${page.total}`)
+      // setImmediate, not the bare await above: browse resolves synchronously, so
+      // awaiting it drains only microtasks and the worker's `exit` — a macrotask —
+      // would never be delivered. This loop would then never end.
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    await finished
+
+    expect(skews).toEqual([])
+    // Pin the race window open: an empty `skews` proves nothing if this run only
+    // managed a handful of reads before the writer was done. Observed ~90-97.
+    expect(reads).toBeGreaterThan(20)
+    expect((await s.browse({ limit: 1000 })).total).toBe(0)
   })
 })

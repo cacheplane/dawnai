@@ -67,7 +67,7 @@ function runMigrations(db: DatabaseSync, migrations: readonly Migration[]): void
       db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(m.version)
       db.exec("COMMIT")
     } catch (err) {
-      db.exec("ROLLBACK")
+      rollbackQuietly(db)
       throw err
     }
   }
@@ -532,16 +532,20 @@ export function sqliteMemoryStore(opts: {
       // through: sqlite reads a negative LIMIT as unlimited, Postgres throws.
       const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
-      // One WAL read snapshot across both statements, so `records` and `total` can
-      // never describe different versions of the table. Cost is ~0 — there is no
-      // write here — and nothing awaits between the two, so no other caller can
-      // interleave on this single connection.
-      // COUNT(*) OVER () would collapse the pair to one statement and was measured and
-      // rejected: the window aggregate materializes the entire filtered set (439 ms vs
-      // 5.3 ms at 1M rows) and destroys the lazy top-k path for the rows themselves.
-      db.exec("BEGIN DEFERRED")
+      // One read snapshot across both statements, so `records` and `total` can never
+      // describe different versions of the table. The writer this defends against is
+      // always on ANOTHER connection — a second process against the same file — because
+      // these two statements are synchronous: no caller on this thread can run
+      // between them.
+      // COUNT(*) OVER () would collapse the pair to one statement and was measured on
+      // sqlite and rejected: the window aggregate materializes the entire filtered set
+      // (439 ms vs 5.3 ms at 1M rows) and destroys the lazy top-k path for the rows.
       let rows: Record<string, unknown>[]
       let total: number
+      // BEGIN sits outside the try: if it fails because a transaction is already open
+      // on this long-lived handle, the catch below would send its ROLLBACK into the
+      // CALLER's transaction and silently discard their uncommitted work.
+      db.exec("BEGIN DEFERRED")
       try {
         // Explicit columns: everything rowToRecord reads, EXCLUDING the embedding
         // BLOB (~6KB/row) that a listing UI would otherwise fetch and discard.

@@ -544,17 +544,16 @@ export function pgvectorMemoryStore(opts: {
       const limit = Math.max(0, Math.trunc(q.limit ?? BROWSE_DEFAULT_LIMIT))
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
       // READ COMMITTED takes a fresh snapshot per STATEMENT, which is exactly the skew
-      // we are removing — so this pair runs on one client at REPEATABLE READ.
-      // COUNT(*) OVER () would collapse the pair to one statement and was measured and
-      // rejected: the window aggregate materializes the entire filtered set (439 ms vs
-      // 5.3 ms at 1M rows) and destroys the lazy top-k path for the rows themselves.
+      // we are removing — so this pair runs on one client at REPEATABLE READ. READ ONLY
+      // makes "no writes here" enforced rather than asserted, and lets Postgres skip
+      // assigning a transaction id.
       const client = await pool.connect()
       // Named QueryResult, not ReturnType<typeof client.query>: query's last overload
       // is the callback form, which returns void.
       let rowsRes: QueryResult
       let totalRes: QueryResult
       try {
-        await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ")
+        await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         rowsRes = await client.query(
           `SELECT ${RECORD_COLUMNS} FROM ${T} ${rowsClause}
            ORDER BY ${orderSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
