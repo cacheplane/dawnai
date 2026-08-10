@@ -72,8 +72,8 @@ export default {
   // checkpointer: myCheckpointer,
   // threadsStore: myThreadsStore,
 
-  // Path to the env file used by `dawn dev`, `dawn start`, `dawn inspect`,
-  // and `dawn verify`.
+  // Path to the env file loaded by `dawn dev` and `dawn inspect`.
+  // `dawn verify` resolves the same path for readiness checks without loading it.
   // env: "./.env",  // default
 }
 ```
@@ -193,9 +193,11 @@ Stores Agent Protocol thread metadata (create time, status, latest checkpoint re
 
 | Type | Default | Scope |
 |---|---|---|
-| `string` | `"./.env"` | `dawn dev`, `dawn start`, `dawn inspect`, `dawn verify` |
+| `string` | `"./.env"` | loaded by `dawn dev` and `dawn inspect`; checked by `dawn verify` |
 
-Path to the `.env` file these app-aware CLI commands load, relative to the app root. For built Dawn runtimes launched another way, configure environment variables in the host or deployment platform. The generated LangSmith target separately records its detected environment-variable names in `.dawn/build/langgraph.json`; that file is specific to the LangSmith artifact, not the production environment contract for every build target. See [Deployment](/docs/deployment).
+Path to the `.env` file that `dawn dev` and `dawn inspect` load into the process, relative to the app root. `dawn verify` resolves the same path and reads it to check for required provider keys, but does not load it. `dawn start` does not load `config.env`; pass runtime variables through the shell, host, or deployment platform.
+
+The generated LangSmith target records an env-file path in `.dawn/build/langgraph.json`: `.env.example` when that file exists, otherwise `.env`. LangSmith uses the referenced file to identify variables. This is specific to the LangSmith artifact, not the environment contract for every build target. See [Deployment](/docs/deployment).
 
 ---
 

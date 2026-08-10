@@ -105,7 +105,7 @@ Typegen emits two typed tools for any route with a `memory.ts` into `.dawn/dawn.
 
 **`recall({ query?, kind?, tags?, limit?, since?, until? })`** searches the store. It defaults `status` to `"active"` and `limit` to `8`, and returns one `id: content` line per match, or `(no memories found)` when empty. `since`/`until` narrow to a [time window](#time-windowed-recall) — most useful with [episodic memory](#episodic-memory).
 
-**`remember({ data, content, tags?, confidence? })`** requires a human-readable `content` string in the model-facing schema, validates `data` against the route schema, then writes a record. Semantic IDs are data-derived: `memory_` + the first 16 hex chars of `sha1(namespace | JSON(data))`, so a contradicting value (same identity, different data) gets a distinct id and can coexist with the old row. Append-only episodic and reflection IDs hash the same basis **plus the request timestamp**, so repeated events or insights on different requests do not collapse into one row. `confidence` defaults to `1` and `tags` to `[]`.
+**`remember({ data, content, tags?, confidence? })`** requires a human-readable `content` string in the model-facing schema, validates `data` against the route schema, then writes a record. Semantic IDs are data-derived: `memory_` + the first 16 hex chars of `sha1(namespace | JSON(data))`, so a contradicting value (same identity, different data) gets a distinct id and can coexist with the old row. Append-only episodic and reflection IDs hash the same basis **plus the write timestamp** sampled when `remember` executes. Repeated appends normally receive distinct IDs, but identical namespace/data writes in the same millisecond can share an ID and collide through the store's ID-keyed upsert. `confidence` defaults to `1` and `tags` to `[]`.
 
 ### How recall ranks
 
@@ -321,7 +321,7 @@ export default defineMemory({
 })
 ```
 
-The generated `remember` tool then appends one event per call — identical data on different runs stays two distinct events (ids are salted with the request time), and nothing is ever superseded. `effectiveAt` is stamped with the request time; agent-authored episodes have no automatic TTL (retention is `dawn memory prune`'s business).
+The generated `remember` tool normally appends one event per call: its ID includes the write timestamp sampled when the tool executes, and nothing is ever superseded. Identical namespace/data writes in the same millisecond can produce the same ID, however, so the store's ID-keyed put upserts one row rather than preserving both. `effectiveAt` is stamped with that write timestamp; agent-authored episodes have no automatic TTL (retention is `dawn memory prune`'s business).
 
 <Callout type="info" title="Episodes are not embedded">
   Auto-recorded episodes are recalled by keyword and time window only — they are not embedded, even when [semantic recall](#semantic-recall-opt-in) is configured, and `episodes.embed: true` is not yet supported (it resolves to `false` with a warning). Time plus keywords is the natural query shape for "what happened"; semantic search over episodes is a follow-up.
