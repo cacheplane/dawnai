@@ -28,12 +28,14 @@ import {
 	validateDependabotExpectation,
 	validateReconciliationReceipt,
 } from "../../scripts/security/dependabot-reconcile.mjs";
+import { validateAuditExpectation } from "../../scripts/security/dependency-audit-evidence.mjs";
 import {
 	canonicalJsonBytes,
 	createEvidenceBudget,
 	createGitHubReader,
 } from "../../scripts/security/github-evidence.mjs";
 import { INVENTORY_PACKAGES } from "../../scripts/security/publication-containment.mjs";
+import { validateReconciliationFileInputs } from "../../scripts/security/reconciliation-receipt.mjs";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testDir, "../..");
@@ -44,6 +46,126 @@ const expectedNumbers = [
 	122, 123, 124, 125, 160, 162, 163, 164, 170, 171, 172, 176, 178, 179, 180,
 	181, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201,
 ];
+
+const sharedSchemaMutationCorpus = [
+	{
+		name: "exact JSON value",
+		mutateAudit: (value: any) => structuredClone(value),
+		mutateDependabot: (value: any) => structuredClone(value),
+	},
+	{
+		name: "normalizable audit ordering and invalid alert ordering",
+		mutateAudit: (value: any) => {
+			const changed = structuredClone(value);
+			changed.full.records.reverse();
+			changed.production.records.reverse();
+			return changed;
+		},
+		mutateDependabot: (value: any) => {
+			const changed = structuredClone(value);
+			changed.open.reverse();
+			return changed;
+		},
+	},
+	{
+		name: "unknown root field",
+		mutateAudit: (value: any) => ({ ...structuredClone(value), extra: true }),
+		mutateDependabot: (value: any) => ({
+			...structuredClone(value),
+			extra: true,
+		}),
+	},
+	{
+		name: "invalid mode or state correlation",
+		mutateAudit: (value: any) => {
+			const changed = structuredClone(value);
+			changed.full.muted = [{ reason: "not-reviewed" }];
+			return changed;
+		},
+		mutateDependabot: (value: any) => {
+			const changed = structuredClone(value);
+			changed.open[0].fixedAt = "2026-08-08T00:00:00Z";
+			return changed;
+		},
+	},
+	{
+		name: "duplicate identity",
+		mutateAudit: (value: any) => {
+			const changed = structuredClone(value);
+			changed.full.records[1] = structuredClone(changed.full.records[0]);
+			return changed;
+		},
+		mutateDependabot: (value: any) => {
+			const changed = structuredClone(value);
+			changed.open[1] = structuredClone(changed.open[0]);
+			return changed;
+		},
+	},
+	{
+		name: "invalid record identity",
+		mutateAudit: (value: any) => {
+			const changed = structuredClone(value);
+			changed.production.records[0].ghsa = "CVE-2026-1";
+			return changed;
+		},
+		mutateDependabot: (value: any) => {
+			const changed = structuredClone(value);
+			changed.open[0].manifest = "../pnpm-lock.yaml";
+			return changed;
+		},
+	},
+] as const;
+
+describe("shared reconciliation input schemas", () => {
+	it.each(sharedSchemaMutationCorpus)(
+		"keeps collection and reconciliation schema outcomes identical for $name",
+		({ mutateAudit, mutateDependabot }) => {
+			const auditCandidate = mutateAudit(schemaAuditExpectation());
+			const collectionAudit = schemaOutcome(() =>
+				validateAuditExpectation(auditCandidate),
+			);
+			const auditForReceipt = collectionAudit.accepted
+				? JSON.parse(collectionAudit.bytes)
+				: schemaAuditExpectation();
+			const auditInputs = reconciliationFileInputs(defaultSha);
+			const reconciliationAudit = schemaOutcome(() => {
+				const result = validateReconciliationFileInputs({
+					...auditInputs,
+					auditExpectationFixtureBytes: canonicalJsonBytes(auditCandidate),
+					auditReceiptBytes: canonicalJsonBytes(
+						auditReceiptFromExpectation(auditForReceipt),
+					),
+					expectedReviewedBaseSha: defaultSha,
+				});
+				return {
+					full: { muted: [], records: result.audit.full.records },
+					production: { muted: [], records: result.audit.production.records },
+					schemaVersion: 1,
+				};
+			});
+			expect(reconciliationAudit).toEqual(collectionAudit);
+
+			const dependabotCandidate = mutateDependabot(
+				schemaDependabotExpectation(),
+			);
+			const collectionDependabot = schemaOutcome(() =>
+				validateDependabotExpectation(dependabotCandidate),
+			);
+			const dependabotInputs = reconciliationFileInputs(
+				defaultSha,
+				dependabotCandidate,
+			);
+			const reconciliationDependabot = schemaOutcome(
+				() =>
+					validateReconciliationFileInputs({
+						...dependabotInputs,
+						expectedReviewedBaseSha: defaultSha,
+					}).dependabotIdentities,
+			);
+			expect(reconciliationDependabot).toEqual(collectionDependabot);
+		},
+	);
+});
 
 describe("Dependabot baseline identities", () => {
 	it("loads the exact complete 27-alert fixture", async () => {
@@ -1611,6 +1733,81 @@ describe("offline reconciliation receipt sealing", () => {
 		}
 	});
 });
+
+type SchemaOutcome = { accepted: false } | { accepted: true; bytes: string };
+
+function schemaOutcome(operation: () => unknown): SchemaOutcome {
+	try {
+		return {
+			accepted: true,
+			bytes: canonicalJsonBytes(operation()).toString("utf8"),
+		};
+	} catch {
+		return { accepted: false };
+	}
+}
+
+function schemaAuditExpectation() {
+	const records = [
+		{
+			ghsa: "GHSA-866g-f22w-33x8",
+			package: "@ai-sdk/provider-utils",
+			severity: "low",
+			version: "3.0.28",
+		},
+		{
+			ghsa: "GHSA-54fx-42gc-7vw4",
+			package: "hono",
+			severity: "moderate",
+			version: "4.12.28",
+		},
+	];
+	return {
+		full: { muted: [], records: structuredClone(records) },
+		production: { muted: [], records: structuredClone(records) },
+		schemaVersion: 1,
+	};
+}
+
+function auditReceiptFromExpectation(expectation: any) {
+	const auditMode = (value: any) => {
+		const severityTotals = {
+			critical: 0,
+			high: 0,
+			info: 0,
+			low: 0,
+			moderate: 0,
+		};
+		for (const record of value.records) {
+			severityTotals[record.severity as keyof typeof severityTotals] += 1;
+		}
+		return {
+			exitCode: value.records.length === 0 ? 0 : 1,
+			muted: [],
+			records: structuredClone(value.records),
+			severityTotals,
+			status: value.records.length === 0 ? "clean" : "findings",
+		};
+	};
+	return {
+		full: auditMode(expectation.full),
+		kind: "pnpm-audit",
+		production: auditMode(expectation.production),
+		schemaVersion: 1,
+	};
+}
+
+function schemaDependabotExpectation() {
+	return {
+		defaultSha,
+		open: [
+			normalizedAlert(),
+			normalizedAlert({ number: 2, package: "second" }),
+		],
+		repository: "cacheplane/dawnai",
+		schemaVersion: 1,
+	};
+}
 
 function normalizedAlert(overrides: Record<string, unknown> = {}) {
 	return {

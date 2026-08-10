@@ -294,6 +294,31 @@ describe("publication containment", () => {
 	});
 
 	it.each([
+		`release-v0.8.22-${sourceSha}`,
+		"@dawn-ai/sdk@0.8.22",
+		"create-dawn-ai-app@0.8.22",
+	])("rejects an exact candidate artifact %s", async (artifactName) => {
+		await expect(
+			collectWithGithubOptions({ artifactNames: [artifactName] }),
+		).rejects.toThrow(/UNPROVABLE/u);
+	});
+
+	it.each([
+		`release-v0.8.21-${sourceSha}`,
+		`release-v0.8.220-${sourceSha}`,
+		"@dawn-ai/sdk@0.8.220",
+		"create-dawn-ai-app@0.8.21",
+	])(
+		"does not confuse a near-miss artifact version %s",
+		async (artifactName) => {
+			const receipt = await collectWithGithubOptions({
+				artifactNames: [artifactName],
+			});
+			expect(receipt.candidateAbsence.artifacts).toBe(true);
+		},
+	);
+
+	it.each([
 		["default head", { finalHead: "d".repeat(40) }],
 		["release workflow state", { finalReleaseState: "active" }],
 		["chart workflow state", { finalChartState: "active" }],
@@ -590,8 +615,12 @@ function githubTransport(options: any = {}) {
 				options.release === undefined ? [] : [options.release],
 			);
 		}
-		if (path.includes("/actions/artifacts?"))
-			return jsonResponse({ artifacts: [], total_count: 0 });
+		if (path.includes("/actions/artifacts?")) {
+			const artifacts = (options.artifactNames ?? []).map(
+				(name: string, index: number) => ({ id: index + 1, name }),
+			);
+			return jsonResponse({ artifacts, total_count: artifacts.length });
+		}
 		for (const item of [...releaseRuns, chartRun]) {
 			if (path.endsWith(`/actions/runs/${item.id}`)) return jsonResponse(item);
 		}

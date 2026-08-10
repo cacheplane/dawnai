@@ -703,11 +703,24 @@ function candidateVersionIdentities(version) {
 function candidateArtifact(name, version) {
 	return (
 		typeof name === "string" &&
-		new RegExp(
-			`(?:^|[-_.])${version.replaceAll(".", "\\.")}(?:$|[-_.])`,
-			"u",
-		).test(name)
+		[...candidateVersionIdentities(version)].some((identity) =>
+			containsBoundedIdentity(name, identity),
+		)
 	);
+}
+
+function containsBoundedIdentity(value, identity) {
+	let offset = value.indexOf(identity);
+	while (offset !== -1) {
+		const before = offset === 0 ? "" : value[offset - 1];
+		const end = offset + identity.length;
+		const after = end === value.length ? "" : value[end];
+		if (!/[0-9A-Za-z]/u.test(before) && !/[0-9A-Za-z]/u.test(after)) {
+			return true;
+		}
+		offset = value.indexOf(identity, offset + 1);
+	}
+	return false;
 }
 
 export function verifyPublicationSnapshot(value, { expectedDefaultSha } = {}) {

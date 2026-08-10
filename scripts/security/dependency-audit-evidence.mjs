@@ -1,15 +1,19 @@
 import { readBoundedFixture } from "../release/fixture-io.mjs";
 import {
+	AUDIT_SEVERITIES,
+	assertUniqueAuditRecords,
+	compareAuditRecords,
+	countAuditSeverity,
+	normalizeAuditRecord,
+	validateAuditExpectation,
+	validateAuditExpectationMode,
+} from "./audit-evidence-schema.mjs";
+import {
 	canonicalJsonBytes,
 	EvidenceError,
 	runBoundedProcess,
 } from "./github-evidence.mjs";
 
-const GHSA_PATTERN =
-	/^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$/u;
-const PACKAGE_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
-const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$/u;
-const SEVERITIES = ["critical", "high", "info", "low", "moderate"];
 const UTC_SECONDS_PATTERN =
 	/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/u;
 const MAX_AUDIT_BYTES = 64 * 1024 * 1024;
@@ -54,68 +58,11 @@ export async function loadAuditExpectation(
 	return validateAuditExpectation(parsed);
 }
 
-export function validateAuditExpectation(value) {
-	const fixture = safeClone(value, "INVALID_AUDIT_EXPECTATION");
-	assertExactKeys(
-		fixture,
-		["full", "production", "schemaVersion"],
-		"INVALID_AUDIT_EXPECTATION",
-	);
-	if (fixture.schemaVersion !== 1) fail("INVALID_AUDIT_EXPECTATION");
-	return {
-		full: validateMode(fixture.full),
-		production: validateMode(fixture.production),
-		schemaVersion: 1,
-	};
-}
-
-function validateMode(value) {
-	if (!isRecord(value)) fail("INVALID_AUDIT_EXPECTATION");
-	assertExactKeys(value, ["muted", "records"], "INVALID_AUDIT_EXPECTATION");
-	if (
-		!Array.isArray(value.muted) ||
-		value.muted.length !== 0 ||
-		!Array.isArray(value.records)
-	) {
-		fail("INVALID_AUDIT_EXPECTATION");
-	}
-	const records = value.records
-		.map(normalizeExpectedRecord)
-		.sort(compareRecord);
-	assertUniqueRecords(records, "DUPLICATE_AUDIT_EXPECTATION");
-	return { muted: [], records };
-}
-
-function normalizeExpectedRecord(value) {
-	if (!isRecord(value)) fail("INVALID_AUDIT_EXPECTATION");
-	assertExactKeys(
-		value,
-		["ghsa", "package", "severity", "version"],
-		"INVALID_AUDIT_EXPECTATION",
-	);
-	if (
-		typeof value.package !== "string" ||
-		!PACKAGE_PATTERN.test(value.package) ||
-		typeof value.version !== "string" ||
-		!VERSION_PATTERN.test(value.version) ||
-		typeof value.ghsa !== "string" ||
-		!GHSA_PATTERN.test(value.ghsa) ||
-		typeof value.severity !== "string" ||
-		!SEVERITIES.includes(value.severity)
-	) {
-		fail("INVALID_AUDIT_EXPECTATION");
-	}
-	return {
-		ghsa: value.ghsa,
-		package: value.package,
-		severity: value.severity,
-		version: value.version,
-	};
-}
+export { validateAuditExpectation };
 
 export function normalizeAuditDocument(value, expectedMode, exitCode) {
 	const document = safeClone(value, "MALFORMED_AUDIT_SCHEMA");
-	const expected = validateMode(expectedMode);
+	const expected = validateAuditExpectationMode(expectedMode);
 	if (!isRecord(document) || Object.hasOwn(document, "error"))
 		fail("MALFORMED_AUDIT_SCHEMA");
 	if (!Array.isArray(document.muted) || document.muted.length !== 0) {
@@ -158,18 +105,21 @@ export function normalizeAuditDocument(value, expectedMode, exitCode) {
 			fail("INVALID_AUDIT_IDENTITY");
 		}
 		records.push(
-			normalizeExpectedRecord({
-				ghsa: advisory.github_advisory_id,
-				package: advisory.module_name,
-				severity: advisory.severity,
-				version: finding.version,
-			}),
+			normalizeAuditRecord(
+				{
+					ghsa: advisory.github_advisory_id,
+					package: advisory.module_name,
+					severity: advisory.severity,
+					version: finding.version,
+				},
+				"INVALID_AUDIT_EXPECTATION",
+			),
 		);
 	}
-	records.sort(compareRecord);
-	assertUniqueRecords(records, "DUPLICATE_AUDIT_IDENTITY");
+	records.sort(compareAuditRecords);
+	assertUniqueAuditRecords(records, "DUPLICATE_AUDIT_IDENTITY");
 	const totals = normalizeSeverityTotals(document.metadata?.vulnerabilities);
-	const observedTotals = countSeverity(records);
+	const observedTotals = countAuditSeverity(records);
 	if (JSON.stringify(totals) !== JSON.stringify(observedTotals))
 		fail("AUDIT_TOTAL_MISMATCH");
 	if (JSON.stringify(records) !== JSON.stringify(expected.records))
@@ -189,9 +139,9 @@ export function normalizeAuditDocument(value, expectedMode, exitCode) {
 
 function normalizeSeverityTotals(value) {
 	if (!isRecord(value)) fail("MALFORMED_AUDIT_SCHEMA");
-	assertExactKeys(value, SEVERITIES, "MALFORMED_AUDIT_SCHEMA");
+	assertExactKeys(value, AUDIT_SEVERITIES, "MALFORMED_AUDIT_SCHEMA");
 	const result = {};
-	for (const severity of SEVERITIES) {
+	for (const severity of AUDIT_SEVERITIES) {
 		if (!Number.isSafeInteger(value[severity]) || value[severity] < 0) {
 			fail("MALFORMED_AUDIT_SCHEMA");
 		}
@@ -341,25 +291,6 @@ function assertExactKeys(value, expected, code) {
 	const actual = Object.keys(value).sort(compareText);
 	const wanted = [...expected].sort(compareText);
 	if (JSON.stringify(actual) !== JSON.stringify(wanted)) fail(code);
-}
-
-function assertUniqueRecords(records, code) {
-	const identities = new Set();
-	for (const record of records) {
-		const identity = JSON.stringify(record);
-		if (identities.has(identity)) fail(code);
-		identities.add(identity);
-	}
-}
-
-function countSeverity(records) {
-	const result = { critical: 0, high: 0, info: 0, low: 0, moderate: 0 };
-	for (const record of records) result[record.severity] += 1;
-	return result;
-}
-
-function compareRecord(left, right) {
-	return compareText(JSON.stringify(left), JSON.stringify(right));
 }
 
 function compareText(left, right) {

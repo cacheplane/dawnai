@@ -1,3 +1,8 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -14,6 +19,60 @@ import {
 const repo = "cacheplane/dawnai";
 const alertsUrl =
 	"https://api.github.com/repos/cacheplane/dawnai/dependabot/alerts?state=open&per_page=100";
+
+function processIsRunning(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		if (
+			error !== null &&
+			typeof error === "object" &&
+			Reflect.get(error, "code") === "ESRCH"
+		) {
+			return false;
+		}
+		throw error;
+	}
+}
+
+async function waitForPid(path: string): Promise<number> {
+	const deadline = Date.now() + 2_000;
+	while (Date.now() < deadline) {
+		try {
+			const value = Number((await readFile(path, "utf8")).trim());
+			if (Number.isSafeInteger(value) && value > 0) return value;
+		} catch (error) {
+			if (
+				error === null ||
+				typeof error !== "object" ||
+				Reflect.get(error, "code") !== "ENOENT"
+			) {
+				throw error;
+			}
+		}
+		await delay(20);
+	}
+	throw new Error("process-tree fixture did not report its descendant");
+}
+
+async function stopProcess(pid: number): Promise<void> {
+	if (processIsRunning(pid)) {
+		try {
+			process.kill(pid, "SIGKILL");
+		} catch (error) {
+			if (
+				error === null ||
+				typeof error !== "object" ||
+				Reflect.get(error, "code") !== "ESRCH"
+			) {
+				throw error;
+			}
+		}
+	}
+	const deadline = Date.now() + 2_000;
+	while (processIsRunning(pid) && Date.now() < deadline) await delay(20);
+}
 
 describe("canonical evidence", () => {
 	it("sorts object keys and emits one trailing newline", () => {
@@ -631,6 +690,151 @@ describe("bounded fixed-argv subprocess transport", () => {
 			}),
 		).rejects.toThrow(/UNPROVABLE: PROCESS_TIMEOUT/u);
 	});
+
+	it.runIf(process.platform !== "win32")(
+		"terminates a timed-out POSIX process group before inherited pipes can hang settlement",
+		async ({ task }) => {
+			const temporary = await mkdtemp(
+				resolve(tmpdir(), `dawn-evidence-process-tree-${task.id}-`),
+			);
+			const readyPath = resolve(temporary, "descendant.pid");
+			const leaderSource = [
+				'const { spawn } = require("node:child_process");',
+				'const { writeFileSync } = require("node:fs");',
+				'const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] });',
+				'if (descendant.pid === undefined) throw new Error("missing descendant pid");',
+				'writeFileSync(process.argv[1], String(descendant.pid), "utf8");',
+				"setInterval(() => {}, 1000);",
+			].join("");
+			let descendantPid: number | undefined;
+			const startedAt = Date.now();
+			const processResult = runBoundedProcess({
+				args: ["-e", leaderSource, readyPath],
+				command: process.execPath,
+				maxBytes: 1024,
+				timeoutMs: 750,
+			});
+			const observedResult = processResult.then(
+				() => ({ status: "resolved" as const }),
+				(error: unknown) => ({ error, status: "rejected" as const }),
+			);
+			try {
+				descendantPid = await waitForPid(readyPath);
+				const outcome = await Promise.race([
+					observedResult,
+					delay(2_000).then(() => ({ status: "watchdog" as const })),
+				]);
+				expect(outcome.status).toBe("rejected");
+				if (outcome.status === "rejected") {
+					expect(outcome.error).toMatchObject({
+						message: "UNPROVABLE: PROCESS_TIMEOUT",
+					});
+				}
+				expect(Date.now() - startedAt).toBeLessThan(2_000);
+				expect(processIsRunning(descendantPid)).toBe(false);
+			} finally {
+				if (descendantPid !== undefined) await stopProcess(descendantPid);
+				await Promise.race([observedResult, delay(1_000)]);
+				await rm(temporary, { force: true, recursive: true });
+			}
+		},
+	);
+
+	it.runIf(process.platform !== "win32")(
+		"does not settle when the leader exits until a signal-resistant descendant is dead",
+		async ({ task }) => {
+			const temporary = await mkdtemp(
+				resolve(tmpdir(), `dawn-evidence-resistant-tree-${task.id}-`),
+			);
+			const readyPath = resolve(temporary, "descendant.pid");
+			const descendantSource = [
+				'const { writeFileSync } = require("node:fs");',
+				'process.on("SIGTERM", () => {});',
+				'writeFileSync(process.argv[1], String(process.pid), "utf8");',
+				"setInterval(() => {}, 1000);",
+			].join("");
+			const leaderSource = [
+				'const { spawn } = require("node:child_process");',
+				`spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv[1]], { stdio: "ignore" });`,
+				"setInterval(() => {}, 1000);",
+			].join("");
+			let descendantPid: number | undefined;
+			const startedAt = Date.now();
+			const processResult = runBoundedProcess({
+				args: ["-e", leaderSource, readyPath],
+				command: process.execPath,
+				maxBytes: 1024,
+				timeoutMs: 750,
+			});
+			const observedResult = processResult.then(
+				() => ({ status: "resolved" as const }),
+				(error: unknown) => ({ error, status: "rejected" as const }),
+			);
+			try {
+				descendantPid = await waitForPid(readyPath);
+				const outcome = await Promise.race([
+					observedResult,
+					delay(2_000).then(() => ({ status: "watchdog" as const })),
+				]);
+				expect(outcome.status).toBe("rejected");
+				if (outcome.status === "rejected") {
+					expect(outcome.error).toMatchObject({
+						message: "UNPROVABLE: PROCESS_TIMEOUT",
+					});
+				}
+				expect(Date.now() - startedAt).toBeLessThan(2_000);
+				expect(processIsRunning(descendantPid)).toBe(false);
+			} finally {
+				if (descendantPid !== undefined) await stopProcess(descendantPid);
+				await Promise.race([observedResult, delay(1_000)]);
+				await rm(temporary, { force: true, recursive: true });
+			}
+		},
+	);
+
+	it.runIf(process.platform !== "win32")(
+		"uses one bounded taskkill tree request on Windows",
+		async ({ task }) => {
+			const temporary = await mkdtemp(
+				resolve(tmpdir(), `dawn-evidence-taskkill-${task.id}-`),
+			);
+			const readyPath = resolve(temporary, "leader.pid");
+			const source = [
+				'const { writeFileSync } = require("node:fs");',
+				'writeFileSync(process.argv[1], String(process.pid), "utf8");',
+				"setInterval(() => {}, 1000);",
+			].join("");
+			let leaderPid: number | undefined;
+			let taskkillRequest: unknown;
+			try {
+				const processResult = runBoundedProcess({
+					args: ["-e", source, readyPath],
+					command: process.execPath,
+					maxBytes: 1024,
+					platform: "win32",
+					runTaskkill: async (request: any) => {
+						taskkillRequest = request;
+						process.kill(Number(request.args[1]), "SIGKILL");
+					},
+					timeoutMs: 500,
+				});
+				leaderPid = await waitForPid(readyPath);
+				await expect(processResult).rejects.toThrow(
+					/UNPROVABLE: PROCESS_TIMEOUT/u,
+				);
+				expect(taskkillRequest).toEqual({
+					args: ["/PID", String(leaderPid), "/T", "/F"],
+					command: "taskkill.exe",
+					maxBytes: 64 * 1024,
+					timeoutMs: 500,
+				});
+				expect(processIsRunning(leaderPid)).toBe(false);
+			} finally {
+				if (leaderPid !== undefined) await stopProcess(leaderPid);
+				await rm(temporary, { force: true, recursive: true });
+			}
+		},
+	);
 
 	it("terminates a process when either output cap is exceeded", async () => {
 		await expect(

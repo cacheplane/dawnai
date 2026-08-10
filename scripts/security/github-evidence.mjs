@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 
 const API_ORIGIN = "https://api.github.com";
 const REPOSITORY_PATH = "/repos/cacheplane/dawnai/";
@@ -7,6 +7,10 @@ const API_VERSION = "2022-11-28";
 const JSON_ACCEPT = "application/vnd.github+json";
 const MAX_PROCESS_BYTES = 64 * 1024 * 1024;
 const MAX_PROCESS_TIMEOUT_MS = 300_000;
+const PROCESS_TERM_GRACE_MS = 100;
+const PROCESS_KILL_GRACE_MS = 250;
+const PROCESS_TASKKILL_TIMEOUT_MS = 500;
+const PROCESS_TASKKILL_BYTES = 64 * 1024;
 const MAX_DATE_MILLISECONDS = 8_640_000_000_000_000;
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const SECRET_KEY =
@@ -644,6 +648,8 @@ export function runBoundedProcess({
 	cwd,
 	env,
 	maxBytes,
+	platform = process.platform,
+	runTaskkill = runWindowsTaskkill,
 	timeoutMs,
 }) {
 	if (
@@ -658,7 +664,17 @@ export function runBoundedProcess({
 		maxBytes > MAX_PROCESS_BYTES ||
 		!Number.isSafeInteger(timeoutMs) ||
 		timeoutMs < 1 ||
-		timeoutMs > MAX_PROCESS_TIMEOUT_MS
+		timeoutMs > MAX_PROCESS_TIMEOUT_MS ||
+		![
+			"aix",
+			"darwin",
+			"freebsd",
+			"linux",
+			"openbsd",
+			"sunos",
+			"win32",
+		].includes(platform) ||
+		typeof runTaskkill !== "function"
 	) {
 		return Promise.reject(new EvidenceError("INVALID_PROCESS_REQUEST"));
 	}
@@ -667,6 +683,7 @@ export function runBoundedProcess({
 		try {
 			child = spawn(command, args, {
 				...(cwd === undefined ? {} : { cwd }),
+				detached: platform !== "win32",
 				...(env === undefined ? {} : { env }),
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
@@ -681,32 +698,79 @@ export function runBoundedProcess({
 		let stderrBytes = 0;
 		let failure = null;
 		let killTimer = null;
+		let finalTimer = null;
+		let settled = false;
+		const clearTimers = () => {
+			clearTimeout(timeout);
+			if (killTimer !== null) clearTimeout(killTimer);
+			if (finalTimer !== null) clearTimeout(finalTimer);
+		};
+		const finishFailure = () => {
+			if (settled || failure === null) return;
+			settled = true;
+			clearTimers();
+			child.stdout.destroy();
+			child.stderr.destroy();
+			reject(failure);
+		};
 		const terminate = (code) => {
 			if (failure === null) failure = new EvidenceError(code);
-			child.kill("SIGTERM");
-			killTimer ??= setTimeout(() => child.kill("SIGKILL"), 100);
-			killTimer.unref?.();
+			if (killTimer !== null || finalTimer !== null) return;
+			if (platform === "win32") {
+				const pid = child.pid;
+				if (!Number.isSafeInteger(pid) || pid < 1) {
+					finalTimer = setTimeout(finishFailure, PROCESS_KILL_GRACE_MS);
+					return;
+				}
+				const finishTaskkill = () => {
+					signalDirectProcess(child, "SIGKILL");
+					finalTimer ??= setTimeout(finishFailure, PROCESS_KILL_GRACE_MS);
+				};
+				killTimer = setTimeout(
+					finishTaskkill,
+					PROCESS_TASKKILL_TIMEOUT_MS + PROCESS_KILL_GRACE_MS,
+				);
+				void Promise.resolve()
+					.then(() =>
+						runTaskkill({
+							args: ["/PID", String(pid), "/T", "/F"],
+							command: "taskkill.exe",
+							maxBytes: PROCESS_TASKKILL_BYTES,
+							timeoutMs: PROCESS_TASKKILL_TIMEOUT_MS,
+						}),
+					)
+					.then(finishTaskkill, finishTaskkill);
+				return;
+			}
+			signalProcessTree(child, "SIGTERM", platform);
+			killTimer = setTimeout(() => {
+				signalProcessTree(child, "SIGKILL", platform);
+				finalTimer = setTimeout(finishFailure, PROCESS_KILL_GRACE_MS);
+			}, PROCESS_TERM_GRACE_MS);
 		};
 		child.stdout.on("data", (chunk) => {
+			if (failure !== null) return;
 			stdoutBytes += chunk.length;
 			if (stdoutBytes > maxBytes) terminate("PROCESS_OUTPUT_LIMIT");
 			else stdout.push(chunk);
 		});
 		child.stderr.on("data", (chunk) => {
+			if (failure !== null) return;
 			stderrBytes += chunk.length;
 			if (stderrBytes > maxBytes) terminate("PROCESS_OUTPUT_LIMIT");
 			else stderr.push(chunk);
 		});
 		child.on("error", () => terminate("PROCESS_START_FAILED"));
 		const timeout = setTimeout(() => terminate("PROCESS_TIMEOUT"), timeoutMs);
-		timeout.unref?.();
 		child.on("close", (code, signal) => {
-			clearTimeout(timeout);
-			if (killTimer !== null) clearTimeout(killTimer);
+			if (settled) return;
 			if (failure !== null) {
-				reject(failure);
+				// The process-group leader can close while descendants remain alive.
+				// Keep the force-kill and final watchdog armed until tree supervision ends.
 				return;
 			}
+			settled = true;
+			clearTimers();
 			if (!Number.isInteger(code) || signal !== null) {
 				reject(new EvidenceError("PROCESS_TERMINATED"));
 				return;
@@ -718,6 +782,43 @@ export function runBoundedProcess({
 			});
 		});
 	});
+}
+
+function signalProcessTree(child, signal, platform) {
+	if (platform !== "win32" && Number.isSafeInteger(child.pid)) {
+		try {
+			process.kill(-child.pid, signal);
+			return;
+		} catch (error) {
+			if (readErrorCode(error) === "ESRCH") return;
+		}
+	}
+	signalDirectProcess(child, signal);
+}
+
+function signalDirectProcess(child, signal) {
+	try {
+		child.kill(signal);
+	} catch (error) {
+		if (readErrorCode(error) !== "ESRCH") return;
+	}
+}
+
+function runWindowsTaskkill({ args, command, maxBytes, timeoutMs }) {
+	return new Promise((resolve, reject) => {
+		execFile(
+			command,
+			args,
+			{ maxBuffer: maxBytes, timeout: timeoutMs, windowsHide: true },
+			(error) => (error === null ? resolve() : reject(error)),
+		);
+	});
+}
+
+function readErrorCode(error) {
+	if (error === null || typeof error !== "object") return undefined;
+	const code = Reflect.get(error, "code");
+	return typeof code === "string" ? code : undefined;
 }
 
 function isRecord(value) {
