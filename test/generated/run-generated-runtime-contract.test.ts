@@ -10,6 +10,7 @@ import {
   prepareGeneratedRuntimeApp,
   readGeneratedExpectedFixture,
   runGeneratedRuntimeScenario,
+  typecheckGeneratedRuntimeApp,
   type TrackedTempDir,
 } from "./harness.ts"
 
@@ -71,6 +72,7 @@ describe("generated app runtime contract", () => {
       tempRoot,
     })
 
+    await typecheckGeneratedRuntimeApp(prepared)
     const result = await runGeneratedRuntimeScenario(prepared)
     const expected = await readGeneratedExpectedFixture("handwritten")
 

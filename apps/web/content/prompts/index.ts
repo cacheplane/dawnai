@@ -225,7 +225,7 @@ const DEPLOY = `Help me deploy a Dawn app. Dawn itself is not a production runti
    dawn verify
    dawn test
    \`\`\`
-   Both must pass. \`dawn verify\` covers the app contract, route discovery, typegen, and dependency/env advisories; \`dawn test\` runs scenario tests against the in-process runtime.
+   Both must pass. \`dawn verify\` covers the app contract, route discovery, typegen, and dependency/env advisories; \`dawn test\` runs scenarios in-process by default and follows any explicit \`.server()\` selection.
 
 2. Optionally catch protocol-shape issues by running selected scenarios against a live dev server. Add \`.server("http://127.0.0.1:3001")\` to those scenario builder chains, then run:
    \`\`\`

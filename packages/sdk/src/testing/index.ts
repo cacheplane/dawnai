@@ -37,6 +37,7 @@ export function scenarios<TRoute extends Extract<keyof RouteScenarioMap, string>
 export { isScenarioSuite, readScenarioSuite } from "./scenario-builder.js"
 export type {
   ScenarioDescriptor,
+  ScenarioSuiteBuilder,
   ScenarioSuiteDescriptor,
   ScenarioToolCallExpectationDescriptor,
   ScenarioToolCallRecord,

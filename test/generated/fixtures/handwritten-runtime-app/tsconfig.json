@@ -7,6 +7,7 @@
   },
   "include": [
     "dawn.config.ts",
-    "src/**/*.ts"
+    "src/**/*.ts",
+    ".dawn/dawn.generated.d.ts"
   ]
 }
