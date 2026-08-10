@@ -1,291 +1,608 @@
-import { fileURLToPath } from "node:url"
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
-import { readBoundedFixture } from "../release/fixture-io.mjs"
 import {
-  canonicalJsonBytes,
-  EvidenceError,
-  runBoundedProcess,
-  safeEvidenceError,
-} from "./github-evidence.mjs"
+	assertValidReleaseInventory,
+	readReleaseInventory,
+} from "../release/inventory.mjs";
+import {
+	loadDependabotExpectation,
+	readDependabotOpen,
+	reconcileDependabot,
+	sealReconciliationReceipt,
+	validateDependabotExpectation,
+} from "./dependabot-reconcile.mjs";
+import {
+	collectAuditEvidence,
+	formatUtcSeconds,
+	loadAuditExpectation,
+	normalizeAuditDocument,
+	validateAuditExpectation,
+} from "./dependency-audit-evidence.mjs";
+import {
+	readEvidenceInputBytes,
+	writeCanonicalEvidenceFile,
+} from "./evidence-file-io.mjs";
+import {
+	canonicalJsonBytes,
+	createEvidenceBudget,
+	createGhApiTransport,
+	createGitHubReader,
+	EvidenceError,
+	runBoundedProcess,
+	safeEvidenceError,
+} from "./github-evidence.mjs";
+import {
+	collectPublicationContainment,
+	verifyPublicationSnapshot,
+} from "./publication-containment.mjs";
 
-const GHSA_PATTERN = /^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$/u
-const PACKAGE_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
-const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$/u
-const SEVERITIES = ["critical", "high", "info", "low", "moderate"]
+const UTC_SECONDS_PATTERN =
+	/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/u;
+
+export {
+	collectAuditEvidence,
+	formatUtcSeconds,
+	loadAuditExpectation,
+	normalizeAuditDocument,
+	validateAuditExpectation,
+} from "./dependency-audit-evidence.mjs";
 
 function fail(code) {
-  throw new EvidenceError(code)
+	throw new EvidenceError(code);
 }
 
-export async function loadAuditExpectation(file, { root = process.cwd() } = {}) {
-  let source
-  try {
-    source = await readBoundedFixture(file, { maxBytes: 1024 * 1024, root })
-  } catch {
-    fail("INVALID_EXPECTATION_FILE")
-  }
-  if (source.includes("\uFFFD")) fail("INVALID_EXPECTATION_ENCODING")
-  let parsed
-  try {
-    parsed = JSON.parse(source)
-  } catch {
-    fail("MALFORMED_EXPECTATION_JSON")
-  }
-  return validateAuditExpectation(parsed)
-}
-
-export function validateAuditExpectation(value) {
-  const fixture = safeClone(value, "INVALID_AUDIT_EXPECTATION")
-  assertExactKeys(fixture, ["full", "production", "schemaVersion"], "INVALID_AUDIT_EXPECTATION")
-  if (fixture.schemaVersion !== 1) fail("INVALID_AUDIT_EXPECTATION")
-  return {
-    full: validateMode(fixture.full),
-    production: validateMode(fixture.production),
-    schemaVersion: 1,
-  }
-}
-
-function validateMode(value) {
-  if (!isRecord(value)) fail("INVALID_AUDIT_EXPECTATION")
-  assertExactKeys(value, ["muted", "records"], "INVALID_AUDIT_EXPECTATION")
-  if (!Array.isArray(value.muted) || value.muted.length !== 0 || !Array.isArray(value.records)) {
-    fail("INVALID_AUDIT_EXPECTATION")
-  }
-  const records = value.records.map(normalizeExpectedRecord).sort(compareRecord)
-  assertUniqueRecords(records, "DUPLICATE_AUDIT_EXPECTATION")
-  return { muted: [], records }
-}
-
-function normalizeExpectedRecord(value) {
-  if (!isRecord(value)) fail("INVALID_AUDIT_EXPECTATION")
-  assertExactKeys(
-    value,
-    ["ghsa", "package", "severity", "version"],
-    "INVALID_AUDIT_EXPECTATION",
-  )
-  if (
-    typeof value.package !== "string" ||
-    !PACKAGE_PATTERN.test(value.package) ||
-    typeof value.version !== "string" ||
-    !VERSION_PATTERN.test(value.version) ||
-    typeof value.ghsa !== "string" ||
-    !GHSA_PATTERN.test(value.ghsa) ||
-    typeof value.severity !== "string" ||
-    !SEVERITIES.includes(value.severity)
-  ) {
-    fail("INVALID_AUDIT_EXPECTATION")
-  }
-  return {
-    ghsa: value.ghsa,
-    package: value.package,
-    severity: value.severity,
-    version: value.version,
-  }
-}
-
-export function normalizeAuditDocument(value, expectedMode, exitCode) {
-  const document = safeClone(value, "MALFORMED_AUDIT_SCHEMA")
-  const expected = validateMode(expectedMode)
-  if (!isRecord(document) || Object.hasOwn(document, "error")) fail("MALFORMED_AUDIT_SCHEMA")
-  if (!Array.isArray(document.muted) || document.muted.length !== 0) {
-    fail("AUDIT_MUTED_RECORDS")
-  }
-  if (!isRecord(document.advisories)) fail("MALFORMED_AUDIT_SCHEMA")
-  const records = []
-  const advisoryIds = new Set()
-  for (const [advisoryId, advisory] of Object.entries(document.advisories)) {
-    if (!/^(?:0|[1-9][0-9]*)$/u.test(advisoryId) || advisoryIds.has(advisoryId)) {
-      fail("INVALID_AUDIT_IDENTITY")
-    }
-    advisoryIds.add(advisoryId)
-    if (
-      !isRecord(advisory) ||
-      typeof advisory.module_name !== "string" ||
-      typeof advisory.github_advisory_id !== "string" ||
-      typeof advisory.severity !== "string" ||
-      !Array.isArray(advisory.findings) ||
-      advisory.findings.length !== 1
-    ) {
-      fail("INVALID_AUDIT_IDENTITY")
-    }
-    const finding = advisory.findings[0]
-    if (
-      !isRecord(finding) ||
-      typeof finding.version !== "string" ||
-      !Array.isArray(finding.paths) ||
-      finding.paths.length === 0 ||
-      !finding.paths.every(
-        (path) =>
-          typeof path === "string" && path.length > 0 && Buffer.byteLength(path, "utf8") <= 16_384,
-      )
-    ) {
-      fail("INVALID_AUDIT_IDENTITY")
-    }
-    records.push(
-      normalizeExpectedRecord({
-        ghsa: advisory.github_advisory_id,
-        package: advisory.module_name,
-        severity: advisory.severity,
-        version: finding.version,
-      }),
-    )
-  }
-  records.sort(compareRecord)
-  assertUniqueRecords(records, "DUPLICATE_AUDIT_IDENTITY")
-  const totals = normalizeSeverityTotals(document.metadata?.vulnerabilities)
-  const observedTotals = countSeverity(records)
-  if (JSON.stringify(totals) !== JSON.stringify(observedTotals)) fail("AUDIT_TOTAL_MISMATCH")
-  if (JSON.stringify(records) !== JSON.stringify(expected.records)) fail("AUDIT_IDENTITY_MISMATCH")
-  const findings = records.length > 0
-  if ((findings && exitCode !== 1) || (!findings && exitCode !== 0)) {
-    fail("AUDIT_EXIT_MISMATCH")
-  }
-  return {
-    exitCode,
-    muted: [],
-    records,
-    severityTotals: totals,
-    status: findings ? "findings" : "clean",
-  }
-}
-
-function normalizeSeverityTotals(value) {
-  if (!isRecord(value)) fail("MALFORMED_AUDIT_SCHEMA")
-  assertExactKeys(value, SEVERITIES, "MALFORMED_AUDIT_SCHEMA")
-  const result = {}
-  for (const severity of SEVERITIES) {
-    if (!Number.isSafeInteger(value[severity]) || value[severity] < 0) {
-      fail("MALFORMED_AUDIT_SCHEMA")
-    }
-    result[severity] = value[severity]
-  }
-  return result
-}
-
-export async function collectAuditEvidence({
-  cwd = process.cwd(),
-  expectation,
-  maxBytes = 8 * 1024 * 1024,
-  now = Date.now,
-  runProcess = runBoundedProcess,
-  timeoutMs = 120_000,
+export function createBaselineReceipt({
+	capturedAt,
+	expectedDefaultSha,
+	fixture,
+	open,
+	publication,
+	repository,
+	sourceSha,
 }) {
-  const expected = validateAuditExpectation(expectation)
-  if (typeof now !== "function" || typeof runProcess !== "function") fail("INVALID_AUDIT_RUNNER")
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000) {
-    fail("INVALID_AUDIT_TIMEOUT")
-  }
-  const deadline = now() + timeoutMs
-  const env = sanitizedAuditEnvironment(process.env)
-  const results = {}
-  for (const [mode, args] of [
-    ["full", ["audit", "--json"]],
-    ["production", ["audit", "--json", "--prod"]],
-  ]) {
-    const remaining = deadline - now()
-    if (remaining <= 0) fail("AUDIT_TIMEOUT")
-    let processResult
-    try {
-      processResult = await runProcess({
-        args,
-        command: "pnpm",
-        cwd,
-        env,
-        maxBytes,
-        timeoutMs: remaining,
-      })
-    } catch (error) {
-      if (error instanceof EvidenceError) throw error
-      fail("AUDIT_PROCESS_FAILED")
-    }
-    if (
-      !isRecord(processResult) ||
-      !Number.isInteger(processResult.exitCode) ||
-      typeof processResult.stdout !== "string" ||
-      typeof processResult.stderr !== "string"
-    ) {
-      fail("AUDIT_PROCESS_FAILED")
-    }
-    let document
-    try {
-      document = JSON.parse(processResult.stdout)
-    } catch {
-      fail("MALFORMED_AUDIT_JSON")
-    }
-    results[mode] = normalizeAuditDocument(document, expected[mode], processResult.exitCode)
-  }
-  return {
-    full: results.full,
-    kind: "pnpm-audit",
-    production: results.production,
-    schemaVersion: 1,
-  }
+	const expectedFixture = validateDependabotExpectation(fixture);
+	if (
+		repository !== "cacheplane/dawnai" ||
+		typeof sourceSha !== "string" ||
+		!/^[0-9a-f]{40}$/u.test(sourceSha) ||
+		typeof expectedDefaultSha !== "string" ||
+		!/^[0-9a-f]{40}$/u.test(expectedDefaultSha) ||
+		expectedFixture.defaultSha !== expectedDefaultSha ||
+		!isCanonicalUtcSeconds(capturedAt)
+	) {
+		fail("INVALID_BASELINE_RECEIPT");
+	}
+	const normalizedOpen = safeClone(open, "INVALID_BASELINE_RECEIPT");
+	if (JSON.stringify(normalizedOpen) !== JSON.stringify(expectedFixture.open)) {
+		fail("INVALID_BASELINE_RECEIPT");
+	}
+	const normalizedPublication = verifyPublicationSnapshot(publication, {
+		expectedDefaultSha,
+	});
+	if (normalizedPublication.sourceSha !== sourceSha)
+		fail("INVALID_BASELINE_RECEIPT");
+	return safeClone(
+		{
+			capturedAt,
+			dependabot: { defaultSha: expectedDefaultSha, open: normalizedOpen },
+			kind: "dependency-security-baseline",
+			publication: normalizedPublication,
+			repository,
+			schemaVersion: 1,
+			sourceSha,
+		},
+		"INVALID_BASELINE_RECEIPT",
+	);
 }
 
-function sanitizedAuditEnvironment(environment) {
-  const safe = {}
-  for (const [key, value] of Object.entries(environment)) {
-    if (
-      typeof value === "string" &&
-      !/(?:^|_)(?:AUTH|KEY|PASSWORD|SECRET|TOKEN)(?:_|$)/iu.test(key) &&
-      !["GH_TOKEN", "GITHUB_TOKEN", "NODE_AUTH_TOKEN", "NPM_TOKEN"].includes(key)
-    ) {
-      safe[key] = value
-    }
-  }
-  return safe
+export async function runDependencyEvidenceCli({
+	argv = process.argv.slice(2),
+	cwd = process.cwd(),
+	environment = process.env,
+	gitProcess = runBoundedProcess,
+	githubTransport = createGhApiTransport(),
+	now = Date.now,
+	npmRequest,
+	reconcile = reconcileDependabot,
+	runProcess = runBoundedProcess,
+	writeStdout = (value) => process.stdout.write(value),
+} = {}) {
+	if (
+		!Array.isArray(argv) ||
+		typeof cwd !== "string" ||
+		typeof writeStdout !== "function" ||
+		typeof reconcile !== "function"
+	) {
+		fail("INVALID_CLI_REQUEST");
+	}
+	const { operation, options } = parseDependencyEvidenceArguments(argv);
+	if (operation === "audit") {
+		const expectation = await loadAuditExpectation(options.expected, {
+			root: cwd,
+		});
+		const receipt = await collectAuditEvidence({
+			cwd,
+			expectation,
+			runProcess,
+		});
+		const output = await writeCanonicalEvidenceFile(options.output, receipt, {
+			cwd,
+		});
+		writeStdout(
+			`audit receipt ${output} full=${receipt.full.records.length} production=${receipt.production.records.length}\n`,
+		);
+		return { output, receipt };
+	}
+	if (operation === "baseline") {
+		const result = await collectLiveBaseline({
+			cwd,
+			gitProcess,
+			githubTransport,
+			now,
+			npmRequest,
+			options,
+		});
+		const output = await writeCanonicalEvidenceFile(
+			options.output,
+			result.receipt,
+			{ cwd },
+		);
+		writeStdout(
+			`baseline receipt ${output} open=${result.receipt.dependabot.open.length} digest=${result.digest}\n`,
+		);
+		return { output, ...result };
+	}
+	if (operation === "reconcile") {
+		const result = await runReconciliationCliOperation({
+			cwd,
+			gitProcess,
+			githubTransport,
+			now,
+			npmRequest,
+			options,
+			reconcile,
+		});
+		const output = await writeCanonicalEvidenceFile(
+			options.output,
+			result.receipt,
+			{ cwd },
+		);
+		writeStdout(
+			`reconciliation receipt ${output} fixed=${result.receipt.dependabot.fixed.length} open=${result.receipt.dependabot.open.length}\n`,
+		);
+		return { output, receipt: result.receipt };
+	}
+	if (operation === "seal-receipt") {
+		const runId = parsePositiveInteger(
+			environment?.GITHUB_RUN_ID,
+			"INVALID_UPLOADER_RUN_ID",
+		);
+		const runAttempt = parsePositiveInteger(
+			environment?.GITHUB_RUN_ATTEMPT,
+			"INVALID_UPLOADER_RUN_ATTEMPT",
+		);
+		const result = await sealReconciliationReceipt({
+			expectedMainSha: options["expected-main-sha"],
+			expectedMergeSha: options["expected-merge-sha"],
+			expectedPrNumber: parsePositiveInteger(
+				options["expected-pr-number"],
+				"INVALID_RECEIPT_CORRELATION",
+			),
+			expectedRepository: "cacheplane/dawnai",
+			expectedReviewedBaseSha: options["expected-reviewed-base-sha"],
+			expectedReviewedHeadSha: options["expected-reviewed-head-sha"],
+			outputDirectory: options["output-directory"],
+			outputRoot: options["output-root"],
+			receiptBase64: options["receipt-base64"],
+			receiptSha256: options["receipt-sha256"],
+			runAttempt,
+			runId,
+		});
+		writeStdout(
+			`sealed receipt ${result.receiptPath} manifest=${result.manifestPath} digest=${result.manifest.receiptSha256}\n`,
+		);
+		return result;
+	}
+	fail("UNSUPPORTED_OPERATION");
+}
+
+async function collectLiveBaseline({
+	cwd,
+	gitProcess,
+	githubTransport,
+	now,
+	npmRequest,
+	options,
+}) {
+	if (
+		options.repo !== "cacheplane/dawnai" ||
+		options["inventory-ref"] !== "HEAD" ||
+		options["current-version"] !== "0.8.21" ||
+		options["target-version"] !== "0.8.22" ||
+		!isSha(options["source-sha"]) ||
+		!isSha(options["expected-default-sha"]) ||
+		typeof githubTransport !== "function" ||
+		typeof gitProcess !== "function" ||
+		typeof now !== "function"
+	) {
+		fail("INVALID_BASELINE_REQUEST");
+	}
+	const sourceSha = await readExactHead({ cwd, gitProcess });
+	if (sourceSha !== options["source-sha"]) fail("INVENTORY_SOURCE_MISMATCH");
+	let inventory;
+	try {
+		inventory = assertValidReleaseInventory(
+			await readReleaseInventory({ root: cwd, ref: options["inventory-ref"] }),
+		);
+	} catch {
+		fail("INVENTORY_UNPROVABLE");
+	}
+	if (
+		inventory.version !== options["current-version"] ||
+		inventory.packages.length !== 21
+	) {
+		fail("INVENTORY_UNPROVABLE");
+	}
+	const fixture = await loadDependabotExpectation(
+		options["expected-identities"],
+		{
+			root: cwd,
+		},
+	);
+	const expectedNumbers = parseNumberSet(options["expected-open"]);
+	const budget = createEvidenceBudget({
+		maxBytes: 128 * 1024 * 1024,
+		maxPages: 50,
+		maxRecords: 10_000,
+		maxRequests: 200,
+		now,
+		timeoutMs: 300_000,
+	});
+	const github = createGitHubReader({
+		budget,
+		repo: options.repo,
+		transport: githubTransport,
+	});
+	const publication = await collectPublicationContainment({
+		budget,
+		currentVersion: options["current-version"],
+		expectedDefaultSha: options["expected-default-sha"],
+		github,
+		inventory: {
+			packages: inventory.packages,
+			ref: options["inventory-ref"],
+			sourceSha,
+			version: inventory.version,
+		},
+		...(npmRequest === undefined ? {} : { npmRequest }),
+		repo: options.repo,
+		sourceSha,
+		targetVersion: options["target-version"],
+	});
+	const open = await readDependabotOpen({
+		expectedDefaultSha: options["expected-default-sha"],
+		expectedNumbers,
+		fixture,
+		github,
+	});
+	const closingHead = await github.object("commits/main");
+	if (closingHead.sha !== options["expected-default-sha"])
+		fail("DEFAULT_HEAD_DRIFT");
+	const capturedAt = formatUtcSeconds(now());
+	const receipt = createBaselineReceipt({
+		capturedAt,
+		expectedDefaultSha: options["expected-default-sha"],
+		fixture,
+		open,
+		publication,
+		repository: options.repo,
+		sourceSha,
+	});
+	return {
+		digest: createHash("sha256")
+			.update(canonicalJsonBytes(receipt))
+			.digest("hex"),
+		receipt,
+	};
+}
+
+async function runReconciliationCliOperation({
+	cwd,
+	gitProcess,
+	githubTransport,
+	now,
+	npmRequest,
+	options,
+	reconcile,
+}) {
+	if (
+		options.repo !== "cacheplane/dawnai" ||
+		options["inventory-ref"] !== "HEAD" ||
+		options["current-version"] !== "0.8.21" ||
+		options["target-version"] !== "0.8.22" ||
+		!isSha(options["reviewed-base-sha"]) ||
+		!isSha(options["reviewed-head-sha"]) ||
+		!isSha(options["merge-sha"]) ||
+		!isSha(options["observation-head-sha"]) ||
+		typeof githubTransport !== "function" ||
+		typeof gitProcess !== "function" ||
+		typeof now !== "function"
+	) {
+		fail("INVALID_RECONCILIATION_CLI_REQUEST");
+	}
+	const prNumber = parsePositiveInteger(
+		options.pr,
+		"INVALID_RECONCILIATION_CLI_REQUEST",
+	);
+	const timeoutMs = parsePositiveInteger(
+		options["wait-timeout-ms"],
+		"INVALID_RECONCILIATION_CLI_REQUEST",
+	);
+	const intervalMs = parsePositiveInteger(
+		options["poll-interval-ms"],
+		"INVALID_RECONCILIATION_CLI_REQUEST",
+	);
+	const maxAttempts = parsePositiveInteger(
+		options["max-attempts"],
+		"INVALID_RECONCILIATION_CLI_REQUEST",
+	);
+	if (timeoutMs !== 900_000 || intervalMs !== 15_000 || maxAttempts !== 61) {
+		fail("INVALID_RECONCILIATION_CLI_REQUEST");
+	}
+	const expectedFixedNumbers = parseNumberSet(options["expected-fixed"]);
+	const expectedOpenNumbers = parseNumberSet(options["expected-open"]);
+	const sourceSha = await readExactHead({ cwd, gitProcess });
+	if (sourceSha !== options["observation-head-sha"])
+		fail("INVENTORY_SOURCE_MISMATCH");
+	let inventory;
+	try {
+		inventory = assertValidReleaseInventory(
+			await readReleaseInventory({ root: cwd, ref: options["inventory-ref"] }),
+		);
+	} catch {
+		fail("INVENTORY_UNPROVABLE");
+	}
+	if (
+		inventory.version !== options["current-version"] ||
+		inventory.packages.length !== 21
+	) {
+		fail("INVENTORY_UNPROVABLE");
+	}
+	const [
+		auditExpectationFixtureBytes,
+		auditReceiptBytes,
+		baselineReceiptBytes,
+		dependabotIdentitiesFixtureBytes,
+	] = await Promise.all([
+		readEvidenceInputBytes(options["audit-expectation"], {
+			cwd,
+			contained: true,
+		}),
+		readEvidenceInputBytes(options["audit-receipt"], { cwd, contained: false }),
+		readEvidenceInputBytes(options["baseline-receipt"], {
+			cwd,
+			contained: true,
+		}),
+		readEvidenceInputBytes(options["expected-identities"], {
+			cwd,
+			contained: true,
+		}),
+	]);
+	const budget = createEvidenceBudget({
+		maxBytes: 256 * 1024 * 1024,
+		maxPages: 800,
+		maxRecords: 100_000,
+		maxRequests: 3_000,
+		now,
+		timeoutMs,
+	});
+	const github = createGitHubReader({
+		budget,
+		repo: options.repo,
+		transport: githubTransport,
+	});
+	const collectPublication = () =>
+		collectPublicationContainment({
+			budget,
+			currentVersion: options["current-version"],
+			expectedDefaultSha: options["observation-head-sha"],
+			github,
+			inventory: {
+				packages: inventory.packages,
+				ref: options["inventory-ref"],
+				sourceSha,
+				version: inventory.version,
+			},
+			...(npmRequest === undefined ? {} : { npmRequest }),
+			repo: options.repo,
+			sourceSha,
+			targetVersion: options["target-version"],
+		});
+	const receipt = await reconcile({
+		auditExpectationFixtureBytes,
+		auditReceiptBytes,
+		baselineReceiptBytes,
+		collectPublication,
+		dependabotIdentitiesFixtureBytes,
+		expectedFixedNumbers,
+		expectedMergeSha: options["merge-sha"],
+		expectedObservationHeadSha: options["observation-head-sha"],
+		expectedOpenNumbers,
+		expectedReviewedBaseSha: options["reviewed-base-sha"],
+		expectedReviewedHeadSha: options["reviewed-head-sha"],
+		github,
+		intervalMs,
+		maxAttempts,
+		now,
+		prNumber,
+		repo: options.repo,
+		timeoutMs,
+	});
+	return { receipt };
+}
+
+async function readExactHead({ cwd, gitProcess }) {
+	let result;
+	try {
+		result = await gitProcess({
+			args: ["rev-parse", "--verify", "HEAD^{commit}"],
+			command: "git",
+			cwd,
+			maxBytes: 1024,
+			timeoutMs: 15_000,
+		});
+	} catch {
+		fail("INVENTORY_SOURCE_UNPROVABLE");
+	}
+	if (
+		!isRecord(result) ||
+		result.exitCode !== 0 ||
+		typeof result.stdout !== "string" ||
+		typeof result.stderr !== "string"
+	) {
+		fail("INVENTORY_SOURCE_UNPROVABLE");
+	}
+	const sourceSha = result.stdout.endsWith("\n")
+		? result.stdout.slice(0, -1)
+		: result.stdout;
+	if (!isSha(sourceSha)) fail("INVENTORY_SOURCE_UNPROVABLE");
+	return sourceSha;
+}
+
+function parseNumberSet(value) {
+	if (
+		typeof value !== "string" ||
+		!/^[1-9][0-9]*(?:,[1-9][0-9]*)*$/u.test(value)
+	) {
+		fail("INVALID_NUMBER_SET");
+	}
+	const numbers = value.split(",").map(Number);
+	if (
+		numbers.some((number) => !Number.isSafeInteger(number)) ||
+		new Set(numbers).size !== numbers.length ||
+		numbers.some((number, index) => index > 0 && number <= numbers[index - 1])
+	) {
+		fail("INVALID_NUMBER_SET");
+	}
+	return numbers;
+}
+
+function parsePositiveInteger(value, code) {
+	if (typeof value !== "string" || !/^[1-9][0-9]*$/u.test(value)) fail(code);
+	const number = Number(value);
+	if (!Number.isSafeInteger(number)) fail(code);
+	return number;
+}
+
+function isSha(value) {
+	return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
+}
+
+export function parseDependencyEvidenceArguments(argv) {
+	if (!Array.isArray(argv)) fail("INVALID_CLI_ARGUMENTS");
+	const [operation, ...tokens] = argv;
+	const requiredByOperation = {
+		audit: ["expected", "output"],
+		baseline: [
+			"repo",
+			"inventory-ref",
+			"source-sha",
+			"expected-default-sha",
+			"current-version",
+			"target-version",
+			"expected-identities",
+			"expected-open",
+			"output",
+		],
+		reconcile: [
+			"repo",
+			"pr",
+			"reviewed-base-sha",
+			"reviewed-head-sha",
+			"merge-sha",
+			"observation-head-sha",
+			"inventory-ref",
+			"current-version",
+			"target-version",
+			"expected-identities",
+			"expected-fixed",
+			"expected-open",
+			"baseline-receipt",
+			"audit-expectation",
+			"audit-receipt",
+			"wait-timeout-ms",
+			"poll-interval-ms",
+			"max-attempts",
+			"output",
+		],
+		"seal-receipt": [
+			"expected-main-sha",
+			"expected-pr-number",
+			"expected-reviewed-base-sha",
+			"expected-reviewed-head-sha",
+			"expected-merge-sha",
+			"receipt-base64",
+			"receipt-sha256",
+			"output-root",
+			"output-directory",
+		],
+	};
+	const required = requiredByOperation[operation];
+	if (required === undefined || tokens.length !== required.length * 2) {
+		fail("INVALID_CLI_ARGUMENTS");
+	}
+	const options = Object.create(null);
+	for (let index = 0; index < tokens.length; index += 2) {
+		const flag = tokens[index];
+		const value = tokens[index + 1];
+		if (
+			typeof flag !== "string" ||
+			typeof value !== "string" ||
+			!flag.startsWith("--") ||
+			value.length === 0
+		) {
+			fail("INVALID_CLI_ARGUMENTS");
+		}
+		const key = flag.slice(2);
+		if (!required.includes(key) || Object.hasOwn(options, key))
+			fail("INVALID_CLI_ARGUMENTS");
+		options[key] = value;
+	}
+	if (required.some((key) => !Object.hasOwn(options, key)))
+		fail("INVALID_CLI_ARGUMENTS");
+	return { operation, options: { ...options } };
+}
+
+function isCanonicalUtcSeconds(value) {
+	if (typeof value !== "string" || !UTC_SECONDS_PATTERN.test(value))
+		return false;
+	const milliseconds = Date.parse(value);
+	if (!Number.isFinite(milliseconds)) return false;
+	try {
+		return new Date(milliseconds).toISOString().replace(".000Z", "Z") === value;
+	} catch {
+		return false;
+	}
 }
 
 function safeClone(value, code) {
-  try {
-    return JSON.parse(canonicalJsonBytes(value).toString("utf8"))
-  } catch (error) {
-    if (error instanceof EvidenceError) fail(code)
-    fail(code)
-  }
-}
-
-function assertExactKeys(value, expected, code) {
-  if (!isRecord(value)) fail(code)
-  const actual = Object.keys(value).sort(compareText)
-  const wanted = [...expected].sort(compareText)
-  if (JSON.stringify(actual) !== JSON.stringify(wanted)) fail(code)
-}
-
-function assertUniqueRecords(records, code) {
-  const identities = new Set()
-  for (const record of records) {
-    const identity = JSON.stringify(record)
-    if (identities.has(identity)) fail(code)
-    identities.add(identity)
-  }
-}
-
-function countSeverity(records) {
-  const result = { critical: 0, high: 0, info: 0, low: 0, moderate: 0 }
-  for (const record of records) result[record.severity] += 1
-  return result
-}
-
-function compareRecord(left, right) {
-  return compareText(JSON.stringify(left), JSON.stringify(right))
-}
-
-function compareText(left, right) {
-  return left === right ? 0 : left < right ? -1 : 1
+	try {
+		return JSON.parse(canonicalJsonBytes(value).toString("utf8"));
+	} catch {
+		fail(code);
+	}
 }
 
 function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
+	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  try {
-    const [operation] = process.argv.slice(2)
-    if (operation !== "audit") fail("UNSUPPORTED_OPERATION")
-    fail("CLI_NOT_READY")
-  } catch (error) {
-    console.error(safeEvidenceError(error))
-    process.exitCode = 1
-  }
+	try {
+		await runDependencyEvidenceCli();
+	} catch (error) {
+		console.error(safeEvidenceError(error));
+		process.exitCode = 1;
+	}
 }

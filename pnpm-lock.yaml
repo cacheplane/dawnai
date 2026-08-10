@@ -31,6 +31,9 @@ importers:
       '@dawn-ai/sdk':
         specifier: workspace:*
         version: link:packages/sdk
+      '@types/node':
+        specifier: 26.1.2
+        version: 26.1.2
       publint:
         specifier: 0.3.22
         version: 0.3.22

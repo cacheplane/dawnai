@@ -2,11 +2,15 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "../../packages/config-typescript/node.json",
   "compilerOptions": {
-    "allowJs": true,
+    "allowJs": false,
     "checkJs": false,
+    "composite": false,
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "noEmit": true,
+    "noImplicitAny": false,
     "types": ["node", "vitest/globals"]
   },
   "include": ["./**/*.ts", "./**/*.tsx"]

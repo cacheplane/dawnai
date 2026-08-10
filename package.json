@@ -61,6 +61,7 @@
     "@changesets/cli": "2.31.1",
     "@copilotkit/aimock": "^1.37.4",
     "@dawn-ai/sdk": "workspace:*",
+    "@types/node": "26.1.2",
     "publint": "0.3.22",
     "tsx": "^4.23.5",
     "turbo": "2.10.8",
