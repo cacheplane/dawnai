@@ -169,14 +169,33 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     GET /threads/:thread_id/pending_interrupts
     -> 200 { "interrupts": [ { "interruptId", "resumeKey", "value" } ] }
     -> 404 if no such thread (error.details.code = thread_not_found)
-    -> 409 if the thread has never run (error.details.code = thread_route_unknown)
+    -> 409 if the thread has no route identity to gate on (error.details.code = thread_route_unknown)
     ```
 
-    `value` is the interrupt payload as the agent emitted it — for a permission prompt, `{ interruptId, type, kind, detail }`, the same object the `interrupt` SSE event carries. Answer the prompts with `POST /threads/:thread_id/resume`, using `interruptId`. A thread that exists but has nothing parked returns `200 { "interrupts": [] }`, and the response is sent `cache-control: no-store` because checkpoint state moves under the client.
+    `value` is the interrupt payload as it is stored in the checkpoint — for a permission prompt, `{ interruptId, type, kind, detail }`. It carries the same payload as the `interrupt` SSE event, minus the fields the stream projection adds on the way out: a prompt raised *inside* a subagent picks up a `callId` on the wire, naming the parent's subagent tool call, and the stored copy of that payload has no such field. `resumeKey` is the checkpoint write's own key, or `null` when the write does not carry a usable one; clients address prompts by `interruptId`.
 
-    The two endpoints decide "no such thread" from different sources: this one from the thread record, `POST /threads/:thread_id/resume` from the checkpoint — so a thread that was created but never checkpointed answers `200 { "interrupts": [] }` here and `404` there.
+    A thread whose route resolves but has nothing parked returns `200 { "interrupts": [] }`, and the response is sent `cache-control: no-store` because checkpoint state moves under the client.
 
-    Middleware gates this endpoint using the route last run on the thread, which is why a thread that has never run is refused rather than served: there would be no route identity to gate on, and the endpoint exposes the same interrupt payloads the run stream does.
+    The two endpoints decide "no such thread" from different sources: this one from the thread record, `POST /threads/:thread_id/resume` from the checkpoint. So a thread that has run but has no checkpoint — only agent routes are handed one, so a thread that only ran a graph, chain, or workflow route never gets one — answers `200 { "interrupts": [] }` here and `404` there. A thread with no route recorded — the ordinary state of one that was created and never ran — answers neither: it is refused with `409` (see below).
+
+    #### Answering the prompts
+
+    Send the decisions to `POST /threads/:thread_id/resume`. Its body must be exactly `{ resume, route }` — `route` is required and unknown keys are rejected — and `resume` must list every parked `interruptId` exactly once:
+
+    ```json
+    {
+      "resume": [{ "interruptId": "perm-1730-a1b2c3", "status": "resolved", "payload": "once" }],
+      "route": "/research#agent"
+    }
+    ```
+
+    A client that reloaded and no longer knows the route reads it from `GET /threads/:thread_id`, whose `metadata.route` is the route key the server records at the start of every run on the thread. The server prefers its own recorded route over the body's when it has one, but the field is still required, so a reloaded client needs that extra read.
+
+    #### Why a never-run thread is refused
+
+    Middleware gates this endpoint on a route identity, and that identity is the route that **parked** the interrupts — recorded as `metadata.parked_route` when a turn parks, and retired when the last prompt is answered. It is deliberately not the route that last ran: both endpoints that start a turn overwrite that value, so gating on it would let a caller who is allowed to run some cheaper route repoint the thread and read a prompt that route never raised. Only when no parking route is recorded does it fall back to the last-run route — in memory for this server session, `metadata.route` across a restart.
+
+    A thread with none of those has no identity to gate on at all, so it is refused rather than served: this endpoint returns the same interrupt payloads the run stream does. The same `409 thread_route_unknown` answers a thread whose recorded route is no longer registered — the response deliberately does not echo which route that was.
   </Tab>
   <Tab label="POST /threads/:thread_id/resume">
     Resolve every human-in-the-loop interrupt currently parked on the root thread. The response streams the continuation as SSE (same event types as `runs/stream`).
@@ -234,7 +253,7 @@ Run tracking is in-memory and process-local, so both the one-run-per-thread gate
 
 ### Thread status after an interrupt
 
-`GET /threads/:thread_id` reports `status: "interrupted"` for **two** different situations: a run stopped by `POST /threads/:thread_id/cancel`, and a turn parked on a human-in-the-loop interrupt waiting for a decision. `GET /threads/:thread_id/pending_interrupts` is the discriminator — a non-empty `interrupts` array means the agent is waiting on a human, an empty one means the run was cancelled.
+`GET /threads/:thread_id` reports `status: "interrupted"` for **two** different situations: a run stopped by `POST /threads/:thread_id/cancel`, and a turn parked on a human-in-the-loop interrupt waiting for a decision. `GET /threads/:thread_id/pending_interrupts` is the discriminator — a non-empty `interrupts` array means the agent is waiting on a human. An empty one means it is not: the run was cancelled, or the prompts have already been answered.
 
 Parked turns previously reported `"idle"`, which was indistinguishable from a finished run and left a reloaded UI showing a completed agent that was in fact blocked on a prompt.
 
@@ -285,7 +304,7 @@ If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACI
 
 ## Middleware
 
-`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) gates Agent Protocol `/runs/stream`, `/runs/wait`, `/resume`, and `/pending_interrupts` execution plus AG-UI route execution under both `dawn dev` and the built runtime served by `dawn start`. Thread create, read, delete, and state endpoints do not invoke middleware. `/pending_interrupts` is a `GET` and has no body, so `req.method` is `"GET"` there and `req.params` is empty; a middleware that assumes `"POST"` needs updating. It can short-circuit execution with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
+`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) gates Agent Protocol `/runs/stream`, `/runs/wait`, `/resume`, and `/pending_interrupts` execution plus AG-UI route execution under both `dawn dev` and the built runtime served by `dawn start`. Thread create, read, delete, state, and cancel endpoints do not invoke middleware. `/pending_interrupts` is a `GET` and has no body, so `req.method` is `"GET"` there and `req.params` is `{}`; a middleware that assumes `"POST"` needs updating. `/resume` also has no route input to derive params from, so `req.params` is `{}` there too. It can short-circuit execution with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
 
 `MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Middleware](/docs/middleware) for the full reference.
 
