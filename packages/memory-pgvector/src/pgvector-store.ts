@@ -444,6 +444,10 @@ export function pgvectorMemoryStore(opts: {
 
     async browse(q = {}) {
       await ready()
+      // TODO(Tasks 9/11/12/13/14): `q.namespace`, `q.filters`, `q.orderBy` and
+      // `q.cursor` are read NOWHERE below — this store still answers only the
+      // pre-existing shorthand fields. Setting one of them is silently a no-op, not an
+      // error; the JSDoc on BrowseQuery marks each as not-yet-applied.
       const where: string[] = []
       const params: unknown[] = []
       if (q.namespacePrefix) {
@@ -488,8 +492,9 @@ export function pgvectorMemoryStore(opts: {
       const offset = Math.max(0, Math.trunc(q.offset ?? 0))
       // Rows and total are two separate round-trips; a concurrent write between
       // them can momentarily skew total vs records — acceptable for a dev
-      // inspection tool (no transaction needed). COLLATE "C" pins the id ASC
-      // tiebreak to codepoint order, matching sqlite's BINARY collation.
+      // inspection tool (no transaction needed). One snapshot: Task 15. COLLATE "C"
+      // pins the id ASC tiebreak to codepoint order, matching sqlite's BINARY
+      // collation.
       const rowsRes = await pool.query(
         `SELECT ${RECORD_COLUMNS} FROM ${T} ${clause}
          ORDER BY updated_at DESC, id COLLATE "C" ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
@@ -499,6 +504,8 @@ export function pgvectorMemoryStore(opts: {
       return {
         records: (rowsRes.rows as Record<string, unknown>[]).map(rowToRecord),
         total: (totalRes.rows[0] as { n: number }).n,
+        // TODO(Task 14 — keyset continuation): always null until the keyset cursor
+        // lands. NOT the documented "no more rows" signal yet — see BrowsePage.
         continuation: null,
       }
     },

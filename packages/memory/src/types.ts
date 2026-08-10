@@ -69,12 +69,22 @@ export interface BrowseSortEntry {
 /** One normalized predicate. AND-combined with the other filters and with the
  *  top-level shorthand fields. At most ONE filter per `field` (mirrors the
  *  one-filter-per-column model of the grid that drives this API); within-field
- *  multi-value exists only through `in`/`notIn`. */
+ *  multi-value exists only through `in`/`notIn`. That cap is unenforced today —
+ *  see `BrowseQuery.filters`. */
 export type BrowseFilter =
+  // The enum arms are split PER FIELD, not shared as `field: "status" | "kind"` with
+  // `values: readonly string[]` — a shared arm compiles
+  // `{field: "status", op: "in", values: ["actve"]}`, losing the typo check the
+  // `status` shorthand below already gives us for the identical query.
   | {
-      readonly field: "status" | "kind"
+      readonly field: "status"
       readonly op: "in" | "notIn"
-      readonly values: readonly string[]
+      readonly values: readonly MemoryStatus[]
+    }
+  | {
+      readonly field: "kind"
+      readonly op: "in" | "notIn"
+      readonly values: readonly MemoryKind[]
     }
   | {
       readonly field: "content"
@@ -127,26 +137,44 @@ export interface BrowseQuery {
   readonly until?: string
   /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
   readonly now?: string
+  // ─ The four fields below are DECLARED BUT NOT YET HONORED. Both in-repo stores
+  //   (`sqliteMemoryStore`, `pgvectorMemoryStore`) drop them on the floor today: a
+  //   caller that sets one gets an unfiltered, default-ordered, uncursored page and no
+  //   error. Each doc states the intended contract and names the task delivering it —
+  //   do NOT write a consumer against the guarantee before that task lands.
   /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive,
-   *  no prefix semantics. ANDed with everything else. */
+   *  no prefix semantics. ANDed with everything else.
+   *  NOT YET APPLIED — ignored until Task 11 (exact namespace + sargable prefix). */
   readonly namespace?: string
-  /** AND-combined normalized predicates; at most one per field, at most 8 total. */
+  /** AND-combined normalized predicates. The intended contract is at most one filter
+   *  per `field` and at most 8 in total — but nothing validates either cap yet, and no
+   *  store evaluates a predicate. Caps arrive with the shared validator (Task 4), the
+   *  predicates with Task 9 (status/kind/content) and Task 12 (confidence/updatedAt). */
   readonly filters?: readonly BrowseFilter[]
   /** Applied in order, always terminated server-side by an `id ASC` tie-break so
-   *  every window is deterministic. Absent or empty = `updatedAt DESC`. */
+   *  every window is deterministic. Absent or empty = `updatedAt DESC`.
+   *  NOT YET APPLIED — every store still orders `updatedAt DESC, id ASC`
+   *  unconditionally until Task 13 (orderBy with the id tie-break). */
   readonly orderBy?: readonly BrowseSortEntry[]
-  /** Opaque continuation from a prior `BrowsePage`. Belongs to the query that
-   *  produced it: the store recomputes the fingerprint and rejects a mismatch. */
+  /** Opaque continuation from a prior `BrowsePage`. It will belong to the query that
+   *  produced it: the store recomputes the fingerprint and rejects a mismatch.
+   *  NOT YET APPLIED — ignored, and no store computes or checks a fingerprint, until
+   *  Task 14 (keyset continuation). */
   readonly cursor?: string
 }
 export interface BrowsePage {
   readonly records: readonly MemoryRecord[]
   /** Exact count of the whole matching set — NOT of this window, and NOT reduced by
-   *  a `cursor`. Read from the same transaction snapshot as `records`. */
+   *  a `cursor`. TODAY rows and total are two separate statements in both stores, so a
+   *  concurrent write landing between them can momentarily skew `total` against
+   *  `records`; reading both from one transaction snapshot is Task 15. */
   readonly total: number
   /** Opaque keyset continuation, or null when this window did not fill `limit`.
-   *  A continuation is issued whenever the page filled, so following the last one
-   *  may legitimately return zero rows. */
+   *  ALWAYS null today: no store issues one until Task 14 (keyset continuation), so
+   *  `null` currently means "this store cannot page" and NOT "no more rows" — a
+   *  consumer must not stop on it yet. Once Task 14 lands a continuation is issued
+   *  whenever the page filled, so following the last one may legitimately return
+   *  zero rows. */
   readonly continuation: string | null
 }
 export interface MemoryStats {

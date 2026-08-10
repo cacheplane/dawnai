@@ -352,6 +352,25 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
+    // Deliberately temporary scaffold. It pins the CURRENT (unimplemented) continuation
+    // behavior so "always null" is executable rather than only prose — without it, a
+    // consumer reading BrowsePage's JSDoc as "null = no more rows" stops after page 1
+    // and nothing fails. Task 14 (keyset continuation) MUST delete this test: it breaks
+    // the moment a filled window starts issuing a continuation, which is the point.
+    test("browse issues no continuation yet, even when the window fills", async () => {
+      const s = await makeStore()
+      try {
+        for (const id of ["c0", "c1", "c2"]) {
+          await s.put(rec({ id, namespace: "ns", content: id }))
+        }
+        const page = await s.browse({ limit: 2 })
+        expect(page.records).toHaveLength(2)
+        expect(page.total).toBe(3)
+        expect(page.continuation).toBeNull()
+      } finally {
+        await close?.(s)
+      }
+    })
     test("browse returns empty records but full total when offset exceeds total", async () => {
       const s = await makeStore()
       try {

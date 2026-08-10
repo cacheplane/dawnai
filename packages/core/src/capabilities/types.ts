@@ -58,10 +58,17 @@ export interface BrowseSortEntryLike {
 
 /** Mirror of @dawn-ai/memory's `BrowseFilter`. */
 export type BrowseFilterLike =
+  // Split per field, mirroring `BrowseFilter`: a shared `field: "status" | "kind"` arm
+  // with `values: readonly string[]` would compile a typo'd value.
   | {
-      readonly field: "status" | "kind"
+      readonly field: "status"
       readonly op: "in" | "notIn"
-      readonly values: readonly string[]
+      readonly values: readonly MemoryStatusLike[]
+    }
+  | {
+      readonly field: "kind"
+      readonly op: "in" | "notIn"
+      readonly values: readonly MemoryKindLike[]
     }
   | {
       readonly field: "content"
@@ -120,23 +127,33 @@ export interface BrowseQueryLike {
   readonly until?: string
   /** When supplied, rows with expiresAt <= now are excluded (matches search's `now`). */
   readonly now?: string
+  // ─ The four fields below are DECLARED BUT NOT YET HONORED by any in-repo store:
+  //   they are ignored, silently, with no error. See packages/memory/src/types.ts for
+  //   the per-field intended contract and the task that delivers it.
   /** EXACT namespace. Distinct from `namespacePrefix`: byte-exact, case-sensitive,
-   *  no prefix semantics. ANDed with everything else. */
+   *  no prefix semantics. ANDed with everything else. NOT YET APPLIED. */
   readonly namespace?: string
-  /** AND-combined normalized predicates; at most one per field, at most 8 total. */
+  /** AND-combined normalized predicates. Intended: at most one per `field`, at most 8
+   *  in total — neither cap is validated yet, and no store evaluates a predicate. */
   readonly filters?: readonly BrowseFilterLike[]
   /** Applied in order, always terminated store-side by an `id ASC` tie-break so every
-   *  window is deterministic. Absent or empty = `updatedAt DESC`. */
+   *  window is deterministic. Absent or empty = `updatedAt DESC`. NOT YET APPLIED —
+   *  every store still orders `updatedAt DESC, id ASC` unconditionally. */
   readonly orderBy?: readonly BrowseSortEntryLike[]
-  /** Opaque continuation from a prior `BrowsePageLike`. Belongs to the query that
-   *  produced it: the store recomputes the fingerprint and rejects a mismatch. */
+  /** Opaque continuation from a prior `BrowsePageLike`. It will belong to the query
+   *  that produced it: the store recomputes the fingerprint and rejects a mismatch.
+   *  NOT YET APPLIED — ignored, and no store computes or checks a fingerprint. */
   readonly cursor?: string
 }
 
 /** Structural mirror of @dawn-ai/memory's `BrowsePage`. See `BrowseQueryLike`. */
 export interface BrowsePageLike {
   readonly records: readonly MemoryRecordLike[]
+  /** Exact count of the whole matching set. Rows and total are two separate statements
+   *  in both in-repo stores today, so a concurrent write can momentarily skew them. */
   readonly total: number
+  /** ALWAYS null today — no store issues a continuation yet, so `null` means "this
+   *  store cannot page", NOT "no more rows". Do not stop on it. */
   readonly continuation: string | null
 }
 

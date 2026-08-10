@@ -429,6 +429,10 @@ export function sqliteMemoryStore(opts: {
       return rows.map(rowToRecord)
     },
     async browse(q = {}) {
+      // TODO(Tasks 9/11/12/13/14): `q.namespace`, `q.filters`, `q.orderBy` and
+      // `q.cursor` are read NOWHERE below — this store still answers only the
+      // pre-existing shorthand fields. Setting one of them is silently a no-op, not an
+      // error; the JSDoc on BrowseQuery marks each as not-yet-applied.
       const where: string[] = []
       const params: SQLInputValue[] = []
       if (q.namespacePrefix) {
@@ -479,9 +483,13 @@ export function sqliteMemoryStore(opts: {
            FROM memories ${clause} ORDER BY updated_at DESC, id ASC LIMIT ? OFFSET ?`,
         )
         .all(...params, limit, offset) as Record<string, unknown>[]
+      // Rows and total are two separate unwrapped statements; a concurrent write
+      // between them can momentarily skew total vs records. One snapshot: Task 15.
       const total = (
         db.prepare(`SELECT COUNT(*) AS n FROM memories ${clause}`).get(...params) as { n: number }
       ).n
+      // TODO(Task 14 — keyset continuation): always null until the keyset cursor lands.
+      // This is NOT the documented "no more rows" signal yet — see BrowsePage.
       return { records: rows.map(rowToRecord), total, continuation: null }
     },
     async stats(opts = {}) {

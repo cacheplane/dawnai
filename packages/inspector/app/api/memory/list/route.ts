@@ -99,5 +99,8 @@ export async function GET(req: Request): Promise<Response> {
     limit: Number.isFinite(limit) ? limit : 50,
     offset: Number.isFinite(offset) ? offset : 0,
   })
+  // `page.continuation` goes out on the wire as null on EVERY response — no store
+  // issues one yet (Task 14). Until then it is not the "no more rows" signal its
+  // JSDoc describes, so this route keeps offset paging and no client may stop on it.
   return Response.json(page)
 }

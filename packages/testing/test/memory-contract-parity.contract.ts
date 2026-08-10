@@ -4,6 +4,7 @@
 // both packages — this file is where drift fails LOCALLY and legibly instead of as an
 // assignability wall in resolve-memory.ts.
 import type {
+  BrowseFilterLike,
   BrowsePageLike,
   BrowseQueryLike,
   MemoryKindLike,
@@ -13,6 +14,7 @@ import type {
   MemoryStoreLike,
 } from "@dawn-ai/core"
 import type {
+  BrowseFilter,
   BrowsePage,
   BrowseQuery,
   MemoryKind,
@@ -60,6 +62,39 @@ const record: Identical<MemoryRecord, MemoryRecordLike> = true
 const browseQuery: Identical<BrowseQuery, BrowseQueryLike> = true
 const browsePage: Identical<BrowsePage, BrowsePageLike> = true
 
+/** `never` — so the assignment below fails — when `Candidate` IS assignable to `Union`. */
+type Rejects<Candidate, Union> = [Candidate] extends [Union] ? never : true
+
+/**
+ * The enum-valued filter arms are split PER FIELD, so `values` carries that field's own
+ * literal union rather than a shared `readonly string[]`. Merged into one
+ * `field: "status" | "kind"` arm, `{field: "status", op: "in", values: ["actve"]}`
+ * compiles — losing the typo check the `BrowseQuery.status` shorthand already gives us
+ * for the semantically identical query. Asserted on BOTH sides: `Identical<BrowseQuery,
+ * BrowseQueryLike>` above would keep a re-widened pair in lockstep with each other while
+ * both silently accept garbage.
+ */
+const statusTypoRejected: Rejects<
+  { readonly field: "status"; readonly op: "in"; readonly values: readonly ["actve"] },
+  BrowseFilter
+> = true
+const kindTypoRejected: Rejects<
+  { readonly field: "kind"; readonly op: "notIn"; readonly values: readonly ["semantci"] },
+  BrowseFilter
+> = true
+const statusTypoRejectedLike: Rejects<
+  { readonly field: "status"; readonly op: "in"; readonly values: readonly ["actve"] },
+  BrowseFilterLike
+> = true
+const kindTypoRejectedLike: Rejects<
+  { readonly field: "kind"; readonly op: "notIn"; readonly values: readonly ["semantci"] },
+  BrowseFilterLike
+> = true
+// Positive controls: the well-spelled values must still be accepted, so the four
+// rejections above cannot be satisfied by an arm that has stopped matching anything.
+const statusFilter: BrowseFilter = { field: "status", op: "in", values: ["active"] }
+const kindFilter: BrowseFilterLike = { field: "kind", op: "notIn", values: ["semantic"] }
+
 void kind
 void status
 void sourceType
@@ -67,3 +102,9 @@ void store
 void record
 void browseQuery
 void browsePage
+void statusTypoRejected
+void kindTypoRejected
+void statusTypoRejectedLike
+void kindTypoRejectedLike
+void statusFilter
+void kindFilter
