@@ -856,7 +856,7 @@ describe("dependency evidence CLI", () => {
 						"--source-sha",
 						sourceSha,
 						"--expected-default-sha",
-						"3887079d400bdf019d3ff90bc89599c1899fa422",
+						"8398c908844cf961f1d64e575c8b9a0000923f41",
 						"--current-version",
 						"0.8.21",
 						"--target-version",
@@ -906,7 +906,7 @@ describe("dependency evidence CLI", () => {
 			const output = resolve(temporary, "reconciliation.json");
 			await writeFile(baselineReceipt, '{"baseline":true}\n');
 			await writeFile(auditReceipt, '{"audit":true}\n');
-			const reviewedBaseSha = "3887079d400bdf019d3ff90bc89599c1899fa422";
+			const reviewedBaseSha = "8398c908844cf961f1d64e575c8b9a0000923f41";
 			const reviewedHeadSha = "b".repeat(40);
 			const mergeSha = "c".repeat(40);
 			const observationHeadSha = "d".repeat(40);

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repository": "cacheplane/dawnai",
-  "defaultSha": "3887079d400bdf019d3ff90bc89599c1899fa422",
+  "defaultSha": "8398c908844cf961f1d64e575c8b9a0000923f41",
   "open": [
     { "number": 122, "state": "open", "ecosystem": "npm", "package": "@ai-sdk/provider-utils", "manifest": "pnpm-lock.yaml", "relationship": "transitive", "scope": "runtime", "ghsa": "GHSA-866g-f22w-33x8", "severity": "low", "dismissal": null, "fixedAt": null, "autoDismissedAt": null, "createdAt": "2026-07-08T21:56:11Z", "updatedAt": "2026-07-08T21:56:11Z" },
     { "number": 123, "state": "open", "ecosystem": "npm", "package": "@hono/node-server", "manifest": "pnpm-lock.yaml", "relationship": "transitive", "scope": "runtime", "ghsa": "GHSA-frvp-7c67-39w9", "severity": "medium", "dismissal": null, "fixedAt": null, "autoDismissedAt": null, "createdAt": "2026-07-23T23:09:48Z", "updatedAt": "2026-07-23T23:09:48Z" },
