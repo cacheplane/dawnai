@@ -26,9 +26,14 @@ describe("validateBrowseQuery — bounds", () => {
     ok({ cursor: "abc", offset: 0 })
     bad({ cursor: "abc", offset: 10 }, /cursor and a non-zero offset/)
   })
+  it("accepts a cursor at the length cap", () => ok({ cursor: "x".repeat(4096) }))
   it("rejects an oversized cursor", () => bad({ cursor: "x".repeat(4097) }, /at most 4096/))
   it("rejects an oversized string value", () =>
     bad({ namespace: "n".repeat(1025) }, /namespace must be at most 1024 bytes/))
+  it("measures the string cap in bytes, not characters", () => {
+    ok({ namespace: "é".repeat(512) })
+    bad({ namespace: "é".repeat(513) }, /namespace must be at most 1024 bytes/)
+  })
 })
 
 describe("validateBrowseQuery — instants and enums", () => {
@@ -38,11 +43,21 @@ describe("validateBrowseQuery — instants and enums", () => {
     bad({ until: "2026-08-09" }, /until must be a full ISO-8601 UTC instant/)
     bad({ now: "not-a-date" }, /now must be a full ISO-8601 UTC instant/)
   })
+  it("rejects well-formed instants that name no real UTC time", () => {
+    bad(
+      { since: "2026-02-31T00:00:00.000Z" },
+      /since "2026-02-31T00:00:00\.000Z" is not a real UTC instant/,
+    )
+    bad({ until: "2026-99-99T99:99:99.999Z" }, /until .* is not a real UTC instant/)
+    bad({ now: "2026-08-09T24:00:00.000Z" }, /now .* is not a real UTC instant/)
+  })
   it("rejects unknown status/kind/sourceType values instead of matching zero rows", () => {
     bad({ status: "bogus" as never }, /invalid status "bogus"/)
     bad({ kind: ["semantic", "nope"] as never }, /invalid kind "nope"/)
     bad({ sourceType: "ghost" as never }, /invalid sourceType "ghost"/)
   })
+  it("rejects an array sourceType — every store binds it as a single parameter", () =>
+    bad({ sourceType: ["run", "user"] as never }, /invalid sourceType \["run","user"\]/))
   it("accepts an empty set (it means 'match nothing', not 'invalid')", () => ok({ status: [] }))
 })
 
@@ -57,6 +72,17 @@ describe("validateBrowseQuery — filters", () => {
       /unknown op "isEmpty" for filter field "content"/,
     )
   })
+  it("accepts one filter on each of the six filterable fields", () =>
+    ok({
+      filters: [
+        { field: "status", op: "in", values: ["active"] },
+        { field: "kind", op: "in", values: ["semantic"] },
+        { field: "content", op: "contains", value: "x" },
+        { field: "namespace", op: "startsWith", value: "app/" },
+        { field: "confidence", op: "gte", value: 0.5 },
+        { field: "updatedAt", op: "onDay", day: "2026-08-09" },
+      ],
+    }))
   it("caps the filter count and forbids two filters on one field", () => {
     const one = { field: "content", op: "contains", value: "x" } as const
     bad(
@@ -121,6 +147,14 @@ describe("validateBrowseQuery — orderBy", () => {
     ok({
       orderBy: [
         { field: "confidence", dir: "desc" },
+        { field: "namespace", dir: "asc" },
+      ],
+    }))
+  it("accepts a full-depth orderBy", () =>
+    ok({
+      orderBy: [
+        { field: "kind", dir: "asc" },
+        { field: "status", dir: "asc" },
         { field: "namespace", dir: "asc" },
       ],
     }))
