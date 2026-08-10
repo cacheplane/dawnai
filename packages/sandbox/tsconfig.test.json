@@ -12,5 +12,6 @@
     "src/**/*.tsx",
     "test/**/*.ts",
     "test/**/*.tsx"
-  ]
+  ],
+  "references": [{ "path": "../workspace" }]
 }
