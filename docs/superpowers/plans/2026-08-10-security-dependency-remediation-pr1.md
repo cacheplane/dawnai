@@ -28,7 +28,7 @@ gate.
 `@hono/node-server` 2.1, CopilotKit 1.66, MCP SDK, Kubernetes client, GitHub
 Actions, Dependabot, and `pnpm audit`.
 
-**Pinned baseline:** `71dfab04e99efe303bd22e36394d68c5862cf502`
+**Pinned baseline:** `d42774ecbc4295e9135ba74e8aab7520c3edd7d2`
 
 **Preferred terminal security set:** Full and production audits contain only
 `GHSA-866g-f22w-33x8`; the live Dependabot open set is exactly alert `#122`.
@@ -43,12 +43,16 @@ if the explicit A/B failure threshold in Task 5 is met and documented.
 - Read: `docs/superpowers/specs/2026-08-09-security-backlog-release-recovery-design.md`
 - Read: `.github/workflows/release.yml`
 - Read: `.github/workflows/publish-chart.yml`
-- Read: `package.json`
-- Read: `pnpm-lock.yaml`
+- Modify: `package.json`
+- Modify: `pnpm-lock.yaml`
 - Create: `scripts/security/dependency-evidence.mjs`
+- Create: `scripts/security/dependency-audit-evidence.mjs`
+- Create: `scripts/security/evidence-file-io.mjs`
 - Create: `scripts/security/github-evidence.mjs`
 - Create: `scripts/security/publication-containment.mjs`
 - Create: `scripts/security/dependabot-reconcile.mjs`
+- Create: `scripts/security/reconciliation-receipt.mjs`
+- Create: `scripts/security/reconciliation-seal.mjs`
 - Create: `test/security-dependencies/dependency-evidence.test.ts`
 - Create: `test/security-dependencies/github-evidence.test.ts`
 - Create: `test/security-dependencies/publication-containment.test.ts`
@@ -72,8 +76,8 @@ test "$(node --version)" = "v24.19.0"
 test "$(pnpm --version)" = "10.33.0"
 git fetch origin main
 test "$(git branch --show-current)" = "blove/security-dependency-remediation"
-test "$(git rev-parse origin/main)" = "71dfab04e99efe303bd22e36394d68c5862cf502"
-test "$(git merge-base origin/main HEAD)" = "71dfab04e99efe303bd22e36394d68c5862cf502"
+test "$(git rev-parse origin/main)" = "d42774ecbc4295e9135ba74e8aab7520c3edd7d2"
+test "$(git merge-base origin/main HEAD)" = "d42774ecbc4295e9135ba74e8aab7520c3edd7d2"
 test "$(git diff --name-only origin/main...HEAD)" = \
   "docs/superpowers/plans/2026-08-10-security-dependency-remediation-pr1.md"
 test -z "$(git status --short)"
@@ -116,9 +120,15 @@ the complete bounded workflow/public-registry containment proof.
 
 First add the dedicated repository-root Vitest config described in Task 2 Step
 1 and register it in `vitest.workspace.ts`; the missing evidence module is the
-first RED. Add focused tests before implementation. Keep the CLI, GitHub
+first RED. Because this repository-root TypeScript project cannot inherit a
+workspace package's private type installation, add the existing workspace-wide
+exact `@types/node` version `26.1.2` as a private root dev dependency and update
+only the root importer in the lockfile; the isolated `tsc --noEmit` command must
+resolve it without a package-relative `typeRoots` workaround. Add focused tests before implementation. Keep the CLI, GitHub
 transport, publication correlation, and alert reconciliation in the four
-focused modules listed above. The CLI exposes four read-only operations:
+public facades listed above; extract audit, exact-file I/O, receipt-schema, and
+seal/writer responsibilities into the dedicated helper modules rather than
+leaving thousand-line mixed-responsibility files. The CLI exposes four read-only operations:
 
 - `audit`: executes exact argv for full and production `pnpm audit --json`, with
   one shared wall-clock deadline, stdout/stderr byte caps, no shell, explicit
@@ -140,7 +150,9 @@ focused modules listed above. The CLI exposes four read-only operations:
   fail closed. The terminal page is proved only by absence of `rel="next"`, not
   by a short page. Exact alert identities bind number/state/ecosystem/package/
   manifest/scope/GHSA/reported severity/dismissal/timestamps to
-  `--expected-identities` and `--expected-open`.
+  `--expected-identities` and `--expected-open`. The identity fixture's
+  `defaultSha` is provenance for the reviewed base, not a decorative field:
+  baseline collection requires it to equal `--expected-default-sha`.
 - `reconcile`: validates the exact merged PR/head/base/merge identity, derives
   `merged_at`, and polls the expected fixed/open alert sets under one validated
   wall-clock deadline, interval, request/byte/record budget, and attempt cap.
@@ -150,16 +162,30 @@ focused modules listed above. The CLI exposes four read-only operations:
   same stable default-branch head before and after. Every fixed record retains
   the baseline package/manifest/scope/GHSA/reported-severity identity, has a
   null dismissal, and has `fixed_at >= merged_at`. It independently validates
+  that the identity fixture's `defaultSha` equals the exact reviewed base SHA,
   the supplied audit receipt, embeds its complete normalized full/production
   status, tuple, severity-total, and empty-muted evidence in the canonical
   reconciliation receipt, and also binds the original audit-receipt digest.
+  It collects complete publication containment both before and after the alert
+  reads and requires the two normalized snapshots to be byte-identical. It
+  selects exactly one successful CI, CodeQL, and Scorecard run for each unique
+  required head in `[mergeSha, observationHead]`; this is exactly three run
+  records when those heads match and six when they differ.
 - `seal-receipt`: accepts only a bounded base64 canonical reconciliation
   receipt plus its exact SHA-256 and immutable repository correlation inputs,
   revalidates the complete receipt schema and digest without network access,
   then writes the exact receipt plus a separate canonical uploader manifest
   containing the current workflow run ID/attempt to a contained output
   directory. The pre-dispatch receipt cannot contain its future uploader run
-  identity. The operation never logs the receipt payload.
+  identity. The operation never logs the receipt payload. The output root is an
+  existing canonical non-symlink directory owned by the current effective user
+  with exact mode `0700`; its ancestor chain is not group/world writable except
+  for a sticky system temporary ancestor. Portable Node lacks `openat`, so a
+  concurrent hostile same-UID process is explicitly outside this local
+  writer's threat model. The writer nevertheless binds and revalidates root,
+  output-directory, and file inode identities; reserves the exact direct-child
+  output atomically with exclusive `mkdir`; uses exact `0600` no-follow,
+  exclusive files; and proves the final two-name directory set and bytes.
 
 Both `baseline` and `reconcile` call `publication-containment.mjs`. Its GitHub
 reads use fixed-argv `gh api --include` one page at a time so credentials remain
@@ -240,7 +266,7 @@ node scripts/security/dependency-evidence.mjs baseline \
   --repo cacheplane/dawnai \
   --inventory-ref HEAD \
   --source-sha "$(git rev-parse HEAD)" \
-  --expected-default-sha 71dfab04e99efe303bd22e36394d68c5862cf502 \
+  --expected-default-sha d42774ecbc4295e9135ba74e8aab7520c3edd7d2 \
   --current-version 0.8.21 \
   --target-version 0.8.22 \
   --expected-identities test/security-dependencies/fixtures/dependabot-baseline.json \
@@ -312,7 +338,7 @@ limited to `test/security-dependencies/**/*.test.ts` and `.tsx`. This is a test
 project, not a new workspace package, and the repo-level TypeScript test files
 must not be pulled into a publishable package's `rootDir`.
 
-Add `test/security-dependencies/tsconfig.json`, extending the repository's Node
+Confirm Task 1's `test/security-dependencies/tsconfig.json` extends the repository's Node
 configuration with DOM libs, `noEmit`, explicit `jsx: "react-jsx"`, and explicit
 path mappings to the chat example's React, ReactDOM, and React Core types used by
 the browser entry.
@@ -1045,9 +1071,12 @@ Critical/Important findings.
 - [ ] **Step 1: Rebase/pin before publication of the branch**
 
 Fetch main. If it moved, rebase and repeat frozen install, resolution receipt,
-full/prod audits, focused tests, and all affected validation. Record the exact
-reviewed head SHA and reviewed base SHA, announce an operational main freeze for
-the merge window, and require a clean worktree. Auto-merge remains off.
+full/prod audits, focused tests, and all affected validation. Recapture the
+complete live alert baseline against the new base; update and review the
+identity fixture's `defaultSha`, the checked-in baseline receipt, and their
+digests before accepting the rebased branch. Record the exact reviewed head SHA
+and reviewed base SHA, announce an operational main freeze for the merge
+window, and require a clean worktree. Auto-merge remains off.
 
 - [ ] **Step 2: Push the fix/evidence commits and finalize the draft PR**
 
@@ -1156,7 +1185,9 @@ The operation validates the exact PR number, reviewed base/head, merge commit
 and parents, observation head, and `merged_at`; verifies CI/CodeQL/Scorecard run
 IDs, attempts, heads, and success conclusions; reruns complete publication
 containment before and after alert reads; and binds the audit receipt plus every
-input fixture by SHA-256. The audit receipt is not merely referenced: after
+input fixture by SHA-256. It requires the Dependabot identity fixture's
+`defaultSha` to equal the exact reviewed base SHA; it is not compared with the
+later post-merge observation head. The audit receipt is not merely referenced: after
 schema and fixture validation, its complete normalized full/production status,
 package/version/GHSA/reported-severity tuples, severity totals, and explicit
 empty muted sets are embedded in the canonical reconciliation receipt. It polls
@@ -1166,12 +1197,44 @@ open snapshot A == open snapshot B around one fresh exact-number read of every
 fixed alert and requires the live default head to equal
 `OBSERVATION_HEAD_SHA` before A and after B.
 
-The canonical receipt schema contains repository, PR, reviewed base/head,
-merge and parent SHAs, observation head, CI/security run IDs and attempts,
-started/completed observation timestamps, complete publication facts, the
-normalized full/production audit evidence, exact open/fixed alert records, and
-all input/output digests. Raw alert descriptions, headers, job logs,
-credentials, and error bodies are excluded.
+The canonical receipt has this exact top-level shape (all fields required; no
+nullable fields):
+
+```text
+schemaVersion, kind, repository, observationHead,
+observation { startedAt, completedAt },
+pr { number, reviewedBaseSha, reviewedHeadSha, mergeSha,
+     mergeParentShas, mergedAt },
+verificationRuns[],
+digests { inputs { auditExpectationFixtureSha256, auditReceiptSha256,
+                   baselineReceiptSha256, dependabotIdentitiesFixtureSha256 },
+          outputs { fixedAlertsSha256, openSnapshotASha256,
+                    openSnapshotBSha256, publicationBeforeSha256,
+                    publicationAfterSha256 } },
+audit { digest, evidence }, dependabot { fixed, open }, publication
+```
+
+Each verification-run record has exact keys `workflowPath`, `runId`,
+`runAttempt`, `headSha`, `headBranch`, `event`, `status`, and `conclusion`. The allowed paths are
+`.github/workflows/ci.yml`, `.github/workflows/codeql.yml`, and
+`.github/workflows/scorecard.yml`; status/conclusion are exactly
+`completed`/`success`, event is exactly `push`, and `headBranch` is exactly
+`main`. For each path/head, complete
+pagination may contain other workflow events, but exactly one distinct `push`
+run ID must exist; a rerun is that same run ID's latest positive attempt. The
+retained set is the Cartesian product of the three paths and the unique
+merge/observation heads, with unique positive run IDs and stable head/path
+ordering. Merge parents are exactly `[reviewedBaseSha,
+reviewedHeadSha]`; `mergedAt <= startedAt <= completedAt`; completion is
+captured after the closing publication/head proof and before the shared
+deadline. Input hashes cover the exact bounded file bytes actually validated.
+Audit digest fields agree with the normalized audit bytes. Open A/B digests
+agree with each other and the retained open set; the fixed digest matches the
+retained fixed set; publication before/after digests agree with each other and
+the retained publication snapshot. Publication default/source SHAs equal the
+observation head. Raw alert descriptions, headers, job logs, credentials, and
+error bodies are excluded. The receipt never embeds its own digest or future
+uploader/artifact identities.
 
 ```bash
 set -euo pipefail
@@ -1189,6 +1252,8 @@ node scripts/security/dependency-evidence.mjs reconcile \
   --expected-identities test/security-dependencies/fixtures/dependabot-baseline.json \
   --expected-fixed 123,124,125,160,162,163,164,170,171,172,176,178,179,180,181,191,192,193,194,195,196,197,198,199,200,201 \
   --expected-open 122 \
+  --baseline-receipt docs/superpowers/audits/2026-08-10-dependency-remediation-baseline.json \
+  --audit-expectation test/security-dependencies/fixtures/audit-provider-utils-only.json \
   --audit-receipt /tmp/dawn-pr1-postmerge-audit.json \
   --wait-timeout-ms 900000 \
   --poll-interval-ms 15000 \
