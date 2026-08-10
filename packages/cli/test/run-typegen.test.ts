@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import * as compiler from "@dawn-ai/core/internal/compiler"
 import { discoverRoutes } from "@dawn-ai/core/node"
 import { afterEach, describe, expect, test, vi } from "vitest"
@@ -10,6 +11,8 @@ import { runTypegen } from "../src/lib/typegen/run-typegen.js"
 
 const tempDirs: string[] = []
 const originalCwd = process.cwd()
+const repoRoot = resolve(import.meta.dirname, "../../..")
+const generatedDeclarationFiles = ["dawn.generated.d.ts", "scenarios.generated.d.ts"] as const
 
 afterEach(async () => {
   vi.restoreAllMocks()
@@ -285,4 +288,132 @@ describe("runTypegen", () => {
     const stateJson = JSON.parse(await readFile(stateJsonPath, "utf8"))
     expect(stateJson).toEqual([{ name: "context", reducer: "replace", default: "" }])
   })
+
+  test.each(["app-basic", "app-research"] as const)(
+    "keeps the %s template declaration pair in sync with typegen",
+    async (templateName) => {
+      const templateDir = join(repoRoot, "packages", "devkit", "templates", templateName)
+      const trackedPaths = generatedDeclarationFiles.map((fileName) =>
+        join(templateDir, ".dawn", fileName),
+      )
+      for (const trackedPath of trackedPaths) {
+        expect(existsSync(trackedPath)).toBe(true)
+      }
+      const trackedDeclarations = await Promise.all(
+        trackedPaths.map((trackedPath) => readFile(trackedPath, "utf8")),
+      )
+
+      const appRoot = await mkdtemp(join(tmpdir(), `dawn-${templateName}-typegen-drift-`))
+      tempDirs.push(appRoot)
+      await materializeDevkitTemplate(templateDir, appRoot)
+      await installTemplateTypegenDependencies(appRoot)
+      await Promise.all(
+        generatedDeclarationFiles.map((fileName) =>
+          rm(join(appRoot, ".dawn", fileName), { force: true }),
+        ),
+      )
+
+      process.chdir(appRoot)
+      try {
+        const manifest = await discoverRoutes({ appRoot })
+        await runTypegen({ appRoot, manifest })
+      } finally {
+        process.chdir(originalCwd)
+      }
+
+      for (const [index, fileName] of generatedDeclarationFiles.entries()) {
+        const regeneratedPath = join(appRoot, ".dawn", fileName)
+        expect(existsSync(regeneratedPath)).toBe(true)
+        await expect(readFile(regeneratedPath, "utf8")).resolves.toBe(trackedDeclarations[index])
+      }
+    },
+  )
 })
+
+async function materializeDevkitTemplate(templateDir: string, appRoot: string): Promise<void> {
+  const modulePath = pathToFileURL(
+    join(repoRoot, "packages", "devkit", "src", "write-template.ts"),
+  ).href
+  const { writeTemplate } = (await import(modulePath)) as {
+    writeTemplate(options: {
+      readonly replacements: Readonly<Record<string, string>>
+      readonly targetDir: string
+      readonly templateDir: string
+    }): Promise<void>
+  }
+
+  await writeTemplate({
+    replacements: {
+      appName: "typegen-drift-check",
+      dawnCliSpecifier: "workspace:*",
+      dawnConfigTypescriptSpecifier: "workspace:*",
+      dawnCoreSpecifier: "workspace:*",
+      dawnEvalsSpecifier: "workspace:*",
+      dawnInspectorSpecifier: "workspace:*",
+      dawnLangchainSpecifier: "workspace:*",
+      dawnSandboxSpecifier: "workspace:*",
+      dawnSdkSpecifier: "workspace:*",
+      dawnTestingSpecifier: "workspace:*",
+    },
+    targetDir: appRoot,
+    templateDir,
+  })
+}
+
+async function installTemplateTypegenDependencies(appRoot: string): Promise<void> {
+  const modulesDir = join(appRoot, "node_modules")
+  await Promise.all([
+    createModuleStub(
+      join(modulesDir, "@dawn-ai", "cli"),
+      "@dawn-ai/cli",
+      "export const config = (value) => value\n",
+      "export function config<T>(value: T): T\n",
+    ),
+    createModuleStub(
+      join(modulesDir, "@dawn-ai", "sandbox"),
+      "@dawn-ai/sandbox",
+      "export const dockerSandbox = (options) => ({ options })\n",
+      "export function dockerSandbox(options: unknown): unknown\n",
+    ),
+    createModuleStub(
+      join(modulesDir, "@dawn-ai", "sdk"),
+      "@dawn-ai/sdk",
+      "export const defineMemory = (value) => value\n",
+      [
+        "export interface DawnToolContext {",
+        "  readonly fs: {",
+        "    listDir(path?: string): Promise<string[]>",
+        "    readFile(path: string): Promise<string>",
+        "  }",
+        "}",
+        "export function defineMemory<T>(value: T): T",
+        "",
+      ].join("\n"),
+    ),
+    linkDirectory(
+      join(repoRoot, "packages", "core", "node_modules", "zod"),
+      join(modulesDir, "zod"),
+    ),
+  ])
+}
+
+async function createModuleStub(
+  moduleDir: string,
+  name: string,
+  source: string,
+  types: string,
+): Promise<void> {
+  await Promise.all([
+    createFile(
+      join(moduleDir, "package.json"),
+      `${JSON.stringify({ exports: { ".": { types: "./index.d.ts", default: "./index.js" } }, name, type: "module" }, null, 2)}\n`,
+    ),
+    createFile(join(moduleDir, "index.js"), source),
+    createFile(join(moduleDir, "index.d.ts"), types),
+  ])
+}
+
+async function linkDirectory(target: string, linkPath: string): Promise<void> {
+  await mkdir(dirname(linkPath), { recursive: true })
+  await symlink(target, linkPath, process.platform === "win32" ? "junction" : "dir")
+}

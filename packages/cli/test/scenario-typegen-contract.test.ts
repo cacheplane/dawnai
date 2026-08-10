@@ -12,6 +12,8 @@ import { runTypegen } from "../src/lib/typegen/run-typegen.js"
 const repoRoot = resolve(import.meta.dirname, "../../..")
 const sdkTestingEntry = resolve(import.meta.dirname, "../../sdk/src/testing/index.ts")
 const nodeTypesRoot = resolve(import.meta.dirname, "../node_modules/@types")
+const typescriptCliPath = resolve(repoRoot, "node_modules/typescript/bin/tsc")
+const compilerTimeoutMs = 10_000
 const tempDirs: string[] = []
 
 afterEach(async () => {
@@ -23,7 +25,9 @@ async function createFile(filePath: string, content: string): Promise<void> {
   await writeFile(filePath, content, "utf8")
 }
 
-test("generated scenario declarations compile with private application tool types", async () => {
+test("generated scenario declarations compile with private application tool types", {
+  timeout: 15_000,
+}, async () => {
   const appRoot = await mkdtemp(join(tmpdir(), "dawn-scenario-typegen-contract-"))
   tempDirs.push(appRoot)
 
@@ -105,7 +109,11 @@ test("generated scenario declarations compile with private application tool type
     )}\n`,
   )
 
-  const result = await spawnTsc(tsconfigPath)
+  const result = await runCompilerProcess({
+    compilerPath: typescriptCliPath,
+    timeoutMs: compilerTimeoutMs,
+    tsconfigPath,
+  })
   expect(
     result.exitCode,
     [`tsc exited with ${result.exitCode}`, `stdout:\n${result.stdout}`, `stderr:\n${result.stderr}`]
@@ -123,19 +131,60 @@ test("generated scenario declarations compile with private application tool type
   )
 })
 
-async function spawnTsc(tsconfigPath: string): Promise<{
+test("terminates the compiler process when its timeout expires", { timeout: 5_000 }, async () => {
+  const appRoot = await mkdtemp(join(tmpdir(), "dawn-scenario-compiler-timeout-"))
+  tempDirs.push(appRoot)
+  const compilerPath = join(appRoot, "hanging-compiler.mjs")
+  await createFile(
+    compilerPath,
+    [
+      'process.stdout.write("compiler stdout\\n")',
+      'process.stderr.write("compiler stderr\\n")',
+      "setInterval(() => {}, 1_000)",
+      "",
+    ].join("\n"),
+  )
+
+  let error: unknown
+  try {
+    await runCompilerProcess({
+      compilerPath,
+      timeoutMs: 1_000,
+      tsconfigPath: join(appRoot, "unused-tsconfig.json"),
+    })
+  } catch (caught) {
+    error = caught
+  }
+
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toContain("timed out after 1000ms")
+  expect((error as Error).message).toContain("compiler stdout")
+  expect((error as Error).message).toContain("compiler stderr")
+})
+
+async function runCompilerProcess(options: {
+  readonly compilerPath: string
+  readonly timeoutMs: number
+  readonly tsconfigPath: string
+}): Promise<{
   readonly exitCode: number | null
   readonly stderr: string
   readonly stdout: string
 }> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn("pnpm", ["exec", "tsc", "-p", tsconfigPath], {
+    const child = spawn(process.execPath, [options.compilerPath, "-p", options.tsconfigPath], {
       cwd: repoRoot,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     })
     let stdout = ""
     let stderr = ""
+    let timedOut = false
+    let settled = false
+    const timeout = setTimeout(() => {
+      timedOut = true
+      child.kill("SIGKILL")
+    }, options.timeoutMs)
 
     child.stdout.setEncoding("utf8")
     child.stderr.setEncoding("utf8")
@@ -145,9 +194,41 @@ async function spawnTsc(tsconfigPath: string): Promise<{
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk
     })
-    child.once("error", rejectPromise)
+    child.once("error", (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      rejectPromise(
+        new Error(
+          formatCompilerFailure(
+            `Failed to start TypeScript compiler: ${error.message}`,
+            stdout,
+            stderr,
+          ),
+        ),
+      )
+    })
     child.once("close", (exitCode) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      if (timedOut) {
+        rejectPromise(
+          new Error(
+            formatCompilerFailure(
+              `TypeScript compiler timed out after ${options.timeoutMs}ms`,
+              stdout,
+              stderr,
+            ),
+          ),
+        )
+        return
+      }
       resolvePromise({ exitCode, stderr, stdout })
     })
   })
+}
+
+function formatCompilerFailure(summary: string, stdout: string, stderr: string): string {
+  return [summary, `stdout:\n${stdout}`, `stderr:\n${stderr}`].join("\n")
 }
