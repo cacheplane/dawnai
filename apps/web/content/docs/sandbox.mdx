@@ -14,7 +14,7 @@ import { dockerSandbox } from "@dawn-ai/sandbox"
 
 export default config({
   sandbox: {
-    provider: dockerSandbox({ image: "node:22-slim" }),
+    provider: dockerSandbox({ image: "node:24-slim" }),
     network: { mode: "allow", denylist: ["169.254.169.254"] },
     env: { NODE_ENV: "production" },
     resources: { memoryMb: 512, cpus: 1, timeoutMs: 120_000 },
@@ -31,7 +31,7 @@ No `sandbox` key means no behavior change — the app keeps using the local `wor
 
 - **Filesystem** — `readFile`, `writeFile`, and `listDir` operate inside the sandbox's workspace volume. The host filesystem is never touched.
 - **Shell** — `runBash` executes inside the sandbox, still gated by the [permissions](/docs/permissions) allow/deny lists.
-- **Network** — governed by the configured [network policy](#network-policy); `deny` mode is zero egress.
+- **Network** — governed by the configured [network policy](#network-policy); the exact `deny` enforcement depends on the provider.
 - **Environment** — the host's environment variables are never inherited. Only the key/value pairs in `sandbox.env` are injected into the sandbox.
 - **Resources** — `resources.memoryMb` and `resources.cpus` cap the sandbox's memory and CPU; `resources.timeoutMs` caps how long a single exec call may run.
 
@@ -67,7 +67,7 @@ import { dockerSandbox } from "@dawn-ai/sandbox"
 
 export default config({
   sandbox: {
-    provider: dockerSandbox({ image: "node:22-slim" }),
+    provider: dockerSandbox({ image: "node:24-slim" }),
     security: { runAsNonRoot: false, readOnlyRootFilesystem: false }, // opt out if your image needs it
   },
 })
@@ -91,21 +91,21 @@ export default config({
 
 ```ts
 sandbox: {
-  provider: dockerSandbox({ image: "node:22-slim" }),
+  provider: dockerSandbox({ image: "node:24-slim" }),
   resources: { timeoutMs: 120_000 },
 },
 ```
 
-It's enforced only when set — omitting `resources.timeoutMs` leaves exec calls unbounded in duration (still subject to `memoryMb`/`cpus` caps, if configured). Enforcement shells out to the `timeout` binary (GNU coreutils) inside the container, so when you set `resources.timeoutMs` make sure your image ships it — most full base images (`node:22-slim`, `debian`, `ubuntu`) do, but minimal ones (`alpine` without the `coreutils` package, distroless) may not. The ceiling is rounded up to whole seconds (`timeoutMs: 500` enforces a 1-second limit).
+It's enforced only when set — omitting `resources.timeoutMs` leaves exec calls unbounded in duration (still subject to `memoryMb`/`cpus` caps, if configured). Enforcement shells out to the `timeout` binary (GNU coreutils) inside the container, so when you set `resources.timeoutMs` make sure your image ships it — most full base images (`node:24-slim`, `debian`, `ubuntu`) do, but minimal ones (`alpine` without the `coreutils` package, distroless) may not. The ceiling is rounded up to whole seconds (`timeoutMs: 500` enforces a 1-second limit).
 
 ## Network policy
 
-`sandbox.network` takes one of two shapes:
+`sandbox.network` takes one of two shapes. The portable config expresses intent; each provider maps it to different enforcement:
 
-- **`{ mode: "deny" }`** — zero egress. This is an exact guarantee in the Docker reference (`--network none`); the sandbox cannot reach the network at all. An optional `allowlist` may be added for providers that support scoped egress.
+- **`{ mode: "deny" }`** — default-closed egress. Docker enforces this exactly with `--network none`. Kubernetes keeps cluster DNS reachable and can add allowlisted CIDRs, so it does not fully eliminate egress.
 - **`{ mode: "allow", denylist?: [...] }`** — egress is on by default, with an optional denylist of hosts to block.
 
-The default, when `network` is omitted, is `{ mode: "allow", denylist: ["169.254.169.254"] }` — the cloud-metadata endpoint is blocked out of the box since it's a common SSRF target.
+The default, when `network` is omitted, is `{ mode: "allow", denylist: ["169.254.169.254"] }`, expressing an intent to block the common cloud-metadata SSRF target. The reference providers do not rigorously enforce an allow-mode denylist; use an egress proxy or provider with stronger enforcement when that boundary matters.
 
 <Callout type="warn" title="allow-mode denylist is best-effort">
   In the Docker reference provider, the `allow`-mode denylist is **best-effort**, not enforced with the same rigor as `deny` mode. Blocking arbitrary outbound hosts from inside a container needs an in-container firewall rule or an egress proxy; the reference does not guarantee every denylisted host is unreachable. `deny` mode's `--network none` remains exact. A provider backed by a microVM or a cloud sandbox can enforce the denylist more strongly.
@@ -121,14 +121,23 @@ import { kubernetesSandbox } from "@dawn-ai/sandbox"
 
 export default config({
   sandbox: {
-    provider: kubernetesSandbox({ image: "node:22-slim", namespace: "dawn-sandboxes" }),
+    provider: kubernetesSandbox({ image: "node:24-slim", namespace: "dawn-sandboxes" }),
     network: { mode: "deny" },
     resources: { memoryMb: 512, cpus: 1, diskGb: 2 },
   },
 })
 ```
 
-`kubernetesSandbox({ image, namespace?, storageClass?, startupTimeoutMs? })` implements the same `SandboxProvider` contract as `dockerSandbox` — every `security`, `network`, and `resources` field on `SandboxConfig` means the same thing regardless of which provider is configured.
+`kubernetesSandbox({ image, namespace?, storageClass?, startupTimeoutMs? })` implements the same `SandboxProvider` contract as `dockerSandbox`. The shared `security`, `network`, and `resources` shape expresses the same intent, but it does **not** imply identical enforcement:
+
+| Policy intent | Docker provider | Kubernetes provider |
+|---|---|---|
+| `network.mode: "deny"` | `--network none`; no network egress | `NetworkPolicy`; permits cluster DNS and allowlisted CIDRs, and requires a policy-enforcing CNI |
+| `network.mode: "allow"` denylist | Best-effort; not rigorously enforced | Best-effort; no provider-created policy |
+| `security.pidsLimit` | `--pids-limit` (default 512) | Not enforced by the provider; use the node-level kubelet PID limit |
+| `resources.diskGb` | Ignored | PVC storage request |
+
+Kubernetes DNS access also leaves a DNS-tunneling path. Choose and validate the provider against your threat model.
 
 **Per thread:** a Pod plus a per-thread `ReadWriteOnce` PersistentVolumeClaim mounted at `/workspace`, mirroring the Docker provider's named-volume persistence. `release()` deletes the Pod but keeps the PVC, so the next turn's `acquire()` schedules a fresh Pod against the existing claim with the workspace intact. `destroy()` deletes both the Pod and the PVC, discarding the workspace permanently — the same lifecycle semantics as the Docker provider's container/volume split, just on Kubernetes' own objects.
 
@@ -138,7 +147,7 @@ export default config({
 
 ### Security hardening on Kubernetes
 
-The `security` intent maps onto the Pod and container `SecurityContext` fields instead of `docker run` flags, but the defaults and opt-outs are identical to the table in [Security hardening](#security-hardening):
+The `security` intent maps onto Pod and container `SecurityContext` fields instead of `docker run` flags. Most defaults and opt-outs match [Security hardening](#security-hardening); the process-limit exception is called out below:
 
 | Control | Kubernetes mechanism |
 | --- | --- |
@@ -160,7 +169,7 @@ The same `network` config (`{ mode: "deny", allowlist? }` or `{ mode: "allow", d
 - **`{ mode: "allow" }`** — no `NetworkPolicy` is created, so egress is open by default; a `denylist`, if given, is best-effort only and not enforced — the same honest-scope caveat as the Docker provider's `allow`-mode denylist.
 
 <Callout type="warn" title="NetworkPolicy needs a policy-capable CNI">
-  A Kubernetes `NetworkPolicy` object is inert unless the cluster's CNI plugin enforces it — Calico and Cilium do; some CNIs silently ignore `NetworkPolicy` entirely. `dawn check` runs this provider's `preflight()`, which warns when it can't confirm the cluster's CNI enforces `NetworkPolicy`, but it can't guarantee enforcement the way `--network none` does for Docker's `deny` mode. Confirm your cluster's CNI supports `NetworkPolicy` before relying on `deny` mode as a hard boundary.
+  A Kubernetes `NetworkPolicy` object is inert unless the cluster's CNI plugin enforces it — Calico and Cilium do; some CNIs silently ignore `NetworkPolicy` entirely. `dawn check` runs this provider's `preflight()`, which warns when it can't confirm the cluster's CNI enforces `NetworkPolicy`, but it can't guarantee enforcement the way `--network none` does for Docker's `deny` mode. Even with enforcement, cluster DNS remains reachable and the policy does not prevent DNS tunneling. Confirm your cluster's CNI and DNS controls before relying on `deny` mode as a boundary.
 </Callout>
 
 Kubernetes Pod isolation is the same boundary class as Docker's container isolation, not a microVM — the same caveats in [What it is — and isn't](#what-it-is--and-isnt) apply. The namespace, RBAC, default-deny `NetworkPolicy`, `LimitRange`, and PVC-reaper are provisioned separately by the Helm chart below, not by the provider itself.
@@ -229,7 +238,7 @@ helm install dawn-sandbox-infra oci://ghcr.io/cacheplane/charts/dawn-sandbox-inf
 
 ## Deploying a Dawn app (Helm)
 
-`dawn build`'s `node` target (see [Deploying to production (Node/Docker)](/docs/deployment#deploying-to-production-nodedocker)) emits a `server.mjs` plus a hardened `Dockerfile` that boot the real Dawn runtime. **Build that image when your app configures `kubernetesSandbox`** — the sandbox provider only runs inside the Dawn runtime process, so an image built from the `langsmith` target's `langgraph.json` (containerized separately with `@langchain/langgraph-cli`'s `langgraphjs dockerfile`) never calls the Kubernetes API and will not create sandbox Pods, even with `kubernetesSandbox` configured in `dawn.config.ts`. The `dawn-app` Helm chart takes that **user-built image** and runs it on Kubernetes as a Deployment + Service, with optional Ingress, HorizontalPodAutoscaler, and PodDisruptionBudget. It owns only the Kubernetes deploy concerns — it does not build your image or bake `dawn.config.ts`; the image is the runtime contract.
+`dawn build`'s `node` target (see [Deploying to production (Node/Docker)](/docs/deployment#deploying-to-production-nodedocker)) emits a `server.mjs` plus a hardened `Dockerfile` that boot the real Dawn runtime. **Build that image when your app configures `kubernetesSandbox`** — the sandbox provider only runs inside the Dawn runtime process, so an image built from the `langsmith` target's `langgraph.json` (containerized separately with `@langchain/langgraph-cli`'s `langgraphjs dockerfile`) never calls the Kubernetes API and will not create sandbox Pods, even with `kubernetesSandbox` configured in `dawn.config.ts`. The `dawn-app` Helm chart takes that **user-built image** and runs it on Kubernetes as a Deployment + Service, with optional Ingress and PodDisruptionBudget. It owns only the Kubernetes deploy concerns — it does not build your image or bake `dawn.config.ts`; the image is the runtime contract.
 
 ```bash
 # Build the image via dawn build's node target (on by default)
@@ -265,7 +274,7 @@ If your app's `dawn.config.ts` configures `kubernetesSandbox`, the app process c
 
 The chart's post-install NOTES print the exact subject to add for your release. Either way, keep `sandboxNamespace` (informational only) in sync with the `namespace` passed to `kubernetesSandbox({ namespace })` in `dawn.config.ts` and with `dawn-sandbox-infra`'s `namespace.name`.
 
-### Env, secrets, and scaling
+### Env, secrets, and replicas
 
 Supply environment variables directly (`env`) or via an existing Secret (`secretName`, wired as a convenience `envFrom.secretRef` — the chart does not template Secrets itself):
 
@@ -275,15 +284,18 @@ helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
   --set secretName=my-app-secrets
 ```
 
-Ingress, autoscaling, and a PodDisruptionBudget are all opt-in:
+Ingress and a PodDisruptionBudget are opt-in:
 
 ```bash
 helm install dawn-app oci://ghcr.io/cacheplane/charts/dawn-app \
   --set image.repository=ghcr.io/you/your-app \
   --set ingress.enabled=true --set ingress.className=nginx --set ingress.host=app.example.com \
-  --set autoscaling.enabled=true --set autoscaling.maxReplicas=10 \
   --set podDisruptionBudget.enabled=true
 ```
+
+<Callout type="warn" title="Do not scale replicas without distributed run coordination">
+  The Dawn HTTP runtime's one-run-per-thread gate and cancellation registry are process-local. Shared Postgres stores make thread data durable, but do not distribute that coordination. Keep one replica unless you provide sticky routing plus distributed per-thread serialization and route cancellation to the replica that owns the run.
+</Callout>
 
 <Callout type="warn" title="A user-built image, not a Dawn-hosted runtime">
   This chart cannot validate a real Dawn app end-to-end in CI — that needs an app image and model credentials. CI instead validates the chart's manifests (lint, render, `kubeconform`) plus a gated `kind` smoke test that installs the chart with a placeholder image and confirms the Deployment and Service come up and serve traffic. Validating your actual app image against a real model is your responsibility.
@@ -361,7 +373,7 @@ The build gate is not the last word, because it can be bypassed: an entry compos
 
 ## What it is — and isn't
 
-**Is:** per-thread kernel-level filesystem and process isolation; the host filesystem is never touched; the host environment is never leaked into the sandbox; CPU and memory caps via `resources`; multi-tenant separation by thread; `network: { mode: "deny" }` is zero egress; the workspace survives turns, server restarts, and container crashes; hardened by default — all Linux capabilities dropped, no privilege escalation, a read-only root filesystem, a non-root user, and a process-count limit, each with an explicit opt-out.
+**Is:** per-thread kernel-level filesystem and process isolation; the host filesystem is never touched; the host environment is never leaked into the sandbox; CPU and memory caps via `resources`; multi-tenant separation by thread; provider-specific deny-mode egress control; the workspace survives turns, server restarts, and container crashes; hardened by default — all Linux capabilities dropped, no privilege escalation, a read-only root filesystem, and a non-root user. Docker also applies a process-count limit; Kubernetes requires a node-level kubelet setting for that control.
 
 **Is not:** a guarantee against container-escape zero-days. Dropped capabilities, a non-root user, a read-only root filesystem, and deny-mode networking materially raise the bar an attacker has to clear, but this remains Docker's isolation boundary, not a microVM. That's why the hardening is expressed as a provider-agnostic `SandboxPolicy.security` intent rather than a Docker-specific flag set: a gVisor-, Kata-, or cloud-microVM-backed provider satisfies the same seam with a stronger underlying substrate, as a drop-in replacement with no change to your app code. The `allow`-mode denylist is best-effort in the Docker reference; it does not stop an agent exfiltrating its own sandbox's data under `allow` mode. And the sandbox does not govern tool *surface* — that's [tool scoping](/docs/tools)'s job (`agent({ tools })`); the sandbox and tool scoping are complementary layers, not substitutes for each other.
 

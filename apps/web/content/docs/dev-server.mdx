@@ -28,7 +28,7 @@ echo '{"messages":[{"role":"user","content":"Hello"}]}' | dawn run '/research' -
 
 ## Agent Protocol endpoints
 
-The dev server exposes eight endpoints organized around a thread lifecycle: create thread → run (wait or stream) → read state → resume. Anything else returns 404. Thread state persists in SQLite under `.dawn/` and survives server restarts — see [Configuration](/docs/configuration) for the `checkpointer` and `threadsStore` defaults and override options.
+The dev server exposes the endpoints below for health, thread execution, and memory-candidate review. Anything else returns 404. By default, thread state persists in SQLite under `.dawn/` and survives server restarts — see [Configuration](/docs/configuration) for the `checkpointer` and `threadsStore` defaults and override options.
 
 ### Thread lifecycle with curl
 
@@ -152,6 +152,8 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     | `subagent.message` | `{ ... }` | Message emitted by a subagent |
     | `subagent.end` | `{ ... }` | Subagent finished |
     | `done` | `{ output }` | Final event; marks end of stream |
+
+    For long-running streams, Dawn sends the SSE comment `: ping\n\n` every 15 seconds by default. SSE clients ignore comment frames; the heartbeat keeps intermediaries from treating an otherwise quiet connection as idle.
   </Tab>
   <Tab label="GET /threads/:thread_id/state">
     Read the latest checkpoint state for a thread.
@@ -181,6 +183,8 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     ```
 
     `resume` must contain the complete pending interrupt set, with each public `interruptId` exactly once. A `cancelled` entry has only `interruptId` and `status` and maps to denial. The body requires exactly `resume` and `route`, and each entry rejects unknown fields. Nested subagent interrupts are resumed through this root thread; clients never address the child checkpoint separately. The removed scalar resume body is not accepted.
+
+    Long-running resume streams use the same default 15-second `: ping\n\n` SSE comments as `runs/stream`. Clients ignore these comments.
   </Tab>
   <Tab label="POST /threads/:thread_id/cancel">
     Stop the run currently in flight on a thread. Checkpointed state is kept, so the thread can still be inspected or resumed afterwards; there is no rollback.
@@ -194,9 +198,39 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
 
     A cancelled SSE run terminates with `event: done` and `data: {"output":{"cancelled":true}}`, which is how clients tell cancellation apart from failure. A cancelled `runs/wait` returns `409` with `error.details.code` of `run_cancelled` — it has not sent a response body yet, so it can still use a status code, whereas a stream has already committed to `200`.
   </Tab>
+  <Tab label="GET /memory/candidates">
+    List candidate memory records across all namespaces. This public management endpoint bypasses middleware.
+
+    ```
+    GET /memory/candidates
+    -> 200 { "candidates": [...] }
+    ```
+  </Tab>
+  <Tab label="POST /memory/candidates/:id/approve">
+    Approve a candidate using identity-aware reconciliation. The response reports whether it was activated, superseded a contradicting active record, or deduplicated against an identical active record.
+
+    ```
+    POST /memory/candidates/:id/approve
+    -> 200 { "record": {...}, "action": "activated" | "superseded" | "deduped", "superseded": [...] }
+    -> 404 if the record does not exist
+    -> 409 if the record is not a candidate
+    ```
+
+    This public management endpoint bypasses middleware.
+  </Tab>
+  <Tab label="POST /memory/candidates/:id/reject">
+    Reject a candidate by deleting its record.
+
+    ```
+    POST /memory/candidates/:id/reject
+    -> 200 { "ok": true }
+    ```
+
+    This public management endpoint bypasses middleware.
+  </Tab>
 </Tabs>
 
-The `route` format `<routeId>#<kind>` is the same format `dawn build` writes into the `graphs` map of `.dawn/build/langgraph.json`, so the same client request body works against `dawn dev` and against a deployed runtime.
+The `route` format `<routeId>#<kind>` is the same format `dawn build` writes into the `graphs` map of `.dawn/build/langgraph.json`. The `{ route, input }` request body is shared by Dawn's dev, Node, and Hono HTTP runtimes. LangSmith is a separate server with its own request envelope keyed by `assistant_id`; the Dawn body is not portable there unchanged.
 
 ### One run at a time per thread
 
@@ -206,14 +240,14 @@ The gate is tracked in memory by the process serving the request, not by the thr
 
 ### Client disconnect
 
-Agent Protocol runs **keep going** when the client disconnects. Runs are checkpointed and threads are resumable, so a dropped connection is treated as a lost viewer rather than a lost intent — and on the wire a deliberate stop is indistinguishable from a flaky network. This matches LangGraph Platform, which defaults to `on_disconnect: "continue"` for the same endpoints.
+Agent Protocol `runs/stream`, `runs/wait`, and `resume` runs **keep going** when the client disconnects. Runs are checkpointed and threads are resumable, so a dropped connection is treated as a lost viewer rather than a lost intent — and on the wire a deliberate stop is indistinguishable from a flaky network. This matches LangGraph Platform, which defaults to `on_disconnect: "continue"` for the same endpoints.
 
-To actually stop a run, call `POST /threads/:thread_id/cancel`.
+To actually stop a run, call `POST /threads/:thread_id/cancel`. Server shutdown also aborts in-flight runs.
 
 The [AG-UI endpoint](#ag-ui-endpoint) takes the opposite default and aborts on disconnect, because it is an ephemeral surface with no reattach and nothing to resume.
 
 <Callout type="warn" title="Run tracking is single-replica">
-Run tracking is in-memory and process-local, so both the one-run-per-thread gate and `/cancel` assume a **single replica**. This is not a new constraint — Dawn's threads database and checkpoints are already pod-local — but it is worth knowing before scaling out. See [deployment](/docs/deployment).
+Run tracking is in-memory and process-local, so both the one-run-per-thread gate and `/cancel` assume a **single replica**. Shared Postgres thread, checkpoint, or permission stores add persistence but do not distribute this coordination. Multiple replicas require sticky routing plus a distributed per-thread serialization and cancel-routing design. The default dev and Node stores are a separate concern: they are local SQLite stores unless configured otherwise. See [deployment](/docs/deployment).
 </Callout>
 
 ## AG-UI endpoint
@@ -294,7 +328,7 @@ The parent process keeps the HTTP server alive while child route runtimes restar
 <RelatedCards items={[
   { href: "/docs/testing", title: "Testing", subtitle: "run scenarios against a live dev server via run.url" },
   { href: "/docs/deployment", title: "Deployment", subtitle: "dawn build and the LangSmith handoff" },
-  { href: "/docs/middleware", title: "Middleware", subtitle: "how src/middleware.ts gates local runtime requests" },
+  { href: "/docs/middleware", title: "Middleware", subtitle: "how src/middleware.ts gates Dawn HTTP runtime requests" },
   { href: "/docs/planning", title: "Planning", subtitle: "plan_update events over /runs/stream" },
   { href: "/docs/subagents", title: "Subagents", subtitle: "child events stream as subagent.*" },
   { href: "/docs/faq", title: "FAQ", subtitle: "where AG-UI and CopilotKit fit" },
