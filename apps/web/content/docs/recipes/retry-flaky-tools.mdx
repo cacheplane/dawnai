@@ -1,6 +1,6 @@
-# Retry flaky tools
+# Retry transient model calls
 
-You want an agent route to retry transient execution failures automatically. Here's how.
+You want an agent route to retry transient model and provider failures automatically. Here's how.
 
 ## The code
 
@@ -16,16 +16,23 @@ export default agent({
 ```
 
 ```ts title="src/app/(public)/summarize/[doc]/tools/fetch-doc.ts"
-// The tool the agent calls. Keep the tool itself simple and let route-level
-// retry handle retryable execution failures before streaming output commits.
+import { setTimeout as delay } from "node:timers/promises"
+
+// Tool retry is local application code. It is separate from agent retry.
 export default async (
   input: { readonly doc: string },
   ctx: { signal: AbortSignal },
 ) => {
-  const res = await fetch(`https://docs.example.com/${input.doc}`, { signal: ctx.signal })
-  if (!res.ok) throw new Error(`fetch failed: ${res.status}`)
-  const text = await res.text()
-  return { text }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(`https://docs.example.com/${input.doc}`, { signal: ctx.signal })
+    if (res.ok) return { text: await res.text() }
+
+    const retryable = res.status === 429 || res.status >= 500
+    if (!retryable || attempt === 2) throw new Error(`fetch failed: ${res.status}`)
+    await delay(250 * 2 ** attempt, undefined, { signal: ctx.signal })
+  }
+
+  throw new Error("fetch retry exhausted")
 }
 ```
 
@@ -44,10 +51,10 @@ export default agent({
 ## Notes
 
 - **Per-route, not global.** Each `agent()` declares its own `retry`. Different routes can have different policies.
-- **Transient errors only.** Rate limits (`429`), server errors (`500`/`502`/`503`), network timeouts, and OpenAI `overloaded`/`server_error` are retried. Invalid API keys, missing models, and schema validation errors fail immediately.
-- **Exponential backoff with jitter, capped at 10s.** `delay = min(baseDelay * 2^n + jitter, 10s)`. Lowering `baseDelay` makes the first retry faster.
+- **Transient model/provider errors only.** Rate limits (`429`), server errors (`500`/`502`/`503`), network timeouts, and OpenAI `overloaded`/`server_error` are retried. Invalid API keys, missing models, and schema validation errors fail immediately.
+- **Exponential backoff with jitter, capped at 10s.** For non-stream fallback, `delay = min(baseDelay * 2^n + jitter, 10s)`. Lowering `baseDelay` makes the first retry faster.
 - **`maxAttempts: 1` disables retry.** The default is `3` if `retry` is omitted entirely.
-- **Streaming routes only retry before the first token or event.** Once content has streamed, the response is committed.
+- **Streaming routes only retry before the first event.** Once an event has streamed, the response is committed. Agent retry covers transient model/provider execution before that point; applications needing tool retry implement it locally, as in the example above.
 
 ## Related
 

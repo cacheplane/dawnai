@@ -26,7 +26,7 @@ export default agent({
 })
 ```
 
-The coordinator calls the subagent by name at runtime:
+This is an internal `task` tool call emitted by the coordinator's model, not TypeScript route code that an author imports or calls:
 
 ```ts
 task({
@@ -68,7 +68,7 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       route: "/research#agent",
-      input: { query: state.job },
+      input: { messages: [{ role: "user", content: state.job }] },
     }),
   })
 
@@ -76,8 +76,12 @@ export async function workflow(state: OrchestratorState, _ctx: RuntimeContext) {
     throw new Error(`dispatch failed: ${res.status}`)
   }
 
-  const result = (await res.json()) as { readonly output: string }
-  return { ...state, summary: result.output }
+  const remoteState = (await res.json()) as {
+    readonly messages?: readonly { readonly content?: unknown }[]
+  }
+  const lastMessage = remoteState.messages?.at(-1)
+  const summary = typeof lastMessage?.content === "string" ? lastMessage.content : ""
+  return { ...state, summary }
 }
 ```
 

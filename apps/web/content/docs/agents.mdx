@@ -83,7 +83,7 @@ See [Tools](/docs/tools) for the full input/output rules and the generated decla
 
 ## Retry
 
-Agent calls accept a `retry` config for transient route execution failures:
+Agent calls accept a `retry` config for transient model/provider execution failures:
 
 ```ts title="src/app/.../index.ts"
 export default agent({
@@ -93,7 +93,7 @@ export default agent({
 })
 ```
 
-See [Retry](/docs/retry) for the backoff strategy, what is retried, and the streaming caveat. Dawn does not expose per-tool retry overrides today.
+See [Retry](/docs/retry) for the backoff strategy, what is retried, and the streaming caveat.
 
 ## Built-in agent features
 
