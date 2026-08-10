@@ -302,3 +302,60 @@ describe("GET /threads/:thread_id/pending_interrupts", () => {
     })
   }, 30_000)
 })
+
+/** Rejects unless `x-allow` is present, echoing what it observed so a test can
+ * pin the middleware inputs a body-less GET produces. */
+const ECHO_MIDDLEWARE = [
+  'import { allow, defineMiddleware, reject } from "@dawn-ai/sdk"',
+  "export default defineMiddleware((req) =>",
+  '  req.headers["x-allow"] ? allow() : reject(403, { method: req.method, routeId: req.routeId }),',
+  ")",
+  "",
+].join("\n")
+
+describe("GET /threads/:thread_id/pending_interrupts — gating", () => {
+  it("refuses a thread that has never run with 409 thread_route_unknown", async () => {
+    const handler = await createHandler(await fixtureApp())
+    const created = await handler.fetch(new Request("http://localhost/threads", { method: "POST" }))
+    const { thread_id: threadId } = (await created.json()) as { thread_id: string }
+
+    const response = await handler.fetch(pendingInterruptsRequest(threadId))
+
+    // Fail closed: with no route there is no identity for route-scoped
+    // middleware to gate on, and interrupt payloads must never fall through.
+    expect(response.status).toBe(409)
+    const body = (await response.json()) as ErrorBody
+    expect(body.error.details?.code).toBe("thread_route_unknown")
+  })
+
+  it("gates on middleware, which observes method GET and the thread's route", async () => {
+    const handler = await createHandler(await fixtureApp({ "src/middleware.ts": ECHO_MIDDLEWARE }))
+    const threadId = "t-gated"
+
+    // Prove the fixture middleware LOADED before reading anything into a 200.
+    // loadMiddleware swallows every import error and returns undefined, so an
+    // unloadable fixture serves 200s indistinguishable from a handler that
+    // never calls runMiddleware — and this GET would look gated when it is not.
+    // This pair is also the "identical to the POST stream" gating assertion.
+    const streamRejected = await handler.fetch(runStreamRequest(threadId, "/echo#graph"))
+    expect(streamRejected.status).toBe(403)
+    expect(await streamRejected.json()).toEqual({ method: "POST", routeId: "/echo" })
+
+    // The rejected POST never reached the threads store, so this allowed run is
+    // what creates the thread and records its route.
+    const seeded = await handler.fetch(
+      runStreamRequest(threadId, "/echo#graph", {}, { "x-allow": "1" }),
+    )
+    expect(seeded.status).toBe(200)
+    await drain(seeded)
+
+    const rejected = await handler.fetch(pendingInterruptsRequest(threadId))
+    expect(rejected.status).toBe(403)
+    // Dawn's first AP endpoint where middleware sees a method other than POST.
+    expect(await rejected.json()).toEqual({ method: "GET", routeId: "/echo" })
+
+    const allowed = await handler.fetch(pendingInterruptsRequest(threadId, { "x-allow": "1" }))
+    expect(allowed.status).toBe(200)
+    expect(await allowed.json()).toEqual({ interrupts: [] })
+  }, 30_000)
+})

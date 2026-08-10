@@ -1084,7 +1084,11 @@ function buildRouteTable(ctx: {
       handle: async (request, params) =>
         handleApPendingInterruptsRequest({
           checkpointer: getCheckpointer(request),
+          middleware,
+          registry,
+          request,
           threadId: params.thread_id ?? "",
+          threadRouteMap,
           threadsStore: getThreadsStore(request),
         }),
       method: "GET",
@@ -1615,10 +1619,15 @@ async function handleApWaitRequest(options: {
 
 async function handleApPendingInterruptsRequest(options: {
   readonly checkpointer: BaseCheckpointSaver
+  readonly middleware: DawnMiddleware | undefined
+  readonly registry: RuntimeRegistry
+  readonly request: Request
   readonly threadId: string
+  readonly threadRouteMap: Map<string, string>
   readonly threadsStore: ThreadsStore
 }): Promise<Response> {
-  const { checkpointer, threadId, threadsStore } = options
+  const { checkpointer, middleware, registry, request, threadId, threadRouteMap, threadsStore } =
+    options
 
   // Thread first, with the same code POST /cancel and POST /resume use for an
   // unknown thread, so a client branches on one code across the AP surface.
@@ -1631,6 +1640,51 @@ async function handleApPendingInterruptsRequest(options: {
     return Response.json(createRequestErrorBody("Thread not found", { code: "thread_not_found" }), {
       status: 404,
     })
+  }
+
+  // Route identity for middleware, resolved thread-first in the same priority
+  // order POST /resume uses: the in-memory map is the fast path for this server
+  // session, thread metadata survives a restart. There is no client-supplied
+  // fallback — a GET has no body to carry one.
+  const persistedRoute = thread.metadata.route
+  const routeKey =
+    threadRouteMap.get(threadId) ??
+    (typeof persistedRoute === "string" ? persistedRoute : undefined)
+  if (!routeKey) {
+    // Fail closed. This endpoint exposes interrupt payloads, so it must be
+    // gated exactly like the run endpoints that produced them; with no route
+    // there is no identity to gate on and route-scoped middleware would
+    // silently fall through. Deliberately a different code from /resume's
+    // route_not_found: that one is fixable by passing `route` in the body.
+    return Response.json(
+      createRequestErrorBody(
+        `No route recorded for thread "${threadId}": it has never run, so its pending ` +
+          "interrupts cannot be gated by route middleware.",
+        { code: "thread_route_unknown" },
+      ),
+      { status: 409 },
+    )
+  }
+
+  const route = registry.lookup(routeKey)
+  if (!route) {
+    return Response.json(createRequestErrorBody(`Unknown route: ${routeKey}`), { status: 404 })
+  }
+
+  const requestUrl = new URL(request.url)
+  const mwRequest: MiddlewareRequest = {
+    assistantId: route.assistantId,
+    headers: headersToRecord(request.headers),
+    // "GET" here — the first AP endpoint where a middleware sees anything
+    // other than "POST".
+    method: request.method,
+    params: {},
+    routeId: route.routeId,
+    url: `${requestUrl.pathname}${requestUrl.search}`,
+  }
+  const mwResult = await runMiddleware(middleware, mwRequest)
+  if (mwResult.action === "reject") {
+    return statusResponse(mwResult.status, mwResult.body)
   }
 
   // A known thread with no checkpoint has nothing parked. That is a 200 with an
