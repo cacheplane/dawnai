@@ -48,19 +48,39 @@ export async function run(argv: readonly string[] = process.argv.slice(2)): Prom
 
 function printNextSteps(options: CliOptions): void {
   const appName = basename(resolve(options.targetDir))
+  const isWindows = process.platform === "win32"
+  const targetDir = isWindows
+    ? `'${options.targetDir.replaceAll("'", "''")}'`
+    : `'${options.targetDir.replaceAll("'", "'\\''")}'`
+  const changeDirectoryStep = isWindows
+    ? `  Set-Location -LiteralPath ${targetDir}`
+    : `  cd ${targetDir}`
+  const researchSteps = [
+    changeDirectoryStep,
+    "  npm install",
+    isWindows
+      ? "  Copy-Item -LiteralPath .env.example -Destination .env"
+      : "  cp .env.example .env",
+    "  # add OPENAI_API_KEY",
+    "  npm run verify",
+    "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+  ]
+  const basicSteps = [
+    changeDirectoryStep,
+    "  npm install",
+    "  npm run check     # validate the app",
+    "  npm test          # offline tests — no API key needed",
+    "",
+    "Run it live (needs an OpenAI key):",
+    isWindows ? "  $env:OPENAI_API_KEY = 'sk-...'" : "  export OPENAI_API_KEY=sk-...",
+    "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+  ]
   const lines = [
     "",
     `✔ Created ${appName} (${options.template} template)`,
     "",
-    "Next steps:",
-    `  cd ${options.targetDir}`,
-    "  npm install",
-    "  npm run check     # generate route + tool types",
-    "  npm test          # offline tests — no API key needed",
-    "",
-    "Run it live (needs an OpenAI key):",
-    "  export OPENAI_API_KEY=sk-...",
-    "  npm run dev       # Dawn dev server on http://127.0.0.1:3000",
+    isWindows ? "Next steps (PowerShell):" : "Next steps:",
+    ...(options.template === "research" ? researchSteps : basicSteps),
     "",
     "See README.md for the full tour, or https://github.com/cacheplane/dawn",
     "",
