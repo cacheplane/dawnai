@@ -5511,12 +5511,15 @@ export function parseNativeVercelBuildLogTranscript(options: {
     throw new Error("native Vercel inspect build log transcript must end with a newline")
   }
   const lines = normalized.slice(0, -1).split("\n")
-  if (lines.length < 2) {
+  if (lines.length < 3) {
     throw new Error("native Vercel inspect build log transcript is incomplete")
   }
-  const first = lines[0] as string
+  if (lines[0] !== `Vercel CLI 58.9.0 (Node.js ${process.versions.node})`) {
+    throw new Error("native Vercel inspect build log version banner is malformed")
+  }
+  const fetchLine = lines[1] as string
   const expectedPrefix = `Fetching deployment "${deploymentId}" in `
-  const context = first.startsWith(expectedPrefix) ? first.slice(expectedPrefix.length) : ""
+  const context = fetchLine.startsWith(expectedPrefix) ? fetchLine.slice(expectedPrefix.length) : ""
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(context)) {
     throw new Error("native Vercel inspect build log fetch line is malformed")
   }
@@ -5524,7 +5527,7 @@ export function parseNativeVercelBuildLogTranscript(options: {
     throw new Error("native Vercel inspect build log final status must be Ready")
   }
   const events: Array<{ readonly createdAtIso: string; readonly text: string }> = []
-  for (const [index, line] of lines.slice(1, -1).entries()) {
+  for (const [index, line] of lines.slice(2, -1).entries()) {
     const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) {2}(.*)$/.exec(line)
     if (!match) {
       throw new Error(`native Vercel inspect build log event ${index} is malformed`)

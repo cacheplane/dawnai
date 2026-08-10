@@ -6055,6 +6055,7 @@ describe("native orchestration and evidence closure", () => {
   }
   const buildTranscript = (deploymentId: string, payloads: readonly string[]) =>
     [
+      pinnedVercelVersionStderr.trimEnd(),
       `Fetching deployment "${deploymentId}" in fixture-team`,
       ...payloads.map(
         (payload, index) =>
@@ -6409,6 +6410,7 @@ describe("native orchestration and evidence closure", () => {
     expect(inspectRequest.env).not.toHaveProperty("RELEASE_TOKEN")
 
     buildLogStderr = [
+      pinnedVercelVersionStderr.trimEnd(),
       'Fetching deployment "dpl_Source1" in fixture-team',
       "> Deployment events polling error: timeout",
       "status\t● Ready",
@@ -6625,11 +6627,20 @@ describe("native orchestration and evidence closure", () => {
       {
         deploymentId: "dpl_Source1",
         stderr: [
+          pinnedVercelVersionStderr.trimEnd(),
           'Fetching deployment "dpl_Source1" in fixture-team',
           "> Deployment events polling error: timeout",
           "status\t● Ready",
           "",
         ].join("\n"),
+        stdout: "",
+      },
+      {
+        deploymentId: "dpl_Source1",
+        stderr: buildTranscript("dpl_Source1", sourceBuildPayloads).replace(
+          pinnedVercelVersionStderr.trimEnd(),
+          `Vercel CLI 58.9.0 (Node.js ${process.versions.node}.unexpected)`,
+        ),
         stdout: "",
       },
       {

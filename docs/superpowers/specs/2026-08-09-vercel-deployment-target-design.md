@@ -437,7 +437,9 @@ not closed per request; Vercel instance teardown owns its socket lifetime.
 Every operation invokes the absolute package-local binary at
 `packages/cli/node_modules/.bin/vercel`; root `pnpm exec`, `npx`, and ambient
 `PATH` resolution are forbidden. Before any external operation, the lane runs
-that binary's version command under Node 24 and requires exactly `58.9.0`.
+that binary's version command under Node 24 and requires stdout exactly
+`58.9.0\n` plus stderr exactly
+`Vercel CLI 58.9.0 (Node.js <current-Node-version>)\n`.
 Every CLI invocation passes an absolute job-owned `--global-config` directory
 created with owner-only permissions. The directory and its ancestors must be
 regular, non-symlink paths separate from both fixtures. Every CLI call uses a
@@ -466,6 +468,17 @@ configuration with a config below a remotely configured project root. The
 dedicated project must allow its short-lived preview URLs to be reached by the
 black-box client without an interactive protection challenge. It contains only
 the deterministic fixture and test data; production projects are out of scope.
+
+Vercel can force an empty project's first deployment to the production target
+even when the CLI explicitly requests preview. Provisioning therefore retains
+one inert static bootstrap deployment in this dedicated project, marked only
+with `dawnVercelBootstrap=v1`, with domain assignment skipped and no Dawn route
+or database credential in its deploy command. Before enabling the lane, a
+separate disposable `--target preview` probe must receive authoritative target
+`null` or `preview`, then be deleted by exact ID with a `404` readback. The
+bootstrap is external project state, never lane evidence. Reconciliation filters
+only `dawnVercelRun`, so neither test cleanup nor fallback cleanup may select or
+delete the retained bootstrap.
 
 The harness constructs every child environment from a sanitized base. It
 removes all inherited names beginning `DAWN_VERCEL_`, `VERCEL_`, or `NOW_`, as
@@ -560,6 +573,9 @@ The second fixture runs the workspace-built Dawn CLI locally. The lane asserts
 the Build Output API receipt and deploys it with `vercel deploy --prebuilt`.
 No source-build fallback is allowed; the command and logs are checked so a
 silently rebuilt source deployment cannot satisfy this half of the lane.
+Pinned `inspect <id> --logs` evidence begins with the same exact CLI/Node version
+banner, followed by the exact deployment-fetch line, canonical timestamped build
+events, and final `status\t● Ready`; extra polling, retry, or warning lines fail.
 
 ### Shared black-box assertions
 
