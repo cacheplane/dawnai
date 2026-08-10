@@ -857,6 +857,7 @@ test("activates the default research scaffold through the complete npm lifecycle
       {
         appRoot,
         script: "dev",
+        signal: lifecycleSignal,
         env: {
           OPENAI_BASE_URL: activeAimock.baseUrl,
           OPENAI_API_KEY: "test-not-used",
@@ -929,6 +930,7 @@ test("activates the default research scaffold through the complete npm lifecycle
       {
         appRoot,
         script: "start",
+        signal: lifecycleSignal,
         env: { HOST: "127.0.0.1" },
         unsetEnv: ["OPENAI_BASE_URL", "OPENAI_API_KEY"],
         transcriptPath: commandsTranscriptPath,

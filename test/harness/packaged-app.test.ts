@@ -56,7 +56,7 @@ async function waitForTopology(path: string): Promise<{
         error instanceof SyntaxError ||
         (error !== null && typeof error === "object" && Reflect.get(error, "code") === "ENOENT")
       if (!retryable) throw error
-      await delay(25)
+      await new Promise<void>((resolvePromise) => setImmediate(resolvePromise))
     }
   }
   throw new Error(`Hanging process fixture did not become ready at ${path}`)
@@ -109,8 +109,9 @@ async function createNpmServerFixture(prefix: string, targetRoot?: string): Prom
       'const host = mode === "start" ? process.env.HOST : "127.0.0.1"',
       'const startingResponses = Number(process.env.FIXTURE_STARTING_RESPONSES ?? "0")',
       'const exitCode = Number(process.env.FIXTURE_EXIT_CODE ?? "0")',
+      'const forcedExitMs = Number(process.env.FIXTURE_FORCED_EXIT_MS ?? "0")',
       "let healthRequestCount = 0",
-      'await writeFile(new URL("./observed.json", import.meta.url), JSON.stringify({ args, host, mode, port, runtimeEnv: { apiKey: process.env.OPENAI_API_KEY ?? "missing", baseUrl: process.env.OPENAI_BASE_URL ?? "missing", dockerSandbox: process.env.DAWN_DEMO_DOCKER_SANDBOX ?? "missing" }, unsetEnv: process.env.DAWN_TEST_SERVER_UNSET_ENV ?? "missing" }))',
+      'await writeFile(new URL("./observed.json", import.meta.url), JSON.stringify({ args, host, mode, pid: process.pid, port, runtimeEnv: { apiKey: process.env.OPENAI_API_KEY ?? "missing", baseUrl: process.env.OPENAI_BASE_URL ?? "missing", dockerSandbox: process.env.DAWN_DEMO_DOCKER_SANDBOX ?? "missing" }, unsetEnv: process.env.DAWN_TEST_SERVER_UNSET_ENV ?? "missing" }))',
       'process.stdout.write("fixture " + mode + " stdout\\n")',
       'process.stderr.write("fixture " + mode + " stderr\\n")',
       "if (exitCode > 0) {",
@@ -133,6 +134,7 @@ async function createNpmServerFixture(prefix: string, targetRoot?: string): Prom
       "const close = () => server.close(() => process.exit(0))",
       'process.once("SIGTERM", close)',
       'process.once("SIGINT", close)',
+      "if (forcedExitMs > 0) setTimeout(close, forcedExitMs).unref()",
       "",
     ].join("\n"),
     "utf8",
@@ -184,6 +186,7 @@ async function readObservedServer(appRoot: string): Promise<{
   readonly args: readonly string[]
   readonly host?: string
   readonly mode: string
+  readonly pid: number
   readonly port: number
   readonly runtimeEnv: {
     readonly apiKey: string
@@ -196,6 +199,7 @@ async function readObservedServer(appRoot: string): Promise<{
     readonly args: readonly string[]
     readonly host?: string
     readonly mode: string
+    readonly pid: number
     readonly port: number
     readonly runtimeEnv: {
       readonly apiKey: string
@@ -208,6 +212,23 @@ async function readObservedServer(appRoot: string): Promise<{
 
 async function expectServerStopped(url: string): Promise<void> {
   await expect(fetch(new URL("/healthz", url))).rejects.toThrow()
+}
+
+async function waitForHealthRequest(appRoot: string): Promise<number> {
+  const healthCountPath = join(appRoot, "health-count.txt")
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    try {
+      const count = Number(await readFile(healthCountPath, "utf8"))
+      if (count >= 1) return count
+    } catch (error) {
+      if (error === null || typeof error !== "object" || Reflect.get(error, "code") !== "ENOENT") {
+        throw error
+      }
+    }
+    await delay(25)
+  }
+  throw new Error(`npm server fixture did not receive a health request at ${healthCountPath}`)
 }
 
 describe("resolveNpmLaunch", () => {
@@ -592,6 +613,7 @@ describe("installRegistryScaffolderWithNpm", () => {
     let poisonRegistry: Awaited<ReturnType<typeof startPoisonRegistry>> | undefined
     let restoreLowerUserconfig: (() => void) | undefined
     let restoreUpperUserconfig: (() => void) | undefined
+    const restoreRegistryEnvironment: Array<() => void> = []
 
     try {
       poisonRegistry = await startPoisonRegistry()
@@ -607,6 +629,19 @@ describe("installRegistryScaffolderWithNpm", () => {
       )
       restoreLowerUserconfig = setTestEnvironmentVariable("npm_config_userconfig", userconfigPath)
       restoreUpperUserconfig = setTestEnvironmentVariable("NPM_CONFIG_USERCONFIG", userconfigPath)
+      for (const [name, value] of [
+        ["npm_config_registry", poisonRegistry.url],
+        ["NPM_CONFIG_REGISTRY", poisonRegistry.url],
+        ["nPm_CoNfIg_ReGiStRy", poisonRegistry.url],
+        ["npm_config_scope", "@poison"],
+        ["NPM_CONFIG_SCOPE", "@poison"],
+        ["nPm_CoNfIg_ScOpE", "@poison"],
+        ["npm_config_@dawn-ai:registry", poisonRegistry.url],
+        ["NPM_CONFIG_@DAWN-AI:REGISTRY", poisonRegistry.url],
+        ["nPm_CoNfIg_@DaWn-Ai:ReGiStRy", poisonRegistry.url],
+      ] as const) {
+        restoreRegistryEnvironment.push(setTestEnvironmentVariable(name, value))
+      }
 
       let installResult: Awaited<ReturnType<typeof installRegistryScaffolderWithNpm>> | undefined
       let installError: unknown
@@ -673,8 +708,13 @@ describe("installRegistryScaffolderWithNpm", () => {
       expect(transcript).toContain(
         `$ (cd ${installerDir} && npm install --no-save create-dawn-ai-app@latest)`,
       )
+      expect(transcript).not.toContain("--registry")
+      expect(transcript).not.toContain(getTestRegistryUrl())
       expect(transcript).toContain("[exit 0]")
     } finally {
+      for (const restoreEnvironment of restoreRegistryEnvironment.reverse()) {
+        restoreEnvironment()
+      }
       restoreUpperUserconfig?.()
       restoreLowerUserconfig?.()
       try {
@@ -687,6 +727,196 @@ describe("installRegistryScaffolderWithNpm", () => {
 })
 
 describe("withPackagedNpmServer", () => {
+  it("does not spawn when the caller signal is already aborted", async () => {
+    const appRoot = await createNpmServerFixture("dawn-npm-pre-aborted-server-")
+    const transcriptPath = join(appRoot, "pre-aborted.log")
+    const controller = new AbortController()
+    const abortReason = new Error("cancel before npm server spawn")
+    let actionRan = false
+    let thrown: unknown
+    controller.abort(abortReason)
+
+    try {
+      try {
+        await withPackagedNpmServer(
+          { appRoot, script: "start", signal: controller.signal, transcriptPath },
+          async () => {
+            actionRan = true
+          },
+        )
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBe(abortReason)
+      expect(actionRan).toBe(false)
+      await expect(readFile(join(appRoot, "observed.json"), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      })
+    } finally {
+      await rm(appRoot, { force: true, recursive: true })
+    }
+  })
+
+  it("aborts readiness after a real health probe and settles cleanup before rejecting", async () => {
+    const appRoot = await createNpmServerFixture("dawn-npm-abort-readiness-server-")
+    const transcriptPath = join(appRoot, "abort-readiness.log")
+    const controller = new AbortController()
+    const abortReason = new Error("cancel npm server readiness")
+    let actionRan = false
+    let observed: Awaited<ReturnType<typeof readObservedServer>> | undefined
+    let serverResult: Promise<void> | undefined
+
+    try {
+      serverResult = withPackagedNpmServer(
+        {
+          appRoot,
+          env: {
+            FIXTURE_FORCED_EXIT_MS: "5000",
+            FIXTURE_STARTING_RESPONSES: "1000000",
+          },
+          script: "start",
+          signal: controller.signal,
+          transcriptPath,
+        },
+        async () => {
+          actionRan = true
+        },
+      )
+      expect(await waitForHealthRequest(appRoot)).toBeGreaterThanOrEqual(1)
+      observed = await readObservedServer(appRoot)
+      const serverUrl = `http://${observed.host}:${observed.port}`
+      const abortedAt = Date.now()
+      controller.abort(abortReason)
+
+      let thrown: unknown
+      try {
+        await serverResult
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(Date.now() - abortedAt).toBeLessThan(3_000)
+      expect(thrown).toBe(abortReason)
+      expect(actionRan).toBe(false)
+      await expectServerStopped(serverUrl)
+      await expectProcessStopped(observed.pid)
+      const transcript = await readFile(transcriptPath, "utf8")
+      expect(transcript).toContain(`$ (cd ${appRoot} && npm run start)`)
+      expect(transcript).not.toContain("[exit pending")
+      expect(transcript).toMatch(/\[exit (?:-?\d+|null) signal (?:[A-Z0-9]+|none)\]/)
+    } finally {
+      controller.abort(abortReason)
+      await serverResult?.catch(() => undefined)
+      if (observed !== undefined) await expectProcessStopped(observed.pid)
+      await rm(appRoot, { force: true, recursive: true })
+    }
+  })
+
+  it("bounds action waiting with the caller signal", async () => {
+    const appRoot = await createNpmServerFixture("dawn-npm-abort-action-server-")
+    const transcriptPath = join(appRoot, "abort-action.log")
+    const controller = new AbortController()
+    const abortReason = new Error("cancel npm server action")
+    let actionStartedResolve: (() => void) | undefined
+    const actionStarted = new Promise<void>((resolvePromise) => {
+      actionStartedResolve = resolvePromise
+    })
+    let releaseAction: (() => void) | undefined
+    const actionWait = new Promise<void>((resolvePromise) => {
+      releaseAction = resolvePromise
+    })
+    const fallback = setTimeout(() => releaseAction?.(), 5_000)
+    fallback.unref()
+    let serverResult: Promise<string> | undefined
+    let serverUrl = ""
+
+    try {
+      serverResult = withPackagedNpmServer(
+        { appRoot, script: "start", signal: controller.signal, transcriptPath },
+        async ({ url }) => {
+          serverUrl = url
+          actionStartedResolve?.()
+          await actionWait
+          return "late action result"
+        },
+      )
+      await actionStarted
+      const abortedAt = Date.now()
+      controller.abort(abortReason)
+
+      let thrown: unknown
+      try {
+        await serverResult
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(Date.now() - abortedAt).toBeLessThan(3_000)
+      expect(thrown).toBe(abortReason)
+      await expectServerStopped(serverUrl)
+      const transcript = await readFile(transcriptPath, "utf8")
+      expect(transcript).not.toContain("[exit pending")
+    } finally {
+      clearTimeout(fallback)
+      releaseAction?.()
+      controller.abort(abortReason)
+      await serverResult?.catch(() => undefined)
+      await actionWait
+      await rm(appRoot, { force: true, recursive: true })
+    }
+  })
+
+  it("observes an action rejection when the action aborts its caller signal", async () => {
+    const appRoot = await createNpmServerFixture("dawn-npm-action-aborts-server-")
+    const transcriptPath = join(appRoot, "action-aborts.log")
+    const controller = new AbortController()
+    const abortReason = new Error("action cancelled its npm server")
+    const actionFailure = new Error("action rejected after cancellation")
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason)
+    }
+    let observed: Awaited<ReturnType<typeof readObservedServer>> | undefined
+    let serverResult: Promise<never> | undefined
+    let serverUrl = ""
+
+    process.on("unhandledRejection", onUnhandledRejection)
+    try {
+      serverResult = withPackagedNpmServer(
+        { appRoot, script: "start", signal: controller.signal, transcriptPath },
+        ({ url }) => {
+          serverUrl = url
+          controller.abort(abortReason)
+          return Promise.reject(actionFailure)
+        },
+      )
+
+      let thrown: unknown
+      try {
+        await serverResult
+      } catch (error) {
+        thrown = error
+      }
+      await delay(25)
+
+      expect(thrown).toBe(abortReason)
+      expect(unhandledRejections).toEqual([])
+      observed = await readObservedServer(appRoot)
+      await expectServerStopped(serverUrl)
+      await expectProcessStopped(observed.pid)
+      const transcript = await readFile(transcriptPath, "utf8")
+      expect(transcript).not.toContain("[exit pending")
+      expect(transcript).toMatch(/\[exit (?:-?\d+|null) signal (?:[A-Z0-9]+|none)\]/)
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection)
+      controller.abort(abortReason)
+      await serverResult?.catch(() => undefined)
+      if (observed !== undefined) await expectProcessStopped(observed.pid)
+      await rm(appRoot, { force: true, recursive: true })
+    }
+  })
+
   it.skipIf(process.platform !== "win32")(
     "launches npm scripts through argv from a Windows metacharacter path",
     async () => {

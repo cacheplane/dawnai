@@ -20,6 +20,10 @@ export function registryLatestSpecifiers() {
   }
 }
 
+export function candidateRegistryNpmArgs(registryUrl: string): readonly string[] {
+  return [`--registry=${registryUrl}`, "--scope=", `--@dawn-ai:registry=${registryUrl}`]
+}
+
 /**
  * Point a scaffolded app at the ephemeral test registry. Real users install from
  * a registry; the generated app does exactly that — no overrides, no tarball pins.

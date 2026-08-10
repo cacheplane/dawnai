@@ -18,7 +18,7 @@ import {
   startDevServer,
 } from "../runtime/support/dev-server.ts"
 import { getTestRegistryUrl } from "./local-registry.ts"
-import { writeRegistryNpmrc } from "./scaffold-packaging.ts"
+import { candidateRegistryNpmArgs, writeRegistryNpmrc } from "./scaffold-packaging.ts"
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..")
 const PACKAGED_COMMAND_TIMEOUT_MS = 180_000
@@ -182,9 +182,11 @@ export async function installRegistryScaffolderWithNpm(options: {
     "utf8",
   )
   await writeRegistryNpmrc(installerDir, getTestRegistryUrl())
+  const displayArgs = ["install", "--no-save", "create-dawn-ai-app@latest"]
   await runPackagedNpmCommand({
-    args: ["install", "--no-save", "create-dawn-ai-app@latest"],
+    args: [...candidateRegistryNpmArgs(getTestRegistryUrl()), ...displayArgs],
     cwd: installerDir,
+    displayArgs,
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     transcriptPath: options.transcriptPath,
   })
@@ -337,6 +339,7 @@ async function appendPackagedCommandTranscript(options: {
 export async function runPackagedNpmCommand(options: {
   readonly args: readonly string[]
   readonly cwd: string
+  readonly displayArgs?: readonly string[]
   readonly env?: NodeJS.ProcessEnv
   readonly signal?: AbortSignal
   readonly stdin?: string
@@ -349,7 +352,7 @@ export async function runPackagedNpmCommand(options: {
     args: [...launch.argsPrefix, ...options.args],
     command: launch.command,
     cwd: options.cwd,
-    displayArgs: options.args,
+    displayArgs: options.displayArgs ?? options.args,
     displayCommand: launch.displayCommand,
     ...(options.env ? { env: options.env } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
@@ -367,9 +370,11 @@ export async function runGeneratedAppNpmCommand(options: {
   readonly timeoutMs?: number
   readonly transcriptPath?: string
 }) {
+  const displayArgs = options.args
   return await runPackagedNpmCommand({
-    args: options.args,
+    args: [...candidateRegistryNpmArgs(getTestRegistryUrl()), ...displayArgs],
     cwd: options.cwd,
+    displayArgs,
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     ...(options.transcriptPath ? { transcriptPath: options.transcriptPath } : {}),
@@ -484,18 +489,24 @@ async function waitForPackagedNpmReady(options: {
   readonly readStderr: () => string
   readonly readStdout: () => string
   readonly script: "dev" | "start"
+  readonly signal?: AbortSignal
   readonly state: PackagedNpmChildState
 }): Promise<void> {
   const deadline = Date.now() + PACKAGED_NPM_READY_TIMEOUT_MS
 
   while (Date.now() < deadline) {
+    options.signal?.throwIfAborted()
     assertPackagedNpmChildRunning(options)
 
     const remainingMs = Math.max(1, deadline - Date.now())
     let ready = false
     try {
+      const requestTimeoutSignal = AbortSignal.timeout(Math.min(1_000, remainingMs))
       const response = await fetch(options.healthUrl, {
-        signal: AbortSignal.timeout(Math.min(1_000, remainingMs)),
+        signal:
+          options.signal === undefined
+            ? requestTimeoutSignal
+            : AbortSignal.any([options.signal, requestTimeoutSignal]),
       })
       const body = await response.json().catch(() => undefined)
       ready =
@@ -504,10 +515,12 @@ async function waitForPackagedNpmReady(options: {
         body !== null &&
         Reflect.get(body, "status") === "ready"
     } catch {
+      options.signal?.throwIfAborted()
       // The server may still be starting. Child state is checked again below.
     }
 
     if (ready) {
+      options.signal?.throwIfAborted()
       assertPackagedNpmChildRunning(options)
       return
     }
@@ -515,7 +528,10 @@ async function waitForPackagedNpmReady(options: {
     if (options.state.failed || options.state.closed) continue
     const waitMs = Math.min(100, Math.max(0, deadline - Date.now()))
     if (waitMs === 0) break
-    await Promise.race([delay(waitMs), options.closed.catch(() => undefined)])
+    await awaitWithAbort(
+      Promise.race([delay(waitMs), options.closed.catch(() => undefined)]),
+      options.signal,
+    )
   }
 
   throw new Error(
@@ -525,6 +541,33 @@ async function waitForPackagedNpmReady(options: {
       options.readStderr(),
     ),
   )
+}
+
+async function awaitWithAbort<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return await pending
+  // The caller may have synchronously aborted while producing an already-rejected
+  // promise. Observe that rejection before abort checks can throw the signal reason.
+  void pending.catch(() => undefined)
+  signal.throwIfAborted()
+
+  let onAbort: () => void = () => undefined
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      try {
+        signal.throwIfAborted()
+      } catch (error) {
+        reject(error)
+      }
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+    if (signal.aborted) onAbort()
+  })
+
+  try {
+    return await Promise.race([pending, aborted])
+  } finally {
+    signal.removeEventListener("abort", onAbort)
+  }
 }
 
 async function appendPackagedNpmServerTranscript(options: {
@@ -567,12 +610,15 @@ export async function withPackagedNpmServer<T>(
     readonly env?: Readonly<Record<string, string>>
     readonly script: "dev" | "start"
     readonly scriptArgs?: readonly string[]
+    readonly signal?: AbortSignal
     readonly transcriptPath: string
     readonly unsetEnv?: readonly string[]
   },
   action: (session: { readonly url: string }) => Promise<T>,
 ): Promise<T> {
+  options.signal?.throwIfAborted()
   const port = await allocatePort()
+  options.signal?.throwIfAborted()
   const url = `http://127.0.0.1:${port}`
   const healthUrl = new URL("/healthz", url).href
   const args = ["run", options.script, ...(options.scriptArgs ?? [])]
@@ -659,9 +705,11 @@ export async function withPackagedNpmServer<T>(
       readStderr: () => stderr,
       readStdout: () => stdout,
       script: options.script,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
       state,
     })
-    actionResult = { value: await action({ url }) }
+    options.signal?.throwIfAborted()
+    actionResult = { value: await awaitWithAbort(action({ url }), options.signal) }
   } catch (error) {
     recordFailure(error, `npm run ${options.script} failed and cleanup also failed`)
   } finally {
