@@ -120,6 +120,14 @@ async function linkTargetFixtureDependencies(appRoot: string): Promise<void> {
   )
 }
 
+async function linkPgTargetFixtureDependency(appRoot: string): Promise<void> {
+  await symlink(
+    join(cliPackageRoot, "node_modules", "pg"),
+    join(appRoot, "node_modules", "pg"),
+    "junction",
+  )
+}
+
 async function runTargetBuild(appRoot: string): Promise<{ stderr: string[]; stdout: string[] }> {
   const stdout: string[] = []
   const stderr: string[] = []
@@ -271,6 +279,55 @@ console.log(JSON.stringify({
   node: process.versions.node,
   parentReadBlocked,
 }))
+`
+
+const ISOLATED_PG_IMPORT_PROBE = `import { resolve } from "node:path"
+import { pathToFileURL } from "node:url"
+
+if (process.versions.node.split(".")[0] !== "24") {
+  throw new Error(\`expected Node 24, received \${process.versions.node}\`)
+}
+
+const entry = resolve(process.cwd(), "index.mjs")
+const module = await import(pathToFileURL(entry).href)
+if (typeof module.default?.fetch !== "function") {
+  throw new Error("expected a default Web Fetch API handler")
+}
+
+const evidence = globalThis.__dawnVercelPgEvidence
+if (
+  evidence?.nativeAbsent !== true ||
+  evidence?.poolInstance !== true ||
+  evidence?.poolName !== "BoundPool"
+) {
+  throw new Error(\`unexpected pg bundle evidence: \${JSON.stringify(evidence)}\`)
+}
+
+console.log(JSON.stringify({
+  defaultFetch: true,
+  nativeAbsent: evidence.nativeAbsent,
+  node: process.versions.node,
+  poolInstance: evidence.poolInstance,
+  poolName: evidence.poolName,
+}))
+`
+
+const ISOLATED_FORCED_PG_NATIVE_PROBE = `import { resolve } from "node:path"
+import { pathToFileURL } from "node:url"
+
+const entry = resolve(process.cwd(), "index.mjs")
+try {
+  await import(pathToFileURL(entry).href)
+  console.error(JSON.stringify({ code: "NO_ERROR", event: "forced-native-import" }))
+  process.exitCode = 88
+} catch (error) {
+  const code =
+    typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "INVALID"
+  console.error(JSON.stringify({ code, event: "forced-native-import" }))
+  process.exitCode = code === "MODULE_NOT_FOUND" ? 86 : 87
+}
 `
 
 const ISOLATED_STREAM_PROBE = `import { readFile } from "node:fs/promises"
@@ -451,6 +508,167 @@ describe("complete Vercel target", () => {
       parentReadBlocked: true,
     })
   }, 180_000)
+
+  describe("Vercel CommonJS Node compatibility", () => {
+    test("bundles a real pg Pool without changing absent pg.native semantics", async () => {
+      await ensureLinkedDistsFresh()
+      const pgManifest = JSON.parse(
+        await readFile(join(cliPackageRoot, "node_modules", "pg", "package.json"), "utf8"),
+      ) as { version?: unknown }
+      expect(pgManifest.version).toBe("8.22.0")
+
+      const appRoot = await createTargetFixture({
+        "package.json": `${JSON.stringify({
+          dependencies: {
+            "@dawn-ai/cli": "workspace:*",
+            "@dawn-ai/postgres-storage": "workspace:*",
+            "@neondatabase/serverless": "^1.1.0",
+            hono: "^4.12.28",
+            pg: "8.22.0",
+          },
+          name: "vercel-pg-fixture",
+          type: "module",
+        })}\n`,
+        "src/app/probe/index.ts": `import pg from "pg"
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  connectionTimeoutMillis: 10_000,
+  idleTimeoutMillis: 30_000,
+  max: 2,
+})
+pool.on("error", () => {})
+
+Object.assign(globalThis, {
+  __dawnVercelPgEvidence: {
+    nativeAbsent: pg.native === null,
+    poolInstance: pool instanceof pg.Pool,
+    poolName: pool.constructor.name,
+  },
+})
+
+export async function workflow() {
+  return { message: "pg bundle loaded" }
+}
+`,
+      })
+      await linkPgTargetFixtureDependency(appRoot)
+
+      await runTargetBuild(appRoot)
+      await expect(
+        validateVercelOutput(join(appRoot, ".vercel", "output")),
+      ).resolves.toBeUndefined()
+
+      const copiedFunctionDir = await copyFunctionOutsideApp(appRoot)
+      const { stderr, stdout } = await runIsolatedNode(copiedFunctionDir, ISOLATED_PG_IMPORT_PROBE)
+      expect(stderr).toBe("")
+      expect(JSON.parse(stdout.trim())).toEqual({
+        defaultFetch: true,
+        nativeAbsent: true,
+        node: expect.stringMatching(/^24\./),
+        poolInstance: true,
+        poolName: "BoundPool",
+      })
+
+      await expect(
+        runIsolatedNode(copiedFunctionDir, ISOLATED_FORCED_PG_NATIVE_PROBE, {
+          NODE_PG_FORCE_NATIVE: "1",
+        }),
+      ).rejects.toMatchObject({
+        code: 86,
+        stderr: '{"code":"MODULE_NOT_FOUND","event":"forced-native-import"}\n',
+        stdout: "",
+      })
+    }, 180_000)
+
+    test.each([
+      {
+        files: {
+          "src/app/probe/index.ts": `const dependency = "node:fs"
+export async function workflow() {
+  return { loaded: typeof require(dependency).readFile === "function" }
+}
+`,
+        },
+        name: "nonliteral require",
+        pattern: /nonliteral dynamic|runtime dependency|<runtime>/i,
+      },
+      {
+        files: {
+          "src/app/probe/index.ts": `export async function workflow() {
+  return require("pg-native")
+}
+`,
+        },
+        name: "direct pg-native require",
+        pattern: /pg-native/i,
+      },
+      {
+        files: {
+          "src/app/probe/index.ts": `export async function workflow() {
+  return await import("pg-native")
+}
+`,
+        },
+        name: "direct pg-native import",
+        pattern: /pg-native/i,
+      },
+      {
+        files: {
+          "spoof/node_modules/pg/lib/native/client.js": 'module.exports = require("pg-native")\n',
+          "spoof/node_modules/pg/package.json": `${JSON.stringify({
+            name: "not-pg",
+            peerDependencies: { "pg-native": ">=3.0.1" },
+            peerDependenciesMeta: { "pg-native": { optional: true } },
+          })}\n`,
+          "src/app/probe/index.ts": `export async function workflow() {
+  return await import("../../../spoof/node_modules/pg/lib/native/client.js")
+}
+`,
+        },
+        name: "pg-native wrong-package spoof importer",
+        pattern: /pg-native/i,
+      },
+      {
+        files: {
+          "spoof/node_modules/pg/lib/native/client.js": 'module.exports = require("pg-native")\n',
+          "spoof/node_modules/pg/package.json": `${JSON.stringify({
+            name: "pg",
+            peerDependencies: { "pg-native": ">=3.0.1" },
+          })}\n`,
+          "src/app/probe/index.ts": `export async function workflow() {
+  return await import("../../../spoof/node_modules/pg/lib/native/client.js")
+}
+`,
+        },
+        name: "pg-native required-peer spoof importer",
+        pattern: /pg-native/i,
+      },
+      {
+        files: {
+          "src/app/probe/index.ts": `export async function workflow() {
+  return require("module")
+}
+`,
+        },
+        name: "bare module runtime loader",
+        pattern: /nonliteral dynamic|runtime loader|runtime dependency|<runtime>|module/i,
+      },
+      {
+        files: {
+          "src/app/probe/index.ts": `export async function workflow() {
+  return require("node:module")
+}
+`,
+        },
+        name: "node:module runtime loader",
+        pattern: /nonliteral dynamic|runtime loader|runtime dependency|<runtime>|node:module/i,
+      },
+    ])("rejects $name from application code", async ({ files, pattern }) => {
+      const appRoot = await createTargetFixture(files)
+      await expect(runTargetBuild(appRoot)).rejects.toThrow(pattern)
+    })
+  })
 
   isolatedRoundTrip(
     "streams Agent Protocol requests through the isolated copied function",

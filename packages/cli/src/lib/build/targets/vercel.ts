@@ -7,6 +7,7 @@ import { build } from "esbuild"
 import { CliError, formatErrorMessage } from "../../output.js"
 import type { BuildTarget } from "./index.js"
 import { reconcileVercelConfig } from "./vercel-config.js"
+import { createVercelNodeCompatibilityPlugin } from "./vercel-node-compat.js"
 import { publishVercelOutput, validateVercelOutput, writeVercelMetadata } from "./vercel-output.js"
 import { emitWebRuntimeArtifacts } from "./web-runtime.js"
 
@@ -59,6 +60,7 @@ export const vercelTarget: BuildTarget = {
           minify: false,
           outfile: functionEntryPath,
           platform: "node",
+          plugins: [createVercelNodeCompatibilityPlugin()],
           sourcemap: false,
           target: "node24",
         })
