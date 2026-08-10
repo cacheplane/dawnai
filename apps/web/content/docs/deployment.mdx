@@ -87,11 +87,11 @@ This path targets LangSmith or another runtime that consumes `langgraph.json` an
     ```
   </Step>
   <Step title="Confirm protocol parity">
-    Run scenarios against a live dev server by setting `run.url` per-scenario in your `run.test.ts` files (the command-level `--url` flag does not exist on `dawn test`). `dawn dev` exposes Agent Protocol endpoints — `/threads/:id/runs/wait` and `/threads/:id/runs/stream` — so this catches request/response shape issues before deploy. Process boundaries, state persistence, and tool bindings are still re-materialized by `dawn build` for production, so this step is necessary but not sufficient.
+    Run selected scenarios against a live dev server by adding `.server(url)` to their builder chains in `run.test.ts` (the command-level `--url` flag does not exist on `dawn test`). `dawn dev` exposes Agent Protocol endpoints — `/threads/:id/runs/wait` and `/threads/:id/runs/stream` — so this catches request/response shape issues before deploy. Process boundaries, state persistence, and tool bindings are still re-materialized by `dawn build` for production, so this step is necessary but not sufficient.
 
     ```
     dawn dev --port 3001 &
-    # In your run.test.ts: set run: { url: "http://127.0.0.1:3001" } per scenario
+    # In run.test.ts: add .server("http://127.0.0.1:3001") to selected scenarios
     dawn test
     ```
   </Step>
