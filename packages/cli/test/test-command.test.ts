@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url"
 import { afterEach, describe, expect, test } from "vitest"
 
 import { run } from "../src/index.js"
+import { loadRunScenarios, RunScenarioLoadError } from "../src/lib/runtime/load-run-scenarios.js"
 
 const SDK_TESTING_URL = pathToFileURL(
   resolve(import.meta.dirname, "../../sdk/dist/testing/index.js"),
@@ -364,6 +365,43 @@ export const workflow = async (
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain(
       'Scenario "unknown application tool" mocks unknown application tool "missing". Available tools: alpha, zeta',
+    )
+  })
+
+  test("wraps malformed shared tool discovery with scenario file context", async () => {
+    const appRoot = await createFixtureApp({
+      "package.json": "{}\n",
+      "dawn.config.ts": "export default {};\n",
+      "src/tools/broken.ts": "export default { invalid: true };\n",
+      "src/app/support/index.ts": "export const graph = async () => ({ ok: true });\n",
+      "src/app/support/run.test.ts": scenarioModuleSource(`
+        import { scenarios } from ${JSON.stringify(SDK_TESTING_URL)}
+
+        export default scenarios("/support").scenario("malformed shared tool", (s) =>
+          s
+            .input({})
+            .mockTool("broken", async () => "mocked")
+            .expectPassed(),
+        )
+      `),
+    })
+    const scenarioFile = join(appRoot, "src/app/support/run.test.ts")
+    const toolFile = join(appRoot, "src/tools/broken.ts")
+
+    const error: unknown = await loadRunScenarios({ cwd: appRoot }).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    )
+
+    expect(error).toBeInstanceOf(RunScenarioLoadError)
+    if (!(error instanceof Error)) {
+      throw new Error("Expected scenario loading to throw an Error")
+    }
+    expect(error.message).toContain(
+      `Scenario file ${scenarioFile} failed to discover application tools`,
+    )
+    expect(error.message).toContain(
+      `Tool file ${toolFile} must default export a function (got an object with keys [invalid])`,
     )
   })
 

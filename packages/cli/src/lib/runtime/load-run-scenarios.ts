@@ -280,12 +280,16 @@ async function validateScenarioToolMocks(options: {
     return
   }
 
-  const availableToolNames = (
-    await discoverToolDefinitions({
-      appRoot: options.appRoot,
-      routeDir: options.routeDir,
-    })
-  )
+  const discoveredTools = await discoverToolDefinitions({
+    appRoot: options.appRoot,
+    routeDir: options.routeDir,
+  }).catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new RunScenarioLoadError(
+      `Scenario file ${options.scenarioFile} failed to discover application tools: ${detail}`,
+    )
+  })
+  const availableToolNames = discoveredTools
     .map((tool) => tool.name)
     .sort((left, right) => left.localeCompare(right))
   const availableTools = new Set(availableToolNames)
