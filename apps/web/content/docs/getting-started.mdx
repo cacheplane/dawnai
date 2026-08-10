@@ -37,9 +37,8 @@ src/app/research/
   index.ts                          # research coordinator agent
   state.ts                          # route state shape
   plan.md                           # seeds the thread's planning todos
-  tools/
-    searchCorpus.ts                 # keyword search over the bundled corpus
-    readDoc.ts                      # reads a corpus document in full
+  memory.md                         # route-specific persistent prompt guidance
+  memory.ts                         # typed cross-session research memory
   subagents/
     researcher/index.ts             # specialist dispatched per sub-question
   skills/
@@ -47,17 +46,22 @@ src/app/research/
     synthesize-findings/SKILL.md    # loaded on demand: report structure
   evals/
     research-quality.eval.ts        # quality eval with scorers and a gate
+src/tools/
+  readDoc.ts                        # shared full-document reader
+  searchCorpus.ts                   # shared keyword corpus search
 test/
-  research.test.ts                  # harness tests (offline, no API key)
+  research.test.ts                  # main offline harness suite
+  sandbox-docker.test.ts            # optional gated Docker sandbox smoke test
 workspace/
-  AGENTS.md                         # house style injected every turn
+  AGENTS.md                         # persistent prompt guidance injected every turn
   corpus/                           # bundled documents the agent searches
   scripts/
     fetch-source.mjs                # network fetch script called via runBash
+AGENTS.md                            # contributor guidance for coding agents
 dawn.config.ts                      # app config: permissions, tool-output offloading
 ```
 
-The route entry (`index.ts`) is a research coordinator. It plans sub-questions, dispatches the `researcher` subagent for each one, and synthesizes a cited report. Tools under `tools/` are bound to both agents at build time — `dawn check` infers their types from function signatures.
+The route entry (`index.ts`) is a research coordinator. It recalls durable context, plans sub-questions, dispatches the `researcher` subagent for each one, and synthesizes a cited report. The shared tools under `src/tools/` are bound to both agents at build time — `dawn check` infers their types from function signatures.
 
 <CodeGroup>
 ```ts title="src/app/research/index.ts"
@@ -69,11 +73,13 @@ export default agent({
     "A deep-research assistant: plans sub-questions, dispatches researchers, and writes a cited report.",
   systemPrompt: `You are a deep-research coordinator. Given a question:
 
-1. Plan the sub-questions to investigate and record them in your todos.
-2. For each sub-question, dispatch a specialist with \`task({ subagent: "researcher", input: "<sub-question>" })\`.
-3. You may also \`searchCorpus({ query })\` and \`readDoc({ path })\` directly for quick lookups.
-4. When the corpus lacks coverage, you may run \`runBash({ command: "node scripts/fetch-source.mjs <topic>" })\` — the human must approve it.
-5. Synthesize the findings into a cited report and save it with \`writeFile({ path: "reports/<slug>.md", content: "<report>" })\`.
+1. Start by checking durable context with \`recall({ query: "<the user's topic and preferences>" })\`.
+2. Plan the sub-questions to investigate and record them in your todos.
+3. For each sub-question, dispatch a specialist with \`task({ subagent: "researcher", input: "<sub-question>" })\`.
+4. You may also \`searchCorpus({ query })\` and \`readDoc({ path })\` directly for quick lookups.
+5. When the corpus lacks coverage, you may run \`runBash({ command: "node scripts/fetch-source.mjs <topic>" })\` — the human must approve it.
+6. Synthesize the findings into a cited report and save it with \`writeFile({ path: "reports/<slug>.md", content: "<report>" })\`.
+7. When the user gives a durable preference or you verify a reusable finding, call \`remember({ data, content })\` so it can be reviewed and recalled later.
 
 Cite every claim with its source path in square brackets, e.g. [corpus/agent-architectures.md]. Keep the final answer concise.`,
 })
@@ -104,13 +110,16 @@ export default {
     offloadThresholdChars: 1500,
     previewLines: 10,
   },
+  memory: {
+    writes: "candidate",
+  },
   // Persistence (SQLite checkpointer + threads store) is on by default.
   // Threads survive a restart.
 }
 ```
 </CodeGroup>
 
-The `plan.md` file opts the route into Dawn's planning capability — its checklist items seed each thread's todos. `workspace/AGENTS.md` is injected into the agent's system prompt every turn as durable memory. Skills under `skills/` are loaded on demand by name.
+The `plan.md` file opts the route into Dawn's planning capability — its checklist items seed each thread's todos. `workspace/AGENTS.md` and route-local `memory.md` provide persistent prompt guidance; `memory.ts` defines typed cross-session records exposed through `recall` and `remember`. Skills under `skills/` are loaded on demand by name.
 
 ## 3. Verify and test
 
@@ -130,13 +139,13 @@ Dawn app is valid: 2 routes discovered.
 npm test
 ```
 
-Runs the harness tests in `test/research.test.ts`. The test script drives the agent using recorded fixture responses, covering corpus search, subagent dispatch, tool-output offloading, and the human-in-the-loop permission gate. No API key is needed.
+Runs the harness suite in `test/research.test.ts`. It replays fixture responses while exercising corpus search and citation, durable-memory recall and candidate approval, subagent dispatch, tool-output offloading, and the human-in-the-loop permission gate. No API key is needed. The separate `test:sandbox:docker` script enables the optional Docker sandbox smoke test.
 
 ```bash
 npm run eval
 ```
 
-Runs the quality eval in `src/app/research/evals/research-quality.eval.ts`. The agent run replays fixtures, then two dataset cases are scored across four scorers (`toolCalled`, `contains`, `cites-source`, `llmJudge`). The generated fixtures also cover the judge requests from `llmJudge`, so the scaffolded eval runs without an API key.
+Runs the quality eval in `src/app/research/evals/research-quality.eval.ts`. Its dataset exercises research questions against the corpus; the scorers require corpus search, source citations, and a passing model-graded quality verdict. The inline fixtures cover both agent and judge requests, so the scaffolded eval runs without an API key.
 
 Before running the app live, run `dawn verify` as your preflight — it checks app integrity plus environment readiness (Node version, the provider API key your routes need, and the Docker daemon when a sandbox is configured) so `dawn dev` and `dawn start` boot cleanly. See [`dawn verify`](/docs/cli).
 

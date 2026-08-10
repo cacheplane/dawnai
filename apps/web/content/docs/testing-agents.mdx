@@ -1,8 +1,8 @@
 # Testing your Dawn agent
 
-Agent tests should be deterministic and CI-safe — they must never call a live model. `@dawn-ai/testing` achieves this by intercepting the model's HTTP endpoint with **aimock**, a local mock that replays pre-written fixtures. Your tools, prompts, capabilities, and state all run normally; only the LLM is replaced.
+Agent tests in CI should be deterministic and replay committed fixtures. `@dawn-ai/testing` achieves this by intercepting the model's HTTP endpoint with **aimock**, a local mock that replays pre-written fixtures. Your tools, prompts, capabilities, and state all run normally; only the LLM is replaced. Optional, explicitly gated local smoke tests may instead use a live model.
 
-The fixture is the source of truth. Never assert against a live model response.
+For CI, the fixture is the source of truth. Use live mode locally to probe model behaviour, with looser assertions that account for nondeterminism.
 
 ## Install
 
@@ -12,7 +12,7 @@ pnpm add -D @dawn-ai/testing vitest
 
 ## First test
 
-Ten lines. This is the full shape you'll use for most agent tests.
+This is the full shape you'll use for most agent tests.
 
 ```ts title="src/app/chat/agent.test.ts"
 import { fileURLToPath } from "node:url"
@@ -21,7 +21,9 @@ import { createAgentHarness, expectFinalMessage, expectToolCalled, script } from
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url))
 const h = await createAgentHarness({ appRoot, route: "/chat#agent" })
-afterAll(() => h.close())
+afterAll(async () => {
+  await h.close()
+})
 
 it("filters open items", async () => {
   const run = await h.run({
@@ -36,11 +38,17 @@ it("filters open items", async () => {
 }, 60_000)
 ```
 
-`createAgentHarness` boots aimock on a random port, runs typegen, and resolves your route — all in the same process. The `route` string is the Agent Protocol key: `"/chat#agent"` means the `agent` export from `src/app/chat/index.ts`. Call `h.close()` in `afterAll` to stop aimock and restore env vars.
+`createAgentHarness` boots aimock on a random port, runs typegen, and resolves your route — all in the same process. The `route` string is the Agent Protocol key: `"/chat#agent"` means the `agent` export from `src/app/chat/index.ts`. Await `h.close()` in `afterAll` to stop aimock and restore env vars.
+
+<Callout type="warn">
+  Keep only one agent harness alive per process. The aimock endpoint and environment variables,
+  plus Dawn's materialized-model state, are process-global. Run harness suites sequentially or
+  isolate them in separate subprocesses.
+</Callout>
 
 ## Fixture script
 
-`script()` compiles a multi-turn conversation into aimock fixtures. Each `.user()` starts a new turn group. `.callsTool()` tells aimock to respond with a tool call; `.replies()` tells it to respond with a text message.
+`script()` compiles one or more fixture groups for fresh-thread scenarios. Each `.user()` starts a group whose `turnIndex` begins at zero. `.callsTool()` tells aimock to respond with a tool call; `.replies()` tells it to respond with a text message. For a same-thread follow-up, use explicit fixtures with cumulative turn indexes as shown below.
 
 ```ts
 script()
@@ -79,12 +87,53 @@ expectStreamedTokens(run)  // throws if zero tokens were streamed
 ### Multi-turn: run the agent twice
 
 ```ts
-const run1 = await h.run({ input: "List tasks", fixtures: script().user("List tasks").replies("You have 3 tasks.") })
-h.reset()  // start a fresh thread; aimock port stays stable
-const run2 = await h.run({ input: "Mark first done", fixtures: script().user("Mark first done").replies("Done.") })
+const first = await h.run({
+  input: "List tasks",
+  fixtures: [
+    {
+      match: { userMessage: "List tasks", turnIndex: 0, hasToolResult: false },
+      response: { content: "You have 3 tasks." },
+    },
+  ],
+})
+
+const followUp = await h.run({
+  input: "Mark first done",
+  fixtures: [
+    {
+      // The same thread already contains the first assistant message.
+      match: { userMessage: "Mark first done", turnIndex: 1, hasToolResult: false },
+      response: { content: "Done. You have 2 tasks left." },
+    },
+  ],
+})
+
+expectFinalMessage(first).toContain("3 tasks")
+expectFinalMessage(followUp).toContain("2 tasks left")
 ```
 
-Call `h.reset()` between turns when you want a clean thread. Without it, follow-up messages accumulate in the same thread (useful for testing multi-turn memory).
+Two `h.run()` calls without a reset are two turns on the same thread, so the follow-up can exercise conversation state.
+
+### Fresh-thread test isolation
+
+```ts
+const original = await h.run({
+  input: "Remember project alpha",
+  fixtures: script().user("Remember project alpha").replies("Remembered."),
+})
+
+h.reset() // new thread and a clean fixture set; aimock keeps the same port
+
+const isolated = await h.run({
+  input: "What project did I mention?",
+  fixtures: script().user("What project did I mention?").replies("No project yet."),
+})
+
+expectFinalMessage(original).toContain("Remembered")
+expectFinalMessage(isolated).toContain("No project")
+```
+
+Use `h.reset()` between scenarios or tests that require a fresh thread, not between turns in one conversation.
 
 ### Tool output offloading
 
@@ -214,7 +263,9 @@ const h = await createAgentHarness({
   route: "/chat#agent",
   fixtures: loadFixtures(fixturesPath),
 })
-afterAll(() => h.close())
+afterAll(async () => {
+  await h.close()
+})
 
 it("filters open items", async () => {
   // Per-run override — loadFixtures() returns a plain FixtureSet.
@@ -251,7 +302,9 @@ import {
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url))
 const h = await createAgentHarness({ appRoot, route: "/chat#agent", live: true })
-afterAll(() => h.close())
+afterAll(async () => {
+  await h.close()
+})
 
 it("filters open items against real model", async () => {
   const run = await h.run({ input: "Filter open items" })
@@ -290,7 +343,7 @@ Do not put your API key in CI. Live tests are local-development tools for valida
 npm test
 ```
 
-The generated file has four tests. The first verifies the corpus search and citation path verbatim:
+The generated suite starts by verifying the corpus search and citation path:
 
 ```ts title="test/research.test.ts"
 import { fileURLToPath } from "node:url"
@@ -308,7 +361,9 @@ import {
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url))
 const h = await createAgentHarness({ appRoot, route: "/research#agent" })
-afterAll(() => h.close())
+afterAll(async () => {
+  await h.close()
+})
 
 it("searches the corpus and writes a cited answer", async () => {
   h.reset()
@@ -326,7 +381,15 @@ it("searches the corpus and writes a cited answer", async () => {
 }, 60_000)
 ```
 
-The remaining three tests cover: researcher subagent dispatch (`expectSubagent`); offloading of a large `readDoc` result (`expectOffloaded`); and the HITL permission gate for `runBash` with resume (`expectInterrupt` + `harness.resume`). All four share one harness and call `h.reset()` per test — `reset()` starts a fresh thread and clears the previous scenario's fixtures, so the tests stay isolated.
+The suite also exercises:
+
+- Recall of seeded durable research preferences.
+- Candidate writes through `remember`, plus CLI approval and recall from a fresh thread.
+- Researcher subagent dispatch with access to the shared corpus tools.
+- Offloading of a large `readDoc` result.
+- The HITL permission gate for `runBash`, followed by resume.
+
+These scenarios share one harness and call `h.reset()` per test — `reset()` starts a fresh thread and clears the previous scenario's fixtures, so the tests stay isolated. The separately gated `test/sandbox-docker.test.ts` verifies that shared tools operate inside an isolated Docker workspace without leaking files to the host or a fresh thread sandbox.
 
 Grow it by:
 
