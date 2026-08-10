@@ -28,7 +28,7 @@ echo '{"messages":[{"role":"user","content":"Hello"}]}' | dawn run '/research' -
 
 ## Agent Protocol endpoints
 
-The dev server exposes eight endpoints organized around a thread lifecycle: create thread → run (wait or stream) → read state → resume. Anything else returns 404. Thread state persists in SQLite under `.dawn/` and survives server restarts — see [Configuration](/docs/configuration) for the `checkpointer` and `threadsStore` defaults and override options.
+The dev server exposes a small set of endpoints organized around a thread lifecycle: create thread → run (wait or stream) → read state → inspect pending interrupts → resume. Anything else returns 404. Thread state persists in SQLite under `.dawn/` and survives server restarts — see [Configuration](/docs/configuration) for the `checkpointer` and `threadsStore` defaults and override options.
 
 ### Thread lifecycle with curl
 
@@ -162,6 +162,22 @@ curl http://127.0.0.1:3001/threads/$THREAD_ID/state
     -> 404 if no checkpoint found
     ```
   </Tab>
+  <Tab label="GET /threads/:thread_id/pending_interrupts">
+    List the human-in-the-loop interrupts currently parked on a thread, with the payload each one carries — enough for a client that reloaded to put the permission prompt back on screen without a live stream.
+
+    ```
+    GET /threads/:thread_id/pending_interrupts
+    -> 200 { "interrupts": [ { "interruptId", "resumeKey", "value" } ] }
+    -> 404 if no such thread (error.details.code = thread_not_found)
+    -> 409 if the thread has never run (error.details.code = thread_route_unknown)
+    ```
+
+    `value` is the interrupt payload as the agent emitted it — for a permission prompt, `{ interruptId, type, kind, detail }`, the same object the `interrupt` SSE event carries. Answer the prompts with `POST /threads/:thread_id/resume`, using `interruptId`. A thread that exists but has nothing parked returns `200 { "interrupts": [] }`, and the response is sent `cache-control: no-store` because checkpoint state moves under the client.
+
+    The two endpoints decide "no such thread" from different sources: this one from the thread record, `POST /threads/:thread_id/resume` from the checkpoint — so a thread that was created but never checkpointed answers `200 { "interrupts": [] }` here and `404` there.
+
+    Middleware gates this endpoint using the route last run on the thread, which is why a thread that has never run is refused rather than served: there would be no route identity to gate on, and the endpoint exposes the same interrupt payloads the run stream does.
+  </Tab>
   <Tab label="POST /threads/:thread_id/resume">
     Resolve every human-in-the-loop interrupt currently parked on the root thread. The response streams the continuation as SSE (same event types as `runs/stream`).
 
@@ -216,6 +232,14 @@ The [AG-UI endpoint](#ag-ui-endpoint) takes the opposite default and aborts on d
 Run tracking is in-memory and process-local, so both the one-run-per-thread gate and `/cancel` assume a **single replica**. This is not a new constraint — Dawn's threads database and checkpoints are already pod-local — but it is worth knowing before scaling out. See [deployment](/docs/deployment).
 </Callout>
 
+### Thread status after an interrupt
+
+`GET /threads/:thread_id` reports `status: "interrupted"` for **two** different situations: a run stopped by `POST /threads/:thread_id/cancel`, and a turn parked on a human-in-the-loop interrupt waiting for a decision. `GET /threads/:thread_id/pending_interrupts` is the discriminator — a non-empty `interrupts` array means the agent is waiting on a human, an empty one means the run was cancelled.
+
+Parked turns previously reported `"idle"`, which was indistinguishable from a finished run and left a reloaded UI showing a completed agent that was in fact blocked on a prompt.
+
+This applies to the two streaming endpoints, `/runs/stream` and `/resume`. `/runs/wait` is a blocking JSON call and still reports `"idle"` when its turn parks — check `pending_interrupts` there rather than the thread status.
+
 ## AG-UI endpoint
 
 For UI clients that speak [AG-UI](https://github.com/ag-ui-protocol/ag-ui), `dawn dev` also serves:
@@ -261,7 +285,7 @@ If `LANGSMITH_API_KEY` is present in the loaded environment and `LANGCHAIN_TRACI
 
 ## Middleware
 
-`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) gates Agent Protocol `/runs/stream`, `/runs/wait`, and `/resume` execution plus AG-UI route execution under both `dawn dev` and the built runtime served by `dawn start`. Thread create, read, delete, and state endpoints do not invoke middleware. It can short-circuit execution with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
+`src/middleware.ts` (default-exporting a function returned by `defineMiddleware`) gates Agent Protocol `/runs/stream`, `/runs/wait`, `/resume`, and `/pending_interrupts` execution plus AG-UI route execution under both `dawn dev` and the built runtime served by `dawn start`. Thread create, read, delete, and state endpoints do not invoke middleware. `/pending_interrupts` is a `GET` and has no body, so `req.method` is `"GET"` there and `req.params` is empty; a middleware that assumes `"POST"` needs updating. It can short-circuit execution with `reject(status, body?)`, or continue with `allow(context?)` — the optional `context` flows to every tool as `ctx.middleware` (a `Readonly<Record<string, unknown>>`).
 
 `MiddlewareRequest` shape: `{ assistantId, headers, method, params, routeId, url }`. See [Middleware](/docs/middleware) for the full reference.
 
