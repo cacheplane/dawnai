@@ -281,6 +281,82 @@ test("workflow entrypoints fail closed unless their exact normalized form is exp
   )
 })
 
+test("testing-windows has one exact safe descriptor and executable classification", async () => {
+  const descriptors = JSON.parse(
+    await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }),
+  )
+  const job = descriptors.workflows["ci.yml"].jobs.find(({ id }) => id === "testing-windows")
+  assert.deepEqual(job, {
+    classification: "safe",
+    id: "testing-windows",
+    descriptor: { "runs-on": "windows-latest", "timeout-minutes": 20 },
+    steps: [
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Checkout",
+          uses: "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+        },
+      },
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Setup pnpm",
+          uses: "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+          with: { version: "10.33.0" },
+        },
+      },
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Setup Node.js",
+          uses: "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+          with: { "node-version": "24.17.0", cache: "pnpm" },
+        },
+      },
+      {
+        classification: "safe",
+        descriptor: { name: "Install", run: "pnpm install --frozen-lockfile" },
+      },
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Build testing dependency closure",
+          run: "pnpm --filter @dawn-ai/testing... build",
+        },
+      },
+      {
+        classification: "safe",
+        descriptor: {
+          name: "Native Windows subprocess shutdown tests",
+          run: 'pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts --testNamePattern "Windows process tree|injected Windows tree kill"',
+        },
+      },
+    ],
+  })
+  assert.deepEqual(
+    EXECUTABLE_ALLOWLIST.workflows["ci.yml"].filter(({ job }) => job === "testing-windows"),
+    job.steps.map(({ descriptor }, stepIndex) => ({
+      classification: "safe",
+      job: "testing-windows",
+      stepIndex,
+      step: descriptor.name,
+      kind: descriptor.run === undefined ? "step-uses" : "run",
+      value: descriptor.run ?? descriptor.uses,
+    })),
+  )
+
+  const sources = await readWorkflowSourcesFromRoot(ROOT)
+  const mutated = sources["ci.yml"].replace(
+    "pnpm --filter @dawn-ai/testing... build",
+    "pnpm --filter @dawn-ai/testing... build && echo bypass",
+  )
+  assert.throws(
+    () => auditWorkflowEntrypoints({ ...sources, "ci.yml": mutated }, descriptors.workflows),
+    /not explicitly audited/u,
+  )
+})
+
 test("every workflow executable entrypoint matches the readable audited allowlist", async () => {
   const allowlist = JSON.parse(await readBoundedFixture(ENTRYPOINT_ALLOWLIST_PATH, { root: ROOT }))
   const sources = await readWorkflowSourcesFromRoot(ROOT)

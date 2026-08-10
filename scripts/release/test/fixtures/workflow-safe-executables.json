@@ -182,6 +182,54 @@
       },
       {
         "classification": "safe",
+        "job": "testing-windows",
+        "stepIndex": 0,
+        "step": "Checkout",
+        "kind": "step-uses",
+        "value": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+      },
+      {
+        "classification": "safe",
+        "job": "testing-windows",
+        "stepIndex": 1,
+        "step": "Setup pnpm",
+        "kind": "step-uses",
+        "value": "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271"
+      },
+      {
+        "classification": "safe",
+        "job": "testing-windows",
+        "stepIndex": 2,
+        "step": "Setup Node.js",
+        "kind": "step-uses",
+        "value": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+      },
+      {
+        "classification": "safe",
+        "job": "testing-windows",
+        "stepIndex": 3,
+        "step": "Install",
+        "kind": "run",
+        "value": "pnpm install --frozen-lockfile"
+      },
+      {
+        "classification": "safe",
+        "job": "testing-windows",
+        "stepIndex": 4,
+        "step": "Build testing dependency closure",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-ai/testing... build"
+      },
+      {
+        "classification": "safe",
+        "job": "testing-windows",
+        "stepIndex": 5,
+        "step": "Native Windows subprocess shutdown tests",
+        "kind": "run",
+        "value": "pnpm --filter @dawn-ai/testing exec vitest --run --config vitest.config.ts test/subprocess.test.ts --testNamePattern \"Windows process tree|injected Windows tree kill\""
+      },
+      {
+        "classification": "safe",
         "job": "sandbox-docker",
         "stepIndex": 0,
         "step": "Checkout",
