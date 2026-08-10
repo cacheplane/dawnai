@@ -59,6 +59,7 @@ The 0.4 preview treated subagents as a useful route boundary. The current API cl
 ```ts
 export default agent({
   model: "gpt-5-mini",
+  systemPrompt: "Coordinate research and writing.",
   subagents: { researcher, writer },
   delegation: {
     default: "deny",
