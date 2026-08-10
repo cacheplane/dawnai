@@ -41,6 +41,51 @@ describe("scenarios", () => {
     })
   })
 
+  test("reuses parsed descriptors when appending scenarios", () => {
+    const firstSuite = scenarios("/research").scenario("first", (s) =>
+      s.input({ value: "first" }).expectPassed(),
+    )
+    const firstDescriptor = readScenarioSuite(firstSuite)
+    const firstScenario = firstDescriptor.scenarios[0]
+    if (!firstScenario) throw new Error("Expected the first scenario descriptor")
+
+    const secondSuite = firstSuite.scenario("second", (s) =>
+      s.input({ value: "second" }).expectPassed(),
+    )
+    const secondDescriptor = readScenarioSuite(secondSuite)
+
+    expect(secondDescriptor.scenarios[0]).toBe(firstScenario)
+    expect(readScenarioSuite(firstSuite)).toBe(firstDescriptor)
+    expect(readScenarioSuite(secondSuite)).toBe(secondDescriptor)
+  })
+
+  test("caches a successful forged suite parse between guard and read", () => {
+    const suite = scenarios("/research").scenario("valid", (s) => s.input({}).expectPassed())
+    const descriptor = readScenarioSuite(suite)
+    const [brand] = Object.getOwnPropertySymbols(suite)
+    if (!brand) throw new Error("Expected a scenario suite brand")
+
+    let routeReads = 0
+    const payload = new Proxy(descriptor, {
+      get(target, property, receiver) {
+        if (property === "route") routeReads += 1
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    const forged = {
+      scenario: () => undefined,
+      [brand]: payload,
+    }
+
+    expect(isScenarioSuite(forged)).toBe(true)
+    const readsAfterGuard = routeReads
+    const firstRead = readScenarioSuite(forged)
+    const secondRead = readScenarioSuite(forged)
+
+    expect(routeReads).toBe(readsAfterGuard)
+    expect(secondRead).toBe(firstRead)
+  })
+
   test("rejects duplicate scenario names", () => {
     const suite = scenarios("/research").scenario("duplicate", (s) => s.input({}).expectPassed())
     expect(() => suite.scenario("duplicate", (s) => s.input({}).expectPassed())).toThrow(
@@ -115,6 +160,7 @@ describe("scenarios", () => {
     if (!brand) throw new Error("Expected a scenario suite brand")
 
     const forged = {
+      scenario: () => undefined,
       [brand]: {
         route: "/research",
         scenarios: [{ input: {}, name: "missing required fields" }],
@@ -194,7 +240,7 @@ describe("scenarios", () => {
     ]
 
     for (const { label, payload } of cases) {
-      const forged = { [brand]: payload }
+      const forged = { scenario: () => undefined, [brand]: payload }
       expect(isScenarioSuite(forged), label).toBe(false)
       expect(() => readScenarioSuite(forged), label).toThrow(
         new RegExp(`malformed scenario suite: .*${label}.*index 0`, "i"),
@@ -276,10 +322,107 @@ describe("scenarios", () => {
     ]
 
     for (const { label, payload } of cases) {
-      const forged = { [brand]: payload }
+      const forged = { scenario: () => undefined, [brand]: payload }
       expect(isScenarioSuite(forged), label).toBe(true)
       expect(readScenarioSuite(forged).scenarios, label).toHaveLength(1)
     }
+  })
+
+  test("rejects functions in opaque scenario values", () => {
+    expect(() =>
+      scenarios("/research").scenario("function input", (s) =>
+        s.input({ nested: () => "invalid" }).expectPassed(),
+      ),
+    ).toThrow(/function snapshot values are not supported/i)
+
+    expect(() =>
+      scenarios("/research").scenario("function output", (s) =>
+        s
+          .input({})
+          .expectPassed()
+          .expectOutput({ nested: () => "invalid" }),
+      ),
+    ).toThrow(/function snapshot values are not supported/i)
+
+    expect(() =>
+      scenarios("/research").scenario("function matcher", (s) =>
+        s
+          .input({})
+          .mockTool("searchWeb", async () => ({ results: [] }))
+          .expectPassed()
+          .expectTool("searchWeb", (call) =>
+            call.withArgs({ query: (() => "invalid") as unknown as string }),
+          ),
+      ),
+    ).toThrow(/function snapshot values are not supported/i)
+  })
+
+  test("preserves array own data properties and cycles", () => {
+    const marker = Symbol("marker")
+    type RichArray = unknown[] & {
+      hidden?: { count: number }
+      self?: RichArray
+      [marker]?: { label: string }
+    }
+
+    const hidden = { count: 1 }
+    const symbolValue = { label: "stable" }
+    const authored = ["first"] as RichArray
+    Object.defineProperty(authored, "hidden", {
+      configurable: true,
+      enumerable: false,
+      value: hidden,
+      writable: true,
+    })
+    authored[marker] = symbolValue
+    authored.self = authored
+
+    const suite = scenarios("/research").scenario("array shape", (s) =>
+      s.input(authored).expectPassed(),
+    )
+    authored[0] = "changed"
+    hidden.count = 2
+    symbolValue.label = "changed"
+
+    const scenario = readScenarioSuite(suite).scenarios[0]
+    if (!scenario) throw new Error("Expected a scenario descriptor")
+    const snapshot = scenario.input as RichArray
+
+    expect(snapshot[0]).toBe("first")
+    expect(snapshot.self).toBe(snapshot)
+    expect(snapshot.hidden).toEqual({ count: 1 })
+    expect(Object.getOwnPropertyDescriptor(snapshot, "hidden")?.enumerable).toBe(false)
+    expect(snapshot[marker]).toEqual({ label: "stable" })
+    expect(Object.isFrozen(snapshot)).toBe(true)
+    expect(Object.isFrozen(snapshot.hidden)).toBe(true)
+    expect(Object.isFrozen(snapshot[marker])).toBe(true)
+  })
+
+  test("rejects accessor properties without invoking them", () => {
+    let getterCalls = 0
+    const authored = {}
+    Object.defineProperty(authored, "danger", {
+      get() {
+        getterCalls += 1
+        return "invalid"
+      },
+    })
+
+    expect(() =>
+      scenarios("/research").scenario("accessor", (s) => s.input(authored).expectPassed()),
+    ).toThrow(/accessor property.*danger.*not supported/i)
+    expect(getterCalls).toBe(0)
+  })
+
+  test("rejects a valid branded payload without a scenario method", () => {
+    const suite = scenarios("/research").scenario("valid", (s) => s.input({}).expectPassed())
+    const descriptor = readScenarioSuite(suite)
+    const [brand] = Object.getOwnPropertySymbols(suite)
+    if (!brand) throw new Error("Expected a scenario suite brand")
+    const forged = { [brand]: descriptor }
+
+    expect(isScenarioSuite(forged)).toBe(false)
+    expect(() => readScenarioSuite(forged)).toThrow(/malformed scenario suite: .*scenario.*method/i)
   })
 
   test("recursively snapshots mutable opaque values", async () => {
@@ -594,6 +737,7 @@ describe("scenarios", () => {
 
     for (const { label, value } of values) {
       const forged = {
+        scenario: () => undefined,
         [brand]: {
           route: "/research",
           scenarios: [

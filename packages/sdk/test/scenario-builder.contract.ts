@@ -1,4 +1,4 @@
-import { scenarios } from "../src/testing/index.js"
+import { isScenarioSuite, scenarios } from "../src/testing/index.js"
 
 declare module "../src/testing/index.js" {
   interface RouteScenarioMap {
@@ -12,6 +12,11 @@ declare module "../src/testing/index.js" {
     }
     "/without-tools": { readonly tools: Record<never, never> }
   }
+}
+
+declare const unknownSuite: unknown
+if (isScenarioSuite(unknownSuite)) {
+  unknownSuite.scenario("narrowed", (s) => s.input({}).expectPassed())
 }
 
 scenarios("/research").scenario("typed", (s) =>
