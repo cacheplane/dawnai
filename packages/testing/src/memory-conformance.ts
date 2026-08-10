@@ -1188,19 +1188,31 @@ export function runMemoryStoreConformance(opts: {
         await close?.(s)
       }
     })
-    test("browse walks the whole dataset through continuations, no gaps or repeats", async () => {
+    test("browse walks the whole dataset through continuations under a fixed now", async () => {
       const s = await makeStore()
       try {
+        // Odd days, so the expired row below can land BETWEEN two live ones.
         for (let i = 0; i < 7; i += 1) {
-          await s.put(rec({ id: `r${i}`, namespace: "ns", content: `r${i}`, updatedAt: D(i + 1) }))
+          await s.put(
+            rec({ id: `r${i}`, namespace: "ns", content: `r${i}`, updatedAt: D(2 * i + 1) }),
+          )
         }
+        // Sorts between r4 and r3, i.e. inside the SECOND window: a store that applies
+        // the expiry clause to the first page and drops it on continuations leaks it here.
+        await s.put(
+          rec({ id: "dead", namespace: "ns", content: "dead", updatedAt: D(8), expiresAt: D(2) }),
+        )
+        // Holding one `now` across the walk is the POSITIVE half of the cursor's `now`
+        // contract; rejection of a re-stamped one is pinned separately. Without this,
+        // a store that rejected every cursor carrying a `now` would still pass.
+        const query = { limit: 3, now: D(20) } as const
         const seen: string[] = []
-        let page = await s.browse({ limit: 3 })
+        let page = await s.browse(query)
         expect(page.total).toBe(7)
         expect(page.continuation).not.toBeNull()
         seen.push(...page.records.map((r) => r.id))
         for (let walked = 0; page.continuation && walked < MAX_WALK_PAGES; walked += 1) {
-          page = await s.browse({ limit: 3, cursor: page.continuation })
+          page = await s.browse({ ...query, cursor: page.continuation })
           // total is the WHOLE matching set on every window, never what remains.
           expect(page.total).toBe(7)
           seen.push(...page.records.map((r) => r.id))
