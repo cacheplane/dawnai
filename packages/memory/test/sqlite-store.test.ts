@@ -691,6 +691,15 @@ describe("browse against a concurrently written database file", () => {
     const ids = Array.from({ length: 400 }, (_, i) => `r${String(i).padStart(3, "0")}`)
     for (const id of ids) await s.put(rec({ id, namespace: "ns", content: id }))
 
+    const chunk = 20
+    const chunks = ids.length / chunk
+    // Counters, not flags: the reader releases a chunk before the writer starts
+    // waiting for it, and a monotonic counter cannot lose that edge the way a
+    // boolean can. IDLE is never written, so waiting on it is simply a sleep — the
+    // only precise one a worker thread has.
+    const [GO, DONE, IDLE] = [0, 1, 2]
+    const control = new Int32Array(new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT))
+
     // A worker thread, because nothing on THIS thread can expose the skew: browse's
     // two statements are synchronous, so no same-thread writer can land between
     // them. A second connection on the shared WAL file can, and that writer — a
@@ -699,46 +708,91 @@ describe("browse against a concurrently written database file", () => {
     const worker = new Worker(
       `const { DatabaseSync } = require("node:sqlite")
        const { workerData } = require("node:worker_threads")
-       const db = new DatabaseSync(workerData.path)
+       const { path, ids, chunk, control, GO, DONE, IDLE } = workerData
+       const sleep = (ms) => { Atomics.wait(control, IDLE, 0, ms) }
+       const db = new DatabaseSync(path)
        db.exec("PRAGMA foreign_keys = ON")
        const del = db.prepare("DELETE FROM memories WHERE id = ?")
-       for (const id of workerData.ids) {
-         // Retry past SQLITE_BUSY instead of abandoning the write run mid-way.
-         for (let a = 0; a < 500; a += 1) {
-           try { del.run(id); break } catch { /* busy: the reader holds the file */ }
+       for (let c = 0; c * chunk < ids.length; c += 1) {
+         // Delete only what the reader has released. The row count between chunks is
+         // then a fact the reader asserts, not a state it hopes to catch in passing.
+         while (Atomics.load(control, GO) <= c) {
+           if (Atomics.wait(control, GO, c, 30000) === "timed-out")
+             throw new Error("reader never released chunk " + c)
          }
+         for (const id of ids.slice(c * chunk, (c + 1) * chunk)) {
+           // Paced in wall time, not in event-loop turns: a starved machine is
+           // exactly where the whole chunk would otherwise collapse into a gap
+           // between two of the reader's reads and overlap nothing.
+           sleep(1)
+           let deleted = false
+           for (let a = 0; a < 500 && !deleted; a += 1) {
+             try { del.run(id); deleted = true } catch { sleep(1) }
+           }
+           // Abandoning it strands the row, and the only symptom is a later count
+           // assertion failing with nothing to point at.
+           if (!deleted) throw new Error("gave up deleting " + id + " after 500 busy retries")
+         }
+         Atomics.add(control, DONE, 1)
+         Atomics.notify(control, DONE)
        }`,
-      { eval: true, workerData: { path, ids } },
+      { eval: true, workerData: { path, ids, chunk, control, GO, DONE, IDLE } },
     )
-    let writing = true
+    let workerError: unknown
     const finished = new Promise<void>((resolve, reject) => {
-      worker.on("error", reject)
+      worker.on("error", (err) => {
+        workerError = err
+        reject(err)
+      })
       worker.on("exit", (code) => {
-        writing = false
         if (code === 0) resolve()
         else reject(new Error(`writer thread exited with ${code}`))
       })
     })
+    // The read loop rethrows `workerError` itself, so this rejection would otherwise
+    // sit unhandled until an `await finished` that never runs.
+    finished.catch(() => {})
 
     const skews: string[] = []
-    let sawPartial = false
-    while (writing) {
-      const page = await s.browse({ limit: 1000 })
-      if (page.total > 0 && page.total < ids.length) sawPartial = true
-      if (page.records.length !== page.total) skews.push(`${page.records.length} of ${page.total}`)
-      // setImmediate, not the bare await above: browse resolves synchronously, so
-      // awaiting it drains only microtasks and the worker's `exit` — a macrotask —
-      // would never be delivered. This loop would then never end.
-      await new Promise((resolve) => setImmediate(resolve))
+    const settled: number[] = []
+    let reads = 0
+    const deadline = Date.now() + 20_000
+    try {
+      for (let c = 0; c < chunks; c += 1) {
+        Atomics.store(control, GO, c + 1)
+        Atomics.notify(control, GO)
+        // do/while, not while: one read is issued per chunk however the two threads
+        // are scheduled, so "the loops overlapped" is not left to chance.
+        do {
+          reads += 1
+          const page = await s.browse({ limit: 1000 })
+          if (page.records.length !== page.total)
+            skews.push(`${page.records.length} of ${page.total}`)
+          // setImmediate, not the bare await above: browse resolves synchronously, so
+          // awaiting it drains only microtasks and the worker's `error` — a macrotask
+          // — would never be delivered.
+          await new Promise((resolve) => setImmediate(resolve))
+          if (workerError) throw workerError
+          if (Date.now() > deadline) throw new Error(`writer stalled on chunk ${c}`)
+        } while (Atomics.load(control, DONE) < c + 1)
+        // The writer is now parked on GO, so this read has nothing to race: its count
+        // is a fact about the table rather than a sample of a moving one.
+        settled.push((await s.browse({ limit: 1000 })).total)
+      }
+      await finished
+    } finally {
+      await worker.terminate()
     }
-    await finished
 
-    expect(skews).toEqual([])
-    // Pin the race window open: an empty `skews` proves nothing if every read landed
-    // after the writer was already done. A read that saw a PARTIALLY deleted table is
-    // direct evidence the two overlapped, and unlike a raw read COUNT it does not fail
-    // on a loaded machine that simply got fewer turns between the writer's deletes.
-    expect(sawPartial).toBe(true)
-    expect((await s.browse({ limit: 1000 })).total).toBe(0)
-  })
+    // One-sided, and sliced: a store that reads its rows and its count from two
+    // snapshots skews on most reads, and the failure should name a few pairs rather
+    // than print thousands.
+    expect(skews.slice(0, 8)).toEqual([])
+    // The guard that assertion needs — an empty `skews` proves nothing if every read
+    // landed after the writer was done. Every intermediate row count between full and
+    // empty was observed, in order, which no scheduling can change: the writer cannot
+    // run ahead of the reader's releases.
+    expect(settled).toEqual(Array.from({ length: chunks }, (_, c) => ids.length - chunk * (c + 1)))
+    expect(reads).toBeGreaterThanOrEqual(chunks)
+  }, 60_000)
 })
